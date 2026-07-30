@@ -380,71 +380,79 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 // width 1): sweeping the codebooks, it repeatedly re-selects code_m as the entry nearest to the
 // group minus the sum of the OTHER codebooks' current contributions. A few sweeps converge.
 func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k, g int) {
-	target := make([]float64, g)
-	for i := range groups {
-		for range 3 { // sweeps
-			for a := range m {
-				copy(target, groups[i])
-				for b := range m {
-					if b == a {
-						continue
+	// Each group's re-encode is self-contained: it writes only codes[i*m : i*m+m] and reads
+	// groups[i] plus the shared read-only codebooks, so the group loop fans out over GOMAXPROCS
+	// bit-identically to the serial loop (the entry scan's argmin is deterministic — ascending-j
+	// strict-< ties to the lowest j regardless of worker interleaving). Each worker owns a private
+	// target scratch. Gated on ng·(3·m·k·g) so a tiny re-encode stays serial. This is the
+	// parallelizable half of EncodeAQLM's refit/re-encode alternation.
+	parallelRows(len(groups), 3*m*k*g, func(glo, ghi int) {
+		target := make([]float64, g)
+		for i := glo; i < ghi; i++ {
+			for range 3 { // sweeps
+				for a := range m {
+					copy(target, groups[i])
+					for b := range m {
+						if b == a {
+							continue
+						}
+						c := codebooks[b*k+codes[i*m+b]]
+						for t := range g {
+							target[t] -= c[t]
+						}
 					}
-					c := codebooks[b*k+codes[i*m+b]]
-					for t := range g {
-						target[t] -= c[t]
+					best, bd := 0, math.Inf(1)
+					j := 0
+					for ; j+4 <= k; j += 4 {
+						// Unroll-and-jam the entry scan by 4: one target[t] load feeds
+						// four independent squared-distance accumulators. Each keeps its
+						// own ascending-t sum and the argmin folds in ascending-j strict-<
+						// order -> identical winner (first/lowest j on ties). Bit-exact.
+						cb0 := codebooks[a*k+j]
+						cb1 := codebooks[a*k+j+1]
+						cb2 := codebooks[a*k+j+2]
+						cb3 := codebooks[a*k+j+3]
+						var d0, d1, d2, d3 float64
+						for t := range g {
+							tv := target[t]
+							e0 := tv - cb0[t]
+							d0 += e0 * e0
+							e1 := tv - cb1[t]
+							d1 += e1 * e1
+							e2 := tv - cb2[t]
+							d2 += e2 * e2
+							e3 := tv - cb3[t]
+							d3 += e3 * e3
+						}
+						if d0 < bd {
+							bd, best = d0, j
+						}
+						if d1 < bd {
+							bd, best = d1, j+1
+						}
+						if d2 < bd {
+							bd, best = d2, j+2
+						}
+						if d3 < bd {
+							bd, best = d3, j+3
+						}
 					}
+					for ; j < k; j++ {
+						cb := codebooks[a*k+j]
+						var d float64
+						for t := range g {
+							diff := target[t] - cb[t]
+							d += diff * diff
+						}
+						if d < bd {
+							bd, best = d, j
+						}
+					}
+					codes[i*m+a] = best
 				}
-				best, bd := 0, math.Inf(1)
-				j := 0
-				for ; j+4 <= k; j += 4 {
-					// Unroll-and-jam the entry scan by 4: one target[t] load feeds
-					// four independent squared-distance accumulators. Each keeps its
-					// own ascending-t sum and the argmin folds in ascending-j strict-<
-					// order -> identical winner (first/lowest j on ties). Bit-exact.
-					cb0 := codebooks[a*k+j]
-					cb1 := codebooks[a*k+j+1]
-					cb2 := codebooks[a*k+j+2]
-					cb3 := codebooks[a*k+j+3]
-					var d0, d1, d2, d3 float64
-					for t := range g {
-						tv := target[t]
-						e0 := tv - cb0[t]
-						d0 += e0 * e0
-						e1 := tv - cb1[t]
-						d1 += e1 * e1
-						e2 := tv - cb2[t]
-						d2 += e2 * e2
-						e3 := tv - cb3[t]
-						d3 += e3 * e3
-					}
-					if d0 < bd {
-						bd, best = d0, j
-					}
-					if d1 < bd {
-						bd, best = d1, j+1
-					}
-					if d2 < bd {
-						bd, best = d2, j+2
-					}
-					if d3 < bd {
-						bd, best = d3, j+3
-					}
-				}
-				for ; j < k; j++ {
-					cb := codebooks[a*k+j]
-					var d float64
-					for t := range g {
-						diff := target[t] - cb[t]
-						d += diff * diff
-					}
-					if d < bd {
-						bd, best = d, j
-					}
-				}
-				codes[i*m+a] = best
 			}
 		}
-	}
+	})
 }
 
 // refitCodebooksAQLM re-solves ALL codebook entries jointly for the fixed code assignment by
