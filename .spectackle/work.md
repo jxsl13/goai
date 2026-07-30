@@ -1953,3 +1953,24 @@ So the two filters overlap almost completely, and generalizing the guard buys a 
 WHAT WAS DONE INSTEAD. The one site is genuinely misleading rather than merely redundant - the check was pointing at a dispatch fallback and recommending it be fused, when the fused version is the code immediately above it, and that same site is recorded elsewhere as one of this rule's own success cases. A suppression directive at the site carries the reason where a reader sees it, and the unused-directive check added earlier now catches it if a later edit drifts it away from its target. Verified: the check drops from 26 to 25, and the unused-directive check reports the new directive as live.
 
 ALSO CHECKED, because it would have been the higher-value finding if true: whether the single-identifier guard pattern repeats elsewhere in the analyzer. It does not - exactly one check uses it. That is a clean negative and closes the question.
+
+## R-01KYRQZQ2VEWYS66EC7YAAHXYZ The largest scan check audited SOUND at zero false positives, and the contrast with the one that failed is a fact-versus-cost-model distinction
+kind: research
+state: draft
+created: 2026-07-30
+
+Second hit-by-hit audit of a high-count scan check, run with the method that worked on the first. The result is the opposite and the reason why is the durable part.
+
+ZERO FALSE POSITIVES OF 198, under both a strict and a lenient reading. Every clause of the message holds at every site, and the load-bearing one is compiler-verified rather than argued: all 198 lines emit an escapes-to-heap diagnostic. An independent recount of all 536 candidate calls in the two packages reproduced the check's output exactly, hit for hit, with zero misses and zero extras. The named sibling exists at every site and transfers argument for argument. One candidate false-positive class - training-only loss code where the pooled sibling would defer to the variadic form under a tape - collapsed on inspection, because eleven of twelve call sites pass an untaped context.
+
+WHY THIS ONE IS SOUND AND THE OTHER WAS NOT. The failed check inferred a COST MODEL - a per-sequence dispatch overhead - from a loop whose trip count it could not see. This one asserts a FACT, that a slice is constructed at this line, plus a SIGNATURE TRANSFER, that a named sibling accepts these arguments. Both are fully decidable from the syntax tree. That is the line worth drawing when judging any future check: a claim about what the code IS survives static analysis, a claim about what it COSTS does not.
+
+NO PREDICATE CHANGE. Three candidate filters were counted against the full hit list and all had precision zero on their removals, including transplanting the fix that saved the other check - it would have discarded 190 genuine allocations including every benchmark-reached one, for recall of four percent.
+
+THE ACTUAL GAP WAS IN THE HELPER SET, NOT THE CHECK. It reports a variadic call only when a non-variadic sibling of that arity exists, and no four-input sibling existed, so five masked-attention allocations were structurally invisible. Declaring one closed recall from 198 of 203 to all 203 with no analyzer change. Cast as a rule.
+
+SHIPPED: the new sibling plus 63 conversions, taking the check from 203 hits to 148. Measured six percent fewer allocations on both benchmarked decode paths, about sixteen and twenty thousand objects per operation, with no measurable latency change - which matches the check's own modest claim of one allocation per call and the campaign's earlier recorded range for the same transformation.
+
+PRIORITIZATION, NOT PRECISION, IS THIS QUEUE'S WEAKNESS: 148 of 198 sites are on no benchmarked path, and each is worth a single small allocation. The wins concentrate entirely in the fifty reachable ones. Working it in benchmark-reachability order is the whole optimization.
+
+THE GUARD BLIND SPOT DOES NOT REPEAT: the single-identifier helper is called from exactly one place in the analyzer. One sibling check ORs three broader arms and has only a narrow residual gap; a third has the same shape but zero hits, so it is latent rather than live.
