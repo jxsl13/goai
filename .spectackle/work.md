@@ -1936,3 +1936,20 @@ THE MESSAGE OVERCLAIMED and is corrected. It asserted a per-sequence dispatch co
 TWO ADJACENT DEFECTS, recorded not fixed. The fused-path guard matches a single identifier, so it misses every fused path spelled otherwise - thirty-six of the hit functions already have one, and in one vision file this rule's own documented success case was being re-reported as an opportunity. And the check reports the outermost qualifying loop per nest but not siblings, so one function can still yield several hits.
 
 THE PROCESS POINT, cast as a rule: a check that accumulates dozens of unacted-on hits should have every hit classified before it is treated as a work queue. This one had two prior surveys note in passing that its premise was wrong for most matches; neither counted, so nothing changed for months.
+
+## R-01KYRPSF2YFS9VPA1MVR6Q4GF6 The fused-path guard generalization was worth one hit, not the thirty-six the pre-filter count implied, so it was declined
+kind: research
+state: draft
+created: 2026-07-30
+
+Closes the second of two adjacent defects the scan-check audit surfaced, with a negative result that only appeared once the counting was redone in the right order.
+
+THE DEFECT AS REPORTED. The check skips a function that already carries a fused fast path, but it tests for a single identifier, so it misses every fused path spelled otherwise. The audit put that at thirty-six of the original one hundred ten hit functions - a substantial-looking second win on top of the trip-count filter.
+
+THE RECOUNT CHANGED THE ANSWER. After the trip-count filter cut the check from 110 to 26, I classified all twenty-six surviving enclosing functions. Only four carry any fused-path signal, and only ONE carries the tight one - an inference-only arm gated on an absent recorder, which is semantically exactly what the guard means. The other three show merely a raw-storage access, a signal one hundred ninety-five files in this tree contain, far too loose to suppress on without risking genuine recurrences.
+
+So the two filters overlap almost completely, and generalizing the guard buys a single hit at real recall cost. One instance is not a rule; the same arithmetic killed an earlier candidate built on two measured instances. Cast as a rule: recount a second precision fix against the SURVIVORS, not the original population, because the pre-filter figure describes a population the first filter has already removed.
+
+WHAT WAS DONE INSTEAD. The one site is genuinely misleading rather than merely redundant - the check was pointing at a dispatch fallback and recommending it be fused, when the fused version is the code immediately above it, and that same site is recorded elsewhere as one of this rule's own success cases. A suppression directive at the site carries the reason where a reader sees it, and the unused-directive check added earlier now catches it if a later edit drifts it away from its target. Verified: the check drops from 26 to 25, and the unused-directive check reports the new directive as live.
+
+ALSO CHECKED, because it would have been the higher-value finding if true: whether the single-identifier guard pattern repeats elsewhere in the analyzer. It does not - exactly one check uses it. That is a clean negative and closes the question.
