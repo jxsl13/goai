@@ -41,6 +41,13 @@ type ballTree struct {
 	// comparator, which otherwise pays a row-pointer load plus an index per comparison.
 	// One allocation for the whole build, reused down the recursion.
 	splitKey []float64
+	// spreadLo/spreadHi are d-length builder scratch for the split-dimension choice, filled by the
+	// SAME row-major pass that accumulates the centroid. The scan they replace made one pass per
+	// DIMENSION over pts[i][j] with j fixed — a column walk over a slice-of-slices, so it
+	// re-dereferenced every row header d times and touched a fresh cache line per row to read eight
+	// bytes. enclose already loads each row contiguously; min/max ride along for free.
+	spreadLo []float64
+	spreadHi []float64
 }
 
 // ballMetric selects the distance the tree measures with. It mirrors the two
@@ -147,26 +154,21 @@ func (bt *ballTree) toDist(sq float64) float64 {
 // deterministic construction that keeps the two children balanced.
 func (bt *ballTree) build(idx []int) *ballNode {
 	n := &ballNode{}
-	n.centroid, n.radius = bt.enclose(idx)
-	if len(idx) <= ballLeafSize {
+	willSplit := len(idx) > ballLeafSize
+	n.centroid, n.radius = bt.enclose(idx, willSplit)
+	if !willSplit {
 		n.idx = idx
 		return n
 	}
-	// Choose the split dimension: the one with the greatest coordinate spread.
+	// Choose the split dimension: the one with the greatest coordinate spread. The per-dimension
+	// lo/hi came out of enclose's own row-major pass above, so this is a d-length scan rather than d
+	// full passes over the node's points. Bit-identical: c[j] still sums i ascending over the same
+	// operands, min/max are order-insensitive, and the strict-> argmax still scans j ascending, so
+	// the same split dimension is chosen.
 	d := len(bt.pts[idx[0]])
 	splitDim, bestSpread := 0, -1.0
 	for j := 0; j < d; j++ {
-		lo, hi := math.Inf(1), math.Inf(-1)
-		for _, i := range idx {
-			v := bt.pts[i][j]
-			if v < lo {
-				lo = v
-			}
-			if v > hi {
-				hi = v
-			}
-		}
-		if s := hi - lo; s > bestSpread {
+		if s := bt.spreadHi[j] - bt.spreadLo[j]; s > bestSpread {
 			bestSpread, splitDim = s, j
 		}
 	}
@@ -203,13 +205,38 @@ func (bt *ballTree) build(idx []int) *ballNode {
 
 // enclose returns the centroid (componentwise mean) of the given points and the
 // radius of the smallest enclosing ball about that centroid under the metric.
-func (bt *ballTree) enclose(idx []int) ([]float64, float64) {
+func (bt *ballTree) enclose(idx []int, spread bool) ([]float64, float64) {
 	d := len(bt.pts[idx[0]])
 	c := make([]float64, d)
-	for _, i := range idx {
-		p := bt.pts[i]
+	if spread {
+		// Only for nodes that will actually split; a leaf never consults the spread, so it keeps the
+		// plain accumulation below and pays nothing for this.
+		if cap(bt.spreadLo) < d {
+			bt.spreadLo, bt.spreadHi = make([]float64, d), make([]float64, d)
+		}
+		lo, hi := bt.spreadLo[:d], bt.spreadHi[:d]
 		for j := 0; j < d; j++ {
-			c[j] += p[j]
+			lo[j], hi[j] = math.Inf(1), math.Inf(-1)
+		}
+		for _, i := range idx {
+			p := bt.pts[i]
+			for j := 0; j < d; j++ {
+				v := p[j]
+				c[j] += v
+				if v < lo[j] {
+					lo[j] = v
+				}
+				if v > hi[j] {
+					hi[j] = v
+				}
+			}
+		}
+	} else {
+		for _, i := range idx {
+			p := bt.pts[i]
+			for j := 0; j < d; j++ {
+				c[j] += p[j]
+			}
 		}
 	}
 	inv := 1.0 / float64(len(idx))
