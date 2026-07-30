@@ -957,7 +957,18 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 			return nil, fmt.Errorf("classic: gmm PredictProba feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
 	}
+	// ONE slab for every output row, handed out as capacity-capped views. rowBody used to
+	// make([]float64, k) per sample, which an allocation profile put at 1.06GB — 11.5% of the
+	// classic suite's total — for a result whose size is known up front. The slab is the same
+	// bytes in one allocation instead of len(x) of them.
+	//
+	// Capped so an append to one row copies rather than writing into the next; the rows are
+	// handed to the caller, so that is not hypothetical.
 	out := make([][]float64, len(x))
+	slab := make([]float64, len(x)*k)
+	for i := range out {
+		out[i] = slab[i*k : (i+1)*k : (i+1)*k]
+	}
 	diag := m.cfg.covariance == GMMDiag
 	rowBody := func(lr []float64, y4 [4][]float64, y []float64, i int) {
 		// Fused density: the per-component scalar logGaussian calls collapse into the
@@ -972,9 +983,7 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
 		}
-		o := make([]float64, k)
-		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
-		out[i] = o
+		softmaxLSE(out[i], lr) // out[i] = normalized responsibilities (one fused SIMD exp pass)
 	}
 	newScratch := func() ([]float64, [4][]float64, []float64) {
 		var y4 [4][]float64
