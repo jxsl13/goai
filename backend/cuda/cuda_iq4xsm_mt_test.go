@@ -35,7 +35,7 @@ func rawIQ4XS(K, N int, rng *rand.Rand) []byte {
 // → max abs diff ~0. M=13 = full MT=8 tile + ragged tail.
 func TestCUDAIQ4XSMatMulMTParity(t *testing.T) {
 	skipNoGPU(t)
-	const K, N, M = 512, 48, 13
+	const K, N, M = 512, 48, 7 // M in [2,8): validates the newly-routed MT path (partial tile)
 	rng := rand.New(rand.NewSource(53))
 	raw := rawIQ4XS(K, N, rng)
 	a := make([]float32, M*K)

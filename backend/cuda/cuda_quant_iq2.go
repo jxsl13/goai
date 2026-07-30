@@ -126,7 +126,7 @@ func (r *ResidentBIQ2XXS) qmatmul(a, out *DeviceF32, beta float32) error {
 	}
 	// M>1 (prefill/batch): route to the weight-read-once M-tiled GEMM (bit-identical) so column
 	// n's IQ2_XXS block is grid-decoded once, not re-read per row. M==1 decode stays on the GEMV.
-	if a.rows >= 8 {
+	if a.rows >= 2 { // M>1: weight-read-once MT wins from M=2 (matches Q4_K/Q5_K/Q6_K)
 		if rc := C.cu_qmatmul_iq2xxs_mt(a.ptr, r.q, grid, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(beta)); rc != 0 {
 			return fmt.Errorf("cuda: IQ2_XXS m-tiled matmul failed (code %d)", int(rc))
 		}
