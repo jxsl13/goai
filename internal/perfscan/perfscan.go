@@ -7353,6 +7353,14 @@ func perRowMakeSlabFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		if !ok || body == nil {
 			return true
 		}
+		// A loop ranging over a FIXED-SIZE ARRAY is bounded by a compile-time constant, so the
+		// slab it would earn is a handful of allocations rather than one per data row. PS2008's own
+		// guidance is to prefer data-sized loops, and five of the seven sites this check reported
+		// in classic/gmm.go were `for t := range y4` with y4 declared [4][]float64 — four
+		// allocations each. Reporting them buries the two that ran thousands of times.
+		if rs, ok := n.(*ast.RangeStmt); ok && rangesFixedArray(fn, rs.X) {
+			return true
+		}
 		made := map[string]ast.Node{}
 		report := func(base string, at ast.Node, rows ast.Expr) {
 			out = append(out, finding{
@@ -7416,6 +7424,63 @@ func perRowMakeSlabFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return out
+}
+
+// rangesFixedArray reports whether e names a variable declared in fn as a fixed-size ARRAY, so a
+// range over it iterates a compile-time constant number of times.
+//
+// No type information is needed: the declaration is in the same function, and an array type carries
+// its length in the syntax. A slice ([]T) has no Len and is correctly not matched — its length is a
+// runtime fact and a slab over it can be worth having.
+func rangesFixedArray(fn *ast.FuncDecl, e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch d := n.(type) {
+		case *ast.DeclStmt: // var y4 [4][]float64
+			gd, ok := d.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok || vs.Type == nil {
+					continue
+				}
+				at, ok := vs.Type.(*ast.ArrayType)
+				if !ok || at.Len == nil { // Len == nil means a slice, not an array
+					continue
+				}
+				for _, nm := range vs.Names {
+					if nm.Name == id.Name {
+						found = true
+					}
+				}
+			}
+		case *ast.AssignStmt: // y4 := [4][]float64{...}
+			for i, lhs := range d.Lhs {
+				lid, ok := lhs.(*ast.Ident)
+				if !ok || lid.Name != id.Name || i >= len(d.Rhs) {
+					continue
+				}
+				cl, ok := ast.Unparen(d.Rhs[i]).(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				if at, ok := cl.Type.(*ast.ArrayType); ok && at.Len != nil {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // invariantSliceMake reports whether e is make([]T, len, ...) whose size arguments do NOT mention

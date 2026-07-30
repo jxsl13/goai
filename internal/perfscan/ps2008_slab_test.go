@@ -156,6 +156,31 @@ func f(n int) []map[string]int {
 	return a
 }`)
 
+	// CLAUSE: a range over a FIXED-SIZE ARRAY iterates a compile-time constant number of times,
+	// so the slab it would earn is a handful of allocations, not one per data row. Five of the
+	// seven sites this check reported in classic/gmm.go were exactly this — `for t := range y4`
+	// with y4 declared [4][]float64 — and they buried the two that ran thousands of times.
+	silent("range-over-fixed-array-var", `package p
+
+func f(d int) [4][]float64 {
+	var y4 [4][]float64
+	for t := range y4 {
+		y4[t] = make([]float64, d)
+	}
+	return y4
+}`)
+
+	// Same, written as a composite literal rather than a var declaration.
+	silent("range-over-fixed-array-literal", `package p
+
+func f(d int) [3][]float64 {
+	y := [3][]float64{}
+	for t := range y {
+		y[t] = make([]float64, d)
+	}
+	return y
+}`)
+
 	// A make OUTSIDE any loop is the shape this check recommends, so it must never be reported —
 	// otherwise applying the advice would leave the finding in place.
 	silent("already-a-slab", `package p
@@ -168,4 +193,46 @@ func f(n, k int) [][]float64 {
 	}
 	return a
 }`)
+}
+
+// TestPS2008StillFiresOnSliceOfSlices is the counterpart to the fixed-array exclusion: a slice has
+// no length in its type, so its iteration count is a runtime fact and a slab over it can be worth
+// having. Without this the exclusion could be widened to skip every range-over-variable and nothing
+// would notice.
+func TestPS2008StillFiresOnSliceOfSlices(t *testing.T) {
+	src := `package p
+
+func f(n, d int) [][]float64 {
+	rows := make([][]float64, n)
+	for i := range rows {
+		rows[i] = make([]float64, d)
+	}
+	return rows
+}`
+	if got := slabCount(t, src); got != 1 {
+		t.Fatalf("a range over a SLICE must still be reported, got %d", got)
+	}
+}
+
+// TestPS2008FiresOnVarDeclaredSlice isolates the slice-versus-array test inside the fixed-array
+// exclusion's var-declaration branch. The other slice fixture declares its rows with
+// `rows := make(...)`, an assignment, so it exercises the composite-literal branch and never
+// reaches this one — which left the Len check unguarded until a mutation exposed it.
+//
+// A slice type is an ast.ArrayType with a nil Len, so dropping that test would classify every
+// var-declared slice as a fixed-size array and silence it.
+func TestPS2008FiresOnVarDeclaredSlice(t *testing.T) {
+	src := `package p
+
+func f(n, d int) [][]float64 {
+	var rows [][]float64
+	rows = make([][]float64, n)
+	for i := range rows {
+		rows[i] = make([]float64, d)
+	}
+	return rows
+}`
+	if got := slabCount(t, src); got != 1 {
+		t.Fatalf("a var-declared SLICE must still be reported, got %d", got)
+	}
 }
