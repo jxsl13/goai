@@ -7222,15 +7222,110 @@ func reflectSwapperSortFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 		if sel.Sel.Name != "Slice" && sel.Sel.Name != "SliceStable" {
 			return true
 		}
+		want := map[string]string{"Slice": "Sort", "SliceStable": "SortStable"}[sel.Sel.Name]
+		risk := " slices." + want + "Func passes VALUES where sort." + sel.Sel.Name +
+			" passes INDICES, so re-derive the comparator rather than transcribing it: here the" +
+			" element is not an index into anything, so a transcribed version will not compile and" +
+			" the compiler catches the mistake for you."
+		if outer, inner, ok := permutationSortComparator(call); ok {
+			risk = " THIS ONE IS AN INDEX-PERMUTATION SORT and the conversion is SILENT if done" +
+				" wrong. The comparator reads " + outer + "[" + inner + "[param]], so " + inner +
+				" holds integer indices. sort." + sel.Sel.Name + " passes POSITIONS while slices." +
+				want + "Func passes ELEMENTS, and because both are ints a transcribed " + outer +
+				"[" + inner + "[x]] still COMPILES while sorting by a meaningless key — it must" +
+				" become " + outer + "[x]. Two occurrences of exactly this shape were caught only" +
+				" by deliberately applying the wrong version and watching a gate fail; in one of" +
+				" them (a canonicalizing sort feeding an intern table) the whole package still" +
+				" passed, because the damage was lost deduplication rather than a wrong answer."
+		}
 		out = append(out, finding{
 			pos:      fset.Position(call.Pos()),
 			category: "reflect-swapper-sort",
-			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice length — switch to slices.%sFunc. Triage by how often this line runs, not by how long the slice is: a short sort called per node or per query is worth converting, a long one called once per Fit is not. slices.SortFunc passes VALUES where sort.%s passes INDICES, so re-derive the comparator rather than transcribing it",
-				sel.Sel.Name, map[string]string{"Slice": "Sort", "SliceStable": "SortStable"}[sel.Sel.Name], sel.Sel.Name),
+			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice length — switch to slices.%sFunc. Triage by how often this line runs, not by how long the slice is: a short sort called per node or per query is worth converting, a long one called once per Fit is not.%s",
+				sel.Sel.Name, want, risk),
 		})
 		return true
 	})
 	return out
+}
+
+// permutationSortComparator reports whether a sort.Slice/SliceStable call sorts an INDEX
+// PERMUTATION: its comparator indexes some other slice using the sorted slice's own element as
+// the index, i.e. OUTER[INNER[param]] where INNER is the slice being sorted. It returns the two
+// slice names.
+//
+// This is the one PS6009 conversion that fails SILENTLY. Everywhere else the element type is not
+// an integer, so transcribing the old positional expression into the element-based API does not
+// compile and the mistake is caught immediately. Here both the position and the element are ints,
+// so the transcription type-checks and sorts by whatever OUTER[INNER[element]] happens to be.
+//
+// Detection is purely syntactic and needs no type information: finding OUTER[INNER[param]] with
+// INNER the sorted slice and param a comparator parameter is itself the proof that INNER's
+// elements are used as indices.
+func permutationSortComparator(call *ast.CallExpr) (outer, inner string, ok bool) {
+	if len(call.Args) < 2 {
+		return "", "", false
+	}
+	slice, isIdent := ast.Unparen(call.Args[0]).(*ast.Ident)
+	if !isIdent {
+		return "", "", false
+	}
+	lit, isLit := ast.Unparen(call.Args[1]).(*ast.FuncLit)
+	if !isLit || lit.Type == nil || lit.Type.Params == nil {
+		return "", "", false
+	}
+	params := map[string]bool{}
+	for _, f := range lit.Type.Params.List {
+		for _, nm := range f.Names {
+			if nm.Name != "_" {
+				params[nm.Name] = true
+			}
+		}
+	}
+	if len(params) == 0 {
+		return "", "", false
+	}
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if ok {
+			return false
+		}
+		ix, isIx := n.(*ast.IndexExpr)
+		if !isIx {
+			return true
+		}
+		outerID, isID := ast.Unparen(ix.X).(*ast.Ident)
+		if !isID {
+			return true
+		}
+		// The outer slice is deliberately NOT required to differ from the sorted one. A
+		// self-permutation, s[s[a]], has exactly the property this check is about — the element
+		// is an integer index — so a transcribed s[s[x]] compiles and is wrong. An earlier
+		// version excluded outer == inner, which mutation testing showed to be both unnecessary
+		// (a direct s[i] < s[j] is already excluded by the nesting requirement below, since its
+		// index is a bare parameter rather than another index expression) and harmful, because
+		// it would have skipped the self-permutation case.
+		// The index must itself be, or contain, slice[param] — "contain" so that an offset form
+		// such as gsc[grp[a]-base] matches, which is the shape that was actually shipped wrong.
+		ast.Inspect(ix.Index, func(m ast.Node) bool {
+			if ok {
+				return false
+			}
+			inner2, isIx2 := m.(*ast.IndexExpr)
+			if !isIx2 {
+				return true
+			}
+			innerID, isID2 := ast.Unparen(inner2.X).(*ast.Ident)
+			if !isID2 || innerID.Name != slice.Name {
+				return true
+			}
+			if p, isP := ast.Unparen(inner2.Index).(*ast.Ident); isP && params[p.Name] {
+				outer, inner, ok = outerID.Name, innerID.Name, true
+			}
+			return !ok
+		})
+		return !ok
+	})
+	return outer, inner, ok
 }
 
 // stridedInnerWalkFindings flags PS6011 — a nested loop that walks a flat row-major buffer
