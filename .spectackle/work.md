@@ -1974,3 +1974,22 @@ SHIPPED: the new sibling plus 63 conversions, taking the check from 203 hits to 
 PRIORITIZATION, NOT PRECISION, IS THIS QUEUE'S WEAKNESS: 148 of 198 sites are on no benchmarked path, and each is worth a single small allocation. The wins concentrate entirely in the fifty reachable ones. Working it in benchmark-reachability order is the whole optimization.
 
 THE GUARD BLIND SPOT DOES NOT REPEAT: the single-identifier helper is called from exactly one place in the analyzer. One sibling check ORs three broader arms and has only a narrow residual gap; a third has the same shape but zero hits, so it is latent rather than live.
+
+## R-01KYRRXFDPE089QEV3FR5FYKD6 All 59 scan checks classified: the analyzer is broadly sound, and its whole liability is six messages that oversell borrowed numbers
+kind: research
+state: draft
+created: 2026-07-30
+
+Triage of every registry entry against one question - is the check's claim decidable from the syntax tree, or does it depend on how often the code runs, how big its data is, or what a kernel costs. The hypothesis came from two hit-by-hit audits with opposite outcomes and it held.
+
+THE SHAPE OF THE ANALYZER. Fifty-nine entries, not the forty-four I briefed - that was the count with non-zero hits, and the agent corrected me. Thirty-eight are fact-class and carry 752 of 1288 findings; nine are cost-model, twelve mixed. Every one of the five largest checks by volume is fact-class, and together they are forty-two percent of all output. The analyzer is sound; the problem is narrower than expected.
+
+THE LIABILITY IS SIX MESSAGES, 290 HITS. They assert a magnitude measured somewhere else as though it applied where the check fired. That is precisely what made the check audited earlier useless for months - a reader trusts the number, acts, finds nothing, and stops trusting the tool. Five checks already handle this correctly and one of them publishes its own counterexample, so the standard exists in-tree; six were below it. Fixed by attribution alone: no predicate touched, hit counts identical before and after.
+
+THE MOST IMPORTANT SINGLE FINDING is not about performance. One check suggests replacing a loop-invariant divide with a reciprocal multiply, and with no type information it cannot tell float operands from integer ones. On integers the suggested rewrite evaluates to zero - a wrong-value bug, not a missed win. That now leads its message, and it is the one check whose next step should be a real audit, because its wrong answer produces incorrect code rather than wasted effort.
+
+ANOTHER worth keeping: one check had no evidence and no hedge at all, the terse-est message in the analyzer attached to its third-largest cost-model count, and it prescribed a four-way unroll - the remainder-path shape another check in the same registry exists to warn about. Its message now names two checks that decide a site, one of which is answerable statically from the compiler's assembly output without any benchmark.
+
+TWO CONCRETE DEFECTS, one mine. A check hard-coded its own identifier in its message while the reporter appends it, so every finding printed the ID twice; verified the class does not repeat. And a message credited a filter by a name I had invented in an earlier commit for a function that shipped under a different one - corrected to describe what it does.
+
+WHAT WAS DELIBERATELY NOT DONE. No predicate changed. The triage floated one narrowing and could not count it, and the standing rule forbids proposing an uncounted predicate. Also recorded: the global summary footer already tells every reader that hits are candidates and hotness must be measured, which is why the cost-model checks are a message-honesty problem rather than a soundness one.
