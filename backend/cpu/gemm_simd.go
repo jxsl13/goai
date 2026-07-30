@@ -555,3 +555,12 @@ func gemmF64BandScalar(A, B, C []float64, loRow, hiRow, k, n int) {
 		}
 	}
 }
+
+// gemmF64Rows is the simd build's form of the F64 row-band fan-out: the packed panel path in
+// gemm_nosimd.go is a fix for the SCALAR kernel's strided B read, and this build's AVX band does
+// not share that shape, so it stays the plain fan-out.
+func gemmF64Rows(A, B, C []float64, m, k, n int) {
+	parallelWork(m, k*n, func(loRow, hiRow int) {
+		gemmF64Band(A, B, C, loRow, hiRow, k, n)
+	})
+}

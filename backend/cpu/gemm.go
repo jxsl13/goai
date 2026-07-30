@@ -129,9 +129,7 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			// per-element transcendentals keep parThreshold so they still parallelize.
 			gemmF64Band(A, B, C, 0, m, k, n)
 		} else {
-			parallelWork(m, k*n, func(loRow, hiRow int) {
-				gemmF64Band(A, B, C, loRow, hiRow, k, n)
-			})
+			gemmF64Rows(A, B, C, m, k, n)
 		}
 	case tensor.F32:
 		A, B := ac.Storage().F32(), bc.Storage().F32()

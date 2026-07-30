@@ -51,7 +51,7 @@ func BenchmarkGemmF32Portable(b *testing.B) {
 // says it does; the values stay far from overflow at these sizes and the arithmetic cost does not
 // depend on them.
 func BenchmarkGemmF64Portable(b *testing.B) {
-	for _, sz := range []int{256, 512, 1024} {
+	for _, sz := range []int{64, 128, 256, 512, 1024} {
 		b.Run(fmt.Sprintf("%d", sz), func(b *testing.B) {
 			m, k, n := sz, sz, sz
 			rng := rand.New(rand.NewSource(7))
@@ -64,15 +64,26 @@ func BenchmarkGemmF64Portable(b *testing.B) {
 			for i := range Bm {
 				Bm[i] = rng.Float64()*2 - 1
 			}
-			b.ResetTimer()
-			for range b.N {
-				parallelWork(m, k*n, func(loRow, hiRow int) {
-					gemmF64Band(A, Bm, C, loRow, hiRow, k, n)
+			// Drive gemmF64Rows, which is what gemm.go calls for a large matmul, and sweep the
+			// pack gate inside ONE binary: the arms then differ only by that variable, with no
+			// file swap and no recompilation between them.
+			for _, arm := range []struct {
+				name string
+				gate int
+			}{{"unpacked", 1 << 30}, {"packed", 0}} {
+				b.Run(arm.name, func(b *testing.B) {
+					saved := gemmPackMinWorkF64
+					gemmPackMinWorkF64 = arm.gate
+					defer func() { gemmPackMinWorkF64 = saved }()
+					b.ResetTimer()
+					for range b.N {
+						gemmF64Rows(A, Bm, C, m, k, n)
+					}
+					b.StopTimer()
+					flops := 2 * float64(m) * float64(k) * float64(n)
+					b.ReportMetric(flops/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 				})
 			}
-			b.StopTimer()
-			flops := 2 * float64(m) * float64(k) * float64(n)
-			b.ReportMetric(flops/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 		})
 	}
 }

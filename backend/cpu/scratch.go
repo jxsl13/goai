@@ -23,6 +23,18 @@ func getF64(n int) *[]float64 {
 	return bp
 }
 
+// getF64Raw returns a []float64 of length n from the pool WITHOUT zeroing — for buffers every
+// element of which is overwritten before use (packed operands). Same pool as getF64.
+func getF64Raw(n int) *[]float64 {
+	bp := f64Scratch.Get().(*[]float64)
+	if cap(*bp) < n {
+		*bp = make([]float64, n)
+	} else {
+		*bp = (*bp)[:n]
+	}
+	return bp
+}
+
 // putF64 returns a buffer to the pool.
 func putF64(bp *[]float64) { f64Scratch.Put(bp) }
 
