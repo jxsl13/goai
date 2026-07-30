@@ -56,10 +56,36 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 				//
 				// Bit-identical: every destination is written once from the same two
 				// source values, in the same k order. Only branches are removed.
-				for kp, kq := p, q; kq < len(m); kp, kq = kp+n, kq+n {
+				// v is stored TRANSPOSED (vT[p*n+k] is the old v[k*n+p]). The
+				// accumulator is only ever column-rotated, so transposing its storage
+				// turns the walk contiguous without touching the arithmetic — same
+				// operations, same order, same operands (PS6011).
+				rp := vT[p*n : p*n+n : p*n+n]
+				rq := vT[q*n : q*n+n : q*n+n]
+				rq = rq[:len(rp)]
+				// THE COLUMN ROTATION OF m AND THE ROTATION OF THE ACCUMULATOR ARE FUSED.
+				// They are disjoint by construction — one touches columns p and q of m, the
+				// other touches only vT — so no peel and no skip is needed and the two
+				// dependency chains issue together. Fusing the ROW rotation in as well would
+				// need a four-element peel, because at k in {p,q} the row loop reads cells the
+				// column loop has just written; that is left separate.
+				//
+				// The loop ranges over rp with rq clamped to it, which is what discharges
+				// their bounds checks — ranging over a separate count does not, since prove
+				// gets no relation between the count and the slice length. m keeps its two
+				// computed-offset checks, as before.
+				//
+				// Bit-identical: the column rotation still completes for every k before the
+				// row rotation begins, every destination is written once from the same two
+				// source values, and the k order is unchanged in all three.
+				for k, vkp := range rp {
+					kp, kq := k*n+p, k*n+q
 					mkp, mkq := m[kp], m[kq]
 					m[kp] = c*mkp - s*mkq
 					m[kq] = s*mkp + c*mkq
+					vkq := rq[k]
+					rp[k] = c*vkp - s*vkq
+					rq[k] = s*vkp + c*vkq
 				}
 				rmp := m[p*n : p*n+n : p*n+n]
 				rmq := m[q*n : q*n+n : q*n+n]
@@ -68,18 +94,6 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 					mqk := rmq[k]
 					rmp[k] = c*mpk - s*mqk
 					rmq[k] = s*mpk + c*mqk
-				}
-				// v is stored TRANSPOSED (vT[p*n+k] is the old v[k*n+p]). The
-				// accumulator is only ever column-rotated, so transposing its storage
-				// turns the walk contiguous without touching the arithmetic — same
-				// operations, same order, same operands (PS6011).
-				rp := vT[p*n : p*n+n : p*n+n]
-				rq := vT[q*n : q*n+n : q*n+n]
-				rq = rq[:len(rp)]
-				for k, vkp := range rp {
-					vkq := rq[k]
-					rp[k] = c*vkp - s*vkq
-					rq[k] = s*vkp + c*vkq
 				}
 			}
 		}
