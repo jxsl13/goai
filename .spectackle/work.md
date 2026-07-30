@@ -862,3 +862,10 @@ state: draft
 created: 2026-07-30
 
 105k-token read-only scout of backend/cpu vs backend/ref registrations + model drivers. RESULT: NO clean high-leverage un-optimized F32 inference kernel left. Confirmed optimal: RMSNorm/LayerNorm(+bwd) norm.go, Softmax (softmaxWide), AddBias(+bwd), Conv1D fwd, reduce-all Sum/Mean/Max/Min/Prod, MHAMasked F64, all elementwise activations. Leftovers all LOW-EV: (1) axis-reductions fall to ref scalar (bit-exact fixable but rare in inference); (2) MHAMasked/MHASelect F32 unregistered→ref but T5 runs F64 so unexercised; (3) mamba_decode.go mixerStep/mixerPrefill S6 scan serial over independent D channels (SSM-adjacent, parallelizable bit-exact, but scan is fraction of prefill); (4) misc elementwise Sqrt/Clip→ref, Griffin runs F64. Highest-EV=#3 but e2e-dilution risk.
+
+## R-01KYSQ5YVJEXGR1PGH38RTMMFH REJECT (quantified): Mamba mixerPrefill scan parallelize is <2% e2e (matmul-dominated)
+kind: research
+state: draft
+created: 2026-07-30
+
+Leftover #3 from the tick-5 scout. mixerPrefill scan (nlp/mamba_decode.go:311-333) is the only SERIAL section — tempting Amdahl target. But FLOP analysis at production dims (dModel=2560, dInner=5120, N=16, T=512): the 3 big F64 projections InX/InZ/OutProj are ~6.7 GFLOP each = ~20 GFLOP; the scan is O(T*D*N)=168 MFLOP = <1% of FLOPs. Even 8x-parallelizing the serial scan saves ~1% e2e — matmuls (already parallel via OpMatMul) are ~100x larger. NewMambaBlock(F64,2560,16,4,2) makes a production block cheaply, so a bench IS feasible, but the win is diluted to noise. Amdahl doesn t apply because the parallel matmuls dominate wall-clock, not just FLOPs. Bit-exact fix available (mirror ssmParallelScanF64, per-worker abar) but NOT worth it. REJECT. Confirms scout dilution concern with numbers.
