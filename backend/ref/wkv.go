@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -49,22 +50,24 @@ func wkvKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			ks, vs := kc.Storage().F64(), vc.Storage().F64()
 			ws, us := wcv.Storage().F64(), ucv.Storage().F64()
 			os := out.Storage().F64()
-			for c := range d {
-				wc, uc := ws[c], us[c]
-				aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, max exponent
-				for t := range seq {
-					kk, vv := ks[t*d+c], vs[t*d+c]
-					ww := uc + kk
-					q := math.Max(pp, ww)
-					e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
-					os[t*d+c] = (e1*aa + e2*vv) / (e1*bb + e2)
-					q = math.Max(pp-wc, kk)
-					e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
-					aa = e1*aa + e2*vv
-					bb = e1*bb + e2
-					pp = q
+			parallel.Rows(d, func(clo, chi int) {
+				for c := clo; c < chi; c++ {
+					wc, uc := ws[c], us[c]
+					aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, max exponent
+					for t := range seq {
+						kk, vv := ks[t*d+c], vs[t*d+c]
+						ww := uc + kk
+						q := math.Max(pp, ww)
+						e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+						os[t*d+c] = (e1*aa + e2*vv) / (e1*bb + e2)
+						q = math.Max(pp-wc, kk)
+						e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+						aa = e1*aa + e2*vv
+						bb = e1*bb + e2
+						pp = q
+					}
 				}
-			}
+			})
 			return []*tensor.Tensor{out}, nil
 		}
 	case tensor.F32:
@@ -74,22 +77,24 @@ func wkvKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			ks, vs := kc.Storage().F32(), vc.Storage().F32()
 			ws, us := wcv.Storage().F32(), ucv.Storage().F32()
 			os := out.Storage().F32()
-			for c := range d {
-				wc, uc := float64(ws[c]), float64(us[c])
-				aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
-				for t := range seq {
-					kk, vv := float64(ks[t*d+c]), float64(vs[t*d+c])
-					ww := uc + kk
-					q := math.Max(pp, ww)
-					e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
-					os[t*d+c] = float32((e1*aa + e2*vv) / (e1*bb + e2))
-					q = math.Max(pp-wc, kk)
-					e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
-					aa = e1*aa + e2*vv
-					bb = e1*bb + e2
-					pp = q
+			parallel.Rows(d, func(clo, chi int) {
+				for c := clo; c < chi; c++ {
+					wc, uc := float64(ws[c]), float64(us[c])
+					aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
+					for t := range seq {
+						kk, vv := float64(ks[t*d+c]), float64(vs[t*d+c])
+						ww := uc + kk
+						q := math.Max(pp, ww)
+						e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+						os[t*d+c] = float32((e1*aa + e2*vv) / (e1*bb + e2))
+						q = math.Max(pp-wc, kk)
+						e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+						aa = e1*aa + e2*vv
+						bb = e1*bb + e2
+						pp = q
+					}
 				}
-			}
+			})
 			return []*tensor.Tensor{out}, nil
 		}
 	}
