@@ -231,7 +231,7 @@ var checks = []check{
 	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
 	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
 	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it. MEASURED, in isolation, on nlp exec1 against its pooled siblings exec1a and exec2 (M2 Pro, darwin/arm64, nil Recorder so the pooled arm is taken): the pooling removes EXACTLY ONE allocation per call, 8 down to 7, with 392->384 B at one input and 432->416 B at two, and 179.8->177.6 ns (1 input) and 201.5->197.1 ns (2 inputs). So the win is real, bit-identical by construction (same op, same inputs, same attrs — only the slice provenance changes) and portable, but it is ONE allocation out of eight: the other seven come from the callee itself (output tensor, storage, shape and strides), so a whole-call ratio near 1-2% is the ceiling, not a starting point. RANKING, and this is what the count hides: all 118 findings in this tree sit on code that NO benchmark reaches. exec1 was probed with a counter under BenchmarkGemmaDecode, BenchmarkFalconDecode, BenchmarkCohereDecode, BenchmarkQuantDeepSeekV2ReconstructedDecode and BenchmarkT5Decode500RowBuf — every one confirmed to have executed — and the call count was ZERO in all five. The 97 nlp sites live in bert, blt, jamba, gemma2, granitemoe, dola and the unquantized deepseekv2 decode and prefill paths, none of which is benchmarked. So an end-to-end number for this check cannot be produced on this host without first writing the missing model benchmarks. Convert these as a portable resource win on the strength of the isolated measurement, or write the instrument first if a wall-clock claim is wanted — but do not read the finding COUNT as leverage. A 3-argument call has no sibling to move to (exec1/exec2 stop at two), which is one site here; the check reports it because the sibling test only needs SOME matching sibling, so confirm the exact arity exists before converting", false},
-	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop", false},
+	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop FALLBACK ARMS ARE SKIPPED: where an if/else has a branch reaching typed storage — in its body, its init guard or its condition — the else is the correctness path for whatever that branch declines, so a literal rebuilt there never runs on the path a benchmark takes. Verified rather than assumed: a panic in nlp quant_deepseekv2 attnReconstructed's else arm never fires under BenchmarkQuantDeepSeekV2ReconstructedPrefill or its Decode twin, both of which take the typed branch. That file went from 8 findings to 2, and the 2 that remain are the ConcatAttrs literals AFTER the if/else, on the common path — which is the behavior wanted. Tree-wide 117 to 111. PS1001 suppresses its equivalent via hasFlat and PS1009 via its dtype tail; this brings PS6016 in line, and PERF-FINDING-MAY-BE-THE-FALLBACK-ARM-001 records the pattern across all three", false},
 	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
 	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
 	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
@@ -7584,9 +7584,14 @@ func isDtypeSwitch(sw *ast.SwitchStmt) bool {
 
 // clauseReadsTypedStorage reports whether the clause reaches the backing store through
 // Storage().<Typed>() — the shape that makes it a converted arm.
-func clauseReadsTypedStorage(cc *ast.CaseClause) bool {
+func clauseReadsTypedStorage(cc *ast.CaseClause) bool { return readsTypedStorage(cc) }
+
+// readsTypedStorage reports whether a subtree reaches the backing store through
+// Storage().<Typed>(). Shared by PS1009, which uses it to recognize a converted dtype arm, and by
+// PS6016, which uses it to recognize the arm a fallback sits behind.
+func readsTypedStorage(root ast.Node) bool {
 	found := false
-	ast.Inspect(cc, func(n ast.Node) bool {
+	ast.Inspect(root, func(n ast.Node) bool {
 		if found {
 			return false
 		}
@@ -9506,6 +9511,40 @@ func loopInvariantLiteralArgFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 			return true
 		}
 		moving := loopMovingNames(n, body)
+		// FALLBACK ARMS ARE INERT. Where an if/else has a devirtualized branch that reaches typed
+		// storage, the else is the correctness path for whatever that branch declines — so a literal
+		// rebuilt there is not rebuilt on the hot path at all. Verified rather than assumed: a panic
+		// in nlp quant_deepseekv2's attnReconstructed else-arm never fires under either
+		// BenchmarkQuantDeepSeekV2Reconstructed benchmark, both of which take the typed branch.
+		// PS1001 and PS1009 already suppress their own equivalents; this brings PS6016 in line.
+		var inert []struct{ lo, hi token.Pos }
+		ast.Inspect(body, func(k ast.Node) bool {
+			ifs, ok := k.(*ast.IfStmt)
+			if !ok || ifs.Else == nil {
+				return true
+			}
+			// The typed access may sit in the BODY (`if ... { s := x.Storage().F64(); ... }`) or in
+			// the guard's INIT (`if s := x.Storage().F64(); s != nil {`), and both forms occur.
+			guarded := readsTypedStorage(ifs.Body)
+			if !guarded && ifs.Init != nil {
+				guarded = readsTypedStorage(ifs.Init)
+			}
+			if !guarded && ifs.Cond != nil {
+				guarded = readsTypedStorage(ifs.Cond)
+			}
+			if guarded {
+				inert = append(inert, struct{ lo, hi token.Pos }{ifs.Else.Pos(), ifs.Else.End()})
+			}
+			return true
+		})
+		inFallback := func(p token.Pos) bool {
+			for _, sp := range inert {
+				if p >= sp.lo && p < sp.hi {
+					return true
+				}
+			}
+			return false
+		}
 		// Every use of each candidate literal has to be the one call argument, so collect
 		// the literals reached as a direct argument and reject any seen elsewhere.
 		reported := map[string]bool{}
@@ -9516,7 +9555,7 @@ func loopInvariantLiteralArgFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 			}
 			for _, arg := range call.Args {
 				cl, ok := arg.(*ast.CompositeLit)
-				if !ok || len(cl.Elts) == 0 || cl.Type == nil {
+				if !ok || len(cl.Elts) == 0 || cl.Type == nil || inFallback(cl.Pos()) {
 					continue
 				}
 				if _, ok := cl.Type.(*ast.ArrayType); ok {
