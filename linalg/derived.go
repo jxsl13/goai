@@ -15,6 +15,8 @@ const f64Eps = 2.220446049250313e-16
 // otherwise, cutoff = rcond·σ_max with numpy's default rcond = 1e-15. A⁺ satisfies the four
 // Moore-Penrose conditions; for a full-rank tall matrix it is the least-squares left-inverse
 // (AᵀA)⁻¹Aᵀ, and A⁺·b is the least-squares/minimum-norm solution. Result is [n×m] f64.
+//
+//perfscan:ignore PS6004 dual path unverifiable: the fallback is unreachable, u and v are SVD outputs
 func Pinv(a *tensor.Tensor) (*tensor.Tensor, error) {
 	u, s, v, err := SVD(a)
 	if err != nil {
@@ -30,6 +32,11 @@ func Pinv(a *tensor.Tensor) (*tensor.Tensor, error) {
 	// available and the read becomes uf[j*p+k]. Same operands, same order, same
 	// accumulation into out, so bit-identical; the accessor path is retained for
 	// tensors a flat view cannot expose.
+	// The accessor arm below is UNREACHABLE in practice and kept only as a defensive fallback:
+	// u and v are SVD's own outputs, freshly built contiguous f64 tensors, so both guards always
+	// succeed no matter what the caller passed in. Confirmed by panicking in that arm — the whole
+	// linalg suite stayed green. The PS6004 suppression for it sits on the func declaration, which
+	// is where that check reports.
 	uf, uok := flatRowMajor(u)
 	vf, vok := flatRowMajor(v)
 	for k := range p {
