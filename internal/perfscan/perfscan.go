@@ -185,6 +185,7 @@ var checks = []check{
 	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
+	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. Strip-mine the d loop by 4 and hold the four partial sums in registers with the outer loop innermost: the input is still read 4-contiguous from one cache line, but OUT is written once per element. Bit-identical when OUT enters zeroed (each element still sums the outer var ascending, same terms, same association); if OUT is pre-seeded, seed the register from OUT[d] first. This is the MIRROR of PS1006 and the two must not be confused: PS1006 says interchange when the INNER var is strided, and interchanging THIS shape would be the wrong direction — here the inner var is already contiguous, so the fix is strip-mining, not swapping. MEASURED against the axpy form on the sparse P·V (nn, 3 interleaved rounds, M2 Pro): MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). COST MODEL, not fact: the win comes from removing OUT traffic, so it shrinks as OUT gets small enough to stay in L1 across the whole outer loop — rank candidates by the outer trip count, which is how many times OUT is re-streamed", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -1974,6 +1975,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, stridedInnerReductionFindings(fset, fn)...)
+	out = append(out, outputRowRestreamedFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, scaledSerialDotFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
@@ -3697,6 +3699,211 @@ func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, boo
 		return !found
 	})
 	return base, stride, found
+}
+
+// outputRowRestreamedFindings flags PS1007 — the MIRROR of PS1006. An inner loop over d
+// accumulates into an output row that is INVARIANT across the enclosing loop:
+//
+//	for j := range keys {          // outer
+//	    w := scores[j]
+//	    for d := 0; d < dk; d++ {  // inner, d is already the contiguous part
+//	        out[d] += w * vs[j*dm+d]
+//	    }
+//	}
+//
+// Every one of the dk elements of `out` is loaded and stored once per OUTER step, so out is
+// re-streamed len(keys) times when it only needs writing once. PS1006 deliberately stays
+// SILENT here (its own silence fixture is this exact shape) because interchanging would put
+// the strided access on the inside — the wrong direction. The fix is to strip-mine the d loop
+// by 4 with the outer loop innermost, keeping four partial sums in registers: the input is
+// still read four-contiguous from a single cache line, and out is written once per element.
+//
+// Bit-identical when out enters zeroed — each element still sums the outer var ascending over
+// the same terms with the same association. If out is pre-seeded the register must be seeded
+// from out[d] first.
+//
+// Requires the accumulated base to be a plain identifier indexed by EXACTLY the inner var. A
+// base whose index also mentions the outer var writes a different location each outer step —
+// a scatter, not a re-stream — and is not flagged. A base ASSIGNED inside the outer body (a
+// per-iteration row slice) is likewise excluded for the same reason.
+func outputRowRestreamedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ovs, obody, ok := loopBoundVarsBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range immediateInnerLoops(obody) {
+			iName, ibody, ok := loopVarBody(s)
+			if !ok || iName == "" {
+				continue
+			}
+			skip := false
+			for _, ov := range ovs {
+				if ov == iName {
+					skip = true
+				}
+			}
+			if skip {
+				continue
+			}
+			base, rhs, ok := rowAccumulatedAt(ibody, iName)
+			if !ok {
+				continue
+			}
+			// The accumulated value must depend on the OUTER loop, or the inner loop is
+			// simply summing something the outer loop does not vary and the whole nest is
+			// redundant work of a different kind.
+			if !dependsOnOuterVars(rhs, ovs, obody) {
+				continue
+			}
+			// Loop-INVARIANT across the outer loop: a base reassigned per outer step is a
+			// scatter into distinct rows, which is not re-streamed.
+			if identAssignedIn(obody, base) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "output-row-restreamed",
+				msg: fmt.Sprintf("inner %s-loop accumulates into %s[%s], and %s does not vary with the"+
+					" enclosing %s loop — so every element of %s is loaded and stored once per %s step"+
+					" instead of once in total. Strip-mine the %s loop by 4 and keep the four partial"+
+					" sums in registers with the %s loop innermost: %s is then written once per element"+
+					" while the input stays 4-contiguous. Bit-identical if %s enters zeroed (same"+
+					" ascending-%s terms, same association); seed the registers from %s[%s] if not."+
+					" NOT PS1006 — %s is already the contiguous part here, so interchanging is the"+
+					" wrong direction. Measured 1.24x (MoBA) / 1.09x (DSA) against the axpy form."+
+					" Rank by the %s trip count: that is how many times %s is re-streamed.",
+					iName, base, iName, base, strings.Join(ovs, "/"), base, strings.Join(ovs, "/"),
+					iName, strings.Join(ovs, "/"), base, base, strings.Join(ovs, "/"), base, iName,
+					iName, strings.Join(ovs, "/"), base),
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// loopBoundVarsBody is loopVarBody widened to every non-blank name a loop binds, and to the
+// range VALUE. `for _, j := range act` — iterating a list of selected indices, the shape a
+// sparse mask produces — binds j as Value with a blank Key, which loopVarBody rejects
+// outright; PS1007 must see it, since that is the exact loop the measurement came from.
+func loopBoundVarsBody(n ast.Node) ([]string, *ast.BlockStmt, bool) {
+	var names []string
+	add := func(e ast.Expr) {
+		if id, ok := e.(*ast.Ident); ok && id.Name != "_" {
+			names = append(names, id.Name)
+		}
+	}
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		if l.Key != nil {
+			add(l.Key)
+		}
+		if l.Value != nil {
+			add(l.Value)
+		}
+		if len(names) == 0 {
+			return nil, nil, false
+		}
+		return names, l.Body, true
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				add(lhs)
+			}
+		}
+		if len(names) == 0 {
+			return nil, nil, false
+		}
+		return names, l.Body, true
+	}
+	return nil, nil, false
+}
+
+// rowAccumulatedAt finds a `BASE[iName] += RHS` in root where BASE is a plain identifier and
+// the index is EXACTLY iName. Returns the base name and the accumulated expression.
+func rowAccumulatedAt(root ast.Node, iName string) (string, ast.Expr, bool) {
+	var base string
+	var rhs ast.Expr
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		ix, ok := as.Lhs[0].(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		id, ok := ix.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if !isPlainIdent(ix.Index, iName) {
+			return true
+		}
+		base, rhs, found = id.Name, as.Rhs[0], true
+		return false
+	})
+	return base, rhs, found
+}
+
+// dependsOnOuterVars reports whether e mentions one of the outer loop's variables, either
+// directly or through a local assigned from one inside the outer body (the hoisted `w :=
+// scores[j]` shape, which is the common form).
+func dependsOnOuterVars(e ast.Expr, ovs []string, obody *ast.BlockStmt) bool {
+	for _, v := range ovs {
+		if exprMentions(e, v) {
+			return true
+		}
+	}
+	for _, st := range obody.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		via := false
+		for _, v := range ovs {
+			if exprMentions(as.Rhs[0], v) {
+				via = true
+			}
+		}
+		if !via {
+			continue
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && exprMentions(e, id.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// identAssignedIn reports whether name appears on the LHS of an assignment in root.
+func identAssignedIn(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // immediateInnerLoops returns the loop statements nested in body that are not themselves
