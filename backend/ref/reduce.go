@@ -1,6 +1,7 @@
 package ref
 
 import (
+	"github.com/jxsl13/goai/internal/parallel"
 	"fmt"
 	"math"
 
@@ -273,17 +274,22 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			// one store per segment (no odometer, no best[of]/bidx[of] memory RMW). Strict
 			// > with ascending k gives the same lowest-index tie as the odometer.
 			count := shape[nd-1]
-			for seg := 0; seg < outNumel; seg++ {
-				base := seg * count
-				bv := math.Inf(-1)
-				bk := 0
-				for k := 0; k < count; k++ {
-					if v := xs[base+k]; v > bv {
-						bv, bk = v, k
+			// Each output segment scans its own contiguous [count]-run for the argmax with the
+			// lowest-index tie (strict >, ascending k) and writes bidx[seg] — disjoint, so the
+			// segments parallelize byte-identically.
+			parallel.Rows(outNumel, func(slo, shi int) {
+				for seg := slo; seg < shi; seg++ {
+					base := seg * count
+					bv := math.Inf(-1)
+					bk := 0
+					for k := 0; k < count; k++ {
+						if v := xs[base+k]; v > bv {
+							bv, bk = v, k
+						}
 					}
+					bidx[seg] = float64(bk)
 				}
-				bidx[seg] = float64(bk)
-			}
+			})
 		} else {
 			eff := make([]int, nd)
 			for ax := range nd {
