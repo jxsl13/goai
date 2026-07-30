@@ -474,13 +474,17 @@ func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
 	n, d := len(x), m.W.Shape()[0]
 	k := m.W.Shape()[1]
 	xt := tensor.New(tensor.F64, tensor.Shape{n, d})
+	// Fill through the contiguous backing slice: the per-element SetF64 was n*d interface
+	// dispatches plus a flat-offset recompute each time — 81920 of them at n=4096, d=20 — to move
+	// values that are already contiguous on both sides (PS1005). W is always built as F64 (see
+	// Fit), so xt is too and no dtype fallback is needed; this is the idiom the rest of this file
+	// already uses. Identical values, identical order.
+	xf := xt.Storage().F64()
 	for i := range n {
 		if len(x[i]) != d {
 			return nil, fmt.Errorf("classic: SoftmaxRegression.PredictProba row %d width %d, want %d", i, len(x[i]), d)
 		}
-		for j := range d {
-			xt.SetF64(x[i][j], i, j)
-		}
+		copy(xf[i*d:i*d+d], x[i])
 	}
 	ctx := backend.NewContext()
 	z, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{xt, m.W}, nil)
@@ -495,12 +499,16 @@ func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Copy out the same way, and from ONE slab: the accessor walk was another n*k dispatches, and
+	// the per-row make() was one allocation per sample — the largest such site in this package by
+	// iteration count (PS1005 and PS2008 at the same spot). Rows are disjoint capped views and
+	// every element is overwritten by the copy, so this is bit-identical.
+	pf := p[0].Storage().F64()
 	out := make([][]float64, n)
+	slab := make([]float64, n*k)
 	for i := range n {
-		out[i] = make([]float64, k)
-		for j := range k {
-			out[i][j] = p[0].AtF64(i, j)
-		}
+		out[i] = slab[i*k : i*k+k : i*k+k]
+		copy(out[i], pf[i*k:i*k+k])
 	}
 	return out, nil
 }
