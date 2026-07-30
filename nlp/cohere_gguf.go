@@ -329,6 +329,10 @@ func CohereToGGUF(m *Cohere) (map[string]any, map[string]*tensor.Tensor) {
 func permuteSplitToInterleave(w *tensor.Tensor, heads, headDim int) *tensor.Tensor {
 	out, in := w.Shape()[0], w.Shape()[1]
 	res := tensor.New(tensor.F64, tensor.Shape{out, in})
+	// res is constructed F64 here, so write its storage directly — one of the two dispatches per
+	// element with no dtype fallback needed (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001). w keeps its
+	// accessor: its dtype comes from the loaded file.
+	rf := res.Storage().F64()
 	half := headDim / 2
 	for h := range heads {
 		base := h * headDim
@@ -337,9 +341,11 @@ func permuteSplitToInterleave(w *tensor.Tensor, heads, headDim int) *tensor.Tens
 			src1 := base + i + half // split-half: second half
 			dst0 := base + 2*i      // interleaved even channel
 			dst1 := base + 2*i + 1  // interleaved odd channel
+			r0 := rf[dst0*in : (dst0+1)*in]
+			r1 := rf[dst1*in : (dst1+1)*in]
 			for c := range in {
-				res.SetF64(w.AtF64(src0, c), dst0, c)
-				res.SetF64(w.AtF64(src1, c), dst1, c)
+				r0[c] = w.AtF64(src0, c)
+				r1[c] = w.AtF64(src1, c)
 			}
 		}
 	}

@@ -268,10 +268,17 @@ func slice3D(t *tensor.Tensor, j int) (*tensor.Tensor, error) {
 func deinterleaveRoPE(w *tensor.Tensor, heads, block, peOffset, ropeDim int) *tensor.Tensor {
 	out, in := w.Shape()[0], w.Shape()[1]
 	res := tensor.New(tensor.F64, tensor.Shape{out, in})
+	// res is constructed F64 right here, so its storage can be written directly and no dtype
+	// fallback is needed or wanted (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001). That removes one of the
+	// two interface dispatches per element — out*in of them in this copy alone, 4.2M at [4096,1024].
+	// w keeps its accessor: its dtype comes from the file being loaded, so a typed read there would
+	// need a dual path and a test reaching both arms.
+	rf := res.Storage().F64()
 	// Copy every row as-is first; the pe rows are then overwritten in permuted order.
 	for r := range out {
+		row := rf[r*in : (r+1)*in]
 		for c := range in {
-			res.SetF64(w.AtF64(r, c), r, c)
+			row[c] = w.AtF64(r, c)
 		}
 	}
 	half := ropeDim / 2
@@ -282,9 +289,11 @@ func deinterleaveRoPE(w *tensor.Tensor, heads, block, peOffset, ropeDim int) *te
 			src1 := base + 2*i + 1  // interleaved odd channel
 			dst0 := base + i        // split-half: first half
 			dst1 := base + i + half // split-half: second half
+			r0 := rf[dst0*in : (dst0+1)*in]
+			r1 := rf[dst1*in : (dst1+1)*in]
 			for c := range in {
-				res.SetF64(w.AtF64(src0, c), dst0, c)
-				res.SetF64(w.AtF64(src1, c), dst1, c)
+				r0[c] = w.AtF64(src0, c)
+				r1[c] = w.AtF64(src1, c)
 			}
 		}
 	}

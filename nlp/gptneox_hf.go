@@ -160,12 +160,17 @@ func splitNeoXQKV(qkv *tensor.Tensor, heads, headDim int) (q, k, v *tensor.Tenso
 	in := qkv.Shape()[1]
 	mk := func(which int) *tensor.Tensor {
 		out := tensor.New(tensor.F64, tensor.Shape{heads * headDim, in})
+		// out is constructed F64 here, so its storage is written directly — one of the two dispatches
+		// per element goes away with no dtype fallback (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001). qkv
+		// keeps its accessor: its dtype comes from the loaded file.
+		of := out.Storage().F64()
 		for h := range heads {
 			for d := range headDim {
 				src := h*3*headDim + which*headDim + d
 				dst := h*headDim + d
+				row := of[dst*in : (dst+1)*in]
 				for c := range in {
-					out.SetF64(qkv.AtF64(src, c), dst, c)
+					row[c] = qkv.AtF64(src, c)
 				}
 			}
 		}

@@ -1353,7 +1353,25 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				category: "per-element-dispatch",
 				msg: fmt.Sprintf("per-element .%s in an element-count/index loop with no configured typed bulk"+
 					" accessor in %s() — walk the backing slice directly for the contiguous case, keeping the"+
-					" per-element form as the strided/other-dtype fallback", name, fn.Name.Name),
+					" per-element form as the strided/other-dtype fallback."+
+					" MEASURED, and the ceiling is close to 2x because the dispatch IS the cost at a site"+
+					" like this: the four RoPE/QKV weight permutations in nlp move every element with an"+
+					" AtF64 read and a SetF64 store, and removing just the STORE half — half the dispatches,"+
+					" nothing else touched — took all 8 benchmark cells down 44.98%% to 49.07%%, geomean"+
+					" -47.64%% (deinterleaveRoPE, permuteInterleaveToSplit, permuteSplitToInterleave,"+
+					" splitNeoXQKV; 18 samples per arm, p=0.000 everywhere). Those loops run out*in times —"+
+					" 4.2M at [4096,1024] — and do nothing else, which is the shape that pays."+
+					" ASYMMETRY IS THE TRICK: convert only the side whose dtype is statically fixed. Each of"+
+					" these builds its destination with tensor.New(tensor.F64, ...) in the same function, so"+
+					" the store needs no fallback and none is wanted"+
+					" (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001), while the SOURCE dtype comes from the file"+
+					" being loaded and keeps its accessor — a typed read there would be a dual path needing a"+
+					" test on both arms. Half the win, none of the risk."+
+					" DO NOT GENERALIZE THE RATIO: the same transform on a walk inside a"+
+					" matmul-dominated prefill measured -0.61%% (see PS1005). Rank by trip count AND by the"+
+					" loop's share of its enclosing function. Note also that these four run at MODEL LOAD,"+
+					" which no end-to-end benchmark exercises, so the instrument had to be written before"+
+					" anything could be claimed (BENCH-PROVE-THE-CODE-RAN-001)", name, fn.Name.Name),
 			})
 		}
 		// A2: a variadic accessor called with a SPREAD index slice — .AtF64(coords...) —
