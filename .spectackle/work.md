@@ -841,3 +841,10 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
+
+## R-01KYSXCY6AF6KSZV4DFB4A2VBG REJECT: KDA typed fast-path devirt is a NON-win (AtF64 already O(n²), not in the O(n³) inner loop)
+kind: research
+state: draft
+created: 2026-07-30
+
+KimiDeltaAttention (Kimi Linear) host recurrence read q/k/v/a/beta via AtF64 + wrote via SetF64. Added typed F64/F32 fast path (hoist to []float64). BENCHED no-win: F64 256x128 1.02×, F32 0.92× (slight regression), F64 512x64 0.96×. ROOT CAUSE: the AtF64 reads are at O(seq·(dk+dv)) (per (t,c)/(t,r)), NOT in the O(seq·dk·dv) inner loops — those decay/S·k/delta/output loops ALREADY use []float64 scratch (S, kt, qt, sk). So devirt saves a negligible O(n²) fraction while the F32-widening copies + outf buffer add overhead. REVERTED. Reject reason recorded per document-rejections directive.

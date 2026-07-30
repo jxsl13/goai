@@ -22,6 +22,29 @@ import (
 // Keys and queries are L2-normalized per row (the DeltaNet convention, matching
 // GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
 // a [seq,d_k]; beta [seq,1].
+// dot4 returns Σ x[i]·y[i] with four independent accumulators, breaking the single-
+// accumulator dependency chain (each add waited a full FP-add latency on the previous)
+// so four chains retire in parallel. Reassociated (four partial sums combined
+// (s0+s1)+(s2+s3) plus the <4 tail), so not bit-identical to the ascending sum — rides
+// the model tolerance (the same accumulation numpy/BLAS blocking would produce). len(y)
+// must be ≥ len(x).
+func dot4(x, y []float64) float64 {
+	var s0, s1, s2, s3 float64
+	n := len(x)
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		s0 += x[i] * y[i]
+		s1 += x[i+1] * y[i+1]
+		s2 += x[i+2] * y[i+2]
+		s3 += x[i+3] * y[i+3]
+	}
+	s := (s0 + s1) + (s2 + s3)
+	for ; i < n; i++ {
+		s += x[i] * y[i]
+	}
+	return s
+}
+
 func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error) {
 	// beta is read per row as beta.AtF64(t,0), so it MUST be rank-2 [seq,1] like the
 	// others — guarding only q,k,v,a let a 1-D beta [seq] panic at that access and a
@@ -76,11 +99,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 			}
 		}
 		for r := range dv {
-			var s float64
-			for c := range dk {
-				s += S[r*dk+c] * kt[c]
-			}
-			sk[r] = s
+			sk[r] = dot4(S[r*dk:r*dk+dk], kt)
 		}
 		for r := range dv {
 			delta := bt * (v.AtF64(t, r) - sk[r])
@@ -89,11 +108,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 			}
 		}
 		for r := range dv {
-			var o float64
-			for c := range dk {
-				o += S[r*dk+c] * qt[c]
-			}
-			out.SetF64(o, t, r)
+			out.SetF64(dot4(S[r*dk:r*dk+dk], qt), t, r)
 		}
 	}
 	return out, nil
