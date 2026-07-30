@@ -765,18 +765,15 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 	}
 	out := make([][]float64, len(x))
 	diag := m.cfg.covariance == GMMDiag
-	rowBody := func(lr []float64, i int) error {
+	rowBody := func(lr []float64, y4 [4][]float64, y []float64, i int) {
 		// Fused density: the per-component scalar logGaussian calls collapse into the
-		// unroll-and-jammed batch kernel ScoreSamples already uses — x[j] is loaded once
-		// and reused across 4 components, breaking the single-accumulator FADD/FSUB chain,
-		// so lr[c] is bit-identical to k scalar logGaussian calls (same ascending terms,
-		// same -0.5·(d·log2π+quad)-logDetHalf sequence). Diag is race-free (reads only the
-		// shared per-component params); the full-cov batch's shared m.yScratch4 is safe
-		// here because GMMFull never takes the parallel path (gated to GMMDiag below).
+		// unroll-and-jammed batch kernel (x[j] loaded once, reused across 4 components), so
+		// lr[c] is bit-identical to k scalar logGaussian calls. Full-cov's triangular solve
+		// uses the caller-owned (per-worker) y4/y scratch threaded in #618.
 		if diag {
 			m.logGaussianDiagBatch(x[i], lr)
 		} else {
-			m.logGaussianFullBatch(x[i], lr, m.yScratch4, m.yScratch)
+			m.logGaussianFullBatch(x[i], lr, y4, y)
 		}
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
@@ -784,23 +781,25 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		o := make([]float64, k)
 		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
 		out[i] = o
-		return nil
 	}
-	// Rows are independent for GMMDiag: logGaussian(diag) only READS per-component
-	// params (Means/invCov/logDetHalf), out[i]/o are per-sample, and lr is made PER
-	// WORKER — so chunk the row loop across GOMAXPROCS bit-identically to the serial
-	// scan. GMMFull stays SERIAL: its logGaussian reuses the shared m.yScratch solve
-	// buffer, so concurrent calls would race. Serial below a small work threshold too.
+	newScratch := func() ([]float64, [4][]float64, []float64) {
+		var y4 [4][]float64
+		for t := range y4 {
+			y4[t] = make([]float64, m.nFeat)
+		}
+		return make([]float64, k), y4, make([]float64, m.nFeat)
+	}
+	// Each sample is independent (reads only shared read-only params, writes only out[i]/o);
+	// full-cov's solve now uses PER-WORKER scratch, so BOTH diag and full fan out
+	// bit-identically across GOMAXPROCS. Serial below a small work threshold.
 	nw := runtime.GOMAXPROCS(0)
 	if nw > len(x) {
 		nw = len(x)
 	}
-	if nw <= 1 || m.cfg.covariance != GMMDiag || len(x)*k < 1<<11 {
-		lr := make([]float64, k)
+	if nw <= 1 || len(x)*k < 1<<11 {
+		lr, y4, y := newScratch()
 		for i := range x {
-			if err := rowBody(lr, i); err != nil {
-				return nil, err
-			}
+			rowBody(lr, y4, y, i)
 		}
 		return out, nil
 	}
@@ -811,11 +810,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		lr := make([]float64, k) // per-worker scratch
+		lr, y4, y := newScratch() // per-worker scratch
 		for i := lo; i < hi; i++ {
-			if err := rowBody(lr, i); err != nil {
-				return err
-			}
+			rowBody(lr, y4, y, i)
 		}
 		return nil
 	}); err != nil {
