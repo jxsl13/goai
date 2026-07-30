@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 )
 
 // Diverse Beam Search (Vijayakumar, Cogswell, Selvaraju, Sun, Lee, Crandall & Batra 2018,
@@ -25,6 +24,57 @@ import (
 // (Wu 2016 penalty lp(n)=((5+n)/6)^alpha, as in BeamSearch). λ=0 reduces to G independent beam
 // searches (identical groups); larger λ trades likelihood for diversity (the paper reports λ in
 // 0.2–0.8 works well, grid-searched per task — there is no single canonical default).
+
+// dbsCand is a scored candidate extension, kept as a lightweight backpointer into the group's
+// CURRENT beams instead of a materialized token sequence (T942). The full toks slice
+// (make+copy+append) is built ONLY for the B' survivors that advance — not for every ~vocab
+// candidate that is scored and then discarded, which dominated allocation.
+//
+// aug is the diversity-augmented sort key, computed ONCE when the candidate is appended. It
+// used to be recomputed inside the comparator, which called it twice per comparison — about
+// 98 thousand evaluations per group-step at benchmark geometry where 4096 suffice. Computing
+// it at append time is valid because it reads stepCount, which is frozen for the whole of a
+// group's candidate construction and selection and only mutated after the group's survivors
+// are chosen.
+//
+// Declared at package scope, with its comparator, so both the selection and the prefix sort
+// receive a STATIC function value rather than a shared closure.
+type dbsCand struct {
+	parent int     // index into the group's current beams
+	tok    int     // token appended to parent (meaningful only for a freshly extended candidate)
+	score  float64 // raw cumulative log-prob (parent.score+lp fresh; parent.score for a carried done beam)
+	aug    float64 // score minus the diversity penalty; the sort key
+	newLen int
+	done   bool
+}
+
+// dbsCandByAug is a STRICT TOTAL ORDER: augmented score descending, then parent ascending,
+// then token ascending. Totality is what lets the selection below stand in for a sort — with
+// ties the retained set would not be unique. Candidates are appended parent-outer, and within
+// a parent there is either one carried-done candidate or the fresh vocabulary expansion with
+// distinct tokens, so (parent, tok) uniquely orders the appends and this reproduces the
+// stable order exactly.
+func dbsCandByAug(a, b dbsCand) int {
+	if a.aug != b.aug {
+		if a.aug > b.aug {
+			return -1
+		}
+		return 1
+	}
+	if a.parent != b.parent {
+		if a.parent < b.parent {
+			return -1
+		}
+		return 1
+	}
+	if a.tok < b.tok {
+		return -1
+	}
+	if a.tok > b.tok {
+		return 1
+	}
+	return 0
+}
 
 // DiverseBeamSearch decodes width beams in `groups` groups (width must be divisible by groups),
 // up to maxNew new tokens, completing a hypothesis on `eos` (eos<0 disables). lambda is the
@@ -50,22 +100,19 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		newLen int
 		done   bool
 	}
-	// A scored candidate extension, kept as a lightweight backpointer into the group's
-	// CURRENT beams instead of a materialized token sequence (T942). The full toks slice
-	// (make+copy+append) is built ONLY for the B' survivors that advance — not for every
-	// ~vocab candidate that is scored and then discarded, which dominated allocation.
-	type cand struct {
-		parent int     // index into the group's current beams (grp[g])
-		tok    int     // token appended to parent (meaningful only for a freshly extended candidate)
-		score  float64 // raw cumulative log-prob (parent.score+lp fresh; parent.score for a carried done beam)
-		newLen int
-		done   bool
-	}
 
 	grp := make([][]node, groups)
 	for g := range grp {
 		grp[g] = []node{{append([]int(nil), start...), 0, 0, false}}
 	}
+
+	// Reused across every group of every step: the candidate buffer (whose old per-group
+	// capacity hint of len(beams)*8 was ~256x short of the bPrime*vocab it grows to, costing a
+	// full doubling chain per group-step) and the log-softmax row. Both are reset, never
+	// aliased — survivors copy candidate VALUES out, and each log-softmax row is consumed
+	// before the next is produced.
+	var cands []dbsCand
+	var lsBuf []float64
 
 	for step := 0; step < maxNew; step++ {
 		// token -> #earlier groups (this step) that picked it. Dense []int over the
@@ -76,62 +123,40 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		anyLive := false
 		for g := 0; g < groups; g++ {
 			beams := grp[g]
-			cands := make([]cand, 0, len(beams)*8)
+			cands = cands[:0]
 			for pi := range beams {
 				b := beams[pi]
 				if b.done {
-					cands = append(cands, cand{pi, 0, b.score, b.newLen, true}) // carry a finished hypothesis unchanged
+					// a carried finished hypothesis keeps its score and takes no diversity penalty
+					cands = append(cands, dbsCand{pi, 0, b.score, b.score, b.newLen, true})
 					continue
 				}
 				anyLive = true
-				ls := logSoftmaxRow(next(b.toks))
+				ls := logSoftmaxRowInto(&lsBuf, next(b.toks))
 				if stepCount == nil {
 					stepCount = make([]int, len(ls))
 				}
+				if cap(cands) < len(beams)*len(ls) {
+					cands = make([]dbsCand, 0, len(beams)*len(ls))
+				}
 				for tok, lp := range ls {
-					cands = append(cands, cand{pi, tok, b.score + lp, b.newLen + 1, eos >= 0 && tok == eos})
+					sc := b.score + lp
+					cands = append(cands, dbsCand{pi, tok, sc, sc - lambda*float64(stepCount[tok]), b.newLen + 1, eos >= 0 && tok == eos})
 				}
 			}
-			// select this group's top B' by the diversity-augmented score; the penalty applies
-			// only to candidates freshly extended THIS step (carried done beams keep their score).
-			// last(fresh candidate) == its appended tok, so selection needs no materialized toks.
-			fresh := func(c cand) bool { return c.newLen == step+1 }
-			aug := func(c cand) float64 {
-				if fresh(c) {
-					return c.score - lambda*float64(stepCount[c.tok])
-				}
-				return c.score
-			}
-			// Unstable sort.Slice (pdqsort) with an explicit tie-break reproducing the
-			// stable order: cands are appended parent-outer, and within a parent either one
-			// carried-done cand (tok 0) or the fresh vocab expansion (distinct toks), so
-			// (parent, tok) uniquely orders the appends — ties resolve to that same order,
-			// keeping the top-B' set identical, but with pdqsort's lower constant.
-			slices.SortFunc(cands, func(a, b cand) int {
-				ai, aj := aug(a), aug(b)
-				if ai != aj {
-					if ai > aj {
-						return -1
-					}
-					return 1
-				}
-				if a.parent != b.parent {
-					if a.parent < b.parent {
-						return -1
-					}
-					return 1
-				}
-				if a.tok < b.tok {
-					return -1
-				}
-				if a.tok > b.tok {
-					return 1
-				}
-				return 0
-			})
-			if len(cands) > bPrime {
+			// Select this group's top B' by the diversity-augmented score; the penalty applies
+			// only to candidates freshly extended THIS step (carried done beams keep their
+			// score). Only bPrime candidates survive, so ordering the rest is wasted work
+			// (PS6022): at width 8 in 4 groups over a 2048 vocabulary that is a sort of 4096
+			// to keep 2. selectTopK is an INTROSELECT — a plain quickselect degenerates on
+			// candidate arrays built parent-outer over a smooth logit curve.
+			fresh := func(c dbsCand) bool { return c.newLen == step+1 }
+			//perfscan:ignore PS6022 the truncation happens BEFORE the sort — that is the fix
+			if bPrime < len(cands) {
+				selectTopK(cands, bPrime, dbsCandByAug)
 				cands = cands[:bPrime]
 			}
+			slices.SortFunc(cands, dbsCandByAug)
 			// materialize toks ONLY for the B' survivors that advance.
 			survivors := make([]node, len(cands))
 			for i, c := range cands {
@@ -164,7 +189,18 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 			out = append(out, Beam{b.toks, b.score / lenPenalty(b.newLen)})
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	// slices.SortStableFunc rather than sort.SliceStable: the latter reaches its swap through
+	// reflectlite.Swapper and allocates on every call (PS6009). Score-only comparison is not a
+	// total order, so stability is load-bearing and this one must stay a stable SORT.
+	slices.SortStableFunc(out, func(a, b Beam) int {
+		if a.Score > b.Score {
+			return -1
+		}
+		if a.Score < b.Score {
+			return 1
+		}
+		return 0
+	})
 	if len(out) > width {
 		out = out[:width]
 	}

@@ -202,3 +202,31 @@ func logSoftmaxRow(logits []float64) []float64 {
 	}
 	return out
 }
+
+// logSoftmaxRowInto is logSoftmaxRow against a caller-owned buffer, grown on demand through
+// the pointer. Beam search allocates one vocabulary-sized row per beam per step — about
+// 2.4 MB per call at benchmark geometry — and every row is consumed by the candidate loop
+// immediately after it is produced, so one buffer per search suffices.
+//
+// The returned slice ALIASES *buf and is valid only until the next call with the same buf.
+func logSoftmaxRowInto(buf *[]float64, logits []float64) []float64 {
+	if cap(*buf) < len(logits) {
+		*buf = make([]float64, len(logits))
+	}
+	out := (*buf)[:len(logits)]
+	m := math.Inf(-1)
+	for _, v := range logits {
+		if v > m {
+			m = v
+		}
+	}
+	var sum float64
+	for _, v := range logits {
+		sum += math.Exp(v - m)
+	}
+	lse := m + math.Log(sum)
+	for i, v := range logits {
+		out[i] = v - lse
+	}
+	return out
+}
