@@ -735,3 +735,8 @@ Rationale: A check with perfect precision had 198 hits of which 148 were on no m
 WHEN a comparison reports no significant change, the measuring agent SHALL state the within-arm spread alongside it, because no-change on a one-percent-spread benchmark is a result while no-change on a fifty-percent-spread benchmark is an absence of resolution.
 
 Rationale: In one comparison three tight arms held one percent spread and genuinely showed no time change, while two long generation benchmarks in the same run held fifteen to fifty-three percent and their timing columns supported no conclusion at all. Both printed as insignificant. Quoting the second as evidence of no regression would have been unfounded.
+
+## PERF-ATTRIBUTE-BORROWED-NUMBERS-001
+WHEN a scan check's message quotes a speedup measured at a different site, the author SHALL name the site it came from and the variables the check cannot see, rather than stating it as though it applies where the check fired.
+
+Rationale: A triage of all 59 checks found six asserting a measured magnitude with no hedge, across 290 hits. That is the failure mode that made one check useless for months: a reader trusts the number, acts, and finds nothing. Attribution costs a clause and changes nothing about what fires.
