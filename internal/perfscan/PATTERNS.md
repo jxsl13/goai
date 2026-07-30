@@ -1026,6 +1026,49 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6021 — a fan-out helper with no per-worker seam  *(scanner: static)*
+
+A parallel helper whose callback receives **only a work index**:
+
+```go
+func knnParallelRows(n int, body func(i int))          // KNN: 3 allocations per QUERY
+func nbPredictParallel(n, feat int, body func(i int))  // GaussianNB: 1 allocation per ROW
+```
+
+The callback runs once per **item**, so a buffer the caller allocates inside it is allocated
+per item. Hoisting it above the helper makes it shared mutable state every worker races on,
+and putting it on the receiver is the same bug with a longer fuse (PS6006). With no
+per-worker seam in the signature, **per-item allocation is the only correct option
+available** — which is exactly why these sites survive review. The code is not careless; the
+interface is short a parameter.
+
+Three wins in this repository were blocked by this one shape, all with the arithmetic already
+parallel:
+
+| site | after adding a seam |
+|---|---|
+| `GaussianNB.Predict` | **1.28x**, allocations −99.2%, bytes −73.6% |
+| `KNNClassifier.Predict` | allocations −99.4%, bytes −94.1%, 2.1% faster |
+| `DBSCAN.Fit` | allocations −78.8%, bytes −40.0% |
+
+**The fix is the signature.** Either give the callback a scratch parameter the helper supplies
+per worker (`gmmParallelRows`, `moeParallelTokens`, `wkvParallelChannels`), or take a
+`func() T` constructor the helper calls once per worker and passes down.
+
+Two floors keep this quiet enough to act on, and both are mutation-verified:
+
+- **A `(lo, hi)` range callback is not reported.** The caller can allocate inside the chunk
+  closure, which is per-chunk and therefore already per-worker. Most helpers here have that
+  shape, so reporting them would drown the real hits.
+- **A channel-creating helper is not reported.** That is a work-queue primitive
+  (`parallelBuild`), where the callback *is* the job and other helpers build their seam on top
+  of it by passing a worker count as the job count. Reporting the primitive reports the cure.
+
+A clause excluding helpers that take a `func() T` constructor was written and then **removed**:
+such a helper must pass the constructed value to its callback, so the callback already carries
+a scratch parameter and fails the index-only test. Mutation testing showed no test could reach
+the clause, and a predicate clause nothing exercises implies coverage it does not have.
+
 ## PS6019 — a jam loop whose remainder delegates  *(scanner: static)*
 
 An unroll-and-jammed loop whose scalar remainder is handled by a **different code path**:

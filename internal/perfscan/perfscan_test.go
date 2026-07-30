@@ -4984,3 +4984,182 @@ func (m *M) batch(x []float64, ld []float64) {
 		t.Fatalf("want 0 without a jam header, got %d", got)
 	}
 }
+
+// The exact pre-fix signature of knnParallelRows. Three separate wins in this repository
+// were blocked by this shape, so the rule's whole value is that it would have fired here.
+func TestDetectPS6021_PerItemCallbackNoSeam(t *testing.T) {
+	src := `package p
+func knnParallelRows(n int, body func(i int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n < 64 {
+		for i := 0; i < n; i++ {
+			body(i)
+		}
+		return
+	}
+	csz := (n + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		for i := lo; i < lo+csz && i < n; i++ {
+			body(i)
+		}
+		return nil
+	})
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 1 {
+		t.Fatalf("want 1 fanout-without-worker-seam, got %d", got)
+	}
+}
+
+// The pre-fix nbPredictParallel: extra leading scalars must not matter — only the callback's
+// shape does.
+func TestDetectPS6021_ExtraLeadingScalars(t *testing.T) {
+	src := `package p
+func nbPredictParallel(n, feat int, body func(i int)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			for i := start; i < n; i += 4 {
+				body(i)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 1 {
+		t.Fatalf("want 1 fanout-without-worker-seam, got %d", got)
+	}
+}
+
+// THE FLOOR THAT MAKES THIS RULE USABLE: a (lo, hi) range callback hands the caller a
+// per-chunk closure, which is already a per-worker seam. parallel.Rows and most helpers in
+// this repository have this shape, so reporting them would drown the one real hit.
+func TestDetectPS6021_SilentOnRangeCallback(t *testing.T) {
+	src := `package p
+func parallelRows(n int, body func(lo, hi int)) {
+	var wg sync.WaitGroup
+	chunk := (n + 3) / 4
+	for lo := 0; lo < n; lo += chunk {
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, lo+chunk)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a range callback, got %d", got)
+	}
+}
+
+// A callback already given scratch has the seam. This is the post-fix shape, so the rule must
+// go quiet once the fix lands — otherwise it reports forever and gets ignored.
+func TestDetectPS6021_SilentWithScratchParam(t *testing.T) {
+	src := `package p
+func gmmParallelRows(n, per, k int, body func(i int, ldBuf []float64)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			buf := make([]float64, k)
+			for i := start; i < n; i += 4 {
+				body(i, buf)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 with a scratch parameter, got %d", got)
+	}
+}
+
+// The other post-fix shape: a func() T constructor the helper calls once per worker. This
+// passes because the constructor's result must reach the callback, which therefore carries a
+// scratch parameter — NOT because of any clause about the constructor itself. A clause for it
+// existed and was removed when mutation testing showed no test could reach it.
+func TestDetectPS6021_SilentWithScratchConstructor(t *testing.T) {
+	src := `package p
+func knnParallelRows(n int, newScratch func() *knnScratch, body func(i int, sc *knnScratch)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			sc := newScratch()
+			for i := start; i < n; i += 4 {
+				body(i, sc)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 with a scratch constructor, got %d", got)
+	}
+}
+
+// A work-queue primitive builds a channel and its callback IS the job; every fix for this
+// rule is implemented on top of such a primitive by passing a worker count as the job count.
+// Reporting the mechanism would be reporting the cure.
+func TestDetectPS6021_SilentOnChannelWorkQueue(t *testing.T) {
+	src := `package p
+func parallelBuild(n int, work func(t int) error) error {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func() {
+			defer wg.Done()
+			for t := range jobs {
+				_ = work(t)
+			}
+		}()
+	}
+	for t := 0; t < n; t++ {
+		jobs <- t
+	}
+	close(jobs)
+	wg.Wait()
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a channel work queue, got %d", got)
+	}
+}
+
+// A serial helper taking a per-item callback is not a fan-out and has no race to avoid — the
+// caller can hoist a buffer above the call safely. Without this floor the rule would fire on
+// every ordinary callback API in the tree.
+func TestDetectPS6021_SilentWithoutFanOut(t *testing.T) {
+	src := `package p
+func eachRow(n int, body func(i int)) {
+	for i := 0; i < n; i++ {
+		body(i)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 without a fan-out, got %d", got)
+	}
+}
+
+// GIVES THE INTEGER-TYPE CHECK TEETH. Without it a callback taking exactly one NON-index
+// parameter would be reported: one parameter, so the count check alone lets it through. That
+// shape is a visitor over values, not an index fan-out, and it has no per-item allocation
+// problem to report. Mutation testing found this floor missing — the two floors above were
+// both passing on the parameter COUNT, leaving the type check unexercised.
+func TestDetectPS6021_SilentOnSingleNonIndexParam(t *testing.T) {
+	src := `package p
+func eachBuffer(n int, body func(buf []float64)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func() {
+			defer wg.Done()
+			body(make([]float64, n))
+		}()
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a single non-index parameter, got %d", got)
+	}
+}

@@ -218,6 +218,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6021", "fanout-without-worker-seam", "a fan-out helper whose callback receives ONLY a single work index and no scratch, with no sibling scratch-constructor parameter — callers have nowhere to hoist a per-item buffer to, so every caller that needs a working buffer must allocate one PER ITEM; give the callback a scratch parameter or take a func() T constructor the helper calls once per worker", false},
 	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
 	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
 	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it", false},
@@ -1873,6 +1874,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, unpooledVariadicSiblingFindings(fset, fn)...)
 	out = append(out, layoutOpClusterFindings(fset, fn, ns)...)
 	out = append(out, jamTailDelegatesFindings(fset, fn)...)
+	out = append(out, fanoutWithoutWorkerSeamFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
@@ -7703,6 +7705,138 @@ func hasFusedStoragePath(body *ast.BlockStmt, ns nameSets) bool {
 			}
 		}
 		return true
+	})
+	return found
+}
+
+// fanoutWithoutWorkerSeamFindings flags PS6021 — a fan-out helper whose callback signature
+// gives its callers no per-worker seam.
+//
+// Three separate wins in this repository were blocked by the identical shape, and in all
+// three the arithmetic was already parallel; what was missing was a place to put a buffer:
+//
+//	func knnParallelRows(n int, body func(i int))      // KNN: 3 allocations per QUERY
+//	func nbPredictParallel(n, feat int, body func(i int)) // GaussianNB: 1 per ROW
+//
+// The callback is invoked once per ITEM, so a buffer the caller allocates inside it is
+// allocated per item. Hoisting it above the helper makes it shared mutable state that every
+// worker races on — and a receiver field is the same bug with a longer fuse (PS6006). With
+// no per-worker seam in the signature, the per-item allocation is the only CORRECT option
+// available, which is why these sites survive review: the code is not careless, the
+// interface is short a parameter. Measured after adding one: GaussianNB predict 1.28x with
+// 99.2% fewer allocations, KNN predict 99.4% fewer allocations, DBSCAN fit 78.8% fewer.
+//
+// THE FIX IS THE SIGNATURE. Either give the callback a scratch parameter the helper supplies
+// per worker (gmmParallelRows, moeParallelTokens, wkvParallelChannels all do this), or take
+// a func() T constructor the helper calls once per worker and passes down.
+//
+// A callback taking a RANGE rather than a single index is NOT reported: with (lo, hi) the
+// caller can allocate inside the chunk closure, which is per-chunk and therefore already
+// per-worker. That is why parallel.Rows and the many (lo, hi) helpers here are silent, and
+// it is the distinction that makes this check quiet enough to act on.
+//
+// A helper that takes a func() T scratch constructor needs no separate exception: it must
+// pass what the constructor returns down to the callback, so that callback already carries a
+// scratch parameter and fails the index-only test. A clause for the constructor was written
+// first and removed — mutation testing showed nothing depended on it, and a predicate clause
+// no test can reach implies coverage it does not have.
+//
+// A helper that creates a CHANNEL in its own body is also skipped: that is a work-queue
+// primitive (parallelBuild), where the callback is the job and the queue is what other
+// helpers build their own seam on top of by passing a worker count as the job count.
+// Reporting the primitive would be reporting the mechanism every fix uses.
+func fanoutWithoutWorkerSeamFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Type.Params == nil {
+		return nil
+	}
+	if !fanoutDispatches(fn.Body) || fanoutMakesChan(fn.Body) {
+		return nil
+	}
+	var (
+		cbName string
+		cbPos  token.Pos
+	)
+	for _, p := range fn.Type.Params.List {
+		ft, ok := p.Type.(*ast.FuncType)
+		if !ok || ft.Params == nil || !fanoutIndexOnlyParams(ft.Params) {
+			continue
+		}
+		for _, nm := range p.Names {
+			cbName, cbPos = nm.Name, nm.Pos()
+		}
+	}
+	if cbName == "" {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(cbPos),
+		category: "fanout-without-worker-seam",
+		msg: fmt.Sprintf("callback %q takes only a work index, so a caller needing a per-item buffer has nowhere to hoist it — every call site must allocate per item, and hoisting above %q would be a data race. Give the callback a scratch parameter, or take a func() T constructor this helper calls once per worker",
+			cbName, fn.Name.Name),
+	}}
+}
+
+// fanoutIndexOnlyParams reports whether a callback takes exactly one parameter and that
+// parameter is a bare integer index. Exactly one is the load-bearing part: a (lo, hi) range
+// hands the caller a per-chunk closure, which is already a per-worker seam.
+func fanoutIndexOnlyParams(ps *ast.FieldList) bool {
+	n := 0
+	for _, f := range ps.List {
+		id, ok := f.Type.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		switch id.Name {
+		case "int", "int32", "int64":
+		default:
+			return false
+		}
+		if len(f.Names) == 0 {
+			n++
+			continue
+		}
+		n += len(f.Names)
+	}
+	return n == 1
+}
+
+// fanoutDispatches reports whether a body fans work out: a go statement, or a call to one of
+// the project's parallel helpers (the same naming isParallelDispatch matches).
+func fanoutDispatches(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.GoStmt:
+			found = true
+		case *ast.CallExpr:
+			if isParallelDispatch(v.Fun) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// fanoutMakesChan reports whether a body constructs a channel, marking it a work-queue
+// primitive rather than an index fan-out.
+func fanoutMakesChan(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || identName(call.Fun) != "make" || len(call.Args) == 0 {
+			return true
+		}
+		if _, isChan := call.Args[0].(*ast.ChanType); isChan {
+			found = true
+		}
+		return !found
 	})
 	return found
 }
