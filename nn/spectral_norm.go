@@ -88,14 +88,23 @@ func (s *SpectralNorm) powerIterate(iters int) {
 		tv := make([]float64, out)
 		tu := make([]float64, in)
 		for range iters {
+			// v = Wᵀu, computed i-OUTER so each W row ws[i*out:] is walked CONTIGUOUSLY
+			// in j (was j-outer/i-inner, striding ws by out per step — a cache-line miss
+			// per access on a 512² matrix). tv[j] still accumulates in ascending-i order
+			// and nv=Σ_j tv[j]² still in ascending-j, so both are bit-identical (PS1006).
+			for j := range out {
+				tv[j] = 0
+			}
+			for i := range in {
+				ui := us[i]
+				wrow := ws[i*out : i*out+out : i*out+out]
+				for j := range out {
+					tv[j] += wrow[j] * ui
+				}
+			}
 			var nv float64
 			for j := range out {
-				var acc float64
-				for i := range in {
-					acc += ws[i*out+j] * us[i]
-				}
-				tv[j] = acc
-				nv += acc * acc
+				nv += tv[j] * tv[j]
 			}
 			if nv = math.Sqrt(nv); nv > 0 {
 				for j := range out {
