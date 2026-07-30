@@ -139,6 +139,16 @@ func vsoftcapF64(dst, src []float64, cap float64) {
 	}
 }
 
+// vsoftcapF32 exists only so softCapKernelCPU type-checks off the SIMD build;
+// vexpF32Fast is false here, so the F32 softcap kernel is not registered on the
+// CPU backend (the ref serial-scalar kernel handles F32) and this is dead at run
+// time. Kept as the scalar twin regardless.
+func vsoftcapF32(dst, src []float32, cap float32) {
+	for i, v := range src {
+		dst[i] = softcapF32(v, cap)
+	}
+}
+
 // vsoftplusGradF64 computes dst[i] = g[i]·softplus'(x[i]) = g[i]·σ(x[i]) scalar (the amd64
 // twin vectorizes this 4-wide). Overflow-safe σ = num/(1+z) with z=e^(−|x|), num=(x≥0?1:z).
 func vsoftplusGradF64(dst, x, g []float64) {

@@ -325,6 +325,33 @@ func vtanhF32(dst, src []float32) {
 	}
 }
 
+// vsoftcapF32 is the f32-native Gemma-2 logit soft-cap cap·tanh(x/cap) on the AVX2
+// expF32x8 primitive — the vtanhF32 lane pre-scaled by 1/cap and re-scaled by cap
+// (the f32 twin of vsoftcapF64). Rides the model f32 tolerance (ADR-0021; expF32x8
+// is the same ~1-ulp poly the other f32 activations use). The scalar tail/no-AVX
+// fallback runs softcapF32 (its exact scalar twin).
+func vsoftcapF32(dst, src []float32, cap float32) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = softcapF32(v, cap)
+		}
+		return
+	}
+	capV := archsimd.BroadcastFloat32x8(cap)
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		zc := archsimd.LoadFloat32x8Slice(src[i:]).Div(capV)             // x/cap
+		a := zc.AsUint32x8().And(vAbs).AsFloat32x8()                     // |x/cap|
+		z := expF32x8(vZero.Sub(a.Add(a)))                              // e^(−2|x/cap|)
+		t := vOne.Sub(z).Div(vOne.Add(z))                               // tanh(|x/cap|)
+		t = t.AsUint32x8().Or(zc.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
+		t.Mul(capV).StoreSlice(dst[i:])                                 // ·cap
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = softcapF32(src[i], cap)
+	}
+}
+
 func vlogF32(dst, src []float32) {
 	if !vexpHasAVX {
 		for i, v := range src {
