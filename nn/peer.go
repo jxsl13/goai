@@ -203,7 +203,11 @@ func peerTopIndices(s []float64, k int) []int {
 	for i := range idx {
 		idx[i] = i
 	}
-	sort.SliceStable(idx, func(a, b int) bool {
+	// Unstable pdqsort: the comparator is already a STRICT TOTAL ORDER (score desc,
+	// ties → lower index), so stability is redundant and the result is bit-identical —
+	// but pdqsort is 2-5× faster than SliceStable's symMerge, and s has one entry per
+	// sub-key (n where n² is the expert count), sorted per token.
+	sort.Slice(idx, func(a, b int) bool {
 		if s[idx[a]] != s[idx[b]] {
 			return s[idx[a]] > s[idx[b]]
 		}
@@ -235,7 +239,9 @@ func peerRetrieve(s1, s2 []float64, n, topK, subKeyK int) (flat, sub1, sub2 []in
 			cands = append(cands, cand{i, j, s1[i] + s2[j]})
 		}
 	}
-	sort.SliceStable(cands, func(a, b int) bool {
+	// Total-order comparator (score desc, ties → smaller flat index) → sort.Slice is
+	// bit-identical to the stable sort but ~2-5× faster over the k'² candidates.
+	sort.Slice(cands, func(a, b int) bool {
 		if cands[a].sc != cands[b].sc {
 			return cands[a].sc > cands[b].sc
 		}
