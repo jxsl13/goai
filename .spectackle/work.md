@@ -1426,3 +1426,18 @@ THE CRITERION IS NEARLY A NO-OP HERE, which is the actually useful finding. The 
 WHAT THE PROFILE CONFIRMS. GBMHist_exact_80k spends 79 percent of CPU samples in pthread_cond_wait, cond_signal and usleep at 3.0x average parallelism - pprof reports that ratio directly as 300 percent of one core. Under PROC-PROFILE-PARALLEL-CONDVAR-001 that is about nine of twelve workers idling, which is what a 3x-parallel program looks like when sampled this way. GBM opens a region per tree node, roughly 750 for 50 estimators, so the barrier traffic is real - but measurement already established that REDUCING the region count makes it slower. The only remaining lever is a cheaper barrier, which means changing internal/parallel, shared with backend and outside my lane.
 
 NO ACTION on GBM. The correction matters because the original rejection would discourage a future per-chunk gate on principle, when the honest statement is narrower: the criterion is fine, the constant must be derived from the caller's actual node sizes rather than multiplied by the worker count, and for this caller it would change almost nothing.
+
+## R-01KYR8GNARE0BB53XAQ7N8MQCJ Two targets scoped out with reasons: ForestFit allocations are in the user's lane, attnReconstructed has no benchmark
+kind: research
+state: draft
+created: 2026-07-30
+
+Recorded so neither is re-derived. Both were located this iteration by applying PROC-PROFILE-WALL-SHARE-001 and PROC-BENCH-COVERAGE-NULL-001 to the remaining large numbers in my lanes.
+
+FORESTFIT IS THE LARGEST ALLOCATION SITE LEFT IN classic AND IS OUT OF LANE. 352008 allocations per fit, roughly 40x the next-highest benchmark in the package. An allocation profile puts cartBuilder.buildIdx at 99.11 percent of them, 2101692 objects. That function lives in classic/tree.go, which the user works on in parallel and where main has three recent perf commits (incremental Gini, hoisted class counts, fused leaf histograms). Not touched. Anyone picking this up should confirm the lane is free first: the win is likely large and purely on the resource axis, since ForestFit already scales 7.93x from one core to twelve.
+
+ATTNRECONSTRUCTED IS THE ONE PS6018 CANDIDATE I LEFT UNFUSED AND CANNOT VALIDATE. It is the second per-head loop in nlp/quant_deepseekv2.go, deliberately skipped when the absorbed path was fused, and PS6018 correctly reports it as the only surviving hit among the three files fused that round. A panic probe establishes the coverage gap precisely: it is reached by the DeepSeekV2 tests but by NO benchmark, including the twelve-architecture matrix, which takes the absorbed path instead.
+
+The selector is per-BLOCK rather than per-config: b.WkvB != nil chooses reconstructed, nil chooses absorbed. So covering it needs a GGUF fixture whose blocks carry a kv_b weight, not a benchmark flag - which is why the arch matrix misses it. Under the standing constraint that only what is verifiable here may ship, the fusion is blocked on building that fixture, and the fixture is the larger half of the work.
+
+WORTH STATING PLAINLY: the two reconstructed and absorbed paths mean this file has two per-head loops with the same movement-only fusion opportunity, and only one of them is exercised by any benchmark. That asymmetry is exactly what PERF-GATE-IMPLIES-BLIND-SPOT-001 predicts - the path excluded from the optimization was also the path excluded from measurement.
