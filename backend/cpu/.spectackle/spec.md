@@ -22,3 +22,8 @@ Rationale: Widening A to f64 once per row block removed real work in the packed 
 WHEN a kernel behind a size or cost threshold is made faster, the implementing agent SHALL re-sweep that threshold in the same change, because it was calibrated against the old arm and now excludes inputs the new one wins on.
 
 Rationale: The f32 GEMM pack gate was set at 1<<19 elements when packing measured +2.78% at n=256. Hoisting two operand widenings made the packed band about 18% faster and moved the crossover two orders of magnitude, to 1<<12: the same n=256 went from +2.78% to -17.17%, and the stale gate was leaving 8 to 19 percent unclaimed at every size below 1024. Vision gained 8.99% geomean from the re-sweep alone.
+
+## PERF-SWEEP-EVERY-AXIS-THE-GATE-READS-001
+IF a gate reads more than one input and only one axis was swept to calibrate it, THEN the implementing agent SHALL sweep each axis the condition names before shipping, since a square sweep moves rows and columns together and can never exercise the row term.
+
+Rationale: The GEMM pack gate reads both m and k*n. Its work term was calibrated on square matrices, where m was always in the hundreds, so the row term went unmeasured and shipped at 32. A row sweep at k=n=512 later showed packing costing 13.59% for f32 and 17.51% for f64 at exactly that value, on the few-rows-wide-B shape decode and attention matmuls use.

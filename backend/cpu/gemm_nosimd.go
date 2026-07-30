@@ -17,9 +17,28 @@ import "sync"
 // default — are shared by every non-amd64-simd build, including arm64+simd
 // (whose experiment only replaces the F32 matmul entry point, ADR-0026).
 
-// gemmPackMinRows is the row count above which gemmF32 packs B: the pack costs one k*n copy and is
-// reused by m/4 row blocks, so its overhead is ~2/m, and 32 rows puts that near 6%.
-const gemmPackMinRows = 32
+// gemmPackMinRowsF32 / gemmPackMinRowsF64 are the row counts above which B is packed. The pack
+// costs one k*n copy and is reused by m/4 row blocks, so few rows means the copy is never amortized.
+//
+// A SHARED GATE OF 32 WAS WRONG ON BOTH DTYPES, and only a row-axis sweep could show it: the square
+// sweeps that calibrated the work gates move m and n together, so every one of them had m in the
+// hundreds and none exercised the shape this gates. At k=n=512, forcing each arm:
+//
+//	f32  m=24 +16.92%  m=32 +13.59%  m=48 +0.16%  m=64 +0.14%  m=96 -8.01%  m=192 -17.69%
+//	f64  m=32 +17.51%  m=64 +9.10%   m=96 +5.85%  m=192 +6.76%  m=256 -5.47%  m=512 -8.16%
+//
+// So f32 turns over near 96 rows and f64 not until 256 — at the old gate of 32 both were paying
+// 13-18% for a pack neither could amortize. Decode- and attention-shaped matmuls are exactly this
+// shape: few rows against a wide, deep B.
+//
+// KNOWN LIMIT of these numbers: the row and work axes interact and only the k=n=512 slice was
+// swept. The f32 square case at n=64 (k*n=4096, m=64) measured -9.29% when packed, and the row gate
+// now declines it — a cheap pack at small k*n can amortize over fewer rows than an expensive one.
+// Capturing that needs a two-dimensional rule and more measurement than a single slice supports.
+var (
+	gemmPackMinRowsF32 = 96
+	gemmPackMinRowsF64 = 256
+)
 
 // gemmPackMinWorkF32 / gemmPackMinWorkF64 are the B element counts above which packing pays.
 // BOTH dtypes need a gate and they need DIFFERENT ones, because packing is a cache fix and the two
@@ -351,7 +370,7 @@ func packBTiles4(B []float32, pack []float64, k, n int) {
 // directly: they pass a B whose shape is the kernel matrix, not a large operand, so they sit below
 // the gate anyway and there is no reason to route them through an extra decision.
 func gemmF64Rows(A, B, C []float64, m, k, n int) {
-	if m >= gemmPackMinRows && n >= 4 && k*n >= gemmPackMinWorkF64 {
+	if m >= gemmPackMinRowsF64 && n >= 4 && k*n >= gemmPackMinWorkF64 {
 		packP := getF64Raw((n >> 2) * k * 4)
 		pack := *packP
 		packBTiles4F64(B, pack, k, n)

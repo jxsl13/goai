@@ -101,3 +101,72 @@ func BenchmarkGemmF64Portable(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGemmF32PortableRows sweeps the ROW count at a fixed, large k*n, which is the axis
+// gemmPackMinRows gates and the one the square sweep above cannot see. Decode- and attention-shaped
+// matmuls are exactly this: few rows against a wide, deep B.
+func BenchmarkGemmF32PortableRows(b *testing.B) {
+	const k, n = 512, 512
+	for _, m := range []int{32, 64, 96, 192} {
+		b.Run(fmt.Sprintf("m=%d", m), func(b *testing.B) {
+			rng := rand.New(rand.NewSource(11))
+			A := make([]float32, m*k)
+			B := make([]float32, k*n)
+			C := make([]float32, m*n)
+			for i := range A {
+				A[i] = rng.Float32()*2 - 1
+			}
+			for i := range B {
+				B[i] = rng.Float32()*2 - 1
+			}
+			for _, arm := range []struct {
+				name string
+				rows int
+			}{{"unpacked", 1 << 30}, {"packed", 0}} {
+				b.Run(arm.name, func(b *testing.B) {
+					saved := gemmPackMinRowsF32
+					gemmPackMinRowsF32 = arm.rows
+					defer func() { gemmPackMinRowsF32 = saved }()
+					b.ResetTimer()
+					for range b.N {
+						gemmF32(A, B, C, m, k, n)
+					}
+				})
+			}
+		})
+	}
+}
+
+// BenchmarkGemmF64PortableRows is the f64 twin of the row sweep. The row gate is shared between the
+// dtypes, so per PERF-CACHE-GATE-IS-PER-DTYPE-001 it has to be checked on both before being moved.
+func BenchmarkGemmF64PortableRows(b *testing.B) {
+	const k, n = 512, 512
+	for _, m := range []int{256, 384, 512} {
+		b.Run(fmt.Sprintf("m=%d", m), func(b *testing.B) {
+			rng := rand.New(rand.NewSource(13))
+			A := make([]float64, m*k)
+			Bm := make([]float64, k*n)
+			C := make([]float64, m*n)
+			for i := range A {
+				A[i] = rng.Float64()*2 - 1
+			}
+			for i := range Bm {
+				Bm[i] = rng.Float64()*2 - 1
+			}
+			for _, arm := range []struct {
+				name string
+				rows int
+			}{{"unpacked", 1 << 30}, {"packed", 0}} {
+				b.Run(arm.name, func(b *testing.B) {
+					saved := gemmPackMinRowsF64
+					gemmPackMinRowsF64 = arm.rows
+					defer func() { gemmPackMinRowsF64 = saved }()
+					b.ResetTimer()
+					for range b.N {
+						gemmF64Rows(A, Bm, C, m, k, n)
+					}
+				})
+			}
+		})
+	}
+}
