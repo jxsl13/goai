@@ -630,3 +630,8 @@ Rationale: A PS6020 guard predicate was proposed on the belief that both measure
 WHEN a perfscan check is proposed to be refined by a syntactic proxy for how often the matched code runs, the implementing agent SHALL reject the refinement and leave the check advisory, since call frequency is cross-function and runtime.
 
 Rationale: Two consecutive attempts failed identically. PS6020 hinged on a guard hit rate, not on whether a guard existed. PS6018 hinged on entry frequency: a loop-nesting proxy would have excluded all three shipped wins, whose movement clusters sit at function top level exactly like the rejected candidate. Perfscan output already instructs the reader to measure hotness; pushing hotness into the parser trades real recall for imagined precision.
+
+## BENCH-ASSERT-REGIME-001
+WHEN a benchmark chooses an input parameter that decides which code path executes, the author SHALL add a test asserting the resulting regime, so a benchmark that measures nothing fails instead of passing.
+
+Rationale: BenchmarkDBSCANFit called itself the probe for the eps-neighbourhood search at eps=2, where measurement showed 0 clusters, 0 core points and all 4000 points noise: every neighbourhood was a singleton and the cluster-expansion flood fill never ran one iteration. It timed a tree build plus empty queries for as long as it existed, reporting healthy numbers throughout. Since every optimization here is validated solely by benchmark, a degenerate benchmark silently voids that gate.
