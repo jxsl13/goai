@@ -129,4 +129,28 @@ func f(x [][]float64, d, n, k int) {
 		_ = s
 	}
 }`)
+	// CLAUSE: the strided access must not be AMORTIZED. This fixture DOES match every other clause
+	// — outer j is the column index, inner i is the row index, and the body assigns to a scalar —
+	// but the inner body also contains a loop of its own, so x[i][j] is read once against that
+	// loop's whole trip count and is a vanishing share of the nest.
+	//
+	// An earlier version of this fixture was LU's elimination step verbatim, which is silent for a
+	// completely DIFFERENT reason: its column index is a parameter, not the outer loop variable, so
+	// it never matched the index shape at all. Relaxing the amortization filter changed nothing
+	// while the tree went from 27 findings to 46 — the mutation was invisible until the fixture
+	// actually reached the clause.
+	quiet("amortized-by-inner-loop", `package p
+
+func f(x [][]float64, w []float64, d, n, m int) {
+	for j := 0; j < d; j++ {
+		var s float64
+		for i := 0; i < n; i++ {
+			s += x[i][j]
+			for q := 0; q < m; q++ {
+				s += w[q]
+			}
+		}
+		_ = s
+	}
+}`)
 }
