@@ -41,31 +41,57 @@ func ContrastiveScore(probs, maxSim []float64, alpha float64) []float64 {
 // contextReps is [numContext][dim]. With no context every penalty is 0.
 func MaxContextCosine(candReps, contextReps [][]float64) []float64 {
 	out := make([]float64, len(candReps))
+	if len(candReps) == 0 {
+		return out
+	}
+	dim := len(candReps[0])
+	// Pre-validate widths serially so the parallel body carries no panic path (a panic in a
+	// worker goroutine would be unrecoverable). This preserves the original per-pair
+	// length-mismatch panic while keeping the hot loop clean.
 	for v, cand := range candReps {
-		best := 0.0
-		for _, ctx := range contextReps {
-			if s := cosine(cand, ctx); s > best {
-				best = s
-			}
+		if len(cand) != dim {
+			panic(fmt.Sprintf("nlp: MaxContextCosine candidate %d width %d != %d", v, len(cand), dim))
 		}
-		out[v] = best
 	}
+	for j, ctx := range contextReps {
+		if len(ctx) != dim {
+			panic(fmt.Sprintf("nlp: MaxContextCosine context %d width %d != %d", j, len(ctx), dim))
+		}
+	}
+	// Each candidate's penalty is independent — it writes only out[v] and reads the shared
+	// read-only contextReps — so the candidate loop fans out over GOMAXPROCS bit-identically to
+	// the serial loop. Within a candidate its own squared norm ‖cand‖² is loop-invariant across
+	// the context reps, so hoist it out of the inner scan instead of recomputing it for every
+	// context token (a third of the inner-loop multiplies — the original recomputed dot, ‖cand‖²
+	// and ‖ctx‖² together per pair). Bit-identical: dot and ‖ctx‖² keep the same ascending-i
+	// summation order, and the divisor sqrt(na)·sqrt(nb) is the same product, so every compared
+	// cosine value is unchanged.
+	parallelChunks(len(candReps), len(contextReps)*dim, func(lo, hi int) {
+		for v := lo; v < hi; v++ {
+			cand := candReps[v]
+			var na float64
+			for i := range cand {
+				na += cand[i] * cand[i]
+			}
+			best := 0.0
+			if na != 0 {
+				sna := math.Sqrt(na)
+				for _, ctx := range contextReps {
+					var dot, nb float64
+					for i := range cand {
+						dot += cand[i] * ctx[i]
+						nb += ctx[i] * ctx[i]
+					}
+					if nb == 0 {
+						continue // zero-norm context: similarity is 0, best is already >= 0
+					}
+					if s := dot / (sna * math.Sqrt(nb)); s > best {
+						best = s
+					}
+				}
+			}
+			out[v] = best
+		}
+	})
 	return out
-}
-
-// cosine returns the cosine similarity a·b/(‖a‖‖b‖) ∈ [−1,1]; 0 if either is zero.
-func cosine(a, b []float64) float64 {
-	if len(a) != len(b) {
-		panic(fmt.Sprintf("nlp: cosine length mismatch %d != %d", len(a), len(b)))
-	}
-	var dot, na, nb float64
-	for i := range a {
-		dot += a[i] * b[i]
-		na += a[i] * a[i]
-		nb += b[i] * b[i]
-	}
-	if na == 0 || nb == 0 {
-		return 0
-	}
-	return dot / (math.Sqrt(na) * math.Sqrt(nb))
 }
