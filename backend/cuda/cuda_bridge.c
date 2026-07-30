@@ -1767,7 +1767,11 @@ int cu_softmax_f32(void* x, int rows, int cols) {
                          "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
                          "  double rowmax=sh[0]; __syncthreads();\n"
                          "  double local=0.0;\n"
-                         "  for(int j=t;j<cols;j+=nt){ double e=exp((double)xr[j]-rowmax); xr[j]=(float)e; local+=e; }\n"
+                         // GA106 runs FP64 at 1/64 the FP32 rate, so the double exp() dominated this
+                         // kernel (~28 GB/s, 8% of peak). Use FP32 expf on the reduced argument (~1e-7
+                         // rel, inside the softmax tolerance gate) but keep the SUM in double for
+                         // stability. The row-max shift keeps expf's argument <= 0 (no overflow).
+                         "  for(int j=t;j<cols;j+=nt){ float e=expf((float)((double)xr[j]-rowmax)); xr[j]=e; local+=(double)e; }\n"
                          "  sh[t]=local; __syncthreads();\n"
                          "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                          "  double inv=1.0/sh[0];\n"
