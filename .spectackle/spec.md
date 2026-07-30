@@ -745,3 +745,8 @@ Rationale: A triage of all 59 checks found six asserting a measured magnitude wi
 WHEN a narrowing would suppress a recommendation that is not merely useless but WRONG, the implementing agent SHALL ship it on high precision even at low recall, unlike a performance narrowing which needs enough instances to justify itself.
 
 Rationale: A divide check recommended a reciprocal multiply that evaluates to zero on integer operands. Two proofs caught three of ten such sites with zero false positives. Suppressing a wrong recommendation costs nothing, and what is given up is a perf suggestion at sites where it would have produced zero. For a perf check the failure mode is low precision; for a correctness hazard it is low precision that must be avoided and low recall that is tolerable.
+
+## PROC-CONFIRM-THE-MUTATION-APPLIED-001
+WHEN a mutation is applied by string replacement to check whether a test has teeth, the implementing agent SHALL confirm it actually changed the file, by diff or match count, before reading the test result.
+
+Rationale: A mutation intended to weaken a recall floor left the test green, which reads as a toothless test. It had silently no-oped on a shell escaping problem, and the floor was fine. Separately, a mutation earlier in the campaign landed on a dead duplicate of the target code and the suite stayed green for the same misleading reason. A green result after a mutation means nothing until the mutation is known to exist.
