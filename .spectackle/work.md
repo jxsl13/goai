@@ -1572,3 +1572,22 @@ THE REAL DECIDING PROPERTY IS THE GUARD'S HIT RATE, which no parser can read. bp
 CORRECTED PERF-APPEND-USUALLY-CONDITIONAL-001, which I had cast with the wrong reasoning: it now says to estimate how often the guard fires rather than whether one exists. As originally worded it would have talked a future reader out of the bpeInto win.
 
 THE META-OBSERVATION, third instance this session. The error was in the pattern-recognition step between a measurement and a rule, not in the measurement and not in the rule's implementation. PROC-RULE-FROM-N-INSTANCES-001 asks whether the instances are the same intervention - they were, both reserve-capacity-at-declaration. What it does not ask is whether the PREDICATE separating them from non-instances actually holds, and that is where all three failures landed. The cheap guard is to state the predicate and check it against every catalogued site BEFORE writing the detector; here that took two greps and would have saved building the rule twice.
+
+## R-01KYRC2ATJEVJVY8TDAPK6N162 PS6018 at nlp/eagle.go:202 rejected on leverage, and the attempt to encode that as a predicate failed the same way PS6020 did
+kind: research
+state: draft
+created: 2026-07-30
+
+REJECTS the last open PS6018 candidate in my lanes, and records that the second attempt in two iterations to refine a perfscan check with a syntactic hotness proxy failed, for the same underlying reason.
+
+THE CANDIDATE. PS6018 fires on EagleLoss because the function dispatches three pure data-movement ops with no fused raw-storage path: a row slice of hidden for rows 0..n-2, a second row slice of hidden for rows 1..n-1, and a row slice of pred for rows 0..n-3. All three are contiguous row ranges of a rank-2 tensor, so fusing them is bit-identical by construction, exactly as the check says.
+
+WHY IT IS STILL A REJECT. The three dispatches execute exactly three times per call. They are not in a loop, and EagleLoss is called once per training step, where it is dominated by the draft head's two dim-by-dim matmuls and by a vocab-wide classification matmul. Three tensor allocations and three dispatches against a vocab-sized GEMM is noise. Separately there is no benchmark in the package that calls EagleLoss at all, so nothing here is measurable on this host without first writing one, and the estimated ceiling does not justify that.
+
+FIRST PREDICATE ATTEMPT, REJECTED BEFORE IMPLEMENTATION: suppress PS6018 inside loss functions, on the theory that the recommended fix gates the fused arm on an untaped context while a loss only runs under a tape, making the fused arm dead code. Checked against the catalogue as the new predicate-first rule requires. It failed twice over. Of 26 PS6018 sites tree-wide exactly one is a loss function, so the class buys one site; and EagleLoss is in fact called untaped in its own reference tests, so the fused arm would not be dead code. Premise false, yield negligible.
+
+SECOND PREDICATE ATTEMPT, ALSO REJECTED: rank or suppress by loop nesting, on the theory that a movement cluster inside a loop body is hot and one at function top level is not. Checked against the three shipped PS6018 wins - partial-RoPE, Gemma2 capped attention, DeepSeekV2 absorbed attention. All three have their movement cluster at function top level, structurally identical to the rejected candidate. The predicate would have excluded every shipped win. Zero recall again.
+
+THE ACTUAL DISCRIMINATOR, and it is not syntax. What separates the three wins from this reject is that each winning function is entered once per layer per decoded token, while EagleLoss is entered once per training step. That is a call frequency: cross-function, and a runtime fact. This is the second consecutive check whose precision ceiling is set by call frequency rather than by shape - PS6020's was a guard's hit rate. The conclusion is not that perfscan needs a better proxy; it is that the tool is already correctly scoped as a candidate generator whose output line says to measure hotness before shipping. Attempts to push hotness into the AST should stop.
+
+WHAT WOULD ACTUALLY HELP, recorded but not built: annotate each candidate with whether any benchmark in the tree reaches the enclosing function, which converts a flat list of 26 into the triage the workflow actually needs - measurable now versus needs a new benchmark first. That requires a name-based cross-package call graph, which is a real feature rather than a predicate tweak, and is a separate task.
