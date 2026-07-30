@@ -390,6 +390,16 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 	// grouping the step's gate uses, so rows bit-match). sigZ/gated hoist out of the loop.
 	// Each token's gated-RMSNorm row is independent (reads y[t]/z[t], writes yT row t); parallelize
 	// over t with per-worker sigZ/gated. Bit-identical — per-row order and reduction unchanged.
+	// Same hoist the single-row [QuantMamba2Block.step] already performs (see there): the F32 gain
+	// and yT's F32 storage are taken ONCE instead of re-dispatched per element. The write loop was
+	// seq*intermediate iterations paying TWO interface dispatches each — an AtF64 on NormW that does
+	// not vary with t at all, plus a SetF64 that recomputes a flat offset for a slot the loop already
+	// knows. Bit-identical: AtF64 on an f32 tensor widens exactly, SetF64 on an f32 tensor stores
+	// float32(v), and this is the same expression in the same order, which also makes the prefill and
+	// decode paths textually identical — the invariant that DecodeStep matches Forward bit-for-bit
+	// now rests on one spelling rather than two.
+	nw := b.NormW.Storage().F32()
+	yf := yT.Storage().F32()
 	parallelChunks(seq, seq*b.Intermediate, func(tlo, thi int) {
 		sigZ := make([]float64, b.Intermediate)
 		gated := make([]float64, b.Intermediate)
@@ -402,8 +412,9 @@ func (b *QuantMamba2Mixer) forward(ctx *backend.Context, u *tensor.Tensor) (*ten
 			}
 			variance /= float64(b.Intermediate)
 			inv := 1.0 / math.Sqrt(variance+b.Eps)
+			row := yf[t*b.Intermediate : (t+1)*b.Intermediate]
 			for o := range b.Intermediate {
-				yT.SetF64(b.NormW.AtF64(o)*gated[o]*inv, t, o)
+				row[o] = float32(float64(nw[o]) * gated[o] * inv)
 			}
 		}
 	})
