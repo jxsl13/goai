@@ -202,6 +202,7 @@ var checks = []check{
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
+	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
 	// PS4xxx — vectorization candidates
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
@@ -2155,6 +2156,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, searchFeedsReductionFindings(fset, fn)...)
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, unconvertedDtypeArmFindings(fset, fn, ns)...)
+	out = append(out, compositeKeyMapProbeFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, perRowMakeSlabFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
@@ -7250,6 +7252,55 @@ func anyLoopBody(n ast.Node) (*ast.BlockStmt, bool) {
 		return v.Body, v.Body != nil
 	}
 	return nil, false
+}
+
+// compositeKeyMapProbeFindings flags PS3004 — a map probed with a composite-literal key.
+//
+// The predicate is sound without types, which is rare here: a composite literal is not a valid index
+// for a slice or an array, so `X[T{...}]` can only be a map lookup. What it costs is that an array or
+// struct key misses Go's specialized hashers and takes the generic one, a hash call per field plus a
+// combine, making it the priciest probe shape available.
+//
+// DELIBERATELY NOT GATED ON BEING INSIDE A LOOP. The site that motivated this check — the GGUF BPE
+// seed pass, worth -38.19% when replaced by a dense byte-pair table — sits in a four-line helper that
+// a loop calls, not in the loop itself, so a loop gate would have missed the only measured win. The
+// whole population in this tree is a handful of sites, small enough that reporting all of them and
+// letting a reader judge hotness beats a predicate that silently drops the interesting one.
+func compositeKeyMapProbeFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		cl, ok := ix.Index.(*ast.CompositeLit)
+		if !ok || cl.Type == nil {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(ix.Pos()),
+			end:      fset.Position(ix.End()),
+			category: "composite-key-map-probe",
+			msg: fmt.Sprintf("%s is probed with a COMPOSITE-LITERAL key (%s), so it is a map, and an"+
+				" array or struct key takes Go's GENERIC hasher — one hash call per field plus a"+
+				" combine — rather than the specialized path a plain string or int key gets. Where the"+
+				" key domain is small and dense, a flat index removes the probe entirely. Measured:"+
+				" nlp's GGUF BPE seed pass probed a map[[2]string] once per input byte, and a"+
+				" 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode -38.19%%"+
+				" (p=0.000). The sibling tiktoken encoder had already made that change, its comment"+
+				" recording that the string hash dominated its profile — and a [2]string key is worse"+
+				" still. HOTNESS IS NOT VISIBLE TO THIS CHECK: the measured site was not in a loop, it"+
+				" was a helper CALLED from one, which is why there is no loop gate here. Confirm the key"+
+				" domain is genuinely dense and bounded (two enum-like fields or two bytes qualify; an"+
+				" arbitrary string pair does not) and that the probe repeats, before converting.",
+				srcText(fset, ix.X), srcText(fset, cl.Type)),
+		})
+		return true
+	})
+	return out
 }
 
 // unconvertedDtypeArmFindings flags PS1009 — an accessor walk in one clause of a Dtype() switch
