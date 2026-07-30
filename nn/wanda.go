@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"sort"
 	"sync"
 
 	"github.com/jxsl13/goai/tensor"
@@ -368,56 +369,75 @@ func WandaPruneNM(w, x *tensor.Tensor, n, m int) (pruned, mask *tensor.Tensor, e
 	sf64 := s.Storage()
 	if wsF := flatF64(w); wsF != nil {
 		ss, ps, ms := sf64.F64(), pruned.Storage().F64(), mask.Storage().F64()
-		for o := 0; o < cout; o++ {
-			for base := 0; base < cin; base += m {
-				for r := 0; r < m; r++ {
-					grp[r] = base + r
-					gsc[r] = ss[(base+r)*cout+o]
-				}
-				sortGrp(base)
-				for r := range drop {
-					drop[r] = false
-				}
-				for r := 0; r < n; r++ {
-					drop[grp[r]-base] = true
-				}
-				for r := 0; r < m; r++ {
-					if drop[r] {
-						continue
+		// Each output column is independent (its own N:M block selection, disjoint strided
+		// output), so fan the column loop over GOMAXPROCS with PER-WORKER grp/gsc/drop scratch
+		// and comparator. Bit-identical to the serial loop.
+		parallelRows(cout, cin, func(olo, ohi int) {
+			grp := make([]int, m)
+			gsc := make([]float64, m)
+			drop := make([]bool, m)
+			sortGrp := func(base int) {
+				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+			}
+			for o := olo; o < ohi; o++ {
+				for base := 0; base < cin; base += m {
+					for r := 0; r < m; r++ {
+						grp[r] = base + r
+						gsc[r] = ss[(base+r)*cout+o]
 					}
-					off := (base+r)*cout + o
-					ps[off] = wsF[off]
-					ms[off] = 1
+					sortGrp(base)
+					for r := range drop {
+						drop[r] = false
+					}
+					for r := 0; r < n; r++ {
+						drop[grp[r]-base] = true
+					}
+					for r := 0; r < m; r++ {
+						if drop[r] {
+							continue
+						}
+						off := (base+r)*cout + o
+						ps[off] = wsF[off]
+						ms[off] = 1
+					}
 				}
 			}
-		}
+		})
 		return pruned, mask, nil
 	}
 	if wsF := flatF32(w); wsF != nil {
 		ss, ps, ms := sf64.F32(), pruned.Storage().F32(), mask.Storage().F32()
-		for o := 0; o < cout; o++ {
-			for base := 0; base < cin; base += m {
-				for r := 0; r < m; r++ {
-					grp[r] = base + r
-					gsc[r] = float64(ss[(base+r)*cout+o])
-				}
-				sortGrp(base)
-				for r := range drop {
-					drop[r] = false
-				}
-				for r := 0; r < n; r++ {
-					drop[grp[r]-base] = true
-				}
-				for r := 0; r < m; r++ {
-					if drop[r] {
-						continue
+		parallelRows(cout, cin, func(olo, ohi int) {
+			grp := make([]int, m)
+			gsc := make([]float64, m)
+			drop := make([]bool, m)
+			sortGrp := func(base int) {
+				sort.SliceStable(grp, func(a, b int) bool { return gsc[grp[a]-base] < gsc[grp[b]-base] })
+			}
+			for o := olo; o < ohi; o++ {
+				for base := 0; base < cin; base += m {
+					for r := 0; r < m; r++ {
+						grp[r] = base + r
+						gsc[r] = float64(ss[(base+r)*cout+o])
 					}
-					off := (base+r)*cout + o
-					ps[off] = wsF[off]
-					ms[off] = 1
+					sortGrp(base)
+					for r := range drop {
+						drop[r] = false
+					}
+					for r := 0; r < n; r++ {
+						drop[grp[r]-base] = true
+					}
+					for r := 0; r < m; r++ {
+						if drop[r] {
+							continue
+						}
+						off := (base+r)*cout + o
+						ps[off] = wsF[off]
+						ms[off] = 1
+					}
 				}
 			}
-		}
+		})
 		return pruned, mask, nil
 	}
 	for o := range cout {
