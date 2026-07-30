@@ -5585,7 +5585,21 @@ func innerInvariantRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 						" recomputed on every iteration of the outer loop for the same result. Precompute"+
 						" it once into a scratch indexed by %q. Bit-identical — it is the same product,"+
 						" not a reassociation. Measured 1.10x on the Mamba2 SSM scan, where the value was"+
-						" rebuilt N times per inner index.", innerVar, outerVar, innerVar),
+						" rebuilt N times per inner index."+
+						" REDUNDANT ARITHMETIC IS NOT AUTOMATICALLY COST, and this check cannot tell the"+
+						" difference: when the recompute is a REDUCTION sharing a loop with another"+
+						" reduction, it runs in the latency shadow of the chain beside it and is very"+
+						" nearly free. MEASURED on nlp MaxContextCosine, where the ‖ctx‖² sum is rebuilt"+
+						" once per (candidate, context) pair: the inner loop costs 822 ns with that term"+
+						" and 813 ns without it at dim=768, so the whole redundancy is about 1%% despite"+
+						" being half the arithmetic. Hoisting it into a prepass REGRESSED the benchmark"+
+						" +98.51%% at 8 candidates and +34.70%% at 64 (p=0.000, n=8), because the prepass"+
+						" is serial O(numContext·dim) while the work it saves was spread across workers"+
+						" and nearly free to begin with. Before hoisting a reduction out of a loop that"+
+						" contains another one, measure the loop WITH and WITHOUT the term: if removing it"+
+						" does not speed the loop up, hoisting it cannot speed the function up"+
+						" (PERF-REDUNDANT-WORK-IN-A-LATENCY-SHADOW-IS-FREE-001, PS3010)",
+						innerVar, outerVar, innerVar),
 				})
 				return true
 			})
