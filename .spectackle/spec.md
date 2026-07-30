@@ -625,3 +625,8 @@ Rationale: CORRECTED. The original treated a guard as disqualifying, which measu
 WHEN a scan rule proposal names a predicate to separate true instances from look-alikes, the implementing agent SHALL test that predicate by hand against every catalogued site, true and false, before writing any detector code.
 
 Rationale: A PS6020 guard predicate was proposed on the belief that both measured true positives were unguarded and all six rejected sites guarded. Two greps showed the opposite: knnHeap appends inside a capacity check and not inside a loop at all in that function, and bpeInto appends inside a vocab-hit check. The predicate would have yielded zero true positives. The failure was not in the measurement or the detector but in the untested predicate between them, which is where the two earlier rule failures this session also landed.
+
+## PERF-HOTNESS-IS-NOT-SYNTAX-001
+WHEN a perfscan check is proposed to be refined by a syntactic proxy for how often the matched code runs, the implementing agent SHALL reject the refinement and leave the check advisory, since call frequency is cross-function and runtime.
+
+Rationale: Two consecutive attempts failed identically. PS6020 hinged on a guard hit rate, not on whether a guard existed. PS6018 hinged on entry frequency: a loop-nesting proxy would have excluded all three shipped wins, whose movement clusters sit at function top level exactly like the rejected candidate. Perfscan output already instructs the reader to measure hotness; pushing hotness into the parser trades real recall for imagined precision.
