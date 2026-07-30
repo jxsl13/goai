@@ -5,9 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
-	"sync"
 
-	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/internal/simd"
 )
 
@@ -151,7 +149,7 @@ type GaussianMixture struct {
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol        [][][]float64
 	invCholDiag [][]float64  // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
-	yScratch    []float64    // GMMFull only: forward-substitution buffer for the SERIAL callers
+	yScratch    []float64    // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
 	yScratch4   [4][]float64 // GMMFull only: 4 solve buffers for logGaussianFullBatch's component jam
 	logDetHalf  []float64    // per component: 0.5·log|Σ_k| (density normaliser)
 	invCov      [][]float64  // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
@@ -293,17 +291,8 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		logW[c] = math.Log(m.Weights[c])
 	}
 	diag := m.cfg.covariance == GMMDiag
-	// PARALLEL over samples. Each iteration writes only logResp[i] and resp[i], and reads the
-	// component params read-only; the per-sample scratch (ldBuf, and the full-cov solve buffers)
-	// is per chunk. This was serial for BOTH covariance shapes until the density kernels stopped
-	// reading their scratch off the receiver — the same field that gated PredictProba.
-	//
-	// The running total is the ONLY cross-sample dependency, so it becomes norms[i] and is summed
-	// AFTER the loop in ascending sample order: bit-identical to the serial accumulation, where a
-	// chunked reduction would reassociate. n extra words against O(n*k*d) work.
-	norms := make([]float64, len(x))
-	rowBody := func(i int, ldBuf []float64, y4 *[4][]float64) {
-		row := x[i]
+	ldBuf := make([]float64, k)
+	for i, row := range x {
 		lr := logResp[i]
 		if diag {
 			m.logGaussianDiagBatch(row, ldBuf) // unroll-and-jam over components
@@ -311,7 +300,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 				lr[c] = logW[c] + ldBuf[c]
 			}
 		} else {
-			m.logGaussianFullBatch(row, ldBuf, y4) // unroll-and-jam over components
+			m.logGaussianFullBatch(row, ldBuf, m.yScratch4, m.yScratch) // unroll-and-jam over components
 			for c := range k {
 				lr[c] = logW[c] + ldBuf[c]
 			}
@@ -329,25 +318,21 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 			}
 		}
 		if math.IsInf(mx, -1) {
-			norms[i] = mx // degenerate all-−Inf row: preserve the scalar semantics
+			total += mx // degenerate all-−Inf row: preserve the scalar semantics
 			for c := range k {
 				lr[c] -= mx
 				resp[i][c] = math.Exp(lr[c])
 			}
-			return
+			continue
 		}
 		s := simd.ExpSumF64(resp[i], lr, mx)
 		norm := mx + math.Log(s)
-		norms[i] = norm
+		total += norm
 		inv := 1 / s
 		for c := range k {
 			lr[c] -= norm
 			resp[i][c] *= inv
 		}
-	}
-	gmmParallelRows(len(x), k*m.nFeat, k, m.nFeat, m.cfg.covariance == GMMFull, rowBody)
-	for _, v := range norms { // ascending sample order: bit-identical to the serial running sum
-		total += v
 	}
 	return total / float64(len(x)), nil
 }
@@ -495,79 +480,53 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		m.yScratch4[t] = make([]float64, d)
 	}
 	m.logDetHalf = make([]float64, k)
-	// PARALLEL over components: each c owns its own accumulator s, its own Cholesky and
-	// its own slot in chol/invCholDiag/logDetHalf. The centered-row scratch was the only
-	// state crossing components and now belongs to the chunk — the same shape that made
-	// logGaussian racy, caught there by -race and avoided here by construction.
-	//
-	// BIT-IDENTICAL: component c still accumulates over samples in ascending i order.
-	// Only the order in which DIFFERENT components are computed changes, and they share
-	// no accumulator.
-	//
-	// k-way at best (6 in the benchmark), so this cannot reach the E-step's 1.93x. It is
-	// worth doing because after that fix this loop is the dominant remainder, not because
-	// the parallelism is wide.
-	var covMu sync.Mutex
-	var covErr error
-	parallelSamples(k, n*d*d/max(k, 1), func(clo, chi int) {
-		cen := make([]float64, d) // per-chunk centered-row scratch
-		for c := clo; c < chi; c++ {
-			s := make([]float64, d*d)
-			inv := 1.0 / (nk[c] + 1e-300)
-			for i := range n {
-				r := resp[i][c]
-				xi, mc := x[i], m.Means[c]
-				// Center the row ONCE (cen[b] = xi[b]−mc[b]) instead of recomputing xi[b]−mc[b]
-				// for every a, then accumulate s[a] += (r·cen[a])·cen as an equal-length slice
-				// axpy (auto-vectorizing). r·da·(xi[b]−mc[b]) = (r·cen[a])·cen[b] bit-identically.
-				for b := range cen {
-					cen[b] = xi[b] - mc[b]
-				}
-				for a := 0; a < d; a++ {
-					rda := r * cen[a]
-					sa := s[a*d : a*d+a+1] // LOWER triangle + diagonal only (b ≤ a): the
-					for b := range sa {    // covariance is symmetric, and gmmCholesky reads only
-						sa[b] += rda * cen[b] // a[i*d+j], j≤i — so skip the redundant upper half,
-					} // halving the O(n·k·d²) accumulation.
-				}
+	cen := make([]float64, d) // centered-row scratch, reused per sample
+	for c := range k {
+		s := make([]float64, d*d)
+		inv := 1.0 / (nk[c] + 1e-300)
+		for i := range n {
+			r := resp[i][c]
+			xi, mc := x[i], m.Means[c]
+			// Center the row ONCE (cen[b] = xi[b]−mc[b]) instead of recomputing xi[b]−mc[b]
+			// for every a, then accumulate s[a] += (r·cen[a])·cen as an equal-length slice
+			// axpy (auto-vectorizing). r·da·(xi[b]−mc[b]) = (r·cen[a])·cen[b] bit-identically.
+			for b := range cen {
+				cen[b] = xi[b] - mc[b]
 			}
-			for a := range d {
-				for b := 0; b <= a; b++ { // normalize the accumulated lower triangle (incl diag)
-					s[a*d+b] *= inv
-				}
-				s[a*d+a] += m.cfg.regCovar
-				for b := 0; b < a; b++ { // mirror lower→upper so the STORED m.cov is symmetric
-					s[b*d+a] = s[a*d+b] // (Covariance(k) reads the full matrix). The Cholesky-
-				} // visible lower half is bit-identical to the full-accumulate; only the upper
-			} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
-			l, half, err := gmmCholesky(s, d)
-			if err != nil {
-				covMu.Lock()
-				if covErr == nil {
-					covErr = fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
-				}
-				covMu.Unlock()
-				return
+			for a := 0; a < d; a++ {
+				rda := r * cen[a]
+				sa := s[a*d : a*d+a+1] // LOWER triangle + diagonal only (b ≤ a): the
+				for b := range sa {    // covariance is symmetric, and gmmCholesky reads only
+					sa[b] += rda * cen[b] // a[i*d+j], j≤i — so skip the redundant upper half,
+				} // halving the O(n·k·d²) accumulation.
 			}
-			m.cov[c] = s
-			m.chol[c] = l
-			id := make([]float64, d)
-			for i := range d {
-				id[i] = 1 / l[i][i] // reciprocal of the Cholesky diagonal for the solve
-			}
-			m.invCholDiag[c] = id
-			m.logDetHalf[c] = half
 		}
-	})
-	return covErr
+		for a := range d {
+			for b := 0; b <= a; b++ { // normalize the accumulated lower triangle (incl diag)
+				s[a*d+b] *= inv
+			}
+			s[a*d+a] += m.cfg.regCovar
+			for b := 0; b < a; b++ { // mirror lower→upper so the STORED m.cov is symmetric
+				s[b*d+a] = s[a*d+b] // (Covariance(k) reads the full matrix). The Cholesky-
+			} // visible lower half is bit-identical to the full-accumulate; only the upper
+		} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
+		l, half, err := gmmCholesky(s, d)
+		if err != nil {
+			return fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+		}
+		m.cov[c] = s
+		m.chol[c] = l
+		id := make([]float64, d)
+		for i := range d {
+			id[i] = 1 / l[i][i] // reciprocal of the Cholesky diagonal for the solve
+		}
+		m.invCholDiag[c] = id
+		m.logDetHalf[c] = half
+	}
+	return nil
 }
 
 // logGaussian returns log N(x; μ_c, Σ_c) for component c.
-// The forward-substitution buffer is a PARAMETER for the same reason logGaussianFullBatch's
-// four are: this is the k%4 TAIL of that kernel, so it runs on whatever goroutine the batch
-// runs on. Reading it off the receiver made the parallel full-covariance path race whenever the
-// component count was not a multiple of four — a case no benchmark or test had exercised,
-// because they all used k=8.
 func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64, error) {
 	d := m.nFeat
 	const log2pi = 1.8378770664093453 // log(2π)
@@ -580,9 +539,8 @@ func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64,
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
-	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y is the CALLER's buffer — serial callers
-	// hand over the per-model scratch, the parallel batch hands over its worker's — and the
-	// solve multiplies the cached 1/L[i][i].
+	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y is a caller-owned scratch (len ≥ d;
+	// per-worker when parallel) and multiplies the cached 1/L[i][i].
 	l, id := m.chol[c], m.invCholDiag[c]
 	for i := range d {
 		s := x[i] - m.Means[c][i]
@@ -609,11 +567,7 @@ func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64,
 // solve subtracts l_c[i][j]·y_c[j] in the same ascending j order, y_c[i]=s·id_c[i]
 // is unchanged, quad accumulates y_c[i]² in the same ascending i order, and the
 // final -0.5·(d·log2π+quad) − logDetHalf op sequence is untouched.
-// The four solve buffers are a PARAMETER, not m.yScratch4. As a receiver field they were a
-// per-call temporary on shared state (PS6006), and that single fact was what pinned GMMFull to
-// the serial path in PredictProba — the gate there named this buffer as the reason. Passing
-// them in lets each worker own a set.
-func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 *[4][]float64) {
+func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4][]float64, y []float64) {
 	d := m.nFeat
 	k := m.cfg.k
 	const log2pi = 1.8378770664093453
@@ -655,7 +609,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 *[4
 		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
 	}
 	for ; c < k; c++ {
-		ld[c], _ = m.logGaussian(x, c, y4[0])
+		ld[c], _ = m.logGaussian(x, c, y)
 	}
 }
 
@@ -720,25 +674,61 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
-	out := make([]float64, len(x))
-	buf := make([]float64, k)
-	diag := m.cfg.covariance == GMMDiag
-	for i, row := range x {
+	for _, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: gmm ScoreSamples feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
+	}
+	out := make([]float64, len(x))
+	diag := m.cfg.covariance == GMMDiag
+	// Each sample's density is independent (reads only shared read-only params, writes only
+	// out[i]). Full-cov's triangular solve needs a private y-scratch — the shared
+	// m.yScratch/m.yScratch4 are exactly why this stayed serial — so give every worker its OWN
+	// buf + solve buffers and fan the sample loop across GOMAXPROCS. Bit-identical to the serial
+	// scan; serial below a small work threshold.
+	rowScore := func(buf []float64, y4 [4][]float64, y []float64, i int) {
 		if diag {
-			m.logGaussianDiagBatch(row, buf) // unroll-and-jam over components → buf[c]=ld[c]
-			for c := range k {
-				buf[c] = logW[c] + buf[c]
-			}
+			m.logGaussianDiagBatch(x[i], buf)
 		} else {
-			m.logGaussianFullBatch(row, buf, &m.yScratch4) // unroll-and-jam over components
-			for c := range k {
-				buf[c] = logW[c] + buf[c]
-			}
+			m.logGaussianFullBatch(x[i], buf, y4, y)
+		}
+		for c := range k {
+			buf[c] = logW[c] + buf[c]
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
+	}
+	newScratch := func() ([]float64, [4][]float64, []float64) {
+		var y4 [4][]float64
+		for t := range y4 {
+			y4[t] = make([]float64, m.nFeat)
+		}
+		return make([]float64, k), y4, make([]float64, m.nFeat)
+	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || len(x)*k < 1<<11 {
+		buf, y4, y := newScratch()
+		for i := range x {
+			rowScore(buf, y4, y, i)
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	if err := parallelBuild(nw, func(cw int) error {
+		lo := cw * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		buf, y4, y := newScratch() // per-worker scratch
+		for i := lo; i < hi; i++ {
+			rowScore(buf, y4, y, i)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -775,18 +765,15 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 	}
 	out := make([][]float64, len(x))
 	diag := m.cfg.covariance == GMMDiag
-	rowBody := func(lr []float64, y4 *[4][]float64, i int) error {
+	rowBody := func(lr []float64, y4 [4][]float64, y []float64, i int) {
 		// Fused density: the per-component scalar logGaussian calls collapse into the
-		// unroll-and-jammed batch kernel ScoreSamples already uses — x[j] is loaded once
-		// and reused across 4 components, breaking the single-accumulator FADD/FSUB chain,
-		// so lr[c] is bit-identical to k scalar logGaussian calls (same ascending terms,
-		// same -0.5·(d·log2π+quad)-logDetHalf sequence). Diag is race-free (reads only the
-		// shared per-component params); the full-cov batch's solve buffers are per-worker
-		// here because GMMFull never takes the parallel path (gated to GMMDiag below).
+		// unroll-and-jammed batch kernel (x[j] loaded once, reused across 4 components), so
+		// lr[c] is bit-identical to k scalar logGaussian calls. Full-cov's triangular solve
+		// uses the caller-owned (per-worker) y4/y scratch threaded in #618.
 		if diag {
 			m.logGaussianDiagBatch(x[i], lr)
 		} else {
-			m.logGaussianFullBatch(x[i], lr, y4)
+			m.logGaussianFullBatch(x[i], lr, y4, y)
 		}
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
@@ -794,27 +781,25 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		o := make([]float64, k)
 		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
 		out[i] = o
-		return nil
 	}
-	// Rows are independent for BOTH covariance shapes: the density kernels only READ the
-	// per-component params (Means/invCov/chol/logDetHalf), out[i] and o are per-sample, and
-	// lr plus the four full-cov solve buffers are made PER WORKER — so chunking the row loop
-	// across GOMAXPROCS is bit-identical to the serial scan.
-	//
-	// GMMFull used to be excluded here, and the reason was not the math: its batch kernel read
-	// four solve buffers off the receiver, so concurrent calls would have raced on them. That
-	// buffer is now a parameter, which removes the only obstacle. The work threshold still
-	// keeps small inputs serial.
+	newScratch := func() ([]float64, [4][]float64, []float64) {
+		var y4 [4][]float64
+		for t := range y4 {
+			y4[t] = make([]float64, m.nFeat)
+		}
+		return make([]float64, k), y4, make([]float64, m.nFeat)
+	}
+	// Each sample is independent (reads only shared read-only params, writes only out[i]/o);
+	// full-cov's solve now uses PER-WORKER scratch, so BOTH diag and full fan out
+	// bit-identically across GOMAXPROCS. Serial below a small work threshold.
 	nw := runtime.GOMAXPROCS(0)
 	if nw > len(x) {
 		nw = len(x)
 	}
 	if nw <= 1 || len(x)*k < 1<<11 {
-		lr := make([]float64, k)
+		lr, y4, y := newScratch()
 		for i := range x {
-			if err := rowBody(lr, &m.yScratch4, i); err != nil {
-				return nil, err
-			}
+			rowBody(lr, y4, y, i)
 		}
 		return out, nil
 	}
@@ -825,17 +810,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		lr := make([]float64, k) // per-worker scratch
-		var y4 [4][]float64      // per-worker full-cov solve buffers
-		if m.cfg.covariance == GMMFull {
-			for t := range y4 {
-				y4[t] = make([]float64, m.nFeat)
-			}
-		}
+		lr, y4, y := newScratch() // per-worker scratch
 		for i := lo; i < hi; i++ {
-			if err := rowBody(lr, &y4, i); err != nil {
-				return err
-			}
+			rowBody(lr, y4, y, i)
 		}
 		return nil
 	}); err != nil {
@@ -966,69 +943,4 @@ func gmmKMeansPP(x [][]float64, k int, seed int64) [][]float64 {
 		centers = append(centers, append([]float64(nil), x[pick]...))
 	}
 	return centers
-}
-
-// gmmParThreshold is the total work below which splitting an EM loop costs more than it
-// saves — the same 1<<15 crossover measured for this class of core.
-const gmmParThreshold = 1 << 15
-
-// parallelSamples splits n units of work across the shared bounded pool; per is the
-// per-unit cost so the threshold compares total work rather than a bare count. Routing
-// through the pool rather than spawning keeps a caller that is already parallel from
-// multiplying the process's goroutine count (ADR-01KYMWJ76AFA2).
-func parallelSamples(n, per int, body func(lo, hi int)) {
-	if n*per < gmmParThreshold {
-		body(0, n)
-		return
-	}
-	parallel.Rows(n, body)
-}
-
-// gmmParallelRows runs body over rows [0,n) across GOMAXPROCS, giving each worker its own
-// component buffer and — when full covariance needs them — its own four triangular-solve
-// buffers. Serial below a work threshold and for a single worker.
-//
-// Per-worker scratch is the whole reason this can be concurrent at all: the density kernels used
-// to read those buffers off the receiver, which forced the caller to stay serial. PS6006 as a
-// structural blocker, not a contention cost.
-func gmmParallelRows(n, per, k, d int, full bool, body func(i int, ldBuf []float64, y4 *[4][]float64)) {
-	newScratch := func() ([]float64, *[4][]float64) {
-		ldBuf := make([]float64, k)
-		var y4 [4][]float64
-		if full {
-			for t := range y4 {
-				y4[t] = make([]float64, d)
-			}
-		}
-		return ldBuf, &y4
-	}
-	nw := runtime.GOMAXPROCS(0)
-	if nw > n {
-		nw = n
-	}
-	if nw <= 1 || n*per < gmmParThreshold {
-		ldBuf, y4 := newScratch()
-		for i := range n {
-			body(i, ldBuf, y4)
-		}
-		return
-	}
-	csz := (n + nw - 1) / nw
-	var wg sync.WaitGroup
-	for c := 0; c < nw; c++ {
-		lo := c * csz
-		if lo >= n {
-			break
-		}
-		hi := min(lo+csz, n)
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			ldBuf, y4 := newScratch()
-			for i := lo; i < hi; i++ {
-				body(i, ldBuf, y4)
-			}
-		}(lo, hi)
-	}
-	wg.Wait()
 }

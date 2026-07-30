@@ -74,12 +74,14 @@ func benchPredictProbaFull(b *testing.B, n, k, d int) {
 	for i := range x {
 		row := make([]float64, d)
 		for j := range row {
-			row[j] = rng.NormFloat64()
+			// +i%k gives the points actual cluster structure, so the responsibilities are
+			// meaningful rather than near-uniform over pure noise.
+			row[j] = rng.NormFloat64() + float64(i%k)
 		}
 		x[i] = row
 	}
-	m := classic.NewGaussianMixture(classic.WithGMMComponents(k), classic.WithGMMSeed(1),
-		classic.WithGMMCovariance(classic.GMMFull))
+	m := classic.NewGaussianMixture(classic.WithGMMComponents(k), classic.WithGMMCovariance(classic.GMMFull),
+		classic.WithGMMSeed(1))
 	if err := m.Fit(x); err != nil {
 		b.Fatal(err)
 	}
@@ -94,4 +96,5 @@ func benchPredictProbaFull(b *testing.B, n, k, d int) {
 
 func BenchmarkGMMPredictProbaFull_512x8_d16(b *testing.B)  { benchPredictProbaFull(b, 512, 8, 16) }
 func BenchmarkGMMPredictProbaFull_512x8_d32(b *testing.B)  { benchPredictProbaFull(b, 512, 8, 32) }
+func BenchmarkGMMPredictProbaFull_2048x8_d20(b *testing.B) { benchPredictProbaFull(b, 2048, 8, 20) }
 func BenchmarkGMMPredictProbaFull_2048x8_d32(b *testing.B) { benchPredictProbaFull(b, 2048, 8, 32) }
