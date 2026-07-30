@@ -645,3 +645,8 @@ Rationale: PS6021 passed all nine tests on the first draft while two clauses wer
 WHEN an A/B reports a wall-clock delta under about five percent, the measuring agent SHALL run a null A/B with identical code in both arms and report the claimed delta against that measured floor.
 
 Rationale: A broken stash left identical code in both arms of a vision A/B; it reported a geomean sec/op delta of -1.39 percent. The valid run of a real change reported -1.15 percent. Without the accidental null run the smaller number would have read as a modest win. Interleaving and min-of-N bound sampling error but say nothing about a benchmark that cannot resolve the effect size at all.
+
+## BENCH-STASH-UNTRACKED-001
+WHEN an A/B swaps arms with git stash and the change adds a new file, the measuring agent SHALL verify the base arm by grepping for pre-change text before timing it, since stash refuses untracked paths and leaves the new code in place.
+
+Rationale: git stash push with an untracked pathspec fails, the subsequent pop reports no stash entries, and both loop iterations then time the new code. The run completed with plausible numbers and no visible error in the benchstat output. A one-line assertion that the base arm actually contains the old text turns a silent wrong answer into a loud failure.
