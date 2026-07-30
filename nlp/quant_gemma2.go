@@ -183,13 +183,13 @@ func (m *QuantGemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
 	if err != nil {
 		return nil, err
 	}
 	// √dim normalizer on the residual stream only (the tied head stays unscaled) — the
 	// same lookup-then-scale order as Gemma2.Forward.
-	if x, err = exec1(ctx, backend.OpMul, nil, x, m.embedScale()); err != nil {
+	if x, err = exec2(ctx, backend.OpMul, nil, x, m.embedScale()); err != nil {
 		return nil, err
 	}
 	for _, b := range m.Blocks {
@@ -236,7 +236,7 @@ func (m *QuantGemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 	}
 	// Final-logit soft-cap, the same OpSoftCap primitive as the float path.
 	if cfg.FinalLogitCap > 0 {
-		logits, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.FinalLogitCap}, logits)
+		logits, err = exec1a(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.FinalLogitCap}, logits)
 		if err != nil {
 			return nil, err
 		}
@@ -271,10 +271,10 @@ func (m *QuantGemma2) cappedAttention(ctx *backend.Context, b *QuantGemma2Block,
 	if err != nil {
 		return nil, err
 	}
-	if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
+	if q, err = exec1a(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 		return nil, err
 	}
-	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
+	if k, err = exec1a(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 		return nil, err
 	}
 
@@ -295,15 +295,15 @@ func (m *QuantGemma2) cappedAttention(ctx *backend.Context, b *QuantGemma2Block,
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
 		kvHead := h / rep
-		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
+		qh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
 		if err != nil {
 			return nil, err
 		}
-		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, k)
+		kh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, k)
 		if err != nil {
 			return nil, err
 		}
-		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, v)
+		vh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, v)
 		if err != nil {
 			return nil, err
 		}
@@ -322,7 +322,7 @@ func (m *QuantGemma2) cappedAttention(ctx *backend.Context, b *QuantGemma2Block,
 		}
 		// attention-logit soft-cap on the scaled scores, before the mask
 		if cfg.AttnLogitCap > 0 {
-			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
+			if scores, err = exec1a(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}
@@ -363,7 +363,7 @@ func (m *QuantGemma2) embedOne(ctx *backend.Context, token int) (*tensor.Tensor,
 		return nil, fmt.Errorf("nlp: token %d outside vocab %d", token, m.Config.Vocab)
 	}
 	x := embedRow(m.TokEmb, token, m.Config.Dim)
-	return exec1(ctx, backend.OpMul, nil, x, m.embedScale())
+	return exec2(ctx, backend.OpMul, nil, x, m.embedScale())
 }
 
 // DecodeStep advances the quantized Gemma 2 by one token at absolute position pos,
@@ -425,7 +425,7 @@ func (m *QuantGemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token
 		return nil, err
 	}
 	if cfg.FinalLogitCap > 0 {
-		logits, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.FinalLogitCap}, logits)
+		logits, err = exec1a(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.FinalLogitCap}, logits)
 		if err != nil {
 			return nil, err
 		}
@@ -459,10 +459,10 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 		return nil, err
 	}
 	// RoPE the single token at its absolute position, then append k,v to the cache.
-	if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+	if q, err = exec1a(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 		return nil, err
 	}
-	if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+	if k, err = exec1a(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 		return nil, err
 	}
 	kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
@@ -519,14 +519,14 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 			qh, khT, vh = qBuf, kTBuf, vBuf
 		} else {
 			var err error
-			if qh, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q); err != nil {
+			if qh, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q); err != nil {
 				return nil, err
 			}
-			kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
+			kh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
 			if err != nil {
 				return nil, err
 			}
-			if vh, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew); err != nil {
+			if vh, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew); err != nil {
 				return nil, err
 			}
 			// scores = qh·khᵀ  [1,sk]
@@ -544,7 +544,7 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 		}
 		// attention-logit soft-cap on the scaled scores (no mask for a single query)
 		if cfg.AttnLogitCap > 0 {
-			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
+			if scores, err = exec1a(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}

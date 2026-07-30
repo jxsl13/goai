@@ -83,7 +83,7 @@ type QuantMoE struct {
 // [nn.SparseMoE.ForwardDecode]). Inference-only: the routing is discrete and nothing is
 // recorded for autograd.
 func (m *QuantMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Router) // [T, E] f32 gate logits
+	logits, err := exec2(ctx, backend.OpMatMul, nil, x, m.Router) // [T, E] f32 gate logits
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func (m *QuantMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
-		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
+		term, err := exec2(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
@@ -235,7 +235,7 @@ func (m *QuantMixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tens
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
 	if err != nil {
 		return nil, err
 	}

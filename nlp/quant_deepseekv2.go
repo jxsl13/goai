@@ -117,7 +117,7 @@ type QuantDeepSeekMoE struct {
 // V2's gating), every expert evaluated densely, then the shared expert added
 // unconditionally — [DeepSeekV2.moeFFN] with quantized experts. Inference-only.
 func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Router) // [T, E] f32 gate logits
+	logits, err := exec2(ctx, backend.OpMatMul, nil, x, m.Router) // [T, E] f32 gate logits
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		if err != nil {
 			return nil, err
 		}
-		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
+		term, err := exec2(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
@@ -379,7 +379,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -650,11 +650,11 @@ func (m *QuantDeepSeekV2) mlaLatents(ctx *backend.Context, b *QuantDeepSeekV2Blo
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kvLatent, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
+	kvLatent, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
+	kPe, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -753,14 +753,14 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 			}
 			qNope, qPe = qNopeBuf, qPeBuf
 		} else {
-			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			qh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 			if err != nil {
 				return nil, err
 			}
-			if qNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
+			if qNope, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
 				return nil, err
 			}
-			if qPe, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
+			if qPe, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
 				return nil, err
 			}
 		}
@@ -885,14 +885,14 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 			}
 			qNope, qPe = qNopeBuf, qPeBuf
 		} else {
-			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			qh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 			if err != nil {
 				return nil, err
 			}
-			if qNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
+			if qNope, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
 				return nil, err
 			}
-			if qPe, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
+			if qPe, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
 				return nil, err
 			}
 		}
@@ -900,7 +900,7 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 		if err != nil {
 			return nil, err
 		}
-		queryH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [T, qkHead]
+		queryH, err := exec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [T, qkHead]
 		if err != nil {
 			return nil, err
 		}
@@ -915,18 +915,18 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 			}
 			kNope, valueH = kNopeBuf, valBuf
 		} else {
-			kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
+			kvh, err := exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
 			if err != nil {
 				return nil, err
 			}
-			if kNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh); err != nil {
+			if kNope, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh); err != nil {
 				return nil, err
 			}
-			if valueH, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh); err != nil {
+			if valueH, err = exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh); err != nil {
 				return nil, err
 			}
 		}
-		keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [T, qkHead]
+		keyH, err := exec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [T, qkHead]
 		if err != nil {
 			return nil, err
 		}

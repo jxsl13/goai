@@ -95,7 +95,7 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, m.TokEmb, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -116,15 +116,15 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 		if err != nil {
 			return nil, err
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, xb, b.Wq)
 		if err != nil {
 			return nil, err
 		}
-		k, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wk)
+		k, err := exec2(ctx, backend.OpMatMul, nil, xb, b.Wk)
 		if err != nil {
 			return nil, err
 		}
-		v, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wv)
+		v, err := exec2(ctx, backend.OpMatMul, nil, xb, b.Wv)
 		if err != nil {
 			return nil, err
 		}
@@ -148,7 +148,7 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 		if err != nil {
 			return nil, err
 		}
-		o, err := exec1(ctx, backend.OpMatMul, nil, a, b.Wo)
+		o, err := exec2(ctx, backend.OpMatMul, nil, a, b.Wo)
 		if err != nil {
 			return nil, err
 		}
@@ -177,7 +177,7 @@ func (m *Mixtral) forwardCapture(ctx *backend.Context, tokens []int, capture fun
 	if x, err = m.Norm.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, m.Out)
+	return exec2(ctx, backend.OpMatMul, nil, x, m.Out)
 }
 
 // Params returns every trainable tensor for optimizers (router + all experts included).
