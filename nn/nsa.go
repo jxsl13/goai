@@ -56,68 +56,76 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 		}
 	}
 
-	scores := make([]float64, max(seq, nBlocks))
-	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
-	for h := range heads {
-		off := h * dk
-		for i := range seq {
-			for d := range dk {
-				qrow[d] = q.AtF64(i, off+d)
-			}
-			// ---- cmp: softmax over complete blocks strictly before the query.
-			nPast := i / blockSize // complete blocks before i
-			blockW := make([]float64, nPast)
-			if nPast > 0 {
-				m := math.Inf(-1)
-				for b := range nPast {
-					var s float64
-					for d := range dk {
-						s += qrow[d] * poolK[b*dm+off+d]
-					}
-					s *= scale
-					scores[b] = s
-					if s > m {
-						m = s
-					}
-				}
-				var sum float64
-				for b := range nPast {
-					scores[b] = math.Exp(scores[b] - m)
-					sum += scores[b]
-				}
-				for b := range nPast {
-					scores[b] /= sum // normalize once, not per channel d
-				}
+	// Heads are independent: head h writes only the disjoint output columns [off:off+dk] of
+	// cmp/slc/win and reads its own head slice of q/k/v plus the shared read-only poolK/poolV
+	// (pooled once above), with no cross-head reduction. Parallelizing over heads runs each
+	// head's exact serial computation on a worker, so the result is bit-identical regardless of
+	// the internal softmax/sort. Each worker owns its own scores/qrow scratch (reused across the
+	// head's queries). Gated on heads·seq²·dk so a tiny problem stays serial.
+	parallelRows(heads, seq*seq*dk, func(hlo, hhi int) {
+		scores := make([]float64, max(seq, nBlocks))
+		qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
+		for h := hlo; h < hhi; h++ {
+			off := h * dk
+			for i := range seq {
 				for d := range dk {
-					var o float64
+					qrow[d] = q.AtF64(i, off+d)
+				}
+				// ---- cmp: softmax over complete blocks strictly before the query.
+				nPast := i / blockSize // complete blocks before i
+				blockW := make([]float64, nPast)
+				if nPast > 0 {
+					m := math.Inf(-1)
 					for b := range nPast {
-						o += scores[b] * poolV[b*dm+off+d]
+						var s float64
+						for d := range dk {
+							s += qrow[d] * poolK[b*dm+off+d]
+						}
+						s *= scale
+						scores[b] = s
+						if s > m {
+							m = s
+						}
 					}
-					cmp.SetF64(o, i, off+d)
+					var sum float64
+					for b := range nPast {
+						scores[b] = math.Exp(scores[b] - m)
+						sum += scores[b]
+					}
+					for b := range nPast {
+						scores[b] /= sum // normalize once, not per channel d
+					}
+					for d := range dk {
+						var o float64
+						for b := range nPast {
+							o += scores[b] * poolV[b*dm+off+d]
+						}
+						cmp.SetF64(o, i, off+d)
+					}
+					for b := range nPast {
+						blockW[b] = scores[b] // already normalized
+					}
 				}
+				// ---- slc: top-n blocks by cmp importance, own block always in.
+				type imp struct {
+					block int
+					w     float64
+				}
+				var imps []imp
 				for b := range nPast {
-					blockW[b] = scores[b] // already normalized
+					imps = append(imps, imp{b, blockW[b]})
 				}
+				sort.Slice(imps, func(a, b int) bool { return imps[a].w > imps[b].w })
+				selected := map[int]bool{i / blockSize: true}
+				for gi := 0; gi < len(imps) && len(selected) < topN; gi++ {
+					selected[imps[gi].block] = true
+				}
+				attendMask(qrow, k, v, slc, i, off, dk, scale, scores, func(j int) bool { return selected[j/blockSize] })
+				// ---- win: last `window` keys.
+				attendMask(qrow, k, v, win, i, off, dk, scale, scores, func(j int) bool { return i-j < window })
 			}
-			// ---- slc: top-n blocks by cmp importance, own block always in.
-			type imp struct {
-				block int
-				w     float64
-			}
-			var imps []imp
-			for b := range nPast {
-				imps = append(imps, imp{b, blockW[b]})
-			}
-			sort.Slice(imps, func(a, b int) bool { return imps[a].w > imps[b].w })
-			selected := map[int]bool{i / blockSize: true}
-			for gi := 0; gi < len(imps) && len(selected) < topN; gi++ {
-				selected[imps[gi].block] = true
-			}
-			attendMask(qrow, k, v, slc, i, off, dk, scale, scores, func(j int) bool { return selected[j/blockSize] })
-			// ---- win: last `window` keys.
-			attendMask(qrow, k, v, win, i, off, dk, scale, scores, func(j int) bool { return i-j < window })
 		}
-	}
+	})
 	return cmp, slc, win, nil
 }
 
