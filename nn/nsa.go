@@ -163,14 +163,22 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 				scores[j] /= sum
 			}
 		}
+		// P·V j-OUTER / d-inner: read each selected v-row contiguously (vs[j*dm+off:+dk])
+		// ONCE and axpy it into a dk-wide output-row accumulator, instead of striding vs by
+		// dm and re-streaming the whole column region once per output channel d. For each
+		// fixed d the sum still runs j ascending, so it is bit-identical (PS1006).
+		orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
 		for d := range dk {
-			var o float64
-			if sum > 0 {
-				for j := 0; j <= i; j++ {
-					o += scores[j] * vs[j*dm+off+d]
+			orow[d] = 0
+		}
+		if sum > 0 {
+			for j := 0; j <= i; j++ {
+				pj := scores[j]
+				vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+				for d := range dk {
+					orow[d] += pj * vrow[d]
 				}
 			}
-			os[i*dm+off+d] = o
 		}
 		return
 	}
