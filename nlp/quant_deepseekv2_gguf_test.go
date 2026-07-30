@@ -147,7 +147,7 @@ func quantDeepSeekV2Write(t testing.TB, meta map[string]any, ts map[string]*tens
 // dims, and the unsplit attn_kv_b [heads·(QKNope+VHead), KVLoraRank] replacing
 // the attn_k_b/attn_v_b pair — the form whose quantized bytes carry the fused
 // RECONSTRUCTION operator (see [nlp.QuantDeepSeekV2]).
-func legacyQuantDeepSeekV2GGUFBytes(t *testing.T, m *nlp.DeepSeekV2) []byte {
+func legacyQuantDeepSeekV2GGUFBytes(t testing.TB, m *nlp.DeepSeekV2) []byte {
 	t.Helper()
 	meta, ts := nlp.DeepSeekV2ToGGUF(m)
 	c := m.Config

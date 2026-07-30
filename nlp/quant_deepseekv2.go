@@ -849,18 +849,52 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 	rope := backend.RoPEAttrs{Base: cfg.RopeBase, Heads: 1, PosOffset: ropePos}
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
+	// Fuse the per-head gathers, movement only (ADR-01KYQ9PHNPEFC). Six slice dispatches per
+	// head become four copies, and two of the six were pure indirection: qh and kvh existed
+	// only to be re-sliced, and every one of the four results is a contiguous run of q's or
+	// kv's own storage. Bit-identical by construction — the same floats reach the same RoPE,
+	// concat, matmul and softmax kernels in the same order.
+	//
+	// This is the second per-head loop in this file. The absorbed one was fused earlier and this
+	// one deliberately left alone because no benchmark reached it; it now has one.
+	//
+	// Gated on ctx.Recorder == nil: under a tape those slices are gradient edges.
+	rowsQ := q.Shape()[0]
+	fusedH := false
+	var qNopeBuf, qPeBuf, kNopeBuf, valBuf *tensor.Tensor
+	var qF, kvF []float32
+	if ctx.Recorder == nil && q.Dtype() == tensor.F32 && kv.Dtype() == tensor.F32 {
+		qF, kvF = q.Contiguous().Storage().F32(), kv.Contiguous().Storage().F32()
+		if len(qF) >= rowsQ*cfg.Heads*qkHead && len(kvF) >= rowsQ*cfg.Heads*kvHead {
+			qNopeBuf = tensor.New(tensor.F32, tensor.Shape{rowsQ, cfg.QKNope})
+			qPeBuf = tensor.New(tensor.F32, tensor.Shape{rowsQ, qkHead - cfg.QKNope})
+			kNopeBuf = tensor.New(tensor.F32, tensor.Shape{rowsQ, cfg.QKNope})
+			valBuf = tensor.New(tensor.F32, tensor.Shape{rowsQ, kvHead - cfg.QKNope})
+			fusedH = true
+		}
+	}
 	for h := range cfg.Heads {
-		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
-		if err != nil {
-			return nil, err
-		}
-		qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
-		if err != nil {
-			return nil, err
-		}
-		qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
-		if err != nil {
-			return nil, err
+		var qNope, qPe *tensor.Tensor
+		if fusedH {
+			nope, pe := qNopeBuf.Storage().F32(), qPeBuf.Storage().F32()
+			peW := qkHead - cfg.QKNope
+			for r := range rowsQ {
+				base := r*cfg.Heads*qkHead + h*qkHead
+				copy(nope[r*cfg.QKNope:(r+1)*cfg.QKNope], qF[base:base+cfg.QKNope])
+				copy(pe[r*peW:(r+1)*peW], qF[base+cfg.QKNope:base+qkHead])
+			}
+			qNope, qPe = qNopeBuf, qPeBuf
+		} else {
+			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
+			if err != nil {
+				return nil, err
+			}
+			if qNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh); err != nil {
+				return nil, err
+			}
+			if qPe, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh); err != nil {
+				return nil, err
+			}
 		}
 		qPeRot, err := exec1a(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
@@ -870,17 +904,27 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 		if err != nil {
 			return nil, err
 		}
-		kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
-		if err != nil {
-			return nil, err
-		}
-		kNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh)
-		if err != nil {
-			return nil, err
-		}
-		valueH, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh)
-		if err != nil {
-			return nil, err
+		var kNope, valueH *tensor.Tensor
+		if fusedH {
+			kn, vv := kNopeBuf.Storage().F32(), valBuf.Storage().F32()
+			vW := kvHead - cfg.QKNope
+			for r := range rowsQ {
+				base := r*cfg.Heads*kvHead + h*kvHead
+				copy(kn[r*cfg.QKNope:(r+1)*cfg.QKNope], kvF[base:base+cfg.QKNope])
+				copy(vv[r*vW:(r+1)*vW], kvF[base+cfg.QKNope:base+kvHead])
+			}
+			kNope, valueH = kNopeBuf, valBuf
+		} else {
+			kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
+			if err != nil {
+				return nil, err
+			}
+			if kNope, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh); err != nil {
+				return nil, err
+			}
+			if valueH, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh); err != nil {
+				return nil, err
+			}
 		}
 		keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [T, qkHead]
 		if err != nil {
