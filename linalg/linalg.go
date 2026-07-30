@@ -165,12 +165,28 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 				}
 				y[i] = s
 			}
+			// Back-substitution accumulates in the CONTIGUOUS scratch, not through out.
+			//
+			// The inner loop used to read out[j*cols+c]: for a fixed column c, stepping j jumps a
+			// whole row of the output — 6 KB at n=cols=768 — so every iteration touched its own
+			// cache line to use eight bytes of it. A line-level profile put that single statement
+			// at 32% of BenchmarkInverse. The values it reads are the x[j] this same loop wrote on
+			// earlier iterations, so they can live in y instead: x[i] overwrites y[i] only AFTER
+			// y[i] has been read into s, and the forward pass's y[j] for j > i was already
+			// consumed at step j, so nothing still needed is clobbered. The row is scattered to
+			// out once at the end.
+			//
+			// Bit-identical: same operands, same descending-i order, same ascending-j accumulation
+			// into s, same final divide. Only where the intermediate lives changes.
 			for i := n - 1; i >= 0; i-- { // back: U·x = y
 				s := y[i]
 				for j := i + 1; j < n; j++ {
-					s -= f.lu[i][j] * out[j*cols+c]
+					s -= f.lu[i][j] * y[j]
 				}
-				out[i*cols+c] = s / f.lu[i][i]
+				y[i] = s / f.lu[i][i]
+			}
+			for i := range n {
+				out[i*cols+c] = y[i]
 			}
 		}
 	})
