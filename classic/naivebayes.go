@@ -260,6 +260,48 @@ func (m *GaussianNB) jointRow(row []float64) []float64 {
 	return out
 }
 
+// jointArgmax returns the predicted class label for one row — the argmax of the
+// per-class log-posterior — WITHOUT materialising the length-nc joint vector that
+// jointRow allocates per row. It runs the identical unroll-by-2 accumulation as
+// jointRow and folds in the argmax inline, scanning classes in ASCENDING order with
+// a strict `>` so the lowest label wins ties, exactly as Predict's argmax over the
+// jointRow vector did — bit-identical prediction, one fewer allocation per row.
+func (m *GaussianNB) jointArgmax(row []float64) int {
+	nc := len(m.classes)
+	best, bestLL := 0, math.Inf(-1)
+	c := 0
+	for ; c+1 < nc; c += 2 {
+		ll0, ll1 := m.logPrior[c], m.logPrior[c+1]
+		ln0, iv0, th0 := m.logNorm[c], m.invSigma[c], m.theta[c]
+		ln1, iv1, th1 := m.logNorm[c+1], m.invSigma[c+1], m.theta[c+1]
+		for j := 0; j < m.nFeat; j++ {
+			rj := row[j]
+			d0 := rj - th0[j]
+			ll0 += ln0[j] - 0.5*d0*d0*iv0[j]
+			d1 := rj - th1[j]
+			ll1 += ln1[j] - 0.5*d1*d1*iv1[j]
+		}
+		if ll0 > bestLL { // class c first (ascending), strict ⇒ lowest label wins ties
+			bestLL, best = ll0, c
+		}
+		if ll1 > bestLL {
+			bestLL, best = ll1, c+1
+		}
+	}
+	for ; c < nc; c++ {
+		ll := m.logPrior[c]
+		ln, iv, th := m.logNorm[c], m.invSigma[c], m.theta[c]
+		for j := 0; j < m.nFeat; j++ {
+			dv := row[j] - th[j]
+			ll += ln[j] - 0.5*dv*dv*iv[j]
+		}
+		if ll > bestLL {
+			bestLL, best = ll, c
+		}
+	}
+	return m.classes[best]
+}
+
 // JointLogLikelihood returns, for each row of X, the unnormalised per-class
 // log-posterior log P(y)+Σᵢ log N(xᵢ;μ,σ²) (scikit-learn's
 // _joint_log_likelihood). Column j corresponds to [GaussianNB.Classes]()[j]. It
@@ -294,14 +336,7 @@ func (m *GaussianNB) Predict(x [][]float64) ([]int, error) {
 	}
 	out := make([]int, len(x))
 	nbPredictParallel(len(x), m.nFeat, func(i int) {
-		joint := m.jointRow(x[i])
-		best, bestLL := 0, math.Inf(-1)
-		for c, ll := range joint {
-			if ll > bestLL { // strict ⇒ lowest label wins ties
-				bestLL, best = ll, c
-			}
-		}
-		out[i] = m.classes[best]
+		out[i] = m.jointArgmax(x[i]) // inline argmax, no per-row joint-vector alloc
 	})
 	return out, nil
 }
