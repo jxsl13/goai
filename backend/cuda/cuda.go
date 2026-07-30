@@ -737,8 +737,24 @@ func GroupedQueryAttentionTF32(q, k, v *DeviceF32, qHeads, kvHeads int, causal b
 // gqaCore runs the batched QKᵀ → fused scale/causal-mask/softmax → ·V pipeline
 // for q [seqQ,·] against k/v [seqKV,·]. offset is passed to the mask: key j is
 // kept for query row i when j ≤ i+offset (offset≥seqKV disables masking).
+// wmmaMaxSeq caps the fused-attention fast path by the kernel's shared-memory budget: it stages
+// 16·seq f32 scores (16·seq·4 B); Ampere's opt-in dynamic-shared max is ~99 KB, so seq ≤ 1536
+// keeps it ≤ 96 KB. Larger seq (or a device with less shared) falls through to the triple.
+const wmmaMaxSeq = 1536
+
 func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int, tf32 bool) (*DeviceF32, error) {
 	seqQ, seqKV, wq := q.rows, k.rows, q.cols
+	// Fused tensor-core fast path for causal-SQUARE prefill (offset==0 ⇒ row i attends keys ≤ i,
+	// the wmma kernel's built-in causal mask) with hd==64 and seq a multiple of 16 within the
+	// shared-mem bound: QKᵀ→warp-parallel-softmax→PV in one kernel, NO materialized HBM scores.
+	// Tol-gated: f16 WMMA accumulation vs the triple's f32/tf32 — the incumbent (llama.cpp/vLLM)
+	// prefill-attention numerics, permitted by PERF-INCUMBENT-TOLERANCE-001. Any miss (hd≠64,
+	// non-causal offset, sq≠sk, odd/oversized seq, or a kernel error) falls through to the triple.
+	if hd == 64 && offset == 0 && seqQ == seqKV && seqQ%16 == 0 && seqQ <= wmmaMaxSeq {
+		if out, err := GroupedQueryAttentionWMMA(q, k, v, qHeads, kvHeads); err == nil {
+			return out, nil
+		}
+	}
 	scores := C.cu_alloc_f32(C.int(qHeads * seqQ * seqKV))
 	if scores == nil {
 		return nil, fmt.Errorf("cuda: GQA scores alloc failed")

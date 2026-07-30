@@ -41,20 +41,30 @@ extern "C" __global__ void wmma_attn_gqa(const half* Q, const half* K, const hal
     }
     __syncwarp();
 
-    if (lane < 16) {
-        int qi = q0 + lane;
-        float* row = sscore + (size_t)lane * seq;
+    // Warp-parallel stable softmax: all 32 lanes cooperate on each of the 16 query rows in turn,
+    // each lane reducing a strided (lane, lane+32, …) slice then combining via __shfl_xor
+    // butterflies — replacing the old 16-lanes-each-serial-over-seq tail that dominated (and
+    // regressed) at large seq. Serial length per row drops from seq to seq/32. Max is
+    // order-independent (bit-identical to the sequential max); the sum reassociates over the 32
+    // strided partials (tol-gated — matching the f16 accumulation this kernel already rides).
+    for (int r = 0; r < 16; r++) {
+        int qi = q0 + r;
+        float* row = sscore + (size_t)r * seq;
         float m = -1e30f;
-        for (int j = 0; j < seq; j++) {
+        for (int j = lane; j < seq; j += 32) {
             float v = row[j] * scale;
             if (j > qi) v = -1e30f;
             row[j] = v;
             if (v > m) m = v;
         }
+        #pragma unroll
+        for (int o = 16; o > 0; o >>= 1) m = fmaxf(m, __shfl_xor_sync(0xffffffffu, m, o));
         float sum = 0.f;
-        for (int j = 0; j < seq; j++) { float e = __expf(row[j] - m); row[j] = e; sum += e; }
+        for (int j = lane; j < seq; j += 32) { float e = __expf(row[j] - m); row[j] = e; sum += e; }
+        #pragma unroll
+        for (int o = 16; o > 0; o >>= 1) sum += __shfl_xor_sync(0xffffffffu, sum, o);
         float inv = 1.0f / sum;
-        for (int j = 0; j < seq; j++) row[j] *= inv;
+        for (int j = lane; j < seq; j += 32) row[j] *= inv;
     }
     __syncwarp();
 
