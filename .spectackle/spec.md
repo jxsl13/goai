@@ -725,3 +725,8 @@ Rationale: An audit put a guard's blind spot at 36 of 110 hit functions, which r
 WHEN a scan check reports a call only when a sibling of that shape exists and some call shapes go unreported, the implementing agent SHALL extend the helper set rather than the check, since declaring the missing sibling makes the check report those sites with no analyzer change.
 
 Rationale: A variadic-call check could not see five per-iteration allocations because no four-input pooled sibling existed. Declaring one took its recall from 198 of 203 sibling-coverable sites to all 203 without touching the detector. The gap was in the code the check measures against, not in the check.
+
+## PERF-WORK-A-QUEUE-BY-REACHABILITY-001
+WHEN a sound scan check leaves dozens of hits whose individual payoff is one small allocation, the implementing agent SHALL convert only the sites a benchmark reaches, in that order, and declare the queue exhausted for measurable value when those run out.
+
+Rationale: A check with perfect precision had 198 hits of which 148 were on no measured path. The first pass over its reachable sites gave six percent fewer allocations on two decode paths; the second gave one to three percent. The 119 that remain cannot be validated on this host, so further conversion is mechanical hygiene rather than optimization, and saying so prevents an unbounded sweep that looks like progress.
