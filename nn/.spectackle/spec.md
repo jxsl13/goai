@@ -180,3 +180,8 @@ IF an A/B arm is measured from a single benchmark run, THEN the result SHALL be 
 
 ## PROC-SPLIT-SEARCH-FOLD-001
 IF an expensive independent search feeds a cheap order-dependent reduction in one loop, THEN the loop SHALL be split into a parallel search pass writing an array and a sequential fold over it, since chunked partials reassociate; used in AQLM k-means and the GMM E-step.
+
+## PERF-MEASURE-THE-COMPOSITION-001
+WHEN WHEN, the implementing agent SHALL measure the composition as its own third arm before keeping it, rather than inferring from bit-identity plus two positive results that the combination is also a win.
+
+Rationale: Merging two branches that had each optimized the MoBA and DSA P·V loops produced exactly this situation: iterating only the mask-selected keys (register-blocked, four accumulators, output row stored once) versus reading each v-row contiguously into an axpy over the output row. All three candidates are bit-identical, so reading the code could not decide it. Measured (nn, -count=4, three interleaved rounds, M2 Pro): register-blocked 48.89ms/46.07ms on DSAAttention_seq1024/MoBAAttention; sparse plus axpy 53.14ms/57.20ms (+8.7%/+24.2%); dense plus axpy 79.01ms/68.40ms (+61.6%/+48.5%). The composition LOST to one of its two halves, because the register accumulators are what keep the output row out of memory and the axpy reintroduces a reload-and-restore of all d_k elements per active key. Bit-identity constrains the arithmetic, not the traffic, and traffic is what these two changes each optimized in incompatible directions.
