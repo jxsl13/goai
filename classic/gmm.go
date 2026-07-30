@@ -293,25 +293,27 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 // logs, and returns the mean log-likelihood (1/n)·Σ_n log p(x_n).
 func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float64, error) {
 	k := m.cfg.k
-	var total float64
 	logW := make([]float64, k)
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
 	diag := m.cfg.covariance == GMMDiag
-	ldBuf := make([]float64, k)
-	for i, row := range x {
-		lr := logResp[i]
+
+	// rowBody computes sample i and RETURNS its log-likelihood contribution instead of
+	// accumulating it. That return is what makes the fan-out below legal: `total += norm` inside
+	// the loop fixes the summation order, and a partitioned accumulation would reassociate it.
+	// Each contribution is parked in llBuf and summed ASCENDING afterwards, which is the identical
+	// sequence the serial loop performed, so the mean log-likelihood is bit-identical. The extra
+	// pass is O(n) against O(n·k·d²) of density work.
+	rowBody := func(lr, ldBuf []float64, y4 [4][]float64, y []float64, i int) float64 {
+		row := x[i]
 		if diag {
-			m.logGaussianDiagBatch(row, ldBuf) // unroll-and-jam over components
-			for c := range k {
-				lr[c] = logW[c] + ldBuf[c]
-			}
+			m.logGaussianDiagBatch(row, ldBuf)
 		} else {
-			m.logGaussianFullBatch(row, ldBuf, m.yScratch4, m.yScratch) // unroll-and-jam over components
-			for c := range k {
-				lr[c] = logW[c] + ldBuf[c]
-			}
+			m.logGaussianFullBatch(row, ldBuf, y4, y)
+		}
+		for c := range k {
+			lr[c] = logW[c] + ldBuf[c]
 		}
 		// Fused log-sum-exp + responsibilities: ExpSumF64 writes resp[c]=exp(lr[c]−mx)
 		// and returns Σ in one 4-wide pass, so norm=mx+log(Σ) and the responsibility is
@@ -326,23 +328,67 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 			}
 		}
 		if math.IsInf(mx, -1) {
-			total += mx // degenerate all-−Inf row: preserve the scalar semantics
 			for c := range k {
 				lr[c] -= mx
 				resp[i][c] = math.Exp(lr[c])
 			}
-			continue
+			return mx // degenerate all-−Inf row: preserve the scalar semantics
 		}
 		s := simd.ExpSumF64(resp[i], lr, mx)
 		norm := mx + math.Log(s)
-		total += norm
 		inv := 1 / s
 		for c := range k {
 			lr[c] -= norm
 			resp[i][c] *= inv
 		}
+		return norm
 	}
-	return total / float64(len(x)), nil
+
+	// Per-WORKER scratch, never a receiver field. lr aliased logResp[i] before and still does;
+	// ldBuf and the full-cov solve buffers were m.yScratch4/m.yScratch, receiver state every
+	// worker would race on — the same shape this package already had to remove from the
+	// full-covariance density path.
+	newScratch := func() ([]float64, [4][]float64, []float64) {
+		var y4 [4][]float64
+		for t := range y4 {
+			y4[t] = make([]float64, m.nFeat)
+		}
+		return make([]float64, k), y4, make([]float64, m.nFeat)
+	}
+
+	n := len(x)
+	llBuf := make([]float64, n)
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*k < 1<<11 {
+		ldBuf, y4, y := newScratch()
+		for i := range x {
+			llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
+		}
+	} else {
+		csz := (n + nw - 1) / nw
+		if err := parallelBuild(nw, func(cw int) error {
+			lo := cw * csz
+			hi := lo + csz
+			if hi > n {
+				hi = n
+			}
+			ldBuf, y4, y := newScratch() // per-worker scratch
+			for i := lo; i < hi; i++ {
+				llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	var total float64
+	for i := range llBuf { // ascending, exactly the serial accumulation order
+		total += llBuf[i]
+	}
+	return total / float64(n), nil
 }
 
 // mStep recomputes Weights, Means and covariances (with Cholesky factors for
