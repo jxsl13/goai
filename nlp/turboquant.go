@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"sync"
 
 	"github.com/jxsl13/goai/internal/simd"
 )
@@ -564,15 +565,32 @@ type tqScratch struct {
 	res, z, ruT, buf, uT []float64
 }
 
-func (c *TurboQuantKVCache) newScratch() *tqScratch {
-	return &tqScratch{
-		res: make([]float64, c.qjl.d),
-		z:   make([]float64, c.qjl.d),
-		ruT: make([]float64, c.m),
-		buf: make([]float64, c.rot.m),
-		uT:  make([]float64, c.rot.d),
+// tqScratchPool recycles reconstruction scratch across rows() calls. One call allocated a set per
+// CHUNK — twelve of them on a twelve-way host — which an allocation profile showed as most of what
+// the per-chunk scratch had not already removed. Pooled, a steady-state decode loop allocates none.
+//
+// Sized on get rather than assumed: a process can hold caches of different geometry, so a set
+// recycled from a smaller one is grown instead of silently reused too short.
+var tqScratchPool = sync.Pool{New: func() any { return new(tqScratch) }}
+
+func fitF64(b []float64, n int) []float64 {
+	if cap(b) < n {
+		return make([]float64, n)
 	}
+	return b[:n]
 }
+
+func (c *TurboQuantKVCache) getScratch() *tqScratch {
+	sc := tqScratchPool.Get().(*tqScratch)
+	sc.res = fitF64(sc.res, c.qjl.d)
+	sc.z = fitF64(sc.z, c.qjl.d)
+	sc.ruT = fitF64(sc.ruT, c.m)
+	sc.buf = fitF64(sc.buf, c.rot.m)
+	sc.uT = fitF64(sc.uT, c.rot.d)
+	return sc
+}
+
+func putScratch(sc *tqScratch) { tqScratchPool.Put(sc) }
 
 // reconstruct writes one row into dst using the caller's scratch. Identical arithmetic in
 // identical order to the allocating form; only the buffers' provenance changes.
@@ -627,7 +645,8 @@ func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
 	// per row — that is what removes the four allocations each row used to make — and never
 	// crosses workers. Gated on len(rs)·dim so a short cache stays serial.
 	parallelChunks(len(rs), len(rs)*c.dim, func(lo, hi int) {
-		sc := c.newScratch()
+		sc := c.getScratch()
+		defer putScratch(sc)
 		for i := lo; i < hi; i++ {
 			c.reconstruct(out[i], sc, rs[i])
 		}
