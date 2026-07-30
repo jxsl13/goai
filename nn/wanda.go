@@ -106,52 +106,77 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	sf64 := s.Storage()
 	if wsF := flatF64(w); wsF != nil {
 		ss, ps, ms := sf64.F64(), pruned.Storage().F64(), mask.Storage().F64()
-		for o := 0; o < cout; o++ {
-			for j := 0; j < cin; j++ {
-				idx[j] = j
-				col[j] = ss[j*cout+o]
-			}
-			selectDrop(k)
-			for j := range drop {
-				drop[j] = false
-			}
-			for r := 0; r < k; r++ {
-				drop[idx[r]] = true
-			}
-			for j := 0; j < cin; j++ {
-				if drop[j] {
-					continue
+		// Each output column is independent (its own scores, quickselect and disjoint strided
+		// output j*cout+o), so fan the column loop out over GOMAXPROCS with PER-WORKER scratch
+		// (idx/col/drop + a col-capturing comparator). Bit-identical to the serial loop.
+		parallelRows(cout, cin, func(olo, ohi int) {
+			idx := make([]int, cin)
+			col := make([]float64, cin)
+			drop := make([]bool, cin)
+			less := func(x, y int) bool {
+				if col[x] != col[y] {
+					return col[x] < col[y]
 				}
-				off := j*cout + o
-				ps[off] = wsF[off]
-				ms[off] = 1
+				return x < y
 			}
-		}
+			for o := olo; o < ohi; o++ {
+				for j := 0; j < cin; j++ {
+					idx[j] = j
+					col[j] = ss[j*cout+o]
+				}
+				selectPartition(idx, k, less)
+				for j := range drop {
+					drop[j] = false
+				}
+				for r := 0; r < k; r++ {
+					drop[idx[r]] = true
+				}
+				for j := 0; j < cin; j++ {
+					if drop[j] {
+						continue
+					}
+					off := j*cout + o
+					ps[off] = wsF[off]
+					ms[off] = 1
+				}
+			}
+		})
 		return pruned, mask, nil
 	}
 	if wsF := flatF32(w); wsF != nil {
 		ss, ps, ms := sf64.F32(), pruned.Storage().F32(), mask.Storage().F32()
-		for o := 0; o < cout; o++ {
-			for j := 0; j < cin; j++ {
-				idx[j] = j
-				col[j] = float64(ss[j*cout+o])
-			}
-			selectDrop(k)
-			for j := range drop {
-				drop[j] = false
-			}
-			for r := 0; r < k; r++ {
-				drop[idx[r]] = true
-			}
-			for j := 0; j < cin; j++ {
-				if drop[j] {
-					continue
+		parallelRows(cout, cin, func(olo, ohi int) {
+			idx := make([]int, cin)
+			col := make([]float64, cin)
+			drop := make([]bool, cin)
+			less := func(x, y int) bool {
+				if col[x] != col[y] {
+					return col[x] < col[y]
 				}
-				off := j*cout + o
-				ps[off] = wsF[off]
-				ms[off] = 1
+				return x < y
 			}
-		}
+			for o := olo; o < ohi; o++ {
+				for j := 0; j < cin; j++ {
+					idx[j] = j
+					col[j] = float64(ss[j*cout+o])
+				}
+				selectPartition(idx, k, less)
+				for j := range drop {
+					drop[j] = false
+				}
+				for r := 0; r < k; r++ {
+					drop[idx[r]] = true
+				}
+				for j := 0; j < cin; j++ {
+					if drop[j] {
+						continue
+					}
+					off := j*cout + o
+					ps[off] = wsF[off]
+					ms[off] = 1
+				}
+			}
+		})
 		return pruned, mask, nil
 	}
 	for o := range cout {
