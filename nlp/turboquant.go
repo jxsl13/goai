@@ -123,8 +123,28 @@ func (p *polarRotation) applyInverse(y []float64) ([]float64, error) {
 	// Bit-identical: out[j] still accumulates i ascending over the same terms. The previous form
 	// summed into a register and stored once; this sums into out[j], which make() zeroed, so the
 	// addition sequence is 0 + t0 + t1 + ... either way.
+	// The i loop is unrolled by 4 with SEPARATE accumulating adds, which is PS1007's remedy for the
+	// case where the input is already contiguous in the inner variable. The loop visits d*d slots
+	// and does three memory ops per visit — load q, load out, store out — and an unroll by U cuts
+	// that to 1 + 2/U: 1.5 at U=4, so a third fewer memory operations. out[j] stays in a register
+	// across the four adds while all four q rows stay contiguous.
+	//
+	// SEPARATE adds, not a fused sum: writing out[j] += q0[j]*y0 + q1[j]*y1 would add the two
+	// products to each other FIRST and then to out[j], which is a reassociation. Written as four
+	// statements the order is exactly i ascending, the same order the un-unrolled loop produced.
 	out := make([]float64, p.d)
-	for i := range p.d {
+	i := 0
+	for ; i+4 <= p.d; i += 4 {
+		y0, y1, y2, y3 := y[i], y[i+1], y[i+2], y[i+3]
+		q0, q1, q2, q3 := p.q[i], p.q[i+1], p.q[i+2], p.q[i+3]
+		for j := range p.d {
+			out[j] += q0[j] * y0
+			out[j] += q1[j] * y1
+			out[j] += q2[j] * y2
+			out[j] += q3[j] * y3
+		}
+	}
+	for ; i < p.d; i++ {
 		yi := y[i]
 		qi := p.q[i]
 		for j := range p.d {
