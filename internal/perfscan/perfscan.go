@@ -1627,6 +1627,33 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if num != nil && hasModuloSibling(fn.Body, num, div) {
 				return true
 			}
+			// Two more integer proofs, in the same spirit and for the same reason: on integer
+			// operands the recommended inv := 1/n evaluates to ZERO, so a false positive here
+			// costs correctness rather than a missed win.
+			//
+			// A divide that IS a loop bound must be integer — Go's for-condition compares an
+			// index against it. And a quotient later used as a slice INDEX must be integer,
+			// which the existing a[i/stride] guard misses because the quotient goes through a
+			// variable first.
+			//
+			// COUNTED against all 89 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
+			// Ten are genuine integer divides. These two proofs catch three of them —
+			// autograd/vjp.go's len(src)/inner loop bound, and nn/hqq.go and nn/qgalore.go
+			// where a group index i/groupSize indexes a scale table — with ZERO false
+			// positives. The other seven need type information: their quotients feed
+			// attribute structs or offset arithmetic rather than a bracket index, and every
+			// looser signal tried for them also swept up float sites, including a first
+			// attempt that wrongly flagged six.
+			//
+			// WHY SHIP AT THREE INSTANCES when a perf rule at that count would be declined:
+			// the asymmetry. Suppressing a wrong recommendation costs nothing, because the
+			// recommendation was wrong; and the thing lost is a perf suggestion at sites where
+			// it would have produced zero. For a correctness hazard, high precision at low
+			// recall is the right trade — the opposite of a perf check, where low precision is
+			// what makes it useless.
+			if divideIsLoopBound(loop, n) || quotientIndexesASlice(loop, parent, n) {
+				return true
+			}
 			name, ok := invariantDivisor(loop, div)
 			if !ok {
 				return true
@@ -1972,6 +1999,67 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
 	out = append(out, sincosFusableFindings(fset, fn)...)
 	return out
+}
+
+// divideIsLoopBound reports whether the divide expression appears in the loop's own
+// post/condition clause, which forces it to be integer: a for-condition compares an index
+// against it.
+func divideIsLoopBound(loop ast.Node, div ast.Node) bool {
+	f, ok := loop.(*ast.ForStmt)
+	if !ok || f.Cond == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f.Cond, func(n ast.Node) bool {
+		if n == div {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// quotientIndexesASlice reports whether the divide's result is assigned to a name that is
+// later used as a slice index inside the same loop. That forces the quotient to be integer,
+// and so both operands of the divide. The existing direct a[i/stride] guard cannot see this
+// case, because the quotient passes through a variable first.
+func quotientIndexesASlice(loop ast.Node, parent map[ast.Node]ast.Node, div ast.Node) bool {
+	// Walk up to the assignment that stores the quotient.
+	var as *ast.AssignStmt
+	for p := parent[div]; p != nil; p = parent[p] {
+		if a, ok := p.(*ast.AssignStmt); ok {
+			as = a
+			break
+		}
+		if _, ok := p.(*ast.BlockStmt); ok {
+			break
+		}
+	}
+	if as == nil || len(as.Lhs) == 0 {
+		return false
+	}
+	name := ""
+	if id, ok := as.Lhs[0].(*ast.Ident); ok {
+		name = id.Name
+	}
+	if name == "" || name == "_" {
+		return false
+	}
+	used := false
+	ast.Inspect(loop, func(n ast.Node) bool {
+		if used {
+			return false
+		}
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := ast.Unparen(ix.Index).(*ast.Ident); ok && id.Name == name {
+			used = true
+		}
+		return !used
+	})
+	return used
 }
 
 // isNumelRange reports whether a range loop iterates a tensor's element count:

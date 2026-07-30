@@ -5437,3 +5437,64 @@ func f(ctx *backend.Context, m *Model, x *tensor.Tensor) (*tensor.Tensor, error)
 		t.Fatalf("want 0 for a loop bounded by a field, got %d", got)
 	}
 }
+
+// A float divide, loop-invariant, in an elementwise loop: the shape PS5001 exists for.
+func TestDetectPS5001_FloatDivideStillFires(t *testing.T) {
+	src := `package p
+func f(xs []float64, denom float64) {
+	for i := range xs {
+		xs[i] = xs[i] / denom
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 1 {
+		t.Fatalf("want 1 loop-invariant-divide for a float divide, got %d", got)
+	}
+}
+
+// FLOOR: a divide that IS the loop bound must be integer, because the for-condition compares
+// an index against it. Suppressing this is a CORRECTNESS matter, not a precision preference —
+// the recommended inv := 1/n evaluates to zero on integer operands.
+func TestDetectPS5001_SilentOnLoopBoundDivide(t *testing.T) {
+	src := `package p
+func f(src []float64, inner int) {
+	for r := 0; r < len(src)/inner; r++ {
+		src[r] = src[r] + 1
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 for a divide used as a loop bound, got %d", got)
+	}
+}
+
+// FLOOR: a quotient later used as a slice INDEX must be integer. The pre-existing direct
+// a[i/stride] guard cannot see this, because the quotient passes through a variable first —
+// which is how the two shipped instances in this tree are written.
+func TestDetectPS5001_SilentWhenQuotientIndexes(t *testing.T) {
+	src := `package p
+func f(codes []int, scale []float64, groupSize int, out []float64) {
+	for i := range codes {
+		g := i / groupSize
+		out[i] = scale[g] * float64(codes[i])
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 when the quotient indexes a slice, got %d", got)
+	}
+}
+
+// RECALL FLOOR, and the one that matters most: a quotient that is MULTIPLIED rather than used
+// as an index says nothing about its type, and this is the dominant float shape in the tree.
+// A first attempt at the predicate above treated "quotient is used again" as the signal and
+// wrongly swept up six float sites of exactly this form. It must still fire.
+func TestDetectPS5001_FiresWhenQuotientIsMultiplied(t *testing.T) {
+	src := `package p
+func f(ps []float64, den float64, out []float64, gt float64) {
+	for i := range ps {
+		pi := ps[i] / den
+		out[i] += gt * pi
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 1 {
+		t.Fatalf("want 1 when the quotient is multiplied (a float shape), got %d", got)
+	}
+}
