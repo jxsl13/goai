@@ -186,7 +186,7 @@ var checks = []check{
 	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses. THE BIGGEST MEASURED PAYOFF IN THIS TOOL, and also one of the most share-dependent, so both numbers matter. classic SoftmaxRegression.PredictProba: an n*d SetF64 fill plus an n*k AtF64 copy-out, 94208 dispatches at n=4096, replaced by contiguous row copies — sec/op -48.67%/-45.57%/-55.53% across three shapes, geomean -50.10% (2.0x), allocs -97.95%. nlp QuantMamba2 prefill gated RMSNorm: seq*intermediate iterations each paying TWO dispatches, an AtF64 on a gain that does not vary with the outer variable plus a SetF64 recomputing a flat offset — removed entirely, and the result was geomean -0.61% with 3 of 4 cells indistinguishable, because the enclosing prefill is dominated by quantized matmul. Same transform, same class, an 80x difference in outcome. RANK BY (a) the dispatch count, the product of the loop bounds times dispatches per iteration, and (b) the loop SHARE of its enclosing function — a walk bolted to a matmul-dominated path will not move a wall clock however many dispatches it removes (PERF-HOTNESS-IS-NOT-SYNTAX-001, PERF-ISOLATED-RATIO-IS-NOT-A-SITE-001). THE COST OF THE FIX IS DECIDED BY ONE THING: whether the dtype is statically fixed. Where a constructor pins it (tensor.New(tensor.F64, ...) or tensor.New(tensor.F32, ...)) the fix is three lines — take Storage().F64()/F32() once and index it — with no fallback needed and none wanted (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001). Where the dtype comes from an input, tensor.New(xin.Dtype(), ...), a direct storage write needs a dual path, which is a bit-identity claim between two arms that PS6004 then reports forever unless a test reaches BOTH. That is the case at the remaining quant_mamba, quant_jamba and quant_deepseekv2 sites, and it is why they were left alone rather than converted. Read the construction before estimating the work. Bit-identity is otherwise free: AtF64 on an f32 tensor widens exactly and SetF64 on one stores float32(v), so the same expression in the same order over the typed slice gives the same result — a converted site can even be made TEXTUALLY identical to a sibling that already hoists, which is worth doing where a bit-match invariant between two paths is relied on", false},
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
 	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. TWO remedies, and WHICH ONE depends on whether IN is already contiguous in the inner var; both are bit-identical when OUT enters zeroed, since each element still sums the outer var ascending over the same terms with the same association. (a) IN is NOT contiguous in d (the d-strided gather, e.g. a sparse P·V reading IN[key*stride+d]): strip-mine the d loop by 4 and hold four partial sums in registers with the outer loop INNERMOST. Measured on the sparse P·V against the axpy form: MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). (b) IN IS already contiguous in d (a row-major rank-1 update, IN[i*n+d] read as a row slice): do NOT strip-mine — that trades one contiguous pass over the whole submatrix for n/4 strided passes, and the measurement shows its gain DECAYING with the outer trip count (LstsqMat -2.56% at n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). Instead unroll the OUTER loop by 2 and emit SEPARATE accumulating adds (`OUT[d] += v0*r0[d]` then `OUT[d] += v1*r1[d]`), so OUT[d] stays in a register across the pair while both input rows stay contiguous: -2.31% to -3.16% at every size, geomean -2.69% (linalg QR, shipped). Case (b) was found by measuring case (a)'s advice on a contiguous site and watching it decay. Also the MIRROR of PS1006, and interchange is NEVER the remedy here — the inner var is already the contiguous part. RANKING for case (b) is NOT about cache residency, and an earlier version of this text got that wrong: the loop visits outer*|OUT| elements and does 3 memory ops per visit (load IN, load OUT, store OUT), which an unroll by U cuts to 1+2/U — 2.0 at U=2, 1.5 at U=4 — so the saving is a fixed fraction of the loop's own traffic whether OUT is L1-resident or not. Both shipped sites confirm it: linalg QR unrolled by 2 with a 6 KB L1-resident accumulator, and nlp SnapKV unrolled by 4 with a 57 KB one. What actually decides the payoff is the loop's SHARE of runtime and the unroll factor the outer trip count allows: QR's accumulate is one of several phases in Lstsq and gave geomean -2.69%, while SnapKV's aggregate dominates its function and gave -21.08% at U=4 (-17.6% at U=2, so the third and fourth rows earned their registers). Rank by share-of-runtime x achievable U, not by whether OUT fits in cache", false},
-	{"PS1009", "unconverted-dtype-arm", "a per-element accessor walk sitting in one clause of a Dtype() switch whose SIBLING clause already takes typed storage — a fast path that covers some dtypes and leaves the rest on interface dispatch. PS1001 CANNOT REPORT THIS, structurally: it suppresses on hasFlat, which is satisfied by the sibling arm, so a helper that is fast for f64 and slow for everything else reads as already optimized. Which arm is hot is a workload fact, not a syntax one — nlp rows2D had an f64 copy arm and an accessor default, and every QUANTIZED model went through the default because activations are f32. Adding an f32 arm measured geomean -6.46% on the whole QuantMamba2 prefill (Q4_K_128 -6.34%, Q8_0_128 -6.56%, seq256 -4.79%, seq512 -8.09%, all p=0.000, 18 samples per arm) — a whole-benchmark win from one helper, since rows2D has 20+ call sites. Bit-identical where the missing arm is a WIDENING: AtF64 on an f32 tensor is exactly float64(v). NOT every arm is worth adding — f16/bf16 store as u16 and need a real conversion rather than a widening, so those clauses are legitimately left on the accessor; this check reports the population and the reader picks. Confirm which dtype the workload actually takes (a panic in the clause under the relevant benchmark settles it in one run) before converting", false},
+	{"PS1009", "unconverted-dtype-arm", "a per-element accessor walk sitting in one clause of a Dtype() switch whose SIBLING clause already takes typed storage — a fast path that covers some dtypes and leaves the rest on interface dispatch. PS1001 CANNOT REPORT THIS, structurally: it suppresses on hasFlat, which is satisfied by the sibling arm, so a helper that is fast for f64 and slow for everything else reads as already optimized. Which arm is hot is a workload fact, not a syntax one — nlp rows2D had an f64 copy arm and an accessor default, and every QUANTIZED model went through the default because activations are f32. Adding an f32 arm measured geomean -6.46% on the whole QuantMamba2 prefill (Q4_K_128 -6.34%, Q8_0_128 -6.56%, seq256 -4.79%, seq512 -8.09%, all p=0.000, 18 samples per arm) — a whole-benchmark win from one helper, since rows2D has 20+ call sites. Bit-identical where the missing arm is a WIDENING: AtF64 on an f32 tensor is exactly float64(v). NOT every arm is worth adding — f16/bf16 store as u16 and need a real conversion rather than a widening, so those clauses are legitimately left on the accessor; this check reports the population and the reader picks. Confirm which dtype the workload actually takes (a panic in the clause under the relevant benchmark settles it in one run) before converting. NARROWED AFTER SHIPPING, and the reason is the useful part: the first version reported 23 sites and an audit of every one found that ALL 23 already had both an f64 and an f32 arm, so once rows2D was fixed the check had zero actionable findings and 23 pieces of permanent noise. A switch that already covers F32 and leaves only its DEFAULT on the accessor is the FINISHED state - what remains there is f16/bf16 and the quantized dtypes, which live in u16 or packed storage and need a real conversion rather than an exact widening - so that shape is now suppressed. A NAMED case left on the accessor still fires, since listing a dtype and not converting it is a choice rather than an accepted tail. rows2D BEFORE its fix is the canonical hit: typed arms for f64 only, f32 falling through, every quantized model on that path", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -7277,7 +7277,7 @@ func unconvertedDtypeArmFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameS
 		if !ok || !isDtypeSwitch(sw) {
 			return true
 		}
-		typed := false
+		typed, cheapCovered := false, false
 		var slow []*ast.CaseClause
 		for _, st := range sw.Body.List {
 			cc, ok := st.(*ast.CaseClause)
@@ -7286,12 +7286,28 @@ func unconvertedDtypeArmFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameS
 			}
 			if clauseReadsTypedStorage(cc) {
 				typed = true
+				if clauseMentionsCheapDtype(cc) {
+					cheapCovered = true
+				}
 			} else if clauseAccessorName(cc, ns) != "" {
 				slow = append(slow, cc)
 			}
 		}
 		if !typed {
 			return true // no fast arm at all — that is PS1001's domain, not this one
+		}
+		// SUPPRESS THE ACCEPTED TAIL. A switch that already has an F32 arm and leaves only its
+		// `default` on the accessor is in the FINISHED state, not an unfinished one: what remains
+		// there is f16/bf16 and the quantized dtypes, which live in u16 or packed storage and need a
+		// genuine conversion rather than the exact widening that makes an f32 arm a one-liner.
+		//
+		// This was measured, not assumed. Auditing all 23 sites this check reported found that every
+		// single one already covered both f64 and f32, so after the rows2D fix the check had ZERO
+		// actionable findings and would have emitted 23 pieces of noise forever. rows2D BEFORE that
+		// fix is the shape worth firing on — typed arms for f64 only, f32 falling through to the
+		// accessor, and every quantized model taking that path — and it still fires here.
+		if cheapCovered && onlyDefaultIsSlow(slow) {
+			return true
 		}
 		for _, cc := range slow {
 			kind := "case"
@@ -7320,6 +7336,31 @@ func unconvertedDtypeArmFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameS
 		return true
 	})
 	return out
+}
+
+// clauseMentionsCheapDtype reports whether a case label names a dtype whose conversion to float64 is
+// an exact WIDENING, which is what makes converting that arm a one-liner. F32 is the only such dtype
+// besides F64 itself: f16 and bf16 live in u16 storage and need real conversion code.
+func clauseMentionsCheapDtype(cc *ast.CaseClause) bool {
+	for _, e := range cc.List {
+		if sel, ok := e.(*ast.SelectorExpr); ok && sel.Sel.Name == "F32" {
+			return true
+		}
+		if id, ok := e.(*ast.Ident); ok && id.Name == "F32" {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyDefaultIsSlow reports whether every unconverted clause is the `default` one.
+func onlyDefaultIsSlow(slow []*ast.CaseClause) bool {
+	for _, cc := range slow {
+		if cc.List != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // isDtypeSwitch reports whether the switch tag is an X.Dtype() call.

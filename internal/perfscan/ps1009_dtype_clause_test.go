@@ -138,4 +138,56 @@ func rows(t *T, r int, buf []float64) {
 		}
 	}
 }`)
+	// CLAUSE: an F32 arm plus a default-only tail is the FINISHED state, not an unfinished one.
+	// What remains in default is f16/bf16 and the quantized dtypes, which live in u16 or packed
+	// storage and need a real conversion rather than the exact widening an f32 arm gets.
+	//
+	// This floor exists because the check shipped without it and was wrong at scale: all 23 sites
+	// it reported already covered both f64 and f32, so once nlp rows2D was fixed the check had zero
+	// actionable findings and 23 pieces of permanent noise. The positive floors above are rows2D's
+	// PRE-fix shape — typed arms for f64 only — which is what should still fire.
+	quiet("f32-covered-default-tail", `package p
+
+func rows(t *T, r int, buf []float64) {
+	switch t.Dtype() {
+	case F64:
+		src := t.Storage().F64()
+		for i := range r {
+			buf[i] = src[i]
+		}
+	case F32:
+		s32 := t.Storage().F32()
+		for i := range r {
+			buf[i] = float64(s32[i])
+		}
+	default:
+		for i := range r {
+			buf[i] = t.AtF64(i, 0)
+		}
+	}
+}`)
+
+	// CLAUSE: the suppression applies ONLY when the slow arm is `default`. A NAMED case left on the
+	// accessor is a deliberate dtype someone chose to list and then did not convert, so it stays
+	// reportable even alongside an f32 arm.
+	t.Run("named-slow-case-still-fires", func(t *testing.T) {
+		src := `package p
+
+func rows(t *T, r int, buf []float64) {
+	switch t.Dtype() {
+	case F32:
+		s32 := t.Storage().F32()
+		for i := range r {
+			buf[i] = float64(s32[i])
+		}
+	case F16:
+		for i := range r {
+			buf[i] = t.AtF64(i, 0)
+		}
+	}
+}`
+		if msgs := dtypeArmMsgs(t, src); len(msgs) != 1 {
+			t.Fatalf("%d findings, want 1 — a NAMED unconverted case is not the accepted default tail", len(msgs))
+		}
+	})
 }
