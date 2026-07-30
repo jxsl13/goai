@@ -690,3 +690,8 @@ Rationale: After the Swin blockwise path returned early, its old in-loop branche
 WHEN two arms of a comparison run as sequential sub-benchmarks in one function, the measuring agent SHALL give each arm its own top-level benchmark and its own data before reading a ratio between them.
 
 Rationale: A paired sub-benchmark over a shared slice reported the second arm 18 percent slower, which read as a real dispatch regression from carrying a chunk index in a task struct. A scale benchmark with independent arms per size put the two within 1.00x from 2^14 to 2^20. The second arm was inheriting a different cache and scheduler state.
+
+## PERF-THRESHOLD-NEEDS-EVIDENCE-001
+WHEN a parallel or fast-path threshold constant is introduced or copied from a sibling, the implementing agent SHALL cite the benchmark that located its crossover, and if none exists build one before relying on the constant.
+
+Rationale: More than ten thresholds in this tree share the constant 1<<15, two describing it as measured, with no surviving artifact. A dispatch benchmark then showed the shared fan-out helper 15 percent SLOWER than serial at exactly that size for an elementwise body, with the real crossover between 2^15 and 2^16. A constant copied between call sites carries none of the original body's cost profile.
