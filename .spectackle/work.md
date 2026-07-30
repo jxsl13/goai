@@ -1644,3 +1644,22 @@ REMAINING, MEASURABLE. GaussianNB.jointRow at naivebayes.go:230 allocates its re
   A cache-locality interchange in GaussianNB.Fit, which currently streams the whole row array once per feature per pass. Bit-identical because each fixed-feature summation stays ascending and only independent chains are reordered. No benchmark covers Fit at all.
 
 REJECTED with reasons. Per-element tensor dispatch is absent from all four files - they operate on native Go slices, not tensors. No new parallelization is both legal and measurable: every hot loop the six benchmarks reach is already chunk-parallel. Parallelizing cholSolve is illegal on the reduction axis and the one legal axis is 65 wide. Parallelizing the NB fit passes over rows is illegal for the same reason; over features it is legal but only 20 units wide and unbenchmarked. DBSCAN's cluster expansion is inherently order-dependent, not an FP problem. The brute-force neighbour paths are unreachable above 16 points. The width-validation pre-passes are deliberately serial so the reported offending row index is deterministic. A wider unroll of the NB class loop would never execute, since every covering benchmark has 3 classes.
+
+## T-01KYRCTTDCEAJ828V5P86X4RGS perf(vision): fuse patchify into a contiguous row copy across vit.go, mlpmixer.go and mae.go
+kind: task
+state: draft
+created: 2026-07-30
+
+SCOPE. vision/vit.go patchify (~line 206), vision/mlpmixer.go mixerPatchify (~line 248), vision/mae.go patchify (~line 385). Three byte-identical copies; change all three or none, and prefer factoring one shared helper in the package.
+
+CURRENT SHAPE. Each obtains a per-element accessor closure from makeReader(img.Contiguous()), appends every pixel into a staging []float64 sized n*channels*p*p, then makes a second full pass narrowing or widening into the output tensor's backing slice. Per pixel that is one indirect call, one widen, one bounds-checked append, then one narrow and one store. The staging buffer's size is loop-invariant and it is allocated per image.
+
+THE NEST is grid*grid*channels*p*p, which equals channels*size*size - the pixel count, independent of patch size. At the ViT and Mixer benchmark geometry that is 3072 per image and 24576 per batched iteration.
+
+INTERVENTION. Delete the staging buffer and write straight into the output's backing slice, exploiting that the innermost run of length p is contiguous in BOTH source and destination: the source index is base + dx with base fixed per (py,px,c,dy), and the destination is append order. For f32-to-f32 and f64-to-f64 that makes each run a copy() of p elements - 768 memmoves per image instead of 3072 closure calls plus conversions plus appends. For the mixed dtype pairs keep an element loop but convert once directly rather than through float64. Keep img.Contiguous() and keep the existing unsupported-dtype error branch. Take the flat slice with an OFFSET-CORRECT helper: the swin flat helpers in vision/swin.go slice by offset and length, whereas makeReader indexes the whole storage and ignores the offset - reuse the swin form, not makeReader's.
+
+BIT-IDENTITY. Bit-identical on all four dtype pairs. There is no arithmetic; the traversal order is unchanged; the f32-f64-f32 round trip the current code performs is an exact identity, and an f64-to-f32 narrowing happens exactly once either way. Verify against TestViTTorchParity, which holds an exact torch golden at 1e-9, plus the ViT and Mixer batched parity tests.
+
+VERIFY. gofmt -l, go vet ./vision/, go test ./vision/ -count=1, and go test ./vision/ -race -run 'ViT|Mixer|MAE' -count=1. Then A/B with at least three interleaved alternations per PROC-INTERLEAVE-001: go test ./vision/ -run '^$' -bench 'BenchmarkViTForwardBatched|BenchmarkMLPMixerForwardBatched' -benchmem -count=3, stashing the change between arms, and report via benchstat. Check within-arm spread before claiming any ratio.
+
+EXPECTED. Both models are GEMM-bound, so the honest expectation is low single-digit percent on wall clock plus one fewer allocation per image. Report whatever the measurement says, including no change; the mae.go copy is not covered by any benchmark, so state that its share is unmeasured rather than implying it was validated.
