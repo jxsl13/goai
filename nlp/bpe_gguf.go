@@ -50,6 +50,10 @@ type BPETokenizer struct {
 	u2b      map[rune]byte
 	decSlice []string // id → symbol as a dense slice (Decode fast path; nil until built)
 	u2bSlice []int16  // rune → byte (−1 = unmapped) for Decode's byte-inversion, sized to the max u2b rune
+	// rawSlice holds each id's FINAL raw bytes — decSlice[id] already pushed through u2b — so
+	// Decode never has to rebuild the byte-mapped text and decode it back. Fixed at construction:
+	// decSlice[id] is a constant string and u2b never changes after NewBPE.
+	rawSlice [][]byte
 	unkID    int
 	hasUnk   bool
 	specials specialSet // markers parsed only by EncodeSpecial (§B60)
@@ -260,11 +264,58 @@ func (t *BPETokenizer) buildDecodeSlices() {
 		u2s[r] = int16(b)
 	}
 	t.u2bSlice = u2s
+
+	// Per-id raw bytes, built once. Decode used to write every symbol into a strings.Builder, take
+	// its String(), and then RUNE-DECODE the whole output to invert the byte map — two full passes
+	// over the result plus the intermediate itself, all to recompute a per-id constant. One slab
+	// backs every row so this is one allocation, and the rows are capped so no append can reach
+	// into the next.
+	total := 0
+	for _, sym := range ds {
+		total += len(sym)
+	}
+	slab := make([]byte, 0, total)
+	raw := make([][]byte, len(ds))
+	for id, sym := range ds {
+		start := len(slab)
+		for _, r := range sym {
+			if uint(r) < uint(len(u2s)) {
+				if b := u2s[r]; b >= 0 {
+					slab = append(slab, byte(b))
+				}
+			}
+		}
+		raw[id] = slab[start:len(slab):len(slab)]
+	}
+	t.rawSlice = raw
 }
 
 // Decode reconstructs the original text: token ids → byte-mapped symbols → invert the
 // byte→Unicode map back to raw bytes. Byte-exact for any input the vocabulary covers.
 func (t *BPETokenizer) Decode(ids []int) string {
+	// Fast path: every id's raw bytes are already known, so this is a size prepass plus one append
+	// pass. What it replaces is a strings.Builder over the byte-mapped symbols, a String() to
+	// materialize it, and a full UTF-8 rune decode of that intermediate to invert the byte map —
+	// two passes over the output and an allocation, none of which depended on the ids.
+	//
+	// Byte-identical: the fused loop converted rune by rune and dropped unmapped runes, and so does
+	// the table build; vocabulary symbols are whole UTF-8 strings, so no rune ever straddles a
+	// token boundary and per-symbol conversion is the same conversion.
+	if rs := t.rawSlice; rs != nil {
+		total := 0
+		for _, id := range ids {
+			if uint(id) < uint(len(rs)) {
+				total += len(rs[id])
+			}
+		}
+		out := make([]byte, 0, total)
+		for _, id := range ids {
+			if uint(id) < uint(len(rs)) {
+				out = append(out, rs[id]...)
+			}
+		}
+		return string(out)
+	}
 	var mapped strings.Builder
 	mapped.Grow(len(ids) * 4) // pre-size (§T929): skip the log(n) builder growth churn
 	if ds := t.decSlice; ds != nil {
