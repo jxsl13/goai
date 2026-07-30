@@ -3299,6 +3299,25 @@ func attn(ctx *C, x T, seq int) T {
 	}
 }
 
+// Silent on a per-expert / per-recursion composition loop where each iteration runs a whole
+// sub-module (`.Forward`/`.Route`) — that is layer composition, not a scalar recurrence
+// (measured false positives: mor/remoe, 2026-07-30).
+func TestDetectPS4011_SilentOnSubmoduleForward(t *testing.T) {
+	src := `package p
+func moe(ctx *C, x T, e int) T {
+	var out T
+	for i := 0; i < e; i++ {
+		g := ex(backend.OpSlice, x)
+		o := m.Experts[i].Forward(ctx, x)
+		out = ex(backend.OpAdd, out, o)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (submodule Forward), got %d", got)
+	}
+}
+
 // Silent when the loop dispatches fewer than 2 backend ops.
 func TestDetectPS4011_SilentOnSingleDispatch(t *testing.T) {
 	src := `package p

@@ -3655,8 +3655,9 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		// Suppress two unambiguous "this is attention, not a scalar recurrence" markers:
 		// ranging over a `.Heads` field, or dispatching OpSoftmax over keys (a linear-attention
 		// recurrence — the real target — never softmaxes per step). Zero false-negative risk.
-		if rangesOverField(n, "Heads") || loopBodyDispatchesOp(body, "OpSoftmax") {
-			return false
+		if rangesOverField(n, "Heads") || loopBodyDispatchesOp(body, "OpSoftmax") ||
+			loopBodyCallsMethod(body, "Forward") || loopBodyCallsMethod(body, "Route") {
+			return false // per-head/per-expert/per-recursion composition, not a scalar recurrence
 		}
 		count := 0
 		ast.Inspect(body, func(m ast.Node) bool {
@@ -3714,6 +3715,26 @@ func loopBodyDispatchesOp(body ast.Node, opName string) bool {
 					found = true
 					return false
 				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// loopBodyCallsMethod reports whether body contains a method call `X.<name>(...)` — used to
+// suppress PS4011 when each iteration runs a whole sub-module (e.g. `.Forward`/`.Route` on a
+// per-expert / per-recursion / per-block loop), which is composition, not a scalar recurrence.
+func loopBodyCallsMethod(body ast.Node, name string) bool {
+	found := false
+	ast.Inspect(body, func(m ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := m.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+				found = true
+				return false
 			}
 		}
 		return true
