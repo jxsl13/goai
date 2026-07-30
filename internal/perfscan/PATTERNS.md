@@ -480,6 +480,41 @@ candidate (which is why the detector skips set-typed maps and the report says
 
 ---
 
+## PS3009 — one column of a slice-of-slices read through an indirect row index  *(scanner: static)*
+
+**Smell.** A loop gathers a single column through a permutation:
+
+```go
+for k := 0; k < n; k++ {
+    vals[k] = x[idx[k]][f]      // every element is in a different row
+}
+```
+
+Each read dereferences a row header and pulls a whole cache line to use eight bytes.
+
+**Not PS1010, despite the same cache behavior.** PS1010 needs an *interchangeable nest* and
+tells you to swap the loops. Here the row order is a data-dependent permutation — there is
+no nest to interchange. The fix is a **feature-major copy**, `xT[f*n+row]`, so a column is
+`n*8` contiguous bytes and scattered rows within it share lines.
+
+**Measured** (`classic.gbmBuilder.bestSplit`, the exact-split scan):
+- That single gather was **330ms of the function's 400ms**.
+- `GBMHist_exact_80k` **−7.74%** (p=0.002), `GBMFit` **−6.55%** (p=0.002),
+  `GBMHist_exact_20k` **−2.00%** (p=0.007). The win grows with n — the cache argument
+  showing up in the numbers rather than being asserted.
+
+**It trades memory for time, so the answer is not always yes.** The copy costs `n*d*8`
+bytes: measured B/op rose **26.7%** at 80k × 20. Worth it there because that builder
+already carries two `n*d` index arrays, so a third `n*d` array is in keeping. Not obviously
+worth it where the matrix dominates allocation and the gather is cold. Weigh it against the
+gather's hotness instead of converting on sight.
+
+**Expected false positive:** a reference implementation kept deliberately simple so a
+production path can be checked against it. This repo's `gbm.go` has exactly that, already
+carrying a `perfscan:ignore` for its other findings.
+
+---
+
 ## PS3008 — monotone accumulator tested on every iteration  *(scanner: static)*
 
 **Smell.** A loop adds a provably non-negative term to a scalar and tests it against a

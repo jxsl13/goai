@@ -44,6 +44,9 @@
 //	PS4003. a loop calls a package-local elementwise helper that WRAPS a libm
 //	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
 //	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
+//	PS3009. ONE column of a slice-of-slices read through an INDIRECT row index (M[idx[k]][f]) —
+//	   a gather with no nest to interchange; a feature-major copy makes the column contiguous
+//	   (GBM exact split scan -7.74%/-6.55%, at the cost of one n*d*8 copy).
 //	PS3008. a monotone (non-negative) accumulator tested against a threshold EVERY iteration —
 //	   the test can run every 4th iteration for the same answer, dropping an unpredictable branch
 //	   (DBSCAN leaf test -17.4%/-8.5%; the branch was 450ms against 30ms of arithmetic).
@@ -210,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3009", "indirect-column-gather", "a loop reading ONE column of a slice-of-slices through an INDIRECT row index — M[idx[k]][f] with f invariant — so every element lands in a different row, costing a row-header dereference and a cache line per eight bytes used. Same cache behavior PS1010 describes but NOT the same fix: PS1010 needs an interchangeable nest, and here the row order is a data-dependent permutation with no nest to swap. Keep a feature-major copy (xT[f*n+row]) instead. MEASURED on classic gbmBuilder.bestSplit, where the gather was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. TRADES MEMORY FOR TIME — the copy costs n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh it against the gather's hotness rather than converting on sight. A reference implementation kept deliberately simple is the expected false positive", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
 	// PS4xxx — vectorization candidates
@@ -2155,6 +2159,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, setMapFromSliceFindings(fset, fn)...)
 	out = append(out, monotoneBailPerElementFindings(fset, fn)...)
+	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
@@ -10786,6 +10791,121 @@ func bailsOut(b *ast.BlockStmt) bool {
 	switch b.List[len(b.List)-1].(type) {
 	case *ast.ReturnStmt, *ast.BranchStmt:
 		return true
+	}
+	return false
+}
+
+// indirectColumnGatherFindings flags PS3009 — a loop reading ONE column of a slice-of-slices
+// through an INDIRECT row index: M[idx[k]][f], where f does not vary with the loop.
+//
+// Every element lands in a different row, so each read dereferences a row header and pulls a whole
+// cache line to use eight bytes of it. That is the same cache behavior PS1010 describes, but it is
+// NOT the same defect and does not take the same fix. PS1010 requires an interchangeable nest and
+// tells you to swap the loops; here the row order is a data-dependent permutation, so there is no
+// nest to interchange. The fix is to keep a feature-major copy of the matrix — xT[f*n+row] — so a
+// column is contiguous and scattered rows within it share lines.
+//
+// MEASURED, which is why this exists rather than being a plausible idea. classic's gbmBuilder
+// hoists a node's feature column into a buffer before scanning splits, gathering through the
+// node's sorted index permutation. That single line was 330ms of bestSplit's 400ms in a profile of
+// the classic suite; against a feature-major buffer it took BenchmarkGBMHist_exact_80k -7.74%
+// (p=0.002), BenchmarkGBMFit -6.55% (p=0.002) and the 20k fit -2.00% (p=0.007). The win grows with
+// n, as the cache argument predicts.
+//
+// IT TRADES MEMORY FOR TIME, and the finding says so, because the answer is not always yes: the
+// transposed copy costs n*d*8 bytes, which raised measured B/op 26.7% at 80k x 20. Worth it there
+// because that builder already carries two n*d index arrays; not obviously worth it where the
+// matrix is the dominant allocation and the gather is cold.
+//
+// Reference implementations are the expected false positive. A deliberately simple twin that a
+// production path is checked against should not be optimized, and this repo's gbm.go carries
+// exactly that, already marked with a perfscan:ignore for its other findings.
+func indirectColumnGatherFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	var stack []ast.Node
+	var walk func(ast.Node)
+	walk = func(n ast.Node) {
+		ast.Inspect(n, func(c ast.Node) bool {
+			if c == nil {
+				return false
+			}
+			switch c.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				if c != n {
+					stack = append(stack, c)
+					walk(c)
+					stack = stack[:len(stack)-1]
+					return false
+				}
+			}
+			outer, ok := c.(*ast.IndexExpr)
+			if !ok || len(stack) == 0 {
+				return true
+			}
+			row, ok := outer.X.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// The row index must itself be an index expression — that indirection is the whole
+			// point, and it is what makes the access a gather rather than a stride PS1006 could see.
+			gather, ok := row.Index.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// The COLUMN index must not vary with the innermost loop, or this is not a column walk.
+			col := exprText(outer.Index)
+			if col == "" || loopAdvancesVar(stack[len(stack)-1], col) {
+				return true
+			}
+			line := fset.Position(outer.Pos()).Line
+			if seen[line] {
+				return true
+			}
+			seen[line] = true
+			out = append(out, finding{
+				pos:      fset.Position(outer.Pos()),
+				end:      fset.Position(outer.End()),
+				category: "indirect-column-gather",
+				msg: fmt.Sprintf("%s reads ONE column (%q) of a slice-of-slices through an INDIRECT"+
+					" row index (%s[…]) — every element lands in a different row, so each read"+
+					" dereferences a row header and pulls a cache line to use eight bytes. PS1010"+
+					" cannot help here: the row order is a data-dependent permutation, so there is no"+
+					" nest to interchange. Keep a FEATURE-MAJOR copy instead (xT[col*n+row]) so a"+
+					" column is contiguous. MEASURED on classic gbmBuilder.bestSplit, where this line"+
+					" was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit"+
+					" -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. IT COSTS"+
+					" MEMORY — the copy is n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh"+
+					" that against the gather's hotness rather than converting on sight, and skip it"+
+					" for a reference implementation kept simple on purpose.",
+					srcText(fset, outer), col, exprText(gather.X)),
+			})
+			return true
+		})
+	}
+	walk(fn.Body)
+	return out
+}
+
+// loopAdvancesVar reports whether the loop advances the named variable.
+func loopAdvancesVar(n ast.Node, v string) bool {
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		return exprText(l.Key) == v || exprText(l.Value) == v
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if exprText(lhs) == v {
+					return true
+				}
+			}
+		}
+		if inc, ok := l.Post.(*ast.IncDecStmt); ok && exprText(inc.X) == v {
+			return true
+		}
 	}
 	return false
 }
