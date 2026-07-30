@@ -73,26 +73,61 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 	// e·O(n log n) comparisons, to read a value that depends only on the token (PS3005).
 	// Filling it once per expert is O(n) and leaves the comparator a single load.
 	key := make([]float64, n)
+	heap := make([]int, 0, capacity) // size-`capacity` selection heap of token ids, reused per expert
+	// worse(a,b): token id a ranks AFTER b under the total order (key desc, then id asc).
+	worse := func(a, b int) bool {
+		if key[a] != key[b] {
+			return key[a] < key[b]
+		}
+		return a > b
+	}
+	siftDown := func(i int) {
+		for {
+			lo := i
+			if l := 2*i + 1; l < len(heap) && worse(heap[l], heap[lo]) {
+				lo = l
+			}
+			if r := 2*i + 2; r < len(heap) && worse(heap[r], heap[lo]) {
+				lo = r
+			}
+			if lo == i {
+				return
+			}
+			heap[i], heap[lo] = heap[lo], heap[i]
+			i = lo
+		}
+	}
 	for ex := range e {
-		idx := make([]int, n)
-		for i := range idx {
-			idx[i] = i
+		for i := 0; i < n; i++ {
 			key[i] = scores[i][ex]
 		}
-		// sort token indices by this expert's affinity, descending (stable → ties by index).
-		// key[id] == scores[id][ex], so this is the SAME PREDICATE as the direct form and
-		// SliceStable returns the identical permutation — the tie-by-index guarantee in
-		// this function's contract is preserved exactly, not merely "probably unchanged".
-		// total-order comparator (key desc, then token index asc) so the faster unstable
-		// sort.Slice reproduces the stable permutation exactly (indices are unique) — the
-		// tie-by-lowest-index contract is preserved.
-		sort.Slice(idx, func(a, b int) bool {
-			if ka, kb := key[idx[a]], key[idx[b]]; ka != kb {
-				return ka > kb
+		// Select the top-`capacity` token ids into a min-heap whose ROOT is the WORST kept,
+		// so a better token evicts it in O(log capacity) — O(n log capacity) instead of
+		// sorting ALL n (and its reflect.Swapper swaps + per-expert O(n) idx alloc). The
+		// comparator (key desc, then id asc) is a strict total order (ids are unique), so the
+		// retained set and its sorted order are uniquely determined: bit-identical to the
+		// previous full sort's idx[:capacity], preserving the tie-by-lowest-index contract (PS3006).
+		heap = heap[:0]
+		for i := 0; i < n; i++ {
+			if len(heap) < capacity {
+				heap = append(heap, i)
+				for j := len(heap) - 1; j > 0; { // sift up
+					p := (j - 1) / 2
+					if !worse(heap[j], heap[p]) {
+						break
+					}
+					heap[j], heap[p] = heap[p], heap[j]
+					j = p
+				}
+			} else if capacity > 0 && worse(heap[0], i) { // root is worst kept; i is better
+				heap[0] = i
+				siftDown(0)
 			}
-			return idx[a] < idx[b]
-		})
-		tokens[ex] = append([]int(nil), idx[:capacity]...)
+		}
+		sel := make([]int, len(heap))
+		copy(sel, heap)
+		sort.Slice(sel, func(a, b int) bool { return worse(sel[b], sel[a]) })
+		tokens[ex] = sel
 		gr := make([]float64, capacity)
 		gates[ex] = gr
 		for i, t := range tokens[ex] {
