@@ -2007,7 +2007,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 						" small part of an OLS fit dominated by building the Gram matrix. The flatten"+
 						" pays when the flagged loop IS the enclosing operation's work, so measure the"+
 						" OPERATION end to end, not the loop. Check too that the rows are uniform"+
-						" length — a genuinely ragged matrix cannot flatten.", name, name),
+						" length — a genuinely ragged matrix cannot flatten. TRY THE CHEAPER FIX"+
+						" FIRST: where the outer index is invariant across the inner loop, HOISTING"+
+						" the row (qi := %s[i], then range qi) removes the same per-step pointer load"+
+						" with no type change, no API change and no call-site churn, and ranging the"+
+						" row rather than a separate extent lets the compiler drop a bounds check it"+
+						" could not otherwise prove. Measured alone on nlp randomOrthogonal, an"+
+						" O(d^3) Gram-Schmidt: -21.3%% (d=128/256/512, all p=0.002). Reach for the"+
+						" full flatten when the hoist is not available or not enough.", name, name, name),
 				})
 			}
 		}
