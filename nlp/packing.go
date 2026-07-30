@@ -77,6 +77,25 @@ func DocumentCausalMask(docIDs []int) *tensor.Tensor {
 	// write the flat storage directly and skip the per-element Unravel/dispatch.
 	md := m.Storage().F64()
 	neg := math.Inf(-1)
+	// Rows belonging to the same document have IDENTICAL same-document masks — the predicate
+	// di == docIDs[j] depends on the row only through di — so the whole fill collapses to two
+	// memmoves per row once one template per distinct document id exists. That replaces n²
+	// branchy stores, each carrying a data-dependent docIDs[j] load, with n² bytes of
+	// straight-line copy.
+	//
+	// Guarded, because the template set costs D·n to build and D·n·8 bytes to hold: with a
+	// distinct id per position it would be n² of extra work for nothing. Above the guard the
+	// original loop runs unchanged.
+	if tmplIdx, tmpl, ok := docMaskTemplates(docIDs, n, neg); ok {
+		negRow := tmpl[len(tmpl)-1] // the all-neg row, appended by docMaskTemplates
+		for i := range n {
+			row := md[i*n : i*n+n]
+			t := tmpl[tmplIdx[i]]
+			copy(row[:i+1], t[:i+1])
+			copy(row[i+1:], negRow[i+1:])
+		}
+		return m
+	}
 	for i := range n {
 		di := docIDs[i]
 		row := md[i*n : i*n+n]
@@ -89,6 +108,53 @@ func DocumentCausalMask(docIDs []int) *tensor.Tensor {
 		}
 	}
 	return m
+}
+
+// docMaskTemplateLimit bounds how many distinct documents the templated fill will build for.
+// Beyond it the template set stops being cheaper than the direct loop it replaces: building
+// it is D·n work and D·n·8 bytes, so at D approaching n it costs a second n² pass plus an
+// n²-sized allocation. 256 keeps the templates under 256·n·8 bytes while covering every
+// realistic packed block, which holds tens of documents.
+const docMaskTemplateLimit = 256
+
+// docMaskTemplates returns, for each position, the index of its document's mask template,
+// plus the templates themselves with an all-neg row appended last. It reports false when the
+// document count exceeds the limit, leaving the caller's direct loop in charge.
+//
+// Template k has entry j equal to 0 exactly when docIDs[j] == id_k, and neg otherwise — the
+// same predicate the direct loop evaluates, so a row copied from it and then neg-filled past
+// the diagonal is bit-identical. The zero written here and the zero the direct loop writes
+// are both +0.0.
+func docMaskTemplates(docIDs []int, n int, neg float64) ([]int, [][]float64, bool) {
+	slot := make(map[int]int, 16)
+	tmplIdx := make([]int, n)
+	for i, id := range docIDs {
+		k, seen := slot[id]
+		if !seen {
+			if len(slot) >= docMaskTemplateLimit {
+				return nil, nil, false
+			}
+			k = len(slot)
+			slot[id] = k
+		}
+		tmplIdx[i] = k
+	}
+	d := len(slot)
+	buf := make([]float64, (d+1)*n)
+	tmpl := make([][]float64, d+1)
+	for k := range d + 1 {
+		tmpl[k] = buf[k*n : (k+1)*n : (k+1)*n]
+	}
+	for k := range d + 1 {
+		row := tmpl[k]
+		for j := range n {
+			row[j] = neg
+		}
+	}
+	for j, id := range docIDs {
+		tmpl[slot[id]][j] = 0
+	}
+	return tmplIdx, tmpl, true
 }
 
 // DocumentPositions returns the position ids for a packed block: they restart at 0 at each
