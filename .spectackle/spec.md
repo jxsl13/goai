@@ -750,3 +750,8 @@ Rationale: A divide check recommended a reciprocal multiply that evaluates to ze
 WHEN a mutation is applied by string replacement to check whether a test has teeth, the implementing agent SHALL confirm it actually changed the file, by diff or match count, before reading the test result.
 
 Rationale: A mutation intended to weaken a recall floor left the test green, which reads as a toothless test. It had silently no-oped on a shell escaping problem, and the floor was fine. Separately, a mutation earlier in the campaign landed on a dead duplicate of the target code and the suite stayed green for the same misleading reason. A green result after a mutation means nothing until the mutation is known to exist.
+
+## PERF-CONVERSION-IS-NOT-A-CALL-001
+WHEN an AST predicate treats the presence of a call expression as evidence a loop is bottlenecked, the implementing agent SHALL exclude predeclared conversions and builtins first, since Go models float64(x) as a call expression and len compiles to a field load.
+
+Rationale: A floated narrowing for a register-blocking check would have removed 28 hits and lost ten of forty-five genuine sites. Seven of the casualties were the f32-widening twin of an f64 hit the same predicate kept - the same kernel in the same file, differing only by a conversion around each load. Excluding conversions and builtins turned the same idea into a 69 to 96 percent precision gain at 98 percent recall.
