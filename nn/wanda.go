@@ -89,17 +89,17 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 	idx := make([]int, cin)
 	col := make([]float64, cin) // this output's per-input scores, hoisted out of the comparator
 	drop := make([]bool, cin)   // reused across columns (cleared each output)
-	sortCol := func() {
-		// ascending by score, ties broken by input index for determinism. The total-order
-		// comparator (score, then index) lets the faster unstable sort reproduce the stable
-		// order exactly (indices are unique), and reads the hoisted col instead of dispatching.
-		sort.Slice(idx, func(a, b int) bool {
-			if ca, cb := col[idx[a]], col[idx[b]]; ca != cb {
-				return ca < cb
-			}
-			return idx[a] < idx[b]
-		})
+	// selectDrop partitions idx so idx[:k] holds the k LOWEST-score inputs (the pruned set),
+	// under a strict total order (score asc, then input index asc). The drop loop below marks
+	// exactly that set order-independently, so a quickselect (avg O(cin)) is bit-identical to
+	// the previous full O(cin log cin) sort — while running once per output column (PS3006).
+	less := func(x, y int) bool {
+		if col[x] != col[y] {
+			return col[x] < col[y]
+		}
+		return x < y
 	}
+	selectDrop := func(k int) { selectPartition(idx, k, less) }
 	// Typed fast paths: read the score column and write the kept weights / mask through
 	// the contiguous storage instead of AtF64/SetF64 per element. Identical values,
 	// identical sort order, kept entries only (pruned/mask are zero-initialised).
@@ -111,7 +111,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 				idx[j] = j
 				col[j] = ss[j*cout+o]
 			}
-			sortCol()
+			selectDrop(k)
 			for j := range drop {
 				drop[j] = false
 			}
@@ -136,7 +136,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 				idx[j] = j
 				col[j] = float64(ss[j*cout+o])
 			}
-			sortCol()
+			selectDrop(k)
 			for j := range drop {
 				drop[j] = false
 			}
@@ -159,7 +159,7 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 			idx[j] = j
 			col[j] = s.AtF64(j, o)
 		}
-		sortCol()
+		selectDrop(k)
 		for j := range drop {
 			drop[j] = false
 		}
@@ -175,6 +175,61 @@ func WandaPrune(w, x *tensor.Tensor, sparsity float64) (pruned, mask *tensor.Ten
 		}
 	}
 	return pruned, mask, nil
+}
+
+// selectPartition partitions a in place so that a[:k] holds the k elements that rank BEFORE
+// the rest under less (a ranks before b ⟺ less(a,b)), in unspecified order — a Hoare
+// quickselect, average O(len(a)). less MUST be a strict total order (no two elements compare
+// equal), which makes the retained set unique and independent of pivot choice. Small ranges
+// are finished by insertion sort. No-op when k ≤ 0 or k ≥ len(a).
+func selectPartition(a []int, k int, less func(x, y int) bool) {
+	if k <= 0 || k >= len(a) {
+		return
+	}
+	lo, hi := 0, len(a)-1
+	for lo < hi {
+		if hi-lo < 12 { // insertion sort the small range; the split point is then settled
+			for i := lo + 1; i <= hi; i++ {
+				for j := i; j > lo && less(a[j], a[j-1]); j-- {
+					a[j], a[j-1] = a[j-1], a[j]
+				}
+			}
+			return
+		}
+		mid := lo + (hi-lo)/2
+		// median-of-three (lo, mid, hi) so a[lo] ≤ a[mid] ≤ a[hi] under less; pivot = a[mid].
+		// A median pivot bounds the inner scans and avoids O(n²) on sorted / organ-pipe input.
+		if less(a[mid], a[lo]) {
+			a[lo], a[mid] = a[mid], a[lo]
+		}
+		if less(a[hi], a[lo]) {
+			a[lo], a[hi] = a[hi], a[lo]
+		}
+		if less(a[hi], a[mid]) {
+			a[mid], a[hi] = a[hi], a[mid]
+		}
+		pivot := a[mid]
+		i, j := lo, hi
+		for {
+			for less(a[i], pivot) {
+				i++
+			}
+			for less(pivot, a[j]) {
+				j--
+			}
+			if i >= j {
+				break
+			}
+			a[i], a[j] = a[j], a[i]
+			i++
+			j--
+		}
+		if k <= j { // [lo,j] rank ≤ pivot, [j+1,hi] rank ≥ pivot
+			hi = j
+		} else {
+			lo = j + 1
+		}
+	}
 }
 
 // WandaPruneNM applies N:M structured Wanda pruning: within every group of m consecutive
