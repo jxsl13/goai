@@ -640,3 +640,8 @@ Rationale: BenchmarkDBSCANFit called itself the probe for the eps-neighbourhood 
 WHEN a scan rule ships with floors asserting it stays silent, the implementing agent SHALL break each predicate clause in turn and confirm exactly one floor turns red, then fix any clause no floor covers.
 
 Rationale: PS6021 passed all nine tests on the first draft while two clauses were defective. A scratch-constructor exclusion was unreachable, since such a helper must pass its value to the callback, which then already carries a scratch parameter. And both post-fix floors were passing on parameter count alone, leaving the type check unexercised. Neither was visible from green tests; a floor can pass for a reason unrelated to the clause it appears to defend.
+
+## BENCH-NULL-AB-FLOOR-001
+WHEN an A/B reports a wall-clock delta under about five percent, the measuring agent SHALL run a null A/B with identical code in both arms and report the claimed delta against that measured floor.
+
+Rationale: A broken stash left identical code in both arms of a vision A/B; it reported a geomean sec/op delta of -1.39 percent. The valid run of a real change reported -1.15 percent. Without the accidental null run the smaller number would have read as a modest win. Interleaving and min-of-N bound sampling error but say nothing about a benchmark that cannot resolve the effect size at all.
