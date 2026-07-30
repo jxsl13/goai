@@ -49,7 +49,11 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 // M-series cores (§T511 pool design, §V22 A/B) — the point where GOMAXPROCS-way splitting
 // starts to win. Not a user knob (internal, §C13-exempt); revisit via benchmarks (§V5) if the
 // pool dispatch cost changes.
-const parThreshold = 1 << 15 // 32768
+// A var, not a const, so TestParThresholdArmsAgree can force each arm and diff them. Every op in
+// this package routes through parallelWork, and the partition is supposed to be value-neutral for
+// all of them; nothing pinned that (PS6023). NOT a tuning knob — retuning it needs multi-platform
+// numbers, not this host's.
+var parThreshold = 1 << 15 // 32768
 
 // poolBarrier is the completion state of one parallelWork call. pending is the
 // countdown the CALLER spin-waits on (§V22: parking in wg.Wait cost a full
