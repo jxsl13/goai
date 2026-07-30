@@ -665,3 +665,8 @@ Rationale: A beam-search selection beat pdqsort 61us to 1236us on varied candida
 WHEN an A/B swaps arms by restoring files, the measuring agent SHALL assert the arm compiles before timing it, not merely that its source text is right.
 
 Rationale: Restoring the base beam.go while deleting a new helper left a test file referencing the missing symbol, so the base arm failed to build and produced zero samples. Benchstat then printed a single-column report of the new arm alone with no error, which reads as a completed comparison. A source-text check passes in exactly this case; only a build check catches it.
+
+## BENCH-CONTROL-BASELINE-MOVED-001
+WHEN a change optimizes a benchmark that another comparison uses as its control, the implementing agent SHALL say so in the record and require the dependent comparison to re-establish its null floor rather than reusing the recorded one.
+
+Rationale: The Frobenius-norm benchmark exists as the control for pseudoinverse A/Bs, chosen because it touches the same tensors without entering the accumulation loop. Devirtualizing its accessor made it 3.1x faster, so every recorded Pinv comparison that leaned on that control now rests on a stale baseline. A control is only a control while it is untouched.
