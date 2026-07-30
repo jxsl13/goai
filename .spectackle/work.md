@@ -2031,3 +2031,20 @@ TWO DEFECTS THE COUNTING SURFACED that no predicate addresses, and the hedged me
 A CORRECTION TO MY OWN TEXT. The message I wrote one iteration earlier claimed a body containing a call or a transcendental is bottlenecked elsewhere so the load is already free. False for conversions and for constant folds, which are the calls present at twelve of the twenty-eight call-bearing hits. Replaced.
 
 AND A VACUOUS FLOOR CAUGHT BY MUTATION: the first version of the silence test used only accessor calls, which the detector cannot witness a shared operand through at all, so it passed for an unrelated reason and stayed green when the exclusion was removed. Rewritten to keep an index-witnessed operand alongside a real call.
+
+## R-01KYRTB7R1F9EBYBGSKY7YE684 The register-blocking check now has zero false positives in its population, and the recount rule is what kept the last narrowing honest
+kind: research
+state: draft
+created: 2026-07-30
+
+Completes the precision work on the output-invariant-reload check. Two narrowings shipped across two iterations take it from 69.2 percent precision on 65 hits to 100 percent on 44.
+
+THE RECOUNT MATTERED, WHICH IS THE POINT. A counting task had measured the final narrowing at three of the pre-filter sixty-five hits. Recounted against the forty-six that survive the earlier non-trivial-call exclusion it is TWO - one of the three had already been removed there. Acting on the stale figure would have overstated the change by half, and the rule requiring a recount against survivors rather than the original population is exactly what caught it. The two remaining turn out to be precisely the two false positives left, so the check goes from forty-four genuine of forty-six to forty-four of forty-four.
+
+THE SIGNAL: a body declaring more than one scalar float accumulator is not the single-accumulator reload shape the check targets. Either the operand already feeds several accumulators, which IS the recommended transform - so recommending it again multiplies code paths, the hazard a sibling check reports - or the accumulators consume the operand differently and nothing invariant remains to amortize. The two sites are one of each: a hand-written vector-kernel tail already feeding four accumulators from one load, and a site whose two accumulators read the same operand through different indices. My first rationale called both already-blocked, which is true of the first and wrong about the second; the comment now distinguishes them.
+
+WHY THE EXISTING STRIDE EXCLUSION CANNOT REACH EITHER: it inspects only the flagged loop's own post statement, while in both cases the blocking lives on an enclosing loop or in the accumulator set.
+
+A SECOND VACUOUS FLOOR THIS WEEK. The silence test's first version strided by four, which the pre-existing stride exclusion already covers, so it passed without the new clause and stayed green when the clause was removed. Rewritten with stride one it goes red correctly. That is now twice in a few days that a floor passed for a reason unrelated to the clause it appeared to defend, and both were found only by confirming the mutation applied and then reading which tests moved.
+
+STILL OPEN and recorded rather than acted on: two hits recommend a transform that is ILLEGAL, because the flagged loop is itself a sequential state-space recurrence. They are currently excluded for an unrelated reason - they call a transcendental - so the illegality is incidental to the fix rather than the reason for it. A dedicated sweep for checks that recommend illegal rather than merely unprofitable transforms was launched and died on a transient server error; it is worth re-running, because the two confirmed instances of that class so far were both found by hit-by-hit auditing and not by any predicate.
