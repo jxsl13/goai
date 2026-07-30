@@ -685,3 +685,8 @@ Rationale: A single-core profile put Swin window attention at 24.1 percent of th
 WHEN a faster arm is added that returns before an existing branch, the implementing agent SHALL delete the branches the early return makes unreachable rather than leaving them as a second copy.
 
 Rationale: After the Swin blockwise path returned early, its old in-loop branches became dead but textually identical. A mutation applied to the first textual match landed on the dead copy and the whole suite stayed green, which reads exactly like a test with no teeth. Two code paths computing one thing also let a property established for one go stale in the other.
+
+## BENCH-NO-RATIO-ACROSS-SUBBENCH-001
+WHEN two arms of a comparison run as sequential sub-benchmarks in one function, the measuring agent SHALL give each arm its own top-level benchmark and its own data before reading a ratio between them.
+
+Rationale: A paired sub-benchmark over a shared slice reported the second arm 18 percent slower, which read as a real dispatch regression from carrying a chunk index in a task struct. A scale benchmark with independent arms per size put the two within 1.00x from 2^14 to 2^20. The second arm was inheriting a different cache and scheduler state.
