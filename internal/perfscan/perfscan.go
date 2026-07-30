@@ -224,7 +224,7 @@ var checks = []check{
 	{"PS4012", "scaled-serial-dot", "a serial scalar dot accumulator whose result is SCALED/dequantized (acc*scale…) before being stored — a quantized/dequant GEMM inner loop; latency-bound like PS4008 but missed by it (acc isn't stored raw). Break the chain with independent accumulators; bit-identical when the products are integer-valued (int8·int8 partials < 2^53 reassociate exactly), else tolerance-gated", false},
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
-	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Verified: sinusoidal PE builder, RoPE trig fill (attn_extra.go already uses Sincos)", false},
+	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Wins ONLY where trig DOMINATES the kernel (pure positional encoding, e.g. nn/sinusoidal.go +33% #587) — NOT where the trig is an amortized seq·half PRECOMPUTE feeding a larger matmul/attention: fusing MLA/self-extend RoPE (11 sites) was bit-exact but measured flat/within-noise because the seq²·heads score+value-mix dwarfs the trig (R-01KYRJ6RW1FJ0). Bench the ENCLOSING op, skip if trig <~10% of its work", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -3981,9 +3981,15 @@ var sincosNames = map[string]bool{"Sin": true, "Cos": true}
 // Advisory (no auto-fix): the enclosing fill/scan loop still needs an A/B bench to
 // confirm the trig is a real fraction of it, and the rewrite must bind the (sin, cos)
 // return order at a single site the tool cannot always place safely. Verified win:
-// nn/sinusoidal.go PE builder (~15-22% on the trig-fill loop). Argument matching is
-// structural via exprEqual, so it is conservative — args differing only by a value
-// conversion (float64(i)…) are not matched, avoiding false positives.
+// nn/sinusoidal.go PE builder (~15-22% on the trig-fill loop, +33% at op level #587)
+// — a kernel that is NOTHING BUT trig. Verified NON-win: MLA/self-extend RoPE (11
+// sites, backend/{cpu,ref}/mla.go + autograd/vjp_mla.go + nlp/self_extend.go) fused
+// bit-exact (12.8M-arg ulp check clean) but benched flat/within-noise, because there
+// the trig is a seq·half per-position PRECOMPUTE dwarfed by the seq²·heads score +
+// value-mix (R-01KYRJ6RW1FJ0). Rule of thumb: ship only if trig is >~10% of the
+// enclosing op's work. Argument matching is structural via exprEqual, so it is
+// conservative — args differing only by a value conversion (float64(i)…) are not
+// matched, avoiding false positives.
 func sincosFusableFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	if fn.Body == nil {
 		return nil
