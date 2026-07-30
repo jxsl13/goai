@@ -117,6 +117,13 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 					break
 				}
 			}
+			leading := count > 1 && !trailing
+			for ax := 1; ax < nd; ax++ {
+				if !reduced[ax-1] && reduced[ax] { // a reduced axis after a kept one breaks the prefix
+					leading = false
+					break
+				}
+			}
 			if trailing {
 				// Each output segment reduces its own contiguous xs[seg*count:(seg+1)*count] run
 				// into acc[seg] — disjoint writes, same ascending combine order per segment — so
@@ -141,6 +148,32 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 								a = combine(a, xs[base+k])
 							}
 							acc[seg] = a
+						}
+					})
+				}
+			} else if leading {
+				// Reduced axes are the outermost prefix: for each output position of (over the kept
+				// trailing axes, outNumel of them) the inputs are xs[of + r*outNumel] for r=0..count-1
+				// (stride outNumel; ascending r == ascending pos), so outputs parallelize with each
+				// reducing its own strided column in the SAME order the odometer would — bit-identical.
+				if isSum {
+					parallel.Rows(outNumel, func(olo, ohi int) {
+						for of := olo; of < ohi; of++ {
+							a := acc[of]
+							for r := 0; r < count; r++ {
+								a += xs[of+r*outNumel]
+							}
+							acc[of] = a
+						}
+					})
+				} else {
+					parallel.Rows(outNumel, func(olo, ohi int) {
+						for of := olo; of < ohi; of++ {
+							a := acc[of]
+							for r := 0; r < count; r++ {
+								a = combine(a, xs[of+r*outNumel])
+							}
+							acc[of] = a
 						}
 					})
 				}
