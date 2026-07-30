@@ -212,7 +212,7 @@ var checks = []check{
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
 	{"PS4009", "transposed-gram-colstride", "a symmetric-gram reduction M[k][i]·M[k][j] whose reduction index k is the OUTER (row) index of a row-major/jagged matrix — the innermost loop strides down a column across rows; reblock to k-outer rank-1 (load M[k] once, walk contiguously)", false},
 	// PS5xxx — arithmetic
-	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element. MOST FINDINGS SHOULD BE DECLINED. The reciprocal-multiply rewrite is NOT bit-identical and its speedup evaporates as soon as the loop touches memory, which an elementwise tensor loop always does. Measured on this host, 18 samples per arm interleaved in both orders: pure arithmetic with 8 independent chains and no memory 1303.5ns -> 933.7ns (-28.37%), the same arithmetic reading from an L1-resident slice 454.7ns -> 452.2ns (p=0.168, indistinguishable), a load-divide-store elementwise loop noise. The 1.2-1.5x quoted from SoftCap VJP and the optimizer moments is the memory-free ceiling. Accuracy cost, over 200k values: results differ for 66.3% of inputs at d=3.7, 35.4% at d=7, 24.5% across 50 random divisors, by up to 1 ulp — exact ONLY for a power-of-two divisor (0.000% differing at d=1024). So the usual trade is 1 ulp on a quarter to two thirds of outputs for nothing. Rank by whether the divide sits on a memory-free path; if it does not, decline", false},
 	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
@@ -1677,12 +1677,27 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "loop-invariant-divide",
 				msg: fmt.Sprintf("divide by %q, loop-invariant, on every element — hoist inv := 1/%s"+
-					" once and multiply. CHECK THE OPERAND TYPE FIRST: with no type information this check"+
-					" cannot tell float from integer, and on integer operands inv := 1/n is ZERO — a"+
-					" wrong-value bug, not a missed win. ~1.2-1.5x was measured on standalone float"+
-					" divides elsewhere (SoftCap VJP 1.28x,"+
-					" optimizer moments). SAFE ONLY for a CONTINUOUS output (gradient/moment/probability,"+
-					" ½ulp rides tolerance) — NEVER feeding round/quantize/argmax. Verify float + intent.", name, name),
+					" once and multiply. MOST SITES SHOULD DECLINE THIS, and the numbers say why."+
+					" CHECK THE OPERAND TYPE FIRST: with no type information this check cannot tell float"+
+					" from integer, and on integer operands inv := 1/n is ZERO — a wrong-value bug, not a"+
+					" missed win. SPEED: the divide is genuinely ~1.4x slower than the multiply, but only"+
+					" where nothing else is going on. Measured on this host at three levels of realism,"+
+					" 18 samples per arm interleaved in both orders: pure arithmetic with 8 independent"+
+					" chains and NO memory, 1303.5ns -> 933.7ns (-28.37%%, p=0.000); the same arithmetic"+
+					" reading its values from an L1-resident slice, 454.7ns -> 452.2ns (p=0.168,"+
+					" INDISTINGUISHABLE); a plain load-divide-store elementwise loop, noise. A tensor"+
+					" elementwise loop is the third case, so the expected win at a typical site here is"+
+					" ZERO — the divide overlaps with the loads and stores around it. The 1.2-1.5x figures"+
+					" quoted from SoftCap VJP and the optimizer moments are the memory-free ceiling, not"+
+					" what a strided kernel will see. ACCURACY: the rewrite is NOT bit-identical and the"+
+					" cost is larger than it looks — measured over 200k values, results differ for 66.3%%"+
+					" of inputs at d=3.7, 35.4%% at d=7, 35.0%% at d=0.1, 24.5%% across 50 random divisors,"+
+					" by up to 1 ulp (not half). It is EXACT only when the divisor is a power of two"+
+					" (0.000%% differing at d=1024), since 1/d is then representable. So: pay 1 ulp on a"+
+					" quarter to two thirds of your outputs for a win that is usually zero. SAFE ONLY for a"+
+					" CONTINUOUS output (gradient/moment/probability) — NEVER feeding"+
+					" round/quantize/argmax. Verify float + intent, and measure the enclosing loop before"+
+					" believing the ceiling applies to it.", name, name),
 			})
 			return true
 		})
