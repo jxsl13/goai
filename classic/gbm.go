@@ -238,6 +238,7 @@ type gbmBuilder struct {
 	inSet    []bool      // membership of a round's subsample (len n)
 	vals     []float64   // bestSplit scratch: a node's feature values in sorted order (len n)
 	valsW    [][]float64 // per-worker gather scratch for the parallel feature scan (nw × n)
+	partW    [][]int     // per-worker right-partition scratch for the parallel column partition (nw × n)
 }
 
 // gbmSplitParWork gates the parallel feature scan in bestSplit: fork only when the node's
@@ -290,8 +291,10 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 		nw = 1
 	}
 	b.valsW = make([][]float64, nw)
+	b.partW = make([][]int, nw)
 	for c := range b.valsW {
 		b.valsW[c] = make([]float64, n)
+		b.partW[c] = make([]int, n)
 	}
 	return b
 }
@@ -433,12 +436,39 @@ func (b *gbmBuilder) bestSplitParallel(start, end, n int, total float64) (feat i
 // place (stable) by the chosen test, returning the boundary mid.
 func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 	col := b.cols[feat]
+	mid := start // the left count (identical for every feature); computed here to avoid a race
 	for p := start; p < end; p++ {
 		s := col[p]
-		b.goLeft[s] = b.x[s][feat] <= thr
+		gl := b.x[s][feat] <= thr
+		b.goLeft[s] = gl
+		if gl {
+			mid++
+		}
 	}
-	mid := start
-	for f := 0; f < b.d; f++ {
+	// Each feature's column is stable-partitioned independently (writes only cols[f], reads
+	// the shared goLeft read-only), so fan the feature loop over GOMAXPROCS with per-worker
+	// `part` scratch when the d·n work amortizes the fork — bit-identical (same per-feature
+	// stable rearrangement). mid = the left count, identical for every feature.
+	n := end - start
+	if len(b.partW) > 1 && b.d >= 2 && b.d*n >= gbmSplitParWork {
+		_ = parallelBuild(len(b.partW), func(c int) error {
+			f0 := c * b.d / len(b.partW)
+			f1 := (c + 1) * b.d / len(b.partW)
+			b.partitionFeatures(f0, f1, start, end, b.partW[c])
+			return nil
+		})
+		return mid
+	}
+	b.partitionFeatures(0, b.d, start, end, b.part)
+	return mid
+}
+
+// partitionFeatures stable-partitions the columns of features [f0,f1) of the node [start,end)
+// into left|right by b.goLeft, using `part` as the right-side scratch. Each feature's column is
+// independent (writes only cols[f], reads goLeft read-only), so callers may run disjoint feature
+// chunks concurrently with per-worker part scratch.
+func (b *gbmBuilder) partitionFeatures(f0, f1, start, end int, part []int) {
+	for f := f0; f < f1; f++ {
 		cf := b.cols[f]
 		w := start
 		r := 0
@@ -448,14 +478,12 @@ func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 				cf[w] = s
 				w++
 			} else {
-				b.part[r] = s
+				part[r] = s
 				r++
 			}
 		}
-		copy(cf[w:end], b.part[:r])
-		mid = w
+		copy(cf[w:end], part[:r])
 	}
-	return mid
 }
 
 func (n *gbmNode) predict(row []float64) float64 {
