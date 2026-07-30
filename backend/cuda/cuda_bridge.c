@@ -1823,17 +1823,21 @@ int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, in
                              "  extern __shared__ double sh[];\n"
                              "  int t=threadIdx.x, nt=blockDim.x;\n"
                              "  float* xr = x + (size_t)row*cols;\n"
-                             "  double m=-1e300;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)(cap*tanhf(xr[j]*scale/cap)); if(v>m)m=v; } }\n"
-                             "  sh[t]=m; __syncthreads();\n"
+                             // GA106 FP64 = 1/64 FP32: keep per-element math in FP32 (softcap is
+                             // already f32 tanhf; max is exact in f32; the exp-arg subtract and
+                             // per-thread partial sum ride the f32 softmax tolerance). Only the
+                             // cross-thread reductions stay double for stability.
+                             "  float m=-3.4e38f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float v=cap*tanhf(xr[j]*scale/cap); if(v>m)m=v; } }\n"
+                             "  sh[t]=(double)m; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
-                             "  double rowmax=sh[0]; __syncthreads();\n"
-                             "  double local=0.0;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double cs=(double)(cap*tanhf(xr[j]*scale/cap)); float e=expf((float)(cs-rowmax)); xr[j]=e; local+=(double)e; } else { xr[j]=0.0f; } }\n"
-                             "  sh[t]=local; __syncthreads();\n"
+                             "  float rowmax=(float)sh[0]; __syncthreads();\n"
+                             "  float local=0.0f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float cs=cap*tanhf(xr[j]*scale/cap); float e=expf(cs-rowmax); xr[j]=e; local+=e; } else { xr[j]=0.0f; } }\n"
+                             "  sh[t]=(double)local; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
-                             "  double inv=1.0/sh[0];\n"
-                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                             "  float inv=(float)(1.0/sh[0]);\n"
+                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=xr[j]*inv; }\n"
                              "}\n",
                              "attn_softmax_cap.cu", "attn_softmax_cap", &gAttnSoftmaxCap) != 0) { rc = -2; goto done; }
     {
@@ -1947,17 +1951,20 @@ int cu_attn_softmax(void* x, int rows, int cols, float scale, int offset, int se
                              "  extern __shared__ double sh[];\n"
                              "  int t=threadIdx.x, nt=blockDim.x;\n"
                              "  float* xr = x + (size_t)row*cols;\n"
-                             "  double m=-1e300;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)xr[j]*scale; if(v>m)m=v; } }\n"
-                             "  sh[t]=m; __syncthreads();\n"
+                             // GA106 FP64 = 1/64 FP32: keep per-element math in FP32 (max exact in
+                             // f32; the scaled exp-arg subtract and per-thread partial sum ride the
+                             // f32 softmax tolerance). Cross-thread reductions stay double.
+                             "  float m=-3.4e38f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float v=xr[j]*scale; if(v>m)m=v; } }\n"
+                             "  sh[t]=(double)m; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
-                             "  double rowmax=sh[0]; __syncthreads();\n"
-                             "  double local=0.0;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float e=expf((float)((double)xr[j]*scale-rowmax)); xr[j]=e; local+=(double)e; } else { xr[j]=0.0f; } }\n"
-                             "  sh[t]=local; __syncthreads();\n"
+                             "  float rowmax=(float)sh[0]; __syncthreads();\n"
+                             "  float local=0.0f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float e=expf(xr[j]*scale-rowmax); xr[j]=e; local+=e; } else { xr[j]=0.0f; } }\n"
+                             "  sh[t]=(double)local; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
-                             "  double inv=1.0/sh[0];\n"
-                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=(float)(xr[j]*inv); }\n"
+                             "  float inv=(float)(1.0/sh[0]);\n"
+                             "  for(int j=t;j<=lim;j+=nt){ xr[j]=xr[j]*inv; }\n"
                              "}\n",
                              "attn_softmax.cu", "attn_softmax", &gAttnSoftmax) != 0) { rc = -2; goto done; }
     {
