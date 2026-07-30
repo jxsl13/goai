@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -129,5 +130,51 @@ func TestEStepReductionOrderGolden(t *testing.T) {
 	if h != wantHash {
 		t.Fatalf("llHistory hash %#x, want %#x — the mean log-likelihood is no longer the ascending "+
 			"sum of the per-sample contributions", h, wantHash)
+	}
+}
+
+// TestMStepErrorIsLowestComponent pins the error DETERMINISM the M-step fan-out had to preserve.
+//
+// The serial loop returned on the first non-positive-definite covariance, so it always named the
+// lowest failing component. Fanned out over components, whichever worker finishes first would
+// otherwise decide the message, and with 12 workers that is a coin toss. The implementation
+// collects one error per component and scans ascending after the fan-out; this asserts the
+// resulting index is stable and is the lowest, comparing the SERIAL and PARALLEL arms selected by
+// GOMAXPROCS so a difference is attributable to the partition.
+//
+// regCovar is zeroed and each component gets fewer samples than dimensions, which makes every
+// accumulated covariance rank-deficient — so more than one component fails and the choice among
+// them is observable rather than incidental.
+func TestMStepErrorIsLowestComponent(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("single-CPU host: mStep cannot take its parallel branch")
+	}
+	const d, k = 8, 4
+	n := k * 2
+	x := make([][]float64, n)
+	for i := range x {
+		row := make([]float64, d)
+		for j := range row {
+			row[j] = float64((i%k)*10 + j)
+		}
+		x[i] = row
+	}
+	run := func(procs int) string {
+		defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(procs))
+		m := NewGaussianMixture(WithGMMComponents(k), WithGMMCovariance(GMMFull),
+			WithGMMSeed(5), WithGMMMaxIter(3), WithGMMRegCovar(0))
+		err := m.Fit(x)
+		if err == nil {
+			t.Fatalf("procs=%d: expected a non-positive-definite covariance; the fixture no longer "+
+				"produces one and this test would pass vacuously", procs)
+		}
+		return err.Error()
+	}
+	ser, par := run(1), run(runtime.NumCPU())
+	if ser != par {
+		t.Fatalf("the reported component depends on the partition:\n serial:   %s\n parallel: %s", ser, par)
+	}
+	if !strings.Contains(ser, "component 0 ") {
+		t.Fatalf("expected the LOWEST failing component to be reported, got: %s", ser)
 	}
 }

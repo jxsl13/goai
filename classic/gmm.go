@@ -534,8 +534,24 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		m.yScratch4[t] = make([]float64, d)
 	}
 	m.logDetHalf = make([]float64, k)
-	cen := make([]float64, d) // centered-row scratch, reused per sample
-	for c := range k {
+	// PARALLEL over components. Component c owns its own accumulator s, its own Cholesky, and
+	// writes only m.cov[c]/m.chol[c]/m.invCholDiag[c]/m.logDetHalf[c] — nothing crosses c, and
+	// within a component the sample loop still runs i ascending over identical operands, so the
+	// partition is bit-identical.
+	//
+	// This is 42% of BenchmarkGMMFitFull and was the last serial block: after the E-step fan-out
+	// the GOMAXPROCS curve plateaued at 1.75x by 8 cores, which is Amdahl for a ~44% serial
+	// remainder. A 12-thread profile HID it — the serial work is one thread while eleven park, so
+	// mStep showed 2.9% of samples; at GOMAXPROCS=1 it is 37.4% flat, with the covariance
+	// outer-product line alone at 61% of the function.
+	//
+	// cen moves INSIDE the worker: at function scope it is one buffer every component would
+	// rewrite per sample, which is the receiver-scratch race this package has already had to fix
+	// twice. The error is collected PER COMPONENT and the lowest failing index is returned after
+	// the fan-out, so a non-positive-definite covariance reports the same component the serial
+	// loop reported rather than whichever worker happened to finish first.
+	cerr := make([]error, k)
+	body := func(c int, cen []float64) {
 		s := make([]float64, d*d)
 		inv := 1.0 / (nk[c] + 1e-300)
 		for i := range n {
@@ -566,7 +582,8 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
 		l, half, err := gmmCholesky(s, d)
 		if err != nil {
-			return fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+			cerr[c] = fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+			return
 		}
 		m.cov[c] = s
 		m.chol[c] = l
@@ -576,6 +593,35 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		}
 		m.invCholDiag[c] = id
 		m.logDetHalf[c] = half
+	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > k {
+		nw = k
+	}
+	if nw <= 1 || n*d*d < 1<<14 {
+		cen := make([]float64, d) // centered-row scratch, reused per sample
+		for c := range k {
+			body(c, cen)
+		}
+	} else {
+		csz := (k + nw - 1) / nw
+		_ = parallelBuild(nw, func(w int) error {
+			lo := w * csz
+			hi := lo + csz
+			if hi > k {
+				hi = k
+			}
+			cen := make([]float64, d) // per-worker
+			for c := lo; c < hi; c++ {
+				body(c, cen)
+			}
+			return nil
+		})
+	}
+	for c := range cerr { // ascending: the same component the serial loop would have reported
+		if cerr[c] != nil {
+			return cerr[c]
+		}
 	}
 	return nil
 }
