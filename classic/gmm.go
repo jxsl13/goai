@@ -300,7 +300,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 				lr[c] = logW[c] + ldBuf[c]
 			}
 		} else {
-			m.logGaussianFullBatch(row, ldBuf) // unroll-and-jam over components
+			m.logGaussianFullBatch(row, ldBuf, m.yScratch4, m.yScratch) // unroll-and-jam over components
 			for c := range k {
 				lr[c] = logW[c] + ldBuf[c]
 			}
@@ -527,7 +527,7 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 }
 
 // logGaussian returns log N(x; μ_c, Σ_c) for component c.
-func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
+func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64, error) {
 	d := m.nFeat
 	const log2pi = 1.8378770664093453 // log(2π)
 	if m.cfg.covariance == GMMDiag {
@@ -539,10 +539,9 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 		}
 		return -0.5*(float64(d)*log2pi+quad) - m.logDetHalf[c], nil
 	}
-	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y reuses a per-model scratch
-	// (logGaussian runs serially) and multiplies the cached 1/L[i][i].
+	// full: solve L y = (x−μ), Mahalanobis = ‖y‖². y is a caller-owned scratch (len ≥ d;
+	// per-worker when parallel) and multiplies the cached 1/L[i][i].
 	l, id := m.chol[c], m.invCholDiag[c]
-	y := m.yScratch
 	for i := range d {
 		s := x[i] - m.Means[c][i]
 		for j := range i {
@@ -568,7 +567,7 @@ func (m *GaussianMixture) logGaussian(x []float64, c int) (float64, error) {
 // solve subtracts l_c[i][j]·y_c[j] in the same ascending j order, y_c[i]=s·id_c[i]
 // is unchanged, quad accumulates y_c[i]² in the same ascending i order, and the
 // final -0.5·(d·log2π+quad) − logDetHalf op sequence is untouched.
-func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
+func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4][]float64, y []float64) {
 	d := m.nFeat
 	k := m.cfg.k
 	const log2pi = 1.8378770664093453
@@ -578,7 +577,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
 		l0, l1, l2, l3 := m.chol[c], m.chol[c+1], m.chol[c+2], m.chol[c+3]
 		id0, id1, id2, id3 := m.invCholDiag[c], m.invCholDiag[c+1], m.invCholDiag[c+2], m.invCholDiag[c+3]
 		mu0, mu1, mu2, mu3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
-		y0, y1, y2, y3 := m.yScratch4[0], m.yScratch4[1], m.yScratch4[2], m.yScratch4[3]
+		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3]
 		for i := range d {
 			xi := x[i]
 			s0 := xi - mu0[i]
@@ -610,7 +609,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64) {
 		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
 	}
 	for ; c < k; c++ {
-		ld[c], _ = m.logGaussian(x, c)
+		ld[c], _ = m.logGaussian(x, c, y)
 	}
 }
 
@@ -675,25 +674,61 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
-	out := make([]float64, len(x))
-	buf := make([]float64, k)
-	diag := m.cfg.covariance == GMMDiag
-	for i, row := range x {
+	for _, row := range x {
 		if len(row) != m.nFeat {
 			return nil, fmt.Errorf("classic: gmm ScoreSamples feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
+	}
+	out := make([]float64, len(x))
+	diag := m.cfg.covariance == GMMDiag
+	// Each sample's density is independent (reads only shared read-only params, writes only
+	// out[i]). Full-cov's triangular solve needs a private y-scratch — the shared
+	// m.yScratch/m.yScratch4 are exactly why this stayed serial — so give every worker its OWN
+	// buf + solve buffers and fan the sample loop across GOMAXPROCS. Bit-identical to the serial
+	// scan; serial below a small work threshold.
+	rowScore := func(buf []float64, y4 [4][]float64, y []float64, i int) {
 		if diag {
-			m.logGaussianDiagBatch(row, buf) // unroll-and-jam over components → buf[c]=ld[c]
-			for c := range k {
-				buf[c] = logW[c] + buf[c]
-			}
+			m.logGaussianDiagBatch(x[i], buf)
 		} else {
-			m.logGaussianFullBatch(row, buf) // unroll-and-jam over components
-			for c := range k {
-				buf[c] = logW[c] + buf[c]
-			}
+			m.logGaussianFullBatch(x[i], buf, y4, y)
+		}
+		for c := range k {
+			buf[c] = logW[c] + buf[c]
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
+	}
+	newScratch := func() ([]float64, [4][]float64, []float64) {
+		var y4 [4][]float64
+		for t := range y4 {
+			y4[t] = make([]float64, m.nFeat)
+		}
+		return make([]float64, k), y4, make([]float64, m.nFeat)
+	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > len(x) {
+		nw = len(x)
+	}
+	if nw <= 1 || len(x)*k < 1<<11 {
+		buf, y4, y := newScratch()
+		for i := range x {
+			rowScore(buf, y4, y, i)
+		}
+		return out, nil
+	}
+	csz := (len(x) + nw - 1) / nw
+	if err := parallelBuild(nw, func(cw int) error {
+		lo := cw * csz
+		hi := lo + csz
+		if hi > len(x) {
+			hi = len(x)
+		}
+		buf, y4, y := newScratch() // per-worker scratch
+		for i := lo; i < hi; i++ {
+			rowScore(buf, y4, y, i)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
@@ -741,7 +776,7 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if diag {
 			m.logGaussianDiagBatch(x[i], lr)
 		} else {
-			m.logGaussianFullBatch(x[i], lr)
+			m.logGaussianFullBatch(x[i], lr, m.yScratch4, m.yScratch)
 		}
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
