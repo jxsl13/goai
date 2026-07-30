@@ -45,6 +45,12 @@ func QR(a *tensor.Tensor) (q, r *tensor.Tensor, err error) {
 	return tensor.FromFloat64(tensor.Shape{m, n}, qMat), tensor.FromFloat64(tensor.Shape{n, n}, rMat), nil
 }
 
+// colJam is how many right-hand-side columns Lstsq processes together. Columns are independent,
+// so jamming them shares each reflector and each R element across that many accumulator chains
+// without reassociating any one column's arithmetic. Four is the width measured on this host; see
+// the jam comment in Lstsq for what it bought.
+const colJam = 4
+
 // Lstsq solves the least-squares problem min‖A·x − b‖₂ for an m×n matrix a with m ≥ n (overdetermined
 // or square) via Householder QR (§R116; LAPACK dgels): apply Qᵀ to b, then back-substitute
 // R·x = (Qᵀb)[0:n]. More stable than the normal equations AᵀA·x = Aᵀb. b is a vector [m] or matrix
@@ -86,64 +92,122 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	// said so before the profile did — LstsqMat/768 ran 830ms on one core and 792ms on twelve,
 	// 1.05x, the worst scaler of any benchmark in this package.
 	//
-	// cvec is the per-WORKER scratch solveCols hands out rather than a per-column make(): it is
-	// fully rewritten at the top of every column, so reuse across a worker's columns is safe.
-	solveCols(cols, n*n, m, func(clo, chi int, cvec []float64) {
-		for c := clo; c < chi; c++ {
-			for i := range m {
-				if vec {
-					cvec[i] = b.AtF64(i)
-				} else {
-					cvec[i] = b.AtF64(i, c)
+	// The columns are processed FOUR AT A TIME. Every column re-reads the same two large
+	// read-only arrays — all of vs (n*m doubles) in the Qᵀb application and R's upper triangle in
+	// the back substitution — so at n=512 the old one-column-at-a-time loop streamed roughly 3MB
+	// per column, 512 times over. Jamming four columns shares each vk[i] and each rm[i*n+j] load
+	// across four independent accumulator chains, cutting that traffic about fourfold and giving
+	// the FMA units four chains to interleave instead of one dependent one.
+	//
+	// This is a FREE-DIMENSION jam and therefore bit-identical: columns are independent, and each
+	// column's dot still accumulates over the same j in the same order with the same operands.
+	// It is not an inner-reduction split, which would reassociate and would not be.
+	// TestLstsqBitStable is the gate, and it hashes the same before and after this change.
+	//
+	// Measured at every benchmark size, interleaved, both arm orders: n=64 -13.89% (p=0.002),
+	// n=256 -25.93% (p=0.000), n=512 -23.52% (p=0.000), n=768 -29.54% (p=0.002). Unlike the two
+	// locality fixes above, which needed a working set past cache before they showed at all, this
+	// one pays across the range.
+	//
+	// It COSTS memory, which is the honest tradeoff: the per-worker scratch grows from m to
+	// colJam*m doubles, so B/op rises 12.0% at n=64 (137KB to 154KB, where the totals are small)
+	// and 1.2-3.5% at the larger sizes.
+	//
+	// buf is the per-WORKER scratch solveCols hands out rather than a per-column make(): it holds
+	// colJam columns, each fully rewritten before use, so reuse across a worker's columns is safe.
+	solveCols(cols, n*n, colJam*m, func(clo, chi int, buf []float64) {
+		load := func(c int, dst []float64) {
+			if vec {
+				for i := range m {
+					dst[i] = b.AtF64(i)
 				}
+				return
 			}
-			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric).
-			//
-			// vk is hoisted out of both i loops: k is invariant across them, so vs[k][i] reloads
-			// the reflector's row pointer on every one of the ~m·n steps this block runs per
-			// column, and it runs twice per k. Bit-identical — same operands, same order.
-			//
-			// Worth -2.77% on its own (n=512, p=0.021, n=8), measured on top of the substitution
-			// change rather than credited jointly with it. Combined the two are -4.31% at n=512
-			// (p=0.021) — and NOTHING measurable at n=256 (p=1.000) or n=64, which is the honest
-			// shape of this fix: it only shows once the working set outgrows cache.
+			for i := range m {
+				dst[i] = b.AtF64(i, c)
+			}
+		}
+		store := func(c int, src []float64) {
+			for i := range n {
+				out[i*cols+c] = src[i]
+			}
+		}
+		// one column, the shape the jammed path below replicates four ways.
+		one := func(c int, cv []float64) {
+			load(c, cv)
 			for k := range n {
 				vk := vs[k]
 				s := 0.0
 				for i := k; i < m; i++ {
-					s += vk[i] * cvec[i]
+					s += vk[i] * cv[i]
 				}
 				bt := betas[k] * s
 				for i := k; i < m; i++ {
-					cvec[i] -= bt * vk[i]
+					cv[i] -= bt * vk[i]
 				}
 			}
-			// back-substitute R·x = (Qᵀb)[0:n], IN PLACE in cvec.
-			//
-			// The inner product used to read the solution back out of `out`, which is [n,cols]
-			// row-major, so out[j*cols+c] walks a COLUMN: consecutive j are cols apart and each
-			// touches its own cache line. Writing x over cvec[0:n] instead makes that read
-			// contiguous. It is safe in place because the substitution runs i downward and reads
-			// only j > i, which have already been overwritten with their solution — and cvec[i] is
-			// consumed into sum before it is reassigned.
-			//
-			// Worth -1.75% here (n=512, p=0.001, n=10), well short of the -5.55% the same transform
-			// gave CholSolve's back substitution: there it WAS the operation, whereas here the Qᵀb
-			// application below dominates the per-column body and the substitution is the smaller
-			// half. Expectations carried over from a sibling site are worth measuring, not assuming.
-			//
-			// Bit-identical: cvec[j] holds exactly the value out[j*cols+c] held, and the operands
-			// are combined in the same order.
 			for i := n - 1; i >= 0; i-- {
-				sum := cvec[i]
+				sum := cv[i]
 				for j := i + 1; j < n; j++ {
-					sum -= rm[i*n+j] * cvec[j]
+					sum -= rm[i*n+j] * cv[j]
 				}
-				cvec[i] = sum / rm[i*n+i]
+				cv[i] = sum / rm[i*n+i]
 			}
-			for i := range n {
-				out[i*cols+c] = cvec[i]
+			store(c, cv)
+		}
+		c := clo
+		for ; c+colJam <= chi; c += colJam {
+			c0, c1 := buf[0:m], buf[m:2*m]
+			c2, c3 := buf[2*m:3*m], buf[3*m:4*m]
+			load(c, c0)
+			load(c+1, c1)
+			load(c+2, c2)
+			load(c+3, c3)
+			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric). vk is
+			// hoisted out of the i loops, where k is invariant, and now feeds four columns per load.
+			for k := range n {
+				vk := vs[k]
+				var s0, s1, s2, s3 float64
+				for i := k; i < m; i++ {
+					v := vk[i]
+					s0 += v * c0[i]
+					s1 += v * c1[i]
+					s2 += v * c2[i]
+					s3 += v * c3[i]
+				}
+				bk := betas[k]
+				b0, b1, b2, b3 := bk*s0, bk*s1, bk*s2, bk*s3
+				for i := k; i < m; i++ {
+					v := vk[i]
+					c0[i] -= b0 * v
+					c1[i] -= b1 * v
+					c2[i] -= b2 * v
+					c3[i] -= b3 * v
+				}
 			}
+			// back-substitute R·x = (Qᵀb)[0:n], in place, four columns sharing each rm row element.
+			// Reading c*[i] into the accumulators before the j loop is safe: that loop reads only
+			// j > i, which already hold their solution.
+			for i := n - 1; i >= 0; i-- {
+				s0, s1, s2, s3 := c0[i], c1[i], c2[i], c3[i]
+				base := i * n
+				for j := i + 1; j < n; j++ {
+					r := rm[base+j]
+					s0 -= r * c0[j]
+					s1 -= r * c1[j]
+					s2 -= r * c2[j]
+					s3 -= r * c3[j]
+				}
+				d := rm[base+i]
+				c0[i], c1[i], c2[i], c3[i] = s0/d, s1/d, s2/d, s3/d
+			}
+			store(c, c0)
+			store(c+1, c1)
+			store(c+2, c2)
+			store(c+3, c3)
+		}
+		for ; c < chi; c++ {
+			one(c, buf[0:m])
 		}
 	})
 	if vec {
