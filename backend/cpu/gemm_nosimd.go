@@ -181,3 +181,101 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		}
 	}
 }
+
+// gemmF32BandPacked is gemmF32Band reading B from a 4-column PACKED panel:
+// pack[(t*k+p)*4+c] == B[p*n+t*4+c]. Identical arithmetic, identical order.
+//
+// Why: the tiled loop reads B[p*n+j .. j+4] for a fixed j-tile across all p, so consecutive p
+// are n floats apart. Every one of those pulls a 64-byte line to use 16 bytes, and each i-block
+// re-walks the whole matrix that way. Packed, a tile's k values are contiguous, so the line is
+// fully used and the panel stays resident across the p sweep. gemmF32 packs once and every row
+// band shares it, which is what makes the copy worth paying.
+func gemmF32BandPacked(A, B, pack []float32, acc []float64, loRow, hiRow, k, n int) {
+	nt := n >> 2 // full 4-column tiles
+	i := loRow
+	for ; i+3 < hiRow; i += 4 {
+		c0 := acc[(i+0)*n : (i+1)*n]
+		c1 := acc[(i+1)*n : (i+2)*n]
+		c2 := acc[(i+2)*n : (i+3)*n]
+		c3 := acc[(i+3)*n : (i+4)*n]
+		a0r := A[(i+0)*k : (i+1)*k]
+		a1r := A[(i+1)*k : (i+2)*k]
+		a2r := A[(i+2)*k : (i+3)*k]
+		a3r := A[(i+3)*k : (i+4)*k]
+		for t := range nt {
+			j := t * 4
+			bcol := pack[t*k*4 : (t+1)*k*4]
+			v00, v01, v02, v03 := c0[j], c0[j+1], c0[j+2], c0[j+3]
+			v10, v11, v12, v13 := c1[j], c1[j+1], c1[j+2], c1[j+3]
+			v20, v21, v22, v23 := c2[j], c2[j+1], c2[j+2], c2[j+3]
+			v30, v31, v32, v33 := c3[j], c3[j+1], c3[j+2], c3[j+3]
+			for p := range k {
+				bp := bcol[p*4 : p*4+4]
+				b0, b1 := float64(bp[0]), float64(bp[1])
+				b2, b3 := float64(bp[2]), float64(bp[3])
+				a0 := float64(a0r[p])
+				v00 += a0 * b0
+				v01 += a0 * b1
+				v02 += a0 * b2
+				v03 += a0 * b3
+				a1 := float64(a1r[p])
+				v10 += a1 * b0
+				v11 += a1 * b1
+				v12 += a1 * b2
+				v13 += a1 * b3
+				a2 := float64(a2r[p])
+				v20 += a2 * b0
+				v21 += a2 * b1
+				v22 += a2 * b2
+				v23 += a2 * b3
+				a3 := float64(a3r[p])
+				v30 += a3 * b0
+				v31 += a3 * b1
+				v32 += a3 * b2
+				v33 += a3 * b3
+			}
+			c0[j], c0[j+1], c0[j+2], c0[j+3] = v00, v01, v02, v03
+			c1[j], c1[j+1], c1[j+2], c1[j+3] = v10, v11, v12, v13
+			c2[j], c2[j+1], c2[j+2], c2[j+3] = v20, v21, v22, v23
+			c3[j], c3[j+1], c3[j+2], c3[j+3] = v30, v31, v32, v33
+		}
+		if rem := nt * 4; rem < n { // unpacked column remainder
+			for p := range k {
+				bp := B[p*n : (p+1)*n]
+				a0 := float64(a0r[p])
+				a1 := float64(a1r[p])
+				a2 := float64(a2r[p])
+				a3 := float64(a3r[p])
+				for jj := rem; jj < n; jj++ {
+					bf := float64(bp[jj])
+					c0[jj] += a0 * bf
+					c1[jj] += a1 * bf
+					c2[jj] += a2 * bf
+					c3[jj] += a3 * bf
+				}
+			}
+		}
+	}
+	for ; i < hiRow; i++ { // single-row remainder: unchanged, reads B directly
+		ci := acc[i*n : (i+1)*n]
+		for p := range k {
+			aip := float64(A[i*k+p])
+			bp := B[p*n : (p+1)*n]
+			for j, bv := range bp {
+				ci[j] += aip * float64(bv)
+			}
+		}
+	}
+}
+
+// packBTiles4 fills pack[(t*k+p)*4+c] = B[p*n+t*4+c] for the n/4 full tiles.
+func packBTiles4(B, pack []float32, k, n int) {
+	nt := n >> 2
+	for t := range nt {
+		src := t * 4
+		dst := pack[t*k*4 : (t+1)*k*4]
+		for p := range k {
+			copy(dst[p*4:p*4+4], B[p*n+src:p*n+src+4])
+		}
+	}
+}

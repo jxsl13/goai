@@ -12,11 +12,26 @@ import (
 // exercise BOTH the 4x4 register tile and every remainder it can leave: n not divisible by 4 takes
 // the column tail, and m not divisible by 4 takes the single-row tail.
 func TestGemmF32PortableHash(t *testing.T) {
-	const wantHash uint64 = 0xad374cc7cd2a5ae4
-	var h uint64 = 14695981039346656037
-	for _, g := range []struct{ m, k, n int }{
+	const wantHash uint64 = 0xb901bc1baa7550bf
+	geoms := []struct{ m, k, n int }{
 		{8, 8, 8}, {7, 5, 9}, {4, 3, 6}, {13, 11, 15}, {1, 1, 1}, {5, 4, 3},
-	} {
+		// m at or above gemmPackMinRows so the PACKED band runs: one with n a multiple of 4 and
+		// one without, so the packed path's own column remainder executes too. Without these the
+		// whole set sat below the gate and this golden covered only the unpacked kernel.
+		{40, 9, 8}, {35, 7, 11}, {33, 5, 4},
+	}
+	var packed int
+	for _, g := range geoms {
+		if g.m >= gemmPackMinRows && g.n >= 4 {
+			packed++
+		}
+	}
+	if packed == 0 {
+		t.Fatalf("no geometry clears gemmPackMinRows=%d; this golden would cover only the "+
+			"unpacked band", gemmPackMinRows)
+	}
+	var h uint64 = 14695981039346656037
+	for _, g := range geoms {
 		rng := rand.New(rand.NewSource(int64(g.m*100 + g.n)))
 		A := make([]float32, g.m*g.k)
 		B := make([]float32, g.k*g.n)
@@ -70,5 +85,44 @@ func TestGemmF64BandHash(t *testing.T) {
 	}
 	if h != wantHash {
 		t.Fatalf("gemmF64Band hash %#x, want %#x", h, wantHash)
+	}
+}
+
+// TestGemmF32PackedMatchesUnpacked pins the packed band against the unpacked one directly, which a
+// static golden alone cannot do: the pack is gated on B's size, so every geometry small enough to
+// keep a golden fast is also small enough to skip packing entirely. Forcing the gate both ways and
+// diffing is what actually covers the packed kernel.
+func TestGemmF32PackedMatchesUnpacked(t *testing.T) {
+	saved := gemmPackMinWork
+	defer func() { gemmPackMinWork = saved }()
+	for _, g := range []struct{ m, k, n int }{
+		{40, 9, 8}, {35, 7, 11}, {33, 5, 4}, {64, 16, 16}, {36, 3, 7},
+	} {
+		if g.m < gemmPackMinRows || g.n < 4 {
+			t.Fatalf("%+v never reaches the packed band whatever the work gate says", g)
+		}
+		rng := rand.New(rand.NewSource(int64(g.m*31 + g.n)))
+		A := make([]float32, g.m*g.k)
+		B := make([]float32, g.k*g.n)
+		for i := range A {
+			A[i] = rng.Float32()*2 - 1
+		}
+		for i := range B {
+			B[i] = rng.Float32()*2 - 1
+		}
+		run := func(gate int) []float32 {
+			gemmPackMinWork = gate
+			C := make([]float32, g.m*g.n)
+			gemmF32(A, B, C, g.m, g.k, g.n)
+			return C
+		}
+		unpacked := run(1 << 30) // never packs
+		packed := run(0)         // always packs
+		for i := range unpacked {
+			if math.Float32bits(unpacked[i]) != math.Float32bits(packed[i]) {
+				t.Fatalf("%+v: C[%d] unpacked %v (%08x) != packed %v (%08x)", g, i,
+					unpacked[i], math.Float32bits(unpacked[i]), packed[i], math.Float32bits(packed[i]))
+			}
+		}
 	}
 }
