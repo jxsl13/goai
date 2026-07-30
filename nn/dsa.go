@@ -42,8 +42,6 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		scale = 1 / math.Sqrt(float64(dk))
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
-	scores := make([]float64, seq)
-	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
 	type ranked struct {
 		j int
 		s float64
@@ -55,80 +53,90 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	// ranking and attention.
 	if qis, kis, qs := flatF64(qIdx), flatF64(kIdx), flatF64(q); qis != nil && kis != nil && qs != nil {
 		idxWidth := qIdx.Shape()[1]
-		// Hoisted scratch: a reused rank slice (no per-query realloc growth) and a []bool
-		// membership set (no per-query map alloc + hashing). Both are cleared between
-		// queries, so the selected set, sort order and attention math are IDENTICAL.
-		rank := make([]ranked, 0, seq)
-		sel := make([]bool, seq)
-		var setIdx []int
-		for i := range seq {
-			qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
-			rank = rank[:0]
+		// Queries are independent: query i writes only out[i,:] (all heads) and reads the shared
+		// read-only q/k/v/qIdx/kIdx, so the query loop fans out over GOMAXPROCS bit-identically to
+		// the serial loop (each worker runs a query's exact serial code). Per-worker scratch: a
+		// reused rank slice and a []bool membership set (both cleared between the worker's queries)
+		// plus the attendMask scores buffer. Gated on seq·seq·dm.
+		parallelRows(seq, seq*dm, func(lo, hi int) {
+			rank := make([]ranked, 0, seq)
+			sel := make([]bool, seq)
+			var setIdx []int
+			scores := make([]float64, seq)
+			for i := lo; i < hi; i++ {
+				qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
+				rank = rank[:0]
+				for j := 0; j <= i; j++ {
+					kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
+					var s float64
+					for h := range idxHeads {
+						base := h * idxDim
+						var dot float64
+						for d := range idxDim {
+							dot += qir[base+d] * kjr[base+d]
+						}
+						if dot > 0 {
+							s += w[h] * dot
+						}
+					}
+					rank = append(rank, ranked{j, s})
+				}
+				sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
+				setIdx = setIdx[:0]
+				sel[i] = true
+				setIdx = append(setIdx, i)
+				cnt := 1
+				for ri := 0; ri < len(rank) && cnt < topK; ri++ {
+					if j := rank[ri].j; !sel[j] {
+						sel[j] = true
+						setIdx = append(setIdx, j)
+						cnt++
+					}
+				}
+				for h := range heads {
+					off := h * dk
+					qr := qs[i*dm+off : i*dm+off+dk]
+					attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return sel[j] })
+				}
+				for _, j := range setIdx {
+					sel[j] = false
+				}
+			}
+		})
+		return out, nil
+	}
+	// Same per-query independence as the fast path; each worker owns scores/qrow.
+	parallelRows(seq, seq*dm, func(lo, hi int) {
+		scores := make([]float64, seq)
+		qrow := make([]float64, dk)
+		for i := lo; i < hi; i++ {
+			var rank []ranked
 			for j := 0; j <= i; j++ {
-				kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
 				var s float64
 				for h := range idxHeads {
-					base := h * idxDim
 					var dot float64
 					for d := range idxDim {
-						dot += qir[base+d] * kjr[base+d]
+						dot += qIdx.AtF64(i, h*idxDim+d) * kIdx.AtF64(j, h*idxDim+d)
 					}
-					if dot > 0 {
+					if dot > 0 { // ReLU
 						s += w[h] * dot
 					}
 				}
 				rank = append(rank, ranked{j, s})
 			}
 			sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
-			setIdx = setIdx[:0]
-			sel[i] = true
-			setIdx = append(setIdx, i)
-			cnt := 1
-			for ri := 0; ri < len(rank) && cnt < topK; ri++ {
-				if j := rank[ri].j; !sel[j] {
-					sel[j] = true
-					setIdx = append(setIdx, j)
-					cnt++
-				}
+			selected := map[int]bool{i: true} // the query itself is always attended
+			for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
+				selected[rank[ri].j] = true
 			}
 			for h := range heads {
 				off := h * dk
-				qr := qs[i*dm+off : i*dm+off+dk]
-				attendMask(qr, k, v, out, i, off, dk, scale, scores, func(j int) bool { return sel[j] })
-			}
-			for _, j := range setIdx {
-				sel[j] = false
-			}
-		}
-		return out, nil
-	}
-	for i := range seq {
-		var rank []ranked
-		for j := 0; j <= i; j++ {
-			var s float64
-			for h := range idxHeads {
-				var dot float64
-				for d := range idxDim {
-					dot += qIdx.AtF64(i, h*idxDim+d) * kIdx.AtF64(j, h*idxDim+d)
+				for d := range dk {
+					qrow[d] = q.AtF64(i, off+d)
 				}
-				if dot > 0 { // ReLU
-					s += w[h] * dot
-				}
+				attendMask(qrow, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
 			}
-			rank = append(rank, ranked{j, s})
 		}
-		sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
-		selected := map[int]bool{i: true} // the query itself is always attended
-		for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
-			selected[rank[ri].j] = true
-		}
-		for h := range heads {
-			off := h * dk
-			for d := range dk {
-				qrow[d] = q.AtF64(i, off+d)
-			}
-			attendMask(qrow, k, v, out, i, off, dk, scale, scores, func(j int) bool { return selected[j] })
-		}
-	}
+	})
 	return out, nil
 }
