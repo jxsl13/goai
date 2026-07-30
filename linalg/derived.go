@@ -111,6 +111,20 @@ func NormFro(a *tensor.Tensor) (float64, error) {
 		return 0, err
 	}
 	var s float64
+	// AtF64 is not inlinable — it is a real call plus a storage type switch, against a
+	// three-cycle add chain — so on the contiguous F64 path it dominates this loop. Same
+	// (i,j) traversal, same accumulation sequence into s, so bit-identical; flatRowMajor
+	// rejects strided, offset, non-F64 and non-rank-2 inputs, which keep the accessor arm.
+	if d, ok := flatRowMajor(a); ok {
+		for i := range m {
+			row := d[i*n : i*n+n : i*n+n]
+			for j := range n {
+				v := row[j]
+				s += v * v
+			}
+		}
+		return math.Sqrt(s), nil
+	}
 	for i := range m {
 		for j := range n {
 			v := a.AtF64(i, j)
@@ -146,6 +160,22 @@ func NormInf(a *tensor.Tensor) (float64, error) {
 		return 0, err
 	}
 	best := 0.0
+	// Row sums are already the row-major traversal, so only the accessor changes. Each row
+	// accumulates its elements in the same ascending-j order, and the comparison sequence
+	// over i is unchanged, so the result is bit-identical.
+	if d, ok := flatRowMajor(a); ok {
+		for i := range m {
+			row := d[i*n : i*n+n : i*n+n]
+			var r float64
+			for j := range n {
+				r += math.Abs(row[j])
+			}
+			if r > best {
+				best = r
+			}
+		}
+		return best, nil
+	}
 	for i := range m {
 		var r float64
 		for j := range n {

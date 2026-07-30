@@ -29,9 +29,12 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 	}
 	// one-sided Jacobi on the columns of a working copy; V accumulates the right rotations.
 	col := toColMajor(a, m, n)
+	// Same one-backing-array treatment as toColMajor: n row views over a single n*n buffer
+	// instead of n allocations. Values and traversal are untouched.
+	vbuf := make([]float64, n*n)
 	vmat := make([][]float64, n)
 	for i := range n {
-		vmat[i] = make([]float64, n)
+		vmat[i] = vbuf[i*n : (i+1)*n : (i+1)*n]
 		vmat[i][i] = 1
 	}
 	const tol = 1e-14
@@ -149,11 +152,28 @@ func transposeT(a *tensor.Tensor, m, n int) *tensor.Tensor {
 // slices — the cache-locality win for tall (m≫n) matrices. Same values as toRect, just
 // transposed, so the k-accumulation order and every float64 result are bit-identical.
 func toColMajor(a *tensor.Tensor, m, n int) [][]float64 {
+	// One backing array carved into n column views rather than n separate allocations. The
+	// [][]float64 type and every downstream index are unchanged; only the addresses move, so
+	// this is bit-identical. Three-index slices cap each column so an accidental append can
+	// never reach into the next one.
+	buf := make([]float64, n*m)
 	c := make([][]float64, n)
 	for j := range n {
-		c[j] = make([]float64, m)
+		c[j] = buf[j*m : (j+1)*m : (j+1)*m]
+	}
+	if d, ok := flatRowMajor(a); ok {
+		for j := range n {
+			cj := c[j]
+			for k := range m {
+				cj[k] = d[k*n+j]
+			}
+		}
+		return c
+	}
+	for j := range n {
+		cj := c[j]
 		for k := range m {
-			c[j][k] = a.AtF64(k, j)
+			cj[k] = a.AtF64(k, j)
 		}
 	}
 	return c
