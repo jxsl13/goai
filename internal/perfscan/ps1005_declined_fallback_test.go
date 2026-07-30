@@ -208,3 +208,124 @@ func convert(t *T, dim, n int) *T {
 			"an accessor walk a fallback arm", len(fs))
 	}
 }
+
+// TestPS1005SilentOnEarlyReturnFastPath pins the EARLY-RETURN spelling of a declined arm.
+//
+// linalg does not write `if fast { } else { }`; it writes `if d, ok := flatRowMajor(a); ok { ...;
+// return }` and lets the accessor loop follow at function level. That is the same construct, and a
+// suppression keyed only on IfStmt.Else misses all of it — NormFro, Norm1, Cholesky's symmetry
+// check, qr toFlat and svd's column gather are five instances in one package. NormFro was the
+// top-ranked non-contested finding in a weighted profile intersection, and it was already fixed.
+func TestPS1005SilentOnEarlyReturnFastPath(t *testing.T) {
+	src := `package p
+
+func norm(a *T, m, n int) float64 {
+	var s float64
+	if d, ok := flatRowMajor(a); ok {
+		s = d[0]
+		return s
+	}
+	for i := range m {
+		for j := range n {
+			s += a.AtF64(i, j)
+		}
+	}
+	return s
+}`
+	if fs := manualWalkFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the guard returns, so the loop after it is the declined arm:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
+
+// TestPS1005ReportsWalkBeforeTheGuard is the ORDER floor. Only code AFTER a terminating guard is
+// declined; a walk that runs before it is on the common path and is a real finding.
+func TestPS1005ReportsWalkBeforeTheGuard(t *testing.T) {
+	src := `package p
+
+func f(a *T, m, n int) float64 {
+	var s float64
+	for i := range m {
+		for j := range n {
+			s += a.AtF64(i, j)
+		}
+	}
+	if d, ok := flatRowMajor(a); ok {
+		return d[0]
+	}
+	return s
+}`
+	if fs := manualWalkFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the walk precedes the guard and always runs", len(fs))
+	}
+}
+
+// TestPS1005ReportsWhenGuardDoesNotReturn is the TERMINATION floor, and it is the one that keeps
+// this suppression honest. Without the return both the fast path and the loop execute, so the loop
+// is not a fallback for anything — it is the common path with a fast path bolted in front of it.
+func TestPS1005ReportsWhenGuardDoesNotReturn(t *testing.T) {
+	src := `package p
+
+func f(a *T, m, n int) float64 {
+	var s float64
+	if d, ok := flatRowMajor(a); ok {
+		s = d[0]
+	}
+	for i := range m {
+		for j := range n {
+			s += a.AtF64(i, j)
+		}
+	}
+	return s
+}`
+	if fs := manualWalkFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — control falls through the guard, so the loop always runs", len(fs))
+	}
+}
+
+// TestPS1005ReportsWhenGuardIsNotAFastPath keeps the suppression tied to an actual typed view. An
+// early return on an unrelated condition declines nothing.
+func TestPS1005ReportsWhenGuardIsNotAFastPath(t *testing.T) {
+	src := `package p
+
+func f(a *T, m, n int, quick bool) float64 {
+	var s float64
+	if quick {
+		return 0
+	}
+	for i := range m {
+		for j := range n {
+			s += a.AtF64(i, j)
+		}
+	}
+	return s
+}`
+	if fs := manualWalkFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the guard reaches no typed view, so nothing is declined", len(fs))
+	}
+}
+
+// TestPS1005SilentOnFastPathHelperInElseArm pins the helper-name half. The fast path need not be a
+// literal Storage().F64(): perfscan.json already lists flatRowMajor, flatF64, flatF32 and friends in
+// fastPathHelpers, and the suppression has to honor the same list the rest of the tool does.
+func TestPS1005SilentOnFastPathHelperInElseArm(t *testing.T) {
+	src := `package p
+
+func f(a *T, m, n int) float64 {
+	var s float64
+	if d, ok := flatRowMajor(a); ok {
+		s = d[0]
+	} else {
+		for i := range m {
+			for j := range n {
+				s += a.AtF64(i, j)
+			}
+		}
+	}
+	return s
+}`
+	if fs := manualWalkFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — flatRowMajor is a configured fast-path helper:\n%s",
+			len(fs), fs[0].msg)
+	}
+}

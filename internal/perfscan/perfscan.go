@@ -1428,7 +1428,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// The advice below prescribes "keeping the accessor as the exotic-dtype fallback",
 			// so an already-converted site still contains, by construction, the very loop this
 			// arm matches. Reporting it re-files the applied fix as the defect, forever.
-			if loopArgs >= 2 && !inDeclinedTypedFallback(parent, call) {
+			if loopArgs >= 2 && !inDeclinedTypedFallback(parent, call, ns) {
 				out = append(out, finding{
 					pos:      fset.Position(loop.Pos()),
 					category: "manual-walk-dispatch",
@@ -7654,21 +7654,29 @@ func clauseReadsTypedStorage(cc *ast.CaseClause) bool { return readsTypedStorage
 // wrong: nlp jlens builds a typed DESTINATION slice and then walks a DIFFERENT, provably non-F64
 // source by accessor inside the same function. That walk is not a fallback, and the identity fill
 // a few lines below it is a genuine site the coarse rule would have swallowed with it.
-func inDeclinedTypedFallback(parent map[ast.Node]ast.Node, n ast.Node) bool {
+func inDeclinedTypedFallback(parent map[ast.Node]ast.Node, n ast.Node, ns nameSets) bool {
 	for cur := n; cur != nil; cur = parent[cur] {
 		switch s := parent[cur].(type) {
 		case *ast.IfStmt:
 			// Only the ELSE side is inert. The taken side is the fast path itself, and an
 			// accessor loop there would be a real finding.
-			if s.Else == cur && (readsTypedStorage(s.Body) ||
-				(s.Init != nil && readsTypedStorage(s.Init)) ||
-				(s.Cond != nil && readsTypedStorage(s.Cond))) {
+			if s.Else == cur && (reachesFastPath(s.Body, ns) ||
+				(s.Init != nil && reachesFastPath(s.Init, ns)) ||
+				(s.Cond != nil && reachesFastPath(s.Cond, ns))) {
 				return true
 			}
 		case *ast.CaseClause:
 			// A default clause carries no expression list; a converted sibling is any other
 			// clause that reaches typed storage.
-			if len(s.List) == 0 && switchHasConvertedClause(parent, s) {
+			if len(s.List) == 0 && switchHasConvertedClause(parent, s, ns) {
+				return true
+			}
+		case *ast.BlockStmt:
+			// EARLY-RETURN SPELLING. `if fast { ...; return }` followed by the accessor loop at
+			// function level is the same construct as if/else — linalg NormFro is written this
+			// way — and keying only on Else misses it. The guard has to TERMINATE for the tail to
+			// be a fallback: without the return both run, and the loop is on the common path.
+			if precededByTerminatingFastPath(s, cur, ns) {
 				return true
 			}
 		}
@@ -7676,9 +7684,74 @@ func inDeclinedTypedFallback(parent map[ast.Node]ast.Node, n ast.Node) bool {
 	return false
 }
 
+// precededByTerminatingFastPath reports whether some statement before target in block is an
+// else-less `if <fast path> { ...; return }`, which makes everything after it the declined arm.
+func precededByTerminatingFastPath(block *ast.BlockStmt, target ast.Node, ns nameSets) bool {
+	for _, st := range block.List {
+		if st == target {
+			return false // reached the loop without passing a terminating guard
+		}
+		ifs, ok := st.(*ast.IfStmt)
+		if !ok || ifs.Else != nil || !blockTerminates(ifs.Body) {
+			continue
+		}
+		if reachesFastPath(ifs.Body, ns) ||
+			(ifs.Init != nil && reachesFastPath(ifs.Init, ns)) ||
+			(ifs.Cond != nil && reachesFastPath(ifs.Cond, ns)) {
+			return true
+		}
+	}
+	return false
+}
+
+// blockTerminates reports whether b ends in a return or a branch, so control cannot fall through
+// to the statements after the guard.
+func blockTerminates(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	switch b.List[len(b.List)-1].(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	}
+	return false
+}
+
+// reachesFastPath reports whether a subtree acquires a contiguous typed view, either directly via
+// Storage().<Typed>() or through one of the package's configured fast-path helpers. NormFro's guard
+// is `if d, ok := flatRowMajor(a); ok`, and flatRowMajor is already in fastPathHelpers — the
+// config knew about it before this suppression did.
+func reachesFastPath(root ast.Node, ns nameSets) bool {
+	if readsTypedStorage(root) {
+		return true
+	}
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if ns.fastPath[fn.Name] {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if ns.fastPath[fn.Sel.Name] {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
 // switchHasConvertedClause reports whether the switch owning def has some OTHER, non-default clause
 // that reaches typed storage — the sibling that makes def the declined arm.
-func switchHasConvertedClause(parent map[ast.Node]ast.Node, def *ast.CaseClause) bool {
+func switchHasConvertedClause(parent map[ast.Node]ast.Node, def *ast.CaseClause, ns nameSets) bool {
 	// The parent map is built from the walk stack, so a BlockStmt sits between the switch and
 	// its clauses; walk up until the switch itself appears.
 	var body *ast.BlockStmt
@@ -7703,7 +7776,7 @@ func switchHasConvertedClause(parent map[ast.Node]ast.Node, def *ast.CaseClause)
 		if !ok || cc == def || len(cc.List) == 0 {
 			continue
 		}
-		if readsTypedStorage(cc) {
+		if reachesFastPath(cc, ns) {
 			return true
 		}
 	}
