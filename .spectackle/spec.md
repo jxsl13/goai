@@ -605,3 +605,8 @@ Rationale: Which of QuantDeepSeekV2 two per-head loops runs is decided by the lo
 WHEN an allocation profile is taken to find an optimization target, the implementing agent SHALL read it on BOTH sample_index=alloc_objects and alloc_space, because few-and-large allocation sites never surface in a count profile and many-and-small ones never surface in a byte profile.
 
 Rationale: Nine iterations of this sweep profiled alloc_objects only. One alloc_space profile put nlp rows2D at 206MB, about 38 percent of a prefill per-op footprint, having never appeared near the top of a count profile because it allocates one slice per row - few, large allocations. Consolidating them cut allocations 25 percent and bytes 3.4 percent. The two axes rank sites differently and asking for only one leaves a blind spot the size of the other.
+
+## PROC-PROFILE-ONETIME-VS-PERROUND-001
+WHEN a profile aggregated over benchmark iterations shows a large allocation site, the implementing agent SHALL read the call site to establish whether the cost is per-iteration setup or per-round work before proposing reuse, because a benchmark that constructs a fresh object each iteration makes a one-time cost look recurring.
+
+Rationale: An alloc_space profile of a GBM fit ranked newGBMBuilder first at 53% of bytes and subsampleIdx second at 31%. newGBMBuilder is a one-time presort already hoisted outside the boosting loop, so there was no reuse to exploit - it looked recurring only because the benchmark builds a fresh model per iteration and the profile aggregates over iterations. subsampleIdx, ranked lower, is genuinely called once per round and yielded up to 55% fewer bytes. The profile ranking inverted the actionability ranking.
