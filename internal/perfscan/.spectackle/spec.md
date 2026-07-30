@@ -65,3 +65,8 @@ Rationale: PS1007 case (b) was measured on a single-row rank-1 update (linalg QR
 WHEN a defect class has been hit more than once and is about to be reasoned about from first principles, the implementing agent SHALL run the scanner for an existing check reporting that class first, since PS6023 had already flagged the stale threshold that was later re-derived by hand.
 
 Rationale: matmulInlineWork appeared in PS6023 output as gemm.go:95 throughout the session while four thresholds went stale. It was found instead by reasoning about which constants the GEMM work invalidated, and the re-sweep then measured +37.26% at the gate value. The tool was right and unread.
+
+## PERF-ALLOC-CONSOLIDATION-MOVES-TIME-WHEN-THE-BODY-IS-CHEAP-001
+IF a per-iteration allocation is consolidated into a slab or a pool and the expectation is set from a prior site, THEN the implementing agent SHALL set it from the body work per allocation instead: per-row allocation can move the clock, per-worker cannot, and the same transform measured minus 11 percent at one width and nothing at four times that width.
+
+Rationale: PS2008 said EXPECT NO SPEEDUP on two sites where the loop body was substantial. GMM PredictProba output rows broke that: -11.17% at k=4, -7.30% at k=8, yet indistinguishable at d=16, 32 and 64 within the same function, where the density evaluation dominates. Pooling that functions per-WORKER scratch in the same file moved allocs -63% and time -0.61% geomean. Resource win always, throughput win only when the allocation is a real fraction of the per-iteration work.
