@@ -5596,3 +5596,47 @@ func f(a []float64, b [][]float64, out []float64, n int) {
 		t.Fatalf("want 0 when the inner loop calls a transcendental, got %d", got)
 	}
 }
+
+// FLOOR: a body with more than one scalar float accumulator is not the single-accumulator
+// reload shape this check targets. Either the operand already feeds several accumulators — which
+// IS the recommended transform, so recommending it again multiplies code paths, the hazard
+// PS6019 reports — or the accumulators consume it differently and there is nothing invariant to
+// amortize. Both surviving false positives were one of those two.
+//
+// THE STRIDE MUST BE 1 HERE. A first version of this test used j += 4, which the pre-existing
+// stride exclusion already covers, so it passed without the accumulator clause and stayed green
+// when that clause was removed — a vacuous floor.
+func TestDetectPS6010_SilentOnMultipleAccumulators(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, ks []float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var sk, sv float64
+		for k := 0; k < n; k++ {
+			sk += b[k][j] * a[k]
+			sv += b[k][j] * ks[k]
+		}
+		out[j] = sk + sv
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 for a multi-accumulator body, got %d", got)
+	}
+}
+
+// RECALL FLOOR for the same clause: ONE accumulator is the unblocked shape the check is for,
+// and must still fire. Without this, tightening the accumulator count to zero would look fine.
+func TestDetectPS6010_SingleAccumulatorStillFires(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var t0 float64
+		for k := 0; k < n; k++ {
+			t0 += b[k][j] * a[k]
+		}
+		out[j] = t0
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 for a single-accumulator body, got %d", got)
+	}
+}

@@ -5649,6 +5649,30 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		if f, isFor := n.(*ast.ForStmt); isFor && stridesByMoreThanOne(f.Post) {
 			return true
 		}
+		// A body declaring MORE THAN ONE scalar float accumulator is not the
+		// single-accumulator reload shape this check targets. Either the operand already feeds
+		// several accumulators — which IS the recommended transform, so recommending it again
+		// multiplies code paths, the hazard PS6019 reports — or the accumulators consume it
+		// differently and nothing invariant is left to amortize. The two surviving false
+		// positives are one of each: a NEON kernel tail already feeding t0..t3 from one load,
+		// and a site whose two accumulators read the same operand through different indices.
+		//
+		// COUNTED AGAINST THE SURVIVORS, not the original population
+		// (PROC-RECOUNT-AFTER-FILTERING-001). Against the pre-filter 65 hits this shape
+		// appeared 3 times; against the 46 that survive the non-trivial-call exclusion it
+		// appears twice, because one of the three was already removed there. Those two are
+		// EXACTLY the two false positives left in the population: a NEON kernel's own
+		// commented scalar column tail already feeding t0..t3 from one load, and a site where
+		// the sole operand is booked as both shared and per-output because the index goes
+		// through a variable. So this takes the check from 44 genuine of 46 to 44 of 44 —
+		// zero genuine sites lost.
+		//
+		// The existing stride exclusion cannot reach either, because it inspects only the
+		// flagged loop's own post statement, and in both cases the blocking lives on an
+		// ENCLOSING loop or in the body's accumulator set rather than in this loop's stride.
+		if len(scalarAccumulators(outBody)) > 1 {
+			return true
+		}
 		// Everything reachable from the output index, transitively: `rowBits :=
 		// weight[ni*rowBytes:]` then `q := rowBits[o:]` makes q output-dependent even
 		// though it never mentions ni. Without the closure the shared operand cannot be
