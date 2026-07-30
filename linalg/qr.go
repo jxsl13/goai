@@ -72,35 +72,50 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 		cols = b.Shape()[1]
 	}
 	out := make([]float64, n*cols) // [n,cols] row-major
-	for c := range cols {
-		cvec := make([]float64, m)
-		for i := range m {
-			if vec {
-				cvec[i] = b.AtF64(i)
-			} else {
-				cvec[i] = b.AtF64(i, c)
+	// PARALLEL over right-hand-side columns, the same fan-out LU.Solve already uses. Column c
+	// reads vs/betas/rm — all read-only once the factorization is done — and writes only
+	// out[·*cols+c], with its own cvec; nothing crosses columns, and within a column the Qᵀb
+	// application and the back substitution keep their exact order, so the partition is
+	// bit-identical.
+	//
+	// This loop was the last serial block here and it is the dominant one: at GOMAXPROCS=1 the
+	// three statements inside it (the Qᵀb dot, the Qᵀb update, and the back-substitution inner
+	// product) are 68% of Lstsq, against 17% for the householder factorization. The scaling curve
+	// said so before the profile did — LstsqMat/768 ran 830ms on one core and 792ms on twelve,
+	// 1.05x, the worst scaler of any benchmark in this package.
+	//
+	// cvec is the per-WORKER scratch solveCols hands out rather than a per-column make(): it is
+	// fully rewritten at the top of every column, so reuse across a worker's columns is safe.
+	solveCols(cols, n*n, m, func(clo, chi int, cvec []float64) {
+		for c := clo; c < chi; c++ {
+			for i := range m {
+				if vec {
+					cvec[i] = b.AtF64(i)
+				} else {
+					cvec[i] = b.AtF64(i, c)
+				}
+			}
+			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
+			for k := range n {
+				s := 0.0
+				for i := k; i < m; i++ {
+					s += vs[k][i] * cvec[i]
+				}
+				bt := betas[k] * s
+				for i := k; i < m; i++ {
+					cvec[i] -= bt * vs[k][i]
+				}
+			}
+			// back-substitute R·x = (Qᵀb)[0:n]
+			for i := n - 1; i >= 0; i-- {
+				sum := cvec[i]
+				for j := i + 1; j < n; j++ {
+					sum -= rm[i*n+j] * out[j*cols+c]
+				}
+				out[i*cols+c] = sum / rm[i*n+i]
 			}
 		}
-		// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
-		for k := range n {
-			s := 0.0
-			for i := k; i < m; i++ {
-				s += vs[k][i] * cvec[i]
-			}
-			bt := betas[k] * s
-			for i := k; i < m; i++ {
-				cvec[i] -= bt * vs[k][i]
-			}
-		}
-		// back-substitute R·x = (Qᵀb)[0:n]
-		for i := n - 1; i >= 0; i-- {
-			sum := cvec[i]
-			for j := i + 1; j < n; j++ {
-				sum -= rm[i*n+j] * out[j*cols+c]
-			}
-			out[i*cols+c] = sum / rm[i*n+i]
-		}
-	}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}

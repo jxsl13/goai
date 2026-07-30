@@ -80,3 +80,66 @@ func TestSolveColsParallelArmIsReached(t *testing.T) {
 		}
 	}
 }
+
+// TestLstsqParallelArmIsReached is the gate for the Lstsq column fan-out, which had none — and the
+// absence was total: sharing one cvec across workers, the race the per-worker scratch exists to
+// prevent, was caught by NO test and reported ZERO data races.
+//
+// The race detector was silent for a specific reason worth recording: it only reports races it
+// actually observes, and no existing Lstsq test reaches solveCols' parallel arm. That arm needs
+// cols·n² to clear solveColsThreshold, and the correctness tests in this package use matrices of a
+// handful of rows, so every one of them runs the serial branch. A fan-out with a genuine race can
+// therefore sit under a green suite AND a green race detector.
+//
+// The geometry below is derived from the threshold rather than guessed, and the guard fails loudly
+// if it stops clearing it. Both arms are the same source selected by GOMAXPROCS.
+func TestLstsqParallelArmIsReached(t *testing.T) {
+	if runtime.NumCPU() < 2 {
+		t.Skip("single-CPU host: solveCols cannot take its parallel branch")
+	}
+	const n = 48
+	cols := solveColsThreshold/(n*n) + 2
+	if cols < 2 {
+		cols = 2
+	}
+	if cols*n*n < solveColsThreshold {
+		t.Fatalf("geometry no longer reaches the parallel arm: cols=%d n=%d gives %d, gate %d",
+			cols, n, cols*n*n, solveColsThreshold)
+	}
+
+	rng := rand.New(rand.NewPCG(19, 23))
+	ad := make([]float64, n*n)
+	for i := range ad {
+		ad[i] = rng.NormFloat64()
+	}
+	for i := range n {
+		ad[i*n+i] += float64(n) // well conditioned, so R has no zero on its diagonal
+	}
+	a := tensor.FromFloat64(tensor.Shape{n, n}, ad)
+	bd := make([]float64, n*cols)
+	for i := range bd {
+		bd[i] = rng.NormFloat64()
+	}
+	b := tensor.FromFloat64(tensor.Shape{n, cols}, bd)
+
+	prev := runtime.GOMAXPROCS(1)
+	serial, err := Lstsq(a, b)
+	runtime.GOMAXPROCS(prev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	par, err := Lstsq(a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss, ps := serial.Storage().F64(), par.Storage().F64()
+	if len(ss) != len(ps) {
+		t.Fatalf("%d values serial, %d parallel", len(ss), len(ps))
+	}
+	for i := range ss {
+		if math.Float64bits(ss[i]) != math.Float64bits(ps[i]) {
+			t.Fatalf("value %d: serial %016x != parallel %016x — the column partition moved a bit",
+				i, math.Float64bits(ss[i]), math.Float64bits(ps[i]))
+		}
+	}
+}
