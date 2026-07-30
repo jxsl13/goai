@@ -31,28 +31,57 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 	// thus the per-head max, possibly its argmax) by ~1 ulp vs the ascending-d AtF64
 	// fallback below — well within the QK-clip tests' 1e-9/1e-12 gates.
 	if qs, ks := flatF64(q), flatF64(k); qs != nil && ks != nil {
-		for h := range heads {
+		// Heads are independent: each head computes the scalar out[h] over its own q/k column
+		// slice (shared read-only) with only local scratch, so the head loop fans out over
+		// GOMAXPROCS bit-identically to the serial fast path. Gated on heads·sq·sk·dk.
+		parallelRows(heads, sq*sk*dk, func(hlo, hhi int) {
+			for h := hlo; h < hhi; h++ {
+				m := math.Inf(-1)
+				off := h * dk
+				for i := range sq {
+					qrow := qs[i*dm+off : i*dm+off+dk : i*dm+off+dk]
+					jmax := sk
+					if causal && i+1 < sk {
+						jmax = i + 1
+					}
+					for j := range jmax {
+						krow := ks[j*dm2+off : j*dm2+off+dk : j*dm2+off+dk]
+						var s0, s1, s2, s3 float64
+						d := 0
+						for ; d+4 <= dk; d += 4 {
+							s0 += qrow[d] * krow[d]
+							s1 += qrow[d+1] * krow[d+1]
+							s2 += qrow[d+2] * krow[d+2]
+							s3 += qrow[d+3] * krow[d+3]
+						}
+						s := s0 + s1 + s2 + s3
+						for ; d < dk; d++ {
+							s += qrow[d] * krow[d]
+						}
+						if s*scale > m {
+							m = s * scale
+						}
+					}
+				}
+				out[h] = m
+			}
+		})
+		return out, nil
+	}
+	// Same per-head independence as the fast path.
+	parallelRows(heads, sq*sk*dk, func(hlo, hhi int) {
+		for h := hlo; h < hhi; h++ {
 			m := math.Inf(-1)
 			off := h * dk
 			for i := range sq {
-				qrow := qs[i*dm+off : i*dm+off+dk : i*dm+off+dk]
 				jmax := sk
 				if causal && i+1 < sk {
 					jmax = i + 1
 				}
 				for j := range jmax {
-					krow := ks[j*dm2+off : j*dm2+off+dk : j*dm2+off+dk]
-					var s0, s1, s2, s3 float64
-					d := 0
-					for ; d+4 <= dk; d += 4 {
-						s0 += qrow[d] * krow[d]
-						s1 += qrow[d+1] * krow[d+1]
-						s2 += qrow[d+2] * krow[d+2]
-						s3 += qrow[d+3] * krow[d+3]
-					}
-					s := s0 + s1 + s2 + s3
-					for ; d < dk; d++ {
-						s += qrow[d] * krow[d]
+					var s float64
+					for d := range dk {
+						s += q.AtF64(i, off+d) * k.AtF64(j, off+d)
 					}
 					if s*scale > m {
 						m = s * scale
@@ -61,28 +90,7 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 			}
 			out[h] = m
 		}
-		return out, nil
-	}
-	for h := range heads {
-		m := math.Inf(-1)
-		off := h * dk
-		for i := range sq {
-			jmax := sk
-			if causal && i+1 < sk {
-				jmax = i + 1
-			}
-			for j := range jmax {
-				var s float64
-				for d := range dk {
-					s += q.AtF64(i, off+d) * k.AtF64(j, off+d)
-				}
-				if s*scale > m {
-					m = s * scale
-				}
-			}
-		}
-		out[h] = m
-	}
+	})
 	return out, nil
 }
 

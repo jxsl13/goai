@@ -42,17 +42,12 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		scale = 1 / math.Sqrt(float64(dk))
 	}
 	out := tensor.New(q.Dtype(), q.Shape())
-	scores := make([]float64, seq)
-	act := make([]int, 0, seq)  // active (unmasked) key indices, reused by attendMask
-	qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (query,head) for attendMask
 	// The rank slice, the selected-set map and one closure PER HEAD were all allocated
 	// inside the query loop. Sizes are loop-invariant, so allocate once and reset.
-	keepBuf := make([]bool, seq)
 	type ranked struct {
 		j int
 		s float64
 	}
-	rankBuf := make([]ranked, seq)
 	// F64 fast path: the lightning-indexer ranking scores qIdx·kIdx per (i,j) with a double
 	// AtF64 dispatch over O(seq²·idxHeads·idxDim) — the main attention (attendMask) is already
 	// typed, so this ranking dispatch is now the dominant cost. Walk the index rows contiguously
@@ -63,22 +58,103 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		// Hoisted scratch: a reused rank slice (no per-query realloc growth) and a []bool
 		// membership set (no per-query map alloc + hashing). Both are cleared between
 		// queries, so the selected set, sort order and attention math are IDENTICAL.
-		rank := make([]ranked, 0, seq)
-		sel := make([]bool, seq)
-		var setIdx []int
-		for i := range seq {
-			qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
-			rank = rank[:0]
+		// PARALLEL over QUERIES, with every per-query buffer owned by the worker. Query i writes
+		// only out[i, :] and reads keys/values at indices <= i, so the queries are independent and
+		// the partition runs each one's exact serial computation — bit-identical, including the
+		// total-order rank sort below whose tie-break makes the attended set a property of the
+		// input rather than of the sort. The buffers were hoisted out of the query loop to remove
+		// the per-query rank slice, selected-set map and per-head closure; at function scope they
+		// would be shared across workers and race, so they move in here and cost one set per
+		// worker instead of one per query.
+		parallelRows(seq, seq*dm, func(ilo, ihi int) {
+			scores := make([]float64, seq)
+			act := make([]int, 0, seq)
+			rank := make([]ranked, 0, seq)
+			sel := make([]bool, seq)
+			var setIdx []int
+			for i := ilo; i < ihi; i++ {
+				qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
+				rank = rank[:0]
+				for j := 0; j <= i; j++ {
+					kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
+					var s float64
+					for h := range idxHeads {
+						base := h * idxDim
+						var dot float64
+						for d := range idxDim {
+							dot += qir[base+d] * kjr[base+d]
+						}
+						if dot > 0 {
+							s += w[h] * dot
+						}
+					}
+					rank = append(rank, ranked{j, s})
+				}
+				slices.SortFunc(rank, func(x, y ranked) int {
+					// TOTAL order: score descending, then index ascending. Ranking on score alone
+					// leaves ties in whatever order the sort happens to produce, and that order
+					// decides WHICH keys are attended. DSA's indexer scores are ReLU'd dot
+					// products, so they tie at exactly zero routinely — this is ordinary input,
+					// not a corner case. Tie-breaking by index makes the attended set a property
+					// of the input rather than of the sort implementation.
+					//
+					// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
+					// reflectlite.Swapper and ALLOCATES on every call (PS6009), once per query.
+					switch {
+					case x.s > y.s:
+						return -1
+					case x.s < y.s:
+						return 1
+					}
+					return x.j - y.j
+				})
+				setIdx = setIdx[:0]
+				sel[i] = true
+				setIdx = append(setIdx, i)
+				cnt := 1
+				for ri := 0; ri < len(rank) && cnt < topK; ri++ {
+					if j := rank[ri].j; !sel[j] {
+						sel[j] = true
+						setIdx = append(setIdx, j)
+						cnt++
+					}
+				}
+				for h := range heads {
+					off := h * dk
+					qr := qs[i*dm+off : i*dm+off+dk]
+					attendMask(qr, k, v, out, i, off, dk, scale, scores, act, sel)
+				}
+				for _, j := range setIdx {
+					sel[j] = false
+				}
+			}
+		})
+		return out, nil
+	}
+	// PARALLEL over QUERIES, with every per-query buffer owned by the worker. Query i writes
+	// only out[i, :] and reads keys/values at indices <= i, so the queries are independent and
+	// the partition runs each one's exact serial computation — bit-identical, including the
+	// total-order rank sort below whose tie-break makes the attended set a property of the
+	// input rather than of the sort. The buffers were hoisted out of the query loop to remove
+	// the per-query rank slice, selected-set map and per-head closure; at function scope they
+	// would be shared across workers and race, so they move in here and cost one set per
+	// worker instead of one per query.
+	parallelRows(seq, seq*dm, func(ilo, ihi int) {
+		scores := make([]float64, seq)
+		act := make([]int, 0, seq)
+		qrow := make([]float64, dk)
+		keepBuf := make([]bool, seq)
+		rankBuf := make([]ranked, 0, seq)
+		for i := ilo; i < ihi; i++ {
+			rank := rankBuf[:0]
 			for j := 0; j <= i; j++ {
-				kjr := kis[j*idxWidth : j*idxWidth+idxWidth : j*idxWidth+idxWidth]
 				var s float64
 				for h := range idxHeads {
-					base := h * idxDim
 					var dot float64
 					for d := range idxDim {
-						dot += qir[base+d] * kjr[base+d]
+						dot += qIdx.AtF64(i, h*idxDim+d) * kIdx.AtF64(j, h*idxDim+d)
 					}
-					if dot > 0 {
+					if dot > 0 { // ReLU
 						s += w[h] * dot
 					}
 				}
@@ -102,79 +178,25 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 				}
 				return x.j - y.j
 			})
-			setIdx = setIdx[:0]
-			sel[i] = true
-			setIdx = append(setIdx, i)
-			cnt := 1
-			for ri := 0; ri < len(rank) && cnt < topK; ri++ {
-				if j := rank[ri].j; !sel[j] {
-					sel[j] = true
-					setIdx = append(setIdx, j)
-					cnt++
+			// A []bool rather than a map: attendMask takes the admission mask directly, so the
+			// generic arm mirrors the typed one above. Membership is all that is read.
+			clear(keepBuf)
+			keepBuf[i] = true // the query itself is always attended
+			nSel := 1
+			for ri := 0; ri < len(rank) && nSel < topK; ri++ {
+				if j := rank[ri].j; !keepBuf[j] {
+					keepBuf[j] = true
+					nSel++
 				}
 			}
 			for h := range heads {
 				off := h * dk
-				qr := qs[i*dm+off : i*dm+off+dk]
-				attendMask(qr, k, v, out, i, off, dk, scale, scores, act, sel)
-			}
-			for _, j := range setIdx {
-				sel[j] = false
-			}
-		}
-		return out, nil
-	}
-	for i := range seq {
-		rank := rankBuf[:0]
-		for j := 0; j <= i; j++ {
-			var s float64
-			for h := range idxHeads {
-				var dot float64
-				for d := range idxDim {
-					dot += qIdx.AtF64(i, h*idxDim+d) * kIdx.AtF64(j, h*idxDim+d)
+				for d := range dk {
+					qrow[d] = q.AtF64(i, off+d)
 				}
-				if dot > 0 { // ReLU
-					s += w[h] * dot
-				}
-			}
-			rank = append(rank, ranked{j, s})
-		}
-		slices.SortFunc(rank, func(x, y ranked) int {
-			// TOTAL order: score descending, then index ascending. Ranking on score alone
-			// leaves ties in whatever order the sort happens to produce, and that order
-			// decides WHICH keys are attended. DSA's indexer scores are ReLU'd dot
-			// products, so they tie at exactly zero routinely — this is ordinary input,
-			// not a corner case. Tie-breaking by index makes the attended set a property
-			// of the input rather than of the sort implementation.
-			//
-			// slices.SortFunc rather than sort.Slice: the latter reaches its swap through
-			// reflectlite.Swapper and ALLOCATES on every call (PS6009), once per query.
-			switch {
-			case x.s > y.s:
-				return -1
-			case x.s < y.s:
-				return 1
-			}
-			return x.j - y.j
-		})
-		// A []bool rather than a map: attendMask takes the admission mask directly, so the
-		// generic arm mirrors the typed one above. Membership is all that is read.
-		clear(keepBuf)
-		keepBuf[i] = true // the query itself is always attended
-		nSel := 1
-		for ri := 0; ri < len(rank) && nSel < topK; ri++ {
-			if j := rank[ri].j; !keepBuf[j] {
-				keepBuf[j] = true
-				nSel++
+				attendMask(qrow, k, v, out, i, off, dk, scale, scores, act, keepBuf)
 			}
 		}
-		for h := range heads {
-			off := h * dk
-			for d := range dk {
-				qrow[d] = q.AtF64(i, off+d)
-			}
-			attendMask(qrow, k, v, out, i, off, dk, scale, scores, act, keepBuf)
-		}
-	}
+	})
 	return out, nil
 }
