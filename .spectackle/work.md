@@ -1411,3 +1411,18 @@ ALLOCATIONS ARE THE HONEST COST. Each factorization opens one pooled region per 
 SINGLE-CORE IS PARITY OR BETTER EVERYWHERE, with IDENTICAL allocation counts at GOMAXPROCS=1 and on small inputs, because every serial branch is written out inline. That was not free - it is duplicated loop bodies - and it is what makes these changes qualify under the constraint that an optimization improve things across systems rather than only on a twelve-core host.
 
 NO PERFSCAN RULE for the factorization pattern. The shape - a sequential outer step whose inner update is independent - is real and recurred four times, but deciding independence requires knowing which array elements each iteration reads and writes, which is alias and dependence analysis rather than syntax. The tool that finds these is a GOMAXPROCS sweep followed by a profile, both already recorded as rules.
+
+## R-01KYR8FT2KEP0RNM3JF7H5QED8 Correction to the GBM rejection: the per-chunk gate failed because my CONSTANT was 12x too high, not because the criterion was wrong
+kind: research
+state: draft
+created: 2026-07-30
+
+SHARPENS R-01KYR494K5ESB, which rejected a per-chunk work gate for GBM feature fan-out after measuring it 1.88x slower on GBMFit and 1.20x slower on GBMHist_exact_80k. That record attributed the failure to the CRITERION being wrong - total work versus per-chunk work. A later profile shows the real cause, and it is more mundane and more useful.
+
+WHAT THE GATE ACTUALLY DID. It required d*n >= histParThreshold * workers, which at 1<<15 and 12 workers is 393216. With d=20 that means n >= 19661 samples per node. BenchmarkGBMFit uses n=2000 TOTAL, so every node fell below the bar and the gate disabled parallelism for the ENTIRE fit - hence 1.88x slower. GBMHist_exact_80k has 80000 rows, so only its deepest nodes were disabled, hence a milder 1.20x. The measurements were right; my reading of them was not.
+
+THE CRITERION IS NEARLY A NO-OP HERE, which is the actually useful finding. The existing gate is d*n >= 1<<15, so n >= 1638 at d=20. A per-chunk gate with a correctly scaled constant asks for about 2 features times n, landing within a factor of two of the same place. At these shapes the two framings are a distinction without a practical difference, so there was never much to win, and the existing constant is already well calibrated for this caller.
+
+WHAT THE PROFILE CONFIRMS. GBMHist_exact_80k spends 79 percent of CPU samples in pthread_cond_wait, cond_signal and usleep at 3.0x average parallelism - pprof reports that ratio directly as 300 percent of one core. Under PROC-PROFILE-PARALLEL-CONDVAR-001 that is about nine of twelve workers idling, which is what a 3x-parallel program looks like when sampled this way. GBM opens a region per tree node, roughly 750 for 50 estimators, so the barrier traffic is real - but measurement already established that REDUCING the region count makes it slower. The only remaining lever is a cheaper barrier, which means changing internal/parallel, shared with backend and outside my lane.
+
+NO ACTION on GBM. The correction matters because the original rejection would discourage a future per-chunk gate on principle, when the honest statement is narrower: the criterion is fine, the constant must be derived from the caller's actual node sizes rather than multiplied by the worker count, and for this caller it would change almost nothing.
