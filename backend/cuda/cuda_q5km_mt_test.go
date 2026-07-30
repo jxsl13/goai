@@ -169,3 +169,65 @@ func BenchmarkQ5KM16_2048(b *testing.B)      { benchQ5KM(b, 16, 2048, 2048) }
 func BenchmarkQ5KM32_2048(b *testing.B)      { benchQ5KM(b, 32, 2048, 2048) }
 func BenchmarkQ5KM64_2048x5632(b *testing.B) { benchQ5KM(b, 64, 2048, 5632) }
 func BenchmarkQ5KM64_5632x2048(b *testing.B) { benchQ5KM(b, 64, 5632, 2048) } // ffn_down (deep-K), M=64
+
+// Small-M benches to tune the GEMV↔MT routing threshold (currently rows>=8, vs rows>=2 for
+// Q4_K/Q6_K). Weight-read-once MT should win for any M>1.
+func BenchmarkQ5KM2_2048x5632(b *testing.B) { benchQ5KM(b, 2, 2048, 5632) }
+func BenchmarkQ5KM4_2048x5632(b *testing.B) { benchQ5KM(b, 4, 2048, 5632) }
+func BenchmarkQ5KM4_2048x2048(b *testing.B) { benchQ5KM(b, 4, 2048, 2048) }
+
+// TestCUDAQ5KSmallMParity locks the newly-routed small-batch range (M in [2,8)): after lowering
+// the GEMV↔MT threshold from 8 to 2, these M now use the M-tiled kernel and must still match the
+// per-row GEMV (the M=1 path, unchanged).
+func TestCUDAQ5KSmallMParity(t *testing.T) {
+	skipNoGPU(t)
+	const K, N = 512, 300
+	rng := rand.New(rand.NewSource(83))
+	w := tensor.New(tensor.F32, tensor.Shape{K, N})
+	wf := w.Storage().F32()
+	for i := range wf {
+		wf[i] = float32(rng.NormFloat64())
+	}
+	rq, err := quantQ5K(w)
+	must(t, err)
+	defer rq.Free()
+
+	gd, err := cuda.NewDeviceF32(1, K)
+	must(t, err)
+	defer gd.Free()
+	gout, err := cuda.NewDeviceF32(1, N)
+	must(t, err)
+	defer gout.Free()
+
+	for _, M := range []int{2, 3, 4, 5, 7} {
+		a := make([]float32, M*K)
+		for i := range a {
+			a[i] = float32(rng.NormFloat64())
+		}
+		da, err := cuda.NewDeviceF32(M, K)
+		must(t, err)
+		dout, err := cuda.NewDeviceF32(M, N)
+		must(t, err)
+		must(t, da.UploadF32(a))
+		must(t, rq.QMatMulInto(da, dout)) // M in [2,8) → now the MT kernel
+		got, err := dout.ToHost()
+		must(t, err)
+		var maxAbs float64
+		for m := 0; m < M; m++ {
+			must(t, gd.UploadF32(a[m*K:(m+1)*K]))
+			must(t, rq.QMatMulInto(gd, gout)) // M=1 → GEMV reference
+			gv, err := gout.ToHost()
+			must(t, err)
+			for n := 0; n < N; n++ {
+				if d := math.Abs(got.AtF64(m, n) - gv.AtF64(0, n)); d > maxAbs {
+					maxAbs = d
+				}
+			}
+		}
+		da.Free()
+		dout.Free()
+		if maxAbs > 1e-3 {
+			t.Fatalf("M=%d: MT diverges from per-row GEMV: max abs %.3g", M, maxAbs)
+		}
+	}
+}

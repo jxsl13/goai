@@ -67,8 +67,10 @@ func (r *ResidentBQ5K) qmatmul(a, out *DeviceF32, beta float32) error {
 		return fmt.Errorf("cuda: Q5_K matmul shape a[%d,%d]·B[%d,%d]→out[%d,%d]", a.rows, a.cols, r.k, r.n, out.rows, out.cols)
 	}
 	// M>1 (prefill/batch): route to the weight-read-once M-tiled GEMM (bit-identical) so column
-	// n's Q5_K block is decoded once, not re-read per row. M==1 decode stays on the GEMV.
-	if a.rows >= 8 {
+	// n's Q5_K block is decoded once, not re-read per row. M==1 decode stays on the GEMV. The
+	// threshold is M>1 (matching Q4_K/Q6_K): the GEMV re-reads each Q5_K block M times, so the
+	// MT kernel's read-once already wins at M=2 (benchmarked), not only at large batches.
+	if a.rows >= 2 {
 		if rc := C.cu_qmatmul_q5k_mt(a.ptr, r.q, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(beta)); rc != 0 {
 			return fmt.Errorf("cuda: Q5_K m-tiled matmul failed (code %d)", int(rc))
 		}
