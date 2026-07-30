@@ -1707,16 +1707,16 @@ int cu_layernorm_f32(const void* in, void* out, const void* gamma, const void* b
                            "  int t=threadIdx.x, nt=blockDim.x;\n"
                            "  const float* xr = in + (size_t)row*cols;\n"
                            "  float* yr = out + (size_t)row*cols;\n"
-                           "  double s=0.0; for(int j=t;j<cols;j+=nt) s+=(double)xr[j];\n"
-                           "  sh[t]=s; __syncthreads();\n"
+                           "  float s=0.0f; for(int j=t;j<cols;j+=nt) s+=xr[j];\n"
+                           "  sh[t]=(double)s; __syncthreads();\n"
                            "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
-                           "  double mean=sh[0]/(double)cols; __syncthreads();\n"
-                           "  double v=0.0; for(int j=t;j<cols;j+=nt){ double d=(double)xr[j]-mean; v+=d*d; }\n"
-                           "  sh[t]=v; __syncthreads();\n"
+                           "  float mean=(float)(sh[0]/(double)cols); __syncthreads();\n"
+                           "  float v=0.0f; for(int j=t;j<cols;j+=nt){ float d=xr[j]-mean; v+=d*d; }\n"
+                           "  sh[t]=(double)v; __syncthreads();\n"
                            "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
                            "  double var=sh[0]/(double)cols;\n"
                            "  float inv=(float)(1.0/sqrt(var+(double)eps));\n"
-                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(float)(((double)xr[j]-mean)*inv*(double)g[j]+(double)b[j]); }\n"
+                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(xr[j]-mean)*inv*g[j]+b[j]; }\n"
                            "}\n",
                            "layernorm.cu", "layernorm_f32", &gLayerNorm) != 0) { rc = -2; goto done; }
     {
