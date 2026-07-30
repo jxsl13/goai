@@ -83,35 +83,39 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	// (PS6006 — a receiver slice used as per-call scratch is a data race waiting for its
 	// second caller). Measured at n=512, cols=512: 1546 allocations per call down to 1035,
 	// B/op 10.52MB down to 8.43MB.
-	cvec := make([]float64, m)
-	for c := range cols {
-		for i := range m {
-			if vec {
-				cvec[i] = b.AtF64(i)
-			} else {
-				cvec[i] = b.AtF64(i, c)
+	// PARALLEL over the right-hand-side columns, scratch per WORKER. Each column applies the
+	// reflectors to its own Qᵀb copy and back-substitutes into its own out[i*cols+c], so the
+	// columns are independent and the partition changes no value.
+	solveCols(cols, m*n, m, func(clo, chi int, cvec []float64) {
+		for c := clo; c < chi; c++ {
+			for i := range m {
+				if vec {
+					cvec[i] = b.AtF64(i)
+				} else {
+					cvec[i] = b.AtF64(i, c)
+				}
+			}
+			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
+			for k := range n {
+				s := 0.0
+				for i := k; i < m; i++ {
+					s += vs[k][i] * cvec[i]
+				}
+				bt := betas[k] * s
+				for i := k; i < m; i++ {
+					cvec[i] -= bt * vs[k][i]
+				}
+			}
+			// back-substitute R·x = (Qᵀb)[0:n]
+			for i := n - 1; i >= 0; i-- {
+				sum := cvec[i]
+				for j := i + 1; j < n; j++ {
+					sum -= rm[i][j] * out[j*cols+c]
+				}
+				out[i*cols+c] = sum / rm[i][i]
 			}
 		}
-		// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
-		for k := range n {
-			s := 0.0
-			for i := k; i < m; i++ {
-				s += vs[k][i] * cvec[i]
-			}
-			bt := betas[k] * s
-			for i := k; i < m; i++ {
-				cvec[i] -= bt * vs[k][i]
-			}
-		}
-		// back-substitute R·x = (Qᵀb)[0:n]
-		for i := n - 1; i >= 0; i-- {
-			sum := cvec[i]
-			for j := i + 1; j < n; j++ {
-				sum -= rm[i][j] * out[j*cols+c]
-			}
-			out[i*cols+c] = sum / rm[i][i]
-		}
-	}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}

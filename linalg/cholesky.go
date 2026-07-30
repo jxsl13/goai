@@ -65,28 +65,32 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	// (PS6006 — a receiver slice used as per-call scratch is a data race waiting for its
 	// second caller). Measured at n=512, cols=512: 1032 allocations per call down to 521,
 	// B/op 8.40MB down to 6.31MB.
-	y := make([]float64, n)
-	for c := range cols {
-		for i := range n { // forward: L·y = b
-			var s float64
-			if vec {
-				s = b.AtF64(i)
-			} else {
-				s = b.AtF64(i, c)
+	// PARALLEL over the right-hand-side columns, with the scratch per WORKER. Columns are
+	// independent — each writes only its own out[i*cols+c] and reads only its own pass's y — so
+	// the partition changes no value. Hoisting one shared buffer had coupled them.
+	solveCols(cols, n*n, n, func(clo, chi int, y []float64) {
+		for c := clo; c < chi; c++ {
+			for i := range n { // forward: L·y = b
+				var s float64
+				if vec {
+					s = b.AtF64(i)
+				} else {
+					s = b.AtF64(i, c)
+				}
+				for k := range i {
+					s -= l[i][k] * y[k]
+				}
+				y[i] = s / l[i][i]
 			}
-			for k := range i {
-				s -= l[i][k] * y[k]
+			for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
+				s := y[i]
+				for k := i + 1; k < n; k++ {
+					s -= l[k][i] * out[k*cols+c]
+				}
+				out[i*cols+c] = s / l[i][i]
 			}
-			y[i] = s / l[i][i]
 		}
-		for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
-			s := y[i]
-			for k := i + 1; k < n; k++ {
-				s -= l[k][i] * out[k*cols+c]
-			}
-			out[i*cols+c] = s / l[i][i]
-		}
-	}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}

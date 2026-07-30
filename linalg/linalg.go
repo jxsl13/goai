@@ -109,23 +109,33 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	// reused buffer cannot expose the previous column's values. A function local,
 	// not a field on LU: a factorization is immutable after Factor and is safe to
 	// Solve against concurrently, which a shared buffer would silently break.
-	y := make([]float64, n)
-	for c := range cols {
-		for i := range n { // forward: L·y = P·b, L unit-lower
-			s := bat(f.piv[i], c)
-			for j := range i {
-				s -= f.lu[i][j] * y[j]
+	// PARALLEL over the right-hand-side columns. Column c writes only out[i*cols+c] for its own
+	// c and reads its own forward-substitution scratch, so the columns are independent and the
+	// partition changes no value: each column's forward pass still assigns y[i] ascending and
+	// reads only y[j] with j < i from the SAME pass, and its back pass reads only its own column.
+	//
+	// The scratch is per WORKER, which is the whole enabler. Hoisting one buffer out of the
+	// column loop removed cols allocations per call but coupled the columns to each other, so
+	// the loop could not fan out — the same shape that gated GMM. A whole linalg sweep measured
+	// 1.00-1.10x from GOMAXPROCS=1 to 12: the package was entirely serial.
+	solveCols(cols, n*n, n, func(clo, chi int, y []float64) {
+		for c := clo; c < chi; c++ {
+			for i := range n { // forward: L·y = P·b, L unit-lower
+				s := bat(f.piv[i], c)
+				for j := range i {
+					s -= f.lu[i][j] * y[j]
+				}
+				y[i] = s
 			}
-			y[i] = s
-		}
-		for i := n - 1; i >= 0; i-- { // back: U·x = y
-			s := y[i]
-			for j := i + 1; j < n; j++ {
-				s -= f.lu[i][j] * out[j*cols+c]
+			for i := n - 1; i >= 0; i-- { // back: U·x = y
+				s := y[i]
+				for j := i + 1; j < n; j++ {
+					s -= f.lu[i][j] * out[j*cols+c]
+				}
+				out[i*cols+c] = s / f.lu[i][i]
 			}
-			out[i*cols+c] = s / f.lu[i][i]
 		}
-	}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}
