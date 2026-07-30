@@ -129,36 +129,42 @@ func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tens
 	switch dt {
 	case tensor.F64:
 		qs := q.Storage().F64()
-		for r := range out {
-			var maxabs float64
-			for j := range in {
-				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+		// Each output row is self-contained (its own maxabs, quantizer grid and disjoint
+		// output slice), so a row-range fan-out is bit-identical to the serial loop.
+		parallelRows(out, in, func(rlo, rhi int) {
+			for r := rlo; r < rhi; r++ {
+				var maxabs float64
+				for j := range in {
+					maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+				}
+				if maxabs == 0 {
+					continue
+				}
+				grid := UniformQuantizer(levels, -maxabs, maxabs)
+				row := qs[r*in : r*in+in : r*in+in]
+				for j := range in {
+					row[j] = grid(w[r][j]*scale[j]) / scale[j]
+				}
 			}
-			if maxabs == 0 {
-				continue
-			}
-			grid := UniformQuantizer(levels, -maxabs, maxabs)
-			row := qs[r*in : r*in+in : r*in+in]
-			for j := range in {
-				row[j] = grid(w[r][j]*scale[j]) / scale[j]
-			}
-		}
+		})
 	case tensor.F32:
 		qs := q.Storage().F32()
-		for r := range out {
-			var maxabs float64
-			for j := range in {
-				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+		parallelRows(out, in, func(rlo, rhi int) {
+			for r := rlo; r < rhi; r++ {
+				var maxabs float64
+				for j := range in {
+					maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
+				}
+				if maxabs == 0 {
+					continue
+				}
+				grid := UniformQuantizer(levels, -maxabs, maxabs)
+				row := qs[r*in : r*in+in : r*in+in]
+				for j := range in {
+					row[j] = float32(grid(w[r][j]*scale[j]) / scale[j])
+				}
 			}
-			if maxabs == 0 {
-				continue
-			}
-			grid := UniformQuantizer(levels, -maxabs, maxabs)
-			row := qs[r*in : r*in+in : r*in+in]
-			for j := range in {
-				row[j] = float32(grid(w[r][j]*scale[j]) / scale[j])
-			}
-		}
+		})
 	default:
 		for r := range out { // exotic dtype: per-element dispatch
 			var maxabs float64
