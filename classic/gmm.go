@@ -616,6 +616,43 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 		ld[c+2] = -0.5*(dlog2pi+q2) - m.logDetHalf[c+2]
 		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
 	}
+	// A 2-WIDE JAM before the scalar tail. The 4-jam leaves k%4 components to the per-component
+	// logGaussian, which redoes the whole forward substitution with a single accumulator — and
+	// k%4 is 2 or 3 for exactly the small component counts this estimator is usually run with.
+	// BenchmarkGMMFitFull uses k=6, so TWO of its six components took the unjammed path on every
+	// sample of every iteration, which is why a profile showed logGaussian at 20% flat while the
+	// batch kernel it is supposed to have replaced sat at 24%.
+	//
+	// Bit-identical to two logGaussian calls by the same argument the 4-jam rests on: each
+	// component keeps its OWN y and its own quad accumulator, summing j in the same ascending
+	// order over the same terms, and the closing expression is the identical
+	// -0.5*(dlog2pi+q) - logDetHalf sequence with the -0.5 left undistributed.
+	if c+2 <= k {
+		l0, l1 := m.chol[c], m.chol[c+1]
+		id0, id1 := m.invCholDiag[c], m.invCholDiag[c+1]
+		mu0, mu1 := m.Means[c], m.Means[c+1]
+		y0, y1 := y4[0], y4[1]
+		for i := range d {
+			xi := x[i]
+			s0 := xi - mu0[i]
+			s1 := xi - mu1[i]
+			l0i, l1i := l0[i], l1[i]
+			for j := range i {
+				s0 -= l0i[j] * y0[j]
+				s1 -= l1i[j] * y1[j]
+			}
+			y0[i] = s0 * id0[i]
+			y1[i] = s1 * id1[i]
+		}
+		var q0, q1 float64
+		for i := range d {
+			q0 += y0[i] * y0[i]
+			q1 += y1[i] * y1[i]
+		}
+		ld[c] = -0.5*(dlog2pi+q0) - m.logDetHalf[c]
+		ld[c+1] = -0.5*(dlog2pi+q1) - m.logDetHalf[c+1]
+		c += 2
+	}
 	for ; c < k; c++ {
 		ld[c], _ = m.logGaussian(x, c, y)
 	}
