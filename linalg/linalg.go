@@ -153,6 +153,9 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	// column loop removed cols allocations per call but coupled the columns to each other, so
 	// the loop could not fan out — the same shape that gated GMM. A whole linalg sweep measured
 	// 1.00-1.10x from GOMAXPROCS=1 to 12: the package was entirely serial.
+	//
+	// Gated on n·n·cols, so a single heavy column or a single right-hand side (Solve of a
+	// vector) stays serial rather than paying a fan-out to hand one worker all the work.
 	solveCols(cols, n*n, n, func(clo, chi int, y []float64) {
 		for c := clo; c < chi; c++ {
 			for i := range n { // forward: L·y = P·b, L unit-lower
