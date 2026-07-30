@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -154,9 +155,7 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 // order match the generic loops exactly — bit-identical.
 func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 	seq, dm, dk, kdm, heads, rep, window int, causal bool, scale float64, slopes []float64) {
-	a := make([]float64, seq)  // softmax weights for the current (head,row)
-	dA := make([]float64, seq) // grad w.r.t. those weights
-	for h := 0; h < heads; h++ {
+	perHead := func(h int, a, dA []float64) {
 		qOff := h * dk
 		kvOff := (h / rep) * dk
 		for i := 0; i < seq; i++ {
@@ -223,6 +222,24 @@ func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 				}
 			}
 		}
+	}
+	// rep==1 ⇒ each head owns disjoint dQ/dK/dV column bands (no mask, no shared
+	// accumulation), so heads run fully in parallel with per-worker softmax scratch —
+	// byte-identical regardless of head order. GQA (rep>1) shares dK/dV across a group → serial.
+	if rep == 1 && heads >= 2 && parallel.Workers() > 1 {
+		parallel.Rows(heads, func(hlo, hhi int) {
+			a := make([]float64, seq)
+			dA := make([]float64, seq)
+			for h := hlo; h < hhi; h++ {
+				perHead(h, a, dA)
+			}
+		})
+		return
+	}
+	a := make([]float64, seq)
+	dA := make([]float64, seq)
+	for h := 0; h < heads; h++ {
+		perHead(h, a, dA)
 	}
 }
 
