@@ -59,6 +59,35 @@ func copeMaxAbs(a, b *tensor.Tensor) float64 {
 	return m
 }
 
+// TestCoPEFusedBitExactVsDispatch pins the inference gather path (ctx.Recorder == nil,
+// copeGatherBias) bit-identical to the differentiable one-hot einsum path (a recording
+// tape context): the position-term interpolation is a plain gather of z rows, so on
+// finite inputs the two must agree to the last bit.
+func TestCoPEFusedBitExactVsDispatch(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 11))
+	for _, tc := range []struct{ dim, heads, seq, maxPos int }{
+		{16, 4, 24, 8}, {32, 4, 40, 32}, {8, 2, 13, 3},
+	} {
+		c, err := NewCoPEAttention(tensor.F64, tc.dim, tc.heads, 3, WithCoPEMaxPos(tc.maxPos))
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := copeRandMat(rng, tc.seq, tc.dim)
+		fused, err := c.Forward(backend.NewContext(), x) // Recorder == nil → copeGatherBias
+		if err != nil {
+			t.Fatal(err)
+		}
+		disp, err := c.Forward(autograd.NewTape().Context(), x) // Recorder != nil → one-hot einsum
+		if err != nil {
+			t.Fatal(err)
+		}
+		if m := copeMaxAbs(fused, disp); m != 0 {
+			t.Fatalf("dim=%d heads=%d seq=%d maxPos=%d: fused gather vs einsum differ by %g (want bit-exact 0)",
+				tc.dim, tc.heads, tc.seq, tc.maxPos, m)
+		}
+	}
+}
+
 // §V16 tier-1: CoPEAttention maps [T,dim]→[T,dim] and exposes every learnable
 // tensor: 4 Linears × (W,B) = 8, plus one position table per head.
 func TestCoPEAttentionShapes(t *testing.T) {
