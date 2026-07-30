@@ -50,3 +50,8 @@ Rationale: PS1009 was written after measuring a real 6.46% win on nlp rows2D, wh
 IF a scan rule is proposed for hoisting a loop-invariant row out of an inner loop, THEN the implementing agent SHALL decline it and fold the advice into PS4006, whose narrower row-per-allocation predicate covers the actionable sites.
 
 Rationale: The bare two-deep-index predicate matches 225 sites repo-wide (105 at depth 2, 99 at depth 3) with no hotness signal. One measured instance, randomOrthogonal at -21.3%, does not make 225 sites defects, and the compiler already hoists many of them.
+
+## PROC-INTERSECT-FINDINGS-WITH-PROFILE-001
+WHEN choosing which perfscan finding to spend time on, the implementing agent SHALL intersect the findings with a line-level profile first and work the overlap, treating the check list as a candidate generator rather than a ranking.
+
+Rationale: In one sweep of five packages, 436 of 439 findings sat on lines carrying no measurable profile time, and the three that did were in files locked by open PRs. Every win this session came from the profile first and the check second; the tool is hotness-blind by design (PERF-HOTNESS-IS-NOT-SYNTAX-001). Caveat for whoever repeats this: pprof -lines -top reports only the hottest lines, so the overlap is understated, not zero.
