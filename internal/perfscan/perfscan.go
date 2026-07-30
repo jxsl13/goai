@@ -11178,6 +11178,25 @@ func serialReductionChainFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 				return true
 			}
 		}
+		// Integer addition is exactly associative, so for an integer accumulator the split is
+		// bit-identical by construction and the contract check below does not apply at all. Say
+		// which case this is rather than making every reader re-derive it.
+		safety := "THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it reassociates" +
+			" the sum, so the result moves in the last ulp. DO NOT apply it where the exact value is" +
+			" pinned."
+		switch accumulatorKind(fn, acc) {
+		case "integer":
+			safety = "THIS ONE IS AN INTEGER ACCUMULATOR, so the usual objection does not apply:" +
+				" integer addition is exactly associative and the split is bit-identical BY" +
+				" CONSTRUCTION, with no contract to clear. The payoff is smaller than the float case" +
+				" because an integer add is a single cycle and the loop is closer to load-bound —" +
+				" measured 271 -> 168 ns at d=768 (1.61x) — but it is unconditionally safe."
+		case "float":
+			safety = "THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it reassociates" +
+				" the FLOAT sum, so the result moves in the last ulp. DO NOT apply it where the exact" +
+				" value is pinned. f32 gains MORE than f64, not less — 610 -> 167 ns at d=768 (3.65x)" +
+				" against 2.90x for f64 — because the same add latency covers half the memory traffic."
+		}
 		out = append(out, finding{
 			pos:      fset.Position(n.Pos()),
 			category: "serial-reduction-chain",
@@ -11188,15 +11207,13 @@ func serialReductionChainFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 				" 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x). The 512"+
 				" figure matches the hardware prediction — 512 dependent adds at about four cycles"+
 				" each is roughly 600 ns at 3.4 GHz — so this is a latency stall, not a measurement"+
-				" artifact. THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it"+
-				" reassociates the sum, so the result moves in the last ulp. DO NOT apply it where the"+
-				" exact value is pinned. Two of the hottest reductions in this repo are blocked for"+
+				" artifact. %s Two of the hottest reductions in this repo are blocked for"+
 				" precisely that reason and are NOT candidates — nlp randomOrthogonal, whose matrix"+
 				" TurboQuant regenerates at dequantization time so a changed draw would break every"+
 				" model quantized with the old one, and classic ballTree.within, whose sum decides"+
 				" exact-label DBSCAN goldens. Check for a bit-stability test and a reproducibility"+
 				" contract BEFORE measuring, then benchmark: the win is real but it is worth nothing"+
-				" if the loop is cold (PERF-HOTNESS-IS-NOT-SYNTAX-001)", acc),
+				" if the loop is cold (PERF-HOTNESS-IS-NOT-SYNTAX-001)", acc, safety),
 		})
 		return true
 	})
@@ -11220,4 +11237,76 @@ func loopStrideExceedsOne(n ast.Node) bool {
 		return false
 	}
 	return lit.Value != "1"
+}
+
+// accumulatorKind infers whether an accumulator is an integer or a float from its declaration in
+// the enclosing function. AST only — there is no type checker here — so it recognizes the two
+// spellings that actually occur: an explicit `var s float64` / `var s int`, and a `s := 0` or
+// `s := 0.0` whose literal kind gives the type away. Anything else returns "", and the caller
+// falls back to advice that covers both.
+//
+// The distinction is not cosmetic. Integer addition is EXACTLY associative, so splitting an integer
+// accumulator is bit-identical by construction and needs no contract check at all; floating-point
+// addition is not, and there the split is a value change that has to be cleared first.
+func accumulatorKind(fn *ast.FuncDecl, name string) string {
+	kind := ""
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.DeclStmt:
+			gd, ok := s.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok || vs.Type == nil {
+					continue
+				}
+				id, ok := vs.Type.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				for _, nm := range vs.Names {
+					// Only a RECOGNIZED type name settles the question. A named or generic type
+					// resolves to "", and overwriting with it would erase a kind already found.
+					if nm.Name == name {
+						if k := numericKindOfTypeName(id.Name); k != "" {
+							kind = k
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if s.Tok != token.DEFINE || len(s.Lhs) != len(s.Rhs) {
+				return true
+			}
+			for i, l := range s.Lhs {
+				if identName(l) != name {
+					continue
+				}
+				if lit, ok := s.Rhs[i].(*ast.BasicLit); ok {
+					switch lit.Kind {
+					case token.INT:
+						kind = "integer"
+					case token.FLOAT:
+						kind = "float"
+					}
+				}
+			}
+		}
+		return true
+	})
+	return kind
+}
+
+// numericKindOfTypeName classifies a builtin numeric type name.
+func numericKindOfTypeName(t string) string {
+	switch t {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune":
+		return "integer"
+	case "float32", "float64":
+		return "float"
+	}
+	return ""
 }

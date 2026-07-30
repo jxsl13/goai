@@ -190,3 +190,117 @@ func f(a []float64) (float64, float64) {
 		t.Fatalf("%d findings, want 0 — the accumulator is read inside the loop", len(fs))
 	}
 }
+
+// TestPS3010_IntegerAccumulatorDropsTheContractWarning pins the branch that matters most for
+// ACTING on this check.
+//
+// Integer addition is exactly associative, so splitting an integer accumulator is bit-identical BY
+// CONSTRUCTION — it passes even a Float64bits golden-checksum test unchanged. Emitting the generic
+// reassociation warning there would send a reader off to clear a contract that cannot be violated.
+func TestPS3010_IntegerAccumulatorDropsTheContractWarning(t *testing.T) {
+	for _, decl := range []string{"var s int", "s := 0"} {
+		src := `package p
+
+func f(a []int) int {
+	` + decl + `
+	for i := range a {
+		s += a[i]
+	}
+	return s
+}`
+		fs := serialReductionFindings(t, src)
+		if len(fs) != 1 {
+			t.Fatalf("decl %q: %d findings, want 1", decl, len(fs))
+		}
+		if !strings.Contains(fs[0].msg, "INTEGER ACCUMULATOR") {
+			t.Fatalf("decl %q: integer accumulator did not get the exact-associativity message:\n%s",
+				decl, fs[0].msg)
+		}
+		if strings.Contains(fs[0].msg, "DO NOT apply it where the exact value is pinned") {
+			t.Fatalf("decl %q: integer accumulator still carries the float contract warning:\n%s",
+				decl, fs[0].msg)
+		}
+	}
+}
+
+// TestPS3010_FloatAccumulatorKeepsTheContractWarning is the other side of the same branch, and it
+// also pins the f32 number — f32 gains MORE than f64 (3.65x vs 2.90x at dim=768), which is the
+// opposite of what a reader assuming "smaller type, smaller win" would guess.
+func TestPS3010_FloatAccumulatorKeepsTheContractWarning(t *testing.T) {
+	for _, decl := range []string{"var s float64", "s := 0.0"} {
+		src := `package p
+
+func f(a []float64) float64 {
+	` + decl + `
+	for i := range a {
+		s += a[i]
+	}
+	return s
+}`
+		fs := serialReductionFindings(t, src)
+		if len(fs) != 1 {
+			t.Fatalf("decl %q: %d findings, want 1", decl, len(fs))
+		}
+		if !strings.Contains(fs[0].msg, "DO NOT apply it where the exact") {
+			t.Fatalf("decl %q: float accumulator lost the reassociation warning:\n%s", decl, fs[0].msg)
+		}
+		if strings.Contains(fs[0].msg, "INTEGER ACCUMULATOR") {
+			t.Fatalf("decl %q: float accumulator claimed exact associativity:\n%s", decl, fs[0].msg)
+		}
+	}
+}
+
+// TestPS3010_UnknownAccumulatorTypeFallsBackToTheStrictAdvice keeps the inference FAIL-SAFE. With
+// no type checker here the kind is often unknowable — a generic parameter, a named type, a value
+// from a call. The fallback has to be the strict float warning, because telling a reader that a
+// split is unconditionally safe when it may be a float is the one error with a wrong answer at the
+// end of it.
+func TestPS3010_UnknownAccumulatorTypeFallsBackToTheStrictAdvice(t *testing.T) {
+	src := `package p
+
+func f[T Num](a []T) T {
+	var s T
+	for i := range a {
+		s += a[i]
+	}
+	return s
+}`
+	fs := serialReductionFindings(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1", len(fs))
+	}
+	if strings.Contains(fs[0].msg, "INTEGER ACCUMULATOR") {
+		t.Fatalf("an unknown accumulator type must not be claimed exactly associative:\n%s", fs[0].msg)
+	}
+	if !strings.Contains(fs[0].msg, "NOT BIT-IDENTICAL") {
+		t.Fatalf("an unknown accumulator type must keep the strict warning:\n%s", fs[0].msg)
+	}
+}
+
+// TestPS3010_UndeclaredAccumulatorFallsBackToTheStrictAdvice is the UNMASKED fail-safe floor.
+//
+// TestPS3010_UnknownAccumulatorTypeFallsBackToTheStrictAdvice cannot floor the default on its own:
+// its `var s T` still runs the classifier, which returns "" and overwrites whatever the default
+// was. Here the accumulator is a PARAMETER, so no declaration is found in the body at all and the
+// initial value is what survives. It must be the strict one — claiming exact associativity for a
+// float is the error with a wrong answer at the end of it.
+//
+// Reading parameter types would be a genuine recall improvement and is deliberately not done here;
+// the fallback is safe, so the gap costs advice quality rather than correctness.
+func TestPS3010_UndeclaredAccumulatorFallsBackToTheStrictAdvice(t *testing.T) {
+	src := `package p
+
+func f(a []float64, s float64) float64 {
+	for i := range a {
+		s += a[i]
+	}
+	return s
+}`
+	fs := serialReductionFindings(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1", len(fs))
+	}
+	if strings.Contains(fs[0].msg, "INTEGER ACCUMULATOR") {
+		t.Fatalf("an undeclared accumulator must not be claimed exactly associative:\n%s", fs[0].msg)
+	}
+}
