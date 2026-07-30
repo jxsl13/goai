@@ -1387,3 +1387,27 @@ TWO CLEAN NEGATIVES ARE PART OF THE RESULT. vision has no flat path, and its per
 ONE INVALID APPLICATION, and this is the durable limitation. Sweeping the twelve-architecture quant matrix reported every path at 1.04-1.16x, which looks like a package-wide serial bottleneck. It is an artifact: those fixtures are deliberately two layers at dim 32 - I built them that way, and recorded that they measure per-layer ALLOCATION COUNT, which is geometry-independent - so no backend op is large enough for the parallelism under test to engage. Re-running against benchmarks with realistic geometry gave 4.20x and 5.63x. THE SWEEP ONLY MEANS SOMETHING ON BENCHMARKS WHOSE TENSORS ARE BIG ENOUGH FOR THE PARALLELISM UNDER TEST TO ENGAGE, and a fixture set optimized for cheap deterministic allocation counting is precisely the wrong input. The failure is subtle because the flat numbers are perfectly reproducible - they are just measuring the fixture, not the code.
 
 SCORECARD FOR THE INSTRUMENT: three large signals, all confirmed on re-measurement, all yielding real wins (1.96x, 1.27x, 7.87x). Two marginal signals, both artifacts of insufficient benchtime (rl). One whole-package flat reading that was a fixture artifact (nlp). The large-signal discipline in PROC-SWEEP-IS-HYPOTHESIS-001 is what separated them.
+
+## R-01KYR87326EZ6929J966A3A8S4 linalg is done: 5.5x to 9.0x across the package, and the profile-reparallelize loop terminated on its own
+kind: research
+state: draft
+created: 2026-07-30
+
+Completes the linalg arc opened in R-01KYR5ZS7RF7H. Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds per change, all ranges disjoint.
+
+THE PACKAGE AT n=768, cumulative over three changes:
+  LUSolve    549ms ->  61ms   9.0x
+  Lstsq     1325ms -> 214ms   6.2x
+  Inverse    676ms -> 112ms   6.0x
+  CholSolve  629ms -> 114ms   5.5x
+It measured 1.00-1.10x from one core to twelve when the GOMAXPROCS sweep found it.
+
+THE METHOD WAS A LOOP THAT TERMINATED ITSELF. Each change made the next bottleneck dominant and the profile named it: parallelizing the solve phase raised LU Factor from 18% of CPU to about 60% of wall clock; parallelizing that left householder at 78% of Lstsq wall and cholFactor at 46% of CholSolve wall; parallelizing those leaves nothing above the solve phase, which is already parallel. Three iterations, each target selected by the previous fix rather than by search. Worth noting the arithmetic that makes a CPU profile usable here: total CPU divided by wall clock gives average parallelism, and a serial block share divided by that ratio gives its true wall share - which is how an 18% CPU entry was correctly read as 60% of wall.
+
+THE AXIS WAS DIFFERENT EACH TIME and was the whole content of each change. Solve: over right-hand-side COLUMNS. LU elimination: over ROWS of the trailing submatrix. Householder: over COLUMNS of the trailing submatrix. Cholesky: over ROWS below the diagonal. In every case the accumulation axis stayed inside and untouched, per PERF-REDUCTION-AXIS-DECIDES-001, which is what made all four bit-identical rather than merely close.
+
+ALLOCATIONS ARE THE HONEST COST. Each factorization opens one pooled region per step, so n=768 costs roughly a thousand extra allocations per call - Lstsq 1586 to 2613, CholSolve 820 to 1964, Inverse 826 to 1850. Against 475ms saved on Lstsq that is about 31us of allocator work, a clearly favorable trade, but it is a real regression on the resource axis and is reported as one rather than omitted. Two mistakes were caught by measuring it: spawning a worker set per step instead of using the pool cost 17463 allocations (21x), and passing a closure on the serial branch cost one allocation per step. Both are now rules.
+
+SINGLE-CORE IS PARITY OR BETTER EVERYWHERE, with IDENTICAL allocation counts at GOMAXPROCS=1 and on small inputs, because every serial branch is written out inline. That was not free - it is duplicated loop bodies - and it is what makes these changes qualify under the constraint that an optimization improve things across systems rather than only on a twelve-core host.
+
+NO PERFSCAN RULE for the factorization pattern. The shape - a sequential outer step whose inner update is independent - is real and recurred four times, but deciding independence requires knowing which array elements each iteration reads and writes, which is alias and dependence analysis rather than syntax. The tool that finds these is a GOMAXPROCS sweep followed by a profile, both already recorded as rules.
