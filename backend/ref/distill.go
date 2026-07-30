@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -48,18 +49,27 @@ func distillKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 	ss, sok := f64Data(zs)
 	ts, tok := f64Data(zt)
 	if sok && tok {
-		p := make([]float64, c)
-		q := make([]float64, c)
-		for i := range b {
-			softmaxRowFlat(p, ts[i*c:i*c+c], temp) // teacher soft targets
-			softmaxRowFlat(q, ss[i*c:i*c+c], temp) // student soft distribution
-			var kl float64
-			for j := range c {
-				if p[j] > 0 {
-					kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+		// Parallelize the per-row softmax+KL (the O(b·c) exp/log compute) over batch rows;
+		// each row writes its own contrib[i], then the batch sum runs SERIALLY in row order —
+		// byte-identical to the serial loop (same per-row value, same left-fold, no reassociation).
+		contrib := make([]float64, b)
+		parallel.Rows(b, func(ilo, ihi int) {
+			p := make([]float64, c)
+			q := make([]float64, c)
+			for i := ilo; i < ihi; i++ {
+				softmaxRowFlat(p, ts[i*c:i*c+c], temp) // teacher soft targets
+				softmaxRowFlat(q, ss[i*c:i*c+c], temp) // student soft distribution
+				var kl float64
+				for j := range c {
+					if p[j] > 0 {
+						kl += p[j] * (math.Log(p[j]) - math.Log(q[j]))
+					}
 				}
+				contrib[i] = temp * temp * kl
 			}
-			total += temp * temp * kl
+		})
+		for i := range b {
+			total += contrib[i]
 		}
 	} else {
 		// Generic fallback for exotic dtypes (verbatim original loop).
