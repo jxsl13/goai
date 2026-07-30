@@ -848,3 +848,10 @@ state: draft
 created: 2026-07-30
 
 F32 OpSoftplus CPU kernel parallelized in #563 but still scalar f64 math.Log1p(math.Exp) even on SIMD build (no vexpF32Fast check). Add softplusF32x8 = max(x,0)+log(1+exp(-|x|)) via expF32x8 + inline Cephes logf poly (log arg 1+e in (1,2], well-conditioned, no specials). Gate on vexpF32Fast; default byte-identical, SIMD tol-gated ADR-0021. Consumers: Mamba Delta, griffin/hymba gates, focal/reward losses. Bench new BenchmarkSoftplusF32.
+
+## T-01KYSP6DEBEJN8M5KDTKKD2GZ5 F32 Softplus vectorized on vexp (vsoftplusF32) SHIPPED #649 2.2-2.6x
+kind: task
+state: draft
+created: 2026-07-30
+
+Sibling of #648. softplusF32x8=max(x,0)+log(1+e^-|x|) via expF32x8+vlogF32 poly (log arg in (1,2] → no specials). Gated vexpF32Fast, default byte-identical, SIMD tol-gated. Bench count=5: MambaΔ 512x5120 2.23x, 1x5120 2.19x, 64K 2.55x. PR #649. F32-activation-SIMD vein now FULLY closed.
