@@ -44,6 +44,7 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 	// buffer instead of re-dispatching AtF64. Values and order unchanged (bit-identical).
 	vrow := make([]float64, dv)
 	qrow := make([]float64, dk)
+	orow := make([]float64, dv) // out row accumulator (reused across steps)
 	for n := range l {
 		for j := range dv {
 			vrow[j] = v.AtF64(n, j)
@@ -59,12 +60,23 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 				s[base+j] = gamma*s[base+j] + ki*vrow[j]
 			}
 		}
+		// out_n = Q_n·S_n = Σ_i qrow[i]·S[i,:]. Interchange to i-outer so the inner loop
+		// streams S's CONTIGUOUS row i (s[i*dv:]) into the accumulator row, instead of
+		// striding s[i*dv+j] down a column (stride dv) once per output j. Bit-identical:
+		// out[j] still sums over i in ascending order — only the loop nesting changed —
+		// and the inner AXPY orow[j] += qi·srow[j] carries no reduction dependency.
 		for j := range dv {
-			var acc float64 // out_n = Q_n·S_n
-			for i := range dk {
-				acc += qrow[i] * s[i*dv+j]
+			orow[j] = 0
+		}
+		for i := range dk {
+			qi := qrow[i]
+			srow := s[i*dv : i*dv+dv]
+			for j := range dv {
+				orow[j] += qi * srow[j]
 			}
-			out.SetF64(acc, n, j)
+		}
+		for j := range dv {
+			out.SetF64(orow[j], n, j)
 		}
 	}
 	return out, nil
