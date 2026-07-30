@@ -142,15 +142,23 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					scores[j] = math.Exp(scores[j] - m)
 					sum += scores[j]
 				}
-				orow := os[i*dm+off : i*dm+off+dk]
+				// P·V j-OUTER / d-inner: read each v-row contiguously (vs[j*dm+off:+dk])
+				// ONCE and axpy it into the dk-wide output row, instead of striding vs by
+				// dm and re-streaming the column region per output channel d. Also hoists
+				// scores[j]/sum out of the d loop (it was recomputed dk×). Bit-identical:
+				// scores[j]/sum is deterministic and each fixed d sums j ascending (PS1006).
+				orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
 				for d := range dk {
-					var o float64
-					if sum > 0 {
-						for j := 0; j <= i; j++ {
-							o += scores[j] / sum * vs[j*dm+off+d]
+					orow[d] = 0
+				}
+				if sum > 0 {
+					for j := 0; j <= i; j++ {
+						pj := scores[j] / sum
+						vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+						for d := range dk {
+							orow[d] += pj * vrow[d]
 						}
 					}
-					orow[d] = o
 				}
 			}
 		}
