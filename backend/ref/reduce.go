@@ -1,6 +1,7 @@
 package ref
 
 import (
+	"github.com/jxsl13/goai/internal/parallel"
 	"fmt"
 	"math"
 
@@ -117,24 +118,31 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 				}
 			}
 			if trailing {
+				// Each output segment reduces its own contiguous xs[seg*count:(seg+1)*count] run
+				// into acc[seg] — disjoint writes, same ascending combine order per segment — so
+				// the segments parallelize byte-identically.
 				if isSum { // inline `a += x`, no per-element indirect combine call
-					for seg := 0; seg < outNumel; seg++ {
-						a := acc[seg]
-						base := seg * count
-						for k := 0; k < count; k++ {
-							a += xs[base+k]
+					parallel.Rows(outNumel, func(slo, shi int) {
+						for seg := slo; seg < shi; seg++ {
+							a := acc[seg]
+							base := seg * count
+							for k := 0; k < count; k++ {
+								a += xs[base+k]
+							}
+							acc[seg] = a
 						}
-						acc[seg] = a
-					}
+					})
 				} else {
-					for seg := 0; seg < outNumel; seg++ {
-						a := acc[seg]
-						base := seg * count
-						for k := 0; k < count; k++ {
-							a = combine(a, xs[base+k])
+					parallel.Rows(outNumel, func(slo, shi int) {
+						for seg := slo; seg < shi; seg++ {
+							a := acc[seg]
+							base := seg * count
+							for k := 0; k < count; k++ {
+								a = combine(a, xs[base+k])
+							}
+							acc[seg] = a
 						}
-						acc[seg] = a
-					}
+					})
 				}
 			} else {
 				eff := make([]int, nd)
