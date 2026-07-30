@@ -480,6 +480,49 @@ candidate (which is why the detector skips set-typed maps and the report says
 
 ---
 
+## PS3007 — membership set built from a slice, then probed in a loop  *(scanner: static)*
+
+**Smell.** A set — `map[K]bool` or `map[K]struct{}` — is filled by ranging a slice the
+caller already owns, then probed once per iteration of a loop:
+
+```go
+breaker := map[int]bool{}
+for _, b := range s.DRYBreakers { breaker[b] = true }
+for j, t := range window { brk[j] = breaker[t] }   // one hash per window position
+```
+
+PS3003 deliberately skips set-shaped maps, because a sparse set is not the dense `[0,N)`
+lookup a slice would replace. That is right about *densification* and misses this: the
+question the map answers is already answered by the slice it was built from.
+
+**Fix.** Don't build the map. Scan the source slice — for a handful of elements the
+compiler keeps it in registers, and a few predictable comparisons beat one hash. Keep the
+map behind a size threshold so a large set doesn't fall off the O(L·B) cliff.
+
+**Measured** (`nlp.applyDRY`, sequence-breaker set):
+- `runtime.mapaccess1_fast64` was **1.14s of the function's 1.99s cumulative** — 57% of
+  its own time, for a prepass whose comment already recorded killing the O(L²) probes.
+- `BenchmarkApplyDRY` **19.52µs → 15.87µs, −18.72%** (p=0.002, n=6, interleaved, both arm
+  orders); B/op and allocs/op unchanged; `mapaccess1_fast64` left the profile entirely.
+- The benchmark's own 256KB logits reset is ~25% of each op, so the function improved by
+  more than the reported delta.
+
+**Crossover, measured rather than assumed.** Forced onto each arm on an M2 Pro: at 8
+breakers the scan wins (62.7µs vs 64.7µs), at 16 it has already lost (68.0µs vs 65.4µs),
+at 64 it loses badly (97.7µs vs 66.3µs). Hence a threshold of 8 — and hence this is a
+SMALL-SET transform, not a general one.
+
+**Silent on** a set written after its build loop (a mutable working set genuinely needs a
+map — autograd's einsum `avail`), and on a build already guarded by a size THRESHOLD on
+the source, which is code that has taken this advice already. **Not** silenced by an
+emptiness guard: `len(src) > 0` is a nil check whose branch is the only path, not a
+fallback, and conflating the two made the check silent on the one true site in this repo.
+
+**Blind spot.** Only the value form `for _, v := range src` is recognized; the index form
+`for i := range src { set[src[i]] = true }` is missed. No instance exists in this repo.
+
+---
+
 ## Discipline
 
 - **Verify or revert.** No change ships without a pre/post benchmark on

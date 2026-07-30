@@ -44,6 +44,9 @@
 //	PS4003. a loop calls a package-local elementwise helper that WRAPS a libm
 //	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
 //	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
+//	PS3007. a membership SET (map[K]bool/struct{}) built by ranging a slice, then probed in
+//	   a loop — the source slice already answers the question, so a small set is faster scanned
+//	   than hashed (applyDRY -18.72%, mapaccess1_fast64 gone; crossover 8–16 elements).
 //	PS3003. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
 //	   loop — when the keys are dense over [0,N) a []T indexed by the key drops the
 //	   per-lookup hash (BPE Decode 2.85×, GGUF Decode 3.67×, forest votes T312).
@@ -202,6 +205,7 @@ var checks = []check{
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
+	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
 	// PS4xxx — vectorization candidates
@@ -2138,6 +2142,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
+	out = append(out, setMapFromSliceFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
@@ -10326,6 +10331,271 @@ func callsReceiverMethod(body *ast.BlockStmt, recv string) bool {
 		if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
 			found = true
 		}
+		return true
+	})
+	return found
+}
+
+// setMapFromSliceFindings flags PS3007 — a membership SET (map[K]bool / map[K]struct{}) that is
+// built by ranging a slice and then probed inside a loop.
+//
+// PS3003 deliberately excludes set-shaped maps, on the grounds that a sparse membership set is not
+// the dense [0,N) lookup a slice would replace. That is right about DENSIFICATION and wrong about
+// this: when the set's contents come from a slice the caller already owns, the fix is not a dense
+// table but no map at all — scan the source slice. The map build plus one hash per probe loses to
+// len(src) comparisons the compiler keeps in registers, as long as the source stays small.
+//
+// MEASURED, which is why the check exists. nlp's applyDRY hashed its sequence-breaker set once per
+// window position to precompute a dense []bool; runtime.mapaccess1_fast64 was 1.14s of the
+// function's 1.99s cumulative profile, 57% of its own time. Scanning DRYBreakers directly took
+// BenchmarkApplyDRY from 19.52us to 15.87us, -18.72% at p=0.002 (n=6, interleaved, both arm
+// orders), allocations unchanged, and mapaccess1_fast64 left the profile entirely. That measurement
+// also fixes the boundary: forced onto each arm, the crossover sits between 8 and 16 elements on an
+// M2 Pro (at 8 the scan wins 62.7us vs 64.7us; at 16 it has lost, 68.0us vs 65.4us; at 64 it loses
+// badly, 97.7us vs 66.3us). So this is a SMALL-SET transform, and the advice says so.
+//
+// Two narrowings, both load-bearing rather than cosmetic — without them the check reported three
+// sites in this repo and exactly one was real:
+//
+//   - The set must be READ-ONLY after its build loop. Scanning the source reproduces the predicate
+//     only if nothing adds to the set later; autograd's einsum `avail` is written inside the very
+//     loop that probes it, so it genuinely needs a map.
+//   - A build already guarded by a SIZE THRESHOLD on the source is silent, because such code has
+//     already taken this advice and kept the map only as its large-set fallback — applyDRY itself
+//     now looks exactly like that. The threshold test must not be confused with an EMPTINESS test:
+//     `len(src) > 0` is a nil guard whose branch is the only path, not a fallback, and treating it
+//     as a threshold suppressed the one true finding in the repo while it was written that way.
+//
+// HOTNESS IS NOT VISIBLE HERE. The probe loop's trip count and the source slice's length are both
+// runtime facts, so confirm the source really is small and the probe really is on a repeating path,
+// then benchmark before converting.
+//
+// KNOWN BLIND SPOT: only the value form of the build is recognized, `for _, v := range src {
+// set[v] = true }`. The index form, `for i := range src { set[src[i]] = true }`, denotes the same
+// pattern and is missed. Deliberate — a counting pass over this repo finds no instance, so
+// supporting it would add machinery no real code exercises.
+func setMapFromSliceFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Names declared in this function as a SET map, and the map type's own position.
+	sets := map[string]bool{}
+	declSet := func(typ ast.Expr, name string) {
+		mt, ok := typ.(*ast.MapType)
+		if !ok {
+			return
+		}
+		if id, ok := mt.Value.(*ast.Ident); ok && id.Name == "bool" {
+			sets[name] = true
+			return
+		}
+		if st, ok := mt.Value.(*ast.StructType); ok && st.Fields != nil && len(st.Fields.List) == 0 {
+			sets[name] = true
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if i >= len(x.Lhs) {
+					break
+				}
+				id, ok := x.Lhs[i].(*ast.Ident)
+				if !ok {
+					continue
+				}
+				switch r := rhs.(type) {
+				case *ast.CallExpr:
+					if calleeName(r.Fun) == "make" && len(r.Args) > 0 {
+						declSet(r.Args[0], id.Name)
+					}
+				case *ast.CompositeLit:
+					declSet(r.Type, id.Name)
+				}
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				declSet(x.Type, nm.Name)
+			}
+		}
+		return true
+	})
+	if len(sets) == 0 {
+		return nil
+	}
+
+	// Builds of the shape `for _, v := range SRC { SET[v] = true }`.
+	built := map[string]string{}
+	buildLoop := map[string]*ast.RangeStmt{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		r, ok := n.(*ast.RangeStmt)
+		if !ok || r.Value == nil || r.Body == nil || len(r.Body.List) != 1 {
+			return true
+		}
+		v, ok := r.Value.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		as, ok := r.Body.List[0].(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 {
+			return true
+		}
+		idx, ok := as.Lhs[0].(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || !sets[m.Name] {
+			return true
+		}
+		if k, ok := idx.Index.(*ast.Ident); !ok || k.Name != v.Name {
+			return true
+		}
+		src := exprText(r.X)
+		if src == "" {
+			return true
+		}
+		built[m.Name] = src
+		buildLoop[m.Name] = r
+		return true
+	})
+	if len(built) == 0 {
+		return nil
+	}
+
+	inBuild := func(name string, n ast.Node) bool {
+		bl := buildLoop[name]
+		return bl != nil && n.Pos() >= bl.Pos() && n.End() <= bl.End()
+	}
+	// NARROWING 1: drop any set written to outside its build loop.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, l := range as.Lhs {
+			ix, ok := l.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			m, ok := ix.X.(*ast.Ident)
+			if !ok || built[m.Name] == "" || inBuild(m.Name, ix) {
+				continue
+			}
+			delete(built, m.Name)
+		}
+		return true
+	})
+	// NARROWING 2: drop any build already guarded by a size threshold on the source.
+	for name, src := range built {
+		if buildGuardedBySize(fn, buildLoop[name], src) {
+			delete(built, name)
+		}
+	}
+	if len(built) == 0 {
+		return nil
+	}
+
+	parent := map[ast.Node]ast.Node{}
+	var stack []ast.Node
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if len(stack) > 0 {
+			parent[n] = stack[len(stack)-1]
+		}
+		stack = append(stack, n)
+		return true
+	})
+
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		idx, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || built[m.Name] == "" || inBuild(m.Name, idx) {
+			return true
+		}
+		// A write is a build, not a probe. (Narrowing 1 already dropped such sets, but a
+		// comma-ok read must still be distinguished from an assignment target.)
+		if as, ok := parent[idx].(*ast.AssignStmt); ok {
+			for _, l := range as.Lhs {
+				if l == idx {
+					return true
+				}
+			}
+		}
+		if nearestLoop(parent, idx) == nil || seen[idx.Pos()] {
+			return true
+		}
+		seen[idx.Pos()] = true
+		out = append(out, finding{
+			pos:      fset.Position(idx.Pos()),
+			category: "set-map-from-slice",
+			msg: fmt.Sprintf("%q is a membership SET built by ranging %q, then probed in a loop —"+
+				" each probe pays a hash to answer a question the source slice already answers."+
+				" When %q is small, scanning it directly is faster than building and hashing the"+
+				" map (applyDRY: -18.72%%, and mapaccess1_fast64 left the profile); keep the map"+
+				" behind a size threshold for large sets, since the scan is O(len(%s)) per probe."+
+				" Measured crossover was 8-16 elements. Confirm the source is small and the probe"+
+				" repeats, then benchmark.", m.Name, built[m.Name], built[m.Name], built[m.Name]),
+		})
+		return true
+	})
+	return out
+}
+
+// buildGuardedBySize reports whether bl sits inside an if whose condition compares len(src) against
+// a bound other than the literal 0.
+//
+// The literal-0 exclusion is the whole point rather than a detail: `if len(src) > 0` is an
+// emptiness guard, and the build behind it is the function's only path, not a large-set fallback.
+// Counting it as a threshold made this check silent on the single genuine site in the repo.
+func buildGuardedBySize(fn *ast.FuncDecl, bl *ast.RangeStmt, src string) bool {
+	if bl == nil {
+		return false
+	}
+	isLenOfSrc := func(e ast.Expr) bool {
+		call, ok := e.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return false
+		}
+		return calleeName(call.Fun) == "len" && exprText(call.Args[0]) == src
+	}
+	isZeroLit := func(e ast.Expr) bool {
+		lit, ok := e.(*ast.BasicLit)
+		return ok && lit.Kind == token.INT && lit.Value == "0"
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok || ifs.Cond == nil || bl.Pos() < ifs.Pos() || bl.End() > ifs.End() {
+			return true
+		}
+		ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+			bin, ok := c.(*ast.BinaryExpr)
+			if !ok {
+				return true
+			}
+			var other ast.Expr
+			switch {
+			case isLenOfSrc(bin.X):
+				other = bin.Y
+			case isLenOfSrc(bin.Y):
+				other = bin.X
+			default:
+				return true
+			}
+			if !isZeroLit(other) {
+				found = true
+			}
+			return true
+		})
 		return true
 	})
 	return found
