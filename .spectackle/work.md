@@ -1898,3 +1898,20 @@ THE PAYOFF DIFFERS BY FOUR TIMES BETWEEN THE TWO SITES, AND THAT IS THE FINDING.
 WHY NO SCAN RULE WAS ADDED. The compiler already detects this shape exactly, and better than an AST approximation could - it reports the checks that actually survive, after inlining and after prove. An AST rule matching range-over-a-count-while-indexing-another-slice would flag thousands of sites the compiler has already discharged, and would still not rank them. The honest division of labor is: the compiler finds the checks, a profile finds the hot ones, and the analyzer stays out of it. That is the second time this campaign has concluded that a real and generalizable optimization should NOT become a scan rule, for the same underlying reason.
 
 STILL OPEN, now with proven headroom: the eigensolver's loop fusion with a four-element peel, and its unrolling candidate. The 15 percent result established that its inner loop is issue-bound, which is exactly the condition those two need and which was previously unknown.
+
+## R-01KYRNP2D9EN2V7JVB9C58X9T4 Eigensolver fusion landed for a further 3.5 and 7.2 percent, and the peel the legality argument demanded is confirmed by mutation
+kind: research
+state: draft
+created: 2026-07-30
+
+Completes the internal eigensolver line. Cumulative 1.21 times at n=64 and 1.22 at n=128 across two bit-identical changes, both gated by a tolerance-zero oracle that already existed.
+
+THE SEQUENCING IS THE LESSON. The survey estimated bounds-check removal at 1.03 to 1.10 times and explicitly framed it as the calibration that would decide whether the fusion and unrolling candidates were worth attempting at all. It measured 1.18, which established the inner loop is issue-bound; the fusion that answer unlocked then added a further 3.5 percent at n=64 and 7.2 at n=128. Had the cheap candidate been dismissed on the strength of its small estimate, the expensive one would have stayed closed too. Cast as a rule.
+
+WHICH LOOPS FUSED AND WHY NOT THE THIRD. The column rotation of the matrix and the rotation of the eigenvector accumulator are disjoint by construction, so they fuse with no peel and no skip and their dependency chains issue together. The row rotation is left separate because at the two pivot indices it reads the four cells the column rotation has just written, so fusing it requires a four-element peel of both loops.
+
+THAT CAVEAT IS EMPIRICALLY CONFIRMED, not just argued. Fusing the row loop naively, without the peel, turns the bit-identity oracle red. The legality analysis and the test agree, which is worth recording because the analysis was subtle enough to be worth doubting - the overlap is exactly four cells out of an n-by-n matrix, and a naive reading would call the loops independent.
+
+THE SIZE DEPENDENCE CAME OUT IN THE PREDICTED DIRECTION. Fusion helps roughly twice as much at n=128 as at n=64. At 256 kilobytes the working set is out of first-level cache, so overlapping a strided stream with a contiguous one buys more than when everything is already resident. The bounds-check removal, by contrast, was nearly size-independent, which is the correct signature for a pure instruction-count change.
+
+STILL OPEN, and now the only remaining candidate in the package: unrolling the fused loop by four, bit-identical since the iterations write distinct destinations and carry no accumulation. Also still open and still declined: the triangle-only symmetric form, estimated at 1.30 to 1.45 times but reassociating, which would retire the oracle both of these changes were validated against.
