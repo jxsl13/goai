@@ -1915,3 +1915,24 @@ THAT CAVEAT IS EMPIRICALLY CONFIRMED, not just argued. Fusing the row loop naive
 THE SIZE DEPENDENCE CAME OUT IN THE PREDICTED DIRECTION. Fusion helps roughly twice as much at n=128 as at n=64. At 256 kilobytes the working set is out of first-level cache, so overlapping a strided stream with a contiguous one buys more than when everything is already resident. The bounds-check removal, by contrast, was nearly size-independent, which is the correct signature for a pure instruction-count change.
 
 STILL OPEN, and now the only remaining candidate in the package: unrolling the fused loop by four, bit-identical since the iterations write distinct destinations and carry no accumulation. Also still open and still declined: the triangle-only symmetric form, estimated at 1.30 to 1.45 times but reassociating, which would retire the oracle both of these changes were validated against.
+
+## R-01KYRPFK1NEG5A8EAECNVQA4T5 An audit of the most-fired scan check found zero of its 110 hits matched its own shape, and the counted fix prunes 84 of them
+kind: research
+state: draft
+created: 2026-07-30
+
+Closes the precision question two earlier surveys had raised in passing, with the arithmetic they lacked.
+
+THE RESULT. Every one of the check's 110 hits was classified. None was the sequential recurrence its message described. Fifty-seven were transformer layer stacks, thirty-five more were per-head, per-window or per-expert fan-outs, twelve were movement-only preparation loops. The strict false-positive rate - the message's premise being factually false at the site - was 109 of 110.
+
+WORSE THAN THE RATE: the genuine class exists, six loops in this tree, every one carrying explicit state across a sequence-length range, and all six were already suppressed by a different guard. So the check was reporting 110 sites and had never once reported one of the six it was built for. A high hit count read as high yield and meant the opposite.
+
+THE FIX IS ONE NEGATIVE CONDITION, counted before it was written and verified after: skip the loop when its trip count comes from a FIELD. Layer, head and expert collections are architecture counts on the order of tens; a sequence length arrives as a local or a parameter. Measured 110 hits down to 26, all six genuine sites kept, the three existing fixtures unchanged, layer stacks down from 57 sites to 1.
+
+FOUR RICHER PREDICATES WERE COUNTED AND REJECTED, and the arithmetic is the deliverable rather than the idea. Loop-carried state fires on every layer stack too, because the residual IS carried state - it is what the two shapes share, not what separates them. Requiring the carried value to feed two or more dispatches loses the canonical single-chain recurrence, dropping recall to four of six. Filtering elementwise against matmul ops has recall ZERO, because twenty-two layer stacks show no visible matmul - theirs sit behind method calls an AST walker cannot resolve - while all six real recurrences do show one. Matching a literal row-slice attribute also has recall zero.
+
+THE MESSAGE OVERCLAIMED and is corrected. It asserted a per-sequence dispatch cost and prescribed a plain-Go recurrence, both true of zero hits. It now states the condition and tells the reader the check cannot see the trip count.
+
+TWO ADJACENT DEFECTS, recorded not fixed. The fused-path guard matches a single identifier, so it misses every fused path spelled otherwise - thirty-six of the hit functions already have one, and in one vision file this rule's own documented success case was being re-reported as an opportunity. And the check reports the outermost qualifying loop per nest but not siblings, so one function can still yield several hits.
+
+THE PROCESS POINT, cast as a rule: a check that accumulates dozens of unacted-on hits should have every hit classified before it is treated as a work queue. This one had two prior surveys note in passing that its premise was wrong for most matches; neither counted, so nothing changed for months.
