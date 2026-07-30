@@ -2,6 +2,7 @@ package classic
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 	"runtime"
 )
@@ -330,9 +331,20 @@ func (kc *kernelCache) column(i int) []float64 {
 	}
 	col := make([]float64, kc.n)
 	xi := kc.x[i]
-	for t := range kc.n {
-		col[t] = kc.m.kernel(xi, kc.x[t])
-	}
+	// PARALLEL over the column's entries. Each t writes only col[t] and calls kernel, which
+	// reads its two argument rows and the config and nothing else — no receiver scratch, so
+	// nothing to race on. Bit-identical: the accumulation axis is the FEATURE index INSIDE each
+	// kernel evaluation and is untouched; t merely selects which independent evaluation runs
+	// where (PERF-REDUCTION-AXIS-DECIDES-001).
+	//
+	// A whole SVC fit measured 0.97x from GOMAXPROCS=1 to 12 — entirely serial — while this
+	// method sat at 58% of the profile. SMO itself cannot be parallelized (it picks a violating
+	// pair and updates, iteration by iteration), but the two columns each step evaluates can be.
+	svcParallelColumn(kc.n, len(xi), func(lo, hi int) {
+		for t := lo; t < hi; t++ {
+			col[t] = kc.m.kernel(xi, kc.x[t])
+		}
+	})
 	if kc.cap > 0 && len(kc.cols) >= kc.cap {
 		evict := kc.order[0]
 		kc.order = kc.order[1:]
@@ -636,3 +648,19 @@ func (m *SVC) Intercept() float64 { return m.b }
 // Gamma returns the kernel coefficient γ actually used (resolved from "scale"
 // when γ was not set explicitly). Zero for the linear kernel's purposes.
 func (m *SVC) Gamma() float64 { return m.gammaVal }
+
+// svcParallelColumn splits a kernel column's n entries across the shared bounded pool. Entries
+// are independent — each writes its own slot from read-only inputs — so the partition changes no
+// value. Serial below a work threshold and for a single worker; per is the per-entry feature
+// count, so the threshold compares total work.
+func svcParallelColumn(n, per int, body func(lo, hi int)) {
+	if n < 2 || parallel.Workers() <= 1 || n*per < svcParThreshold {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
+}
+
+// svcParThreshold is the total work below which splitting a kernel column costs more than it
+// saves — the same 1<<15 crossover the other classic parallel helpers use.
+const svcParThreshold = 1 << 15
