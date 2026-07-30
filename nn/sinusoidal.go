@@ -42,15 +42,21 @@ func SinusoidalPositionalEncoding(seqLen, dModel int, base float64, dtype tensor
 	for i := range half {
 		freqs[i] = 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
 	}
-	for pos := range seqLen {
-		fp := float64(pos)
-		for i := range half {
-			angle := fp * freqs[i]
-			sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical to Sin+Cos)
-			pe.SetF64(sin, pos, 2*i)
-			pe.SetF64(cos, pos, 2*i+1)
+	// Each position's row depends only on pos and the shared read-only freqs (per-row Sincos is
+	// deterministic and order-independent), and writes only disjoint columns of row pos, so the
+	// position loop fans out over GOMAXPROCS bit-identically to the serial loop. Gated on
+	// seqLen·half so a small table stays serial.
+	parallelRows(seqLen, half, func(lo, hi int) {
+		for pos := lo; pos < hi; pos++ {
+			fp := float64(pos)
+			for i := range half {
+				angle := fp * freqs[i]
+				sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical to Sin+Cos)
+				pe.SetF64(sin, pos, 2*i)
+				pe.SetF64(cos, pos, 2*i+1)
+			}
 		}
-	}
+	})
 	return pe, nil
 }
 
@@ -83,14 +89,19 @@ func SinusoidalPositionalEncodingConcat(seqLen, dModel int, base float64, dtype 
 	for i := range half {
 		freqs[i] = 1.0 / math.Pow(base, float64(2*i)/float64(dModel))
 	}
-	for pos := range seqLen {
-		fp := float64(pos)
-		for i := range half {
-			angle := fp * freqs[i]
-			sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical)
-			pe.SetF64(sin, pos, i)         // first half: sines
-			pe.SetF64(cos, pos, half+i)    // second half: cosines
+	// Per-row Sincos is deterministic and writes only disjoint columns of row pos, so the
+	// position loop fans out over GOMAXPROCS bit-identically to the serial loop (see the
+	// interleaved variant above). Gated on seqLen·half.
+	parallelRows(seqLen, half, func(lo, hi int) {
+		for pos := lo; pos < hi; pos++ {
+			fp := float64(pos)
+			for i := range half {
+				angle := fp * freqs[i]
+				sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical)
+				pe.SetF64(sin, pos, i)         // first half: sines
+				pe.SetF64(cos, pos, half+i)    // second half: cosines
+			}
 		}
-	}
+	})
 	return pe, nil
 }
