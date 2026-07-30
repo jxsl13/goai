@@ -55,3 +55,43 @@ func TestMaskLogitsInvalidStateMasksEverything(t *testing.T) {
 		}
 	}
 }
+
+// The GrammarGuide twin of both edge tests. Its MaskLogits carries the same two explicit branches for
+// the same reason, and they were equally uncovered — verified by the same two mutations leaving the
+// package green before this existed.
+func maskGrammarGuide(t *testing.T) (*nlp.GrammarGuide, int) {
+	t.Helper()
+	vocab := []string{"a", "b", "c", "d"}
+	g, err := nlp.NewGrammarGuide(`root ::= "a" root | "a"`, vocab)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g, len(vocab)
+}
+
+func TestGrammarMaskLogitsMasksBeyondVocab(t *testing.T) {
+	g, v := maskGrammarGuide(t)
+	logits := make([]float64, v+3)
+	g.MaskLogits(g.Start(), logits, -1)
+	for i := v; i < len(logits); i++ {
+		if !math.IsInf(logits[i], -1) {
+			t.Fatalf("logit %d is past the vocabulary (%d tokens) and must be masked, got %v", i, v, logits[i])
+		}
+	}
+	if math.IsInf(logits[0], -1) {
+		t.Fatal(`"a" is the only legal first token of this grammar and must remain allowed`)
+	}
+}
+
+func TestGrammarMaskLogitsInvalidStateMasksEverything(t *testing.T) {
+	g, v := maskGrammarGuide(t)
+	for _, state := range []int{-1, 1 << 20} {
+		logits := make([]float64, v)
+		g.MaskLogits(state, logits, -1)
+		for i, x := range logits {
+			if !math.IsInf(x, -1) {
+				t.Fatalf("state %d is invalid so every token must be masked; logit %d is %v", state, i, x)
+			}
+		}
+	}
+}

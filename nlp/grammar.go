@@ -174,12 +174,43 @@ func (g *GrammarGuide) Advance(state, token int) int {
 // otherwise). A dead state masks everything. logits must be vocab-sized.
 func (g *GrammarGuide) MaskLogits(state int, logits []float64, eosID int) (eosAllowed bool) {
 	acc := g.Accepting(state)
-	for t := range logits {
-		if t == eosID {
-			continue
+	// Same hoist as RegexGuide.MaskLogits, for the same reason: Allowed -> Advance was a real call
+	// per VOCAB ENTRY per generated token, and each call re-validated state and token against their
+	// bounds, re-dereferenced g.states[state] and re-checked the memo for nil before indexing it.
+	// The memo is read directly here; Advance runs only for entries not yet computed.
+	//
+	// Identical results: the memo IS what Advance returns once filled, tokens past the vocabulary
+	// still mask (Advance's bounds check returned -1), and an out-of-range state masks everything.
+	if state < 0 || state >= len(g.states) {
+		for t := range logits {
+			if t != eosID {
+				logits[t] = math.Inf(-1)
+			}
 		}
-		if !g.Allowed(state, t) {
-			logits[t] = math.Inf(-1)
+	} else {
+		st := g.states[state]
+		if st.tokNext == nil { // the lazy init Advance performs, done once instead of per token
+			st.tokNext = make([]int, len(g.vocab))
+			for i := range st.tokNext {
+				st.tokNext[i] = -2
+			}
+		}
+		nx := st.tokNext
+		for t := range logits {
+			if t == eosID {
+				continue
+			}
+			if t >= len(nx) { // beyond the vocabulary
+				logits[t] = math.Inf(-1)
+				continue
+			}
+			v := nx[t]
+			if v == -2 {
+				v = g.Advance(state, t) // first visit walks the stacks; memoized thereafter
+			}
+			if v < 0 {
+				logits[t] = math.Inf(-1)
+			}
 		}
 	}
 	if eosID >= 0 && eosID < len(logits) && !acc {

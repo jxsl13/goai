@@ -84,3 +84,45 @@ func maskName(n int) string {
 	}
 	return "v" + string(d[i:])
 }
+
+// The GrammarGuide twin of the benchmark above. Same regime — memo warm, every token a table hit —
+// and the same reason it needs its own numbers rather than inheriting the regex ones: the two
+// MaskLogits bodies are structurally identical but sit on different Advance implementations, so what
+// share of the loop is the hoistable per-call overhead is a question only measurement answers.
+func BenchmarkGrammarGuideMaskLogits(b *testing.B) {
+	const gr = `root ::= obj
+obj ::= "{" pairs "}"
+pairs ::= pair | pair "," pairs | ""
+pair ::= str ":" val
+str ::= "\"" [a-z]+ "\""
+val ::= str | num | "true" | "false" | "null"
+num ::= [0-9]+`
+	for _, v := range []int{4096, 32768} {
+		vocab := maskVocab(v)
+		g, err := nlp.NewGrammarGuide(gr, vocab)
+		if err != nil {
+			b.Fatal(err)
+		}
+		st := g.Start()
+		logits := make([]float64, v)
+		g.MaskLogits(st, logits, -1) // warm the memo for this state
+		b.Run(maskName(v), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				for i := range logits {
+					logits[i] = 0
+				}
+				g.MaskLogits(st, logits, 1)
+			}
+			masked := 0
+			for _, x := range logits {
+				if math.IsInf(x, -1) {
+					masked++
+				}
+			}
+			if masked == 0 || masked == len(logits) {
+				b.Fatalf("fixture masks %d of %d tokens; it must mask some but not all", masked, len(logits))
+			}
+		})
+	}
+}
