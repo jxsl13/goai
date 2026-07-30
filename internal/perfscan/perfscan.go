@@ -1672,7 +1672,11 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	//
 	// Requires BOTH the per-row allocation loop and a two-deep index inside a nested
 	// loop. A [][]T that is merely passed around, or indexed once outside a loop, is
-	// a legitimate ragged structure and not a candidate.
+	// a legitimate ragged structure and not a candidate. The per-row alloc is matched
+	// whether the fill is direct (m[i] = make(...)) or indirect (r := make(...); m[i] = r),
+	// and the two-deep index whether literal (m[i][j]) or via a hoisted row local
+	// (row := m[i]; … row[j]) — the common idiom that lifts the row pointer once per outer
+	// iteration and columns-walks it in the inner loop.
 	{
 		for name := range rowAllocMatrices(fn) {
 			if pos, ok := nestedDoubleIndex(fn, name); ok {
@@ -2874,6 +2878,33 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 		}
 		return true
 	})
+	// Locals bound to a 1-D make (`row := make([]T, …)`) — a single row buffer that the
+	// fill loop may store into arr[i] indirectly (`row := make(...); …; arr[i] = row`)
+	// rather than the direct `arr[i] = make(...)`. Both fills allocate one row per i.
+	makeRow := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		if f, ok := call.Fun.(*ast.Ident); !ok || f.Name != "make" {
+			return true
+		}
+		if at, ok := call.Args[0].(*ast.ArrayType); ok {
+			if _, nested := at.Elt.(*ast.ArrayType); !nested { // 1-D []T row, not [][]T
+				makeRow[id.Name] = true
+			}
+		}
+		return true
+	})
 	filled := map[string]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		as, ok := n.(*ast.AssignStmt)
@@ -2888,21 +2919,51 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 		if !ok || !outer[id.Name] {
 			return true
 		}
-		call, ok := as.Rhs[0].(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if f, ok := call.Fun.(*ast.Ident); ok && f.Name == "make" {
-			filled[id.Name] = true
+		switch rhs := as.Rhs[0].(type) {
+		case *ast.CallExpr: // arr[i] = make(...)
+			if f, ok := rhs.Fun.(*ast.Ident); ok && f.Name == "make" {
+				filled[id.Name] = true
+			}
+		case *ast.Ident: // arr[i] = row, where row := make([]T, …)
+			if makeRow[rhs.Name] {
+				filled[id.Name] = true
+			}
 		}
 		return true
 	})
 	return filled
 }
 
-// nestedDoubleIndex reports the position of a two-deep index on name (m[i][j])
-// occurring inside at least two nested loops — the region where the row-pointer
-// dereference is paid repeatedly rather than once.
+// rowAliases collects the local variables bound to a single-index ROW of name
+// (`row := name[i]`, including within a tuple `row, pr := name[i], other[i]`). It lets
+// nestedDoubleIndex also recognize the HOISTED-ROW form of a two-deep index — where the
+// row pointer is lifted into a local and then indexed (`row[j]`) — which the literal
+// m[i][j] matcher misses. A `_` binding is ignored.
+func rowAliases(fn *ast.FuncDecl, name string) map[string]bool {
+	locals := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for k := 0; k < len(as.Lhs) && k < len(as.Rhs); k++ {
+			lid, lok := as.Lhs[k].(*ast.Ident)
+			ix, iok := as.Rhs[k].(*ast.IndexExpr)
+			if lok && iok && lid.Name != "_" {
+				if xid, ok := ix.X.(*ast.Ident); ok && xid.Name == name {
+					locals[lid.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return locals
+}
+
+// nestedDoubleIndex reports the position of a two-deep index on name — either the literal
+// m[i][j] or the hoisted-row form `row := m[i]; … row[j]` — occurring inside at least two
+// nested loops — the region where the row-pointer dereference is paid repeatedly rather
+// than once.
 // It reports the position of the INNERMOST ENCLOSING LOOP, not of the index expression
 // itself. That distinction is not cosmetic: `//perfscan:ignore` applies to a comment
 // block and the statement below it, so a finding anchored to an expression one line
@@ -2911,6 +2972,7 @@ func rowAllocMatrices(fn *ast.FuncDecl) map[string]bool {
 // only a bare directive failing to silence it revealed the cause. PS4005 and PS4008
 // already anchor to the loop; this makes the family consistent.
 func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
+	rowLocals := rowAliases(fn, name) // locals bound to name[i] — the hoisted-row form
 	var found token.Pos
 	var ok bool
 	var walk func(n ast.Node, depth int, loop token.Pos)
@@ -2939,11 +3001,17 @@ func nestedDoubleIndex(fn *ast.FuncDecl, name string) (token.Pos, bool) {
 			return
 		case *ast.IndexExpr:
 			if depth >= 2 {
+				// literal m[i][j]
 				if inner, isIdx := v.X.(*ast.IndexExpr); isIdx {
 					if id, isID := inner.X.(*ast.Ident); isID && id.Name == name {
 						found, ok = loop, true
 						return
 					}
+				}
+				// hoisted row: row[j] where `row := m[i]` earlier
+				if id, isID := v.X.(*ast.Ident); isID && rowLocals[id.Name] {
+					found, ok = loop, true
+					return
 				}
 			}
 		}
