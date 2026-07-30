@@ -1463,9 +1463,13 @@ int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int c
                      "  int t=threadIdx.x, nt=blockDim.x;\n"
                      "  const float* xr = in + (size_t)row*cols;\n"
                      "  float* yr = out + (size_t)row*cols;\n"
-                     "  double local=0.0;\n"
-                     "  for (int j=t;j<cols;j+=nt){ double v=xr[j]; local+=v*v; }\n"
-                     "  sh[t]=local; __syncthreads();\n"
+                     // GA106 FP64 = 1/64 FP32: sum the squares per thread in FP32 (each thread only
+                     // covers ~cols/nt elements, so the f32 accumulation error is tiny) and combine
+                     // the per-thread partials in DOUBLE for a stable mean-square. Rides the f32
+                     // RMSNorm tolerance; the normalize was already f32.
+                     "  float local=0.0f;\n"
+                     "  for (int j=t;j<cols;j+=nt){ float v=xr[j]; local+=v*v; }\n"
+                     "  sh[t]=(double)local; __syncthreads();\n"
                      "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                      "  double ms = sh[0]/(double)cols;\n"
                      "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
@@ -1508,9 +1512,9 @@ int cu_rmsnorm_f16(const void* in, void* out, const void* gamma, int rows, int c
             "  int t=threadIdx.x, nt=blockDim.x;\n"
             "  const unsigned short* xr = in + (size_t)row*cols;\n"
             "  unsigned short* yr = out + (size_t)row*cols;\n"
-            "  double local=0.0;\n"
-            "  for(int j=t;j<cols;j+=nt){ double v=h2f(xr[j]); local+=v*v; }\n"
-            "  sh[t]=local; __syncthreads();\n"
+            "  float local=0.0f;\n"
+            "  for(int j=t;j<cols;j+=nt){ float v=h2f(xr[j]); local+=v*v; }\n"
+            "  sh[t]=(double)local; __syncthreads();\n"
             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
             "  double ms=sh[0]/(double)cols;\n"
             "  float inv=(float)(1.0/sqrt(ms+(double)eps));\n"
