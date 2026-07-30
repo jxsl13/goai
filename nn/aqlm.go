@@ -484,11 +484,16 @@ func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k,
 // term keeps the system non-singular when some entries are unused (which then refit to zero).
 func refitCodebooksAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k, g int, ridge float64) {
 	n := m * k
+	// ata (n×n) and atg (n×g) each backed by ONE contiguous buffer — the [][] view still
+	// hands solveLinearAQLM its rows, but this drops the 2n per-row allocations per refit
+	// (× iters). Bit-identical: same values, only the row backing changes.
+	ataFlat := make([]float64, n*n)
+	atgFlat := make([]float64, n*g)
 	ata := make([][]float64, n)
 	atg := make([][]float64, n)
 	for i := range n {
-		ata[i] = make([]float64, n)
-		atg[i] = make([]float64, g)
+		ata[i] = ataFlat[i*n : i*n+n : i*n+n]
+		atg[i] = atgFlat[i*g : i*g+g : i*g+g]
 	}
 	cols := make([]int, m)
 	for i := range groups {

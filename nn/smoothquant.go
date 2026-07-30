@@ -41,17 +41,26 @@ func SmoothQuant(x, w *tensor.Tensor, alpha float64) (xHat, wHat *tensor.Tensor,
 	scale = SmoothQuantScale(actAbsMax(x), weightAbsMax(w), alpha)
 
 	xHat = tensor.New(x.Dtype(), x.Shape())
+	// scale[j] is invariant across the `tokens` rows, so precompute its reciprocal once
+	// (cin divisions) and MULTIPLY per element instead of dividing tokens×cin times — f64
+	// division throughput is several× worse than multiply. Tolerance-gated: x·(1/s) differs
+	// from x/s by ≤½ulp, so the SmoothQuant identity X̂·Ŵ = X·W still holds to ~1e-16, well
+	// inside the golden test's 1e-9 relative gate.
+	inv := make([]float64, cin)
+	for j := range cin {
+		inv[j] = 1 / scale[j]
+	}
 	if xs, xhs := flatF64(x), flatF64(xHat); xs != nil && xhs != nil {
 		for t := range tokens {
 			base := t * cin
 			for j := range cin {
-				xhs[base+j] = xs[base+j] / scale[j]
+				xhs[base+j] = xs[base+j] * inv[j]
 			}
 		}
 	} else {
 		for t := range tokens {
 			for j := range cin {
-				xHat.SetF64(x.AtF64(t, j)/scale[j], t, j) // X̂_j = X_j / s_j
+				xHat.SetF64(x.AtF64(t, j)*inv[j], t, j) // X̂_j = X_j · (1/s_j)
 			}
 		}
 	}

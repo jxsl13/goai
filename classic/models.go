@@ -646,36 +646,40 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	for j := range d {
 		p.Mean[j] /= float64(n)
 	}
-	cov := make([][]float64, d)
-	for i := range cov {
-		cov[i] = make([]float64, d)
-	}
-	// Accumulate the covariance as the sum of centered outer products. Centering the
-	// row ONCE into c (instead of recomputing row[i]−mean[i] and row[j]−mean[j] for
-	// every (i,j)) and writing cov[i] += c[i]·c as an equal-length slice axpy lets the
-	// inner loop auto-vectorize; same i-outer/j-inner accumulation order → bit-identical.
-	c := make([]float64, d)
-	for _, row := range x {
+	// cov = Xcᵀ·Xc / (n−1) through the vectorized AVX GEMM (backend OpMatMul) — the same
+	// normal-equations routing that brings LinearRegression.Fit to BLAS class — instead of a
+	// scalar rank-1 outer-product accumulation. Tolerance-gated: the GEMM reassociates the
+	// length-n sum (~1e-13 relative), which TestPCAParity's 1e-9 eigenvalue / sign-invariant
+	// component gate absorbs; the covariance eigenspectrum is unchanged to that tolerance.
+	xc := tensor.New(tensor.F64, tensor.Shape{n, d})
+	xcf := xc.Storage().F64()
+	for r := range n {
+		row := x[r]
+		base := r * d
 		for j := range d {
-			c[j] = row[j] - p.Mean[j]
-		}
-		for i := range d {
-			ci := c[i]
-			covi := cov[i][i:] // upper triangle incl. diagonal — cov is symmetric and
-			cj := c[i:]        // SymEig reads it symmetrically, so skip the redundant half
-			for j := range covi {
-				covi[j] += ci * cj[j]
-			}
+			xcf[base+j] = row[j] - p.Mean[j]
 		}
 	}
-	// scale the upper triangle and mirror it down; keep the DIVISION (not reciprocal-mul)
-	// to preserve bit-parity. Mirror is exact: cov[j][i] = Σ c_j·c_i equals cov[i][j] =
-	// Σ c_i·c_j byte-for-byte (IEEE multiply is commutative, same row-order sum).
+	be, ok := backend.Get(backend.CPU)
+	if !ok {
+		return fmt.Errorf("classic: cpu backend unavailable")
+	}
+	ctx := backend.NewContext().WithBackend(be)
+	xcT, err := xc.Transpose(0, 1)
+	if err != nil {
+		return err
+	}
+	gramRes, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{xcT, xc}, nil)
+	if err != nil {
+		return err
+	}
+	gf := gramRes[0].Storage().F64() // [d,d] = Σ_k Xc[k,i]·Xc[k,j], symmetric
+	cov := make([][]float64, d)
 	for i := range d {
-		for j := i; j < d; j++ {
-			v := cov[i][j] / float64(n-1)
-			cov[i][j] = v
-			cov[j][i] = v
+		cov[i] = make([]float64, d)
+		base := i * d
+		for j := range d {
+			cov[i][j] = gf[base+j] / float64(n-1)
 		}
 	}
 	vals, vecs := linalg.SymEig(cov)
