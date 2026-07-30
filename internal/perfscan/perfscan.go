@@ -3311,7 +3311,7 @@ func stridedInnerReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		if !ok {
 			return true
 		}
-		for _, s := range obody.List {
+		for _, s := range immediateInnerLoops(obody) {
 			jName, jbody, ok := loopVarBody(s)
 			if !ok || jName == oName {
 				continue
@@ -3365,18 +3365,73 @@ func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, boo
 		if !ok {
 			return true
 		}
-		add, ok := ix.Index.(*ast.BinaryExpr)
-		if !ok || add.Op != token.ADD {
+		// Flatten the additive index into its terms so an intervening constant offset
+		// — ARR[j*stride + off + o], the attention P·V / per-head-offset shape — matches,
+		// not just the exact two-term ARR[j*stride + o]. Flag when SOME term is the inner
+		// var strided (j*stride) and SOME term is the plain outer var o; extra terms (off)
+		// are position-invariant and don't change the stride/contiguity analysis.
+		terms := flattenAdd(ix.Index)
+		if len(terms) < 2 {
 			return true
 		}
-		if st, ok := strideOperand(add.X, jName); ok && isPlainIdent(add.Y, oName) {
-			base, stride, found = baseID.Name, st, true
-		} else if st, ok := strideOperand(add.Y, jName); ok && isPlainIdent(add.X, oName) {
+		var st string
+		strided, contig := false, false
+		for _, t := range terms {
+			if s, ok := strideOperand(t, jName); ok {
+				st, strided = s, true
+			} else if isPlainIdent(t, oName) {
+				contig = true
+			}
+		}
+		if strided && contig {
 			base, stride, found = baseID.Name, st, true
 		}
 		return !found
 	})
 	return base, stride, found
+}
+
+// immediateInnerLoops returns the loop statements nested in body that are not themselves
+// inside a deeper loop — descending through if/else/block wrappers but STOPPING at the first
+// loop on each path. This finds an inner reduction loop even when it is guarded by an `if`
+// (the attention P·V `if sum > 0 { for j … }` shape), without reaching into deeper unrelated
+// loop bodies (those are handled when their own enclosing loop becomes the outer candidate).
+func immediateInnerLoops(body *ast.BlockStmt) []ast.Stmt {
+	var loops []ast.Stmt
+	var walk func(stmts []ast.Stmt)
+	walk = func(stmts []ast.Stmt) {
+		for _, s := range stmts {
+			switch t := s.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				loops = append(loops, s)
+			case *ast.IfStmt:
+				if t.Body != nil {
+					walk(t.Body.List)
+				}
+				switch e := t.Else.(type) {
+				case *ast.BlockStmt:
+					walk(e.List)
+				case *ast.IfStmt:
+					walk([]ast.Stmt{e})
+				}
+			case *ast.BlockStmt:
+				walk(t.List)
+			}
+		}
+	}
+	walk(body.List)
+	return loops
+}
+
+// flattenAdd splits an additive expression tree (a + b + c …) into its addends, recursing
+// only through ADD binary ops. A non-add expression returns itself. Used so a strided index
+// carrying a constant offset (ARR[j*stride + off + o]) is analyzed by its individual terms.
+func flattenAdd(e ast.Expr) []ast.Expr {
+	be, ok := e.(*ast.BinaryExpr)
+	if !ok || be.Op != token.ADD {
+		return []ast.Expr{e}
+	}
+	return append(flattenAdd(be.X), flattenAdd(be.Y)...)
 }
 
 // strideOperand reports whether e is a multiply `v * K` (or `K * v`) and returns the textual
