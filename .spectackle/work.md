@@ -1554,3 +1554,21 @@ NO TIME CLAIM, and the discipline is the point. Five rounds at benchtime=1500x g
 THE RULE CALCULUS, which is why this closes rather than reopens PS6020. There are now TWO measured instances of reserve-capacity-at-declaration: the KNN heap, an exact bound k on a zero-value struct field, and this one, an estimate len(text)/3 on a local slice. Same intervention, so PROC-RULE-FROM-N-INSTANCES-001 is satisfied on that axis. But the same lanes contain SIX sites where the shape appears and preallocation is wrong - conditional appends whose loop bound is an upper estimate that would over-reserve (R-01KYRANC8DFNE). A rule flagging the shape would run at 25% precision: two true positives against six known false ones. That is worse than the advisory rules already in the set, and PERF-SCANRULE-EMPTY-001's sibling argument applies - a rule whose hits are mostly wrong trains readers to skip it.
 
 WHAT WOULD MAKE IT SHIPPABLE is a predicate separating an unconditional append from a guarded one, which the AST can see, combined with a bound available at the declaration. The six false positives are all guarded, and both true positives are effectively unguarded - the KNN heap appends whenever below k, and bpeInto appends on every piece unless a vocab miss coincides with no unk token. So the precision problem is solvable; it needs the guard predicate implemented and re-validated against all eight sites, which is a task rather than an aside. Recorded with the site list so that work starts from evidence.
+
+## R-01KYRBHDN1FMST22Q0X2X4HHQG PS6020 is definitively not AST-ruleable: the deciding property is a guard's HIT RATE, and my proposed predicate would have excluded both true positives
+kind: research
+state: draft
+created: 2026-07-30
+
+CLOSES the PS6020 line for good, and corrects two claims I recorded one iteration earlier in R-01KYRBBDHRE9H. That record proposed shipping the rule with a guard predicate on the grounds that both measured true positives are effectively unguarded while all six false positives are guarded. Both halves were wrong, and checking before building is what caught it.
+
+WHAT THE TRUE POSITIVES ACTUALLY LOOK LIKE:
+  knnHeap.consider - the append sits inside if len(h.items) < h.k, so it IS guarded; and it is not inside a loop within that function at all. The loop lives in the CALLER, searchKNN, which calls consider once per candidate point. The shape spans two functions, so a rule scanning one function body cannot see it regardless of predicate.
+  bpeInto - the append sits inside if id, ok := t.vocab[...]; ok, with an else-if branch for the unk token. Guarded, in a loop, and therefore a member of the exact class I had classified as the false-positive class. Preallocating still cut allocations 65 percent and bytes 21 percent.
+So the proposed predicate would have produced ZERO true positives and correctly excluded the six - precision undefined, recall zero. Exactly wrong.
+
+THE REAL DECIDING PROPERTY IS THE GUARD'S HIT RATE, which no parser can read. bpeInto's guard is a vocabulary hit, which is the normal case, so the loop bound is a good capacity estimate. The six rejected sites guard on an entropy threshold, a mask test, an instruction-op switch and an early error return - conditions that fire on a minority of iterations, where reserving the loop bound over-allocates. Same syntax, opposite conclusion, decided by a runtime frequency. That is not a shape; it is a measurement.
+
+CORRECTED PERF-APPEND-USUALLY-CONDITIONAL-001, which I had cast with the wrong reasoning: it now says to estimate how often the guard fires rather than whether one exists. As originally worded it would have talked a future reader out of the bpeInto win.
+
+THE META-OBSERVATION, third instance this session. The error was in the pattern-recognition step between a measurement and a rule, not in the measurement and not in the rule's implementation. PROC-RULE-FROM-N-INSTANCES-001 asks whether the instances are the same intervention - they were, both reserve-capacity-at-declaration. What it does not ask is whether the PREDICATE separating them from non-instances actually holds, and that is where all three failures landed. The cheap guard is to state the predicate and check it against every catalogued site BEFORE writing the detector; here that took two greps and would have saved building the rule twice.
