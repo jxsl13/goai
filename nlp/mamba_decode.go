@@ -339,10 +339,17 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	// Capture the conv-window tail: the last d_conv−1 PRE-conv rows of xin,
 	// oldest first. Pre-sequence slots (T < d_conv−1) keep the fresh state's
 	// zeros, exactly what T mixerStep shifts would have left there.
-	xinRows := rows2D(xin)
+	// Only the last K-1 rows are wanted, so read those rows and no others. rows2D materializes the
+	// ENTIRE [T, D] activation into a fresh T*D buffer, which this loop then samples 3 rows of: at
+	// T=64 that is 21x more elements copied than used, and the ratio grows with the prompt. AtF64
+	// returns exactly what rows2D would have placed in those slots — its F64 arm copies the same
+	// storage and its fallback arm calls this same accessor — so the values are unchanged.
 	for i := range K - 1 {
 		if t := T - (K - 1) + i; t >= 0 {
-			copy(ls.ConvBuf[i*D:(i+1)*D], xinRows[t])
+			dst := ls.ConvBuf[i*D : (i+1)*D]
+			for c := range D {
+				dst[c] = xin.AtF64(t, c)
+			}
 		}
 	}
 

@@ -292,10 +292,17 @@ func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState
 
 	// Capture the conv-window tail: the last d_conv−1 PRE-conv rows of xin,
 	// oldest first; pre-sequence slots keep the fresh state's zeros.
-	xinRows := rows2D(xin)
+	// Only the last K-1 rows are wanted, so read those rows and no others — the same fix as the
+	// Mamba twin in mamba_decode.go, whose measurement is the evidence for this one (no Jamba
+	// prefill benchmark exists). rows2D materializes the ENTIRE [T, D] activation into a fresh T*D
+	// buffer that this loop then samples 3 rows of. AtF64 returns exactly what rows2D would have
+	// placed in those slots, so the values are unchanged.
 	for i := range K - 1 {
 		if t := T - (K - 1) + i; t >= 0 {
-			copy(ls.ConvBuf[i*D:(i+1)*D], xinRows[t])
+			dst := ls.ConvBuf[i*D : (i+1)*D]
+			for c := range D {
+				dst[c] = xin.AtF64(t, c)
+			}
 		}
 	}
 
