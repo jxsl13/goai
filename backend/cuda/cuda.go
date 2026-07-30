@@ -820,3 +820,16 @@ func init() {
 	}
 	// no CUDA GPU → not registered → feature detection via backend.Available() (§I4/§V4)
 }
+
+// attnSoftmaxCap applies the Gemma-2 soft-capped, causally-masked softmax kernel in place to
+// d[rows,cols] (rows = heads*seqQ, cols = seqKV). Test/benchmark hook for cu_attn_softmax_cap,
+// which otherwise is reachable only through the recorder's MHACap.
+func (d *DeviceF32) attnSoftmaxCap(scale float32, offset, seqQ int, cap float32) error {
+	if d.ptr == nil {
+		return fmt.Errorf("cuda: attnSoftmaxCap on a freed handle")
+	}
+	if rc := C.cu_attn_softmax_cap(d.ptr, C.int(d.rows), C.int(d.cols), C.float(scale), C.int(offset), C.int(seqQ), C.float(cap)); rc != 0 {
+		return fmt.Errorf("cuda: attnSoftmaxCap failed (code %d)", int(rc))
+	}
+	return nil
+}

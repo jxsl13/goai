@@ -1102,7 +1102,11 @@ int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, 
                       "  double dl=(double)delta[d], ud=(double)u[d], acc=0.0;\n"
                       "  const float* ad = A + (size_t)d*N; float* hd = h + (size_t)d*N;\n"
                       "  for(int n=0;n<N;n++){\n"
-                      "    double dA = exp(dl*(double)ad[n]);\n"
+                      // FP32 expf for the decay (GA106 FP64 = 1/64 rate). The recurrence is
+                      // CONTRACTIVE (A<0, Δ>0 → dA=exp(neg)<1), so the ~1e-7 per-step error decays
+                      // rather than accumulates; state hv and the C·h sum stay double for stability.
+                      // Inside the SSM tolerance gate (1e-4 vs the f64 ref).
+                      "    double dA = (double)expf((float)(dl*(double)ad[n]));\n"
                       "    double hv = dA*(double)hd[n] + dl*(double)B[n]*ud;\n"
                       "    hd[n] = (float)hv; acc += (double)C[n]*hv;\n"
                       "  }\n"
@@ -1812,15 +1816,15 @@ int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, in
                              "  int row=blockIdx.x; if(row>=rows) return;\n"
                              "  int lim = (row % seqQ) + offset; if(lim>=cols) lim=cols-1;\n"
                              "  extern __shared__ double sh[];\n"
-                             "  int t=threadIdx.x, nt=blockDim.x; double dc=(double)cap;\n"
+                             "  int t=threadIdx.x, nt=blockDim.x;\n"
                              "  float* xr = x + (size_t)row*cols;\n"
                              "  double m=-1e300;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=dc*tanh((double)xr[j]*scale/dc); if(v>m)m=v; } }\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double v=(double)(cap*tanhf(xr[j]*scale/cap)); if(v>m)m=v; } }\n"
                              "  sh[t]=m; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
                              "  double rowmax=sh[0]; __syncthreads();\n"
                              "  double local=0.0;\n"
-                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double cs=dc*tanh((double)xr[j]*scale/dc); float e=expf((float)(cs-rowmax)); xr[j]=e; local+=(double)e; } else { xr[j]=0.0f; } }\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ double cs=(double)(cap*tanhf(xr[j]*scale/cap)); float e=expf((float)(cs-rowmax)); xr[j]=e; local+=(double)e; } else { xr[j]=0.0f; } }\n"
                              "  sh[t]=local; __syncthreads();\n"
                              "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                              "  double inv=1.0/sh[0];\n"
