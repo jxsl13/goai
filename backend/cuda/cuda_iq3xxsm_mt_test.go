@@ -35,7 +35,7 @@ func rawIQ3XXS(K, N int, rng *rand.Rand) []byte {
 // max abs diff ~0. M=13 = full MT=8 tile + ragged tail.
 func TestCUDAIQ3XXSMatMulMTParity(t *testing.T) {
 	skipNoGPU(t)
-	const K, N, M = 512, 48, 13
+	const K, N, M = 512, 48, 7 // M in [2,8): validates the newly-routed MT path (partial tile)
 	rng := rand.New(rand.NewSource(91))
 	raw := rawIQ3XXS(K, N, rng)
 	a := make([]float32, M*K)
@@ -129,3 +129,6 @@ func benchIQ3XXSM(b *testing.B, m, k, n int) {
 func BenchmarkIQ3XXSM16_2048(b *testing.B)      { benchIQ3XXSM(b, 16, 2048, 2048) }
 func BenchmarkIQ3XXSM32_2048(b *testing.B)      { benchIQ3XXSM(b, 32, 2048, 2048) }
 func BenchmarkIQ3XXSM64_2048x5632(b *testing.B) { benchIQ3XXSM(b, 64, 2048, 5632) }
+
+func BenchmarkIQ3XXSM2_5632(b *testing.B) { benchIQ3XXSM(b, 2, 2048, 5632) }
+func BenchmarkIQ3XXSM4_5632(b *testing.B) { benchIQ3XXSM(b, 4, 2048, 5632) }
