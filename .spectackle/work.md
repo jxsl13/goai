@@ -1364,3 +1364,26 @@ THE METHOD FAILURE IS THE POINT, and it is the fifth distinct instance this sess
 THE SWEEP ITSELF NEEDS THE SAME DISCIPLINE, which I had not applied to it. PROC-BENCH-TOTAL-TIME-001 was cast about A/B comparisons; a GOMAXPROCS sweep is an A/B in disguise - the two arms are core counts - and its cheapness was exactly what made me run it at benchtime=5x across dozens of benchmarks. The sweep is still the right instrument: it correctly found SoftmaxRegression at 0.99x, SVC at 0.97x and the entire linalg package at 1.00-1.10x, all three confirmed and all three fixed for real wins. But a sweep entry is a HYPOTHESIS to re-measure, never a result, and the ones worth acting on are the large clear signals rather than the marginal ones.
 
 NO ACTION on rl. Its two flat paths were already optimized earlier this session (PPO rollout 1.59x, DQN learn 1.35x) by removing dispatch waste rather than by adding parallelism, which is the correct treatment for a dispatch-bound path and is why they are flat rather than slow.
+
+## R-01KYR68YJYF8ZRYA80GR64CFYF GOMAXPROCS sweep completed across all four owned packages: two real finds, two clean negatives, and one invalid application
+kind: research
+state: draft
+created: 2026-07-30
+
+Closes the sweep line opened in R-01KYR4Z7SWFTC. Measured on darwin/arm64 M2 Pro, go1.26.5, at benchtimes giving tens of milliseconds per arm per PROC-SWEEP-IS-HYPOTHESIS-001.
+
+FINAL RESULTS, parallel speedup from GOMAXPROCS=1 to 12:
+  classic  ForestFit 7.93x, KNNPredict 5.87x, DBSCAN 5.67x, GMMFitFull 3.51x, GBM 1.53-2.79x
+           SoftmaxRegressionFit 0.99x -> FIXED, 1.96x
+           SVCFit/n4000_rbf     0.97x -> FIXED, 1.27x (Amdahl-bounded by sequential SMO)
+  linalg   EVERY benchmark 1.00-1.10x -> FIXED, up to 7.87x on the solve phase
+  vision   MLPMixer 1.85/4.07x, Swin 1.68/3.42x, ViT 2.14/4.32x (perimage/batched) - all parallel, NO finds
+  rl       PPORollout and DQNLearn flat at ~1.0x, correctly - dispatch-bound on tiny tensors,
+           already optimized earlier by removing dispatch waste rather than adding parallelism
+  nlp      realistic geometry: MixtralPromptPrefill 4.20x, QuantMamba2Prefill_256 5.63x - all parallel
+
+TWO CLEAN NEGATIVES ARE PART OF THE RESULT. vision has no flat path, and its perimage-versus-batched gap turned out to be caller-side: the per-image loop lives in the BENCHMARK, so fanning out across images is the user job and not a library change. rl is flat rather than slow, which is the correct end state for a dispatch-bound path.
+
+ONE INVALID APPLICATION, and this is the durable limitation. Sweeping the twelve-architecture quant matrix reported every path at 1.04-1.16x, which looks like a package-wide serial bottleneck. It is an artifact: those fixtures are deliberately two layers at dim 32 - I built them that way, and recorded that they measure per-layer ALLOCATION COUNT, which is geometry-independent - so no backend op is large enough for the parallelism under test to engage. Re-running against benchmarks with realistic geometry gave 4.20x and 5.63x. THE SWEEP ONLY MEANS SOMETHING ON BENCHMARKS WHOSE TENSORS ARE BIG ENOUGH FOR THE PARALLELISM UNDER TEST TO ENGAGE, and a fixture set optimized for cheap deterministic allocation counting is precisely the wrong input. The failure is subtle because the flat numbers are perfectly reproducible - they are just measuring the fixture, not the code.
+
+SCORECARD FOR THE INSTRUMENT: three large signals, all confirmed on re-measurement, all yielding real wins (1.96x, 1.27x, 7.87x). Two marginal signals, both artifacts of insufficient benchtime (rl). One whole-package flat reading that was a fixture artifact (nlp). The large-signal discipline in PROC-SWEEP-IS-HYPOTHESIS-001 is what separated them.
