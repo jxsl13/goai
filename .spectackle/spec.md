@@ -720,3 +720,8 @@ Rationale: One check reached 110 hits and an audit found ZERO matched the shape 
 WHEN a second precision fix is proposed for a check whose hit list has already been filtered, the implementing agent SHALL recount the second predicate against the SURVIVORS, not against the original population.
 
 Rationale: An audit put a guard's blind spot at 36 of 110 hit functions, which read as a substantial second win. After a trip-count filter cut the check to 26, only 4 survivors carried any fused-path signal and only 1 carried the tight one. The two filters overlapped almost completely, so the second fix was worth a single hit at real recall cost rather than the 36 the pre-filter count implied.
+
+## PERF-CHECK-BLIND-SPOT-IS-THE-HELPER-SET-001
+WHEN a scan check reports a call only when a sibling of that shape exists and some call shapes go unreported, the implementing agent SHALL extend the helper set rather than the check, since declaring the missing sibling makes the check report those sites with no analyzer change.
+
+Rationale: A variadic-call check could not see five per-iteration allocations because no four-input pooled sibling existed. Declaring one took its recall from 198 of 203 sibling-coverable sites to all 203 without touching the detector. The gap was in the code the check measures against, not in the check.
