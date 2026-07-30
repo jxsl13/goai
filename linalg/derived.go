@@ -193,7 +193,17 @@ func NormInf(a *tensor.Tensor) (float64, error) {
 // through AtF64. Reports false for anything strided, offset, or of another dtype,
 // leaving the caller's accessor path in charge.
 func flatRowMajor(t *tensor.Tensor) ([]float64, bool) {
-	if t == nil || t.Ndim() != 2 || t.Dtype() != tensor.F64 || !t.IsContiguous() || t.Offset() != 0 {
+	if t == nil || t.Ndim() != 2 {
+		return nil, false
+	}
+	return flatContig(t)
+}
+
+// flatContig is flatRowMajor without the rank restriction: the contiguous f64 backing slice of a
+// tensor of ANY rank, in row-major order. CholSolve's right-hand side is a vector or a matrix
+// depending on the call, and both want the same typed fast path.
+func flatContig(t *tensor.Tensor) ([]float64, bool) {
+	if t == nil || t.Dtype() != tensor.F64 || !t.IsContiguous() || t.Offset() != 0 {
 		return nil, false
 	}
 	d := t.Storage().F64()

@@ -69,13 +69,22 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	// PARALLEL over the right-hand-side columns, with the scratch per WORKER. Columns are
 	// independent — each writes only its own out[i*cols+c] and reads only its own pass's y — so
 	// the partition changes no value. Hoisting one shared buffer had coupled them.
+	// The forward pass reads one rhs element per (column, row), so n*cols interface dispatches
+	// per solve — 262k at n=512, cols=512 (PS1005). bf is the contiguous f64 backing slice when
+	// there is one, covering both the vector and matrix shapes; nil falls back to AtF64.
+	bf, _ := flatContig(b)
 	solveCols(cols, n*n, n, func(clo, chi int, y []float64) {
 		for c := clo; c < chi; c++ {
 			for i := range n { // forward: L·y = b
 				var s float64
-				if vec {
+				switch {
+				case bf != nil && vec:
+					s = bf[i]
+				case bf != nil:
+					s = bf[i*cols+c]
+				case vec:
 					s = b.AtF64(i)
-				} else {
+				default:
 					s = b.AtF64(i, c)
 				}
 				for k := range i {
@@ -105,8 +114,19 @@ func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
 	for i := range n {
 		l[i] = make([]float64, n)
 	}
+	// One contiguous view of a for the whole factorization: the column update below reads
+	// a[i,j] for every i>j, so the naive walk costs n²/2 interface dispatches per factorization
+	// on top of the n diagonal reads (PS1005). af == nil keeps the AtF64 path for non-f64 or
+	// strided inputs. Same values in the same order either way.
+	af, afOK := flatRowMajor(a)
+	atA := func(i, j int) float64 {
+		if afOK {
+			return af[i*n+j]
+		}
+		return a.AtF64(i, j)
+	}
 	for j := range n {
-		d := a.AtF64(j, j)
+		d := atA(j, j)
 		for k := range j {
 			d -= l[j][k] * l[j][k]
 		}
@@ -127,7 +147,7 @@ func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
 		lj := l[j]
 		if rows*j < factorParThreshold || parallel.Workers() <= 1 {
 			for i := j + 1; i < n; i++ {
-				s := a.AtF64(i, j)
+				s := atA(i, j)
 				li := l[i]
 				for k := range j {
 					s -= li[k] * lj[k]
@@ -138,7 +158,7 @@ func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
 			parallelRowsIf(true, rows, func(lo, hi int) {
 				for t := lo; t < hi; t++ {
 					i := j + 1 + t
-					s := a.AtF64(i, j)
+					s := atA(i, j)
 					li := l[i]
 					for k := range j {
 						s -= li[k] * lj[k]
@@ -153,6 +173,23 @@ func cholFactor(a *tensor.Tensor, n int) ([][]float64, error) {
 
 // requireSymmetric errors if a is not symmetric to a relative tolerance.
 func requireSymmetric(a *tensor.Tensor, n int) error {
+	// The predicate reads each off-diagonal pair FOUR times, so the naive walk costs 2n²
+	// interface dispatches on every CholSolve — 524k at n=512, before any arithmetic happens
+	// (PS1005). The contiguous path reads the same two values once each from the typed backing
+	// slice; the AtF64 walk stays as the fallback for non-f64 or strided inputs. Identical
+	// comparison, identical tolerance, identical first-offending pair reported.
+	if af, ok := flatRowMajor(a); ok {
+		for i := range n {
+			for j := i + 1; j < n; j++ {
+				x, y := af[i*n+j], af[j*n+i]
+				if math.Abs(x-y) > 1e-9*(math.Abs(x)+math.Abs(y))+1e-12 {
+					return fmt.Errorf("linalg: expected a symmetric matrix; A[%d,%d]=%g != A[%d,%d]=%g",
+						i, j, x, j, i, y)
+				}
+			}
+		}
+		return nil
+	}
 	for i := range n {
 		for j := i + 1; j < n; j++ {
 			if math.Abs(a.AtF64(i, j)-a.AtF64(j, i)) > 1e-9*(math.Abs(a.AtF64(i, j))+math.Abs(a.AtF64(j, i)))+1e-12 {
