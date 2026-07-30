@@ -223,6 +223,7 @@ var checks = []check{
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
 	{"PS4011", "op-dispatch-recurrence", "a sequential loop dispatching 2+ backend ops (calls passing a backend.Op* constant) per iteration in a function with NO fused typed fast path (no flatF64 guard) — O(seq) dispatch+alloc overhead on tiny per-step tensors; add a raw-slice fused path", false},
 	{"PS4012", "scaled-serial-dot", "a serial scalar dot accumulator whose result is SCALED/dequantized (acc*scale…) before being stored — a quantized/dequant GEMM inner loop; latency-bound like PS4008 but missed by it (acc isn't stored raw). Break the chain with independent accumulators; bit-identical when the products are integer-valued (int8·int8 partials < 2^53 reassociate exactly), else tolerance-gated", false},
+	{"PS4013", "einsum-no-inference-fusion", "a function dispatching backend.OpEinsum (and taking a *backend.Context) with NO ctx.Recorder == nil fused inference branch. The generic einsum engine decodes every contraction combo with a per-index modulo (~38 ns/combo) and materializes the whole output tensor; for a large contraction that dominates the layer's forward. Add a typed fused inference path gated on ctx.Recorder == nil (training keeps the differentiable einsum so gradients still reach the operands) reproducing the einsum's index order for bit-identity. Shipped: CoPE gather #660 (37-133x, [T,T,MaxPos+1] one-hot einsum → direct z gather), KAN spline #661 (45-75x, bic,ijc->bij + bij,ij->bj → fused typed contraction). Bench the ENCLOSING forward at production dims; wins scale with the contraction size (combos = product of all einsum index sizes)", false},
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
 	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Wins ONLY where trig DOMINATES the kernel (pure positional encoding, e.g. nn/sinusoidal.go +33% #587) — NOT where the trig is an amortized seq·half PRECOMPUTE feeding a larger matmul/attention: fusing MLA/self-extend RoPE (11 sites) was bit-exact but measured flat/within-noise because the seq²·heads score+value-mix dwarfs the trig (R-01KYRJ6RW1FJ0). Bench the ENCLOSING op, skip if trig <~10% of its work", false},
@@ -1012,6 +1013,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
 	out = append(out, scanFusableLoops(fset, f)...)
+	out = append(out, einsumNoInferenceFusionFindings(fset, f)...)
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
 	ign := ignoreDirectives(fset, f)
 	var kept []finding
@@ -3686,6 +3688,78 @@ func callHasBackendOpArg(call *ast.CallExpr) bool {
 }
 
 // funcCallsIdent reports whether the subtree contains a call to the named function.
+// funcHasContextParam reports whether fn takes a *T param whose type name is "Context"
+// (i.e. *backend.Context) — the marker of a backend-dispatching / forward function, used to
+// scope PS4013 to layer forwards and skip backend-internal kernels/registration.
+func funcHasContextParam(fn *ast.FuncDecl) bool {
+	if fn.Type.Params == nil {
+		return false
+	}
+	for _, f := range fn.Type.Params.List {
+		star, ok := f.Type.(*ast.StarExpr)
+		if !ok {
+			continue
+		}
+		if sel, ok := star.X.(*ast.SelectorExpr); ok && sel.Sel.Name == "Context" {
+			return true
+		}
+	}
+	return false
+}
+
+// einsumNoInferenceFusionFindings flags PS4013 at the FILE level: an OpEinsum dispatched in a
+// *backend.Context forward, reported ONLY when the file has no ctx.Recorder reference anywhere —
+// i.e. the layer has no fused inference path at all. A file whose Forward already gates a
+// Recorder==nil fast path (even if the einsum itself sits in a training-only helper, as in
+// griffin/hgrn) is fused for inference and is NOT flagged. The generic einsum engine decodes
+// every contraction combo with a per-index modulo (~38 ns/combo) and materializes the whole
+// output tensor, so a large contraction dominates the layer's forward; a typed fused path gated
+// on ctx.Recorder == nil (training keeps the differentiable einsum so gradients still reach the
+// operands) reproducing the einsum's index order is often bit-identical and 1-2 orders of
+// magnitude faster. Shipped: CoPE #660 (37-133x), KAN #661 (45-75x).
+func einsumNoInferenceFusionFindings(fset *token.FileSet, f *ast.File) []finding {
+	// File-level: if any function gates on ctx.Recorder, the layer already has a fused
+	// inference path — the einsum is its differentiable/training branch, not a candidate.
+	hasRecorder := false
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Recorder" {
+			hasRecorder = true
+			return false
+		}
+		return true
+	})
+	if hasRecorder {
+		return nil
+	}
+	var out []finding
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || !funcHasContextParam(fn) {
+			continue
+		}
+		var einsumPos token.Pos
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "OpEinsum" && !einsumPos.IsValid() {
+				einsumPos = sel.Pos()
+			}
+			return true
+		})
+		if einsumPos.IsValid() {
+			out = append(out, finding{
+				pos:      fset.Position(einsumPos),
+				category: "einsum-no-inference-fusion",
+				msg: "OpEinsum dispatched in a *backend.Context forward with no ctx.Recorder == nil fused" +
+					" inference path — the generic einsum engine decodes every contraction combo with a" +
+					" per-index modulo (~38 ns/combo) and materializes the whole output. For a large" +
+					" contraction add a typed fused path gated on ctx.Recorder == nil (training keeps the" +
+					" differentiable einsum for gradients), reproducing the einsum's index order for" +
+					" bit-identity. Shipped: CoPE #660 (37-133x), KAN #661 (45-75x).",
+			})
+		}
+	}
+	return out
+}
+
 func funcCallsIdent(root ast.Node, name string) bool {
 	found := false
 	ast.Inspect(root, func(n ast.Node) bool {
