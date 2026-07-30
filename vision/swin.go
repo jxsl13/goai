@@ -693,6 +693,7 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 	// body (PS6019: two code paths computing one thing let a property established for one go
 	// stale in the other).
 	winOuts := make([]*tensor.Tensor, numWin)
+	//perfscan:ignore PS4011 this IS the dispatch fallback; the fused path is above and returns early
 	for w := range numWin {
 		qw, err := rowSlice(q, w)
 		if err != nil {
