@@ -1410,8 +1410,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		// C: batch API fed a single-element nested-slice literal (a wrapped row), in any loop.
 		for _, arg := range call.Args {
 			if isSingleEltNestedSliceLit(arg) {
+				// Positioned at the CALL, not the enclosing loop. dedup collapses findings sharing a
+				// (position, category), so a loop holding two different batch-1 calls used to yield one
+				// finding naming only the first — the second was invisible, not merely deduplicated.
+				// rl.rlRollout was exactly that shape (actor forward plus critic forward) and PS6015's
+				// doc comment recorded the gap without closing it. Per-call positioning also points at
+				// the line a reader has to change.
 				out = append(out, finding{
-					pos:      fset.Position(loop.Pos()),
+					pos:      fset.Position(call.Pos()),
+					end:      fset.Position(call.End()),
 					category: "batch-single-elt",
 					msg: fmt.Sprintf("%q called with a single-element slice literal inside a loop"+
 						" — call a single-item API instead of wrapping each element in a fresh slice", name),
@@ -8811,11 +8818,11 @@ func identNamesIn(e ast.Expr) []string {
 // THIS IS DIFFERENT ADVICE FROM PS1003, which matches the same call shape and says "call a
 // single-item API instead" — avoid the wrapper allocation, keep N calls. That is the right
 // fix when the loop READS the result (the actor forward in the same loop feeds a softmax
-// that feeds the action that feeds the environment, so it cannot move). PS1003 also reports
-// once per loop, so where both a hoistable and a non-hoistable call share a loop it flags
-// only the first and the hoistable one can go unmentioned entirely. This check reports per
-// call site and only for the hoistable case, so the two are complementary rather than
-// redundant.
+// that feeds the action that feeds the environment, so it cannot move). Both checks now report per
+// CALL SITE: PS1003 used to position its finding at the enclosing loop, which made dedup collapse a
+// second batch-1 call in the same loop into the first and hide it entirely — the shape this very
+// function was written about. That is fixed, so where a hoistable and a non-hoistable call share a
+// loop, PS1003 names both and this check adds the hoist advice for the one it applies to.
 //
 // SOUNDNESS. Hoisting across a loop is legal only if the call is pure, so the callee must be
 // named in pureComputeFuncs — the same licensing PS6014 uses, and for a stronger reason

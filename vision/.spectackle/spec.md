@@ -41,8 +41,3 @@ intermediates. Removing them means reproducing matmul and softmax rounding insid
 kernel — precisely what ADR-01KYQ9PHNPEFC declines after the Titans attempt cost three
 iterations. Anything further should be weighed against that decision, not treated as a
 continuation of these three steps.
-
-## PERF-ORCHESTRATION-HAS-NO-LEVERAGE-001
-IF a package benchmark scales poorly and every function of that package profiles at 0% flat, THEN the implementing agent SHALL stop: the leverage is in the callee package, so retarget rather than editing the caller.
-
-Rationale: The vision package looked like the best remaining candidate: ViT forward batched scaled 3.06x with about 32ms serial, MLP-Mixer 2.99x, Swin 2.34x, and none of the three had been examined. A GOMAXPROCS=1 profile ended the search in one step. backend/cpu gemmF32Band is 55% flat, mhaFwd 7%, math.erf 5.5%, and EVERY vision function — ViT.Forward, Features, forwardOne, vitBlock.forward, forwardBatched — shows 0% flat with only cumulative time. They are pure orchestration over the backend, so nothing inside vision can move the number and the serial fraction belongs to gemm, which is another lane and already tuned. The cheap test is the per-package attribution of a one-core profile: a package whose own functions are all 0% flat has no work to optimize, however badly its benchmarks scale. Three steps and no edits — sweep the scaling ratio, profile at one core, attribute by package — is enough to reject a whole lane, and doing it before writing code is what kept this from becoming a wasted refactor.
