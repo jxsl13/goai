@@ -1172,7 +1172,7 @@ int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, 
                       "  int idx = blockIdx.x*blockDim.x + threadIdx.x; int HP = H*P; if(idx>=HP) return;\n"
                       "  int h = idx / P; int g = h / (H / G);\n"
                       "  double dl = (double)delta[h];\n"
-                      "  double a = exp(dl * (double)A[h]);\n"
+                      "  double a = (double)expf((float)(dl * (double)A[h]));\n"
                       "  double xv = (double)x[idx];\n"
                       "  double xin = dl * xv;\n"
                       "  const float* Bg = B + (size_t)g*N; const float* Cg = C + (size_t)g*N;\n"
