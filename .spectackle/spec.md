@@ -635,3 +635,8 @@ Rationale: Two consecutive attempts failed identically. PS6020 hinged on a guard
 WHEN a benchmark chooses an input parameter that decides which code path executes, the author SHALL add a test asserting the resulting regime, so a benchmark that measures nothing fails instead of passing.
 
 Rationale: BenchmarkDBSCANFit called itself the probe for the eps-neighbourhood search at eps=2, where measurement showed 0 clusters, 0 core points and all 4000 points noise: every neighbourhood was a singleton and the cluster-expansion flood fill never ran one iteration. It timed a tree build plus empty queries for as long as it existed, reporting healthy numbers throughout. Since every optimization here is validated solely by benchmark, a degenerate benchmark silently voids that gate.
+
+## PROC-MUTATE-EVERY-CLAUSE-001
+WHEN a scan rule ships with floors asserting it stays silent, the implementing agent SHALL break each predicate clause in turn and confirm exactly one floor turns red, then fix any clause no floor covers.
+
+Rationale: PS6021 passed all nine tests on the first draft while two clauses were defective. A scratch-constructor exclusion was unreachable, since such a helper must pass its value to the callback, which then already carries a scratch parameter. And both post-fix floors were passing on parameter count alone, leaving the type check unexercised. Neither was visible from green tests; a floor can pass for a reason unrelated to the clause it appears to defend.
