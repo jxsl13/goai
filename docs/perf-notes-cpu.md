@@ -200,3 +200,10 @@ one binary (`BenchmarkGemmF32Portable`, `BenchmarkGemmF64Portable`):
   tile swings the result from +71.0% to −28.1% — a hundred points on a variable
   neither axis reads. The gate stays conservative instead.
 - **A wider tile (4×8)**: 44 live doubles against 32 FP registers; it spills.
+
+## See also
+
+- [perf-notes-allocation.md](perf-notes-allocation.md) — the heap-allocation
+  sweep (`-memprofile`) across `classic`, `nlp`, `linalg`, `tensor` and
+  `autograd`: what shipped, and the sites deliberately declined with the reason
+  each one is not what its profile rank suggests.
