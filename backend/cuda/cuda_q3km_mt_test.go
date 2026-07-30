@@ -16,7 +16,7 @@ import (
 // loop nest differs) — assert that directly (max abs diff ~0). M=13 = full MT=8 tile + tail.
 func TestCUDAQ3KMatMulMTParity(t *testing.T) {
 	skipNoGPU(t)
-	const K, N, M = 512, 48, 13
+	const K, N, M = 512, 48, 7 // M in [2,8): validates the newly-routed MT path (partial tile)
 	rng := rand.New(rand.NewSource(37))
 	w := tensor.New(tensor.F32, tensor.Shape{K, N})
 	wf := w.Storage().F32()
