@@ -573,3 +573,60 @@ func TestTurboQuantDeterministic(t *testing.T) {
 		t.Log("note: different-seed reconstruction coincidentally matched at [0][0] (rare, not an error)")
 	}
 }
+
+// TestTurboQuantRowsAreIndependent covers what the output slab introduced and what the value-level
+// tests cannot see.
+//
+// rows() used to allocate each reconstructed row separately; it now carves them from one buffer as
+// capacity-capped views. Every value test passes either way — the numbers are identical — so
+// nothing would notice if the rows started sharing storage, or if a view could be appended past its
+// end into its neighbour. Keys() and Values() hand these rows to the caller, so both are real.
+func TestTurboQuantRowsAreIndependent(t *testing.T) {
+	const dim, n = 64, 12
+	c, err := NewTurboQuantKVCache(dim, 2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r := range n {
+		v := make([]float64, dim)
+		for i := range v {
+			v[i] = math.Sin(float64(i+r)) + 0.25*float64(r)
+		}
+		if err := c.Append(v, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, get := range []struct {
+		name string
+		fn   func() [][]float64
+	}{{"Keys", c.Keys}, {"Values", c.Values}} {
+		out := get.fn()
+		if len(out) != n {
+			t.Fatalf("%s: %d rows, want %d", get.name, len(out), n)
+		}
+		for i := range out {
+			marker := float64(i) + 1234.5
+			for j := range out[i] {
+				out[i][j] = marker
+			}
+			for o := range out {
+				if o == i {
+					continue
+				}
+				for j, v := range out[o] {
+					if v == marker {
+						t.Fatalf("%s: writing row %d changed row %d at %d — the rows alias",
+							get.name, i, o, j)
+					}
+				}
+			}
+		}
+		for i := 0; i+1 < len(out); i++ {
+			grown := append(out[i], 7)
+			if &grown[len(grown)-1] == &out[i+1][0] {
+				t.Fatalf("%s: append to row %d wrote into row %d — the view is not capacity-capped",
+					get.name, i, i+1)
+			}
+		}
+	}
+}

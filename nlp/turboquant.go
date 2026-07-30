@@ -405,6 +405,32 @@ func (q *qjlSketch) encode(r []float64) (signs []bool, rnorm float64) {
 
 // decodeResidual returns the unbiased residual estimate (√(π/2)/√d)·‖r‖·Sᵀ·qjl, where
 // Sᵀ·qjl = (1/√d)·D·H·qjl (H symmetric) is another fwht — O(d log d).
+// decodeResidualInto is decodeResidual writing into caller-owned buffers. out and z must both be
+// length q.d.
+//
+// The clear is CONDITIONAL and that is a measured detail, not a micro-optimization. The allocating
+// form got a zeroed z from make(); a reused buffer must reproduce that, but only where signs does
+// not cover it — the loop below writes every element signs reaches. Clearing unconditionally cost
+// +4.16% on the single-row reconstruct path, where there is no reuse to amortize it and the pass is
+// pure overhead; signs is produced by encode at exactly q.d, so in practice the clear never runs.
+func (q *qjlSketch) decodeResidualInto(out, z []float64, signs []bool, rnorm float64) {
+	if len(signs) < len(z) {
+		clear(z[len(signs):])
+	}
+	for i, s := range signs {
+		if s {
+			z[i] = 1
+		} else {
+			z[i] = -1
+		}
+	}
+	fwht(z)
+	scale := math.Sqrt(math.Pi/2) / float64(q.d) * rnorm
+	for i := range out {
+		out[i] = scale * z[i] * q.signs[i]
+	}
+}
+
 func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
 	z := make([]float64, q.d)
 	for i, s := range signs {
@@ -531,18 +557,34 @@ func (c *TurboQuantKVCache) compress(x []float64) (tqRow, error) {
 	return tqRow{idx: idx, signs: signs, norm: norm, rnorm: rnorm}, nil
 }
 
-func (c *TurboQuantKVCache) reconstruct(row tqRow) []float64 {
-	res := c.qjl.decodeResidual(row.signs, row.rnorm) // m coords
-	ruT := make([]float64, c.m)
+// tqScratch is one worker's reconstruction buffers. reconstruct allocated four slices per ROW —
+// an allocation profile put the cache's reconstruction path at 3.95GB across the nlp suite — and
+// every one of them is fully overwritten before use, so a per-worker set serves an entire chunk.
+type tqScratch struct {
+	res, z, ruT, buf, uT []float64
+}
+
+func (c *TurboQuantKVCache) newScratch() *tqScratch {
+	return &tqScratch{
+		res: make([]float64, c.qjl.d),
+		z:   make([]float64, c.qjl.d),
+		ruT: make([]float64, c.m),
+		buf: make([]float64, c.rot.m),
+		uT:  make([]float64, c.rot.d),
+	}
+}
+
+// reconstruct writes one row into dst using the caller's scratch. Identical arithmetic in
+// identical order to the allocating form; only the buffers' provenance changes.
+func (c *TurboQuantKVCache) reconstruct(dst []float64, sc *tqScratch, row tqRow) {
+	c.qjl.decodeResidualInto(sc.res, sc.z, row.signs, row.rnorm) // m coords
 	for i := range row.idx {
-		ruT[i] = c.cb[row.idx[i]] + res[i]
+		sc.ruT[i] = c.cb[row.idx[i]] + sc.res[i]
 	}
-	uT, _ := c.rot.applyInverse(ruT) // back to dim coords
-	out := make([]float64, c.dim)
-	for i := range uT {
-		out[i] = row.norm * uT[i]
+	_ = c.rot.applyInverseInto(sc.uT, sc.buf, sc.ruT) // back to dim coords
+	for i := range sc.uT {
+		dst[i] = row.norm * sc.uT[i]
 	}
-	return out
 }
 
 // Append compresses and stores one key and value vector (each length dim).
@@ -571,14 +613,23 @@ func (c *TurboQuantKVCache) Keys() [][]float64 { return c.rows(c.keys) }
 func (c *TurboQuantKVCache) Values() [][]float64 { return c.rows(c.vals) }
 
 func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
+	// ONE slab for the returned rows, handed out as capacity-capped views, instead of one
+	// allocation per row. The rows go to the caller, so the cap matters: an append must copy
+	// rather than write into the next row.
 	out := make([][]float64, len(rs))
-	// Each row's reconstruction is independent: reconstruct writes only out[i] and reads the
-	// immutable rotation/codebook/sketch (applyInverse and decodeResidual allocate all their
-	// buffers locally — no receiver scratch), so the loop fans out over GOMAXPROCS bit-identically
-	// to the serial loop. Gated on len(rs)·dim so a short cache stays serial.
+	slab := make([]float64, len(rs)*c.dim)
+	for i := range out {
+		out[i] = slab[i*c.dim : (i+1)*c.dim : (i+1)*c.dim]
+	}
+	// Each row's reconstruction is independent: reconstruct writes only out[i] and its own
+	// worker's scratch, and reads the immutable rotation/codebook/sketch, so the loop fans out
+	// over GOMAXPROCS bit-identically to the serial loop. The scratch is PER CHUNK rather than
+	// per row — that is what removes the four allocations each row used to make — and never
+	// crosses workers. Gated on len(rs)·dim so a short cache stays serial.
 	parallelChunks(len(rs), len(rs)*c.dim, func(lo, hi int) {
+		sc := c.newScratch()
 		for i := lo; i < hi; i++ {
-			out[i] = c.reconstruct(rs[i])
+			c.reconstruct(out[i], sc, rs[i])
 		}
 	})
 	return out
@@ -646,6 +697,21 @@ func (r *hadamardRotation) apply(x []float64) ([]float64, error) {
 
 // applyInverse returns Rᵀ·y = D·(1/√m)·H·y, truncated to the original d coordinates (R
 // orthogonal ⇒ R⁻¹ = Rᵀ; H,D symmetric). len(y) must be m.
+// applyInverseInto is applyInverse writing into caller-owned buffers: out length r.d, buf length
+// r.m. buf is fully overwritten by the copy, so reuse reproduces the freshly-made buffer.
+func (r *hadamardRotation) applyInverseInto(out, buf, y []float64) error {
+	if len(y) != r.m {
+		return fmt.Errorf("nlp: hadamardRotation.applyInverseInto wants len %d, got %d", r.m, len(y))
+	}
+	copy(buf, y)
+	fwht(buf)
+	inv := 1 / math.Sqrt(float64(r.m))
+	for i := range out {
+		out[i] = buf[i] * inv * r.signs[i]
+	}
+	return nil
+}
+
 func (r *hadamardRotation) applyInverse(y []float64) ([]float64, error) {
 	if len(y) != r.m {
 		return nil, fmt.Errorf("nlp: hadamardRotation.applyInverse wants len %d, got %d", r.m, len(y))
