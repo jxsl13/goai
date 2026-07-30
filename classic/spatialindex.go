@@ -233,7 +233,12 @@ const pruneSlack = 1e-9
 // ties broken by ascending index — identical to a full brute-force sort by
 // (dist, idx) truncated to k. It assumes k ≤ n.
 func (bt *ballTree) kNN(query []float64, k int) []neighbour {
-	h := &knnHeap{k: k}
+	// items is sized to k up front. Left nil it grew by doubling inside consider — log2(k)
+	// allocations per QUERY plus the overshoot of the last doubling — which an alloc_space
+	// profile put at 47.6% of the bytes a KNN predict allocates, the largest single site.
+	// The heap never exceeds k members by construction, so one allocation of exactly k both
+	// removes the growth and wastes nothing.
+	h := &knnHeap{k: k, items: make([]neighbour, 0, k)}
 	if bt.root != nil {
 		bt.searchKNN(bt.root, query, h, bt.distSq(query, bt.root.centroid))
 	}
