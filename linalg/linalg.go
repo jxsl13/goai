@@ -12,9 +12,39 @@ package linalg
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+// parallelCols splits n independent right-hand-side columns across GOMAXPROCS workers, gated on
+// the TOTAL work n·workPerItem so a single heavy column (or a small count) stays serial. body must
+// touch only columns in its [lo,hi) range, so the result is bit-identical to the serial loop.
+func parallelCols(n, workPerItem int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n < 2 || n*workPerItem < 1<<14 {
+		body(0, n)
+		return
+	}
+	if nw > n {
+		nw = n
+	}
+	var wg sync.WaitGroup
+	chunk := (n + nw - 1) / nw
+	for lo := 0; lo < n; lo += chunk {
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
 
 // LU is a partial-pivoting LU factorization P·A = L·U of a square matrix: L is unit-lower-triangular
 // (implicit 1s on the diagonal), U is upper-triangular, and P is a row permutation. L and U are
@@ -103,29 +133,33 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		return b.AtF64(i, c)
 	}
 	out := make([]float64, n*cols) // row-major [n,cols]
-	// One forward-substitution scratch for all columns instead of one per column.
-	// The forward pass below assigns y[i] for every i in ascending order and reads
-	// only y[j] with j < i, all written earlier in the SAME column's pass, so a
-	// reused buffer cannot expose the previous column's values. A function local,
-	// not a field on LU: a factorization is immutable after Factor and is safe to
-	// Solve against concurrently, which a shared buffer would silently break.
-	y := make([]float64, n)
-	for c := range cols {
-		for i := range n { // forward: L·y = P·b, L unit-lower
-			s := bat(f.piv[i], c)
-			for j := range i {
-				s -= f.lu[i][j] * y[j]
+	// Columns are independent: column c writes only out[·*cols+c] and reads its own
+	// forward-substitution scratch y plus the shared read-only factorization, so the
+	// per-column loop fans out over GOMAXPROCS bit-identically to the serial loop
+	// (each worker owns a private y). A factorization is immutable after Factor, so
+	// concurrent Solve is safe. Each column's forward pass assigns y[i] in ascending
+	// order and reads only y[j] with j < i (written earlier in the SAME column), so a
+	// reused per-worker buffer cannot expose another column's values. Gated on n·n·cols
+	// so a single heavy column or a single RHS (Solve of a vector) stays serial.
+	parallelCols(cols, n*n, func(clo, chi int) {
+		y := make([]float64, n)
+		for c := clo; c < chi; c++ {
+			for i := range n { // forward: L·y = P·b, L unit-lower
+				s := bat(f.piv[i], c)
+				for j := range i {
+					s -= f.lu[i][j] * y[j]
+				}
+				y[i] = s
 			}
-			y[i] = s
-		}
-		for i := n - 1; i >= 0; i-- { // back: U·x = y
-			s := y[i]
-			for j := i + 1; j < n; j++ {
-				s -= f.lu[i][j] * out[j*cols+c]
+			for i := n - 1; i >= 0; i-- { // back: U·x = y
+				s := y[i]
+				for j := i + 1; j < n; j++ {
+					s -= f.lu[i][j] * out[j*cols+c]
+				}
+				out[i*cols+c] = s / f.lu[i][i]
 			}
-			out[i*cols+c] = s / f.lu[i][i]
 		}
-	}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}
