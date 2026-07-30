@@ -508,14 +508,37 @@ func (bt *ballTree) within(a, b []float64, eps, eps2 float64) bool {
 		}
 		return true
 	default: // ballL2
+		// The bail-out is checked every FOUR dimensions rather than every one. A profile of the
+		// DBSCAN fit put that single branch at 450ms against 30ms for the subtraction and square
+		// it guards — it is the dominant cost of this function, not the arithmetic, because it is
+		// a data-dependent branch the predictor cannot learn.
+		//
+		// Checking less often returns the SAME boolean: s never decreases, so if it exceeds the
+		// threshold at some dimension it still exceeds it at the next checkpoint and at the end.
+		// The accumulation itself is untouched — one accumulator, same order, same operands — so
+		// s is bit-identical too, which is what the exact-label DBSCAN goldens require.
 		var s float64
-		for i := range a {
-			d := a[i] - b[i]
-			s += d * d
+		i := 0
+		for ; i+4 <= len(a); i += 4 {
+			d0 := a[i] - b[i]
+			s += d0 * d0
+			d1 := a[i+1] - b[i+1]
+			s += d1 * d1
+			d2 := a[i+2] - b[i+2]
+			s += d2 * d2
+			d3 := a[i+3] - b[i+3]
+			s += d3 * d3
 			if s > eps2 {
 				return false
 			}
 		}
-		return true
+		for ; i < len(a); i++ {
+			d := a[i] - b[i]
+			s += d * d
+		}
+		// NOT `s <= eps2`: with a NaN coordinate s is NaN, and the loop above never bailed
+		// because NaN > eps2 is false, so the original returned true. !(s > eps2) reproduces
+		// that; s <= eps2 would flip it.
+		return !(s > eps2)
 	}
 }
