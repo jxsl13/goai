@@ -695,3 +695,8 @@ Rationale: A paired sub-benchmark over a shared slice reported the second arm 18
 WHEN a parallel or fast-path threshold constant is introduced or copied from a sibling, the implementing agent SHALL cite the benchmark that located its crossover, and if none exists build one before relying on the constant.
 
 Rationale: More than ten thresholds in this tree share the constant 1<<15, two describing it as measured, with no surviving artifact. A dispatch benchmark then showed the shared fan-out helper 15 percent SLOWER than serial at exactly that size for an elementwise body, with the real crossover between 2^15 and 2^16. A constant copied between call sites carries none of the original body's cost profile.
+
+## PERF-BCE-NEEDS-LENGTH-RELATION-001
+WHEN a hot loop is given a hoisted row slice to remove bounds checks, the implementing agent SHALL verify with the compiler's bounds-check debug output that they actually went away, and range over one slice with the others clamped to its length rather than over a separate count.
+
+Rationale: An eigensolver loop already had the row-slice hoist and still carried both of its per-iteration checks, because ranging over a separate element count gives the prove pass no relation between that count and the slice length. Clamping the second slice to the first and ranging over it removed them, and the four checks removed this way were worth 15 percent at one size and 12 at another.
