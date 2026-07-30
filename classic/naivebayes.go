@@ -10,11 +10,16 @@ import (
 // row is independent — jointRow only reads the immutable fitted params and body writes only
 // its own out index), so the result is bit-identical to the serial loop. Serial below a
 // small work threshold. Widths are pre-validated by the caller.
-func nbPredictParallel(n, feat int, body func(i int)) {
+// newScratch is called once per WORKER (and once for the serial path), so the per-row
+// working buffer it returns is never shared across goroutines. It must be a parameter and
+// never a field on the model: a receiver-held buffer is shared state every worker would
+// race on, the race this package shipped once in its GMM code.
+func nbPredictParallel(n, feat int, newScratch func() []float64, body func(i int, sc []float64)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw <= 1 || n*feat < 1<<13 {
+		sc := newScratch()
 		for i := 0; i < n; i++ {
-			body(i)
+			body(i, sc)
 		}
 		return
 	}
@@ -28,8 +33,9 @@ func nbPredictParallel(n, feat int, body func(i int)) {
 		if hi > n {
 			hi = n
 		}
+		sc := newScratch()
 		for i := lo; i < hi; i++ {
-			body(i)
+			body(i, sc)
 		}
 		return nil
 	})
@@ -225,11 +231,14 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 	return nil
 }
 
-// jointRow returns the unnormalised log-posterior log P(y)+Σ log N(xᵢ;μ,σ²) for
-// each class on one query row.
-func (m *GaussianNB) jointRow(row []float64) []float64 {
+// jointRow writes the unnormalised log-posterior log P(y)+Σ log N(xᵢ;μ,σ²) for each class
+// on one query row into the caller-owned out, which must hold len(m.classes) entries.
+//
+// EVERY out[c] is assigned unconditionally below — the jammed loop writes the pair, the
+// tail writes the remainder — so a buffer reused across rows cannot leak a value from the
+// previous row and needs no clearing. That is the correctness hinge for reusing it.
+func (m *GaussianNB) jointRow(row, out []float64) {
 	nc := len(m.classes)
-	out := make([]float64, nc)
 	// Unroll-and-jam the class loop by 2: each row[j] load feeds two independent
 	// per-class accumulators, while each class keeps its own contiguous theta/
 	// logNorm/invSigma row (locality preserved). Each ll_c still sums j ascending
@@ -257,7 +266,6 @@ func (m *GaussianNB) jointRow(row []float64) []float64 {
 		}
 		out[c] = ll
 	}
-	return out
 }
 
 // JointLogLikelihood returns, for each row of X, the unnormalised per-class
@@ -273,9 +281,17 @@ func (m *GaussianNB) JointLogLikelihood(x [][]float64) ([][]float64, error) {
 			return nil, fmt.Errorf("classic: row %d width %d, want %d", i, len(row), m.nFeat)
 		}
 	}
+	// One flat arena instead of one row allocation per sample: each i owns the disjoint
+	// region [i*nc, (i+1)*nc), so writing it under the existing row-parallelism is safe,
+	// and the three-index slice caps each row so a caller's append cannot reach into the
+	// next one. Bit-identical — only where the values live changes.
+	nc := len(m.classes)
+	flat := make([]float64, len(x)*nc)
 	out := make([][]float64, len(x))
-	nbPredictParallel(len(x), m.nFeat, func(i int) {
-		out[i] = m.jointRow(x[i])
+	nbPredictParallel(len(x), m.nFeat, func() []float64 { return nil }, func(i int, _ []float64) {
+		row := flat[i*nc : (i+1)*nc : (i+1)*nc]
+		m.jointRow(x[i], row)
+		out[i] = row
 	})
 	return out, nil
 }
@@ -293,8 +309,8 @@ func (m *GaussianNB) Predict(x [][]float64) ([]int, error) {
 		}
 	}
 	out := make([]int, len(x))
-	nbPredictParallel(len(x), m.nFeat, func(i int) {
-		joint := m.jointRow(x[i])
+	nbPredictParallel(len(x), m.nFeat, func() []float64 { return make([]float64, len(m.classes)) }, func(i int, joint []float64) {
+		m.jointRow(x[i], joint)
 		best, bestLL := 0, math.Inf(-1)
 		for c, ll := range joint {
 			if ll > bestLL { // strict ⇒ lowest label wins ties
@@ -321,8 +337,8 @@ func (m *GaussianNB) PredictProba(x [][]float64) ([][]float64, error) {
 		}
 	}
 	out := make([][]float64, len(x))
-	nbPredictParallel(len(x), m.nFeat, func(i int) {
-		joint := m.jointRow(x[i])
+	nbPredictParallel(len(x), m.nFeat, func() []float64 { return make([]float64, len(m.classes)) }, func(i int, joint []float64) {
+		m.jointRow(x[i], joint)
 		mx := math.Inf(-1)
 		for _, ll := range joint {
 			if ll > mx {
