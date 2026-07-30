@@ -68,72 +68,80 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 	}
 	tokens = make([][]int, e)
 	gates = make([][]float64, e)
-	// One id-indexed key column, refilled per expert. The comparator would otherwise do
-	// scores[idx[a]][ex] — a row-pointer load plus an index — on every one of the
-	// e·O(n log n) comparisons, to read a value that depends only on the token (PS3005).
-	// Filling it once per expert is O(n) and leaves the comparator a single load.
-	key := make([]float64, n)
-	heap := make([]int, 0, capacity) // size-`capacity` selection heap of token ids, reused per expert
-	// worse(a,b): token id a ranks AFTER b under the total order (key desc, then id asc).
-	worse := func(a, b int) bool {
-		if key[a] != key[b] {
-			return key[a] < key[b]
-		}
-		return a > b
-	}
-	siftDown := func(i int) {
-		for {
-			lo := i
-			if l := 2*i + 1; l < len(heap) && worse(heap[l], heap[lo]) {
-				lo = l
+	// Experts are independent: expert ex reads only its own affinity column scores[·][ex]
+	// (the rest of scores is read-only shared) and writes only tokens[ex]/gates[ex], so the
+	// per-expert loop fans out over GOMAXPROCS bit-identically to the serial loop. Each worker
+	// owns a private key column, selection heap, and comparator/sift closures (they capture
+	// that worker's key/heap by reference); gated on e·2n (each expert makes ≥2 O(n) passes —
+	// the key fill and the selection scan) so a small routing stays serial.
+	parallelRows(e, 2*n, func(elo, ehi int) {
+		// One id-indexed key column, refilled per expert. The comparator would otherwise do
+		// scores[idx[a]][ex] — a row-pointer load plus an index — on every one of the
+		// O(n log n) comparisons, to read a value that depends only on the token (PS3005).
+		// Filling it once per expert is O(n) and leaves the comparator a single load.
+		key := make([]float64, n)
+		heap := make([]int, 0, capacity) // size-`capacity` selection heap of token ids, reused per expert
+		// worse(a,b): token id a ranks AFTER b under the total order (key desc, then id asc).
+		worse := func(a, b int) bool {
+			if key[a] != key[b] {
+				return key[a] < key[b]
 			}
-			if r := 2*i + 2; r < len(heap) && worse(heap[r], heap[lo]) {
-				lo = r
-			}
-			if lo == i {
-				return
-			}
-			heap[i], heap[lo] = heap[lo], heap[i]
-			i = lo
+			return a > b
 		}
-	}
-	for ex := range e {
-		for i := 0; i < n; i++ {
-			key[i] = scores[i][ex]
-		}
-		// Select the top-`capacity` token ids into a min-heap whose ROOT is the WORST kept,
-		// so a better token evicts it in O(log capacity) — O(n log capacity) instead of
-		// sorting ALL n (and its reflect.Swapper swaps + per-expert O(n) idx alloc). The
-		// comparator (key desc, then id asc) is a strict total order (ids are unique), so the
-		// retained set and its sorted order are uniquely determined: bit-identical to the
-		// previous full sort's idx[:capacity], preserving the tie-by-lowest-index contract (PS3006).
-		heap = heap[:0]
-		for i := 0; i < n; i++ {
-			if len(heap) < capacity {
-				heap = append(heap, i)
-				for j := len(heap) - 1; j > 0; { // sift up
-					p := (j - 1) / 2
-					if !worse(heap[j], heap[p]) {
-						break
-					}
-					heap[j], heap[p] = heap[p], heap[j]
-					j = p
+		siftDown := func(i int) {
+			for {
+				lo := i
+				if l := 2*i + 1; l < len(heap) && worse(heap[l], heap[lo]) {
+					lo = l
 				}
-			} else if capacity > 0 && worse(heap[0], i) { // root is worst kept; i is better
-				heap[0] = i
-				siftDown(0)
+				if r := 2*i + 2; r < len(heap) && worse(heap[r], heap[lo]) {
+					lo = r
+				}
+				if lo == i {
+					return
+				}
+				heap[i], heap[lo] = heap[lo], heap[i]
+				i = lo
 			}
 		}
-		sel := make([]int, len(heap))
-		copy(sel, heap)
-		sort.Slice(sel, func(a, b int) bool { return worse(sel[b], sel[a]) })
-		tokens[ex] = sel
-		gr := make([]float64, capacity)
-		gates[ex] = gr
-		for i, t := range tokens[ex] {
-			gr[i] = scores[t][ex]
+		for ex := elo; ex < ehi; ex++ {
+			for i := 0; i < n; i++ {
+				key[i] = scores[i][ex]
+			}
+			// Select the top-`capacity` token ids into a min-heap whose ROOT is the WORST kept,
+			// so a better token evicts it in O(log capacity) — O(n log capacity) instead of
+			// sorting ALL n (and its reflect.Swapper swaps + per-expert O(n) idx alloc). The
+			// comparator (key desc, then id asc) is a strict total order (ids are unique), so the
+			// retained set and its sorted order are uniquely determined: bit-identical to the
+			// previous full sort's idx[:capacity], preserving the tie-by-lowest-index contract (PS3006).
+			heap = heap[:0]
+			for i := 0; i < n; i++ {
+				if len(heap) < capacity {
+					heap = append(heap, i)
+					for j := len(heap) - 1; j > 0; { // sift up
+						p := (j - 1) / 2
+						if !worse(heap[j], heap[p]) {
+							break
+						}
+						heap[j], heap[p] = heap[p], heap[j]
+						j = p
+					}
+				} else if capacity > 0 && worse(heap[0], i) { // root is worst kept; i is better
+					heap[0] = i
+					siftDown(0)
+				}
+			}
+			sel := make([]int, len(heap))
+			copy(sel, heap)
+			sort.Slice(sel, func(a, b int) bool { return worse(sel[b], sel[a]) })
+			tokens[ex] = sel
+			gr := make([]float64, capacity)
+			gates[ex] = gr
+			for i, t := range tokens[ex] {
+				gr[i] = scores[t][ex]
+			}
 		}
-	}
+	})
 	return tokens, gates
 }
 

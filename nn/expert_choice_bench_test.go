@@ -30,8 +30,9 @@ func benchExpertChoiceRoute(b *testing.B, n, e, capacity int) {
 	}
 }
 
-func BenchmarkExpertChoiceRoute_2048x8(b *testing.B) { benchExpertChoiceRoute(b, 2048, 8, 256) }
-func BenchmarkExpertChoiceRoute_512x16(b *testing.B) { benchExpertChoiceRoute(b, 512, 16, 32) }
+func BenchmarkExpertChoiceRoute_2048x8(b *testing.B)  { benchExpertChoiceRoute(b, 2048, 8, 256) }
+func BenchmarkExpertChoiceRoute_512x16(b *testing.B)  { benchExpertChoiceRoute(b, 512, 16, 32) }
+func BenchmarkExpertChoiceRoute_4096x64(b *testing.B) { benchExpertChoiceRoute(b, 4096, 64, 64) } // many-expert MoE
 
 // BenchmarkExpertAffinity times the row-wise softmax over the logits.
 func BenchmarkExpertAffinity(b *testing.B) {
