@@ -1843,3 +1843,20 @@ THREE DISPATCH MECHANISMS COEXIST: the shared pool, the backend pool, and one fi
 CANDIDATES. The chunk-indexed variant of the shared helper allocates one closure per chunk, roughly a dozen per call, which is exactly the shape that function exists to eliminate for its callers; the fix is to carry the index in the task struct. A scalar scan kernel walks three arrays at a stride equal to the channel count, costing eight-fold read amplification, and its correct loop order already exists in a sibling - but the loop calls an exponential per element, which swamps the traffic, so the survey caps it at single digits rather than the ratio the analyzer quotes. A butterfly transform lacks the bounds-check hoist the rest of its file documents as worth 1.45 times, with the caveat that this loop has a store-back dependency the measured one did not.
 
 WORTH KNOWING: the vectorized kernels for the other architecture cannot be measured on this host at all, so their analyzer hits are unactionable here; and on this architecture several benchmark pairs named for a vectorized and a scalar variant call the same function, so they are duplicates rather than comparisons.
+
+## R-01KYRMHWX1EWDB7WF6JTV2WYM2 The shared fan-out helper is 15 percent slower than serial at the threshold eight call sites use, and cold dispatch costs no more than warm
+kind: research
+state: draft
+created: 2026-07-30
+
+Builds the dispatch-cost benchmark the previous survey identified as missing, and reports what it says. Both results contradict a standing assumption.
+
+THE THRESHOLD IN WIDEST USE IS BELOW ITS OWN CROSSOVER. Running the identical elementwise body serially and through the shared helper: at 1024 elements the parallel path is 0.13 times as fast, at 16384 it is 0.74, at 32768 - the constant used at eight or more call sites - it is 0.85, and it first wins at 65536 with 1.20. So the crossover sits between two-to-the-fifteenth and two-to-the-sixteenth, roughly double the constant in use, and at exactly that constant the parallel path LOSES fifteen percent.
+
+THE CAVEAT THAT DECIDES WHICH SITES ARE IMPLICATED. The body is one multiply-add per element, about twenty-four bytes of traffic per element, which is the bandwidth-bound regime where parallelism gains least. Sites whose threshold counts raw ELEMENTS over a comparably cheap body - the rotation and solve loops in the linear-algebra package - are directly implicated. Sites that multiply by a per-element work factor, or whose body calls a transcendental, may be fine at the same numeric constant. That distinction is why no threshold was changed here: each site needs its own measurement, and the deliverable is the instrument.
+
+COLD DISPATCH IS NOT MEASURABLY MORE EXPENSIVE THAN WARM, which refutes the expectation that motivated measuring them separately. A two-hundred-microsecond idle gap before each fan-out leaves the result statistically indistinguishable at three sizes spanning the crossover. One threshold suffices; the warm-versus-cold split can be dropped from future reasoning about this pool.
+
+SHIPPED ALONGSIDE: the chunk-indexed variant no longer allocates a closure per chunk - thirteen allocations and 312 bytes per call against the plain variant's two and forty-eight. That is precisely the per-call allocation the function exists to spare its callers, and its own documentation records a thirty-one-fold memory regression from that shape in the boosting grower. The index now rides in the task struct; bit-identical, and measured at no time cost.
+
+A FOURTH MEASUREMENT TRAP, and the reason that last claim needed two measurements. The paired benchmark first showed the fixed variant eighteen percent SLOWER, which read as a real dispatch regression. It was the two arms running back to back over a shared slice, so the second inherited a different cache and scheduler state; independent arms per size put the two within 1.00 times from two-to-the-fourteenth to two-to-the-twentieth. The paired benchmark now documents that it is for allocation counts only. Cast as a rule, alongside one requiring a threshold constant to cite the benchmark that located its crossover.
