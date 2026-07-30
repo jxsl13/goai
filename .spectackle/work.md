@@ -1993,3 +1993,22 @@ ANOTHER worth keeping: one check had no evidence and no hedge at all, the terse-
 TWO CONCRETE DEFECTS, one mine. A check hard-coded its own identifier in its message while the reporter appends it, so every finding printed the ID twice; verified the class does not repeat. And a message credited a filter by a name I had invented in an earlier commit for a function that shipped under a different one - corrected to describe what it does.
 
 WHAT WAS DELIBERATELY NOT DONE. No predicate changed. The triage floated one narrowing and could not count it, and the standing rule forbids proposing an uncounted predicate. Also recorded: the global summary footer already tells every reader that hits are candidates and hotness must be measured, which is why the cost-model checks are a message-honesty problem rather than a soundness one.
+
+## R-01KYRSFK8RE02S269VSRPXR0KJ A scan check was recommending a rewrite that evaluates to zero at ten of its eighty-nine sites; three are now provably suppressed and seven need types
+kind: research
+state: draft
+created: 2026-07-30
+
+Audits the one check the whole-registry triage flagged as highest priority, and it was flagged for correctness rather than performance.
+
+THE HAZARD. The check recommends replacing a loop-invariant divide with a reciprocal multiply. With no type information it cannot tell float operands from integer, and on integers the suggested reciprocal evaluates to ZERO — following the advice silently zeroes the result. That is a wrong-value bug, not a missed win, which is why it outranked the larger cost-model checks.
+
+AUDITED ALL EIGHTY-NINE. Ten are genuine integer divides: a loop bound over a length divided by a stride; a group index feeding a scale table in two quantization dequantizers; four attention sites where a head count divided by a key-value count produces a head index; and one each in a compute backend, a weight loader, and a position-remapping routine. The other seventy-nine are float, several of them in matrix factorizations where the divide is a genuine pivot.
+
+TWO PROOFS SHIPPED, matching the spirit of a modulo-sibling proof the check already had. A divide that IS the loop bound must be integer, because the for-condition compares an index against it. And a quotient later used as a slice INDEX must be integer — which the pre-existing direct-index guard could not see, because in both shipped instances the quotient passes through a variable first. Counted before shipping: eighty-nine to eighty-six, exactly the three integer sites, zero float sites lost, verified by spot-checking three known float sites that must remain.
+
+THE OTHER SEVEN NEED TYPE INFORMATION and are not addressable in an AST-only analyzer: their quotients feed attribute structs or offset arithmetic rather than a bracket index. Every looser signal tried also swept up float sites — a first attempt treated the quotient being used again as the signal and wrongly flagged six, all of the shape quotient-then-multiply. Those seven are mitigated by the message, which now leads with the operand-type warning rather than a speedup range.
+
+THE THRESHOLD QUESTION, cast as a rule. Three instances would not justify a performance narrowing, and I have declined two this campaign at similar counts. The asymmetry justifies acting here: suppressing a wrong recommendation costs nothing because the recommendation was wrong, and what is given up is a suggestion at sites where it would have produced zero. For a perf check the failure mode is low precision; for a correctness hazard low precision is what must be avoided and low recall is tolerable.
+
+A VERIFICATION NOTE worth its own rule. One mutation appeared to leave a recall floor green, which reads as a toothless test; it had silently no-oped on a shell escaping problem and the floor was fine. Earlier in the campaign a different mutation landed on a dead duplicate of its target with the same misleading result. A green result after a mutation means nothing until the mutation is known to have applied.
