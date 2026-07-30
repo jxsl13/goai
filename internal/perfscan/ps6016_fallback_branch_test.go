@@ -65,3 +65,30 @@ func f(ctx *C, t *T, rows []R, n int, flag bool) {
 		t.Fatalf("%d findings, want 1: an else with no typed-storage sibling is not a fallback arm", got)
 	}
 }
+
+// TestPS6016SkipsAllConstantLiteral pins the constness suppression, which was added only after a
+// hoist measured ZERO.
+//
+// A literal whose every field is a compile-time constant costs nothing to box — the compiler emits a
+// pointer to a static read-only copy. Hoisting two such sites in nlp quant_deepseekv2 changed
+// allocs/op not at all, every sample equal, even though `go build -gcflags=-m` had reported them as
+// escaping to heap. An isolated benchmark separated the cases: all-constant is 0 allocs at 1.98ns,
+// identical to a pre-boxed package var, while one non-constant field costs 1 alloc, 24 B and 11.4ns.
+//
+// Both cases live in one fixture so the test fails if the suppression is dropped (2 findings) or if
+// it swallows the variable-field literal too (0).
+func TestPS6016SkipsAllConstantLiteral(t *testing.T) {
+	src := `package p
+
+func f(ctx *C, t *T, rows []R, n int) {
+	for i := range rows {
+		a, _ := exec(ctx, OpConcat, ConcatAttrs{Axis: 1}, t)
+		b, _ := exec(ctx, OpSlice, SliceAttrs{Axis: 1, Start: 0, End: n}, t)
+		_, _ = a, b
+	}
+}`
+	if got := literalArgCount(t, src); got != 1 {
+		t.Fatalf("%d findings, want 1: the all-constant literal boxes for free and must be skipped, "+
+			"the one reading n must survive", got)
+	}
+}

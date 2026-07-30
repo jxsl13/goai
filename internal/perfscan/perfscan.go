@@ -9474,6 +9474,49 @@ func onlyAppendedOutside(body *ast.BlockStmt, name string, declared map[string]b
 	return appendUses >= 1 && otherUses <= 1
 }
 
+// allFieldsConst reports whether every field initializer is a compile-time constant. Such a literal
+// costs NOTHING to box: the compiler emits a pointer to a static read-only copy rather than calling
+// newobject, so hoisting it cannot save an allocation.
+//
+// MEASURED, because escape analysis says otherwise and that is the trap. `go build -gcflags=-m`
+// reports "backend.ConcatAttrs{...} escapes to heap" for a fully constant literal, and PS6016's own
+// text used to point at -m as the confirmation. Hoisting two such sites in nlp quant_deepseekv2
+// changed allocs/op by ZERO, every sample equal. An isolated benchmark then separated the cases:
+// boxing an all-constant literal is 0 allocs and 1.98ns, identical to a pre-boxed package var, while
+// a literal with ANY non-constant field — even one that never changes inside the loop — is 1 alloc,
+// 24 B and 11.4ns. So the field constness, not the escape verdict, is what decides.
+//
+// A bare identifier is deliberately NOT treated as constant: the AST cannot tell a const from a var,
+// and guessing wrong here would drop a real finding rather than merely keep a harmless one.
+func allFieldsConst(cl *ast.CompositeLit) bool {
+	for _, el := range cl.Elts {
+		v := el
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			v = kv.Value
+		}
+		if !constFoldable(v) {
+			return false
+		}
+	}
+	return len(cl.Elts) > 0
+}
+
+// constFoldable reports whether an expression is a literal, or a unary/binary/parenthesized
+// combination of literals — the forms the compiler can fold at compile time.
+func constFoldable(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.UnaryExpr:
+		return constFoldable(x.X)
+	case *ast.BinaryExpr:
+		return constFoldable(x.X) && constFoldable(x.Y)
+	case *ast.ParenExpr:
+		return constFoldable(x.X)
+	}
+	return false
+}
+
 // loopInvariantLiteralArgFindings flags PS6016 — a struct literal rebuilt every iteration
 // from values that do not change:
 //
@@ -9555,7 +9598,7 @@ func loopInvariantLiteralArgFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 			}
 			for _, arg := range call.Args {
 				cl, ok := arg.(*ast.CompositeLit)
-				if !ok || len(cl.Elts) == 0 || cl.Type == nil || inFallback(cl.Pos()) {
+				if !ok || len(cl.Elts) == 0 || cl.Type == nil || inFallback(cl.Pos()) || allFieldsConst(cl) {
 					continue
 				}
 				if _, ok := cl.Type.(*ast.ArrayType); ok {
