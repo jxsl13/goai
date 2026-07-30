@@ -194,6 +194,7 @@ var checks = []check{
 	{"PS2005", "regexp-compile-in-loop", "a regexp.Compile/MustCompile inside a loop", true},
 	{"PS2006", "quadratic-cache-append", "a per-token cache slot reassigned to a concat of ITSELF and a new row — O(T\u00b2) copy traffic where an amortized row buffer is O(T)", false},
 	{"PS2007", "build-nxn-use-one-row", "a call given the same size argument twice, whose square result is then read at exactly that position — an N×N object materialized to consume one row", false},
+	{"PS2008", "per-row-make-slab", "a loop that allocates one slice per iteration into ARR[loopvar] — make([]T, len) with len LOOP-INVARIANT — where a single slab plus disjoint capped views would do. Replace with one make([]T, n*len) and ARR[i] = slab[i*len : (i+1)*len : (i+1)*len]. Bit-identical by construction: make() zeroes and so does a fresh slab, and no value, order or association changes. EXPECT NO SPEEDUP. Measured twice: linalg QR's per-column reflectors -39.7% allocs/op, classic GMM's per-sample responsibility rows -62.2% (5751 to 1753 on GMMFit), and BOTH moved the wall clock not at all (p=0.50 and p=0.42; QR indistinguishable at n>=512). It is a RESOURCE optimization — fewer allocations means less allocator work and less GC scan pressure on every machine, which is why it is worth doing and why it holds across systems — but reaching for it expecting throughput is a mistake the two measurements above rule out. Bytes barely move: the [][]T header stays and one slab rounds to a size class (+0.1% observed). PRECONDITIONS the check cannot verify: rows must not be appended to (the 3-index cap makes that safe but it then reallocates, losing the benefit) and must not be individually replaced later, since the views are only valid while the slab is. Jagged rows are already excluded — a length that varies with the loop variable needs per-row offsets, a different transform. Cannot be ranked syntactically: the payoff scales with the ITERATION COUNT, which is a runtime fact (PERF-HOTNESS-IS-NOT-SYNTAX-001), so prefer sites whose loop bound is a data size over ones bounded by a small constant", false},
 	// PS3xxx — indirection / reflection overhead
 	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
@@ -2004,6 +2005,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, searchFeedsReductionFindings(fset, fn)...)
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
+	out = append(out, perRowMakeSlabFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, sortThenTopKFindings(fset, fn)...)
@@ -7326,6 +7328,126 @@ func permutationSortComparator(call *ast.CallExpr) (outer, inner string, ok bool
 		return !ok
 	})
 	return outer, inner, ok
+}
+
+// perRowMakeSlabFindings flags PS2008 — a loop that allocates one slice per iteration into
+// ARR[loopvar], where a single slab plus disjoint capped views would replace n allocations with
+// one. Both spellings are matched: a direct ARR[i] = make(...) and the two-step v := make(...)
+// followed by ARR[i] = v.
+//
+// The length must be LOOP-INVARIANT. A length varying with the loop variable makes the rows
+// jagged, and a jagged set needs per-row offsets rather than a uniform stride — a different and
+// far less mechanical transform, so it is excluded rather than reported with advice that does not
+// apply to it.
+//
+// See the registry entry for the measurements: this is an allocation-count win with no wall-clock
+// effect, verified at two independent sites, and the message says so because the transform is
+// otherwise easy to mistake for a throughput optimization.
+func perRowMakeSlabFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lv, body, ok := loopVarBody(n)
+		if !ok || body == nil {
+			return true
+		}
+		made := map[string]ast.Node{}
+		report := func(base string, at ast.Node, rows ast.Expr) {
+			out = append(out, finding{
+				pos:      fset.Position(at.Pos()),
+				category: "per-row-make-slab",
+				msg: fmt.Sprintf("this make() runs once per %s iteration, so %s costs one allocation"+
+					" per row. The length does not vary with %s, so all rows are the same width:"+
+					" allocate ONE slab and hand out disjoint capped views —"+
+					" slab := make([]T, rows*len) then %s[%s] = slab[%s*len : (%s+1)*len : (%s+1)*len]."+
+					" Bit-identical (make zeroes, so does a fresh slab; no value or order changes)."+
+					" EXPECT NO SPEEDUP: measured at two sites (QR reflectors -39.7%% allocs, GMM"+
+					" responsibilities -62.2%%) with NO wall-clock change at either. Worth doing as a"+
+					" resource win — less allocator and GC-scan work everywhere — not for throughput."+
+					" Preconditions this check cannot see: rows must not be appended to, nor"+
+					" individually replaced later. Payoff scales with the ITERATION count, which is a"+
+					" runtime fact, so prefer loops bounded by a data size over a small constant.",
+					lv, base, lv, base, lv, lv, lv, lv),
+			})
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, isAs := m.(*ast.AssignStmt)
+			if !isAs || len(as.Rhs) != 1 || len(as.Lhs) != 1 || !invariantSliceMake(as.Rhs[0], lv) {
+				return true
+			}
+			switch lhs := as.Lhs[0].(type) {
+			case *ast.Ident:
+				made[lhs.Name] = as
+			case *ast.IndexExpr:
+				if ix, isID := lhs.Index.(*ast.Ident); isID && ix.Name == lv {
+					if base, isB := lhs.X.(*ast.Ident); isB {
+						report(base.Name, as, nil)
+					}
+				}
+			}
+			return true
+		})
+		for name, at := range made {
+			ast.Inspect(body, func(m ast.Node) bool {
+				as, isAs := m.(*ast.AssignStmt)
+				if !isAs || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					return true
+				}
+				ix, isIx := as.Lhs[0].(*ast.IndexExpr)
+				if !isIx {
+					return true
+				}
+				idx, isID := ix.Index.(*ast.Ident)
+				if !isID || idx.Name != lv {
+					return true
+				}
+				rhs, isR := as.Rhs[0].(*ast.Ident)
+				if !isR || rhs.Name != name {
+					return true
+				}
+				if base, isB := ix.X.(*ast.Ident); isB {
+					report(base.Name, at, nil)
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// invariantSliceMake reports whether e is make([]T, len, ...) whose size arguments do NOT mention
+// lv. A size that varies with the loop variable produces jagged rows, which a uniform-stride slab
+// cannot represent.
+func invariantSliceMake(e ast.Expr, lv string) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	// The "make" name test has NO floor in ps2008_slab_test.go, deliberately. In valid Go only
+	// make accepts a type as its first argument, so the ArrayType test below already implies it
+	// and no fixture can distinguish them — mutation testing showed removing the name test
+	// reddens nothing. It is kept as an explicit statement of intent, not as a live filter;
+	// recorded here so the next reader does not go looking for the missing floor.
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "make" || len(call.Args) < 2 {
+		return false
+	}
+	if _, isSlice := call.Args[0].(*ast.ArrayType); !isSlice {
+		return false
+	}
+	varies := false
+	for _, a := range call.Args[1:] {
+		ast.Inspect(a, func(n ast.Node) bool {
+			if idn, ok := n.(*ast.Ident); ok && idn.Name == lv {
+				varies = true
+			}
+			return !varies
+		})
+	}
+	return !varies
 }
 
 // stridedInnerWalkFindings flags PS6011 — a nested loop that walks a flat row-major buffer
