@@ -841,3 +841,10 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
+
+## T-01KYSNWWK3FA0T31GXB394QAJP F32 softplus vectorized on vexp (vsoftplusF32) — sibling of #648
+kind: task
+state: draft
+created: 2026-07-30
+
+F32 OpSoftplus CPU kernel parallelized in #563 but still scalar f64 math.Log1p(math.Exp) even on SIMD build (no vexpF32Fast check). Add softplusF32x8 = max(x,0)+log(1+exp(-|x|)) via expF32x8 + inline Cephes logf poly (log arg 1+e in (1,2], well-conditioned, no specials). Gate on vexpF32Fast; default byte-identical, SIMD tol-gated ADR-0021. Consumers: Mamba Delta, griffin/hymba gates, focal/reward losses. Bench new BenchmarkSoftplusF32.
