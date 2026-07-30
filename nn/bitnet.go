@@ -36,6 +36,35 @@ func parallelRange(n int, body func(lo, hi int)) {
 	wg.Wait()
 }
 
+// parallelRows splits n independent rows across GOMAXPROCS workers, gated on the TOTAL work
+// n·workPerItem (not n) so a small row count with heavy rows (e.g. 512 rows of 4096) still
+// fans out. body must touch only rows in its [lo,hi) range, so the result is identical to
+// the serial loop.
+func parallelRows(n, workPerItem int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n < 2 || n*workPerItem < 1<<14 {
+		body(0, n)
+		return
+	}
+	if nw > n {
+		nw = n
+	}
+	var wg sync.WaitGroup
+	chunk := (n + nw - 1) / nw
+	for lo := 0; lo < n; lo += chunk {
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 // BitLinear is the BitNet b1.58 quantization-aware-training linear layer (Ma, Wang,
 // Ma, Wang, Wang, Huang, Dong, Wang, Xue & Wei 2024, "The Era of 1-bit LLMs: All
 // Large Language Models are in 1.58 Bits", arXiv:2402.17764; architecture from Wang
@@ -306,37 +335,43 @@ func bitAct8Fill(x, q *tensor.Tensor) {
 		switch x.Dtype() {
 		case tensor.F64:
 			xd, qd := x.Storage().F64(), q.Storage().F64()
-			for r := range rows {
-				base := r * cols
-				absmax := 0.0
-				for c := range cols {
-					if a := math.Abs(xd[base+c]); a > absmax {
-						absmax = a
+			// Each row's absmax → scale → quantize is self-contained (no cross-row reduction),
+			// so a disjoint row-range fan-out is bit-identical to the serial loop.
+			parallelRows(rows, cols, func(lo, hi int) {
+				for r := lo; r < hi; r++ {
+					base := r * cols
+					absmax := 0.0
+					for c := range cols {
+						if a := math.Abs(xd[base+c]); a > absmax {
+							absmax = a
+						}
+					}
+					s := 127 / math.Max(absmax, bitnetScaleFloor)
+					for c := range cols {
+						v := math.Max(-128, math.Min(127, math.Round(xd[base+c]*s)))
+						qd[base+c] = v / s
 					}
 				}
-				s := 127 / math.Max(absmax, bitnetScaleFloor)
-				for c := range cols {
-					v := math.Max(-128, math.Min(127, math.Round(xd[base+c]*s)))
-					qd[base+c] = v / s
-				}
-			}
+			})
 			return
 		case tensor.F32:
 			xd, qd := x.Storage().F32(), q.Storage().F32()
-			for r := range rows {
-				base := r * cols
-				absmax := 0.0
-				for c := range cols {
-					if a := math.Abs(float64(xd[base+c])); a > absmax {
-						absmax = a
+			parallelRows(rows, cols, func(lo, hi int) {
+				for r := lo; r < hi; r++ {
+					base := r * cols
+					absmax := 0.0
+					for c := range cols {
+						if a := math.Abs(float64(xd[base+c])); a > absmax {
+							absmax = a
+						}
+					}
+					s := 127 / math.Max(absmax, bitnetScaleFloor)
+					for c := range cols {
+						v := math.Max(-128, math.Min(127, math.Round(float64(xd[base+c])*s)))
+						qd[base+c] = float32(v / s)
 					}
 				}
-				s := 127 / math.Max(absmax, bitnetScaleFloor)
-				for c := range cols {
-					v := math.Max(-128, math.Min(127, math.Round(float64(xd[base+c])*s)))
-					qd[base+c] = float32(v / s)
-				}
-			}
+			})
 			return
 		}
 	}
