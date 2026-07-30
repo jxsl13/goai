@@ -3,7 +3,6 @@ package nlp
 import (
 	"math"
 	"slices"
-	"sort"
 )
 
 // Beam search decoding (Sutskever et al. 2014; length penalty from Wu et al. 2016
@@ -11,6 +10,50 @@ import (
 // partial hypotheses, expanding each by every token and pruning back to the top
 // `width` at each step — a deterministic, higher-quality alternative to greedy
 // decoding (§R54).
+
+// beamCnd is a lightweight candidate backpointer — {parent beam index, next token} — scored
+// and pruned WITHOUT materializing its token sequence; only the survivors that advance
+// materialize toks (make+copy), instead of one full slice per vocab token per beam (the T942
+// diverse-beam fix, applied to plain beam search: T943).
+//
+// Declared at package scope, together with its comparator, so that BOTH the selection and the
+// prefix sort receive a STATIC function value. That is load-bearing for performance, not
+// style: as a local closure shared by two call sites the comparator cannot be devirtualized,
+// every comparison becomes an indirect call, and a measurement showed the resulting selection
+// LOSING to the full sort it replaced even though it performs an order of magnitude fewer
+// comparisons.
+type beamCnd struct {
+	parent int
+	tok    int
+	score  float64
+	newLen int
+}
+
+// beamCndByScore is a STRICT TOTAL ORDER: score descending, then parent ascending, then token
+// ascending. Totality is what makes the selection below substitutable for a sort — with ties
+// the retained set would not be unique. It also reproduces the stable sort's order exactly,
+// since candidates are appended parent-outer and token-inner.
+func beamCndByScore(a, b beamCnd) int {
+	if a.score != b.score {
+		if a.score > b.score {
+			return -1
+		}
+		return 1
+	}
+	if a.parent != b.parent {
+		if a.parent < b.parent {
+			return -1
+		}
+		return 1
+	}
+	if a.tok < b.tok {
+		return -1
+	}
+	if a.tok > b.tok {
+		return 1
+	}
+	return 0
+}
 
 // NextLogits returns the next-token logits given the tokens produced so far.
 // Beam search applies a stable log-softmax internally, so raw logits are fine.
@@ -37,16 +80,6 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		score  float64 // raw cumulative log-prob
 		newLen int
 	}
-	// cnd is a lightweight candidate backpointer — {parent beam index, next token} —
-	// scored and pruned WITHOUT materializing its token sequence; only the survivors
-	// that advance materialize toks (make+copy), instead of one full slice per vocab
-	// token per beam (the T942 diverse-beam fix, applied to plain beam search: T943).
-	type cnd struct {
-		parent int
-		tok    int
-		score  float64
-		newLen int
-	}
 	lenPenalty := func(n int) float64 {
 		if alpha == 0 {
 			return 1
@@ -58,11 +91,11 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 	var done []Beam
 
 	for len(live) > 0 {
-		cand := make([]cnd, 0, len(live)*8)
+		cand := make([]beamCnd, 0, len(live)*8)
 		for p, h := range live {
 			ls := logSoftmaxRow(next(h.toks))
 			for tok, l := range ls {
-				cand = append(cand, cnd{p, tok, h.score + l, h.newLen + 1})
+				cand = append(cand, beamCnd{p, tok, h.score + l, h.newLen + 1})
 			}
 		}
 		// prune the frontier to the top `width` by RAW cumulative log-prob
@@ -70,28 +103,33 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		// sort.Slice with an explicit (score, parent, tok) tie-break reproduces the stable
 		// sort's order — cand is appended parent-outer, tok-inner, so ties resolve to that
 		// same append order — but with pdqsort's lower constant instead of symMerge.
+		// SELECT, then sort only the prefix. Sorting all len(live)·vocab candidates ordered a
+		// tail nothing reads: at width 8 over a 2048 vocabulary that is a sort of 16384 to
+		// consume at most 16 (PS6022).
+		//
+		// keep is an exact upper bound on what the walk below can reach, not a heuristic.
+		// The walk stops once the frontier holds `width`, so it consumes `width` survivors
+		// plus however many completions it passes on the way. In a non-terminal step a
+		// candidate completes only via eos, and the expansion gives each parent exactly one
+		// eos candidate, so completions are at most len(live). Hence width+len(live) bounds
+		// it, and truncating there is bit-identical — the walk provably never looked further.
+		//
+		// The terminal step is the case that needs its own argument, because there EVERY
+		// candidate satisfies newLen >= maxNew, the frontier never fills, and the walk
+		// currently runs to the end. Dropping its tail is still result-identical: newLen is
+		// uniform across a step by induction (every node in `live` was created with the same
+		// newLen), so lenPenalty is a single positive constant within the step and final-score
+		// order equals raw-score order. A dropped candidate is therefore worse than all
+		// keep >= width retained ones, so it cannot enter the top `width` of `done` — and the
+		// retained ones enter `done` in the same relative order as before, so the trailing
+		// stable sort is unaffected.
 		//perfscan:ignore PS3002 already the optimized form; radix needs a monotonic single key
-		slices.SortFunc(cand, func(a, b cnd) int {
-			if a.score != b.score {
-				if a.score > b.score {
-					return -1
-				}
-				return 1
-			}
-			if a.parent != b.parent {
-				if a.parent < b.parent {
-					return -1
-				}
-				return 1
-			}
-			if a.tok < b.tok {
-				return -1
-			}
-			if a.tok > b.tok {
-				return 1
-			}
-			return 0
-		})
+		//perfscan:ignore PS6022 the truncation happens BEFORE the sort — that is the fix
+		if keep := width + len(live); keep < len(cand) {
+			selectTopK(cand, keep, beamCndByScore)
+			cand = cand[:keep]
+		}
+		slices.SortFunc(cand, beamCndByScore)
 
 		// Walk candidates best-first and STOP once the frontier is full.
 		//
@@ -125,7 +163,20 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		}
 	}
 
-	sort.SliceStable(done, func(i, j int) bool { return done[i].Score > done[j].Score })
+	// slices.SortStableFunc rather than sort.SliceStable: the latter reaches its swap through
+	// reflectlite.Swapper and allocates on every call (PS6009). Same comparator, same stable
+	// order, monomorphized swap. Score-only comparison is NOT a total order, so stability is
+	// load-bearing here and the stable variant is required — this is the one sort in this
+	// function that must not become a selection.
+	slices.SortStableFunc(done, func(a, b Beam) int {
+		if a.Score > b.Score {
+			return -1
+		}
+		if a.Score < b.Score {
+			return 1
+		}
+		return 0
+	})
 	if len(done) > width {
 		done = done[:width]
 	}
