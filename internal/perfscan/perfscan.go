@@ -1425,7 +1425,10 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					loopArgs++
 				}
 			}
-			if loopArgs >= 2 {
+			// The advice below prescribes "keeping the accessor as the exotic-dtype fallback",
+			// so an already-converted site still contains, by construction, the very loop this
+			// arm matches. Reporting it re-files the applied fix as the defect, forever.
+			if loopArgs >= 2 && !inDeclinedTypedFallback(parent, call) {
 				out = append(out, finding{
 					pos:      fset.Position(loop.Pos()),
 					category: "manual-walk-dispatch",
@@ -7631,6 +7634,74 @@ func isDtypeSwitch(sw *ast.SwitchStmt) bool {
 // clauseReadsTypedStorage reports whether the clause reaches the backing store through
 // Storage().<Typed>() — the shape that makes it a converted arm.
 func clauseReadsTypedStorage(cc *ast.CaseClause) bool { return readsTypedStorage(cc) }
+
+// inDeclinedTypedFallback reports whether n sits in the arm a typed fast path DECLINED: the else
+// of an if whose taken side reaches Storage().<Typed>(), or the default of a switch that has a
+// converted case. Such an arm is the exotic-dtype correctness path — precisely what the fix these
+// checks recommend LEAVES BEHIND — so reporting it flags the applied fix as the defect. PS1001,
+// PS1009 and PS6016 already suppress their own equivalents; this is the shared form.
+//
+// THE SIBLING-ARM TEST IS THE WHOLE POINT, and a per-function one is not a weaker version of it but
+// a wrong one. "The enclosing function mentions Storage() somewhere" flags 16 of the 84 PS1005
+// sites, and reading them shows the coarse rule is right for the wrong reason and sometimes simply
+// wrong: nlp jlens builds a typed DESTINATION slice and then walks a DIFFERENT, provably non-F64
+// source by accessor inside the same function. That walk is not a fallback, and the identity fill
+// a few lines below it is a genuine site the coarse rule would have swallowed with it.
+func inDeclinedTypedFallback(parent map[ast.Node]ast.Node, n ast.Node) bool {
+	for cur := n; cur != nil; cur = parent[cur] {
+		switch s := parent[cur].(type) {
+		case *ast.IfStmt:
+			// Only the ELSE side is inert. The taken side is the fast path itself, and an
+			// accessor loop there would be a real finding.
+			if s.Else == cur && (readsTypedStorage(s.Body) ||
+				(s.Init != nil && readsTypedStorage(s.Init)) ||
+				(s.Cond != nil && readsTypedStorage(s.Cond))) {
+				return true
+			}
+		case *ast.CaseClause:
+			// A default clause carries no expression list; a converted sibling is any other
+			// clause that reaches typed storage.
+			if len(s.List) == 0 && switchHasConvertedClause(parent, s) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// switchHasConvertedClause reports whether the switch owning def has some OTHER, non-default clause
+// that reaches typed storage — the sibling that makes def the declined arm.
+func switchHasConvertedClause(parent map[ast.Node]ast.Node, def *ast.CaseClause) bool {
+	// The parent map is built from the walk stack, so a BlockStmt sits between the switch and
+	// its clauses; walk up until the switch itself appears.
+	var body *ast.BlockStmt
+	for p := parent[def]; p != nil; p = parent[p] {
+		if sw, ok := p.(*ast.SwitchStmt); ok {
+			body = sw.Body
+			break
+		}
+		if sw, ok := p.(*ast.TypeSwitchStmt); ok {
+			body = sw.Body
+			break
+		}
+		if _, ok := p.(*ast.BlockStmt); !ok {
+			return false
+		}
+	}
+	if body == nil {
+		return false
+	}
+	for _, st := range body.List {
+		cc, ok := st.(*ast.CaseClause)
+		if !ok || cc == def || len(cc.List) == 0 {
+			continue
+		}
+		if readsTypedStorage(cc) {
+			return true
+		}
+	}
+	return false
+}
 
 // readsTypedStorage reports whether a subtree reaches the backing store through
 // Storage().<Typed>(). Shared by PS1009, which uses it to recognize a converted dtype arm, and by
