@@ -51,9 +51,9 @@ func parallelCols(n, workPerItem int, body func(lo, hi int)) {
 // packed into a single n×n array (L below the diagonal, U on and above). Reuse it to solve several
 // right-hand sides or to get the determinant without refactoring.
 type LU struct {
-	lu   [][]float64 // packed L (strictly-lower, unit) + U (upper), n×n
-	piv  []int       // row permutation: row i of P·A is original row piv[i]
-	sign float64     // (−1)^(#row swaps), for the determinant
+	lu   []float64 // packed L (strictly-lower, unit) + U (upper), FLAT row-major n×n (lu[i*n+j])
+	piv  []int     // row permutation: row i of P·A is original row piv[i]
+	sign float64   // (−1)^(#row swaps), for the determinant
 	n    int
 }
 
@@ -65,7 +65,18 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := toMatrix(a, n)
+	// FLAT row-major working copy (was [][]float64 — one heap slice per row, scattered,
+	// with a slice-header deref on every m[i][j] read inside the O(n³) elimination). A single
+	// contiguous block makes the inner update stream two row slices; row swaps become a
+	// physical element exchange (O(n) each, O(n²) total — negligible vs the O(n³) elimination)
+	// instead of a pointer swap, but produce the same logical matrix. Bit-identical: same pivot
+	// choice, same elimination order, same `m[i][k] / m[k][k]` DIVISION.
+	m := make([]float64, n*n)
+	for i := range n {
+		for j := range n {
+			m[i*n+j] = a.AtF64(i, j)
+		}
+	}
 	piv := make([]int, n)
 	for i := range piv {
 		piv[i] = i
@@ -75,23 +86,29 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 		// partial pivot: largest absolute value in column k, rows k..n−1 (numerical stability)
 		p := k
 		for i := k + 1; i < n; i++ {
-			if math.Abs(m[i][k]) > math.Abs(m[p][k]) {
+			if math.Abs(m[i*n+k]) > math.Abs(m[p*n+k]) {
 				p = i
 			}
 		}
-		if m[p][k] == 0 {
+		if m[p*n+k] == 0 {
 			continue // singular column: U[k,k] stays 0, no elimination
 		}
 		if p != k {
-			m[k], m[p] = m[p], m[k]
+			rk, rp := m[k*n:k*n+n], m[p*n:p*n+n]
+			for j := range n {
+				rk[j], rp[j] = rp[j], rk[j]
+			}
 			piv[k], piv[p] = piv[p], piv[k]
 			sign = -sign
 		}
+		mk := m[k*n : k*n+n]
+		pivot := mk[k] // = m[k][k]; row k is untouched by the i>k updates below
 		for i := k + 1; i < n; i++ {
-			mult := m[i][k] / m[k][k]
-			m[i][k] = mult // store the L multiplier
+			mi := m[i*n : i*n+n]
+			mult := mi[k] / pivot
+			mi[k] = mult // store the L multiplier
 			for j := k + 1; j < n; j++ {
-				m[i][j] -= mult * m[k][j]
+				mi[j] -= mult * mk[j]
 			}
 		}
 	}
@@ -102,8 +119,9 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 // the U diagonal). It is 0 exactly when A is singular.
 func (f *LU) Det() float64 {
 	d := f.sign
-	for k := range f.n {
-		d *= f.lu[k][k]
+	n := f.n
+	for k := range n {
+		d *= f.lu[k*n+k]
 	}
 	return d
 }
@@ -117,7 +135,7 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("linalg: Solve rhs must be [%d] or [%d,k], got %v", n, n, b.Shape())
 	}
 	for k := range n {
-		if f.lu[k][k] == 0 {
+		if f.lu[k*n+k] == 0 {
 			return nil, fmt.Errorf("linalg: Solve of a singular matrix (zero pivot at %d)", k)
 		}
 	}
@@ -146,17 +164,19 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		for c := clo; c < chi; c++ {
 			for i := range n { // forward: L·y = P·b, L unit-lower
 				s := bat(f.piv[i], c)
+				li := f.lu[i*n : i*n+n] // contiguous factor row i
 				for j := range i {
-					s -= f.lu[i][j] * y[j]
+					s -= li[j] * y[j]
 				}
 				y[i] = s
 			}
 			for i := n - 1; i >= 0; i-- { // back: U·x = y
 				s := y[i]
+				li := f.lu[i*n : i*n+n]
 				for j := i + 1; j < n; j++ {
-					s -= f.lu[i][j] * out[j*cols+c]
+					s -= li[j] * out[j*cols+c]
 				}
-				out[i*cols+c] = s / f.lu[i][i]
+				out[i*cols+c] = s / li[i]
 			}
 		}
 	})
