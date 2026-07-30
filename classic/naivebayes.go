@@ -136,20 +136,35 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 
 	// epsilon = var_smoothing · max over features of the population variance of
 	// that feature across the whole dataset (scikit-learn's epsilon_).
+	// TWO ROW-MAJOR PASSES, not 2*d column ones. The previous form fixed j and walked i, so for
+	// every one of the d features it re-dereferenced all n row headers and touched a fresh cache
+	// line per row to read eight bytes — 2*d = 40 such passes at d=20. Every other loop in Fit
+	// already walks rows contiguously (the per-class means and variances below), so this prepass was
+	// the odd one out.
+	//
+	// Bit-identical: for each j the sum still accumulates i ascending over the same operands, the
+	// divisions are unchanged, and maxVar still scans j ascending with the same strict >.
+	mean := make([]float64, d)
+	for i := range x {
+		xi := x[i]
+		for j := 0; j < d; j++ {
+			mean[j] += xi[j]
+		}
+	}
+	for j := 0; j < d; j++ {
+		mean[j] /= float64(n)
+	}
+	ss := make([]float64, d)
+	for i := range x {
+		xi := x[i]
+		for j := 0; j < d; j++ {
+			dv := xi[j] - mean[j]
+			ss[j] += dv * dv
+		}
+	}
 	maxVar := 0.0
 	for j := 0; j < d; j++ {
-		var mean float64
-		for i := range x {
-			mean += x[i][j]
-		}
-		mean /= float64(n)
-		var v float64
-		for i := range x {
-			dv := x[i][j] - mean
-			v += dv * dv
-		}
-		v /= float64(n)
-		if v > maxVar {
+		if v := ss[j] / float64(n); v > maxVar {
 			maxVar = v
 		}
 	}
