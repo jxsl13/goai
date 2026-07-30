@@ -1392,7 +1392,19 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					msg: fmt.Sprintf(".%s walks a tensor by explicit loop indices in %s() — an interface"+
 						" dispatch + flat-offset recompute per element that PS1001's Numel-loop check"+
 						" misses. Take the contiguous typed backing slice once (Storage().F64()/F32())"+
-						" and index it directly, keeping the accessor as the exotic-dtype fallback.",
+						" and index it directly, keeping the accessor as the exotic-dtype fallback."+
+						" PAYOFF IS PER-SITE AND THE SPREAD IS 80x, so rank before converting. classic"+
+						" SoftmaxRegression.PredictProba was an n*d SetF64 fill plus an n*k AtF64 copy-out,"+
+						" 94208 dispatches at n=4096, and went geomean -50.10%% (2.0x) with allocs -97.95%%."+
+						" nlp QuantMamba2's prefill gated RMSNorm removed just as many dispatches and went"+
+						" geomean -0.61%%, 3 of 4 cells indistinguishable, because that loop sits inside a"+
+						" quantized-matmul-dominated prefill. Rank by (a) the dispatch count, the product of"+
+						" the loop bounds times dispatches per iteration, and (b) the loop's SHARE of its"+
+						" enclosing function. THE COST OF THE FIX is decided by the dtype: a constructor-pinned"+
+						" tensor.New(tensor.F64/F32, ...) makes it three lines with no fallback wanted"+
+						" (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001), while a dtype taken from an input,"+
+						" tensor.New(xin.Dtype(), ...), needs a dual path — a fresh bit-identity claim PS6004"+
+						" then reports forever unless a test reaches BOTH arms.",
 						name, fn.Name.Name),
 				})
 			}
@@ -7263,7 +7275,21 @@ func allocInParallelBodyFindings(fset *token.FileSet, fn *ast.FuncDecl) []findin
 				out = append(out, finding{
 					pos:      fset.Position(as.Pos()),
 					category: "alloc-in-parallel-body",
-					msg: fmt.Sprintf("%q is allocated inside a parallel body — once per DISPATCH. Check how often this dispatch runs: if the enclosing function is itself called in a loop, hoist it to one buffer per chunk on the receiver and select it with the chunk index",
+					msg: fmt.Sprintf("%q is allocated inside a parallel body — once per DISPATCH, so whether"+
+						" this is free or ruinous depends ENTIRELY on how often the dispatch runs, which the"+
+						" check cannot see. Both sides were measured in this repo. Dispatch-once sites pay"+
+						" nothing: AQLM went 49 to 51 MB and GMM 4 to 4 MB, one dispatch per encode pass or"+
+						" EM iteration. The GBM exact grower dispatches once per TREE NODE, thousands of"+
+						" times per fit, and the identical code shape took it from 64 MB / 883 allocs to"+
+						" 2007 MB / 8965 — a 31x memory regression that shipped hidden behind a 2.80x"+
+						" speedup because the commit reported only ns/op. So find the call frame that"+
+						" repeats. If the dispatch runs once per call and the enclosing function is not"+
+						" itself in a loop, this is per-worker scratch bounded by GOMAXPROCS and is"+
+						" SANCTIONED — accept it and report both numbers"+
+						" (PERF-PER-WORKER-ALLOCS-ARE-BOUNDED-001); most findings here are that case. If the"+
+						" dispatch repeats, hoist to one buffer per chunk on the receiver and select it with"+
+						" the chunk index. Report B/op and allocs/op either way, since ns/op alone hid the"+
+						" only regression this check exists to catch",
 						identName(as.Lhs[0])),
 				})
 			}
@@ -7355,7 +7381,15 @@ func reflectSwapperSortFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 		out = append(out, finding{
 			pos:      fset.Position(call.Pos()),
 			category: "reflect-swapper-sort",
-			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice length — switch to slices.%sFunc. Triage by how often this line runs, not by how long the slice is: a short sort called per node or per query is worth converting, a long one called once per Fit is not.%s",
+			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice"+
+				" length — switch to slices.%sFunc. Triage by how often this line runs, not by how long"+
+				" the slice is, which is the counter-intuitive part: the allocation is per CALL."+
+				" Measured in this repo — classic/tree.go's radixByFeature, once per node per feature,"+
+				" went 1,095,700 to 352,027 allocs (3.11x); classic/knn.go's three per-node/per-query"+
+				" sites went 36,004 to 24,003 (1.50x) sorting SHORT slices of k results. A long sort"+
+				" called once allocates one swapper and is not worth touching; five sites were declined"+
+				" on exactly that basis. Both forms are UNSTABLE, so ties may land differently — confirm"+
+				" the comparator is a total order, or gate the output, before converting.%s",
 				sel.Sel.Name, want, risk),
 		})
 		return true
