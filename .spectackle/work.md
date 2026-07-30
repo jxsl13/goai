@@ -1297,3 +1297,24 @@ A CAVEAT WORTH THE EXTRA CODE. The interchange is NOT free when it cannot fan ou
 BIT-IDENTITY established by capturing digests from the serial implementation BEFORE the interchange and reproducing them exactly after, over three geometries: the benchmark shape, k=4 with six pair blocks, and k=2 with a single block. Pinned as assertions.
 
 STILL OPEN from the sweep: SVCFit at 0.97x, also entirely serial, with an existing task (T-01KYJQ78WJF57) proposing a flattened kernel matrix. The gradient and Hessian-scatter loops in this same Fit remain serial and cannot be chunked bit-identically over samples for the reason above.
+
+## R-01KYR5DFZHECA80K8PJTPSMP7C SVC kernel column 1.27x: the GOMAXPROCS sweep is exhausted for classic, and a size below the threshold looked like a regression
+kind: research
+state: draft
+created: 2026-07-30
+
+CONSUMES the second finding of the GOMAXPROCS sweep in R-01KYR4Z7SWFTC, and closes T-01KYJQ78WJF57 by a different route than it proposed. Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds at benchtime=30x.
+
+MEASURED:
+  SVCFit/n4000_rbf  6.58-6.73ms -> 5.20-5.21ms  1.27x, ranges disjoint
+  SVCFit/n1000_rbf  unchanged, below the work threshold
+  parallel scaling  0.97x -> 1.30x from GOMAXPROCS=1 to 12
+  GOMAXPROCS=1      7.13ms vs 7.17ms, parity within noise
+
+THE CEILING IS AMDAHL AND IS WORTH STATING WITH THE RATIO. SMO cannot be parallelized - it selects a maximal-violating pair and updates, one iteration at a time. Only the two kernel columns each step evaluates can be, and they were 58% of the profile. So 1.27x is close to what 58% parallelizable work allows, not a partial result waiting for more effort. The task T-01KYJQ78WJF57 proposed flattening the kernel matrix and specializing the kernel column per kernel type; parallelizing the existing column loop got the available win without touching the memory layout, and the layout change would now be chasing the remaining 42% sequential share.
+
+BIT-IDENTITY IS PINNED ON THE FITTED MODEL, not on a column, and the reason generalizes: SMO iteration DEPENDS on the values it reads, so a divergence does not stay small - it compounds into a different support vector set. For any solver whose control flow reads the values being changed, the model output is the only meaningful parity target. Digests reproduced exactly at both sizes with identical support vector counts.
+
+A SIZE BELOW THE THRESHOLD LOOKED LIKE A REGRESSION. The n=1000 arm showed 1.39ms in one baseline round against 1.93-2.01ms for the new arm - a 1.4x apparent regression. Both arms run IDENTICAL SERIAL CODE at that size: d=20 puts the work at 20000 against the 32768 threshold. A panic probe confirmed n=1000 never enters the parallel path and n=4000 always does. That is a structural answer in one command, against re-running the benchmark until the noise settles - and it is the third distinct way this session that a benchmark number has misled (phantom regression from one sample, inverted sign from a bimodal min-of-N, and now a spread on a code path the change does not reach).
+
+THE SWEEP IS NOW EXHAUSTED FOR classic. Both 0.97-0.99x paths are fixed. The remaining ranking is ForestFit 7.93x, KNNPredict 5.87x, DBSCANFit 5.67x, GMMFitFull 3.51x, GBMHist_exact 2.79x, GBMFit 1.73x, GBMHist_hist 1.53x - all genuinely parallel, and the two GBM figures were separately confirmed NOT to be over-parallelization (R-01KYR494K5ESB). Applying the same sweep to another package is the cheapest next move; it costs one command per benchmark and needs no code reading.
