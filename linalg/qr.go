@@ -19,30 +19,25 @@ func QR(a *tensor.Tensor) (q, r *tensor.Tensor, err error) {
 	if m < n {
 		return nil, nil, fmt.Errorf("linalg: QR needs m ≥ n (tall/square), got %dx%d", m, n)
 	}
-	rm := toRect(a, m, n) // working copy, becomes R (upper triangle)
-	vs, betas := householder(rm, m, n)
+	rm := toFlat(a, m, n) // row-major working copy, becomes R (upper triangle)
+	t := make([]float64, n)
+	vs, betas := householder(rm, m, n, t)
 
 	// R = the top n×n upper triangle
 	rMat := make([]float64, n*n)
 	for i := range n {
 		for j := i; j < n; j++ {
-			rMat[i*n+j] = rm[i][j]
+			rMat[i*n+j] = rm[i*n+j]
 		}
 	}
-	// reduced Q = H_0·H_1·…·H_{n−1} applied to the first n columns of I_m (apply reflectors in reverse)
-	qcols := make([][]float64, m)
-	for i := range m {
-		qcols[i] = make([]float64, n)
-		if i < n {
-			qcols[i][i] = 1
-		}
+	// reduced Q = H_0·H_1·…·H_{n−1} applied to the first n columns of I_m (apply reflectors in
+	// reverse). qMat is the row-major [m,n] buffer, initialized to the first n columns of I_m.
+	qMat := make([]float64, m*n)
+	for i := range n {
+		qMat[i*n+i] = 1
 	}
 	for k := n - 1; k >= 0; k-- {
-		applyReflector(qcols, vs[k], betas[k], k, m, n)
-	}
-	qMat := make([]float64, m*n)
-	for i := range m {
-		copy(qMat[i*n:(i+1)*n], qcols[i])
+		applyReflector(qMat, vs[k], betas[k], k, m, n, t)
 	}
 	return tensor.FromFloat64(tensor.Shape{m, n}, qMat), tensor.FromFloat64(tensor.Shape{n, n}, rMat), nil
 }
@@ -62,10 +57,11 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	if b.Ndim() < 1 || b.Ndim() > 2 || b.Shape()[0] != m {
 		return nil, fmt.Errorf("linalg: Lstsq rhs must be [%d] or [%d,k], got %v", m, m, b.Shape())
 	}
-	rm := toRect(a, m, n)
-	vs, betas := householder(rm, m, n)
+	rm := toFlat(a, m, n)
+	t := make([]float64, n)
+	vs, betas := householder(rm, m, n, t)
 	for k := range n {
-		if rm[k][k] == 0 {
+		if rm[k*n+k] == 0 {
 			return nil, fmt.Errorf("linalg: Lstsq of a rank-deficient matrix (zero R[%d,%d])", k, k)
 		}
 	}
@@ -99,9 +95,9 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 		for i := n - 1; i >= 0; i-- {
 			sum := cvec[i]
 			for j := i + 1; j < n; j++ {
-				sum -= rm[i][j] * out[j*cols+c]
+				sum -= rm[i*n+j] * out[j*cols+c]
 			}
-			out[i*cols+c] = sum / rm[i][i]
+			out[i*cols+c] = sum / rm[i*n+i]
 		}
 	}
 	if vec {
@@ -113,14 +109,15 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 // householder reduces the m×n matrix rm (in place) to upper-triangular R via Householder reflectors,
 // returning the reflector vectors vs[k] (nonzero in rows k..m−1) and coefficients β_k such that
 // H_k = I − β_k·v_k·v_kᵀ. R is left in rm's upper triangle.
-func householder(rm [][]float64, m, n int) (vs [][]float64, betas []float64) {
+func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []float64) {
 	vs = make([][]float64, n)
 	betas = make([]float64, n)
 	for k := range n {
 		// x = rm[k:m, k]; norm below (incl.) the diagonal
 		var norm float64
 		for i := k; i < m; i++ {
-			norm += rm[i][k] * rm[i][k]
+			x := rm[i*n+k]
+			norm += x * x
 		}
 		norm = math.Sqrt(norm)
 		v := make([]float64, m)
@@ -130,11 +127,11 @@ func householder(rm [][]float64, m, n int) (vs [][]float64, betas []float64) {
 		}
 		// α = −sign(x₀)·‖x‖ (sign opposite to x₀ avoids cancellation in v₀)
 		alpha := -norm
-		if rm[k][k] < 0 {
+		if rm[k*n+k] < 0 {
 			alpha = norm
 		}
 		for i := k; i < m; i++ {
-			v[i] = rm[i][k]
+			v[i] = rm[i*n+k]
 		}
 		v[k] -= alpha
 		var vtv float64
@@ -146,38 +143,64 @@ func householder(rm [][]float64, m, n int) (vs [][]float64, betas []float64) {
 		}
 		beta := 2 / vtv
 		betas[k] = beta
-		// apply H_k to the trailing submatrix rm[k:m, k:n]
+		// Apply H_k to the trailing submatrix rm[k:m, k:n] as a rank-1 update, i-OUTER so each
+		// row segment rm[i*n+k:i*n+n] streams CONTIGUOUSLY (row-major) instead of the former
+		// column-strided rm[i][j] scatter across m separate row slices. t[j] = Σ_i v[i]·rm[i,j]
+		// in ascending i, scaled to β·t[j], then rm[i,j] -= (β·t[j])·v[i]. Same operands, same
+		// ascending-i order, and the (β·s)·v[i] product grouping preserved → bit-identical.
 		for j := k; j < n; j++ {
-			s := 0.0
-			for i := k; i < m; i++ {
-				s += v[i] * rm[i][j]
-			}
-			bs := beta * s
-			for i := k; i < m; i++ {
-				rm[i][j] -= bs * v[i]
+			t[j] = 0
+		}
+		for i := k; i < m; i++ {
+			vi := v[i]
+			row := rm[i*n : i*n+n]
+			for j := k; j < n; j++ {
+				t[j] += vi * row[j]
 			}
 		}
-		rm[k][k] = alpha // exact diagonal
+		for j := k; j < n; j++ {
+			t[j] *= beta
+		}
+		for i := k; i < m; i++ {
+			vi := v[i]
+			row := rm[i*n : i*n+n]
+			for j := k; j < n; j++ {
+				row[j] -= t[j] * vi
+			}
+		}
+		rm[k*n+k] = alpha // exact diagonal
 		for i := k + 1; i < m; i++ {
-			rm[i][k] = 0 // annihilated below the diagonal
+			rm[i*n+k] = 0 // annihilated below the diagonal
 		}
 	}
 	return vs, betas
 }
 
 // applyReflector applies H_k = I − β·v·vᵀ to the rows k..m−1 of every column of the m×cols matrix q.
-func applyReflector(q [][]float64, v []float64, beta float64, k, m, cols int) {
+func applyReflector(q []float64, v []float64, beta float64, k, m, cols int, t []float64) {
 	if beta == 0 {
 		return
 	}
+	// i-OUTER rank-1 update (see householder): stream each row q[i*cols:i*cols+cols]
+	// contiguously instead of the column-strided q[i][j] scatter. Bit-identical.
 	for j := range cols {
-		s := 0.0
-		for i := k; i < m; i++ {
-			s += v[i] * q[i][j]
+		t[j] = 0
+	}
+	for i := k; i < m; i++ {
+		vi := v[i]
+		row := q[i*cols : i*cols+cols]
+		for j := range cols {
+			t[j] += vi * row[j]
 		}
-		bs := beta * s
-		for i := k; i < m; i++ {
-			q[i][j] -= bs * v[i]
+	}
+	for j := range cols {
+		t[j] *= beta
+	}
+	for i := k; i < m; i++ {
+		vi := v[i]
+		row := q[i*cols : i*cols+cols]
+		for j := range cols {
+			row[j] -= t[j] * vi
 		}
 	}
 }
@@ -194,13 +217,12 @@ func shapeMN(a *tensor.Tensor) (m, n int, err error) {
 	return m, n, nil
 }
 
-// toRect copies a into a fresh m×n [][]float64.
-func toRect(a *tensor.Tensor, m, n int) [][]float64 {
-	r := make([][]float64, m)
+// toFlat copies a into a fresh m×n row-major []float64 (one contiguous allocation).
+func toFlat(a *tensor.Tensor, m, n int) []float64 {
+	r := make([]float64, m*n)
 	for i := range m {
-		r[i] = make([]float64, n)
 		for j := range n {
-			r[i][j] = a.AtF64(i, j)
+			r[i*n+j] = a.AtF64(i, j)
 		}
 	}
 	return r
