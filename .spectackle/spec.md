@@ -710,3 +710,8 @@ Rationale: The same transformation was worth 15 percent in a Jacobi rotation - p
 WHEN a survey conditions a candidate on whether a loop turns out to be issue-bound, the implementing agent SHALL ship and measure the cheapest bit-identical candidate first, then revisit the conditioned ones with that answer in hand.
 
 Rationale: An eigensolver survey estimated bounds-check removal at 1.03 to 1.10 times and framed it as the calibration deciding whether fusion and unrolling were worth attempting. It measured 1.18 times, establishing the loop was issue-bound, and the fusion it unlocked then added a further 3.5 and 7.2 percent. Dismissing the cheap candidate on its small estimate would have closed the expensive one too.
+
+## PROC-AUDIT-EVERY-HIT-BEFORE-TRUSTING-001
+WHEN a scan check accumulates dozens of hits without any being acted on, the implementing agent SHALL classify every hit and report the false-positive fraction before treating the check as a work queue.
+
+Rationale: One check reached 110 hits and an audit found ZERO matched the shape its own message described: 57 were layer stacks, 35 were per-head or per-expert fan-outs. Its six genuine instances were all suppressed by another guard, so it had never once reported the class it was built for. A high hit count reads as high yield and can mean the opposite.
