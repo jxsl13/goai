@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3010", "serial-reduction-chain", "a single-accumulator floating-point reduction whose every add depends on the previous one, so the loop is bound by add LATENCY rather than throughput. Four independent partials summed at the end measured 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x) on Apple M2 Pro darwin/arm64, matching the hardware prediction for a dependent-add chain. NOT BIT-IDENTICAL: it reassociates the sum, so the value moves in the last ulp, and the two hottest instances in this tree are blocked on exactly that — nlp randomOrthogonal is regenerated at dequantization time by TurboQuant, and classic ballTree.within decides exact-label DBSCAN goldens. Requires a pure reduction: one accumulator, written once, read nowhere else in the loop, no branching. An accumulator that is also TESTED is PS3008 territory and is excluded, since four partials cannot be compared against a threshold without summing them first", false},
 	{"PS3009", "indirect-column-gather", "a loop reading ONE column of a slice-of-slices through an INDIRECT row index — M[idx[k]][f] with f invariant — so every element lands in a different row, costing a row-header dereference and a cache line per eight bytes used. Same cache behavior PS1010 describes but NOT the same fix: PS1010 needs an interchangeable nest, and here the row order is a data-dependent permutation with no nest to swap. Keep a feature-major copy (xT[f*n+row]) instead. MEASURED on classic gbmBuilder.bestSplit, where the gather was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. TRADES MEMORY FOR TIME — the copy costs n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh it against the gather's hotness rather than converting on sight. A reference implementation kept deliberately simple is the expected false positive", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
@@ -2169,6 +2170,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, setMapFromSliceFindings(fset, fn)...)
 	out = append(out, monotoneBailPerElementFindings(fset, fn)...)
+	out = append(out, serialReductionChainFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -11064,4 +11066,144 @@ func loopAdvancesVar(n ast.Node, v string) bool {
 		}
 	}
 	return false
+}
+
+// serialReductionChainFindings flags PS3010 — a reduction loop with ONE accumulator, where every
+// iteration's add depends on the previous one. On an out-of-order core the loop is bound by
+// floating-point add/FMA LATENCY rather than throughput, and splitting the accumulator into four
+// independent partials removes that dependency.
+//
+// The shape is required to be a pure reduction: exactly one `acc += <indexed expr>` in the body,
+// acc read nowhere else in the loop, and no branching or control flow. A loop that also TESTS its
+// accumulator (PS3008's early-bail shape) is excluded, because four partials cannot be compared
+// against the threshold without summing them first, which changes when the loop bails.
+//
+// The applied form needs no special case: it has four ADD_ASSIGN statements, so the count test
+// already declines it.
+func serialReductionChainFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		// A loop that already strides by more than one has had this transform applied: the four
+		// partials of an unrolled dot product are four distinct names each written once, which
+		// otherwise satisfies every test below and would report the fix as the defect.
+		if loopStrideExceedsOne(n) {
+			return true
+		}
+		// One to four FUSED accumulators, each written exactly once. Requiring exactly one was the
+		// first cut and it was wrong in the direction that costs the most: a fused dot-plus-norm
+		// loop is the canonical hot reduction, and restricting to a single chain flagged the COLD
+		// norm loop in nlp MaxContextCosine (0.00s) while missing the hot pair loop right below it
+		// (0.37s, the second-hottest own-package line in nlp). Two chains already give the core two
+		// independent streams, and the split still measured 2.90x at dim=768.
+		//
+		// The ceiling is four because past that the partials themselves compete for registers, and
+		// a loop already carrying four independent chains has the parallelism this check exists to
+		// recommend.
+		accs := map[string]ast.Expr{}
+		adds := 0
+		simple := true
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok {
+				simple = false // an if/for/switch/call in the body: not a pure reduction
+				continue
+			}
+			if as.Tok == token.ADD_ASSIGN && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+				if nm := identName(as.Lhs[0]); nm != "" {
+					accs[nm] = as.Rhs[0]
+					adds++
+					continue
+				}
+			}
+			if as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
+				simple = false
+			}
+		}
+		// adds != len(accs) means some accumulator is written twice — that is the applied,
+		// already-unrolled form, not a candidate.
+		if !simple || len(accs) == 0 || len(accs) > 4 || adds != len(accs) {
+			return true
+		}
+		// Every accumulator must be write-only inside the loop. Any other mention is a read — a
+		// threshold test, a running comparison — and the split would change what it observes.
+		// A loop that TESTS its accumulator is PS3008's early-bail shape and is excluded here,
+		// because four partials cannot be compared against a threshold without summing them first.
+		mentions := map[string]int{}
+		ast.Inspect(body, func(k ast.Node) bool {
+			if id, ok := k.(*ast.Ident); ok {
+				if _, isAcc := accs[id.Name]; isAcc {
+					mentions[id.Name]++
+				}
+			}
+			return true
+		})
+		acc := ""
+		for nm := range accs {
+			if mentions[nm] != 1 {
+				return true
+			}
+			if acc == "" || nm < acc {
+				acc = nm // deterministic name for the message; map order is not stable
+			}
+		}
+		// Every term has to vary per iteration; summing a loop-invariant is a different (and much
+		// better) fix, and PS4006 owns it.
+		for _, rhs := range accs {
+			varies := false
+			ast.Inspect(rhs, func(k ast.Node) bool {
+				if _, ok := k.(*ast.IndexExpr); ok {
+					varies = true
+				}
+				return !varies
+			})
+			if !varies {
+				return true
+			}
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-reduction-chain",
+			msg: fmt.Sprintf("%q is a single-accumulator reduction: each iteration's add waits on the"+
+				" previous one, so the loop runs at floating-point add LATENCY, not throughput."+
+				" Four independent partials summed at the end removed that stall in a direct"+
+				" measurement on this host (Apple M2 Pro, darwin/arm64, go1.26, f64 dot product):"+
+				" 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x). The 512"+
+				" figure matches the hardware prediction — 512 dependent adds at about four cycles"+
+				" each is roughly 600 ns at 3.4 GHz — so this is a latency stall, not a measurement"+
+				" artifact. THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it"+
+				" reassociates the sum, so the result moves in the last ulp. DO NOT apply it where the"+
+				" exact value is pinned. Two of the hottest reductions in this repo are blocked for"+
+				" precisely that reason and are NOT candidates — nlp randomOrthogonal, whose matrix"+
+				" TurboQuant regenerates at dequantization time so a changed draw would break every"+
+				" model quantized with the old one, and classic ballTree.within, whose sum decides"+
+				" exact-label DBSCAN goldens. Check for a bit-stability test and a reproducibility"+
+				" contract BEFORE measuring, then benchmark: the win is real but it is worth nothing"+
+				" if the loop is cold (PERF-HOTNESS-IS-NOT-SYNTAX-001)", acc),
+		})
+		return true
+	})
+	return out
+}
+
+// loopStrideExceedsOne reports whether a 3-clause for loop advances its index by more than one per
+// iteration (`i += 4`). A range loop and a plain `i++` both stride by one. Used to recognize an
+// already-unrolled loop, which is the applied form of PS3010 rather than a candidate for it.
+func loopStrideExceedsOne(n ast.Node) bool {
+	fs, ok := n.(*ast.ForStmt)
+	if !ok || fs.Post == nil {
+		return false
+	}
+	as, ok := fs.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return false
+	}
+	return lit.Value != "1"
 }
