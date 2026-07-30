@@ -231,13 +231,20 @@ type gbmBuilder struct {
 	n, d     int
 	maxDepth int
 	minLeaf  int
-	master   [][]int   // presorted [0..n) by each feature (built once, immutable)
-	cols     [][]int   // per-round working columns; cols[f][start:end] = node samples sorted by f
-	part     []int     // stable-partition scratch (len n)
-	goLeft   []bool    // per-sample split membership during a partition (len n)
-	inSet    []bool    // membership of a round's subsample (len n)
-	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
+	master   [][]int     // presorted [0..n) by each feature (built once, immutable)
+	cols     [][]int     // per-round working columns; cols[f][start:end] = node samples sorted by f
+	part     []int       // stable-partition scratch (len n)
+	goLeft   []bool      // per-sample split membership during a partition (len n)
+	inSet    []bool      // membership of a round's subsample (len n)
+	vals     []float64   // bestSplit scratch: a node's feature values in sorted order (len n)
+	valsW    [][]float64 // per-worker gather scratch for the parallel feature scan (nw × n)
 }
+
+// gbmSplitParWork gates the parallel feature scan in bestSplit: fork only when the node's
+// per-feature O(n) gather+scan over d features (≈ d·n element ops) amortizes the goroutine
+// spawn (parallelBuild is not pooled). Upper tree nodes carry most of the samples/time and are
+// few, so a work gate forks only those. Below it the serial scan (no fork) is faster.
+const gbmSplitParWork = 1 << 17
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
 func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
@@ -278,6 +285,14 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.goLeft = make([]bool, n)
 	b.inSet = make([]bool, n)
 	b.vals = make([]float64, n)
+	nw := runtime.GOMAXPROCS(0)
+	if nw < 1 {
+		nw = 1
+	}
+	b.valsW = make([][]float64, nw)
+	for c := range b.valsW {
+		b.valsW[c] = make([]float64, n)
+	}
 	return b
 }
 
@@ -339,14 +354,23 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 	for p := start; p < end; p++ {
 		total += b.y[col0[p]]
 	}
-	bestGain := 0.0
-	vals := b.vals
-	for f := 0; f < b.d; f++ {
+	// Large nodes: scan the independent features over GOMAXPROCS (each worker reads
+	// cols[f]/x/y read-only into its OWN valsW scratch), then reduce. See bestSplitParallel.
+	if len(b.valsW) > 1 && b.d >= 2 && b.d*n >= gbmSplitParWork {
+		return b.bestSplitParallel(start, end, n, total)
+	}
+	feat, thr, _, ok = b.scanFeatures(0, b.d, start, n, total, b.vals)
+	return feat, thr, ok
+}
+
+// scanFeatures finds the best variance-reduction split over features [f0,f1) of the node
+// [start,start+n), gathering each feature's sorted values into vals. It returns the split and
+// its gain; on an exact-gain tie the LOWEST feature index (then lowest threshold) wins — the
+// ascending-f, strict-`>` behaviour of the original serial loop, so the parallel reduction is
+// bit-identical.
+func (b *gbmBuilder) scanFeatures(f0, f1, start, n int, total float64, vals []float64) (feat int, thr, gain float64, ok bool) {
+	for f := f0; f < f1; f++ {
 		cf := b.cols[f]
-		// Hoist this node's sorted feature values into a contiguous buffer once (n
-		// gathers into b.x), then the split scan reads them sequentially. The old inline
-		// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
-		// endpoint at k, then the left at k+1) — halved to one gather per value here.
 		for k := 0; k < n; k++ {
 			vals[k] = b.x[cf[start+k]][f]
 		}
@@ -358,17 +382,48 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 				continue
 			}
 			vk, vn := vals[k], vals[k+1]
-			if vk == vn { // cannot split between equal values
+			if vk == vn {
 				continue
 			}
 			meanL := leftSum / float64(nl)
 			meanR := (total - leftSum) / float64(nr)
 			diff := meanL - meanR
-			gain := float64(nl) * float64(nr) / float64(n) * diff * diff
-			if gain > bestGain {
-				bestGain = gain
+			g := float64(nl) * float64(nr) / float64(n) * diff * diff
+			if g > gain {
+				gain = g
 				feat, thr, ok = f, (vk+vn)/2, true
 			}
+		}
+	}
+	return feat, thr, gain, ok
+}
+
+// bestSplitParallel runs scanFeatures over GOMAXPROCS contiguous feature chunks (each with its
+// own valsW scratch), then reduces: the global winner is the max-gain split, ties broken to the
+// LOWEST feature — reproducing the serial ascending-f `>` winner exactly (bit-identical).
+func (b *gbmBuilder) bestSplitParallel(start, end, n int, total float64) (feat int, thr float64, ok bool) {
+	nw := len(b.valsW)
+	if nw > b.d {
+		nw = b.d
+	}
+	type res struct {
+		feat      int
+		thr, gain float64
+		ok        bool
+	}
+	out := make([]res, nw)
+	_ = parallelBuild(nw, func(c int) error {
+		f0 := c * b.d / nw
+		f1 := (c + 1) * b.d / nw
+		ft, th, g, o := b.scanFeatures(f0, f1, start, n, total, b.valsW[c])
+		out[c] = res{ft, th, g, o}
+		return nil
+	})
+	var bestGain float64
+	for c := 0; c < nw; c++ {
+		if out[c].ok && out[c].gain > bestGain { // strict `>`, ascending chunk order → lowest feat wins ties
+			bestGain = out[c].gain
+			feat, thr, ok = out[c].feat, out[c].thr, true
 		}
 	}
 	return feat, thr, ok
