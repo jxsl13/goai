@@ -95,11 +95,16 @@ type histBuilder struct {
 	maxDepth, minLeaf int
 	nbins             int
 	edges             [][]float64 // [d][≤nbins-1] ascending split thresholds
-	binned            []uint16    // [n*d] row-major bin index (bin = #edges < x)
-	hist              [][]histBin // [maxDepth+1][d*nbins] per-level (gradient sum, count) histograms
-	idxbuf            []int       // reusable full-sample index scratch
-	contrib           []float64   // [n] per-sample leaf value of the last grown tree (full-sample rounds)
-	wantContrib       bool        // capture contrib this round (only when the round grows on all n samples)
+	// binnedF is the SAME codes in feature-major order, [d*n], for the parallel histogram arm.
+	// The two arms want opposite layouts: the serial arm walks a sample's d codes, which is one
+	// contiguous row here, while the parallel arm fixes a feature and walks samples, which in
+	// row-major strides d*2 bytes — 40 at d=20, under a cache line, so every feature pass streams
+	// the WHOLE n*d array instead of its own 1/d slice. Holding both costs n*d*2 extra bytes.
+	binnedF     []uint16
+	hist        [][]histBin // [maxDepth+1][d*nbins] per-level (gradient sum, count) histograms
+	idxbuf      []int       // reusable full-sample index scratch
+	contrib     []float64   // [n] per-sample leaf value of the last grown tree (full-sample rounds)
+	wantContrib bool        // capture contrib this round (only when the round grows on all n samples)
 }
 
 // newHistBuilder bins every feature once and allocates the reusable scratch.
@@ -109,7 +114,7 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	}
 	b := &histBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf, nbins: nbins}
 	b.edges = make([][]float64, d)
-	b.binned = make([]uint16, n*d)
+	b.binnedF = make([]uint16, n*d)
 	// Bin the features in parallel. Each feature owns its own edges[f] and its own
 	// column of binned, so the loop bodies share nothing mutable once the sort scratch
 	// is per-chunk — and the sort dominates, which is why this was the second-largest
@@ -143,9 +148,10 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 				}
 			}
 			b.edges[f] = ed
+			col := b.binnedF[f*n : f*n+n : f*n+n]
 			for i := 0; i < n; i++ {
 				// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
-				b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
+				col[i] = uint16(sort.SearchFloat64s(ed, x[i][f]))
 			}
 		}
 	})
@@ -210,25 +216,25 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 	// ascending idx order in both orders. Only the sequence in which DIFFERENT bins are
 	// touched changes, and those are independent sums.
 	if d*len(idx) < histParThreshold || parallel.Workers() <= 1 {
-		y, binned := b.y, b.binned
-		for _, i := range idx {
-			yi := y[i]
-			br := binned[i*d : i*d+d : i*d+d]
-			base := 0
-			for f := 0; f < d; f++ {
-				c := base + int(br[f])
-				h[c].sum += yi
+		y, n := b.y, len(b.y)
+		for f := 0; f < d; f++ {
+			base := f * nb
+			col := b.binnedF[f*n : f*n+n : f*n+n]
+			for _, i := range idx {
+				c := base + int(col[i])
+				h[c].sum += y[i]
 				h[c].cnt++
-				base += nb
 			}
 		}
 		return
 	}
 	parallel.Rows(d, func(lo, hi int) {
+		n := len(b.y)
 		for f := lo; f < hi; f++ {
 			base := f * nb
+			col := b.binnedF[f*n : f*n+n : f*n+n] // this feature's codes, contiguous
 			for _, i := range idx {
-				c := base + int(b.binned[i*d+f])
+				c := base + int(col[i])
 				h[c].sum += b.y[i]
 				h[c].cnt++
 			}
@@ -299,11 +305,15 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 	if bestFeat < 0 {
 		return b.leafNode(idx, value)
 	}
-	// Partition idx in place (unstable): bin ≤ bestBin goes left. nl==bestNL.
+	// Partition idx in place (unstable): bin ≤ bestBin goes left. nl==bestNL. bcol is the winning
+	// feature's contiguous column, so this walk stays inside one n*2-byte slice instead of striding
+	// the whole n*d array.
+	bn := len(b.y)
+	bcol := b.binnedF[bestFeat*bn : bestFeat*bn+bn : bestFeat*bn+bn]
 	lo := 0
 	for k := 0; k < m; k++ {
 		s := idx[k]
-		if int(b.binned[s*b.d+bestFeat]) <= bestBin {
+		if int(bcol[s]) <= bestBin {
 			idx[lo], idx[k] = idx[k], idx[lo]
 			lo++
 		}
