@@ -505,8 +505,21 @@ func addTreeScore(f []float64, gb gbmGrower, tree *gbmTree, x [][]float64, lr fl
 	}
 }
 
-func subsampleIdx(n int, subsample float64, rng *rand.Rand) []int {
-	idx := make([]int, n)
+// buf is reused across boosting rounds. This is called once per round — 50 times for the
+// default estimator count — and allocating n ints each time was 31% of the BYTES a
+// GBMHist_exact_20k fit allocates, second only to the one-time presort. Both growers copy idx
+// into their own working storage and document that they never mutate the caller's slice
+// (histBuilder.grow copies into idxbuf, gbmBuilder.fit only reads it to filter its presorted
+// columns), so one buffer can serve every round.
+//
+// Bit-identical: idx is refilled with the identity permutation before each shuffle, so the
+// same rng draws act on the same starting order and produce the same sample.
+func subsampleIdx(n int, subsample float64, rng *rand.Rand, buf []int) []int {
+	idx := buf
+	if cap(idx) < n {
+		idx = make([]int, n)
+	}
+	idx = idx[:n]
 	for i := range idx {
 		idx[i] = i
 	}
@@ -617,11 +630,12 @@ func (m *GradientBoostingRegressor) Fit(x [][]float64, y []float64) error {
 	if m.cfg.nEstimators > 0 {
 		gb = newGBMGrower(m.cfg, x, n, d)
 	}
+	idxBuf := make([]int, n) // reused by every round's subsample
 	for round := 0; round < m.cfg.nEstimators; round++ {
 		for i := 0; i < n; i++ {
 			resid[i] = y[i] - f[i] // negative gradient of ½(y−f)²
 		}
-		idx := subsampleIdx(n, m.cfg.subsample, rng)
+		idx := subsampleIdx(n, m.cfg.subsample, rng, idxBuf)
 		tree := gb.grow(resid, idx)
 		addTreeScore(f, gb, tree, x, m.cfg.learningRate, len(idx) == n)
 		m.trees = append(m.trees, tree)
@@ -805,6 +819,7 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 	if m.cfg.nEstimators > 0 {
 		gb = newGBMGrower(m.cfg, x, n, d)
 	}
+	idxBuf := make([]int, n) // reused by every round's subsample
 	for round := 0; round < m.cfg.nEstimators; round++ {
 		// negative gradient of log loss: resid = y − σ(f). Vectorize σ over the whole
 		// score vector (recomputed every boosting round — ~18% of GBM fit); σ writes
@@ -814,7 +829,7 @@ func (m *GradientBoostingClassifier) Fit(x [][]float64, y []int) error {
 		for i := 0; i < n; i++ {
 			resid[i] = yf[i] - resid[i]
 		}
-		idx := subsampleIdx(n, m.cfg.subsample, rng)
+		idx := subsampleIdx(n, m.cfg.subsample, rng, idxBuf)
 		tree := gb.grow(resid, idx)
 		addTreeScore(f, gb, tree, x, m.cfg.learningRate, len(idx) == n)
 		m.trees = append(m.trees, tree)
