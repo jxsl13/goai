@@ -1102,7 +1102,11 @@ int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, 
                       "  double dl=(double)delta[d], ud=(double)u[d], acc=0.0;\n"
                       "  const float* ad = A + (size_t)d*N; float* hd = h + (size_t)d*N;\n"
                       "  for(int n=0;n<N;n++){\n"
-                      "    double dA = exp(dl*(double)ad[n]);\n"
+                      // FP32 expf for the decay (GA106 FP64 = 1/64 rate). The recurrence is
+                      // CONTRACTIVE (A<0, Δ>0 → dA=exp(neg)<1), so the ~1e-7 per-step error decays
+                      // rather than accumulates; state hv and the C·h sum stay double for stability.
+                      // Inside the SSM tolerance gate (1e-4 vs the f64 ref).
+                      "    double dA = (double)expf((float)(dl*(double)ad[n]));\n"
                       "    double hv = dA*(double)hd[n] + dl*(double)B[n]*ud;\n"
                       "    hd[n] = (float)hv; acc += (double)C[n]*hv;\n"
                       "  }\n"
