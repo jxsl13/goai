@@ -64,50 +64,57 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 	scale = make([]float64, ng)
 	zero = make([]float64, ng)
 
-	for g := range ng {
-		lo, hi := g*groupSize, min((g+1)*groupSize, n)
-		wg := w[lo:hi]
+	// Each group's optimization is self-contained (its own scale/zero/codes and a private
+	// q scratch; shrinkLp is pure), so the group loop fans out over GOMAXPROCS bit-identically
+	// to the serial loop. The per-group q allocation is hoisted to one reused per-worker buffer
+	// (round() fully overwrites it before any read), dropping ~ng allocations to ~workers.
+	parallelRows(ng, groupSize, func(glo, ghi int) {
+		qbuf := make([]float64, groupSize)
+		for g := glo; g < ghi; g++ {
+			lo, hi := g*groupSize, min((g+1)*groupSize, n)
+			wg := w[lo:hi]
 
-		// fixed scale from the group range; zero-point maps min→0, max→maxLevel.
-		mn, mx := wg[0], wg[0]
-		for _, v := range wg {
-			mn, mx = math.Min(mn, v), math.Max(mx, v)
-		}
-		s := (mx - mn) / maxLevel
-		if s == 0 {
-			s = 1 // degenerate constant group
-		}
-		z := -mn / s
-
-		q := make([]float64, len(wg)) // current integer levels (float-valued)
-		round := func() {
-			for i, v := range wg {
-				q[i] = math.Min(maxLevel, math.Max(0, math.Round(v/s+z)))
+			// fixed scale from the group range; zero-point maps min→0, max→maxLevel.
+			mn, mx := wg[0], wg[0]
+			for _, v := range wg {
+				mn, mx = math.Min(mn, v), math.Max(mx, v)
 			}
-		}
-		round()
-
-		// half-quadratic: alternate the Lp shrinkage of the error and the closed-form z.
-		beta := cfg.betaInit
-		for range cfg.iters {
-			// (a) W_e = shrink_p(W − Ŵ, β), Ŵ = s(q − z).
-			// (b) z = mean( q − (W − W_e)/s ), the argmin of the quadratic in z.
-			var zsum float64
-			for i, v := range wg {
-				wHat := s * (q[i] - z)
-				we := shrinkLp(v-wHat, beta, cfg.p)
-				zsum += q[i] - (v-we)/s
+			s := (mx - mn) / maxLevel
+			if s == 0 {
+				s = 1 // degenerate constant group
 			}
-			z = zsum / float64(len(wg))
+			z := -mn / s
+
+			q := qbuf[:len(wg)] // current integer levels (float-valued); overwritten by round()
+			round := func() {
+				for i, v := range wg {
+					q[i] = math.Min(maxLevel, math.Max(0, math.Round(v/s+z)))
+				}
+			}
 			round()
-			beta *= cfg.kappa
-		}
 
-		scale[g], zero[g] = s, z
-		for i := range wg {
-			codes[lo+i] = int(q[i])
+			// half-quadratic: alternate the Lp shrinkage of the error and the closed-form z.
+			beta := cfg.betaInit
+			for range cfg.iters {
+				// (a) W_e = shrink_p(W − Ŵ, β), Ŵ = s(q − z).
+				// (b) z = mean( q − (W − W_e)/s ), the argmin of the quadratic in z.
+				var zsum float64
+				for i, v := range wg {
+					wHat := s * (q[i] - z)
+					we := shrinkLp(v-wHat, beta, cfg.p)
+					zsum += q[i] - (v-we)/s
+				}
+				z = zsum / float64(len(wg))
+				round()
+				beta *= cfg.kappa
+			}
+
+			scale[g], zero[g] = s, z
+			for i := range wg {
+				codes[lo+i] = int(q[i])
+			}
 		}
-	}
+	})
 	return codes, scale, zero
 }
 
