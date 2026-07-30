@@ -197,6 +197,7 @@ var checks = []check{
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
+	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	// PS4xxx — vectorization candidates
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
@@ -1827,6 +1828,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
+	out = append(out, sortThenTopKFindings(fset, fn)...)
 	out = append(out, spatialBoundsBranchFindings(fset, fn)...)
 	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
 	out = append(out, sincosFusableFindings(fset, fn)...)
@@ -5103,6 +5105,186 @@ func fullSortBoundedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			" candidates with SortStableFunc to match the tie order). Shipped: Mirostat, nucleusTopP"+
 			" §T627. Verify the consumer is genuinely bounded, then benchmark.", sortSlice),
 	}}
+}
+
+// sortThenTopKFindings flags PS3006 — a raw package sort of a WHOLE slice
+// (sort.Slice/SliceStable(s,…) or slices.Sort/SortFunc/SortStableFunc(s,…)) whose result is
+// consumed ONLY through a bounded top-K prefix: a reslice s[:K] or a loop bounded by an
+// identifier K (≠ len(s)) that reads s[r]. That is an O(n log n) sort done for an O(K) need;
+// a size-K min-heap or quickselect (then sorting just those K) is O(n log K) and drops the
+// O(n) sort scratch. Bit-identical when the comparator is a strict total order. Shipped:
+// MemMemory.retrieveHead (2.98×, #597).
+//
+// Consumption is analyzed only AFTER the sort's position (so the comparator closure's own
+// s[i]/s[j] and the pre-sort fill are ignored). Kept SILENT — vetoed as full-use — when the
+// sorted slice is also range-d, resliced s[:] / s[:len(s)], returned, or passed whole to a
+// call, since the caller may then need the entire order.
+func sortThenTopKFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	sortEnd := map[string]token.Pos{} // sorted slice → End() of its (last) sort call
+	sortPos := map[string]token.Pos{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := c.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || len(c.Args) < 1 {
+			return true
+		}
+		m := sel.Sel.Name
+		isSort := (pkg.Name == "sort" && (m == "Slice" || m == "SliceStable")) ||
+			(pkg.Name == "slices" && (m == "Sort" || m == "SortFunc" || m == "SortStableFunc"))
+		if !isSort {
+			return true
+		}
+		if s, ok := c.Args[0].(*ast.Ident); ok && c.End() > sortEnd[s.Name] {
+			sortEnd[s.Name], sortPos[s.Name] = c.End(), c.Pos()
+		}
+		return true
+	})
+	if len(sortEnd) == 0 {
+		return nil
+	}
+	after := func(name string, pos token.Pos) bool { e, ok := sortEnd[name]; return ok && pos > e }
+	// makeSize[s] = the identifiers used as the len/cap of `s := make(…, x[, y])`. A prefix
+	// bound that equals one of these means the slice is ALREADY that size (K == len(s), just a
+	// different name — e.g. `heap := make([]T, 0, topM)` consumed as heap[:topM]); such a sort
+	// is already O(K log K), not the full sort, so it must not be flagged.
+	makeSize := map[string]map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		lhs, ok := as.Lhs[0].(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := as.Rhs[0].(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := call.Fun.(*ast.Ident); !ok || id.Name != "make" {
+			return true
+		}
+		for _, a := range call.Args[1:] { // skip the type arg
+			if id, ok := a.(*ast.Ident); ok {
+				if makeSize[lhs.Name] == nil {
+					makeSize[lhs.Name] = map[string]bool{}
+				}
+				makeSize[lhs.Name][id.Name] = true
+			}
+		}
+		return true
+	})
+	isMakeSize := func(slice, bound string) bool { return makeSize[slice] != nil && makeSize[slice][bound] }
+	isLenOf := func(e ast.Expr, name string) bool {
+		c, ok := e.(*ast.CallExpr)
+		if !ok || len(c.Args) != 1 {
+			return false
+		}
+		id, ok := c.Fun.(*ast.Ident)
+		if !ok || id.Name != "len" {
+			return false
+		}
+		a, ok := c.Args[0].(*ast.Ident)
+		return ok && a.Name == name
+	}
+	bounded, full := map[string]bool{}, map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.SliceExpr:
+			if id, ok := x.X.(*ast.Ident); ok && after(id.Name, x.Pos()) {
+				hi, _ := x.High.(*ast.Ident)
+				switch {
+				case x.High == nil || isLenOf(x.High, id.Name):
+					full[id.Name] = true // s[:] / s[low:] / s[:len(s)] — whole tail
+				case hi != nil && isMakeSize(id.Name, hi.Name):
+					// s[:K] where K is s's own make size → already K-sized, not a full sort
+				default:
+					bounded[id.Name] = true // s[:K]
+				}
+			}
+		case *ast.RangeStmt:
+			if id, ok := x.X.(*ast.Ident); ok && after(id.Name, x.Pos()) {
+				full[id.Name] = true // range s
+			}
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if id, ok := r.(*ast.Ident); ok && after(id.Name, r.Pos()) {
+					full[id.Name] = true // return s (whole)
+				}
+			}
+		case *ast.CallExpr:
+			for _, a := range x.Args {
+				if id, ok := a.(*ast.Ident); ok && after(id.Name, a.Pos()) {
+					full[id.Name] = true // s passed whole to append/copy/f(s)
+				}
+			}
+		}
+		return true
+	})
+	// Bounded-loop form: `for r := range K { … s[r] … }` or `for …; r < K; … { s[r] }`, K an
+	// identifier that is neither the sorted slice nor len(s) — reads only the top-K prefix.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		var loopVar, boundName string
+		var body *ast.BlockStmt
+		switch x := n.(type) {
+		case *ast.RangeStmt:
+			if k, ok := x.Key.(*ast.Ident); ok && x.Value == nil {
+				if b, ok := x.X.(*ast.Ident); ok {
+					loopVar, boundName, body = k.Name, b.Name, x.Body
+				}
+			}
+		case *ast.ForStmt:
+			if c, ok := x.Cond.(*ast.BinaryExpr); ok && c.Op == token.LSS {
+				lv, lok := c.X.(*ast.Ident)
+				b, bok := c.Y.(*ast.Ident)
+				if lok && bok {
+					loopVar, boundName, body = lv.Name, b.Name, x.Body
+				}
+			}
+		}
+		if body == nil {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			s, sok := ix.X.(*ast.Ident)
+			iv, iok := ix.Index.(*ast.Ident)
+			if sok && iok && iv.Name == loopVar && boundName != s.Name && after(s.Name, ix.Pos()) && !isMakeSize(s.Name, boundName) {
+				bounded[s.Name] = true
+			}
+			return true
+		})
+		return true
+	})
+	var out []finding
+	for name := range sortEnd {
+		if bounded[name] && !full[name] {
+			out = append(out, finding{
+				pos:      fset.Position(sortPos[name]),
+				category: "full-sort-take-topk",
+				msg: fmt.Sprintf("full sort of %q but only a bounded top-K prefix is consumed — an"+
+					" O(n log n) sort for an O(K) need. Replace with a size-K min-heap or quickselect"+
+					" (then sort just those K); bit-identical when the comparator is a strict total"+
+					" order (a unique tiebreak → no genuine ties). Shipped: retrieveHead 2.98x."+
+					" Confirm K ≪ len(%s), then benchmark.", name, name),
+			})
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].pos.Offset < out[b].pos.Offset })
+	return out
 }
 
 // andedComparisons counts the relational comparisons (<, >, <=, >=) joined by && in a boolean
