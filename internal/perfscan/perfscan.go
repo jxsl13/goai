@@ -44,6 +44,9 @@
 //	PS4003. a loop calls a package-local elementwise helper that WRAPS a libm
 //	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
 //	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
+//	PS3008. a monotone (non-negative) accumulator tested against a threshold EVERY iteration —
+//	   the test can run every 4th iteration for the same answer, dropping an unpredictable branch
+//	   (DBSCAN leaf test -17.4%/-8.5%; the branch was 450ms against 30ms of arithmetic).
 //	PS3007. a membership SET (map[K]bool/struct{}) built by ranging a slice, then probed in
 //	   a loop — the source slice already answers the question, so a small set is faster scanned
 //	   than hashed (applyDRY -18.72%, mapaccess1_fast64 gone; crossover 8–16 elements).
@@ -206,6 +209,7 @@ var checks = []check{
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
+	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
 	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
 	// PS4xxx — vectorization candidates
@@ -2150,6 +2154,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
 	out = append(out, setMapFromSliceFindings(fset, fn)...)
+	out = append(out, monotoneBailPerElementFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
@@ -10625,4 +10630,162 @@ func buildGuardedBySize(fn *ast.FuncDecl, bl *ast.RangeStmt, src string) bool {
 		return true
 	})
 	return found
+}
+
+// monotoneBailPerElementFindings flags PS3008 — a loop that accumulates a provably NON-NEGATIVE
+// term into a scalar and tests that accumulator against a threshold on EVERY iteration, bailing
+// out when it is exceeded.
+//
+// The accumulator only ever grows, so once it passes the threshold it stays past it. The bail-out
+// is therefore a pure heuristic, not semantics: testing it every Nth iteration returns the SAME
+// answer, because a run that would have bailed at iteration k still bails at the next checkpoint
+// and at the end. What that buys is removing a data-dependent branch the predictor cannot learn.
+//
+// MEASURED, which is why this check exists rather than being a plausible idea. classic's
+// ballTree.within is the L2 leaf test DBSCAN runs for every candidate pair. A line-level profile
+// put the bail-out branch at 450ms against 30ms for the subtraction and square it guards — the
+// branch, not the arithmetic, was the function. Checking it every fourth dimension took
+// BenchmarkDBSCANFit -17.41% at eps=2 (p=0.000) and -8.51% at eps=4 (p=0.010), geomean -13.07%,
+// allocations unchanged, with the exact-label DBSCAN goldens still green.
+//
+// THE MONOTONICITY IS THE CORRECTNESS CONDITION, so the check demands it syntactically rather than
+// guessing: the added term must be x*x with identical operands, math.Abs, math.Hypot, or a sum of
+// those. An accumulator fed a signed term can dip back below the threshold, and moving its test
+// would change the answer, not just the speed.
+//
+// Two things this cannot see, both stated in the finding. Whether the loop is hot at all — a cold
+// bail-out is not worth restructuring. And the NaN edge: with a NaN term the accumulator becomes
+// NaN, every `acc > thr` is false, and the original falls out of the loop and returns its
+// not-exceeded answer, so the rewritten tail must end with !(acc > thr) and NOT acc <= thr, which
+// flips it. That trap is real; it is gated by a test in classic rather than left to reasoning.
+func monotoneBailPerElementFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBodyOf(n)
+		if body == nil || loopStridesByMoreThanOne(n) {
+			return true
+		}
+		// Accumulators in THIS loop's body fed a provably non-negative term.
+		accs := map[string]string{}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			name := identName(as.Lhs[0])
+			if name == "" {
+				continue
+			}
+			if term, ok := provablyNonNegative(as.Rhs[0]); ok {
+				accs[name] = term
+			}
+		}
+		if len(accs) == 0 {
+			return true
+		}
+		for _, st := range body.List {
+			ifs, ok := st.(*ast.IfStmt)
+			if !ok || ifs.Init != nil || ifs.Else != nil || !bailsOut(ifs.Body) {
+				continue
+			}
+			bin, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || (bin.Op != token.GTR && bin.Op != token.GEQ) {
+				continue
+			}
+			acc := identName(bin.X)
+			term, ok := accs[acc]
+			if !ok {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(ifs.Pos()),
+				category: "monotone-bail-per-element",
+				msg: fmt.Sprintf("%q accumulates a non-negative term (%s) and is tested against a"+
+					" threshold on EVERY iteration — the accumulator never decreases, so testing it"+
+					" every 4th iteration returns the same answer and removes a data-dependent branch"+
+					" the predictor cannot learn. MEASURED on classic ballTree.within, the DBSCAN leaf"+
+					" test: the branch was 450ms of profile against 30ms for the arithmetic it guarded,"+
+					" and checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2"+
+					" (p=0.000) and -8.51%% at eps=4 (p=0.010). Keep ONE accumulator in the SAME order"+
+					" so the sum stays bit-identical, and end the scalar tail with !(%s > thr), NOT"+
+					" %s <= thr — with a NaN term the original never bailed and returned its"+
+					" not-exceeded answer, and <= flips that. HOTNESS IS NOT VISIBLE HERE: a cold"+
+					" bail-out is not worth restructuring, so benchmark the enclosing operation first.",
+					acc, term, acc, acc),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// loopBodyOf returns the body of a for/range statement, or nil.
+func loopBodyOf(n ast.Node) *ast.BlockStmt {
+	switch l := n.(type) {
+	case *ast.ForStmt:
+		return l.Body
+	case *ast.RangeStmt:
+		return l.Body
+	}
+	return nil
+}
+
+// loopStridesByMoreThanOne reports whether the loop advances by a literal step other than 1 —
+// evidence the blocking this check recommends has already been applied.
+func loopStridesByMoreThanOne(n ast.Node) bool {
+	f, ok := n.(*ast.ForStmt)
+	if !ok || f.Post == nil {
+		return false
+	}
+	as, ok := f.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value != "1"
+}
+
+// provablyNonNegative reports whether e is >= 0 from syntax alone, and names the shape that proves
+// it. Only forms that cannot be negative qualify: a square with identical operands, math.Abs,
+// math.Hypot, or a sum of those. This is the check's correctness condition, not a heuristic — a
+// signed term lets the accumulator fall back below the threshold, and then moving the test changes
+// the answer.
+func provablyNonNegative(e ast.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return provablyNonNegative(x.X)
+	case *ast.CallExpr:
+		if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+			if identName(sel.X) == "math" && (sel.Sel.Name == "Abs" || sel.Sel.Name == "Hypot") {
+				return "math." + sel.Sel.Name, true
+			}
+		}
+	case *ast.BinaryExpr:
+		if x.Op == token.MUL && exprText(x.X) == exprText(x.Y) && exprText(x.X) != "" {
+			return "a square", true
+		}
+		if x.Op == token.ADD {
+			if a, ok := provablyNonNegative(x.X); ok {
+				if b, ok := provablyNonNegative(x.Y); ok {
+					return a + " + " + b, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// bailsOut reports whether the block ends in a return or a break/continue.
+func bailsOut(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	switch b.List[len(b.List)-1].(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	}
+	return false
 }

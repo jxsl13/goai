@@ -480,6 +480,48 @@ candidate (which is why the detector skips set-typed maps and the report says
 
 ---
 
+## PS3008 — monotone accumulator tested on every iteration  *(scanner: static)*
+
+**Smell.** A loop adds a provably non-negative term to a scalar and tests it against a
+threshold every single iteration, bailing out when it is exceeded:
+
+```go
+for i := range a {
+    d := a[i] - b[i]
+    s += d * d
+    if s > eps2 { return false }   // one unpredictable branch per element
+}
+```
+
+**Fix.** The accumulator never decreases, so once it passes the threshold it stays past
+it. Test every 4th iteration instead: a run that would have bailed at element k still
+bails at the next checkpoint, and at the end. Keep ONE accumulator in the SAME order so
+the sum stays bit-identical, and handle the leftovers in a scalar tail.
+
+**Measured** (`classic.ballTree.within`, the leaf test DBSCAN runs per candidate pair):
+- The branch was **450ms** of profile against **30ms** for the subtraction and square it
+  guarded. The branch *was* the function — it is data-dependent and the predictor cannot
+  learn it.
+- `BenchmarkDBSCANFit` **−17.41%** at eps=2 (p=0.000) and **−8.51%** at eps=4 (p=0.010),
+  geomean −13.07%, allocations unchanged, exact-label goldens green.
+- The bigger win is at the *smaller* eps, where most pairs bail: the rewrite does a little
+  more arithmetic before bailing and still wins, because it trades three branches for one.
+
+**Non-negativity is the correctness condition, not a heuristic.** It is required
+syntactically — `x*x` with identical operands, `math.Abs`, `math.Hypot`, or a sum of
+those. A signed term lets the accumulator dip back under the threshold, and then moving
+the test changes the *answer*.
+
+**Mind the NaN tail.** With a NaN term the accumulator is NaN, every `acc > thr` is false,
+and the original fell out of the loop and returned its not-exceeded answer. End the tail
+with `!(acc > thr)`, **not** `acc <= thr`, which flips it. Gated by a test in `classic`.
+
+**Silent** once the loop strides by more than 1 (the applied form), when the test does not
+exit the loop, and when the term is not provably non-negative. Hotness is not visible to
+the AST: benchmark the enclosing operation before restructuring a cold bail-out.
+
+---
+
 ## PS3007 — membership set built from a slice, then probed in a loop  *(scanner: static)*
 
 **Smell.** A set — `map[K]bool` or `map[K]struct{}` — is filled by ranging a slice the
