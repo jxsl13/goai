@@ -283,3 +283,31 @@ func BenchmarkGemmF32PackRemainder(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGemmF64PackRemainder is the f64 twin of the remainder measurement, at the same stable
+// size and with the same rem=0 control. The f32 result is not assumed to carry: adjacent GEMM
+// functions have already produced opposite-signed results for one transform this session
+// (PERF-HOIST-PAYS-ONLY-WHERE-THE-STREAM-IS-TIGHT-001).
+func BenchmarkGemmF64PackRemainder(b *testing.B) {
+	w := runtime.GOMAXPROCS(0)
+	const k, n = 512, 512
+	for _, rem := range []int{0, 1, 2, 3} {
+		m := (20 + rem) * w // 5 tile blocks per band (the f64 gate), plus rem leftover rows
+		b.Run(fmt.Sprintf("rem=%d", rem), func(b *testing.B) {
+			rng := rand.New(rand.NewSource(int64(rem) + 19))
+			A := make([]float64, m*k)
+			Bm := make([]float64, k*n)
+			C := make([]float64, m*n)
+			for i := range A {
+				A[i] = rng.Float64()*2 - 1
+			}
+			for i := range Bm {
+				Bm[i] = rng.Float64()*2 - 1
+			}
+			b.ResetTimer()
+			for range b.N {
+				gemmF64Rows(A, Bm, C, m, k, n)
+			}
+		})
+	}
+}
