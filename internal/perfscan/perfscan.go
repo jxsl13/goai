@@ -218,6 +218,7 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6022", "sort-feeds-truncation", "a slice sorted in FULL and then truncated to a smaller bound — every comparison that ordered the discarded tail was wasted, and a selection answers the same question in O(n). The counted-loop (PS6013) and threshold-break (PS6001) forms miss this one, because the consumer is neither a loop nor a break: it is a reslice", false},
 	{"PS6021", "fanout-without-worker-seam", "a fan-out helper whose callback receives ONLY a single work index and no scratch, with no sibling scratch-constructor parameter — callers have nowhere to hoist a per-item buffer to, so every caller that needs a working buffer must allocate one PER ITEM; give the callback a scratch parameter or take a func() T constructor the helper calls once per worker", false},
 	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
 	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
@@ -1868,6 +1869,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
 	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
 	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
+	out = append(out, sortFeedsTruncationFindings(fset, fn)...)
 	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
 	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
 	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
@@ -6530,6 +6532,134 @@ func subscriptProducts(body *ast.BlockStmt) map[token.Pos]bool {
 		return true
 	})
 	return out
+}
+
+// sortFeedsTruncationFindings flags PS6022 — a slice sorted in full and then immediately
+// resliced to a smaller bound.
+//
+//	slices.SortFunc(cand, byScore)
+//	if len(cand) > width { cand = cand[:width] }   // the rest of the order is discarded
+//
+// This is the third consumer shape in the sort-does-too-much family, and the one the other
+// two structurally cannot see. PS6013 requires a COUNTED loop that indexes the slice; PS6001
+// requires a consumer that BREAKS on a threshold. Here the consumer is neither a loop nor a
+// break — it is a reslice, so no loop exists to match. The gap was found by a survey of the
+// decoding path, where both beam search and diverse beam search sort every candidate
+// (beams x vocabulary) and keep the top few: at a 2048 vocabulary and width 8 that is a sort
+// of 16384 to select 8, once per generated token.
+//
+// SOUNDNESS. The bound must not be len(target) — that keeps everything and discards nothing.
+// Any statement between the sort and the reslice that INDEXES or RANGES over target is
+// disqualifying: it may depend on the full order, and it also means one of the other two
+// checks already describes the site better. A len(target) guard is not such a read, since
+// that is how the idiomatic truncation is written.
+//
+// Replacing the sort with a selection is bit-safe only when the comparator is a TOTAL order.
+// With ties the retained SET is not unique, so a selection and a sort can legitimately keep
+// different elements. The message says so, because that is the precondition a reviewer must
+// check rather than assume — and in the motivating case the comparator was written as a total
+// order precisely so it would reproduce a stable sort's tie order, which is what makes the
+// substitution safe there.
+func sortFeedsTruncationFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			target, sorter, ok := sortedSliceName(st)
+			if !ok {
+				continue
+			}
+			for _, next := range blk.List[i+1:] {
+				if bound, isTrunc := truncatesSlice(next, target); isTrunc {
+					out = append(out, finding{
+						pos:      fset.Position(st.Pos()),
+						category: "sort-feeds-truncation",
+						msg: fmt.Sprintf("%s orders %q in full and it is then resliced to %s — every comparison"+
+							" that ordered the discarded tail was wasted work. A selection (quickselect /"+
+							" nth_element) partitions in O(n), after which sorting only the kept prefix"+
+							" restores the same order. Bit-safe ONLY when the comparator is a TOTAL order:"+
+							" with ties the retained set is not unique, so a selection and a sort can keep"+
+							" different elements.", sorter, target, bound),
+					})
+					break
+				}
+				// A read of the slice before the truncation may depend on the full order, and
+				// means PS6001 or PS6013 describes the site better. A len() guard is not such a
+				// read — see readsSliceSlots.
+				if readsSliceSlots(next, target) {
+					break
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// truncatesSlice reports whether st reslices target to a bound other than len(target), and
+// returns that bound's source text. It walks st rather than matching only a top-level assign,
+// because the idiomatic form wraps the reslice in an `if len(target) > k` guard.
+func truncatesSlice(st ast.Stmt, target string) (string, bool) {
+	bound, found := "", false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		sl, ok := ast.Unparen(as.Rhs[0]).(*ast.SliceExpr)
+		if !ok || sl.High == nil || sl.Low != nil || sl.Slice3 {
+			return true
+		}
+		if identName(sl.X) != target {
+			return true
+		}
+		// len(target) keeps every element; nothing is discarded and nothing is wasted.
+		if c, isCall := ast.Unparen(sl.High).(*ast.CallExpr); isCall && calleeName(c.Fun) == "len" {
+			return true
+		}
+		bound, found = exprText(sl.High), true
+		return false
+	})
+	return bound, found
+}
+
+// readsSliceSlots reports whether st reads target by index or by range — a use that may depend
+// on the full sorted order.
+//
+// A len(target) call needs no exemption and deliberately has none. len takes the slice as a
+// bare identifier, which is neither an index nor a range, so the idiomatic
+// `if len(target) > k` guard already passes through. An explicit len case was written first
+// and removed: mutation testing showed no floor depended on it, and it was worse than
+// redundant — by stopping the descent it would also have skipped a genuine indexed read
+// nested inside a len argument, such as len(target[i]).
+func readsSliceSlots(st ast.Stmt, target string) bool {
+	found := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.IndexExpr:
+			if identName(v.X) == target {
+				found = true
+			}
+		case *ast.RangeStmt:
+			if identName(v.X) == target {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 // sortFeedsCountedPrefixFindings flags PS6013 — a slice sorted in full whose only subsequent

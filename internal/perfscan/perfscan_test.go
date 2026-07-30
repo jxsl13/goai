@@ -5163,3 +5163,129 @@ func eachBuffer(n int, body func(buf []float64)) {
 		t.Fatalf("want 0 for a single non-index parameter, got %d", got)
 	}
 }
+
+// The beam-search shape: a full sort, then a guarded truncation. PS6013 and PS6001 both miss
+// it because the consumer is a reslice rather than a loop, which is the whole reason this
+// check exists.
+func TestDetectPS6022_SortThenGuardedTruncation(t *testing.T) {
+	src := `package p
+func f(cands []cand, bPrime int) []cand {
+	slices.SortFunc(cands, byScore)
+	if len(cands) > bPrime {
+		cands = cands[:bPrime]
+	}
+	return cands
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-truncation, got %d", got)
+	}
+}
+
+// The bare form, and a different sorter, to pin that neither the guard nor the sort function
+// is load-bearing for detection.
+func TestDetectPS6022_SortThenBareTruncation(t *testing.T) {
+	src := `package p
+func f(done []Beam, width int) []Beam {
+	sort.SliceStable(done, func(i, j int) bool { return done[i].Score > done[j].Score })
+	done = done[:width]
+	return done
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-truncation, got %d", got)
+	}
+}
+
+// FLOOR for the len() bound check: reslicing to len(x) keeps every element, so nothing was
+// discarded and no comparison was wasted. Without this the check would fire on any sort
+// followed by an idiomatic identity reslice.
+func TestDetectPS6022_SilentOnFullLengthReslice(t *testing.T) {
+	src := `package p
+func f(x []int) []int {
+	slices.Sort(x)
+	x = x[:len(x)]
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for a full-length reslice, got %d", got)
+	}
+}
+
+// FLOOR for the prefix requirement: a window that drops a head is not a top-k truncation, and
+// a selection does not answer the same question.
+func TestDetectPS6022_SilentOnNonPrefixWindow(t *testing.T) {
+	src := `package p
+func f(x []int, k int) []int {
+	slices.Sort(x)
+	y := x[2:k]
+	return y
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for a non-prefix window, got %d", got)
+	}
+}
+
+// FLOOR for the intervening-read rule: an indexed read before the truncation may depend on the
+// full order, and it also means PS6001 or PS6013 describes the site better.
+func TestDetectPS6022_SilentWhenReadBeforeTruncation(t *testing.T) {
+	src := `package p
+func f(x []int, k int) int {
+	slices.Sort(x)
+	total := 0
+	for i := range x {
+		total += x[i]
+	}
+	x = x[:k]
+	return total
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 when the slice is read before truncation, got %d", got)
+	}
+}
+
+// FLOOR for the identity match: truncating a DIFFERENT slice says nothing about the sorted one.
+func TestDetectPS6022_SilentOnOtherSliceTruncation(t *testing.T) {
+	src := `package p
+func f(x, y []int, k int) []int {
+	slices.Sort(x)
+	y = y[:k]
+	return y
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 when a different slice is truncated, got %d", got)
+	}
+}
+
+// GIVES THE len-ARGUMENT CASE TEETH. An indexed read nested inside a len argument is still an
+// order-dependent read. An earlier draft special-cased len() and stopped descending into it,
+// which would have skipped exactly this; mutation testing showed no floor covered that clause,
+// so it was removed and this floor added in its place.
+func TestDetectPS6022_SilentOnIndexedReadInsideLen(t *testing.T) {
+	src := `package p
+func f(x [][]int, k int) int {
+	slices.SortFunc(x, byLen)
+	n := len(x[0])
+	x = x[:k]
+	return n
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for an indexed read nested in a len argument, got %d", got)
+	}
+}
+
+// And the companion: a bare len() guard between the sort and the truncation must NOT suppress
+// the finding, since that is how the idiomatic guarded truncation is written across two
+// statements.
+func TestDetectPS6022_BareLenGuardDoesNotSuppress(t *testing.T) {
+	src := `package p
+func f(x []int, k int) []int {
+	slices.Sort(x)
+	if len(x) <= k {
+		return x
+	}
+	x = x[:k]
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 with only a bare len guard in between, got %d", got)
+	}
+}

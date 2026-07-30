@@ -1026,6 +1026,44 @@ followed by `return false`, structurally identical and semantically unrelated. A
 adds exactly one finding (56 → 57) instead of fourteen.
 
 
+## PS6022 — a full sort feeding a truncation  *(scanner: static)*
+
+A slice sorted in full and then resliced to a smaller bound:
+
+```go
+slices.SortFunc(cands, byScore)
+if len(cands) > bPrime {
+    cands = cands[:bPrime]     // the order of everything past bPrime is discarded
+}
+```
+
+This is the third consumer shape in the sort-does-too-much family, and the one the other two
+**structurally cannot see**. PS6013 requires a counted loop that indexes the slice; PS6001
+requires a consumer that breaks on a threshold. Here the consumer is neither a loop nor a
+break — it is a reslice, so there is no loop to match.
+
+Both existing checks reported **zero hits across `nlp/`** while beam search and diverse beam
+search each sort every candidate (beams × vocabulary) to keep the top few. At a 2048
+vocabulary and width 8 that is a sort of **16384 elements to select 8**, once per generated
+token. Do not read PS6001/PS6013 silence as evidence that a sort is well-sized.
+
+**Soundness.** The bound must not be `len(target)` — that keeps everything. Any statement
+between the sort and the reslice that indexes or ranges over the slice is disqualifying: it may
+depend on the full order, and it also means PS6001 or PS6013 describes the site better. A
+`len(target)` guard is not such a read, and needs no special case: `len` takes the slice as a
+bare identifier, which is neither an index nor a range.
+
+**Bit-safety is a precondition, not a consequence.** Replacing the sort with a selection is
+bit-safe only when the comparator is a **total order** — with ties the retained *set* is not
+unique, so a selection and a sort can legitimately keep different elements. In the motivating
+case the comparator was deliberately written as a total order so it would reproduce a stable
+sort's tie order, which is what makes the substitution safe there.
+
+Every clause of this check is mutation-verified. An explicit `len()` exemption in the
+intervening-read test was written first and **removed**: no floor depended on it, and by
+stopping the AST descent it would also have skipped a genuine indexed read nested inside a len
+argument, such as `len(target[i])`.
+
 ## PS6021 — a fan-out helper with no per-worker seam  *(scanner: static)*
 
 A parallel helper whose callback receives **only a work index**:
