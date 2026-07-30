@@ -238,7 +238,20 @@ func (bt *ballTree) kNN(query []float64, k int) []neighbour {
 	// profile put at 47.6% of the bytes a KNN predict allocates, the largest single site.
 	// The heap never exceeds k members by construction, so one allocation of exactly k both
 	// removes the growth and wastes nothing.
-	h := &knnHeap{k: k, items: make([]neighbour, 0, k)}
+	return bt.kNNInto(query, k, &knnHeap{k: k, items: make([]neighbour, 0, k)})
+}
+
+// kNNInto is kNN against a caller-owned heap, so a loop over many queries pays for the
+// heap once rather than once per query. h is reset here; its items slice keeps whatever
+// capacity it already had. The returned slice ALIASES h.items and is therefore only valid
+// until the next kNNInto call on the same h — callers must consume it before reusing the
+// scratch, which every caller in this package does within one iteration.
+//
+// The search itself is untouched: same reset state (empty, capacity ≥ k), same visit order,
+// same comparator, same distance conversion, so the result is bit-identical to kNN.
+func (bt *ballTree) kNNInto(query []float64, k int, h *knnHeap) []neighbour {
+	h.k = k
+	h.items = h.items[:0]
 	if bt.root != nil {
 		bt.searchKNN(bt.root, query, h, bt.distSq(query, bt.root.centroid))
 	}

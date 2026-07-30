@@ -136,8 +136,14 @@ func nearest(x [][]float64, row []float64, cfg knnConfig) []neighbour {
 // except that when any neighbour sits at distance 0 those exact matches take
 // weight 1 and all others weight 0 (avoids a division by zero and reproduces
 // sklearn's exact-match rule).
-func knnWeights(nb []neighbour, w KNNWeights) []float64 {
-	out := make([]float64, len(nb))
+// It writes into the caller-owned out, which is resliced to len(nb). EVERY entry is
+// assigned on both branches below, so a buffer reused across queries cannot leak a value
+// from the previous one and no clear() is needed.
+func knnWeights(nb []neighbour, w KNNWeights, out []float64) []float64 {
+	if cap(out) < len(nb) {
+		out = make([]float64, len(nb))
+	}
+	out = out[:len(nb)]
 	if w == KNNUniform {
 		for i := range out {
 			out[i] = 1
@@ -233,25 +239,61 @@ func (m *KNNClassifier) Fit(x [][]float64, y []int) error {
 
 // knn returns the k nearest training rows to row using the ball-tree index when
 // one was built, falling back to the brute-force scan for tiny training sets.
-// Both paths produce the identical (dist, idx)-ordered neighbour set.
-func (m *KNNClassifier) knn(row []float64) []neighbour {
+// Both paths produce the identical (dist, idx)-ordered neighbour set. The search runs
+// against the caller-owned heap in sc; the brute-force fallback still allocates, since it
+// only runs for training sets too small to index, where per-query allocation is not the
+// cost that matters.
+func (m *KNNClassifier) knn(row []float64, sc *knnScratch) []neighbour {
 	if m.tree != nil {
-		return m.tree.kNN(row, m.cfg.k)
+		return m.tree.kNNInto(row, m.cfg.k, &sc.heap)
 	}
 	return nearest(m.x, row, m.cfg)
 }
 
 // vote returns the per-class summed neighbour weights for one query row.
+// knnScratch is the per-query working set of a neighbour lookup: the search heap, the
+// neighbour weights and the class-score accumulator. All three are sized by k and by the
+// class count, both loop-invariant, so one set per WORKER replaces three allocations per
+// QUERY. An alloc profile of BenchmarkKNNPredict put those three at ~161 bytes and 3
+// allocations for every one of 4000 queries, and the resulting GC page churn showed up as
+// runtime.madvise burning 27% of all CPU samples while average parallelism sat at 4.0x on
+// 12 cores — the allocation rate, not the distance arithmetic, was capping the fan-out.
+//
+// The scratch MUST be a per-worker parameter and must never hang off the model struct: a
+// receiver-held buffer is shared state and every worker would race on it. That exact race
+// shipped once in this package's GMM code and stayed invisible until a test finally
+// exercised the loop tail that used it.
+type knnScratch struct {
+	heap   knnHeap
+	w      []float64
+	scores []float64
+}
+
+// newKNNScratch sizes one worker's scratch. k is the neighbour count, classes the number of
+// distinct labels (0 for the regressor, which votes into no score vector).
+func newKNNScratch(k, classes int) *knnScratch {
+	sc := &knnScratch{
+		heap: knnHeap{k: k, items: make([]neighbour, 0, k)},
+		w:    make([]float64, k),
+	}
+	if classes > 0 {
+		sc.scores = make([]float64, classes)
+	}
+	return sc
+}
+
 // knnParallelRows runs body over the n query rows chunk-parallel across GOMAXPROCS. Each
-// query reads the immutable fitted ball tree / training data and allocates its own result
-// (the tree is concurrency-safe — the same property DBSCAN.Fit relies on), and body writes
-// only its own out index, so the result is bit-identical to the serial loop. Serial below a
+// query reads the immutable fitted ball tree / training data and writes only its own out
+// index (the tree is concurrency-safe — the same property DBSCAN.Fit relies on), so the
+// result is bit-identical to the serial loop. newScratch is called once per worker, and
+// once for the serial path, so no buffer is ever shared across goroutines. Serial below a
 // small work threshold. Callers pre-validate row widths.
-func knnParallelRows(n int, body func(i int)) {
+func knnParallelRows(n int, newScratch func() *knnScratch, body func(i int, sc *knnScratch)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw <= 1 || n < 64 {
+		sc := newScratch()
 		for i := 0; i < n; i++ {
-			body(i)
+			body(i, sc)
 		}
 		return
 	}
@@ -265,17 +307,24 @@ func knnParallelRows(n int, body func(i int)) {
 		if hi > n {
 			hi = n
 		}
+		sc := newScratch()
 		for i := lo; i < hi; i++ {
-			body(i)
+			body(i, sc)
 		}
 		return nil
 	})
 }
 
-func (m *KNNClassifier) vote(row []float64) []float64 {
-	nb := m.knn(row)
-	w := knnWeights(nb, m.cfg.weights)
-	scores := make([]float64, len(m.classes))
+// vote returns the per-class summed neighbour weights for one query row, using the
+// caller-owned scratch. scores is cleared first because it accumulates with +=; nb and w
+// are fully overwritten by their producers. Same neighbour set, same weights, same
+// ascending-neighbour accumulation order as the allocating version this replaced, so the
+// summed scores are bit-identical.
+func (m *KNNClassifier) vote(row []float64, sc *knnScratch) []float64 {
+	nb := m.knn(row, sc)
+	w := knnWeights(nb, m.cfg.weights, sc.w)
+	scores := sc.scores
+	clear(scores)
 	for i, n := range nb {
 		scores[m.yi[n.idx]] += w[i]
 	}
@@ -294,8 +343,8 @@ func (m *KNNClassifier) Predict(x [][]float64) ([]int, error) {
 		}
 	}
 	out := make([]int, len(x))
-	knnParallelRows(len(x), func(i int) {
-		scores := m.vote(x[i])
+	knnParallelRows(len(x), func() *knnScratch { return newKNNScratch(m.cfg.k, len(m.classes)) }, func(i int, sc *knnScratch) {
+		scores := m.vote(x[i], sc)
 		best, bestScore := 0, math.Inf(-1)
 		for c, s := range scores {
 			if s > bestScore { // strict ⇒ lowest label wins ties
@@ -321,8 +370,8 @@ func (m *KNNClassifier) PredictProba(x [][]float64) ([][]float64, error) {
 		}
 	}
 	out := make([][]float64, len(x))
-	knnParallelRows(len(x), func(i int) {
-		scores := m.vote(x[i])
+	knnParallelRows(len(x), func() *knnScratch { return newKNNScratch(m.cfg.k, len(m.classes)) }, func(i int, sc *knnScratch) {
+		scores := m.vote(x[i], sc)
 		var sum float64
 		for _, s := range scores {
 			sum += s
@@ -398,11 +447,12 @@ func (m *KNNRegressor) Fit(x [][]float64, y []float64) error {
 	return nil
 }
 
-// knnReg returns the k nearest training rows to row using the ball-tree index
-// when built, else the brute-force scan — identical neighbour sets either way.
-func (m *KNNRegressor) knnReg(row []float64) []neighbour {
+// knnReg returns the k nearest training rows to row using the ball-tree index when built,
+// else the brute-force scan — identical neighbour sets either way. Searches against the
+// caller-owned heap in sc; see knn on the classifier.
+func (m *KNNRegressor) knnReg(row []float64, sc *knnScratch) []neighbour {
 	if m.tree != nil {
-		return m.tree.kNN(row, m.cfg.k)
+		return m.tree.kNNInto(row, m.cfg.k, &sc.heap)
 	}
 	return nearest(m.x, row, m.cfg)
 }
@@ -419,9 +469,9 @@ func (m *KNNRegressor) Predict(x [][]float64) ([]float64, error) {
 		}
 	}
 	out := make([]float64, len(x))
-	knnParallelRows(len(x), func(i int) {
-		nb := m.knnReg(x[i])
-		w := knnWeights(nb, m.cfg.weights)
+	knnParallelRows(len(x), func() *knnScratch { return newKNNScratch(m.cfg.k, 0) }, func(i int, sc *knnScratch) {
+		nb := m.knnReg(x[i], sc)
+		w := knnWeights(nb, m.cfg.weights, sc.w)
 		var num, den float64
 		for j, n := range nb {
 			num += w[j] * m.y[n.idx]
