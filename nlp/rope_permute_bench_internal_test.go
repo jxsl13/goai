@@ -98,3 +98,22 @@ func itoaRope(n int) string {
 	}
 	return string(d[i:])
 }
+
+// rwkvShiftRows builds the RWKV token-shift matrix on the prefill path: row 0 from the carried
+// state, row t from row t-1 of the input. It had no benchmark, so PS1001's report on it was
+// unrankable. Sizes match a real prefill rather than the tiny correctness fixtures.
+func BenchmarkRWKVShiftRows(b *testing.B) {
+	for _, g := range []struct{ T, dim int }{{256, 1024}, {512, 2048}} {
+		prev := make([]float64, g.dim)
+		for i := range prev {
+			prev[i] = float64(i%97) * 0.25
+		}
+		xn := ropeWeight(g.T, g.dim)
+		b.Run(ropeName(g.T, g.dim), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				_ = rwkvShiftRows(prev, xn)
+			}
+		})
+	}
+}

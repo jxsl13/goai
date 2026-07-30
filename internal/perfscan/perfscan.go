@@ -1361,6 +1361,13 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					" -47.64%% (deinterleaveRoPE, permuteInterleaveToSplit, permuteSplitToInterleave,"+
 					" splitNeoXQKV; 18 samples per arm, p=0.000 everywhere). Those loops run out*in times —"+
 					" 4.2M at [4096,1024] — and do nothing else, which is the shape that pays."+
+					" A SITE CAN PAY TWICE, and then the ratio is far larger: nlp's rwkvShiftRows fed its"+
+					" per-element stores from a rows2D() call that materialized the whole input as"+
+					" [][]float64 first, so it paid the dispatches AND a second T*dim buffer. Routing it"+
+					" through the package's existing typed bulk copy went -89.65%% and -93.39%% (geomean"+
+					" -91.73%%, 12.1x) with bytes -50.06%% and allocs -25%%. Look for a helper the package"+
+					" ALREADY has before writing a fast path: reusing a tested one avoids minting a new"+
+					" bit-identity claim, and the per-element loop stays as its declined-dtype fallback."+
 					" ASYMMETRY IS THE TRICK: convert only the side whose dtype is statically fixed. Each of"+
 					" these builds its destination with tensor.New(tensor.F64, ...) in the same function, so"+
 					" the store needs no fallback and none is wanted"+

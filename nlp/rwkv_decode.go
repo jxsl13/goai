@@ -95,10 +95,22 @@ func rwkvShiftRows(prev []float64, xn *tensor.Tensor) *tensor.Tensor {
 	for c, v := range prev {
 		sh.SetF64(v, 0, c)
 	}
-	rows := rows2D(xn)
-	for t := 1; t < T; t++ {
-		for c := range dim {
-			sh.SetF64(rows[t-1][c], t, c)
+	// Rows 1..T-1 are rows 0..T-2 of xn verbatim — one contiguous block of (T-1)*dim elements at
+	// both ends — so the typed bulk copy already used by keepSinkRecent moves it in a single
+	// memmove. That replaces (T-1)*dim SetF64 dispatches AND the whole [][]float64 materialization
+	// rows2D was doing purely to feed them, which was a second T*dim buffer.
+	//
+	// Bit-identical, and for a reason worth stating: the old path widened each element to float64
+	// and stored it back through SetF64, and a widen-then-narrow round trip through the SAME format
+	// is exact for every dtype copyRowsFrom handles. Copying the bits directly lands the same
+	// values. The per-element loop stays as the fallback for dtypes copyRowsFrom declines — it is
+	// the pre-existing implementation, not a new untested arm.
+	if !copyRowsFrom(sh, dim, xn, 0, (T-1)*dim) {
+		rows := rows2D(xn)
+		for t := 1; t < T; t++ {
+			for c := range dim {
+				sh.SetF64(rows[t-1][c], t, c)
+			}
 		}
 	}
 	return sh
