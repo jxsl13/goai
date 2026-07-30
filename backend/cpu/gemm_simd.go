@@ -5,16 +5,18 @@ package cpu
 // archsimd (AVX) GEMM band kernels (§T11b/§T74). These replace the scalar twins
 // in gemm_nosimd.go under GOEXPERIMENT=simd on amd64. They vectorize the FREE
 // dimension j in 4-wide f64 lanes (Float64x4) while the reduction over p stays
-// scalar-ordered ascending — so every C[i][j] sums its k-products in the exact
-// same order as the scalar kernel. Products use Mul THEN Add (two roundings),
-// never a fused MulAdd (one rounding), so the result is BIT-IDENTICAL to the
-// scalar/reference GEMM (§V3, §V11 tol 0), not merely within tolerance.
+// ascending-ordered — so every C[i][j] sums its k-products in the same order as
+// the scalar kernel. Products use a FUSED MulAdd (VFMADD, one rounding per term),
+// so the result is NOT bit-identical to the reference's Mul-then-Add (two
+// roundings); it is within the incumbent FMA tolerance instead (#581/#531,
+// PERF-INCUMBENT-TOLERANCE-001), gated by gemmF64Tolerant + assertMatMulF64Close
+// (rtol 1e-11, atol 1e-13). Only the FMA fusion differs from the reference — the
+// f64 accumulation (§V10) and the ascending-p reduction order are unchanged.
 //
 // The accumulator is loaded from C before the p-loop and stored after, so the
 // += contract of the scalar kernel is preserved verbatim (conv im2col scatter
 // depends on it, §T597). F32 has its own f32-NATIVE direct kernel below
-// (ADR-0021 tolerance, FMA-gated); F64 keeps f64 accumulation (§V10) and
-// bit-exactness.
+// (ADR-0021 tolerance, FMA-gated).
 //
 // gemmHasAVX runtime-gates the intrinsics (§I4): built with the experiment but
 // run on a pre-AVX CPU, gemmF64Band falls back to a correct scalar accumulate
