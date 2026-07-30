@@ -387,35 +387,7 @@ func (m *MAE) patchify(img *tensor.Tensor) (*tensor.Tensor, error) {
 	if img.Ndim() != 3 || sh[0] != m.channels || sh[1] != m.size || sh[2] != m.size {
 		return nil, fmt.Errorf("vision: MAE expects [%d,%d,%d] images, got %v", m.channels, m.size, m.size, sh)
 	}
-	p := m.Patch
-	grid := m.size / p
-	n := grid * grid
-	read := makeReader(img.Contiguous())
-	data := make([]float64, 0, n*m.channels*p*p)
-	for py := range grid {
-		for px := range grid {
-			for c := range m.channels {
-				for dy := range p {
-					for dx := range p {
-						data = append(data, read(((c*m.size)+py*p+dy)*m.size+px*p+dx))
-					}
-				}
-			}
-		}
-	}
-	out := tensor.New(m.EncPos.Dtype(), tensor.Shape{n, m.channels * p * p})
-	switch out.Dtype() {
-	case tensor.F64:
-		copy(out.Storage().F64(), data)
-	case tensor.F32:
-		dst := out.Storage().F32()
-		for i, v := range data {
-			dst[i] = float32(v)
-		}
-	default:
-		return nil, fmt.Errorf("vision: MAE supports F32/F64, got %v", out.Dtype())
-	}
-	return out, nil
+	return patchifyImage(img, m.EncPos.Dtype(), m.channels, m.size, m.Patch, "MAE")
 }
 
 // unshuffleRows reassembles the full [S,D] decoder input in ORIGINAL patch order
