@@ -17,3 +17,8 @@ Rationale: Packing B turned over between 1MB and 4MB of B for f32 but between 12
 IF a hoist that won inside a packed or blocked kernel is carried to the unblocked twin beside it, THEN the implementing agent SHALL re-measure it there, since the same A widening was worth minus 11 points packed and plus 11 points unpacked.
 
 Rationale: Widening A to f64 once per row block removed real work in the packed f32 GEMM band because B arrives from a compact panel. In the unpacked band the tile already streams B with fourfold line waste, so the extra 4*k pass evicts what the loop is streaming and the hoist costs more than the conversions it removes: +11.71% at n=256 and +11.08% at n=512, both p<=0.002. Reverted.
+
+## PERF-THRESHOLD-IS-STALE-WHEN-ITS-ARM-CHANGES-001
+WHEN a kernel behind a size or cost threshold is made faster, the implementing agent SHALL re-sweep that threshold in the same change, because it was calibrated against the old arm and now excludes inputs the new one wins on.
+
+Rationale: The f32 GEMM pack gate was set at 1<<19 elements when packing measured +2.78% at n=256. Hoisting two operand widenings made the packed band about 18% faster and moved the crossover two orders of magnitude, to 1<<12: the same n=256 went from +2.78% to -17.17%, and the stale gate was leaving 8 to 19 percent unclaimed at every size below 1024. Vision gained 8.99% geomean from the re-sweep alone.

@@ -22,21 +22,26 @@ import "sync"
 const gemmPackMinRows = 32
 
 // gemmPackMinWorkF32 / gemmPackMinWorkF64 are the B element counts above which packing pays.
-// BOTH dtypes need a gate and they need DIFFERENT ones — packing is a cache fix, so it only wins
-// once B is too big to stay resident while the tiles walk it, and the two kernels reach that point
-// at different sizes. Measured by sweeping the gate inside one binary (see
-// BenchmarkGemmF32Portable / BenchmarkGemmF64Portable), square k=n:
+// BOTH dtypes need a gate and they need DIFFERENT ones, because packing is a cache fix and the two
+// kernels stop being resident at different sizes. Swept by forcing each arm inside one binary; see
+// BenchmarkGemmF32Portable / BenchmarkGemmF64Portable, square k=n, packed vs unpacked:
 //
-//	f32   n=256 (B 256KB) +2.78%    n=512 (1MB) ~        n=1024 (4MB) -13.16%
-//	f64   n=64  (B  32KB) +24.50%   n=128 (128KB) +1.56%  n=256 (512KB) -2.80%
-//	                                n=512 (2MB) -5.67%    n=1024 (8MB) -26.77%
+//	f32  n=32 +42.00%  n=48 +18.09%  n=64 -9.29%  n=96 -22.53%  n=128 -5.77%
+//	     n=256 -17.17%  n=384 -19.00%  n=512 -17.20%  n=1024 -24.52%
+//	f64  n=64 +26.16%  n=128 +1.48%  n=256 -1.71%  n=512 -7.46%  n=1024 -28.06%
 //
-// So f32 turns over between 1MB and 4MB of B and f64 between 128KB and 512KB — a single shared
-// threshold would either leave the f64 wins on the floor or pack f32 where it costs 2.78%. The
-// thresholds sit inside each measured bracket. Vars rather than consts so a parity test and the
-// benchmarks can force either arm.
+// THE F32 GATE MOVED, and why is the point. It was first set at 1<<19 against a packed band that
+// still widened both operands inside its innermost loop; at that time packing measured +2.78% at
+// n=256 and break-even at 512, so the threshold sat above 1MB of B. Hoisting those widenings made
+// the packed band roughly 18% faster, which moved the crossover down by two orders of magnitude —
+// the same n=256 that cost 2.78% now saves 17.17%. A threshold calibrated against an older, slower
+// arm is stale by construction, so re-sweep this whenever either band changes.
+//
+// f32 now turns over between 2304 and 4096 elements; f64, whose band has no conversions to hoist
+// and is unchanged, still turns over between 16384 and 65536. Vars rather than consts so the
+// parity tests and the benchmarks can force either arm.
 var (
-	gemmPackMinWorkF32 = 1 << 19 // 524288 elements = 2MB of f32
+	gemmPackMinWorkF32 = 1 << 12 // 4096 elements = 16KB of f32
 	gemmPackMinWorkF64 = 1 << 16 // 65536 elements = 512KB of f64
 )
 

@@ -19,7 +19,7 @@ import (
 // rows of the f64 accumulator live across a whole k pass, which is 4*n*8 bytes — 8KB at n=256, 32KB
 // at n=1024.
 func BenchmarkGemmF32Portable(b *testing.B) {
-	for _, sz := range []int{256, 512, 1024} {
+	for _, sz := range []int{64, 128, 256, 512, 1024} {
 		b.Run(fmt.Sprintf("%d", sz), func(b *testing.B) {
 			m, k, n := sz, sz, sz
 			rng := rand.New(rand.NewSource(42))
@@ -32,13 +32,27 @@ func BenchmarkGemmF32Portable(b *testing.B) {
 			for i := range B {
 				B[i] = rng.Float32()*2 - 1
 			}
-			b.ResetTimer()
-			for range b.N {
-				gemmF32(A, B, C, m, k, n)
+			// Sweep the pack gate inside ONE binary, as the f64 benchmark does: the arms then
+			// differ by that variable alone. This is also how the gate itself is calibrated, and
+			// it has to be re-run whenever the packed band changes — a threshold measured against
+			// an older, slower packed kernel is stale by construction.
+			for _, arm := range []struct {
+				name string
+				gate int
+			}{{"unpacked", 1 << 30}, {"packed", 0}} {
+				b.Run(arm.name, func(b *testing.B) {
+					saved := gemmPackMinWorkF32
+					gemmPackMinWorkF32 = arm.gate
+					defer func() { gemmPackMinWorkF32 = saved }()
+					b.ResetTimer()
+					for range b.N {
+						gemmF32(A, B, C, m, k, n)
+					}
+					b.StopTimer()
+					flops := 2 * float64(m) * float64(k) * float64(n)
+					b.ReportMetric(flops/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+				})
 			}
-			b.StopTimer()
-			flops := 2 * float64(m) * float64(k) * float64(n)
-			b.ReportMetric(flops/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 		})
 	}
 }
