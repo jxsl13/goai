@@ -124,6 +124,11 @@ func benchPrefill(b *testing.B, seq int) {
 func BenchmarkTinyLlamaPrefillGPU_32(b *testing.B)  { benchPrefill(b, 32) }
 func BenchmarkTinyLlamaPrefillGPU_128(b *testing.B) { benchPrefill(b, 128) }
 
+// Long-context prefill: the fused WMMA attention fast path (gqaCore) removes the
+// O(heads·seq²) score HBM round-trip, whose fraction of the prefill step grows with seq.
+func BenchmarkTinyLlamaPrefillGPU_512(b *testing.B)  { benchPrefill(b, 512) }
+func BenchmarkTinyLlamaPrefillGPU_1024(b *testing.B) { benchPrefill(b, 1024) }
+
 // CPU baseline (goai nlp.Llama forward on the optimized cpu backend).
 func benchPrefillCPU(b *testing.B, seq int) {
 	m := loadTinyLlama(b)
