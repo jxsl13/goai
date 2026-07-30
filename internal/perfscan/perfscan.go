@@ -1636,7 +1636,10 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "loop-invariant-divide",
 				msg: fmt.Sprintf("divide by %q, loop-invariant, on every element — hoist inv := 1/%s"+
-					" once and multiply. ~1.2-1.5x when the divide is standalone (SoftCap VJP 1.28x,"+
+					" once and multiply. CHECK THE OPERAND TYPE FIRST: with no type information this check"+
+					" cannot tell float from integer, and on integer operands inv := 1/n is ZERO — a"+
+					" wrong-value bug, not a missed win. ~1.2-1.5x was measured on standalone float"+
+					" divides elsewhere (SoftCap VJP 1.28x,"+
 					" optimizer moments). SAFE ONLY for a CONTINUOUS output (gradient/moment/probability,"+
 					" ½ulp rides tolerance) — NEVER feeding round/quantize/argmax. Verify float + intent.", name, name),
 			})
@@ -1774,7 +1777,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					" summation order, and if the hoisted run accumulates into a scalar that scalar MUST" +
 					" keep the element type — widening it to float64 and narrowing once is MORE accurate" +
 					" and therefore a different answer. Verify the run length and that the enclosing loop" +
-					" is not already a specialized fast path before acting (PS4005)",
+					" is not already a specialized fast path before acting",
 			})
 			return true
 		})
@@ -3691,7 +3694,7 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 					" — shipped DeltaNet/GatedDeltaNet 2.0-3.6x. VERIFY THE TRIP COUNT FIRST: this"+
 					" check cannot see it, and an audit of every hit found the architectural"+
 					" shapes (layer stacks, per-head and per-expert fan-outs) outnumbered genuine"+
-					" recurrences by two orders of magnitude before the iterated-expression filter"+
+					" recurrences by two orders of magnitude before the trip-count-origin filter"+
 					" was added. Benchmark it.", count),
 			})
 			return false
@@ -3856,7 +3859,9 @@ func scaledSerialDotFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" like PS4008 but not stored raw. Break the dependency chain with independent"+
 					" accumulators (e.g. 4-way unroll). Bit-identical when the products are"+
 					" integer-valued (int8·int8 partials < 2^53 reassociate exactly); else"+
-					" tolerance-gate against the sequential form. Shipped: nn.LLMInt8MatMul (~2x).", acc),
+					" tolerance-gate against the sequential form. ~2x was measured on nn.LLMInt8MatMul, not"+
+					" here; like PS4008 the gain turns on the contraction extent and cache residency,"+
+					" which this check cannot see.", acc),
 			})
 		}
 		return true
@@ -4061,7 +4066,9 @@ func serialDotMatmulFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				msg: fmt.Sprintf("%q accumulates a scalar dot in the innermost loop and is then stored to %s"+
 					" — a serial FMADD chain running at latency, not throughput. Transpose the k-dim operand"+
 					" once and rewrite as ikj/axpy so the accumulators are independent across the output index"+
-					" (measured 2.9x per-MAC on nn.matmulABt). Prove bit-identity against the current form with"+
+					" (2.9x per-MAC was measured on nn.matmulABt, not here; the gain turns on the contraction"+
+					" extent and the operands' cache residency, neither of which this check can see)."+
+					" Prove bit-identity against the current form with"+
 					" a tolerance-0 cross-reference test, and do NOT carry over a zero-skip.", acc, store),
 			})
 		}
@@ -5581,7 +5588,14 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 					pos:      fset.Position(n.Pos()),
 					end:      fset.Position(n.End()),
 					category: "output-invariant-operand-reload",
-					msg:      fmt.Sprintf("accumulator %q re-reads an operand that does not vary with output index %q — unroll this loop by 4 so one load feeds 4 accumulators (register blocking)", acc, outVar),
+					msg: fmt.Sprintf("accumulator %q re-reads an operand that does not vary with output index %q — unrolling"+
+						" the output loop by 4 would let one load feed 4 accumulators (register blocking)."+
+						" NOTHING HERE IS MEASURED, and two things must be checked before acting. Confirm the"+
+						" load actually survives register allocation — build with -gcflags='<pkg>=-S' and count"+
+						" loads of that operand in the loop body; a scalar the compiler already keeps in a"+
+						" register gives nothing to amortize. And a body containing a call or a transcendental"+
+						" is bottlenecked elsewhere, so the load is already free. The remainder path an unroll"+
+						" needs is itself a hazard — see PS6019.", acc, outVar),
 				})
 				break // one finding per output loop, not one per accumulator
 			}
@@ -6397,7 +6411,11 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" whole row and touches its own cache line to use one element — and the walk repeats"+
 						" once per %q. Interchange the loops so %q runs contiguously (bit-neutral when the body"+
 						" is a pure elementwise update), or block four adjacent %q values so one fetched line"+
-						" feeds four accumulators. Measured 2.40x (NSA P*V) and the larger share of KDA's 1.75x.",
+						" feeds four accumulators. THE PREMISE IS A CACHE CLAIM THIS CHECK CANNOT MAKE: below"+
+						" one cache line of stride, consecutive iterations share a line, and a buffer that"+
+						" fits L1 pays nothing for striding either — read the stride value and the buffer"+
+						" size before acting. 2.40x on NSA P*V and part of KDA's 1.75x were measured AT"+
+						" THOSE SITES, not here.",
 						innerVar, buf.Name, outerVar, innerVar, outerVar),
 				})
 				return true
@@ -7937,7 +7955,10 @@ func layoutOpClusterFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets)
 			"Movement cannot change a value, so gathering the operands out of storage and scattering the result back is "+
 			"bit-identical BY CONSTRUCTION — index arithmetic only, no numerical judgment. Gate the fused arm on "+
 			"ctx.Recorder == nil so a taped context keeps the dispatch nodes as gradient edges. Shipped: partialRoPE "+
-			"1.25-1.33x with 38-43%% fewer allocations, Gemma2 capped attention 1.21x, DeepSeekV2 absorbed attention 1.12x.",
+			"1.25-1.33x with 38-43%% fewer allocations, Gemma2 capped attention 1.21x and DeepSeekV2"+
+			"absorbed attention 1.12x were measured AT THOSE SITES, on per-layer per-token decode"+
+			" paths. The count above is of STATIC call sites, not iterations, so it says nothing"+
+			" about how often this function runs — measure that first.",
 			len(sites), strings.Join(sorted, ", ")),
 	}}
 }
