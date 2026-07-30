@@ -32,7 +32,7 @@ func (d *T5Decoder) Logits(ctx *backend.Context, hidden *tensor.Tensor) (*tensor
 	if d.LMHead == nil {
 		return nil, fmt.Errorf("nlp: T5Decoder has no LM head")
 	}
-	return exec1(ctx, backend.OpMatMul, nil, hidden, d.LMHead)
+	return exec2(ctx, backend.OpMatMul, nil, hidden, d.LMHead)
 }
 
 // T5DecoderBlock is one decoder block: self-attn, cross-attn, FFN.
@@ -64,7 +64,7 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, d.Shared, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, d.Shared, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -95,23 +95,23 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		if err != nil {
 			return nil, err
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWq)
 		if err != nil {
 			return nil, err
 		}
-		k, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWk)
+		k, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWk)
 		if err != nil {
 			return nil, err
 		}
-		v, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWv)
+		v, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWv)
 		if err != nil {
 			return nil, err
 		}
-		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, k, v, rb)
+		attn, err := exec4(ctx, backend.OpMHAMasked, attrs, q, k, v, rb)
 		if err != nil {
 			return nil, err
 		}
-		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
+		if attn, err = exec2(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
@@ -121,23 +121,23 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		if h, err = b.CrossNorm.Forward(ctx, x); err != nil {
 			return nil, err
 		}
-		cq, err := exec1(ctx, backend.OpMatMul, nil, h, b.CWq)
+		cq, err := exec2(ctx, backend.OpMatMul, nil, h, b.CWq)
 		if err != nil {
 			return nil, err
 		}
-		ck, err := exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWk)
+		ck, err := exec2(ctx, backend.OpMatMul, nil, encoderOut, b.CWk)
 		if err != nil {
 			return nil, err
 		}
-		cv, err := exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWv)
+		cv, err := exec2(ctx, backend.OpMatMul, nil, encoderOut, b.CWv)
 		if err != nil {
 			return nil, err
 		}
-		cattn, err := exec1(ctx, backend.OpMHAMasked, attrs, cq, ck, cv, crossMask)
+		cattn, err := exec4(ctx, backend.OpMHAMasked, attrs, cq, ck, cv, crossMask)
 		if err != nil {
 			return nil, err
 		}
-		if cattn, err = exec1(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
+		if cattn, err = exec2(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, cattn); err != nil {
@@ -149,14 +149,14 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 		}
 		var ff *tensor.Tensor
 		if b.Wi1 != nil {
-			g, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi0)
+			g, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi0)
 			if err != nil {
 				return nil, err
 			}
 			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
-			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
+			u, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi1)
 			if err != nil {
 				return nil, err
 			}
@@ -164,14 +164,14 @@ func (d *T5Decoder) Decode(ctx *backend.Context, encoderOut *tensor.Tensor, toke
 				return nil, err
 			}
 		} else {
-			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
+			if ff, err = exec2(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
 			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}
-		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
+		if ff, err = exec2(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {
@@ -466,7 +466,7 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 	}
 	idx := tensor.New(d.Shared.Dtype(), tensor.Shape{1})
 	idx.SetF64(float64(token), 0)
-	x, err := exec1(ctx, backend.OpEmbed, nil, d.Shared, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, d.Shared, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -483,15 +483,15 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		if err != nil {
 			return nil, err
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWq)
 		if err != nil {
 			return nil, err
 		}
-		kt, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWk)
+		kt, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWk)
 		if err != nil {
 			return nil, err
 		}
-		vt, err := exec1(ctx, backend.OpMatMul, nil, h, b.SWv)
+		vt, err := exec2(ctx, backend.OpMatMul, nil, h, b.SWv)
 		if err != nil {
 			return nil, err
 		}
@@ -501,11 +501,11 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		// own kt/vt as the cache slot — the row buffer copies into its own backing
 		// instead, which is the same values with strictly less sharing.
 		cache.selfK[l], cache.selfV[l] = cache.bufs.appendKV(cache.selfK, cache.selfV, l, kt, vt)
-		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, cache.selfK[l], cache.selfV[l], selfMask)
+		attn, err := exec4(ctx, backend.OpMHAMasked, attrs, q, cache.selfK[l], cache.selfV[l], selfMask)
 		if err != nil {
 			return nil, err
 		}
-		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
+		if attn, err = exec2(ctx, backend.OpMatMul, nil, attn, b.SWo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
@@ -516,22 +516,22 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 			return nil, err
 		}
 		if cache.crossK[l] == nil {
-			if cache.crossK[l], err = exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWk); err != nil {
+			if cache.crossK[l], err = exec2(ctx, backend.OpMatMul, nil, encoderOut, b.CWk); err != nil {
 				return nil, err
 			}
-			if cache.crossV[l], err = exec1(ctx, backend.OpMatMul, nil, encoderOut, b.CWv); err != nil {
+			if cache.crossV[l], err = exec2(ctx, backend.OpMatMul, nil, encoderOut, b.CWv); err != nil {
 				return nil, err
 			}
 		}
-		cq, err := exec1(ctx, backend.OpMatMul, nil, h, b.CWq)
+		cq, err := exec2(ctx, backend.OpMatMul, nil, h, b.CWq)
 		if err != nil {
 			return nil, err
 		}
-		cattn, err := exec1(ctx, backend.OpMHAMasked, attrs, cq, cache.crossK[l], cache.crossV[l], crossMask)
+		cattn, err := exec4(ctx, backend.OpMHAMasked, attrs, cq, cache.crossK[l], cache.crossV[l], crossMask)
 		if err != nil {
 			return nil, err
 		}
-		if cattn, err = exec1(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
+		if cattn, err = exec2(ctx, backend.OpMatMul, nil, cattn, b.CWo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, cattn); err != nil {
@@ -543,14 +543,14 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 		}
 		var ff *tensor.Tensor
 		if b.Wi1 != nil {
-			g, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi0)
+			g, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi0)
 			if err != nil {
 				return nil, err
 			}
 			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
-			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
+			u, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi1)
 			if err != nil {
 				return nil, err
 			}
@@ -558,14 +558,14 @@ func (d *T5Decoder) DecodeStep(ctx *backend.Context, cache *T5DecoderCache, enco
 				return nil, err
 			}
 		} else {
-			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
+			if ff, err = exec2(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
 			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}
-		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
+		if ff, err = exec2(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {

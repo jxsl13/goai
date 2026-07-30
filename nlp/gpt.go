@@ -154,6 +154,12 @@ func exec2(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b *tenso
 var (
 	ins1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
 	ins3Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 3); return &s }}
+	// ins4Pool serves the masked-attention ops, which take query, key, value and a mask or
+	// relative-position bias. Without a 4-input sibling those five call sites were the only
+	// per-iteration variadic allocations in this family that PS6017 could not see — it reports
+	// a variadic call only when a non-variadic sibling of that arity exists, so the gap was in
+	// the helper set, not in the check.
+	ins4Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 4); return &s }}
 )
 
 // exec1a runs a 1-input op with a pooled input slice when not recording (RoPE). See exec2.
@@ -184,6 +190,28 @@ func exec3(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b, c *te
 	out, err := backend.Execute(ctx, op, s, attrs)
 	s[0], s[1], s[2] = nil, nil, nil
 	ins3Pool.Put(sp)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// exec4 is the 4-input sibling, for the masked-attention ops that take query, key, value and
+// a mask or relative-position bias. Same contract as exec2/exec3: under a recorder it defers
+// to the variadic form so the tape sees a slice it may retain, and otherwise it borrows a
+// pooled 4-element slice, nils the entries before returning it, and calls the identical
+// backend.Execute. Bit-identical by construction — only the provenance of the input slice
+// changes.
+func exec4(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b, c, d *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return exec1(ctx, op, attrs, a, b, c, d)
+	}
+	sp := ins4Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0], s[1], s[2], s[3] = a, b, c, d
+	out, err := backend.Execute(ctx, op, s, attrs)
+	s[0], s[1], s[2], s[3] = nil, nil, nil, nil
+	ins4Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}

@@ -67,7 +67,7 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 		}
 		idx.SetF64(float64(t), i)
 	}
-	x, err := exec1(ctx, backend.OpEmbed, nil, m.Shared, idx)
+	x, err := exec2(ctx, backend.OpEmbed, nil, m.Shared, idx)
 	if err != nil {
 		return nil, err
 	}
@@ -90,23 +90,23 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 		if err != nil {
 			return nil, err
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wq)
 		if err != nil {
 			return nil, err
 		}
-		k, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wk)
+		k, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wk)
 		if err != nil {
 			return nil, err
 		}
-		v, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wv)
+		v, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wv)
 		if err != nil {
 			return nil, err
 		}
-		attn, err := exec1(ctx, backend.OpMHAMasked, attrs, q, k, v, bias)
+		attn, err := exec4(ctx, backend.OpMHAMasked, attrs, q, k, v, bias)
 		if err != nil {
 			return nil, err
 		}
-		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
+		if attn, err = exec2(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
@@ -118,14 +118,14 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 		}
 		var ff *tensor.Tensor
 		if b.Wi1 != nil { // gated-GELU (v1.1): gelu(h·Wi0) ⊙ (h·Wi1)
-			g, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi0)
+			g, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi0)
 			if err != nil {
 				return nil, err
 			}
 			if g, err = exec1a(ctx, backend.OpGELU, nil, g); err != nil {
 				return nil, err
 			}
-			u, err := exec1(ctx, backend.OpMatMul, nil, h, b.Wi1)
+			u, err := exec2(ctx, backend.OpMatMul, nil, h, b.Wi1)
 			if err != nil {
 				return nil, err
 			}
@@ -133,14 +133,14 @@ func (m *T5) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error)
 				return nil, err
 			}
 		} else { // ReLU (v1.0)
-			if ff, err = exec1(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
+			if ff, err = exec2(ctx, backend.OpMatMul, nil, h, b.Wi0); err != nil {
 				return nil, err
 			}
 			if ff, err = exec1a(ctx, backend.OpReLU, nil, ff); err != nil {
 				return nil, err
 			}
 		}
-		if ff, err = exec1(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
+		if ff, err = exec2(ctx, backend.OpMatMul, nil, ff, b.WOut); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, ff); err != nil {

@@ -168,11 +168,11 @@ func (c *CLA) embed(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) 
 		tokIdx.SetF64(float64(t), i)
 		posIdx.SetF64(float64(i), i)
 	}
-	et, err := exec1(ctx, backend.OpEmbed, nil, c.TokEmb, tokIdx)
+	et, err := exec2(ctx, backend.OpEmbed, nil, c.TokEmb, tokIdx)
 	if err != nil {
 		return nil, err
 	}
-	ep, err := exec1(ctx, backend.OpEmbed, nil, c.PosEmb, posIdx)
+	ep, err := exec2(ctx, backend.OpEmbed, nil, c.PosEmb, posIdx)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (c *CLA) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error
 	if x, err = c.hiddenFromEmbed(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, c.Head)
+	return exec2(ctx, backend.OpMatMul, nil, x, c.Head)
 }
 
 // hiddenFromEmbed is the CLA block stack + final LayerNorm: per layer,
@@ -208,22 +208,22 @@ func (c *CLA) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 			return nil, err
 		}
 		if l%c.Config.Share == 0 { // leader: project and stash the group's k,v
-			if kShare, err = exec1(ctx, backend.OpMatMul, nil, h1, b.Wk); err != nil {
+			if kShare, err = exec2(ctx, backend.OpMatMul, nil, h1, b.Wk); err != nil {
 				return nil, err
 			}
-			if vShare, err = exec1(ctx, backend.OpMatMul, nil, h1, b.Wv); err != nil {
+			if vShare, err = exec2(ctx, backend.OpMatMul, nil, h1, b.Wv); err != nil {
 				return nil, err
 			}
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, h1, b.Wq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, h1, b.Wq)
 		if err != nil {
 			return nil, err
 		}
-		attn, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: c.Config.Heads, Causal: true}, q, kShare, vShare)
+		attn, err := exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: c.Config.Heads, Causal: true}, q, kShare, vShare)
 		if err != nil {
 			return nil, err
 		}
-		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
+		if attn, err = exec2(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
@@ -234,19 +234,19 @@ func (c *CLA) hiddenFromEmbed(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
 		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
@@ -321,11 +321,11 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 		}
 		g := l / c.Config.Share
 		if l%c.Config.Share == 0 { // leader: append this token's k,v to the group slot
-			kt, err := exec1(ctx, backend.OpMatMul, nil, h1, b.Wk)
+			kt, err := exec2(ctx, backend.OpMatMul, nil, h1, b.Wk)
 			if err != nil {
 				return nil, err
 			}
-			vt, err := exec1(ctx, backend.OpMatMul, nil, h1, b.Wv)
+			vt, err := exec2(ctx, backend.OpMatMul, nil, h1, b.Wv)
 			if err != nil {
 				return nil, err
 			}
@@ -336,16 +336,16 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 			// than holding a local from before the append.
 			cache.K[g], cache.V[g] = cache.bufs.appendKV(cache.K, cache.V, g, kt, vt)
 		}
-		q, err := exec1(ctx, backend.OpMatMul, nil, h1, b.Wq)
+		q, err := exec2(ctx, backend.OpMatMul, nil, h1, b.Wq)
 		if err != nil {
 			return nil, err
 		}
 		// single query at the last position attends to all cached keys → no mask
-		attn, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: c.Config.Heads, Causal: false}, q, cache.K[g], cache.V[g])
+		attn, err := exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: c.Config.Heads, Causal: false}, q, cache.K[g], cache.V[g])
 		if err != nil {
 			return nil, err
 		}
-		if attn, err = exec1(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
+		if attn, err = exec2(ctx, backend.OpMatMul, nil, attn, b.Wo); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, attn); err != nil {
@@ -355,19 +355,19 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
 		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
 		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
@@ -377,5 +377,5 @@ func (c *CLA) DecodeStep(ctx *backend.Context, cache *CLACache, token, pos int) 
 	if x, err = c.LNf.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, c.Head)
+	return exec2(ctx, backend.OpMatMul, nil, x, c.Head)
 }
