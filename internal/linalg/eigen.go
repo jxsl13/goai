@@ -44,15 +44,30 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 				t := math.Copysign(1, theta) / (math.Abs(theta) + math.Sqrt(theta*theta+1))
 				c := 1 / math.Sqrt(t*t+1)
 				s := t * c
-				for k := range n {
-					mkp, mkq := m[k*n+p], m[k*n+q]
-					m[k*n+p] = c*mkp - s*mkq
-					m[k*n+q] = s*mkp + c*mkq
+				// Six bounds checks per k survived across these three loops, confirmed
+				// with -d=ssa/check_bce/debug=1. Note that the row-slice hoist below did
+				// NOT remove its own pair: `for k := range n` gives prove no relation
+				// between n and len(rp), so hoisting the slice is not by itself enough.
+				//
+				// The column loop cannot use row slices — it walks a column — so it runs
+				// on two induction offsets against one hoisted bound instead. The row and
+				// accumulator loops range over one slice with the other clamped to the
+				// same length, which is the shape prove can discharge.
+				//
+				// Bit-identical: every destination is written once from the same two
+				// source values, in the same k order. Only branches are removed.
+				for kp, kq := p, q; kq < len(m); kp, kq = kp+n, kq+n {
+					mkp, mkq := m[kp], m[kq]
+					m[kp] = c*mkp - s*mkq
+					m[kq] = s*mkp + c*mkq
 				}
-				for k := range n {
-					mpk, mqk := m[p*n+k], m[q*n+k]
-					m[p*n+k] = c*mpk - s*mqk
-					m[q*n+k] = s*mpk + c*mqk
+				rmp := m[p*n : p*n+n : p*n+n]
+				rmq := m[q*n : q*n+n : q*n+n]
+				rmq = rmq[:len(rmp)]
+				for k, mpk := range rmp {
+					mqk := rmq[k]
+					rmp[k] = c*mpk - s*mqk
+					rmq[k] = s*mpk + c*mqk
 				}
 				// v is stored TRANSPOSED (vT[p*n+k] is the old v[k*n+p]). The
 				// accumulator is only ever column-rotated, so transposing its storage
@@ -60,8 +75,9 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 				// operations, same order, same operands (PS6011).
 				rp := vT[p*n : p*n+n : p*n+n]
 				rq := vT[q*n : q*n+n : q*n+n]
-				for k := range n {
-					vkp, vkq := rp[k], rq[k]
+				rq = rq[:len(rp)]
+				for k, vkp := range rp {
+					vkq := rq[k]
 					rp[k] = c*vkp - s*vkq
 					rq[k] = s*vkp + c*vkq
 				}
