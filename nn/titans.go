@@ -246,6 +246,65 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 	if err != nil {
 		return nil, err
 	}
+	// Fused typed-F64 inference path for the LINEAR memory (same idiom as deltanet.go): the
+	// linear recurrence is the delta-rule family's momentum+forget generalization, so it runs on
+	// raw []float64 with the memory M and momentum S reused in place — eliminating ~13 backend-op
+	// dispatches + tiny-tensor allocs per timestep. Gated on inference (ctx.Recorder == nil);
+	// training keeps the dispatch loop below so the outer tape can backprop through the scan.
+	// Bit-identical to the dispatch path: ascending-order matvec dots (no reorder, no FMA — the
+	// same accumulation OpMatMul uses on these shapes), e+e for the exact 2·e, and the same
+	// per-element grad·θ / η·S / (1−α)·M / +S ordering. Deep memory (m.LinearMem == false) is far
+	// more complex (per-token MLP gradient) and stays on the dispatch path.
+	if ctx.Recorder == nil && m.LinearMem {
+		if qs, ks, vs, m0 := flatF64(qn), flatF64(kn), flatF64(v), flatF64(m.M0); qs != nil && ks != nil && vs != nil && m0 != nil {
+			ets, tts, ats := flatF64(eta), flatF64(theta), flatF64(alpha)
+			if ets != nil && tts != nil && ats != nil {
+				dim := m.Dim
+				out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dim})
+				os := flatF64(out)
+				M := append([]float64(nil), m0...) // mutable copy; M0 is a param, never mutated
+				S := make([]float64, dim*dim)       // momentum state (zero == the nil "first token")
+				started := false
+				for t := range seq {
+					krow := ks[t*dim : t*dim+dim : t*dim+dim]
+					qrow := qs[t*dim : t*dim+dim : t*dim+dim]
+					vrow := vs[t*dim : t*dim+dim : t*dim+dim]
+					etaT, thetaT, keep := ets[t], tts[t], 1-ats[t]
+					// grad = 2·(M_{t-1}·k − v)·kᵀ; S = η·S − θ·grad; M = (1−α)·M_{t-1} + S.
+					// pred_i uses M_{t-1} row i (updated only after its own row's pred is taken; other
+					// rows are untouched), matching the dispatch's whole-matvec-before-write order.
+					for i := range dim {
+						base := i * dim
+						var pred float64
+						for c := range dim {
+							pred += M[base+c] * krow[c] // ascending c, M_{t-1}
+						}
+						e := pred - vrow[i]
+						e2 := e + e // exact 2·e
+						for c := range dim {
+							ginc := (e2 * krow[c]) * thetaT // (grad_ic)·θ, grad_ic = e2·k[c]
+							if started {
+								S[base+c] = S[base+c]*etaT - ginc
+							} else {
+								S[base+c] = -ginc
+							}
+							M[base+c] = M[base+c]*keep + S[base+c]
+						}
+					}
+					started = true
+					for i := range dim { // o_t = M_t · q_t
+						base := i * dim
+						var o float64
+						for c := range dim {
+							o += M[base+c] * qrow[c] // ascending c, M_t
+						}
+						os[t*dim+i] = o
+					}
+				}
+				return out, nil
+			}
+		}
+	}
 	row := func(t *tensor.Tensor, i int) (*tensor.Tensor, error) {
 		return ex(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i, End: i + 1}, t)
 	}
