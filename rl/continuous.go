@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -277,6 +278,33 @@ func boundsScaleCenter(low, high []float64) (scale, center *tensor.Tensor) {
 	return scale, center
 }
 
+// softUpdateParThreshold is the element count above which one parameter's Polyak blend is
+// worth fanning out. Each element does two reads and one write of a resident array, so the
+// loop is bandwidth-bound rather than compute-bound and the crossover sits where the fan-out
+// overhead stops dominating. 1<<15 matches the threshold the other packages in this
+// repository use for the same kind of elementwise sweep.
+//
+// At the shape this actually runs on — a critic-sized MLP, hidden 256 — it fans out the two
+// 65536-element weight matrices and leaves the three bias vectors of 256 or fewer elements
+// serial, which is the intended split: a 256-element fan-out is pure overhead.
+const softUpdateParThreshold = 1 << 15
+
+// softUpdateRun applies body over [0,n) in parallel above the threshold and serially below
+// it. Splitting is legal here because the blend carries NO accumulation: every output index
+// is written exactly once, from its own source element and its own previous value, so chunk
+// order cannot affect a single bit. That is the property to check before reusing this shape —
+// a loop that summed into a shared float would reassociate and change results.
+//
+// Self-aliasing is safe too. Even if the source and destination were the same array, chunk j
+// reads and writes only index j, so no chunk can observe another's write.
+func softUpdateRun(n int, body func(lo, hi int)) {
+	if n < softUpdateParThreshold || parallel.Workers() <= 1 {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
+}
+
 // softUpdate performs the Polyak soft update of a target network toward an online
 // one: for every parameter, target ← τ·online + (1−τ)·target. τ=1 is an exact
 // hard copy (target ← online); τ=0 leaves the target unchanged. The two networks
@@ -294,17 +322,21 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 		if s.Dtype() == tensor.F64 && d.Dtype() == tensor.F64 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F64()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F64()[d.Offset() : d.Offset()+d.Numel()]
-			for j := range to {
-				to[j] = tau*so[j] + (1-tau)*to[j]
-			}
+			softUpdateRun(len(to), func(lo, hi int) {
+				for j := lo; j < hi; j++ {
+					to[j] = tau*so[j] + (1-tau)*to[j]
+				}
+			})
 			continue
 		}
 		if s.Dtype() == tensor.F32 && d.Dtype() == tensor.F32 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F32()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F32()[d.Offset() : d.Offset()+d.Numel()]
-			for j := range to {
-				to[j] = float32(tau*float64(so[j]) + (1-tau)*float64(to[j]))
-			}
+			softUpdateRun(len(to), func(lo, hi int) {
+				for j := lo; j < hi; j++ {
+					to[j] = float32(tau*float64(so[j]) + (1-tau)*float64(to[j]))
+				}
+			})
 			continue
 		}
 		n := s.Numel()
