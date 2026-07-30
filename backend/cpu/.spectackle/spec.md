@@ -32,3 +32,8 @@ Rationale: The GEMM pack gate reads both m and k*n. Its work term was calibrated
 IF a coverage guard checks a subset of the conditions the code under test actually branches on, THEN the implementing agent SHALL make the guard call the same predicate the code calls, since a partial guard reports coverage the test does not have.
 
 Rationale: The portable GEMM golden guarded only the row gate while the kernel gated on rows AND a work threshold. Its geometries had k*n=72 against a 4096 threshold, so it had not reached the packed band since that threshold was introduced, and the guard reported it as covered throughout. Pointing the guard at the kernel predicate rejected the set immediately.
+
+## PERF-DO-NOT-FIT-A-GATE-TO-A-CONFOUNDED-SWEEP-001
+IF a threshold is about to be refined on two axes and the sweep over them is non-monotonic, THEN the implementing agent SHALL pin both axes and vary a suspected third before fitting anything, and leave the gate conservative if the outcome still moves.
+
+Rationale: The GEMM pack grid looked ready to fit until a control run held blocks-per-band at 1 and pack size at 16KB and varied only the leftover rows past the tile: the result ran from +71.02% to -28.09%. A gate fit to the original grid would have been fit to a variable it does not read.

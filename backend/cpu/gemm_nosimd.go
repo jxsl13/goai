@@ -39,10 +39,28 @@ import (
 // the previous fixed constants encoded; expressed in blocks they now follow GOMAXPROCS instead of
 // assuming twelve of them.
 //
-// KNOWN LIMIT, unchanged: blocks and pack cost interact and only the k=n=512 slice was swept. The
-// f32 square case at n=64 gets 1 block yet measured -9.29% packed, because a 16KB pack amortizes on
-// reuse a 1MB pack cannot. This gate still declines it. A rule capturing both axes needs more
-// measurement than one slice supports.
+// DO NOT REFINE THIS FURTHER ON TWO AXES — that was attempted and the measurement refuses it.
+//
+// The open question was whether blocks-per-band and pack size together predict the outcome, since
+// the f32 square case at n=64 gets 1 block yet measured -9.29% packed while a 1MB pack at 1 block
+// is neutral. Sweeping the grid (BenchmarkGemmF32PackGrid) came back non-monotonic: at k*n=16384,
+// one block measured -20.85% while two measured -2.64%.
+//
+// The reason is a third variable neither axis carries. BenchmarkGemmF32PackSameBlocks holds the
+// block count at exactly 1 and the pack size at 16KB and varies ONLY the rows left over past the
+// tile:
+//
+//	1 block + 0 remainder rows  +30.37%
+//	1 block + 1 remainder row   +71.02%
+//	1 block + 2 remainder rows  -28.09%
+//	1 block + 3 remainder rows  -27.53%
+//
+// A hundred-point swing with both modelled axes pinned. Those remainder rows run the single-row
+// loop, which reads B directly and gets nothing from the pack, but that alone does not explain the
+// sign flip at two — the mechanism is not established. What IS established is that a gate fit to
+// (blocks, pack size) would be fit to noise. The current gate is deliberately conservative: it
+// declines in the region where the outcome is unpredictable, forgoing the -9.29% at n=64 rather
+// than risking the +71%.
 // Vars, not consts, so the sweeps in gemm_portable_bench_test.go and the parity tests can force
 // either arm without a rebuild.
 var (
@@ -54,11 +72,16 @@ var (
 // parallelWork's own partitioning — including its serial branch, where the single band gets all m
 // rows and the block count is m/4 regardless of how many cores the machine has.
 func gemmPackBands(m, k, n, minBlocks int) bool {
+	return gemmPackBandCount(m, k, n) >= minBlocks
+}
+
+// gemmPackBandCount is the number of 4-row tile blocks a single band receives.
+func gemmPackBandCount(m, k, n int) int {
 	w := runtime.GOMAXPROCS(0)
 	if w <= 1 || m*k*n < parThreshold {
 		w = 1
 	}
-	return ((m+w-1)/w)/4 >= minBlocks
+	return ((m + w - 1) / w) / 4
 }
 
 // gemmPackMinWorkF32 / gemmPackMinWorkF64 are the B element counts above which packing pays.
