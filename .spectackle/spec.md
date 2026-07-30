@@ -585,3 +585,8 @@ Rationale: Sweeping the twelve-architecture quant matrix reported every path at 
 WHEN a parallel region is opened inside a loop that runs many times (an elimination step, a training step, a layer), the implementing agent SHALL route it through the shared bounded pool rather than spawning a worker set per call, and measure allocations alongside time, because per-call spawning multiplies by the outer loop count.
 
 Rationale: Parallelizing the LU elimination step opens a region once per step - 768 of them at n=768. Spawning a worker set per step took Inverse/768 from 823 allocations to 17463, a 21x regression, while delivering the intended 1.74x wall-clock win. Routing through the shared pool kept the win at 1.73x with 1850 allocations. A wall-clock-only A/B reports this change as a clean success; only the allocation axis shows the cost, and the outer loop count is what makes it large.
+
+## PERF-CLOSURE-ON-SERIAL-BRANCH-001
+WHEN a parallel helper takes a body closure and is called from inside a hot loop, the implementing agent SHALL write the serial branch out inline at the call site instead of passing the closure to the helper, because a closure capturing loop state allocates once per call and most calls take the serial branch.
+
+Rationale: The LU elimination helper was called once per step and most steps fall below the parallel threshold. Passing the closure regardless cost one heap allocation per step - 64 extra allocations at n=64, an entire factorization worth of garbage for no benefit. Writing the serial loop out at the call site returned small sizes and single-core runs to identical allocation counts. The same shape appeared in the SoftmaxRegression interchange, where the serial branch also had to be kept separate.
