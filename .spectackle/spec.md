@@ -670,3 +670,8 @@ Rationale: Restoring the base beam.go while deleting a new helper left a test fi
 WHEN a change optimizes a benchmark that another comparison uses as its control, the implementing agent SHALL say so in the record and require the dependent comparison to re-establish its null floor rather than reusing the recorded one.
 
 Rationale: The Frobenius-norm benchmark exists as the control for pseudoinverse A/Bs, chosen because it touches the same tensors without entering the accumulation loop. Devirtualizing its accessor made it 3.1x faster, so every recorded Pinv comparison that leaned on that control now rests on a stale baseline. A control is only a control while it is untouched.
+
+## PERF-SUPPRESSION-DRIFTS-001
+WHEN a scan-suppression comment is added or code is inserted near one, the implementing agent SHALL re-run the scanner and confirm the finding is actually gone, since a directive reaches only its own comment block and the following line.
+
+Rationale: Three suppressions written in one session were separated from their targets by a later edit that inserted a selection block between comment and sort. All three read as deliberate and reasoned; none suppressed anything, and the findings they named went on reporting unnoticed. The analyzer now reports unused directives as PS0001, but the habit is what prevents writing them.
