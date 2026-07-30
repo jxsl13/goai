@@ -262,6 +262,21 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 		// eight of its bytes, repeated d_k times. Four adjacent output channels per pass
 		// read v[j, off+d .. off+d+3], four doubles from the SAME line, so the line that
 		// was fetched anyway serves four accumulators. Each o still sums over ascending j.
+		//
+		// Composing this with the contiguous-v-row axpy from the other merge side was
+		// MEASURED and LOST, so that form was not merged in. All three candidates are
+		// bit-identical, so the choice is purely about traffic (nn, -count=4, 3
+		// interleaved rounds, M2 Pro):
+		//
+		//                         act+regblock   act+axpy        all-j+axpy
+		//   DSAAttention_seq1024      48.89ms   53.14ms +8.7%   79.01ms +61.6%
+		//   MoBAAttention             46.07ms   57.20ms +24.2%  68.40ms +48.5%
+		//
+		// Iterating only the selected keys is the dominant win; the axpy is a
+		// REGRESSION on top of it. The register accumulators are what keep the OUTPUT
+		// row out of memory — an axpy into orow reloads and restores all d_k elements
+		// once per active key, and under a sparse mask that costs more than the v-row
+		// locality it buys.
 		orow := os[i*dm+off : i*dm+off+dk : i*dm+off+dk]
 		if sum <= 0 {
 			clear(orow)

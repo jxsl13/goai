@@ -192,6 +192,21 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 				// touching one cache line per key to consume eight of its bytes and
 				// repeating that d_k times; four adjacent channels read v[j, off+d..d+3]
 				// from the SAME line (PS6011). Each accumulator still sums over ascending j.
+				//
+				// Composing this with the contiguous-v-row axpy from the other merge side was
+				// MEASURED and LOST, so that form was not merged in. All three candidates are
+				// bit-identical, so the choice is purely about traffic (nn, -count=4, 3
+				// interleaved rounds, M2 Pro):
+				//
+				//                         act+regblock   act+axpy        all-j+axpy
+				//   DSAAttention_seq1024      48.89ms   53.14ms +8.7%   79.01ms +61.6%
+				//   MoBAAttention             46.07ms   57.20ms +24.2%  68.40ms +48.5%
+				//
+				// Iterating only the selected keys is the dominant win; the axpy is a
+				// REGRESSION on top of it. The register accumulators are what keep the OUTPUT
+				// row out of memory — an axpy into orow reloads and restores all d_k elements
+				// once per active key, and under a sparse mask that costs more than the v-row
+				// locality it buys.
 				d := 0
 				for ; d+4 <= dk; d += 4 {
 					var o0, o1, o2, o3 float64
