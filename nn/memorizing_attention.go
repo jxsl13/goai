@@ -514,7 +514,7 @@ func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headD
 	t := qh.Shape()[0]
 	kg = tensor.New(dtype, tensor.Shape{t, topM, headDim})
 	vg = tensor.New(dtype, tensor.Shape{t, topM, headDim})
-	qrow := make([]float64, headDim)
+	nKeys := len(m.keys)
 	// The query row was read one cell at a time via qh.AtF64 and each neighbour
 	// element written via kg/vg.SetF64 — interface dispatch over O(t·topM·headDim).
 	// m.keys/m.vals are already []float64, so when the query and output tensors are
@@ -529,61 +529,74 @@ func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headD
 	case tensor.F64:
 		kgs := kg.Storage().F64()
 		vgs := vg.Storage().F64()
-		for ti := range t {
-			if qTyped {
-				copy(qrow, qs[ti*headDim:ti*headDim+headDim])
-			} else {
-				for d := range headDim {
-					qrow[d] = qh.AtF64(ti, d)
+		// Each query token's neighbour search is independent (writes only its own output block,
+		// reads the shared read-only m.keys/m.vals; retrieveHead allocates its own heap), so the
+		// token loop fans out over GOMAXPROCS bit-identically. Per-worker qrow scratch.
+		parallelRows(t, nKeys*headDim, func(lo, hi int) {
+			qrow := make([]float64, headDim)
+			for ti := lo; ti < hi; ti++ {
+				if qTyped {
+					copy(qrow, qs[ti*headDim:ti*headDim+headDim])
+				} else {
+					for d := range headDim {
+						qrow[d] = qh.AtF64(ti, d)
+					}
+				}
+				idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
+				obase := ti * topM * headDim
+				for r, id := range idx {
+					kr, vr := m.keys[id], m.vals[id]
+					rb := obase + r*headDim
+					for d := range headDim {
+						kgs[rb+d] = kr[headOff+d]
+						vgs[rb+d] = vr[headOff+d]
+					}
 				}
 			}
-			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-			obase := ti * topM * headDim
-			for r, id := range idx {
-				kr, vr := m.keys[id], m.vals[id]
-				rb := obase + r*headDim
-				for d := range headDim {
-					kgs[rb+d] = kr[headOff+d]
-					vgs[rb+d] = vr[headOff+d]
-				}
-			}
-		}
+		})
 		return kg, vg
 	case tensor.F32:
 		kgs := kg.Storage().F32()
 		vgs := vg.Storage().F32()
-		for ti := range t {
-			if qTyped {
-				copy(qrow, qs[ti*headDim:ti*headDim+headDim])
-			} else {
-				for d := range headDim {
-					qrow[d] = qh.AtF64(ti, d)
+		parallelRows(t, nKeys*headDim, func(lo, hi int) {
+			qrow := make([]float64, headDim)
+			for ti := lo; ti < hi; ti++ {
+				if qTyped {
+					copy(qrow, qs[ti*headDim:ti*headDim+headDim])
+				} else {
+					for d := range headDim {
+						qrow[d] = qh.AtF64(ti, d)
+					}
+				}
+				idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
+				obase := ti * topM * headDim
+				for r, id := range idx {
+					kr, vr := m.keys[id], m.vals[id]
+					rb := obase + r*headDim
+					for d := range headDim {
+						kgs[rb+d] = float32(kr[headOff+d])
+						vgs[rb+d] = float32(vr[headOff+d])
+					}
 				}
 			}
-			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-			obase := ti * topM * headDim
-			for r, id := range idx {
-				kr, vr := m.keys[id], m.vals[id]
-				rb := obase + r*headDim
-				for d := range headDim {
-					kgs[rb+d] = float32(kr[headOff+d])
-					vgs[rb+d] = float32(vr[headOff+d])
-				}
-			}
-		}
+		})
 		return kg, vg
 	}
-	for ti := range t {
-		for d := range headDim {
-			qrow[d] = qh.AtF64(ti, d)
-		}
-		idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-		for r, id := range idx {
+	// Same per-token independence for the AtF64 fallback.
+	parallelRows(t, nKeys*headDim, func(lo, hi int) {
+		qrow := make([]float64, headDim)
+		for ti := lo; ti < hi; ti++ {
 			for d := range headDim {
-				kg.SetF64(m.keys[id][headOff+d], ti, r, d)
-				vg.SetF64(m.vals[id][headOff+d], ti, r, d)
+				qrow[d] = qh.AtF64(ti, d)
+			}
+			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
+			for r, id := range idx {
+				for d := range headDim {
+					kg.SetF64(m.keys[id][headOff+d], ti, r, d)
+					vg.SetF64(m.vals[id][headOff+d], ti, r, d)
+				}
 			}
 		}
-	}
+	})
 	return kg, vg
 }
