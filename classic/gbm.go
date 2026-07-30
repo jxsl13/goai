@@ -239,6 +239,26 @@ type gbmBuilder struct {
 	inSet    []bool    // membership of a round's subsample (len n)
 	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
 
+	// xT is x transposed into ONE flat feature-major buffer: xT[f*n+row] == x[row][f].
+	//
+	// bestSplit gathers a whole feature column for the samples of a node, through the node's
+	// sorted index permutation. Against the row-major x that reads x[row][f] for scattered rows,
+	// and since a row is d*8 bytes wide, every one of those touches its own cache line — a
+	// profile put that single gather at 330ms of bestSplit's 400ms. Feature-major, a column is
+	// n*8 contiguous bytes, so scattered rows within it share lines.
+	//
+	// Built once per builder. IT COSTS ONE EXTRA COPY OF THE MATRIX, and that is the real
+	// tradeoff here rather than a footnote: measured B/op rises 26.7% at 80k x 20 (47.9MB to
+	// 60.7MB, i.e. exactly the n*d*8 bytes of the copy) and 25.1% on BenchmarkGBMFit. It buys
+	// -7.74% at 80k (p=0.002), -6.55% on GBMFit (p=0.002) and -2.00% at 20k (p=0.007) — the win
+	// grows with n, which is the cache argument showing up in the numbers.
+	//
+	// Judged proportionate because the builder ALREADY carries two n*d index arrays, master and
+	// cols, each the same size as this one; a third n*d array of the values themselves is in
+	// keeping with the structure rather than a new order of cost. A caller for whom peak memory
+	// binds harder than fit time should know the ratio: about one input matrix for about 7%.
+	xT []float64
+
 	// Per-CHUNK scratch, one slot each, allocated once with the builder. Allocating these
 	// inside the parallel body instead is per NODE, which took an 80k fit from 64MB/883
 	// allocs to 2007MB/8965 — a 31x memory regression hiding behind the speedup.
@@ -250,6 +270,13 @@ type gbmBuilder struct {
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
 func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b := &gbmBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf}
+	b.xT = make([]float64, n*d)
+	for i := range n {
+		row := x[i]
+		for f := range d {
+			b.xT[f*n+i] = row[f]
+		}
+	}
 	b.master = make([][]int, d)
 	mbase := make([]int, n*d)
 	// Hoist the scattered x[id][ff] load out of the O(n log n) comparator: fill a
@@ -380,8 +407,9 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 			// gathers into b.x), then the split scan reads them sequentially. The old inline
 			// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
 			// endpoint at k, then the left at k+1) — halved to one gather per value here.
+			col := b.xT[f*b.n : (f+1)*b.n : (f+1)*b.n]
 			for k := 0; k < n; k++ {
-				vals[k] = b.x[cf[start+k]][f]
+				vals[k] = col[cf[start+k]]
 			}
 			var leftSum float64
 			for k := 0; k < n-1; k++ {
