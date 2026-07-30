@@ -202,8 +202,18 @@ func (l *KANLayer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	}
 
 	// Spline term: basis[b,i,c] (constant) · coef[i,j,c] → spl[b,i,j], then scale by w_scale[i,j]
-	// and sum over inputs i → [batch, out].
+	// and sum over inputs i → [batch, out]. Training forms it as two einsums (spl is a taped
+	// [batch,in,out] intermediate so the gradient reaches Coef and WScale). For inference
+	// (ctx.Recorder == nil) that materializes a [batch,in,out] tensor and drives the generic
+	// einsum engine over batch·in·out·(G+k) combos for what fuses into ySpline[b,j] =
+	// Σ_i WScale[i,j]·Σ_c basis[b,i,c]·Coef[i,j,c] — a direct typed contraction, bit-identical
+	// (same i-outer, c-inner order) with no [batch,in,out] intermediate and no per-combo dispatch.
 	basis := l.buildBasis(x) // [batch, in, G+k]
+	if ctx.Recorder == nil {
+		if ySpline := l.fusedSpline(basis); ySpline != nil {
+			return ex(backend.OpAdd, nil, yBase, ySpline)
+		}
+	}
 	spl, err := ex(backend.OpEinsum, backend.EinsumAttrs{Spec: "bic,ijc->bij"}, basis, l.Coef)
 	if err != nil {
 		return nil, err
@@ -213,6 +223,45 @@ func (l *KANLayer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		return nil, err
 	}
 	return ex(backend.OpAdd, nil, yBase, ySpline)
+}
+
+// fusedSpline computes the spline term ySpline[b,j] = Σ_i WScale[i,j]·Σ_c basis[b,i,c]·
+// Coef[i,j,c] directly for the inference path (ctx.Recorder == nil). It is bit-identical
+// to the two-einsum path (bic,ijc->bij then bij,ij->bj): the inner Σ_c reproduces the
+// first einsum's spl[b,i,j] and the accumulation over i (increasing) reproduces the
+// second — same operand order, no reduction reorder, no FMA — while avoiding the taped
+// [batch,in,out] spl materialization and the generic einsum engine's per-combo index
+// decode. Returns nil (caller uses the einsums) unless basis, Coef and WScale are all
+// F64-contiguous.
+func (l *KANLayer) fusedSpline(basis *tensor.Tensor) *tensor.Tensor {
+	bs, cs, ws := flatF64(basis), flatF64(l.Coef), flatF64(l.WScale)
+	if bs == nil || cs == nil || ws == nil {
+		return nil
+	}
+	B := basis.Shape()[0]
+	in, out := l.inDim, l.outDim
+	nbasis := l.gridSize + l.splineOrder
+	y := tensor.New(l.dtype, tensor.Shape{B, out})
+	ys := flatF64(y)
+	for b := range B {
+		obase := b * out
+		for i := range in {
+			bo := (b*in + i) * nbasis
+			brow := bs[bo : bo+nbasis : bo+nbasis]
+			wbase := i * out
+			cbase := i * out * nbasis
+			for j := range out {
+				co := cbase + j*nbasis
+				crow := cs[co : co+nbasis : co+nbasis]
+				var acc float64
+				for c := range nbasis {
+					acc += brow[c] * crow[c]
+				}
+				ys[obase+j] += ws[wbase+j] * acc
+			}
+		}
+	}
+	return y
 }
 
 // buildBasis evaluates the G+k B-spline basis functions at every input coordinate x[b,i], returning
