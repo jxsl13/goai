@@ -675,3 +675,8 @@ Rationale: The Frobenius-norm benchmark exists as the control for pseudoinverse 
 WHEN a scan-suppression comment is added or code is inserted near one, the implementing agent SHALL re-run the scanner and confirm the finding is actually gone, since a directive reaches only its own comment block and the following line.
 
 Rationale: Three suppressions written in one session were separated from their targets by a later edit that inserted a selection block between comment and sort. All three read as deliberate and reasoned; none suppressed anything, and the findings they named went on reporting unnoticed. The analyzer now reports unused directives as PS0001, but the habit is what prevents writing them.
+
+## BENCH-SERIAL-FRACTION-AT-TARGET-001
+WHEN a parallelization is sized from a single-core profile, the estimating agent SHALL measure the candidate's share at the target core count instead, because shares shift when other parts of the workload already parallelize.
+
+Rationale: A single-core profile put Swin window attention at 24.1 percent of the forward, 15.1 ms against a 17.2 ms twelve-core forward, implying it was nearly the entire twelve-core wall clock and predicting up to 3.3x. Measured gain was 1.11x. The large projections parallelize through the backend and shrink at twelve cores while this stayed serial, so the one-core shares did not describe the twelve-core mix.
