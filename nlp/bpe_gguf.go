@@ -41,9 +41,16 @@ func bytesToUnicode() (b2u [256]rune, u2b map[rune]byte) {
 // the list) is merged, until none remains. Because all 256 byte code points are base
 // tokens, decode∘encode is byte-exact for any input (§V15).
 type BPETokenizer struct {
-	vocab     map[string]int    // byte-mapped symbol → id
-	decoder   map[int]string    // id → byte-mapped symbol
-	mergeRank map[[2]string]int // {left, right} → merge priority (list index). A struct key, not
+	vocab   map[string]int // byte-mapped symbol → id
+	decoder map[int]string // id → byte-mapped symbol
+	// pairRankByte[b1<<8|b2] = the merge rank of the byte-mapped pair, or math.MaxInt32 when that
+	// pair is not a merge. The SEED pass of every piece looks up one adjacent pair per input byte,
+	// and a direct array index skips the struct-key map hash it otherwise pays — the same trick the
+	// tiktoken path already uses (see pairRank in bpe.go, where the string hash dominated the
+	// profile), which this GGUF path never got. Only the seed pass can use it: after the first merge
+	// a part spans several runes and needs the general lookup. len 65536 or nil (map fallback).
+	pairRankByte []int32
+	mergeRank    map[[2]string]int // {left, right} → merge priority (list index). A struct key, not
 	//                            "left right", so the O(L²) merge scan looks up a pair with ZERO
 	//                            string allocation (no per-pair concat, no string() — T625 class).
 	b2u      [256]rune
@@ -89,6 +96,23 @@ func NewBPE(vocab []string, merges []string, opts ...BPEOption) (*BPETokenizer, 
 	for _, o := range opts {
 		o(t)
 	}
+	// Dense seed table. Built by probing the 65536 byte pairs once at construction, which is cheap
+	// and keeps the mapping to mergeRank obvious; the alternative (walking merges and decoding each
+	// side back to a byte) would have to reject every multi-byte merge anyway.
+	pr := make([]int32, 1<<16)
+	for b1 := 0; b1 < 256; b1++ {
+		l := string(t.b2u[b1])
+		for b2 := 0; b2 < 256; b2++ {
+			rk, ok := t.mergeRank[[2]string{l, string(t.b2u[b2])}]
+			switch {
+			case !ok || rk > math.MaxInt32:
+				pr[b1<<8|b2] = math.MaxInt32
+			default:
+				pr[b1<<8|b2] = int32(rk)
+			}
+		}
+	}
+	t.pairRankByte = pr
 	t.buildDecodeSlices()
 	return t, nil
 }
@@ -149,7 +173,7 @@ func (t *BPETokenizer) pairRankAt(mapped string, parts []ggufPart, k int) int {
 // and the final token boundaries are bit-identical to the old scan (§V15/§V16), so token ids
 // are unchanged for every input. mapped is NOT retained: only map-key lookups on mapped[a:b]
 // substrings, which never retain the key — so the caller may safely reuse its mapped builder.
-func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]int, []ggufPart) {
+func (t *BPETokenizer) bpeInto(mapped, raw string, out []int, parts []ggufPart) ([]int, []ggufPart) {
 	// parts[k].start = byte offset of part k; the trailing sentinel {len(mapped)}
 	// makes part k span mapped[parts[k].start : parts[k+1].start]. Initial parts are
 	// per-RUNE — range mapped yields each rune's leading byte offset. parts[:0] reuses the
@@ -164,10 +188,28 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 	// (first wins on ties) with minRank = MaxInt reproduces the old ascending scan
 	// exactly: an unmergeable pair (rank MaxInt) is never selected.
 	minRank, minI := math.MaxInt, -1
-	for k := 0; k < len(parts)-1; k++ {
-		parts[k].rank = t.pairRankAt(mapped, parts, k)
-		if parts[k].rank < minRank {
-			minRank, minI = parts[k].rank, k
+	// Initial parts are one per RUNE of mapped, and mapped rune k is exactly b2u[raw[k]] — one rune
+	// per input byte — so the seed pair (part k, part k+1) is the byte pair (raw[k], raw[k+1]) and
+	// the dense table answers it without hashing a [2]string. The last k has no right neighbour
+	// (parts carries a trailing sentinel), which pairRankAt reports as MaxInt; the loop bound below
+	// stops one earlier and that slot keeps its MaxInt from the append above.
+	if pr := t.pairRankByte; pr != nil && len(parts) == len(raw)+1 {
+		for k := 0; k+2 < len(parts); k++ {
+			rk := int(pr[int(raw[k])<<8|int(raw[k+1])])
+			if rk == math.MaxInt32 {
+				rk = math.MaxInt
+			}
+			parts[k].rank = rk
+			if rk < minRank {
+				minRank, minI = rk, k
+			}
+		}
+	} else {
+		for k := 0; k < len(parts)-1; k++ {
+			parts[k].rank = t.pairRankAt(mapped, parts, k)
+			if parts[k].rank < minRank {
+				minRank, minI = parts[k].rank, k
+			}
 		}
 	}
 	for minRank != math.MaxInt {
@@ -228,7 +270,7 @@ func (t *BPETokenizer) Encode(text string) []int {
 		}
 		// unsafe.String aliases the reused buffer (no copy); safe because bpeInto never
 		// retains the string past the call, so the next piece may overwrite mapped (§T954).
-		ids, parts = t.bpeInto(unsafe.String(unsafe.SliceData(mapped), len(mapped)), ids, parts)
+		ids, parts = t.bpeInto(unsafe.String(unsafe.SliceData(mapped), len(mapped)), piece, ids, parts)
 	}
 	return ids
 }
