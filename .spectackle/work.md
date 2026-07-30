@@ -1441,3 +1441,26 @@ ATTNRECONSTRUCTED IS THE ONE PS6018 CANDIDATE I LEFT UNFUSED AND CANNOT VALIDATE
 The selector is per-BLOCK rather than per-config: b.WkvB != nil chooses reconstructed, nil chooses absorbed. So covering it needs a GGUF fixture whose blocks carry a kv_b weight, not a benchmark flag - which is why the arch matrix misses it. Under the standing constraint that only what is verifiable here may ship, the fusion is blocked on building that fixture, and the fixture is the larger half of the work.
 
 WORTH STATING PLAINLY: the two reconstructed and absorbed paths mean this file has two per-head loops with the same movement-only fusion opportunity, and only one of them is exercised by any benchmark. That asymmetry is exactly what PERF-GATE-IMPLIES-BLIND-SPOT-001 predicts - the path excluded from the optimization was also the path excluded from measurement.
+
+## R-01KYR93X7EFGBT100ET1AX4NK4 attnReconstructed fused after building its fixture: -16.6% allocs, and a per-FILE branch is the hardest kind of coverage gap to notice
+kind: research
+state: draft
+created: 2026-07-30
+
+CONSUMES the second item scoped out in R-01KYR8GNARE0B. Measured on darwin/arm64 M2 Pro, go1.26.5, three interleaved rounds at benchtime=100x.
+
+MEASURED:
+  ReconstructedDecode   5767 -> 4807 allocs  -16.6%   301-307us -> 272-284us  1.11x
+  ReconstructedPrefill  1203 -> 1011 allocs  -16.0%   time parity
+  QuantArchDecode/DeepSeekV2 (absorbed) unchanged at 4686 allocs
+Allocation counts identical every round. The unchanged absorbed figure is the isolation check: it proves the edit landed only on the branch intended.
+
+THE COVERAGE GAP WAS PER-FILE, WHICH IS THE HARD CASE. Which of QuantDeepSeekV2's two per-head loops runs is decided by the loaded GGUF: split-form keys (attn_k_b/attn_v_b) give the absorbed operator, the legacy unsplit key (attn_kv_b) gives the fused reconstruction and takes attnReconstructed. Not a config flag, not a size threshold, not a dtype - a property of the input FILE. So no amount of parameterizing the existing benchmark would have reached it, and the twelve-architecture matrix builds the split form throughout. The path was covered by tests and by zero benchmarks.
+
+That is worth separating from the earlier coverage failures. A size below a threshold (SVC n=1000) or a float-versus-quant model (Cohere) are visible in the benchmark's own arguments. A branch on file CONTENT is only visible by reading the loader, and the symptom - a rule reporting one stubborn candidate - looks like a deliberate exception rather than a blind spot. PS6018 flagging it every run is what kept it from being forgotten.
+
+BUILDING THE FIXTURE WAS THE WORK; the fusion was mechanical and identical to the absorbed one. The existing legacyQuantDeepSeekV2GGUFBytes already produced the unsplit form for a test, so widening it to testing.TB and writing two benchmarks over it was cheap - but only because someone had written that helper. The benchmarks assert WkvB is non-nil, so they fail loudly rather than silently degrading into measuring the absorbed path, which is the failure mode PROC-BENCH-COVERAGE-NULL-001 describes.
+
+ONE ALIASING HAZARD CHECKED RATHER THAN ASSUMED. The value buffer is reused across heads and handed to appendKV, which stores into the KV cache. rowBuf.Append copies its row argument via copyRows and returns a view of its OWN backing, so no head's value block can alias another's. Had it retained the argument the cache would have been corrupted silently, with every head seeing the last head's values - and the parity test would likely have caught it, but only after the fact. Reading the callee is cheaper than debugging that.
+
+PS6018 now reports ZERO in quant_deepseekv2.go, having tracked the file from two findings to one to none across three iterations.
