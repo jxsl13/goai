@@ -1,6 +1,25 @@
 package tensor
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
+
+// intsText renders a []int as "[a b c]" WITHOUT leaking it. Handing the slice to fmt as an
+// interface argument would make escape analysis mark the enclosing function's parameter leaking,
+// which forces every caller to heap-allocate its argument even on paths that never format
+// (PS3013). This reads only the ints, so nothing derived from the slice is retained.
+func intsText(xs []int) string {
+	b := make([]byte, 0, 2+4*len(xs))
+	b = append(b, '[')
+	for i, x := range xs {
+		if i > 0 {
+			b = append(b, ' ')
+		}
+		b = strconv.AppendInt(b, int64(x), 10)
+	}
+	return string(append(b, ']'))
+}
 
 // Reshape returns a zero-copy view with newShape. It requires this tensor to be
 // contiguous with offset 0 (so element order is well-defined) and the element
@@ -8,11 +27,11 @@ import "fmt"
 // reshape a non-contiguous view.
 func (t *Tensor) Reshape(newShape Shape) (*Tensor, error) {
 	if !newShape.IsValid() {
-		return nil, fmt.Errorf("tensor: invalid reshape target %v", newShape)
+		return nil, fmt.Errorf("tensor: invalid reshape target %s", newShape.String())
 	}
 	if newShape.Numel() != t.Numel() {
-		return nil, fmt.Errorf("tensor: reshape %v→%v changes element count %d→%d",
-			t.shape, newShape, t.Numel(), newShape.Numel())
+		return nil, fmt.Errorf("tensor: reshape %s→%s changes element count %d→%d",
+			t.shape.String(), newShape.String(), t.Numel(), newShape.Numel())
 	}
 	if !t.IsContiguous() || t.offset != 0 {
 		return nil, fmt.Errorf("tensor: reshape requires contiguous offset-0 view (call Contiguous)")
@@ -76,7 +95,7 @@ func (t *Tensor) Permute(perm ...int) (*Tensor, error) {
 		var seen uint64
 		for _, p := range perm {
 			if p < 0 || p >= n || seen&(1<<uint(p)) != 0 {
-				return nil, fmt.Errorf("tensor: permute %v is not a permutation of 0..%d", perm, n-1)
+				return nil, fmt.Errorf("tensor: permute %s is not a permutation of 0..%d", intsText(perm), n-1)
 			}
 			seen |= 1 << uint(p)
 		}
@@ -84,7 +103,7 @@ func (t *Tensor) Permute(perm ...int) (*Tensor, error) {
 		seen := make([]bool, n)
 		for _, p := range perm {
 			if p < 0 || p >= n || seen[p] {
-				return nil, fmt.Errorf("tensor: permute %v is not a permutation of 0..%d", perm, n-1)
+				return nil, fmt.Errorf("tensor: permute %s is not a permutation of 0..%d", intsText(perm), n-1)
 			}
 			seen[p] = true
 		}
