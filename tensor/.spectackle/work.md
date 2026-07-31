@@ -50,3 +50,19 @@ EXPECTED: 1.5-2.5x on rank-3/4 strided Contiguous/Cast. High confidence that the
 BIT-IDENTITY BAR: none — pure reordering of independent element copies and conversions, the same (i,j) -> dst[i*cols+j] mapping, no accumulation involved. gatherBlocked2D's doc comment at tensor.go:130-134 already makes this argument for rank 2 and it carries over unchanged. Verify with TestContiguousPermuted3DMatchesGeneric asserting exact []float32 equality against gatherCast.
 
 PERFSCAN RULE REQUIRED: a fast path gated on an exact rank or dimension literal where the underlying condition is rank-agnostic. AST shape: an assignment whose RHS is a BinaryExpr{&&} containing X == <int literal> where X is len(<field>) or a variable assigned from it, and where the guarded branch calls a helper ALSO reachable from a default/else branch handling the same dtypes. Report as "dimensionality-gated fast path — check whether the general case is reachable". Related sub-check worth adding at the same time: flag stale NOTE(... rejected) comments whose claim contradicts a currently-live code path.
+
+## T-01KYX4MP2WFFYB5T9T2V1DJK6V T1031 view Tensor co-allocated with its strides; lifetime rule now measured both ways
+kind: task
+state: draft
+created: 2026-07-31
+targets: tensor/view.go
+
+MEASURED AND SHIPPED (commit e7d8c4e8).
+
+SITE. tensor Slice and Transpose each cost two allocations - one for the shape/stride array, one for the Tensor - whose lifetimes are IDENTICAL, since nothing but the view ever points at that array. The block trick NewOn already uses applies directly. SliceView 64.81ns to 47.74ns, -26.34% (p=0.003); TransposeView 62.53ns to 48.26ns, -22.84% (p=0.010); allocations 2 to 1 on both; NewSmall flat as the untouched control (p=0.977). Bytes unchanged at 112, since 80 plus 32 lands in the same size class.
+
+THIS IS THE POSITIVE HALF OF A PAIR. The previous round REJECTED folding the Storage into tensorBlock: -23% allocations but 6.86% SLOWER, because the Storage is shared with the parent and every sibling view, so one survivor pins the whole block. Same transform, opposite outcome, and the discriminator is exactly lifetime exclusivity. FOLD-ONLY-OBJECTS-WITH-IDENTICAL-LIFETIMES-001 now carries both measurements, which makes it a test rather than an aphorism.
+
+PERMUTE IS DELIBERATELY UNTOUCHED, and reaching that took two measurements and one wrong hypothesis. Routing it through the shared helper regressed it +6.17%. The first explanation - that the helper allocates a zeroed Tensor and then copies into it - was wrong: restoring its composite literal did not fix it (+7.84%, p=0.003). The real cause is that the helper is a function call Permute previously did inline as a make, and Permute's callers are rank 3 and 4, above maxInlineRank, so the block can never apply to it at all. It keeps its original code. Recorded as A-SHARED-HELPER-COSTS-A-CALL-ON-PATHS-IT-CANNOT-HELP-001: extracting a shared allocation helper is not free for the callers it cannot help.
+
+NO SCAN RULE, the fourth withholding of the session. Following SCAN-THE-PRE-FIX-SITE-BEFORE-DESIGNING-A-PREDICATE-001, the full scan was run against the pre-fix constructors first and NOTHING fires there, so the class is genuinely uncovered. But the only predicate expressible without types - a function that makes a slice and returns a struct pointer referencing it - describes nearly every constructor in the tree, and the discriminator that matters (does anything else retain that slice) is precisely what an AST cannot see. That is the same noise category that got candidates withheld at 117 and 141 sites. The learning is a judgment a reader must make, so it belongs in a rule with measurements on both sides, which is where it went.
