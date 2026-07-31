@@ -130,4 +130,4 @@ IF a loop with un-discharged bounds checks is ranked for a fix, THEN the impleme
 IF a new scan check is being designed from a fix just applied, THEN the implementing agent SHALL run ALL checks against the pre-fix site first, since a 40-site predicate duplicated PS1010 and surfaced only on a helper name collision.
 
 ## COUNT-THE-OPERANDS-NOT-THE-CHECKS-001
-IF a loop keeps bounds checks on several slices indexed by the same key, THEN the implementing agent SHALL rank it by the OPERAND count, since each check pins a live length and 8 of them spilled the induction variable itself (-5.27% when cut).
+IF a loop keeps bounds checks on several slices indexed by one key, THEN the implementing agent SHALL rank it by OPERAND count, since each check pins a live length and 8 spilled the induction variable (-5.27% when cut).
