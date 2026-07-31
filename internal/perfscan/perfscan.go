@@ -12105,8 +12105,11 @@ func twoDeepIndexNotRangedFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 						" -gcflags=-d=ssa/check_bce/debug=1 and count the checks INSIDE the loop"+
 						" against the multiply-adds beside them: the same conversion on a 4x4"+
 						" register tile measured null, because sixteen accumulators amortize a"+
-						" predicted branch to nothing"+
-						" (RANK-BCE-CANDIDATES-BY-CHECKS-OVER-FMA-001)",
+						" predicted branch to nothing — and so did autograd's conv1d backward, at"+
+						" the TOP of that ratio ranking, because it streams about 200MB per call"+
+						" and a bandwidth-bound loop hides a removed branch just as thoroughly"+
+						" (RANK-BCE-CANDIDATES-BY-CHECKS-OVER-FMA-001,"+
+						" MEMORY-BOUND-HIDES-CHECK-REMOVAL-TOO-001)",
 						base, k, col, col, base, col),
 				})
 				return true
