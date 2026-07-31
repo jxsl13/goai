@@ -46,6 +46,10 @@ type Mamba2LayerState struct {
 	// of [nn.SSDRecurrent] (row-major h[n·head_dim+j]), which the scan keeps in
 	// f64 across timesteps.
 	H []float64
+	// projRow is scratch for the in_proj output row, reused across decode steps. It belongs to
+	// the STATE rather than the mixer because a mixer is shared by every stream decoding against
+	// the same weights, while a state is per stream and already advances one token at a time.
+	projRow []float64
 	// a caches the per-head scalar decay A[h] = −exp(A_log[h]) so DecodeStep
 	// doesn't re-exponentiate it every token. Pure f64 — exactly the value the
 	// Forward mixer computes per call.

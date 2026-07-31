@@ -368,6 +368,42 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 }
 
 // rows2D copies a 2-D tensor into a [rows][cols] f64 slice for host math.
+// row0Into widens row 0 of a [1,c] tensor into dst, growing dst only when it is too small, and
+// returns the filled row. It is rows2D specialized for the single-token decode path.
+//
+// Decode calls rows2D once per LAYER per token, and at seq=1 each call allocates two objects that
+// live for microseconds: the [][]float64 header slice and the row backing array. That was 37% of
+// all allocation objects in BenchmarkQuantMamba2DecodeQ4_K. Threading a buffer through the
+// per-stream layer state removes both, since a decode stream advances one token at a time and
+// nothing retains the row past the step.
+//
+// Bit-identical to rows2D(t)[0] BY CONSTRUCTION: the arms below are the same widening in the same
+// order, and the F32 case is the one every quantized model takes (activations are f32).
+func row0Into(dst []float64, t *tensor.Tensor) []float64 {
+	c := t.Shape()[1]
+	tc := t.Contiguous()
+	if cap(dst) < c {
+		dst = make([]float64, c)
+	}
+	dst = dst[:c]
+	switch tc.Dtype() {
+	case tensor.F64:
+		copy(dst, tc.Storage().F64()[:c])
+	case tensor.F32:
+		src := tc.Storage().F32()[:c]
+		for j := range c {
+			dst[j] = float64(src[j])
+		}
+	default:
+		// F16/BF16 keep the accessor for the same reason rows2D does: their storage is u16 and
+		// needs a real conversion rather than a widening.
+		for j := range c {
+			dst[j] = tc.AtF64(0, j)
+		}
+	}
+	return dst
+}
+
 func rows2D(t *tensor.Tensor) [][]float64 {
 	r, c := t.Shape()[0], t.Shape()[1]
 	tc := t.Contiguous()

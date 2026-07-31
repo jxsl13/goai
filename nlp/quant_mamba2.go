@@ -464,7 +464,10 @@ func (b *QuantMamba2Mixer) step(ctx *backend.Context, ls *Mamba2LayerState, u *t
 	if err != nil {
 		return nil, err
 	}
-	row := rows2D(proj)[0]
+	// Reuses the per-stream scratch instead of allocating a header slice and a row per layer per
+	// token; z/xBC/dt below only READ it, and nothing retains it past this step.
+	ls.projRow = row0Into(ls.projRow, proj)
+	row := ls.projRow
 	z := row[:b.Intermediate]
 	xBC := row[b.Intermediate : b.Intermediate+D]
 	dt := row[b.Intermediate+D:]
