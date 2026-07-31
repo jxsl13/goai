@@ -156,8 +156,31 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	//
 	// Gated on n·n·cols, so a single heavy column or a single right-hand side (Solve of a
 	// vector) stays serial rather than paying a fan-out to hand one worker all the work.
-	solveCols(cols, n*n, n, func(clo, chi int, y []float64) {
-		for c := clo; c < chi; c++ {
+	// JAM FOUR RIGHT-HAND-SIDE COLUMNS, the transform Lstsq already carries (see colJam in qr.go).
+	// Both substitution loops are a serial FMA recurrence on one accumulator — s depends on the
+	// previous s — so they run at FMA LATENCY, not throughput, and the whole packed LU array is
+	// re-streamed once per column. Four columns share each lij load and run four independent
+	// chains, which cuts both the recurrence and the read traffic without touching any column's
+	// own summation. The scatter also becomes four adjacent out[] slots per row instead of one,
+	// so the write side stops touching a fresh cache line per eight bytes.
+	//
+	// BIT-IDENTICAL, and this is the distinction that makes it legal where splitting the inner
+	// dot into partials is not: the jammed dimension is the FREE one. Column c still accumulates
+	// over the same j (and t) in the same ascending order, with the same operands, into its own
+	// accumulator. Nothing is reassociated. TestSolveBitStableGoldens pins this at tolerance zero
+	// with a Float64bits digest, and lu_solve_reuse_test sweeps cols in {1,2,3,7}, covering every
+	// remainder class and the cols<4 path.
+	//
+	// It costs memory: the per-worker scratch grows from n to colJam*n doubles — but only when
+	// there are columns to jam. Sizing it to min(colJam, cols) keeps a single right-hand side
+	// (Solve of a vector, cols==1) on exactly the scratch it had before, which matters because
+	// that path takes the remainder loop and can never use the wider buffer.
+	jam := colJam
+	if cols < jam {
+		jam = cols
+	}
+	solveCols(cols, n*n, jam*n, func(clo, chi int, buf []float64) {
+		one := func(c int, y []float64) {
 			for i := range n { // forward: L·y = P·b, L unit-lower
 				s := bat(f.piv[i], c)
 				// RANGE the row rather than index it. f.lu[i][j] re-loads the row pointer and
@@ -204,6 +227,51 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 			for i := range n {
 				out[i*cols+c] = y[i]
 			}
+		}
+		c := clo
+		for ; c+colJam <= chi; c += colJam {
+			y0, y1 := buf[0:n], buf[n:2*n]
+			y2, y3 := buf[2*n:3*n], buf[3*n:4*n]
+			for i := range n { // forward: L·y = P·b, four columns sharing each lij
+				pi := f.piv[i]
+				s0, s1 := bat(pi, c), bat(pi, c+1)
+				s2, s3 := bat(pi, c+2), bat(pi, c+3)
+				lr := f.lu[i][:i]
+				a0, a1 := y0[:i], y1[:i]
+				a2, a3 := y2[:i], y3[:i]
+				for j, lij := range lr {
+					s0 -= lij * a0[j]
+					s1 -= lij * a1[j]
+					s2 -= lij * a2[j]
+					s3 -= lij * a3[j]
+				}
+				y0[i], y1[i], y2[i], y3[i] = s0, s1, s2, s3
+			}
+			for i := n - 1; i >= 0; i-- { // back: U·x = y
+				s0, s1, s2, s3 := y0[i], y1[i], y2[i], y3[i]
+				li := f.lu[i]
+				lr := li[i+1 : n]
+				b0, b1 := y0[i+1:n], y1[i+1:n]
+				b2, b3 := y2[i+1:n], y3[i+1:n]
+				b0, b1 = b0[:len(lr)], b1[:len(lr)]
+				b2, b3 = b2[:len(lr)], b3[:len(lr)]
+				for t, lij := range lr {
+					s0 -= lij * b0[t]
+					s1 -= lij * b1[t]
+					s2 -= lij * b2[t]
+					s3 -= lij * b3[t]
+				}
+				d := li[i]
+				y0[i], y1[i], y2[i], y3[i] = s0/d, s1/d, s2/d, s3/d
+			}
+			for i := range n {
+				base := i * cols
+				out[base+c], out[base+c+1] = y0[i], y1[i]
+				out[base+c+2], out[base+c+3] = y2[i], y3[i]
+			}
+		}
+		for ; c < chi; c++ {
+			one(c, buf[0:n])
 		}
 	})
 	if vec {

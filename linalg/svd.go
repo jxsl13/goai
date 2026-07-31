@@ -43,11 +43,20 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		for i := range n {
 			for j := i + 1; j < n; j++ {
 				ci, cj := col[i], col[j] // contiguous columns i,j (streamed by every loop below)
+				// Cut cj to ci's length so both reads are proved in range. toColMajor carves every
+				// column as buf[j*m:(j+1)*m:(j+1)*m], so both are exactly m long and this cannot
+				// truncate. Without it each of the three products carried its own bounds check and
+				// the two panic edges split the body into three basic blocks, rotating the loop so
+				// the back edge sat on the second check — four of eleven instructions for three
+				// FMAs. Bit-identical: same operands, same ascending-k order, three separate
+				// accumulators exactly as before.
+				cj = cj[:len(ci)]
 				var alpha, beta, gamma float64
-				for k := range m {
-					alpha += ci[k] * ci[k]
-					beta += cj[k] * cj[k]
-					gamma += ci[k] * cj[k]
+				for k, a := range ci {
+					b := cj[k]
+					alpha += a * a
+					beta += b * b
+					gamma += a * b
 				}
 				if alpha == 0 || beta == 0 {
 					continue // a zero column can't be rotated meaningfully
@@ -69,7 +78,9 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 				}
 				c := 1 / math.Sqrt(1+t*t)
 				sn := c * t
-				for k := range m { // rotate columns i,j of A (in place on their contiguous slices)
+				// Ranging over ci discharges both reads here too; cj is already cut to its length
+				// above. Same operands, same order, so the rotation is bit-identical.
+				for k := range ci { // rotate columns i,j of A (in place on their contiguous slices)
 					ai, aj := ci[k], cj[k]
 					ci[k] = c*ai - sn*aj
 					cj[k] = sn*ai + c*aj
