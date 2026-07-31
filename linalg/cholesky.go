@@ -88,10 +88,16 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 				default:
 					s = b.AtF64(i, c)
 				}
-				for k := range i {
-					s -= l[i][k] * y[k]
+				// RANGE OVER THE ROW, not over the index. l[i][k] re-loads the row pointer and
+				// bounds-checks against it every step; ranging li[:i] hoists the pointer and
+				// lets the compiler drop the check, which is the half that actually pays —
+				// hoisting alone, keeping `for k := range i`, measured a wash here.
+				// Bit-identical: same operands, same ascending-k order.
+				li := l[i]
+				for k, lik := range li[:i] {
+					s -= lik * y[k]
 				}
-				y[i] = s / l[i][i]
+				y[i] = s / li[i]
 			}
 			// Back-substitution accumulates in the CONTIGUOUS scratch, not through out — the same
 			// transform LU.Solve already carries, and for the same reason: reading out[k*cols+c]
