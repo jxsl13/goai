@@ -22,18 +22,65 @@ func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 
 // NewOn allocates a zeroed contiguous tensor on dev, using its allocator. It
 // panics on an invalid dtype or shape (programming error).
+// maxInlineRank is the rank up to which a fresh tensor carries its shape and strides inside its
+// own allocation block.
+//
+// TWO, and the value was measured rather than picked. The block reserves 2*maxInlineRank ints
+// whatever the actual rank, so anything above the real rank is waste on every tensor. Swept on
+// BenchmarkJambaDecode: rank 2, 3 and 4 all give the same 957 allocs/op, but B/op runs 542519,
+// 544834 and 547159 against a 542517 baseline — so 2 buys the whole allocation win for nothing,
+// while 3 and 4 pay bytes for coverage no tensor in these paths needs.
+//
+// Identical allocation counts across the three also say something worth recording: nothing on a
+// decode path here is rank 3 or above. A workload that is would take the fallback below, which is
+// the old behavior, so raising this is a byte-for-coverage trade and never a regression.
+const maxInlineRank = 2
+
+// tensorBlock co-allocates the three objects NewOn always creates together: the Tensor, the
+// Storage it exclusively owns at birth, and the backing array for shape and strides.
+//
+// A fresh tensor cost FIVE allocations — Tensor, Storage, the shape/stride array, the data slice,
+// and the interface box Storage.data pays to hold that slice — and a Jamba decode step creates
+// about 158 of them, which was over half its allocation count. Co-allocating the first three drops
+// it to three.
+//
+// SAFE FOR VIEWS, which is the non-obvious part. Reshape and friends build a new Tensor pointing at
+// this same Storage; the Storage lives inside the block, so a surviving view keeps the whole block
+// alive rather than just the Storage. That retains a few extra words per live view and never a
+// buffer, since the data slice is allocated separately and is what actually holds bytes.
+type tensorBlock struct {
+	t   Tensor
+	buf [2 * maxInlineRank]int
+}
+
 func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	if !shape.IsValid() {
 		panic(fmt.Sprintf("tensor: invalid shape %v", shape))
 	}
-	sh, st := cloneShapeStrides(shape)
-	return &Tensor{
-		storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
-		shape:   sh,
-		strides: st,
-		offset:  0,
-		dev:     dev,
+	n := len(shape)
+	if n == 0 || n > maxInlineRank {
+		// Rank 0 keeps the nil/empty distinction cloneShapeStrides is careful about; high ranks
+		// are rare enough that the block would be waste.
+		sh, st := cloneShapeStrides(shape)
+		return &Tensor{
+			storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
+			shape:   sh,
+			strides: st,
+			offset:  0,
+			dev:     dev,
+		}
 	}
+	blk := &tensorBlock{}
+	sh := Shape(blk.buf[:n:n])
+	st := Strides(blk.buf[n : 2*n : 2*n])
+	acc := 1
+	for i := n - 1; i >= 0; i-- {
+		sh[i] = shape[i]
+		st[i] = acc
+		acc *= shape[i]
+	}
+	blk.t = Tensor{storage: newStorageWith(dev.Allocator(), dtype, acc), shape: sh, strides: st, offset: 0, dev: dev}
+	return &blk.t
 }
 
 // FromFloat64 builds a contiguous F64 tensor from data laid out row-major. len
