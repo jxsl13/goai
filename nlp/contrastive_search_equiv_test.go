@@ -10,8 +10,20 @@ import (
 )
 
 // refCosine and refMaxContextCosine are VERBATIM copies of the original serial implementation
-// (single-pass dot/na/nb per pair, no norm hoist), used to prove the optimized
-// MaxContextCosine (per-candidate parallel + hoisted candidate norm) is BIT-FOR-BIT identical.
+// (single-pass dot/na/nb per pair, no norm hoist, ONE accumulator per term), used to bound the
+// optimized MaxContextCosine against the shape this package started from.
+//
+// This comparison was bit-for-bit until the inner loop's two accumulators were split into four
+// partials each for instruction-level parallelism (geomean -62.32%, ADR-01KYTPF84PEC0). That
+// reassociates the sums, so the results now differ from the reference in the last ulp and the
+// check is a relative tolerance. The pin was a REGRESSION PIN — it existed to prove an earlier
+// parallelization changed nothing — not a guarantee to any external consumer, which is why
+// weakening it was a decision that could be taken at all.
+//
+// The SERIAL-VERSUS-PARALLEL half stays EXACT, and that is the half worth keeping strict: the
+// partition is over candidates, and each candidate's own sums are computed by the same code in the
+// same order regardless of which worker runs it. If those two ever diverge it is a real bug, not
+// rounding, so tolerance there would hide exactly what this test is for.
 func refCosine(a, b []float64) float64 {
 	var dot, na, nb float64
 	for i := range a {
@@ -39,7 +51,12 @@ func refMaxContextCosine(candReps, contextReps [][]float64) []float64 {
 	return out
 }
 
-func TestMaxContextCosineBitExact(t *testing.T) {
+// relTol bounds the last-ulp drift from reassociating the two inner sums into four partials each.
+// dim here is at most 64, where the accumulated difference is on the order of 1e-15; 1e-12 leaves
+// three orders of headroom while still failing any real arithmetic change.
+const relTol = 1e-12
+
+func TestMaxContextCosineMatchesReference(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260730))
 	mk := func(n, dim int, zeroRow bool) [][]float64 {
 		r := make([][]float64, n)
@@ -71,11 +88,18 @@ func TestMaxContextCosineBitExact(t *testing.T) {
 		gotP := nlp.MaxContextCosine(cand, ctx)
 
 		for v := range want {
-			if want[v] != gotS[v] {
-				t.Fatalf("trial %d cand %d: serial %v != reference %v", trial, v, gotS[v], want[v])
+			// Against the single-accumulator reference: rounding only. The partial sums are
+			// reassociated, so the tolerance has to be relative — a cosine near zero must not be
+			// held to an absolute bound a denormal difference would break.
+			if d := math.Abs(want[v] - gotS[v]); d > relTol*math.Max(1, math.Abs(want[v])) {
+				t.Fatalf("trial %d cand %d: serial %v differs from reference %v by %g, above the "+
+					"reassociation tolerance", trial, v, gotS[v], want[v], d)
 			}
-			if want[v] != gotP[v] {
-				t.Fatalf("trial %d cand %d: parallel %v != reference %v", trial, v, gotP[v], want[v])
+			// Against itself across partitions: EXACT. Same operands, same order, same association
+			// per candidate — only which goroutine runs it changes.
+			if gotS[v] != gotP[v] {
+				t.Fatalf("trial %d cand %d: parallel %v != serial %v; the candidate partition must "+
+					"not change any candidate's own arithmetic", trial, v, gotP[v], gotS[v])
 			}
 		}
 	}

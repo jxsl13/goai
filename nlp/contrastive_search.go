@@ -35,6 +35,47 @@ func ContrastiveScore(probs, maxSim []float64, alpha float64) []float64 {
 	return out
 }
 
+// dotAndNorm returns ⟨cand,ctx⟩ and ‖ctx‖² in one pass over four INDEPENDENT partial sums each.
+//
+// The single-accumulator form is bound by floating-point add latency, not throughput: every
+// iteration's add waits on the previous one, leaving most issue slots idle. Four partials per chain
+// break that dependency. Measured in isolation on this shape (M2 Pro, darwin/arm64, go1.26, f64):
+// 822 -> 284 ns at dim=768 and 1121 -> 376 ns at dim=1024, both about 2.9x.
+//
+// NOT BIT-IDENTICAL, deliberately (ADR-01KYTPF84PEC0). Summing in four partials reassociates the
+// sum, so each result can differ from the serial one in the last ulp. That is a value change, and
+// it is allowed here because the property it breaks was a REGRESSION PIN — a test proving an
+// earlier parallelization changed nothing — rather than a guarantee to an external consumer. The
+// contrast is nlp turboquant, whose matrix TurboQuant regenerates at dequantization time, where a
+// changed draw would break already-quantized models and the split therefore stays forbidden.
+// TestMaxContextCosineMatchesReference now compares against the serial reference within a relative
+// tolerance rather than bit-for-bit.
+//
+// Keeping BOTH terms in one loop is load-bearing, and the reason is counterintuitive enough to
+// record: ‖ctx‖² is invariant across candidates and hoisting it into a prepass looks free, but it
+// measured +98.51% at 8 candidates because the term costs about 1% here — it runs in the latency
+// shadow of the dot chain — while the prepass it needs is serial (T988).
+func dotAndNorm(cand, ctx []float64) (float64, float64) {
+	var d0, d1, d2, d3, n0, n1, n2, n3 float64
+	i := 0
+	for ; i+4 <= len(cand); i += 4 {
+		d0 += cand[i] * ctx[i]
+		n0 += ctx[i] * ctx[i]
+		d1 += cand[i+1] * ctx[i+1]
+		n1 += ctx[i+1] * ctx[i+1]
+		d2 += cand[i+2] * ctx[i+2]
+		n2 += ctx[i+2] * ctx[i+2]
+		d3 += cand[i+3] * ctx[i+3]
+		n3 += ctx[i+3] * ctx[i+3]
+	}
+	dot, nb := d0+d1+d2+d3, n0+n1+n2+n3
+	for ; i < len(cand); i++ {
+		dot += cand[i] * ctx[i]
+		nb += ctx[i] * ctx[i]
+	}
+	return dot, nb
+}
+
 // MaxContextCosine returns, for each candidate representation, the maximum cosine
 // similarity to any of the context (previously generated) token representations — the
 // degeneration-penalty term of contrastive search. candReps is [numCandidates][dim],
@@ -77,11 +118,7 @@ func MaxContextCosine(candReps, contextReps [][]float64) []float64 {
 			if na != 0 {
 				sna := math.Sqrt(na)
 				for _, ctx := range contextReps {
-					var dot, nb float64
-					for i := range cand {
-						dot += cand[i] * ctx[i]
-						nb += ctx[i] * ctx[i]
-					}
+					dot, nb := dotAndNorm(cand, ctx)
 					if nb == 0 {
 						continue // zero-norm context: similarity is 0, best is already >= 0
 					}
