@@ -2063,3 +2063,47 @@ option: no: keep bit-exactness everywhere; treat this class as closed and stop r
 option: yes for regression pins only: allow it where a measured win justifies regenerating the golden, contracts untouched
 option: yes, but only for nlp contrastive_search as a single measured trial before deciding the general case
 choice: yes for regression pins only: allow it where a measured win justifies regenerating the golden, contracts untouched
+
+## T-01KYWWKJWRF06AEMTKY4A5FJEE T1019 max-normalized exp skip in WKV backward; perfscan PS3018
+kind: task
+state: draft
+created: 2026-07-31
+targets: autograd/vjp_rwkv.go, internal/perfscan/perfscan.go
+
+MEASURED AND SHIPPED (commit 96367b21).
+
+SITE. autograd/vjp_rwkv.go, the stabilized forward sweep of wkvChannelBackward. With z = math.Max(l, dgt), the code evaluated math.Exp(l-z) and math.Exp(dgt-z) and wrote EACH TWICE (once for the denominator dt, once for at and qd). math.Exp is not inlined, so the repeat was a genuine second evaluation and not a subexpression the compiler folds. Four calls per step where one suffices: the max guarantees one of the two exponents is exactly zero. The running-maximum fold carried a third instance — with positive decay b rises by w per step, so b[t] is the new maximum on nearly every step and exp(b[t]-curM) is exp(0).
+
+RESULT. WKVScale128 198.0us -> 171.1us, -13.59%; WKVScale512 484.4us -> 412.3us, -14.87%; both p=0.000, n=12, interleaved.
+
+BIT-IDENTICAL, and this is a real distinction rather than a tolerance claim: exp(0) is exactly 1, so substituting the literal changes no value, unlike an accumulator split which reassociates. Verified by dumping Float64bits of every gradient over five decay regimes (3.0, 0.7, 0.02, -0.5, 0) crossed with seq in {1,2,17,64,129} — 6540 values, byte-identical. Negative and zero decay are in the sweep because they are the regimes where b[t] is NOT the new maximum, so the fold guard takes its other branch.
+
+NaN. The guard tests the max against the ARGUMENT (if z != l) rather than branching on the original comparison (if l >= dgt). With a NaN operand math.Max yields NaN, the equality then fails, and both exponentials still evaluate exactly as before. Branching on the comparison would substitute a 1 the original never produced.
+
+GENERALIZED as perfscan PS3018 max-normalized-exp, which is what found this site. 22 remaining findings tree-wide, the rest in backend/cpu/wkv.go and backend/ref/wkv.go, both contested by open PRs (#692 perf-wkv-f32-cpu) and therefore left alone.
+
+CHECK CONSTRUCTION, two things worth keeping. First, the initial version of PS3018 reported its OWN motivating fix as a defect: the applied form keeps math.Max and still contains the textual math.Exp(pp-q), so the detector matched it. The before/after validation is what caught this, not the floors — the floors all passed. A suppression for calls guarded by an inequality test against the max was added. Second, one clause was vacuously covered: the silent-without-max floor has no max at all, so a mutant accepting ANY max in scope stayed silent and the floor passed for the wrong reason. A distinct floor with a max PRESENT but a different subtrahend was added. All four clauses now redden exactly one floor under mutation: applied-form suppression, subtrahend-is-the-max lookup, argument match, subtraction requirement.
+
+The check reports per CALL SITE rather than per exponent, deliberately — collapsing duplicates would have hidden half the cost here.
+
+## T-01KYWWN4QGFKTRBJ4JKKGPCKRS T1019 max-normalized exp skip in WKV backward; perfscan PS3018
+kind: task
+state: done
+created: 2026-07-31
+targets: autograd/vjp_rwkv.go, internal/perfscan/perfscan.go
+
+MEASURED AND SHIPPED (commit 96367b21).
+
+SITE. autograd/vjp_rwkv.go, the stabilized forward sweep of wkvChannelBackward. With z = math.Max(l, dgt), the code evaluated math.Exp(l-z) and math.Exp(dgt-z) and wrote EACH TWICE (once for the denominator dt, once for at and qd). math.Exp is not inlined, so the repeat was a genuine second evaluation and not a subexpression the compiler folds. Four calls per step where one suffices: the max guarantees one of the two exponents is exactly zero. The running-maximum fold carried a third instance — with positive decay b rises by w per step, so b[t] is the new maximum on nearly every step and exp(b[t]-curM) is exp(0).
+
+RESULT. WKVScale128 198.0us -> 171.1us, -13.59%; WKVScale512 484.4us -> 412.3us, -14.87%; both p=0.000, n=12, interleaved.
+
+BIT-IDENTICAL, and this is a real distinction rather than a tolerance claim: exp(0) is exactly 1, so substituting the literal changes no value, unlike an accumulator split which reassociates. Verified by dumping Float64bits of every gradient over five decay regimes (3.0, 0.7, 0.02, -0.5, 0) crossed with seq in 1, 2, 17, 64, 129 — 6540 values, byte-identical. Negative and zero decay are in the sweep because they are the regimes where b[t] is NOT the new maximum, so the fold guard takes its other branch.
+
+NaN. The guard tests the max against the ARGUMENT (if z != l) rather than branching on the original comparison (if l >= dgt). With a NaN operand math.Max yields NaN, the equality then fails, and both exponentials still evaluate exactly as before. Branching on the comparison would substitute a 1 the original never produced.
+
+GENERALIZED as perfscan PS3018 max-normalized-exp, which is what found this site. 22 remaining findings tree-wide, the rest in backend/cpu/wkv.go and backend/ref/wkv.go, both contested by open PR 692 and therefore left alone.
+
+CHECK CONSTRUCTION, two things worth keeping. First, the initial version of PS3018 reported its OWN motivating fix as a defect: the applied form keeps math.Max and still contains the textual math.Exp(pp-q), so the detector matched it. The before/after validation caught this, not the floors — the floors all passed. A suppression for calls guarded by an inequality test against the max was added. Second, one clause was vacuously covered: the silent-without-max floor has no max at all, so a mutant accepting ANY max in scope stayed silent and the floor passed for the wrong reason. A distinct floor with a max PRESENT but a different subtrahend was added. All four clauses now redden exactly one floor under mutation: applied-form suppression, subtrahend-is-the-max lookup, argument match, subtraction requirement.
+
+The check reports per CALL SITE rather than per exponent, deliberately — collapsing duplicates would have hidden half the cost here.
