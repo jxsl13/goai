@@ -12233,7 +12233,17 @@ func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 					" indices are proven (SLICE-BOTH-OPERANDS-NOT-JUST-THE-ROW-001). PRECONDITION"+
 					" THIS CHECK CANNOT SEE: the two must genuinely have the same length over the"+
 					" loop's extent — a companion indexed with an OFFSET, or shorter than the row,"+
-					" needs its own slice expression rather than a bare cut", base, key, base),
+					" needs its own slice expression rather than a bare cut."+
+					" VERIFY WITH THE COMPILER, not by inference: go build"+
+					" -gcflags=-d=ssa/check_bce/debug=1 lists every remaining check with a line, and"+
+					" what matters is the count INSIDE the inner loop, not in the file. Cholesky's"+
+					" accumulate went 3 inner checks to 1 to 0 across the two steps of this"+
+					" conversion, matching -2.08%% then a further -1.59%%; a whole-file count showed"+
+					" 35 to 34 to 34 and would have said the second step did nothing. AND THE WIN"+
+					" SCALES WITH CHECKS PER FMA: the same conversion on backend/cpu's 4x4 register"+
+					" tile took its inner loop from 2 checks to 1 and measured NULL across twelve"+
+					" cells, because sixteen accumulators amortize one predicted branch to nothing."+
+					" A scalar dot product does not", base, key, base),
 			})
 			return true
 		})
