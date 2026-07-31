@@ -85,5 +85,14 @@
     "OpReshape",
     "OpTranspose",
     "OpConcat"
+  ],
+  "pointerTypeNames": [
+    "Shape",
+    "Strides",
+    "Tensor",
+    "Storage",
+    "Attrs",
+    "Device",
+    "Context"
   ]
 }

@@ -55,7 +55,10 @@ type tensorBlock struct {
 
 func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	if !shape.IsValid() {
-		panic(fmt.Sprintf("tensor: invalid shape %v", shape))
+		// shape.String() rather than a %v: passing the slice to Sprintf as an interface makes escape
+		// analysis mark shape as LEAKING, which forces every caller to heap-allocate its shape
+		// literal even though this panic never fires. String is proven non-escaping.
+		panic("tensor: invalid shape " + shape.String())
 	}
 	n := len(shape)
 	if n == 0 || n > maxInlineRank {

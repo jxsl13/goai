@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3013", "leaking-format-param", "a pointer-carrying parameter handed to a fmt call. Passing it as an interface argument makes escape analysis mark the PARAMETER as leaking, and that verdict belongs to the function rather than to the branch, so every caller heap-allocates its argument even though the formatting usually sits on a panic or error path that never runs. MEASURED on tensor.NewOn, whose invalid-shape panic formatted its shape with a %%v verb: the shape literal at every call site escaped, costing one allocation per tensor created anywhere in the tree. Swapping in shape.String(), which escape analysis already proves non-escaping, took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with time unchanged (p=1.000, n=12) and QuantMamba2 decode -8.70%% allocs. Fix with a non-escaping formatter, never by deleting the message, and VERIFY with go build -gcflags=-m that the parameter flips from leaking param to does not escape — another leak in the same function keeps the old verdict and the change buys nothing. Named parameter types need the configured pointerTypeNames list, since with no type checker a named slice and an int alias are indistinguishable", false},
 	{"PS3012", "slice-built-for-one-element", "a package-level function call immediately indexed by a constant, f(x)[0] — the callee builds a whole collection and the caller keeps one item, so where the callee allocates, the rest of it and the slice header are waste that repeats every call. MEASURED on nlp QuantMamba2 decode: rows2D materializes the in_proj output as [][]float64 once per LAYER per token and the caller takes row 0, which at seq=1 was 37%% of all allocation OBJECTS in the step; threading a scratch buffer through the per-stream layer state instead went -18.37%% B/op, -3.67%% allocs/op and -0.54%% sec/op across all seven quantization formats (p<=0.01 every cell). The scratch must live on a PER-STREAM or per-worker object, never on a shared model, and the element must be read-only at the call site since the original returns an independent copy. Restricted to a bare identifier callee: method chains like t.Shape()[0] return a view and allocate nothing. Cannot see whether the callee allocates — confirm before acting", false},
 	{"PS3011", "static-chunk-barrier", "work split into equal chunks sized by the worker count, one goroutine per chunk, joined at a barrier — the slowest worker sets the wall clock. On a heterogeneous CPU that is the common case, not a tail: an M2 Pro has 8 performance and 4 efficiency cores, so a chunk landing on an E core can take several times as long. MEASURED on the autograd WKV VJP, where the static split made MORE CORES SLOWER (GOMAXPROCS=8 at 3.36ms against 3.76ms at 12) and pthread_cond_wait was 47.96%% of the profile, more than every line of the kernel combined; claiming units through an atomic cursor went -28.73%% and -29.58%% (p=0.000, n=8) and was BIT-IDENTICAL, since which worker runs a unit cannot change that unit arithmetic. Diagnose with a GOMAXPROCS sweep and a FUNCTION profile — a line profile ranks the kernel and hides the waiting. Silent once the function reaches for sync/atomic, which is what claiming looks like", false},
 	{"PS3010", "serial-reduction-chain", "a single-accumulator floating-point reduction whose every add depends on the previous one, so the loop is bound by add LATENCY rather than throughput. Four independent partials summed at the end measured 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x) on Apple M2 Pro darwin/arm64, matching the hardware prediction for a dependent-add chain. NOT BIT-IDENTICAL: it reassociates the sum, so the value moves in the last ulp, and the two hottest instances in this tree are blocked on exactly that — nlp randomOrthogonal is regenerated at dequantization time by TurboQuant, and classic ballTree.within decides exact-label DBSCAN goldens. Requires a pure reduction: one accumulator, written once, read nowhere else in the loop, no branching. An accumulator that is also TESTED is PS3008 territory and is excluded, since four partials cannot be compared against a threshold without summing them first", false},
@@ -318,6 +319,10 @@ type Config struct {
 	// concat). A cluster of these around a little arithmetic is fusable bit-identically,
 	// because a gather and a scatter cannot change a value. Empty by default.
 	LayoutOpConstants []string `json:"layoutOpConstants,omitempty"`
+	// PointerTypeNames lists NAMED types that carry a pointer (a named slice, map, or struct
+	// holding one). PS3013 needs to know whether a parameter can leak, and with no type checker a
+	// bare identifier like Shape is indistinguishable from an int alias.
+	PointerTypeNames []string `json:"pointerTypeNames,omitempty"`
 	// PS6014 — entry points that are PURE with respect to their arguments: same
 	// arguments, same result, no observable side effect (e.g. a network forward pass).
 	// The purity judgment is a project's to make and cannot be derived from syntax, so
@@ -333,6 +338,7 @@ type nameSets struct {
 	allocators, visitors, bulkCopy, vectorized     map[string]bool
 	pureCompute                                    map[string]bool
 	layoutOps                                      map[string]bool
+	pointerTypes                                   map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -356,6 +362,7 @@ func (c Config) compile() nameSets {
 		vectorized:     toSet(c.VectorizedSiblingFuncs),
 		pureCompute:    toSet(c.PureComputeFuncs),
 		layoutOps:      toSet(c.LayoutOpConstants),
+		pointerTypes:   toSet(c.PointerTypeNames),
 	}
 }
 
@@ -2175,6 +2182,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, serialReductionChainFindings(fset, fn)...)
 	out = append(out, staticChunkBarrierFindings(fset, fn)...)
 	out = append(out, sliceBuiltForOneElementFindings(fset, fn)...)
+	out = append(out, leakingFormatParamFindings(fset, fn, ns)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -11490,6 +11498,106 @@ func isBuiltinName(s string) bool {
 	switch s {
 	case "len", "cap", "make", "new", "append", "copy", "min", "max", "complex", "real", "imag":
 		return true
+	}
+	return false
+}
+
+// leakingFormatParamFindings flags PS3013 — a pointer-carrying parameter handed to a fmt call.
+//
+// Passing it as an interface argument makes Go's escape analysis mark the PARAMETER as leaking,
+// and that verdict is a property of the function, not of the path: every caller must then
+// heap-allocate its argument, even though the formatting usually sits on a panic or error branch
+// that never executes.
+func leakingFormatParamFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Type.Params == nil {
+		return nil
+	}
+	leakable := map[string]bool{}
+	for _, f := range fn.Type.Params.List {
+		if !typeCanLeak(f.Type, ns) {
+			continue
+		}
+		for _, nm := range f.Names {
+			if nm.Name != "_" {
+				leakable[nm.Name] = true
+			}
+		}
+	}
+	if len(leakable) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "fmt" {
+			return true
+		}
+		for _, arg := range call.Args {
+			id, ok := arg.(*ast.Ident)
+			if !ok || !leakable[id.Name] || seen[id.Name] {
+				continue
+			}
+			seen[id.Name] = true
+			out = append(out, finding{
+				pos:      fset.Position(arg.Pos()),
+				category: "leaking-format-param",
+				msg: fmt.Sprintf("%q is a pointer-carrying parameter of %s handed to fmt.%s, which"+
+					" makes escape analysis mark it LEAKING — and that verdict belongs to the"+
+					" function, not to this branch, so EVERY CALLER heap-allocates its argument even"+
+					" though this path usually never runs. MEASURED on tensor.NewOn, whose"+
+					" invalid-shape panic formatted its shape with %%v: the literal at each call site"+
+					" escaped, costing one allocation per tensor CREATED anywhere in the tree."+
+					" Replacing it with shape.String() — a method escape analysis already proves"+
+					" non-escaping — took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with"+
+					" time unchanged (p=1.000, n=12), and QuantMamba2 decode -8.70%% allocs."+
+					" THE FIX IS A NON-ESCAPING FORMATTER, not deleting the message: give the type a"+
+					" String method that only reads its receiver and build the string from it, or"+
+					" format the fields individually. Verify with go build -gcflags=-m that the"+
+					" parameter changes from `leaking param` to `does not escape`, since a second"+
+					" leak elsewhere in the function keeps the old verdict and the fix buys nothing."+
+					" This check cannot tell whether the parameter already leaks for another reason,"+
+					" so confirm before acting", id.Name, exprText(paramTypeOf(fn, id.Name)), sel.Sel.Name),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// paramTypeOf returns the declared type expression of the named parameter.
+func paramTypeOf(fn *ast.FuncDecl, name string) ast.Expr {
+	for _, f := range fn.Type.Params.List {
+		for _, nm := range f.Names {
+			if nm.Name == name {
+				return f.Type
+			}
+		}
+	}
+	return nil
+}
+
+// typeCanLeak reports whether a parameter type carries a pointer, so that leaking it forces the
+// caller's argument onto the heap. Slices, maps and pointers are syntactic; a NAMED type needs the
+// configured pointerTypeNames list, since with no type checker `Shape` and an int alias look alike.
+func typeCanLeak(t ast.Expr, ns nameSets) bool {
+	switch e := t.(type) {
+	case *ast.ArrayType:
+		return e.Len == nil // slice; a fixed array is a value
+	case *ast.MapType, *ast.StarExpr:
+		return true
+	case *ast.Ident:
+		return ns.pointerTypes[e.Name]
+	case *ast.SelectorExpr:
+		return ns.pointerTypes[e.Sel.Name]
 	}
 	return false
 }

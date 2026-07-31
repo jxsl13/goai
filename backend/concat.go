@@ -91,7 +91,11 @@ func BroadcastShape(a, b tensor.Shape) (tensor.Shape, error) {
 		case da == 1:
 			out[i] = db
 		default:
-			return nil, fmt.Errorf("backend: shapes %v and %v not broadcast-compatible (axis %d: %d vs %d)", a, b, i, da, db)
+			// a.String()/b.String() rather than %v: handing a Shape to Errorf as an interface
+			// makes escape analysis mark the PARAMETER leaking, so every caller heap-allocates
+			// its shape even on the overwhelmingly common path where no error is returned
+			// (PS3013). String is proven non-escaping.
+			return nil, fmt.Errorf("backend: shapes %s and %s not broadcast-compatible (axis %d: %d vs %d)", a.String(), b.String(), i, da, db)
 		}
 	}
 	return out, nil
@@ -162,10 +166,10 @@ func BroadcastPlan(inShape, target tensor.Shape) (offset int, err error) {
 	for a, d := range inShape {
 		td := target[a+offset]
 		if td < 0 {
-			return 0, fmt.Errorf("backend: broadcast target %v has a negative dimension", target)
+			return 0, fmt.Errorf("backend: broadcast target %s has a negative dimension", target.String())
 		}
 		if d != td && d != 1 {
-			return 0, fmt.Errorf("backend: cannot broadcast shape %v to %v (axis %d: %d vs %d)", inShape, target, a, d, td)
+			return 0, fmt.Errorf("backend: cannot broadcast shape %s to %s (axis %d: %d vs %d)", inShape.String(), target.String(), a, d, td)
 		}
 	}
 	return offset, nil
