@@ -115,7 +115,7 @@ Rationale: A check derived from one example encodes assumptions the author canno
 IF a floor asserts a scan check stays SILENT on a near-miss, THEN the implementing agent SHALL build the fixture AROUND the construct that clause tests, never omitting it, and confirm a mutant dropping that 1 clause reddens that floor.
 
 ## A-DETECTOR-THAT-FINDS-NOTHING-MUST-BE-PROVEN-ABLE-TO-FIRE-001
-IF a new scan predicate reports 0 sites tree-wide, THEN the implementing agent SHALL run it against the known pre-fix source and require a hit before believing the 0, since an ast.Inspect visitor mistaking the end-of-children nil for a leaf silenced 1 whole predicate.
+IF a new scan predicate reports 0 sites tree-wide, THEN the implementing agent SHALL run it against the known pre-fix source and require 1 hit before believing the 0.
 
 ## A-BOUNDS-CHECK-ALSO-BLOCKS-HOISTING-001
-IF a counted loop indexes slices and also recomputes a loop-invariant value, THEN the implementing agent SHALL discharge the bounds checks and hoist the invariant together, since the panic edge splits the block and Go SSA will not hoist across it (measured -21.30% and -18.62%).
+IF a counted loop indexes slices and recomputes a loop-invariant value, THEN the implementing agent SHALL discharge the bounds checks and hoist the invariant together, since the panic edge splits the block and SSA cannot hoist across it (-21.30% measured).
