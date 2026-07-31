@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3020", "invariant-behind-bounds-check", "a counted loop that indexes slices with its loop variable AND recomputes a loop-invariant value every iteration. These are ONE defect: each indexed read is a bounds check, a bounds check is a panic edge that splits the body into separate basic blocks, and Go SSA will not hoist across a block that can panic — so the checks cost more than their own instructions because they also trap the invariant. Fix both halves: range over the destination and cut every companion to its length, then lift the invariant above the loop. MEASURED on the rl Polyak soft update, where (1-tau) was rematerialized per element behind two bounds checks — body from 14 instructions to 5, -21.30%% F64 and -18.62%% F32 (p=0.000, n=12), with an untouched sibling benchmark flat as the control. Restricted to invariants used as a VALUE against an indexed element; addressing arithmetic folds into an addressing mode and is excluded. Verify the FMA fusion did not move — merging blocks can change which multiply contracts, and a 1-ulp failure from exactly that is already on record here", false},
 	{"PS3019", "unrolled-index-not-windowed", "a manually unrolled loop bounded by `i+K <= len(x)` that reads x at K constant offsets and never cuts it to the K-wide window. The bound does NOT discharge those reads — i+K can overflow, so the prove pass keeps a check on every one. Cutting a window once per iteration replaces K checks with ONE slice check. MEASURED on nlp dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12), geomean -17.36%%, bit-identical. IT DID NOT PAY at the site it was found on, which is the load-bearing half of this advice: the classic ballTree L2 leaf test went four checks to one for -1.11%% against an UNTOUCHED sibling arm that moved -1.06%% in the same run, so nothing was attributable — that loop has a data-dependent early exit whose misprediction dominates and hides the checks. Require a branchless body with no loop-carried dependency, and run an untouched control, because this class yields a plausible small win that is really drift. Reordering the reads to touch the highest offset first is NOT a substitute and left all four checks in place. Clamping a second operand to the first outside the loop makes its window free", false},
 	{"PS3018", "max-normalized-exp", "math.Exp(x - m) where m is a max that INCLUDES x, so the call is exp(0) whenever the max picked x and exp(0) is exactly 1. MEASURED TWICE: on the RWKV WKV forward scan, where both stabilized pairs had this shape and half of four calls per element computed a constant, -12.42%% and -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical over 6540 gradients across five decay regimes including negative and zero. Check for REPEATS at the same time: each call SITE is reported, and in the backward each of the two exponents appeared twice — math.Exp is not inlined, so a repeat is a second evaluation rather than a subexpression the compiler folds. Test the max against the ARGUMENT rather than branching on the original comparison, so a NaN operand still evaluates both exponentials exactly as before. The win scales with 1/N — over a max of N terms it saves one call in N and is not worth the branch; it paid here because N is two — and the measured saving was a third of what the exp profile share predicted", false},
 	{"PS3017", "companion-not-sliced", "a loop that already ranges over a row but still indexes a SECOND slice with the range key, so only half the bounds checks are gone. Ranging proves the row index in range and says nothing about the companion, whose length the compiler cannot relate to the ranged slice. Cut both to the same length, writing the relation explicitly for a trailing segment. MEASURED as the gap between a half-applied and a finished conversion: linalg Cholesky ranged only the row for geomean -2.08%% and gained a FURTHER -1.59%% (three of four cells at p=0.000) when the companion was sliced, while linalg LU done with both from the start went -6.61%% geomean over nine cells. Bit-identical. Silent when the companion name is cut from a slice expression anywhere in the function; the precondition it cannot check is that the two really span the same extent, so an offset or shorter companion needs its own slice", false},
@@ -2194,6 +2195,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
 	out = append(out, companionNotSlicedFindings(fset, fn)...)
 	out = append(out, unrolledIndexNotWindowedFindings(fset, fn)...)
+	out = append(out, invariantBehindBoundsCheckFindings(fset, fn)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -12634,4 +12636,171 @@ func sortedKeys(m map[string]map[int]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// invariantBehindBoundsCheckFindings flags PS3020 — a counted loop that indexes slices with its
+// loop variable AND recomputes a loop-invariant value on every iteration.
+//
+// The two halves are one defect. Each indexed read carries a bounds check, and a bounds check is a
+// panic edge that splits the body into separate basic blocks; Go's SSA will not hoist across a
+// block that can panic, so the invariant stays inside the loop even though nothing in it moves.
+// Discharging the checks is what makes the hoist possible, which is why the remedy is both edits.
+func invariantBehindBoundsCheckFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.ForStmt)
+		if !ok || fl.Body == nil || fl.Cond == nil {
+			return true
+		}
+		lv := counterName(fl)
+		if lv == "" {
+			return true
+		}
+		assigned := assignedNames(fl.Body)
+		assigned[lv] = true
+		var reported bool
+		ast.Inspect(fl.Body, func(m ast.Node) bool {
+			be, ok := m.(*ast.BinaryExpr)
+			if !ok || reported {
+				return true
+			}
+			switch be.Op {
+			case token.ADD, token.SUB, token.MUL, token.QUO:
+			default:
+				return true
+			}
+			// The invariant must be an OPERAND against an element indexed by the loop variable.
+			// That is what makes it a VALUE the loop recomputes rather than addressing arithmetic,
+			// which folds into an addressing mode and costs nothing.
+			if !pairedWithIndexedRead(fl.Body, be, lv) || !allLoopInvariant(be, assigned) {
+				return true
+			}
+			reported = true
+			out = append(out, finding{
+				pos:      fset.Position(be.Pos()),
+				category: "invariant-behind-bounds-check",
+				msg: fmt.Sprintf("%s does not change across this loop, yet it is evaluated on"+
+					" every iteration. The compiler would normally hoist it — it does not here"+
+					" because the loop indexes slices with %q, each read is a bounds check, and a"+
+					" bounds check is a PANIC EDGE that splits the body into separate basic"+
+					" blocks; Go's SSA will not hoist across a block that can panic. So the two"+
+					" defects are one: the checks cost more than their own instructions because"+
+					" they also trap the invariant. FIX BOTH — range over the destination slice"+
+					" and cut every companion to its length, then lift the invariant to a local"+
+					" above the loop. MEASURED on the rl Polyak soft update, where (1-tau) was"+
+					" rematerialized per element (FMOVD of 1.0 then FSUBD, both visible in"+
+					" -gcflags=-S) behind two bounds checks: the body went from 14 instructions to"+
+					" 5 for -21.30%% on the F64 arm and -18.62%% on the F32 arm (p=0.000, n=12),"+
+					" with an untouched sibling benchmark flat as the control. VERIFY THE FUSION"+
+					" DID NOT MOVE: merging basic blocks can change which multiply the backend"+
+					" contracts into an FMA, and this repo has already recorded a 1-ulp failure"+
+					" from exactly that, so re-read the -S dump and confirm the same FMADDD in the"+
+					" same position before claiming bit-identity",
+					renderExpr(be), lv),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// counterName reports the variable a counted loop advances, or "" when the post statement is not a
+// simple increment of one identifier.
+func counterName(fl *ast.ForStmt) string {
+	switch post := fl.Post.(type) {
+	case *ast.IncDecStmt:
+		if id, ok := unparen(post.X).(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.AssignStmt:
+		if len(post.Lhs) == 1 {
+			if id, ok := unparen(post.Lhs[0]).(*ast.Ident); ok {
+				return id.Name
+			}
+		}
+	}
+	return ""
+}
+
+// assignedNames collects every identifier written in a block, including the base of an indexed
+// assignment, so that anything the loop mutates is excluded from being called invariant.
+func assignedNames(b *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(b, func(n ast.Node) bool {
+		switch a := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range a.Lhs {
+				switch t := l.(type) {
+				case *ast.Ident:
+					out[t.Name] = true
+				case *ast.IndexExpr:
+					if id, ok := unparen(t.X).(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.IncDecStmt:
+			if id, ok := unparen(a.X).(*ast.Ident); ok {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// allLoopInvariant reports whether every leaf of e is a literal or an identifier the loop never
+// writes. Calls, selectors and index expressions are rejected: without a type checker there is no
+// way to know they are pure, and hoisting an impure expression changes behavior.
+func allLoopInvariant(e ast.Expr, assigned map[string]bool) bool {
+	idents, ok := 0, true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if n == nil { // Inspect signals end-of-children with nil; it is not a leaf
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.Ident:
+			idents++
+			if assigned[t.Name] {
+				ok = false
+			}
+		case *ast.BasicLit, *ast.BinaryExpr, *ast.ParenExpr:
+		default:
+			ok = false
+		}
+		return ok
+	})
+	return ok && idents > 0
+}
+
+// pairedWithIndexedRead reports whether e is one side of a binary expression whose other side reads
+// a slice indexed by the loop variable.
+func pairedWithIndexedRead(body *ast.BlockStmt, e ast.Expr, lv string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		var other ast.Expr
+		switch {
+		case unparen(be.X) == e:
+			other = be.Y
+		case unparen(be.Y) == e:
+			other = be.X
+		default:
+			return true
+		}
+		ast.Inspect(other, func(q ast.Node) bool {
+			if ix, ok := q.(*ast.IndexExpr); ok {
+				if id, ok := unparen(ix.Index).(*ast.Ident); ok && id.Name == lv {
+					found = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return found
 }
