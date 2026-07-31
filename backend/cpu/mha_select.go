@@ -50,6 +50,82 @@ func mhaSelectKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	scale := pa.Scale / math.Sqrt(float64(dk))
 
 	out := tensor.NewOn(ctx.Device(), q1.Dtype(), tensor.Shape{sq, dm})
+
+	// F32 fast path: close the dtype-gap (cpu-registered F64-only, so F32 fell to
+	// backend/ref's serial select scan). ref's F32 input deterministically takes its
+	// devirtualised path (f64Data widens F32→F64; the generic AtF64 loop only runs for
+	// dtypes f64Data rejects), computing every score/softmax/·V in F64 and narrowing only on
+	// store. We reproduce that F64 arithmetic in the SAME ascending-j order, widening each F32
+	// read per element and narrowing on store → BYTE-IDENTICAL, and skip ref's up-front F64
+	// materialization of all 6 inputs. (head,query-row) pairs are independent.
+	if q1.Dtype() == tensor.F32 {
+		qs1 := q1.Contiguous().Storage().F32()
+		ks1 := k1.Contiguous().Storage().F32()
+		qs2 := q2.Contiguous().Storage().F32()
+		ks2 := k2.Contiguous().Storage().F32()
+		vs := v.Contiguous().Storage().F32()
+		sels := sel.Contiguous().Storage().F32()
+		os := out.Storage().F32()
+		kdm := kvHeads * dk
+		parallelWork(heads*sq, sk*dk, func(lo, hi int) {
+			row := make([]float64, sk)
+			obuf := make([]float64, dk)
+			for idx := lo; idx < hi; idx++ {
+				h := idx / sq
+				i := idx % sq
+				qOff := h * dk
+				kvOff := (h / rep) * dk
+				srow := sels[i*sk : i*sk+sk]
+				m := math.Inf(-1)
+				for j, sv32 := range srow {
+					sv := float64(sv32)
+					if math.IsInf(sv, -1) {
+						row[j] = math.Inf(-1)
+						continue
+					}
+					qrow, krow := qs1[i*dm+qOff:i*dm+qOff+dk], ks1[j*kdm+kvOff:j*kdm+kvOff+dk]
+					if sv != 0 {
+						qrow, krow = qs2[i*dm+qOff:i*dm+qOff+dk], ks2[j*kdm+kvOff:j*kdm+kvOff+dk]
+					}
+					var s float64
+					for d, qv := range qrow {
+						s += float64(qv) * float64(krow[d])
+					}
+					s *= scale
+					row[j] = s
+					if s > m {
+						m = s
+					}
+				}
+				var sum float64
+				for j := 0; j < sk; j++ {
+					if math.IsInf(row[j], -1) {
+						row[j] = 0
+						continue
+					}
+					row[j] = math.Exp(row[j] - m)
+					sum += row[j]
+				}
+				for d := range obuf {
+					obuf[d] = 0
+				}
+				if sum > 0 {
+					for j := 0; j < sk; j++ {
+						w := row[j] / sum
+						vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
+						for d, vv := range vrow {
+							obuf[d] += w * float64(vv)
+						}
+					}
+				}
+				for d := 0; d < dk; d++ {
+					os[i*dm+qOff+d] = float32(obuf[d])
+				}
+			}
+		})
+		return []*tensor.Tensor{out}, nil
+	}
+
 	qs1 := q1.Contiguous().Storage().F64()
 	ks1 := k1.Contiguous().Storage().F64()
 	qs2 := q2.Contiguous().Storage().F64()
@@ -115,4 +191,7 @@ func mhaSelectKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	return []*tensor.Tensor{out}, nil
 }
 
-func init() { std.add(backend.OpMHASelect, tensor.F64, mhaSelectKernelCPU) }
+func init() {
+	std.add(backend.OpMHASelect, tensor.F64, mhaSelectKernelCPU)
+	std.add(backend.OpMHASelect, tensor.F32, mhaSelectKernelCPU)
+}
