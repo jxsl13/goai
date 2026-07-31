@@ -132,3 +132,21 @@ THE ONLY REAL PATH is the full reverse recurrence: express dv_i, dk_i, du and dw
 VALIDATION AVAILABLE. TestWKVGradCheck compares against finite differences with a tolerance and is the real correctness gate. TestWKVVJPBitIdentical pins golden checksums and would need regenerating, which ADR-01KYTPF84PEC0 permits for a regression pin. Note the checksum test is the only thing standing between a subtly wrong gradient and a green run, so the gradcheck must be extended to the shapes the recurrence changes rather than trusted as-is.
 
 NOT ATTEMPTED THIS ROUND, deliberately. A numerically stable reverse recurrence for RWKV is research-grade, a subtly wrong gradient is the worst failure mode available here, and a hasty version validated only by an existing tolerance test would be worse than none.
+
+## T-01KYX2EB2TF5PRHBNMAWM3PKF6 T1027 Cholesky VJP computes one triangle; symmetry check withheld as empty
+kind: task
+state: draft
+created: 2026-07-31
+targets: autograd/vjp_cholesky.go
+
+MEASURED AND SHIPPED (commit 84b0fb19).
+
+SITE. autograd vjp_cholesky, the S block. It ran the full n^2 pair loop and did every pair twice: at (j,i) its sij is the (i,j) iteration's sji and vice versa, so half the O(n^3) accumulation recomputed sums already formed, and at i==j it formed the identical sum twice and discarded one. Restricting j to start at i and mirroring each off-diagonal result halves the cubic term.
+
+RESULT. CholeskyVJP_512 276.1ms to 181.3ms, -34.33%; _256 33.86ms to 22.42ms, -33.79%; _128 5.547ms to 4.032ms, -27.32%; all p=0.000, n=12. LogDetBackward_256 flat as the untouched control (p=0.514). Short of the ideal 50% because the surrounding O(n^2) work does not halve and its share grows as n falls - which is exactly the gradient the three cells show, and is why they were added.
+
+THE BENCHMARK CELLS CAME FIRST, and that ordering was the point. The S block is O(n^3) inside a call whose other work is O(n^2), so at the pre-existing n=64 and n=128 cells it was too small a share for a change to resolve. BenchmarkCholeskyVJP_256 and _512 were added before any code changed, so the measurement would mean something.
+
+BIT-IDENTICAL, on the argument vjp_solvespd already records in-tree: the full loop stored 0.5*(sji+sij) at (j,i) where this stores 0.5*(sij+sji), and IEEE addition is commutative for all non-NaN operands, which these are by construction. Each individual sum keeps its own ascending-k order and operands, so nothing is reassociated. Verified rather than argued - a Float64bits dump over n in 1, 2, 5, 17, 40, some 1919 values, is byte-identical.
+
+NO SCAN RULE, and this is the THIRD withholding of the session but the first for emptiness rather than density. Following SCAN-THE-PRE-FIX-SITE-BEFORE-DESIGNING-A-PREDICATE-001 the full scan was run first: six checks fire on the pre-fix block (PS1001, PS3010, PS4006, PS1010, PS3016, PS4012) and NONE of them is about the symmetry redundancy, so the class is genuinely uncovered. A predicate was then built - two reduction loops in one body whose accumulated expressions are each other's swap under the two loop variables - and it was validated to FIRE on the pre-fix site. It also fired on the SHIPPED form, because both sums per pair legitimately remain and only the inner loop's lower bound distinguishes fixed from broken; a suppression keyed to an inner loop starting at the outer variable fixed that. With the suppression in place the tree-wide count is ZERO. The class has exactly one instance in this repository and it is now fixed: vjp_solvespd and vjp_logdet already exploit symmetry, so the codebase was mature on this axis. An empty rule earns nothing, so it was not shipped; the transform is recorded as a spec rule instead so a future site is recognized by reading.
