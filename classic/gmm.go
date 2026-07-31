@@ -184,11 +184,9 @@ type GaussianMixture struct {
 	// used by the density, together with logDetPrec = −Σ log L_ii (half the log
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol        [][][]float64
-	invCholDiag [][]float64  // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
-	yScratch    []float64    // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
-	yScratch4   [4][]float64 // GMMFull only: 4 solve buffers for logGaussianFullBatch's component jam
-	logDetHalf  []float64    // per component: 0.5·log|Σ_k| (density normaliser)
-	invCov      [][]float64  // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
+	invCholDiag [][]float64 // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
+	logDetHalf  []float64   // per component: 0.5·log|Σ_k| (density normaliser)
+	invCov      [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
 
 	nFeat  int
 	fitted bool
@@ -381,9 +379,9 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 	}
 
 	// Per-WORKER scratch, never a receiver field. lr aliased logResp[i] before and still does;
-	// ldBuf and the full-cov solve buffers were m.yScratch4/m.yScratch, receiver state every
-	// worker would race on — the same shape this package already had to remove from the
-	// full-covariance density path.
+	// ldBuf and the full-cov solve buffers were receiver state that every worker would have
+	// raced on — the same shape this package already had to remove from the full-covariance
+	// density path.
 	newScratch := func() (*gmmScratch, func()) {
 		sc := getGMMScratch(k, m.nFeat)
 		return sc, func() { putGMMScratch(sc) }
@@ -623,10 +621,6 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	// full covariance
 	m.chol = make([][][]float64, k)
 	m.invCholDiag = make([][]float64, k)
-	m.yScratch = make([]float64, d)
-	for t := range m.yScratch4 {
-		m.yScratch4[t] = make([]float64, d)
-	}
 	m.logDetHalf = make([]float64, k)
 	// PARALLEL over components. Component c owns its own accumulator s, its own Cholesky, and
 	// writes only m.cov[c]/m.chol[c]/m.invCholDiag[c]/m.logDetHalf[c] — nothing crosses c, and
@@ -914,7 +908,8 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 	diag := m.cfg.covariance == GMMDiag
 	// Each sample's density is independent (reads only shared read-only params, writes only
 	// out[i]). Full-cov's triangular solve needs a private y-scratch — the shared
-	// m.yScratch/m.yScratch4 are exactly why this stayed serial — so give every worker its OWN
+	// shared receiver-level scratch this used to keep is exactly why it stayed serial — so give
+	// every worker its OWN
 	// buf + solve buffers and fan the sample loop across GOMAXPROCS. Bit-identical to the serial
 	// scan; serial below a small work threshold.
 	rowScore := func(buf []float64, y4 [4][]float64, y []float64, i int) {

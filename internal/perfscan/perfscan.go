@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3015", "write-only-alloc-field", "a struct field handed a fresh allocation and read nowhere in the package, so every construction pays for a buffer nothing uses. The compiler will not report it: an unused local is an error, but a field assigned in a constructor counts as a use. MEASURED on the autograd WKV backward, where a linear-time rewrite stopped needing the loga and p exponent buffers the quadratic path required and they kept being allocated per worker per call; removing them with a pooled scratch took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, worth a further 15.82%% geomean on time. A KERNEL REWRITE IS THE USUAL CAUSE, since the scratch a kernel inherits describes the algorithm it replaced. Restricted to UNEXPORTED fields, where absence of reads in the package is conclusive, and matched by NAME without types so a same-named field read anywhere suppresses it; a read through reflection is the remaining blind spot", false},
 	{"PS3014", "coupled-index-weight", "a doubly-nested reduction whose accumulated term is scaled by an arithmetic combination of BOTH loop indices, used as a VALUE rather than as an index. That coupling is what makes such a sum look irreducibly quadratic, and a DIFFERENCE usually is not: (t-1-i) rewrites as (t-1) minus i, turning one distance-weighted sum into (t-1)*S minus S1 over two ordinary prefix sums maintained in O(1) per step. MEASURED on the autograd WKV backward, where dw was the only gradient with a distance weight and the only reason the pass stayed quadratic; splitting it took seq=512 from 10335us to 580us (17.8x) and the cost per doubling of seq from 3.85x to 1.81x. PRECONDITION THE CHECK CANNOT SEE: the remaining factors must separate into a t-only part and an i-only part or nothing hoists. Products and moduli of the two indices generally do not split and are reported only so they can be ruled out deliberately. Index arithmetic is excluded, since a[t*n+i] couples the indices to address memory rather than to weight a value", false},
 	{"PS3013", "leaking-format-param", "a pointer-carrying parameter handed to a fmt call. Passing it as an interface argument makes escape analysis mark the PARAMETER as leaking, and that verdict belongs to the function rather than to the branch, so every caller heap-allocates its argument even though the formatting usually sits on a panic or error path that never runs. MEASURED on tensor.NewOn, whose invalid-shape panic formatted its shape with a %%v verb: the shape literal at every call site escaped, costing one allocation per tensor created anywhere in the tree. Swapping in shape.String(), which escape analysis already proves non-escaping, took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with time unchanged (p=1.000, n=12) and QuantMamba2 decode -8.70%% allocs. Fix with a non-escaping formatter, never by deleting the message, and VERIFY with go build -gcflags=-m that the parameter flips from leaking param to does not escape — another leak in the same function keeps the old verdict and the change buys nothing. Named parameter types need the configured pointerTypeNames list, since with no type checker a named slice and an int alias are indistinguishable", false},
 	{"PS3012", "slice-built-for-one-element", "a package-level function call immediately indexed by a constant, f(x)[0] — the callee builds a whole collection and the caller keeps one item, so where the callee allocates, the rest of it and the slice header are waste that repeats every call. MEASURED on nlp QuantMamba2 decode: rows2D materializes the in_proj output as [][]float64 once per LAYER per token and the caller takes row 0, which at seq=1 was 37%% of all allocation OBJECTS in the step; threading a scratch buffer through the per-stream layer state instead went -18.37%% B/op, -3.67%% allocs/op and -0.54%% sec/op across all seven quantization formats (p<=0.01 every cell). The scratch must live on a PER-STREAM or per-worker object, never on a shared model, and the element must be read-only at the call site since the original returns an independent copy. Restricted to a bare identifier callee: method chains like t.Shape()[0] return a view and allocate nothing. Cannot see whether the callee allocates — confirm before acting", false},
@@ -1101,6 +1102,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// PS6023 is FILE-level (it reports at a declaration) but reads PACKAGE-level facts the
 	// pre-pass gathered, since a threshold is usually declared in one file and used in another.
 	out = append(out, thresholdUncoveredFindings(fset, f)...)
+	out = append(out, writeOnlyAllocFieldFindings(fset, f)...)
 	for name := range intMapReg[curPkg] { // cross-file dispatch registries
 		intKeyMaps[name] = true
 	}
@@ -2807,6 +2809,7 @@ func main() {
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
 	collectThresholdUse(fset, parsed)
+	collectWriteOnlyFields(parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
@@ -11842,4 +11845,144 @@ func renderExpr(e ast.Expr) string {
 		return "?"
 	}
 	return b.String()
+}
+
+// --- PS3015: a struct field given an allocation but never read ---
+
+var (
+	deadFieldDeclared = map[string]bool{} // unexported struct field names declared in this package
+	deadFieldRead     = map[string]bool{} // field names read anywhere in this package
+)
+
+// collectWriteOnlyFields records every unexported struct field declared in the package and every
+// field name READ anywhere in it. Matching is by NAME, without types, which is deliberately
+// conservative: a same-named field read elsewhere suppresses the finding rather than risking a
+// false one.
+//
+// Restricted to UNEXPORTED names because those cannot be read outside the package, which is what
+// makes "no reads anywhere here" conclusive.
+func collectWriteOnlyFields(files []*ast.File) {
+	deadFieldDeclared = map[string]bool{}
+	deadFieldRead = map[string]bool{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, fld := range st.Fields.List {
+				for _, nm := range fld.Names {
+					if !nm.IsExported() {
+						deadFieldDeclared[nm.Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, f := range files {
+		markFieldReads(f)
+	}
+}
+
+// markFieldReads records field names appearing anywhere OTHER than as a write target: the left side
+// of an assignment, or the key of a composite literal element.
+func markFieldReads(f *ast.File) {
+	writeTargets := map[ast.Node]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range s.Lhs {
+				if sel, ok := l.(*ast.SelectorExpr); ok {
+					writeTargets[sel.Sel] = true
+				}
+			}
+		case *ast.KeyValueExpr:
+			if id, ok := s.Key.(*ast.Ident); ok {
+				writeTargets[id] = true
+			}
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && !writeTargets[sel.Sel] {
+			deadFieldRead[sel.Sel.Name] = true
+		}
+		return true
+	})
+}
+
+// writeOnlyAllocFieldFindings flags PS3015 — a field handed a fresh allocation and never read.
+func writeOnlyAllocFieldFindings(fset *token.FileSet, f *ast.File) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	report := func(name string, pos token.Pos, what string) {
+		if !deadFieldDeclared[name] || deadFieldRead[name] || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "write-only-alloc-field",
+			msg: fmt.Sprintf("field %q is given a fresh %s here and is READ NOWHERE in this package,"+
+				" so every construction pays an allocation for a buffer nothing uses. THE COMPILER"+
+				" WILL NOT SAY SO: an unused local is an error, but a struct field assigned in a"+
+				" constructor is a use as far as it is concerned. MEASURED on the autograd WKV"+
+				" backward, where a linear-time rewrite stopped needing the loga and p exponent"+
+				" buffers the quadratic path required; they stayed in the scratch struct and kept"+
+				" being allocated per worker per call. Removing them, together with pooling the"+
+				" scratch, took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, and the"+
+				" reduced allocator work showed up as a further 15.82%% geomean on TIME. A KERNEL"+
+				" REWRITE IS THE USUAL CAUSE, because the scratch a kernel inherits describes the"+
+				" algorithm it replaced (A-REWRITE-LEAVES-DEAD-SCRATCH-BEHIND-001). Matching is by"+
+				" field NAME and without types, so a same-named field read anywhere in the package"+
+				" suppresses this; the remaining blind spot is a read through reflection, which no"+
+				" AST pass can see", name, what),
+		})
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.KeyValueExpr:
+			id, ok := s.Key.(*ast.Ident)
+			if ok && allocatingExpr(s.Value) {
+				report(id.Name, id.Pos(), allocKind(s.Value))
+			}
+		case *ast.AssignStmt:
+			for i, l := range s.Lhs {
+				sel, ok := l.(*ast.SelectorExpr)
+				if !ok || i >= len(s.Rhs) || !allocatingExpr(s.Rhs[i]) {
+					continue
+				}
+				report(sel.Sel.Name, sel.Sel.Pos(), allocKind(s.Rhs[i]))
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// allocatingExpr reports whether an expression produces a fresh heap object worth paying for.
+func allocatingExpr(e ast.Expr) bool { return allocKind(e) != "" }
+
+func allocKind(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok {
+			switch id.Name {
+			case "make":
+				return "make"
+			case "new":
+				return "new"
+			}
+		}
+	case *ast.CompositeLit:
+		return "composite literal"
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			if _, ok := x.X.(*ast.CompositeLit); ok {
+				return "composite literal"
+			}
+		}
+	}
+	return ""
 }
