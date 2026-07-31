@@ -1,9 +1,11 @@
 package parallel
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Every index must be visited exactly once, at every n around the worker count — an
@@ -128,15 +130,53 @@ func TestRowsIdxCoversEveryIndexAndBoundsTheChunkIndex(t *testing.T) {
 	}
 }
 
-// Distinct chunks must get DISTINCT indices — a per-chunk buffer array is only safe if no
-// two concurrent chunks share a slot.
-func TestRowsIdxGivesDistinctChunkIndices(t *testing.T) {
+// Concurrent runners must never SHARE a slot, which is the property a per-slot buffer array
+// actually depends on.
+//
+// This replaced a stricter-looking assertion that each index was handed out at most ONCE. That
+// held only because the old partition gave every runner exactly one chunk, so "unique per chunk"
+// and "unique per concurrent runner" happened to coincide. Units are now CLAIMED, so one runner
+// takes several and is called several times with its own stable slot — which is safe, and which
+// the old assertion would have called an aliasing bug.
+//
+// So the check is occupancy, not a count: each body marks its slot on entry and clears it on
+// exit, and any runner finding its slot already marked has caught a real alias. A counter cannot
+// express that distinction; this can, and it fails on the thing that would actually corrupt a
+// caller's scratch.
+func TestRowsIdxSlotsAreNeverConcurrentlyShared(t *testing.T) {
 	const n = 4096
-	seen := make([]int32, Workers())
-	RowsIdx(n, func(chunk, lo, hi int) { atomic.AddInt32(&seen[chunk], 1) })
-	for c, k := range seen {
-		if k > 1 {
-			t.Fatalf("chunk index %d handed out %d times — per-chunk buffers would alias", c, k)
+	occupied := make([]int32, Workers())
+	var aliased, calls atomic.Int32
+	RowsIdx(n, func(slot, lo, hi int) {
+		if slot < 0 || slot >= Workers() {
+			t.Errorf("slot %d outside [0,%d)", slot, Workers())
+			return
 		}
+		calls.Add(1)
+		if !atomic.CompareAndSwapInt32(&occupied[slot], 0, 1) {
+			aliased.Add(1)
+			return
+		}
+		// Hold the slot long enough that runners actually OVERLAP. Without this the body is
+		// too fast to catch anything: the caller drains most units before a worker even
+		// receives its task, so two runners are never live at once and an alias that is
+		// genuinely present goes unobserved. Verified by mutation — handing every runner
+		// slot 0 passes this test with a trivial body and fails it with this spin.
+		deadline := time.Now().Add(200 * time.Microsecond)
+		for time.Now().Before(deadline) {
+			runtime.Gosched()
+		}
+		_ = lo
+		_ = hi
+		atomic.StoreInt32(&occupied[slot], 0)
+	})
+	if got := aliased.Load(); got != 0 {
+		t.Fatalf("%d body calls found their slot already occupied — per-slot buffers would alias", got)
+	}
+	// Guard against the test passing because nothing ran, and confirm claiming is actually
+	// happening: with a grain finer than one unit per worker there must be more calls than slots.
+	if c := int(calls.Load()); c <= Workers() {
+		t.Fatalf("%d body calls for %d slots; the partition is not being subdivided, so this test "+
+			"is not exercising slot reuse", c, Workers())
 	}
 }

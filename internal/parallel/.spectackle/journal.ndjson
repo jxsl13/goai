@@ -1,0 +1,1 @@
+{"t":"2026-07-31T16:23:14Z","eid":"ba1eee32532d9590","ag":"ag-6e84","ev":"rule","dir":"internal/parallel","op":"add","rule":"SLOT-IS-PER-RUNNER-NOT-PER-UNIT-001","txt":"IF a work-partitioning primitive hands callers an index for per-partition scratch, THEN the implementing agent SHALL define it as a per-RUNNER slot bounded by the worker count, not a per-unit index."}

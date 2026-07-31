@@ -17,9 +17,42 @@ package parallel
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
+// job is one Rows/RowsIdx call's shared claim state. Workers pull units from next until it
+// passes units; the slot they were given stays fixed for the whole drain, which is what a
+// caller's per-slot scratch is keyed by.
+type job struct {
+	body    func(lo, hi int)
+	bodyIdx func(slot, lo, hi int)
+	next    atomic.Int64
+	n       int
+	units   int
+	grain   int
+	wg      sync.WaitGroup
+}
+
+// drain claims units until the cursor is exhausted. slot is this runner's stable index.
+func (j *job) drain(slot int) {
+	for {
+		u := int(j.next.Add(1)) - 1
+		if u >= j.units {
+			return
+		}
+		lo := u * j.grain
+		hi := min(lo+j.grain, j.n)
+		if j.bodyIdx != nil {
+			j.bodyIdx(slot, lo, hi)
+		} else {
+			j.body(lo, hi)
+		}
+	}
+}
+
 type task struct {
+	job  *job
+	slot int
 	body func(lo, hi int)
 	// bodyIdx and chunk serve RowsIdx. Carrying the chunk index in the struct rather than
 	// capturing it in a per-chunk closure is what keeps RowsIdx allocation-free: measured at
@@ -31,6 +64,14 @@ type task struct {
 	lo, hi  int
 	wg      *sync.WaitGroup
 }
+
+// grainPerWorker is how many units each worker is expected to claim on average. One would be a
+// static split by another name, and more is not better: swept at 2, 4 and 8 against both axes,
+// 2 was best on each. Dispatch cost rises monotonically with the grain (19.88, 23.00, 26.95 us on
+// BenchmarkDispatchRowsIdx) while the balance win saturates immediately (127.1, 129.0, 128.9 ms on
+// classic BenchmarkGBMHist_exact_20k). At 2 the dispatch path is FASTER than the static split it
+// replaced (22.11 us), because the pool now receives one task per worker instead of one per chunk.
+const grainPerWorker = 2
 
 var mailboxes []chan task
 
@@ -51,12 +92,8 @@ func init() {
 		mailboxes[i] = ch
 		go func() {
 			for t := range ch {
-				if t.bodyIdx != nil {
-					t.bodyIdx(t.chunk, t.lo, t.hi)
-				} else {
-					t.body(t.lo, t.hi)
-				}
-				t.wg.Done()
+				t.job.drain(t.slot)
+				t.job.wg.Done()
 			}
 		}()
 	}
@@ -74,81 +111,62 @@ func Workers() int { return len(mailboxes) + 1 }
 // GBM exact grower calls its split search and partition once PER TREE NODE; per-call
 // scratch took that fit from 64MB and 883 allocs to 2007MB and 8965, a 31x memory
 // regression hiding behind a 2.80x speedup. chunk is always in [0, Workers()).
-func RowsIdx(n int, body func(chunk, lo, hi int)) {
-	parts := min(len(mailboxes)+1, n)
-	if parts <= 1 {
-		body(0, 0, n)
-		return
-	}
-	chunk := (n + parts - 1) / parts
-	var wg sync.WaitGroup
-	var inline [][3]int
-	mb, ci := 0, 1
-	for lo := chunk; lo < n; lo += chunk {
-		hi := min(lo+chunk, n)
-		c := ci
-		ci++
-		queued := false
-		for mb < len(mailboxes) && !queued {
-			wg.Add(1)
-			select {
-			case mailboxes[mb] <- task{bodyIdx: body, chunk: c, lo: lo, hi: hi, wg: &wg}:
-				queued = true
-			default:
-				wg.Done()
-			}
-			mb++
-		}
-		if !queued {
-			inline = append(inline, [3]int{c, lo, hi})
-		}
-	}
-	body(0, 0, min(chunk, n)) // the caller works chunk 0
-	for _, r := range inline {
-		body(r[0], r[1], r[2])
-	}
-	wg.Wait()
+func RowsIdx(n int, body func(slot, lo, hi int)) {
+	run(&job{bodyIdx: body}, n)
 }
 
-// Rows splits [0,n) into contiguous chunks and calls body on each, returning once every
-// chunk has run. body must be safe to run concurrently for disjoint ranges: the caller
-// owns that guarantee, and for a matmul it holds because each output row is written
-// exactly once by exactly one chunk.
+// Rows splits [0,n) into contiguous units and calls body on each, returning once every unit
+// has run. body must be safe to run concurrently for disjoint ranges: the caller owns that
+// guarantee, and for a matmul it holds because each output row is written exactly once by
+// exactly one unit.
 //
-// The partition is deterministic but the ORDER is not, so body must not accumulate
-// across chunks. Callers whose result must be bit-identical to the serial form need each
-// chunk to compute the same values it would have computed alone — writing distinct
-// indices, not reducing into a shared one.
+// The partition is deterministic but the ORDER is not, so body must not accumulate across
+// units. Callers whose result must be bit-identical to the serial form need each unit to
+// compute the same values it would have computed alone — writing distinct indices, not
+// reducing into a shared one.
 func Rows(n int, body func(lo, hi int)) {
+	run(&job{body: body}, n)
+}
+
+// run splits [0,n) into units and drains them across the pool plus the calling goroutine.
+//
+// UNITS ARE CLAIMED, NOT DEALT, and the grain is deliberately finer than one unit per worker.
+// An equal static split assumes every worker retires its share at the same rate, which on a
+// heterogeneous CPU is false: an M2 Pro has 8 performance and 4 efficiency cores, so the unit
+// landing on an E core sets the barrier. The signature is that MORE CORES MAKE IT SLOWER —
+// classic BenchmarkGBMHist_exact_20k measured 132.4ms at GOMAXPROCS=8 against 136.7ms at 12
+// before this change (STATIC-CHUNKS-LOSE-ON-HETEROGENEOUS-CORES-001).
+//
+// grainPerWorker trades balance against claim overhead. The units this pool hands out are tens
+// of microseconds of dense arithmetic, so an atomic increment per unit is negligible, but too
+// fine a grain starts to matter and too coarse a one brings the tail back.
+func run(j *job, n int) {
 	parts := min(len(mailboxes)+1, n)
 	if parts <= 1 {
-		body(0, n)
+		if j.bodyIdx != nil {
+			j.bodyIdx(0, 0, n)
+		} else {
+			j.body(0, n)
+		}
 		return
 	}
-	chunk := (n + parts - 1) / parts
-	var wg sync.WaitGroup
-	var inline [][2]int // ranges no worker accepted; run by the caller below
-	mb := 0
-	for lo := chunk; lo < n; lo += chunk {
-		hi := min(lo+chunk, n)
-		queued := false
-		for mb < len(mailboxes) && !queued {
-			wg.Add(1)
-			select {
-			case mailboxes[mb] <- task{body: body, lo: lo, hi: hi, wg: &wg}:
-				queued = true
-			default:
-				wg.Done() // occupied: try the next worker, then fall back to inline
-			}
-			mb++
-		}
-		if !queued {
-			inline = append(inline, [2]int{lo, hi})
+	units := min(parts*grainPerWorker, n)
+	j.n, j.units = n, units
+	j.grain = (n + units - 1) / units
+	j.units = (n + j.grain - 1) / j.grain // recompute: the ceil grain may need fewer units
+
+	// Slot 0 belongs to the calling goroutine, so a worker's slot is its mailbox index plus
+	// one. Slots are STABLE for the whole drain and no two concurrent runners share one, which
+	// is the property a per-slot scratch buffer actually needs — the old chunk index happened
+	// to be unique per chunk, but with claiming a runner takes many units.
+	for mb := 0; mb < len(mailboxes); mb++ {
+		j.wg.Add(1)
+		select {
+		case mailboxes[mb] <- task{job: j, slot: mb + 1}:
+		default:
+			j.wg.Done() // occupied: this worker sits out; the cursor still gets drained
 		}
 	}
-	body(0, min(chunk, n)) // the caller works too, rather than idling on the barrier
-	for _, r := range inline {
-		body(r[0], r[1])
-	}
-	wg.Wait()
+	j.drain(0) // the caller works too, rather than idling on the barrier
+	j.wg.Wait()
 }
