@@ -2257,3 +2257,27 @@ THE TOP CANDIDATE WAS A TRAP, AND CATCHING IT IS THE MAIN RESULT. The survey pro
 STILL OPEN AND UNMEASURED. (1) The view constructors - Slice, Transpose, Permute - each pay two allocations, a copyShapeStrides array plus the Tensor, and could take the same block treatment New already has. This is NOT the rejected change: a view block holds the view's own Tensor and its own shape/stride buffer, whose lifetimes are identical by construction, so the retention argument does not apply. Three benchmarks already report allocations. Note the Permute cell implies rank 4 while maxInlineRank is 2, so the inline size is a byte-for-coverage trade to sweep rather than guess. (2) Storage.data is an interface, so every allocation pays a runtime slice-to-interface box - 14% of objects in a decode step. An additive unexported typed-allocator interface would avoid it without touching the exported Allocator signature, but it grows Storage from 48 to about 104 bytes, trading bytes for objects; that one needs an A/B on both heap and pooled devices rather than an argument. A variant using unsafe.Pointer avoids the byte growth and was explicitly flagged as higher risk in the repo's foundational type.
 
 COVERAGE GAP WORTH NAMING: New on a POOL-backed device has no benchmark. Only Pool.Alloc and Free in isolation are measured. The pool path is where the interface box is proportionally most expensive, since the buffer is recycled and the box never is.
+
+## T-01KYX4B549E8Y9K4H63420H7B5 T1030 MHA routed through pooled exec helpers; perfscan PS3024
+kind: task
+state: draft
+created: 2026-07-31
+targets: nlp/mha.go, nlp/decode.go, internal/perfscan/perfscan.go
+
+MEASURED AND SHIPPED (commits aab765b1, 4344f303).
+
+SITE. nlp (*MHA).exec was a byte-for-byte clone of gpt.go's exec1 that never touched its receiver. Its thirteen call sites therefore allocated a fresh variadic slice on every backend dispatch, while exec1a, exec2, exec3 and exec4 - recorder-guarded, sync.Pool-backed, written for exactly this inference hot path - sat unused beside it. Five of the thirteen are on the per-token decode path. Every site now takes the pooled helper matching its arity; the one genuinely variadic site, an OpConcat over a parts slice, takes exec1 directly. The clone is deleted so nothing can drift back.
+
+RESULT. GPTGenerate500RowBuf 235.3k to 225.3k allocs/op, -4.26% (p=0.000, n=10) - ten thousand fewer allocations per generate. KVCacheGrowthRowBuf allocs unchanged (p=0.595). NucleusTopP, untouched, identical allocations and flat time.
+
+TIME IS NOT CLAIMED. sec/op came out -1.7% at p=0.143, which does not separate. An earlier n=12 run had shown -2.47% at p=0.007 and it did not reproduce at n=10, so it was not banked. These benchmarks are 69% backend worker-pool park and wake, which is why allocs/op is the metric this change is answerable for.
+
+Bit-identical: the pooled helpers pass the same tensors in the same order to the same backend.Execute, and each defers to the variadic form when a recorder is attached, so the taping path is untouched.
+
+GENERALIZED as PS3024 fixed-arity-variadic-call. Clean before and after on its own site: 12 findings pre-fix, 0 after. Twelve and not thirteen is correct - the remaining site is a real spread, which cannot avoid building a pack. Three clauses mutation-proven, and the pooled-helper suppression is the load-bearing one: a pooled helper hands its fixed arguments to the variadic form exactly when a recorder is attached, so without it the check reports the fix as the defect.
+
+450 FINDINGS TREE-WIDE, ALL IN nn/, and the number is stated rather than tuned away. This is NOT the noise that got two candidate rules withheld earlier this session at 117 and 141 sites; those were mixtures of non-defects. This is one defect class in one package - nn ships nnIns1Pool through nnIns3Pool and 43 of its own wrapper clones bypass them - so the remedy already exists there and the count is a backlog rather than a false-positive rate. nn is not this agent's lane, which is precisely why the finding belongs in a scanner instead of a patch.
+
+HOW THE CLASS WAS FOUND, worth keeping as method. A whole-tree duplicate-body scan (function bodies rendered with parameters renamed positionally, so a method and a free function still match) reported 44 clone groups, the largest being 29 identical exec methods in nn. Raw duplication was rejected as a rule - most Go clone groups are legitimate per-type boilerplate in the absence of generics - but it was the right INSTRUMENT for locating the class, and the shippable predicate turned out to be at the CALL SITE rather than the declaration.
+
+TWO SELF-INFLICTED FAULTS, both caught by existing rules. The detector first reported zero findings everywhere, including its own motivating site: the check table entry was never added, so the category mapped to no ID and every finding was dropped. Then with exec1 on the configured list it reported 770, because the pooled helpers' own correct fallback calls matched. Narrowing the list and suppressing calls made from inside a pooled helper took it to the real 450.
