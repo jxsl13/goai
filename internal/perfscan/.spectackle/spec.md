@@ -124,4 +124,4 @@ IF a counted loop indexes slices and recomputes a loop-invariant value, THEN the
 IF a validated predicate matches a large fraction of ordinary loops, THEN the implementing agent SHALL withhold the check and record the density rather than shipping it, as a 117-site free-dimension predicate overlapping PS1007 was withheld.
 
 ## RANK-A-CHECKED-LOOP-BY-THE-WORK-ITS-CHECKS-TRAP-001
-IF a loop with un-discharged bounds checks is ranked for a fix, THEN the implementing agent SHALL rank by the invariant work trapped behind the panic edges, read from -gcflags=-S, not the check count — that gap made 1 site pay 15x.
+IF a loop with un-discharged bounds checks is ranked for a fix, THEN the implementing agent SHALL rank by the invariant work trapped behind the panic edges, not the check count — that gap made 1 site pay 15x.
