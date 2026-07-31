@@ -33,3 +33,44 @@ func benchWKV(b *testing.B, seq, d int) {
 
 func BenchmarkWKV_512x1024(b *testing.B)  { benchWKV(b, 512, 1024) }
 func BenchmarkWKV_1024x2048(b *testing.B) { benchWKV(b, 1024, 2048) }
+
+func benchWKVF32(b *testing.B, seq, d int) {
+	k := bench.RandF32(tensor.Shape{seq, d}, 1)
+	v := bench.RandF32(tensor.Shape{seq, d}, 2)
+	w := bench.RandF32(tensor.Shape{d}, 3)
+	u := bench.RandF32(tensor.Shape{d}, 4)
+	in := []*tensor.Tensor{k, v, w, u}
+	ctx := backend.NewContext()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpWKV, in, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWKVF32_512x1024(b *testing.B)  { benchWKVF32(b, 512, 1024) }
+func BenchmarkWKVF32_1024x2048(b *testing.B) { benchWKVF32(b, 1024, 2048) }
+
+// benchWKVF32On measures the F32 WKV on a chosen backend — PRE (Ref, serial) vs POST
+// (CPU, channel-parallel) A/B for the dtype-gap win.
+func benchWKVF32On(b *testing.B, name backend.Name, seq, d int) {
+	be, _ := backend.Get(name)
+	k := bench.RandF32(tensor.Shape{seq, d}, 1)
+	v := bench.RandF32(tensor.Shape{seq, d}, 2)
+	w := bench.RandF32(tensor.Shape{d}, 3)
+	u := bench.RandF32(tensor.Shape{d}, 4)
+	in := []*tensor.Tensor{k, v, w, u}
+	ctx := backend.NewContext().WithBackend(be)
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpWKV, in, nil); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWKVF32Ref_512x1024(b *testing.B)  { benchWKVF32On(b, backend.Ref, 512, 1024) }
+func BenchmarkWKVF32CPU_512x1024(b *testing.B)  { benchWKVF32On(b, backend.CPU, 512, 1024) }
+func BenchmarkWKVF32Ref_1024x2048(b *testing.B) { benchWKVF32On(b, backend.Ref, 1024, 2048) }
+func BenchmarkWKVF32CPU_1024x2048(b *testing.B) { benchWKVF32On(b, backend.CPU, 1024, 2048) }
