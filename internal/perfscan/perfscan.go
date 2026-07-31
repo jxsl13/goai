@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3017", "companion-not-sliced", "a loop that already ranges over a row but still indexes a SECOND slice with the range key, so only half the bounds checks are gone. Ranging proves the row index in range and says nothing about the companion, whose length the compiler cannot relate to the ranged slice. Cut both to the same length, writing the relation explicitly for a trailing segment. MEASURED as the gap between a half-applied and a finished conversion: linalg Cholesky ranged only the row for geomean -2.08%% and gained a FURTHER -1.59%% (three of four cells at p=0.000) when the companion was sliced, while linalg LU done with both from the start went -6.61%% geomean over nine cells. Bit-identical. Silent when the companion name is cut from a slice expression anywhere in the function; the precondition it cannot check is that the two really span the same extent, so an offset or shorter companion needs its own slice", false},
 	{"PS3016", "two-deep-index-not-ranged", "an inner loop reading m[i][k] with the OUTER index invariant, so every step re-loads the row pointer and bounds-checks against it. Hoist the row and RANGE over it — and the range is the half that pays. On linalg Cholesky forward substitution, hoisting the row while keeping the integer-bounded loop measured geomean -0.53%% over eleven benchmarks with one cell at +0.41%% (p=0.038) and did not reach significance at n=12 (p=0.060); converting the same site to range over the row gave -2.82%%, -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The mechanism is bounds-check elimination, not the pointer reload. Bit-identical either way. Silent when the loop already ranges over a slice, which is the applied form; a loop whose OUTER index moves instead has no row to range and is a different problem", false},
 	{"PS3015", "write-only-alloc-field", "a struct field handed a fresh allocation and read nowhere in the package, so every construction pays for a buffer nothing uses. The compiler will not report it: an unused local is an error, but a field assigned in a constructor counts as a use. MEASURED on the autograd WKV backward, where a linear-time rewrite stopped needing the loga and p exponent buffers the quadratic path required and they kept being allocated per worker per call; removing them with a pooled scratch took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, worth a further 15.82%% geomean on time. A KERNEL REWRITE IS THE USUAL CAUSE, since the scratch a kernel inherits describes the algorithm it replaced. Restricted to UNEXPORTED fields, where absence of reads in the package is conclusive, and matched by NAME without types so a same-named field read anywhere suppresses it; a read through reflection is the remaining blind spot", false},
 	{"PS3014", "coupled-index-weight", "a doubly-nested reduction whose accumulated term is scaled by an arithmetic combination of BOTH loop indices, used as a VALUE rather than as an index. That coupling is what makes such a sum look irreducibly quadratic, and a DIFFERENCE usually is not: (t-1-i) rewrites as (t-1) minus i, turning one distance-weighted sum into (t-1)*S minus S1 over two ordinary prefix sums maintained in O(1) per step. MEASURED on the autograd WKV backward, where dw was the only gradient with a distance weight and the only reason the pass stayed quadratic; splitting it took seq=512 from 10335us to 580us (17.8x) and the cost per doubling of seq from 3.85x to 1.81x. PRECONDITION THE CHECK CANNOT SEE: the remaining factors must separate into a t-only part and an i-only part or nothing hoists. Products and moduli of the two indices generally do not split and are reported only so they can be ruled out deliberately. Index arithmetic is excluded, since a[t*n+i] couples the indices to address memory rather than to weight a value", false},
@@ -2189,6 +2190,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, leakingFormatParamFindings(fset, fn, ns)...)
 	out = append(out, coupledIndexWeightFindings(fset, fn)...)
 	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
+	out = append(out, companionNotSlicedFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -12161,4 +12163,107 @@ func rangesOverSlice(n ast.Node) bool {
 		return true
 	}
 	return false
+}
+
+// companionNotSlicedFindings flags PS3017 — a loop that DOES range over a row but still indexes a
+// second slice with the range key, so only half the bounds checks were removed.
+//
+// This is the shape PS3016 suppresses as "applied", and it is applied only halfway: ranging proves
+// the ROW's index in range and says nothing about the companion's.
+func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rs, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		key := identName(rs.Key)
+		if key == "" || key == "_" {
+			return true
+		}
+		// Names cut from a slice expression anywhere in this function are treated as already
+		// paired with the row. Conservative: a same-named local sliced elsewhere suppresses.
+		sliced := slicedNames(fn.Body)
+		// THE RANGED THING MUST BE A DELIBERATELY CUT ROW, not any collection. Ranging a field or
+		// a plain slice and indexing a parallel one by the key is ordinary Go — `for i, t := range
+		// obj.Items { out[i] = ... }` — and matching it reported 199 sites, essentially none of
+		// them a numeric kernel. Requiring an explicit cut, or a name that was cut, keeps this to
+		// loops someone converted on purpose.
+		if _, isCut := rs.X.(*ast.SliceExpr); !isCut && !sliced[identName(rs.X)] {
+			return true
+		}
+		// And it must be a REDUCTION: a compound assignment in the body. Without that there is no
+		// hot inner accumulation for the second bounds check to matter to.
+		if !hasCompoundAssign(rs.Body) {
+			return true
+		}
+		seen := map[string]bool{}
+		ast.Inspect(rs.Body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok || identName(ix.Index) != key {
+				return true
+			}
+			base := identName(ix.X)
+			if base == "" || sliced[base] || seen[base] {
+				return true
+			}
+			seen[base] = true
+			out = append(out, finding{
+				pos:      fset.Position(ix.Pos()),
+				category: "companion-not-sliced",
+				msg: fmt.Sprintf("%s[%s] is indexed by the range key of a loop that already ranges a"+
+					" row, so the ROW's bounds check is gone and this one is NOT. Ranging proves only"+
+					" its own index in range; the compiler cannot relate %q's length to the ranged"+
+					" slice. Cut both to the same length — and for a trailing segment write the"+
+					" relation down, as in yr = yr[:len(lr)], or it still cannot see it. MEASURED as"+
+					" the difference between a half-applied and a finished conversion: linalg"+
+					" Cholesky was converted with only the row ranged for geomean -2.08%%, and adding"+
+					" the companion slice afterwards gave a FURTHER -1.59%% with three of four cells"+
+					" at p=0.000. linalg LU, done with both from the start, went -6.61%% geomean over"+
+					" nine cells. Bit-identical: operands and order do not change, only how the"+
+					" indices are proven (SLICE-BOTH-OPERANDS-NOT-JUST-THE-ROW-001). PRECONDITION"+
+					" THIS CHECK CANNOT SEE: the two must genuinely have the same length over the"+
+					" loop's extent — a companion indexed with an OFFSET, or shorter than the row,"+
+					" needs its own slice expression rather than a bare cut", base, key, base),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// hasCompoundAssign reports whether a block accumulates with += or -=.
+func hasCompoundAssign(b *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok &&
+			(as.Tok == token.ADD_ASSIGN || as.Tok == token.SUB_ASSIGN) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// slicedNames collects identifiers assigned from a slice expression, which is what pairing a
+// companion to the ranged row looks like.
+func slicedNames(body *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, r := range as.Rhs {
+			if _, isSlice := r.(*ast.SliceExpr); !isSlice || i >= len(as.Lhs) {
+				continue
+			}
+			if nm := identName(as.Lhs[i]); nm != "" {
+				out[nm] = true
+			}
+		}
+		return true
+	})
+	return out
 }
