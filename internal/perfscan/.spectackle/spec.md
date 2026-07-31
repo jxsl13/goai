@@ -119,3 +119,6 @@ IF a new scan predicate reports 0 sites tree-wide, THEN the implementing agent S
 
 ## A-BOUNDS-CHECK-ALSO-BLOCKS-HOISTING-001
 IF a counted loop indexes slices and recomputes a loop-invariant value, THEN the implementing agent SHALL discharge the bounds checks and hoist the invariant together, since the panic edge splits the block and SSA cannot hoist across it (-21.30% measured).
+
+## A-NOISY-RULE-IS-AS-USELESS-AS-AN-EMPTY-ONE-001
+IF a validated predicate matches a large fraction of ordinary loops, THEN the implementing agent SHALL withhold the check and record the density rather than shipping it, as a 117-site free-dimension predicate overlapping PS1007 was withheld.

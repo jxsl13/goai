@@ -143,3 +143,25 @@ column-rotated, so transposing its storage is a pure relayout) and shipped 1.89x
 IF MORE SPEED IS WANTED HERE, attack the algorithm rather than the layout: block the Jacobi
 sweep, or use a different eigensolver for the sizes that matter. Both change the arithmetic
 and would need the oracle relaxed deliberately, with an ADR, rather than by accident.
+
+## T-01KYWZYDCGFHKSCVZP1QTMFA6A T1022 free-dimension column jam in LU.Solve; SVD Jacobi bounds checks
+kind: task
+state: draft
+created: 2026-07-31
+targets: linalg/linalg.go, linalg/svd.go
+
+MEASURED AND SHIPPED (commit ac9aa7e9).
+
+SITE. linalg LU.Solve, both substitution loops. Lstsq had already been given a free-dimension column jam (colJam=4, qr.go) and LU.Solve was left with byte-for-byte the same loop shape and the same solveCols scaffolding. Each loop is a serial FMA recurrence on ONE accumulator - s depends on the previous s - so it ran at FMA latency rather than throughput, and the entire packed LU array was re-streamed once per right-hand-side column. The scatter compounded it: out[i*cols+c] stepping i jumps a whole output row, so every store touched its own cache line to use eight bytes.
+
+RESULT. LUSolve_768x768 56.76ms to 17.04ms, -69.98%; LUSolve_512x512 -64.06%; Inverse/768 -43.21%; Inverse/512 -35.84%; Inverse/256 -25.67%; all p=0.000, n=10. LUSolve_128x1, where cols==1 forces the remainder path and the jam cannot run, was flat at p=0.436 - the sibling-arm control.
+
+BIT-IDENTICAL, and the distinction is the whole point. The jammed dimension is the FREE one: column c still accumulates over the same j and t in the same ascending order with the same operands into its own accumulator. Nothing is reassociated. This is why the jam is legal exactly where splitting the inner dot into four partials is not - and that inner split is what the scanner recommends and what TestSolveBitStableGoldens (tolerance-zero Float64bits digest), lu_solve_reuse_test (cols in 1,2,3,7) and lu_solve_parallel_equiv_test all forbid. The free-dimension jam obtains the same four independent chains without touching any sum.
+
+MEMORY. Scratch is sized min(colJam, cols)*n, not colJam*n. A first version used the flat colJam*n and measured +91.87% B/op on the single-right-hand-side benchmark (3.266 to 6.266 KiB) for a buffer that path can never use, since cols==1 always takes the remainder loop. Sizing to the columns actually available restored it to byte-identical while the large sizes pay only +1.2% to +2.3%.
+
+ALSO SHIPPED. The SVD one-sided Jacobi accumulation carried two live bounds checks and its column rotation a third. The two panic edges split that body into three basic blocks and rotated the loop so the back edge sat on the second check - four of eleven instructions for three FMAs. Cutting cj to len(ci) once per column pair and ranging over ci discharges all three. SVDPCA -6.64% (p=0.000, n=10).
+
+SCAN RULE DELIBERATELY NOT SHIPPED THIS ROUND, and the reason is recorded so it is not retried blindly. The generalizable pattern is real: an outer loop carrying a FREE index whose body holds a serial single-accumulator reduction that never mentions that index can be jammed K-wide for K independent chains WITHOUT reassociation. A predicate was written and validated to FIRE on the pre-fix site (it reports both substitution loops and drops from 3 hits to 1 after the fix), so it is not broken. But it matches 117 sites tree-wide, because almost every nested reduction has an outer index absent from the accumulation - including ordinary matmul i-over-k loops that PS1007 already covers with band and register-tile advice. A rule at that density is noise, and noise is as useless as an empty rule. Tightening it needs a discriminator for the outer dimension being genuinely free (disjoint outputs) and for the reduction being long enough to be latency-bound; that is the next round's work, not something to rush.
+
+NO EXISTING CHECK FIRES ON THE PRE-FIX SITE. This was verified before designing anything: the scanner reports PS3010 elsewhere in linalg (derived.go, qr.go, svd.go) but nothing at all on linalg.go's substitution loops. The gap is genuine.

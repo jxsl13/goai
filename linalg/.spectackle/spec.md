@@ -30,3 +30,6 @@ Rationale: The one-sided Jacobi sweep in linalg SVD computes alpha, beta and gam
 IF a golden covers a loop that jams by N inside a work partitioner, THEN the implementing agent SHALL assert the per-worker chunk is at least N, since clearing the parallel threshold does not imply the jammed path ran.
 
 Rationale: At cols=24 on a 12-way host solveCols gave each worker 2 columns, so Lstsq four-wide jam never executed and the golden covered only the scalar remainder. It would have passed with an arbitrarily broken jam, and both thresholds were individually satisfied.
+
+## JAM-THE-FREE-DIMENSION-INSTEAD-OF-SPLITTING-THE-SUM-001
+IF a serial single-accumulator reduction is latency-bound but its value is pinned bit-exactly, THEN the implementing agent SHALL jam 4 of the free outer dimension instead, which buys the same independent chains with no reassociation (-69.98% measured).
