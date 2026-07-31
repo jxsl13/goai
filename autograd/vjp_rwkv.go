@@ -36,7 +36,6 @@ import (
 // before any read, dvcol/dkcol are cleared at the top of each channel, and loga/p are written
 // through index t before being read through t.
 type wkvScratch struct {
-	loga, p          []float64
 	kcol, vcol, gcol []float64
 	dvcol, dkcol     []float64
 	// The F32 arm accumulates its gradient columns in float32 on purpose: that branch rounds on
@@ -173,12 +172,40 @@ func (s *wkvScratch) grad32() ([]float32, []float32) {
 	return s.dvcol32, s.dkcol32
 }
 
-func newWKVScratch(seq int) *wkvScratch {
-	return &wkvScratch{
-		loga: make([]float64, seq), p: make([]float64, seq),
-		kcol: make([]float64, seq), vcol: make([]float64, seq), gcol: make([]float64, seq),
-		seq: seq,
+// wkvScratchPool keeps one worker's buffers alive between CALLS.
+//
+// The linear backward needs eight seq-long arrays per worker, and allocating them per call cost
+// +37.8% allocs/op against the quadratic version it replaced — a fair trade for 17.8x, but an
+// avoidable one. Training calls this op once per layer per step at a fixed seq, so a pooled scratch
+// hits on essentially every call after the first.
+//
+// Every array is allocated on FIRST USE rather than up front: the two dtype arms need different
+// gradient buffers and only one of them runs in a given process, and the loga/p pair the quadratic
+// path used is gone entirely — it survived the rewrite as two dead allocations per worker per call
+// because nothing read the struct fields any more.
+var wkvScratchPool sync.Pool
+
+func getWKVScratch(seq int) *wkvScratch {
+	if s, _ := wkvScratchPool.Get().(*wkvScratch); s != nil {
+		if s.seq == seq {
+			return s
+		}
+		// A different sequence length: drop the buffers rather than keep a mismatched set, and
+		// let the lazy accessors rebuild them at the new size.
+		*s = wkvScratch{seq: seq}
+		return s
 	}
+	return &wkvScratch{seq: seq}
+}
+
+// cols returns the three gathered input columns, allocating on first use.
+func (s *wkvScratch) cols() (kcol, vcol, gcol []float64) {
+	if s.kcol == nil {
+		s.kcol = make([]float64, s.seq)
+		s.vcol = make([]float64, s.seq)
+		s.gcol = make([]float64, s.seq)
+	}
+	return s.kcol, s.vcol, s.gcol
 }
 
 // wkvParallelChannels runs body over the d independent channels, each worker with its own scratch.
@@ -202,7 +229,8 @@ func wkvParallelChannels(d, seq int, body func(c int, s *wkvScratch)) {
 		nw = d
 	}
 	if nw <= 1 {
-		s := newWKVScratch(seq)
+		s := getWKVScratch(seq)
+		defer wkvScratchPool.Put(s)
 		for c := range d {
 			body(c, s)
 		}
@@ -214,7 +242,8 @@ func wkvParallelChannels(d, seq int, body func(c int, s *wkvScratch)) {
 	for range nw {
 		go func() {
 			defer wg.Done()
-			s := newWKVScratch(seq)
+			s := getWKVScratch(seq)
+			defer wkvScratchPool.Put(s)
 			for {
 				c := int(next.Add(1)) - 1
 				if c >= d {
@@ -271,7 +300,7 @@ func init() {
 					// Allocated per CHUNK, not per channel: the callback runs once per
 					// worker, so this is O(GOMAXPROCS) allocations for the whole call, and
 					// hoisting them any further would share them across workers.
-					kcol, vcol, gcol := sc.kcol, sc.vcol, sc.gcol
+					kcol, vcol, gcol := sc.cols()
 					dvcol, dkcol := sc.grad64()
 					{
 						wc, uc := ws[c], us[c]
@@ -307,7 +336,7 @@ func init() {
 				wkvParallelChannels(d, seq, func(c int, sc *wkvScratch) {
 					// Same column gather as the F64 branch (PS6011). The gradient scratch is
 					// gathers convert once, which is exact.
-					kcol, vcol, gcol := sc.kcol, sc.vcol, sc.gcol
+					kcol, vcol, gcol := sc.cols()
 					{
 						wc, uc := float64(ws[c]), float64(us[c])
 						for i := range seq {
