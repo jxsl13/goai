@@ -100,18 +100,32 @@ func wkvChannelBackward(seq int, kcol, vcol, gcol []float64, wc, uc float64, sc 
 	for t := 0; t < seq; t++ {
 		dgt := uc + kcol[t]
 		var at, z, dt, pT, qT, nT float64
+		// ed is exp(dgt-z), shared by dt and the diagonal below. Because z is the maximum of the
+		// two exponents, one of them equals z and its exp is exactly 1 — so the skipped call is
+		// replaced by the literal it would have returned, and the result is BIT-IDENTICAL rather
+		// than a reassociation (contrast dotAndNorm, which is not). Testing z against the argument
+		// rather than branching on a comparison keeps NaN propagating: a NaN argument makes z NaN,
+		// z != arg is then true, and the exp still runs (PS3018).
+		ed := 1.0
 		if t == 0 {
 			z, dt = dgt, 1
 		} else {
 			l := curM - float64(t-1)*wc
 			z = math.Max(l, dgt)
-			dt = math.Exp(l-z)*sS + math.Exp(dgt-z)
-			at = math.Exp(l-z) / dt
+			el := 1.0
+			if z != l {
+				el = math.Exp(l - z)
+			}
+			if z != dgt {
+				ed = math.Exp(dgt - z)
+			}
+			dt = el*sS + ed
+			at = el / dt
 			pT = float64(t-1)*sS - sS1
 			qT = float64(t-1)*sN - sN1
 			nT = sN
 		}
-		qd := math.Exp(dgt-z) / dt
+		qd := ed / dt
 		wk := at*nT + qd*vcol[t]
 		alpha[t], wkvs[t], qdiag[t] = at, wk, qd
 		if gt := gcol[t]; gt != 0 {
@@ -131,7 +145,12 @@ func wkvChannelBackward(seq int, kcol, vcol, gcol []float64, wc, uc float64, sc 
 		}
 		curM = nm
 		mpost[t] = curM
-		e := math.Exp(b[t] - curM)
+		// b rises by w per step whenever the decay is positive, so b[t] IS the new maximum on
+		// nearly every step and this exp is exp(0) = 1 exactly.
+		e := 1.0
+		if b[t] != curM {
+			e = math.Exp(b[t] - curM)
+		}
 		sS += e
 		sN += e * vcol[t]
 		sS1 += float64(t) * e

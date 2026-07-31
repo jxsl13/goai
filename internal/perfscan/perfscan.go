@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3018", "max-normalized-exp", "math.Exp(x - m) where m is a max that INCLUDES x, so the call is exp(0) whenever the max picked x and exp(0) is exactly 1. MEASURED TWICE: on the RWKV WKV forward scan, where both stabilized pairs had this shape and half of four calls per element computed a constant, -12.42%% and -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical over 6540 gradients across five decay regimes including negative and zero. Check for REPEATS at the same time: each call SITE is reported, and in the backward each of the two exponents appeared twice — math.Exp is not inlined, so a repeat is a second evaluation rather than a subexpression the compiler folds. Test the max against the ARGUMENT rather than branching on the original comparison, so a NaN operand still evaluates both exponentials exactly as before. The win scales with 1/N — over a max of N terms it saves one call in N and is not worth the branch; it paid here because N is two — and the measured saving was a third of what the exp profile share predicted", false},
 	{"PS3017", "companion-not-sliced", "a loop that already ranges over a row but still indexes a SECOND slice with the range key, so only half the bounds checks are gone. Ranging proves the row index in range and says nothing about the companion, whose length the compiler cannot relate to the ranged slice. Cut both to the same length, writing the relation explicitly for a trailing segment. MEASURED as the gap between a half-applied and a finished conversion: linalg Cholesky ranged only the row for geomean -2.08%% and gained a FURTHER -1.59%% (three of four cells at p=0.000) when the companion was sliced, while linalg LU done with both from the start went -6.61%% geomean over nine cells. Bit-identical. Silent when the companion name is cut from a slice expression anywhere in the function; the precondition it cannot check is that the two really span the same extent, so an offset or shorter companion needs its own slice", false},
 	{"PS3016", "two-deep-index-not-ranged", "an inner loop reading m[i][k] with the OUTER index invariant, so every step re-loads the row pointer and bounds-checks against it. Hoist the row and RANGE over it — and the range is the half that pays. On linalg Cholesky forward substitution, hoisting the row while keeping the integer-bounded loop measured geomean -0.53%% over eleven benchmarks with one cell at +0.41%% (p=0.038) and did not reach significance at n=12 (p=0.060); converting the same site to range over the row gave -2.82%%, -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The mechanism is bounds-check elimination, not the pointer reload. Bit-identical either way. Silent when the loop already ranges over a slice, which is the applied form; a loop whose OUTER index moves instead has no row to range and is a different problem", false},
 	{"PS3015", "write-only-alloc-field", "a struct field handed a fresh allocation and read nowhere in the package, so every construction pays for a buffer nothing uses. The compiler will not report it: an unused local is an error, but a field assigned in a constructor counts as a use. MEASURED on the autograd WKV backward, where a linear-time rewrite stopped needing the loga and p exponent buffers the quadratic path required and they kept being allocated per worker per call; removing them with a pooled scratch took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, worth a further 15.82%% geomean on time. A KERNEL REWRITE IS THE USUAL CAUSE, since the scratch a kernel inherits describes the algorithm it replaced. Restricted to UNEXPORTED fields, where absence of reads in the package is conclusive, and matched by NAME without types so a same-named field read anywhere suppresses it; a read through reflection is the remaining blind spot", false},
@@ -2191,6 +2192,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, coupledIndexWeightFindings(fset, fn)...)
 	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
 	out = append(out, companionNotSlicedFindings(fset, fn)...)
+	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -12373,4 +12375,124 @@ func assignedFrom(body *ast.BlockStmt, want func(ast.Expr) bool) map[string]bool
 		return true
 	})
 	return out
+}
+
+// maxNormalizedExpFindings flags PS3018 — math.Exp(x - m) where m was assigned from a max that
+// INCLUDES x, so the call is exp(0) whenever the max picked x, and exp(0) is exactly 1.
+func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		// maxOf[name] = the argument expressions of the max assigned to it.
+		maxOf := map[string][]ast.Expr{}
+		for _, st := range blk.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			call, ok := as.Rhs[0].(*ast.CallExpr)
+			if !ok || !isMathCall(call, "Max") || len(call.Args) != 2 {
+				continue
+			}
+			if nm := identName(as.Lhs[0]); nm != "" {
+				maxOf[nm] = call.Args
+			}
+		}
+		if len(maxOf) == 0 {
+			return true
+		}
+		// Calls already guarded by a test of the max against an argument are the APPLIED form —
+		// that guard is exactly the fix — and reporting them files the fix as the defect.
+		guarded := map[token.Pos]bool{}
+		ast.Inspect(blk, func(g ast.Node) bool {
+			ifs, ok := g.(*ast.IfStmt)
+			if !ok {
+				return true
+			}
+			cmp, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || (cmp.Op != token.NEQ && cmp.Op != token.EQL &&
+				cmp.Op != token.GEQ && cmp.Op != token.LEQ &&
+				cmp.Op != token.GTR && cmp.Op != token.LSS) {
+				return true
+			}
+			if _, isMax := maxOf[identName(cmp.X)]; !isMax {
+				if _, isMax := maxOf[identName(cmp.Y)]; !isMax {
+					return true
+				}
+			}
+			ast.Inspect(ifs, func(h ast.Node) bool {
+				if c, ok := h.(*ast.CallExpr); ok && isMathCall(c, "Exp") {
+					guarded[c.Pos()] = true
+				}
+				return true
+			})
+			return true
+		})
+		ast.Inspect(blk, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || !isMathCall(call, "Exp") || len(call.Args) != 1 || seen[call.Pos()] ||
+				guarded[call.Pos()] {
+				return true
+			}
+			sub, ok := unparen(call.Args[0]).(*ast.BinaryExpr)
+			if !ok || sub.Op != token.SUB {
+				return true
+			}
+			args, ok := maxOf[identName(sub.Y)]
+			if !ok {
+				return true
+			}
+			lhs := renderExpr(unparen(sub.X))
+			for _, a := range args {
+				if renderExpr(unparen(a)) != lhs {
+					continue
+				}
+				seen[call.Pos()] = true
+				out = append(out, finding{
+					pos:      fset.Position(call.Pos()),
+					category: "max-normalized-exp",
+					msg: fmt.Sprintf("math.Exp(%s - %s) where %s is the max OF %s, so this call is"+
+						" exp(0) whenever the max picked it — and exp(0) is exactly 1. Replace the"+
+						" call with the literal when the argument equals the max. MEASURED TWICE: on"+
+						" the RWKV WKV forward scan, where both stabilized pairs had this shape and"+
+						" half of four calls per element were computing a constant, -12.42%% and"+
+						" -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on"+
+						" the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical"+
+						" over 6540 gradients across five decay regimes including negative and zero"+
+						" decay. CHECK FOR REPEATS AT THE SAME TIME: this check reports each CALL"+
+						" SITE, and in the backward each of the two exponents appeared TWICE."+
+						" math.Exp is not inlined, so a repeat is a second evaluation and not a"+
+						" subexpression the compiler folds — binding it to a local was half of that"+
+						" win."+
+						" TEST THE MAX AGAINST THE ARGUMENT, do not branch on the original"+
+						" comparison: with a NaN operand math.Max yields NaN, the equality fails and"+
+						" both exponentials still evaluate exactly as before, whereas an if/else on"+
+						" `a >= b` substitutes a 1 the original never produced. THE WIN SCALES WITH"+
+						" 1/N: over a max of N terms this saves one call in N and is not worth the"+
+						" branch; it paid here because N is two. Note also the saving came to a third"+
+						" of what the exp share predicted, so rank by term count rather than by"+
+						" profile share (THE-MAX-NORMALIZED-EXP-IS-EXACTLY-ONE-001)",
+						lhs, identName(sub.Y), identName(sub.Y), renderExpr(args[0])+" and "+renderExpr(args[1])),
+				})
+				break
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// isMathCall reports whether a call is math.<name>.
+func isMathCall(c *ast.CallExpr, name string) bool {
+	sel, ok := c.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "math"
 }
