@@ -2809,7 +2809,7 @@ func main() {
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
 	collectThresholdUse(fset, parsed)
-	collectWriteOnlyFields(parsed)
+	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
@@ -11861,7 +11861,7 @@ var (
 //
 // Restricted to UNEXPORTED names because those cannot be read outside the package, which is what
 // makes "no reads anywhere here" conclusive.
-func collectWriteOnlyFields(files []*ast.File) {
+func collectWriteOnlyFields(fset *token.FileSet, files []*ast.File) {
 	deadFieldDeclared = map[string]bool{}
 	deadFieldRead = map[string]bool{}
 	for _, f := range files {
@@ -11883,6 +11883,32 @@ func collectWriteOnlyFields(files []*ast.File) {
 	for _, f := range files {
 		markFieldReads(f)
 	}
+	// TEST FILES COUNT AS READERS, and they are parsed here rather than taken from the scan set
+	// because the default run excludes them. Without this, any field whose only consumer is a
+	// test reads as dead: nlp's layerSkipDecodeTrace.blockTokens is written in production and
+	// ranged over only by llama_layerskip_decode_internal_test.go, and it was reported until
+	// test files were included. Nothing in a test file is ever REPORTED — they are read for
+	// field mentions alone.
+	dirs := map[string]bool{}
+	for _, f := range files {
+		dirs[filepath.Dir(fset.Position(f.Pos()).Filename)] = true
+	}
+	for dir := range dirs {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			tf, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+			if err != nil {
+				continue
+			}
+			markFieldReads(tf)
+		}
+	}
 }
 
 // markFieldReads records field names appearing anywhere OTHER than as a write target: the left side
@@ -11893,13 +11919,34 @@ func markFieldReads(f *ast.File) {
 		switch s := n.(type) {
 		case *ast.AssignStmt:
 			for _, l := range s.Lhs {
-				if sel, ok := l.(*ast.SelectorExpr); ok {
-					writeTargets[sel.Sel] = true
+				switch t := l.(type) {
+				case *ast.SelectorExpr:
+					writeTargets[t.Sel] = true
+				case *ast.IndexExpr:
+					// x.f[i] = v STORES INTO an element. It reads the header to find the
+					// backing array, but it is not a use of the DATA, and treating it as one
+					// is what let a field written only through its own initialization loop
+					// look alive.
+					if sel, ok := t.X.(*ast.SelectorExpr); ok {
+						writeTargets[sel.Sel] = true
+					}
 				}
 			}
 		case *ast.KeyValueExpr:
 			if id, ok := s.Key.(*ast.Ident); ok {
 				writeTargets[id] = true
+			}
+		case *ast.RangeStmt:
+			// `for i := range x.f` with NO value variable ranges for the indices alone, which
+			// an initialization loop does to fill the field. That is not a read of the data
+			// either. `for _, v := range x.f` IS, because v carries an element out, so the
+			// value variable is the discriminator and dropping it would flag genuinely-read
+			// fields.
+			if s.Value != nil && identName(s.Value) != "_" {
+				return true
+			}
+			if sel, ok := s.X.(*ast.SelectorExpr); ok {
+				writeTargets[sel.Sel] = true
 			}
 		}
 		return true
@@ -11949,11 +11996,21 @@ func writeOnlyAllocFieldFindings(fset *token.FileSet, f *ast.File) []finding {
 			}
 		case *ast.AssignStmt:
 			for i, l := range s.Lhs {
-				sel, ok := l.(*ast.SelectorExpr)
-				if !ok || i >= len(s.Rhs) || !allocatingExpr(s.Rhs[i]) {
+				if i >= len(s.Rhs) || !allocatingExpr(s.Rhs[i]) {
 					continue
 				}
-				report(sel.Sel.Name, sel.Sel.Pos(), allocKind(s.Rhs[i]))
+				switch t := l.(type) {
+				case *ast.SelectorExpr:
+					report(t.Sel.Name, t.Sel.Pos(), allocKind(s.Rhs[i]))
+				case *ast.IndexExpr:
+					// x.f[i] = make(...) fills a field ELEMENT by element, which is how an
+					// array-of-slices scratch is initialized. The allocation is just as wasted
+					// when nothing reads f, and reporting only whole-field assignment missed
+					// exactly that shape.
+					if sel, ok := t.X.(*ast.SelectorExpr); ok {
+						report(sel.Sel.Name, sel.Sel.Pos(), allocKind(s.Rhs[i]))
+					}
+				}
 			}
 		}
 		return true

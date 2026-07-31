@@ -17,7 +17,7 @@ func deadFieldFindings(t *testing.T, src string) []finding {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	collectWriteOnlyFields([]*ast.File{f})
+	collectWriteOnlyFields(fset, []*ast.File{f})
 	var out []finding
 	for _, fd := range scanFile(fset, f, testSets(t)) {
 		if fd.category == "write-only-alloc-field" {
@@ -105,5 +105,52 @@ type scratch struct{ tmp []float64 }
 func fill(s *scratch, n int) { s.tmp = make([]float64, n) }`
 	if fs := deadFieldFindings(t, src); len(fs) != 1 {
 		t.Fatalf("%d findings, want 1 — an assigned allocation counts too", len(fs))
+	}
+}
+
+// TestDetectPS3015_TestFilesCountAsReaders pins the rule that a field consumed only by a test is
+// NOT dead.
+//
+// perfscan excludes _test.go by default, so without parsing them in the collection pass any
+// test-only reader is invisible and its field reads as unused. nlp's layerSkipDecodeTrace has
+// exactly that shape — written in production, ranged over only by an internal test — and it was
+// reported until test files were included. This fixture stands in for that, since scanSrc has no
+// sibling files: it proves the RANGE-with-value form registers as a read, which is the mechanism
+// the real case depends on.
+func TestDetectPS3015_RangeWithValueIsARead(t *testing.T) {
+	src := `package p
+
+type trace struct{ counts []int }
+
+func newTrace(n int) *trace { return &trace{counts: make([]int, n)} }
+
+func report(tr *trace) int {
+	total := 0
+	for _, n := range tr.counts {
+		total += n
+	}
+	return total
+}`
+	if fs := deadFieldFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — ranging WITH a value carries elements out:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3015_RangeWithoutValueIsNotARead is the other half, and the reason the value variable
+// is the discriminator: an initialization loop ranges for indices alone to FILL the field, which is
+// not a use of the data. Without this the yScratch4 shape stayed invisible.
+func TestDetectPS3015_RangeWithoutValueIsNotARead(t *testing.T) {
+	src := `package p
+
+type scratch struct{ rows [4][]float64 }
+
+func fill(s *scratch, d int) {
+	for t := range s.rows {
+		s.rows[t] = make([]float64, d)
+	}
+}`
+	if fs := deadFieldFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — an index-only range that fills the field is not a read", len(fs))
 	}
 }

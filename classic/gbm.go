@@ -232,12 +232,11 @@ type gbmBuilder struct {
 	n, d     int
 	maxDepth int
 	minLeaf  int
-	master   [][]int   // presorted [0..n) by each feature (built once, immutable)
-	cols     [][]int   // per-round working columns; cols[f][start:end] = node samples sorted by f
-	part     []int     // stable-partition scratch (len n)
-	goLeft   []bool    // per-sample split membership during a partition (len n)
-	inSet    []bool    // membership of a round's subsample (len n)
-	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
+	master   [][]int // presorted [0..n) by each feature (built once, immutable)
+	cols     [][]int // per-round working columns; cols[f][start:end] = node samples sorted by f
+	part     []int   // stable-partition scratch (len n)
+	goLeft   []bool  // per-sample split membership during a partition (len n)
+	inSet    []bool  // membership of a round's subsample (len n)
 
 	// xT is x transposed into ONE flat feature-major buffer: xT[f*n+row] == x[row][f].
 	//
@@ -312,7 +311,6 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.part = make([]int, n)
 	b.goLeft = make([]bool, n)
 	b.inSet = make([]bool, n)
-	b.vals = make([]float64, n)
 	w := parallel.Workers()
 	b.valsPar = make([][]float64, w)
 	b.partPar = make([][]int, w)
@@ -384,9 +382,9 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 	}
 	// PARALLEL over features. Two things had to change, neither incidental:
 	//
-	// b.vals was a SHARED scratch buffer on the builder, overwritten by every feature —
-	// the receiver-scratch shape PS6006 exists for, though its name heuristic does not
-	// catch "vals". It becomes a per-chunk buffer.
+	// The feature-value scratch was a SHARED buffer on the builder, overwritten by every
+	// feature — the receiver-scratch shape PS6006 exists for, though its name heuristic did
+	// not catch it. It is a per-chunk buffer now.
 	//
 	// The best-gain tracking is an ARGMAX REDUCTION across features. Each feature now
 	// records its own candidate and they are combined afterward in ASCENDING FEATURE
