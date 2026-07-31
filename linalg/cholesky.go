@@ -127,8 +127,20 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 			// the shape, not the payoff, which is why its output says candidates rather than wins.
 			for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
 				s := y[i]
-				for k := i + 1; k < n; k++ {
-					s -= l[k][i] * y[k]
+				// Three bounds checks against ONE multiply-add: l[k], then [i], then y[k].
+				// Ranging the ROW POINTERS and pairing y to the same extent leaves only lk[i],
+				// taking the inner loop from 3 checks to 1 (verified with
+				// -gcflags=-d=ssa/check_bce/debug=1). There is no row to range along here — the
+				// walk is down a column — but the slice of rows can be, which is the part the
+				// earlier column-gather rejection did not cover.
+				//
+				// Bit-identical: lr[t] is l[i+1+t] and yr[t] is y[i+1+t], the same operands in the
+				// same ascending order.
+				lr := l[i+1 : n]
+				yr := y[i+1 : n]
+				yr = yr[:len(lr)]
+				for t, lk := range lr {
+					s -= lk[i] * yr[t]
 				}
 				y[i] = s / l[i][i]
 			}
