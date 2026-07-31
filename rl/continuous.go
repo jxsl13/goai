@@ -322,9 +322,20 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 		if s.Dtype() == tensor.F64 && d.Dtype() == tensor.F64 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F64()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F64()[d.Offset() : d.Offset()+d.Numel()]
+			// omt is hoisted and the chunk is re-sliced for one reason each, and the two are
+			// connected: the loop carried a bounds check on so[j] AND on to[j], and those two
+			// panic edges split the body into separate basic blocks — Go's SSA will not hoist
+			// across a block that can panic, so (1-tau) was rematerialized every iteration
+			// (FMOVD $(1.0) then FSUBD, visible in -gcflags=-S). Discharging the checks is what
+			// makes the hoist possible; ranging over ds bounds j, and cutting ss to len(ds)
+			// relates the second operand to it. 1-tau computed once is the identical double,
+			// and the expression shape is otherwise untouched, so nothing is reassociated.
+			omt := 1 - tau
 			softUpdateRun(len(to), func(lo, hi int) {
-				for j := lo; j < hi; j++ {
-					to[j] = tau*so[j] + (1-tau)*to[j]
+				ds, ss := to[lo:hi], so[lo:hi]
+				ss = ss[:len(ds)]
+				for j := range ds {
+					ds[j] = tau*ss[j] + omt*ds[j]
 				}
 			})
 			continue
@@ -332,9 +343,13 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 		if s.Dtype() == tensor.F32 && d.Dtype() == tensor.F32 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F32()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F32()[d.Offset() : d.Offset()+d.Numel()]
+			// Same two defects as the F64 arm above, same remedy; see the comment there.
+			omt := 1 - tau
 			softUpdateRun(len(to), func(lo, hi int) {
-				for j := lo; j < hi; j++ {
-					to[j] = float32(tau*float64(so[j]) + (1-tau)*float64(to[j]))
+				ds, ss := to[lo:hi], so[lo:hi]
+				ss = ss[:len(ds)]
+				for j := range ds {
+					ds[j] = float32(tau*float64(ss[j]) + omt*float64(ds[j]))
 				}
 			})
 			continue
