@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3016", "two-deep-index-not-ranged", "an inner loop reading m[i][k] with the OUTER index invariant, so every step re-loads the row pointer and bounds-checks against it. Hoist the row and RANGE over it — and the range is the half that pays. On linalg Cholesky forward substitution, hoisting the row while keeping the integer-bounded loop measured geomean -0.53%% over eleven benchmarks with one cell at +0.41%% (p=0.038) and did not reach significance at n=12 (p=0.060); converting the same site to range over the row gave -2.82%%, -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The mechanism is bounds-check elimination, not the pointer reload. Bit-identical either way. Silent when the loop already ranges over a slice, which is the applied form; a loop whose OUTER index moves instead has no row to range and is a different problem", false},
 	{"PS3015", "write-only-alloc-field", "a struct field handed a fresh allocation and read nowhere in the package, so every construction pays for a buffer nothing uses. The compiler will not report it: an unused local is an error, but a field assigned in a constructor counts as a use. MEASURED on the autograd WKV backward, where a linear-time rewrite stopped needing the loga and p exponent buffers the quadratic path required and they kept being allocated per worker per call; removing them with a pooled scratch took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, worth a further 15.82%% geomean on time. A KERNEL REWRITE IS THE USUAL CAUSE, since the scratch a kernel inherits describes the algorithm it replaced. Restricted to UNEXPORTED fields, where absence of reads in the package is conclusive, and matched by NAME without types so a same-named field read anywhere suppresses it; a read through reflection is the remaining blind spot", false},
 	{"PS3014", "coupled-index-weight", "a doubly-nested reduction whose accumulated term is scaled by an arithmetic combination of BOTH loop indices, used as a VALUE rather than as an index. That coupling is what makes such a sum look irreducibly quadratic, and a DIFFERENCE usually is not: (t-1-i) rewrites as (t-1) minus i, turning one distance-weighted sum into (t-1)*S minus S1 over two ordinary prefix sums maintained in O(1) per step. MEASURED on the autograd WKV backward, where dw was the only gradient with a distance weight and the only reason the pass stayed quadratic; splitting it took seq=512 from 10335us to 580us (17.8x) and the cost per doubling of seq from 3.85x to 1.81x. PRECONDITION THE CHECK CANNOT SEE: the remaining factors must separate into a t-only part and an i-only part or nothing hoists. Products and moduli of the two indices generally do not split and are reported only so they can be ruled out deliberately. Index arithmetic is excluded, since a[t*n+i] couples the indices to address memory rather than to weight a value", false},
 	{"PS3013", "leaking-format-param", "a pointer-carrying parameter handed to a fmt call. Passing it as an interface argument makes escape analysis mark the PARAMETER as leaking, and that verdict belongs to the function rather than to the branch, so every caller heap-allocates its argument even though the formatting usually sits on a panic or error path that never runs. MEASURED on tensor.NewOn, whose invalid-shape panic formatted its shape with a %%v verb: the shape literal at every call site escaped, costing one allocation per tensor created anywhere in the tree. Swapping in shape.String(), which escape analysis already proves non-escaping, took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with time unchanged (p=1.000, n=12) and QuantMamba2 decode -8.70%% allocs. Fix with a non-escaping formatter, never by deleting the message, and VERIFY with go build -gcflags=-m that the parameter flips from leaking param to does not escape — another leak in the same function keeps the old verdict and the change buys nothing. Named parameter types need the configured pointerTypeNames list, since with no type checker a named slice and an int alias are indistinguishable", false},
@@ -2187,6 +2188,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, sliceBuiltForOneElementFindings(fset, fn)...)
 	out = append(out, leakingFormatParamFindings(fset, fn, ns)...)
 	out = append(out, coupledIndexWeightFindings(fset, fn)...)
+	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -12042,4 +12044,121 @@ func allocKind(e ast.Expr) string {
 		}
 	}
 	return ""
+}
+
+// twoDeepIndexNotRangedFindings flags PS3016 — an inner loop reading m[i][k] where the OUTER index
+// is invariant, so the row could be ranged over instead of indexed.
+//
+// Reported only when the loop does NOT already range over a slice: ranging is the fix, so a loop
+// that already does it is the applied form.
+func twoDeepIndexNotRangedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		k := loopVarOf(n)
+		if k == "" || rangesOverSlice(n) {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok || identName(ix.Index) != k {
+				return true
+			}
+			inner, ok := ix.X.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// The outer subscript must be INVARIANT for the whole loop, not merely different
+			// from this loop's variable. Checking only the latter let the OUTER loop of a nested
+			// pair match l[k][i]: from its point of view i is the moving subscript and k the row,
+			// when k is the inner loop's own variable and there is no fixed row at all.
+			row := identName(inner.Index)
+			if row == "" || row == k || assignedWithin(body, row) {
+				return true
+			}
+			base := identName(inner.X)
+			if base == "" || seen[base] {
+				return true
+			}
+			seen[base] = true
+			out = append(out, finding{
+				pos:      fset.Position(ix.Pos()),
+				category: "two-deep-index-not-ranged",
+				msg: fmt.Sprintf("%s[%s][%s] indexes two deep with %q invariant in this loop, so every"+
+					" step re-loads the row pointer AND bounds-checks against it. Hoist the row and"+
+					" RANGE over it. THE RANGE IS THE PART THAT PAYS, which is worth stating because"+
+					" the obvious half does not: on linalg Cholesky's forward substitution, hoisting"+
+					" li := l[i] while keeping the integer-bounded loop measured geomean -0.53%%"+
+					" over eleven benchmarks with one cell at +0.41%% (p=0.038), and re-running the"+
+					" two largest shapes at n=12 still failed to reach significance at p=0.060."+
+					" Converting the same site to `for k, lik := range li[:i]` then gave -2.82%%,"+
+					" -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The"+
+					" mechanism is bounds-check elimination, not the pointer reload, and a loop"+
+					" bounded by an int keeps the check however the pointer is held"+
+					" (HOISTING-A-ROW-PAYS-ONLY-VIA-THE-RANGE-001). Bit-identical either way: the"+
+					" operands and their order do not change. PRECONDITION THIS CHECK CANNOT SEE:"+
+					" the range bound must equal the loop's own bound, so a loop running to something"+
+					" other than the row length needs a slice expression rather than a bare range,"+
+					" and one whose OUTER index moves instead — m[k][i] — has no row to range at all"+
+					" and is a different problem", base, identName(inner.Index), k,
+					identName(inner.Index)),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// assignedWithin reports whether a name is defined or assigned anywhere inside a block, which
+// includes serving as a nested loop's variable. Such a name is not invariant for the outer loop.
+func assignedWithin(body *ast.BlockStmt, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range s.Lhs {
+				if identName(l) == name {
+					found = true
+				}
+			}
+		case *ast.RangeStmt:
+			if identName(s.Key) == name || identName(s.Value) == name {
+				found = true
+			}
+		case *ast.IncDecStmt:
+			if identName(s.X) == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// rangesOverSlice reports whether a loop already ranges over A ROW, which is the applied form.
+//
+// A BARE IDENTIFIER does not count, and that is the whole subtlety: `for k := range i` over an int
+// is syntactically indistinguishable from `for k := range xs` over a slice, and treating both as
+// applied made this check miss the very site it was built from — Cholesky's forward substitution
+// loops `for k := range i`. Only a row EXPRESSION — a slice of one, an element of a slice-of-slices,
+// or a field — is evidence the fix is already in. Ranging over some other slice is still a
+// candidate, since it is the ROW whose bounds check the range has to eliminate.
+func rangesOverSlice(n ast.Node) bool {
+	rs, ok := n.(*ast.RangeStmt)
+	if !ok {
+		return false
+	}
+	switch rs.X.(type) {
+	case *ast.SliceExpr, *ast.IndexExpr, *ast.SelectorExpr:
+		return true
+	}
+	return false
 }
