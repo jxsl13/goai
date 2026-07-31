@@ -4,6 +4,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
@@ -27,35 +28,93 @@ import (
 // stabilization — exact but quadratic; a linear-time backward (the official
 // CUDA kernel's reverse recurrence) is a separate optimization task. Passes
 // the §V2 finite-difference check.
-// wkvParallelChannels runs body over the d independent channels in GOMAXPROCS chunks,
-// each worker with its own loga/p scratch. Channels write disjoint output columns and each
-// channel's accumulation order is unchanged, so the result is bit-identical to the serial
-// loop. The WKV backward is O(T^2) per channel so parallelism always pays here.
-func wkvParallelChannels(d, seq int, body func(clo, chi int, loga, p []float64)) {
+// wkvScratch is one worker's reusable buffers. Hoisting these out of the body is what lets the
+// channel grain drop to one without multiplying allocations: the count stays O(GOMAXPROCS) however
+// many times a worker goes back for more work.
+//
+// Reuse across channels is safe by inspection. kcol/vcol/gcol are fully overwritten by the gather
+// before any read, dvcol/dkcol are cleared at the top of each channel, and loga/p are written
+// through index t before being read through t.
+type wkvScratch struct {
+	loga, p          []float64
+	kcol, vcol, gcol []float64
+	dvcol, dkcol     []float64
+	// The F32 arm accumulates its gradient columns in float32 on purpose: that branch rounds on
+	// every accumulating store, and widening them would be more accurate but would not reproduce
+	// the existing bits.
+	dvcol32, dkcol32 []float32
+	seq              int
+}
+
+// grad64 and grad32 allocate the gradient columns ON FIRST USE. A worker only ever runs one dtype
+// arm, so eagerly allocating both pairs left two buffers per worker permanently untouched — worth
+// 24 of the 34 allocations this scratch initially added.
+func (s *wkvScratch) grad64() ([]float64, []float64) {
+	if s.dvcol == nil {
+		s.dvcol = make([]float64, s.seq)
+		s.dkcol = make([]float64, s.seq)
+	}
+	return s.dvcol, s.dkcol
+}
+
+func (s *wkvScratch) grad32() ([]float32, []float32) {
+	if s.dvcol32 == nil {
+		s.dvcol32 = make([]float32, s.seq)
+		s.dkcol32 = make([]float32, s.seq)
+	}
+	return s.dvcol32, s.dkcol32
+}
+
+func newWKVScratch(seq int) *wkvScratch {
+	return &wkvScratch{
+		loga: make([]float64, seq), p: make([]float64, seq),
+		kcol: make([]float64, seq), vcol: make([]float64, seq), gcol: make([]float64, seq),
+		seq: seq,
+	}
+}
+
+// wkvParallelChannels runs body over the d independent channels, each worker with its own scratch.
+// Channels write disjoint output columns and each channel's accumulation order is unchanged, so the
+// result is bit-identical to the serial loop AND to any other partition. The WKV backward is
+// O(T^2) per channel so parallelism always pays here.
+//
+// Channels are CLAIMED, not dealt. An equal static split assumes every worker retires its share at
+// the same rate, and on this host that is false: an M2 Pro has 8 performance and 4 efficiency
+// cores, so the chunk that lands on an E core sets the barrier for everyone. Measured on
+// BenchmarkWKVVJP_F64 with the static split, more cores made it SLOWER — GOMAXPROCS=8 ran 3.36ms
+// against 3.76ms at 12 — because the extra workers were all E cores and every P core then waited on
+// them. pthread_cond_wait was 47.96% of the profile, more than every line of this kernel combined.
+//
+// With an atomic cursor a fast core simply comes back for another channel, so the split matches the
+// cores rather than the count. The grain is one channel: at O(seq^2) work per channel the claim is
+// far too cheap to matter, and a coarser grain would reintroduce the same tail.
+func wkvParallelChannels(d, seq int, body func(c int, s *wkvScratch)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > d {
 		nw = d
 	}
 	if nw <= 1 {
-		body(0, d, make([]float64, seq), make([]float64, seq))
+		s := newWKVScratch(seq)
+		for c := range d {
+			body(c, s)
+		}
 		return
 	}
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	chunk := (d + nw - 1) / nw
-	for w := 0; w < nw; w++ {
-		lo := w * chunk
-		if lo >= d {
-			break
-		}
-		hi := lo + chunk
-		if hi > d {
-			hi = d
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
+	wg.Add(nw)
+	for range nw {
+		go func() {
 			defer wg.Done()
-			body(lo, hi, make([]float64, seq), make([]float64, seq))
-		}(lo, hi)
+			s := newWKVScratch(seq)
+			for {
+				c := int(next.Add(1)) - 1
+				if c >= d {
+					return
+				}
+				body(c, s)
+			}
+		}()
 	}
 	wg.Wait()
 }
@@ -91,7 +150,7 @@ func init() {
 				dvs := dv.Storage().F64()
 				dws := dw.Storage().F64()
 				dus := du.Storage().F64()
-				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+				wkvParallelChannels(d, seq, func(c int, sc *wkvScratch) {
 					// Every access here strides by d with the channel fixed, and the work is
 					// O(seq^2) PER CHANNEL, so each of those columns is re-walked seq times
 					// (PS6011). Gathering the three inputs into contiguous scratch once per
@@ -104,12 +163,10 @@ func init() {
 					// Allocated per CHUNK, not per channel: the callback runs once per
 					// worker, so this is O(GOMAXPROCS) allocations for the whole call, and
 					// hoisting them any further would share them across workers.
-					kcol := make([]float64, seq)
-					vcol := make([]float64, seq)
-					gcol := make([]float64, seq)
-					dvcol := make([]float64, seq)
-					dkcol := make([]float64, seq)
-					for c := clo; c < chi; c++ {
+					loga, p := sc.loga, sc.p
+					kcol, vcol, gcol := sc.kcol, sc.vcol, sc.gcol
+					dvcol, dkcol := sc.grad64()
+					{
 						wc, uc := ws[c], us[c]
 						var dwc, duc float64
 						for i := range seq {
@@ -178,18 +235,16 @@ func init() {
 				// Read inputs as float64, keep all scan state in float64, and
 				// round only on store — matching the original AtF64/SetF64
 				// rounding (each accumulating store to an F32 tensor rounds).
-				wkvParallelChannels(d, seq, func(clo, chi int, loga, p []float64) {
+				wkvParallelChannels(d, seq, func(c int, sc *wkvScratch) {
 					// Same column gather as the F64 branch (PS6011). The gradient scratch is
 					// []float32, NOT []float64: this branch rounds on every accumulating
 					// store, so accumulating in wider precision and rounding once would be
 					// more accurate and would not reproduce the existing bits. The input
 					// gathers convert once, which is exact.
-					kcol := make([]float64, seq)
-					vcol := make([]float64, seq)
-					gcol := make([]float64, seq)
-					dvcol := make([]float32, seq)
-					dkcol := make([]float32, seq)
-					for c := clo; c < chi; c++ {
+					loga, p := sc.loga, sc.p
+					kcol, vcol, gcol := sc.kcol, sc.vcol, sc.gcol
+					dvcol, dkcol := sc.grad32()
+					{
 						wc, uc := float64(ws[c]), float64(us[c])
 						var dwc, duc float64
 						for i := range seq {
