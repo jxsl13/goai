@@ -115,3 +115,20 @@ tiling rather than interchange) and the DoRA remainder-tail and zero-column fall
 both rare by construction.
 
 STILL UNSWEPT: nlp 16, linalg 11, internal/linalg 4, llamagpu 3, classic 2, format/gguf 1.
+
+## R-01KYWM71JJEGW82ER9J7JVMTC2 Linear-time RWKV WKV backward: derivation, measured prize, and the numerical obstacle
+kind: research
+state: draft
+created: 2026-07-31
+
+MEASURED PRIZE. autograd vjp_rwkv OpWKV is O(T^2) per channel and the scaling is confirmed on this host at d=64, f64, n=2: seq 64 -> 345us, 128 -> 886us, 256 -> 2634us, 512 -> 10319us. Each doubling multiplies time by 2.6, 3.0 then 3.9, approaching the quadratic 4x. A linear-time backward is worth roughly two orders of magnitude at seq=512. The file already names this as deferred work.
+
+DERIVATION, verified numerically to 4e-16 max relative error against the existing loop over T=12 with random k and v, w=0.37, u=-0.21. The exponent a_{t,i} = k_i - (t-1-i)w rearranges to (k_i + i*w) - (t-1)w. Define b_i = k_i + i*w. The (t-1)w term is CONSTANT ACROSS i and cancels in the softmax, so the weights p_{t,i} are proportional to one fixed vector exp(b_i) that does not depend on t; only the diagonal a_{t,t} = u + k_t stays special. Therefore den_t and the numerator are prefix sums over exp(b_i) and exp(b_i)v_i, each maintainable in O(1) per t, and the O(T^2) exp work disappears.
+
+WHY THE SHORTCUT IS UNSAFE, the finding that matters. Precomputing E_i = exp(b_i - M) once needs a FIXED reference M. With the decay convention here wc > 0, so b grows with i and spans about T*wc. At seq=512 with a per-channel w of order 2 the early E_i underflow to exactly zero, and at small t every term of den_t is one of those, giving 0/0. The existing per-t maximum is load-bearing because it pins the largest term at exp(0). An online running-max rescale fixes den_t and the numerator in O(1), but the GRADIENT loop needs each p_{t,i} individually, and restating the stored vector at a new scale costs O(T) every time the max grows, which with monotone b is every step and returns the algorithm to O(T^2).
+
+THE ONLY REAL PATH is the full reverse recurrence: express dv_i, dk_i, du and dw as suffix recurrences over t so no individual p_{t,i} is ever materialized. dw is the awkward one, since its (t-1-i) weighting needs a second weighted accumulator alongside the plain one. That is the official CUDA kernel structure.
+
+VALIDATION AVAILABLE. TestWKVGradCheck compares against finite differences with a tolerance and is the real correctness gate. TestWKVVJPBitIdentical pins golden checksums and would need regenerating, which ADR-01KYTPF84PEC0 permits for a regression pin. Note the checksum test is the only thing standing between a subtly wrong gradient and a green run, so the gradcheck must be extended to the shapes the recurrence changes rather than trusted as-is.
+
+NOT ATTEMPTED THIS ROUND, deliberately. A numerically stable reverse recurrence for RWKV is research-grade, a subtly wrong gradient is the worst failure mode available here, and a hasty version validated only by an existing tolerance test would be worse than none.
