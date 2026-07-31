@@ -12189,12 +12189,21 @@ func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 		// obj.Items { out[i] = ... }` — and matching it reported 199 sites, essentially none of
 		// them a numeric kernel. Requiring an explicit cut, or a name that was cut, keeps this to
 		// loops someone converted on purpose.
-		if _, isCut := rs.X.(*ast.SliceExpr); !isCut && !sliced[identName(rs.X)] {
+		rows := rowNames(fn.Body)
+		if _, isCut := rs.X.(*ast.SliceExpr); !isCut && !sliced[identName(rs.X)] && !rows[identName(rs.X)] {
 			return true
 		}
 		// And it must be a REDUCTION: a compound assignment in the body. Without that there is no
 		// hot inner accumulation for the second bounds check to matter to.
 		if !hasCompoundAssign(rs.Body) {
+			return true
+		}
+		// The companion and the range VALUE must meet in one accumulation — dot += qk[j]*v — which
+		// is the two-operand reduction this transform is about. Requiring only a compound assign
+		// somewhere in the body matched 260 sites once rows were recognized, because `x := y[i]`
+		// is any slice element and most such loops are not numeric kernels at all.
+		val := identName(rs.Value)
+		if val == "" || val == "_" {
 			return true
 		}
 		seen := map[string]bool{}
@@ -12204,7 +12213,7 @@ func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 				return true
 			}
 			base := identName(ix.X)
-			if base == "" || sliced[base] || seen[base] {
+			if base == "" || sliced[base] || seen[base] || !pairedInReduction(rs.Body, base, val) {
 				return true
 			}
 			seen[base] = true
@@ -12233,6 +12242,31 @@ func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 	return out
 }
 
+// pairedInReduction reports whether some += or -= in the block has both the companion and the
+// range value on its right-hand side, which is what a two-operand inner product looks like.
+func pairedInReduction(b *ast.BlockStmt, base, val string) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Rhs) != 1 {
+			return true
+		}
+		// Either the companion is an OPERAND — dot += qk[j]*v — or it is the accumulation
+		// TARGET — qi[j] -= dot*v. Both are the same transform; matching only the operand form
+		// missed the second Gram-Schmidt loop in randomOrthogonal, which is the mirror of the
+		// first and was fixed alongside it.
+		if mentionsIdent(as.Rhs[0], val) &&
+			(mentionsIdent(as.Rhs[0], base) || mentionsIdent(as.Lhs[0], base)) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
 // hasCompoundAssign reports whether a block accumulates with += or -=.
 func hasCompoundAssign(b *ast.BlockStmt) bool {
 	found := false
@@ -12246,9 +12280,28 @@ func hasCompoundAssign(b *ast.BlockStmt) bool {
 	return found
 }
 
-// slicedNames collects identifiers assigned from a slice expression, which is what pairing a
-// companion to the ranged row looks like.
+// slicedNames collects identifiers assigned from a slice expression — the finished pairing.
 func slicedNames(body *ast.BlockStmt) map[string]bool {
+	return assignedFrom(body, func(e ast.Expr) bool {
+		_, ok := e.(*ast.SliceExpr)
+		return ok
+	})
+}
+
+// rowNames collects identifiers assigned a ROW of a matrix, qi := q[i].
+//
+// These count as ranged rows for PS3017 even though no slice expression is involved, and leaving
+// them out was a real false negative: nlp randomOrthogonal's Gram-Schmidt takes qi := q[i] and then
+// ranges it while indexing a second row, which is the hottest instance of this shape in the tree
+// and was invisible until rows were recognized alongside cuts.
+func rowNames(body *ast.BlockStmt) map[string]bool {
+	return assignedFrom(body, func(e ast.Expr) bool {
+		_, ok := e.(*ast.IndexExpr)
+		return ok
+	})
+}
+
+func assignedFrom(body *ast.BlockStmt, want func(ast.Expr) bool) map[string]bool {
 	out := map[string]bool{}
 	ast.Inspect(body, func(n ast.Node) bool {
 		as, ok := n.(*ast.AssignStmt)
@@ -12256,7 +12309,7 @@ func slicedNames(body *ast.BlockStmt) map[string]bool {
 			return true
 		}
 		for i, r := range as.Rhs {
-			if _, isSlice := r.(*ast.SliceExpr); !isSlice || i >= len(as.Lhs) {
+			if !want(r) || i >= len(as.Lhs) {
 				continue
 			}
 			if nm := identName(as.Lhs[i]); nm != "" {

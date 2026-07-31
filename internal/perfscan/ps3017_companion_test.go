@@ -118,3 +118,66 @@ func f(l [][]float64, y []float64, i, j int) float64 {
 			len(fs), fs[0].msg)
 	}
 }
+
+// TestDetectPS3017_RowAssignedByIndexCounts pins that a row taken as qi := q[i] is a ranged row,
+// not only an explicit cut.
+//
+// Requiring a slice expression missed nlp randomOrthogonal's Gram-Schmidt entirely — the hottest
+// instance of this shape in the tree, and the one that produced the -3.17% and -2.47% measurements
+// behind this check.
+func TestDetectPS3017_RowAssignedByIndexCounts(t *testing.T) {
+	src := `package p
+
+func gram(q [][]float64, i, k int) float64 {
+	qi := q[i]
+	qk := q[k]
+	var dot float64
+	for j, v := range qi {
+		dot += qk[j] * v
+	}
+	return dot
+}`
+	if fs := companionFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — qi := q[i] is a row", len(fs))
+	}
+}
+
+// TestDetectPS3017_CompanionAsAccumulationTarget pins the mirror form, where the companion is what
+// the loop accumulates INTO rather than an operand. Matching only the operand shape missed the
+// second Gram-Schmidt loop, which was fixed alongside the first.
+func TestDetectPS3017_CompanionAsAccumulationTarget(t *testing.T) {
+	src := `package p
+
+func project(q [][]float64, i, k int, dot float64) {
+	qi := q[i]
+	qk := q[k]
+	for j, v := range qk {
+		qi[j] -= dot * v
+	}
+}`
+	if fs := companionFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the companion is the accumulation target", len(fs))
+	}
+}
+
+// TestDetectPS3017_SilentOnUnpairedIteration is the precision floor for the pairing requirement.
+// Recognizing rows without it matched 260 sites, because x := y[i] is any slice element and most
+// such loops are not numeric kernels; the companion and the range value have to meet in one
+// accumulation.
+func TestDetectPS3017_SilentOnUnpairedIteration(t *testing.T) {
+	src := `package p
+
+func f(rows [][]float64, i int, flags []float64) float64 {
+	r := rows[i]
+	var total float64
+	for j, v := range r {
+		total += v
+		_ = flags[j]
+	}
+	return total
+}`
+	if fs := companionFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — flags never meets v in the accumulation:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
