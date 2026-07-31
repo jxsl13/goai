@@ -12067,11 +12067,51 @@ func twoDeepIndexNotRangedFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		}
 		ast.Inspect(body, func(m ast.Node) bool {
 			ix, ok := m.(*ast.IndexExpr)
-			if !ok || identName(ix.Index) != k {
+			if !ok {
 				return true
 			}
 			inner, ok := ix.X.(*ast.IndexExpr)
 			if !ok {
+				return true
+			}
+			// COLUMN WALK: m[k][i], the outer subscript moving and the inner invariant. There is
+			// no row to walk ALONG, which is why this was declined for two rounds — but the SLICE
+			// OF ROWS is itself rangeable, and pairing a companion to it removes every check but
+			// the one on the row that comes out. Measured twice: linalg Cholesky back
+			// substitution went 3 checks to 1 for -2.26%% and -2.13%% (p<=0.017, n=12), and
+			// autograd's logdet forward solve went 4 to 1 for -2.23%% and -1.33%% (p<=0.015).
+			if identName(inner.Index) == k && identName(ix.Index) != k {
+				col := identName(ix.Index)
+				base := identName(inner.X)
+				// Keyed by the LOOP as well as the base: the same matrix is usually walked by
+				// both an outer and an inner loop, and a per-function key let the outer
+				// instance mask the inner one — which is the hotter of the two, being O(n)
+				// deeper. autograd's logdet solve reported only its outer write until this.
+				if col == "" || base == "" || assignedWithin(body, col) || seen[base+"#col#"+k] {
+					return true
+				}
+				seen[base+"#col#"+k] = true
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					category: "two-deep-index-not-ranged",
+					msg: fmt.Sprintf("%s[%s][%s] walks DOWN a column: the row subscript moves with"+
+						" this loop and %q is fixed. There is no row to range along, but the SLICE"+
+						" OF ROWS is rangeable — range %s[lo:hi] and pair any companion to the same"+
+						" length, which leaves only the [%s] on the row that comes out. Measured"+
+						" twice: linalg Cholesky back substitution 3 bounds checks to 1 for -2.26%%"+
+						" and -2.13%% (p<=0.017, n=12), autograd logdet forward solve 4 to 1 for"+
+						" -2.23%% and -1.33%% (p<=0.015). Bit-identical — the operands and their"+
+						" ascending order do not change. VERIFY FIRST with"+
+						" -gcflags=-d=ssa/check_bce/debug=1 and count the checks INSIDE the loop"+
+						" against the multiply-adds beside them: the same conversion on a 4x4"+
+						" register tile measured null, because sixteen accumulators amortize a"+
+						" predicted branch to nothing"+
+						" (RANK-BCE-CANDIDATES-BY-CHECKS-OVER-FMA-001)",
+						base, k, col, col, base, col),
+				})
+				return true
+			}
+			if identName(ix.Index) != k {
 				return true
 			}
 			// The outer subscript must be INVARIANT for the whole loop, not merely different
@@ -12082,6 +12122,7 @@ func twoDeepIndexNotRangedFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			if row == "" || row == k || assignedWithin(body, row) {
 				return true
 			}
+			_ = row
 			base := identName(inner.X)
 			if base == "" || seen[base] {
 				return true

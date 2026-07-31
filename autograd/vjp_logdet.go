@@ -72,8 +72,20 @@ func init() {
 			linv[j][j] = 1 / l[j][j]
 			for i := j + 1; i < n; i++ {
 				var s float64
-				for k := j; k < i; k++ {
-					s += l[i][k] * linv[k][j]
+				// FOUR bounds checks against one multiply-add: l[i], [k], linv[k], [j].
+				// l[i] is a row with i invariant here, so its segment can be ranged; linv walks
+				// DOWN a column, but its slice of rows can be ranged too and paired to the same
+				// extent. Only the [j] on the row that comes out survives — 4 checks to 1,
+				// verified with -gcflags=-d=ssa/check_bce/debug=1 (RANK-BCE-CANDIDATES-BY-
+				// CHECKS-OVER-FMA-001).
+				//
+				// Bit-identical: lrow[t] is l[i][j+t] and lv[t] is linv[j+t], the same operands
+				// in the same ascending-k order.
+				lrow := l[i][j:i]
+				lv := linv[j:i]
+				lv = lv[:len(lrow)]
+				for t, lik := range lrow {
+					s += lik * lv[t][j]
 				}
 				linv[i][j] = -s / l[i][i]
 			}

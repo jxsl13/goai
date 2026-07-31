@@ -59,10 +59,15 @@ func solve(n int, l [][]float64, y []float64) {
 	}
 }
 
-// TestDetectPS3016_SilentOnColumnWalk keeps the check to loops with a ROW to range. When the outer
-// subscript moves — l[k][i] — every step touches a different row and there is nothing to hoist;
-// that is a column gather, a different problem with a different (and here rejected) fix.
-func TestDetectPS3016_SilentOnColumnWalk(t *testing.T) {
+// TestDetectPS3016_ReportsColumnWalkWithRowSliceAdvice pins the arm added after this shape paid
+// twice under a check that used to decline it.
+//
+// When the outer subscript moves — l[k][i] — there is no row to range ALONG, which is what the
+// earlier version keyed on. But the SLICE OF ROWS is itself rangeable, and pairing a companion to
+// it leaves only the fixed subscript's check. Cholesky back substitution went 3 checks to 1 and
+// autograd's logdet solve 4 to 1, both measured wins, and both were found by hand because this
+// check was silent on them.
+func TestDetectPS3016_ReportsColumnWalkWithRowSliceAdvice(t *testing.T) {
 	src := `package p
 
 func back(n int, l [][]float64, y []float64) {
@@ -74,20 +79,24 @@ func back(n int, l [][]float64, y []float64) {
 		y[i] = s
 	}
 }`
-	if fs := twoDeepFindings(t, src); len(fs) != 0 {
-		t.Fatalf("%d findings, want 0 — the outer subscript moves, so there is no row:\n%s",
-			len(fs), fs[0].msg)
+	fs := twoDeepFindings(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the slice of rows is rangeable", len(fs))
+	}
+	if !strings.Contains(fs[0].msg, "SLICE OF ROWS") {
+		t.Fatalf("column walk got the row-ranging advice, which does not apply:\n%s", fs[0].msg)
 	}
 }
 
-// TestDetectPS3016_SilentWhenRowIsANestedLoopVar is the INVARIANCE floor, and it caught a real
+// TestDetectPS3016_OuterLoopDeclinesTheNestedLoopVar is the INVARIANCE floor, and it caught a real
 // false positive.
 //
-// Requiring only that the row index differ from THIS loop's variable let the outer loop of a nested
+// Requiring only that the row index differ from THIS loop's variable let the OUTER loop of a nested
 // pair match l[k][i]: from its point of view i moves and k is the row, when k is the inner loop's
-// own variable and no fixed row exists at all. The fixture is the same column walk as above, which
-// the OUTER loop must also decline.
-func TestDetectPS3016_SilentWhenRowIsANestedLoopVar(t *testing.T) {
+// own variable and no fixed row exists at all. The INNER loop reports it — correctly, as a column
+// walk — so the assertion is exactly one finding, not none: two would mean the outer loop matched
+// as well.
+func TestDetectPS3016_OuterLoopDeclinesTheNestedLoopVar(t *testing.T) {
 	src := `package p
 
 func back(n int, l [][]float64, y []float64) {
@@ -97,9 +106,9 @@ func back(n int, l [][]float64, y []float64) {
 		}
 	}
 }`
-	if fs := twoDeepFindings(t, src); len(fs) != 0 {
-		t.Fatalf("%d findings, want 0 — k is the inner loop's variable, not an invariant row:\n%s",
-			len(fs), fs[0].msg)
+	if fs := twoDeepFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want exactly 1 — the inner loop's column walk, and NOT a second "+
+			"from the outer loop reading k as an invariant row", len(fs))
 	}
 }
 
