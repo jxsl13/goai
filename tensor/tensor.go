@@ -36,18 +36,25 @@ func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 // the old behavior, so raising this is a byte-for-coverage trade and never a regression.
 const maxInlineRank = 2
 
-// tensorBlock co-allocates the three objects NewOn always creates together: the Tensor, the
-// Storage it exclusively owns at birth, and the backing array for shape and strides.
+// tensorBlock co-allocates TWO of the objects NewOn always creates together: the Tensor and the
+// backing array for shape and strides.
 //
 // A fresh tensor cost FIVE allocations — Tensor, Storage, the shape/stride array, the data slice,
 // and the interface box Storage.data pays to hold that slice — and a Jamba decode step creates
-// about 158 of them, which was over half its allocation count. Co-allocating the first three drops
-// it to three.
+// about 158 of them, which was over half its allocation count. Folding the shape/stride array into
+// the Tensor drops that to four.
 //
-// SAFE FOR VIEWS, which is the non-obvious part. Reshape and friends build a new Tensor pointing at
-// this same Storage; the Storage lives inside the block, so a surviving view keeps the whole block
-// alive rather than just the Storage. That retains a few extra words per live view and never a
-// buffer, since the data slice is allocated separately and is what actually holds bytes.
+// THE STORAGE IS DELIBERATELY NOT IN HERE, and that is the whole point of this paragraph, because
+// putting it here is the obvious next step and it has already been tried and MEASURED WORSE. Views
+// are why. Reshape and friends build a new Tensor pointing at the SAME Storage, so if the Storage
+// lived inside this block, one surviving view would pin the entire block — the original Tensor and
+// its shape/stride buffer included — instead of a bare 48-byte Storage. The A/B was unambiguous:
+// allocations fell about 23%, and the decode step ran 6.86% SLOWER, because retention beat the
+// allocation saving. An allocation count is not the objective; it is a proxy that fails exactly
+// when the removed object outlives the one it was folded into.
+//
+// So: fold objects whose lifetimes are IDENTICAL, never objects one of which can outlive the other.
+// The shape/stride array qualifies — nothing but this Tensor ever points at it.
 type tensorBlock struct {
 	t   Tensor
 	buf [2 * maxInlineRank]int
