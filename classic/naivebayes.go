@@ -189,10 +189,22 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 		counts[yi[i]]++
 	}
 	// per-class means
-	for i := range x {
-		c := yi[i]
-		for j := 0; j < d; j++ {
-			theta[c][j] += x[i][j]
+	//
+	// The row headers are hoisted and both operands cut to one length because the inner loop
+	// otherwise carries three bounds checks — on theta[c], on theta[c][j] and on x[i][j] — and
+	// each is a panic edge that splits the body into a separate basic block. Go's SSA will not
+	// hoist across a block that can panic, so c*24, i*24 and BOTH slice headers were being
+	// recomputed on every j even though all four are invariant in j: 14 of the 19 instructions in
+	// the loop were address arithmetic that should have been loop-invariant. Bit-identical — same
+	// operands, same i-ascending then j-ascending order, one FADDD per term, nothing reassociated.
+	// validateXY rejects ragged input, so the row cuts cannot truncate; a short row would panic at
+	// the slice expression rather than one index later, which is the same panic class.
+	for i, row := range x {
+		tc := theta[yi[i]][:d]
+		r := row[:d]
+		r = r[:len(tc)]
+		for j := range tc {
+			tc[j] += r[j]
 		}
 	}
 	for c := 0; c < nc; c++ {
@@ -201,11 +213,14 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 		}
 	}
 	// per-class population variances (ddof=0, as in scikit-learn)
-	for i := range x {
+	for i, row := range x {
 		c := yi[i]
-		for j := 0; j < d; j++ {
-			dv := x[i][j] - theta[c][j]
-			sigma[c][j] += dv * dv
+		sc, tc := sigma[c][:d], theta[c][:d]
+		r := row[:d]
+		tc, r = tc[:len(sc)], r[:len(sc)]
+		for j := range sc {
+			dv := r[j] - tc[j]
+			sc[j] += dv * dv
 		}
 	}
 	for c := 0; c < nc; c++ {
