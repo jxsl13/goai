@@ -107,25 +107,25 @@ func (m *MHA) StepKV(ctx *backend.Context, h, kc, vc *tensor.Tensor) (out, kNew,
 type kvAppend func(kt, vt *tensor.Tensor) (kNew, vNew *tensor.Tensor)
 
 func (m *MHA) stepKV(ctx *backend.Context, h *tensor.Tensor, appendRows kvAppend) (out, kNew, vNew *tensor.Tensor, err error) {
-	q, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wq)
+	q, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wq)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kt, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wk)
+	kt, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wk)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	vt, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wv)
+	vt, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	kNew, vNew = appendRows(kt, vt)
 	// single query at the last position attends to all cached keys → no mask
-	attn, err := m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
+	attn, err := exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	out, err = m.exec(ctx, backend.OpMatMul, nil, attn, m.Wo)
+	out, err = exec2(ctx, backend.OpMatMul, nil, attn, m.Wo)
 	return out, kNew, vNew, err
 }
 
