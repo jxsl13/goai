@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3019", "unrolled-index-not-windowed", "a manually unrolled loop bounded by `i+K <= len(x)` that reads x at K constant offsets and never cuts it to the K-wide window. The bound does NOT discharge those reads — i+K can overflow, so the prove pass keeps a check on every one. Cutting a window once per iteration replaces K checks with ONE slice check. MEASURED on nlp dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12), geomean -17.36%%, bit-identical. IT DID NOT PAY at the site it was found on, which is the load-bearing half of this advice: the classic ballTree L2 leaf test went four checks to one for -1.11%% against an UNTOUCHED sibling arm that moved -1.06%% in the same run, so nothing was attributable — that loop has a data-dependent early exit whose misprediction dominates and hides the checks. Require a branchless body with no loop-carried dependency, and run an untouched control, because this class yields a plausible small win that is really drift. Reordering the reads to touch the highest offset first is NOT a substitute and left all four checks in place. Clamping a second operand to the first outside the loop makes its window free", false},
 	{"PS3018", "max-normalized-exp", "math.Exp(x - m) where m is a max that INCLUDES x, so the call is exp(0) whenever the max picked x and exp(0) is exactly 1. MEASURED TWICE: on the RWKV WKV forward scan, where both stabilized pairs had this shape and half of four calls per element computed a constant, -12.42%% and -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical over 6540 gradients across five decay regimes including negative and zero. Check for REPEATS at the same time: each call SITE is reported, and in the backward each of the two exponents appeared twice — math.Exp is not inlined, so a repeat is a second evaluation rather than a subexpression the compiler folds. Test the max against the ARGUMENT rather than branching on the original comparison, so a NaN operand still evaluates both exponentials exactly as before. The win scales with 1/N — over a max of N terms it saves one call in N and is not worth the branch; it paid here because N is two — and the measured saving was a third of what the exp profile share predicted", false},
 	{"PS3017", "companion-not-sliced", "a loop that already ranges over a row but still indexes a SECOND slice with the range key, so only half the bounds checks are gone. Ranging proves the row index in range and says nothing about the companion, whose length the compiler cannot relate to the ranged slice. Cut both to the same length, writing the relation explicitly for a trailing segment. MEASURED as the gap between a half-applied and a finished conversion: linalg Cholesky ranged only the row for geomean -2.08%% and gained a FURTHER -1.59%% (three of four cells at p=0.000) when the companion was sliced, while linalg LU done with both from the start went -6.61%% geomean over nine cells. Bit-identical. Silent when the companion name is cut from a slice expression anywhere in the function; the precondition it cannot check is that the two really span the same extent, so an offset or shorter companion needs its own slice", false},
 	{"PS3016", "two-deep-index-not-ranged", "an inner loop reading m[i][k] with the OUTER index invariant, so every step re-loads the row pointer and bounds-checks against it. Hoist the row and RANGE over it — and the range is the half that pays. On linalg Cholesky forward substitution, hoisting the row while keeping the integer-bounded loop measured geomean -0.53%% over eleven benchmarks with one cell at +0.41%% (p=0.038) and did not reach significance at n=12 (p=0.060); converting the same site to range over the row gave -2.82%%, -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The mechanism is bounds-check elimination, not the pointer reload. Bit-identical either way. Silent when the loop already ranges over a slice, which is the applied form; a loop whose OUTER index moves instead has no row to range and is a different problem", false},
@@ -2192,6 +2193,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, coupledIndexWeightFindings(fset, fn)...)
 	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
 	out = append(out, companionNotSlicedFindings(fset, fn)...)
+	out = append(out, unrolledIndexNotWindowedFindings(fset, fn)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -12495,4 +12497,141 @@ func isMathCall(c *ast.CallExpr, name string) bool {
 	}
 	pkg, ok := sel.X.(*ast.Ident)
 	return ok && pkg.Name == "math"
+}
+
+// unrolledIndexNotWindowedFindings flags PS3019 — a manually unrolled loop bounded by `i+K <= len(x)`
+// whose body indexes x with K distinct constant offsets and never cuts x to the K-wide window.
+//
+// `i+K <= len(x)` does NOT let the prove pass discharge x[i+K-1]: i+K can overflow, so the bound
+// says nothing about i on its own and every one of the K element reads keeps a check. Cutting a
+// K-wide window once per iteration replaces those K checks with ONE slice check, and the window's
+// length is a constant the compiler folds, so the K reads off it are free.
+func unrolledIndexNotWindowedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.ForStmt)
+		if !ok || fl.Cond == nil || fl.Body == nil {
+			return true
+		}
+		lv, k, ok := unrollBound(fl.Cond)
+		if !ok {
+			return true
+		}
+		// Offsets read off each base, and which bases are already cut to a window.
+		offsets := map[string]map[int]bool{}
+		// Report each base at its OWN first read rather than at the loop header: two bases in one
+		// loop would otherwise carry the same position and be deduplicated into a single finding.
+		firstRead := map[string]token.Pos{}
+		ast.Inspect(fl.Body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			base, ok := unparen(ix.X).(*ast.Ident)
+			if !ok {
+				return true
+			}
+			off, ok := constOffsetOf(unparen(ix.Index), lv)
+			if !ok {
+				return true
+			}
+			if offsets[base.Name] == nil {
+				offsets[base.Name] = map[int]bool{}
+			}
+			offsets[base.Name][off] = true
+			if _, seen := firstRead[base.Name]; !seen {
+				firstRead[base.Name] = ix.Pos()
+			}
+			return true
+		})
+		for _, name := range sortedKeys(offsets) {
+			if len(offsets[name]) < 2 {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(firstRead[name]),
+				category: "unrolled-index-not-windowed",
+				msg: fmt.Sprintf("loop is unrolled by %d over %q but reads %s at %d separate"+
+					" constant offsets and never cuts it to the window. `%s+%d <= len(...)` does NOT"+
+					" discharge those reads: %s+%d can overflow, so the prove pass keeps a bounds"+
+					" check on EVERY one of them. Cut a window once per iteration"+
+					" (`w := %s[%s : %s+%d]`) and index the window — ONE slice check for the whole"+
+					" step, and the window length is a constant the compiler folds. MEASURED on nlp"+
+					" dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12),"+
+					" geomean -17.36%%. BIT-IDENTICAL — operands and their order are untouched."+
+					" BUT IT DID NOT PAY AT THE SITE IT WAS FOUND ON, and that is the important"+
+					" half: the classic ballTree L2 leaf test went four checks to one and measured"+
+					" -1.11%% against an UNTOUCHED L1 control that moved -1.06%% in the same run, so"+
+					" nothing was attributable. That loop carries a data-dependent early exit whose"+
+					" misprediction dominates, and the checks hide behind it. REQUIRE A BRANCHLESS"+
+					" LOOP BODY with no loop-carried dependency before spending the edit, and run an"+
+					" untouched sibling as a control — this class produces a plausible small win that"+
+					" is really run-to-run drift. REORDERING IS NOT A SUBSTITUTE: reading the highest"+
+					" offset first to establish the rest left all four checks in place. A second"+
+					" operand clamped to the first outside the loop (b = b[:len(a)]) needs no check of"+
+					" its own, so its window is free; without the clamp each operand costs one slice"+
+					" check (PERF-BCE-PAYOFF-NEEDS-BRANCHLESS-001)",
+					k, lv, name, len(offsets[name]), lv, k, lv, k, name, lv, lv, k),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// unrollBound reports the loop variable and the unroll factor of a condition shaped `i+K <= len(x)`
+// or `i+K < len(x)`. K must be a constant of at least 2: an unroll of one is an ordinary loop.
+func unrollBound(cond ast.Expr) (string, int, bool) {
+	cmp, ok := unparen(cond).(*ast.BinaryExpr)
+	if !ok || (cmp.Op != token.LEQ && cmp.Op != token.LSS) {
+		return "", 0, false
+	}
+	call, ok := unparen(cmp.Y).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return "", 0, false
+	}
+	if fnID, ok := unparen(call.Fun).(*ast.Ident); !ok || fnID.Name != "len" || !isBuiltinName(fnID.Name) {
+		return "", 0, false
+	}
+	add, ok := unparen(cmp.X).(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return "", 0, false
+	}
+	id, ok := unparen(add.X).(*ast.Ident)
+	if !ok {
+		return "", 0, false
+	}
+	k, ok := intLit(unparen(add.Y))
+	if !ok || k < 2 {
+		return "", 0, false
+	}
+	return id.Name, k, true
+}
+
+// constOffsetOf reports the constant offset of an index expression off the loop variable: `i` is 0,
+// `i+3` is 3. Anything else — a different variable, a product, a call — is not a fixed lane of an
+// unrolled step and cannot be covered by one window.
+func constOffsetOf(e ast.Expr, lv string) (int, bool) {
+	if id, ok := e.(*ast.Ident); ok {
+		return 0, id.Name == lv
+	}
+	add, ok := e.(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return 0, false
+	}
+	id, ok := unparen(add.X).(*ast.Ident)
+	if !ok || id.Name != lv {
+		return 0, false
+	}
+	k, ok := intLit(unparen(add.Y))
+	return k, ok
+}
+
+func sortedKeys(m map[string]map[int]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

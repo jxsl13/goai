@@ -59,14 +59,15 @@ func dotAndNorm(cand, ctx []float64) (float64, float64) {
 	var d0, d1, d2, d3, n0, n1, n2, n3 float64
 	i := 0
 	for ; i+4 <= len(cand); i += 4 {
-		d0 += cand[i] * ctx[i]
-		n0 += ctx[i] * ctx[i]
-		d1 += cand[i+1] * ctx[i+1]
-		n1 += ctx[i+1] * ctx[i+1]
-		d2 += cand[i+2] * ctx[i+2]
-		n2 += ctx[i+2] * ctx[i+2]
-		d3 += cand[i+3] * ctx[i+3]
-		n3 += ctx[i+3] * ctx[i+3]
+		cv, xv := cand[i:i+4], ctx[i:i+4]
+		d0 += cv[0] * xv[0]
+		n0 += xv[0] * xv[0]
+		d1 += cv[1] * xv[1]
+		n1 += xv[1] * xv[1]
+		d2 += cv[2] * xv[2]
+		n2 += xv[2] * xv[2]
+		d3 += cv[3] * xv[3]
+		n3 += xv[3] * xv[3]
 	}
 	dot, nb := d0+d1+d2+d3, n0+n1+n2+n3
 	for ; i < len(cand); i++ {
