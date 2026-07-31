@@ -17,4 +17,4 @@ Rationale: NewOn allocated five objects per fresh tensor: the Tensor, its Storag
 IF two allocations are about to be folded into one block, THEN the implementing agent SHALL fold only when lifetimes are identical: a view own stride array gave -26%, while the SHARED Storage gave -23% allocs and 6.86% slower.
 
 ## A-SHARED-HELPER-COSTS-A-CALL-ON-PATHS-IT-CANNOT-HELP-001
-IF an allocation pattern is extracted into a helper shared by several constructors, THEN the implementing agent SHALL leave callers the helper cannot benefit on their inline code, since routing rank-4 Permute through it cost 7.84% for a call it previously did inline.
+IF an allocation pattern is extracted into a helper shared by several constructors, THEN the implementing agent SHALL leave callers it cannot benefit on their inline code — routing rank-4 Permute through it cost 7.84% for 1 call it did inline.
