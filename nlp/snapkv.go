@@ -100,8 +100,9 @@ func SnapKVKeep(obsAttn [][]float64, budget, kernel int) []int {
 // FOUR ROWS PER PASS. Written one row at a time, every element of agg was loaded and stored
 // once per head — at seq 8192 and 8 heads that is 57k loads and 57k stores of agg to perform
 // 57k adds, so half the memory operations existed only to carry a partial sum between rows.
-// Four rows per pass keeps agg[j] in a register across the group and cuts those load/store
-// pairs to a quarter, while all four input rows are still read contiguously (PS1007 remedy b).
+// Four rows per pass cuts the LOADS of agg to a quarter, while all four input rows are still read
+// contiguously (PS1007 remedy b). It did NOT originally cut the stores — that claim stood here for
+// a while and was wrong; see the note in the loop below for what it took and what it bought.
 // Measured on BenchmarkSnapKVKeep (seq 8192, 8 heads, both arm orders, 24 samples):
 // 137.5us -> 109.9us, -20.1%. Two rows per pass gave -17.6%, so the third and fourth row are
 // worth their registers here.
@@ -114,18 +115,53 @@ func SnapKVKeep(obsAttn [][]float64, budget, kernel int) []int {
 func aggregatePrefixAttn(obsAttn [][]float64, winStart int) []float64 {
 	agg := make([]float64, winStart)
 	h := 0
+	// THE UNROLL ABOVE ONLY HALF-WORKED, and the disassembly said so: the four loads of agg[j]
+	// did collapse to one, but there were still FOUR stores per iteration, not one. `for j :=
+	// range winStart` ranges an INTEGER, which proves nothing about r0..r3, so each row read kept
+	// a bounds check — and a store cannot be sunk past a branch that may panic, so agg[j] had to
+	// be written back before every following check. Clamping the rows to agg's length and ranging
+	// over agg discharges all four checks, which lets the partial sum finally stay in a register:
+	// four stores become one. The four live row lengths it also frees were competing for
+	// registers with the loop's own state.
+	//
+	// Clamping cannot change behavior: r0[j] already panicked when a row was shorter than agg, so
+	// the failure domain is identical — only the panic's site moves one step earlier.
 	for ; h+4 <= len(obsAttn); h += 4 {
-		r0, r1, r2, r3 := obsAttn[h], obsAttn[h+1], obsAttn[h+2], obsAttn[h+3]
-		for j := range winStart {
-			agg[j] += r0[j]
-			agg[j] += r1[j]
-			agg[j] += r2[j]
-			agg[j] += r3[j]
+		r0, r1 := obsAttn[h][:len(agg)], obsAttn[h+1][:len(agg)]
+		r2, r3 := obsAttn[h+2][:len(agg)], obsAttn[h+3][:len(agg)]
+		for j := range agg {
+			// The partial sum is carried in a LOCAL, which is what actually collapses the four
+			// stores to one. Discharging the bounds checks alone did not: with four separate
+			// `agg[j] +=` statements the compiler must make each write observable, because it
+			// cannot prove agg does not overlap r0..r3 — aliasing, not the checks, was forcing
+			// the stores. That proof is available to us and not to the compiler: agg is a fresh
+			// make in this function and the rows come from the caller, so they cannot overlap.
+			//
+			// Bit-identical: the accumulation order is unchanged, still ((((agg+r0)+r1)+r2)+r3)
+			// in ascending head order over the same operands. It relies on the no-alias fact
+			// above — with overlap, reading all four rows before the single store would differ
+			// from interleaving them, which is exactly why the compiler refused.
+			//
+			// AND IT BOUGHT NOTHING MEASURABLE, which is worth stating so the next reader does
+			// not spend on this axis again. The disassembly is unambiguous — four bounds checks
+			// to zero, four stores to one — and BenchmarkSnapKVKeep did not move (p=0.630, n=12,
+			// against an untouched control that was also flat). At seq 8192 and 8 heads each row
+			// is 64 KB, so a four-row group streams 256 KB past a 64 KB agg: the loop is memory
+			// bandwidth bound and the instructions removed were never the constraint
+			// (MEMORY-BOUND-HIDES-CHECK-REMOVAL-TOO-001). The change is kept because it is
+			// strictly fewer instructions and because the comment above it previously claimed a
+			// store reduction the code did not actually perform — not because it is faster.
+			v := agg[j]
+			v += r0[j]
+			v += r1[j]
+			v += r2[j]
+			v += r3[j]
+			agg[j] = v
 		}
 	}
 	for ; h < len(obsAttn); h++ {
-		row := obsAttn[h]
-		for j := range winStart {
+		row := obsAttn[h][:len(agg)]
+		for j := range agg {
 			agg[j] += row[j]
 		}
 	}
