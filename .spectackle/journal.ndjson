@@ -512,3 +512,4 @@
 {"t":"2026-07-31T21:23:08Z","eid":"06a2626b0f22d3d4","ag":"ag-45e7","ev":"create","id":"T-01KYX0YF6XEGVAZC28FAP7YX1H","k":"task","ti":"T1023/T1024 GaussianNB row hoist, conv1d guard bounds; PS3021 + PS3016 amendment"}
 {"t":"2026-07-31T21:37:13Z","eid":"d1c9dd71860512d0","ag":"ag-b996","ev":"create","id":"T-01KYX1R8MCEN5TTV3B9XZG73N8","k":"task","ti":"T1025 logdet solves in the consumed layout; perfscan PS3023"}
 {"t":"2026-07-31T21:42:29Z","eid":"28d056f696dc7405","ag":"ag-400b","ev":"create","id":"T-01KYX21XAWESHAQYZ8A8WW6P8D","k":"task","ti":"T1026 GMM full-covariance solve operands cut to one length; PS3017 amended"}
+{"t":"2026-07-31T21:59:44Z","eid":"432a6fe074ceff1e","ag":"ag-0eb2","ev":"create","id":"R-01KYX31FP2FH2TGBH5BDR0DN7T","k":"research","ti":"R tensor survey: compute at its floor, allocation is the axis, top candidate was a known rejection"}
