@@ -160,8 +160,16 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		for c := clo; c < chi; c++ {
 			for i := range n { // forward: L·y = P·b, L unit-lower
 				s := bat(f.piv[i], c)
-				for j := range i {
-					s -= f.lu[i][j] * y[j]
+				// RANGE the row rather than index it. f.lu[i][j] re-loads the row pointer and
+				// bounds-checks against it every step; ranging li[:i] hoists the pointer and lets
+				// the compiler drop that check, and slicing y to the same length drops the second
+				// one. Hoisting WITHOUT the range measured a wash on the identical shape in
+				// cholesky (HOISTING-A-ROW-PAYS-ONLY-VIA-THE-RANGE-001), so both halves are here.
+				// Bit-identical: same operands, same ascending-j order.
+				li := f.lu[i]
+				yr := y[:i]
+				for j, lij := range li[:i] {
+					s -= lij * yr[j]
 				}
 				y[i] = s
 			}
@@ -180,10 +188,18 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 			// into s, same final divide. Only where the intermediate lives changes.
 			for i := n - 1; i >= 0; i-- { // back: U·x = y
 				s := y[i]
-				for j := i + 1; j < n; j++ {
-					s -= f.lu[i][j] * y[j]
+				// Same treatment as the forward pass, over the trailing segment. lr and yr are cut
+				// to the SAME length so the compiler can see y's index is in range too; t runs
+				// 0-based over them, so lr[t] is f.lu[i][i+1+t] and yr[t] is y[i+1+t] — the same
+				// operands in the same ascending order as the index form.
+				li := f.lu[i]
+				lr := li[i+1 : n]
+				yr := y[i+1 : n]
+				yr = yr[:len(lr)]
+				for t, lij := range lr {
+					s -= lij * yr[t]
 				}
-				y[i] = s / f.lu[i][i]
+				y[i] = s / li[i]
 			}
 			for i := range n {
 				out[i*cols+c] = y[i]

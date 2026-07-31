@@ -94,8 +94,9 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 				// hoisting alone, keeping `for k := range i`, measured a wash here.
 				// Bit-identical: same operands, same ascending-k order.
 				li := l[i]
+				yr := y[:i]
 				for k, lik := range li[:i] {
-					s -= lik * y[k]
+					s -= lik * yr[k]
 				}
 				y[i] = s / li[i]
 			}
