@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3014", "coupled-index-weight", "a doubly-nested reduction whose accumulated term is scaled by an arithmetic combination of BOTH loop indices, used as a VALUE rather than as an index. That coupling is what makes such a sum look irreducibly quadratic, and a DIFFERENCE usually is not: (t-1-i) rewrites as (t-1) minus i, turning one distance-weighted sum into (t-1)*S minus S1 over two ordinary prefix sums maintained in O(1) per step. MEASURED on the autograd WKV backward, where dw was the only gradient with a distance weight and the only reason the pass stayed quadratic; splitting it took seq=512 from 10335us to 580us (17.8x) and the cost per doubling of seq from 3.85x to 1.81x. PRECONDITION THE CHECK CANNOT SEE: the remaining factors must separate into a t-only part and an i-only part or nothing hoists. Products and moduli of the two indices generally do not split and are reported only so they can be ruled out deliberately. Index arithmetic is excluded, since a[t*n+i] couples the indices to address memory rather than to weight a value", false},
 	{"PS3013", "leaking-format-param", "a pointer-carrying parameter handed to a fmt call. Passing it as an interface argument makes escape analysis mark the PARAMETER as leaking, and that verdict belongs to the function rather than to the branch, so every caller heap-allocates its argument even though the formatting usually sits on a panic or error path that never runs. MEASURED on tensor.NewOn, whose invalid-shape panic formatted its shape with a %%v verb: the shape literal at every call site escaped, costing one allocation per tensor created anywhere in the tree. Swapping in shape.String(), which escape analysis already proves non-escaping, took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with time unchanged (p=1.000, n=12) and QuantMamba2 decode -8.70%% allocs. Fix with a non-escaping formatter, never by deleting the message, and VERIFY with go build -gcflags=-m that the parameter flips from leaking param to does not escape — another leak in the same function keeps the old verdict and the change buys nothing. Named parameter types need the configured pointerTypeNames list, since with no type checker a named slice and an int alias are indistinguishable", false},
 	{"PS3012", "slice-built-for-one-element", "a package-level function call immediately indexed by a constant, f(x)[0] — the callee builds a whole collection and the caller keeps one item, so where the callee allocates, the rest of it and the slice header are waste that repeats every call. MEASURED on nlp QuantMamba2 decode: rows2D materializes the in_proj output as [][]float64 once per LAYER per token and the caller takes row 0, which at seq=1 was 37%% of all allocation OBJECTS in the step; threading a scratch buffer through the per-stream layer state instead went -18.37%% B/op, -3.67%% allocs/op and -0.54%% sec/op across all seven quantization formats (p<=0.01 every cell). The scratch must live on a PER-STREAM or per-worker object, never on a shared model, and the element must be read-only at the call site since the original returns an independent copy. Restricted to a bare identifier callee: method chains like t.Shape()[0] return a view and allocate nothing. Cannot see whether the callee allocates — confirm before acting", false},
 	{"PS3011", "static-chunk-barrier", "work split into equal chunks sized by the worker count, one goroutine per chunk, joined at a barrier — the slowest worker sets the wall clock. On a heterogeneous CPU that is the common case, not a tail: an M2 Pro has 8 performance and 4 efficiency cores, so a chunk landing on an E core can take several times as long. MEASURED on the autograd WKV VJP, where the static split made MORE CORES SLOWER (GOMAXPROCS=8 at 3.36ms against 3.76ms at 12) and pthread_cond_wait was 47.96%% of the profile, more than every line of the kernel combined; claiming units through an atomic cursor went -28.73%% and -29.58%% (p=0.000, n=8) and was BIT-IDENTICAL, since which worker runs a unit cannot change that unit arithmetic. Diagnose with a GOMAXPROCS sweep and a FUNCTION profile — a line profile ranks the kernel and hides the waiting. Silent once the function reaches for sync/atomic, which is what claiming looks like", false},
@@ -2183,6 +2184,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, staticChunkBarrierFindings(fset, fn)...)
 	out = append(out, sliceBuiltForOneElementFindings(fset, fn)...)
 	out = append(out, leakingFormatParamFindings(fset, fn, ns)...)
+	out = append(out, coupledIndexWeightFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -11600,4 +11602,244 @@ func typeCanLeak(t ast.Expr, ns nameSets) bool {
 		return ns.pointerTypes[e.Sel.Name]
 	}
 	return false
+}
+
+// coupledIndexWeightFindings flags PS3014 — a nested-loop reduction whose accumulated term is
+// scaled by an arithmetic combination of BOTH loop variables, used as a VALUE rather than as an
+// index. That coupling is what makes such a sum look irreducibly quadratic, and it is often not.
+func coupledIndexWeightFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer := loopVarOf(n)
+		if outer == "" {
+			return true
+		}
+		ast.Inspect(loopBody(n), func(m ast.Node) bool {
+			inner := loopVarOf(m)
+			if inner == "" || inner == outer {
+				return true
+			}
+			ast.Inspect(loopBody(m), func(st ast.Node) bool {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Rhs) != 1 {
+					return true
+				}
+				be := coupledFactor(as.Rhs[0], outer, inner)
+				if be == nil {
+					return true
+				}
+				key := fmt.Sprintf("%d", be.Pos())
+				if seen[key] {
+					return true
+				}
+				seen[key] = true
+				out = append(out, finding{
+					pos:      fset.Position(be.Pos()),
+					category: "coupled-index-weight",
+					msg: fmt.Sprintf("this accumulation is scaled by %q, an arithmetic combination of"+
+						" the outer index %q and the inner index %q used as a VALUE. That coupling is"+
+						" what makes a doubly-nested reduction look irreducibly quadratic, and a"+
+						" DIFFERENCE usually is not: split it. MEASURED on the autograd WKV backward,"+
+						" whose dw term is a sum over t and i<t of (t-1-i) times a weight — rewriting"+
+						" (t-1-i) as (t-1) minus i turns one distance-weighted sum into (t-1)*S minus"+
+						" S1, where S accumulates the weights and S1 accumulates i times the weights,"+
+						" both ordinary prefix sums maintained in O(1) per step. dw was the ONLY"+
+						" gradient in that kernel whose weight depended on the distance and the only"+
+						" reason the whole pass stayed quadratic; splitting it took seq=512 from"+
+						" 10335us to 580us, 17.8x, with the cost per doubling of seq falling from"+
+						" 3.85x to 1.81x. PRECONDITION THIS CHECK CANNOT SEE: the rest of the term"+
+						" must factor into parts that depend on t alone and on i alone, or there is"+
+						" nothing to hoist out of the inner sum. A product or a modulus of the two"+
+						" indices generally does not split and is reported only so it can be ruled"+
+						" out deliberately. Index arithmetic is excluded — a[t*n+i] couples the"+
+						" indices to ADDRESS memory, not to weight a value."+
+						" THE SPLIT ONLY PAYS WHEN THE INNER SUM COLLAPSES TO A SCALAR, and that is"+
+						" how to triage this list rather than by syntax. In WKV the distance-weighted"+
+						" term is summed over i into one number per channel, so hoisting (t-1) out"+
+						" leaves two running sums and the inner loop disappears. In ATTENTION the very"+
+						" same shape appears as an ALiBi bias, slopes[h]*float64(j-i) added to a"+
+						" per-pair score that is then used individually — there is no inner reduction"+
+						" to hoist, and the enclosing loop is irreducibly quadratic because it must"+
+						" produce every pair. Five of the six sites in this tree are that case and"+
+						" are NOT candidates (DISTANCE-WEIGHTS-SPLIT-INTO-TWO-PREFIX-SUMS-001)",
+						renderExpr(be), outer, inner),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// loopVarOf returns the single index variable a loop advances, or "" if it is not that shape.
+func loopVarOf(n ast.Node) string {
+	switch s := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := s.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name
+		}
+	case *ast.ForStmt:
+		if s.Init == nil {
+			return ""
+		}
+		as, ok := s.Init.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 {
+			return ""
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
+}
+
+// coupledFactor returns the sub-expression combining both loop variables as a value, or nil.
+//
+// The walk is explicit rather than an ast.Inspect with a parent lookup, because the exclusion is
+// the entire precision of this check and it has to be structural: an INDEX subtree is skipped
+// outright. a[t*n+i] couples the indices to compute an address, which is simply how a 2-D buffer is
+// walked and says nothing about the reduction's complexity; only a coupling used as a FACTOR does.
+func coupledFactor(root ast.Expr, outer, inner string) *ast.BinaryExpr {
+	var walk func(ast.Expr) *ast.BinaryExpr
+	walk = func(e ast.Expr) *ast.BinaryExpr {
+		switch x := e.(type) {
+		case nil:
+			return nil
+		case *ast.IndexExpr:
+			// Descend into the operand (it may itself hold a factor) but never the index.
+			return walk(x.X)
+		case *ast.ParenExpr:
+			return walk(x.X)
+		case *ast.CallExpr:
+			// A coupling only counts when it is converted to a FLOAT. That is the discriminator
+			// between a distance WEIGHT and a flat INDEX: float64(t-1-i) scales a term, whereas
+			// r*d+j addresses one, and without a type checker the conversion is the only reliable
+			// signal. Requiring it took the finding list from 18 to the handful that are real.
+			if isFloatConv(x) && len(x.Args) == 1 {
+				if be, ok := unparen(x.Args[0]).(*ast.BinaryExpr); ok &&
+					isArithOp(be.Op) && mentionsAsValue(be, outer) && mentionsAsValue(be, inner) {
+					return be
+				}
+			}
+			for _, a := range x.Args {
+				if r := walk(a); r != nil {
+					return r
+				}
+			}
+			return nil
+		case *ast.UnaryExpr:
+			return walk(x.X)
+		case *ast.SelectorExpr:
+			return walk(x.X)
+		case *ast.BinaryExpr:
+			if r := walk(x.X); r != nil {
+				return r
+			}
+			return walk(x.Y)
+		}
+		return nil
+	}
+	return walk(root)
+}
+
+// mentionsAsValue reports whether name appears in e OUTSIDE every index subtree.
+//
+// The distinction is the check's precision. l[k][i] * lbar[k][j] mentions both loop indices, but
+// only as SUBSCRIPTS: its value skeleton is l * lbar, which couples nothing and is just how a
+// matmul-shaped term is written. Searching the whole subtree instead flagged 189 sites, essentially
+// all of them this shape.
+func mentionsAsValue(e ast.Expr, name string) bool {
+	switch x := e.(type) {
+	case nil:
+		return false
+	case *ast.Ident:
+		return x.Name == name
+	case *ast.IndexExpr:
+		return mentionsAsValue(x.X, name) // never x.Index
+	case *ast.ParenExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.UnaryExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.SelectorExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.BinaryExpr:
+		return mentionsAsValue(x.X, name) || mentionsAsValue(x.Y, name)
+	case *ast.CallExpr:
+		// An ELEMENT ACCESSOR's arguments are coordinates, not values: t.AtF64(i, j) addresses an
+		// element exactly as t[i][j] does, and counting those as a coupling flagged 78 sites of
+		// which essentially none were one. A conversion such as float64(t-1-i) is descended, since
+		// that is precisely where a real distance weight appears.
+		if accessorCallName(x) != "" {
+			return false
+		}
+		for _, a := range x.Args {
+			if mentionsAsValue(a, name) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// accessorCallName returns the element-accessor name a call invokes, or "".
+func accessorCallName(c *ast.CallExpr) string {
+	switch f := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		if coupledAccessorNames[f.Sel.Name] {
+			return f.Sel.Name
+		}
+	case *ast.Ident:
+		if coupledAccessorNames[f.Name] {
+			return f.Name
+		}
+	}
+	return ""
+}
+
+// coupledAccessorNames are the element accessors whose arguments are coordinates. Kept local and
+// explicit rather than read from elementAccessors, which lists only the tensor methods; `at` is
+// this repository's package-local two-coordinate helper and reads the same way.
+var coupledAccessorNames = map[string]bool{
+	"AtF64": true, "AtF32": true, "At": true, "SetF64": true, "SetF32": true, "Set": true,
+	"at": true, "idx": true, "index": true,
+}
+
+// isFloatConv reports whether a call is a float conversion.
+func isFloatConv(c *ast.CallExpr) bool {
+	id, ok := c.Fun.(*ast.Ident)
+	return ok && (id.Name == "float64" || id.Name == "float32")
+}
+
+func isArithOp(op token.Token) bool {
+	switch op {
+	case token.ADD, token.SUB, token.MUL, token.QUO, token.REM:
+		return true
+	}
+	return false
+}
+
+func mentionsIdent(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// renderExpr prints an expression for a finding message. exprText only renders the x / x.F / x.F[i]
+// shapes a cache-slot message needs and returns "" for anything else, which turned PS3014's message
+// into a bare empty pair of quotes.
+func renderExpr(e ast.Expr) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, token.NewFileSet(), e); err != nil {
+		return "?"
+	}
+	return b.String()
 }
