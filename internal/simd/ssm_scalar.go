@@ -52,11 +52,21 @@ func ssmScanScalar(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, nLo, nH
 			base := d * N
 			tn := t * N
 			var y float64
-			for n := nLo; n < nHi; n++ {
-				abar := math.Exp(dt * as[base+n])
-				hv := abar*h[base+n] + dt*bs[tn+n]*ut
-				h[base+n] = hv
-				y += cs[tn+n] * hv
+			// FOUR bounds checks in this loop — as, h, bs and cs, each at a computed offset.
+			// Cutting all four to the n-range and ranging the first removes every one; the
+			// others are re-cut to that length so the compiler can relate them. Bit-identical:
+			// the same operands in the same ascending-n order, and hrow aliases h so the
+			// read-modify-write is unchanged.
+			arow := as[base+nLo : base+nHi]
+			hrow := h[base+nLo : base+nHi]
+			brow := bs[tn+nLo : tn+nHi]
+			crow := cs[tn+nLo : tn+nHi]
+			hrow, brow, crow = hrow[:len(arow)], brow[:len(arow)], crow[:len(arow)]
+			for i, av := range arow {
+				abar := math.Exp(dt * av)
+				hv := abar*hrow[i] + dt*brow[i]*ut
+				hrow[i] = hv
+				y += crow[i] * hv
 			}
 			if nLo == 0 {
 				if dsk != nil {
