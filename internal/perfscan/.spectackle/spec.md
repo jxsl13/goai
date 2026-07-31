@@ -125,3 +125,6 @@ IF a validated predicate matches a large fraction of ordinary loops, THEN the im
 
 ## RANK-A-CHECKED-LOOP-BY-THE-WORK-ITS-CHECKS-TRAP-001
 IF a loop with un-discharged bounds checks is ranked for a fix, THEN the implementing agent SHALL rank by the invariant work trapped behind the panic edges, not the check count — that gap made 1 site pay 15x.
+
+## SCAN-THE-PRE-FIX-SITE-BEFORE-DESIGNING-A-PREDICATE-001
+IF a new scan check is being designed from a fix just applied, THEN the implementing agent SHALL run ALL checks against the pre-fix site first, since a 40-site predicate duplicated PS1010 and surfaced only on a helper name collision.

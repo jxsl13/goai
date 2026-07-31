@@ -510,3 +510,4 @@
 {"t":"2026-07-31T20:49:04Z","eid":"ff53b0bcdcdbc824","ag":"ag-23e0","ev":"create","id":"T-01KYWZ0378FEJBKYXSHV0J75HR","k":"task","ti":"T1021 bounds check blocking LICM in rl softUpdate; perfscan PS3020"}
 {"t":"2026-07-31T21:05:39Z","eid":"d820897532d27610","ag":"ag-367c","ev":"create","id":"R-01KYWZYENEFB7R5R1SANDAJBFB","k":"research","ti":"R Unit surveys round 2: linalg, autograd, classic clustering - mechanical evidence only"}
 {"t":"2026-07-31T21:23:08Z","eid":"06a2626b0f22d3d4","ag":"ag-45e7","ev":"create","id":"T-01KYX0YF6XEGVAZC28FAP7YX1H","k":"task","ti":"T1023/T1024 GaussianNB row hoist, conv1d guard bounds; PS3021 + PS3016 amendment"}
+{"t":"2026-07-31T21:37:13Z","eid":"d1c9dd71860512d0","ag":"ag-b996","ev":"create","id":"T-01KYX1R8MCEN5TTV3B9XZG73N8","k":"task","ti":"T1025 logdet solves in the consumed layout; perfscan PS3023"}
