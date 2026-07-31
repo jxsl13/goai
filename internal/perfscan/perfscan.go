@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3011", "static-chunk-barrier", "work split into equal chunks sized by the worker count, one goroutine per chunk, joined at a barrier — the slowest worker sets the wall clock. On a heterogeneous CPU that is the common case, not a tail: an M2 Pro has 8 performance and 4 efficiency cores, so a chunk landing on an E core can take several times as long. MEASURED on the autograd WKV VJP, where the static split made MORE CORES SLOWER (GOMAXPROCS=8 at 3.36ms against 3.76ms at 12) and pthread_cond_wait was 47.96%% of the profile, more than every line of the kernel combined; claiming units through an atomic cursor went -28.73%% and -29.58%% (p=0.000, n=8) and was BIT-IDENTICAL, since which worker runs a unit cannot change that unit arithmetic. Diagnose with a GOMAXPROCS sweep and a FUNCTION profile — a line profile ranks the kernel and hides the waiting. Silent once the function reaches for sync/atomic, which is what claiming looks like", false},
 	{"PS3010", "serial-reduction-chain", "a single-accumulator floating-point reduction whose every add depends on the previous one, so the loop is bound by add LATENCY rather than throughput. Four independent partials summed at the end measured 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x) on Apple M2 Pro darwin/arm64, matching the hardware prediction for a dependent-add chain. NOT BIT-IDENTICAL: it reassociates the sum, so the value moves in the last ulp, and the two hottest instances in this tree are blocked on exactly that — nlp randomOrthogonal is regenerated at dequantization time by TurboQuant, and classic ballTree.within decides exact-label DBSCAN goldens. Requires a pure reduction: one accumulator, written once, read nowhere else in the loop, no branching. An accumulator that is also TESTED is PS3008 territory and is excluded, since four partials cannot be compared against a threshold without summing them first", false},
 	{"PS3009", "indirect-column-gather", "a loop reading ONE column of a slice-of-slices through an INDIRECT row index — M[idx[k]][f] with f invariant — so every element lands in a different row, costing a row-header dereference and a cache line per eight bytes used. Same cache behavior PS1010 describes but NOT the same fix: PS1010 needs an interchangeable nest, and here the row order is a data-dependent permutation with no nest to swap. Keep a feature-major copy (xT[f*n+row]) instead. MEASURED on classic gbmBuilder.bestSplit, where the gather was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. TRADES MEMORY FOR TIME — the copy costs n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh it against the gather's hotness rather than converting on sight. A reference implementation kept deliberately simple is the expected false positive", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
@@ -2171,6 +2172,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, setMapFromSliceFindings(fset, fn)...)
 	out = append(out, monotoneBailPerElementFindings(fset, fn)...)
 	out = append(out, serialReductionChainFindings(fset, fn)...)
+	out = append(out, staticChunkBarrierFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
 	out = append(out, stridedInnerWalkFindings(fset, fn)...)
@@ -11309,4 +11311,115 @@ func numericKindOfTypeName(t string) string {
 		return "float"
 	}
 	return ""
+}
+
+// staticChunkBarrierFindings flags PS3011 — work split into equal chunks sized by the worker count,
+// dispatched one goroutine per chunk, and joined at a barrier. The partition assumes every worker
+// retires its share at the same rate, and on a heterogeneous CPU it does not.
+//
+// The signature is three things in one function: a ceil-division of the work by a worker count, a
+// `go` inside a loop, and a Wait. Silent once the function reaches for sync/atomic, which is what
+// claiming looks like.
+func staticChunkBarrierFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var ceil ast.Node
+	var spawnInLoop, waits, claims bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.BinaryExpr:
+			// (X + Y - 1) / Y — the ceil-division idiom. Only the shape is checked; whether Y is
+			// really a worker count is left to the reader, and the message says so.
+			if s.Op == token.QUO && isCeilNumerator(s.X, s.Y) {
+				ceil = s
+			}
+		case *ast.GoStmt:
+			if enclosingLoopOf(fn.Body, s) != nil {
+				spawnInLoop = true
+			}
+		case *ast.SelectorExpr:
+			switch s.Sel.Name {
+			case "Wait":
+				waits = true
+			case "Add", "CompareAndSwap", "Load":
+				// An atomic cursor is the applied form. Distinguishing it from WaitGroup.Add needs
+				// the receiver, so only a package-qualified atomic or an atomic-typed field counts.
+				if id, ok := s.X.(*ast.Ident); ok && id.Name == "atomic" {
+					claims = true
+				}
+			}
+		case *ast.Ident:
+			if s.Name == "atomic" {
+				claims = true
+			}
+		}
+		return true
+	})
+	if ceil == nil || !spawnInLoop || !waits || claims {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(ceil.Pos()),
+		category: "static-chunk-barrier",
+		msg: fmt.Sprintf("%s deals equal chunks to one goroutine each and joins at a barrier, so the"+
+			" slowest worker sets the wall clock. THAT IS NOT A TAIL EFFECT ON A HETEROGENEOUS CPU,"+
+			" IT IS THE COMMON CASE: an Apple M2 Pro has 8 performance and 4 efficiency cores, so a"+
+			" chunk landing on an E core can take several times as long and every P core waits for"+
+			" it. MEASURED on the autograd WKV VJP, where the giveaway was that MORE CORES MADE IT"+
+			" SLOWER — GOMAXPROCS=8 ran 3.36ms against 3.76ms at 12 — and pthread_cond_wait was"+
+			" 47.96%% of the profile, more than every line of the kernel combined. Claiming units"+
+			" through an atomic cursor instead went -28.73%% and -29.58%% (p=0.000, n=8), BIT-IDENTICAL,"+
+			" because which worker runs a unit cannot change that unit's arithmetic. THE DIAGNOSTIC IS"+
+			" CHEAP AND COMES FIRST: sweep GOMAXPROCS and look at a FUNCTION profile, not a line"+
+			" profile — a line profile ranks the kernel and hides the waiting, which is how this site"+
+			" was nearly missed. Preconditions the check cannot see: the units must be independent"+
+			" (they already are, or the static split would be wrong too), the grain must stay large"+
+			" enough that the claim is negligible, and any per-chunk scratch indexed by a chunk"+
+			" number must be re-keyed to the WORKER instead, since claiming makes the number of units"+
+			" exceed the number of workers", fn.Name.Name),
+	}}
+}
+
+// unparen strips redundant parentheses, which the ceil idiom always carries:
+// `chunk := (n + nw - 1) / nw` parses its numerator as a ParenExpr, not a BinaryExpr.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+// isCeilNumerator reports whether x is the `a + d - 1` half of a ceil-division by d.
+func isCeilNumerator(x, d ast.Expr) bool {
+	outer, ok := unparen(x).(*ast.BinaryExpr)
+	if !ok || outer.Op != token.SUB || !isIntLit(outer.Y, "1") {
+		return false
+	}
+	inner, ok := unparen(outer.X).(*ast.BinaryExpr)
+	if !ok || inner.Op != token.ADD {
+		return false
+	}
+	ds := exprText(unparen(d))
+	return exprText(unparen(inner.Y)) == ds || exprText(unparen(inner.X)) == ds
+}
+
+func isIntLit(e ast.Expr, v string) bool {
+	lit, ok := e.(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value == v
+}
+
+// enclosingLoopOf returns the innermost loop in root containing n, or nil.
+func enclosingLoopOf(root ast.Node, n ast.Node) ast.Node {
+	var found ast.Node
+	ast.Inspect(root, func(k ast.Node) bool {
+		if loopBody(k) == nil {
+			return true
+		}
+		if k.Pos() <= n.Pos() && n.End() <= k.End() {
+			found = k
+		}
+		return true
+	})
+	return found
 }
