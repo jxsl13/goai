@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3023", "transpose-pass-over-built-matrix", "a nested loop that materializes a TRANSPOSED COPY of a matrix this function built itself. This is deliberately the case PS1010 excludes — a transpose writes the inner variable on the left, so interchange only moves the stride — and the remedy is different in kind: DELETE the pass by having the producer write the layout the consumer wants, which also removes the intermediate and its per-row allocations. MEASURED on the autograd logdet VJP, which solved its triangular inverse row-major then transposed it because the contraction needs columns: solving straight into column-major went -10.37%% at n=512 and -6.93%% at n=256 (p=0.000, n=12), allocs down about a third, control flat, bit-identical over 5547 values. Two further costs no line profile shows: the consumer stops walking down a column of a slice-of-slices, losing a row-pointer load and a bounds check per element; and a PARALLEL producer that wrote columns had every worker contending for cache lines with its neighbours, where row-major gives each its own row. Check the source is not ALSO consumed in the original layout, or flipping the producer just moves the transpose", false},
 	{"PS3021", "monotone-guard-in-loop", "a counted loop whose entire body sits behind a guard that moves monotonely with the loop variable and is compared against something invariant. That is not a per-iteration decision — the guard is false for a RUN of iterations at one end and true for the rest — so it belongs in the loop BOUNDS. Computing the crossing point once removes the branch from every iteration AND frees any loop-invariant the branch was trapping, since it splits the body into its own basic block and Go SSA will not hoist across it. MEASURED on the autograd conv1d backward, whose per-tap guard was false for only 3 of 2048 positions and whose loop HEADER profiled larger than either line it protected: F32 -7.92%% (p=0.000, n=16). The F64 arm of the same edit was directionally -4.7%% but did NOT separate at n=16 (p=0.210) — so expect a win when the skipped run is small and the body cheap, and nothing measurable otherwise; apply it anyway when bit-identical, since it strictly removes instructions. Bit-identical by construction: only iterations whose body never ran are skipped. Equality guards are excluded — they select one iteration, not a run. Check the DIRECTION before rewriting; getting it backwards silently drops work", false},
 	{"PS3020", "invariant-behind-bounds-check", "a counted loop that indexes slices with its loop variable AND recomputes a loop-invariant value every iteration. These are ONE defect: each indexed read is a bounds check, a bounds check is a panic edge that splits the body into separate basic blocks, and Go SSA will not hoist across a block that can panic — so the checks cost more than their own instructions because they also trap the invariant. Fix both halves: range over the destination and cut every companion to its length, then lift the invariant above the loop. MEASURED on the rl Polyak soft update, where (1-tau) was rematerialized per element behind two bounds checks — body from 14 instructions to 5, -21.30%% F64 and -18.62%% F32 (p=0.000, n=12), with an untouched sibling benchmark flat as the control. Restricted to invariants used as a VALUE against an indexed element; addressing arithmetic folds into an addressing mode and is excluded. Verify the FMA fusion did not move — merging blocks can change which multiply contracts, and a 1-ulp failure from exactly that is already on record here", false},
 	{"PS3019", "unrolled-index-not-windowed", "a manually unrolled loop bounded by `i+K <= len(x)` that reads x at K constant offsets and never cuts it to the K-wide window. The bound does NOT discharge those reads — i+K can overflow, so the prove pass keeps a check on every one. Cutting a window once per iteration replaces K checks with ONE slice check. MEASURED on nlp dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12), geomean -17.36%%, bit-identical. IT DID NOT PAY at the site it was found on, which is the load-bearing half of this advice: the classic ballTree L2 leaf test went four checks to one for -1.11%% against an UNTOUCHED sibling arm that moved -1.06%% in the same run, so nothing was attributable — that loop has a data-dependent early exit whose misprediction dominates and hides the checks. Require a branchless body with no loop-carried dependency, and run an untouched control, because this class yields a plausible small win that is really drift. Reordering the reads to touch the highest offset first is NOT a substitute and left all four checks in place. Clamping a second operand to the first outside the loop makes its window free", false},
@@ -2221,6 +2222,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, unconvertedDtypeArmFindings(fset, fn, ns)...)
 	out = append(out, compositeKeyMapProbeFindings(fset, fn)...)
 	out = append(out, columnWalkFindings(fset, fn)...)
+	out = append(out, transposePassFindings(fset, fn)...)
 	out = append(out, reflectSwapperSortFindings(fset, fn)...)
 	out = append(out, perRowMakeSlabFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
@@ -12927,4 +12929,139 @@ func mentionsAnyName(e ast.Expr, names map[string]bool) bool {
 		return !found
 	})
 	return found
+}
+
+// transposePassFindings flags PS3023 — a nested loop that materializes a TRANSPOSED COPY of a matrix
+// this function itself built.
+//
+// This is deliberately the case PS1010 EXCLUDES. That check reports a column walk only when the
+// inner loop assigns to something free of the inner variable, because then interchange is the
+// remedy; a transpose writes the inner variable on the left and, as its comment says, strides
+// whichever way it is run, so interchange buys nothing. The remedy here is not to reorder the copy
+// but to DELETE it: when the source is built in this same function, the producer can write the
+// layout the consumer wants and both the pass and the intermediate disappear.
+func transposePassFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	built := locallyBuiltMatrices(fn)
+	if len(built) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, obody, ok := loopIndexVar(n)
+		if !ok || obody == nil {
+			return true
+		}
+		ast.Inspect(obody, func(m ast.Node) bool {
+			inner, ibody, ok := loopIndexVar(m)
+			if !ok || ibody == nil || inner == outer {
+				return true
+			}
+			for _, st := range ibody.List {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					continue
+				}
+				// A transpose WRITE: the destination moves with the inner variable — usually as an
+				// INDEX, which is why mentionsAsValue is the wrong test here. That is what PS1010
+				// refuses, because interchanging it only moves the stride.
+				if !mentions(as.Lhs[0], inner) {
+					continue
+				}
+				src, ok := transposedRead(as.Rhs[0], inner, outer)
+				if !ok || !built[src] {
+					continue
+				}
+				line := fset.Position(as.Pos()).Line
+				if seen[line] {
+					continue
+				}
+				seen[line] = true
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "transpose-pass-over-built-matrix",
+					msg: fmt.Sprintf("this loop materializes a TRANSPOSED COPY of %s, which this"+
+						" function built itself. PS1010 deliberately does not report it: a"+
+						" transpose writes the inner variable on the left, so INTERCHANGE buys"+
+						" nothing and only moves the stride. The remedy is to DELETE the pass"+
+						" instead — have the producer of %s write the layout this consumer wants,"+
+						" and the copy, the intermediate and its per-row allocations all go."+
+						" MEASURED on the autograd logdet VJP, which solved its triangular inverse"+
+						" row-major and then transposed it because the contraction needs columns:"+
+						" solving straight into column-major went -10.37%% at n=512 and -6.93%% at"+
+						" n=256 (p=0.000, n=12), allocs/op down about a third, with an untouched"+
+						" sibling benchmark flat. Bit-identical there, and it should be wherever"+
+						" the producer merely relabels which slot a value lands in — no operand"+
+						" and no summation order changes."+
+						" TWO COSTS BESIDES THE COPY, both invisible to a line profile. The"+
+						" consumer's inner loop stops walking down a column of a slice-of-slices,"+
+						" so it loses a row-pointer load and a bounds check per element. And if"+
+						" the producer is PARALLEL over the transposed axis, each worker was"+
+						" writing a column — adjacent workers storing into adjacent bytes of the"+
+						" same rows, contending for a cache line on every write — and now owns a"+
+						" contiguous row. CHECK FIRST that the source is not ALSO consumed in its"+
+						" original layout somewhere else; if it is, flipping the producer only"+
+						" moves the transpose rather than removing it", src, src),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// transposedRead reports the base name of a read shaped src[inner][outer] appearing in e.
+func transposedRead(e ast.Expr, inner, outer string) (string, bool) {
+	name, found := "", false
+	ast.Inspect(e, func(n ast.Node) bool {
+		elem, ok := n.(*ast.IndexExpr)
+		if !ok || found {
+			return true
+		}
+		row, ok := unparen(elem.X).(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		rid, ok1 := unparen(row.Index).(*ast.Ident)
+		cid, ok2 := unparen(elem.Index).(*ast.Ident)
+		base, ok3 := unparen(row.X).(*ast.Ident)
+		if ok1 && ok2 && ok3 && rid.Name == inner && cid.Name == outer {
+			name, found = base.Name, true
+		}
+		return true
+	})
+	return name, found
+}
+
+// locallyBuiltMatrices collects names assigned from make of a slice type in this function, which is
+// what makes the producer reachable.
+func locallyBuiltMatrices(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, ok := unparen(as.Lhs[0]).(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		fnID, ok := unparen(call.Fun).(*ast.Ident)
+		if !ok || fnID.Name != "make" {
+			return true
+		}
+		if _, isArr := call.Args[0].(*ast.ArrayType); isArr {
+			out[id.Name] = true
+		}
+		return true
+	})
+	return out
 }
