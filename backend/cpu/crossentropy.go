@@ -161,7 +161,161 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 	return []*tensor.Tensor{dz}, nil
 }
 
+// crossEntropyF64CPU is the bit-exact parallel F64 twin of crossEntropyKernelCPU: F64
+// cross-entropy was a cpu dtype-gap (cpu registered CE for F32 only, so F64 fell to the
+// serial ref kernel — PS6006). It reproduces ref's F64 arithmetic exactly (scalar max,
+// Σexp(z−m) and Σz in one pass with scalar math.Exp, lse = m+log(sum), the same
+// label-smoothed loss), fills the per-row loss and lse in parallel, then replays ref's
+// EXACT serial accumulation order — total += loss; if zl≠0 total += zl·lse² as a SEPARATE
+// step, interleaved per row (ceAccum.row) — so the mean is byte-identical to ref, not
+// merely tolerant. Mean + no-ignore-index only (the hot training case); every other
+// reduction / masked row defers to ref, matching the F32 kernel's guard.
+func crossEntropyF64CPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 2 {
+		return nil, fmt.Errorf("cpu: crossentropy wants (logits, targets), got %d inputs", len(in))
+	}
+	z, tg := in[0], in[1]
+	if z.Ndim() != 2 || tg.Ndim() != 1 {
+		return nil, fmt.Errorf("cpu: crossentropy needs logits rank-2 and targets rank-1, got %dD, %dD", z.Ndim(), tg.Ndim())
+	}
+	b, c := z.Shape()[0], z.Shape()[1]
+	if tg.Shape()[0] != b {
+		return nil, fmt.Errorf("cpu: crossentropy targets len %d != batch %d", tg.Shape()[0], b)
+	}
+	if b == 0 {
+		return nil, fmt.Errorf("cpu: crossentropy on empty batch")
+	}
+	pa, _ := attrs.(backend.CrossEntropyAttrs)
+	eps := pa.LabelSmoothing
+	if eps < 0 || eps >= 1 {
+		return nil, fmt.Errorf("cpu: crossentropy label_smoothing %g out of [0,1)", eps)
+	}
+	if pa.ZLoss < 0 {
+		return nil, fmt.Errorf("cpu: crossentropy z_loss coefficient %g must be ≥ 0", pa.ZLoss)
+	}
+	if pa.HasIgnoreIndex || pa.Reduction != backend.ReductionMean {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropy, in, attrs)
+	}
+	tis := make([]int, b)
+	for i := range b {
+		ti := int(tg.AtF64(i))
+		if ti < 0 || ti >= c {
+			return nil, fmt.Errorf("cpu: crossentropy target %d out of range [0,%d)", ti, c)
+		}
+		tis[i] = ti
+	}
+	zs := z.Contiguous().Storage().F64()
+	losses := make([]float64, b)
+	lses := make([]float64, b)
+	parallelWork(b, 8*c, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			base := i * c
+			m := math.Inf(-1)
+			for j := 0; j < c; j++ {
+				if v := zs[base+j]; v > m {
+					m = v
+				}
+			}
+			var sum, rowSum float64
+			for j := 0; j < c; j++ {
+				sum += math.Exp(zs[base+j] - m)
+				rowSum += zs[base+j]
+			}
+			lse := m + math.Log(sum)
+			loss := lse - zs[base+tis[i]]
+			if eps != 0 {
+				loss = lse - (1-eps)*zs[base+tis[i]] - (eps/float64(c))*rowSum
+			}
+			losses[i] = loss
+			lses[i] = lse
+		}
+	})
+	zl := pa.ZLoss
+	var total float64 // serial, in ref's ceAccum.row order (base then zl·lse² separately)
+	for i := 0; i < b; i++ {
+		total += losses[i]
+		if zl != 0 {
+			total += zl * lses[i] * lses[i]
+		}
+	}
+	out := tensor.NewOn(ctx.Device(), z.Dtype(), tensor.Shape{})
+	out.SetF64(total / float64(b))
+	return []*tensor.Tensor{out}, nil
+}
+
+// crossEntropyBackwardF64CPU is the bit-exact parallel F64 twin of
+// crossEntropyBackwardKernelCPU: F64 CE backward was a cpu dtype-gap (cpu registered it
+// for F32 only → F64 fell to serial ref, PS6006). Rows are independent (each reads its own
+// z row, writes its own dz row), so they run across the worker pool; each row reproduces
+// ref's exact F64 sequence — stash e=exp(z−m) in the grad slot during the sum pass, then
+// dz = gv·(p − q + lseTerm·p)/div with p=e/sum (the SAME per-element expression and order
+// as ref, not the rearranged scale form the tol-gated F32 kernel uses) → BYTE-IDENTICAL.
+// Mean + no-ignore-index only; every other case defers to ref (the F32 kernel's guard).
+func crossEntropyBackwardF64CPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 3 {
+		return nil, fmt.Errorf("cpu: crossentropy-backward wants (z, targets, g), got %d", len(in))
+	}
+	z, tg, g := in[0], in[1], in[2]
+	if z.Ndim() != 2 || tg.Ndim() != 1 {
+		return nil, fmt.Errorf("cpu: crossentropy-backward needs z rank-2 and targets rank-1, got %dD/%dD", z.Ndim(), tg.Ndim())
+	}
+	b, c := z.Shape()[0], z.Shape()[1]
+	if tg.Shape()[0] != b {
+		return nil, fmt.Errorf("cpu: crossentropy-backward targets len %d != batch %d", tg.Shape()[0], b)
+	}
+	pX, _ := attrs.(backend.CrossEntropyAttrs)
+	if pX.HasIgnoreIndex || pX.Reduction != backend.ReductionMean {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropyBackward, in, attrs)
+	}
+	eps := pX.LabelSmoothing
+	zl := pX.ZLoss
+	gv := g.AtF64()
+	div := float64(b)
+	dz := tensor.NewOn(ctx.Device(), z.Dtype(), z.Shape())
+	zs := z.Contiguous().Storage().F64()
+	dzs := dz.Storage().F64()
+	tis := make([]int, b)
+	for i := range b {
+		tis[i] = int(tg.AtF64(i))
+	}
+	parallelWork(b, 8*c, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			base := i * c
+			m := math.Inf(-1)
+			for j := 0; j < c; j++ {
+				if v := zs[base+j]; v > m {
+					m = v
+				}
+			}
+			var sum float64
+			for j := 0; j < c; j++ {
+				e := math.Exp(zs[base+j] - m)
+				dzs[base+j] = e // stash exp(z-m) in the grad slot; overwritten below
+				sum += e
+			}
+			var lseTerm float64
+			if zl != 0 {
+				lseTerm = 2 * zl * (m + math.Log(sum))
+			}
+			ti := tis[i]
+			for j := 0; j < c; j++ {
+				p := dzs[base+j] / sum
+				q := eps / float64(c)
+				if j == ti {
+					q += 1 - eps
+				}
+				dzs[base+j] = gv * (p - q + lseTerm*p) / div
+			}
+		}
+	})
+	return []*tensor.Tensor{dz}, nil
+}
+
 func init() {
+	// F64 cross-entropy fwd+bwd: scalar-math (no vexp), bit-exact to ref on every build →
+	// registered unconditionally, closing the F64→serial-ref dtype-gap (PS6006).
+	std.add(backend.OpCrossEntropy, tensor.F64, crossEntropyF64CPU)
+	std.add(backend.OpCrossEntropyBackward, tensor.F64, crossEntropyBackwardF64CPU)
 	if vexpF32Fast {
 		// SIMD perf build, F32 only (§T664): vexp-routed cross-entropy — the LSE
 		// exp+sum runs through vexpRowF32 (4-wide NEON on arm64, 8-wide AVX2 on
