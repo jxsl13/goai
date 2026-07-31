@@ -772,12 +772,22 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 			s1 := xi - mu1[i]
 			s2 := xi - mu2[i]
 			s3 := xi - mu3[i]
-			l0i, l1i, l2i, l3i := l0[i], l1[i], l2[i], l3[i]
-			for j := range i {
-				s0 -= l0i[j] * y0[j]
-				s1 -= l1i[j] * y1[j]
-				s2 -= l2i[j] * y2[j]
-				s3 -= l3i[j] * y3[j]
+			// Cut all eight operands to ONE length so the range proves every index. Indexing them
+			// directly left two checks on each of the four terms — eight in an O(d^2) loop — and
+			// the damage was not the checks themselves but the register pressure they created:
+			// eight loop-invariant lengths stayed live at once, which spilled the induction
+			// variable and forced a slice pointer to be reloaded every iteration. Bit-identical:
+			// range visits the same j in the same ascending order over the same operands, into the
+			// same four separate accumulators.
+			l0i := l0[i][:i]
+			w := len(l0i)
+			l1i, l2i, l3i := l1[i][:w], l2[i][:w], l3[i][:w]
+			yy0, yy1, yy2, yy3 := y0[:w], y1[:w], y2[:w], y3[:w]
+			for j := range l0i {
+				s0 -= l0i[j] * yy0[j]
+				s1 -= l1i[j] * yy1[j]
+				s2 -= l2i[j] * yy2[j]
+				s3 -= l3i[j] * yy3[j]
 			}
 			y0[i] = s0 * id0[i]
 			y1[i] = s1 * id1[i]
@@ -816,10 +826,14 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 			xi := x[i]
 			s0 := xi - mu0[i]
 			s1 := xi - mu1[i]
-			l0i, l1i := l0[i], l1[i]
-			for j := range i {
-				s0 -= l0i[j] * y0[j]
-				s1 -= l1i[j] * y1[j]
+			// Same treatment as the 4-jam arm above; see the comment there.
+			l0i := l0[i][:i]
+			w := len(l0i)
+			l1i := l1[i][:w]
+			yy0, yy1 := y0[:w], y1[:w]
+			for j := range l0i {
+				s0 -= l0i[j] * yy0[j]
+				s1 -= l1i[j] * yy1[j]
 			}
 			y0[i] = s0 * id0[i]
 			y1[i] = s1 * id1[i]
