@@ -89,17 +89,30 @@ func init() {
 				// irrelevant to a per-c accumulator's summation order).
 				conv1dParallelChannels(D, L*K, func(clo, chi int) {
 					for t := 0; t < L; t++ {
+						// The taps whose input index falls before the start of the sequence are
+						// skipped by RANGE rather than by a per-tap guard. `if j >= 0` was a
+						// data-dependent branch inside the innermost loop that is false for only
+						// the first K-1 of L positions — 3 of 2048 at the benchmark shape, so
+						// 99.85% pure overhead — and, being a panic-splitting branch, it also
+						// stopped `t-(K-1)` from hoisting even though it is invariant in both k
+						// and c. The loop HEADER profiled higher than either of the two lines it
+						// guards. Bit-identical: only iterations whose body never executed are
+						// skipped, so the surviving k are the same values in the same ascending
+						// order into the same accumulators.
+						base := t - (K - 1)
+						k0 := 0
+						if base < 0 {
+							k0 = -base
+						}
 						for c := clo; c < chi; c++ {
 							gv := gs[t*D+c]
 							if hasBias {
 								dbs[c] += gv
 							}
-							for k := 0; k < K; k++ {
-								j := t - (K - 1) + k
-								if j >= 0 {
-									dws[c*K+k] += gv * xs[j*D+c]
-									dxs[j*D+c] += gv * ws[c*K+k]
-								}
+							for k := k0; k < K; k++ {
+								j := base + k
+								dws[c*K+k] += gv * xs[j*D+c]
+								dxs[j*D+c] += gv * ws[c*K+k]
 							}
 						}
 					}
@@ -125,17 +138,21 @@ func init() {
 				// [t*D+c] / [j*D+c] flat arrays, bit-identical per-c ascending-t accumulation.
 				conv1dParallelChannels(D, L*K, func(clo, chi int) {
 					for t := 0; t < L; t++ {
+						// Same guard hoist as the F64 arm above; see the comment there.
+						base := t - (K - 1)
+						k0 := 0
+						if base < 0 {
+							k0 = -base
+						}
 						for c := clo; c < chi; c++ {
 							gv := float64(gs[t*D+c])
 							if hasBias {
 								dbs[c] = float32(float64(dbs[c]) + gv)
 							}
-							for k := 0; k < K; k++ {
-								j := t - (K - 1) + k
-								if j >= 0 {
-									dws[c*K+k] = float32(float64(dws[c*K+k]) + gv*float64(xs[j*D+c]))
-									dxs[j*D+c] = float32(float64(dxs[j*D+c]) + gv*float64(ws[c*K+k]))
-								}
+							for k := k0; k < K; k++ {
+								j := base + k
+								dws[c*K+k] = float32(float64(dws[c*K+k]) + gv*float64(xs[j*D+c]))
+								dxs[j*D+c] = float32(float64(dxs[j*D+c]) + gv*float64(ws[c*K+k]))
 							}
 						}
 					}
