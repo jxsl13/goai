@@ -968,3 +968,6 @@ Rationale: In the RWKV WKV scan q is the maximum of two arguments and both are t
 
 ## AN-UNTOUCHED-SIBLING-ARM-IS-THE-CONTROL-001
 IF an A/B reports a small win on a multi-arm benchmark family, THEN the implementing agent SHALL use an arm the change cannot affect as the control, and discard the result when the control moves within 0.1 points of it.
+
+## A-DEGENERATE-FIXTURE-ARM-IS-A-FREE-CONTROL-001
+IF a benchmark fixture already sweeps a parameter into a degenerate case, THEN the implementing agent SHALL use that arm as the control, since DBSCAN all-noise builds 0 neighbour lists and its flatness proved the win came from the lists.

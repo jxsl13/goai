@@ -2281,3 +2281,23 @@ GENERALIZED as PS3024 fixed-arity-variadic-call. Clean before and after on its o
 HOW THE CLASS WAS FOUND, worth keeping as method. A whole-tree duplicate-body scan (function bodies rendered with parameters renamed positionally, so a method and a free function still match) reported 44 clone groups, the largest being 29 identical exec methods in nn. Raw duplication was rejected as a rule - most Go clone groups are legitimate per-type boilerplate in the absence of generics - but it was the right INSTRUMENT for locating the class, and the shippable predicate turned out to be at the CALL SITE rather than the declaration.
 
 TWO SELF-INFLICTED FAULTS, both caught by existing rules. The detector first reported zero findings everywhere, including its own motivating site: the check table entry was never added, so the category mapped to no ID and every finding was dropped. Then with exec1 on the configured list it reported 770, because the pooled helpers' own correct fallback calls matched. Narrowing the list and suppressing calls made from inside a pooled helper took it to the real 450.
+
+## T-01KYX4YA4MF70VKH69NS1MX82K T1032 DBSCAN neighbour lists slab-allocated; PS2008 advice extended
+kind: task
+state: draft
+created: 2026-07-31
+targets: classic/dbscan.go, internal/perfscan/perfscan.go
+
+MEASURED AND SHIPPED (commits 11ebdb60, 03861c42).
+
+SITE. classic DBSCAN gave every core point its own make for its neighbour list - the single largest production allocation site in the package. They are now carved from a per-goroutine block bump allocator: one allocation per 4096-int block instead of one per core point, each list cut three-index so its capacity ends at its own last element, and a list longer than a block getting its own exact-sized one so the slab never forces a copy.
+
+RESULT. DBSCANFit/eps4 allocs 3.515k to 1.189k, -66.18%, time -5.90%. DBSCANFitManhattan/eps16 allocs 4.836k to 1.251k, -74.13%, time -7.48%. Both p=0.000, n=12. Better than predicted - this was expected to move allocations only.
+
+TWO CONTROLS, ONE OF THEM FREE. KNNPredict was flat on both axes. More usefully, the eps2 arm of the DBSCAN fixture is degenerate all-noise, so NO point is core and no list is ever built: it stayed flat too, which is direct evidence the win comes from the lists and nothing else in Fit. A fixture that already contains a degenerate arm hands you a control for free.
+
+THE LIFETIME TEST WAS CHECKED, NOT ASSUMED. A block pins every row in it, so slabbing is only safe when the rows die together. Here neighbors is a local in Fit, never returned and never stored on the receiver, read only by the flood fill - so every core list drops at the same instant. Same test that made the tensor view block a 26% win and the tensor Storage fold a 6.86% loss.
+
+NO NEW SCAN RULE - fifth withholding of the session, second for emptiness rather than density. The pre-fix site was scanned first: PS2008 is the slab check and it correctly stays SILENT, because it requires a loop-invariant length and a uniform slab needs uniform rows. So the varying-length case is genuinely uncovered. A predicate for the clone idiom was built and validated to FIRE on the pre-fix site, then found ZERO other instances tree-wide. One occurrence, now fixed, does not earn a detector.
+
+The learning went into PS2008's advice instead, which is where a reader at such a site already is: the invariant-length requirement is real but not the end of the story, the complement remedy is a block bump allocator, the shape that hides these sites is `dst[i] = append(make([]T, 0, len(src)), src...)` with the make nested inside an append, and the lifetime precondition applies to both forms.
