@@ -11370,7 +11370,15 @@ func staticChunkBarrierFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 			" because which worker runs a unit cannot change that unit's arithmetic. THE DIAGNOSTIC IS"+
 			" CHEAP AND COMES FIRST: sweep GOMAXPROCS and look at a FUNCTION profile, not a line"+
 			" profile — a line profile ranks the kernel and hides the waiting, which is how this site"+
-			" was nearly missed. Preconditions the check cannot see: the units must be independent"+
+			" was nearly missed. ATTRIBUTE THE CURVE BEFORE ACTING ON IT, with a control: a GOMAXPROCS"+
+			" curve is a property of the WHOLE benchmark, not of the chunker you happen to be reading."+
+			" Force THIS chunker serial and re-run; if the benchmark does not move, the scaling loss is"+
+			" somewhere else. nlp quant_mamba2 screened at +4.5%% from GOMAXPROCS 8 to 12 and its curve"+
+			" bottomed at SIX, yet forcing its parallelChunks serial changed the decode benchmark by"+
+			" 0.06%% — it was not on the hot path at all, and both a claim rewrite and a work-sized"+
+			" worker cap measured null-to-negative there before the control was run. Note also that a"+
+			" minimum BELOW the performance-core count indicts per-worker dispatch overhead rather than"+
+			" efficiency-core imbalance, and claiming does not fix that. Preconditions the check cannot see: the units must be independent"+
 			" (they already are, or the static split would be wrong too), the grain must stay large"+
 			" enough that the claim is negligible, and any per-chunk scratch indexed by a chunk"+
 			" number must be re-keyed to the WORKER instead, since claiming makes the number of units"+

@@ -4,6 +4,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -22,21 +23,42 @@ func moeParallelTokens(tks, d int, body func(tLo, tHi int, scratch []float64)) {
 		body(0, tks, make([]float64, d))
 		return
 	}
+	// Token ranges are CLAIMED, not dealt. An equal static split assumes every worker retires its
+	// share at the same rate, which an M2 Pro's 8 performance plus 4 efficiency cores do not: the
+	// chunk landing on an E core sets the barrier. The screening signature is that MORE CORES MAKE
+	// IT SLOWER, and BenchmarkMoECombineBackward showed it at +7.4% going from GOMAXPROCS=8 to 12
+	// (STATIC-CHUNKS-LOSE-ON-HETEROGENEOUS-CORES-001, PS3011).
+	//
+	// Bit-exact for the same reason the static split was: tokens are disjoint, so which worker runs
+	// a token cannot change that token's arithmetic. Scratch is per WORKER rather than per chunk,
+	// which is what keeps allocations at O(GOMAXPROCS) once a worker takes several ranges.
+	units := min(nw*moeClaimGrain, tks)
+	grain := (tks + units - 1) / units
+	units = (tks + grain - 1) / grain
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	chunk := (tks + nw - 1) / nw
-	for lo := 0; lo < tks; lo += chunk {
-		hi := lo + chunk
-		if hi > tks {
-			hi = tks
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
+	wg.Add(nw)
+	for range nw {
+		go func() {
 			defer wg.Done()
-			body(lo, hi, make([]float64, d))
-		}(lo, hi)
+			scratch := make([]float64, d)
+			for {
+				u := int(next.Add(1)) - 1
+				if u >= units {
+					return
+				}
+				lo := u * grain
+				body(lo, min(lo+grain, tks), scratch)
+			}
+		}()
 	}
 	wg.Wait()
 }
+
+// moeClaimGrain is how many ranges each worker is expected to claim on average. Swept in
+// internal/parallel against both dispatch cost and balance: 2 was best on each axis, since dispatch
+// cost rises monotonically with the grain while the balance win saturates immediately.
+const moeClaimGrain = 2
 
 // MoE load-balancing loss VJP (Fedus et al. 2021). With L = α·N·Σ_i F_i·P̄_i,
 // F_i = f_i/T the DETACHED dispatch fraction and P̄_i = mean_t softmax(logits_t)_i,
