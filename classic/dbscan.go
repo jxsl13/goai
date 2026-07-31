@@ -130,6 +130,10 @@ func NewDBSCAN(opts ...DBSCANOption) *DBSCAN {
 // points. The returned slice aliases the estimator's internal state; the same
 // labels are available afterwards via [DBSCAN.Labels]. Fit errors on empty or
 // ragged input, eps ≤ 0, or minSamples < 1.
+// dbscanSlabBlock is how many ints a core-neighbourhood slab block holds. One allocation per block
+// replaces one per core point; a list longer than this gets its own exact-sized block.
+const dbscanSlabBlock = 4096
+
 func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 	n := len(x)
 	if n == 0 {
@@ -173,6 +177,16 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 		// is truncated rather than appended to and needs no reset here; the brute-force
 		// branch truncates explicitly.
 		var buf []int
+		// Core neighbourhoods are carved from a per-goroutine SLAB rather than allocated one at a
+		// time. Every core list is retained in neighbors for the whole of Fit and dropped together
+		// when it returns — neighbors is a local, never returned and never stored on the receiver
+		// — so their lifetimes are identical and a shared block pins nothing beyond its own
+		// members (FOLD-ONLY-OBJECTS-WITH-IDENTICAL-LIFETIMES-001). The slab is per goroutine for
+		// the same reason buf is: a block shared across goroutines would be raced on.
+		//
+		// Each list is cut with a three-index slice so its capacity stops at its own end; without
+		// that cap an append by a future reader would overwrite the next list in the block.
+		var slab []int
 		for i := lo; i < hi; i++ {
 			if tree != nil {
 				buf = tree.radius(x[i], m.cfg.eps, buf)
@@ -192,7 +206,18 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 			// path will read, so it is skipped — which also means Fit holds only the core
 			// lists after it returns instead of all n.
 			if core {
-				neighbors[i] = append(make([]int, 0, len(buf)), buf...)
+				if len(buf) > cap(slab)-len(slab) {
+					// A fresh block. Earlier lists keep pointing at the previous one, which stays
+					// alive exactly as long as they do.
+					sz := dbscanSlabBlock
+					if len(buf) > sz {
+						sz = len(buf)
+					}
+					slab = make([]int, 0, sz)
+				}
+				off := len(slab)
+				slab = append(slab, buf...) // capacity is guaranteed above, so this cannot move
+				neighbors[i] = slab[off:len(slab):len(slab)]
 			}
 		}
 	}
