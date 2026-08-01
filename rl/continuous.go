@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -244,11 +245,11 @@ func contMLP(inDim, hidden, outDim int, seed uint64) *nn.Sequential {
 // contMat builds a [rows][cols] rank-2 tensor from a slice of equal-length rows.
 func contMat(rows [][]float64) *tensor.Tensor {
 	n, d := len(rows), len(rows[0])
+	// Row-major copy straight into the storage — no SetF64 dispatch per element (PS1005).
 	t := tensor.New(tensor.F64, tensor.Shape{n, d})
+	ts := t.Storage().F64()
 	for i, r := range rows {
-		for j, v := range r {
-			t.SetF64(v, i, j)
-		}
+		copy(ts[i*d:i*d+d], r)
 	}
 	return t
 }
@@ -277,6 +278,33 @@ func boundsScaleCenter(low, high []float64) (scale, center *tensor.Tensor) {
 	return scale, center
 }
 
+// softUpdateParThreshold is the element count above which one parameter's Polyak blend is
+// worth fanning out. Each element does two reads and one write of a resident array, so the
+// loop is bandwidth-bound rather than compute-bound and the crossover sits where the fan-out
+// overhead stops dominating. 1<<15 matches the threshold the other packages in this
+// repository use for the same kind of elementwise sweep.
+//
+// At the shape this actually runs on — a critic-sized MLP, hidden 256 — it fans out the two
+// 65536-element weight matrices and leaves the three bias vectors of 256 or fewer elements
+// serial, which is the intended split: a 256-element fan-out is pure overhead.
+const softUpdateParThreshold = 1 << 15
+
+// softUpdateRun applies body over [0,n) in parallel above the threshold and serially below
+// it. Splitting is legal here because the blend carries NO accumulation: every output index
+// is written exactly once, from its own source element and its own previous value, so chunk
+// order cannot affect a single bit. That is the property to check before reusing this shape —
+// a loop that summed into a shared float would reassociate and change results.
+//
+// Self-aliasing is safe too. Even if the source and destination were the same array, chunk j
+// reads and writes only index j, so no chunk can observe another's write.
+func softUpdateRun(n int, body func(lo, hi int)) {
+	if n < softUpdateParThreshold || parallel.Workers() <= 1 {
+		body(0, n)
+		return
+	}
+	parallel.Rows(n, body)
+}
+
 // softUpdate performs the Polyak soft update of a target network toward an online
 // one: for every parameter, target ← τ·online + (1−τ)·target. τ=1 is an exact
 // hard copy (target ← online); τ=0 leaves the target unchanged. The two networks
@@ -294,17 +322,36 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 		if s.Dtype() == tensor.F64 && d.Dtype() == tensor.F64 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F64()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F64()[d.Offset() : d.Offset()+d.Numel()]
-			for j := range to {
-				to[j] = tau*so[j] + (1-tau)*to[j]
-			}
+			// omt is hoisted and the chunk is re-sliced for one reason each, and the two are
+			// connected: the loop carried a bounds check on so[j] AND on to[j], and those two
+			// panic edges split the body into separate basic blocks — Go's SSA will not hoist
+			// across a block that can panic, so (1-tau) was rematerialized every iteration
+			// (FMOVD $(1.0) then FSUBD, visible in -gcflags=-S). Discharging the checks is what
+			// makes the hoist possible; ranging over ds bounds j, and cutting ss to len(ds)
+			// relates the second operand to it. 1-tau computed once is the identical double,
+			// and the expression shape is otherwise untouched, so nothing is reassociated.
+			omt := 1 - tau
+			softUpdateRun(len(to), func(lo, hi int) {
+				ds, ss := to[lo:hi], so[lo:hi]
+				ss = ss[:len(ds)]
+				for j := range ds {
+					ds[j] = tau*ss[j] + omt*ds[j]
+				}
+			})
 			continue
 		}
 		if s.Dtype() == tensor.F32 && d.Dtype() == tensor.F32 && s.IsContiguous() && d.IsContiguous() {
 			so := s.Storage().F32()[s.Offset() : s.Offset()+s.Numel()]
 			to := d.Storage().F32()[d.Offset() : d.Offset()+d.Numel()]
-			for j := range to {
-				to[j] = float32(tau*float64(so[j]) + (1-tau)*float64(to[j]))
-			}
+			// Same two defects as the F64 arm above, same remedy; see the comment there.
+			omt := 1 - tau
+			softUpdateRun(len(to), func(lo, hi int) {
+				ds, ss := to[lo:hi], so[lo:hi]
+				ss = ss[:len(ds)]
+				for j := range ds {
+					ds[j] = float32(tau*float64(ss[j]) + omt*float64(ds[j]))
+				}
+			})
 			continue
 		}
 		n := s.Numel()

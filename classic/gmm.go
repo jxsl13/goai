@@ -5,9 +5,45 @@ import (
 	"math"
 	"math/rand"
 	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/internal/simd"
 )
+
+// gmmScratch is one worker's density-evaluation buffers: the per-component log-responsibility
+// row, the four-wide triangular-solve scratch the full-covariance kernel jams over, and its
+// single-column twin. Every element is overwritten before use.
+type gmmScratch struct {
+	lr []float64
+	y4 [4][]float64
+	y  []float64
+}
+
+// gmmScratchPool recycles those sets across calls. Each fan-out allocated one set PER WORKER per
+// call — twelve on a twelve-way host — which an allocation profile put at 226MB across the classic
+// suite for PredictProba alone. Pooled, a steady-state predict loop allocates none.
+//
+// Sized on get rather than assumed, since one process can hold models of different k and nFeat.
+var gmmScratchPool = sync.Pool{New: func() any { return new(gmmScratch) }}
+
+func gmmFit(b []float64, n int) []float64 {
+	if cap(b) < n {
+		return make([]float64, n)
+	}
+	return b[:n]
+}
+
+func getGMMScratch(k, nFeat int) *gmmScratch {
+	sc := gmmScratchPool.Get().(*gmmScratch)
+	sc.lr = gmmFit(sc.lr, k)
+	for t := range sc.y4 {
+		sc.y4[t] = gmmFit(sc.y4[t], nFeat)
+	}
+	sc.y = gmmFit(sc.y, nFeat)
+	return sc
+}
+
+func putGMMScratch(sc *gmmScratch) { gmmScratchPool.Put(sc) }
 
 // GMMCovariance selects the shape of the per-component covariance matrix a
 // [GaussianMixture] fits. A richer covariance captures more structure but has
@@ -148,11 +184,9 @@ type GaussianMixture struct {
 	// used by the density, together with logDetPrec = −Σ log L_ii (half the log
 	// determinant of the precision). For GMMDiag chol is unused.
 	chol        [][][]float64
-	invCholDiag [][]float64  // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
-	yScratch    []float64    // GMMFull only: reused forward-substitution buffer (logGaussian runs serially)
-	yScratch4   [4][]float64 // GMMFull only: 4 solve buffers for logGaussianFullBatch's component jam
-	logDetHalf  []float64    // per component: 0.5·log|Σ_k| (density normaliser)
-	invCov      [][]float64  // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
+	invCholDiag [][]float64 // GMMFull only: per component 1/L_k[i][i], so the triangular solve multiplies
+	logDetHalf  []float64   // per component: 0.5·log|Σ_k| (density normaliser)
+	invCov      [][]float64 // GMMDiag only: per component 1/Σ_k[j], so logGaussian multiplies instead of dividing
 
 	nFeat  int
 	fitted bool
@@ -196,10 +230,10 @@ func (m *GaussianMixture) Covariance(k int) [][]float64 {
 		}
 		return out
 	}
+	// Row i of the packed covariance is the contiguous run [i*d, (i+1)*d) (PS1008). out rows are
+	// freshly allocated above and m.cov[k] is the model's own storage, so they never alias.
 	for i := range d {
-		for j := range d {
-			out[i][j] = m.cov[k][i*d+j]
-		}
+		copy(out[i], m.cov[k][i*d:i*d+d])
 	}
 	return out
 }
@@ -243,9 +277,16 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 	m.Weights = make([]float64, k)
 	m.Means = make([][]float64, k)
 	m.cov = make([][]float64, k)
+	// ONE slab for the n responsibility rows, not one make() per sample. The bytes are the same;
+	// the allocation COUNT drops from n to 1, and at n=20000 this site plus logResp below were
+	// issuing 2n = 40000 separate allocations per Fit. Rows are disjoint capped views (sample i
+	// owns [i*k, (i+1)*k)), so nothing can append across a boundary, and every row is written in
+	// place by eStep/mStep rather than replaced — so the views stay valid for the whole fit.
+	// Bit-identical: make() zeroes and so does a fresh slab, and no value or order changes.
 	resp := make([][]float64, n) // hard responsibilities from the warm start
+	respSlab := make([]float64, n*k)
 	for i := range resp {
-		resp[i] = make([]float64, k)
+		resp[i] = respSlab[i*k : i*k+k : i*k+k]
 		resp[i][labels[i]] = 1
 	}
 	if err := m.mStep(x, resp); err != nil {
@@ -257,8 +298,9 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 	prevLL := math.Inf(-1)
 	m.converged = false
 	logResp := make([][]float64, n)
+	logRespSlab := make([]float64, n*k)
 	for i := range logResp {
-		logResp[i] = make([]float64, k)
+		logResp[i] = logRespSlab[i*k : i*k+k : i*k+k]
 	}
 	for iter := 1; iter <= m.cfg.maxIter; iter++ {
 		meanLL, err := m.eStep(x, resp, logResp)
@@ -285,25 +327,27 @@ func (m *GaussianMixture) Fit(x [][]float64) error {
 // logs, and returns the mean log-likelihood (1/n)·Σ_n log p(x_n).
 func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float64, error) {
 	k := m.cfg.k
-	var total float64
 	logW := make([]float64, k)
 	for c := range k {
 		logW[c] = math.Log(m.Weights[c])
 	}
 	diag := m.cfg.covariance == GMMDiag
-	ldBuf := make([]float64, k)
-	for i, row := range x {
-		lr := logResp[i]
+
+	// rowBody computes sample i and RETURNS its log-likelihood contribution instead of
+	// accumulating it. That return is what makes the fan-out below legal: `total += norm` inside
+	// the loop fixes the summation order, and a partitioned accumulation would reassociate it.
+	// Each contribution is parked in llBuf and summed ASCENDING afterwards, which is the identical
+	// sequence the serial loop performed, so the mean log-likelihood is bit-identical. The extra
+	// pass is O(n) against O(n·k·d²) of density work.
+	rowBody := func(lr, ldBuf []float64, y4 [4][]float64, y []float64, i int) float64 {
+		row := x[i]
 		if diag {
-			m.logGaussianDiagBatch(row, ldBuf) // unroll-and-jam over components
-			for c := range k {
-				lr[c] = logW[c] + ldBuf[c]
-			}
+			m.logGaussianDiagBatch(row, ldBuf)
 		} else {
-			m.logGaussianFullBatch(row, ldBuf, m.yScratch4, m.yScratch) // unroll-and-jam over components
-			for c := range k {
-				lr[c] = logW[c] + ldBuf[c]
-			}
+			m.logGaussianFullBatch(row, ldBuf, y4, y)
+		}
+		for c := range k {
+			lr[c] = logW[c] + ldBuf[c]
 		}
 		// Fused log-sum-exp + responsibilities: ExpSumF64 writes resp[c]=exp(lr[c]−mx)
 		// and returns Σ in one 4-wide pass, so norm=mx+log(Σ) and the responsibility is
@@ -318,23 +362,94 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 			}
 		}
 		if math.IsInf(mx, -1) {
-			total += mx // degenerate all-−Inf row: preserve the scalar semantics
 			for c := range k {
 				lr[c] -= mx
 				resp[i][c] = math.Exp(lr[c])
 			}
-			continue
+			return mx // degenerate all-−Inf row: preserve the scalar semantics
 		}
 		s := simd.ExpSumF64(resp[i], lr, mx)
 		norm := mx + math.Log(s)
-		total += norm
 		inv := 1 / s
 		for c := range k {
 			lr[c] -= norm
 			resp[i][c] *= inv
 		}
+		return norm
 	}
-	return total / float64(len(x)), nil
+
+	// Per-WORKER scratch, never a receiver field. lr aliased logResp[i] before and still does;
+	// ldBuf and the full-cov solve buffers were receiver state that every worker would have
+	// raced on — the same shape this package already had to remove from the full-covariance
+	// density path.
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
+	}
+
+	n := len(x)
+	llBuf := make([]float64, n)
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*k < 1<<11 {
+		scr, rel := newScratch()
+		defer rel()
+		ldBuf, y4, y := scr.lr, scr.y4, scr.y
+		for i := range x {
+			llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
+		}
+	} else {
+		csz := (n + nw - 1) / nw
+		if err := parallelBuild(nw, func(cw int) error {
+			lo := cw * csz
+			hi := lo + csz
+			if hi > n {
+				hi = n
+			}
+			scr, rel := newScratch() // per-worker scratch, pooled
+			defer rel()
+			ldBuf, y4, y := scr.lr, scr.y4, scr.y
+			for i := lo; i < hi; i++ {
+				llBuf[i] = rowBody(logResp[i], ldBuf, y4, y, i)
+			}
+			return nil
+		}); err != nil {
+			return 0, err
+		}
+	}
+	var total float64
+	for i := range llBuf { // ascending, exactly the serial accumulation order
+		total += llBuf[i]
+	}
+	return total / float64(n), nil
+}
+
+// forComponents runs body over disjoint component ranges, serially when the fan-out cannot pay and
+// in parallel otherwise. The gate mirrors the full-covariance branch's: one worker per component at
+// most, and a work floor below which the goroutine round trip costs more than the loop.
+func forComponents(k, work int, body func(lo, hi int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw > k {
+		nw = k
+	}
+	if nw <= 1 || work < 1<<14 {
+		body(0, k)
+		return
+	}
+	csz := (k + nw - 1) / nw
+	_ = parallelBuild(nw, func(w int) error {
+		lo := w * csz
+		hi := lo + csz
+		if hi > k {
+			hi = k
+		}
+		if lo < hi {
+			body(lo, hi)
+		}
+		return nil
+	})
 }
 
 // mStep recomputes Weights, Means and covariances (with Cholesky factors for
@@ -346,142 +461,185 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	// each x[i][j] load is reused across 4 independent per-component accumulators,
 	// cutting passes over X from k to ceil(k/4). Each mean[c][j]/sum[c] still sums
 	// i ascending over identical operands -> bit-identical.
-	c := 0
-	for ; c+4 <= k; c += 4 {
-		var mm [4][]float64
-		for t := range mm {
-			mm[t] = make([]float64, d)
-		}
-		var s [4]float64
-		for i := range n {
-			ri, xi := resp[i], x[i]
-			r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
-			s[0] += r0
-			s[1] += r1
-			s[2] += r2
-			s[3] += r3
-			m0, m1, m2, m3 := mm[0], mm[1], mm[2], mm[3]
-			for j := range d {
-				xv := xi[j]
-				m0[j] += r0 * xv
-				m1[j] += r1 * xv
-				m2[j] += r2 * xv
-				m3[j] += r3 * xv
+	// FANNED OUT OVER COMPONENTS. Each component owns its own mm/s accumulators, nk[c], Means[c]
+	// and Weights[c], so the partition changes no value: within a component the sample loop still
+	// runs i ascending over identical operands. Same argument as the full-covariance fan-out below,
+	// which shipped earlier — this path was simply never given it, and for GMMDiag mStep returns
+	// before ever reaching that code, leaving BOTH the mean and the variance accumulation serial.
+	//
+	// The 4-wide jam is preserved INSIDE each chunk; a chunk holding fewer than 4 components falls
+	// through to the scalar tail, which this file already documents as bit-identical to the jam.
+	meanRange := func(clo, chi int) {
+		c := clo
+		for ; c+4 <= chi; c += 4 {
+			var mm [4][]float64
+			for t := range mm {
+				mm[t] = make([]float64, d)
+			}
+			var s [4]float64
+			for i := range n {
+				ri, xi := resp[i], x[i]
+				r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+				s[0] += r0
+				s[1] += r1
+				s[2] += r2
+				s[3] += r3
+				m0, m1, m2, m3 := mm[0], mm[1], mm[2], mm[3]
+				for j := range d {
+					xv := xi[j]
+					m0[j] += r0 * xv
+					m1[j] += r1 * xv
+					m2[j] += r2 * xv
+					m3[j] += r3 * xv
+				}
+			}
+			for t := 0; t < 4; t++ {
+				cix, sc, mt := c+t, s[t], mm[t]
+				nk[cix] = sc
+				inv := 1.0 / (sc + 1e-300)
+				for j := range d {
+					mt[j] *= inv
+				}
+				m.Means[cix] = mt
+				m.Weights[cix] = sc / float64(n)
 			}
 		}
-		for t := 0; t < 4; t++ {
-			cix, sc, mt := c+t, s[t], mm[t]
-			nk[cix] = sc
-			inv := 1.0 / (sc + 1e-300)
-			for j := range d {
-				mt[j] *= inv
+		for ; c < chi; c++ {
+			mean := make([]float64, d)
+			var sum float64
+			for i := range n {
+				r := resp[i][c]
+				sum += r
+				for j := range d {
+					mean[j] += r * x[i][j]
+				}
 			}
-			m.Means[cix] = mt
-			m.Weights[cix] = sc / float64(n)
+			nk[c] = sum
+			inv := 1.0 / (sum + 1e-300)
+			for j := range d {
+				mean[j] *= inv
+			}
+			m.Means[c] = mean
+			m.Weights[c] = sum / float64(n)
 		}
 	}
-	for ; c < k; c++ {
-		mean := make([]float64, d)
-		var sum float64
-		for i := range n {
-			r := resp[i][c]
-			sum += r
-			for j := range d {
-				mean[j] += r * x[i][j]
-			}
-		}
-		nk[c] = sum
-		inv := 1.0 / (sum + 1e-300)
-		for j := range d {
-			mean[j] *= inv
-		}
-		m.Means[c] = mean
-		m.Weights[c] = sum / float64(n)
-	}
+	// The mean accumulation stays SERIAL. Fanning it out too was measured and reverted: it is
+	// shared with the full-covariance branch, which already fans out its own per-component work, and
+	// adding a second fan-out there cost GMMFitFull +2.24% (p=0.000) for a diag gain that the
+	// variance fan-out below delivers on its own.
+	meanRange(0, k)
 	if m.cfg.covariance == GMMDiag {
 		m.logDetHalf = make([]float64, k)
 		m.invCov = make([][]float64, k)
 		// Unroll-and-jam the covariance accumulation over c (4-wide): reuse each
 		// x[i][j] load across 4 components. dv differs per component (its own mean),
 		// but each v[c][j] still sums i ascending as (r*dv)*dv -> bit-identical.
-		c = 0
-		for ; c+4 <= k; c += 4 {
-			var vv [4][]float64
-			for t := range vv {
-				vv[t] = make([]float64, d)
-			}
-			mn0, mn1, mn2, mn3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
-			for i := range n {
-				ri, xi := resp[i], x[i]
-				r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
-				v0, v1, v2, v3 := vv[0], vv[1], vv[2], vv[3]
-				for j := range d {
-					xv := xi[j]
-					a0 := xv - mn0[j]
-					v0[j] += r0 * a0 * a0
-					a1 := xv - mn1[j]
-					v1[j] += r1 * a1 * a1
-					a2 := xv - mn2[j]
-					v2[j] += r2 * a2 * a2
-					a3 := xv - mn3[j]
-					v3[j] += r3 * a3 * a3
+		// Fanned out over components on the same terms as the means above: component c owns vv[t],
+		// cov[c], invCov[c] and logDetHalf[c], and reads only Means[c] and nk[c], both written by
+		// component c in the mean pass. Errors go to per-component slots and are scanned ASCENDING
+		// after the fan-out, so the reported component stays the lowest failing one exactly as the
+		// serial code returned it.
+		dcerr := make([]error, k)
+		varRange := func(clo, chi int) {
+			c := clo
+			for ; c+4 <= chi; c += 4 {
+				var vv [4][]float64
+				for t := range vv {
+					vv[t] = make([]float64, d)
+				}
+				mn0, mn1, mn2, mn3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
+				for i := range n {
+					ri, xi := resp[i], x[i]
+					r0, r1, r2, r3 := ri[c], ri[c+1], ri[c+2], ri[c+3]
+					v0, v1, v2, v3 := vv[0], vv[1], vv[2], vv[3]
+					for j := range d {
+						xv := xi[j]
+						a0 := xv - mn0[j]
+						v0[j] += r0 * a0 * a0
+						a1 := xv - mn1[j]
+						v1[j] += r1 * a1 * a1
+						a2 := xv - mn2[j]
+						v2[j] += r2 * a2 * a2
+						a3 := xv - mn3[j]
+						v3[j] += r3 * a3 * a3
+					}
+				}
+				for t := 0; t < 4; t++ {
+					cix := c + t
+					v := vv[t]
+					iv := make([]float64, d)
+					inv := 1.0 / (nk[cix] + 1e-300)
+					var half float64
+					for j := range d {
+						v[j] = v[j]*inv + m.cfg.regCovar
+						if v[j] <= 0 {
+							dcerr[cix] = fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", cix, v[j])
+							break
+						}
+						half += 0.5 * math.Log(v[j])
+						iv[j] = 1 / v[j]
+					}
+					m.cov[cix] = v
+					m.invCov[cix] = iv
+					m.logDetHalf[cix] = half
 				}
 			}
-			for t := 0; t < 4; t++ {
-				cix := c + t
-				v := vv[t]
+			for ; c < chi; c++ {
+				v := make([]float64, d)
 				iv := make([]float64, d)
-				inv := 1.0 / (nk[cix] + 1e-300)
+				inv := 1.0 / (nk[c] + 1e-300)
+				for i := range n {
+					r := resp[i][c]
+					for j := range d {
+						dv := x[i][j] - m.Means[c][j]
+						v[j] += r * dv * dv
+					}
+				}
 				var half float64
 				for j := range d {
 					v[j] = v[j]*inv + m.cfg.regCovar
 					if v[j] <= 0 {
-						return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", cix, v[j])
+						dcerr[c] = fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", c, v[j])
+						break
 					}
 					half += 0.5 * math.Log(v[j])
-					iv[j] = 1 / v[j]
+					iv[j] = 1 / v[j] // cached reciprocal for logGaussian's Mahalanobis term
 				}
-				m.cov[cix] = v
-				m.invCov[cix] = iv
-				m.logDetHalf[cix] = half
+				m.cov[c] = v
+				m.invCov[c] = iv
+				m.logDetHalf[c] = half
 			}
 		}
-		for ; c < k; c++ {
-			v := make([]float64, d)
-			iv := make([]float64, d)
-			inv := 1.0 / (nk[c] + 1e-300)
-			for i := range n {
-				r := resp[i][c]
-				for j := range d {
-					dv := x[i][j] - m.Means[c][j]
-					v[j] += r * dv * dv
-				}
+		forComponents(k, n*d*k, varRange)
+		for c := range dcerr { // ascending: the same component the serial loop would have reported
+			if dcerr[c] != nil {
+				return dcerr[c]
 			}
-			var half float64
-			for j := range d {
-				v[j] = v[j]*inv + m.cfg.regCovar
-				if v[j] <= 0 {
-					return fmt.Errorf("classic: gmm component %d variance %g non-positive (raise regCovar)", c, v[j])
-				}
-				half += 0.5 * math.Log(v[j])
-				iv[j] = 1 / v[j] // cached reciprocal for logGaussian's Mahalanobis term
-			}
-			m.cov[c] = v
-			m.invCov[c] = iv
-			m.logDetHalf[c] = half
 		}
 		return nil
 	}
 	// full covariance
 	m.chol = make([][][]float64, k)
 	m.invCholDiag = make([][]float64, k)
-	m.yScratch = make([]float64, d)
-	for t := range m.yScratch4 {
-		m.yScratch4[t] = make([]float64, d)
-	}
 	m.logDetHalf = make([]float64, k)
-	cen := make([]float64, d) // centered-row scratch, reused per sample
-	for c := range k {
+	// PARALLEL over components. Component c owns its own accumulator s, its own Cholesky, and
+	// writes only m.cov[c]/m.chol[c]/m.invCholDiag[c]/m.logDetHalf[c] — nothing crosses c, and
+	// within a component the sample loop still runs i ascending over identical operands, so the
+	// partition is bit-identical.
+	//
+	// This is 42% of BenchmarkGMMFitFull and was the last serial block: after the E-step fan-out
+	// the GOMAXPROCS curve plateaued at 1.75x by 8 cores, which is Amdahl for a ~44% serial
+	// remainder. A 12-thread profile HID it — the serial work is one thread while eleven park, so
+	// mStep showed 2.9% of samples; at GOMAXPROCS=1 it is 37.4% flat, with the covariance
+	// outer-product line alone at 61% of the function.
+	//
+	// cen moves INSIDE the worker: at function scope it is one buffer every component would
+	// rewrite per sample, which is the receiver-scratch race this package has already had to fix
+	// twice. The error is collected PER COMPONENT and the lowest failing index is returned after
+	// the fan-out, so a non-positive-definite covariance reports the same component the serial
+	// loop reported rather than whichever worker happened to finish first.
+	cerr := make([]error, k)
+	body := func(c int, cen []float64) {
 		s := make([]float64, d*d)
 		inv := 1.0 / (nk[c] + 1e-300)
 		for i := range n {
@@ -512,7 +670,8 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		} // half changes (from a ½-ulp-asymmetric artifact to exact symmetry).
 		l, half, err := gmmCholesky(s, d)
 		if err != nil {
-			return fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+			cerr[c] = fmt.Errorf("classic: gmm component %d covariance not positive definite (raise regCovar): %w", c, err)
+			return
 		}
 		m.cov[c] = s
 		m.chol[c] = l
@@ -522,6 +681,35 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		}
 		m.invCholDiag[c] = id
 		m.logDetHalf[c] = half
+	}
+	nw := runtime.GOMAXPROCS(0)
+	if nw > k {
+		nw = k
+	}
+	if nw <= 1 || n*d*d < 1<<14 {
+		cen := make([]float64, d) // centered-row scratch, reused per sample
+		for c := range k {
+			body(c, cen)
+		}
+	} else {
+		csz := (k + nw - 1) / nw
+		_ = parallelBuild(nw, func(w int) error {
+			lo := w * csz
+			hi := lo + csz
+			if hi > k {
+				hi = k
+			}
+			cen := make([]float64, d) // per-worker
+			for c := lo; c < hi; c++ {
+				body(c, cen)
+			}
+			return nil
+		})
+	}
+	for c := range cerr { // ascending: the same component the serial loop would have reported
+		if cerr[c] != nil {
+			return cerr[c]
+		}
 	}
 	return nil
 }
@@ -584,12 +772,22 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 			s1 := xi - mu1[i]
 			s2 := xi - mu2[i]
 			s3 := xi - mu3[i]
-			l0i, l1i, l2i, l3i := l0[i], l1[i], l2[i], l3[i]
-			for j := range i {
-				s0 -= l0i[j] * y0[j]
-				s1 -= l1i[j] * y1[j]
-				s2 -= l2i[j] * y2[j]
-				s3 -= l3i[j] * y3[j]
+			// Cut all eight operands to ONE length so the range proves every index. Indexing them
+			// directly left two checks on each of the four terms — eight in an O(d^2) loop — and
+			// the damage was not the checks themselves but the register pressure they created:
+			// eight loop-invariant lengths stayed live at once, which spilled the induction
+			// variable and forced a slice pointer to be reloaded every iteration. Bit-identical:
+			// range visits the same j in the same ascending order over the same operands, into the
+			// same four separate accumulators.
+			l0i := l0[i][:i]
+			w := len(l0i)
+			l1i, l2i, l3i := l1[i][:w], l2[i][:w], l3[i][:w]
+			yy0, yy1, yy2, yy3 := y0[:w], y1[:w], y2[:w], y3[:w]
+			for j := range l0i {
+				s0 -= l0i[j] * yy0[j]
+				s1 -= l1i[j] * yy1[j]
+				s2 -= l2i[j] * yy2[j]
+				s3 -= l3i[j] * yy3[j]
 			}
 			y0[i] = s0 * id0[i]
 			y1[i] = s1 * id1[i]
@@ -607,6 +805,47 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 		ld[c+1] = -0.5*(dlog2pi+q1) - m.logDetHalf[c+1]
 		ld[c+2] = -0.5*(dlog2pi+q2) - m.logDetHalf[c+2]
 		ld[c+3] = -0.5*(dlog2pi+q3) - m.logDetHalf[c+3]
+	}
+	// A 2-WIDE JAM before the scalar tail. The 4-jam leaves k%4 components to the per-component
+	// logGaussian, which redoes the whole forward substitution with a single accumulator — and
+	// k%4 is 2 or 3 for exactly the small component counts this estimator is usually run with.
+	// BenchmarkGMMFitFull uses k=6, so TWO of its six components took the unjammed path on every
+	// sample of every iteration, which is why a profile showed logGaussian at 20% flat while the
+	// batch kernel it is supposed to have replaced sat at 24%.
+	//
+	// Bit-identical to two logGaussian calls by the same argument the 4-jam rests on: each
+	// component keeps its OWN y and its own quad accumulator, summing j in the same ascending
+	// order over the same terms, and the closing expression is the identical
+	// -0.5*(dlog2pi+q) - logDetHalf sequence with the -0.5 left undistributed.
+	if c+2 <= k {
+		l0, l1 := m.chol[c], m.chol[c+1]
+		id0, id1 := m.invCholDiag[c], m.invCholDiag[c+1]
+		mu0, mu1 := m.Means[c], m.Means[c+1]
+		y0, y1 := y4[0], y4[1]
+		for i := range d {
+			xi := x[i]
+			s0 := xi - mu0[i]
+			s1 := xi - mu1[i]
+			// Same treatment as the 4-jam arm above; see the comment there.
+			l0i := l0[i][:i]
+			w := len(l0i)
+			l1i := l1[i][:w]
+			yy0, yy1 := y0[:w], y1[:w]
+			for j := range l0i {
+				s0 -= l0i[j] * yy0[j]
+				s1 -= l1i[j] * yy1[j]
+			}
+			y0[i] = s0 * id0[i]
+			y1[i] = s1 * id1[i]
+		}
+		var q0, q1 float64
+		for i := range d {
+			q0 += y0[i] * y0[i]
+			q1 += y1[i] * y1[i]
+		}
+		ld[c] = -0.5*(dlog2pi+q0) - m.logDetHalf[c]
+		ld[c+1] = -0.5*(dlog2pi+q1) - m.logDetHalf[c+1]
+		c += 2
 	}
 	for ; c < k; c++ {
 		ld[c], _ = m.logGaussian(x, c, y)
@@ -683,7 +922,8 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 	diag := m.cfg.covariance == GMMDiag
 	// Each sample's density is independent (reads only shared read-only params, writes only
 	// out[i]). Full-cov's triangular solve needs a private y-scratch — the shared
-	// m.yScratch/m.yScratch4 are exactly why this stayed serial — so give every worker its OWN
+	// shared receiver-level scratch this used to keep is exactly why it stayed serial — so give
+	// every worker its OWN
 	// buf + solve buffers and fan the sample loop across GOMAXPROCS. Bit-identical to the serial
 	// scan; serial below a small work threshold.
 	rowScore := func(buf []float64, y4 [4][]float64, y []float64, i int) {
@@ -697,19 +937,18 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 		}
 		out[i] = softmaxLSE(buf, buf) // buf is scratch; we keep only the log-sum-exp
 	}
-	newScratch := func() ([]float64, [4][]float64, []float64) {
-		var y4 [4][]float64
-		for t := range y4 {
-			y4[t] = make([]float64, m.nFeat)
-		}
-		return make([]float64, k), y4, make([]float64, m.nFeat)
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
 	}
 	nw := runtime.GOMAXPROCS(0)
 	if nw > len(x) {
 		nw = len(x)
 	}
 	if nw <= 1 || len(x)*k < 1<<11 {
-		buf, y4, y := newScratch()
+		scr, rel := newScratch()
+		defer rel()
+		buf, y4, y := scr.lr, scr.y4, scr.y
 		for i := range x {
 			rowScore(buf, y4, y, i)
 		}
@@ -722,7 +961,9 @@ func (m *GaussianMixture) ScoreSamples(x [][]float64) ([]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		buf, y4, y := newScratch() // per-worker scratch
+		scr, rel := newScratch() // per-worker scratch, pooled
+		defer rel()
+		buf, y4, y := scr.lr, scr.y4, scr.y
 		for i := lo; i < hi; i++ {
 			rowScore(buf, y4, y, i)
 		}
@@ -763,7 +1004,18 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 			return nil, fmt.Errorf("classic: gmm PredictProba feature mismatch: got %d want %d", len(row), m.nFeat)
 		}
 	}
+	// ONE slab for every output row, handed out as capacity-capped views. rowBody used to
+	// make([]float64, k) per sample, which an allocation profile put at 1.06GB — 11.5% of the
+	// classic suite's total — for a result whose size is known up front. The slab is the same
+	// bytes in one allocation instead of len(x) of them.
+	//
+	// Capped so an append to one row copies rather than writing into the next; the rows are
+	// handed to the caller, so that is not hypothetical.
 	out := make([][]float64, len(x))
+	slab := make([]float64, len(x)*k)
+	for i := range out {
+		out[i] = slab[i*k : (i+1)*k : (i+1)*k]
+	}
 	diag := m.cfg.covariance == GMMDiag
 	rowBody := func(lr []float64, y4 [4][]float64, y []float64, i int) {
 		// Fused density: the per-component scalar logGaussian calls collapse into the
@@ -778,16 +1030,11 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		for c := range k {
 			lr[c] = logW[c] + lr[c]
 		}
-		o := make([]float64, k)
-		softmaxLSE(o, lr) // o = normalized responsibilities (one fused SIMD exp pass)
-		out[i] = o
+		softmaxLSE(out[i], lr) // out[i] = normalized responsibilities (one fused SIMD exp pass)
 	}
-	newScratch := func() ([]float64, [4][]float64, []float64) {
-		var y4 [4][]float64
-		for t := range y4 {
-			y4[t] = make([]float64, m.nFeat)
-		}
-		return make([]float64, k), y4, make([]float64, m.nFeat)
+	newScratch := func() (*gmmScratch, func()) {
+		sc := getGMMScratch(k, m.nFeat)
+		return sc, func() { putGMMScratch(sc) }
 	}
 	// Each sample is independent (reads only shared read-only params, writes only out[i]/o);
 	// full-cov's solve now uses PER-WORKER scratch, so BOTH diag and full fan out
@@ -797,7 +1044,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		nw = len(x)
 	}
 	if nw <= 1 || len(x)*k < 1<<11 {
-		lr, y4, y := newScratch()
+		sc, release := newScratch()
+		defer release()
+		lr, y4, y := sc.lr, sc.y4, sc.y
 		for i := range x {
 			rowBody(lr, y4, y, i)
 		}
@@ -810,7 +1059,9 @@ func (m *GaussianMixture) PredictProba(x [][]float64) ([][]float64, error) {
 		if hi > len(x) {
 			hi = len(x)
 		}
-		lr, y4, y := newScratch() // per-worker scratch
+		sc, release := newScratch()
+		defer release()
+		lr, y4, y := sc.lr, sc.y4, sc.y // per-worker scratch
 		for i := lo; i < hi; i++ {
 			rowBody(lr, y4, y, i)
 		}
@@ -849,9 +1100,15 @@ func (m *GaussianMixture) Predict(x [][]float64) ([]int, error) {
 // 0.5·log|a| = Σ log L_ii. It mirrors the package cholSolve factorization but
 // also yields the log-determinant the Gaussian normaliser needs.
 func gmmCholesky(a []float64, d int) ([][]float64, float64, error) {
+	// ONE slab for the d rows of L. gmmCholesky runs once per COMPONENT per M-step, so at d=24,
+	// k=6 and 15 EM iterations that is 2160 separate allocations per Fit replaced by 15 slabs.
+	// Rows are disjoint capped views written in place; make() zeroes and so does a fresh slab, so
+	// this is bit-identical (PS2008). Allocation count only — the three prior measurements of this
+	// transform all moved allocs without moving the wall clock.
 	l := make([][]float64, d)
+	lslab := make([]float64, d*d)
 	for i := range l {
-		l[i] = make([]float64, d)
+		l[i] = lslab[i*d : i*d+d : i*d+d]
 	}
 	var half float64
 	for i := range d {

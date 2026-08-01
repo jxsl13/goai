@@ -39,3 +39,10 @@ func benchCholeskyVJP(b *testing.B, n int) {
 
 func BenchmarkCholeskyVJP_64(b *testing.B)  { benchCholeskyVJP(b, 64) }
 func BenchmarkCholeskyVJP_128(b *testing.B) { benchCholeskyVJP(b, 128) }
+
+// The S block of this VJP is O(n^3) while everything around it is O(n^2), so at n=64 and n=128 it
+// is a small share of the call and a change to it cannot be resolved. These cells size it like the
+// logdet ones so the cubic term dominates and a measurement means something
+// (PROC-SWEEP-FIXTURE-SCALE-001).
+func BenchmarkCholeskyVJP_256(b *testing.B) { benchCholeskyVJP(b, 256) }
+func BenchmarkCholeskyVJP_512(b *testing.B) { benchCholeskyVJP(b, 512) }

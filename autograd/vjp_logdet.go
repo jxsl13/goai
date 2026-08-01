@@ -60,39 +60,49 @@ func init() {
 				l[i][j] = lt.AtF64(i, j)
 			}
 		}
-		// Linv = L⁻¹ (lower-triangular) by forward substitution on L·X = I.
-		linv := make([][]float64, n)
+		// Linv = L⁻¹ (lower-triangular) by forward substitution on L·X = I, solved DIRECTLY in
+		// column-major: linvT[j][k] holds Linv[k,j]. The consumer below needs column-major anyway
+		// (it contracts A⁻¹ = Linvᵀ·Linv), so building it here removes an entire O(n²) transpose
+		// pass and n intermediate row allocations rather than paying for both layouts.
+		//
+		// It also fixes FALSE SHARING, which is the part a profile does not show. Solving in
+		// row-major, worker j wrote linv[i][j] for every i — a COLUMN — so worker j+1's stores
+		// landed in the adjacent eight bytes of the same rows, and every write contended for a
+		// cache line with the other workers. Here worker j owns the contiguous row linvT[j]
+		// exclusively.
+		//
+		// Each COLUMN j is an independent solve (reads only l and its own column), so the fan-out
+		// is unchanged and bit-identical to serial.
+		linvT := make([][]float64, n)
 		for i := range n {
-			linv[i] = make([]float64, n)
+			linvT[i] = make([]float64, n)
 		}
-		// Forward substitution — each COLUMN j is an independent solve (reads only l and
-		// its own column linv[·][j]); parallelize over j. Writes linv[i][j] touch disjoint
-		// (row i, col j) slots, so concurrent columns never collide. Bit-identical to serial.
 		logdetParallelIdx(n, n*n*n/6, func(j int) {
-			linv[j][j] = 1 / l[j][j]
+			col := linvT[j]
+			col[j] = 1 / l[j][j]
 			for i := j + 1; i < n; i++ {
+				// Both operands are now contiguous slices cut to one length, so the whole inner
+				// loop carries no bounds check at all. The row-major form had one surviving on
+				// lv[t][j] plus a slice-header load per element, because it walked DOWN a column
+				// of a [][]float64.
+				//
+				// Bit-identical: cv[t] is col[j+t] = Linv[j+t, j], which is exactly the lv[t][j]
+				// the previous form read — same operands, same ascending order.
+				lrow := l[i][j:i]
+				cv := col[j:i]
+				cv = cv[:len(lrow)]
 				var s float64
-				for k := j; k < i; k++ {
-					s += l[i][k] * linv[k][j]
+				for t, lik := range lrow {
+					s += lik * cv[t]
 				}
-				linv[i][j] = -s / l[i][i]
+				col[i] = -s / l[i][i]
 			}
 		})
 		// Ā = ḡ·A⁻¹, A⁻¹ = Linvᵀ·Linv (symmetric): (A⁻¹)_ij = Σ_{k≥max(i,j)} Linv[k,i]·Linv[k,j].
-		// Transpose Linv to column-major (linvT[i][k] = Linv[k,i]) so each dot walks two
-		// CONTIGUOUS rows instead of striding down columns of a [][]float64 — bit-identical
-		// (same k order), but cache-resident. Linv is lower-triangular, so column i is nonzero
-		// only for k ≥ i. Then exploit A⁻¹'s symmetry: compute only i ≤ j and mirror (j,i)=(i,j),
-		// halving the O(n³) accumulation. Both transforms preserve the exact per-element
-		// summation, so the result is bit-identical to the serial column-strided double loop.
-		linvT := make([][]float64, n)
-		for i := range n {
-			col := make([]float64, n)
-			for k := i; k < n; k++ {
-				col[k] = linv[k][i]
-			}
-			linvT[i] = col
-		}
+		// linvT is already column-major, so each dot walks two CONTIGUOUS rows. Linv is
+		// lower-triangular, so column i is nonzero only for k ≥ i, and A⁻¹'s symmetry lets the
+		// O(n³) accumulation run only for i ≤ j and mirror (j,i)=(i,j). Both preserve the exact
+		// per-element summation, so the result is bit-identical to the serial column-strided form.
 		abar := tensor.New(a.Dtype(), a.Shape())
 		// Rows are disjoint: worker for row i writes (i,·) and its mirror (·,i) only within its
 		// own j ≥ i range, so no two i's touch the same (r,c). Chunk-parallel over i, STRIPED

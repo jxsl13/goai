@@ -57,14 +57,6 @@ func NewMHA(heads int, wq, wk, wv, wo *tensor.Tensor) (*MHA, error) {
 	return &MHA{Heads: heads, Wq: wq, Wk: wk, Wv: wv, Wo: wo}, nil
 }
 
-func (m *MHA) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, op, ins, attrs)
-	if err != nil {
-		return nil, err
-	}
-	return out[0], nil
-}
-
 // Forward computes attention for x[seq, dmodel]. Fully differentiable: the
 // projections are matmuls and the multi-head scaled-dot-product core is the
 // single fused OpMHA op (head split/concat/mask internal, §T32) — so gradients
@@ -88,9 +80,9 @@ func (m *MHA) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	}
 	var attn *tensor.Tensor
 	if m.Mask != nil { // §T508: mask expresses the structure; Causal is NOT also applied
-		attn, err = m.exec(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, q, k, v, m.Mask)
+		attn, err = exec4(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, q, k, v, m.Mask)
 	} else {
-		attn, err = m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, q, k, v)
+		attn, err = exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, q, k, v)
 	}
 	if err != nil {
 		return nil, err
@@ -129,7 +121,7 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 	parts := make([]*tensor.Tensor, batch)
 	for b := range batch {
 		sl := func(t *tensor.Tensor) (*tensor.Tensor, error) {
-			return m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: (b + 1) * seq}, t)
+			return exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: (b + 1) * seq}, t)
 		}
 		qb, err := sl(q)
 		if err != nil {
@@ -145,16 +137,16 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 		}
 		var ab *tensor.Tensor
 		if m.Mask != nil { // §T508: mask expresses the structure; Causal is NOT also applied
-			ab, err = m.exec(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
+			ab, err = exec4(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
 		} else {
-			ab, err = m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, qb, kb, vb)
+			ab, err = exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, qb, kb, vb)
 		}
 		if err != nil {
 			return nil, err
 		}
 		parts[b] = ab
 	}
-	attn, err := m.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, parts...)
+	attn, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, parts...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,13 +163,13 @@ func (m *MHA) proj(ctx *backend.Context, x, w *tensor.Tensor, name string) (*ten
 	if l, ok := m.LoRA[name]; ok && l != nil {
 		y, err = l.Forward(ctx, x)
 	} else {
-		y, err = m.exec(ctx, backend.OpMatMul, nil, x, w)
+		y, err = exec2(ctx, backend.OpMatMul, nil, x, w)
 	}
 	if err != nil {
 		return nil, err
 	}
 	if b, ok := m.Bias[name]; ok && b != nil {
-		return m.exec(ctx, backend.OpAddBias, nil, y, b)
+		return exec2(ctx, backend.OpAddBias, nil, y, b)
 	}
 	return y, nil
 }

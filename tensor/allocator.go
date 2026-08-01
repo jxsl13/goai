@@ -41,6 +41,35 @@ func (heapAllocator) Alloc(dtype Dtype, n int) any {
 	}
 }
 
+// typedAllocator is the box-free twin of Allocator, implemented by every allocator in this
+// repository. Alloc returns `any`, so handing back a slice costs a runtime slice-to-interface
+// box — 24 bytes and one object per allocation that no pool can recycle. These methods return
+// and take the concrete slice instead. The EXPORTED Allocator contract is unchanged, and a
+// foreign allocator that does not implement this simply keeps paying the box it always did
+// (T1033/ADR-01KYX550H2F2J).
+type typedAllocator interface {
+	allocF32(n int) []float32
+	allocF64(n int) []float64
+	allocU16(n int) []uint16
+	freeF32([]float32)
+	freeF64([]float64)
+	freeU16([]uint16)
+}
+
+func (heapAllocator) allocF32(n int) []float32 { return make([]float32, negCheck(n)) }
+func (heapAllocator) allocF64(n int) []float64 { return make([]float64, negCheck(n)) }
+func (heapAllocator) allocU16(n int) []uint16  { return make([]uint16, negCheck(n)) }
+func (heapAllocator) freeF32([]float32)        {}
+func (heapAllocator) freeF64([]float64)        {}
+func (heapAllocator) freeU16([]uint16)         {}
+
+func negCheck(n int) int {
+	if n < 0 {
+		panic("tensor: negative alloc length")
+	}
+	return n
+}
+
 func (heapAllocator) Free(any)       {}
 func (heapAllocator) Alignment() int { return 0 } // natural
 
@@ -170,3 +199,56 @@ func emptyBuf(dtype Dtype) any {
 		panic(fmt.Sprintf("tensor: cannot alloc dtype %v", dtype))
 	}
 }
+
+// allocF32/allocF64/allocU16 and their free twins are the box-free path for Pool; the logic
+// mirrors Alloc/Free exactly, including the F16/BF16 carve-out where a shared []uint16 layout
+// makes Free unable to re-file by dtype.
+func (p *Pool) allocF32(n int) []float32 {
+	if negCheck(n) == 0 {
+		return []float32{}
+	}
+	class := sizeClass(n)
+	var s []float32
+	if v := p.f32[class].Get(); v == nil {
+		s = make([]float32, 1<<class)
+	} else {
+		s = v.([]float32)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+func (p *Pool) allocF64(n int) []float64 {
+	if negCheck(n) == 0 {
+		return []float64{}
+	}
+	class := sizeClass(n)
+	var s []float64
+	if v := p.f64[class].Get(); v == nil {
+		s = make([]float64, 1<<class)
+	} else {
+		s = v.([]float64)
+	}
+	s = s[:n]
+	clear(s)
+	return s
+}
+
+// allocU16 does not pool: F16 and BF16 share a []uint16 layout, so a freed buffer cannot be
+// re-filed by dtype. Same carve-out Alloc makes.
+func (p *Pool) allocU16(n int) []uint16 { return make([]uint16, negCheck(n)) }
+
+func (p *Pool) freeF32(b []float32) {
+	if c := cap(b); c != 0 && c&(c-1) == 0 {
+		p.f32[bits.Len(uint(c-1))].Put(b) //nolint:staticcheck // pooling a slice
+	}
+}
+
+func (p *Pool) freeF64(b []float64) {
+	if c := cap(b); c != 0 && c&(c-1) == 0 {
+		p.f64[bits.Len(uint(c-1))].Put(b) //nolint:staticcheck
+	}
+}
+
+func (p *Pool) freeU16([]uint16) {}
