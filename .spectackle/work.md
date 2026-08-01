@@ -2353,3 +2353,23 @@ PERFSCAN UNION. The check sets were near-disjoint - 39 checks main lacked, 1 (PS
 TWO COLLISIONS THAT ONLY EXIST AT MERGE TIME. PS6006 was independently assigned by both sides - main's #697 to cross-backend-dtype-gap, this branch to receiver-scratch-buffer - and the local one renumbered to PS6024. sortedKeys was defined on both sides with different signatures, which Go cannot overload. Neither was preventable from one side: the IDs and names were free in every open PR when each was minted. PERF-ID-COLLISION-001 checks open PRs, which is necessary but not sufficient when two branches mint concurrently and neither is a PR yet.
 
 DELIBERATELY NOT IN THE PR: roughly 570 commits of older branch history containing parallel solutions to problems 653, 658, 664, 689, 690 and 691 also solved. Deciding whose version wins is per-file judgment on the user's own parallel work, not something to guess at.
+
+## T-01KYYZSHYCEV2RDRKT0CE1BHNF T1038 main is red: 10 nn fused-parity failures, 4 from the merge batch
+kind: task
+state: draft
+created: 2026-08-01
+
+MAIN IS RED: 10 failing tests in nn, all of the fused-path-versus-dispatch bit-exactness family. Found while validating unrelated work; reported here because it is not visible from any single PR.
+
+SPLIT OF BLAME, measured rather than assumed by testing three commits.
+At 575e2558, the main tip BEFORE any of the 52 merges, SIX were already failing: TestDeltaNetFusedBitExactVsDispatch, TestEMAUpdateBitIdenticalToSlowPath, TestGLAFusedBitExactVsDispatch, TestHGRNSeqFusedBitExactVsDispatch, TestRGLRUSeqFusedBitExactVsDispatch, TestTitansLinearFusedBitExactVsDispatch. Those predate this campaign entirely.
+The merge batch added FOUR: TestKANFusedBitExactVsDispatch (#661), TestTPAForwardFusedBitExactVsDispatch (#699), TestMemForwardFusedBitExactVsDispatch (#700), TestMTAHeadConvFusedBitExactVsDispatch (#701).
+PR 703 added none: the failure set at da813ab8, immediately before it, is identical to the set after.
+
+THE MECHANISM, and it is the transferable part. The TPA failure is a ONE-ULP divergence - fused 0.14259979878693926 against dispatch 0.14259979878693924 - and the test FAILS AT ITS OWN MERGE COMMIT. It was never green on the main it landed on. Each of these four PRs added a fused path plus a test pinning it bit-exact against the dispatch path, was branched from an older main, and passed CI there. By the time it merged, main had moved by dozens of PRs including ones that altered the dispatch side's arithmetic. A squash merge does not re-run CI against the new base, so a PR whose checks are green can still land red.
+
+This is not a conflict and no merge tool would flag it: both sides compile, the diff is clean, and only a bit-exactness assertion notices. It is specific to pins that compare two code paths against each other rather than against a fixed golden, because either side moving breaks them.
+
+WHAT WOULD HAVE CAUGHT IT: requiring each PR to be rebased onto current main and re-run before merge, rather than merging on the checks it earned against its own base. That is expensive at 52 PRs but the alternative is what happened. A cheaper approximation is to run the fused-parity family once after the batch and bisect what it reports, which is how these four were isolated.
+
+NOT FIXED HERE. Four fused paths need re-deriving against the current dispatch arithmetic, and six older ones were already broken. All ten sit in nn, the user's lane, and each needs its own numerical judgment about which side is now correct.

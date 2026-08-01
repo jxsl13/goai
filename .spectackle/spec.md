@@ -980,3 +980,6 @@ IF gofmt is used as a verification gate, THEN the implementing agent SHALL run i
 
 ## REBUILD-DO-NOT-REBASE-A-LONG-PARALLEL-BRANCH-001
 IF a long-lived branch is to be landed after parallel work merged into main, THEN the implementing agent SHALL rebuild the recent work on top of main instead of merging, since 13 files had BOTH sides optimizing the same loops and a diff cannot show which win is being discarded.
+
+## GREEN-CHECKS-PROVE-THE-BASE-NOT-THE-TARGET-001
+IF a PR is merged on checks earned against an older base, THEN the implementing agent SHALL rebase and re-run before merging when the target has moved, since 4 fused-parity tests landed red by 1 ulp with all 15 checks green.
