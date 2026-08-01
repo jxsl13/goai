@@ -32,24 +32,6 @@ Also fix the stale section-range header in training.md so it names the range act
 
 Migrated from cavekit SPEC.md T891.
 
-## T-01KYJNDS5MFEDAR0GVMSNG4MHD Clear the remaining documentation debt to a green apicheck gate
-kind: task
-state: active
-created: 2026-07-27
-targets: internal/apicheck
-
-Bring internal/apicheck to exit 0 so the public-API doc gate can be enabled.
-
-Completed so far: 118 nlp struct-field symbols documented with architecture-aware godoc referencing the upstream tensor names (Bert, Gemma, Gemma2, Jamba, Mamba, Mamba2, Mixtral, DeepSeekV2, GraniteMoE, RWKV, T5, Qwen2MoE and the 16 quantized twins), 4 further symbols (classic GradientBoostingRegressor.Predict, safetensors TensorInfo.Name/Dtype/Shape), and the 3 magic backend-name string literals replaced with backend.CPU. Undocumented count went from 140 to 18; the magic-strings test is green.
-
-Remaining: (a) the 18 undocumented symbols are all llamagpu New*Q8CUDA and New*Q4KCUDA constructors owned by the parallel CUDA worker; (b) the runnable-Example requirement of TestPublicAPIDocumentedWithExamples is a separate pass. Justified typeExampleExempt and methodExampleExempt allowlist entries are legitimate for fixture-heavy surfaces and beat boilerplate examples.
-
-Definition of done: go test ./internal/apicheck exits 0, checked unpiped. Unblocks enabling apicheck in the CI always-run set.
-
-Note: godoc and Example edits are .go files, so this consumes CI and belongs to the main agent rather than the docs lane.
-
-Migrated from cavekit SPEC.md T892.
-
 ## T-01KYJNDSP0FG4B672MFS69AQ0F Enable apicheck and mdlint in the CI always-run set
 kind: task
 state: active
