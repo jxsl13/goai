@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3028", "unpooled-fully-overwritten-scratch", "a per-call scratch buffer sized by a product of three or more dimensions, where every write in the function is a plain assignment rather than an accumulate — so no slot is read before it is written and the runtime's zeroing of a fresh allocation buys nothing. Recycle it through a sync.Pool. MEASURED: an attention backward's per-head contribution buffer was 16.7 MB at 8 heads and 512x512; pooling cut allocation bytes 53%%, 25.2 MB to 11.8 MB per call. EXPECT NO SPEEDUP — ns/op did not move at all on that kernel, since a memset is a few percent of a body doing heads*sq*sk*dk MACs. This is a resource finding: its value is that the buffer grows with the square of the sequence while the compute grows with the square times the head dimension, so the ratio worsens with length. BEFORE SHIPPING, PROVE THE OVERWRITE instead of trusting the check: poison every borrowed buffer with NaN and confirm the suite stays green, then delete one write and confirm it reddens — this scanner sees the SHAPE of the writes, not their coverage. Silent when the function already mentions a pool, and when any write to the buffer accumulates", false},
 	{"PS3027", "input-view-on-output-tensor", "a READ-ONLY view helper (configured inputViewFuncs) applied to a tensor the function ALLOCATED as an output. These helpers return the live storage when the dtype matches their element type and a WIDENED COPY when it does not, so on the mismatched dtype a kernel accumulates into a buffer nobody reads and the output comes back untouched — right shape, no error, all zeros. FOUND EXACTLY THIS WAY: a masked-attention backward returned four all-zero gradient tensors on F32 while F64 was correct, so an F32 fine-tune of a trainable attention bias propagated no gradient at all; it survived because every test touching the op built F64 tensors. Use the output counterpart (configured outputViewFuncs), which returns a buffer plus a flush, and call the flush before every fast-path return. Then add a test in the OTHER dtype — this class hides precisely because the fast path is exercised in the dtype where the view happens to alias. Not a performance finding: it is the correctness cost of a devirtualization, which is why it lives with the checks that guard those", false},
 	{"PS3026", "full-fanout-under-topk-gate", "a function that picks a SUBSET of branches with a top-k gate and then evaluates EVERY branch anyway, leaving the unselected ones to be multiplied by a zero weight. Skip them: mark the chosen indices in the selection loop that already exists and continue past the rest. The result is the same BITS, not merely close — an unselected branch contributes output times exactly zero, adding an exact zero returns a finite accumulator unchanged, and the surviving addends keep their relative order; state the two exceptions in the doc, a negative-zero accumulator sign and a NaN or Inf escaping a branch nobody routed to. MEASURED on a mixture-of-experts decode step: -23.7%% ns/op, -20.8%% allocs, 8 samples per arm interleaved in both orders. These fan-outs are usually GEMVs, so the step is bound by the weight bytes it streams and skipping k of E branches removes that fraction of the footprint directly. BENCHMARK PROTOCOL: when the benchmark carries state across iterations — a growing KV cache is the common case — pin -benchtime to a fixed count and interleave the arms in BOTH orders; a single-order run of this very change reported it as 239%% SLOWER. Selector names come from the configured topKSelectorFuncs list, since the gate and the fan-out are a project's own vocabulary", false},
 	{"PS3025", "unrounded-product-under-exactness-claim", "a function whose doc claims bit-identity with a DIFFERENT implementation while its body contains a bare multiply feeding an add. Go contracts that into an FMA on arm64 and not on amd64, so the product rounds once here and twice there and the two paths differ by an ulp on one architecture only — invisible to amd64 CI. Wrap the product in an explicit float64/float32 conversion, the only construct the spec guarantees forces the rounding; an intermediate VARIABLE does not work and left all 32 FMADDD in place in the measured case. Found exactly this way: 4 fused inference paths (TPA, KAN, MemorizingAttention, MTA) merged green on amd64 and failed on every arm64 machine, 2 of them carrying comments asserting no FMA while the code contracted. If the peer is a backend kernel that also contracts — the cpu matmul emits 202 FMADDD — exact equality is unreachable from this side and the pin belongs at a tolerance. Claims about a PARALLEL split of the same loop are unaffected and not reported", false},
@@ -2369,6 +2370,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, unroundedProductUnderExactnessClaimFindings(fset, fn)...)
 	out = append(out, fullFanoutUnderTopKGateFindings(fset, fn, ns)...)
 	out = append(out, inputViewOnOutputTensorFindings(fset, fn, ns)...)
+	out = append(out, unpooledFullyOverwrittenScratchFindings(fset, fn)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -13658,6 +13660,102 @@ func addAssignsTo(list []ast.Stmt, target string) bool {
 		}
 	}
 	return false
+}
+
+// unpooledFullyOverwrittenScratchFindings flags PS3028 — a large per-call scratch buffer that is
+// written with plain assignments only, so the runtime's zeroing of a fresh allocation is waste.
+func unpooledFullyOverwrittenScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || mentionsPool(fn.Body) {
+		return nil // already recycling something; leave the judgment to whoever wrote it
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || calleeName(call.Fun) != "make" || len(call.Args) != 2 {
+			return true
+		}
+		if factorCount(call.Args[1]) < 3 {
+			return true // a small or one-dimensional scratch: the zeroing is not the cost
+		}
+		name := identName(as.Lhs[0])
+		if name == "" || name == "_" {
+			return true
+		}
+		if !onlyPlainIndexedWrites(fn.Body, name) {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(as.Pos()),
+			category: "unpooled-fully-overwritten-scratch",
+			msg: fmt.Sprintf("%s is a per-call scratch buffer whose size is a product of three or"+
+				" more dimensions, and every write to it in this function is a plain assignment"+
+				" rather than an accumulate — so nothing reads a slot before writing it and the"+
+				" runtime's zeroing of a fresh allocation buys nothing. Recycle it through a"+
+				" sync.Pool. MEASURED: an attention backward's per-head buffer was 16.7 MB at 8"+
+				" heads and 512x512, and pooling it cut allocation bytes 53%%, from 25.2 MB to 11.8"+
+				" MB per call. EXPECT NO SPEEDUP: on that kernel ns/op did not move at all, because"+
+				" a memset is a few percent of a body doing heads*sq*sk*dk MACs. This is a resource"+
+				" win, and its value is that the buffer grows with the square of the sequence while"+
+				" the compute grows with the square times the head dimension. BEFORE SHIPPING,"+
+				" PROVE THE OVERWRITE rather than trusting this check: poison every borrowed buffer"+
+				" with NaN and confirm the suite stays green, then delete one write and confirm it"+
+				" reddens. This scanner sees the SHAPE of the writes, not their coverage", name),
+		})
+		return true
+	})
+	return out
+}
+
+// mentionsPool reports whether the function already talks to a pool, in which case whoever wrote
+// it has made this call already.
+func mentionsPool(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && strings.Contains(strings.ToLower(id.Name), "pool") {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// factorCount reports how many operands a multiplicative size expression has: make([]T, a*b*c) is
+// three. A buffer sized by a single dimension is not what this check is about.
+func factorCount(e ast.Expr) int {
+	b, ok := unparen(e).(*ast.BinaryExpr)
+	if !ok || b.Op != token.MUL {
+		return 1
+	}
+	return factorCount(b.X) + factorCount(b.Y)
+}
+
+// onlyPlainIndexedWrites reports whether every indexed write to the named slice is a plain
+// assignment. One compound assignment means the buffer accumulates, and a recycled accumulator
+// would need clearing first — which is the cost this check exists to remove.
+func onlyPlainIndexedWrites(body *ast.BlockStmt, name string) bool {
+	wrote, clean := false, true
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, l := range as.Lhs {
+			ix, ok := unparen(l).(*ast.IndexExpr)
+			if !ok || identName(ix.X) != name {
+				continue
+			}
+			wrote = true
+			if as.Tok != token.ASSIGN {
+				clean = false
+			}
+		}
+		return true
+	})
+	return wrote && clean
 }
 
 // inputViewOnOutputTensorFindings flags PS3027 — a READ-ONLY view helper applied to a tensor the
