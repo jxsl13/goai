@@ -64,6 +64,12 @@ func attnSoftmaxPtr(x unsafe.Pointer, rows, cols int, scale float32, offset, seq
 	return int(C.cu_attn_softmax(x, C.int(rows), C.int(cols), C.float(scale), C.int(offset), C.int(seqQ)))
 }
 
+// attnSoftmaxBiasPtr wraps cu_attn_softmax_bias for in-package benchmarks (cgo is not
+// permitted directly in _test.go files).
+func attnSoftmaxBiasPtr(x, bias unsafe.Pointer, rows, cols int, scale float32, offset, seqQ int) int {
+	return int(C.cu_attn_softmax_bias(x, C.int(rows), C.int(cols), C.float(scale), C.int(offset), C.int(seqQ), bias))
+}
+
 func matmulF16w(a, w, c unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_matmul_f16w(a, w, c, C.int(m), C.int(k), C.int(n), C.float(0)))
 }
