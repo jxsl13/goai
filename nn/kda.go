@@ -22,6 +22,29 @@ import (
 // Keys and queries are L2-normalized per row (the DeltaNet convention, matching
 // GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
 // a [seq,d_k]; beta [seq,1].
+// dot4 returns Σ x[i]·y[i] with four independent accumulators, breaking the single-
+// accumulator dependency chain (each add waited a full FP-add latency on the previous)
+// so four chains retire in parallel. Reassociated (four partial sums combined
+// (s0+s1)+(s2+s3) plus the <4 tail), so not bit-identical to the ascending sum — rides
+// the model tolerance (the same accumulation numpy/BLAS blocking would produce). len(y)
+// must be ≥ len(x).
+func dot4(x, y []float64) float64 {
+	var s0, s1, s2, s3 float64
+	n := len(x)
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		s0 += x[i] * y[i]
+		s1 += x[i+1] * y[i+1]
+		s2 += x[i+2] * y[i+2]
+		s3 += x[i+3] * y[i+3]
+	}
+	s := (s0 + s1) + (s2 + s3)
+	for ; i < n; i++ {
+		s += x[i] * y[i]
+	}
+	return s
+}
+
 func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error) {
 	// beta is read per row as beta.AtF64(t,0), so it MUST be rank-2 [seq,1] like the
 	// others — guarding only q,k,v,a let a 1-D beta [seq] panic at that access and a
@@ -47,6 +70,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	sk := make([]float64, dv)   // S·k scratch
 	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
 	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
+	ar := make([]float64, dk)   // per-step decay row a_t (hoisted for the interchanged decay)
 	for t := range seq {
 		bt := beta.AtF64(t, 0)
 		var qn, kn float64
@@ -68,19 +92,21 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 				kt[c] *= kn
 			}
 		}
-		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ. Hoist a_t's row
+		// once (same dk AtF64 as before), then interchange the decay to r-outer so the inner
+		// loop scales S's CONTIGUOUS row instead of striding S[r*dk+c] down a column (stride
+		// dk) per channel. Bit-exact: an element-wise scale, no reduction to reorder.
 		for c := range dk {
-			ac := a.AtF64(t, c)
-			for r := range dv {
-				S[r*dk+c] *= ac
+			ar[c] = a.AtF64(t, c)
+		}
+		for r := range dv {
+			Srow := S[r*dk : r*dk+dk]
+			for c := range dk {
+				Srow[c] *= ar[c]
 			}
 		}
 		for r := range dv {
-			var s float64
-			for c := range dk {
-				s += S[r*dk+c] * kt[c]
-			}
-			sk[r] = s
+			sk[r] = dot4(S[r*dk:r*dk+dk], kt)
 		}
 		for r := range dv {
 			delta := bt * (v.AtF64(t, r) - sk[r])
@@ -89,11 +115,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 			}
 		}
 		for r := range dv {
-			var o float64
-			for c := range dk {
-				o += S[r*dk+c] * qt[c]
-			}
-			out.SetF64(o, t, r)
+			out.SetF64(dot4(S[r*dk:r*dk+dk], qt), t, r)
 		}
 	}
 	return out, nil
