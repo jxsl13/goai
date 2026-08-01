@@ -419,3 +419,6 @@ IF a float chain claiming bit-identity is split into statements to block contrac
 
 ## BEFORE-AFTER-MUST-NOT-REVERT-THE-TOOL-001
 IF a check is validated against pre-fix code recovered with a stash, THEN the developer SHALL restore only the changed FILE from git — a stash reverts the uncommitted detector too and reports 0 findings, reading as a broken check.
+
+## DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001
+IF a typed arm replaces a closure-based one and must stay bit-identical, THEN the developer SHALL wrap any product feeding an accumulation in an explicit conversion — the closure call was blocking a fusion the typed arm allows, and 1 ulp drifted.
