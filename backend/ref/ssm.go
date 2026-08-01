@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -76,25 +77,35 @@ func selectiveScanKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 			if dskip != nil {
 				dsk = dskip.Contiguous().Storage().F64()
 			}
-			for t := range L {
-				for d := range D {
-					dt := ds[t*D+d]
-					ut := us[t*D+d]
+			// Interchange to channel-outer/time-inner: each channel d is an independent
+			// sequential scan over t with its own N-state, so the outer loop parallelizes
+			// over D. Per-worker hloc[N] reproduces the shared h[d*N:] evolution in the same
+			// t-order and arithmetic — byte-identical, disjoint output columns.
+			parallel.Rows(D, func(dlo, dhi int) {
+				hloc := make([]float64, N)
+				for d := dlo; d < dhi; d++ {
 					base := d * N
-					tn := t * N
-					var y float64
 					for n := range N {
-						abar := math.Exp(dt * as[base+n])
-						hv := abar*h[base+n] + dt*bs[tn+n]*ut
-						h[base+n] = hv
-						y += cs[tn+n] * hv
+						hloc[n] = 0
 					}
-					if dskip != nil {
-						y += dsk[d] * ut
+					for t := range L {
+						dt := ds[t*D+d]
+						ut := us[t*D+d]
+						tn := t * N
+						var y float64
+						for n := range N {
+							abar := math.Exp(dt * as[base+n])
+							hv := abar*hloc[n] + dt*bs[tn+n]*ut
+							hloc[n] = hv
+							y += cs[tn+n] * hv
+						}
+						if dskip != nil {
+							y += dsk[d] * ut
+						}
+						os[t*D+d] = y
 					}
-					os[t*D+d] = y
 				}
-			}
+			})
 			return []*tensor.Tensor{out}, nil
 		}
 	case tensor.F32:
@@ -110,25 +121,31 @@ func selectiveScanKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 			if dskip != nil {
 				dsk = dskip.Contiguous().Storage().F32()
 			}
-			for t := range L {
-				for d := range D {
-					dt := float64(ds[t*D+d])
-					ut := float64(us[t*D+d])
+			parallel.Rows(D, func(dlo, dhi int) {
+				hloc := make([]float64, N)
+				for d := dlo; d < dhi; d++ {
 					base := d * N
-					tn := t * N
-					var y float64 // scan state accumulates in float64; only the store rounds
 					for n := range N {
-						abar := math.Exp(dt * float64(as[base+n]))
-						hv := abar*h[base+n] + dt*float64(bs[tn+n])*ut
-						h[base+n] = hv
-						y += float64(cs[tn+n]) * hv
+						hloc[n] = 0
 					}
-					if dskip != nil {
-						y += float64(dsk[d]) * ut
+					for t := range L {
+						dt := float64(ds[t*D+d])
+						ut := float64(us[t*D+d])
+						tn := t * N
+						var y float64 // scan state accumulates in float64; only the store rounds
+						for n := range N {
+							abar := math.Exp(dt * float64(as[base+n]))
+							hv := abar*hloc[n] + dt*float64(bs[tn+n])*ut
+							hloc[n] = hv
+							y += float64(cs[tn+n]) * hv
+						}
+						if dskip != nil {
+							y += float64(dsk[d]) * ut
+						}
+						os[t*D+d] = float32(y)
 					}
-					os[t*D+d] = float32(y)
 				}
-			}
+			})
 			return []*tensor.Tensor{out}, nil
 		}
 	}
