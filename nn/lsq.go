@@ -135,15 +135,22 @@ func lsqRound(vbar *tensor.Tensor) *tensor.Tensor {
 		switch vbar.Dtype() {
 		case tensor.F64:
 			vd, rd := vbar.Storage().F64(), rounded.Storage().F64()
-			for i := range n {
-				rd[i] = math.Round(vd[i])
-			}
+			// Each rd[i] depends only on vd[i] (no cross-element reduction), so a
+			// disjoint-range fan-out is bit-identical to the serial loop — the round
+			// sweeps the full tensor on every QAT forward.
+			parallelRange(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					rd[i] = math.Round(vd[i])
+				}
+			})
 			return rounded
 		case tensor.F32:
 			vd, rd := vbar.Storage().F32(), rounded.Storage().F32()
-			for i := range n {
-				rd[i] = float32(math.Round(float64(vd[i])))
-			}
+			parallelRange(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					rd[i] = float32(math.Round(float64(vd[i])))
+				}
+			})
 			return rounded
 		}
 	}
