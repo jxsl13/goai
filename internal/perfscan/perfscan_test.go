@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -3263,61 +3264,6 @@ func rec(ctx *C, x T, seq int) T {
 	}
 }
 
-// Silent on a per-head attention loop (`for h := range x.Heads`) — the dispatches are
-// per-head [T,T] attention, not a tiny-op scalar recurrence, so the fused-flatF64 lever
-// does not apply (measured false positives: fox_block/aaren/cope, 2026-07-30).
-func TestDetectPS4011_SilentOnPerHeadLoop(t *testing.T) {
-	src := `package p
-func attn(ctx *C, x T) T {
-	var out T
-	for h := range b.Heads {
-		q := ex(backend.OpMatMul, x, x)
-		out = ex(backend.OpAdd, out, q)
-	}
-	return out
-}`
-	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
-		t.Fatalf("want 0 (per-head loop), got %d", got)
-	}
-}
-
-// Silent when the loop dispatches OpSoftmax over keys — quadratic attention, never a
-// linear-attention scalar recurrence (which is what the fused path targets).
-func TestDetectPS4011_SilentOnAttentionSoftmax(t *testing.T) {
-	src := `package p
-func attn(ctx *C, x T, seq int) T {
-	var out T
-	for i := 0; i < seq; i++ {
-		s := ex(backend.OpMatMul, x, x)
-		s = ex(backend.OpSoftmax, s)
-		out = ex(backend.OpMatMul, s, x)
-	}
-	return out
-}`
-	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
-		t.Fatalf("want 0 (attention softmax), got %d", got)
-	}
-}
-
-// Silent on a per-expert / per-recursion composition loop where each iteration runs a whole
-// sub-module (`.Forward`/`.Route`) — that is layer composition, not a scalar recurrence
-// (measured false positives: mor/remoe, 2026-07-30).
-func TestDetectPS4011_SilentOnSubmoduleForward(t *testing.T) {
-	src := `package p
-func moe(ctx *C, x T, e int) T {
-	var out T
-	for i := 0; i < e; i++ {
-		g := ex(backend.OpSlice, x)
-		o := m.Experts[i].Forward(ctx, x)
-		out = ex(backend.OpAdd, out, o)
-	}
-	return out
-}`
-	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
-		t.Fatalf("want 0 (submodule Forward), got %d", got)
-	}
-}
-
 // Silent when the loop dispatches fewer than 2 backend ops.
 func TestDetectPS4011_SilentOnSingleDispatch(t *testing.T) {
 	src := `package p
@@ -3408,5 +3354,2289 @@ func scale(x, s []float64, y []float64, m, n int) {
 }`
 	if got := countCat(scanSrc(t, src))["scaled-serial-dot"]; got != 0 {
 		t.Fatalf("want 0 scaled-serial-dot without a dot loop, got %d", got)
+	}
+}
+
+// The gguf Q4_0 shape: one activation row shared by every output, one accumulator per
+// output, the shared row re-read on every pass.
+func TestDetectPS6010_OutputInvariantReload(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, w []float64) {
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i := range k {
+			acc += row[i] * wr[i]
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 1 {
+		t.Fatalf("want 1 output-invariant-operand-reload, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// THE CASE THAT MADE THE FIRST VERSION MISS THE LOOP IT WAS WRITTEN FROM: the per-output
+// operand arrives as a RANGE VALUE, never as an index expression. Walking only
+// assignments when computing what is output-dependent left `q` unclassified, so the
+// check saw no per-output operand and stayed silent on its own motivating case.
+func TestDetectPS6010_PerOutputOperandArrivingAsARangeValue(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row []float64, w []byte) {
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i, q := range wr {
+			acc += row[i] * float64(q)
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 1 {
+		t.Fatalf("want 1 when the per-output operand is a range value, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT once blocked: a stride above 1 is the signature of someone having already done
+// this, and re-reporting it would make the check noise on exactly the fixed code.
+func TestDetectPS6010_SilentOnAnAlreadyBlockedLoop(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, w []float64) {
+	for ni := 0; ni+4 <= n; ni += 4 {
+		w0, w1 := w[(ni+0)*k:], w[(ni+1)*k:]
+		var a0, a1 float64
+		for i := range k {
+			a0 += row[i] * w0[i]
+			a1 += row[i] * w1[i]
+		}
+		outf[ni] = a0
+		outf[ni+1] = a1
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 on an already-blocked loop, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT when EVERY operand is output-invariant: that is a loop-invariant accumulation,
+// PS5003's finding, and its fix is to hoist the whole thing out rather than unroll —
+// unrolling a computation that should not run n times at all is the wrong advice.
+func TestDetectPS6010_SilentWhenNothingVariesWithTheOutput(t *testing.T) {
+	src := `package p
+func f(n, k int, outf, row, other []float64) {
+	for ni := range n {
+		var acc float64
+		for i := range k {
+			acc += row[i] * other[i]
+		}
+		outf[ni] = acc
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 when nothing varies with the output index, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// SILENT when the accumulator never reaches an output index. Without this the check
+// fires on every scalar reduction that happens to sit inside some loop — it was 145
+// findings tree-wide before this guard and 56 after.
+func TestDetectPS6010_SilentWhenTheAccumulatorIsNotStoredPerOutput(t *testing.T) {
+	src := `package p
+func f(n, k int, row, w []float64) float64 {
+	total := 0.0
+	for ni := range n {
+		wr := w[ni*k:]
+		var acc float64
+		for i := range k {
+			acc += row[i] * wr[i]
+		}
+		total += acc
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["output-invariant-operand-reload"] != 0 {
+		t.Fatalf("want 0 when the accumulator is not stored per output, got %d (%v)",
+			got["output-invariant-operand-reload"], got)
+	}
+}
+
+// The classic.GaussianMixture shape: a receiver slice field taken as a local alias, then
+// written and read back element-wise within one call.
+func TestDetectPS6006_ReceiverScratchViaAlias(t *testing.T) {
+	src := `package p
+type M struct{ yScratch []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	y := m.yScratch
+	for i := range d {
+		s := x[i]
+		for j := range i {
+			s -= y[j]
+		}
+		y[i] = s
+	}
+	var q float64
+	for i := range d {
+		q += y[i] * y[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 receiver-scratch-buffer, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// ALIAS TRACKING IS THE LOAD-BEARING PART. The direct spelling is rarer in real code than
+// the aliased one, and a version of this check that only matched `m.buf[i]` found nothing
+// at all — including the very method it was written from.
+func TestDetectPS6006_ReceiverScratchWrittenDirectly(t *testing.T) {
+	src := `package p
+type M struct{ tmpbuf []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	for i := range d {
+		m.tmpbuf[i] = x[i] * 2
+	}
+	var q float64
+	for i := range d {
+		q += m.tmpbuf[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 for the direct spelling, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on persistent state. This is the false positive the first cut produced: a method
+// that fills model parameters and reads them back is not using a temporary. Nothing in
+// the AST separates the two, so the field NAME carries the intent.
+func TestDetectPS6006_SilentOnPersistentState(t *testing.T) {
+	src := `package p
+type M struct{ Means []float64 }
+func (m *M) f(x []float64, d int) float64 {
+	for i := range d {
+		m.Means[i] = x[i]
+	}
+	var q float64
+	for i := range d {
+		q += m.Means[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on persistent state, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT when the field is only WRITTEN here: that is an output being produced, not a
+// temporary being reused, and passing it as a parameter would be the wrong advice.
+func TestDetectPS6006_SilentWhenOnlyWritten(t *testing.T) {
+	src := `package p
+type M struct{ outbuf []float64 }
+func (m *M) f(x []float64, d int) {
+	for i := range d {
+		m.outbuf[i] = x[i] * 2
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 when the field is only written, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on a plain function: with no receiver there is no shared field, so there is
+// neither a concurrency hazard nor contention to report.
+func TestDetectPS6006_SilentOnNonMethod(t *testing.T) {
+	src := `package p
+func f(buf, x []float64, d int) float64 {
+	for i := range d {
+		buf[i] = x[i]
+	}
+	var q float64
+	for i := range d {
+		q += buf[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on a non-method, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// The structural discriminator: a field INDEXED IN EXACTLY ONE function is a temporary,
+// even when its name says nothing. gbmBuilder.vals and gbmBuilder.part are both spelled
+// this way, and the name-keyed version of this check missed both.
+func TestDetectPS6006_SoleIndexedFieldWithNoScratchishName(t *testing.T) {
+	src := `package p
+type B struct{ vals []float64 }
+func (b *B) alloc(n int) { b.vals = make([]float64, n) }
+func (b *B) f(x []float64, n int) float64 {
+	v := b.vals
+	for i := range n {
+		v[i] = x[i] * 2
+	}
+	var q float64
+	for i := range n {
+		q += v[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 for a sole-indexed field with an ordinary name, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT when a second function also indexes the field: that is shared state, and the
+// method being examined merely happens to fill and read it.
+func TestDetectPS6006_SilentWhenAnotherFunctionAlsoIndexesIt(t *testing.T) {
+	src := `package p
+type B struct{ vals []float64 }
+func (b *B) f(x []float64, n int) float64 {
+	for i := range n {
+		b.vals[i] = x[i] * 2
+	}
+	var q float64
+	for i := range n {
+		q += b.vals[i]
+	}
+	return q
+}
+func (b *B) g(i int) float64 { return b.vals[i] }`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 when a second function indexes the field, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on an EXPORTED field: it is part of the type's API, so callers outside this file
+// can read it and it cannot be a private temporary — whatever indexes it here.
+func TestDetectPS6006_SilentOnExportedField(t *testing.T) {
+	src := `package p
+type M struct{ Means []float64 }
+func (m *M) f(x []float64, n int) float64 {
+	for i := range n {
+		m.Means[i] = x[i]
+	}
+	var q float64
+	for i := range n {
+		q += m.Means[i]
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on an exported field, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// SILENT on a slice of RECORDS. Optimizer per-parameter state ([]soapState) and fitted
+// models ([]*tree) are collections someone keeps, not working space, and they were the
+// bulk of the false positives the structural test produced on its own.
+func TestDetectPS6006_SilentOnSliceOfRecords(t *testing.T) {
+	src := `package p
+type entry struct{ v float64 }
+type O struct{ st []entry }
+func (o *O) step(x []float64, n int) float64 {
+	for i := range n {
+		o.st[i] = entry{x[i]}
+	}
+	var q float64
+	for i := range n {
+		q += o.st[i].v
+	}
+	return q
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 0 {
+		t.Fatalf("want 0 on a slice of records, got %d (%v)", got["receiver-scratch-buffer"], got)
+	}
+}
+
+// A SLICE of the field is a read, not only an index. gbmBuilder.part is consumed entirely
+// by copy(dst, b.part[:r]) — requiring an indexed read missed it even after the
+// structural discriminator was in place.
+func TestDetectPS6006_SliceExpressionCountsAsRead(t *testing.T) {
+	src := `package p
+type B struct{ part []int }
+func (b *B) f(src, dst []int, n int) {
+	r := 0
+	for i := range n {
+		b.part[r] = src[i]
+		r++
+	}
+	copy(dst, b.part[:r])
+}`
+	if got := countCat(scanSrc(t, src)); got["receiver-scratch-buffer"] != 1 {
+		t.Fatalf("want 1 when the field is read via a slice expression, got %d (%v)",
+			got["receiver-scratch-buffer"], got)
+	}
+}
+
+// The AQLM k-means shape: an expensive per-item call chooses WHERE to accumulate.
+func TestDetectPS6007_SearchFeedsIndexedReduction(t *testing.T) {
+	src := `package p
+func f(data [][]float64, cent [][]float64, sums [][]float64, cnt []int, dim int) {
+	for _, x := range data {
+		b := nearest(x, cent)
+		cnt[b]++
+		for t := range dim {
+			sums[b][t] += x[t]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 1 {
+		t.Fatalf("want 1 search-feeds-reduction, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// A BLANK loop key must not hide it. The loop this check was written from is
+// `for _, x := range data`, and an earlier version required a NAMED loop variable — so it
+// missed its own motivating case. Replaying against the pre-fix revision is what showed
+// that; no fixture written from the same mental model would have.
+func TestDetectPS6007_BlankLoopKeyStillDetected(t *testing.T) {
+	src := `package p
+func f(data []float64, cnt []int) {
+	for _, x := range data {
+		b := bucket(x)
+		cnt[b]++
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 1 {
+		t.Fatalf("want 1 with a blank loop key, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the accumulation is not indexed by the searched value: an ordinary scalar
+// sum fed by a call is every reduction loop ever written, and flagging those would bury
+// the shape this check exists for. The distinctive part is that the INDEX makes the loop
+// look partitionable when it is not.
+func TestDetectPS6007_SilentOnScalarAccumulation(t *testing.T) {
+	src := `package p
+func f(data []float64) float64 {
+	var total float64
+	for _, x := range data {
+		v := score(x)
+		total += v
+	}
+	return total
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 on a scalar accumulation, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the searched value indexes a plain STORE rather than an accumulation. A
+// store is idempotent — the last writer wins and no order is being preserved — so the
+// loop does not carry the reduction this check is about. The store is indexed BY the
+// searched value on purpose, so this fixture isolates the accumulation requirement rather
+// than passing on the index check.
+func TestDetectPS6007_SilentOnIndexedStore(t *testing.T) {
+	src := `package p
+func f(data []float64, out []float64) {
+	for _, x := range data {
+		b := bucket(x)
+		out[b] = x
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 on an indexed store, got %d (%v)", got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when the index is not the result of a call: a loop variable indexing an
+// accumulation is an ordinary strided reduction, not a search feeding one.
+func TestDetectPS6007_SilentWhenIndexIsNotFromACall(t *testing.T) {
+	src := `package p
+func f(data []float64, sums []float64, m int) {
+	for i, x := range data {
+		b := i % m
+		sums[b] += x
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 when the index is not from a call, got %d (%v)",
+			got["search-feeds-reduction"], got)
+	}
+}
+
+// SILENT when an accumulation exists but is indexed by the LOOP variable rather than by
+// the searched value. Each item then accumulates into its own slot, so the loop already
+// partitions and there is nothing to split. This is the fixture that isolates the
+// index-mentions-search requirement: the other silent cases are rejected earlier, by the
+// call check or by having no index at all.
+func TestDetectPS6007_SilentWhenAccumulationIndexedByLoopVar(t *testing.T) {
+	src := `package p
+func f(data []float64, sums []float64) {
+	for i, x := range data {
+		b := score(x)
+		sums[i] += b
+	}
+}`
+	if got := countCat(scanSrc(t, src)); got["search-feeds-reduction"] != 0 {
+		t.Fatalf("want 0 when the accumulation is indexed by the loop variable, got %d (%v)",
+			got["search-feeds-reduction"], got)
+	}
+}
+
+// The GBM shape: scratch allocated inside the parallel body, once per dispatch.
+func TestDetectPS6008_AllocInParallelBody(t *testing.T) {
+	src := `package p
+func f(d, n int, cols [][]int) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		vals := make([]float64, n)
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 alloc-in-parallel-body, got %d (%v)", got["alloc-in-parallel-body"], got)
+	}
+}
+
+// The dispatch may be reached through the package helper directly.
+func TestDetectPS6008_AllocInParallelRowsIdxBody(t *testing.T) {
+	src := `package p
+func f(n int) {
+	parallel.Rows(n, func(lo, hi int) {
+		buf := make([]int, n)
+		_ = buf
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 for parallel.Rows, got %d (%v)", got["alloc-in-parallel-body"], got)
+	}
+}
+
+// NO LOCAL LOOP IS REQUIRED, and that is deliberate. The GBM case has none: bestSplit
+// contains no loop around its dispatch — bestSplit ITSELF runs once per tree node, one
+// call frame up. A check that demanded a visible enclosing loop would have missed the
+// only case that mattered, which is why this fixture has a bare function.
+func TestDetectPS6008_NoEnclosingLoopStillReported(t *testing.T) {
+	src := `package p
+func bestSplit(d, n int) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		vals := make([]float64, n)
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 1 {
+		t.Fatalf("want 1 without an enclosing loop, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT when the buffer is hoisted out of the body — the fix this check asks for.
+func TestDetectPS6008_SilentWhenHoistedOutOfTheBody(t *testing.T) {
+	src := `package p
+func f(d, n int, scratch [][]float64) {
+	parallelFeaturesIdx(d, n, func(ci, lo, hi int) {
+		vals := scratch[ci][:n]
+		_ = vals
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 when the buffer is per-chunk and hoisted, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT on an allocation in an ordinary closure: this check is about the cost of a
+// parallel FAN-OUT repeating an allocation, not about allocation in general, which
+// PS2001 and PS2004 already cover.
+func TestDetectPS6008_SilentOnNonParallelCallback(t *testing.T) {
+	src := `package p
+func f(n int) {
+	forEach(n, func(lo, hi int) {
+		buf := make([]int, n)
+		_ = buf
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 on a non-parallel callback, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// SILENT on a non-allocating define inside a parallel body. A parallel body naturally
+// declares locals — slicing a shared buffer, reading a bound — and none of that repeats
+// an allocation. This fixture isolates the make() requirement; without it, relaxing that
+// check to accept any define leaves every other PS6008 fixture green.
+func TestDetectPS6008_SilentOnNonAllocatingDefineInBody(t *testing.T) {
+	src := `package p
+func f(d, n int, shared []float64) {
+	parallelFeatures(d, n, func(lo, hi int) {
+		row := shared[lo:hi]
+		total := compute(row)
+		_ = total
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["alloc-in-parallel-body"] != 0 {
+		t.Fatalf("want 0 for a non-allocating define, got %d (%v)",
+			got["alloc-in-parallel-body"], got)
+	}
+}
+
+// sort.Slice allocates a reflect swapper on every call.
+func TestDetectPS6009_SortSlice(t *testing.T) {
+	src := `package p
+func f(idx []int, key []float64) {
+	sort.Slice(idx, func(a, b int) bool { return key[idx[a]] < key[idx[b]] })
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 1 {
+		t.Fatalf("want 1 reflect-swapper-sort, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
+
+// SliceStable has the same swapper, so it is reported too — with SortStableFunc as its
+// counterpart, since swapping a stable sort for an unstable one changes tie order.
+func TestDetectPS6009_SortSliceStable(t *testing.T) {
+	src := `package p
+func f(rows []row) {
+	sort.SliceStable(rows, func(a, b int) bool { return rows[a].k < rows[b].k })
+}`
+	got := scanSrc(t, src)
+	if countCat(got)["reflect-swapper-sort"] != 1 {
+		t.Fatalf("want 1 for SliceStable, got %v", countCat(got))
+	}
+	for _, f := range got {
+		if f.category == "reflect-swapper-sort" && !strings.Contains(f.msg, "SortStableFunc") {
+			t.Errorf("SliceStable must be pointed at SortStableFunc, got %q", f.msg)
+		}
+	}
+}
+
+// SILENT ON ITS OWN FIX — the property PS3002 lacks. That check kept flagging the
+// slices.SortFunc replacement it had recommended, so the site could only be silenced with
+// a suppression, never cleared. A check that cannot recognize its own remedy cannot tell
+// you whether the work is done.
+func TestDetectPS6009_SilentOnSlicesSortFunc(t *testing.T) {
+	src := `package p
+func f(idx []int, key []float64) {
+	slices.SortFunc(idx, func(a, b int) int {
+		switch {
+		case key[a] < key[b]:
+			return -1
+		case key[a] > key[b]:
+			return 1
+		}
+		return 0
+	})
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on slices.SortFunc — the fix must clear the finding, got %d (%v)",
+			got["reflect-swapper-sort"], got)
+	}
+}
+
+// SILENT on sort.Ints and friends: those are concrete, not reflection-based.
+func TestDetectPS6009_SilentOnConcreteSorts(t *testing.T) {
+	src := `package p
+func f(xs []int, ss []string) {
+	sort.Ints(xs)
+	sort.Strings(ss)
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on concrete sorts, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
+
+// SILENT on a same-named method that is not the sort package.
+func TestDetectPS6009_SilentOnUnrelatedSliceMethod(t *testing.T) {
+	src := `package p
+func f(db store, xs []int) {
+	db.Slice(xs, nil)
+}`
+	if got := countCat(scanSrc(t, src)); got["reflect-swapper-sort"] != 0 {
+		t.Fatalf("want 0 on an unrelated Slice call, got %d (%v)", got["reflect-swapper-sort"], got)
+	}
+}
+
+// PS6011 fires on the KDA decay shape: the inner loop scales S by the row stride.
+func TestDetectPS6011_StridedInnerWalk(t *testing.T) {
+	src := `package p
+func Decay(S, at []float64, dv, dk int) {
+	for c := range dk {
+		ac := at[c]
+		for r := range dv {
+			S[r*dk+c] *= ac
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 strided-inner-walk on the column walk, got %d", got)
+	}
+}
+
+// The inner loop is often GUARDED rather than a direct child of the outer body — NSA's P*V
+// sits inside an `if sum > 0`. The first draft of this check walked outerBody.List only and
+// missed exactly this, its own motivating case.
+func TestDetectPS6011_InnerLoopBehindGuard(t *testing.T) {
+	src := `package p
+func PV(vs, scores, orow []float64, dk, dm, off, i int, sum float64) {
+	for d := range dk {
+		var o float64
+		if sum > 0 {
+			for j := 0; j <= i; j++ {
+				o += scores[j] * vs[j*dm+off+d]
+			}
+		}
+		orow[d] = o
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 strided-inner-walk behind an if guard, got %d", got)
+	}
+}
+
+// SILENT on correct row-major traversal, where the INNER variable is the additive one.
+func TestDetectPS6011_SilentOnRowMajor(t *testing.T) {
+	src := `package p
+func Scale(S, at []float64, dv, dk int) {
+	for r := range dv {
+		for c := range dk {
+			S[r*dk+c] *= at[c]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on contiguous row-major iteration, got %d", got)
+	}
+}
+
+// SILENT on a transpose: it strides on one side whichever way it is iterated, so the
+// interchange this check advises would only move the stride to the other operand.
+func TestDetectPS6011_SilentOnTranspose(t *testing.T) {
+	src := `package p
+func T(x []float64, r, c int) []float64 {
+	out := make([]float64, r*c)
+	for i := range r {
+		for j := range c {
+			out[j*r+i] = x[i*c+j]
+		}
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on a transpose, got %d", got)
+	}
+}
+
+// SILENT when the two loop variables never meet in one index — the axes are not
+// interchangeable and there is nothing to advise.
+func TestDetectPS6011_SilentWhenAxesDoNotMeet(t *testing.T) {
+	src := `package p
+func F(a, b []float64, n, m, stride int) {
+	for i := range n {
+		for j := range m {
+			a[j*stride] += b[i]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 when only one loop var reaches the index, got %d", got)
+	}
+}
+
+// SILENT on a permutation copy whose stride was HOISTED out of the inner loop. The
+// transpose check above is syntactic and cannot see the mirrored multiplication once
+// `row := i*b` moves it, which is exactly how nlp's already-tiled gguf transposes were
+// being flagged.
+func TestDetectPS6011_SilentOnHoistedStrideTranspose(t *testing.T) {
+	src := `package p
+func T(dst, src []float64, a, b int) {
+	for i := 0; i < a; i++ {
+		row := i * b
+		for j := 0; j < b; j++ {
+			dst[j*a+i] = src[row+j]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on a hoisted-stride permutation copy, got %d", got)
+	}
+}
+
+// SILENT when the source is read through an ACCESSOR rather than an index — the generic
+// fallback arms of those same transposes.
+func TestDetectPS6011_SilentOnAccessorPermutationCopy(t *testing.T) {
+	src := `package p
+func T(dst []float64, tc *T2, a, b int) {
+	for i := 0; i < a; i++ {
+		for j := 0; j < b; j++ {
+			dst[j*a+i] = tc.AtF64(i, j)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 0 {
+		t.Fatalf("want 0 on an accessor permutation copy, got %d", got)
+	}
+}
+
+// STILL FIRES when the strided write is an ACCUMULATION rather than a copy — the
+// suppression must not swallow a genuine reduction that happens to look assignment-shaped.
+func TestDetectPS6011_FiresOnStridedAccumulation(t *testing.T) {
+	src := `package p
+func Acc(dst, a, b []float64, n, m, stride int) {
+	for c := range n {
+		for r := range m {
+			dst[r*stride+c] = dst[r*stride+c] + a[r]*b[c]
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+		t.Fatalf("want 1 on a strided accumulation, got %d", got)
+	}
+}
+
+// PS6012 fires on a product assigned to a NAMED LOCAL and then used in a subtract, in a
+// function that pins other products. This is the exact shape that cost three attempts on the
+// Titans fused path: naming a subexpression does not stop the compiler inlining and
+// contracting it.
+func TestDetectPS6012_UnpinnedNamedLocal(t *testing.T) {
+	src := `package p
+func F(g, s []float64, th, et float64, n int) {
+	for i := range n {
+		inc := g[i] * th
+		s[i] = float64(s[i]*et) - inc
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 1 {
+		t.Fatalf("want 1 inconsistent-fma-pinning on the named local, got %d", got)
+	}
+}
+
+// SILENT once the product is pinned — the fix must clear the finding.
+func TestDetectPS6012_SilentWhenPinned(t *testing.T) {
+	src := `package p
+func F(g, s []float64, th, et float64, n int) {
+	for i := range n {
+		inc := float64(g[i] * th)
+		s[i] = float64(s[i]*et) - inc
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 once pinned, got %d", got)
+	}
+}
+
+// SILENT in a function that pins nothing: it is not claiming bit-exactness against a
+// separately-rounded path, so contraction is none of this check's business.
+func TestDetectPS6012_SilentWithoutAnyPinning(t *testing.T) {
+	src := `package p
+func F(a, b, c []float64, k float64, n int) {
+	for i := range n {
+		c[i] = a[i]*k + b[i]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 without any pinning signal, got %d", got)
+	}
+}
+
+// SILENT on integer offset arithmetic, whether in a subscript or computed into a call
+// argument. FMA has nothing to do with index math, and without types the only tell is that
+// it touches no memory.
+func TestDetectPS6012_SilentOnIndexArithmetic(t *testing.T) {
+	src := `package p
+func F(s, d []float64, get func(int) float64, rows, cols, half int, k float64) {
+	for p := range rows {
+		for e := range half {
+			row := p*cols + e
+			d[row] = float64(s[row] * k)
+			_ = get(p*cols + e)
+		}
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 on integer offset arithmetic, got %d", got)
+	}
+}
+
+// SILENT when the only conversion is a float32 STORE rounding. float32(a*b) on an F32 path
+// is how a result is written, not a declaration that contraction matters; treating it as a
+// pinning signal made this check fire in every typed F32 branch in the tree.
+func TestDetectPS6012_SilentOnF32StoreRounding(t *testing.T) {
+	src := `package p
+func F(dst []float32, a, b []float64, k float64, n int) {
+	for i := range n {
+		dst[i] = float32(a[i] * k)
+		dst[i] = float32(a[i]*k + b[i])
+	}
+}`
+	if got := countCat(scanSrc(t, src))["inconsistent-fma-pinning"]; got != 0 {
+		t.Fatalf("want 0 when the only conversion is an F32 store rounding, got %d", got)
+	}
+}
+
+// PS6013 fires when a full sort's only later reader is a counted prefix loop.
+func TestDetectPS6013_SortFeedsCountedPrefix(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool, k int) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-counted-prefix, got %d", got)
+	}
+}
+
+// The sort is often behind a local CLOSURE that captures the slice — the shape the rule was
+// built from. A detector matching only direct calls missed its own motivating case.
+func TestDetectPS6013_SortBehindClosure(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, col []float64, d []bool, k int) {
+	sortCol := func(c []float64) {
+		slices.SortFunc(idx, func(x, y int) int { return 0 })
+	}
+	sortCol(col)
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 1 {
+		t.Fatalf("want 1 when the sort is behind a closure, got %d", got)
+	}
+}
+
+// SILENT when something else reads the sorted slice afterwards — then the full order is
+// load-bearing and the sort must stay. This is the soundness condition.
+func TestDetectPS6013_SilentWhenOrderUsedElsewhere(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool, out []int, k int) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+	copy(out, idx)
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 when the full order is read again, got %d", got)
+	}
+}
+
+// SILENT when the prefix is the WHOLE slice — len(idx) reads everything, so nothing is
+// discarded and a selection buys nothing.
+func TestDetectPS6013_SilentWhenPrefixIsWholeSlice(t *testing.T) {
+	src := `package p
+import "slices"
+func f(idx []int, d []bool) {
+	slices.SortFunc(idx, func(x, y int) int { return 0 })
+	for r := 0; r < len(idx); r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 when the loop covers the whole slice, got %d", got)
+	}
+}
+
+// SILENT when a same-named method is not the sort package — Sort on a receiver is not this.
+func TestDetectPS6013_SilentOnUnrelatedSortMethod(t *testing.T) {
+	src := `package p
+func f(db store, idx []int, d []bool, k int) {
+	db.SortFunc(idx, nil)
+	for r := 0; r < k; r++ {
+		d[idx[r]] = true
+	}
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-counted-prefix"]; got != 0 {
+		t.Fatalf("want 0 on an unrelated SortFunc method, got %d", got)
+	}
+}
+
+// The rl.DQN.learn shape: the same pure forward twice, differing only in the leading
+// context argument, with only a fresh tensor written in between.
+func TestDetectPS6014_RedundantPureRecompute(t *testing.T) {
+	src := `package p
+func learn(d *D, states [][]float64, k int) error {
+	qPred, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	target := New(F64, Shape{len(states), k})
+	for i := range states {
+		for a := range k {
+			target.SetF64(qPred.AtF64(i, a), i, a)
+		}
+	}
+	q, err := forward(tape.Context(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(q, target)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 1 {
+		t.Fatalf("want 1 redundant-pure-recompute, got %d", got)
+	}
+}
+
+// An assignment to one of the arguments between the two calls means the second genuinely
+// asks a different question.
+func TestDetectPS6014_SilentWhenAnArgumentIsReassigned(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	states = nextBatch()
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when an argument is reassigned, got %d", got)
+	}
+}
+
+// A non-pure call handed one of the arguments may mutate what it points at — the classic
+// case being an optimizer step between a preview forward and the real one.
+func TestDetectPS6014_SilentWhenAnImpureCallTouchesAnArgument(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	applyGradients(d.Net)
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when an impure call touches an argument, got %d", got)
+	}
+}
+
+// A mutation hidden inside a loop between the two calls must still suppress: the
+// invalidation scan descends into nested nodes rather than only inspecting top-level
+// statements, which is the failure mode three earlier rules in this file shipped with.
+func TestDetectPS6014_SilentWhenTheWriteIsNestedInALoop(t *testing.T) {
+	src := `package p
+func f(d *D, states [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	for i := range states {
+		if i > 0 {
+			states[i] = perturb(states[i])
+		}
+	}
+	b, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 when the write is nested in a loop, got %d", got)
+	}
+}
+
+// A callee NOT declared pure is never flagged, however identical the two calls look —
+// repeated rng draws and repeated env steps are the whole point of those calls.
+func TestDetectPS6014_SilentOnAnUndeclaredCallee(t *testing.T) {
+	src := `package p
+func f(d *D, n int, bound int) int {
+	a, _ := sampleIndex(d.rng, n, bound)
+	b, _ := sampleIndex(d.rng, n, bound)
+	return a + b
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for a callee outside pureComputeFuncs, got %d", got)
+	}
+}
+
+// Differing arguments are not a recompute.
+func TestDetectPS6014_SilentOnDifferentArguments(t *testing.T) {
+	src := `package p
+func f(d *D, states, nexts [][]float64) error {
+	a, err := forward(NewContext(), d.Net, states)
+	if err != nil {
+		return err
+	}
+	b, err := forward(NewContext(), d.Net, nexts)
+	if err != nil {
+		return err
+	}
+	return use(a, b)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for different arguments, got %d", got)
+	}
+}
+
+// The rl.rlRollout critic: a batch-of-one pure call per iteration whose result is only
+// appended to a slice consumed after the loop.
+func TestDetectPS6015_Batch1FeedsPostloopSlice(t *testing.T) {
+	src := `package p
+func rollout(critic *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 1 {
+		t.Fatalf("want 1 batch1-call-feeds-only-postloop-slice, got %d", got)
+	}
+}
+
+// THE case that must stay silent: the actor in the same loop, whose result feeds the action
+// that feeds the environment. It is the same call shape and it cannot be hoisted — PS1003
+// covers it with different advice. A rule that flagged this would propose a hoist that
+// changes behavior, which is worse than saying nothing.
+func TestDetectPS6015_SilentWhenTheResultDrivesTheLoop(t *testing.T) {
+	src := `package p
+func rollout(actor *Net, ro *R, obs []float64, steps int, k int) error {
+	for i := 0; i < steps; i++ {
+		logits, err := forward(NewContext(), actor, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		a := sampleAction(logits, k)
+		ro.actions = append(ro.actions, a)
+		obs = step(a)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 when the result drives the loop, got %d", got)
+	}
+}
+
+// A use in a branch condition is loop-carried even though an append is also present.
+func TestDetectPS6015_SilentOnABranchUse(t *testing.T) {
+	src := `package p
+func f(critic *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+		if v.AtF64(0, 0) > 1 {
+			break
+		}
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 when the result is read in a branch, got %d", got)
+	}
+}
+
+// Appending to a slice declared INSIDE the loop proves nothing outlives the iteration, so
+// there is no batched call to hoist to.
+func TestDetectPS6015_SilentOnALoopLocalTarget(t *testing.T) {
+	src := `package p
+func f(critic *Net, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		var acc []float64
+		v, err := forward(NewContext(), critic, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		acc = append(acc, v.AtF64(0, 0))
+		consume(acc)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a loop-local append target, got %d", got)
+	}
+}
+
+// A callee outside pureComputeFuncs cannot be hoisted across a loop at all — it might
+// consume RNG, and moving draws out of the stream changes every later iteration.
+func TestDetectPS6015_SilentOnAnUndeclaredCallee(t *testing.T) {
+	src := `package p
+func f(net *Net, ro *R, obs []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := sampleForward(NewContext(), net, [][]float64{obs})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a callee outside pureComputeFuncs, got %d", got)
+	}
+}
+
+// A multi-element batch is already batched; there is nothing to collapse.
+func TestDetectPS6015_SilentOnAMultiElementBatch(t *testing.T) {
+	src := `package p
+func f(critic *Net, ro *R, a, b []float64, steps int) error {
+	for i := 0; i < steps; i++ {
+		v, err := forward(NewContext(), critic, [][]float64{a, b})
+		if err != nil {
+			return err
+		}
+		ro.values = append(ro.values, v.AtF64(0, 0))
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["batch1-call-feeds-only-postloop-slice"]; got != 0 {
+		t.Fatalf("want 0 for a multi-element batch, got %d", got)
+	}
+}
+
+// Different receivers, same method and same argument: the three projections at the top of
+// every attention block. calleeName collapses a qualified call to its last segment, so
+// keying on that alone reported all three as recomputes of each other — and that accounted
+// for EVERY hit this rule produced outside the package it was built from. The key carries
+// the full callee expression to keep them distinct.
+//
+// The method is spelled with the name the configured vocabulary actually contains. Spelled
+// otherwise the assertion passes because nothing here is a pure call at all — which is how
+// this test was first written, and the companion FiresOnTheSameReceiverTwice floor is what
+// exposed it.
+func TestDetectPS6014_SilentOnDifferentReceivers(t *testing.T) {
+	src := `package p
+func attn(b *Block, ctx *C, xn T) error {
+	q, err := b.Wq.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	k, err := b.Wk.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	v, err := b.Wv.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	return use(q, k, v)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 0 {
+		t.Fatalf("want 0 for three different receivers, got %d", got)
+	}
+}
+
+// The same receiver and the same argument IS a recompute, so the receiver fix must not
+// silence the real case — this is the floor against over-suppression.
+func TestDetectPS6014_FiresOnTheSameReceiverTwice(t *testing.T) {
+	src := `package p
+func f(b *Block, ctx *C, xn T) error {
+	a, err := b.Wq.forward(ctx, xn)
+	if err != nil {
+		return err
+	}
+	c, err := b.Wq.forward(tape.Context(), xn)
+	if err != nil {
+		return err
+	}
+	return use(a, c)
+}`
+	if got := countCat(scanSrc(t, src))["redundant-pure-recompute"]; got != 1 {
+		t.Fatalf("want 1 for the same receiver twice, got %d", got)
+	}
+}
+
+// The nlp decode shape: attrs literals rebuilt per layer from layer-independent config.
+func TestDetectPS6016_LoopInvariantLiteralArg(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, pos, kv int, q T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 1 {
+		t.Fatalf("want 1 loop-invariant-literal-arg, got %d", got)
+	}
+}
+
+// A field initializer that reads the loop variable is not invariant — the whole point.
+func TestDetectPS6016_SilentWhenAFieldReadsTheLoopVar(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, q T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Layer: l}, q); err != nil {
+			return err
+		}
+		use(b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 when a field reads the loop variable, got %d", got)
+	}
+}
+
+// A field reading something the loop ASSIGNS is not invariant either, even though the name
+// is not an induction variable.
+func TestDetectPS6016_SilentWhenAFieldReadsALoopAssignedName(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, q T) error {
+	pos := 0
+	for l, b := range m.Blocks {
+		pos = pos + 1
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 when a field reads a loop-assigned name, got %d", got)
+	}
+}
+
+// Appending the literal needs its per-iteration identity: hoisting would make every element
+// alias one value, which is a correctness change, not an optimization.
+func TestDetectPS6016_SilentOnAnAppendedLiteral(t *testing.T) {
+	src := `package p
+func f(m *M, cfg *Cfg) []T {
+	var out []T
+	for l, b := range m.Blocks {
+		out = append(out, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads})
+		use(l, b)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 for an appended literal, got %d", got)
+	}
+}
+
+// Slice and map literals are a different question (pooling, PS2001), not hoisting.
+func TestDetectPS6016_SilentOnSliceAndMapLiterals(t *testing.T) {
+	src := `package p
+func f(m *M, ctx *C, a, b2 T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec(ctx, []*T{a, b2}); err != nil {
+			return err
+		}
+		if _, err := exec2(ctx, map[string]int{"k": 1}); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 0 {
+		t.Fatalf("want 0 for slice/map literals, got %d", got)
+	}
+}
+
+// Two distinct literals of the SAME type in one loop must both report — the q and k RoPE
+// attrs of a decode loop are exactly that, and a per-type dedup hid the second.
+func TestDetectPS6016_ReportsTwoLiteralsOfOneType(t *testing.T) {
+	src := `package p
+func decode(m *M, ctx *C, cfg *Cfg, pos, kv int, q, k T) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
+			return err
+		}
+		if _, err := exec1(ctx, OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-literal-arg"]; got != 2 {
+		t.Fatalf("want 2 for two distinct literals of one type, got %d", got)
+	}
+}
+
+// scanSrcPkg runs the package-level pre-pass PS6017 depends on before scanning. scanSrc
+// alone cannot exercise this rule: the sibling registry is built across files, so without
+// the pre-pass the rule has an empty table and every assertion of zero passes vacuously.
+func scanSrcPkg(t *testing.T, src string) []finding {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "x.go", src, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	variadicSiblings = map[string]map[string]variadicFamily{}
+	collectVariadicSiblings(fset, []*ast.File{f})
+	return scanFile(fset, f, testSets(t))
+}
+
+const variadicFamilySrc = `
+func exec1(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func exec1a(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func exec3(ctx *backend.Context, op backend.Op, attrs backend.Attrs, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
+	return nil, nil
+}
+`
+
+// The nlp decode shape: a variadic exec called in a layer loop at an arity a pooled sibling
+// covers. Grouped parameters (a, b, c *tensor.Tensor) must expand to three, not one.
+func TestDetectPS6017_UnpooledVariadicSibling(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func decode(m *M, ctx *backend.Context, attn backend.Attrs, q, k, v *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpMHA, attn, q, k, v); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]
+	if got != 1 {
+		t.Fatalf("want 1 unpooled-variadic-sibling, got %d", got)
+	}
+}
+
+// An arity no sibling covers has nothing to switch to.
+func TestDetectPS6017_SilentOnAnUncoveredArity(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(m *M, ctx *backend.Context, attn backend.Attrs, a, b2 *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpAdd, attn, a, b2); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 when no sibling has that arity (2), got %d", got)
+	}
+}
+
+// A spread call has no statically known arity.
+func TestDetectPS6017_SilentOnASpreadCall(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(m *M, ctx *backend.Context, attn backend.Attrs, ins []*tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := exec1(ctx, backend.OpMHA, attn, ins...); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 for a spread call, got %d", got)
+	}
+}
+
+// Outside a loop the allocation is once per invocation, which is rarely worth a diff.
+func TestDetectPS6017_SilentOutsideALoop(t *testing.T) {
+	src := `package p` + variadicFamilySrc + `
+func f(ctx *backend.Context, attn backend.Attrs, q, k, v *tensor.Tensor) error {
+	_, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
+	return err
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 outside a loop, got %d", got)
+	}
+}
+
+// A variadic function with NO fixed leading parameters has no shared prefix to make a
+// family, and "same trailing types" alone paired concat1D with every two-tensor function in
+// its package. Requiring a prefix is what removed the only wrong pairing in the tree.
+func TestDetectPS6017_SilentWithoutASharedPrefix(t *testing.T) {
+	src := `package p
+func concat1D(parts ...*tensor.Tensor) *tensor.Tensor { return nil }
+func geGLU(a, b *tensor.Tensor) *tensor.Tensor        { return nil }
+func f(m *M, x, y *tensor.Tensor) {
+	for l, b := range m.Blocks {
+		_ = concat1D(x, y)
+		use(l, b)
+	}
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 without a shared leading prefix, got %d", got)
+	}
+}
+
+// A candidate whose trailing type differs from the variadic element type is not a sibling.
+//
+// The guard against mis-rendered types is the POSITIVE test above, not this one: exprText has
+// no StarExpr case and returns empty for every pointer, which makes the collector skip every
+// candidate and the whole rule go silent. A zero-expecting assertion cannot tell that apart
+// from correct suppression — swapping typeText for exprText leaves this test green and turns
+// TestDetectPS6017_UnpooledVariadicSibling red.
+func TestDetectPS6017_SilentOnADifferingTrailingType(t *testing.T) {
+	src := `package p
+func vexec(ctx *backend.Context, ins ...*tensor.Tensor) (*tensor.Tensor, error) { return nil, nil }
+func notASibling(ctx *backend.Context, other *backend.Context) (*tensor.Tensor, error) {
+	return nil, nil
+}
+func f(m *M, ctx *backend.Context, x *tensor.Tensor) error {
+	for l, b := range m.Blocks {
+		if _, err := vexec(ctx, x); err != nil {
+			return err
+		}
+		use(l, b)
+	}
+	return nil
+}`
+	if got := countCat(scanSrcPkg(t, src))["unpooled-variadic-sibling"]; got != 0 {
+		t.Fatalf("want 0 when the candidate's trailing type differs, got %d", got)
+	}
+}
+
+// The partialRoPE shape: seven layout dispatches around one arithmetic op, straight-line code
+// with no loop — which is why PS4011, the loop-shaped relative, could not see the largest of
+// the three wins this rule was built from.
+func TestDetectPS6018_LayoutOpClusterUnfused(t *testing.T) {
+	src := `package p
+func partialRoPE(ctx *C, x T, heads, rotaryDim int, rope A) (T, error) {
+	flat, err := exec1(ctx, backend.OpReshape, reshapeTo(seq*heads, hd), x)
+	if err != nil {
+		return nil, err
+	}
+	rot, err := exec1(ctx, backend.OpSlice, sliceTo(0, rotaryDim), flat)
+	if err != nil {
+		return nil, err
+	}
+	pass, err := exec1(ctx, backend.OpSlice, sliceTo(rotaryDim, hd), flat)
+	if err != nil {
+		return nil, err
+	}
+	rotWide, err := exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*rotaryDim), rot)
+	if err != nil {
+		return nil, err
+	}
+	if rotWide, err = exec1a(ctx, backend.OpRoPE, rope, rotWide); err != nil {
+		return nil, err
+	}
+	merged, err := exec1(ctx, backend.OpConcat, concatOn(1), rotWide, pass)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*hd), merged)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 1 {
+		t.Fatalf("want 1 layout-op-cluster-unfused, got %d", got)
+	}
+}
+
+// A function that already has the fused path must stop reporting — otherwise the rule flags
+// its own successes forever. This is the shape the fix takes.
+func TestDetectPS6018_SilentOnceFused(t *testing.T) {
+	src := `package p
+func partialRoPE(ctx *C, x T, heads, rotaryDim int, rope A) (T, error) {
+	if ctx.Recorder == nil {
+		xf := x.Contiguous().Storage().F32()
+		return gatherScatter(xf, heads, rotaryDim), nil
+	}
+	flat, err := exec1(ctx, backend.OpReshape, reshapeTo(seq*heads, hd), x)
+	if err != nil {
+		return nil, err
+	}
+	rot, err := exec1(ctx, backend.OpSlice, sliceTo(0, rotaryDim), flat)
+	if err != nil {
+		return nil, err
+	}
+	merged, err := exec1(ctx, backend.OpConcat, concatOn(1), rot, flat)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(seq, heads*hd), merged)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 once a fused storage path exists, got %d", got)
+	}
+}
+
+// Two movement ops around one arithmetic op is often irreducible — transpose then matmul —
+// so the threshold is three. This is the floor against the rule firing on ordinary code.
+func TestDetectPS6018_SilentOnTwoLayoutOps(t *testing.T) {
+	src := `package p
+func attn(ctx *C, q, k T) (T, error) {
+	kT, err := exec1a(ctx, backend.OpTranspose, nil, k)
+	if err != nil {
+		return nil, err
+	}
+	scores, err := exec2(ctx, backend.OpMatMul, nil, q, kT)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpReshape, reshapeTo(1, 4), scores)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 for two layout ops, got %d", got)
+	}
+}
+
+// Arithmetic ops are not movement, however many there are: fusing them raises reassociation
+// and FMA questions, which is the whole reason this rule keys on a movement-op list rather
+// than on dispatch count.
+func TestDetectPS6018_SilentOnArithmeticOps(t *testing.T) {
+	src := `package p
+func mlp(ctx *C, x, w1, w2, w3 T) (T, error) {
+	a, err := exec2(ctx, backend.OpMatMul, nil, x, w1)
+	if err != nil {
+		return nil, err
+	}
+	b, err := exec2(ctx, backend.OpMul, nil, a, w2)
+	if err != nil {
+		return nil, err
+	}
+	c, err := exec2(ctx, backend.OpAdd, nil, b, w3)
+	if err != nil {
+		return nil, err
+	}
+	return exec1a(ctx, backend.OpSoftmax, nil, c)
+}`
+	if got := countCat(scanSrc(t, src))["layout-op-cluster-unfused"]; got != 0 {
+		t.Fatalf("want 0 for arithmetic ops, got %d", got)
+	}
+}
+
+// The GMM shape that shipped a race: a 4-wide jam whose remainder delegates to a receiver
+// method, so the scratch the wide body received as a parameter was not what the tail used.
+func TestDetectPS6019_JamTailDelegates(t *testing.T) {
+	src := `package p
+func (m *M) logGaussianFullBatch(x []float64, ld []float64, y4 *[4][]float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3]
+		for i := range d {
+			y0[i], y1[i], y2[i], y3[i] = f(x, i), f(x, i), f(x, i), f(x, i)
+		}
+		ld[c] = y0[0] + y1[0] + y2[0] + y3[0]
+	}
+	for ; c < k; c++ {
+		ld[c], _ = m.logGaussian(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 1 {
+		t.Fatalf("want 1 jam-tail-delegates, got %d", got)
+	}
+}
+
+// A tail that repeats the wide body INLINE shares every edit by construction — same text — so
+// it is not the hazard and must not report. This is the floor keeping the rule off the ordinary
+// scalar remainder that nearly every jammed kernel has.
+func TestDetectPS6019_SilentOnInlineTail(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64, y4 *[4][]float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		y0 := y4[0]
+		ld[c] = y0[0] * x[c]
+	}
+	for ; c < k; c++ {
+		y0 := y4[0]
+		ld[c] = y0[0] * x[c]
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 for an inline tail, got %d", got)
+	}
+}
+
+// When the WIDE body also delegates to the receiver, both paths go through the same method and
+// share its fixes — the asymmetry is what makes the tail dangerous.
+func TestDetectPS6019_SilentWhenBothDelegate(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64) {
+	c := 0
+	for ; c+4 <= k; c += 4 {
+		ld[c] = m.one(x, c) + m.one(x, c+1) + m.one(x, c+2) + m.one(x, c+3)
+	}
+	for ; c < k; c++ {
+		ld[c] = m.one(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 when both paths delegate, got %d", got)
+	}
+}
+
+// A plain stride-1 loop followed by another loop is not an unroll-and-jam and has no remainder.
+func TestDetectPS6019_SilentWithoutAJamHeader(t *testing.T) {
+	src := `package p
+func (m *M) batch(x []float64, ld []float64) {
+	for c := 0; c < k; c++ {
+		ld[c] = x[c]
+	}
+	for c := 0; c < k; c++ {
+		ld[c] = m.one(x, c)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["jam-tail-delegates"]; got != 0 {
+		t.Fatalf("want 0 without a jam header, got %d", got)
+	}
+}
+
+// The exact pre-fix signature of knnParallelRows. Three separate wins in this repository
+// were blocked by this shape, so the rule's whole value is that it would have fired here.
+func TestDetectPS6021_PerItemCallbackNoSeam(t *testing.T) {
+	src := `package p
+func knnParallelRows(n int, body func(i int)) {
+	nw := runtime.GOMAXPROCS(0)
+	if nw <= 1 || n < 64 {
+		for i := 0; i < n; i++ {
+			body(i)
+		}
+		return
+	}
+	csz := (n + nw - 1) / nw
+	_ = parallelBuild(nw, func(c int) error {
+		lo := c * csz
+		for i := lo; i < lo+csz && i < n; i++ {
+			body(i)
+		}
+		return nil
+	})
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 1 {
+		t.Fatalf("want 1 fanout-without-worker-seam, got %d", got)
+	}
+}
+
+// The pre-fix nbPredictParallel: extra leading scalars must not matter — only the callback's
+// shape does.
+func TestDetectPS6021_ExtraLeadingScalars(t *testing.T) {
+	src := `package p
+func nbPredictParallel(n, feat int, body func(i int)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			for i := start; i < n; i += 4 {
+				body(i)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 1 {
+		t.Fatalf("want 1 fanout-without-worker-seam, got %d", got)
+	}
+}
+
+// THE FLOOR THAT MAKES THIS RULE USABLE: a (lo, hi) range callback hands the caller a
+// per-chunk closure, which is already a per-worker seam. parallel.Rows and most helpers in
+// this repository have this shape, so reporting them would drown the one real hit.
+func TestDetectPS6021_SilentOnRangeCallback(t *testing.T) {
+	src := `package p
+func parallelRows(n int, body func(lo, hi int)) {
+	var wg sync.WaitGroup
+	chunk := (n + 3) / 4
+	for lo := 0; lo < n; lo += chunk {
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, lo+chunk)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a range callback, got %d", got)
+	}
+}
+
+// A callback already given scratch has the seam. This is the post-fix shape, so the rule must
+// go quiet once the fix lands — otherwise it reports forever and gets ignored.
+func TestDetectPS6021_SilentWithScratchParam(t *testing.T) {
+	src := `package p
+func gmmParallelRows(n, per, k int, body func(i int, ldBuf []float64)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			buf := make([]float64, k)
+			for i := start; i < n; i += 4 {
+				body(i, buf)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 with a scratch parameter, got %d", got)
+	}
+}
+
+// The other post-fix shape: a func() T constructor the helper calls once per worker. This
+// passes because the constructor's result must reach the callback, which therefore carries a
+// scratch parameter — NOT because of any clause about the constructor itself. A clause for it
+// existed and was removed when mutation testing showed no test could reach it.
+func TestDetectPS6021_SilentWithScratchConstructor(t *testing.T) {
+	src := `package p
+func knnParallelRows(n int, newScratch func() *knnScratch, body func(i int, sc *knnScratch)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func(start int) {
+			defer wg.Done()
+			sc := newScratch()
+			for i := start; i < n; i += 4 {
+				body(i, sc)
+			}
+		}(w)
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 with a scratch constructor, got %d", got)
+	}
+}
+
+// A work-queue primitive builds a channel and its callback IS the job; every fix for this
+// rule is implemented on top of such a primitive by passing a worker count as the job count.
+// Reporting the mechanism would be reporting the cure.
+func TestDetectPS6021_SilentOnChannelWorkQueue(t *testing.T) {
+	src := `package p
+func parallelBuild(n int, work func(t int) error) error {
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func() {
+			defer wg.Done()
+			for t := range jobs {
+				_ = work(t)
+			}
+		}()
+	}
+	for t := 0; t < n; t++ {
+		jobs <- t
+	}
+	close(jobs)
+	wg.Wait()
+	return nil
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a channel work queue, got %d", got)
+	}
+}
+
+// A serial helper taking a per-item callback is not a fan-out and has no race to avoid — the
+// caller can hoist a buffer above the call safely. Without this floor the rule would fire on
+// every ordinary callback API in the tree.
+func TestDetectPS6021_SilentWithoutFanOut(t *testing.T) {
+	src := `package p
+func eachRow(n int, body func(i int)) {
+	for i := 0; i < n; i++ {
+		body(i)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 without a fan-out, got %d", got)
+	}
+}
+
+// GIVES THE INTEGER-TYPE CHECK TEETH. Without it a callback taking exactly one NON-index
+// parameter would be reported: one parameter, so the count check alone lets it through. That
+// shape is a visitor over values, not an index fan-out, and it has no per-item allocation
+// problem to report. Mutation testing found this floor missing — the two floors above were
+// both passing on the parameter COUNT, leaving the type check unexercised.
+func TestDetectPS6021_SilentOnSingleNonIndexParam(t *testing.T) {
+	src := `package p
+func eachBuffer(n int, body func(buf []float64)) {
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		go func() {
+			defer wg.Done()
+			body(make([]float64, n))
+		}()
+	}
+	wg.Wait()
+}`
+	if got := countCat(scanSrc(t, src))["fanout-without-worker-seam"]; got != 0 {
+		t.Fatalf("want 0 for a single non-index parameter, got %d", got)
+	}
+}
+
+// The beam-search shape: a full sort, then a guarded truncation. PS6013 and PS6001 both miss
+// it because the consumer is a reslice rather than a loop, which is the whole reason this
+// check exists.
+func TestDetectPS6022_SortThenGuardedTruncation(t *testing.T) {
+	src := `package p
+func f(cands []cand, bPrime int) []cand {
+	slices.SortFunc(cands, byScore)
+	if len(cands) > bPrime {
+		cands = cands[:bPrime]
+	}
+	return cands
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-truncation, got %d", got)
+	}
+}
+
+// The bare form, and a different sorter, to pin that neither the guard nor the sort function
+// is load-bearing for detection.
+func TestDetectPS6022_SortThenBareTruncation(t *testing.T) {
+	src := `package p
+func f(done []Beam, width int) []Beam {
+	sort.SliceStable(done, func(i, j int) bool { return done[i].Score > done[j].Score })
+	done = done[:width]
+	return done
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 sort-feeds-truncation, got %d", got)
+	}
+}
+
+// FLOOR for the len() bound check: reslicing to len(x) keeps every element, so nothing was
+// discarded and no comparison was wasted. Without this the check would fire on any sort
+// followed by an idiomatic identity reslice.
+func TestDetectPS6022_SilentOnFullLengthReslice(t *testing.T) {
+	src := `package p
+func f(x []int) []int {
+	slices.Sort(x)
+	x = x[:len(x)]
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for a full-length reslice, got %d", got)
+	}
+}
+
+// FLOOR for the prefix requirement: a window that drops a head is not a top-k truncation, and
+// a selection does not answer the same question.
+func TestDetectPS6022_SilentOnNonPrefixWindow(t *testing.T) {
+	src := `package p
+func f(x []int, k int) []int {
+	slices.Sort(x)
+	y := x[2:k]
+	return y
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for a non-prefix window, got %d", got)
+	}
+}
+
+// FLOOR for the intervening-read rule: an indexed read before the truncation may depend on the
+// full order, and it also means PS6001 or PS6013 describes the site better.
+func TestDetectPS6022_SilentWhenReadBeforeTruncation(t *testing.T) {
+	src := `package p
+func f(x []int, k int) int {
+	slices.Sort(x)
+	total := 0
+	for i := range x {
+		total += x[i]
+	}
+	x = x[:k]
+	return total
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 when the slice is read before truncation, got %d", got)
+	}
+}
+
+// FLOOR for the identity match: truncating a DIFFERENT slice says nothing about the sorted one.
+func TestDetectPS6022_SilentOnOtherSliceTruncation(t *testing.T) {
+	src := `package p
+func f(x, y []int, k int) []int {
+	slices.Sort(x)
+	y = y[:k]
+	return y
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 when a different slice is truncated, got %d", got)
+	}
+}
+
+// GIVES THE len-ARGUMENT CASE TEETH. An indexed read nested inside a len argument is still an
+// order-dependent read. An earlier draft special-cased len() and stopped descending into it,
+// which would have skipped exactly this; mutation testing showed no floor covered that clause,
+// so it was removed and this floor added in its place.
+func TestDetectPS6022_SilentOnIndexedReadInsideLen(t *testing.T) {
+	src := `package p
+func f(x [][]int, k int) int {
+	slices.SortFunc(x, byLen)
+	n := len(x[0])
+	x = x[:k]
+	return n
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 0 {
+		t.Fatalf("want 0 for an indexed read nested in a len argument, got %d", got)
+	}
+}
+
+// And the companion: a bare len() guard between the sort and the truncation must NOT suppress
+// the finding, since that is how the idiomatic guarded truncation is written across two
+// statements.
+func TestDetectPS6022_BareLenGuardDoesNotSuppress(t *testing.T) {
+	src := `package p
+func f(x []int, k int) []int {
+	slices.Sort(x)
+	if len(x) <= k {
+		return x
+	}
+	x = x[:k]
+	return x
+}`
+	if got := countCat(scanSrc(t, src))["sort-feeds-truncation"]; got != 1 {
+		t.Fatalf("want 1 with only a bare len guard in between, got %d", got)
+	}
+}
+
+// A directive that actually suppresses something must not be reported.
+func TestDetectPS0001_SilentOnWorkingDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 deliberate
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	got := countCat(scanSrc(t, src))
+	if got["unused-ignore-directive"] != 0 {
+		t.Fatalf("want 0 unused-ignore-directive for a working directive, got %d", got["unused-ignore-directive"])
+	}
+	if got["closure-comparator-sort"] != 0 {
+		t.Fatalf("the directive did not suppress: %d closure-comparator-sort remain", got["closure-comparator-sort"])
+	}
+}
+
+// THE DEFECT THIS CHECK EXISTS FOR: an edit inserts statements between the directive and its
+// target, so the directive silently stops suppressing while still reading as though it does.
+func TestDetectPS0001_DriftedDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 deliberate
+	y := len(x)
+	_ = y
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	got := countCat(scanSrc(t, src))
+	if got["unused-ignore-directive"] != 1 {
+		t.Fatalf("want 1 unused-ignore-directive for a drifted directive, got %d", got["unused-ignore-directive"])
+	}
+	if got["closure-comparator-sort"] != 1 {
+		t.Fatalf("the drifted directive must NOT suppress; got %d closure-comparator-sort", got["closure-comparator-sort"])
+	}
+}
+
+// FLOOR FOR THE CREDITING SPAN. Two directives stacked above one statement form a two-line
+// comment block, so the upper one sits two lines from its target. Crediting only a directive's
+// own line and the next reported that working directive as unused — a false report, which is
+// the exact failure this check exists to prevent. Both must be credited.
+func TestDetectPS0001_StackedDirectivesBothCredited(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore PS3002 first reason
+	//perfscan:ignore PS3001 second reason
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	// PS3001 has nothing to suppress here, so exactly one directive is genuinely unused; the
+	// PS3002 one is two lines above its target and must still be credited.
+	got := countCat(scanSrc(t, src))
+	if got["closure-comparator-sort"] != 0 {
+		t.Fatalf("the stacked block did not suppress the sort: %d remain", got["closure-comparator-sort"])
+	}
+	if got["unused-ignore-directive"] != 1 {
+		t.Fatalf("want exactly 1 unused (the PS3001 one), got %d — the PS3002 directive two lines up was not credited",
+			got["unused-ignore-directive"])
+	}
+}
+
+// FLOOR FOR THE DIRECTIVE-VERSUS-MENTION TEST. Prose describing the feature, and indented
+// examples inside a doc comment, must not register as live directives. Matching the token
+// anywhere in a comment made four of this package's own doc comments report as unused.
+func TestDetectPS0001_SilentOnPoseMention(t *testing.T) {
+	src := `package p
+
+// f explains that a //perfscan:ignore directive silences a check.
+//
+//	//perfscan:ignore PS1001 an indented example, not a directive
+func f(x []int) {
+	_ = x
+}`
+	if got := countCat(scanSrc(t, src))["unused-ignore-directive"]; got != 0 {
+		t.Fatalf("want 0 for prose mentioning the directive, got %d", got)
+	}
+}
+
+// A bare directive silences every check at its site, and must be credited when it does.
+func TestDetectPS0001_SilentOnWorkingBareDirective(t *testing.T) {
+	src := `package p
+func f(x []int) {
+	//perfscan:ignore deliberate, all checks
+	sort.Slice(x, func(i, j int) bool { return x[i] < x[j] })
+}`
+	if got := countCat(scanSrc(t, src))["unused-ignore-directive"]; got != 0 {
+		t.Fatalf("want 0 for a working bare directive, got %d", got)
+	}
+}
+
+// THE FIXTURE PAIR THAT LOCKS PS4011's ITERATED-EXPRESSION FILTER. Before it, an audit of all
+// 110 hits found ZERO were the sequential recurrence the check describes: 57 were transformer
+// layer stacks and 35 more were per-head, per-window or per-expert fan-outs.
+//
+// This is the genuine shape — a sequence length in a local, with explicit state carried across
+// iterations. All six real instances in this repository have exactly this form.
+func TestDetectPS4011_RecurrenceOverLocalStillFires(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, seq int, x *tensor.Tensor) (*tensor.Tensor, error) {
+	var state *tensor.Tensor
+	for t := range seq {
+		k, err := exec(ctx, backend.OpSlice, nil, x)
+		if err != nil { return nil, err }
+		state, err = exec2(ctx, backend.OpAdd, nil, state, k)
+		if err != nil { return nil, err }
+	}
+	return state, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 1 {
+		t.Fatalf("want 1 op-dispatch-recurrence for a recurrence over a local, got %d", got)
+	}
+}
+
+// FLOOR: a layer stack. The residual is carried exactly as a recurrence's state would be, so
+// loop-carried state cannot separate the two shapes — that signal was counted and rejected for
+// precisely this reason. What separates them is that the trip count comes from a FIELD.
+func TestDetectPS4011_SilentOnLayerStack(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, m *Model, x *tensor.Tensor) (*tensor.Tensor, error) {
+	for l, b := range m.Blocks {
+		h, err := exec(ctx, backend.OpMatMul, nil, x, b.Wq)
+		if err != nil { return nil, err }
+		x, err = exec2(ctx, backend.OpAdd, nil, x, h)
+		if err != nil { return nil, err }
+		_ = l
+	}
+	return x, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 for a layer stack over a field, got %d", got)
+	}
+}
+
+// FLOOR: the three-clause form of the same thing, bounded by a field rather than ranged over
+// one — a depth stack over one shared block.
+func TestDetectPS4011_SilentOnFieldBoundedLoop(t *testing.T) {
+	src := `package p
+func f(ctx *backend.Context, m *Model, x *tensor.Tensor) (*tensor.Tensor, error) {
+	for r := 0; r < m.MaxRecursion; r++ {
+		h, err := exec(ctx, backend.OpMatMul, nil, x, m.W)
+		if err != nil { return nil, err }
+		x, err = exec2(ctx, backend.OpAdd, nil, x, h)
+		if err != nil { return nil, err }
+	}
+	return x, nil
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 for a loop bounded by a field, got %d", got)
+	}
+}
+
+// A float divide, loop-invariant, in an elementwise loop: the shape PS5001 exists for.
+func TestDetectPS5001_FloatDivideStillFires(t *testing.T) {
+	src := `package p
+func f(xs []float64, denom float64) {
+	for i := range xs {
+		xs[i] = xs[i] / denom
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 1 {
+		t.Fatalf("want 1 loop-invariant-divide for a float divide, got %d", got)
+	}
+}
+
+// FLOOR: a divide that IS the loop bound must be integer, because the for-condition compares
+// an index against it. Suppressing this is a CORRECTNESS matter, not a precision preference —
+// the recommended inv := 1/n evaluates to zero on integer operands.
+func TestDetectPS5001_SilentOnLoopBoundDivide(t *testing.T) {
+	src := `package p
+func f(src []float64, inner int) {
+	for r := 0; r < len(src)/inner; r++ {
+		src[r] = src[r] + 1
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 for a divide used as a loop bound, got %d", got)
+	}
+}
+
+// FLOOR: a quotient later used as a slice INDEX must be integer. The pre-existing direct
+// a[i/stride] guard cannot see this, because the quotient passes through a variable first —
+// which is how the two shipped instances in this tree are written.
+func TestDetectPS5001_SilentWhenQuotientIndexes(t *testing.T) {
+	src := `package p
+func f(codes []int, scale []float64, groupSize int, out []float64) {
+	for i := range codes {
+		g := i / groupSize
+		out[i] = scale[g] * float64(codes[i])
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 0 {
+		t.Fatalf("want 0 when the quotient indexes a slice, got %d", got)
+	}
+}
+
+// RECALL FLOOR, and the one that matters most: a quotient that is MULTIPLIED rather than used
+// as an index says nothing about its type, and this is the dominant float shape in the tree.
+// A first attempt at the predicate above treated "quotient is used again" as the signal and
+// wrongly swept up six float sites of exactly this form. It must still fire.
+func TestDetectPS5001_FiresWhenQuotientIsMultiplied(t *testing.T) {
+	src := `package p
+func f(ps []float64, den float64, out []float64, gt float64) {
+	for i := range ps {
+		pi := ps[i] / den
+		out[i] += gt * pi
+	}
+}`
+	if got := countCat(scanSrc(t, src))["loop-invariant-divide"]; got != 1 {
+		t.Fatalf("want 1 when the quotient is multiplied (a float shape), got %d", got)
+	}
+}
+
+// The shape PS6010 exists for: a Gram-style contraction whose accumulator re-reads an operand
+// that does not vary with the output index.
+func TestDetectPS6010_ContractionStillFires(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += b[k][j] * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 output-invariant-operand-reload, got %d", got)
+	}
+}
+
+// THE FLOOR THAT DECIDES THIS PREDICATE. A conversion is an *ast.CallExpr in Go's AST, so
+// "the body contains a call" would silence this — and this is the f32-widening TWIN of the
+// test above, the same kernel differing only by float64(...) around each load. Counted across
+// the check's 65 hits, that naive form removed 28 and lost TEN genuine sites, seven of them
+// twins of an f64 hit the same predicate kept.
+func TestDetectPS6010_ConversionIsNotACall(t *testing.T) {
+	src := `package p
+func f(a []float32, b [][]float32, out []float32, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += float64(b[k][j]) * float64(a[k])
+		}
+		out[j] = float32(s)
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 for the f32-widening twin — a conversion is not a call, got %d", got)
+	}
+}
+
+// FLOOR: len is a field load, not a call.
+func TestDetectPS6010_BuiltinIsNotACall(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64) {
+	for j := 0; j < len(out); j++ {
+		var s float64
+		for k := 0; k < len(a); k++ {
+			s += b[k][j] * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 when the body uses only builtins, got %d", got)
+	}
+}
+
+// FLOOR: a real call the compiler will not fold away means the loop is bottlenecked there, not
+// on the reloaded operand. 13 of the 19 sites this removes are labelled in-tree as generic
+// fallbacks for exotic dtypes, reaching every element through an accessor method.
+//
+// The body keeps its INDEX-witnessed shared operand deliberately. A first version used only
+// accessor calls and passed vacuously — the detector can witness a shared operand solely
+// through an *ast.IndexExpr, so with no index there was nothing to report either way, and
+// removing the exclusion left the test green. This form fires without the exclusion and is
+// silent with it, which is what makes it a floor.
+func TestDetectPS6010_SilentOnRealCall(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += b[k][j] * a[k] * weight(k)
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 when the body makes a real call, got %d", got)
+	}
+}
+
+// FLOOR: a transcendental in the inner loop dominates it.
+func TestDetectPS6010_SilentOnTranscendental(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var s float64
+		for k := 0; k < n; k++ {
+			s += math.Exp(b[k][j]) * a[k]
+		}
+		out[j] = s
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 when the inner loop calls a transcendental, got %d", got)
+	}
+}
+
+// FLOOR: a body with more than one scalar float accumulator is not the single-accumulator
+// reload shape this check targets. Either the operand already feeds several accumulators — which
+// IS the recommended transform, so recommending it again multiplies code paths, the hazard
+// PS6019 reports — or the accumulators consume it differently and there is nothing invariant to
+// amortize. Both surviving false positives were one of those two.
+//
+// THE STRIDE MUST BE 1 HERE. A first version of this test used j += 4, which the pre-existing
+// stride exclusion already covers, so it passed without the accumulator clause and stayed green
+// when that clause was removed — a vacuous floor.
+func TestDetectPS6010_SilentOnMultipleAccumulators(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, ks []float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var sk, sv float64
+		for k := 0; k < n; k++ {
+			sk += b[k][j] * a[k]
+			sv += b[k][j] * ks[k]
+		}
+		out[j] = sk + sv
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 0 {
+		t.Fatalf("want 0 for a multi-accumulator body, got %d", got)
+	}
+}
+
+// RECALL FLOOR for the same clause: ONE accumulator is the unblocked shape the check is for,
+// and must still fire. Without this, tightening the accumulator count to zero would look fine.
+func TestDetectPS6010_SingleAccumulatorStillFires(t *testing.T) {
+	src := `package p
+func f(a []float64, b [][]float64, out []float64, n int) {
+	for j := 0; j < n; j++ {
+		var t0 float64
+		for k := 0; k < n; k++ {
+			t0 += b[k][j] * a[k]
+		}
+		out[j] = t0
+	}
+}`
+	if got := countCat(scanSrc(t, src))["output-invariant-operand-reload"]; got != 1 {
+		t.Fatalf("want 1 for a single-accumulator body, got %d", got)
 	}
 }
