@@ -51,8 +51,13 @@ func init() {
 		// P = Φ(Lᵀ·L̄): M = Lᵀ·L̄, then keep the lower triangle with a halved diagonal.
 		p := make([][]float64, n)
 		for i := range n {
-			pi := make([]float64, n)
-			p[i] = pi
+			p[i] = make([]float64, n)
+		}
+		// Row i of P depends only on lT[i] and lbarT, and writes only p[i] — disjoint across i, so
+		// the striped schedule is bit-identical to the serial loop (each sum keeps its own
+		// ascending-k order). Same argument the logdet VJP records for its Ā loop.
+		logdetParallelIdx(n, n*n*n, func(i int) {
+			pi := p[i]
 			lTi := lT[i]
 			for j := 0; j <= i; j++ {
 				var m float64 // (Lᵀ·L̄)_ij = Σ_k L[k,i]·L̄[k,j]; both lower ⇒ k ≥ max(i,j)
@@ -66,7 +71,7 @@ func init() {
 					pi[j] = m
 				}
 			}
-		}
+		})
 
 		// Linv = L⁻¹ (lower-triangular) by forward substitution on L·X = I, solved straight into
 		// column-major form: linvT[j] IS column j of Linv, which is exactly what the inner sum
@@ -93,8 +98,11 @@ func init() {
 		// are contiguous runs.
 		tmpT := make([][]float64, n)
 		for j := range n {
-			tj := make([]float64, n)
-			tmpT[j] = tj
+			tmpT[j] = make([]float64, n)
+		}
+		// Column j of T reads linvT[j] and P and writes only tmpT[j] — disjoint across j.
+		logdetParallelIdx(n, n*n*n, func(j int) {
+			tj := tmpT[j]
 			cj := linvT[j]
 			for i := range n {
 				var s float64 // (P·Linv)_ij = Σ_k P[i,k]·Linv[k,j], Linv lower ⇒ k ≥ j, P lower ⇒ k ≤ i
@@ -104,7 +112,7 @@ func init() {
 				}
 				tj[i] = s
 			}
-		}
+		})
 		abar := tensor.New(lt.Dtype(), lt.Shape())
 		// Only the UPPER triangle is computed, and each off-diagonal result is mirrored. The full
 		// double loop did every pair twice: at (j,i) its sij is this (i,j)'s sji and vice versa, so
@@ -116,7 +124,9 @@ func init() {
 		// addition is commutative — a+b and b+a have the same bits for all non-NaN operands, which
 		// these are by construction. Each individual sum keeps its own ascending-k order and
 		// operands, so nothing is reassociated.
-		for i := range n {
+		// Iteration i writes only (i,j) and (j,i) for j >= i. Two different i cannot collide: a
+		// clash would need i1 == j' and j == i2 with j >= i1 and j' >= i2, which forces i1 == i2.
+		logdetParallelIdx(n, n*n*n, func(i int) {
 			ci, ti := linvT[i], tmpT[i]
 			for j := i; j < n; j++ {
 				var sij float64 // S_ij = Σ_k Linvᵀ[i,k]·T[k,j] = Σ_k Linv[k,i]·T[k,j], Linv lower ⇒ k ≥ i
@@ -139,7 +149,7 @@ func init() {
 					abar.SetF64(v, j, i)
 				}
 			}
-		}
+		})
 		return []*tensor.Tensor{abar}, nil
 	})
 }

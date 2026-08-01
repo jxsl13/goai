@@ -4,6 +4,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -22,18 +23,24 @@ func moeParallelTokens(tks, d int, body func(tLo, tHi int, scratch []float64)) {
 		body(0, tks, make([]float64, d))
 		return
 	}
+	// Tokens are CLAIMED, not dealt — see distillParallelRows for why a static split stalls on
+	// this 8P+4E host. The scratch stays one per WORKER, allocated once outside the claim loop.
+	const grain = 16 // tokens per claim
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	chunk := (tks + nw - 1) / nw
-	for lo := 0; lo < tks; lo += chunk {
-		hi := lo + chunk
-		if hi > tks {
-			hi = tks
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
+	wg.Add(nw)
+	for range nw {
+		go func() {
 			defer wg.Done()
-			body(lo, hi, make([]float64, d))
-		}(lo, hi)
+			scratch := make([]float64, d)
+			for {
+				lo := int(next.Add(grain)) - grain
+				if lo >= tks {
+					return
+				}
+				body(lo, min(lo+grain, tks), scratch)
+			}
+		}()
 	}
 	wg.Wait()
 }

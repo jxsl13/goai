@@ -39,6 +39,12 @@ func TestDetectPS3011_StaticChunkBarrier(t *testing.T) {
 	}
 	// The diagnostic is the actionable part: this site was nearly missed because a LINE profile
 	// ranks the kernel and hides the waiting.
+	// The two conversion conditions were each learned by converting a sibling and reverting it, so
+	// they must survive into the advice: a reader who applies this blindly will make one of those
+	// two mistakes.
+	if !containsAll(fs[0].msg, "WORKING SET MUST BE THE CLAIM", "ALLOCATE PER INVOCATION") {
+		t.Fatalf("message omits a conversion condition:\n%s", fs[0].msg)
+	}
 	if !containsAll(fs[0].msg, "GOMAXPROCS", "FUNCTION profile") {
 		t.Fatalf("message omits the diagnostic:\n%s", fs[0].msg)
 	}
