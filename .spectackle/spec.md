@@ -425,3 +425,6 @@ IF a typed arm replaces a closure-based one and must stay bit-identical, THEN th
 
 ## SIZE-THE-CELL-PAST-L1-BEFORE-JUDGING-LAYOUT-001
 IF a layout or interchange transform is judged against existing benchmark cells, THEN the developer SHALL add a cell whose working set exceeds L1 first — the same QR transform read -35.0 percent at 128x64 and nothing at 32x16.
+
+## INTERCHANGE-BEFORE-TRANSPOSE-001
+IF a column-walked operand sits in a nest whose strided index is carried by an accumulating loop, THEN the developer SHALL move that loop outermost rather than transposing — one kernel measured -38 percent at zero memory against -12.6 percent at +38 percent bytes.
