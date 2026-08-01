@@ -219,6 +219,7 @@ var checks = []check{
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
+	{"PS6006", "cross-backend-dtype-gap", "an op registered via std.add(backend.Op…, tensor.<dtype>, kernel) in one backend package for a STRICT SUBSET of the dtypes a sibling backend package registers for the SAME op — the missing dtype(s) silently fall through to the sibling (typically the serial reference) kernel. Register the fast backend's kernel for the missing dtype too: mirror the reference arithmetic (widen reads to F64, accumulate in F64, narrow only on store → byte-identical) parallelized over the op's independent rows/channels/heads. Shipped: WKV #692 (7.5-9.1x), distill #693 (6.8-10.5x), SSM #694 (9.3-10.3x), masked-attn #695 (8.1x), select-attn #696 (7.8-8.0x) — all bit-exact F32 cpu registrations closing an F32→serial-ref fall-through. Whole-repo fact (needs both backend packages parsed); silent when a single package is scanned.", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
 	{"PS4010", "vectorizable-butterfly", "an in-loop butterfly p,q = x+y,x-y (add and subtract of the SAME operand pair written to two indexed slots) — a scalar FWHT/FFT/Hadamard stage a SIMD Add/Sub over the contiguous stride-separated runs would vectorize", false},
 	{"PS4011", "op-dispatch-recurrence", "a sequential loop dispatching 2+ backend ops (calls passing a backend.Op* constant) per iteration in a function with NO fused typed fast path (no flatF64 guard) — O(seq) dispatch+alloc overhead on tiny per-step tensors; add a raw-slice fused path", false},
@@ -601,6 +602,142 @@ func collectIntTypes(files []*ast.File) {
 			}
 		}
 	}
+}
+
+// opRegistry records, per backend package, which dtypes each op is registered for
+// (via std.add(backend.Op…, tensor.<dtype>, kernel)) and the source position of the
+// first such registration — the anchor for a PS6006 cross-backend-dtype-gap finding.
+type opRegistry struct {
+	dtypes map[string]map[string]map[string]bool // pkg → op → dtype-suffix → true
+	pos    map[string]map[string]token.Position  // pkg → op → first std.add position
+}
+
+// selName returns the selector field of `X.Field` when X is the bare ident `pkg`
+// (e.g. constNameFor(expr,"backend") on `backend.OpWKV` → "OpWKV"); "" otherwise.
+func constNameFor(e ast.Expr, pkg string) string {
+	sel, ok := e.(*ast.SelectorExpr)
+	if !ok {
+		return ""
+	}
+	id, ok := sel.X.(*ast.Ident)
+	if !ok || id.Name != pkg {
+		return ""
+	}
+	return sel.Sel.Name
+}
+
+// collectOpRegistrations harvests every std.add(backend.Op…, tensor.<dtype>, …) call
+// across the parsed files, grouped by the enclosing package name. It is REPO-scoped:
+// PS6006 compares an op's dtype coverage across sibling backend packages, so every
+// backend's registrations must be seen before any gap is judged.
+func collectOpRegistrations(fset *token.FileSet, files []*ast.File) *opRegistry {
+	r := &opRegistry{
+		dtypes: map[string]map[string]map[string]bool{},
+		pos:    map[string]map[string]token.Position{},
+	}
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		ast.Inspect(f, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || len(call.Args) < 2 {
+				return true
+			}
+			// Match the receiver-method call `std.add(...)` — the backend kernel registry.
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "add" {
+				return true
+			}
+			if recv, ok := sel.X.(*ast.Ident); !ok || recv.Name != "std" {
+				return true
+			}
+			op := constNameFor(call.Args[0], "backend")
+			dt := constNameFor(call.Args[1], "tensor")
+			if op == "" || dt == "" || !strings.HasPrefix(op, "Op") {
+				return true
+			}
+			if r.dtypes[pkg] == nil {
+				r.dtypes[pkg] = map[string]map[string]bool{}
+				r.pos[pkg] = map[string]token.Position{}
+			}
+			if r.dtypes[pkg][op] == nil {
+				r.dtypes[pkg][op] = map[string]bool{}
+				r.pos[pkg][op] = fset.Position(call.Pos())
+			}
+			r.dtypes[pkg][op][dt] = true
+			return true
+		})
+	}
+	return r
+}
+
+// dtypeGapFindings reports PS6006: for each (package, op), any dtype that a SIBLING
+// backend package registers for the same op but this package does not — the missing
+// dtype dispatches to the sibling (typically serial reference) kernel. Repo-agnostic:
+// it never hard-codes package names, it flags whichever registry is the strict subset.
+func (r *opRegistry) dtypeGapFindings() []finding {
+	var out []finding
+	for pkg, ops := range r.dtypes {
+		for op, have := range ops {
+			// Union of the same op's dtypes across every OTHER backend package.
+			missing := map[string]bool{}
+			var siblings []string
+			for other, oops := range r.dtypes {
+				if other == pkg {
+					continue
+				}
+				sset, ok := oops[op]
+				if !ok {
+					continue
+				}
+				sib := false
+				for dt := range sset {
+					if !have[dt] {
+						missing[dt] = true
+						sib = true
+					}
+				}
+				if sib {
+					siblings = append(siblings, other)
+				}
+			}
+			if len(missing) == 0 {
+				continue
+			}
+			out = append(out, finding{
+				pos:      r.pos[pkg][op],
+				category: "cross-backend-dtype-gap",
+				msg: fmt.Sprintf("backend %q registers %s only for {%s}, but sibling backend(s) %s also handle {%s} — those dtypes fall through to the sibling (serial reference) kernel. Register %s here for {%s} too (mirror the reference arithmetic bit-exactly, parallel over the op's independent rows/channels/heads).",
+					pkg, op, sortedKeys(have), fmtStrs(siblings), sortedKeys(missing), op, sortedKeys(missing)),
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].pos.Filename != out[j].pos.Filename {
+			return out[i].pos.Filename < out[j].pos.Filename
+		}
+		return out[i].pos.Line < out[j].pos.Line
+	})
+	return out
+}
+
+// sortedKeys renders a string-set as a stable comma-joined list.
+func sortedKeys(m map[string]bool) string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return strings.Join(ks, ",")
+}
+
+// fmtStrs renders a slice as a stable comma-joined list.
+func fmtStrs(xs []string) string {
+	cp := append([]string(nil), xs...)
+	sort.Strings(cp)
+	return strings.Join(cp, ",")
 }
 
 func builtinIntName(n string) bool {
@@ -2365,6 +2502,14 @@ func main() {
 				fd.id = catToID[fd.category]
 				all = append(all, fd)
 			}
+		}
+	}
+	// PS6006 cross-backend-dtype-gap is a REPO-scoped fact (compares an op's dtype
+	// coverage across sibling backend packages), so it runs once over all parsed files.
+	for _, fd := range collectOpRegistrations(fset, parsed).dtypeGapFindings() {
+		if enabled[fd.category] {
+			fd.id = catToID[fd.category]
+			all = append(all, fd)
 		}
 	}
 	sort.Slice(all, func(i, j int) bool {
