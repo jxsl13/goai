@@ -971,3 +971,9 @@ IF an A/B reports a small win on a multi-arm benchmark family, THEN the implemen
 
 ## A-DEGENERATE-FIXTURE-ARM-IS-A-FREE-CONTROL-001
 IF a benchmark fixture already sweeps a parameter into a degenerate case, THEN the implementing agent SHALL use that arm as the control, since DBSCAN all-noise builds 0 neighbour lists and its flatness proved the win came from the lists.
+
+## NEVER-GIT-ADD-ALL-DURING-A-CONFLICTED-REBASE-001
+IF a rebase stops on a conflict and only some files have been resolved, THEN the implementing agent SHALL stage each resolved file BY NAME, since git add -A staged 1 file still holding conflict markers and CI caught it only after the PR was pushed.
+
+## NEVER-DISCARD-GOFMT-STDERR-001
+IF gofmt is used as a verification gate, THEN the implementing agent SHALL run it without 2>/dev/null, because -l reports formatting on stdout while PARSE errors go to stderr — the 1 signal that catches conflict markers in files the host does not compile.
