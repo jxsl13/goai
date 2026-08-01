@@ -66,6 +66,25 @@ func ssmKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		return []*tensor.Tensor{out}, nil
 	}
 
+	// F32 fast path: close the dtype-gap (OpSSM was cpu-registered F64-only, so F32 fell to
+	// backend/ref's serial scan). The D channels are independent recurrences, so we scan
+	// disjoint channel blocks in parallel, reading F32 directly and widening per element with
+	// scalar math.Exp — BYTE-IDENTICAL to ref's F32 scan (which iterates t-outer/d-middle;
+	// per channel the t/n sequence and float ops are identical, and channels don't interact,
+	// so the d-outer reblock is bit-identical). Unlike the F64 fast path this uses scalar
+	// math.Exp (not the ~1ulp simd exp) to match ref exactly.
+	if uc.Dtype() == tensor.F32 && dc.Dtype() == tensor.F32 && ac.Dtype() == tensor.F32 &&
+		bc.Dtype() == tensor.F32 && cc.Dtype() == tensor.F32 &&
+		(dskip == nil || dskip.Dtype() == tensor.F32) {
+		var dsk []float32
+		if dskip != nil {
+			dsk = dskip.Contiguous().Storage().F32()
+		}
+		ssmParallelScanF32(uc.Storage().F32(), dc.Storage().F32(), ac.Storage().F32(),
+			bc.Storage().F32(), cc.Storage().F32(), dsk, out.Storage().F32(), h, L, D, N)
+		return []*tensor.Tensor{out}, nil
+	}
+
 	// Generic fallback for exotic dtypes / mixed inputs (verbatim ref loop).
 	for t := range L {
 		for d := range D {
@@ -115,6 +134,60 @@ func ssmParallelScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int
 	wg.Wait()
 }
 
+// ssmScanRangeF32 runs the selective scan over channels [dLo,dHi) of the F32 tensors,
+// widening reads to F64 and keeping the recurrent state / output accumulator in F64 —
+// rounding only on store, exactly like backend/ref's F32 scan. Iterates d-outer/t-inner
+// (ref is t-outer/d-middle) but per channel the t/n sequence and float ops are identical
+// and channels never interact, so the result is bit-identical.
+func ssmScanRangeF32(us, ds, as, bs, cs, dsk, os []float32, h []float64, L, D, N, dLo, dHi int) {
+	for d := dLo; d < dHi; d++ {
+		base := d * N
+		for t := 0; t < L; t++ {
+			dt := float64(ds[t*D+d])
+			ut := float64(us[t*D+d])
+			tn := t * N
+			var y float64 // scan state accumulates in float64; only the store rounds
+			for n := 0; n < N; n++ {
+				abar := math.Exp(dt * float64(as[base+n]))
+				hv := abar*h[base+n] + dt*float64(bs[tn+n])*ut
+				h[base+n] = hv
+				y += float64(cs[tn+n]) * hv
+			}
+			if dsk != nil {
+				y += float64(dsk[d]) * ut
+			}
+			os[t*D+d] = float32(y)
+		}
+	}
+}
+
+// ssmParallelScanF32 runs ssmScanRangeF32 across GOMAXPROCS goroutines over disjoint
+// channel blocks. Each channel owns disjoint h[d·N:] state and disjoint out columns →
+// race-free and bit-identical to the serial scan. abar = exp(Δ·A) per (t,d,n) makes this
+// compute-bound → parallelizes near-linearly. Mirrors ssmParallelScanF64's grain gate.
+func ssmParallelScanF32(us, ds, as, bs, cs, dsk, os []float32, h []float64, L, D, N int) {
+	nw := runtime.GOMAXPROCS(0)
+	chunk := (D + nw - 1) / nw
+	if nw <= 1 || chunk >= D || L*D*N < 1<<15 {
+		ssmScanRangeF32(us, ds, as, bs, cs, dsk, os, h, L, D, N, 0, D)
+		return
+	}
+	var wg sync.WaitGroup
+	for lo := 0; lo < D; lo += chunk {
+		hi := lo + chunk
+		if hi > D {
+			hi = D
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			ssmScanRangeF32(us, ds, as, bs, cs, dsk, os, h, L, D, N, lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 func init() {
 	std.add(backend.OpSSM, tensor.F64, ssmKernelCPU)
+	std.add(backend.OpSSM, tensor.F32, ssmKernelCPU)
 }
