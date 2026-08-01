@@ -58,6 +58,12 @@ func devAllocBytes(n int) unsafe.Pointer { return C.cu_alloc_i8(C.int(n)) }
 func devFree(p unsafe.Pointer)           { C.cu_free_f32(p) }
 func devSync()                           { C.cu_graph_sync() }
 
+// attnSoftmaxPtr wraps cu_attn_softmax for in-package benchmarks/tests (cgo is not
+// permitted directly in _test.go files).
+func attnSoftmaxPtr(x unsafe.Pointer, rows, cols int, scale float32, offset, seqQ int) int {
+	return int(C.cu_attn_softmax(x, C.int(rows), C.int(cols), C.float(scale), C.int(offset), C.int(seqQ)))
+}
+
 func matmulF16w(a, w, c unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_matmul_f16w(a, w, c, C.int(m), C.int(k), C.int(n), C.float(0)))
 }
