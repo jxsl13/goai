@@ -339,6 +339,12 @@ func tanhF32(x float32) float32 {
 	return math.Float32frombits(math.Float32bits(t) | math.Float32bits(x)&(1<<31))
 }
 
+// softcapF32 is the scalar bit-twin of one vsoftcapF32 lane: cap·tanh(x/cap), the
+// Gemma-2 logit soft-cap evaluated f32-native through the same expF32 primitive
+// (via tanhF32) — the len%8 remainder tail and the no-AVX fallback. tanhF32 is
+// tanh at cap=1, so this is that lane on x/cap, re-scaled by cap.
+func softcapF32(x, cap float32) float32 { return cap * tanhF32(x/cap) }
+
 // logF32 is the scalar instantiation of the vlog pipeline — the tail lanes
 // (len%4) and the type-check fallback build use it. Same operations per
 // element as the NEON lanes (only FMA contraction may differ); the special-
