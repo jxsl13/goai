@@ -17,7 +17,7 @@ func benchMaxContextCosine(b *testing.B, nCand, nCtx, dim int) {
 		for i := range r {
 			r[i] = make([]float64, dim)
 			for j := range r[i] {
-				r[i][j] = math.Sin(float64((i*31+j*7+seed) % 997))
+				r[i][j] = math.Sin(float64((i*31 + j*7 + seed) % 997))
 			}
 		}
 		return r
@@ -33,5 +33,5 @@ func benchMaxContextCosine(b *testing.B, nCand, nCtx, dim int) {
 	}
 }
 
-func BenchmarkMaxContextCosine_8x1024_d1024(b *testing.B)  { benchMaxContextCosine(b, 8, 1024, 1024) }
-func BenchmarkMaxContextCosine_64x512_d768(b *testing.B)   { benchMaxContextCosine(b, 64, 512, 768) }
+func BenchmarkMaxContextCosine_8x1024_d1024(b *testing.B) { benchMaxContextCosine(b, 8, 1024, 1024) }
+func BenchmarkMaxContextCosine_64x512_d768(b *testing.B)  { benchMaxContextCosine(b, 64, 512, 768) }

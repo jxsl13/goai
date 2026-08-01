@@ -264,7 +264,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 				out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dim})
 				os := flatF64(out)
 				M := append([]float64(nil), m0...) // mutable copy; M0 is a param, never mutated
-				S := make([]float64, dim*dim)       // momentum state (zero == the nil "first token")
+				S := make([]float64, dim*dim)      // momentum state (zero == the nil "first token")
 				started := false
 				for t := range seq {
 					krow := ks[t*dim : t*dim+dim : t*dim+dim]

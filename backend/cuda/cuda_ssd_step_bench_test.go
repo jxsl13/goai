@@ -59,5 +59,5 @@ func benchSSDStep(b *testing.B, H, P, G, N int) {
 	b.StopTimer()
 }
 
-func BenchmarkSSDStep_H64_P64_N128(b *testing.B) { benchSSDStep(b, 64, 64, 128, 8) }
+func BenchmarkSSDStep_H64_P64_N128(b *testing.B)  { benchSSDStep(b, 64, 64, 128, 8) }
 func BenchmarkSSDStep_H128_P64_N128(b *testing.B) { benchSSDStep(b, 128, 64, 128, 8) }
