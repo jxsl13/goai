@@ -516,3 +516,5 @@
 {"t":"2026-07-31T22:22:30Z","eid":"298bccb985b016b0","ag":"ag-4604","ev":"create","id":"T-01KYX4B549E8Y9K4H63420H7B5","k":"task","ti":"T1030 MHA routed through pooled exec helpers; perfscan PS3024"}
 {"t":"2026-07-31T22:32:57Z","eid":"e4813a210adeda0e","ag":"ag-1c1e","ev":"create","id":"T-01KYX4YA4MF70VKH69NS1MX82K","k":"task","ti":"T1032 DBSCAN neighbour lists slab-allocated; PS2008 advice extended"}
 {"t":"2026-07-31T22:32:59Z","eid":"368aa19f426fdf82","ag":"ag-9037","ev":"rule","op":"add","rule":"A-DEGENERATE-FIXTURE-ARM-IS-A-FREE-CONTROL-001","txt":"IF a benchmark fixture already sweeps a parameter into a degenerate case, THEN the implementing agent SHALL use that arm as the control, since DBSCAN all-noise builds 0 neighbour lists and its flatness proved the win came from the lists."}
+{"t":"2026-07-31T22:36:37Z","eid":"86d3ecd017f1ff9c","ag":"ag-4e7f","ev":"create","id":"ADR-01KYX550H2F2JAT4JHRCCBX2MG","k":"adr","ti":"Remove the Storage.data interface box - typed fields, unsafe.Pointer, or leave it?"}
+{"t":"2026-07-31T22:36:37Z","eid":"41884786f7106aec","ag":"ag-4e7f","ev":"move","id":"ADR-01KYX550H2F2JAT4JHRCCBX2MG","fr":"draft","to":"submitted"}

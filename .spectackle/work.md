@@ -2301,3 +2301,15 @@ THE LIFETIME TEST WAS CHECKED, NOT ASSUMED. A block pins every row in it, so sla
 NO NEW SCAN RULE - fifth withholding of the session, second for emptiness rather than density. The pre-fix site was scanned first: PS2008 is the slab check and it correctly stays SILENT, because it requires a loop-invariant length and a uniform slab needs uniform rows. So the varying-length case is genuinely uncovered. A predicate for the clone idiom was built and validated to FIRE on the pre-fix site, then found ZERO other instances tree-wide. One occurrence, now fixed, does not earn a detector.
 
 The learning went into PS2008's advice instead, which is where a reader at such a site already is: the invariant-length requirement is real but not the end of the story, the complement remedy is a block bump allocator, the shape that hides these sites is `dst[i] = append(make([]T, 0, len(src)), src...)` with the make nested inside an append, and the lifetime precondition applies to both forms.
+
+## ADR-01KYX550H2F2JAT4JHRCCBX2MG Remove the Storage.data interface box - typed fields, unsafe.Pointer, or leave it?
+kind: adr
+state: submitted
+created: 2026-07-31
+context: Storage.data is an any, so every tensor allocation pays a runtime slice-to-interface box: 24 bytes and one object that NEVER recycles, even on a pooled device. Newly measured with BenchmarkNewOnPooled (commit b0d31489): on the pool path a tensor costs 184 B in 3 allocations - block 112, Storage 48, box 24 - and a 256 KB tensor costs only 13 bytes more, because the buffer recycles and the rest is fixed overhead. The box is about 14% of all objects a decode step allocates. Removing it means changing the foundational type, and the two ways trade differently, which is why this is a decision and not a task. The exported Allocator.Alloc(dtype, n) any signature stays unchanged either way, and no package in this repo implements Allocator externally - all backends return tensor.Heap() - so an additive unexported fast path is safe.
+status: proposed
+
+kind: radio
+option: A typed fields: an unexported typedAllocator (allocF32/allocF64/allocU16) on heapAllocator and Pool, typed slices in Storage. No unsafe. Storage grows 48 to about 104 bytes, so the pooled small case goes 184 B in 3 allocs to about 216 B in 2 - objects down a third, bytes up about 17%.
+option: B unsafe.Pointer: data becomes an unsafe.Pointer plus the existing dtype and n; F32/F64/U16 become unsafe.Slice. Storage SHRINKS 48 to 40 bytes, so objects AND bytes both improve with no trade. Cost is unsafe in the most foundational type, on the path every tensor takes. Precedent exists in internal/npy, backend/cpu and backend/metal, but this is a different risk class.
+option: C leave it: the box is real but bounded, and Storage is read by every accessor in the package, so neither rewrite is free to review.
