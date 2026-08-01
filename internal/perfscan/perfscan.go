@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3026", "full-fanout-under-topk-gate", "a function that picks a SUBSET of branches with a top-k gate and then evaluates EVERY branch anyway, leaving the unselected ones to be multiplied by a zero weight. Skip them: mark the chosen indices in the selection loop that already exists and continue past the rest. The result is the same BITS, not merely close — an unselected branch contributes output times exactly zero, adding an exact zero returns a finite accumulator unchanged, and the surviving addends keep their relative order; state the two exceptions in the doc, a negative-zero accumulator sign and a NaN or Inf escaping a branch nobody routed to. MEASURED on a mixture-of-experts decode step: -23.7%% ns/op, -20.8%% allocs, 8 samples per arm interleaved in both orders. These fan-outs are usually GEMVs, so the step is bound by the weight bytes it streams and skipping k of E branches removes that fraction of the footprint directly. BENCHMARK PROTOCOL: when the benchmark carries state across iterations — a growing KV cache is the common case — pin -benchtime to a fixed count and interleave the arms in BOTH orders; a single-order run of this very change reported it as 239%% SLOWER. Selector names come from the configured topKSelectorFuncs list, since the gate and the fan-out are a project's own vocabulary", false},
 	{"PS3025", "unrounded-product-under-exactness-claim", "a function whose doc claims bit-identity with a DIFFERENT implementation while its body contains a bare multiply feeding an add. Go contracts that into an FMA on arm64 and not on amd64, so the product rounds once here and twice there and the two paths differ by an ulp on one architecture only — invisible to amd64 CI. Wrap the product in an explicit float64/float32 conversion, the only construct the spec guarantees forces the rounding; an intermediate VARIABLE does not work and left all 32 FMADDD in place in the measured case. Found exactly this way: 4 fused inference paths (TPA, KAN, MemorizingAttention, MTA) merged green on amd64 and failed on every arm64 machine, 2 of them carrying comments asserting no FMA while the code contracted. If the peer is a backend kernel that also contracts — the cpu matmul emits 202 FMADDD — exact equality is unreachable from this side and the pin belongs at a tolerance. Claims about a PARALLEL split of the same loop are unaffected and not reported", false},
 	{"PS3024", "fixed-arity-variadic-call", "a call to a VARIADIC dispatch wrapper that passes a fixed number of arguments. Go builds a fresh slice for the variadic pack at every such site, so a wrapper existing only to forward its pack into a dispatch costs one allocation per dispatch, at every caller, forever. Call a fixed-arity sibling that borrows a pooled slice. MEASURED on nlp, where an MHA method was a byte-for-byte clone of the package's own variadic helper, never touched its receiver, and had 13 call sites while recorder-guarded pooled siblings for arities 1 through 4 sat unused beside it: routing each site to its sibling took a 500-token generate from 235.3k to 225.3k allocs/op, -4.26%% (p=0.000, n=10), control identical. JUDGE ON allocs/op, NOT ns/op — the same change did not separate on time (p=0.143), since those benchmarks are dominated by backend worker-pool park and wake. Check for an existing pool before adding one: nn already ships nnIns1Pool through nnIns3Pool that 43 of its own wrappers bypass. The pooled form MUST defer to the variadic one under a recorder, or the tape retains a slice about to be reused. Wrapper names come from the configured variadicDispatchWrappers list, since the call and the declaration sit in different files and this scanner has no package view. Silent on a genuine spread", false},
 	{"PS3023", "transpose-pass-over-built-matrix", "a nested loop that materializes a TRANSPOSED COPY of a matrix this function built itself. This is deliberately the case PS1010 excludes — a transpose writes the inner variable on the left, so interchange only moves the stride — and the remedy is different in kind: DELETE the pass by having the producer write the layout the consumer wants, which also removes the intermediate and its per-row allocations. MEASURED on the autograd logdet VJP, which solved its triangular inverse row-major then transposed it because the contraction needs columns: solving straight into column-major went -10.37%% at n=512 and -6.93%% at n=256 (p=0.000, n=12), allocs down about a third, control flat, bit-identical over 5547 values. Two further costs no line profile shows: the consumer stops walking down a column of a slice-of-slices, losing a row-pointer load and a bounds check per element; and a PARALLEL producer that wrote columns had every worker contending for cache lines with its neighbours, where row-major gives each its own row. Check the source is not ALSO consumed in the original layout, or flipping the producer just moves the transpose", false},
@@ -340,6 +341,11 @@ type Config struct {
 	// Configured because the call and the declaration sit in different files and this scanner
 	// has no package-level view.
 	VariadicDispatchWrappers []string `json:"variadicDispatchWrappers,omitempty"`
+	// PS3026 — top-k / gating selector helpers: a call to one proves the function chose a SUBSET
+	// of branches, which is what makes a later full-range fan-out over all of them reportable.
+	// Configured because the selector and the fan-out are a project's own vocabulary. Empty by
+	// default: without it PS3026 cannot report.
+	TopKSelectorFuncs []string `json:"topKSelectorFuncs,omitempty"`
 	// PS6014 — entry points that are PURE with respect to their arguments: same
 	// arguments, same result, no observable side effect (e.g. a network forward pass).
 	// The purity judgment is a project's to make and cannot be derived from syntax, so
@@ -357,6 +363,7 @@ type nameSets struct {
 	layoutOps                                      map[string]bool
 	pointerTypes                                   map[string]bool
 	variadicWrappers                               map[string]bool
+	topKSelectors                                  map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -382,6 +389,7 @@ func (c Config) compile() nameSets {
 		layoutOps:        toSet(c.LayoutOpConstants),
 		pointerTypes:     toSet(c.PointerTypeNames),
 		variadicWrappers: toSet(c.VariadicDispatchWrappers),
+		topKSelectors:    toSet(c.TopKSelectorFuncs),
 	}
 }
 
@@ -2348,6 +2356,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, monotoneGuardInLoopFindings(fset, fn)...)
 	out = append(out, fixedArityVariadicCallFindings(fset, fn, ns)...)
 	out = append(out, unroundedProductUnderExactnessClaimFindings(fset, fn)...)
+	out = append(out, fullFanoutUnderTopKGateFindings(fset, fn, ns)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -13530,12 +13539,196 @@ func unroundedProductUnderExactnessClaimFindings(fset *token.FileSet, fn *ast.Fu
 				" code contracted. BOTH SIDES MUST BE ROUNDED: if the peer is a backend kernel"+
 				" that also contracts — the cpu matmul emits 202 FMADDD — exact equality is not"+
 				" reachable by editing this side alone, and the pin belongs at a tolerance"+
-				" instead. A claim of bit-identity across a PARALLEL split of the same loop is"+
-				" not affected and is not reported", renderExpr(bare)),
+				" instead. SEPARATE STATEMENTS DO NOT HELP EITHER: the Go spec permits fusing"+
+				" across statements, and `x *= s` followed by `x += b` on the same slice element"+
+				" contracted anyway, diverging on 66 of 256 logits in the measured case. In"+
+				" generic code the conversion is to the type parameter, T(x*y), and that does"+
+				" force the rounding. A claim of bit-identity across a PARALLEL split of the same"+
+				" loop is not affected and is not reported", renderExpr(bare)),
+		})
+		return true
+	})
+	out = append(out, unroundedScaleThenAddFindings(fset, fn, seen)...)
+	return out
+}
+
+// unroundedScaleThenAddFindings is the ACROSS-STATEMENT half of PS3025: `x *= s` followed by
+// `x += b` on the same target. Splitting the chain into separate statements reads like it forces a
+// rounding between them, and it does not — the Go spec lets an implementation fuse floating-point
+// operations across statements, and arm64 contracted exactly this pair into an FMADD, diverging
+// from the dispatched peer on 66 of 256 logits before the conversions went in.
+func unroundedScaleThenAddFindings(fset *token.FileSet, fn *ast.FuncDecl, seen map[int]bool) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			mul, ok := st.(*ast.AssignStmt)
+			if !ok || mul.Tok != token.MUL_ASSIGN || len(mul.Lhs) != 1 {
+				continue
+			}
+			// Deliberately no "the scale factor is already a conversion" escape hatch. It was
+			// written and deleted: `x *= float32(s)` rounds the FACTOR, and the product of x with
+			// that factor still contracts into the following add. Only wrapping the whole product,
+			// `x = float32(x * s)`, forces the rounding — and that is an ASSIGN, which this shape
+			// does not match in the first place.
+			target := renderExpr(mul.Lhs[0])
+			if !addAssignsTo(blk.List[i+1:], target) {
+				continue
+			}
+			line := fset.Position(mul.Pos()).Line
+			if seen[line] {
+				continue
+			}
+			seen[line] = true
+			out = append(out, finding{
+				pos:      fset.Position(mul.Pos()),
+				category: "unrounded-product-under-exactness-claim",
+				msg: fmt.Sprintf("this function's doc claims bit-identity with another"+
+					" implementation, and %s is scaled here and added to below. Written as two"+
+					" statements this LOOKS like it rounds in between, and it does not: the Go"+
+					" spec permits fusing floating-point operations ACROSS statements, so arm64"+
+					" contracts the pair into a fused multiply-add while amd64 does not."+
+					" MEASURED: exactly this shape diverged from its dispatched peer on 66 of 256"+
+					" logits until each step was wrapped in an explicit conversion. Wrap them:"+
+					" x = float32(x * s), then x = float32(x + b). In generic code the conversion"+
+					" is to the type parameter, T(x*s), which does force the rounding", target),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// addAssignsTo reports whether any statement in the list adds to the named target, at this block
+// level or inside a plain if that is part of the same chain.
+func addAssignsTo(list []ast.Stmt, target string) bool {
+	found := false
+	for _, st := range list {
+		ast.Inspect(st, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Lhs) != 1 {
+				return true
+			}
+			if renderExpr(as.Lhs[0]) == target {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// fullFanoutUnderTopKGateFindings flags PS3026 — a function that selects a SUBSET of branches with
+// a top-k gate and then evaluates ALL of them anyway, relying on the unselected ones carrying a
+// zero weight.
+func fullFanoutUnderTopKGateFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.topKSelectors) == 0 {
+		return nil
+	}
+	gate := token.NoPos
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if name := calleeName(call.Fun); ns.topKSelectors[name] && (gate == token.NoPos || call.Pos() < gate) {
+			gate = call.Pos()
+		}
+		return true
+	})
+	if gate == token.NoPos {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		var body *ast.BlockStmt
+		var idx string
+		switch l := n.(type) {
+		case *ast.RangeStmt:
+			body = l.Body
+			if k, ok := l.Key.(*ast.Ident); ok {
+				idx = k.Name
+			}
+		case *ast.ForStmt:
+			body = l.Body
+			idx = counterName(l)
+		default:
+			return true
+		}
+		// The fan-out has to come AFTER the gate: a loop that ran first could not have skipped on
+		// a selection that did not exist yet.
+		if body == nil || idx == "" || idx == "_" || n.Pos() < gate {
+			return true
+		}
+		if !indexedCallOn(body, idx) || hasContinue(body) {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "full-fanout-under-topk-gate",
+			msg: fmt.Sprintf("this function picks a subset of branches with a top-k gate and then"+
+				" runs EVERY branch over %s, leaving the unselected ones to be multiplied by a zero"+
+				" weight. Skip them: mark the chosen indices in the selection loop that already"+
+				" exists, and `continue` past the rest. The result is the same BITS, not merely"+
+				" close — an unselected branch contributes output times exactly zero, and adding an"+
+				" exact zero returns a finite accumulator unchanged, with the surviving addends"+
+				" still in their original relative order. Two exceptions to state in the doc: a"+
+				" negative-zero accumulator sign, and a NaN or Inf escaping a branch nobody routed"+
+				" to. MEASURED on a mixture-of-experts decode step: -23.7%% ns/op, -20.8%% allocs"+
+				" (8 samples per arm, interleaved in both orders). These fan-outs are usually GEMVs,"+
+				" so the step is bound by the weight bytes it streams and skipping k of E branches"+
+				" removes that fraction of the footprint directly. BENCHMARK PROTOCOL: if the"+
+				" benchmark carries state across iterations — a growing KV cache is the common case"+
+				" — pin -benchtime to a fixed iteration count and interleave the arms in BOTH"+
+				" orders; a single-order run of this very change reported it as 239%% SLOWER",
+				idx),
 		})
 		return true
 	})
 	return out
+}
+
+// indexedCallOn reports whether the block calls something reached through an index by the named
+// loop variable — `things[i].Do()` or `f(things[i])` — which is what makes a loop a fan-out over
+// branches rather than an ordinary counted loop.
+func indexedCallOn(body *ast.BlockStmt, idx string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		ast.Inspect(call, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := unparen(ix.Index).(*ast.Ident); ok && id.Name == idx {
+				found = true
+			}
+			return !found
+		})
+		return !found
+	})
+	return found
+}
+
+// hasContinue reports whether the block skips iterations, which is the applied form.
+func hasContinue(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if br, ok := n.(*ast.BranchStmt); ok && br.Tok == token.CONTINUE {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // isUnroundedProduct reports a multiplication not already wrapped in a conversion. The applied
