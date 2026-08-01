@@ -595,12 +595,12 @@ func gatherHalfTyped(out, t *Tensor, n int) bool {
 	}
 	inner, sInner := t.shape[nd-1], t.strides[nd-1]
 
-	srcU16, srcIsU16 := t.storage.data.([]uint16)
-	dstU16, dstIsU16 := out.storage.data.([]uint16)
-	srcF32, srcIsF32 := t.storage.data.([]float32)
-	dstF32, dstIsF32 := out.storage.data.([]float32)
-	srcF64, srcIsF64 := t.storage.data.([]float64)
-	dstF64, dstIsF64 := out.storage.data.([]float64)
+	srcU16, srcIsU16 := t.storage.u16, t.storage.u16 != nil
+	dstU16, dstIsU16 := out.storage.u16, out.storage.u16 != nil
+	srcF32, srcIsF32 := t.storage.f32, t.storage.f32 != nil
+	dstF32, dstIsF32 := out.storage.f32, out.storage.f32 != nil
+	srcF64, srcIsF64 := t.storage.f64, t.storage.f64 != nil
+	dstF64, dstIsF64 := out.storage.f64, out.storage.f64 != nil
 	srcBF, dstBF := t.storage.dtype == BF16, out.storage.dtype == BF16
 
 	// decode picks the source reader once; encode picks the destination writer once.
