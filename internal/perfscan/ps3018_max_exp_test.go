@@ -136,3 +136,43 @@ func other(a, b float64) float64 {
 		t.Fatalf("%d findings, want 0 — the shift is z, not the max, so no term is exp(0)", len(fs))
 	}
 }
+
+// TestDetectPS3018_ReboundMaxReportsBothPairs is the gap this check shipped with. A scan writes one
+// stabilized pair, then REBINDS the same name for the next pair in the same block. Keying the max
+// by name alone answers with the LAST binding, so every call before the rebinding is compared
+// against arguments it never saw — the RWKV decode scan had two such pairs and only the second was
+// reported. Both pairs are exp(0) elisions and both must be found.
+func TestDetectPS3018_ReboundMaxReportsBothPairs(t *testing.T) {
+	src := `package p
+
+func scan(pp, ww, kk, aa, bb, vv, w float64) float64 {
+	q := math.Max(pp, ww)
+	e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+	out := (e1*aa + e2*vv) / (e1*bb + e2)
+	q = math.Max(pp-w, kk)
+	e1, e2 = math.Exp(pp-w-q), math.Exp(kk-q)
+	return out + e1*aa + e2*vv
+}`
+	fs := maxExpFindings(t, src)
+	if len(fs) != 4 {
+		t.Fatalf("%d findings, want 4 — two per binding, and the first binding is the one a "+
+			"name-keyed lookup loses", len(fs))
+	}
+}
+
+// TestDetectPS3018_SilentBeforeTheBinding pins that a call must see a binding that PRECEDES it. An
+// exponent written before any max is bound cannot be exp(0) by that max, and the fixture keeps a
+// matching max later in the block so it discriminates the position rather than the absence.
+func TestDetectPS3018_SilentBeforeTheBinding(t *testing.T) {
+	src := `package p
+
+func early(a, b float64) float64 {
+	e := math.Exp(a - q)
+	q := math.Max(a, b)
+	return e + q
+}`
+	if fs := maxExpFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the call precedes the binding it would need:\n%s",
+			len(fs), fs[0].msg)
+	}
+}

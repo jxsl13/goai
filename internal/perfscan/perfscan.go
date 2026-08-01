@@ -12704,6 +12704,25 @@ func assignedFrom(body *ast.BlockStmt, want func(ast.Expr) bool) map[string]bool
 
 // maxNormalizedExpFindings flags PS3018 — math.Exp(x - m) where m was assigned from a max that
 // INCLUDES x, so the call is exp(0) whenever the max picked x, and exp(0) is exactly 1.
+// maxBinding is one assignment of a math.Max to a name, with the position that makes it possible
+// to tell which binding a later call actually sees.
+type maxBinding struct {
+	pos  token.Pos
+	args []ast.Expr
+}
+
+// bindingAt returns the arguments of the last max bound to the name before pos, or nil if the name
+// was not bound to a max by then. A call ahead of every binding sees none of them.
+func bindingAt(bs []maxBinding, pos token.Pos) []ast.Expr {
+	var args []ast.Expr
+	for _, b := range bs {
+		if b.pos < pos {
+			args = b.args
+		}
+	}
+	return args
+}
+
 func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	var out []finding
 	seen := map[token.Pos]bool{}
@@ -12712,8 +12731,13 @@ func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		if !ok {
 			return true
 		}
-		// maxOf[name] = the argument expressions of the max assigned to it.
-		maxOf := map[string][]ast.Expr{}
+		// maxOf[name] = every max assigned to that name, in source order. A name is routinely
+		// REBOUND — a scan writes `q := max(a, b)` for one stabilized pair and then `q = max(c, d)`
+		// for the next, in the same block — so a map of name to the LAST arguments answers the
+		// wrong question for every call before the rebinding. Keeping the list and choosing the
+		// binding in effect AT THE CALL is what makes both pairs visible; the single-binding form
+		// reported the second pair in the RWKV decode scan and silently missed the first.
+		maxOf := map[string][]maxBinding{}
 		for _, st := range blk.List {
 			as, ok := st.(*ast.AssignStmt)
 			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
@@ -12724,7 +12748,7 @@ func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				continue
 			}
 			if nm := identName(as.Lhs[0]); nm != "" {
-				maxOf[nm] = call.Args
+				maxOf[nm] = append(maxOf[nm], maxBinding{pos: as.Pos(), args: call.Args})
 			}
 		}
 		if len(maxOf) == 0 {
@@ -12767,8 +12791,8 @@ func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			if !ok || sub.Op != token.SUB {
 				return true
 			}
-			args, ok := maxOf[identName(sub.Y)]
-			if !ok {
+			args := bindingAt(maxOf[identName(sub.Y)], call.Pos())
+			if args == nil {
 				return true
 			}
 			lhs := renderExpr(unparen(sub.X))
