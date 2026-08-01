@@ -44,6 +44,17 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			wcv.Storage().F64(), ucv.Storage().F64(), out.Storage().F64(), seq, d)
 		return []*tensor.Tensor{out}, nil
 	}
+	// F32 fast path: same channel-parallel scan, raw F32 slices. Running state stays F64
+	// and only the store rounds — bit-identical to backend/ref's F32 WKV typed scan (which
+	// this op fell back to serially before it was registered for F32). Channels are
+	// independent recurrences, so the disjoint-column fan-out is bit-identical to the serial
+	// ref path (§dtype-gap: cpu registered only F64, so F32 silently hit the serial ref).
+	if kc.Dtype() == tensor.F32 && vc.Dtype() == tensor.F32 &&
+		wcv.Dtype() == tensor.F32 && ucv.Dtype() == tensor.F32 {
+		wkvParallelScanF32(kc.Storage().F32(), vc.Storage().F32(),
+			wcv.Storage().F32(), ucv.Storage().F32(), out.Storage().F32(), seq, d)
+		return []*tensor.Tensor{out}, nil
+	}
 
 	// Mixed/exotic dtype fallback: the generic scalar scan (verbatim ref path).
 	for c := range d {
@@ -94,6 +105,54 @@ func wkvParallelScanF64(k, v, w, u, out []float64, seq, d int) {
 	wg.Wait()
 }
 
+// wkvScanRangeF32 runs the fresh forward WKV scan over channels [cLo,cHi) of the [seq,d]
+// F32 tensors, widening reads to F64 and rounding only on store — the exact arithmetic of
+// backend/ref's F32 typed scan, so the result is bit-identical.
+func wkvScanRangeF32(k, v, w, u, out []float32, seq, d, cLo, cHi int) {
+	for c := cLo; c < cHi; c++ {
+		wc, uc := float64(w[c]), float64(u[c])
+		aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
+		for t := 0; t < seq; t++ {
+			kk, vv := float64(k[t*d+c]), float64(v[t*d+c])
+			ww := uc + kk
+			q := math.Max(pp, ww)
+			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+			out[t*d+c] = float32((e1*aa + e2*vv) / (e1*bb + e2))
+			q = math.Max(pp-wc, kk)
+			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+			aa = e1*aa + e2*vv
+			bb = e1*bb + e2
+			pp = q
+		}
+	}
+}
+
+// wkvParallelScanF32 runs wkvScanRangeF32 across GOMAXPROCS goroutines over disjoint channel
+// blocks (channels are independent recurrences → bit-identical to the serial scan). Mirrors
+// wkvParallelScanF64's grain gate.
+func wkvParallelScanF32(k, v, w, u, out []float32, seq, d int) {
+	nw := runtime.GOMAXPROCS(0)
+	chunk := ((d+nw-1)/nw + 3) &^ 3
+	if nw <= 1 || chunk >= d || seq*d < 1<<14 {
+		wkvScanRangeF32(k, v, w, u, out, seq, d, 0, d)
+		return
+	}
+	var wg sync.WaitGroup
+	for lo := 0; lo < d; lo += chunk {
+		hi := lo + chunk
+		if hi > d {
+			hi = d
+		}
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			wkvScanRangeF32(k, v, w, u, out, seq, d, lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 func init() {
 	std.add(backend.OpWKV, tensor.F64, wkvKernelCPU)
+	std.add(backend.OpWKV, tensor.F32, wkvKernelCPU)
 }
