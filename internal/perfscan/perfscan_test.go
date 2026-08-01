@@ -3263,6 +3263,61 @@ func rec(ctx *C, x T, seq int) T {
 	}
 }
 
+// Silent on a per-head attention loop (`for h := range x.Heads`) — the dispatches are
+// per-head [T,T] attention, not a tiny-op scalar recurrence, so the fused-flatF64 lever
+// does not apply (measured false positives: fox_block/aaren/cope, 2026-07-30).
+func TestDetectPS4011_SilentOnPerHeadLoop(t *testing.T) {
+	src := `package p
+func attn(ctx *C, x T) T {
+	var out T
+	for h := range b.Heads {
+		q := ex(backend.OpMatMul, x, x)
+		out = ex(backend.OpAdd, out, q)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (per-head loop), got %d", got)
+	}
+}
+
+// Silent when the loop dispatches OpSoftmax over keys — quadratic attention, never a
+// linear-attention scalar recurrence (which is what the fused path targets).
+func TestDetectPS4011_SilentOnAttentionSoftmax(t *testing.T) {
+	src := `package p
+func attn(ctx *C, x T, seq int) T {
+	var out T
+	for i := 0; i < seq; i++ {
+		s := ex(backend.OpMatMul, x, x)
+		s = ex(backend.OpSoftmax, s)
+		out = ex(backend.OpMatMul, s, x)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (attention softmax), got %d", got)
+	}
+}
+
+// Silent on a per-expert / per-recursion composition loop where each iteration runs a whole
+// sub-module (`.Forward`/`.Route`) — that is layer composition, not a scalar recurrence
+// (measured false positives: mor/remoe, 2026-07-30).
+func TestDetectPS4011_SilentOnSubmoduleForward(t *testing.T) {
+	src := `package p
+func moe(ctx *C, x T, e int) T {
+	var out T
+	for i := 0; i < e; i++ {
+		g := ex(backend.OpSlice, x)
+		o := m.Experts[i].Forward(ctx, x)
+		out = ex(backend.OpAdd, out, o)
+	}
+	return out
+}`
+	if got := countCat(scanSrc(t, src))["op-dispatch-recurrence"]; got != 0 {
+		t.Fatalf("want 0 (submodule Forward), got %d", got)
+	}
+}
+
 // Silent when the loop dispatches fewer than 2 backend ops.
 func TestDetectPS4011_SilentOnSingleDispatch(t *testing.T) {
 	src := `package p

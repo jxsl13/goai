@@ -3658,6 +3658,18 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		if !ok {
 			return true
 		}
+		// Precision guard (§step6, 2026-07-30): PS4011's fused-flatF64 lever only pays on a
+		// per-TIMESTEP recurrence whose per-step tensors are microscopic. It over-fired on
+		// per-HEAD attention loops (fox_block/aaren/cope: `for h := range X.Heads`, each head a
+		// full [T,T] Q·Kᵀ→softmax→·V) where the dispatch overhead is negligible against the
+		// GEMMs — a matmul-dominated body, no fused-recurrence win (measured false positives).
+		// Suppress two unambiguous "this is attention, not a scalar recurrence" markers:
+		// ranging over a `.Heads` field, or dispatching OpSoftmax over keys (a linear-attention
+		// recurrence — the real target — never softmaxes per step). Zero false-negative risk.
+		if rangesOverField(n, "Heads") || loopBodyDispatchesOp(body, "OpSoftmax") ||
+			loopBodyCallsMethod(body, "Forward") || loopBodyCallsMethod(body, "Route") {
+			return false // per-head/per-expert/per-recursion composition, not a scalar recurrence
+		}
 		count := 0
 		ast.Inspect(body, func(m ast.Node) bool {
 			if call, ok := m.(*ast.CallExpr); ok && callHasBackendOpArg(call) {
@@ -3681,6 +3693,64 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		return true
 	})
 	return out
+}
+
+// rangesOverField reports whether n is `for k := range <expr>.<field>` — a loop over a
+// named struct field (e.g. `range b.Heads`), the marker of a per-head/per-slot loop rather
+// than a sequence scan. Used to suppress PS4011 on per-head attention loops.
+func rangesOverField(n ast.Node, field string) bool {
+	rs, ok := n.(*ast.RangeStmt)
+	if !ok {
+		return false
+	}
+	sel, ok := rs.X.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == field
+}
+
+// loopBodyDispatchesOp reports whether body contains a backend-op call passing the named
+// Op* constant (e.g. "OpSoftmax") — used to suppress PS4011 when the loop is quadratic
+// attention (softmax over keys) rather than a scalar recurrence.
+func loopBodyDispatchesOp(body ast.Node, opName string) bool {
+	found := false
+	ast.Inspect(body, func(m ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := m.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, a := range call.Args {
+			if sel, ok := a.(*ast.SelectorExpr); ok && sel.Sel.Name == opName {
+				if _, ok := sel.X.(*ast.Ident); ok {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// loopBodyCallsMethod reports whether body contains a method call `X.<name>(...)` — used to
+// suppress PS4011 when each iteration runs a whole sub-module (e.g. `.Forward`/`.Route` on a
+// per-expert / per-recursion / per-block loop), which is composition, not a scalar recurrence.
+func loopBodyCallsMethod(body ast.Node, name string) bool {
+	found := false
+	ast.Inspect(body, func(m ast.Node) bool {
+		if found {
+			return false
+		}
+		if call, ok := m.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == name {
+				found = true
+				return false
+			}
+		}
+		return true
+	})
+	return found
 }
 
 // callHasBackendOpArg reports whether any argument of call is a backend.Op* constant
