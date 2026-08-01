@@ -178,6 +178,18 @@ func (m *TPA) project(ctx *backend.Context, x, wa, wb *tensor.Tensor, r int, app
 // for a decode step's cached factors, so the two cannot drift apart.
 func (m *TPA) contract(ctx *backend.Context, a, b *tensor.Tensor, r int) (*tensor.Tensor, error) {
 	t := a.Shape()[0]
+	// Fused inference path (no autograd taping): the reconstruction c[t,h,d] =
+	// (1/r)·Σ_r a[t,r,h]·b[t,r,d] is dispatched below as reshape+reshape+OpEinsum+
+	// reshape+OpMul. The generic einsum engine walks t·heads·dh output combos with a
+	// per-combo index decode (~tens of ns each) — for TPA's tiny r (2-6) that dispatch
+	// overhead dwarfs the ~r·heads·dh FLOPs and dominates the whole layer. A direct
+	// typed loop reads the raw factor slices once and sums r ascending — the SAME
+	// ascending-r accumulation and products as the einsum engine (order = outSub then
+	// summed r, so r is visited ascending per output), then the identical ×(1/r) — so
+	// it is BIT-IDENTICAL. Training keeps the dispatch loop (einsum VJP taping).
+	if ctx.Recorder == nil && a.Dtype() == tensor.F64 && b.Dtype() == tensor.F64 {
+		return m.contractFusedF64(a, b, r, t)
+	}
 	a3, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{t, r, m.Heads}}, a)
 	if err != nil {
 		return nil, err
@@ -197,6 +209,34 @@ func (m *TPA) contract(ctx *backend.Context, a, b *tensor.Tensor, r int) (*tenso
 	}
 	// 1/r normalization (paper eq. 6) — a broadcast scalar multiply.
 	return m.exec(ctx, backend.OpMul, nil, flat, tensor.Full(a.Dtype(), tensor.Shape{1, 1}, 1/float64(r)))
+}
+
+// contractFusedF64 is the fused F64 inference form of contract: c[t, h·dh+d] =
+// (1/r)·Σ_r a[t, r·heads+h]·b[t, r·dh+d], reading the raw factor slices directly and
+// summing r ascending — bit-identical to the reshape+OpEinsum+OpMul dispatch it
+// replaces (see contract). Rows t are independent; the arithmetic (t·heads·dh·r, r
+// tiny) is trivial — the win is eliminating the einsum engine's per-combo dispatch.
+func (m *TPA) contractFusedF64(a, b *tensor.Tensor, r, t int) (*tensor.Tensor, error) {
+	heads, dh := m.Heads, m.Dh
+	as := a.Contiguous().Storage().F64() // [t, r·heads], (t,rr,h) at t·r·heads + rr·heads + h
+	bs := b.Contiguous().Storage().F64() // [t, r·dh],    (t,rr,d) at t·r·dh    + rr·dh    + d
+	out := tensor.New(a.Dtype(), tensor.Shape{t, heads * dh})
+	os := out.Storage().F64()
+	inv := 1 / float64(r)
+	rh, rd, hd := r*heads, r*dh, heads*dh
+	for tt := 0; tt < t; tt++ {
+		aBase, bBase, oBase := tt*rh, tt*rd, tt*hd
+		for h := 0; h < heads; h++ {
+			for d := 0; d < dh; d++ {
+				var s float64
+				for rr := 0; rr < r; rr++ {
+					s += as[aBase+rr*heads+h] * bs[bBase+rr*dh+d]
+				}
+				os[oBase+h*dh+d] = s * inv
+			}
+		}
+	}
+	return out, nil
 }
 
 // reconstruct projects x[T,d] to the rank-r head/token factors (optionally
