@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3027", "input-view-on-output-tensor", "a READ-ONLY view helper (configured inputViewFuncs) applied to a tensor the function ALLOCATED as an output. These helpers return the live storage when the dtype matches their element type and a WIDENED COPY when it does not, so on the mismatched dtype a kernel accumulates into a buffer nobody reads and the output comes back untouched — right shape, no error, all zeros. FOUND EXACTLY THIS WAY: a masked-attention backward returned four all-zero gradient tensors on F32 while F64 was correct, so an F32 fine-tune of a trainable attention bias propagated no gradient at all; it survived because every test touching the op built F64 tensors. Use the output counterpart (configured outputViewFuncs), which returns a buffer plus a flush, and call the flush before every fast-path return. Then add a test in the OTHER dtype — this class hides precisely because the fast path is exercised in the dtype where the view happens to alias. Not a performance finding: it is the correctness cost of a devirtualization, which is why it lives with the checks that guard those", false},
 	{"PS3026", "full-fanout-under-topk-gate", "a function that picks a SUBSET of branches with a top-k gate and then evaluates EVERY branch anyway, leaving the unselected ones to be multiplied by a zero weight. Skip them: mark the chosen indices in the selection loop that already exists and continue past the rest. The result is the same BITS, not merely close — an unselected branch contributes output times exactly zero, adding an exact zero returns a finite accumulator unchanged, and the surviving addends keep their relative order; state the two exceptions in the doc, a negative-zero accumulator sign and a NaN or Inf escaping a branch nobody routed to. MEASURED on a mixture-of-experts decode step: -23.7%% ns/op, -20.8%% allocs, 8 samples per arm interleaved in both orders. These fan-outs are usually GEMVs, so the step is bound by the weight bytes it streams and skipping k of E branches removes that fraction of the footprint directly. BENCHMARK PROTOCOL: when the benchmark carries state across iterations — a growing KV cache is the common case — pin -benchtime to a fixed count and interleave the arms in BOTH orders; a single-order run of this very change reported it as 239%% SLOWER. Selector names come from the configured topKSelectorFuncs list, since the gate and the fan-out are a project's own vocabulary", false},
 	{"PS3025", "unrounded-product-under-exactness-claim", "a function whose doc claims bit-identity with a DIFFERENT implementation while its body contains a bare multiply feeding an add. Go contracts that into an FMA on arm64 and not on amd64, so the product rounds once here and twice there and the two paths differ by an ulp on one architecture only — invisible to amd64 CI. Wrap the product in an explicit float64/float32 conversion, the only construct the spec guarantees forces the rounding; an intermediate VARIABLE does not work and left all 32 FMADDD in place in the measured case. Found exactly this way: 4 fused inference paths (TPA, KAN, MemorizingAttention, MTA) merged green on amd64 and failed on every arm64 machine, 2 of them carrying comments asserting no FMA while the code contracted. If the peer is a backend kernel that also contracts — the cpu matmul emits 202 FMADDD — exact equality is unreachable from this side and the pin belongs at a tolerance. Claims about a PARALLEL split of the same loop are unaffected and not reported", false},
 	{"PS3024", "fixed-arity-variadic-call", "a call to a VARIADIC dispatch wrapper that passes a fixed number of arguments. Go builds a fresh slice for the variadic pack at every such site, so a wrapper existing only to forward its pack into a dispatch costs one allocation per dispatch, at every caller, forever. Call a fixed-arity sibling that borrows a pooled slice. MEASURED on nlp, where an MHA method was a byte-for-byte clone of the package's own variadic helper, never touched its receiver, and had 13 call sites while recorder-guarded pooled siblings for arities 1 through 4 sat unused beside it: routing each site to its sibling took a 500-token generate from 235.3k to 225.3k allocs/op, -4.26%% (p=0.000, n=10), control identical. JUDGE ON allocs/op, NOT ns/op — the same change did not separate on time (p=0.143), since those benchmarks are dominated by backend worker-pool park and wake. Check for an existing pool before adding one: nn already ships nnIns1Pool through nnIns3Pool that 43 of its own wrappers bypass. The pooled form MUST defer to the variadic one under a recorder, or the tape retains a slice about to be reused. Wrapper names come from the configured variadicDispatchWrappers list, since the call and the declaration sit in different files and this scanner has no package view. Silent on a genuine spread", false},
@@ -346,6 +347,13 @@ type Config struct {
 	// Configured because the selector and the fan-out are a project's own vocabulary. Empty by
 	// default: without it PS3026 cannot report.
 	TopKSelectorFuncs []string `json:"topKSelectorFuncs,omitempty"`
+	// PS3027 — helpers that return a READ-ONLY view of a tensor's values, widening a copy when the
+	// dtype does not match the view's element type. Applying one to a tensor the function ALLOCATED
+	// as an output means the kernel writes into a detached copy. Empty by default.
+	InputViewFuncs []string `json:"inputViewFuncs,omitempty"`
+	// PS3027 — the output counterpart of an input view: returns a buffer plus a flush that narrows
+	// it back into the tensor's storage. Named so the advice can point at the right helper.
+	OutputViewFuncs []string `json:"outputViewFuncs,omitempty"`
 	// PS6014 — entry points that are PURE with respect to their arguments: same
 	// arguments, same result, no observable side effect (e.g. a network forward pass).
 	// The purity judgment is a project's to make and cannot be derived from syntax, so
@@ -364,6 +372,7 @@ type nameSets struct {
 	pointerTypes                                   map[string]bool
 	variadicWrappers                               map[string]bool
 	topKSelectors                                  map[string]bool
+	inputViews, outputViews                        map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -390,6 +399,8 @@ func (c Config) compile() nameSets {
 		pointerTypes:     toSet(c.PointerTypeNames),
 		variadicWrappers: toSet(c.VariadicDispatchWrappers),
 		topKSelectors:    toSet(c.TopKSelectorFuncs),
+		inputViews:       toSet(c.InputViewFuncs),
+		outputViews:      toSet(c.OutputViewFuncs),
 	}
 }
 
@@ -2357,6 +2368,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, fixedArityVariadicCallFindings(fset, fn, ns)...)
 	out = append(out, unroundedProductUnderExactnessClaimFindings(fset, fn)...)
 	out = append(out, fullFanoutUnderTopKGateFindings(fset, fn, ns)...)
+	out = append(out, inputViewOnOutputTensorFindings(fset, fn, ns)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -13646,6 +13658,74 @@ func addAssignsTo(list []ast.Stmt, target string) bool {
 		}
 	}
 	return false
+}
+
+// inputViewOnOutputTensorFindings flags PS3027 — a READ-ONLY view helper applied to a tensor the
+// function allocated as an output.
+//
+// These helpers exist so a kernel can walk typed storage instead of dispatching per element. The
+// input form returns the live storage when the dtype already matches and a WIDENED COPY when it
+// does not; the output form returns a buffer plus a flush that narrows it back. Reach for the
+// input form on an output and the mismatched-dtype path writes into a copy nobody reads — silently,
+// with the right shapes and no error.
+func inputViewOnOutputTensorFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.inputViews) == 0 {
+		return nil
+	}
+	// Names this function ALLOCATED. A parameter may be an input; a tensor made here and returned
+	// is an output, and that is the whole distinction the check rests on.
+	allocated := map[string]token.Pos{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || !ns.allocators[calleeName(call.Fun)] {
+			return true
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			allocated[nm] = as.Pos()
+		}
+		return true
+	})
+	if len(allocated) == 0 { // early-out only: the per-call membership test below decides
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !ns.inputViews[calleeName(call.Fun)] || len(call.Args) != 1 {
+			return true
+		}
+		nm := identName(call.Args[0])
+		if _, isOut := allocated[nm]; !isOut {
+			return true
+		}
+		alt := "the output-view helper"
+		for k := range ns.outputViews {
+			alt = k
+			break
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			category: "input-view-on-output-tensor",
+			msg: fmt.Sprintf("%s is a READ-ONLY view helper and %s is a tensor this function"+
+				" allocated as an output. The view returns live storage when the dtype already"+
+				" matches its element type and a WIDENED COPY when it does not, so on the"+
+				" mismatched dtype the kernel accumulates into a buffer nobody reads and the"+
+				" output comes back untouched — right shape, no error, all zeros. FOUND EXACTLY"+
+				" THIS WAY: an attention backward returned four all-zero gradient tensors on F32"+
+				" while F64 was correct, so training a trainable attention bias in F32 propagated"+
+				" nothing; it survived because every test touching that op built F64 tensors. Use"+
+				" %s instead and call its flush before every return that took the fast path. Then"+
+				" add a test in the OTHER dtype — the reason this class hides is that the fast"+
+				" path is usually exercised in the dtype where the view happens to alias",
+				calleeName(call.Fun), nm, alt),
+		})
+		return true
+	})
+	return out
 }
 
 // fullFanoutUnderTopKGateFindings flags PS3026 — a function that selects a SUBSET of branches with
