@@ -33,15 +33,33 @@ func init() {
 		}
 		v := to2D(vt, n, n)
 		vb := to2D(vbar, n, n)
+		// Both operands of the inner product below are read DOWN a column, and at these sizes a
+		// row is its own page-sized allocation, so a column walk misses on nearly every element.
+		// Transposed copies make each inner loop walk two contiguous runs; the transpose itself is
+		// O(n^2) against the O(n^3) it feeds. Bit-identical: only where an operand lives changes,
+		// never which operand or in what order (the same argument the Cholesky VJP records).
+		vT := make([][]float64, n)
+		vbT := make([][]float64, n)
+		for i := range n {
+			vT[i], vbT[i] = make([]float64, n), make([]float64, n)
+		}
+		for r := range n {
+			vr, vbr := v[r], vb[r]
+			for c := range n {
+				vT[c][r], vbT[c][r] = vr[c], vbr[c]
+			}
+		}
 
 		// inner = diag(w̄) + F ∘ (Vᵀ·V̄).
 		inner := make([][]float64, n)
 		for i := range n {
 			inner[i] = make([]float64, n)
+			vTi := vT[i]
 			for j := range n {
 				var p float64 // (Vᵀ·V̄)_ij = Σ_r V[r,i]·V̄[r,j]
+				vbTj := vbT[j]
 				for r := range n {
-					p += v[r][i] * vb[r][j]
+					p += vTi[r] * vbTj[r]
 				}
 				if i != j {
 					inner[i][j] = p / (w[j] - w[i]) // F_ij ∘ P_ij, F_ij = 1/(w_j − w_i)
@@ -62,14 +80,31 @@ func init() {
 			}
 		}
 		abar := tensor.New(vt.Dtype(), tensor.Shape{n, n})
+		// Only the UPPER triangle is computed, and each off-diagonal result is mirrored. The full
+		// double loop formed every pair TWICE: at (j,i) its g is this (i,j)'s gt and vice versa, so
+		// half of the O(n^3) accumulation was recomputing sums it had already made, and on the
+		// diagonal it formed the identical sum twice and discarded one.
+		//
+		// BIT-IDENTICAL, on the argument the Cholesky and SolveSPD VJPs already record: the full
+		// loop stored 0.5*(gt+g) at (j,i) where this stores 0.5*(g+gt), and IEEE addition is
+		// commutative — a+b and b+a have the same bits for all non-NaN operands, which these are by
+		// construction. Each individual sum keeps its own ascending-a order and operands.
 		for i := range n {
-			for j := range n {
+			vi := v[i]
+			for j := i; j < n; j++ {
 				var g, gt float64 // G[i,j] and G[j,i]
+				vj := v[j]
 				for a := range n {
-					g += v[i][a] * tmp[a][j]
-					gt += v[j][a] * tmp[a][i]
+					g += vi[a] * tmp[a][j]
+					gt += vj[a] * tmp[a][i]
 				}
-				abar.SetF64(0.5*(g+gt), i, j) // Ā = ½(G+Gᵀ)
+				if i == j {
+					abar.SetF64(0.5*(g+gt), i, j)
+					continue
+				}
+				m := 0.5 * (g + gt) // Ā = ½(G+Gᵀ) is symmetric
+				abar.SetF64(m, i, j)
+				abar.SetF64(m, j, i)
 			}
 		}
 		return []*tensor.Tensor{abar}, nil
