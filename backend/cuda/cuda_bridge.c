@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1783,6 +1783,51 @@ int cu_softmax_f32(void* x, int rows, int cols) {
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    {
+        // Shared-cached fast path: when the row (+ the double reduction buffer) fits in the
+        // 48 KB default dynamic shared budget, load xr into shared ONCE, do max/exp/sum/normalize
+        // there, and write back ONCE — 2 global accesses/element instead of the multi-pass
+        // kernel's 5 (read-for-max, read+write-for-exp, read+write-for-normalize). The math
+        // (double-reduced row max, expf on the double-shifted arg, double sum, normalize) is
+        // identical to the fallback, so the result is bit-for-bit the same.
+        int threads = 256;
+        size_t cachedShmem = (size_t)threads * sizeof(double) + (size_t)cols * sizeof(float);
+        if (cachedShmem <= 48000) {
+            if (!gSoftmaxCached && compile_kernel(
+                    "extern \"C\" __global__ void softmax_f32c(float* x, int rows, int cols){\n"
+                    "  int row=blockIdx.x; if(row>=rows) return;\n"
+                    "  extern __shared__ double smem[];\n"
+                    "  int t=threadIdx.x, nt=blockDim.x;\n"
+                    "  double* red=smem;\n"
+                    "  float* sm=(float*)(red+nt);\n"
+                    "  float* xr = x + (size_t)row*cols;\n"
+                    // GA106 runs FP64 at 1/64 FP32, so per-element double (the arg subtract and the
+                    // sum accumulate) — not the memory traffic — is what capped the old kernel at
+                    // ~59 GB/s. Keep everything per-element in FP32: max is EXACT in f32 (it's just a
+                    // representable input element), the exp-arg subtract and the per-thread partial
+                    // sum ride the f32 softmax tolerance; only the cross-thread reductions stay in
+                    // double for stability. The row-max shift keeps expf's argument <= 0.
+                    "  float m=-3.4e38f;\n"
+                    "  for(int j=t;j<cols;j+=nt){ float v=xr[j]; sm[j]=v; if(v>m)m=v; }\n"
+                    "  red[t]=(double)m; __syncthreads();\n"
+                    "  for(int s=nt/2;s>0;s>>=1){ if(t<s && red[t+s]>red[t]) red[t]=red[t+s]; __syncthreads(); }\n"
+                    "  float rowmax=(float)red[0]; __syncthreads();\n"
+                    "  float local=0.0f;\n"
+                    "  for(int j=t;j<cols;j+=nt){ float e=expf(sm[j]-rowmax); sm[j]=e; local+=e; }\n"
+                    "  red[t]=(double)local; __syncthreads();\n"
+                    "  for(int s=nt/2;s>0;s>>=1){ if(t<s) red[t]+=red[t+s]; __syncthreads(); }\n"
+                    "  float inv=(float)(1.0/red[0]);\n"
+                    "  for(int j=t;j<cols;j+=nt){ xr[j]=sm[j]*inv; }\n"
+                    "}\n",
+                    "softmax.cu", "softmax_f32c", &gSoftmaxCached) != 0) { rc = -2; goto done; }
+            void* args[3];
+            args[0] = &x;
+            args[1] = &rows;
+            args[2] = &cols;
+            rc = (cuLaunchKernel(gSoftmaxCached, rows, 1, 1, threads, 1, 1, cachedShmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+            goto done;
+        }
+    }
     if (!gSoftmax && compile_kernel(
                          "extern \"C\" __global__ void softmax_f32(float* x, int rows, int cols){\n"
                          "  int row=blockIdx.x; if(row>=rows) return;\n"
