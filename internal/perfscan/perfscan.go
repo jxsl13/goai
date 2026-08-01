@@ -13530,12 +13530,89 @@ func unroundedProductUnderExactnessClaimFindings(fset *token.FileSet, fn *ast.Fu
 				" code contracted. BOTH SIDES MUST BE ROUNDED: if the peer is a backend kernel"+
 				" that also contracts — the cpu matmul emits 202 FMADDD — exact equality is not"+
 				" reachable by editing this side alone, and the pin belongs at a tolerance"+
-				" instead. A claim of bit-identity across a PARALLEL split of the same loop is"+
-				" not affected and is not reported", renderExpr(bare)),
+				" instead. SEPARATE STATEMENTS DO NOT HELP EITHER: the Go spec permits fusing"+
+				" across statements, and `x *= s` followed by `x += b` on the same slice element"+
+				" contracted anyway, diverging on 66 of 256 logits in the measured case. In"+
+				" generic code the conversion is to the type parameter, T(x*y), and that does"+
+				" force the rounding. A claim of bit-identity across a PARALLEL split of the same"+
+				" loop is not affected and is not reported", renderExpr(bare)),
 		})
 		return true
 	})
+	out = append(out, unroundedScaleThenAddFindings(fset, fn, seen)...)
 	return out
+}
+
+// unroundedScaleThenAddFindings is the ACROSS-STATEMENT half of PS3025: `x *= s` followed by
+// `x += b` on the same target. Splitting the chain into separate statements reads like it forces a
+// rounding between them, and it does not — the Go spec lets an implementation fuse floating-point
+// operations across statements, and arm64 contracted exactly this pair into an FMADD, diverging
+// from the dispatched peer on 66 of 256 logits before the conversions went in.
+func unroundedScaleThenAddFindings(fset *token.FileSet, fn *ast.FuncDecl, seen map[int]bool) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			mul, ok := st.(*ast.AssignStmt)
+			if !ok || mul.Tok != token.MUL_ASSIGN || len(mul.Lhs) != 1 {
+				continue
+			}
+			// Deliberately no "the scale factor is already a conversion" escape hatch. It was
+			// written and deleted: `x *= float32(s)` rounds the FACTOR, and the product of x with
+			// that factor still contracts into the following add. Only wrapping the whole product,
+			// `x = float32(x * s)`, forces the rounding — and that is an ASSIGN, which this shape
+			// does not match in the first place.
+			target := renderExpr(mul.Lhs[0])
+			if !addAssignsTo(blk.List[i+1:], target) {
+				continue
+			}
+			line := fset.Position(mul.Pos()).Line
+			if seen[line] {
+				continue
+			}
+			seen[line] = true
+			out = append(out, finding{
+				pos:      fset.Position(mul.Pos()),
+				category: "unrounded-product-under-exactness-claim",
+				msg: fmt.Sprintf("this function's doc claims bit-identity with another"+
+					" implementation, and %s is scaled here and added to below. Written as two"+
+					" statements this LOOKS like it rounds in between, and it does not: the Go"+
+					" spec permits fusing floating-point operations ACROSS statements, so arm64"+
+					" contracts the pair into a fused multiply-add while amd64 does not."+
+					" MEASURED: exactly this shape diverged from its dispatched peer on 66 of 256"+
+					" logits until each step was wrapped in an explicit conversion. Wrap them:"+
+					" x = float32(x * s), then x = float32(x + b). In generic code the conversion"+
+					" is to the type parameter, T(x*s), which does force the rounding", target),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// addAssignsTo reports whether any statement in the list adds to the named target, at this block
+// level or inside a plain if that is part of the same chain.
+func addAssignsTo(list []ast.Stmt, target string) bool {
+	found := false
+	for _, st := range list {
+		ast.Inspect(st, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Lhs) != 1 {
+				return true
+			}
+			if renderExpr(as.Lhs[0]) == target {
+				found = true
+			}
+			return !found
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 // isUnroundedProduct reports a multiplication not already wrapped in a conversion. The applied

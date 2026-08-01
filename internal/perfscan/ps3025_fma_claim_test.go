@@ -148,3 +148,103 @@ func resid(a, b []float64, n int) float64 {
 		t.Fatalf("%d findings, want 0 — a difference carries no multiply to contract", len(fs))
 	}
 }
+
+// TestDetectPS3025_ScaleThenAddAcrossStatements is the shape the Swin fusion actually shipped with
+// and the one that cost a debugging round: `x *= s` then `x += b` on the same slice element. It
+// reads as if the store between them forces a rounding. It does not — the Go spec permits fusing
+// across statements, and arm64 contracted the pair, diverging from the dispatched peer on 66 of
+// 256 logits.
+func TestDetectPS3025_ScaleThenAddAcrossStatements(t *testing.T) {
+	src := `package p
+
+// score is bit-identical to the dispatch path.
+func score(ss, bh []float32, inv float32) {
+	for i := range ss {
+		ss[i] *= inv
+		ss[i] += bh[i]
+	}
+}`
+	fs := fmaClaimFindings(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1", len(fs))
+	}
+	if !containsAll(fs[0].msg, "ACROSS statements", "66 of 256") {
+		t.Fatalf("message omits the across-statements mechanism or the measurement:\n%s", fs[0].msg)
+	}
+}
+
+// TestDetectPS3025_SilentOnRoundedScaleThenAdd pins the applied form of that shape.
+func TestDetectPS3025_SilentOnRoundedScaleThenAdd(t *testing.T) {
+	src := `package p
+
+// score is bit-identical to the dispatch path.
+func score(ss, bh []float32, inv float32) {
+	for i := range ss {
+		ss[i] = float32(ss[i] * inv)
+		ss[i] = float32(ss[i] + bh[i])
+	}
+}`
+	if fs := fmaClaimFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — wrapped steps are the applied form:\n%s", len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3025_SilentOnScaleWithoutAdd pins the SECOND HALF of the chain. A scale with no
+// following add has nothing to fuse into, so the target must actually be added to afterwards —
+// and the fixture keeps a nearby add to a DIFFERENT target, so it discriminates the target match
+// rather than the mere presence of an addition.
+func TestDetectPS3025_SilentOnScaleWithoutAdd(t *testing.T) {
+	src := `package p
+
+// score is bit-identical to the dispatch path.
+func score(ss, other, bh []float32, inv float32) {
+	for i := range ss {
+		ss[i] *= inv
+		other[i] += bh[i]
+	}
+}`
+	if fs := fmaClaimFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — nothing adds to the scaled target:\n%s", len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3025_SilentOnAddThenAdd pins that the FIRST statement of the chain must be a
+// MULTIPLY. Two additions to the same target are an ordinary accumulation: there is no product for
+// the compiler to fold into the sum, so nothing can contract and nothing should be reported. The
+// fixture is otherwise identical to the positive — same claim, same peer, same target added to
+// afterwards — so it discriminates the operator alone.
+func TestDetectPS3025_SilentOnAddThenAdd(t *testing.T) {
+	src := `package p
+
+// score is bit-identical to the dispatch path.
+func score(ss, bh, ck []float32) {
+	for i := range ss {
+		ss[i] += ck[i]
+		ss[i] += bh[i]
+	}
+}`
+	if fs := fmaClaimFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — two adds carry no product to contract:\n%s", len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3025_SilentOnScaleThenOverwrite pins that the follower must ADD to the target. A
+// scale whose result is then OVERWRITTEN cannot be fused into anything — the product is dead, and
+// a compiler that contracted it would be folding into a value nobody reads. The fixture keeps the
+// same target on both statements so it discriminates the operator of the second one, which no
+// other floor here does.
+func TestDetectPS3025_SilentOnScaleThenOverwrite(t *testing.T) {
+	src := `package p
+
+// score is bit-identical to the dispatch path.
+func score(ss, bh, ck []float32, inv float32) {
+	for i := range ss {
+		ss[i] *= inv
+		ss[i] = bh[i] * ck[i]
+	}
+}`
+	if fs := fmaClaimFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the scaled value is overwritten, not accumulated:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
