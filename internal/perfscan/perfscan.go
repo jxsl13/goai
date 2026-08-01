@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3025", "unrounded-product-under-exactness-claim", "a function whose doc claims bit-identity with a DIFFERENT implementation while its body contains a bare multiply feeding an add. Go contracts that into an FMA on arm64 and not on amd64, so the product rounds once here and twice there and the two paths differ by an ulp on one architecture only — invisible to amd64 CI. Wrap the product in an explicit float64/float32 conversion, the only construct the spec guarantees forces the rounding; an intermediate VARIABLE does not work and left all 32 FMADDD in place in the measured case. Found exactly this way: 4 fused inference paths (TPA, KAN, MemorizingAttention, MTA) merged green on amd64 and failed on every arm64 machine, 2 of them carrying comments asserting no FMA while the code contracted. If the peer is a backend kernel that also contracts — the cpu matmul emits 202 FMADDD — exact equality is unreachable from this side and the pin belongs at a tolerance. Claims about a PARALLEL split of the same loop are unaffected and not reported", false},
 	{"PS3024", "fixed-arity-variadic-call", "a call to a VARIADIC dispatch wrapper that passes a fixed number of arguments. Go builds a fresh slice for the variadic pack at every such site, so a wrapper existing only to forward its pack into a dispatch costs one allocation per dispatch, at every caller, forever. Call a fixed-arity sibling that borrows a pooled slice. MEASURED on nlp, where an MHA method was a byte-for-byte clone of the package's own variadic helper, never touched its receiver, and had 13 call sites while recorder-guarded pooled siblings for arities 1 through 4 sat unused beside it: routing each site to its sibling took a 500-token generate from 235.3k to 225.3k allocs/op, -4.26%% (p=0.000, n=10), control identical. JUDGE ON allocs/op, NOT ns/op — the same change did not separate on time (p=0.143), since those benchmarks are dominated by backend worker-pool park and wake. Check for an existing pool before adding one: nn already ships nnIns1Pool through nnIns3Pool that 43 of its own wrappers bypass. The pooled form MUST defer to the variadic one under a recorder, or the tape retains a slice about to be reused. Wrapper names come from the configured variadicDispatchWrappers list, since the call and the declaration sit in different files and this scanner has no package view. Silent on a genuine spread", false},
 	{"PS3023", "transpose-pass-over-built-matrix", "a nested loop that materializes a TRANSPOSED COPY of a matrix this function built itself. This is deliberately the case PS1010 excludes — a transpose writes the inner variable on the left, so interchange only moves the stride — and the remedy is different in kind: DELETE the pass by having the producer write the layout the consumer wants, which also removes the intermediate and its per-row allocations. MEASURED on the autograd logdet VJP, which solved its triangular inverse row-major then transposed it because the contraction needs columns: solving straight into column-major went -10.37%% at n=512 and -6.93%% at n=256 (p=0.000, n=12), allocs down about a third, control flat, bit-identical over 5547 values. Two further costs no line profile shows: the consumer stops walking down a column of a slice-of-slices, losing a row-pointer load and a bounds check per element; and a PARALLEL producer that wrote columns had every worker contending for cache lines with its neighbours, where row-major gives each its own row. Check the source is not ALSO consumed in the original layout, or flipping the producer just moves the transpose", false},
 	{"PS3021", "monotone-guard-in-loop", "a counted loop whose entire body sits behind a guard that moves monotonely with the loop variable and is compared against something invariant. That is not a per-iteration decision — the guard is false for a RUN of iterations at one end and true for the rest — so it belongs in the loop BOUNDS. Computing the crossing point once removes the branch from every iteration AND frees any loop-invariant the branch was trapping, since it splits the body into its own basic block and Go SSA will not hoist across it. MEASURED on the autograd conv1d backward, whose per-tap guard was false for only 3 of 2048 positions and whose loop HEADER profiled larger than either line it protected: F32 -7.92%% (p=0.000, n=16). The F64 arm of the same edit was directionally -4.7%% but did NOT separate at n=16 (p=0.210) — so expect a win when the skipped run is small and the body cheap, and nothing measurable otherwise; apply it anyway when bit-identical, since it strictly removes instructions. Bit-identical by construction: only iterations whose body never ran are skipped. Equality guards are excluded — they select one iteration, not a run. Check the DIRECTION before rewriting; getting it backwards silently drops work", false},
@@ -2346,6 +2347,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, invariantBehindBoundsCheckFindings(fset, fn)...)
 	out = append(out, monotoneGuardInLoopFindings(fset, fn)...)
 	out = append(out, fixedArityVariadicCallFindings(fset, fn, ns)...)
+	out = append(out, unroundedProductUnderExactnessClaimFindings(fset, fn)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -13443,4 +13445,105 @@ func functionBorrowsFromPool(fn *ast.FuncDecl) bool {
 		return true
 	})
 	return found
+}
+
+// unroundedProductUnderExactnessClaimFindings flags PS3025 — a function whose doc comment claims
+// bit-identity with a DIFFERENT implementation while its body contains a bare multiply-add.
+//
+// Go contracts `a*b + c` into a fused multiply-add on arm64 and does not on amd64. An FMA rounds
+// once where a separate multiply and add round twice, so a hand-written path and the path it
+// claims to equal can differ by an ulp — on one architecture only.
+func unroundedProductUnderExactnessClaimFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Doc == nil {
+		return nil
+	}
+	doc := strings.ToLower(fn.Doc.Text())
+	if !strings.Contains(doc, "bit-identical") && !strings.Contains(doc, "bit-exact") &&
+		!strings.Contains(doc, "no fma") {
+		return nil
+	}
+	// The claim has to be about a SECOND implementation. "Bit-identical" said of a parallel split
+	// of the same loop is safe under contraction, because both halves are the same instructions;
+	// only two independently written paths can fuse in different places.
+	peer := false
+	for _, k := range []string{"dispatch", "generic path", "slow path", "fallback", "reference",
+		"einsum", "scalar path", "the generic"} {
+		if strings.Contains(doc, k) {
+			peer = true
+		}
+	}
+	if !peer {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		var bare ast.Expr
+		switch as.Tok {
+		case token.ADD_ASSIGN, token.SUB_ASSIGN:
+			for _, r := range as.Rhs {
+				if isUnroundedProduct(r) {
+					bare = r
+				}
+			}
+		case token.ASSIGN:
+			for _, r := range as.Rhs {
+				add, ok := unparen(r).(*ast.BinaryExpr)
+				if !ok || add.Op != token.ADD {
+					continue
+				}
+				if isUnroundedProduct(add.X) {
+					bare = add.X
+				} else if isUnroundedProduct(add.Y) {
+					bare = add.Y
+				}
+			}
+		default:
+			return true
+		}
+		if bare == nil {
+			return true
+		}
+		line := fset.Position(as.Pos()).Line
+		if seen[line] {
+			return true
+		}
+		seen[line] = true
+		out = append(out, finding{
+			pos:      fset.Position(as.Pos()),
+			category: "unrounded-product-under-exactness-claim",
+			msg: fmt.Sprintf("this function's doc claims bit-identity with another"+
+				" implementation, and %s is a bare multiply feeding an add. Go CONTRACTS that"+
+				" into a fused multiply-add on arm64 and does NOT on amd64, so the product"+
+				" rounds once here and twice there — the two paths differ by an ulp on one"+
+				" architecture only, and amd64 CI cannot see it. Wrap the product in an explicit"+
+				" float64/float32 conversion, which is the only construct the Go spec guarantees"+
+				" forces the intermediate rounding. AN INTERMEDIATE VARIABLE DOES NOT WORK:"+
+				" assigning the product to a local first left all 32 FMADDD in place in the"+
+				" measured case. FOUND EXACTLY THIS WAY: four fused inference paths (TPA, KAN,"+
+				" MemorizingAttention, MTA) shipped green on amd64 CI and failed on every arm64"+
+				" machine, two of them carrying doc comments that asserted 'no FMA' while the"+
+				" code contracted. BOTH SIDES MUST BE ROUNDED: if the peer is a backend kernel"+
+				" that also contracts — the cpu matmul emits 202 FMADDD — exact equality is not"+
+				" reachable by editing this side alone, and the pin belongs at a tolerance"+
+				" instead. A claim of bit-identity across a PARALLEL split of the same loop is"+
+				" not affected and is not reported", renderExpr(bare)),
+		})
+		return true
+	})
+	return out
+}
+
+// isUnroundedProduct reports a multiplication not already wrapped in a conversion. The applied
+// form — float64(x*y), the only construct the Go spec guarantees forces the intermediate rounding
+// — is a call expression, and a call is not a *ast.BinaryExpr, so this assertion is what excludes
+// it. An explicit CallExpr test was written first and then deleted: it could never change an
+// outcome, and a clause that cannot be reddened by mutation is not a clause.
+func isUnroundedProduct(e ast.Expr) bool {
+	b, ok := unparen(e).(*ast.BinaryExpr)
+	return ok && b.Op == token.MUL
 }
