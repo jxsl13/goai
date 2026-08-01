@@ -85,8 +85,18 @@ func init() {
 			}
 		}
 		abar := tensor.New(lt.Dtype(), lt.Shape())
+		// Only the UPPER triangle is computed, and each off-diagonal result is mirrored. The full
+		// double loop did every pair twice: at (j,i) its sij is this (i,j)'s sji and vice versa, so
+		// half of the O(n^3) accumulation was recomputing sums it had already formed — and at i==j
+		// it formed the identical sum twice and discarded one.
+		//
+		// BIT-IDENTICAL, on the same argument vjp_solvespd already records for this transform: the
+		// full loop stored 0.5*(sji+sij) at (j,i) where this stores 0.5*(sij+sji), and IEEE
+		// addition is commutative — a+b and b+a have the same bits for all non-NaN operands, which
+		// these are by construction. Each individual sum keeps its own ascending-k order and
+		// operands, so nothing is reassociated.
 		for i := range n {
-			for j := range n {
+			for j := i; j < n; j++ {
 				var sij float64 // S_ij = Σ_k Linvᵀ[i,k]·T[k,j] = Σ_k Linv[k,i]·T[k,j], Linv lower ⇒ k ≥ i
 				var sji float64 // S_ji, Linv lower ⇒ k ≥ j
 				for k := i; k < n; k++ {
@@ -101,7 +111,9 @@ func init() {
 				if i == j {
 					abar.SetF64(sij, i, j)
 				} else {
-					abar.SetF64(0.5*(sij+sji), i, j)
+					v := 0.5 * (sij + sji)
+					abar.SetF64(v, i, j)
+					abar.SetF64(v, j, i)
 				}
 			}
 		}

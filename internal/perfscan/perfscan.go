@@ -44,6 +44,15 @@
 //	PS4003. a loop calls a package-local elementwise helper that WRAPS a libm
 //	   transcendental (softplus/mish/swish/…) — K sees only a DIRECT math.X, so this
 //	   hides the scalar cost one call deep (F64 OpSoftplus vsoftplus = 1.62× Mamba).
+//	PS3009. ONE column of a slice-of-slices read through an INDIRECT row index (M[idx[k]][f]) —
+//	   a gather with no nest to interchange; a feature-major copy makes the column contiguous
+//	   (GBM exact split scan -7.74%/-6.55%, at the cost of one n*d*8 copy).
+//	PS3008. a monotone (non-negative) accumulator tested against a threshold EVERY iteration —
+//	   the test can run every 4th iteration for the same answer, dropping an unpredictable branch
+//	   (DBSCAN leaf test -17.4%/-8.5%; the branch was 450ms against 30ms of arithmetic).
+//	PS3007. a membership SET (map[K]bool/struct{}) built by ranging a slice, then probed in
+//	   a loop — the source slice already answers the question, so a small set is faster scanned
+//	   than hashed (applyDRY -18.72%, mapaccess1_fast64 gone; crossover 8–16 elements).
 //	PS3003. a READ of an integer-keyed map (map[int]/map[rune]/…, sets excluded) inside a
 //	   loop — when the keys are dense over [0,N) a []T indexed by the key drops the
 //	   per-lookup hash (BPE Decode 2.85×, GGUF Decode 3.67×, forest votes T312).
@@ -130,6 +139,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -182,8 +192,11 @@ var checks = []check{
 	{"PS1002", "per-element-closure", "per-element visitor fed a closure (an indirect call per element)", false},
 	{"PS1003", "batch-single-elt", "a batch API called with a single-element slice literal inside a loop", false},
 	{"PS1004", "spread-accessor-in-loop", "a variadic AtF64/SetF64(idx...) spread call in a loop outside PS1001's Numel/Unravel domain (rebuilds the flat offset + bounds-checks each call)", false},
-	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses", false},
+	{"PS1005", "manual-walk-dispatch", "a per-element AtF64/SetF64 whose 2+ index args are enclosing-loop variables — a manual multi-dim tensor walk via dispatch that PS1001 Numel-loop check misses. THE BIGGEST MEASURED PAYOFF IN THIS TOOL, and also one of the most share-dependent, so both numbers matter. classic SoftmaxRegression.PredictProba: an n*d SetF64 fill plus an n*k AtF64 copy-out, 94208 dispatches at n=4096, replaced by contiguous row copies — sec/op -48.67%/-45.57%/-55.53% across three shapes, geomean -50.10% (2.0x), allocs -97.95%. nlp QuantMamba2 prefill gated RMSNorm: seq*intermediate iterations each paying TWO dispatches, an AtF64 on a gain that does not vary with the outer variable plus a SetF64 recomputing a flat offset — removed entirely, and the result was geomean -0.61% with 3 of 4 cells indistinguishable, because the enclosing prefill is dominated by quantized matmul. Same transform, same class, an 80x difference in outcome. RANK BY (a) the dispatch count, the product of the loop bounds times dispatches per iteration, and (b) the loop SHARE of its enclosing function — a walk bolted to a matmul-dominated path will not move a wall clock however many dispatches it removes (PERF-HOTNESS-IS-NOT-SYNTAX-001, PERF-ISOLATED-RATIO-IS-NOT-A-SITE-001). THE COST OF THE FIX IS DECIDED BY ONE THING: whether the dtype is statically fixed. Where a constructor pins it (tensor.New(tensor.F64, ...) or tensor.New(tensor.F32, ...)) the fix is three lines — take Storage().F64()/F32() once and index it — with no fallback needed and none wanted (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001). Where the dtype comes from an input, tensor.New(xin.Dtype(), ...), a direct storage write needs a dual path, which is a bit-identity claim between two arms that PS6004 then reports forever unless a test reaches BOTH. That is the case at the remaining quant_mamba, quant_jamba and quant_deepseekv2 sites, and it is why they were left alone rather than converted. Read the construction before estimating the work. Bit-identity is otherwise free: AtF64 on an f32 tensor widens exactly and SetF64 on one stores float32(v), so the same expression in the same order over the typed slice gives the same result — a converted site can even be made TEXTUALLY identical to a sibling that already hoists, which is worth doing where a bit-match invariant between two paths is relied on", false},
 	{"PS1006", "strided-inner-reduction", "a reduction whose INNER loop var is the high-stride (multiplied) part of a flat index ARR[inner*stride + outer] while the OUTER loop var is the contiguous (additive) part — the inner loop strides ARR by `stride` every step (cache-thrashing). Interchange to inner-outer/outer-inner so ARR is walked contiguously; per output element the reduction stays in the same order, so it is bit-identical. Shipped: MLA value-mix (cpu 1.13x / ref 1.27x), spectral-norm power-iter 2.57x (#592). WIN SCALES WITH `stride`×working-set: big when it EXCEEDS L2 (spectral-norm 512²), ~noise when it stays L1-resident — rank candidates by the strided dim's size. When the strided access sits inside a FUSED per-column O(seq²) scan that can't be interchanged (the outer var `c` is fixed per whole scan, e.g. an RWKV/attention recurrence), the remedy is GATHER/SCATTER: copy column c into contiguous scratch once (O(seq) strided), scan the scratch, scatter grads back once — same bit-exact remedy, shipped WKV backward 2.2-2.9x", false},
+	{"PS1007", "output-row-restreamed", "an inner loop that accumulates into a loop-INVARIANT output row — OUT[d] += f(outer)*IN[outer*stride+d] — so all of OUT is loaded and stored once per OUTER step instead of once in total. TWO remedies, and WHICH ONE depends on whether IN is already contiguous in the inner var; both are bit-identical when OUT enters zeroed, since each element still sums the outer var ascending over the same terms with the same association. (a) IN is NOT contiguous in d (the d-strided gather, e.g. a sparse P·V reading IN[key*stride+d]): strip-mine the d loop by 4 and hold four partial sums in registers with the outer loop INNERMOST. Measured on the sparse P·V against the axpy form: MoBAAttention 57.20ms->46.07ms (1.24x), DSAAttention_seq1024 53.14ms->48.89ms (1.09x). (b) IN IS already contiguous in d (a row-major rank-1 update, IN[i*n+d] read as a row slice): do NOT strip-mine — that trades one contiguous pass over the whole submatrix for n/4 strided passes, and the measurement shows its gain DECAYING with the outer trip count (LstsqMat -2.56% at n=64, -1.92% at 256, -0.52% at 512, indistinguishable from base at 768). Instead unroll the OUTER loop by 2 and emit SEPARATE accumulating adds (`OUT[d] += v0*r0[d]` then `OUT[d] += v1*r1[d]`), so OUT[d] stays in a register across the pair while both input rows stay contiguous: -2.31% to -3.16% at every size, geomean -2.69% (linalg QR, shipped). Case (b) was found by measuring case (a)'s advice on a contiguous site and watching it decay. Also the MIRROR of PS1006, and interchange is NEVER the remedy here — the inner var is already the contiguous part. RANKING for case (b) is NOT about cache residency, and an earlier version of this text got that wrong: the loop visits outer*|OUT| elements and does 3 memory ops per visit (load IN, load OUT, store OUT), which an unroll by U cuts to 1+2/U — 2.0 at U=2, 1.5 at U=4 — so the saving is a fixed fraction of the loop's own traffic whether OUT is L1-resident or not. Both shipped sites confirm it: linalg QR unrolled by 2 with a 6 KB L1-resident accumulator, and nlp SnapKV unrolled by 4 with a 57 KB one. What actually decides the payoff is the loop's SHARE of runtime and the unroll factor the outer trip count allows: QR's accumulate is one of several phases in Lstsq and gave geomean -2.69%, while SnapKV's aggregate dominates its function and gave -21.08% at U=4 (-17.6% at U=2, so the third and fourth rows earned their registers). Rank by share-of-runtime x achievable U, not by whether OUT fits in cache. (c) SEVERAL output rows are ALREADY accumulated together (a GEMM band kernel holding c0..c3): case (b)'s refusal does NOT transfer, and this was measured after (b) predicted it would. Strip-mining the inner var by 4 there is not n/4 strided passes over one row — it is a Ux4 REGISTER TILE, and the output traffic it removes (one whole pass over U rows per OUTER step) dominates the input locality it costs. Measured on the portable GEMM band kernels, where IN is contiguous and (b) would have said no: f32 -31.06%%/-38.86%%/-34.17%% and f64 -41.51%%/-50.50%%/-37.84%% at 256/512/1024, all p<=0.002, with the gain GROWING with size instead of decaying as (b)'s LstsqMat curve did. The quantity that separates (b) from (c) is arithmetic intensity: one output row gives 4 FMAs per 5 loads, four rows give 16 per 8", false},
+	{"PS1009", "unconverted-dtype-arm", "a per-element accessor walk sitting in one clause of a Dtype() switch whose SIBLING clause already takes typed storage — a fast path that covers some dtypes and leaves the rest on interface dispatch. PS1001 CANNOT REPORT THIS, structurally: it suppresses on hasFlat, which is satisfied by the sibling arm, so a helper that is fast for f64 and slow for everything else reads as already optimized. Which arm is hot is a workload fact, not a syntax one — nlp rows2D had an f64 copy arm and an accessor default, and every QUANTIZED model went through the default because activations are f32. Adding an f32 arm measured geomean -6.46% on the whole QuantMamba2 prefill (Q4_K_128 -6.34%, Q8_0_128 -6.56%, seq256 -4.79%, seq512 -8.09%, all p=0.000, 18 samples per arm) — a whole-benchmark win from one helper, since rows2D has 20+ call sites. Bit-identical where the missing arm is a WIDENING: AtF64 on an f32 tensor is exactly float64(v). NOT every arm is worth adding — f16/bf16 store as u16 and need a real conversion rather than a widening, so those clauses are legitimately left on the accessor; this check reports the population and the reader picks. Confirm which dtype the workload actually takes (a panic in the clause under the relevant benchmark settles it in one run) before converting. NARROWED AFTER SHIPPING, and the reason is the useful part: the first version reported 23 sites and an audit of every one found that ALL 23 already had both an f64 and an f32 arm, so once rows2D was fixed the check had zero actionable findings and 23 pieces of permanent noise. A switch that already covers F32 and leaves only its DEFAULT on the accessor is the FINISHED state - what remains there is f16/bf16 and the quantized dtypes, which live in u16 or packed storage and need a real conversion rather than an exact widening - so that shape is now suppressed. A NAMED case left on the accessor still fires, since listing a dtype and not converting it is a choice rather than an accepted tail. rows2D BEFORE its fix is the canonical hit: typed arms for f64 only, f32 falling through, every quantized model on that path", false},
+	{"PS1010", "column-walk-slice-of-slices", "a nested loop over a SLICE OF SLICES whose INNER loop varies the ROW index — for j { for i { X[i][j] } } — so every step jumps a whole row, re-dereferences a row header and touches a fresh cache line to read eight bytes. The flat-array analogues (PS1006, PS6011) cannot see this: they match ARR[inner*stride + outer] index arithmetic, and X[i][j] has none. That blind spot was expensive — this check exists because the tool MISSED two measured wins in one session. classic GaussianNB.Fit computed its var-smoothing epsilon with 2*d such passes while every other loop in the same function was already row-major: -23.74% once folded into two row-major passes. classic ballTree.build chose its split dimension with one such pass per dimension, next to an enclose() that already walked rows contiguously: -18.71% on BenchmarkKNNFit once the lo/hi rode along in that pass. REPORTED ONLY WHEN INTERCHANGE IS PROFITABLE: the inner loop must assign to something that does not mention the inner variable — a scalar accumulator, or a slot indexed only by the outer one. A transpose (out[j][i] = in[i][j]) strides whichever way it is run and is excluded by that clause. Bit-identity is usually free, since interchanging preserves each accumulator's summation order when the accumulation is per-outer-index, but CONFIRM that per site rather than assuming it AMORTIZATION FILTER: an inner body that itself contains a loop is skipped, because the strided access then happens once against that loop's whole trip count. LU's elimination forced this — `mult := m[i][k]` reads a column beside a row-major `for j { ri[j] -= mult*pivRow[j] }` that does O(n) work for the same i — and without the filter the tree reported 46 sites, 19 of them amortized like that. The check finds the SHAPE, not the payoff: of its findings measured so far, classic GaussianNB.Fit paid -23.74% and linalg CholSolve's l[k][i] paid NOTHING (transposing L measured +3.74% at n=64, see PERF-TRANSPOSE-IS-NOT-FREE-001), so confirm at the site", false},
 	// PS2xxx — allocation inside loops
 	{"PS2001", "alloc-in-loop", "a tensor allocation inside a per-element loop", false},
 	{"PS2002", "unsized-builder", "a strings.Builder/bytes.Buffer written in a loop with no .Grow", false},
@@ -192,24 +205,43 @@ var checks = []check{
 	{"PS2005", "regexp-compile-in-loop", "a regexp.Compile/MustCompile inside a loop", true},
 	{"PS2006", "quadratic-cache-append", "a per-token cache slot reassigned to a concat of ITSELF and a new row — O(T\u00b2) copy traffic where an amortized row buffer is O(T)", false},
 	{"PS2007", "build-nxn-use-one-row", "a call given the same size argument twice, whose square result is then read at exactly that position — an N×N object materialized to consume one row", false},
+	{"PS2008", "per-row-make-slab", "a loop that allocates one slice per iteration into ARR[loopvar] — make([]T, len) with len LOOP-INVARIANT — where a single slab plus disjoint capped views would do. THE INVARIANT-LENGTH REQUIREMENT IS REAL BUT IT IS NOT THE END OF THE STORY, and a reader who stops here will leave a win behind: a uniform slab needs uniform rows, so this check stays silent when the per-iteration length VARIES — yet those sites take a block BUMP ALLOCATOR instead, one make per block with each row cut three-index from it, and a row longer than a block getting its own. MEASURED that way on classic DBSCAN, whose core neighbour lists differ in length per point and were cloned one make at a time: -66.18%% and -74.13%% allocs/op with -5.90%% and -7.48%% on time (p=0.000, n=12), against two arms of the same fixture that stayed flat. Note the shape that hid it from this check even in spirit — `dst[i] = append(make([]T, 0, len(src)), src...)`, where the make is nested inside an append. CHECK LIFETIMES BEFORE SLABBING EITHER WAY: a block pins every row in it, so this is only safe when the rows die together, which for DBSCAN they do since the destination is a function local never returned. Replace with one make([]T, n*len) and ARR[i] = slab[i*len : (i+1)*len : (i+1)*len]. Bit-identical by construction: make() zeroes and so does a fresh slab, and no value, order or association changes. EXPECT NO SPEEDUP *WHEN THE LOOP BODY IS SUBSTANTIAL*, and that qualifier was added after a third site broke the unconditional form. Measured with no wall-clock movement: linalg QR's per-column reflectors -39.7% allocs/op and classic GMM's per-sample responsibility rows -62.2% (5751 to 1753 on GMMFit), both p>0.4. Measured WITH movement: classic GMM PredictProba's output rows, -11.17%% at k=4 and -7.30%% at k=8 (p=0.002) alongside allocs 605 to 94. What separates them is how much work the body does per allocation, and the cleanest evidence is INSIDE that third site rather than across sites: the same transform on the same function is -11.17%% at d=4 and INDISTINGUISHABLE at d=16, 32 and 64, where the density evaluation dominates and the allocation never was a meaningful share. Position in the loop nest matters for the same reason — per-ROW scratch can move the clock, per-WORKER scratch cannot, since it is amortized over the whole chunk (classic GMM's pooled worker buffers: allocs -63%%, time -0.61%% geomean). So: it is always a RESOURCE optimization — fewer allocations means less allocator work and less GC scan pressure on every machine, which is why it holds across systems — and it is ALSO a throughput one exactly when the allocation is a real fraction of the per-iteration work. Measure the enclosing operation rather than assuming either way. Bytes barely move: the [][]T header stays and one slab rounds to a size class (+0.1% observed). PRECONDITIONS the check cannot verify: rows must not be appended to (the 3-index cap makes that safe but it then reallocates, losing the benefit) and must not be individually replaced later, since the views are only valid while the slab is. Jagged rows are already excluded — a length that varies with the loop variable needs per-row offsets, a different transform. Cannot be ranked syntactically: the payoff scales with the ITERATION COUNT, which is a runtime fact (PERF-HOTNESS-IS-NOT-SYNTAX-001), so prefer sites whose loop bound is a data size over ones bounded by a small constant", false},
 	// PS3xxx — indirection / reflection overhead
 	{"PS3001", "reflection-in-loop", "a reflection-based fmt scan (Sscanf/Sscan/Fscanf) in a loop", false},
 	{"PS3002", "closure-comparator-sort", "a package sort (sort.Slice/SliceStable) with a comparator closure", false},
 	{"PS3003", "int-key-map-in-loop", "a read of an integer-keyed map inside a loop", false},
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
+	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
+	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3024", "fixed-arity-variadic-call", "a call to a VARIADIC dispatch wrapper that passes a fixed number of arguments. Go builds a fresh slice for the variadic pack at every such site, so a wrapper existing only to forward its pack into a dispatch costs one allocation per dispatch, at every caller, forever. Call a fixed-arity sibling that borrows a pooled slice. MEASURED on nlp, where an MHA method was a byte-for-byte clone of the package's own variadic helper, never touched its receiver, and had 13 call sites while recorder-guarded pooled siblings for arities 1 through 4 sat unused beside it: routing each site to its sibling took a 500-token generate from 235.3k to 225.3k allocs/op, -4.26%% (p=0.000, n=10), control identical. JUDGE ON allocs/op, NOT ns/op — the same change did not separate on time (p=0.143), since those benchmarks are dominated by backend worker-pool park and wake. Check for an existing pool before adding one: nn already ships nnIns1Pool through nnIns3Pool that 43 of its own wrappers bypass. The pooled form MUST defer to the variadic one under a recorder, or the tape retains a slice about to be reused. Wrapper names come from the configured variadicDispatchWrappers list, since the call and the declaration sit in different files and this scanner has no package view. Silent on a genuine spread", false},
+	{"PS3023", "transpose-pass-over-built-matrix", "a nested loop that materializes a TRANSPOSED COPY of a matrix this function built itself. This is deliberately the case PS1010 excludes — a transpose writes the inner variable on the left, so interchange only moves the stride — and the remedy is different in kind: DELETE the pass by having the producer write the layout the consumer wants, which also removes the intermediate and its per-row allocations. MEASURED on the autograd logdet VJP, which solved its triangular inverse row-major then transposed it because the contraction needs columns: solving straight into column-major went -10.37%% at n=512 and -6.93%% at n=256 (p=0.000, n=12), allocs down about a third, control flat, bit-identical over 5547 values. Two further costs no line profile shows: the consumer stops walking down a column of a slice-of-slices, losing a row-pointer load and a bounds check per element; and a PARALLEL producer that wrote columns had every worker contending for cache lines with its neighbours, where row-major gives each its own row. Check the source is not ALSO consumed in the original layout, or flipping the producer just moves the transpose", false},
+	{"PS3021", "monotone-guard-in-loop", "a counted loop whose entire body sits behind a guard that moves monotonely with the loop variable and is compared against something invariant. That is not a per-iteration decision — the guard is false for a RUN of iterations at one end and true for the rest — so it belongs in the loop BOUNDS. Computing the crossing point once removes the branch from every iteration AND frees any loop-invariant the branch was trapping, since it splits the body into its own basic block and Go SSA will not hoist across it. MEASURED on the autograd conv1d backward, whose per-tap guard was false for only 3 of 2048 positions and whose loop HEADER profiled larger than either line it protected: F32 -7.92%% (p=0.000, n=16). The F64 arm of the same edit was directionally -4.7%% but did NOT separate at n=16 (p=0.210) — so expect a win when the skipped run is small and the body cheap, and nothing measurable otherwise; apply it anyway when bit-identical, since it strictly removes instructions. Bit-identical by construction: only iterations whose body never ran are skipped. Equality guards are excluded — they select one iteration, not a run. Check the DIRECTION before rewriting; getting it backwards silently drops work", false},
+	{"PS3020", "invariant-behind-bounds-check", "a counted loop that indexes slices with its loop variable AND recomputes a loop-invariant value every iteration. These are ONE defect: each indexed read is a bounds check, a bounds check is a panic edge that splits the body into separate basic blocks, and Go SSA will not hoist across a block that can panic — so the checks cost more than their own instructions because they also trap the invariant. Fix both halves: range over the destination and cut every companion to its length, then lift the invariant above the loop. MEASURED on the rl Polyak soft update, where (1-tau) was rematerialized per element behind two bounds checks — body from 14 instructions to 5, -21.30%% F64 and -18.62%% F32 (p=0.000, n=12), with an untouched sibling benchmark flat as the control. Restricted to invariants used as a VALUE against an indexed element; addressing arithmetic folds into an addressing mode and is excluded. Verify the FMA fusion did not move — merging blocks can change which multiply contracts, and a 1-ulp failure from exactly that is already on record here", false},
+	{"PS3019", "unrolled-index-not-windowed", "a manually unrolled loop bounded by `i+K <= len(x)` that reads x at K constant offsets and never cuts it to the K-wide window. The bound does NOT discharge those reads — i+K can overflow, so the prove pass keeps a check on every one. Cutting a window once per iteration replaces K checks with ONE slice check. MEASURED on nlp dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12), geomean -17.36%%, bit-identical. IT DID NOT PAY at the site it was found on, which is the load-bearing half of this advice: the classic ballTree L2 leaf test went four checks to one for -1.11%% against an UNTOUCHED sibling arm that moved -1.06%% in the same run, so nothing was attributable — that loop has a data-dependent early exit whose misprediction dominates and hides the checks. Require a branchless body with no loop-carried dependency, and run an untouched control, because this class yields a plausible small win that is really drift. Reordering the reads to touch the highest offset first is NOT a substitute and left all four checks in place. Clamping a second operand to the first outside the loop makes its window free", false},
+	{"PS3018", "max-normalized-exp", "math.Exp(x - m) where m is a max that INCLUDES x, so the call is exp(0) whenever the max picked x and exp(0) is exactly 1. MEASURED TWICE: on the RWKV WKV forward scan, where both stabilized pairs had this shape and half of four calls per element computed a constant, -12.42%% and -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical over 6540 gradients across five decay regimes including negative and zero. Check for REPEATS at the same time: each call SITE is reported, and in the backward each of the two exponents appeared twice — math.Exp is not inlined, so a repeat is a second evaluation rather than a subexpression the compiler folds. Test the max against the ARGUMENT rather than branching on the original comparison, so a NaN operand still evaluates both exponentials exactly as before. The win scales with 1/N — over a max of N terms it saves one call in N and is not worth the branch; it paid here because N is two — and the measured saving was a third of what the exp profile share predicted", false},
+	{"PS3017", "companion-not-sliced", "a loop that already ranges over a row but still indexes a SECOND slice with the range key, so only half the bounds checks are gone. Ranging proves the row index in range and says nothing about the companion, whose length the compiler cannot relate to the ranged slice. Cut both to the same length, writing the relation explicitly for a trailing segment. MEASURED as the gap between a half-applied and a finished conversion: linalg Cholesky ranged only the row for geomean -2.08%% and gained a FURTHER -1.59%% (three of four cells at p=0.000) when the companion was sliced, while linalg LU done with both from the start went -6.61%% geomean over nine cells. Bit-identical. THE COST IS OFTEN REGISTER PRESSURE RATHER THAN THE CHECKS, which changes how to rank a site: every surviving check keeps a loop-invariant LENGTH live, and enough of them crowd out the loop's own state. MEASURED on the classic GMM full-covariance solve, where four L rows and four y vectors were indexed inside a loop bounded by an integer — eight live lengths, which spilled the induction variable itself and forced a slice pointer to reload every iteration. Cutting all eight to one length took GMMFitFull -5.27%% (p=0.000, n=12), with the diagonal arm flat as a control. So count the OPERANDS, not just the checks. That site also shows this check's own blind spot: it requires a loop that ranges over a SLICE, and a loop written `for j := range i` over an integer looks identical without types while proving nothing (RANGE-OVER-AN-INT-LOOKS-LIKE-RANGE-OVER-A-SLICE-001), so integer-bounded loops with many indexed companions are NOT reported and must be found by reading. A dedicated check for them was built and withheld: at four-or-more operands it matched 141 sites, nearly all of them the ordinary outer loop that indexes several parallel arrays, which is not a defect. Silent when the companion name is cut from a slice expression anywhere in the function; the precondition it cannot check is that the two really span the same extent, so an offset or shorter companion needs its own slice", false},
+	{"PS3016", "two-deep-index-not-ranged", "an inner loop reading m[i][k] with the OUTER index invariant, so every step re-loads the row pointer and bounds-checks against it. Hoist the row and RANGE over it — and the range is the half that pays. On linalg Cholesky forward substitution, hoisting the row while keeping the integer-bounded loop measured geomean -0.53%% over eleven benchmarks with one cell at +0.41%% (p=0.038) and did not reach significance at n=12 (p=0.060); converting the same site to range over the row gave -2.82%%, -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The mechanism is bounds-check elimination, not the pointer reload. MEASURED FAR LARGER on classic GaussianNB.Fit, which is the instance to reason from: -32.07%% and -28.24%% (p=0.000, n=12) with two untouched sibling benchmarks flat. The reason that site pays 15x what Cholesky did is worth understanding before ranking a candidate — the checks were not just costing their own instructions, they were BLOCKING A HOIST. Each check is a panic edge that splits the body into its own basic block, and Go SSA will not hoist across a block that can panic, so the outer index times the row stride and BOTH slice headers were rematerialized on every inner step even though all of them are invariant: 14 of the 19 instructions in that loop were address arithmetic that should have been loop-invariant. So rank a two-deep site by how much invariant work is trapped behind its checks, not by the check count alone, and read -gcflags=-S to see it. Cut the row and the companion to ONE length so the range proves both indexes; ranging only the row leaves the second check and most of the win. Bit-identical either way. Silent when the loop already ranges over a slice, which is the applied form; a loop whose OUTER index moves instead has no row to range and is a different problem", false},
+	{"PS3015", "write-only-alloc-field", "a struct field handed a fresh allocation and read nowhere in the package, so every construction pays for a buffer nothing uses. The compiler will not report it: an unused local is an error, but a field assigned in a constructor counts as a use. MEASURED on the autograd WKV backward, where a linear-time rewrite stopped needing the loga and p exponent buffers the quadratic path required and they kept being allocated per worker per call; removing them with a pooled scratch took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, worth a further 15.82%% geomean on time. A KERNEL REWRITE IS THE USUAL CAUSE, since the scratch a kernel inherits describes the algorithm it replaced. Restricted to UNEXPORTED fields, where absence of reads in the package is conclusive, and matched by NAME without types so a same-named field read anywhere suppresses it; a read through reflection is the remaining blind spot", false},
+	{"PS3014", "coupled-index-weight", "a doubly-nested reduction whose accumulated term is scaled by an arithmetic combination of BOTH loop indices, used as a VALUE rather than as an index. That coupling is what makes such a sum look irreducibly quadratic, and a DIFFERENCE usually is not: (t-1-i) rewrites as (t-1) minus i, turning one distance-weighted sum into (t-1)*S minus S1 over two ordinary prefix sums maintained in O(1) per step. MEASURED on the autograd WKV backward, where dw was the only gradient with a distance weight and the only reason the pass stayed quadratic; splitting it took seq=512 from 10335us to 580us (17.8x) and the cost per doubling of seq from 3.85x to 1.81x. PRECONDITION THE CHECK CANNOT SEE: the remaining factors must separate into a t-only part and an i-only part or nothing hoists. Products and moduli of the two indices generally do not split and are reported only so they can be ruled out deliberately. Index arithmetic is excluded, since a[t*n+i] couples the indices to address memory rather than to weight a value", false},
+	{"PS3013", "leaking-format-param", "a pointer-carrying parameter handed to a fmt call. Passing it as an interface argument makes escape analysis mark the PARAMETER as leaking, and that verdict belongs to the function rather than to the branch, so every caller heap-allocates its argument even though the formatting usually sits on a panic or error path that never runs. MEASURED on tensor.NewOn, whose invalid-shape panic formatted its shape with a %%v verb: the shape literal at every call site escaped, costing one allocation per tensor created anywhere in the tree. Swapping in shape.String(), which escape analysis already proves non-escaping, took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with time unchanged (p=1.000, n=12) and QuantMamba2 decode -8.70%% allocs. Fix with a non-escaping formatter, never by deleting the message, and VERIFY with go build -gcflags=-m that the parameter flips from leaking param to does not escape — another leak in the same function keeps the old verdict and the change buys nothing. Named parameter types need the configured pointerTypeNames list, since with no type checker a named slice and an int alias are indistinguishable", false},
+	{"PS3012", "slice-built-for-one-element", "a package-level function call immediately indexed by a constant, f(x)[0] — the callee builds a whole collection and the caller keeps one item, so where the callee allocates, the rest of it and the slice header are waste that repeats every call. MEASURED on nlp QuantMamba2 decode: rows2D materializes the in_proj output as [][]float64 once per LAYER per token and the caller takes row 0, which at seq=1 was 37%% of all allocation OBJECTS in the step; threading a scratch buffer through the per-stream layer state instead went -18.37%% B/op, -3.67%% allocs/op and -0.54%% sec/op across all seven quantization formats (p<=0.01 every cell). The scratch must live on a PER-STREAM or per-worker object, never on a shared model, and the element must be read-only at the call site since the original returns an independent copy. Restricted to a bare identifier callee: method chains like t.Shape()[0] return a view and allocate nothing. Cannot see whether the callee allocates — confirm before acting", false},
+	{"PS3011", "static-chunk-barrier", "work split into equal chunks sized by the worker count, one goroutine per chunk, joined at a barrier — the slowest worker sets the wall clock. On a heterogeneous CPU that is the common case, not a tail: an M2 Pro has 8 performance and 4 efficiency cores, so a chunk landing on an E core can take several times as long. MEASURED on the autograd WKV VJP, where the static split made MORE CORES SLOWER (GOMAXPROCS=8 at 3.36ms against 3.76ms at 12) and pthread_cond_wait was 47.96%% of the profile, more than every line of the kernel combined; claiming units through an atomic cursor went -28.73%% and -29.58%% (p=0.000, n=8) and was BIT-IDENTICAL, since which worker runs a unit cannot change that unit arithmetic. Diagnose with a GOMAXPROCS sweep and a FUNCTION profile — a line profile ranks the kernel and hides the waiting. Silent once the function reaches for sync/atomic, which is what claiming looks like", false},
+	{"PS3010", "serial-reduction-chain", "a single-accumulator floating-point reduction whose every add depends on the previous one, so the loop is bound by add LATENCY rather than throughput. Four independent partials summed at the end measured 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x) on Apple M2 Pro darwin/arm64, matching the hardware prediction for a dependent-add chain. NOT BIT-IDENTICAL: it reassociates the sum, so the value moves in the last ulp, and the two hottest instances in this tree are blocked on exactly that — nlp randomOrthogonal is regenerated at dequantization time by TurboQuant, and classic ballTree.within decides exact-label DBSCAN goldens. Requires a pure reduction: one accumulator, written once, read nowhere else in the loop, no branching. An accumulator that is also TESTED is PS3008 territory and is excluded, since four partials cannot be compared against a threshold without summing them first", false},
+	{"PS3009", "indirect-column-gather", "a loop reading ONE column of a slice-of-slices through an INDIRECT row index — M[idx[k]][f] with f invariant — so every element lands in a different row, costing a row-header dereference and a cache line per eight bytes used. Same cache behavior PS1010 describes but NOT the same fix: PS1010 needs an interchangeable nest, and here the row order is a data-dependent permutation with no nest to swap. Keep a feature-major copy (xT[f*n+row]) instead. MEASURED on classic gbmBuilder.bestSplit, where the gather was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. TRADES MEMORY FOR TIME — the copy costs n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh it against the gather's hotness rather than converting on sight. A reference implementation kept deliberately simple is the expected false positive", false},
 	{"PS3006", "full-sort-take-topk", "a full sort.Slice/SliceStable (or slices.SortFunc/Sort) of a whole slice whose result is consumed ONLY through a bounded top-K prefix (s[:K] or a loop bounded by K reading s[r], K an identifier that is not len(s)) — an O(n log n) sort for an O(K) need. When K ≪ n, a bounded top-K selection (size-K min-heap or quickselect) then sorting just those is O(n log K), and it drops the O(n) sort-scratch alloc. Bit-identical when the comparator is a strict total order (a unique tiebreak → no genuine ties). Shipped: MemMemory.retrieveHead 2.98x. Silent when the slice is ALSO consumed in full (range s, s[:], s[:len(s)], a len(s) loop) or returned/passed whole. Confirm K ≪ n and the total-order tiebreak, then benchmark.", false},
+	{"PS3004", "composite-key-map-probe", "a map indexed by a COMPOSITE LITERAL key — m[k{a,b}] or m[[2]T{a,b}] — which only a map can be, so the shape is unambiguous without type information. An array or struct key goes through Go's GENERIC hasher (one hash call per field, then a combine) rather than the specialized fast paths a plain string or int key gets, so it is the most expensive kind of map probe. Where the key domain is small and dense, a flat index replaces it outright. MEASURED: nlp's GGUF BPE encoder probed mergeRank[[2]string{left,right}] once per adjacent pair in the seed pass, one per input byte; a 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode 4.425ms to 2.735ms, -38.19% at p=0.000, with bytes unchanged. The sibling tiktoken path in bpe.go had already made exactly this change, its comment recording that the string hash 'dominated the profile (mapaccess2_faststr)' — and a [2]string key is WORSE than that, since it pays the generic struct hasher instead. HOTNESS IS NOT VISIBLE HERE and the check does not pretend otherwise: the site that mattered was not syntactically inside a loop at all, it was a small function CALLED from one, which no AST-only predicate can see. So this reports the whole population rather than guessing, and the population is small enough to read. Before converting, establish that the key domain really is dense and bounded — two enum-like fields or two bytes qualify, an arbitrary string pair does not — and that the probe is on a repeating path", false},
 	// PS4xxx — vectorization candidates
 	{"PS4001", "le-decode-in-loop", "a per-element little-endian bit decode in a loop with no bulk-copy fast path", false},
 	{"PS4002", "scalar-transcendental-vectorizable", "a scalar libm transcendental in a loop while a vectorized sibling is called", false},
 	{"PS4003", "transcendental-wrapper-in-loop", "a loop calls a helper that wraps a libm transcendental", false},
-	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do", false},
+	{"PS4004", "scalar-copy-loop", "an element-by-element slice copy in a loop where a bulk copy would do. Reported in TWO strengths. ADVISORY when the index pattern only SUGGESTS a run: the message asks for the run length to be verified, because a wrong run is a wrong-value bug rather than a rounding one. PROVEN when the loop body is exactly that one assignment and both sides advance by exactly 1 per step over a base that does not move — then the bounds are computable, the whole loop IS the run, and one copy() replaces it. Measured on this host (M2 Pro, darwin/arm64) against the elementwise form, three run shapes x three sizes, copy() wins EVERY cell: full row 4.13x at n=64, 2.67x at 256, 2.51x at 512; upper-triangular (j from i) 3.16x/2.39x/2.35x; lower-triangular (j to i) 3.46x/2.27x/2.40x. The compiler does NOT rescue these — even the full-row case stays 2.5x off copy() when the index is written ARR[i*n+j] rather than as a bare range over the destination, so the memmove idiom does not apply. RANKING, which decides whether a site is worth touching: those ratios are for the LOOP IN ISOLATION, and all 4 sites converted when the proven classification was added moved end-to-end runtime by NOTHING — linalg Cholesky and QR assemble output in an O(n^2) loop inside an O(n^3) factorization (geomean -0.48% over six cells, all within spread), and the nlp Mamba2 prefill bias seed is one D-length run against a K*D convolution per timestep (six cells indistinguishable). So this is a WORK reduction that holds on every system — fewer instructions and fewer bounds checks for the same bytes moved, which is why those sites were still converted — but it shows in a wall clock only where the run is a meaningful SHARE of the enclosing function. Rank by that share, not by run length; PERF-HOTNESS-IS-NOT-SYNTAX-001 applies. PRECONDITIONS the AST cannot check: (1) element types must be IDENTICAL, not merely assignable — copy() rejects a []any destination fed a []string source, which the loop accepts; (2) if the two slices ALIAS with the destination offset ABOVE the source, an ascending element loop propagates values forward while copy() has memmove semantics and does not, so an in-place forward shift is the one shape to leave alone. SILENCE conditions: any call in the loop body (already fixed, or doing real per-element work), a same-identifier source and destination (a permutation, not a move), a conditional store (a filtered scatter), a sibling branch that already bulk-copies the same pair (the flagged loop is the strided arm that must stay), and — for the ADVISORY strength only — a loop that is not element-counted, which keeps rank-sized setup loops out. The counted-loop gate applies at BOTH strengths: exempting proven runs would cover four range-over-identifier sites but is indistinguishable from a rank loop (`range k` vs `range shape`), so the precision contract wins and those four are a recorded recall gap. A base that is not a bare identifier (a row of a slice-of-slices, l[i][j]) is matched ONLY at the PROVEN strength: allowing it advisorily added 12 findings to the tree and all 12 were gathers with no contiguous run — column gathers, permutation gathers through an index array, and bit-shift sources — so proving the stride is what separates the real shape from them", false},
 	{"PS4005", "per-element-odometer", "an N-D coordinate odometer ticked once per element instead of once per run", false},
 	{"PS4006", "row-slice-matrix", "a [][]T matrix built row-by-row and then indexed inside a nested loop", false},
 	{"PS4007", "vjp-scalar-elementwise-binop", "a *VJP with a scalar single-op elementwise loop (dst[i]=a[i]∘b[i]) that a SIMD backend op would vectorize+parallelize, and no backend.Execute dispatch", false},
 	{"PS4008", "serial-dot-matmul", "a matmul whose innermost loop is a serial scalar dot accumulator — latency-bound where an ikj/axpy form has independent accumulators", false},
 	{"PS4009", "transposed-gram-colstride", "a symmetric-gram reduction M[k][i]·M[k][j] whose reduction index k is the OUTER (row) index of a row-major/jagged matrix — the innermost loop strides down a column across rows; reblock to k-outer rank-1 (load M[k] once, walk contiguously)", false},
 	// PS5xxx — arithmetic
-	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element", false},
+	{"PS5001", "loop-invariant-divide", "a divide by a loop-invariant scalar on every element. MOST FINDINGS SHOULD BE DECLINED. The reciprocal-multiply rewrite is NOT bit-identical and its speedup evaporates as soon as the loop touches memory, which an elementwise tensor loop always does. Measured on this host, 18 samples per arm interleaved in both orders: pure arithmetic with 8 independent chains and no memory 1303.5ns -> 933.7ns (-28.37%), the same arithmetic reading from an L1-resident slice 454.7ns -> 452.2ns (p=0.168, indistinguishable), a load-divide-store elementwise loop noise. The 1.2-1.5x quoted from SoftCap VJP and the optimizer moments is the memory-free ceiling. Accuracy cost, over 200k values: results differ for 66.3% of inputs at d=3.7, 35.4% at d=7, 24.5% across 50 random divisors, by up to 1 ulp — exact ONLY for a power-of-two divisor (0.000% differing at d=1024). So the usual trade is 1 ulp on a quarter to two thirds of outputs for nothing. Rank by whether the divide sits on a memory-free path; if it does not, decline", false},
 	{"PS5004", "multi-sweep-fusable", "three or more consecutive loops over the same range each indexing a shared slice (fuse the passes into one sweep)", false},
 	{"PS5002", "symmetric-accumulation", "a nested loop accumulating a full symmetric matrix (m[i][j] += x[i]*x[j]) where one triangle + mirror would halve the work", false},
 	{"PS5003", "inner-invariant-recompute", "an inner-loop expression that varies with the INNER index but not the outer one — recomputed once per outer iteration where a precomputed row would do", false},
@@ -218,6 +250,24 @@ var checks = []check{
 	{"PS6001", "full-sort-bounded-prefix", "a full-vocabulary descending index sort whose result feeds an early-breaking (threshold-bounded) prefix consumer, with no quickselect/pre-filter guard — an O(n log n) sort for an O(prefix) need", false},
 	{"PS6002", "spatial-bounds-branch", "an innermost window/kernel loop re-testing a compound spatial bounds guard (iy>=0 && iy<h && ix>=0 && ix<wd) per tap, where the in-bounds taps form one contiguous run the guard can be hoisted around", false},
 	{"PS6005", "monotone-index-bound", "an innermost loop guarding its tap work with a single relational bound on an index affine in the loop var (j:=t-(K-1)+k; if j>=0) — the in-bounds iterations are one contiguous run, clamp the loop bound instead of branching per tap", false},
+	{"PS6023", "threshold-path-uncovered", "a package-level tuning constant that gates two code paths through a relational comparison, where NO test file in the package names it — so nothing PINS which arm the tests take. Sometimes the path is entirely unexercised (all three hand-found cases below were); sometimes it is covered incidentally by a test aimed at something else, which is weaker than it looks: the diagnosis misleads, and the coverage vanishes silently the moment the constant is retuned. Measured example of the second kind: both radix sorts behind nlp's radixSortCutoff turned out to be reachable from existing tests, but an ascending-radix STABILITY break surfaced only as a failure in TestDistQuickselectParity, a test named for something else, and nothing pinned the tie-break that diffusionRefillOrder documents. Found by hand three times in three packages before this check existed: linalg goldens ran 384 elements against a 65536 bound and a one-ulp perturbation of the parallel arm left them green; every SnapKV test used 2-3 rows against a group of 4; WandaPrune's fan-out needs 2+ panels and every test capped cout below the panel width, so making the worker scratch SHARED left all eleven Wanda tests passing with the race detector firing. REMEDY: one gate whose two arms are the SAME source selected by the threshold — never a separately written reference, which contracts to FMA differently and fails by an ulp on arithmetic that never changed. If the package's tests are EXTERNAL (package X_test) and the constant is unexported they cannot name it at all, so add an internal test file that asserts the geometry clears the bound, or select the arms through an exported knob such as GOMAXPROCS. VERIFICATION-GAP check: it reports missing evidence, not a defect — a hit is a test to write, never a code change. MEASURED CONSEQUENCE, and this check called it correctly before anyone acted on it: backend/cpu's matmulInlineWork, which decides whether an F64 matmul runs serial or fans out, sat in this check's output as gemm.go:95 while it went stale. The band kernels beneath it were register-tiled and became roughly twice as fast; fork/join cost did not change, so the crossover moved up and the untouched constant kept fanning out shapes that had stopped paying for it — measured at +37.26%% slower at the gate value itself, +22.85%% and +9.41%% just above it. Re-swept, the crossover had moved from 262144 to between 592704 and 681472. The finding was sitting here the whole time and was re-derived from first principles instead of read. TREAT THIS CHECK'S OUTPUT AS A LIVE WORKLIST: an untested threshold is not merely under-covered, it is a number nobody can re-sweep when the code it balances changes, and this repo has now had four of those go stale in one session", false},
+	{"PS0001", "unused-ignore-directive", "a //perfscan:ignore directive that suppressed nothing — either the code it guarded moved out from under it (a directive reaches only its own comment block and the following line) or the finding is fixed and the comment should go. An inert suppression reads as though it took effect, which is worse than none", false},
+	{"PS6022", "sort-feeds-truncation", "a slice sorted in FULL and then truncated to a smaller bound — every comparison that ordered the discarded tail was wasted, and a selection answers the same question in O(n). The counted-loop (PS6013) and threshold-break (PS6001) forms miss this one, because the consumer is neither a loop nor a break: it is a reslice", false},
+	{"PS6021", "fanout-without-worker-seam", "a fan-out helper whose callback receives ONLY a single work index and no scratch, with no sibling scratch-constructor parameter — callers have nowhere to hoist a per-item buffer to, so every caller that needs a working buffer must allocate one PER ITEM; give the callback a scratch parameter or take a func() T constructor the helper calls once per worker", false},
+	{"PS6019", "jam-tail-delegates", "an unroll-and-jammed loop (i+N <= bound) whose scalar remainder loop DELEGATES to a method on the receiver while the wide body is inlined — the two are separate code paths, so a fix applied to the wide one (per-worker scratch, a pinned product, a bounds hoist) silently misses the tail, and a test at a trip count divisible by N never executes it", false},
+	{"PS6018", "layout-op-cluster-unfused", "three or more calls dispatching a pure DATA-MOVEMENT op (layoutOpConstants: slice, reshape, transpose, concat) in one function with no fused raw-storage path — movement cannot change a value, so gathering and scattering directly is bit-identical and removes every one of those dispatches", false},
+	{"PS6017", "unpooled-variadic-sibling", "a VARIADIC helper called inside a loop at a fixed argument count, when the same package declares a non-variadic sibling with identical leading parameters and exactly that many trailing ones — the variadic form allocates a slice per call and the sibling exists to avoid it. MEASURED, in isolation, on nlp exec1 against its pooled siblings exec1a and exec2 (M2 Pro, darwin/arm64, nil Recorder so the pooled arm is taken): the pooling removes EXACTLY ONE allocation per call, 8 down to 7, with 392->384 B at one input and 432->416 B at two, and 179.8->177.6 ns (1 input) and 201.5->197.1 ns (2 inputs). So the win is real, bit-identical by construction (same op, same inputs, same attrs — only the slice provenance changes) and portable, but it is ONE allocation out of eight: the other seven come from the callee itself (output tensor, storage, shape and strides), so a whole-call ratio near 1-2% is the ceiling, not a starting point. RANKING, and this is what the count hides: all 118 findings in this tree sit on code that NO benchmark reaches. exec1 was probed with a counter under BenchmarkGemmaDecode, BenchmarkFalconDecode, BenchmarkCohereDecode, BenchmarkQuantDeepSeekV2ReconstructedDecode and BenchmarkT5Decode500RowBuf — every one confirmed to have executed — and the call count was ZERO in all five. The 97 nlp sites live in bert, blt, jamba, gemma2, granitemoe, dola and the unquantized deepseekv2 decode and prefill paths, none of which is benchmarked. So an end-to-end number for this check cannot be produced on this host without first writing the missing model benchmarks. Convert these as a portable resource win on the strength of the isolated measurement, or write the instrument first if a wall-clock claim is wanted — but do not read the finding COUNT as leverage. A 3-argument call has no sibling to move to (exec1/exec2 stop at two), which is one site here; the check reports it because the sibling test only needs SOME matching sibling, so confirm the exact arity exists before converting", false},
+	{"PS6016", "loop-invariant-literal-arg", "a struct composite literal built INSIDE a loop and passed straight to a call, whose every field initializer is loop-invariant — the same value is rebuilt every iteration, and when the parameter is an interface it is heap-boxed every iteration; construct it once above the loop FALLBACK ARMS ARE SKIPPED: where an if/else has a branch reaching typed storage — in its body, its init guard or its condition — the else is the correctness path for whatever that branch declines, so a literal rebuilt there never runs on the path a benchmark takes. Verified rather than assumed: a panic in nlp quant_deepseekv2 attnReconstructed's else arm never fires under BenchmarkQuantDeepSeekV2ReconstructedPrefill or its Decode twin, both of which take the typed branch. That file went from 8 findings to 2, and the 2 that remain are the ConcatAttrs literals AFTER the if/else, on the common path — which is the behavior wanted. Tree-wide 117 to 111. PS1001 suppresses its equivalent via hasFlat and PS1009 via its dtype tail; this brings PS6016 in line, and PERF-FINDING-MAY-BE-THE-FALLBACK-ARM-001 records the pattern across all three ALL-CONSTANT LITERALS ARE ALSO SKIPPED, and the reason corrects this entry's own advice: go build -gcflags=-m reports a fully constant literal as escaping to heap, but it does not allocate — the compiler emits a pointer to a static read-only copy. Hoisting two backend.ConcatAttrs{Axis: 1} sites in nlp quant_deepseekv2, first PROVED reachable with a panic under both QuantDeepSeekV2Reconstructed benchmarks, changed allocs/op by zero with every sample equal, and was reverted. An isolated benchmark separates the cases: all fields constant is 0 allocs at 1.98ns, identical to a pre-boxed package var; ANY non-constant field is 1 alloc, 24 B and 11.4ns — and a loop-INVARIANT variable field costs the same 1 alloc as a varying one, which is why loop-invariance is still the right thing to key on once the constant literals are gone. Field constness decides, not the escape verdict. 111 findings to 91. A bare identifier is not treated as constant, since the AST cannot tell a const from a var and guessing would drop real findings RANKING, from auditing what survives: about 20% of struct literals in loops sit inside a constructor-like function (New*, *FromGGUF, *FromHF) and therefore run once per MODEL rather than per token — 8 of vision's 12 remaining findings are tensor.Randn weight initialization of exactly that kind. That is NOT filtered here, deliberately: unlike the fallback-arm and constant-field suppressions, which are structural facts, a name prefix is a guess that would misclassify any constructor called per request. Read the enclosing function before acting. The measured unit cost is 1 allocation, 24 bytes and about 9.5ns saved per occurrence, so a site needs a per-token or per-element trip count to be worth touching; vision's other 2 sit in a patch-embedding prologue an allocation profile sized at roughly 1% of ViT's objects", false},
+	{"PS6015", "batch1-call-feeds-only-postloop-slice", "a PURE (pureComputeFuncs) call inside a loop, given a single-element batch, whose result is used ONLY to append to a slice declared outside the loop — nothing in the loop reads it, so N batch-1 calls can become one batched call after the loop", false},
+	{"PS6014", "redundant-pure-recompute", "two syntactically identical calls to a function declared PURE (pureComputeFuncs) in one block, with nothing between them assigning any name the call reads — the second recomputes what the first already holds; keep one and read its result twice", false},
+	{"PS6013", "sort-feeds-counted-prefix", "a full sort whose result is then read only by a COUNTED prefix loop (for r := 0; r < k; r++ over the sorted slice) — the order past k is computed and discarded; a selection answers the same question in O(n) instead of O(n log n)", false},
+	{"PS6012", "inconsistent-fma-pinning", "a function that rounds SOME products explicitly (float64(a*b)) to stop FMA contraction, but leaves a sibling product feeding an add or subtract unpinned — including one assigned to a named local, which the compiler still inlines and contracts", false},
+	{"PS6011", "strided-inner-walk", "an inner loop whose index into a flat buffer MULTIPLIES the inner loop variable by a stride — consecutive iterations jump a whole row, so each touches its own cache line to use one element; interchange the loops, or block four adjacent outer indices so one fetched line serves four accumulators", false},
+	{"PS6010", "output-invariant-operand-reload", "an output loop whose accumulator re-reads an operand that does NOT vary with the output index — unrolling the output loop by 4 amortizes that load across 4 accumulators (register blocking / unroll-and-jam)", false},
+	{"PS6024", "receiver-scratch-buffer", "a method using a receiver SLICE FIELD as a per-call temporary (indexed write, then indexed read, same call) — unsafe to call concurrently, and every caller contends on one cache line", false},
+	{"PS6007", "search-feeds-reduction", "a loop whose expensive per-item CALL produces an index into an accumulation — split it into a parallel search pass and a sequential fold, since chunked partials would reassociate the sums", false},
+	{"PS6008", "alloc-in-parallel-body", "a buffer allocated INSIDE a parallel dispatch body — free when the dispatch is infrequent, ruinous when it sits in a hot loop; hoist to per-chunk buffers indexed by the chunk", false},
+	{"PS6009", "reflect-swapper-sort", "sort.Slice/SliceStable reaches its swap through reflectlite.Swapper, which ALLOCATES on every call — slices.SortFunc/SortStableFunc is the same comparator with a monomorphized swap and no allocation", false},
 	{"PS6003", "partial-fast-path-coverage", "a fast path that bypasses the general path for only SOME members of a variant family a switch in the same function enumerates — the uncovered variants silently pay the slow path", false},
 	{"PS6006", "cross-backend-dtype-gap", "an op registered via std.add(backend.Op…, tensor.<dtype>, kernel) in one backend package for a STRICT SUBSET of the dtypes a sibling backend package registers for the SAME op — the missing dtype(s) silently fall through to the sibling (typically the serial reference) kernel. Register the fast backend's kernel for the missing dtype too: mirror the reference arithmetic (widen reads to F64, accumulate in F64, narrow only on store → byte-identical) parallelized over the op's independent rows/channels/heads. Shipped: WKV #692 (7.5-9.1x), distill #693 (6.8-10.5x), SSM #694 (9.3-10.3x), masked-attn #695 (8.1x), select-attn #696 (7.8-8.0x) — all bit-exact F32 cpu registrations closing an F32→serial-ref fall-through. Whole-repo fact (needs both backend packages parsed); silent when a single package is scanned.", false},
 	{"PS6004", "unverified-dual-path", "a devirtualized fast path with a generic fallback — a bit-identity claim needing a bit-exact test", true},
@@ -277,6 +327,24 @@ type Config struct {
 	// PS4002 — hand-vectorized SIMD kernel names; a call to one in a file marks a
 	// scalar math.X in a loop there as a vectorize candidate (e.g. vsiluF32).
 	VectorizedSiblingFuncs []string `json:"vectorizedSiblingFuncs,omitempty"`
+	// PS6018 — backend op constants that only MOVE data (slice, reshape, transpose,
+	// concat). A cluster of these around a little arithmetic is fusable bit-identically,
+	// because a gather and a scatter cannot change a value. Empty by default.
+	LayoutOpConstants []string `json:"layoutOpConstants,omitempty"`
+	// PointerTypeNames lists NAMED types that carry a pointer (a named slice, map, or struct
+	// holding one). PS3013 needs to know whether a parameter can leak, and with no type checker a
+	// bare identifier like Shape is indistinguishable from an int alias.
+	PointerTypeNames []string `json:"pointerTypeNames,omitempty"`
+	// PS3024 — variadic dispatch wrappers whose call sites usually pass a fixed arity.
+	// Configured because the call and the declaration sit in different files and this scanner
+	// has no package-level view.
+	VariadicDispatchWrappers []string `json:"variadicDispatchWrappers,omitempty"`
+	// PS6014 — entry points that are PURE with respect to their arguments: same
+	// arguments, same result, no observable side effect (e.g. a network forward pass).
+	// The purity judgment is a project's to make and cannot be derived from syntax, so
+	// naming a function here is what licenses the check to call a second identical call
+	// redundant. Empty by default: without it PS6014 cannot report.
+	PureComputeFuncs []string `json:"pureComputeFuncs,omitempty"`
 }
 
 // nameSets is Config compiled to maps for O(1) lookup during a scan.
@@ -284,6 +352,10 @@ type nameSets struct {
 	accessors, fastPath, elemCount, indexDecompose map[string]bool
 	shapeMethods                                   map[string]bool
 	allocators, visitors, bulkCopy, vectorized     map[string]bool
+	pureCompute                                    map[string]bool
+	layoutOps                                      map[string]bool
+	pointerTypes                                   map[string]bool
+	variadicWrappers                               map[string]bool
 }
 
 func toSet(xs []string) map[string]bool {
@@ -296,15 +368,19 @@ func toSet(xs []string) map[string]bool {
 
 func (c Config) compile() nameSets {
 	return nameSets{
-		accessors:      toSet(c.ElementAccessors),
-		fastPath:       toSet(c.FastPathHelpers),
-		elemCount:      toSet(c.ElementCountMethods),
-		shapeMethods:   toSet(c.ShapeMethods),
-		indexDecompose: toSet(c.IndexDecomposeFuncs),
-		allocators:     toSet(c.AllocatorFuncs),
-		visitors:       toSet(c.PerElementVisitors),
-		bulkCopy:       toSet(c.BulkCopyHelpers),
-		vectorized:     toSet(c.VectorizedSiblingFuncs),
+		accessors:        toSet(c.ElementAccessors),
+		fastPath:         toSet(c.FastPathHelpers),
+		elemCount:        toSet(c.ElementCountMethods),
+		shapeMethods:     toSet(c.ShapeMethods),
+		indexDecompose:   toSet(c.IndexDecomposeFuncs),
+		allocators:       toSet(c.AllocatorFuncs),
+		visitors:         toSet(c.PerElementVisitors),
+		bulkCopy:         toSet(c.BulkCopyHelpers),
+		vectorized:       toSet(c.VectorizedSiblingFuncs),
+		pureCompute:      toSet(c.PureComputeFuncs),
+		layoutOps:        toSet(c.LayoutOpConstants),
+		pointerTypes:     toSet(c.PointerTypeNames),
+		variadicWrappers: toSet(c.VariadicDispatchWrappers),
 	}
 }
 
@@ -1073,15 +1149,31 @@ func hasFuncArg(call *ast.CallExpr) bool {
 // pre-consolidation tool). Naming ≥1 class silences ONLY those classes, leaving
 // every other detector live at that site — the whole point of class-granular
 // ignores. Requires the file to be parsed with parser.ParseComments.
-func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool {
+// ignoreAnchor records where a directive was written, so an unused one can be reported at the
+// line the author will look at.
+type ignoreAnchor struct {
+	line       int    // the directive comment's own line — where an unused one is reported
+	cat        string // the class it names, or "*" for a bare directive
+	first, end int    // the suppression span this directive participates in
+}
+
+func ignoreDirectives(fset *token.FileSet, f *ast.File) (map[int]map[string]bool, []ignoreAnchor) {
 	out := map[int]map[string]bool{}
+	var anchors []ignoreAnchor
 	for _, cg := range f.Comments {
 		for _, c := range cg.List {
-			i := strings.Index(c.Text, "perfscan:ignore")
-			if i < 0 {
+			// A DIRECTIVE, not a mention. The token must open the comment — strip the
+			// leading marker, then any indentation — so that prose describing the feature
+			// and the indented examples in this file's own package doc are not parsed as
+			// live directives. Matching the token anywhere in the text made four doc
+			// comments register suppressions, which was harmless only because no finding
+			// ever landed on a doc-comment line; it stopped being harmless the moment
+			// unused directives became reportable.
+			body := strings.TrimLeft(strings.TrimPrefix(c.Text, "//"), " \t")
+			if !strings.HasPrefix(body, "perfscan:ignore") {
 				continue
 			}
-			rest := strings.TrimSpace(c.Text[i+len("perfscan:ignore"):])
+			rest := strings.TrimSpace(body[len("perfscan:ignore"):])
 			cats := map[string]bool{}
 			if fields := strings.Fields(rest); len(fields) > 0 {
 				for _, tok := range strings.Split(fields[0], ",") {
@@ -1102,6 +1194,16 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 			first := fset.Position(cg.Pos()).Line
 			last := fset.Position(cg.End()).Line
 			ln := fset.Position(c.Pos()).Line
+			lo, hi := first, last
+			if lo > ln {
+				lo = ln
+			}
+			if hi < ln {
+				hi = ln
+			}
+			for cat := range cats {
+				anchors = append(anchors, ignoreAnchor{line: ln, cat: cat, first: lo, end: hi + 1})
+			}
 			if first > ln {
 				first = ln
 			}
@@ -1118,7 +1220,7 @@ func ignoreDirectives(fset *token.FileSet, f *ast.File) map[int]map[string]bool 
 			}
 		}
 	}
-	return out
+	return out, anchors
 }
 
 // scanFile runs every detector over one parsed file, drops sites suppressed by
@@ -1137,6 +1239,22 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	// File-scoped fact: names declared as integer-keyed maps (detector PS3003) — indexing
 	// them in a loop is a dense-slice (map→slice) candidate.
 	intKeyMaps := intKeyMapNames(f)
+	// File-scoped fact for PS6024: receiver fields that are INDEXED in exactly one
+	// function of this file. A per-call temporary is used element-wise in the one method
+	// that needs it and merely allocated elsewhere; persistent state is indexed by
+	// several. This replaces a name heuristic that missed two of the three real instances
+	// found in this repo (b.vals, b.part) because they are not spelled like buffers.
+	curSoleIndexed = soleIndexedFields(f)
+	// …and the subset of those declared as a SLICE. A per-call buffer is a slice; the
+	// false positives the structural test produced were overwhelmingly MAPS used as
+	// persistent registries — optimizer per-parameter state (a.st, g.st, s.st), intern
+	// tables, memo caches. Indexing a map is not buffer reuse, and a map field is never
+	// the thing standing between a loop and its parallel form.
+	curSliceFields = sliceTypedFields(f)
+	// PS6023 is FILE-level (it reports at a declaration) but reads PACKAGE-level facts the
+	// pre-pass gathered, since a threshold is usually declared in one file and used in another.
+	out = append(out, thresholdUncoveredFindings(fset, f)...)
+	out = append(out, writeOnlyAllocFieldFindings(fset, f)...)
 	for name := range intMapReg[curPkg] { // cross-file dispatch registries
 		intKeyMaps[name] = true
 	}
@@ -1152,15 +1270,67 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	out = append(out, scanFusableLoops(fset, f)...)
 	out = append(out, einsumNoInferenceFusionFindings(fset, f)...)
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
-	ign := ignoreDirectives(fset, f)
+	ign, anchors := ignoreDirectives(fset, f)
+	used := map[int]map[string]bool{}
 	var kept []finding
 	for _, fd := range dedup(out) {
 		if supp := ign[fd.pos.Line]; supp != nil && (supp["*"] || supp[fd.category]) {
+			// Credit the directive that did the suppressing, so an unused one can be told
+			// apart from a working one below.
+			for _, a := range anchors {
+				if !directiveCovers(a, fd.pos.Line) || !(a.cat == "*" || a.cat == fd.category) {
+					continue
+				}
+				if used[a.line] == nil {
+					used[a.line] = map[string]bool{}
+				}
+				used[a.line][a.cat] = true
+			}
 			continue
 		}
 		kept = append(kept, fd)
 	}
+	// REPORT DIRECTIVES THAT SUPPRESSED NOTHING. An inert suppression is worse than no
+	// suppression, because it reads as though it took effect — the same reasoning that made
+	// this file widen a directive's reach to its whole comment block after two directives
+	// here were found dead. Widening reduced the failure mode; it cannot detect it. A
+	// directive goes stale two ways: the code it guarded moved away from it (an edit inserted
+	// statements between the comment and its target), or the finding was genuinely fixed. The
+	// first is a silent hole, the second means the comment should be deleted. Both want the
+	// author's attention, which is exactly how an unused lint suppression behaves.
+	for _, a := range anchors {
+		if used[a.line][a.cat] {
+			continue
+		}
+		name := a.cat
+		if name == "*" {
+			name = "any check"
+		}
+		kept = append(kept, finding{
+			pos:      token.Position{Filename: fset.Position(f.Pos()).Filename, Line: a.line},
+			category: "unused-ignore-directive",
+			msg: fmt.Sprintf("this //perfscan:ignore names %s but suppressed nothing. Either the code it"+
+				" guarded moved out from under it — a directive reaches only its own comment block and the"+
+				" line after, so inserting statements between the two silently voids it — or the finding is"+
+				" fixed and the comment should be deleted. An inert suppression is worse than none: it reads"+
+				" as though it took effect", name),
+		})
+	}
 	return kept
+}
+
+// directiveCovers reports whether the directive reaches the given line. It MUST mirror the
+// span ignoreDirectives applies — the enclosing comment block through the line after it — and
+// not a tighter approximation.
+//
+// A tighter span was tried first, crediting only the directive's own line and the next, on the
+// reasoning that over-crediting merely hides a stale directive while under-crediting is safe.
+// That was backwards. Two directives stacked above one statement form a two-line block: the
+// upper one is more than one line from the statement, so the tight span refused to credit it
+// and reported a working directive as unused. Under-crediting produces false reports, which is
+// the failure this check exists to prevent.
+func directiveCovers(a ignoreAnchor, line int) bool {
+	return line >= a.first && line <= a.end
 }
 
 // scanFunc analyzes a single function body. Fast-path presence (flatF64/flatF32)
@@ -1364,7 +1534,32 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				category: "per-element-dispatch",
 				msg: fmt.Sprintf("per-element .%s in an element-count/index loop with no configured typed bulk"+
 					" accessor in %s() — walk the backing slice directly for the contiguous case, keeping the"+
-					" per-element form as the strided/other-dtype fallback", name, fn.Name.Name),
+					" per-element form as the strided/other-dtype fallback."+
+					" MEASURED, and the ceiling is close to 2x because the dispatch IS the cost at a site"+
+					" like this: the four RoPE/QKV weight permutations in nlp move every element with an"+
+					" AtF64 read and a SetF64 store, and removing just the STORE half — half the dispatches,"+
+					" nothing else touched — took all 8 benchmark cells down 44.98%% to 49.07%%, geomean"+
+					" -47.64%% (deinterleaveRoPE, permuteInterleaveToSplit, permuteSplitToInterleave,"+
+					" splitNeoXQKV; 18 samples per arm, p=0.000 everywhere). Those loops run out*in times —"+
+					" 4.2M at [4096,1024] — and do nothing else, which is the shape that pays."+
+					" A SITE CAN PAY TWICE, and then the ratio is far larger: nlp's rwkvShiftRows fed its"+
+					" per-element stores from a rows2D() call that materialized the whole input as"+
+					" [][]float64 first, so it paid the dispatches AND a second T*dim buffer. Routing it"+
+					" through the package's existing typed bulk copy went -89.65%% and -93.39%% (geomean"+
+					" -91.73%%, 12.1x) with bytes -50.06%% and allocs -25%%. Look for a helper the package"+
+					" ALREADY has before writing a fast path: reusing a tested one avoids minting a new"+
+					" bit-identity claim, and the per-element loop stays as its declined-dtype fallback."+
+					" ASYMMETRY IS THE TRICK: convert only the side whose dtype is statically fixed. Each of"+
+					" these builds its destination with tensor.New(tensor.F64, ...) in the same function, so"+
+					" the store needs no fallback and none is wanted"+
+					" (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001), while the SOURCE dtype comes from the file"+
+					" being loaded and keeps its accessor — a typed read there would be a dual path needing a"+
+					" test on both arms. Half the win, none of the risk."+
+					" DO NOT GENERALIZE THE RATIO: the same transform on a walk inside a"+
+					" matmul-dominated prefill measured -0.61%% (see PS1005). Rank by trip count AND by the"+
+					" loop's share of its enclosing function. Note also that these four run at MODEL LOAD,"+
+					" which no end-to-end benchmark exercises, so the instrument had to be written before"+
+					" anything could be claimed (BENCH-PROVE-THE-CODE-RAN-001)", name, fn.Name.Name),
 			})
 		}
 		// A2: a variadic accessor called with a SPREAD index slice — .AtF64(coords...) —
@@ -1396,14 +1591,29 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					loopArgs++
 				}
 			}
-			if loopArgs >= 2 {
+			// The advice below prescribes "keeping the accessor as the exotic-dtype fallback",
+			// so an already-converted site still contains, by construction, the very loop this
+			// arm matches. Reporting it re-files the applied fix as the defect, forever.
+			if loopArgs >= 2 && !inDeclinedTypedFallback(parent, call, ns) {
 				out = append(out, finding{
 					pos:      fset.Position(loop.Pos()),
 					category: "manual-walk-dispatch",
 					msg: fmt.Sprintf(".%s walks a tensor by explicit loop indices in %s() — an interface"+
 						" dispatch + flat-offset recompute per element that PS1001's Numel-loop check"+
 						" misses. Take the contiguous typed backing slice once (Storage().F64()/F32())"+
-						" and index it directly, keeping the accessor as the exotic-dtype fallback.",
+						" and index it directly, keeping the accessor as the exotic-dtype fallback."+
+						" PAYOFF IS PER-SITE AND THE SPREAD IS 80x, so rank before converting. classic"+
+						" SoftmaxRegression.PredictProba was an n*d SetF64 fill plus an n*k AtF64 copy-out,"+
+						" 94208 dispatches at n=4096, and went geomean -50.10%% (2.0x) with allocs -97.95%%."+
+						" nlp QuantMamba2's prefill gated RMSNorm removed just as many dispatches and went"+
+						" geomean -0.61%%, 3 of 4 cells indistinguishable, because that loop sits inside a"+
+						" quantized-matmul-dominated prefill. Rank by (a) the dispatch count, the product of"+
+						" the loop bounds times dispatches per iteration, and (b) the loop's SHARE of its"+
+						" enclosing function. THE COST OF THE FIX is decided by the dtype: a constructor-pinned"+
+						" tensor.New(tensor.F64/F32, ...) makes it three lines with no fallback wanted"+
+						" (PERF-NO-FALLBACK-FOR-A-FIXED-DTYPE-001), while a dtype taken from an input,"+
+						" tensor.New(xin.Dtype(), ...), needs a dual path — a fresh bit-identity claim PS6004"+
+						" then reports forever unless a test reaches BOTH arms.",
 						name, fn.Name.Name),
 				})
 			}
@@ -1420,8 +1630,15 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 		// C: batch API fed a single-element nested-slice literal (a wrapped row), in any loop.
 		for _, arg := range call.Args {
 			if isSingleEltNestedSliceLit(arg) {
+				// Positioned at the CALL, not the enclosing loop. dedup collapses findings sharing a
+				// (position, category), so a loop holding two different batch-1 calls used to yield one
+				// finding naming only the first — the second was invisible, not merely deduplicated.
+				// rl.rlRollout was exactly that shape (actor forward plus critic forward) and PS6015's
+				// doc comment recorded the gap without closing it. Per-call positioning also points at
+				// the line a reader has to change.
 				out = append(out, finding{
-					pos:      fset.Position(loop.Pos()),
+					pos:      fset.Position(call.Pos()),
+					end:      fset.Position(call.End()),
 					category: "batch-single-elt",
 					msg: fmt.Sprintf("%q called with a single-element slice literal inside a loop"+
 						" — call a single-item API instead of wrapping each element in a fresh slice", name),
@@ -1645,6 +1862,33 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if num != nil && hasModuloSibling(fn.Body, num, div) {
 				return true
 			}
+			// Two more integer proofs, in the same spirit and for the same reason: on integer
+			// operands the recommended inv := 1/n evaluates to ZERO, so a false positive here
+			// costs correctness rather than a missed win.
+			//
+			// A divide that IS a loop bound must be integer — Go's for-condition compares an
+			// index against it. And a quotient later used as a slice INDEX must be integer,
+			// which the existing a[i/stride] guard misses because the quotient goes through a
+			// variable first.
+			//
+			// COUNTED against all 89 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
+			// Ten are genuine integer divides. These two proofs catch three of them —
+			// autograd/vjp.go's len(src)/inner loop bound, and nn/hqq.go and nn/qgalore.go
+			// where a group index i/groupSize indexes a scale table — with ZERO false
+			// positives. The other seven need type information: their quotients feed
+			// attribute structs or offset arithmetic rather than a bracket index, and every
+			// looser signal tried for them also swept up float sites, including a first
+			// attempt that wrongly flagged six.
+			//
+			// WHY SHIP AT THREE INSTANCES when a perf rule at that count would be declined:
+			// the asymmetry. Suppressing a wrong recommendation costs nothing, because the
+			// recommendation was wrong; and the thing lost is a perf suggestion at sites where
+			// it would have produced zero. For a correctness hazard, high precision at low
+			// recall is the right trade — the opposite of a perf check, where low precision is
+			// what makes it useless.
+			if divideIsLoopBound(loop, n) || quotientIndexesASlice(loop, parent, n) {
+				return true
+			}
 			name, ok := invariantDivisor(loop, div)
 			if !ok {
 				return true
@@ -1654,9 +1898,27 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 				pos:      fset.Position(loop.Pos()),
 				category: "loop-invariant-divide",
 				msg: fmt.Sprintf("divide by %q, loop-invariant, on every element — hoist inv := 1/%s"+
-					" once and multiply. ~1.2-1.5x when the divide is standalone (SoftCap VJP 1.28x,"+
-					" optimizer moments). SAFE ONLY for a CONTINUOUS output (gradient/moment/probability,"+
-					" ½ulp rides tolerance) — NEVER feeding round/quantize/argmax. Verify float + intent.", name, name),
+					" once and multiply. MOST SITES SHOULD DECLINE THIS, and the numbers say why."+
+					" CHECK THE OPERAND TYPE FIRST: with no type information this check cannot tell float"+
+					" from integer, and on integer operands inv := 1/n is ZERO — a wrong-value bug, not a"+
+					" missed win. SPEED: the divide is genuinely ~1.4x slower than the multiply, but only"+
+					" where nothing else is going on. Measured on this host at three levels of realism,"+
+					" 18 samples per arm interleaved in both orders: pure arithmetic with 8 independent"+
+					" chains and NO memory, 1303.5ns -> 933.7ns (-28.37%%, p=0.000); the same arithmetic"+
+					" reading its values from an L1-resident slice, 454.7ns -> 452.2ns (p=0.168,"+
+					" INDISTINGUISHABLE); a plain load-divide-store elementwise loop, noise. A tensor"+
+					" elementwise loop is the third case, so the expected win at a typical site here is"+
+					" ZERO — the divide overlaps with the loads and stores around it. The 1.2-1.5x figures"+
+					" quoted from SoftCap VJP and the optimizer moments are the memory-free ceiling, not"+
+					" what a strided kernel will see. ACCURACY: the rewrite is NOT bit-identical and the"+
+					" cost is larger than it looks — measured over 200k values, results differ for 66.3%%"+
+					" of inputs at d=3.7, 35.4%% at d=7, 35.0%% at d=0.1, 24.5%% across 50 random divisors,"+
+					" by up to 1 ulp (not half). It is EXACT only when the divisor is a power of two"+
+					" (0.000%% differing at d=1024), since 1/d is then representable. So: pay 1 ulp on a"+
+					" quarter to two thirds of your outputs for a win that is usually zero. SAFE ONLY for a"+
+					" CONTINUOUS output (gradient/moment/probability) — NEVER feeding"+
+					" round/quantize/argmax. Verify float + intent, and measure the enclosing loop before"+
+					" believing the ceiling applies to it.", name, name),
 			})
 			return true
 		})
@@ -1690,11 +1952,38 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			if !ok {
 				return true
 			}
-			dstID, ok1 := lhs.X.(*ast.Ident)
-			srcID, ok2 := rhs.X.(*ast.Ident)
-			if !ok1 || !ok2 || dstID.Name == srcID.Name {
+			// The BASE may be an index/selector chain, not just a bare identifier: `out[i*n+j] =
+			// l[i][j]` — a flat destination fed from a row of a slice-of-slices — is a real shape in
+			// this repo (linalg Cholesky assembled its output that way) and an Ident-only base
+			// silently dropped it. Distinctness is compared on the rendered base TEXT so in-place
+			// permutations (out[...] = out[...], a transpose) stay excluded, and the ROOT identifier
+			// is still required so the sibling-branch check below has a name to look for.
+			dstBase, srcBase := srcText(fset, lhs.X), srcText(fset, rhs.X)
+			dstRoot, ok1 := rootIdentName(lhs.X)
+			srcRoot, ok2 := rootIdentName(rhs.X)
+			// Distinctness is on the ROOT identifier, not the rendered base. Comparing base text
+			// looked equivalent and was not: `dst[i][j] = dst[j][i]` renders bases `dst[i]` and
+			// `dst[j]`, which differ, so a TRANSPOSE would have passed as a copy — the exact class
+			// the original identifier comparison existed to exclude. Caught by the tree count
+			// jumping 37 to 50 on a change that was supposed to add 0 sites beyond the four known
+			// shapes.
+			if !ok1 || !ok2 || dstBase == "" || srcBase == "" || dstRoot == srcRoot {
 				return true
 			}
+			// A non-identifier base is admitted ONLY on the proven path, decided below. The advisory
+			// path keeps the original bare-identifier requirement, and the reason is measured: relaxing
+			// it for both strengths took the tree from 33 findings to 45, and every one of the 12 added
+			// was noise — column gathers (`col[i] = x[i][f]`, `key[i] = scores[i][ex]`), permutation
+			// gathers through an index array (`vals[k] = b.x[order[k]][f]`) and bit-shift sources
+			// (`grid[e][b*4+k] = gridMap[(packed>>(2*k))&0x3]`). None of those has a contiguous run at
+			// all, so the advisory message's "where the index pattern has a contiguous run" had nothing
+			// to point at. What made the relaxation worth keeping is one real shape — a flat destination
+			// fed from a row of a slice-of-slices, `out[i*n+j] = l[i][j]`, which linalg Cholesky used —
+			// and that shape is always PROVEN, because proving the run is what tells it apart from a
+			// gather in the first place.
+			_, dstIsIdent := lhs.X.(*ast.Ident)
+			_, srcIsIdent := rhs.X.(*ast.Ident)
+			bareBases := dstIsIdent && srcIsIdent
 			loop := nearestLoop(parent, n)
 			if loop == nil || reportedCopy[loop] || loopBodyHasCall(loop) {
 				return true
@@ -1706,7 +1995,45 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// `for i := 0; i < n; i++`, or a range over a call such as `range t.Numel()`
 			// — whereas ranging over a named container is the shape/rank idiom. This
 			// keeps PS4004 a language-shape check that needs no repo configuration.
+			// PROVEN-RUN CLASSIFICATION, and it also relaxes the gate above. When the loop body is
+			// EXACTLY this assignment and both sides advance by exactly 1 per step with a base that
+			// does not move, the run is not a guess: its bounds are computable and the whole loop is
+			// one copy(). That is the difference between this check's advisory form ("verify the run
+			// length") and an actionable one, so the message says which it is.
+			//
+			// The single-statement requirement is load-bearing. A body that also writes something
+			// else still contains a movable run, but the loop cannot be REPLACED by a copy, and
+			// promising that would be a wrong-value bug rather than a rounding one.
+			lv, lbody, haveVar := loopVarBody(loop)
+			proven := false
+			var runLo, runHi, dstRun, srcRun string
+			if haveVar && lbody != nil && len(lbody.List) == 1 {
+				dr, dok := unitStrideOffset(fset, as.Lhs[0], lv)
+				sr, sok := unitStrideOffset(fset, as.Rhs[0], lv)
+				if dok && sok {
+					proven, dstRun, srcRun = true, dr, sr
+					if lo, hi, ok := loopExtent(fset, loop, lv); ok {
+						runLo, runHi = lo, hi
+					}
+				}
+			}
+			// The counted-loop gate keeps rank-sized setup loops out — `for a := range shape { eff[a]
+			// = strides[a] }` is structurally a copy but runs 2-4 times, so a bulk copy there is
+			// noise — and it applies at BOTH strengths, including proven runs.
+			//
+			// Exempting proven runs was tried and reverted. It is tempting because the advice is
+			// correct whatever the trip count, and it would cover four range-over-identifier sites
+			// (`for j := range k { codebooks[m*k+j] = cb[j] }` and three like it). But that shape is
+			// INDISTINGUISHABLE from the rank loop: both range over a bare identifier, and the AST
+			// cannot tell an element count from a slice of dimensions. TestDetectPS4004_SilentOnRankLoop
+			// pins the exclusion, and trading a standing precision contract for four findings is the
+			// wrong way round — especially since every measured conversion of this class moved
+			// end-to-end runtime by nothing, so the four are low-value by this check's own numbers.
+			// Recorded as a recall gap rather than closed.
 			if !isCountedLoop(loop) {
+				return true
+			}
+			if !proven && !bareBases {
 				return true
 			}
 			// The copy must be UNCONDITIONAL. A guarded store (`if ok { ds[i] = gs[of] }`)
@@ -1721,19 +2048,44 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			// flagged loop IS the strided alternative that has to stay — reporting it
 			// asks for a change that would be wrong. loopBodyHasCall cannot see this,
 			// because the copy() sits in the sibling branch, outside the loop body.
-			if siblingBranchBulkCopies(parent, loop, dstID.Name, srcID.Name) {
+			if siblingBranchBulkCopies(parent, loop, dstRoot, srcRoot) {
 				return true
 			}
 			reportedCopy[loop] = true
+			msg := fmt.Sprintf("%s[...] = %s[...] in a loop with no arithmetic on the value — an"+
+				" element-at-a-time memmove. Where the index pattern has a contiguous run, hoist the"+
+				" run out of the loop and move it with one copy() (a constant source index becomes a"+
+				" fill). Bit-identical by construction: a same-dtype copy does no arithmetic, so there"+
+				" is no accumulation order to change. Verify the run length before acting — a wrong"+
+				" run is a wrong-value bug, not a rounding one.", dstBase, srcBase)
+			if proven {
+				where := "the loop's trip count"
+				if runLo != "" || runHi != "" {
+					where = fmt.Sprintf("exactly [%s, %s)", runLo, runHi)
+				}
+				msg = fmt.Sprintf("this loop's whole body is one unit-stride element move, so the LOOP"+
+					" ITSELF is a contiguous run over %s: the destination advances from %s and the source"+
+					" from %s, both by 1, with no arithmetic between them. Replace the entire loop with a"+
+					" single copy(). Measured on this host against the elementwise form, copy() wins every"+
+					" shape and size tried: full row 4.13x at n=64 down to 2.51x at 512, upper-triangular"+
+					" 3.16x to 2.35x, lower-triangular 3.46x to 2.40x — the compiler does not turn"+
+					" ARR[i*n+j] stores into memmove, so this is not a redundant rewrite. TWO"+
+					" preconditions the AST cannot check: element types must be IDENTICAL rather than"+
+					" assignable (copy() refuses a []any fed from []string), and if the slices ALIAS with"+
+					" the destination offset above the source then the ascending loop propagates forward"+
+					" while copy() does not — leave an in-place forward shift alone. RANK BY SHARE OF"+
+					" RUNTIME: those ratios are for the loop in isolation, and all 4 sites converted when"+
+					" this classification was added moved end-to-end runtime by nothing — an O(n^2)"+
+					" assembly loop inside an O(n^3) factorization (linalg geomean -0.48%%, every cell"+
+					" within spread) and a per-timestep bias seed against a K*D convolution (nlp, all"+
+					" cells indistinguishable). It is a work reduction that holds on every system, so it"+
+					" is still worth doing, but expect a wall-clock change only where the run is a real"+
+					" share of the enclosing function.", where, dstRun, srcRun)
+			}
 			out = append(out, finding{
 				pos:      fset.Position(loop.Pos()),
 				category: "scalar-copy-loop",
-				msg: fmt.Sprintf("%s[...] = %s[...] in a loop with no arithmetic on the value — an"+
-					" element-at-a-time memmove. Where the index pattern has a contiguous run, hoist the"+
-					" run out of the loop and move it with one copy() (a constant source index becomes a"+
-					" fill). Bit-identical by construction: a same-dtype copy does no arithmetic, so there"+
-					" is no accumulation order to change. Verify the run length before acting — a wrong"+
-					" run is a wrong-value bug, not a rounding one.", dstID.Name, srcID.Name),
+				msg:      msg,
 			})
 			return true
 		})
@@ -1792,7 +2144,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 					" summation order, and if the hoisted run accumulates into a scalar that scalar MUST" +
 					" keep the element type — widening it to float64 and narrowing once is MORE accurate" +
 					" and therefore a different answer. Verify the run length and that the enclosing loop" +
-					" is not already a specialized fast path before acting (PS4005)",
+					" is not already a specialized fast path before acting",
 			})
 			return true
 		})
@@ -1832,7 +2184,14 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 						" small part of an OLS fit dominated by building the Gram matrix. The flatten"+
 						" pays when the flagged loop IS the enclosing operation's work, so measure the"+
 						" OPERATION end to end, not the loop. Check too that the rows are uniform"+
-						" length — a genuinely ragged matrix cannot flatten.", name, name),
+						" length — a genuinely ragged matrix cannot flatten. TRY THE CHEAPER FIX"+
+						" FIRST: where the outer index is invariant across the inner loop, HOISTING"+
+						" the row (qi := %s[i], then range qi) removes the same per-step pointer load"+
+						" with no type change, no API change and no call-site churn, and ranging the"+
+						" row rather than a separate extent lets the compiler drop a bounds check it"+
+						" could not otherwise prove. Measured alone on nlp randomOrthogonal, an"+
+						" O(d^3) Gram-Schmidt: -21.3%% (d=128/256/512, all p=0.002). Reach for the"+
+						" full flatten when the hoist is not available or not enough.", name, name, name),
 				})
 			}
 		}
@@ -1898,11 +2257,18 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 			msg := fmt.Sprintf("%s uses an indirect comparator. An LSD radix on the key bits can"+
 				" replace it (math.Float64bits is monotonic for non-negative f64) — measured 1.9–2.25×"+
 				" on top-p / typical sampling. BOTH preconditions must hold, and this check can verify"+
-				" NEITHER: (1) the sort key is a numeric float/int, not a string or a composite —"+
-				" radix-on-float-bits does not apply to a string key at all; (2) the slice is long"+
-				" (vocab-sized), not rank- or dimension-sized — on a short slice the radix loses and"+
-				" the measurement is noise. Confirm both by reading the site before acting, then prove"+
-				" identical output order and benchmark.", sname)
+				" NEITHER: (1) the sort key is numeric, not a string — radix-on-float-bits does not"+
+				" apply to a string key at all. A COMPOSITE OF NUMERICS IS NOT DISQUALIFYING, and"+
+				" reading it as such is the easy mistake here: an LSD radix is stable, so passing over"+
+				" the TIEBREAK key first and the primary key last yields exactly the lexicographic"+
+				" composite order. It costs one pass per key, so a (score, index) comparator roughly"+
+				" halves the payoff instead of removing it. classic spatialindex's (dist, idx) kNN sort"+
+				" and nlp embed's (Score, Index) rerank both clear this axis and were declined on the"+
+				" LENGTH one; (2) the slice is long (vocab-sized), not rank- or dimension-sized — on a"+
+				" short slice the radix loses and the measurement is noise, and a k-nearest result is"+
+				" k-length BY CONSTRUCTION however large the dataset behind it is, which is the trap"+
+				" that makes a kNN sort look like a vocab-sized one. Confirm both by reading the site"+
+				" before acting, then prove identical output order and benchmark.", sname)
 			if isSortPkg {
 				// sort.Slice/SliceStable dispatch every element swap through reflect.Swapper.
 				// For a multi-key total order over a struct slice (radix infeasible), switching to
@@ -1961,14 +2327,51 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, butterflyFindings(fset, fn)...)
 	out = append(out, transposedGramFindings(fset, fn)...)
 	out = append(out, stridedInnerReductionFindings(fset, fn)...)
+	out = append(out, outputRowRestreamedFindings(fset, fn)...)
 	out = append(out, serialDotMatmulFindings(fset, fn)...)
 	out = append(out, scaledSerialDotFindings(fset, fn)...)
 	out = append(out, quadraticCacheAppendFindings(fset, fn)...)
 	out = append(out, buildNxNUseOneRowFindings(fset, fn)...)
 	out = append(out, indirectKeyComparatorFindings(fset, fn)...)
+	out = append(out, setMapFromSliceFindings(fset, fn)...)
+	out = append(out, monotoneBailPerElementFindings(fset, fn)...)
+	out = append(out, serialReductionChainFindings(fset, fn)...)
+	out = append(out, staticChunkBarrierFindings(fset, fn)...)
+	out = append(out, sliceBuiltForOneElementFindings(fset, fn)...)
+	out = append(out, leakingFormatParamFindings(fset, fn, ns)...)
+	out = append(out, coupledIndexWeightFindings(fset, fn)...)
+	out = append(out, twoDeepIndexNotRangedFindings(fset, fn)...)
+	out = append(out, companionNotSlicedFindings(fset, fn)...)
+	out = append(out, unrolledIndexNotWindowedFindings(fset, fn)...)
+	out = append(out, invariantBehindBoundsCheckFindings(fset, fn)...)
+	out = append(out, monotoneGuardInLoopFindings(fset, fn)...)
+	out = append(out, fixedArityVariadicCallFindings(fset, fn, ns)...)
+	out = append(out, maxNormalizedExpFindings(fset, fn)...)
+	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
+	out = append(out, stridedInnerWalkFindings(fset, fn)...)
+	out = append(out, inconsistentFMAPinningFindings(fset, fn)...)
+	out = append(out, sortFeedsCountedPrefixFindings(fset, fn)...)
+	out = append(out, sortFeedsTruncationFindings(fset, fn)...)
+	out = append(out, redundantPureRecomputeFindings(fset, fn, ns)...)
+	out = append(out, batch1FeedsPostloopSliceFindings(fset, fn, ns)...)
+	out = append(out, loopInvariantLiteralArgFindings(fset, fn)...)
+	out = append(out, unpooledVariadicSiblingFindings(fset, fn)...)
+	out = append(out, layoutOpClusterFindings(fset, fn, ns)...)
+	out = append(out, jamTailDelegatesFindings(fset, fn)...)
+	out = append(out, fanoutWithoutWorkerSeamFindings(fset, fn)...)
 	out = append(out, invariantTranscendentalRecomputeFindings(fset, fn)...)
 	out = append(out, partialFastPathFindings(fset, fn)...)
+	out = append(out, outputInvariantReloadFindings(fset, fn)...)
+	out = append(out, receiverScratchFindings(fset, fn)...)
+	out = append(out, searchFeedsReductionFindings(fset, fn)...)
+	out = append(out, allocInParallelBodyFindings(fset, fn)...)
+	out = append(out, unconvertedDtypeArmFindings(fset, fn, ns)...)
+	out = append(out, compositeKeyMapProbeFindings(fset, fn)...)
+	out = append(out, columnWalkFindings(fset, fn)...)
+	out = append(out, transposePassFindings(fset, fn)...)
+	out = append(out, reflectSwapperSortFindings(fset, fn)...)
+	out = append(out, perRowMakeSlabFindings(fset, fn)...)
 	out = append(out, vjpScalarBinopFindings(fset, fn)...)
 	out = append(out, fullSortBoundedPrefixFindings(fset, fn)...)
 	out = append(out, sortThenTopKFindings(fset, fn)...)
@@ -1976,6 +2379,67 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, monotoneIndexBoundFindings(fset, fn)...)
 	out = append(out, sincosFusableFindings(fset, fn)...)
 	return out
+}
+
+// divideIsLoopBound reports whether the divide expression appears in the loop's own
+// post/condition clause, which forces it to be integer: a for-condition compares an index
+// against it.
+func divideIsLoopBound(loop ast.Node, div ast.Node) bool {
+	f, ok := loop.(*ast.ForStmt)
+	if !ok || f.Cond == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(f.Cond, func(n ast.Node) bool {
+		if n == div {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// quotientIndexesASlice reports whether the divide's result is assigned to a name that is
+// later used as a slice index inside the same loop. That forces the quotient to be integer,
+// and so both operands of the divide. The existing direct a[i/stride] guard cannot see this
+// case, because the quotient passes through a variable first.
+func quotientIndexesASlice(loop ast.Node, parent map[ast.Node]ast.Node, div ast.Node) bool {
+	// Walk up to the assignment that stores the quotient.
+	var as *ast.AssignStmt
+	for p := parent[div]; p != nil; p = parent[p] {
+		if a, ok := p.(*ast.AssignStmt); ok {
+			as = a
+			break
+		}
+		if _, ok := p.(*ast.BlockStmt); ok {
+			break
+		}
+	}
+	if as == nil || len(as.Lhs) == 0 {
+		return false
+	}
+	name := ""
+	if id, ok := as.Lhs[0].(*ast.Ident); ok {
+		name = id.Name
+	}
+	if name == "" || name == "_" {
+		return false
+	}
+	used := false
+	ast.Inspect(loop, func(n ast.Node) bool {
+		if used {
+			return false
+		}
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := ast.Unparen(ix.Index).(*ast.Ident); ok && id.Name == name {
+			used = true
+		}
+		return !used
+	})
+	return used
 }
 
 // isNumelRange reports whether a range loop iterates a tensor's element count:
@@ -2458,6 +2922,14 @@ func main() {
 		// elementAccessors empty, hasAccessorFallback is never set and the check
 		// reports zero on any input. Same false assurance, same warning.
 		"unverified-dual-path": ns.accessors,
+		// PS6014 cannot judge purity from syntax; with pureComputeFuncs empty it reports
+		// zero on any input, which is the same false assurance.
+		"redundant-pure-recompute": ns.pureCompute,
+		// PS6015 hoists a call across a loop, which is only legal if the call is pure;
+		// same config, same reason, same zero-means-nothing warning.
+		"batch1-call-feeds-only-postloop-slice": ns.pureCompute,
+		// PS6018 keys on the project's own movement-op constants.
+		"layout-op-cluster-unfused": ns.layoutOps,
 	}
 	var starved []string
 	for cat, vocab := range domainVocab {
@@ -2496,6 +2968,9 @@ func main() {
 	}
 	collectIntTypes(parsed)
 	collectIntKeyMaps(parsed)
+	collectVariadicSiblings(fset, parsed)
+	collectThresholdUse(fset, parsed)
+	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
 			if enabled[fd.category] {
@@ -3617,6 +4092,440 @@ func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, boo
 	return base, stride, found
 }
 
+// outputRowRestreamedFindings flags PS1007 — the MIRROR of PS1006. An inner loop over d
+// accumulates into an output row that is INVARIANT across the enclosing loop:
+//
+//	for j := range keys {          // outer
+//	    w := scores[j]
+//	    for d := 0; d < dk; d++ {  // inner, d is already the contiguous part
+//	        out[d] += w * vs[j*dm+d]
+//	    }
+//	}
+//
+// Every one of the dk elements of `out` is loaded and stored once per OUTER step, so out is
+// re-streamed len(keys) times when it only needs writing once. PS1006 deliberately stays
+// SILENT here (its own silence fixture is this exact shape) because interchanging would put
+// the strided access on the inside — the wrong direction. The fix is to strip-mine the d loop
+// by 4 with the outer loop innermost, keeping four partial sums in registers: the input is
+// still read four-contiguous from a single cache line, and out is written once per element.
+//
+// Bit-identical when out enters zeroed — each element still sums the outer var ascending over
+// the same terms with the same association. If out is pre-seeded the register must be seeded
+// from out[d] first.
+//
+// Requires the accumulated base to be a plain identifier indexed by EXACTLY the inner var. A
+// base whose index also mentions the outer var writes a different location each outer step —
+// a scatter, not a re-stream — and is not flagged. A base ASSIGNED inside the outer body (a
+// per-iteration row slice) is likewise excluded for the same reason.
+func outputRowRestreamedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ovs, obody, ok := loopBoundVarsBody(n)
+		if !ok {
+			return true
+		}
+		for _, s := range immediateInnerLoops(obody) {
+			iName, ibody, ok := loopVarBody(s)
+			if !ok || iName == "" {
+				continue
+			}
+			skip := false
+			for _, ov := range ovs {
+				if ov == iName {
+					skip = true
+				}
+			}
+			if skip {
+				continue
+			}
+			base, rhs, ok := rowAccumulatedAt(ibody, iName)
+			if !ok {
+				continue
+			}
+			// The accumulated value must depend on the OUTER loop, or the inner loop is
+			// simply summing something the outer loop does not vary and the whole nest is
+			// redundant work of a different kind.
+			if !dependsOnOuterVars(rhs, ovs, obody) {
+				continue
+			}
+			// Loop-INVARIANT across the outer loop: a base reassigned per outer step is a
+			// scatter into distinct rows, which is not re-streamed.
+			if identAssignedIn(obody, base) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "output-row-restreamed",
+				msg: fmt.Sprintf("inner %s-loop accumulates into %s[%s], and %s does not vary with the"+
+					" enclosing %s loop — so every element of %s is loaded and stored once per %s step"+
+					" instead of once in total. CHECK THE INPUT FIRST: if it is read as a row slice"+
+					" contiguous in %s (a row-major rank-1 update), do NOT strip-mine — unroll the %s"+
+					" loop by 2 with SEPARATE adds (%s[%s] += v0*r0[%s] then += v1*r1[%s]) so %s[%s]"+
+					" stays in a register across the pair while both rows stay contiguous (shipped"+
+					" linalg QR, geomean -2.69%%; strip-mining the same site decayed from -2.56%% at"+
+					" n=64 to nothing at n=768). If the input is instead %s-STRIDED, strip-mine the %s"+
+					" loop by 4 with the %s loop innermost (measured 1.24x MoBA / 1.09x DSA against"+
+					" the axpy form). Either way bit-identical if %s enters zeroed (same ascending-%s"+
+					" terms, same association). NOT PS1006 — %s is already the contiguous part, so"+
+					" interchanging is never the remedy. Rank by the %s trip count: that is how many"+
+					" times %s is re-streamed. BUT IF SEVERAL OUTPUT ROWS ARE ALREADY ACCUMULATED"+
+					" TOGETHER here (a band kernel holding c0..c3), the contiguous-input refusal"+
+					" above does NOT apply: strip-mining by 4 then builds a Ux4 REGISTER TILE whose"+
+					" removed output traffic dominates the input locality it costs. Measured on the"+
+					" portable GEMM bands, where the input IS contiguous: f32 -34.8%% and f64 -50.5%%"+
+					" geomean, growing with size rather than decaying.",
+					iName, base, iName, base, strings.Join(ovs, "/"), base, strings.Join(ovs, "/"),
+					iName, strings.Join(ovs, "/"), base, iName, iName, iName, base, iName,
+					iName, iName, strings.Join(ovs, "/"),
+					base, strings.Join(ovs, "/"), iName, strings.Join(ovs, "/"), base),
+			})
+			return false
+		}
+		return true
+	})
+	return out
+}
+
+// loopBoundVarsBody is loopVarBody widened to every non-blank name a loop binds, and to the
+// range VALUE. `for _, j := range act` — iterating a list of selected indices, the shape a
+// sparse mask produces — binds j as Value with a blank Key, which loopVarBody rejects
+// outright; PS1007 must see it, since that is the exact loop the measurement came from.
+//
+// KNOWN BOUNDARY, deliberately not widened: a `for ; cond; post` loop whose index was hoisted
+// above it (`i := k` then `for ; i+2 <= m; i += 2`) has no Init and is NOT recognized, so
+// PS1007 does not fire on it. That form is the idiom this repo uses for a strip-mined or
+// unrolled loop — i.e. for code where the fix has ALREADY been applied — so the silence is
+// usually right, but it is right by luck rather than by analysis. Widening this would make
+// PS1007 nag about its own shipped remedies (linalg/qr.go is exactly such a site), which would
+// need two more exclusions to suppress again: an inner body with 2+ accumulating adds into one
+// base, and a remainder loop trailing an unrolled pair over the same variable. Recorded here
+// so the next reader knows this is a chosen boundary and not an oversight. Widen it only
+// together with those exclusions, and only once a genuine un-optimized instance turns up.
+func loopBoundVarsBody(n ast.Node) ([]string, *ast.BlockStmt, bool) {
+	var names []string
+	add := func(e ast.Expr) {
+		if id, ok := e.(*ast.Ident); ok && id.Name != "_" {
+			names = append(names, id.Name)
+		}
+	}
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		if l.Key != nil {
+			add(l.Key)
+		}
+		if l.Value != nil {
+			add(l.Value)
+		}
+		if len(names) == 0 {
+			return nil, nil, false
+		}
+		return names, l.Body, true
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				add(lhs)
+			}
+		}
+		if len(names) == 0 {
+			return nil, nil, false
+		}
+		return names, l.Body, true
+	}
+	return nil, nil, false
+}
+
+// rowAccumulatedAt finds a `BASE[iName] += RHS` in root where BASE is a plain identifier and
+// the index is EXACTLY iName. Returns the base name and the accumulated expression.
+func rowAccumulatedAt(root ast.Node, iName string) (string, ast.Expr, bool) {
+	var base string
+	var rhs ast.Expr
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		ix, ok := as.Lhs[0].(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		id, ok := ix.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if !isPlainIdent(ix.Index, iName) {
+			return true
+		}
+		base, rhs, found = id.Name, as.Rhs[0], true
+		return false
+	})
+	return base, rhs, found
+}
+
+// dependsOnOuterVars reports whether e mentions one of the outer loop's variables, either
+// directly or through a local assigned from one inside the outer body (the hoisted `w :=
+// scores[j]` shape, which is the common form).
+func dependsOnOuterVars(e ast.Expr, ovs []string, obody *ast.BlockStmt) bool {
+	for _, v := range ovs {
+		if exprMentions(e, v) {
+			return true
+		}
+	}
+	for _, st := range obody.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			continue
+		}
+		via := false
+		for _, v := range ovs {
+			if exprMentions(as.Rhs[0], v) {
+				via = true
+			}
+		}
+		if !via {
+			continue
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && exprMentions(e, id.Name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// identAssignedIn reports whether name appears on the LHS of an assignment in root.
+func identAssignedIn(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok && id.Name == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// Package-scoped state for PS6023. Keyed by directory, because a threshold is routinely
+// DECLARED in one file and used as a bound in another (linalg's factorParThreshold is declared
+// in solvecols.go and gates loops in qr.go, cholesky.go and linalg.go), so neither the
+// declaration nor the gate is decidable from a single file.
+var (
+	thrGated     = map[string]bool{} // dir/name -> used in a relational comparison
+	thrInTest    = map[string]bool{} // dir/name -> named by some _test.go in that dir
+	thrExtOnly   = map[string]bool{} // dir -> every test file there is an external X_test package
+	thrTestSeen  = map[string]bool{} // dir -> at least one test file was read
+	thrProcsKnob = map[string]bool{} // dir -> some test there selects arms via GOMAXPROCS
+)
+
+// bailOnlyBlock reports whether every statement in b is a bail-out: a return, a panic, or a
+// break/continue. Such a branch rejects its input rather than choosing an alternative
+// computation, which is what separates a validation limit from a two-path performance gate.
+func bailOnlyBlock(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	for _, st := range b.List {
+		switch t := st.(type) {
+		case *ast.ReturnStmt, *ast.BranchStmt:
+		case *ast.ExprStmt:
+			call, ok := t.X.(*ast.CallExpr)
+			if !ok {
+				return false
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok || id.Name != "panic" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// collectThresholdUse is the PS6023 pre-pass. It records, per directory, which candidate
+// threshold names are used as a bound and which are named by a test.
+//
+// It parses the sibling _test.go files ITSELF rather than relying on the scan set, because the
+// default run excludes tests — and a check about test coverage that could only see test files
+// when -tests was passed would silently report every threshold as uncovered on a normal run.
+// Test files are read for identifier mentions only; nothing in them is ever reported.
+func collectThresholdUse(fset *token.FileSet, files []*ast.File) {
+	dirs := map[string]bool{}
+	for _, f := range files {
+		dir := filepath.Dir(fset.Position(f.Pos()).Filename)
+		dirs[dir] = true
+		ast.Inspect(f, func(n ast.Node) bool {
+			// ONLY an if-condition counts. A relational use in a FOR condition is a loop
+			// bound, not a choice between two code paths, and reporting one would ask for a
+			// two-arm test where there is only one arm.
+			is, ok := n.(*ast.IfStmt)
+			if !ok || is.Cond == nil {
+				return true
+			}
+			// A branch that only BAILS OUT — return, panic, break, continue, with no else —
+			// is a validation limit, not a path gate: the alternative is an error, not a
+			// second implementation of the same result, so there are no two arms to compare
+			// and no bit-identity to prove. format/npy's maxHeaderLen and maxElems,
+			// format/npz's maxEntries and format/pytorch's maxTensors are all this shape, and
+			// an earlier version of this check asked all of them for an arm-selecting test.
+			if is.Else == nil && bailOnlyBlock(is.Body) {
+				return true
+			}
+			ast.Inspect(is.Cond, func(m ast.Node) bool {
+				be, ok := m.(*ast.BinaryExpr)
+				if !ok {
+					return true
+				}
+				switch be.Op {
+				case token.LSS, token.GTR, token.LEQ, token.GEQ:
+				default:
+					return true
+				}
+				for _, side := range []ast.Expr{be.X, be.Y} {
+					ast.Inspect(side, func(q ast.Node) bool {
+						if id, ok := q.(*ast.Ident); ok {
+							thrGated[dir+"/"+id.Name] = true
+						}
+						return true
+					})
+				}
+				return true
+			})
+			return true
+		})
+	}
+	for dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		external, internal := false, false
+		for _, e := range entries {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			tf, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+			if err != nil {
+				continue
+			}
+			thrTestSeen[dir] = true
+			if strings.HasSuffix(tf.Name.Name, "_test") {
+				external = true
+			} else {
+				internal = true
+			}
+			ast.Inspect(tf, func(n ast.Node) bool {
+				switch t := n.(type) {
+				case *ast.Ident:
+					thrInTest[dir+"/"+t.Name] = true
+				case *ast.SelectorExpr:
+					if t.Sel.Name == "GOMAXPROCS" {
+						thrProcsKnob[dir] = true
+					}
+				}
+				return true
+			})
+		}
+		thrExtOnly[dir] = external && !internal
+	}
+}
+
+// thresholdUncoveredFindings flags PS6023 at the DECLARATION of a tuning constant that gates two
+// paths but is named by no test in its package. See the registry entry for why that matters and
+// what the remedy is.
+//
+// Deliberately keyed on the constant being NAMED by a test rather than on whether some test
+// geometry clears it. Whether a given test input exceeds a bound is not decidable from syntax —
+// it depends on values computed at runtime — and incidental coverage is exactly what this check
+// exists to distrust: it evaporates when the constant is retuned, without any test turning red.
+// Naming the threshold is what makes the coverage provable and durable, and it is the shape the
+// tests in this repo that DO cover their fast paths already use.
+func thresholdUncoveredFindings(fset *token.FileSet, f *ast.File) []finding {
+	dir := filepath.Dir(fset.Position(f.Pos()).Filename)
+	if !thrTestSeen[dir] {
+		return nil // no tests at all in this package: PS6023 has nothing to say that is specific
+	}
+	var out []finding
+	for _, d := range f.Decls {
+		gd, ok := d.(*ast.GenDecl)
+		if !ok || (gd.Tok != token.CONST && gd.Tok != token.VAR) {
+			continue
+		}
+		for _, sp := range gd.Specs {
+			vs, ok := sp.(*ast.ValueSpec)
+			if !ok || len(vs.Values) != len(vs.Names) {
+				continue
+			}
+			for i, name := range vs.Names {
+				if !isTuningLiteral(vs.Values[i]) {
+					continue
+				}
+				key := dir + "/" + name.Name
+				if !thrGated[key] || thrInTest[key] {
+					continue
+				}
+				remedy := "add a gate whose two arms are the SAME source selected by " + name.Name
+				if thrExtOnly[dir] && !name.IsExported() {
+					remedy = "this package's tests are all external (X_test) and " + name.Name +
+						" is unexported, so no test CAN name it — add an internal test file that" +
+						" asserts its geometry clears the bound, or select the arms through an" +
+						" exported knob such as GOMAXPROCS"
+					if thrProcsKnob[dir] {
+						remedy += " (some test here already uses GOMAXPROCS, but nothing ties it to" +
+							" this threshold)"
+					}
+				}
+				out = append(out, finding{
+					pos:      fset.Position(name.Pos()),
+					category: "threshold-path-uncovered",
+					msg: fmt.Sprintf("%s gates two code paths through a relational comparison, and no"+
+						" test in this package names it — so nothing PINS which arm the tests take. The"+
+						" guarded path may be entirely unexercised, or covered only incidentally by a"+
+						" test aimed elsewhere, which misdiagnoses failures and disappears the moment"+
+						" %s is retuned, with nothing turning red. Note one threshold can gate SEVERAL"+
+						" paths: naming it in a test that covers one of them silences this check for"+
+						" all of them, so cover every path it gates. %s. This reports MISSING"+
+						" EVIDENCE, not a defect: the fix is a test, never a code change.",
+						name.Name, name.Name, remedy),
+				})
+			}
+		}
+	}
+	return out
+}
+
+// isTuningLiteral reports whether e is a compile-time numeric constant expression — a literal, a
+// shift or arithmetic combination of literals, or a parenthesized one. It is what separates a
+// tuning knob from configuration read at runtime: only the former is a threshold a test can
+// reason about, and only the former stays fixed across a package's tests.
+func isTuningLiteral(e ast.Expr) bool {
+	switch t := e.(type) {
+	case *ast.BasicLit:
+		return t.Kind == token.INT || t.Kind == token.FLOAT
+	case *ast.ParenExpr:
+		return isTuningLiteral(t.X)
+	case *ast.UnaryExpr:
+		return isTuningLiteral(t.X)
+	case *ast.BinaryExpr:
+		return isTuningLiteral(t.X) && isTuningLiteral(t.Y)
+	}
+	return false
+}
+
 // immediateInnerLoops returns the loop statements nested in body that are not themselves
 // inside a deeper loop — descending through if/else/block wrappers but STOPPING at the first
 // loop on each path. This finds an inner reduction loop even when it is guarded by an `if`
@@ -3803,6 +4712,9 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		if !ok {
 			return true
 		}
+		if loopIteratesArchitectureCount(n) {
+			return true
+		}
 		// Precision guard (§step6, 2026-07-30): PS4011's fused-flatF64 lever only pays on a
 		// per-TIMESTEP recurrence whose per-step tensors are microscopic. It over-fired on
 		// per-HEAD attention loops (fox_block/aaren/cope: `for h := range X.Heads`, each head a
@@ -3826,18 +4738,68 @@ func opDispatchRecurrenceFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 			out = append(out, finding{
 				pos:      fset.Position(n.Pos()),
 				category: "op-dispatch-recurrence",
-				msg: fmt.Sprintf("sequential loop dispatches %d backend ops per iteration (calls"+
-					" passing a backend.Op* constant) and the function has no flatF64 fused path —"+
-					" O(seq) dispatch + tiny-tensor alloc overhead. Add a raw-[]float64 fused path"+
-					" (storage grabbed once, state slice reused, plain-Go recurrence) gated on"+
-					" ctx.Recorder==nil so training keeps the dispatch path; usually bit-exact."+
-					" Shipped: DeltaNet/GatedDeltaNet 2.0-3.6x. Benchmark it.", count),
+				msg: fmt.Sprintf("loop dispatches %d backend ops per iteration (calls passing a"+
+					" backend.Op* constant) and the function has no flatF64 fused path. If the trip"+
+					" count is a SEQUENCE LENGTH, that is per-step dispatch and tiny-tensor alloc"+
+					" overhead, and a raw-[]float64 fused path (storage grabbed once, state slice"+
+					" reused, plain-Go recurrence) gated on ctx.Recorder==nil is usually bit-exact"+
+					" — shipped DeltaNet/GatedDeltaNet 2.0-3.6x. VERIFY THE TRIP COUNT FIRST: this"+
+					" check cannot see it, and an audit of every hit found the architectural"+
+					" shapes (layer stacks, per-head and per-expert fan-outs) outnumbered genuine"+
+					" recurrences by two orders of magnitude before the trip-count-origin filter"+
+					" was added. Benchmark it.", count),
 			})
 			return false
 		}
 		return true
 	})
 	return out
+}
+
+// loopIteratesArchitectureCount reports whether the loop's trip count comes from a FIELD —
+// `range m.Blocks`, `range cfg.Heads`, `range m.Experts`, or a three-clause loop bounded by
+// `m.MaxRecursion`. Those are architecture counts: layer, head and expert collections sized by
+// the model, on the order of tens, iterated once per forward. A sequence length, by contrast,
+// arrives as a local or a parameter — `range seq`, `for t := 0; t < seq; t++`.
+//
+// THIS IS A SUPPRESSION, AND IT WAS COUNTED BEFORE IT WAS WRITTEN
+// (PROC-CHECK-PREDICATE-FIRST-001). An audit classified all 110 hits of this check: ZERO were
+// the sequential recurrence its message described, 57 were transformer layer stacks, and 35
+// more were per-head, per-window or per-expert fan-outs. The genuine class exists — six loops
+// in this tree, all carrying explicit scalar-or-small state across a `range seq` — and every
+// one of them iterates a LOCAL, so none is suppressed here. This filter prunes 84 of the 110
+// and keeps 6 of 6 on the real class.
+//
+// Four richer predicates were counted and REJECTED rather than shipped. Loop-carried state
+// fires on every layer stack too — the residual is exactly that, so it is what the two shapes
+// have in common. Requiring the carried value to feed two or more dispatches loses the
+// canonical single-chain recurrence, dropping recall to four of six. Filtering on elementwise
+// versus matmul ops has recall ZERO: 22 layer stacks show no visible matmul because theirs sit
+// behind method calls, while all six real recurrences do show one. And matching a literal
+// row-slice attribute has recall zero as well.
+//
+// An AST walker cannot tell `range m.Blocks` (a slice field) from `range cfg.Heads` (an int
+// field), and does not need to: both are architecture counts and both belong on this side.
+//
+// The known cost: a recurrence written `for t := range m.Config.Ctx` would be missed. There
+// are none in this tree today.
+func loopIteratesArchitectureCount(n ast.Node) bool {
+	switch v := n.(type) {
+	case *ast.RangeStmt:
+		_, isSel := ast.Unparen(v.X).(*ast.SelectorExpr)
+		return isSel
+	case *ast.ForStmt:
+		cmp, ok := v.Cond.(*ast.BinaryExpr)
+		if !ok {
+			return false
+		}
+		if _, isSel := ast.Unparen(cmp.Y).(*ast.SelectorExpr); isSel {
+			return true
+		}
+		_, isSel := ast.Unparen(cmp.X).(*ast.SelectorExpr)
+		return isSel
+	}
+	return false
 }
 
 // rangesOverField reports whether n is `for k := range <expr>.<field>` — a loop over a
@@ -4079,7 +5041,9 @@ func scaledSerialDotFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" like PS4008 but not stored raw. Break the dependency chain with independent"+
 					" accumulators (e.g. 4-way unroll). Bit-identical when the products are"+
 					" integer-valued (int8·int8 partials < 2^53 reassociate exactly); else"+
-					" tolerance-gate against the sequential form. Shipped: nn.LLMInt8MatMul (~2x).", acc),
+					" tolerance-gate against the sequential form. ~2x was measured on nn.LLMInt8MatMul, not"+
+					" here; like PS4008 the gain turns on the contraction extent and cache residency,"+
+					" which this check cannot see.", acc),
 			})
 		}
 		return true
@@ -4284,7 +5248,9 @@ func serialDotMatmulFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				msg: fmt.Sprintf("%q accumulates a scalar dot in the innermost loop and is then stored to %s"+
 					" — a serial FMADD chain running at latency, not throughput. Transpose the k-dim operand"+
 					" once and rewrite as ikj/axpy so the accumulators are independent across the output index"+
-					" (measured 2.9x per-MAC on nn.matmulABt). Prove bit-identity against the current form with"+
+					" (2.9x per-MAC was measured on nn.matmulABt, not here; the gain turns on the contraction"+
+					" extent and the operands' cache residency, neither of which this check can see)."+
+					" Prove bit-identity against the current form with"+
 					" a tolerance-0 cross-reference test, and do NOT carry over a zero-skip.", acc, store),
 			})
 		}
@@ -4956,7 +5922,21 @@ func innerInvariantRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl) []fi
 						" recomputed on every iteration of the outer loop for the same result. Precompute"+
 						" it once into a scratch indexed by %q. Bit-identical — it is the same product,"+
 						" not a reassociation. Measured 1.10x on the Mamba2 SSM scan, where the value was"+
-						" rebuilt N times per inner index.", innerVar, outerVar, innerVar),
+						" rebuilt N times per inner index."+
+						" REDUNDANT ARITHMETIC IS NOT AUTOMATICALLY COST, and this check cannot tell the"+
+						" difference: when the recompute is a REDUCTION sharing a loop with another"+
+						" reduction, it runs in the latency shadow of the chain beside it and is very"+
+						" nearly free. MEASURED on nlp MaxContextCosine, where the ‖ctx‖² sum is rebuilt"+
+						" once per (candidate, context) pair: the inner loop costs 822 ns with that term"+
+						" and 813 ns without it at dim=768, so the whole redundancy is about 1%% despite"+
+						" being half the arithmetic. Hoisting it into a prepass REGRESSED the benchmark"+
+						" +98.51%% at 8 candidates and +34.70%% at 64 (p=0.000, n=8), because the prepass"+
+						" is serial O(numContext·dim) while the work it saves was spread across workers"+
+						" and nearly free to begin with. Before hoisting a reduction out of a loop that"+
+						" contains another one, measure the loop WITH and WITHOUT the term: if removing it"+
+						" does not speed the loop up, hoisting it cannot speed the function up"+
+						" (PERF-REDUNDANT-WORK-IN-A-LATENCY-SHADOW-IS-FREE-001, PS3010)",
+						innerVar, outerVar, innerVar),
 				})
 				return true
 			})
@@ -5911,4 +6891,6556 @@ func monotoneIndexBoundFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 var binopBackendOp = map[token.Token][2]string{
 	token.MUL: {"Mul", "multiply"}, token.ADD: {"Add", "add"},
 	token.SUB: {"Sub", "subtract"}, token.QUO: {"Div", "divide"},
+}
+
+// outputInvariantReloadFindings flags PS6010 — an output loop whose accumulator reads an
+// operand that does NOT vary with the output index. That operand is re-loaded and
+// re-converted once per output, when unrolling the output loop by 4 would amortize one
+// load across 4 accumulators. This is register blocking, the m==1 dual of unroll-and-jam.
+//
+// Found because main had already applied it to exactly one of seven sibling kernels.
+// gguf.QMatMul's Q8_0 single-token path is blocked by 4 and measured 526us -> 233us per
+// decode step (2.26x) — a larger factor than either fusing the dequant into the dot or
+// parallelizing the row loop delivered. Q4_0, structurally the closest sibling, was still
+// one row at a time; blocking it measured 1.55x. NOTHING IN PERFSCAN FLAGGED EITHER. The
+// existing serial-dot rule (PS4008) requires a plain `acc += A[i]*B[i]`, and these loops
+// unpack nibbles and convert between float widths on the way, so it stays silent.
+//
+// The remedy is NOT the ikj rewrite PS4008 asks for. Here the dependency chain is already
+// broken by having one accumulator per output; what is wasted is the repeated load of the
+// SHARED operand. Different defect, different fix, so it is a separate check.
+
+// KNOWN FALSE NEGATIVES, recorded because "PS6010 reports nothing here" must not be read as
+// "there is no load to amortize". linalg.Lstsq's right-hand-side column loop is the measured
+// case: jamming it four wide was worth -13.9% to -29.5% across the size sweep, and this check
+// was silent on it. It fails three of the predicates above at once — the body calls AtF64, it
+// carries two accumulators rather than one, and neither is stored to an index varying with the
+// column. Those filters are what hold precision at 95.7%, so they stay.
+//
+// One of the three rationales does NOT survive that site, though, and the message repeats it:
+// that a body containing a call is bottlenecked on the call, so the reload is already free. In
+// Lstsq the call is a per-element AtF64 that a line-level profile puts at 30ms of 13.58s — 0.2%
+// — while the reloaded operands were the top three lines at 61%. The exclusion is a precision
+// tradeoff that loses real sites, not a statement about where the time goes.
+//
+// The shape this check cannot see is the wider one: an INDEPENDENT outer dimension whose whole
+// body re-reads a large shared read-only array, where the fix replicates the body rather than
+// one accumulator. No detector is proposed for it — see PERF-NO-CHECK-FOR-ROW-HOIST-001 and
+// PERF-NO-CHECK-FOR-JAM-REMAINDER-001 for the two nearest predicates that were counted and
+// declined on population.
+func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outVar, outBody, ok := loopVarBody(n)
+		if !ok || outVar == "" {
+			return true
+		}
+		// Already blocked: a stride > 1 means someone has done this. `range n` and `i++`
+		// are the unblocked forms.
+		// A body that calls something the compiler will not fold away is bottlenecked on that
+		// call, not on the reloaded operand, so blocking the loop buys nothing.
+		//
+		// COUNTED against all 65 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
+		// Removes 19, of which 18 are false positives — 13 are sites this repository itself
+		// labels a generic fallback for exotic or mixed dtypes, reaching every element through
+		// AtF64. Precision 69.2% -> 95.7% at 97.8% recall. The single genuine casualty is
+		// backend/ref/mha_masked_backward.go, where math.Inf and math.IsInf sit in a mask
+		// bail-out branch and never in the dot product.
+		//
+		// CONVERSIONS AND BUILTINS ARE NOT CALLS, and this is the whole reason the obvious
+		// version of this predicate is wrong. Go models float64(x) as an *ast.CallExpr, so
+		// "the body contains a call" removes 28 and loses TEN genuine sites — and seven of
+		// those are the f32-widening twin of an f64 hit the same predicate keeps, the same
+		// kernel in the same file differing only by float64(...) around each load. math.Inf
+		// likewise compiles to a constant load and no call at all.
+		if loopCallsNonTrivial(outBody) {
+			return true
+		}
+		if f, isFor := n.(*ast.ForStmt); isFor && stridesByMoreThanOne(f.Post) {
+			return true
+		}
+		// A body declaring MORE THAN ONE scalar float accumulator is not the
+		// single-accumulator reload shape this check targets. Either the operand already feeds
+		// several accumulators — which IS the recommended transform, so recommending it again
+		// multiplies code paths, the hazard PS6019 reports — or the accumulators consume it
+		// differently and nothing invariant is left to amortize. The two surviving false
+		// positives are one of each: a NEON kernel tail already feeding t0..t3 from one load,
+		// and a site whose two accumulators read the same operand through different indices.
+		//
+		// COUNTED AGAINST THE SURVIVORS, not the original population
+		// (PROC-RECOUNT-AFTER-FILTERING-001). Against the pre-filter 65 hits this shape
+		// appeared 3 times; against the 46 that survive the non-trivial-call exclusion it
+		// appears twice, because one of the three was already removed there. Those two are
+		// EXACTLY the two false positives left in the population: a NEON kernel's own
+		// commented scalar column tail already feeding t0..t3 from one load, and a site where
+		// the sole operand is booked as both shared and per-output because the index goes
+		// through a variable. So this takes the check from 44 genuine of 46 to 44 of 44 —
+		// zero genuine sites lost.
+		//
+		// The existing stride exclusion cannot reach either, because it inspects only the
+		// flagged loop's own post statement, and in both cases the blocking lives on an
+		// ENCLOSING loop or in the body's accumulator set rather than in this loop's stride.
+		if len(scalarAccumulators(outBody)) > 1 {
+			return true
+		}
+		// Everything reachable from the output index, transitively: `rowBits :=
+		// weight[ni*rowBytes:]` then `q := rowBits[o:]` makes q output-dependent even
+		// though it never mentions ni. Without the closure the shared operand cannot be
+		// told apart from the per-output one.
+		derived := derivedFrom(outVar, outBody)
+		for _, acc := range scalarAccumulators(outBody) {
+			shared, perOutput := false, false
+			ast.Inspect(outBody, func(m ast.Node) bool {
+				as, ok := m.(*ast.AssignStmt)
+				if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+					return true
+				}
+				if identName(as.Lhs[0]) != acc {
+					return true
+				}
+				for _, ix := range indexExprs(as.Rhs[0]) {
+					base := identName(ix.X)
+					if base == "" {
+						continue
+					}
+					if derived[base] || mentions(ix.Index, outVar) {
+						perOutput = true
+					} else {
+						shared = true
+					}
+				}
+				// A bare identifier counts too: an unpacked byte carried in as a range
+				// value is per-output without ever appearing as an index.
+				if !perOutput && mentionsAnyOf(as.Rhs[0], derived) {
+					perOutput = true
+				}
+				return true
+			})
+			// BOTH are required. Without a shared operand there is nothing to amortize;
+			// without a per-output one the whole accumulation is loop-invariant, which is
+			// PS5003's finding and a different fix (hoist it out entirely, do not unroll).
+			// And the accumulator must be STORED to an index that varies with the output
+			// variable. That is what makes this an output loop producing one value per
+			// iteration — the thing unrolling replicates. Without it the check fires on
+			// every scalar reduction that happens to sit inside some loop, which is what
+			// took it to 145 findings tree-wide.
+			if shared && perOutput && storedToIndexOf(outBody, acc, outVar) {
+				out = append(out, finding{
+					pos:      fset.Position(n.Pos()),
+					end:      fset.Position(n.End()),
+					category: "output-invariant-operand-reload",
+					msg: fmt.Sprintf("accumulator %q re-reads an operand that does not vary with output index %q — unrolling"+
+						" the output loop by 4 would let one load feed 4 accumulators (register blocking)."+
+						" NOTHING HERE IS MEASURED, and two things must be checked before acting. Confirm the"+
+						" load actually survives register allocation — build with -gcflags='<pkg>=-S' and count"+
+						" loads of that operand in the loop body; a scalar the compiler already keeps in a"+
+						" register gives nothing to amortize. And a body containing a call or a transcendental"+
+						" is bottlenecked elsewhere, so the load is already free. The remainder path an unroll"+
+						" needs is itself a hazard — see PS6019.", acc, outVar),
+				})
+				break // one finding per output loop, not one per accumulator
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// stridesByMoreThanOne reports whether a for-post is `i += c` with c > 1 — the signature
+// of a loop that is already register-blocked.
+// loopCallsNonTrivial reports whether body calls something the compiler will not fold away.
+//
+// A predeclared type conversion and a builtin are deliberately NOT such calls. Go's AST models
+// float64(x) as an *ast.CallExpr, and treating that as a call was measured to lose ten genuine
+// sites out of forty-five — seven of them the f32-widening twin of an f64 site the same test
+// keeps. len and cap likewise compile to a field load, not a call.
+func loopCallsNonTrivial(body ast.Node) bool {
+	trivial := map[string]bool{
+		"float64": true, "float32": true, "int": true, "int8": true, "int16": true,
+		"int32": true, "int64": true, "uint": true, "uint8": true, "uint16": true,
+		"uint32": true, "uint64": true, "uintptr": true, "byte": true, "rune": true,
+		"bool": true, "string": true, "complex64": true, "complex128": true,
+		"len": true, "cap": true, "make": true, "new": true, "append": true,
+		"copy": true, "delete": true, "min": true, "max": true, "clear": true,
+		"panic": true, "print": true, "println": true, "recover": true,
+		"complex": true, "real": true, "imag": true,
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if id, isID := ast.Unparen(call.Fun).(*ast.Ident); isID && trivial[id.Name] {
+			return true // a conversion or a builtin — keep descending into its arguments
+		}
+		found = true
+		return false
+	})
+	return found
+}
+
+func stridesByMoreThanOne(post ast.Stmt) bool {
+	as, ok := post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value != "1"
+}
+
+// derivedFrom returns every identifier reachable from name by assignment inside body,
+// transitively. Iterated to a fixed point because the chain can be several links long.
+func derivedFrom(name string, body *ast.BlockStmt) map[string]bool {
+	set := map[string]bool{name: true}
+	for changed := true; changed; {
+		changed = false
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.AssignStmt:
+				for i, lhs := range v.Lhs {
+					if i >= len(v.Rhs) {
+						break
+					}
+					if l := identName(lhs); l != "" && !set[l] && mentionsAnyOf(v.Rhs[i], set) {
+						set[l] = true
+						changed = true
+					}
+				}
+			case *ast.RangeStmt:
+				// `for i, q := range qs` makes q output-dependent when qs is. Omitting
+				// this is what made the check miss the very loop it was written from:
+				// the per-output operand arrived as a range VALUE, never as an index.
+				if !mentionsAnyOf(v.X, set) {
+					return true
+				}
+				for _, e := range []ast.Expr{v.Key, v.Value} {
+					if l := identName(e); l != "" && l != "_" && !set[l] {
+						set[l] = true
+						changed = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return set
+}
+
+// scalarAccumulators returns names declared in body as a float scalar — `var acc float64`
+// or `acc := 0.0` — the shape an output accumulator takes.
+func scalarAccumulators(body *ast.BlockStmt) []string {
+	var out []string
+	for _, st := range body.List {
+		switch v := st.(type) {
+		case *ast.DeclStmt:
+			gd, ok := v.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				if t := identName(vs.Type); t == "float64" || t == "float32" {
+					for _, nm := range vs.Names {
+						out = append(out, nm.Name)
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if v.Tok != token.DEFINE || len(v.Lhs) != 1 || len(v.Rhs) != 1 {
+				continue
+			}
+			if lit, ok := v.Rhs[0].(*ast.BasicLit); ok && lit.Kind == token.FLOAT {
+				if nm := identName(v.Lhs[0]); nm != "" {
+					out = append(out, nm)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// indexExprs collects every IndexExpr in e.
+func indexExprs(e ast.Expr) []*ast.IndexExpr {
+	var out []*ast.IndexExpr
+	ast.Inspect(e, func(n ast.Node) bool {
+		if ix, ok := n.(*ast.IndexExpr); ok {
+			out = append(out, ix)
+		}
+		return true
+	})
+	return out
+}
+
+// mentions reports whether e references name.
+func mentions(e ast.Expr, name string) bool {
+	return mentionsAnyOf(e, map[string]bool{name: true})
+}
+
+// storedToIndexOf reports whether acc is assigned into an index expression that varies
+// with outVar — `outf[ni] = float32(acc)`, the signature of a per-output accumulator.
+func storedToIndexOf(body *ast.BlockStmt, acc, outVar string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || found {
+			return !found
+		}
+		for i, lhs := range as.Lhs {
+			ix, ok := ast.Unparen(lhs).(*ast.IndexExpr)
+			if !ok || !mentions(ix.Index, outVar) {
+				continue
+			}
+			if i < len(as.Rhs) && mentions(as.Rhs[i], acc) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// receiverScratchFindings flags PS6006 — a method that uses a SLICE FIELD ON ITS RECEIVER
+// as a per-call temporary: written element-wise and read back element-wise within the
+// same call, carrying nothing between calls.
+//
+// It is two defects wearing one shape. The method cannot be called concurrently, which
+// silently blocks parallelizing any loop over it; and when someone parallelizes anyway,
+// every worker writes the same cache line.
+//
+// Both were measured on classic.GaussianMixture.logGaussian, whose triangular-solve
+// buffer was such a field. It carried a comment saying the method "runs serially" — the
+// precondition was known, written down, and still violated the moment the E-step was
+// parallelized. -race caught the correctness half. The performance half is the striking
+// one: the racy version measured 1.16x, and moving the buffer to a parameter took the
+// same parallelization to 1.93x. The contention cost more than the allocation saved.
+//
+// The fix is always the same: make it a parameter. Then the requirement lives in the
+// signature instead of a comment, and the next caller cannot miss it.
+func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return nil
+	}
+	recv := ""
+	if len(fn.Recv.List[0].Names) > 0 {
+		recv = fn.Recv.List[0].Names[0].Name
+	}
+	if recv == "" || recv == "_" {
+		return nil
+	}
+	// ALIASES FIRST, and they are the whole reason a naive version of this check found
+	// nothing. The shape in the wild is `y := m.yScratch` followed by `y[i] = …`, never
+	// `m.yScratch[i] = …`. A detector that insists on the literal selector cannot see the
+	// case it was written from — this one could not, until aliases were tracked.
+	alias := map[string]string{} // local ident -> receiver field it aliases
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			sel, ok := ast.Unparen(rhs).(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+				continue
+			}
+			if l := identName(as.Lhs[i]); l != "" && l != "_" {
+				alias[l] = sel.Sel.Name
+			}
+		}
+		return true
+	})
+	// Fields written through an INDEX (m.buf[i] = … or alias[i] = …) and fields read
+	// through one. A temporary is both; persistent state is written here, read elsewhere.
+	written, read := map[string]token.Pos{}, map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			// A slice of the field passed to a call is a read: copy(cf[w:end], b.part[:r])
+			// is how the gbm partition consumed its scratch, and requiring an INDEXED read
+			// missed it entirely.
+			for _, f := range slicedFields(call.Args, recv, alias) {
+				read[f] = true
+			}
+			for _, a := range call.Args {
+				for _, ix := range indexExprs(a) {
+					if f, okf := indexedField(ix, recv, alias); okf {
+						read[f] = true
+					}
+				}
+			}
+			return true
+		}
+		if as, ok := n.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if f, okf := indexedField(lhs, recv, alias); okf {
+					if _, seen := written[f]; !seen {
+						written[f] = as.Pos()
+					}
+				}
+			}
+			for _, rhs := range as.Rhs {
+				for _, ix := range indexExprs(rhs) {
+					if f, okf := indexedField(ix, recv, alias); okf {
+						read[f] = true
+					}
+				}
+			}
+			for _, f := range slicedFields(as.Rhs, recv, alias) {
+				read[f] = true
+			}
+			return true
+		}
+		return true
+	})
+	var out []finding
+	for f, pos := range written {
+		if !read[f] {
+			continue // written but never read back here: an output, not a temporary
+		}
+		// Written-and-read-in-one-method is NOT enough on its own: the first cut of this
+		// check flagged m.Means, persistent model state that the M-step legitimately
+		// fills and reads back.
+		//
+		// THE DISCRIMINATOR IS STRUCTURAL, NOT THE NAME. An earlier version keyed on
+		// scratch/buf/tmp-style names and missed two of the three real instances in this
+		// repo — gbmBuilder.vals and gbmBuilder.part — because they are not spelled like
+		// buffers. What actually separates a temporary from state is that a temporary is
+		// INDEXED IN EXACTLY ONE FUNCTION: the method that needs it uses it element-wise
+		// and everything else at most allocates it. State (m.Means, b.cols) is indexed by
+		// several. The name is kept only as a fallback for a field whose sole indexed use
+		// happens to be split across a file boundary this per-file scanner cannot see.
+		// An EXPORTED field is part of the type's API, so callers outside this file can
+		// read it and it cannot be a private temporary — whatever it is indexed by here.
+		// Without this the structural test flags m.Means in a file where the M-step is
+		// the only method that indexes it.
+		if ast.IsExported(f) {
+			continue
+		}
+		if !curSliceFields[f] {
+			continue
+		}
+		if !curSoleIndexed[f] && !looksLikeScratchName(f) {
+			continue
+		}
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "receiver-scratch-buffer",
+			msg:      fmt.Sprintf("%q is a receiver slice field used as a per-call temporary — pass it as a parameter instead: as a field it makes this method unsafe to call concurrently, and concurrent callers contend on one cache line", recv+"."+f),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].pos.Offset < out[j].pos.Offset })
+	return out
+}
+
+// recvIndexField matches `recv.field[...]` and returns "field".
+func recvIndexField(e ast.Expr, recv string) (string, bool) {
+	ix, ok := ast.Unparen(e).(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	sel, ok := ast.Unparen(ix.X).(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
+// scratchNameParts are the substrings that mark a field as a per-call temporary by
+// convention. Advisory by nature: a name is evidence of intent, not proof of it.
+var scratchNameParts = []string{"scratch", "scr", "buf", "tmp", "temp", "work"}
+
+func looksLikeScratchName(f string) bool {
+	l := strings.ToLower(f)
+	for _, p := range scratchNameParts {
+		if strings.Contains(l, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// indexedField matches an indexed use of a receiver slice field, whether written
+// directly (recv.field[i]) or through a local alias (y := recv.field; y[i]).
+func indexedField(e ast.Expr, recv string, alias map[string]string) (string, bool) {
+	if f, ok := recvIndexField(e, recv); ok {
+		return f, true
+	}
+	ix, ok := ast.Unparen(e).(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := ast.Unparen(ix.X).(*ast.Ident); ok {
+		if f, isAlias := alias[id.Name]; isAlias {
+			return f, true
+		}
+	}
+	return "", false
+}
+
+// curSoleIndexed holds, per file, the receiver fields indexed in exactly one function —
+// see the note at its assignment in scanFile. File-scoped like curPkg.
+var curSoleIndexed map[string]bool
+
+// soleIndexedFields returns the field names that appear as recv.field[...] (or through a
+// local alias of recv.field) inside exactly ONE function of f. Wholesale assignment
+// (b.vals = make(...)) does not count as an indexed use, so an allocation site elsewhere
+// leaves a temporary sole-indexed.
+func soleIndexedFields(f *ast.File) map[string]bool {
+	users := map[string]map[string]bool{} // field -> set of function names indexing it
+	for _, decl := range f.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
+			continue
+		}
+		recv := ""
+		if len(fn.Recv.List[0].Names) > 0 {
+			recv = fn.Recv.List[0].Names[0].Name
+		}
+		if recv == "" || recv == "_" {
+			continue
+		}
+		alias := receiverAliases(fn.Body, recv)
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			ix, ok := n.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			if fld, ok := indexedField(ix, recv, alias); ok {
+				if users[fld] == nil {
+					users[fld] = map[string]bool{}
+				}
+				users[fld][fn.Name.Name] = true
+			}
+			return true
+		})
+	}
+	out := map[string]bool{}
+	for fld, fns := range users {
+		if len(fns) == 1 {
+			out[fld] = true
+		}
+	}
+	return out
+}
+
+// receiverAliases maps locals assigned directly from a receiver field to that field.
+func receiverAliases(body *ast.BlockStmt, recv string) map[string]string {
+	alias := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			sel, ok := ast.Unparen(rhs).(*ast.SelectorExpr)
+			if !ok {
+				continue
+			}
+			if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+				continue
+			}
+			if l := identName(as.Lhs[i]); l != "" && l != "_" {
+				alias[l] = sel.Sel.Name
+			}
+		}
+		return true
+	})
+	return alias
+}
+
+// slicedFields returns the receiver fields appearing as recv.field[a:b] (or through a
+// local alias) anywhere in exprs. A slice is a READ of the buffer just as an index is;
+// treating only IndexExpr as a read missed gbmBuilder.part, whose whole consumption is
+// copy(dst, b.part[:r]).
+func slicedFields(exprs []ast.Expr, recv string, alias map[string]string) []string {
+	var out []string
+	for _, e := range exprs {
+		ast.Inspect(e, func(n ast.Node) bool {
+			se, ok := n.(*ast.SliceExpr)
+			if !ok {
+				return true
+			}
+			if f, ok := recvField(se.X, recv); ok {
+				out = append(out, f)
+			} else if id, ok := ast.Unparen(se.X).(*ast.Ident); ok {
+				if f, isAlias := alias[id.Name]; isAlias {
+					out = append(out, f)
+				}
+			}
+			return true
+		})
+	}
+	return out
+}
+
+// recvField matches a bare recv.field selector (no index or slice).
+func recvField(e ast.Expr, recv string) (string, bool) {
+	sel, ok := ast.Unparen(e).(*ast.SelectorExpr)
+	if !ok {
+		return "", false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != recv {
+		return "", false
+	}
+	return sel.Sel.Name, true
+}
+
+// curSliceFields holds, per file, the struct fields declared with a slice type.
+var curSliceFields map[string]bool
+
+// sliceTypedFields returns every struct field in f declared as a slice ([]T). Scratch is
+// a buffer; the persistent registries this check kept mistaking for one are maps.
+func sliceTypedFields(f *ast.File) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		st, ok := n.(*ast.StructType)
+		if !ok || st.Fields == nil {
+			return true
+		}
+		for _, fld := range st.Fields.List {
+			at, ok := fld.Type.(*ast.ArrayType)
+			if !ok || at.Len != nil { // Len != nil is a fixed-size array, not a buffer
+				continue
+			}
+			// PRIMITIVE ELEMENTS ONLY. Every genuine scratch buffer found in this repo is
+			// []float64, []int, []bool or []uint16. The persistent registries that kept
+			// being mistaken for one hold structs or pointers — optimizer per-parameter
+			// state ([]soapState), fitted models ([]*tree). A buffer of records is a
+			// collection someone keeps; a buffer of numbers is working space.
+			if !isBasicIdent(at.Elt) {
+				continue
+			}
+			for _, nm := range fld.Names {
+				out[nm.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isBasicIdent reports whether e is a predeclared numeric/bool element type.
+func isBasicIdent(e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	switch id.Name {
+	case "float64", "float32", "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "byte", "rune", "bool":
+		return true
+	}
+	return false
+}
+
+// searchFeedsReductionFindings flags PS6007 — a loop that computes an expensive per-item
+// value with a CALL and then uses that value as the INDEX of an accumulation:
+//
+//	for _, x := range data {
+//	    b := nearest(x, cent)          // expensive, independent per item
+//	    cnt[b]++                       // …but the accumulation is order-dependent
+//	    for t := range dim { sums[b][t] += x[t] }
+//	}
+//
+// The loop cannot be partitioned as written: the accumulation is a reduction over items
+// in order, and per-chunk partial sums reassociate it. The fix is to SPLIT it — run the
+// search in parallel into an assignment array, then fold sequentially in the original
+// order. The expensive half parallelizes and the order-dependent half does not move.
+//
+// Both halves matter to the diagnosis. Parallelizing the whole loop with per-chunk
+// partials is faster to write, silently NOT bit-identical, and passes any test that only
+// checks reproducibility rather than preservation — which is what the determinism tests
+// in this repo do.
+//
+// Shipped twice: AQLM's k-means assignment (part of 990ms -> 278ms end to end) and the
+// GMM E-step's log-likelihood total (part of 76.5ms -> 18.7ms). In both the reduction was
+// a small fraction of the work, so leaving it serial cost nothing measurable.
+func searchFeedsReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// NOT loopVarBody: it requires a NAMED loop variable, and the k-means assignment
+		// this check was written from is `for _, x := range data`. Insisting on a named
+		// key made the rule miss its own motivating case — found by replaying it against
+		// the pre-fix revision, which fixtures written from the same mental model could
+		// not have shown.
+		body, ok := anyLoopBody(n)
+		if !ok {
+			return true
+		}
+		// Locals in THIS loop body assigned straight from a call — the per-item search.
+		searched := map[string]bool{}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			if _, isCall := ast.Unparen(as.Rhs[0]).(*ast.CallExpr); !isCall {
+				continue
+			}
+			if l := identName(as.Lhs[0]); l != "" && l != "_" {
+				searched[l] = true
+			}
+		}
+		if len(searched) == 0 {
+			return true
+		}
+		// …used as the INDEX of an accumulation anywhere below.
+		for name := range searched {
+			if pos, okAcc := accumulationIndexedBy(body, name); okAcc {
+				out = append(out, finding{
+					pos:      fset.Position(pos),
+					category: "search-feeds-reduction",
+					msg:      fmt.Sprintf("%q comes from a per-item call and then indexes an accumulation — split the loop into a parallel search pass writing an assignment array and a sequential fold over it; partitioning as written would reassociate the sums", name),
+				})
+				break // one finding per loop
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// accumulationIndexedBy reports an `acc[name]++` or `acc[name]... += …` inside body — an
+// accumulation whose destination is chosen by the searched value.
+func accumulationIndexedBy(body *ast.BlockStmt, name string) (token.Pos, bool) {
+	var pos token.Pos
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		var lhs ast.Expr
+		switch v := n.(type) {
+		case *ast.IncDecStmt:
+			lhs = v.X
+		case *ast.AssignStmt:
+			if v.Tok != token.ADD_ASSIGN && v.Tok != token.SUB_ASSIGN {
+				return true
+			}
+			if len(v.Lhs) != 1 {
+				return true
+			}
+			lhs = v.Lhs[0]
+		default:
+			return true
+		}
+		// The destination must be indexed BY the searched value somewhere in its chain:
+		// cnt[b] and sums[b][t] both qualify, x[t] does not.
+		for _, ix := range indexExprs(lhs) {
+			if mentions(ix.Index, name) {
+				pos, found = n.Pos(), true
+				return false
+			}
+		}
+		return true
+	})
+	return pos, found
+}
+
+// anyLoopBody returns the body of any for/range loop, whatever its variables are named.
+func anyLoopBody(n ast.Node) (*ast.BlockStmt, bool) {
+	switch v := n.(type) {
+	case *ast.RangeStmt:
+		return v.Body, v.Body != nil
+	case *ast.ForStmt:
+		return v.Body, v.Body != nil
+	}
+	return nil, false
+}
+
+// columnWalkFindings flags PS1010 — a nested loop over a slice of slices whose INNER loop varies the
+// ROW index, so consecutive iterations jump a whole row.
+//
+// WHY THIS IS NOT PS1006 OR PS6011. Those match a flat array indexed as ARR[inner*stride + outer] and
+// reason about the stride arithmetic. A slice of slices has no such arithmetic — X[i][j] is two
+// index operations — so both checks are structurally blind to it. The cost is the same or worse: a
+// row-header dereference per step on top of the cache miss.
+//
+// THE INTERCHANGE CLAUSE is what keeps this from flagging every transpose in the tree. Interchanging
+// only helps when the inner loop accumulates into something that does not depend on the inner
+// variable, so the whole nest can be rewritten as one row-major pass. A transpose writes
+// out[j][i], which mentions the inner variable, and strides whichever way it is run.
+func columnWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, obody, ok := loopIndexVar(n)
+		if !ok || obody == nil {
+			return true
+		}
+		ast.Inspect(obody, func(m ast.Node) bool {
+			inner, ibody, ok := loopIndexVar(m)
+			if !ok || ibody == nil || inner == outer {
+				return true
+			}
+			if !assignsOutsideVar(ibody, inner) {
+				return true // a transpose or an in-place shuffle: interchange buys nothing
+			}
+			// AMORTIZATION: if the inner loop's body contains a loop of its own, the strided access
+			// happens ONCE per inner step against that nested loop's whole trip count, so it is not
+			// what the nest costs. LU's elimination is the case that forced this — `mult := m[i][k]`
+			// reads a column, but it sits beside `for j { ri[j] -= mult*pivRow[j] }`, which is
+			// row-major and does O(n) work per i. Reporting it invites a rewrite of the cheap part.
+			if containsLoop(ibody) {
+				return true
+			}
+			ast.Inspect(ibody, func(k ast.Node) bool {
+				ix, ok := k.(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				col, ok := ix.Index.(*ast.Ident)
+				if !ok || col.Name != outer {
+					return true
+				}
+				row, ok := ix.X.(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				rid, ok := row.Index.(*ast.Ident)
+				if !ok || rid.Name != inner {
+					return true
+				}
+				line := fset.Position(ix.Pos()).Line
+				if seen[line] {
+					return true
+				}
+				seen[line] = true
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					end:      fset.Position(ix.End()),
+					category: "column-walk-slice-of-slices",
+					msg: fmt.Sprintf("%s is read with the INNER loop varying the ROW index (%q inner,"+
+						" %q outer), so every step jumps a whole row — a row-header dereference plus a"+
+						" fresh cache line to use eight bytes of it. The inner loop assigns to something"+
+						" that does not mention %q, so the nest is interchangeable: run rows outer and"+
+						" accumulate all the outer-indexed targets in ONE contiguous pass."+
+						" PS1006 and PS6011 cannot see this — they match ARR[inner*stride+outer]"+
+						" arithmetic and a slice of slices has none, which is why this check exists:"+
+						" the tool MISSED two measured wins of exactly this shape. classic"+
+						" GaussianNB.Fit did 2*d such passes for its epsilon prepass, -23.74%% once"+
+						" folded into two row-major passes; classic ballTree.build did one per"+
+						" dimension beside an enclose() that already walked rows, -18.71%% on"+
+						" BenchmarkKNNFit. Interchange usually preserves each accumulator's summation"+
+						" order, but CONFIRM that at the site rather than assuming it.",
+						srcText(fset, ix), inner, outer, inner),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// containsLoop reports whether a block contains a for/range statement, which for PS1010 means the
+// strided access it holds is amortized against that loop's trip count rather than dominating.
+func containsLoop(b *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch n.(type) {
+		case *ast.ForStmt, *ast.RangeStmt:
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// loopIndexVar returns the index variable a loop advances and its body. A range statement may bind
+// the index as the KEY (for i := range xs) or as the VALUE (for _, i := range idx, where idx holds
+// point ids) — the ball-tree scan that motivated this check uses the second form.
+func loopIndexVar(n ast.Node) (string, *ast.BlockStmt, bool) {
+	switch x := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := x.Value.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, x.Body, true
+		}
+		if id, ok := x.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name, x.Body, true
+		}
+	case *ast.ForStmt:
+		if as, ok := x.Init.(*ast.AssignStmt); ok && len(as.Lhs) == 1 {
+			if id, ok := as.Lhs[0].(*ast.Ident); ok && id.Name != "_" {
+				return id.Name, x.Body, true
+			}
+		}
+	}
+	return "", nil, false
+}
+
+// assignsOutsideVar reports whether the body writes any target that never mentions v — a scalar
+// accumulator, or a slot indexed only by the outer variable. That is the signal that interchanging
+// the nest is profitable rather than merely moving the stride somewhere else.
+func assignsOutsideVar(body *ast.BlockStmt, v string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		var lhs []ast.Expr
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			lhs = x.Lhs
+		case *ast.IncDecStmt:
+			lhs = []ast.Expr{x.X}
+		default:
+			return true
+		}
+		for _, l := range lhs {
+			if !mentionsVar(l, v) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// compositeKeyMapProbeFindings flags PS3004 — a map probed with a composite-literal key.
+//
+// The predicate is sound without types, which is rare here: a composite literal is not a valid index
+// for a slice or an array, so `X[T{...}]` can only be a map lookup. What it costs is that an array or
+// struct key misses Go's specialized hashers and takes the generic one, a hash call per field plus a
+// combine, making it the priciest probe shape available.
+//
+// DELIBERATELY NOT GATED ON BEING INSIDE A LOOP. The site that motivated this check — the GGUF BPE
+// seed pass, worth -38.19% when replaced by a dense byte-pair table — sits in a four-line helper that
+// a loop calls, not in the loop itself, so a loop gate would have missed the only measured win. The
+// whole population in this tree is a handful of sites, small enough that reporting all of them and
+// letting a reader judge hotness beats a predicate that silently drops the interesting one.
+func compositeKeyMapProbeFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		cl, ok := ix.Index.(*ast.CompositeLit)
+		if !ok || cl.Type == nil {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(ix.Pos()),
+			end:      fset.Position(ix.End()),
+			category: "composite-key-map-probe",
+			msg: fmt.Sprintf("%s is probed with a COMPOSITE-LITERAL key (%s), so it is a map, and an"+
+				" array or struct key takes Go's GENERIC hasher — one hash call per field plus a"+
+				" combine — rather than the specialized path a plain string or int key gets. Where the"+
+				" key domain is small and dense, a flat index removes the probe entirely. Measured:"+
+				" nlp's GGUF BPE seed pass probed a map[[2]string] once per input byte, and a"+
+				" 65536-entry table indexed by the raw byte pair took BenchmarkBPEGGUFEncode -38.19%%"+
+				" (p=0.000). The sibling tiktoken encoder had already made that change, its comment"+
+				" recording that the string hash dominated its profile — and a [2]string key is worse"+
+				" still. HOTNESS IS NOT VISIBLE TO THIS CHECK: the measured site was not in a loop, it"+
+				" was a helper CALLED from one, which is why there is no loop gate here. Confirm the key"+
+				" domain is genuinely dense and bounded (two enum-like fields or two bytes qualify; an"+
+				" arbitrary string pair does not) and that the probe repeats, before converting.",
+				srcText(fset, ix.X), srcText(fset, cl.Type)),
+		})
+		return true
+	})
+	return out
+}
+
+// unconvertedDtypeArmFindings flags PS1009 — an accessor walk in one clause of a Dtype() switch
+// whose sibling clause already reads typed storage.
+//
+// THE POINT IS WHAT PS1001 CANNOT SEE. That check suppresses whenever the enclosing function calls a
+// configured fast-path helper anywhere (hasFlat), which is right when the fast path covers the hot
+// case and the accessor is a rare fallback. A dtype switch breaks that assumption: the fast arm
+// covers ONE dtype and every other dtype still pays a dispatch per element, and which arm is hot
+// depends on the workload rather than on the source. nlp's rows2D was the case that proved it — an
+// f64 copy arm and an accessor default, with every quantized model taking the default because
+// activations are f32. PS1001 was silent; adding the f32 arm was worth 6.46% of a whole prefill.
+//
+// Reports the clause, not the switch, so a switch with two unconverted arms yields two findings.
+// Deliberately advisory: an unconverted arm is not automatically worth converting, since f16/bf16
+// live in u16 storage and need a genuine conversion rather than the exact widening that makes the
+// f32 case a one-liner.
+func unconvertedDtypeArmFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		sw, ok := n.(*ast.SwitchStmt)
+		if !ok || !isDtypeSwitch(sw) {
+			return true
+		}
+		typed, cheapCovered := false, false
+		var slow []*ast.CaseClause
+		for _, st := range sw.Body.List {
+			cc, ok := st.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			if clauseReadsTypedStorage(cc) {
+				typed = true
+				if clauseMentionsCheapDtype(cc) {
+					cheapCovered = true
+				}
+			} else if clauseAccessorName(cc, ns) != "" {
+				slow = append(slow, cc)
+			}
+		}
+		if !typed {
+			return true // no fast arm at all — that is PS1001's domain, not this one
+		}
+		// SUPPRESS THE ACCEPTED TAIL. A switch that already has an F32 arm and leaves only its
+		// `default` on the accessor is in the FINISHED state, not an unfinished one: what remains
+		// there is f16/bf16 and the quantized dtypes, which live in u16 or packed storage and need a
+		// genuine conversion rather than the exact widening that makes an f32 arm a one-liner.
+		//
+		// This was measured, not assumed. Auditing all 23 sites this check reported found that every
+		// single one already covered both f64 and f32, so after the rows2D fix the check had ZERO
+		// actionable findings and would have emitted 23 pieces of noise forever. rows2D BEFORE that
+		// fix is the shape worth firing on — typed arms for f64 only, f32 falling through to the
+		// accessor, and every quantized model taking that path — and it still fires here.
+		if cheapCovered && onlyDefaultIsSlow(slow) {
+			return true
+		}
+		for _, cc := range slow {
+			kind := "case"
+			if cc.List == nil {
+				kind = "default"
+			}
+			out = append(out, finding{
+				pos:      fset.Position(cc.Pos()),
+				category: "unconverted-dtype-arm",
+				msg: fmt.Sprintf("this %s clause walks elements with .%s while a SIBLING clause of the same"+
+					" Dtype() switch already reads typed storage — the fast path covers some dtypes and"+
+					" leaves the rest on interface dispatch. PS1001 cannot report this: it suppresses"+
+					" whenever the function has any fast path, and the sibling arm satisfies that, so a"+
+					" helper fast for one dtype and slow for the others reads as already optimized."+
+					" Which arm is HOT is a workload fact — nlp rows2D had exactly this shape and every"+
+					" QUANTIZED model took the accessor default, because activations are f32; adding an"+
+					" f32 arm measured geomean -6.46%% across the whole QuantMamba2 prefill (all 4 cells"+
+					" p=0.000) from one helper with 20+ call sites. Bit-identical when the missing arm is"+
+					" a WIDENING — AtF64 on an f32 tensor is exactly float64(v). Not every arm earns one:"+
+					" f16/bf16 store as u16 and need a real conversion, so leaving those on the accessor"+
+					" is correct. Establish which dtype your workload takes — a panic in this clause under"+
+					" the relevant benchmark settles it in one run — before converting.",
+					kind, clauseAccessorName(cc, ns)),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// clauseMentionsCheapDtype reports whether a case label names a dtype whose conversion to float64 is
+// an exact WIDENING, which is what makes converting that arm a one-liner. F32 is the only such dtype
+// besides F64 itself: f16 and bf16 live in u16 storage and need real conversion code.
+func clauseMentionsCheapDtype(cc *ast.CaseClause) bool {
+	for _, e := range cc.List {
+		if sel, ok := e.(*ast.SelectorExpr); ok && sel.Sel.Name == "F32" {
+			return true
+		}
+		if id, ok := e.(*ast.Ident); ok && id.Name == "F32" {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyDefaultIsSlow reports whether every unconverted clause is the `default` one.
+func onlyDefaultIsSlow(slow []*ast.CaseClause) bool {
+	for _, cc := range slow {
+		if cc.List != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// isDtypeSwitch reports whether the switch tag is an X.Dtype() call.
+func isDtypeSwitch(sw *ast.SwitchStmt) bool {
+	call, ok := sw.Tag.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "Dtype"
+}
+
+// clauseReadsTypedStorage reports whether the clause reaches the backing store through
+// Storage().<Typed>() — the shape that makes it a converted arm.
+func clauseReadsTypedStorage(cc *ast.CaseClause) bool { return readsTypedStorage(cc) }
+
+// inDeclinedTypedFallback reports whether n sits in the arm a typed fast path DECLINED: the else
+// of an if whose taken side reaches Storage().<Typed>(), or the default of a switch that has a
+// converted case. Such an arm is the exotic-dtype correctness path — precisely what the fix these
+// checks recommend LEAVES BEHIND — so reporting it flags the applied fix as the defect. PS1001,
+// PS1009 and PS6016 already suppress their own equivalents; this is the shared form.
+//
+// THE SIBLING-ARM TEST IS THE WHOLE POINT, and a per-function one is not a weaker version of it but
+// a wrong one. "The enclosing function mentions Storage() somewhere" flags 16 of the 84 PS1005
+// sites, and reading them shows the coarse rule is right for the wrong reason and sometimes simply
+// wrong: nlp jlens builds a typed DESTINATION slice and then walks a DIFFERENT, provably non-F64
+// source by accessor inside the same function. That walk is not a fallback, and the identity fill
+// a few lines below it is a genuine site the coarse rule would have swallowed with it.
+func inDeclinedTypedFallback(parent map[ast.Node]ast.Node, n ast.Node, ns nameSets) bool {
+	for cur := n; cur != nil; cur = parent[cur] {
+		switch s := parent[cur].(type) {
+		case *ast.IfStmt:
+			// Only the ELSE side is inert. The taken side is the fast path itself, and an
+			// accessor loop there would be a real finding.
+			if s.Else == cur && (reachesFastPath(s.Body, ns) ||
+				(s.Init != nil && reachesFastPath(s.Init, ns)) ||
+				(s.Cond != nil && reachesFastPath(s.Cond, ns))) {
+				return true
+			}
+		case *ast.CaseClause:
+			// A default clause carries no expression list; a converted sibling is any other
+			// clause that reaches typed storage.
+			if len(s.List) == 0 && switchHasConvertedClause(parent, s, ns) {
+				return true
+			}
+		case *ast.BlockStmt:
+			// EARLY-RETURN SPELLING. `if fast { ...; return }` followed by the accessor loop at
+			// function level is the same construct as if/else — linalg NormFro is written this
+			// way — and keying only on Else misses it. The guard has to TERMINATE for the tail to
+			// be a fallback: without the return both run, and the loop is on the common path.
+			if precededByTerminatingFastPath(s, cur, ns) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// precededByTerminatingFastPath reports whether some statement before target in block is an
+// else-less `if <fast path> { ...; return }`, which makes everything after it the declined arm.
+func precededByTerminatingFastPath(block *ast.BlockStmt, target ast.Node, ns nameSets) bool {
+	for _, st := range block.List {
+		if st == target {
+			return false // reached the loop without passing a terminating guard
+		}
+		ifs, ok := st.(*ast.IfStmt)
+		if !ok || ifs.Else != nil || !blockTerminates(ifs.Body) {
+			continue
+		}
+		if reachesFastPath(ifs.Body, ns) ||
+			(ifs.Init != nil && reachesFastPath(ifs.Init, ns)) ||
+			(ifs.Cond != nil && reachesFastPath(ifs.Cond, ns)) {
+			return true
+		}
+	}
+	return false
+}
+
+// blockTerminates reports whether b ends in a return or a branch, so control cannot fall through
+// to the statements after the guard.
+func blockTerminates(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	switch b.List[len(b.List)-1].(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	}
+	return false
+}
+
+// reachesFastPath reports whether a subtree acquires a contiguous typed view, either directly via
+// Storage().<Typed>() or through one of the package's configured fast-path helpers. NormFro's guard
+// is `if d, ok := flatRowMajor(a); ok`, and flatRowMajor is already in fastPathHelpers — the
+// config knew about it before this suppression did.
+func reachesFastPath(root ast.Node, ns nameSets) bool {
+	if readsTypedStorage(root) {
+		return true
+	}
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			if ns.fastPath[fn.Name] {
+				found = true
+			}
+		case *ast.SelectorExpr:
+			if ns.fastPath[fn.Sel.Name] {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// switchHasConvertedClause reports whether the switch owning def has some OTHER, non-default clause
+// that reaches typed storage — the sibling that makes def the declined arm.
+func switchHasConvertedClause(parent map[ast.Node]ast.Node, def *ast.CaseClause, ns nameSets) bool {
+	// The parent map is built from the walk stack, so a BlockStmt sits between the switch and
+	// its clauses; walk up until the switch itself appears.
+	var body *ast.BlockStmt
+	for p := parent[def]; p != nil; p = parent[p] {
+		if sw, ok := p.(*ast.SwitchStmt); ok {
+			body = sw.Body
+			break
+		}
+		if sw, ok := p.(*ast.TypeSwitchStmt); ok {
+			body = sw.Body
+			break
+		}
+		if _, ok := p.(*ast.BlockStmt); !ok {
+			return false
+		}
+	}
+	if body == nil {
+		return false
+	}
+	for _, st := range body.List {
+		cc, ok := st.(*ast.CaseClause)
+		if !ok || cc == def || len(cc.List) == 0 {
+			continue
+		}
+		if reachesFastPath(cc, ns) {
+			return true
+		}
+	}
+	return false
+}
+
+// readsTypedStorage reports whether a subtree reaches the backing store through
+// Storage().<Typed>(). Shared by PS1009, which uses it to recognize a converted dtype arm, and by
+// PS6016, which uses it to recognize the arm a fallback sits behind.
+func readsTypedStorage(root ast.Node) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		inner, ok := sel.X.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if s2, ok := inner.Fun.(*ast.SelectorExpr); ok && s2.Sel.Name == "Storage" {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// clauseAccessorName returns the first configured per-element accessor called in the clause.
+func clauseAccessorName(cc *ast.CaseClause, ns nameSets) string {
+	name := ""
+	ast.Inspect(cc, func(n ast.Node) bool {
+		if name != "" {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && ns.accessors[sel.Sel.Name] {
+			name = sel.Sel.Name
+		}
+		return name == ""
+	})
+	return name
+}
+
+// allocInParallelBodyFindings flags PS6008 — a buffer allocated inside the body handed to
+// a parallel dispatch:
+//
+//	parallelFeatures(d, n, func(lo, hi int) {
+//	    vals := make([]float64, n)   // once per DISPATCH, not once per program
+//	    …
+//	})
+//
+// WHETHER THIS IS FREE OR RUINOUS DEPENDS ENTIRELY ON HOW OFTEN THE DISPATCH RUNS, which
+// is why the check reports rather than condemns. Measured both sides in this repo: AQLM
+// (49 -> 51MB) and GMM (4 -> 4MB) dispatch once per encode pass or EM iteration and paid
+// nothing. The GBM exact grower dispatches once per TREE NODE — thousands of times per
+// fit — and the identical code shape took it from 64MB/883 allocs to 2007MB/8965, a 31x
+// memory regression that shipped hidden behind a 2.80x speedup because the commit
+// reported only ns/op.
+//
+// The fix is not to avoid the allocation but to move it: one buffer per CHUNK on the
+// caller's struct, allocated once, selected by the chunk index (parallel.RowsIdx).
+//
+// Deliberately NOT restricted to dispatches inside a visible loop: the GBM case is not
+// one. bestSplit contains no loop around its dispatch — it is bestSplit ITSELF that runs
+// per node, one call frame up. A check that demanded a local loop would have missed the
+// only case that mattered.
+func allocInParallelBodyFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isParallelDispatch(call.Fun) {
+			return true
+		}
+		for _, arg := range call.Args {
+			lit, ok := arg.(*ast.FuncLit)
+			if !ok || lit.Body == nil {
+				continue
+			}
+			for _, st := range lit.Body.List {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+					continue
+				}
+				mk, ok := ast.Unparen(as.Rhs[0]).(*ast.CallExpr)
+				if !ok || identName(mk.Fun) != "make" {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "alloc-in-parallel-body",
+					msg: fmt.Sprintf("%q is allocated inside a parallel body — once per DISPATCH, so whether"+
+						" this is free or ruinous depends ENTIRELY on how often the dispatch runs, which the"+
+						" check cannot see. Both sides were measured in this repo. Dispatch-once sites pay"+
+						" nothing: AQLM went 49 to 51 MB and GMM 4 to 4 MB, one dispatch per encode pass or"+
+						" EM iteration. The GBM exact grower dispatches once per TREE NODE, thousands of"+
+						" times per fit, and the identical code shape took it from 64 MB / 883 allocs to"+
+						" 2007 MB / 8965 — a 31x memory regression that shipped hidden behind a 2.80x"+
+						" speedup because the commit reported only ns/op. So find the call frame that"+
+						" repeats. If the dispatch runs once per call and the enclosing function is not"+
+						" itself in a loop, this is per-worker scratch bounded by GOMAXPROCS and is"+
+						" SANCTIONED — accept it and report both numbers"+
+						" (PERF-PER-WORKER-ALLOCS-ARE-BOUNDED-001); most findings here are that case. If the"+
+						" dispatch repeats, hoist to one buffer per chunk on the receiver and select it with"+
+						" the chunk index. Report B/op and allocs/op either way, since ns/op alone hid the"+
+						" only regression this check exists to catch",
+						identName(as.Lhs[0])),
+				})
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// isParallelDispatch matches the naming this project gives its fan-out helpers —
+// parallel.Rows/RowsIdx and the parallelX wrappers each package defines over them.
+func isParallelDispatch(fun ast.Expr) bool {
+	switch v := ast.Unparen(fun).(type) {
+	case *ast.Ident:
+		return strings.HasPrefix(v.Name, "parallel") || strings.Contains(v.Name, "Parallel")
+	case *ast.SelectorExpr:
+		if id, ok := v.X.(*ast.Ident); ok && id.Name == "parallel" {
+			return strings.HasPrefix(v.Sel.Name, "Rows")
+		}
+	}
+	return false
+}
+
+// reflectSwapperSortFindings flags PS6009 — a call to sort.Slice or sort.SliceStable.
+//
+// Both reach the swap through reflectlite.Swapper, which ALLOCATES on every call
+// regardless of how short the slice is. slices.SortFunc/SortStableFunc take the same
+// comparator, produce the same permutation for a total order, and monomorphize the swap.
+//
+// SPLIT OUT OF PS3002 DELIBERATELY. That check reports the same call sites but bundles two
+// unrelated remedies — an LSD radix on the key bits, and this swap fix — and it states it
+// cannot verify whether the radix precondition holds. The consequence was concrete: after
+// converting classic/tree.go to slices.SortFunc, PS3002 went on flagging the REPLACEMENT,
+// its own recommendation, and the site needed a suppression to go quiet. A check that
+// cannot recognize its own fix cannot be cleared, only silenced. This one clears.
+//
+// TRIAGE BY CALL FREQUENCY, NOT SLICE LENGTH, which is the counter-intuitive part and the
+// reason the message says so. The allocation is per CALL:
+//
+//	classic/tree.go   radixByFeature, once per node per feature   1,095,700 -> 352,027 allocs (3.11x)
+//	classic/knn.go    three per-node/per-query sites                 36,004 ->  24,003 allocs (1.50x)
+//	                  sorts of k results — SHORT slices, still 1.50x
+//
+// A long sort called once allocates one swapper and is not worth touching; a short sort
+// called a million times is. Five sites were declined on exactly that basis.
+//
+// Both forms are unstable, so ties may land differently between them — check that the
+// comparator is a total order, or gate the output, before converting. And note the
+// signature difference: sort.Slice passes INDICES while slices.SortFunc passes VALUES, so
+// `key[order[a]] < key[order[c]]` becomes `key[a] < key[c]` — silently wrong if
+// transcribed rather than re-derived.
+func reflectSwapperSortFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, okp := sel.X.(*ast.Ident)
+		if !okp || pkg.Name != "sort" {
+			return true
+		}
+		if sel.Sel.Name != "Slice" && sel.Sel.Name != "SliceStable" {
+			return true
+		}
+		want := map[string]string{"Slice": "Sort", "SliceStable": "SortStable"}[sel.Sel.Name]
+		risk := " slices." + want + "Func passes VALUES where sort." + sel.Sel.Name +
+			" passes INDICES, so re-derive the comparator rather than transcribing it: here the" +
+			" element is not an index into anything, so a transcribed version will not compile and" +
+			" the compiler catches the mistake for you."
+		if outer, inner, ok := permutationSortComparator(call); ok {
+			risk = " THIS ONE IS AN INDEX-PERMUTATION SORT and the conversion is SILENT if done" +
+				" wrong. The comparator reads " + outer + "[" + inner + "[param]], so " + inner +
+				" holds integer indices. sort." + sel.Sel.Name + " passes POSITIONS while slices." +
+				want + "Func passes ELEMENTS, and because both are ints a transcribed " + outer +
+				"[" + inner + "[x]] still COMPILES while sorting by a meaningless key — it must" +
+				" become " + outer + "[x]. Two occurrences of exactly this shape were caught only" +
+				" by deliberately applying the wrong version and watching a gate fail; in one of" +
+				" them (a canonicalizing sort feeding an intern table) the whole package still" +
+				" passed, because the damage was lost deduplication rather than a wrong answer."
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			category: "reflect-swapper-sort",
+			msg: fmt.Sprintf("sort.%s allocates a reflect swapper on EVERY call, whatever the slice"+
+				" length — switch to slices.%sFunc. Triage by how often this line runs, not by how long"+
+				" the slice is, which is the counter-intuitive part: the allocation is per CALL."+
+				" Measured in this repo — classic/tree.go's radixByFeature, once per node per feature,"+
+				" went 1,095,700 to 352,027 allocs (3.11x); classic/knn.go's three per-node/per-query"+
+				" sites went 36,004 to 24,003 (1.50x) sorting SHORT slices of k results. A long sort"+
+				" called once allocates one swapper and is not worth touching; five sites were declined"+
+				" on exactly that basis. Both forms are UNSTABLE, so ties may land differently — confirm"+
+				" the comparator is a total order, or gate the output, before converting.%s",
+				sel.Sel.Name, want, risk),
+		})
+		return true
+	})
+	return out
+}
+
+// permutationSortComparator reports whether a sort.Slice/SliceStable call sorts an INDEX
+// PERMUTATION: its comparator indexes some other slice using the sorted slice's own element as
+// the index, i.e. OUTER[INNER[param]] where INNER is the slice being sorted. It returns the two
+// slice names.
+//
+// This is the one PS6009 conversion that fails SILENTLY. Everywhere else the element type is not
+// an integer, so transcribing the old positional expression into the element-based API does not
+// compile and the mistake is caught immediately. Here both the position and the element are ints,
+// so the transcription type-checks and sorts by whatever OUTER[INNER[element]] happens to be.
+//
+// Detection is purely syntactic and needs no type information: finding OUTER[INNER[param]] with
+// INNER the sorted slice and param a comparator parameter is itself the proof that INNER's
+// elements are used as indices.
+func permutationSortComparator(call *ast.CallExpr) (outer, inner string, ok bool) {
+	if len(call.Args) < 2 {
+		return "", "", false
+	}
+	slice, isIdent := ast.Unparen(call.Args[0]).(*ast.Ident)
+	if !isIdent {
+		return "", "", false
+	}
+	lit, isLit := ast.Unparen(call.Args[1]).(*ast.FuncLit)
+	if !isLit || lit.Type == nil || lit.Type.Params == nil {
+		return "", "", false
+	}
+	params := map[string]bool{}
+	for _, f := range lit.Type.Params.List {
+		for _, nm := range f.Names {
+			if nm.Name != "_" {
+				params[nm.Name] = true
+			}
+		}
+	}
+	if len(params) == 0 {
+		return "", "", false
+	}
+	ast.Inspect(lit.Body, func(n ast.Node) bool {
+		if ok {
+			return false
+		}
+		ix, isIx := n.(*ast.IndexExpr)
+		if !isIx {
+			return true
+		}
+		outerID, isID := ast.Unparen(ix.X).(*ast.Ident)
+		if !isID {
+			return true
+		}
+		// The outer slice is deliberately NOT required to differ from the sorted one. A
+		// self-permutation, s[s[a]], has exactly the property this check is about — the element
+		// is an integer index — so a transcribed s[s[x]] compiles and is wrong. An earlier
+		// version excluded outer == inner, which mutation testing showed to be both unnecessary
+		// (a direct s[i] < s[j] is already excluded by the nesting requirement below, since its
+		// index is a bare parameter rather than another index expression) and harmful, because
+		// it would have skipped the self-permutation case.
+		// The index must itself be, or contain, slice[param] — "contain" so that an offset form
+		// such as gsc[grp[a]-base] matches, which is the shape that was actually shipped wrong.
+		ast.Inspect(ix.Index, func(m ast.Node) bool {
+			if ok {
+				return false
+			}
+			inner2, isIx2 := m.(*ast.IndexExpr)
+			if !isIx2 {
+				return true
+			}
+			innerID, isID2 := ast.Unparen(inner2.X).(*ast.Ident)
+			if !isID2 || innerID.Name != slice.Name {
+				return true
+			}
+			if p, isP := ast.Unparen(inner2.Index).(*ast.Ident); isP && params[p.Name] {
+				outer, inner, ok = outerID.Name, innerID.Name, true
+			}
+			return !ok
+		})
+		return !ok
+	})
+	return outer, inner, ok
+}
+
+// rootIdentName returns the leftmost identifier of an index/selector chain — `l` for `l[i]`, `m` for
+// `m.cov[k]`, `dst` for `dst`. PS4004 needs it because siblingBranchBulkCopies searches for a copy()
+// naming the same operands, and that search works on names rather than on rendered expressions.
+func rootIdentName(e ast.Expr) (string, bool) {
+	for {
+		switch x := e.(type) {
+		case *ast.Ident:
+			return x.Name, true
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SelectorExpr:
+			e = x.X
+		case *ast.ParenExpr:
+			e = x.X
+		default:
+			return "", false
+		}
+	}
+}
+
+// srcText renders a node back to its source form. exprText cannot be used for PS1008: it handles
+// only Ident/Selector/Index/Paren, so it renders a composite index as the empty string — `os[i*n+j]`
+// came out as `os[]` and an integer loop start came out as nothing at all, which is exactly the
+// failure mode already recorded for it on PS6011's index comparison. PS1008's message has to name
+// the two runs precisely to be actionable, so it needs the real text.
+//
+// Scoped to PS1008 on purpose rather than swapped in everywhere: the other checks' messages have
+// floors asserting their exact wording, and widening exprText would move all of them at once.
+func srcText(fset *token.FileSet, n ast.Node) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, fset, n); err != nil {
+		return ""
+	}
+	return b.String()
+}
+
+// unitStrideOffset reports whether e is an index expression whose LAST index advances by exactly 1
+// per increment of v, returning that index rendered with v in place so the message can name where
+// the run starts. Accepts the bare `v` and `X + v` / `v + X` with X free of v; rejects anything
+// multiplied, which is a stride rather than a run.
+func unitStrideOffset(fset *token.FileSet, e ast.Expr, v string) (string, bool) {
+	ix, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return "", false
+	}
+	if !unitStrideIn(ix.Index, v) {
+		return "", false
+	}
+	// The BASE must be invariant in v too, or the walk is not a run. `out[j][j] = m.cov[k][j]`
+	// passes the last-index test and is a DIAGONAL write across a slice-of-slices, which copy()
+	// cannot express at all. Found by reading the 14 reported sites rather than trusting the count:
+	// classic/gmm.go's GMMDiag branch is exactly that shape, and it was the one false positive.
+	if mentionsVar(ix.X, v) {
+		return "", false
+	}
+	return srcText(fset, e), true
+}
+
+// unitStrideIn is the stride test itself: `v`, or a sum of `v` with a term that does not mention v.
+// Anything else — a product, a shift, a call, a nested index — is not a unit stride.
+func unitStrideIn(e ast.Expr, v string) bool {
+	switch x := e.(type) {
+	case *ast.Ident:
+		return x.Name == v
+	case *ast.ParenExpr:
+		return unitStrideIn(x.X, v)
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return false
+		}
+		if unitStrideIn(x.X, v) && !mentionsVar(x.Y, v) {
+			return true
+		}
+		return unitStrideIn(x.Y, v) && !mentionsVar(x.X, v)
+	}
+	return false
+}
+
+// mentionsVar reports whether v appears anywhere in e.
+func mentionsVar(e ast.Expr, v string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == v {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// loopExtent renders the half-open interval the loop covers, when it is syntactically apparent:
+// `for v := LO; v < HI; v++` exactly, and `v <= HI` as HI+1. A range loop is left unbounded rather
+// than guessed at, because `range E` iterates E times for an integer and len(E) times for a slice
+// and the AST alone cannot tell which.
+func loopExtent(fset *token.FileSet, n ast.Node, v string) (string, string, bool) {
+	f, ok := n.(*ast.ForStmt)
+	if !ok || f.Cond == nil {
+		return "", "", false
+	}
+	as, ok := f.Init.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return "", "", false
+	}
+	cond, ok := f.Cond.(*ast.BinaryExpr)
+	if !ok {
+		return "", "", false
+	}
+	if id, ok := cond.X.(*ast.Ident); !ok || id.Name != v {
+		return "", "", false
+	}
+	switch cond.Op {
+	case token.LSS:
+		return srcText(fset, as.Rhs[0]), srcText(fset, cond.Y), true
+	case token.LEQ:
+		return srcText(fset, as.Rhs[0]), srcText(fset, cond.Y) + "+1", true
+	}
+	return "", "", false
+}
+
+// perRowMakeSlabFindings flags PS2008 — a loop that allocates one slice per iteration into
+// ARR[loopvar], where a single slab plus disjoint capped views would replace n allocations with
+// one. Both spellings are matched: a direct ARR[i] = make(...) and the two-step v := make(...)
+// followed by ARR[i] = v.
+//
+// The length must be LOOP-INVARIANT. A length varying with the loop variable makes the rows
+// jagged, and a jagged set needs per-row offsets rather than a uniform stride — a different and
+// far less mechanical transform, so it is excluded rather than reported with advice that does not
+// apply to it.
+//
+// See the registry entry for the measurements: this is an allocation-count win with no wall-clock
+// effect, verified at two independent sites, and the message says so because the transform is
+// otherwise easy to mistake for a throughput optimization.
+func perRowMakeSlabFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lv, body, ok := loopVarBody(n)
+		if !ok || body == nil {
+			return true
+		}
+		// A loop ranging over a FIXED-SIZE ARRAY is bounded by a compile-time constant, so the
+		// slab it would earn is a handful of allocations rather than one per data row. PS2008's own
+		// guidance is to prefer data-sized loops, and five of the seven sites this check reported
+		// in classic/gmm.go were `for t := range y4` with y4 declared [4][]float64 — four
+		// allocations each. Reporting them buries the two that ran thousands of times.
+		if rs, ok := n.(*ast.RangeStmt); ok && rangesFixedArray(fn, rs.X) {
+			return true
+		}
+		made := map[string]ast.Node{}
+		report := func(base string, at ast.Node, rows ast.Expr) {
+			out = append(out, finding{
+				pos:      fset.Position(at.Pos()),
+				category: "per-row-make-slab",
+				msg: fmt.Sprintf("this make() runs once per %s iteration, so %s costs one allocation"+
+					" per row. The length does not vary with %s, so all rows are the same width:"+
+					" allocate ONE slab and hand out disjoint capped views —"+
+					" slab := make([]T, rows*len) then %s[%s] = slab[%s*len : (%s+1)*len : (%s+1)*len]."+
+					" Bit-identical (make zeroes, so does a fresh slab; no value or order changes)."+
+					" EXPECT NO SPEEDUP: measured at two sites (QR reflectors -39.7%% allocs, GMM"+
+					" responsibilities -62.2%%) with NO wall-clock change at either. Worth doing as a"+
+					" resource win — less allocator and GC-scan work everywhere — not for throughput."+
+					" Preconditions this check cannot see: rows must not be appended to, nor"+
+					" individually replaced later. Payoff scales with the ITERATION count, which is a"+
+					" runtime fact, so prefer loops bounded by a data size over a small constant.",
+					lv, base, lv, base, lv, lv, lv, lv),
+			})
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, isAs := m.(*ast.AssignStmt)
+			if !isAs || len(as.Rhs) != 1 || len(as.Lhs) != 1 || !invariantSliceMake(as.Rhs[0], lv) {
+				return true
+			}
+			switch lhs := as.Lhs[0].(type) {
+			case *ast.Ident:
+				made[lhs.Name] = as
+			case *ast.IndexExpr:
+				if ix, isID := lhs.Index.(*ast.Ident); isID && ix.Name == lv {
+					if base, isB := lhs.X.(*ast.Ident); isB {
+						report(base.Name, as, nil)
+					}
+				}
+			}
+			return true
+		})
+		for name, at := range made {
+			ast.Inspect(body, func(m ast.Node) bool {
+				as, isAs := m.(*ast.AssignStmt)
+				if !isAs || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					return true
+				}
+				ix, isIx := as.Lhs[0].(*ast.IndexExpr)
+				if !isIx {
+					return true
+				}
+				idx, isID := ix.Index.(*ast.Ident)
+				if !isID || idx.Name != lv {
+					return true
+				}
+				rhs, isR := as.Rhs[0].(*ast.Ident)
+				if !isR || rhs.Name != name {
+					return true
+				}
+				if base, isB := ix.X.(*ast.Ident); isB {
+					report(base.Name, at, nil)
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// rangesFixedArray reports whether e names a variable declared in fn as a fixed-size ARRAY, so a
+// range over it iterates a compile-time constant number of times.
+//
+// No type information is needed: the declaration is in the same function, and an array type carries
+// its length in the syntax. A slice ([]T) has no Len and is correctly not matched — its length is a
+// runtime fact and a slab over it can be worth having.
+func rangesFixedArray(fn *ast.FuncDecl, e ast.Expr) bool {
+	id, ok := ast.Unparen(e).(*ast.Ident)
+	if !ok {
+		return false
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch d := n.(type) {
+		case *ast.DeclStmt: // var y4 [4][]float64
+			gd, ok := d.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok || vs.Type == nil {
+					continue
+				}
+				at, ok := vs.Type.(*ast.ArrayType)
+				if !ok || at.Len == nil { // Len == nil means a slice, not an array
+					continue
+				}
+				for _, nm := range vs.Names {
+					if nm.Name == id.Name {
+						found = true
+					}
+				}
+			}
+		case *ast.AssignStmt: // y4 := [4][]float64{...}
+			for i, lhs := range d.Lhs {
+				lid, ok := lhs.(*ast.Ident)
+				if !ok || lid.Name != id.Name || i >= len(d.Rhs) {
+					continue
+				}
+				cl, ok := ast.Unparen(d.Rhs[i]).(*ast.CompositeLit)
+				if !ok {
+					continue
+				}
+				if at, ok := cl.Type.(*ast.ArrayType); ok && at.Len != nil {
+					found = true
+				}
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// invariantSliceMake reports whether e is make([]T, len, ...) whose size arguments do NOT mention
+// lv. A size that varies with the loop variable produces jagged rows, which a uniform-stride slab
+// cannot represent.
+func invariantSliceMake(e ast.Expr, lv string) bool {
+	call, ok := ast.Unparen(e).(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	// The "make" name test has NO floor in ps2008_slab_test.go, deliberately. In valid Go only
+	// make accepts a type as its first argument, so the ArrayType test below already implies it
+	// and no fixture can distinguish them — mutation testing showed removing the name test
+	// reddens nothing. It is kept as an explicit statement of intent, not as a live filter;
+	// recorded here so the next reader does not go looking for the missing floor.
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "make" || len(call.Args) < 2 {
+		return false
+	}
+	if _, isSlice := call.Args[0].(*ast.ArrayType); !isSlice {
+		return false
+	}
+	varies := false
+	for _, a := range call.Args[1:] {
+		ast.Inspect(a, func(n ast.Node) bool {
+			if idn, ok := n.(*ast.Ident); ok && idn.Name == lv {
+				varies = true
+			}
+			return !varies
+		})
+	}
+	return !varies
+}
+
+// stridedInnerWalkFindings flags PS6011 — a nested loop that walks a flat row-major buffer
+// along the WRONG axis. The signature is that the INNER loop variable appears multiplied by
+// a stride inside the index while the outer one appears additively: S[r*dk+c] iterated over
+// r, or vs[j*dm+off+d] iterated over j. Consecutive inner iterations then jump a whole row,
+// so each one touches a separate cache line to consume a single element of it, and the
+// whole traversal is repeated once per outer index.
+//
+// The correct spelling has the INNER variable additive (S[r*dk+c] iterated over c), which is
+// why the two are distinguishable without types: this check asks only which loop variable is
+// the one being scaled.
+//
+// Two fixes, and which one wins is a measurement, not a rule. Interchanging the loops makes
+// the access sequential and is bit-neutral when the body is a pure elementwise update.
+// Blocking four adjacent OUTER indices instead keeps register accumulators and reuses the
+// line that was fetched anyway — the right choice while the buffer is cache-resident, per
+// PERF-ACCUM-RESIDENCY-001. Measured this campaign: 2.65x on the Sinkhorn transposed half,
+// 2.40x on the NSA P-times-V, and the larger share of KDA's 1.75x on its decay loop.
+func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outerVar, outerBody, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// Inner loops are searched ANYWHERE beneath the outer body, not just among its
+		// direct statements. The first draft of this check walked outerBody.List and
+		// therefore missed its own motivating case — attendMask's P*V loop sits inside an
+		// `if sum > 0`, one block down, and a guard like that is the norm rather than the
+		// exception in this codebase.
+		ast.Inspect(outerBody, func(inner ast.Node) bool {
+			innerVar, innerBody, ok := loopVarBody(inner)
+			if !ok || innerVar == outerVar {
+				return true
+			}
+			// A TRANSPOSE cannot be fixed by interchange: out[j*r+i] = x[i*c+j] strides on
+			// one side whichever way it is iterated, and swapping the loops just moves the
+			// stride to the other operand. Detect it by the mirrored shape — some index in
+			// this body scales the OUTER variable — and stay quiet. (Tiling helps a
+			// transpose, but that is a different rewrite than the one this check advises.)
+			if scalesVar(innerBody, outerVar) {
+				return true
+			}
+			seen := map[string]bool{}
+			ast.Inspect(innerBody, func(m ast.Node) bool {
+				ix, isIx := m.(*ast.IndexExpr)
+				if !isIx {
+					return true
+				}
+				// A flat buffer named by a plain identifier. A [][]T two-deep index is
+				// PS4006's shape, not this one, and double-reporting the same line helps
+				// nobody.
+				buf, isID := ix.X.(*ast.Ident)
+				if !isID {
+					return true
+				}
+				// Both loop variables must reach the SAME index expression, or the two
+				// axes are not interchangeable and there is nothing to advise.
+				if !exprMentions(ix.Index, innerVar) || !exprMentions(ix.Index, outerVar) {
+					return true
+				}
+				// The discriminator: the INNER variable is scaled and the OUTER one is
+				// not. Reversed, this is ordinary row-major iteration and correct.
+				if !multipliedBy(ix.Index, innerVar) || multipliedBy(ix.Index, outerVar) {
+					return true
+				}
+				// A call in the index means the stride is not a plain scalar and the
+				// rewrite is not mechanical.
+				if containsCall(ix.Index) {
+					return true
+				}
+				// A pure PERMUTATION COPY — dst[j*a+i] = src[row+j], with or without a
+				// conversion — has no reduction to interchange: one side must stride
+				// whichever way it runs, and the real fix is tiling. This is the same
+				// exclusion as the transpose check above, but it survives the stride
+				// being hoisted (row := i*b), which makes the mirrored multiplication
+				// invisible to a syntactic test. nlp's gguf transposes are already
+				// tiled and were the false positives that motivated it.
+				if permutationCopy(innerBody, ix) {
+					return true
+				}
+				if seen[buf.Name] {
+					return true
+				}
+				seen[buf.Name] = true
+				remedy := fmt.Sprintf("Interchange the loops so %q runs contiguously (bit-neutral when"+
+					" the body is a pure elementwise update), or block four adjacent %q values so one"+
+					" fetched line feeds four accumulators.", innerVar, outerVar)
+				if readsBackItsOwnWrites(outerBody, buf.Name) {
+					remedy = fmt.Sprintf("INTERCHANGE IS NOT AVAILABLE HERE: this nest both READS and"+
+						" WRITES %q at differing indices, so the strided accesses are values earlier"+
+						" iterations of this same loop produced — a recurrence, not an independent"+
+						" traversal, and swapping the loops would read x[j] before it exists (%q is the"+
+						" enclosing loop). The remedy that IS"+
+						" available is to keep the intermediate in CONTIGUOUS per-iteration scratch and"+
+						" scatter the finished row into %q once at the end. RANK BY THE RECURRENCE'S SHARE OF"+
+						" RUNTIME, which is what decides this one: shipped on LU back substitution"+
+						" (LUSolve_512x512 -8.41%%, 768x768 -7.00%%) where a line-level profile put the"+
+						" strided statement at 32%% of the benchmark, and REJECTED on the structurally"+
+						" identical back substitution in Lstsq (geomean -0.02%%, only -0.55%% at n=768)"+
+						" where the Householder factorization and Q-transpose-b dominate and the"+
+						" recurrence is a small fraction. Also check the stride really exceeds 1: the"+
+						" single-RHS LU control came out +0.57%% SLOWER, because at one column the access"+
+						" was already contiguous and only the scatter remains.", buf.Name, outerVar, buf.Name)
+				}
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					category: "strided-inner-walk",
+					msg: fmt.Sprintf("the inner loop over %q indexes %q at a stride, so each iteration jumps a"+
+						" whole row and touches its own cache line to use one element — and the walk repeats"+
+						" once per %q. %s THE PREMISE IS A CACHE CLAIM THIS CHECK CANNOT MAKE: below"+
+						" one cache line of stride, consecutive iterations share a line, and a buffer that"+
+						" fits L1 pays nothing for striding either — read the stride value and the buffer"+
+						" size before acting. 2.40x on NSA P*V and part of KDA's 1.75x were measured AT"+
+						" THOSE SITES, not here.",
+						innerVar, buf.Name, outerVar, remedy),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return dedupeByPos(out)
+}
+
+// readsBackItsOwnWrites reports whether the nest both READS and WRITES name at index expressions
+// that DIFFER — the signature of a recurrence, where the strided reads are values earlier
+// iterations of this same loop produced.
+//
+// That combination changes the remedy completely. When a loop reads back what it wrote,
+// interchanging is not merely unprofitable but WRONG: the swapped order would read a value before
+// the iteration producing it has run. LU back substitution is the shipped example — x[i] depends
+// on every x[j] with j > i — and the fix that works there is to keep the intermediate in
+// contiguous scratch and scatter once, which the generic advice does not mention.
+//
+// The comparison is SYMMETRIC on purpose. PS6011 reports whichever access it matched first, and on
+// a three-deep nest (column, row, inner) it reported the WRITE rather than the read — an earlier
+// version of this helper assumed the reported access was the read and classified nothing.
+//
+// Requiring the two index expressions to differ is what separates a recurrence from an
+// elementwise in-place update: src[j*cols+c] = src[j*cols+c] * 2 reads and writes the same slot,
+// so interchange still applies to it.
+func readsBackItsOwnWrites(body *ast.BlockStmt, name string) bool {
+	// Compared by the set of variables MULTIPLIED in the index, not by index text. exprText
+	// renders only identifiers and selectors, so an index like i*cols+c keys to the empty string
+	// and every access collapses to one key — which is what made a first version classify
+	// nothing. The multiplied set is the structural fact that matters anyway: the write strides by
+	// the recurrence variable and the read by the inner one, and an elementwise in-place update
+	// strides both by the same variable.
+	var writes, reads []map[string]bool
+	collect := func(e ast.Expr, into *[]map[string]bool) {
+		ix, ok := e.(*ast.IndexExpr)
+		if !ok {
+			return
+		}
+		if id, ok := ast.Unparen(ix.X).(*ast.Ident); ok && id.Name == name {
+			*into = append(*into, multipliedVars(ix.Index))
+		}
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			collect(lhs, &writes)
+		}
+		for _, rhs := range as.Rhs {
+			ast.Inspect(rhs, func(m ast.Node) bool {
+				if e, ok := m.(ast.Expr); ok {
+					collect(e, &reads)
+				}
+				return true
+			})
+		}
+		return true
+	})
+	for _, w := range writes {
+		for _, r := range reads {
+			if len(w) == 0 || len(r) == 0 {
+				continue // an unstrided access says nothing about a recurrence
+			}
+			if !sameStringSet(w, r) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// multipliedVars returns the identifiers appearing as an operand of a multiplication anywhere in
+// e — the variables the index strides by.
+func multipliedVars(e ast.Expr) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(e, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		for _, side := range []ast.Expr{be.X, be.Y} {
+			if id, ok := ast.Unparen(side).(*ast.Ident); ok {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+func sameStringSet(a, b map[string]bool) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if !b[k] {
+			return false
+		}
+	}
+	return true
+}
+
+// dedupeByPos keeps one finding per source position. Searching inner loops at any depth
+// means a triple-nested loop yields the same index expression once per enclosing loop.
+func dedupeByPos(in []finding) []finding {
+	seen := make(map[token.Position]bool, len(in))
+	out := in[:0:0]
+	for _, f := range in {
+		if seen[f.pos] {
+			continue
+		}
+		seen[f.pos] = true
+		out = append(out, f)
+	}
+	return out
+}
+
+// multipliedBy reports whether name appears as an operand of a multiplication inside e.
+func multipliedBy(e ast.Expr, name string) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok || be.Op != token.MUL {
+			return true
+		}
+		if exprMentions(be.X, name) || exprMentions(be.Y, name) {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// scalesVar reports whether any index expression in body multiplies name by something.
+func scalesVar(body *ast.BlockStmt, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if ix, ok := n.(*ast.IndexExpr); ok && multipliedBy(ix.Index, name) {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// permutationCopy reports whether ix is the target (or source) of a plain assignment whose
+// other side is a single indexed read, i.e. a copy that permutes indices rather than
+// reducing. Conversions are unwrapped so float64(src[k]) counts.
+func permutationCopy(body *ast.BlockStmt, ix *ast.IndexExpr) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		// Only when the flagged index is the WRITE. A transpose is flagged on its
+		// destination, because that is where the inner loop variable is scaled
+		// (dst[j*a+i]). A GATHER is flagged on its source — col[j] = ss[j*cout+o] writes
+		// contiguously and only reads strided — and that is fixable by transposing the
+		// source once, so it must not be suppressed. Suppressing both was a false
+		// negative that hid a 4.2M-strided-read loop in Wanda.
+		if as.Lhs[0] != ast.Expr(ix) {
+			return true
+		}
+		// The destination is exactly one indexed write; the source is a single read —
+		// an index, or an accessor call in the generic fallback arms. What must NOT
+		// appear is arithmetic combining several reads, which is a reduction rather
+		// than a permutation.
+		if countIndexReads(as.Lhs[0]) == 1 && countIndexReads(as.Rhs[0]) <= 1 {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// countIndexReads counts IndexExprs in e, skipping the index expressions themselves so
+// that the arithmetic inside brackets (j*a+i) is not mistaken for a second read.
+func countIndexReads(e ast.Expr) int {
+	n := 0
+	var walk func(ast.Node)
+	walk = func(node ast.Node) {
+		ast.Inspect(node, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			n++
+			walk(ix.X) // descend the operand, never the subscript
+			return false
+		})
+	}
+	walk(e)
+	return n
+}
+
+// inconsistentFMAPinningFindings flags PS6012 — a product that can be contracted into an
+// FMA inside a function whose author has ALREADY pinned other products against exactly that.
+//
+// Go contracts a*b + c into a single FMADD on arm64 and generally does not on amd64. A fused
+// fast path that must reproduce a chain of separately-rounded backend ops therefore has to
+// round every product explicitly, and float64(a*b) is how that is spelled. The failure this
+// catches is not forgetting the technique — it is applying it incompletely, which looks
+// correct and passes on amd64 CI.
+//
+// The discriminator is INTERNAL CONSISTENCY, which is what keeps it quiet: only functions
+// that already contain at least one float64(a*b) are considered, because those have declared
+// that contraction matters here. A function with no pinning at all is not making the claim
+// and is none of this check's business.
+//
+// The case that motivated it is the one that is hardest to see: naming a subexpression does
+// NOT pin it. `inc := gs[i] * th` used in `s = float64(s*et) - inc` is still inlined and
+// contracted to fma(-gs[i], th, ...) — one rounding where the dispatch path does two. That
+// asymmetry cost three attempts on the Titans fused path, because the branch that computes
+// `s = -inc` (a negation, nothing to fuse into) always matched while every other step was off
+// by one ulp.
+func inconsistentFMAPinningFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || !hasPinnedProduct(fn.Body) {
+		return nil
+	}
+	// Products pinned by an explicit float64(...) are the baseline, not findings.
+	pinned := map[ast.Expr]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if p, ok := pinnedProduct(n); ok {
+			pinned[p] = true
+		}
+		return true
+	})
+	// A local whose value is a bare product is a candidate operand: the compiler inlines it.
+	unpinnedLocal := map[string]ast.Expr{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, isID := as.Lhs[0].(*ast.Ident)
+		if !isID {
+			return true
+		}
+		if be, ok := as.Rhs[0].(*ast.BinaryExpr); ok && be.Op == token.MUL && !pinned[be] {
+			unpinnedLocal[id.Name] = be
+		}
+		return true
+	})
+
+	// Index and slice subscripts are INTEGER arithmetic — `ks[t*d : t*d+d]` is a product
+	// feeding an add, and FMA has nothing to do with it. Without types the only way to tell
+	// is structural, so every product appearing inside a subscript is excluded.
+	// Requiring an INDEXED operand is the second half of separating float math from integer
+	// offset math without types: `oy*wo + ox` is all plain identifiers, while real value
+	// arithmetic reads memory (gs[i]*th). It also covers index expressions computed into a
+	// helper call argument, which a subscript-only exclusion cannot see.
+	inSubscript := subscriptProducts(fn.Body)
+
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		add, ok := n.(*ast.BinaryExpr)
+		if !ok || (add.Op != token.ADD && add.Op != token.SUB) {
+			return true
+		}
+		if inSubscript[add.Pos()] {
+			return true
+		}
+		for _, side := range []ast.Expr{add.X, add.Y} {
+			var culprit ast.Expr
+			var why string
+			switch t := side.(type) {
+			case *ast.BinaryExpr:
+				if t.Op == token.MUL && !pinned[t] && hasIndexOperand(t) {
+					culprit, why = t, "this product"
+				}
+			case *ast.Ident:
+				if be, ok := unpinnedLocal[t.Name]; ok && hasIndexOperand(be) {
+					culprit = be
+					why = fmt.Sprintf("the product assigned to %q", t.Name)
+				}
+			}
+			if culprit == nil || seen[culprit.Pos()] {
+				continue
+			}
+			seen[culprit.Pos()] = true
+			out = append(out, finding{
+				pos:      fset.Position(culprit.Pos()),
+				category: "inconsistent-fma-pinning",
+				msg: why + " feeds an add or subtract and is NOT wrapped in float64(...), while this" +
+					" function pins other products against FMA contraction. arm64 will fuse it into one" +
+					" rounding where the path it must match does two, so the bit-exactness claim holds on" +
+					" amd64 CI and fails on Apple silicon. Naming a subexpression does not pin it — the" +
+					" compiler inlines the local. Wrap it: float64(a*b).",
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// hasPinnedProduct reports whether body contains at least one float64(a*b) — the signal that
+// this function is deliberately defending against FMA contraction.
+func hasPinnedProduct(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if _, ok := pinnedProduct(n); ok {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// pinnedProduct matches float64(a*b) and returns the inner product.
+func pinnedProduct(n ast.Node) (ast.Expr, bool) {
+	call, ok := n.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return nil, false
+	}
+	// float64 ONLY. float32(a*b) is overwhelmingly a store rounding on an F32 path, not a
+	// declaration that contraction matters, and treating it as one made this check fire in
+	// every typed F32 branch in the tree.
+	id, ok := call.Fun.(*ast.Ident)
+	if !ok || id.Name != "float64" {
+		return nil, false
+	}
+	be, ok := call.Args[0].(*ast.BinaryExpr)
+	if !ok || be.Op != token.MUL {
+		return nil, false
+	}
+	return be, true
+}
+
+// subscriptProducts collects the positions of every expression that sits inside an index or
+// slice subscript, where arithmetic is integer offsets rather than floating-point values.
+func subscriptProducts(body *ast.BlockStmt) map[token.Pos]bool {
+	out := map[token.Pos]bool{}
+	mark := func(e ast.Expr) {
+		if e == nil {
+			return
+		}
+		ast.Inspect(e, func(n ast.Node) bool {
+			if n != nil {
+				out[n.Pos()] = true
+			}
+			return true
+		})
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch t := n.(type) {
+		case *ast.IndexExpr:
+			mark(t.Index)
+		case *ast.SliceExpr:
+			mark(t.Low)
+			mark(t.High)
+			mark(t.Max)
+		}
+		return true
+	})
+	return out
+}
+
+// sortFeedsTruncationFindings flags PS6022 — a slice sorted in full and then immediately
+// resliced to a smaller bound.
+//
+//	slices.SortFunc(cand, byScore)
+//	if len(cand) > width { cand = cand[:width] }   // the rest of the order is discarded
+//
+// This is the third consumer shape in the sort-does-too-much family, and the one the other
+// two structurally cannot see. PS6013 requires a COUNTED loop that indexes the slice; PS6001
+// requires a consumer that BREAKS on a threshold. Here the consumer is neither a loop nor a
+// break — it is a reslice, so no loop exists to match. The gap was found by a survey of the
+// decoding path, where both beam search and diverse beam search sort every candidate
+// (beams x vocabulary) and keep the top few: at a 2048 vocabulary and width 8 that is a sort
+// of 16384 to select 8, once per generated token.
+//
+// SOUNDNESS. The bound must not be len(target) — that keeps everything and discards nothing.
+// Any statement between the sort and the reslice that INDEXES or RANGES over target is
+// disqualifying: it may depend on the full order, and it also means one of the other two
+// checks already describes the site better. A len(target) guard is not such a read, since
+// that is how the idiomatic truncation is written.
+//
+// Replacing the sort with a selection is bit-safe only when the comparator is a TOTAL order.
+// With ties the retained SET is not unique, so a selection and a sort can legitimately keep
+// different elements. The message says so, because that is the precondition a reviewer must
+// check rather than assume — and in the motivating case the comparator was written as a total
+// order precisely so it would reproduce a stable sort's tie order, which is what makes the
+// substitution safe there.
+func sortFeedsTruncationFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			target, sorter, ok := sortedSliceName(st)
+			if !ok {
+				continue
+			}
+			for _, next := range blk.List[i+1:] {
+				if bound, isTrunc := truncatesSlice(next, target); isTrunc {
+					out = append(out, finding{
+						pos:      fset.Position(st.Pos()),
+						category: "sort-feeds-truncation",
+						msg: fmt.Sprintf("%s orders %q in full and it is then resliced to %s — every comparison"+
+							" that ordered the discarded tail was wasted work. A selection (quickselect /"+
+							" nth_element) partitions in O(n), after which sorting only the kept prefix"+
+							" restores the same order. Bit-safe ONLY when the comparator is a TOTAL order:"+
+							" with ties the retained set is not unique, so a selection and a sort can keep"+
+							" different elements.", sorter, target, bound),
+					})
+					break
+				}
+				// A read of the slice before the truncation may depend on the full order, and
+				// means PS6001 or PS6013 describes the site better. A len() guard is not such a
+				// read — see readsSliceSlots.
+				if readsSliceSlots(next, target) {
+					break
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// truncatesSlice reports whether st reslices target to a bound other than len(target), and
+// returns that bound's source text. It walks st rather than matching only a top-level assign,
+// because the idiomatic form wraps the reslice in an `if len(target) > k` guard.
+func truncatesSlice(st ast.Stmt, target string) (string, bool) {
+	bound, found := "", false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Rhs) != 1 {
+			return true
+		}
+		sl, ok := ast.Unparen(as.Rhs[0]).(*ast.SliceExpr)
+		if !ok || sl.High == nil || sl.Low != nil || sl.Slice3 {
+			return true
+		}
+		if identName(sl.X) != target {
+			return true
+		}
+		// len(target) keeps every element; nothing is discarded and nothing is wasted.
+		if c, isCall := ast.Unparen(sl.High).(*ast.CallExpr); isCall && calleeName(c.Fun) == "len" {
+			return true
+		}
+		bound, found = exprText(sl.High), true
+		return false
+	})
+	return bound, found
+}
+
+// readsSliceSlots reports whether st reads target by index or by range — a use that may depend
+// on the full sorted order.
+//
+// A len(target) call needs no exemption and deliberately has none. len takes the slice as a
+// bare identifier, which is neither an index nor a range, so the idiomatic
+// `if len(target) > k` guard already passes through. An explicit len case was written first
+// and removed: mutation testing showed no floor depended on it, and it was worse than
+// redundant — by stopping the descent it would also have skipped a genuine indexed read
+// nested inside a len argument, such as len(target[i]).
+func readsSliceSlots(st ast.Stmt, target string) bool {
+	found := false
+	ast.Inspect(st, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.IndexExpr:
+			if identName(v.X) == target {
+				found = true
+			}
+		case *ast.RangeStmt:
+			if identName(v.X) == target {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// sortFeedsCountedPrefixFindings flags PS6013 — a slice sorted in full whose only subsequent
+// reader is a COUNTED prefix loop.
+//
+// `sort(idx); for r := 0; r < k; r++ { use(idx[r]) }` computes a total order and then throws
+// away everything past position k. When the consumer only asks WHICH elements are the k
+// smallest — membership, not order — a selection answers it in O(n) against the sort's
+// O(n log n).
+//
+// PS6001 covers a narrower relative: a descending vocabulary sort feeding a consumer that
+// breaks early on a threshold. This one is the counted form, and it is the one that occurs:
+// PS6001 matched nothing anywhere in this tree, while this shape was worth 5.1x in
+// WandaPrune (282ms to 55ms) — 2048 sorts of 2048 elements to decide which half of each
+// column to drop.
+//
+// SOUNDNESS rests on the prefix loop being the ONLY reader. If anything else reads the
+// sorted slice afterwards, the full order is load-bearing and the sort must stay. Writes do
+// not count — re-initializing the index slice for the next column is a write.
+//
+// Replacing a sort with a selection is bit-safe only when the comparator is a TOTAL order
+// and the consumer reads membership rather than position; with ties the selected set is not
+// unique and the two disagree. The message says so, because that is the precondition a
+// reviewer has to check rather than assume.
+func sortFeedsCountedPrefixFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Local closures that sort a CAPTURED slice count as sorters. The motivating case is
+	// written that way — `sortCol := func(col []float64) { slices.SortFunc(idx, …) }` — and
+	// a detector that only matched direct calls missed it, which is the third time a rule in
+	// this file has failed to find the case it was built from.
+	wrapped := closureSorters(fn.Body)
+
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i, st := range blk.List {
+			target, sorter, ok := sortedSliceName(st)
+			if !ok {
+				target, sorter, ok = wrappedSortCall(st, wrapped)
+			}
+			if !ok {
+				continue
+			}
+			// The next statements must contain a counted loop reading target[loopvar]…
+			loop, bound := countedPrefixReader(blk.List[i+1:], target)
+			if loop == nil {
+				continue
+			}
+			// …and nothing else after the sort may READ it.
+			if otherReaderAfter(blk.List[i+1:], target, loop) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(st.Pos()),
+				category: "sort-feeds-counted-prefix",
+				msg: fmt.Sprintf("%s orders %q in full, but the only later reader is a counted loop over"+
+					" its first %s elements — the order past that point is computed and discarded. A"+
+					" selection (quickselect / nth_element) answers the same question in O(n) instead of"+
+					" O(n log n); measured 5.1x on WandaPrune, 282ms to 55ms. Bit-safe ONLY when the"+
+					" comparator is a TOTAL order and the consumer reads membership rather than"+
+					" position — with ties the selected set is not unique.", sorter, target, bound),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// sortedSliceName reports the slice identifier a statement sorts, and the sorter used.
+func sortedSliceName(st ast.Stmt) (target, sorter string, ok bool) {
+	es, isExpr := st.(*ast.ExprStmt)
+	if !isExpr {
+		return "", "", false
+	}
+	call, isCall := es.X.(*ast.CallExpr)
+	if !isCall || len(call.Args) == 0 {
+		return "", "", false
+	}
+	// calleeName collapses a qualified call to its selector, so match the package
+	// explicitly — a bare "Sort" would catch any method of that name.
+	sel, isSel := call.Fun.(*ast.SelectorExpr)
+	if !isSel {
+		return "", "", false
+	}
+	pkg, isPkg := sel.X.(*ast.Ident)
+	if !isPkg {
+		return "", "", false
+	}
+	name := pkg.Name + "." + sel.Sel.Name
+	switch name {
+	case "sort.Slice", "sort.SliceStable", "slices.SortFunc", "slices.SortStableFunc", "slices.Sort":
+	default:
+		return "", "", false
+	}
+	id, isID := call.Args[0].(*ast.Ident)
+	if !isID {
+		return "", "", false
+	}
+	return id.Name, name, true
+}
+
+// countedPrefixReader finds a `for r := 0; r < k; r++` loop among stmts whose body indexes
+// target with the loop variable, returning the loop and the bound's source text.
+func countedPrefixReader(stmts []ast.Stmt, target string) (*ast.ForStmt, string) {
+	var found *ast.ForStmt
+	var bound string
+	for _, st := range stmts {
+		ast.Inspect(st, func(n ast.Node) bool {
+			if found != nil {
+				return false
+			}
+			f, ok := n.(*ast.ForStmt)
+			if !ok || f.Cond == nil {
+				return true
+			}
+			v, _, ok := loopVarBody(f)
+			if !ok {
+				return true
+			}
+			cmpb, isBin := f.Cond.(*ast.BinaryExpr)
+			if !isBin || cmpb.Op != token.LSS {
+				return true
+			}
+			// The bound must not be the slice's own length — that reads everything.
+			if c, isCall := cmpb.Y.(*ast.CallExpr); isCall && calleeName(c.Fun) == "len" {
+				return true
+			}
+			if !indexesWithVar(f.Body, target, v) {
+				return true
+			}
+			found = f
+			if id, isID := cmpb.Y.(*ast.Ident); isID {
+				bound = id.Name
+			} else {
+				bound = "k"
+			}
+			return false
+		})
+		if found != nil {
+			break
+		}
+	}
+	return found, bound
+}
+
+// indexesWithVar reports whether body contains target[v].
+func indexesWithVar(body *ast.BlockStmt, target, v string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		id, isID := ix.X.(*ast.Ident)
+		if !isID || id.Name != target {
+			return true
+		}
+		if iv, isIV := ix.Index.(*ast.Ident); isIV && iv.Name == v {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// otherReaderAfter reports whether target is READ anywhere in stmts outside the given loop.
+// An assignment into target[i] is a write and does not keep the sort alive.
+func otherReaderAfter(stmts []ast.Stmt, target string, skip *ast.ForStmt) bool {
+	found := false
+	for _, st := range stmts {
+		ast.Inspect(st, func(n ast.Node) bool {
+			if n == skip {
+				return false
+			}
+			if as, ok := n.(*ast.AssignStmt); ok {
+				for _, r := range as.Rhs {
+					if exprMentions(r, target) {
+						found = true
+					}
+				}
+				for _, l := range as.Lhs {
+					if ix, isIx := l.(*ast.IndexExpr); isIx {
+						if exprMentions(ix.Index, target) {
+							found = true
+						}
+						continue
+					}
+					if exprMentions(l, target) {
+						found = true
+					}
+				}
+				return false
+			}
+			if call, ok := n.(*ast.CallExpr); ok {
+				for _, a := range call.Args {
+					if exprMentions(a, target) {
+						found = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	return found
+}
+
+// closureSorters maps a local closure's name to the captured slice it sorts.
+func closureSorters(body *ast.BlockStmt) map[string]string {
+	out := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		name, isID := as.Lhs[0].(*ast.Ident)
+		if !isID {
+			return true
+		}
+		lit, isLit := as.Rhs[0].(*ast.FuncLit)
+		if !isLit || lit.Body == nil {
+			return true
+		}
+		params := map[string]bool{}
+		for _, f := range lit.Type.Params.List {
+			for _, pn := range f.Names {
+				params[pn.Name] = true
+			}
+		}
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			if st, ok := m.(ast.Stmt); ok {
+				if t, _, ok := sortedSliceName(st); ok && !params[t] {
+					out[name.Name] = t // sorts a captured slice, not one handed in
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// wrappedSortCall reports the slice sorted by a call to one of the closures above.
+func wrappedSortCall(st ast.Stmt, wrapped map[string]string) (target, sorter string, ok bool) {
+	es, isExpr := st.(*ast.ExprStmt)
+	if !isExpr {
+		return "", "", false
+	}
+	call, isCall := es.X.(*ast.CallExpr)
+	if !isCall {
+		return "", "", false
+	}
+	id, isID := call.Fun.(*ast.Ident)
+	if !isID {
+		return "", "", false
+	}
+	if t, found := wrapped[id.Name]; found {
+		return t, id.Name, true
+	}
+	return "", "", false
+}
+
+// redundantPureRecomputeFindings flags PS6014 — the same pure call made twice in one block
+// with nothing between them that could change its answer:
+//
+//	qPred, _ := forward(backend.NewContext(), d.Net, states) // untaped preview
+//	target := buildTargets(qPred, ...)                       // reads qPred only
+//	q, _ := forward(tape.Context(), d.Net, states)           // SAME network, SAME input
+//
+// The second call recomputes what the first already holds. In the motivating case that was
+// one Context, five backend dispatches and their intermediates on a path that runs once per
+// environment step — worth 1.30-1.35x once removed (rl.DQN.learn), because at these widths
+// the cost is dispatch rather than arithmetic. The shape recurs wherever an untaped preview
+// pass precedes the real taped pass, which is a natural way to write a TD target and a
+// natural way to write it twice.
+//
+// PURITY IS NOT DERIVABLE FROM SYNTAX, so it is not guessed: only callees named in
+// pureComputeFuncs qualify. Without that list the check reports nothing (and says so via
+// the starved-vocabulary warning). Flagging any repeated call would fire on every
+// rng.IntN(n) and every env.Step(a) — calls whose whole purpose is to differ.
+//
+// THE LEADING CONTEXT ARGUMENT IS IGNORED when comparing, which is the point: the two calls
+// in the motivating case differ in exactly that argument (a fresh Context versus the tape's)
+// and are otherwise identical. A comparison that included it would miss every instance.
+// Soundness therefore rests on the remaining arguments, and the check requires all of them
+// to be plain names or selector chains, so "identical text" means "identical value" unless
+// something in between reassigns a name — which is what the invalidation scan looks for.
+func redundantPureRecomputeFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.pureCompute) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		type site struct {
+			key  string
+			call *ast.CallExpr
+			idx  int
+		}
+		var sites []site
+		for i, st := range blk.List {
+			call, key, ok := pureCallSite(st, ns)
+			if !ok {
+				continue
+			}
+			sites = append(sites, site{key, call, i})
+		}
+		for a := 0; a < len(sites); a++ {
+			for b := a + 1; b < len(sites); b++ {
+				if sites[a].key != sites[b].key {
+					continue
+				}
+				if pureCallInvalidated(blk.List[sites[a].idx+1:sites[b].idx+1], sites[b].call, ns) {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(sites[b].call.Pos()),
+					end:      fset.Position(sites[b].call.End()),
+					category: "redundant-pure-recompute",
+					msg: fmt.Sprintf("this call to %q recomputes what the identical call on line %d already produced "+
+						"(same arguments apart from the leading context, and nothing between them assigns any name it reads) — "+
+						"keep one result and read it twice. Measured 1.30-1.35x on rl.DQN.learn, where the duplicate cost "+
+						"one context plus five backend dispatches per step.",
+						calleeName(sites[b].call.Fun), fset.Position(sites[a].call.Pos()).Line),
+				})
+				break // one report per redundant site
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// pureCallSite recognizes `x, err := PURE(ctx, args…)` and returns a comparison key built
+// from the callee and every argument AFTER the first. Only plain names and selector chains
+// qualify as arguments: a composite literal or a nested call would make textual equality a
+// weaker claim than value equality.
+func pureCallSite(st ast.Stmt, ns nameSets) (*ast.CallExpr, string, bool) {
+	as, ok := st.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return nil, "", false
+	}
+	call, ok := as.Rhs[0].(*ast.CallExpr)
+	if !ok || len(call.Args) < 2 || call.Ellipsis.IsValid() {
+		return nil, "", false
+	}
+	if !ns.pureCompute[calleeName(call.Fun)] {
+		return nil, "", false
+	}
+	// The key carries the FULL callee expression, not just the trailing name. calleeName
+	// collapses a qualified call to its last segment, so `b.Wq.Forward(ctx, xn)` and
+	// `b.Wk.Forward(ctx, xn)` — two different projections of the same input, the most common
+	// three lines in an attention block — keyed identically and reported as a recompute.
+	// Every hit outside the package this rule was built from was that false positive. The
+	// vocabulary is still matched on the trailing name, since that is how a method is named
+	// in config; only the identity comparison needs the receiver.
+	key := exprText(call.Fun)
+	if key == "" {
+		return nil, "", false
+	}
+	for _, arg := range call.Args[1:] {
+		t := exprText(arg)
+		if t == "" {
+			return nil, "", false
+		}
+		switch arg.(type) {
+		case *ast.Ident, *ast.SelectorExpr:
+		default:
+			return nil, "", false
+		}
+		key += "\x00" + t
+	}
+	return call, key, true
+}
+
+// pureCallInvalidated reports whether anything in stmts could change what call returns:
+// an assignment to a name the call reads, or a call to a NON-pure function handed one of
+// those names (which might mutate what it points at). Both scans descend into nested nodes,
+// so a loop or closure in between is covered rather than skipped.
+func pureCallInvalidated(stmts []ast.Stmt, call *ast.CallExpr, ns nameSets) bool {
+	reads := map[string]bool{}
+	for _, arg := range call.Args[1:] {
+		for _, nm := range identNamesIn(arg) {
+			reads[nm] = true
+		}
+	}
+	for _, nm := range identNamesIn(call.Fun) {
+		reads[nm] = true
+	}
+	bad := false
+	for _, st := range stmts {
+		if bad {
+			break
+		}
+		ast.Inspect(st, func(n ast.Node) bool {
+			if bad {
+				return false
+			}
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				for _, lhs := range x.Lhs {
+					for _, nm := range identNamesIn(lhs) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			case *ast.IncDecStmt:
+				for _, nm := range identNamesIn(x.X) {
+					if reads[nm] {
+						bad = true
+					}
+				}
+			case *ast.UnaryExpr:
+				if x.Op == token.AND { // &x — the address escapes, assume a write
+					for _, nm := range identNamesIn(x.X) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			case *ast.CallExpr:
+				if ns.pureCompute[calleeName(x.Fun)] {
+					return true
+				}
+				// len and cap are builtins that provably cannot mutate their argument, and
+				// they are how a size gets read between the two calls (Shape{len(batch), k}).
+				// Treating them as potential writers suppressed the very case this rule was
+				// built from when that case was written with the same slice name.
+				if id, ok := x.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") {
+					return true
+				}
+				// A method on something the call reads, or a call handed one of those
+				// names, may mutate it.
+				for _, nm := range identNamesIn(x.Fun) {
+					if reads[nm] {
+						bad = true
+					}
+				}
+				for _, arg := range x.Args {
+					for _, nm := range mutableIdentNamesIn(arg) {
+						if reads[nm] {
+							bad = true
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	return bad
+}
+
+// mutableIdentNamesIn is identNamesIn minus anything reachable only through a len or cap
+// call. Those builtins provably cannot mutate their argument, and reading a size is the
+// normal reason a name appears between two otherwise-identical calls —
+// `New(F64, Shape{len(states), k})`. Counting the `states` inside that `len` as a possible
+// write suppressed the exact case this rule was built from.
+//
+// Worth recording HOW that was caught, because the usual order failed here: replaying the
+// detector against the real pre-fix source PASSED, since that source happened to size its
+// tensor from a different slice than it fed the forward. The synthetic positive test is what
+// exposed it. Replay proves a rule finds the case it was built from; it does not prove the
+// rule finds the SHAPE, and one incidental difference in naming is enough to hide the gap.
+func mutableIdentNamesIn(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok {
+			if id, ok := c.Fun.(*ast.Ident); ok && (id.Name == "len" || id.Name == "cap") {
+				return false
+			}
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+// identNamesIn collects every identifier name appearing in e, including the base of a
+// selector chain (so `d.Net` contributes both "d" and "Net").
+func identNamesIn(e ast.Expr) []string {
+	var out []string
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok {
+			out = append(out, id.Name)
+		}
+		return true
+	})
+	return out
+}
+
+// batch1FeedsPostloopSliceFindings flags PS6015 — a pure call made once per iteration on a
+// single-element batch, whose result NOTHING IN THE LOOP READS:
+//
+//	for { // per environment step
+//		v, _ := forward(NewContext(), critic, [][]float64{obs}) // batch of one
+//		ro.values = append(ro.values, v.AtF64(0, 0))            // the only use
+//	}
+//	// ro.values consumed here, after the loop
+//
+// Because the result only accumulates into a slice that outlives the loop, the N batch-1
+// calls answer a question one batch-N call answers — the loop does not depend on the answer
+// while it runs. Hoisting the critic out of `rl.rlRollout` this way was **1.59x** on
+// collection (29239 allocations down to 15471) and **1.19x** end to end, since each batch-1
+// forward was five backend dispatches on a one-row tensor.
+//
+// THIS IS DIFFERENT ADVICE FROM PS1003, which matches the same call shape and says "call a
+// single-item API instead" — avoid the wrapper allocation, keep N calls. That is the right
+// fix when the loop READS the result (the actor forward in the same loop feeds a softmax
+// that feeds the action that feeds the environment, so it cannot move). Both checks now report per
+// CALL SITE: PS1003 used to position its finding at the enclosing loop, which made dedup collapse a
+// second batch-1 call in the same loop into the first and hide it entirely — the shape this very
+// function was written about. That is fixed, so where a hoistable and a non-hoistable call share a
+// loop, PS1003 names both and this check adds the hoist advice for the one it applies to.
+//
+// SOUNDNESS. Hoisting across a loop is legal only if the call is pure, so the callee must be
+// named in pureComputeFuncs — the same licensing PS6014 uses, and for a stronger reason
+// here, since a call that consumed RNG would move draws out of the stream and change every
+// subsequent iteration. Beyond that, EVERY use of the result inside the loop must be an
+// append to a slice declared outside it. One use in a branch condition, one use handed to
+// another call, one use feeding the iteration state, and the result is loop-carried — the
+// check stays silent rather than proposing a hoist that changes behavior.
+func batch1FeedsPostloopSliceFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.pureCompute) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		declared := declaredInBlock(body)
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || len(as.Rhs) != 1 || len(as.Lhs) == 0 {
+				continue
+			}
+			call, ok := as.Rhs[0].(*ast.CallExpr)
+			if !ok || !ns.pureCompute[calleeName(call.Fun)] || !hasSingleElemBatchArg(call) {
+				continue
+			}
+			res, ok := as.Lhs[0].(*ast.Ident)
+			if !ok || res.Name == "_" {
+				continue
+			}
+			if !onlyAppendedOutside(body, res.Name, declared) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				end:      fset.Position(call.End()),
+				category: "batch1-call-feeds-only-postloop-slice",
+				msg: fmt.Sprintf("%q runs once per iteration on a batch of one, and %q is only appended to a slice "+
+					"that outlives the loop — nothing in the loop reads it, so these calls can become ONE batched "+
+					"call after the loop. Measured 1.59x on rl.rlRollout (29239 allocations to 15471). Unlike PS1003, "+
+					"which keeps N calls and drops the wrapper, this removes N-1 calls; it applies only because no "+
+					"loop-carried use was found.",
+					calleeName(call.Fun), res.Name),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// loopBody returns the body of a for/range statement, or nil for any other node.
+func loopBody(n ast.Node) *ast.BlockStmt {
+	switch x := n.(type) {
+	case *ast.ForStmt:
+		return x.Body
+	case *ast.RangeStmt:
+		return x.Body
+	}
+	return nil
+}
+
+// declaredInBlock collects names introduced anywhere inside body (:= or var), so an append
+// target can be told from a per-iteration local.
+func declaredInBlock(body *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			if x.Tok == token.DEFINE {
+				for _, lhs := range x.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				out[nm.Name] = true
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{x.Key, x.Value} {
+				if id, ok := e.(*ast.Ident); ok {
+					out[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// hasSingleElemBatchArg reports whether any argument is a one-element slice literal — the
+// batch-of-one wrapper.
+func hasSingleElemBatchArg(call *ast.CallExpr) bool {
+	for _, arg := range call.Args {
+		cl, ok := arg.(*ast.CompositeLit)
+		if !ok || len(cl.Elts) != 1 {
+			continue
+		}
+		if _, ok := cl.Type.(*ast.ArrayType); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// onlyAppendedOutside reports whether EVERY use of name inside body sits in an
+// `outer = append(outer, …)` whose target is declared outside body. A single use anywhere
+// else means the result is loop-carried and the hoist is not available.
+func onlyAppendedOutside(body *ast.BlockStmt, name string, declared map[string]bool) bool {
+	appendUses, otherUses := 0, 0
+	var walk func(n ast.Node, inAppend bool)
+	walk = func(n ast.Node, inAppend bool) {
+		if n == nil {
+			return
+		}
+		if as, ok := n.(*ast.AssignStmt); ok && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+			if c, ok := as.Rhs[0].(*ast.CallExpr); ok && calleeName(c.Fun) == "append" && len(c.Args) >= 2 {
+				target := exprText(as.Lhs[0])
+				if target != "" && target == exprText(c.Args[0]) && !declared[baseIdentName(as.Lhs[0])] {
+					// The accumulating append: uses of name in the appended values are fine.
+					for _, arg := range c.Args[1:] {
+						for _, nm := range identNamesIn(arg) {
+							if nm == name {
+								appendUses++
+							}
+						}
+					}
+					// Anything else in this statement still counts as another use.
+					for _, nm := range identNamesIn(as.Lhs[0]) {
+						if nm == name {
+							otherUses++
+						}
+					}
+					return
+				}
+			}
+		}
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == n {
+				return true
+			}
+			if st, ok := m.(ast.Stmt); ok {
+				walk(st, inAppend)
+				return false
+			}
+			if id, ok := m.(*ast.Ident); ok && id.Name == name {
+				otherUses++
+			}
+			return true
+		})
+	}
+	for _, st := range body.List {
+		walk(st, false)
+	}
+	// The defining assignment itself contributes one non-append use of name (its LHS), so
+	// require exactly that one and at least one append use.
+	return appendUses >= 1 && otherUses <= 1
+}
+
+// allFieldsConst reports whether every field initializer is a compile-time constant. Such a literal
+// costs NOTHING to box: the compiler emits a pointer to a static read-only copy rather than calling
+// newobject, so hoisting it cannot save an allocation.
+//
+// MEASURED, because escape analysis says otherwise and that is the trap. `go build -gcflags=-m`
+// reports "backend.ConcatAttrs{...} escapes to heap" for a fully constant literal, and PS6016's own
+// text used to point at -m as the confirmation. Hoisting two such sites in nlp quant_deepseekv2
+// changed allocs/op by ZERO, every sample equal. An isolated benchmark then separated the cases:
+// boxing an all-constant literal is 0 allocs and 1.98ns, identical to a pre-boxed package var, while
+// a literal with ANY non-constant field — even one that never changes inside the loop — is 1 alloc,
+// 24 B and 11.4ns. So the field constness, not the escape verdict, is what decides.
+//
+// A bare identifier is deliberately NOT treated as constant: the AST cannot tell a const from a var,
+// and guessing wrong here would drop a real finding rather than merely keep a harmless one.
+func allFieldsConst(cl *ast.CompositeLit) bool {
+	for _, el := range cl.Elts {
+		v := el
+		if kv, ok := el.(*ast.KeyValueExpr); ok {
+			v = kv.Value
+		}
+		if !constFoldable(v) {
+			return false
+		}
+	}
+	return len(cl.Elts) > 0
+}
+
+// constFoldable reports whether an expression is a literal, or a unary/binary/parenthesized
+// combination of literals — the forms the compiler can fold at compile time.
+func constFoldable(e ast.Expr) bool {
+	switch x := e.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.UnaryExpr:
+		return constFoldable(x.X)
+	case *ast.BinaryExpr:
+		return constFoldable(x.X) && constFoldable(x.Y)
+	case *ast.ParenExpr:
+		return constFoldable(x.X)
+	}
+	return false
+}
+
+// loopInvariantLiteralArgFindings flags PS6016 — a struct literal rebuilt every iteration
+// from values that do not change:
+//
+//	for l, b := range m.Blocks {
+//		q, _ = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q)
+//	}
+//
+// Nothing in the literal depends on l or b. Rebuilding it is cheap on its own; what is not
+// cheap is that `exec1` takes an INTERFACE, so each construction is also a heap box — once
+// per layer per decoded token. Hoisting these above the loop across six nlp decode paths
+// removed 8490 allocations from a 500-token generate (-2.9%) and 391KB of garbage.
+//
+// SOUNDNESS. The literal must be passed DIRECTLY as a call argument and nowhere else: not
+// appended, not assigned, not address-taken. A literal that escapes into a slice needs its
+// per-iteration identity, and hoisting it would make every element alias one value. Field
+// initializers must reference nothing the loop assigns and no loop variable, so the hoisted
+// value is the value every iteration built.
+//
+// WHAT THIS CANNOT SEE, and it is half the defect. The same waste occurs when the struct is
+// ALREADY hoisted but the interface conversion still happens at the call site — the form an
+// earlier pass in this repo produced and then missed, because hoisting the struct looks like
+// the fix. Recognizing it requires knowing the parameter is an interface type, which needs
+// go/types; this scanner is deliberately go/ast-only. The tool that does see it is the
+// compiler: `go build -gcflags='<pkg>=-m'` names every escaping literal, and that is how
+// both forms were actually found here. This check covers the form a parser can prove and
+// points at escape analysis for the rest rather than guessing.
+func loopInvariantLiteralArgFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		moving := loopMovingNames(n, body)
+		// FALLBACK ARMS ARE INERT. Where an if/else has a devirtualized branch that reaches typed
+		// storage, the else is the correctness path for whatever that branch declines — so a literal
+		// rebuilt there is not rebuilt on the hot path at all. Verified rather than assumed: a panic
+		// in nlp quant_deepseekv2's attnReconstructed else-arm never fires under either
+		// BenchmarkQuantDeepSeekV2Reconstructed benchmark, both of which take the typed branch.
+		// PS1001 and PS1009 already suppress their own equivalents; this brings PS6016 in line.
+		var inert []struct{ lo, hi token.Pos }
+		ast.Inspect(body, func(k ast.Node) bool {
+			ifs, ok := k.(*ast.IfStmt)
+			if !ok || ifs.Else == nil {
+				return true
+			}
+			// The typed access may sit in the BODY (`if ... { s := x.Storage().F64(); ... }`) or in
+			// the guard's INIT (`if s := x.Storage().F64(); s != nil {`), and both forms occur.
+			guarded := readsTypedStorage(ifs.Body)
+			if !guarded && ifs.Init != nil {
+				guarded = readsTypedStorage(ifs.Init)
+			}
+			if !guarded && ifs.Cond != nil {
+				guarded = readsTypedStorage(ifs.Cond)
+			}
+			if guarded {
+				inert = append(inert, struct{ lo, hi token.Pos }{ifs.Else.Pos(), ifs.Else.End()})
+			}
+			return true
+		})
+		inFallback := func(p token.Pos) bool {
+			for _, sp := range inert {
+				if p >= sp.lo && p < sp.hi {
+					return true
+				}
+			}
+			return false
+		}
+		// Every use of each candidate literal has to be the one call argument, so collect
+		// the literals reached as a direct argument and reject any seen elsewhere.
+		reported := map[string]bool{}
+		ast.Inspect(body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || calleeName(call.Fun) == "append" {
+				return true
+			}
+			for _, arg := range call.Args {
+				cl, ok := arg.(*ast.CompositeLit)
+				if !ok || len(cl.Elts) == 0 || cl.Type == nil || inFallback(cl.Pos()) || allFieldsConst(cl) {
+					continue
+				}
+				if _, ok := cl.Type.(*ast.ArrayType); ok {
+					continue // a slice literal is the pooling question (PS2001), not this one
+				}
+				if _, ok := cl.Type.(*ast.MapType); ok {
+					continue
+				}
+				if !allElemsInvariant(cl, moving) {
+					continue
+				}
+				tname := exprText(cl.Type)
+				if tname == "" {
+					continue
+				}
+				// Dedup per SITE, not per type: the q and k RoPE attrs in a decode loop are
+				// two distinct literals of the same type, and both need hoisting. Keying on
+				// the type reported one and hid the other.
+				key := fmt.Sprintf("%s@%d", tname, fset.Position(cl.Pos()).Line)
+				if reported[key] {
+					continue
+				}
+				reported[key] = true
+				out = append(out, finding{
+					pos:      fset.Position(cl.Pos()),
+					end:      fset.Position(cl.End()),
+					category: "loop-invariant-literal-arg",
+					msg: fmt.Sprintf("this %s literal is rebuilt every iteration from values the loop never changes, and it is "+
+						"passed straight to a call — if that parameter is an interface, each construction is also a heap box. "+
+						"Construct it once above the loop. Doing this across six nlp decode paths removed 8490 allocations from a "+
+						"500-token generate (-2.9%%). Confirm with go build -gcflags='<pkg>=-m', which is also the only way to see "+
+						"the variant where the struct is already hoisted but still boxed at the call site.",
+						tname),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// loopMovingNames is every name that changes across iterations of the loop at n: its
+// induction variables plus anything assigned anywhere in its body.
+func loopMovingNames(n ast.Node, body *ast.BlockStmt) map[string]bool {
+	moving := map[string]bool{}
+	switch x := n.(type) {
+	case *ast.RangeStmt:
+		for _, e := range []ast.Expr{x.Key, x.Value} {
+			if id, ok := e.(*ast.Ident); ok {
+				moving[id.Name] = true
+			}
+		}
+	case *ast.ForStmt:
+		for _, st := range []ast.Stmt{x.Init, x.Post} {
+			if st == nil {
+				continue
+			}
+			ast.Inspect(st, func(m ast.Node) bool {
+				switch y := m.(type) {
+				case *ast.AssignStmt:
+					for _, lhs := range y.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							moving[id.Name] = true
+						}
+					}
+				case *ast.IncDecStmt:
+					if id, ok := y.X.(*ast.Ident); ok {
+						moving[id.Name] = true
+					}
+				}
+				return true
+			})
+		}
+	}
+	ast.Inspect(body, func(m ast.Node) bool {
+		switch y := m.(type) {
+		case *ast.AssignStmt:
+			for _, lhs := range y.Lhs {
+				for _, nm := range identNamesIn(lhs) {
+					moving[nm] = true
+				}
+			}
+		case *ast.IncDecStmt:
+			for _, nm := range identNamesIn(y.X) {
+				moving[nm] = true
+			}
+		case *ast.RangeStmt:
+			for _, e := range []ast.Expr{y.Key, y.Value} {
+				if id, ok := e.(*ast.Ident); ok {
+					moving[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return moving
+}
+
+// allElemsInvariant reports whether every field initializer of cl references only names the
+// loop leaves alone. A call in an initializer is allowed only if its own arguments are
+// invariant — cfg.attnScale() is fine, next() is not, and neither is distinguishable by name,
+// so any zero-argument call is treated as invariant only when its receiver chain is.
+func allElemsInvariant(cl *ast.CompositeLit, moving map[string]bool) bool {
+	ok := true
+	for _, el := range cl.Elts {
+		val := el
+		if kv, isKV := el.(*ast.KeyValueExpr); isKV {
+			val = kv.Value
+		}
+		ast.Inspect(val, func(n ast.Node) bool {
+			if !ok {
+				return false
+			}
+			if id, isID := n.(*ast.Ident); isID && moving[id.Name] {
+				ok = false
+			}
+			return true
+		})
+	}
+	return ok
+}
+
+// variadicSiblings maps a package name to each variadic function it declares that HAS
+// fixed-arity siblings, and from that function to arity -> sibling name.
+//
+// A sibling is a function with IDENTICAL leading parameter types followed by exactly n
+// parameters of the variadic element type. In this repository that is exec1(ctx, op, attrs,
+// ins ...*tensor.Tensor) against exec1a/exec2/exec3, which exist precisely so a call with a
+// known argument count does not allocate a `[]*tensor.Tensor` to pass three pointers.
+//
+// Package-level, because the variadic form and its siblings are often declared in one file
+// and called from twenty others — the same reason intMapReg exists. Nothing here needs
+// go/types: two parameter types are the same when their source text is, which within one
+// package is what "same type" means for this purpose.
+type variadicFamily struct {
+	fixed   int            // number of non-variadic leading parameters
+	byArity map[int]string // trailing-argument count -> sibling name
+}
+
+var variadicSiblings = map[string]map[string]variadicFamily{}
+
+// collectVariadicSiblings pre-scans every package for variadic functions and pairs each with
+// the fixed-arity siblings that could replace a call of known arity.
+// typeText renders a parameter type to source form. exprText is NOT usable here: it has no
+// StarExpr case and returns empty for every pointer, which breaks this comparison in both
+// directions depending on how the empty is handled. Treated as a placeholder, all pointer
+// types collapse to one value and *backend.Context compares equal to *tensor.Tensor — that is
+// how concat1D(parts ...*tensor.Tensor) acquired project(ctx *backend.Context, …) as a
+// "sibling", the one hit in the tree that was obviously wrong. Treated as unrenderable and
+// skipped, every candidate with a pointer parameter drops out and the rule reports nothing at
+// all — which is the worse failure, because a silent check reads as a clean codebase.
+// Rendering the type properly is what makes the comparison mean anything.
+func typeText(fset *token.FileSet, e ast.Expr) string {
+	var buf bytes.Buffer
+	if err := printer.Fprint(&buf, fset, e); err != nil {
+		return ""
+	}
+	return buf.String()
+}
+
+func collectVariadicSiblings(fset *token.FileSet, files []*ast.File) {
+	type sig struct {
+		name     string
+		lead     []string // rendered leading parameter types
+		elem     string   // rendered variadic element type, "" if not variadic
+		trailing []string // rendered trailing parameter types (non-variadic funcs)
+	}
+	byPkg := map[string][]sig{}
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		for _, decl := range f.Decls {
+			fd, ok := decl.(*ast.FuncDecl)
+			if !ok || fd.Recv != nil || fd.Type.Params == nil {
+				continue
+			}
+			var flat []string
+			variadic := ""
+			skip := false
+			for _, fld := range fd.Type.Params.List {
+				n := len(fld.Names)
+				if n == 0 {
+					n = 1
+				}
+				if ell, isEll := fld.Type.(*ast.Ellipsis); isEll {
+					variadic = typeText(fset, ell.Elt)
+					if variadic == "" {
+						skip = true // an unrenderable type cannot be compared
+					}
+					break // the variadic parameter is always last
+				}
+				t := typeText(fset, fld.Type)
+				if t == "" {
+					skip = true
+					break
+				}
+				for range n {
+					flat = append(flat, t)
+				}
+			}
+			if skip {
+				continue
+			}
+			if variadic != "" {
+				byPkg[pkg] = append(byPkg[pkg], sig{name: fd.Name.Name, lead: flat, elem: variadic})
+				continue
+			}
+			byPkg[pkg] = append(byPkg[pkg], sig{name: fd.Name.Name, trailing: flat})
+		}
+	}
+	for pkg, sigs := range byPkg {
+		for _, v := range sigs {
+			// At least one FIXED leading parameter is required. With none, "same trailing
+			// types" is far too weak a relation: concat1D(parts ...*tensor.Tensor) matched
+			// every two-tensor function in the package, none of which was a sibling of it in
+			// any useful sense. The shared prefix is what makes a family — for exec1 it is
+			// (ctx, op, attrs), which identifies the operation the siblings all perform.
+			if v.elem == "" || len(v.lead) == 0 {
+				continue
+			}
+			for _, c := range sigs {
+				if c.elem != "" || c.name == v.name || len(c.trailing) <= len(v.lead) {
+					continue
+				}
+				// leading types must match exactly...
+				same := true
+				for i, t := range v.lead {
+					if c.trailing[i] != t {
+						same = false
+						break
+					}
+				}
+				if !same {
+					continue
+				}
+				// ...and every remaining parameter must be the variadic element type.
+				rest := c.trailing[len(v.lead):]
+				for _, t := range rest {
+					if t != v.elem {
+						same = false
+						break
+					}
+				}
+				if !same {
+					continue
+				}
+				if variadicSiblings[pkg] == nil {
+					variadicSiblings[pkg] = map[string]variadicFamily{}
+				}
+				fam, ok := variadicSiblings[pkg][v.name]
+				if !ok {
+					fam = variadicFamily{fixed: len(v.lead), byArity: map[int]string{}}
+				}
+				// A stable pick when two siblings share an arity: shortest name, then
+				// lexicographic, so the report does not change between runs.
+				if prev, seen := fam.byArity[len(rest)]; !seen ||
+					len(c.name) < len(prev) || (len(c.name) == len(prev) && c.name < prev) {
+					fam.byArity[len(rest)] = c.name
+				}
+				variadicSiblings[pkg][v.name] = fam
+			}
+		}
+	}
+}
+
+// unpooledVariadicSiblingFindings flags PS6017 — a variadic helper called in a loop at an
+// arity a fixed-arity sibling already covers:
+//
+//	for l, b := range m.Blocks {
+//		a, _ := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew) // allocates a 3-elem slice
+//	}
+//
+// `exec3` takes the same three tensors as named parameters and pools the slice it builds, so
+// the variadic call is a per-iteration allocation with a ready-made replacement. Switching
+// these by hand across the nlp decode paths was part of a change measured at -3.1% allocs;
+// the point of the rule is that 140 such call sites remained package-wide and no one was
+// going to find them by reading.
+//
+// SOUNDNESS. The sibling must have identical leading parameter types and exactly n trailing
+// ones of the variadic element type, so the call transfers argument for argument. Calls that
+// SPREAD (f(xs...)) are skipped — their arity is not known here. Restricted to loop bodies:
+// the allocation is per call either way, but once per invocation is rarely worth a diff, and
+// keeping the report to per-iteration costs is what makes the output actionable.
+//
+// WHAT IT CANNOT CHECK is whether the sibling is semantically equivalent rather than merely
+// type-compatible — that is a judgment about the two bodies. In this repository the siblings
+// pool only when ctx.Recorder == nil and delegate to the variadic form otherwise, which is
+// exactly the equivalence wanted; elsewhere it must be read before the swap. Advisory, like
+// the rest.
+func unpooledVariadicSiblingFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	sibs := variadicSiblings[curPkg]
+	if fn.Body == nil || len(sibs) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || call.Ellipsis.IsValid() {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			fam, ok := sibs[id.Name]
+			if !ok {
+				return true
+			}
+			// Trailing count = total arguments minus the variadic function's fixed leading
+			// parameters. The sibling table is keyed by that count, so one lookup answers
+			// both whether a replacement exists and which one it is.
+			arity := len(call.Args) - fam.fixed
+			sib, ok := fam.byArity[arity]
+			if !ok {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(call.Pos()),
+				end:      fset.Position(call.End()),
+				category: "unpooled-variadic-sibling",
+				msg: fmt.Sprintf("%q is variadic and is called here with %d trailing argument(s) inside a loop, so it "+
+					"allocates a slice every iteration — %q takes the same arguments as named parameters and exists to "+
+					"avoid that. Switching these across the nlp decode paths was part of a change measured at -3.1%% "+
+					"allocations. Read the sibling first: the rule proves the signatures transfer, not that the bodies agree.",
+					id.Name, arity, sib),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// layoutOpClusterFindings flags PS6018 — a function that spends most of its dispatches moving
+// data rather than computing:
+//
+//	flat, _ := exec1(ctx, backend.OpReshape, …, x)      // 7 layout dispatches
+//	rot, _  := exec1(ctx, backend.OpSlice, …, flat)     // around
+//	pass, _ := exec1(ctx, backend.OpSlice, …, flat)     // exactly
+//	rotWide, _ := exec1(ctx, backend.OpReshape, …, rot) // one
+//	rotWide, _ = exec1a(ctx, backend.OpRoPE, r, rotWide)// arithmetic op
+//	merged, _ := exec1(ctx, backend.OpConcat, …, rot, pass)
+//
+// Movement CANNOT change a value, so gathering the operands out of raw storage and scattering
+// the result back is bit-identical BY CONSTRUCTION — no reassociation, no FMA question, no
+// tolerance argument. That is what makes this class worth flagging on sight where a general
+// "too many dispatches" report would not be: the fix needs no numerical judgment, only index
+// arithmetic. Shipped three times, all in one session: partialRoPE 1.25-1.33x with 38-43%
+// fewer allocations across three architectures, Gemma2 capped attention 1.21x / -27.6%, and
+// DeepSeekV2 absorbed attention 1.12x / -9.3%.
+//
+// PS4011 IS THE LOOP-SHAPED RELATIVE and does not subsume this. It requires the dispatches to
+// sit in a sequential loop; partialRoPE is straight-line code, so PS4011 could not see the
+// largest of the three wins. Together they cover the two shapes.
+//
+// SUPPRESSED once the function already has a fused path — a ctx.Recorder == nil guard, a
+// configured fast-path helper, or a direct Storage() grab. That is what the fix looks like, so
+// a fixed function must stop reporting; without it the rule would keep flagging its own
+// successes.
+//
+// The threshold is three because two movement ops around one arithmetic op is often the
+// irreducible shape of an operation (transpose-then-matmul), while three or more means the
+// layout algebra has outgrown the computation.
+func layoutOpClusterFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || len(ns.layoutOps) == 0 {
+		return nil
+	}
+	if hasFusedStoragePath(fn.Body, ns) {
+		return nil
+	}
+	var sites []token.Pos
+	names := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			sel, ok := arg.(*ast.SelectorExpr)
+			if !ok || !ns.layoutOps[sel.Sel.Name] {
+				continue
+			}
+			sites = append(sites, call.Pos())
+			names[sel.Sel.Name] = true
+			break
+		}
+		return true
+	})
+	if len(sites) < 3 {
+		return nil
+	}
+	sorted := make([]string, 0, len(names))
+	for nm := range names {
+		sorted = append(sorted, nm)
+	}
+	sort.Strings(sorted)
+	return []finding{{
+		pos:      fset.Position(sites[0]),
+		end:      fset.Position(sites[0]),
+		category: "layout-op-cluster-unfused",
+		msg: fmt.Sprintf("this function dispatches %d pure data-movement ops (%s) and has no fused raw-storage path. "+
+			"Movement cannot change a value, so gathering the operands out of storage and scattering the result back is "+
+			"bit-identical BY CONSTRUCTION — index arithmetic only, no numerical judgment. Gate the fused arm on "+
+			"ctx.Recorder == nil so a taped context keeps the dispatch nodes as gradient edges. Shipped: partialRoPE "+
+			"1.25-1.33x with 38-43%% fewer allocations, Gemma2 capped attention 1.21x and DeepSeekV2"+
+			"absorbed attention 1.12x were measured AT THOSE SITES, on per-layer per-token decode"+
+			" paths. The count above is of STATIC call sites, not iterations, so it says nothing"+
+			" about how often this function runs — measure that first.",
+			len(sites), strings.Join(sorted, ", ")),
+	}}
+}
+
+// hasFusedStoragePath reports whether fn already reaches raw storage behind a tape guard —
+// the shape the PS6018 fix takes, and therefore the shape that must silence it.
+func hasFusedStoragePath(body *ast.BlockStmt, ns nameSets) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			// ctx.Recorder == nil (either operand order)
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				for _, side := range []ast.Expr{x.X, x.Y} {
+					if sel, ok := side.(*ast.SelectorExpr); ok && sel.Sel.Name == "Recorder" {
+						found = true
+					}
+				}
+			}
+		case *ast.CallExpr:
+			nm := calleeName(x.Fun)
+			if nm == "Storage" || ns.fastPath[nm] {
+				found = true
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// fanoutWithoutWorkerSeamFindings flags PS6021 — a fan-out helper whose callback signature
+// gives its callers no per-worker seam.
+//
+// Three separate wins in this repository were blocked by the identical shape, and in all
+// three the arithmetic was already parallel; what was missing was a place to put a buffer:
+//
+//	func knnParallelRows(n int, body func(i int))      // KNN: 3 allocations per QUERY
+//	func nbPredictParallel(n, feat int, body func(i int)) // GaussianNB: 1 per ROW
+//
+// The callback is invoked once per ITEM, so a buffer the caller allocates inside it is
+// allocated per item. Hoisting it above the helper makes it shared mutable state that every
+// worker races on — and a receiver field is the same bug with a longer fuse (PS6006). With
+// no per-worker seam in the signature, the per-item allocation is the only CORRECT option
+// available, which is why these sites survive review: the code is not careless, the
+// interface is short a parameter. Measured after adding one: GaussianNB predict 1.28x with
+// 99.2% fewer allocations, KNN predict 99.4% fewer allocations, DBSCAN fit 78.8% fewer.
+//
+// THE FIX IS THE SIGNATURE. Either give the callback a scratch parameter the helper supplies
+// per worker (gmmParallelRows, moeParallelTokens, wkvParallelChannels all do this), or take
+// a func() T constructor the helper calls once per worker and passes down.
+//
+// A callback taking a RANGE rather than a single index is NOT reported: with (lo, hi) the
+// caller can allocate inside the chunk closure, which is per-chunk and therefore already
+// per-worker. That is why parallel.Rows and the many (lo, hi) helpers here are silent, and
+// it is the distinction that makes this check quiet enough to act on.
+//
+// A helper that takes a func() T scratch constructor needs no separate exception: it must
+// pass what the constructor returns down to the callback, so that callback already carries a
+// scratch parameter and fails the index-only test. A clause for the constructor was written
+// first and removed — mutation testing showed nothing depended on it, and a predicate clause
+// no test can reach implies coverage it does not have.
+//
+// A helper that creates a CHANNEL in its own body is also skipped: that is a work-queue
+// primitive (parallelBuild), where the callback is the job and the queue is what other
+// helpers build their own seam on top of by passing a worker count as the job count.
+// Reporting the primitive would be reporting the mechanism every fix uses.
+func fanoutWithoutWorkerSeamFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Type.Params == nil {
+		return nil
+	}
+	if !fanoutDispatches(fn.Body) || fanoutMakesChan(fn.Body) {
+		return nil
+	}
+	var (
+		cbName string
+		cbPos  token.Pos
+	)
+	for _, p := range fn.Type.Params.List {
+		ft, ok := p.Type.(*ast.FuncType)
+		if !ok || ft.Params == nil || !fanoutIndexOnlyParams(ft.Params) {
+			continue
+		}
+		for _, nm := range p.Names {
+			cbName, cbPos = nm.Name, nm.Pos()
+		}
+	}
+	if cbName == "" {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(cbPos),
+		category: "fanout-without-worker-seam",
+		msg: fmt.Sprintf("callback %q takes only a work index, so a caller needing a per-item buffer has nowhere to hoist it — every call site must allocate per item, and hoisting above %q would be a data race. Give the callback a scratch parameter, or take a func() T constructor this helper calls once per worker",
+			cbName, fn.Name.Name),
+	}}
+}
+
+// fanoutIndexOnlyParams reports whether a callback takes exactly one parameter and that
+// parameter is a bare integer index. Exactly one is the load-bearing part: a (lo, hi) range
+// hands the caller a per-chunk closure, which is already a per-worker seam.
+func fanoutIndexOnlyParams(ps *ast.FieldList) bool {
+	n := 0
+	for _, f := range ps.List {
+		id, ok := f.Type.(*ast.Ident)
+		if !ok {
+			return false
+		}
+		switch id.Name {
+		case "int", "int32", "int64":
+		default:
+			return false
+		}
+		if len(f.Names) == 0 {
+			n++
+			continue
+		}
+		n += len(f.Names)
+	}
+	return n == 1
+}
+
+// fanoutDispatches reports whether a body fans work out: a go statement, or a call to one of
+// the project's parallel helpers (the same naming isParallelDispatch matches).
+func fanoutDispatches(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch v := n.(type) {
+		case *ast.GoStmt:
+			found = true
+		case *ast.CallExpr:
+			if isParallelDispatch(v.Fun) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// fanoutMakesChan reports whether a body constructs a channel, marking it a work-queue
+// primitive rather than an index fan-out.
+func fanoutMakesChan(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || identName(call.Fun) != "make" || len(call.Args) == 0 {
+			return true
+		}
+		if _, isChan := call.Args[0].(*ast.ChanType); isChan {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// jamTailDelegatesFindings flags PS6019 — an unroll-and-jammed loop whose remainder is handled
+// by a DIFFERENT code path:
+//
+//	for ; c+4 <= k; c += 4 {
+//		y0, y1, y2, y3 := y4[0], y4[1], y4[2], y4[3] // wide body: buffers passed in
+//		…
+//	}
+//	for ; c < k; c++ {
+//		ld[c], _ = m.logGaussian(x, c) // tail: reads the buffer off the RECEIVER
+//	}
+//
+// The two are separate code paths that happen to compute the same thing, and every property
+// established for the wide body has to be re-established for the tail. This shipped as a data
+// race: parallelizing the caller required moving the wide body's scratch off the receiver, the
+// tail still read the receiver, and the scan raced for any k not divisible by four. Nothing
+// caught it because every benchmark and test used k=8 — the race detector cannot flag a line
+// that never runs, and a parity test compares equal on a path that is empty.
+//
+// The properties that go stale in a tail are exactly the ones worth flagging for: per-worker
+// scratch (a race), explicit FMA pinning (§NUM-FUSED-PATH-FMA — a one-ulp divergence on the
+// remainder only), and hoisted bounds or dtype checks (a panic on the last elements).
+//
+// DELEGATION IS THE SIGNAL, not the presence of a tail. A tail that repeats the wide body
+// inline shares its edits by construction, because they sit in the same text. A tail that calls
+// a method inherits nothing. So this reports only when the remainder loop invokes a method on
+// the receiver and the wide body does not — which is also what keeps it quiet on the ordinary
+// scalar-arithmetic tail that most jammed kernels have.
+//
+// THIS RULE DOES NOT GO QUIET WHEN THE BUG IS FIXED, which is deliberate and unlike every other
+// rule here. Threading the scratch through a parameter fixed the race; it did not remove the
+// duplication, so the next property established for the wide body faces the same gap. Reporting
+// it permanently is the point — it is a maintenance hazard attached to a shape, not a defect
+// with a closing state. Suppressing once state is threaded was considered and rejected: telling
+// "argument the wide body also uses as a buffer" from "argument it merely reads" needs alias
+// analysis (the racy call passed x, which the wide body reads too), and an unsound suppression
+// here hides a race.
+func jamTailDelegatesFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || fn.Recv == nil {
+		return nil
+	}
+	recv := ""
+	if len(fn.Recv.List) > 0 && len(fn.Recv.List[0].Names) > 0 {
+		recv = fn.Recv.List[0].Names[0].Name
+	}
+	if recv == "" {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for i := 0; i+1 < len(blk.List); i++ {
+			wide, ok := blk.List[i].(*ast.ForStmt)
+			if !ok {
+				continue
+			}
+			stride, ok := jamStride(wide)
+			if !ok || stride < 2 {
+				continue
+			}
+			tail, ok := blk.List[i+1].(*ast.ForStmt)
+			if !ok || tail.Body == nil {
+				continue
+			}
+			// The tail must delegate to a receiver method while the wide body does not.
+			if !callsReceiverMethod(tail.Body, recv) || callsReceiverMethod(wide.Body, recv) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(tail.Pos()),
+				end:      fset.Position(tail.Pos()),
+				category: "jam-tail-delegates",
+				msg: fmt.Sprintf("this remainder loop delegates to a method on %q while the loop jammed by %d above it is "+
+					"inlined — two code paths for one computation. A STANDING HAZARD rather than a defect to close: "+
+					"anything established for the wide body (per-worker scratch, explicit FMA pinning, a hoisted bounds "+
+					"check) has to be re-established here, and a test at a trip count divisible by %d never executes it. "+
+					"This exact shape shipped as a data race in GMM's full-covariance density kernel, where the wide body "+
+					"took its scratch as a parameter and the tail still read the receiver. Threading the state through does "+
+					"NOT silence this: the duplication remains and the next change faces it again. Whenever you touch the "+
+					"wide body, test at a trip count NOT divisible by %d.",
+					recv, stride, stride, stride),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// jamStride returns N from a `for ; i+N <= bound; i += N` header, the unroll-and-jam idiom.
+func jamStride(f *ast.ForStmt) (int, bool) {
+	cond, ok := f.Cond.(*ast.BinaryExpr)
+	if !ok || (cond.Op != token.LEQ && cond.Op != token.LSS) {
+		return 0, false
+	}
+	add, ok := cond.X.(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return 0, false
+	}
+	n, ok := intLit(add.Y)
+	if !ok {
+		return 0, false
+	}
+	// the post statement must advance by the same N
+	as, ok := f.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return 0, false
+	}
+	if step, ok := intLit(as.Rhs[0]); !ok || step != n {
+		return 0, false
+	}
+	return n, true
+}
+
+// intLit reads a non-negative integer literal.
+func intLit(e ast.Expr) (int, bool) {
+	bl, ok := e.(*ast.BasicLit)
+	if !ok || bl.Kind != token.INT {
+		return 0, false
+	}
+	v, err := strconv.Atoi(bl.Value)
+	if err != nil {
+		return 0, false
+	}
+	return v, true
+}
+
+// callsReceiverMethod reports whether body invokes a method on the named receiver.
+func callsReceiverMethod(body *ast.BlockStmt, recv string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok && id.Name == recv {
+			found = true
+		}
+		return true
+	})
+	return found
+}
+
+// setMapFromSliceFindings flags PS3007 — a membership SET (map[K]bool / map[K]struct{}) that is
+// built by ranging a slice and then probed inside a loop.
+//
+// PS3003 deliberately excludes set-shaped maps, on the grounds that a sparse membership set is not
+// the dense [0,N) lookup a slice would replace. That is right about DENSIFICATION and wrong about
+// this: when the set's contents come from a slice the caller already owns, the fix is not a dense
+// table but no map at all — scan the source slice. The map build plus one hash per probe loses to
+// len(src) comparisons the compiler keeps in registers, as long as the source stays small.
+//
+// MEASURED, which is why the check exists. nlp's applyDRY hashed its sequence-breaker set once per
+// window position to precompute a dense []bool; runtime.mapaccess1_fast64 was 1.14s of the
+// function's 1.99s cumulative profile, 57% of its own time. Scanning DRYBreakers directly took
+// BenchmarkApplyDRY from 19.52us to 15.87us, -18.72% at p=0.002 (n=6, interleaved, both arm
+// orders), allocations unchanged, and mapaccess1_fast64 left the profile entirely. That measurement
+// also fixes the boundary: forced onto each arm, the crossover sits between 8 and 16 elements on an
+// M2 Pro (at 8 the scan wins 62.7us vs 64.7us; at 16 it has lost, 68.0us vs 65.4us; at 64 it loses
+// badly, 97.7us vs 66.3us). So this is a SMALL-SET transform, and the advice says so.
+//
+// Two narrowings, both load-bearing rather than cosmetic — without them the check reported three
+// sites in this repo and exactly one was real:
+//
+//   - The set must be READ-ONLY after its build loop. Scanning the source reproduces the predicate
+//     only if nothing adds to the set later; autograd's einsum `avail` is written inside the very
+//     loop that probes it, so it genuinely needs a map.
+//   - A build already guarded by a SIZE THRESHOLD on the source is silent, because such code has
+//     already taken this advice and kept the map only as its large-set fallback — applyDRY itself
+//     now looks exactly like that. The threshold test must not be confused with an EMPTINESS test:
+//     `len(src) > 0` is a nil guard whose branch is the only path, not a fallback, and treating it
+//     as a threshold suppressed the one true finding in the repo while it was written that way.
+//
+// HOTNESS IS NOT VISIBLE HERE. The probe loop's trip count and the source slice's length are both
+// runtime facts, so confirm the source really is small and the probe really is on a repeating path,
+// then benchmark before converting.
+//
+// KNOWN BLIND SPOT: only the value form of the build is recognized, `for _, v := range src {
+// set[v] = true }`. The index form, `for i := range src { set[src[i]] = true }`, denotes the same
+// pattern and is missed. Deliberate — a counting pass over this repo finds no instance, so
+// supporting it would add machinery no real code exercises.
+func setMapFromSliceFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Names declared in this function as a SET map, and the map type's own position.
+	sets := map[string]bool{}
+	declSet := func(typ ast.Expr, name string) {
+		mt, ok := typ.(*ast.MapType)
+		if !ok {
+			return
+		}
+		if id, ok := mt.Value.(*ast.Ident); ok && id.Name == "bool" {
+			sets[name] = true
+			return
+		}
+		if st, ok := mt.Value.(*ast.StructType); ok && st.Fields != nil && len(st.Fields.List) == 0 {
+			sets[name] = true
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if i >= len(x.Lhs) {
+					break
+				}
+				id, ok := x.Lhs[i].(*ast.Ident)
+				if !ok {
+					continue
+				}
+				switch r := rhs.(type) {
+				case *ast.CallExpr:
+					if calleeName(r.Fun) == "make" && len(r.Args) > 0 {
+						declSet(r.Args[0], id.Name)
+					}
+				case *ast.CompositeLit:
+					declSet(r.Type, id.Name)
+				}
+			}
+		case *ast.ValueSpec:
+			for _, nm := range x.Names {
+				declSet(x.Type, nm.Name)
+			}
+		}
+		return true
+	})
+	if len(sets) == 0 {
+		return nil
+	}
+
+	// Builds of the shape `for _, v := range SRC { SET[v] = true }`.
+	built := map[string]string{}
+	buildLoop := map[string]*ast.RangeStmt{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		r, ok := n.(*ast.RangeStmt)
+		if !ok || r.Value == nil || r.Body == nil || len(r.Body.List) != 1 {
+			return true
+		}
+		v, ok := r.Value.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		as, ok := r.Body.List[0].(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 {
+			return true
+		}
+		idx, ok := as.Lhs[0].(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || !sets[m.Name] {
+			return true
+		}
+		if k, ok := idx.Index.(*ast.Ident); !ok || k.Name != v.Name {
+			return true
+		}
+		src := exprText(r.X)
+		if src == "" {
+			return true
+		}
+		built[m.Name] = src
+		buildLoop[m.Name] = r
+		return true
+	})
+	if len(built) == 0 {
+		return nil
+	}
+
+	inBuild := func(name string, n ast.Node) bool {
+		bl := buildLoop[name]
+		return bl != nil && n.Pos() >= bl.Pos() && n.End() <= bl.End()
+	}
+	// NARROWING 1: drop any set written to outside its build loop.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, l := range as.Lhs {
+			ix, ok := l.(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			m, ok := ix.X.(*ast.Ident)
+			if !ok || built[m.Name] == "" || inBuild(m.Name, ix) {
+				continue
+			}
+			delete(built, m.Name)
+		}
+		return true
+	})
+	// NARROWING 2: drop any build already guarded by a size threshold on the source.
+	for name, src := range built {
+		if buildGuardedBySize(fn, buildLoop[name], src) {
+			delete(built, name)
+		}
+	}
+	if len(built) == 0 {
+		return nil
+	}
+
+	parent := map[ast.Node]ast.Node{}
+	var stack []ast.Node
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if n == nil {
+			stack = stack[:len(stack)-1]
+			return true
+		}
+		if len(stack) > 0 {
+			parent[n] = stack[len(stack)-1]
+		}
+		stack = append(stack, n)
+		return true
+	})
+
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		idx, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		m, ok := idx.X.(*ast.Ident)
+		if !ok || built[m.Name] == "" || inBuild(m.Name, idx) {
+			return true
+		}
+		// A write is a build, not a probe. (Narrowing 1 already dropped such sets, but a
+		// comma-ok read must still be distinguished from an assignment target.)
+		if as, ok := parent[idx].(*ast.AssignStmt); ok {
+			for _, l := range as.Lhs {
+				if l == idx {
+					return true
+				}
+			}
+		}
+		if nearestLoop(parent, idx) == nil || seen[idx.Pos()] {
+			return true
+		}
+		seen[idx.Pos()] = true
+		out = append(out, finding{
+			pos:      fset.Position(idx.Pos()),
+			category: "set-map-from-slice",
+			msg: fmt.Sprintf("%q is a membership SET built by ranging %q, then probed in a loop —"+
+				" each probe pays a hash to answer a question the source slice already answers."+
+				" When %q is small, scanning it directly is faster than building and hashing the"+
+				" map (applyDRY: -18.72%%, and mapaccess1_fast64 left the profile); keep the map"+
+				" behind a size threshold for large sets, since the scan is O(len(%s)) per probe."+
+				" Measured crossover was 8-16 elements. Confirm the source is small and the probe"+
+				" repeats, then benchmark.", m.Name, built[m.Name], built[m.Name], built[m.Name]),
+		})
+		return true
+	})
+	return out
+}
+
+// buildGuardedBySize reports whether bl sits inside an if whose condition compares len(src) against
+// a bound other than the literal 0.
+//
+// The literal-0 exclusion is the whole point rather than a detail: `if len(src) > 0` is an
+// emptiness guard, and the build behind it is the function's only path, not a large-set fallback.
+// Counting it as a threshold made this check silent on the single genuine site in the repo.
+func buildGuardedBySize(fn *ast.FuncDecl, bl *ast.RangeStmt, src string) bool {
+	if bl == nil {
+		return false
+	}
+	isLenOfSrc := func(e ast.Expr) bool {
+		call, ok := e.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return false
+		}
+		return calleeName(call.Fun) == "len" && exprText(call.Args[0]) == src
+	}
+	isZeroLit := func(e ast.Expr) bool {
+		lit, ok := e.(*ast.BasicLit)
+		return ok && lit.Kind == token.INT && lit.Value == "0"
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ifs, ok := n.(*ast.IfStmt)
+		if !ok || ifs.Cond == nil || bl.Pos() < ifs.Pos() || bl.End() > ifs.End() {
+			return true
+		}
+		ast.Inspect(ifs.Cond, func(c ast.Node) bool {
+			bin, ok := c.(*ast.BinaryExpr)
+			if !ok {
+				return true
+			}
+			var other ast.Expr
+			switch {
+			case isLenOfSrc(bin.X):
+				other = bin.Y
+			case isLenOfSrc(bin.Y):
+				other = bin.X
+			default:
+				return true
+			}
+			if !isZeroLit(other) {
+				found = true
+			}
+			return true
+		})
+		return true
+	})
+	return found
+}
+
+// monotoneBailPerElementFindings flags PS3008 — a loop that accumulates a provably NON-NEGATIVE
+// term into a scalar and tests that accumulator against a threshold on EVERY iteration, bailing
+// out when it is exceeded.
+//
+// The accumulator only ever grows, so once it passes the threshold it stays past it. The bail-out
+// is therefore a pure heuristic, not semantics: testing it every Nth iteration returns the SAME
+// answer, because a run that would have bailed at iteration k still bails at the next checkpoint
+// and at the end. What that buys is removing a data-dependent branch the predictor cannot learn.
+//
+// MEASURED, which is why this check exists rather than being a plausible idea. classic's
+// ballTree.within is the L2 leaf test DBSCAN runs for every candidate pair. A line-level profile
+// put the bail-out branch at 450ms against 30ms for the subtraction and square it guards — the
+// branch, not the arithmetic, was the function. Checking it every fourth dimension took
+// BenchmarkDBSCANFit -17.41% at eps=2 (p=0.000) and -8.51% at eps=4 (p=0.010), geomean -13.07%,
+// allocations unchanged, with the exact-label DBSCAN goldens still green.
+//
+// THE MONOTONICITY IS THE CORRECTNESS CONDITION, so the check demands it syntactically rather than
+// guessing: the added term must be x*x with identical operands, math.Abs, math.Hypot, or a sum of
+// those. An accumulator fed a signed term can dip back below the threshold, and moving its test
+// would change the answer, not just the speed.
+//
+// Two things this cannot see, both stated in the finding. Whether the loop is hot at all — a cold
+// bail-out is not worth restructuring. And the NaN edge: with a NaN term the accumulator becomes
+// NaN, every `acc > thr` is false, and the original falls out of the loop and returns its
+// not-exceeded answer, so the rewritten tail must end with !(acc > thr) and NOT acc <= thr, which
+// flips it. That trap is real; it is gated by a test in classic rather than left to reasoning.
+func monotoneBailPerElementFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBodyOf(n)
+		if body == nil || loopStridesByMoreThanOne(n) {
+			return true
+		}
+		// Accumulators in THIS loop's body fed a provably non-negative term.
+		accs := map[string]string{}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			name := identName(as.Lhs[0])
+			if name == "" {
+				continue
+			}
+			if term, ok := provablyNonNegative(as.Rhs[0]); ok {
+				accs[name] = term
+			}
+		}
+		if len(accs) == 0 {
+			return true
+		}
+		for _, st := range body.List {
+			ifs, ok := st.(*ast.IfStmt)
+			if !ok || ifs.Init != nil || ifs.Else != nil || !bailsOut(ifs.Body) {
+				continue
+			}
+			bin, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || (bin.Op != token.GTR && bin.Op != token.GEQ) {
+				continue
+			}
+			acc := identName(bin.X)
+			term, ok := accs[acc]
+			if !ok {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(ifs.Pos()),
+				category: "monotone-bail-per-element",
+				msg: fmt.Sprintf("%q accumulates a non-negative term (%s) and is tested against a"+
+					" threshold on EVERY iteration — the accumulator never decreases, so testing it"+
+					" every 4th iteration returns the same answer and removes a data-dependent branch"+
+					" the predictor cannot learn. MEASURED on classic ballTree.within, the DBSCAN leaf"+
+					" test: the branch was 450ms of profile against 30ms for the arithmetic it guarded,"+
+					" and checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2"+
+					" (p=0.000) and -8.51%% at eps=4 (p=0.010). Keep ONE accumulator in the SAME order"+
+					" so the sum stays bit-identical, and end the scalar tail with !(%s > thr), NOT"+
+					" %s <= thr — with a NaN term the original never bailed and returned its"+
+					" not-exceeded answer, and <= flips that. HOTNESS IS NOT VISIBLE HERE: a cold"+
+					" bail-out is not worth restructuring, so benchmark the enclosing operation first.",
+					acc, term, acc, acc),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// loopBodyOf returns the body of a for/range statement, or nil.
+func loopBodyOf(n ast.Node) *ast.BlockStmt {
+	switch l := n.(type) {
+	case *ast.ForStmt:
+		return l.Body
+	case *ast.RangeStmt:
+		return l.Body
+	}
+	return nil
+}
+
+// loopStridesByMoreThanOne reports whether the loop advances by a literal step other than 1 —
+// evidence the blocking this check recommends has already been applied.
+func loopStridesByMoreThanOne(n ast.Node) bool {
+	f, ok := n.(*ast.ForStmt)
+	if !ok || f.Post == nil {
+		return false
+	}
+	as, ok := f.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value != "1"
+}
+
+// provablyNonNegative reports whether e is >= 0 from syntax alone, and names the shape that proves
+// it. Only forms that cannot be negative qualify: a square with identical operands, math.Abs,
+// math.Hypot, or a sum of those. This is the check's correctness condition, not a heuristic — a
+// signed term lets the accumulator fall back below the threshold, and then moving the test changes
+// the answer.
+func provablyNonNegative(e ast.Expr) (string, bool) {
+	switch x := e.(type) {
+	case *ast.ParenExpr:
+		return provablyNonNegative(x.X)
+	case *ast.CallExpr:
+		if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+			if identName(sel.X) == "math" && (sel.Sel.Name == "Abs" || sel.Sel.Name == "Hypot") {
+				return "math." + sel.Sel.Name, true
+			}
+		}
+	case *ast.BinaryExpr:
+		if x.Op == token.MUL && exprText(x.X) == exprText(x.Y) && exprText(x.X) != "" {
+			return "a square", true
+		}
+		if x.Op == token.ADD {
+			if a, ok := provablyNonNegative(x.X); ok {
+				if b, ok := provablyNonNegative(x.Y); ok {
+					return a + " + " + b, true
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+// bailsOut reports whether the block ends in a return or a break/continue.
+func bailsOut(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	switch b.List[len(b.List)-1].(type) {
+	case *ast.ReturnStmt, *ast.BranchStmt:
+		return true
+	}
+	return false
+}
+
+// indirectColumnGatherFindings flags PS3009 — a loop reading ONE column of a slice-of-slices
+// through an INDIRECT row index: M[idx[k]][f], where f does not vary with the loop.
+//
+// Every element lands in a different row, so each read dereferences a row header and pulls a whole
+// cache line to use eight bytes of it. That is the same cache behavior PS1010 describes, but it is
+// NOT the same defect and does not take the same fix. PS1010 requires an interchangeable nest and
+// tells you to swap the loops; here the row order is a data-dependent permutation, so there is no
+// nest to interchange. The fix is to keep a feature-major copy of the matrix — xT[f*n+row] — so a
+// column is contiguous and scattered rows within it share lines.
+//
+// MEASURED, which is why this exists rather than being a plausible idea. classic's gbmBuilder
+// hoists a node's feature column into a buffer before scanning splits, gathering through the
+// node's sorted index permutation. That single line was 330ms of bestSplit's 400ms in a profile of
+// the classic suite; against a feature-major buffer it took BenchmarkGBMHist_exact_80k -7.74%
+// (p=0.002), BenchmarkGBMFit -6.55% (p=0.002) and the 20k fit -2.00% (p=0.007). The win grows with
+// n, as the cache argument predicts.
+//
+// IT TRADES MEMORY FOR TIME, and the finding says so, because the answer is not always yes: the
+// transposed copy costs n*d*8 bytes, which raised measured B/op 26.7% at 80k x 20. Worth it there
+// because that builder already carries two n*d index arrays; not obviously worth it where the
+// matrix is the dominant allocation and the gather is cold.
+//
+// Reference implementations are the expected false positive. A deliberately simple twin that a
+// production path is checked against should not be optimized, and this repo's gbm.go carries
+// exactly that, already marked with a perfscan:ignore for its other findings.
+func indirectColumnGatherFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	var stack []ast.Node
+	var walk func(ast.Node)
+	walk = func(n ast.Node) {
+		ast.Inspect(n, func(c ast.Node) bool {
+			if c == nil {
+				return false
+			}
+			switch c.(type) {
+			case *ast.ForStmt, *ast.RangeStmt:
+				if c != n {
+					stack = append(stack, c)
+					walk(c)
+					stack = stack[:len(stack)-1]
+					return false
+				}
+			}
+			outer, ok := c.(*ast.IndexExpr)
+			if !ok || len(stack) == 0 {
+				return true
+			}
+			row, ok := outer.X.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// The row index must itself be an index expression — that indirection is the whole
+			// point, and it is what makes the access a gather rather than a stride PS1006 could see.
+			gather, ok := row.Index.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// The COLUMN index must not vary with the innermost loop, or this is not a column walk.
+			col := exprText(outer.Index)
+			if col == "" || loopAdvancesVar(stack[len(stack)-1], col) {
+				return true
+			}
+			line := fset.Position(outer.Pos()).Line
+			if seen[line] {
+				return true
+			}
+			seen[line] = true
+			out = append(out, finding{
+				pos:      fset.Position(outer.Pos()),
+				end:      fset.Position(outer.End()),
+				category: "indirect-column-gather",
+				msg: fmt.Sprintf("%s reads ONE column (%q) of a slice-of-slices through an INDIRECT"+
+					" row index (%s[…]) — every element lands in a different row, so each read"+
+					" dereferences a row header and pulls a cache line to use eight bytes. PS1010"+
+					" cannot help here: the row order is a data-dependent permutation, so there is no"+
+					" nest to interchange. Keep a FEATURE-MAJOR copy instead (xT[col*n+row]) so a"+
+					" column is contiguous. MEASURED on classic gbmBuilder.bestSplit, where this line"+
+					" was 330ms of the function's 400ms: GBMHist_exact_80k -7.74%% (p=0.002), GBMFit"+
+					" -6.55%% (p=0.002), 20k -2.00%% (p=0.007), the win growing with n. IT COSTS"+
+					" MEMORY — the copy is n*d*8 bytes, +26.7%% measured B/op at 80k x 20 — so weigh"+
+					" that against the gather's hotness rather than converting on sight, and skip it"+
+					" for a reference implementation kept simple on purpose.",
+					srcText(fset, outer), col, exprText(gather.X)),
+			})
+			return true
+		})
+	}
+	walk(fn.Body)
+	return out
+}
+
+// loopAdvancesVar reports whether the loop advances the named variable.
+func loopAdvancesVar(n ast.Node, v string) bool {
+	switch l := n.(type) {
+	case *ast.RangeStmt:
+		return exprText(l.Key) == v || exprText(l.Value) == v
+	case *ast.ForStmt:
+		if as, ok := l.Init.(*ast.AssignStmt); ok {
+			for _, lhs := range as.Lhs {
+				if exprText(lhs) == v {
+					return true
+				}
+			}
+		}
+		if inc, ok := l.Post.(*ast.IncDecStmt); ok && exprText(inc.X) == v {
+			return true
+		}
+	}
+	return false
+}
+
+// serialReductionChainFindings flags PS3010 — a reduction loop with ONE accumulator, where every
+// iteration's add depends on the previous one. On an out-of-order core the loop is bound by
+// floating-point add/FMA LATENCY rather than throughput, and splitting the accumulator into four
+// independent partials removes that dependency.
+//
+// The shape is required to be a pure reduction: exactly one `acc += <indexed expr>` in the body,
+// acc read nowhere else in the loop, and no branching or control flow. A loop that also TESTS its
+// accumulator (PS3008's early-bail shape) is excluded, because four partials cannot be compared
+// against the threshold without summing them first, which changes when the loop bails.
+//
+// The applied form needs no special case: it has four ADD_ASSIGN statements, so the count test
+// already declines it.
+func serialReductionChainFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		// A loop that already strides by more than one has had this transform applied: the four
+		// partials of an unrolled dot product are four distinct names each written once, which
+		// otherwise satisfies every test below and would report the fix as the defect.
+		if loopStrideExceedsOne(n) {
+			return true
+		}
+		// One to four FUSED accumulators, each written exactly once. Requiring exactly one was the
+		// first cut and it was wrong in the direction that costs the most: a fused dot-plus-norm
+		// loop is the canonical hot reduction, and restricting to a single chain flagged the COLD
+		// norm loop in nlp MaxContextCosine (0.00s) while missing the hot pair loop right below it
+		// (0.37s, the second-hottest own-package line in nlp). Two chains already give the core two
+		// independent streams, and the split still measured 2.90x at dim=768.
+		//
+		// The ceiling is four because past that the partials themselves compete for registers, and
+		// a loop already carrying four independent chains has the parallelism this check exists to
+		// recommend.
+		accs := map[string]ast.Expr{}
+		adds := 0
+		simple := true
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok {
+				simple = false // an if/for/switch/call in the body: not a pure reduction
+				continue
+			}
+			if as.Tok == token.ADD_ASSIGN && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+				if nm := identName(as.Lhs[0]); nm != "" {
+					accs[nm] = as.Rhs[0]
+					adds++
+					continue
+				}
+			}
+			if as.Tok != token.ASSIGN && as.Tok != token.DEFINE {
+				simple = false
+			}
+		}
+		// adds != len(accs) means some accumulator is written twice — that is the applied,
+		// already-unrolled form, not a candidate.
+		if !simple || len(accs) == 0 || len(accs) > 4 || adds != len(accs) {
+			return true
+		}
+		// Every accumulator must be write-only inside the loop. Any other mention is a read — a
+		// threshold test, a running comparison — and the split would change what it observes.
+		// A loop that TESTS its accumulator is PS3008's early-bail shape and is excluded here,
+		// because four partials cannot be compared against a threshold without summing them first.
+		mentions := map[string]int{}
+		ast.Inspect(body, func(k ast.Node) bool {
+			if id, ok := k.(*ast.Ident); ok {
+				if _, isAcc := accs[id.Name]; isAcc {
+					mentions[id.Name]++
+				}
+			}
+			return true
+		})
+		acc := ""
+		for nm := range accs {
+			if mentions[nm] != 1 {
+				return true
+			}
+			if acc == "" || nm < acc {
+				acc = nm // deterministic name for the message; map order is not stable
+			}
+		}
+		// Every term has to vary per iteration; summing a loop-invariant is a different (and much
+		// better) fix, and PS4006 owns it.
+		for _, rhs := range accs {
+			varies := false
+			ast.Inspect(rhs, func(k ast.Node) bool {
+				if _, ok := k.(*ast.IndexExpr); ok {
+					varies = true
+				}
+				return !varies
+			})
+			if !varies {
+				return true
+			}
+		}
+		// Integer addition is exactly associative, so for an integer accumulator the split is
+		// bit-identical by construction and the contract check below does not apply at all. Say
+		// which case this is rather than making every reader re-derive it.
+		safety := "THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it reassociates" +
+			" the sum, so the result moves in the last ulp. DO NOT apply it where the exact value is" +
+			" pinned."
+		switch accumulatorKind(fn, acc) {
+		case "integer":
+			safety = "THIS ONE IS AN INTEGER ACCUMULATOR, so the usual objection does not apply:" +
+				" integer addition is exactly associative and the split is bit-identical BY" +
+				" CONSTRUCTION, with no contract to clear. The payoff is smaller than the float case" +
+				" because an integer add is a single cycle and the loop is closer to load-bound —" +
+				" measured 271 -> 168 ns at d=768 (1.61x) — but it is unconditionally safe."
+		case "float":
+			safety = "THE TRANSFORM IS NOT BIT-IDENTICAL, and that is the whole risk: it reassociates" +
+				" the FLOAT sum, so the result moves in the last ulp. DO NOT apply it where the exact" +
+				" value is pinned. f32 gains MORE than f64, not less — 610 -> 167 ns at d=768 (3.65x)" +
+				" against 2.90x for f64 — because the same add latency covers half the memory traffic."
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-reduction-chain",
+			msg: fmt.Sprintf("%q is a single-accumulator reduction: each iteration's add waits on the"+
+				" previous one, so the loop runs at floating-point add LATENCY, not throughput."+
+				" Four independent partials summed at the end removed that stall in a direct"+
+				" measurement on this host (Apple M2 Pro, darwin/arm64, go1.26, f64 dot product):"+
+				" 537.8 -> 177.3 ns at d=512 (3.03x) and 89.3 -> 43.6 ns at d=128 (2.05x). The 512"+
+				" figure matches the hardware prediction — 512 dependent adds at about four cycles"+
+				" each is roughly 600 ns at 3.4 GHz — so this is a latency stall, not a measurement"+
+				" artifact. %s Two of the hottest reductions in this repo are blocked for"+
+				" precisely that reason and are NOT candidates — nlp randomOrthogonal, whose matrix"+
+				" TurboQuant regenerates at dequantization time so a changed draw would break every"+
+				" model quantized with the old one, and classic ballTree.within, whose sum decides"+
+				" exact-label DBSCAN goldens. Check for a bit-stability test and a reproducibility"+
+				" contract BEFORE measuring, then benchmark: the win is real but it is worth nothing"+
+				" if the loop is cold (PERF-HOTNESS-IS-NOT-SYNTAX-001)", acc, safety),
+		})
+		return true
+	})
+	return out
+}
+
+// loopStrideExceedsOne reports whether a 3-clause for loop advances its index by more than one per
+// iteration (`i += 4`). A range loop and a plain `i++` both stride by one. Used to recognize an
+// already-unrolled loop, which is the applied form of PS3010 rather than a candidate for it.
+func loopStrideExceedsOne(n ast.Node) bool {
+	fs, ok := n.(*ast.ForStmt)
+	if !ok || fs.Post == nil {
+		return false
+	}
+	as, ok := fs.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := as.Rhs[0].(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return false
+	}
+	return lit.Value != "1"
+}
+
+// accumulatorKind infers whether an accumulator is an integer or a float from its declaration in
+// the enclosing function. AST only — there is no type checker here — so it recognizes the two
+// spellings that actually occur: an explicit `var s float64` / `var s int`, and a `s := 0` or
+// `s := 0.0` whose literal kind gives the type away. Anything else returns "", and the caller
+// falls back to advice that covers both.
+//
+// The distinction is not cosmetic. Integer addition is EXACTLY associative, so splitting an integer
+// accumulator is bit-identical by construction and needs no contract check at all; floating-point
+// addition is not, and there the split is a value change that has to be cleared first.
+func accumulatorKind(fn *ast.FuncDecl, name string) string {
+	kind := ""
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.DeclStmt:
+			gd, ok := s.Decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.VAR {
+				return true
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok || vs.Type == nil {
+					continue
+				}
+				id, ok := vs.Type.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				for _, nm := range vs.Names {
+					// Only a RECOGNIZED type name settles the question. A named or generic type
+					// resolves to "", and overwriting with it would erase a kind already found.
+					if nm.Name == name {
+						if k := numericKindOfTypeName(id.Name); k != "" {
+							kind = k
+						}
+					}
+				}
+			}
+		case *ast.AssignStmt:
+			if s.Tok != token.DEFINE || len(s.Lhs) != len(s.Rhs) {
+				return true
+			}
+			for i, l := range s.Lhs {
+				if identName(l) != name {
+					continue
+				}
+				if lit, ok := s.Rhs[i].(*ast.BasicLit); ok {
+					switch lit.Kind {
+					case token.INT:
+						kind = "integer"
+					case token.FLOAT:
+						kind = "float"
+					}
+				}
+			}
+		}
+		return true
+	})
+	return kind
+}
+
+// numericKindOfTypeName classifies a builtin numeric type name.
+func numericKindOfTypeName(t string) string {
+	switch t {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune":
+		return "integer"
+	case "float32", "float64":
+		return "float"
+	}
+	return ""
+}
+
+// staticChunkBarrierFindings flags PS3011 — work split into equal chunks sized by the worker count,
+// dispatched one goroutine per chunk, and joined at a barrier. The partition assumes every worker
+// retires its share at the same rate, and on a heterogeneous CPU it does not.
+//
+// The signature is three things in one function: a ceil-division of the work by a worker count, a
+// `go` inside a loop, and a Wait. Silent once the function reaches for sync/atomic, which is what
+// claiming looks like.
+func staticChunkBarrierFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var ceil ast.Node
+	var spawnInLoop, waits, claims bool
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.BinaryExpr:
+			// (X + Y - 1) / Y — the ceil-division idiom. Only the shape is checked; whether Y is
+			// really a worker count is left to the reader, and the message says so.
+			if s.Op == token.QUO && isCeilNumerator(s.X, s.Y) {
+				ceil = s
+			}
+		case *ast.GoStmt:
+			if enclosingLoopOf(fn.Body, s) != nil {
+				spawnInLoop = true
+			}
+		case *ast.SelectorExpr:
+			switch s.Sel.Name {
+			case "Wait":
+				waits = true
+			case "Add", "CompareAndSwap", "Load":
+				// An atomic cursor is the applied form. Distinguishing it from WaitGroup.Add needs
+				// the receiver, so only a package-qualified atomic or an atomic-typed field counts.
+				if id, ok := s.X.(*ast.Ident); ok && id.Name == "atomic" {
+					claims = true
+				}
+			}
+		case *ast.Ident:
+			if s.Name == "atomic" {
+				claims = true
+			}
+		}
+		return true
+	})
+	if ceil == nil || !spawnInLoop || !waits || claims {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(ceil.Pos()),
+		category: "static-chunk-barrier",
+		msg: fmt.Sprintf("%s deals equal chunks to one goroutine each and joins at a barrier, so the"+
+			" slowest worker sets the wall clock. THAT IS NOT A TAIL EFFECT ON A HETEROGENEOUS CPU,"+
+			" IT IS THE COMMON CASE: an Apple M2 Pro has 8 performance and 4 efficiency cores, so a"+
+			" chunk landing on an E core can take several times as long and every P core waits for"+
+			" it. MEASURED on the autograd WKV VJP, where the giveaway was that MORE CORES MADE IT"+
+			" SLOWER — GOMAXPROCS=8 ran 3.36ms against 3.76ms at 12 — and pthread_cond_wait was"+
+			" 47.96%% of the profile, more than every line of the kernel combined. Claiming units"+
+			" through an atomic cursor instead went -28.73%% and -29.58%% (p=0.000, n=8), BIT-IDENTICAL,"+
+			" because which worker runs a unit cannot change that unit's arithmetic. THE DIAGNOSTIC IS"+
+			" CHEAP AND COMES FIRST: sweep GOMAXPROCS and look at a FUNCTION profile, not a line"+
+			" profile — a line profile ranks the kernel and hides the waiting, which is how this site"+
+			" was nearly missed. ATTRIBUTE THE CURVE BEFORE ACTING ON IT, with a control: a GOMAXPROCS"+
+			" curve is a property of the WHOLE benchmark, not of the chunker you happen to be reading."+
+			" Force THIS chunker serial and re-run; if the benchmark does not move, the scaling loss is"+
+			" somewhere else. nlp quant_mamba2 screened at +4.5%% from GOMAXPROCS 8 to 12 and its curve"+
+			" bottomed at SIX, yet forcing its parallelChunks serial changed the decode benchmark by"+
+			" 0.06%% — it was not on the hot path at all, and both a claim rewrite and a work-sized"+
+			" worker cap measured null-to-negative there before the control was run. Note also that a"+
+			" minimum BELOW the performance-core count indicts per-worker dispatch overhead rather than"+
+			" efficiency-core imbalance, and claiming does not fix that. Preconditions the check cannot see: the units must be independent"+
+			" (they already are, or the static split would be wrong too), the grain must stay large"+
+			" enough that the claim is negligible, and any per-chunk scratch indexed by a chunk"+
+			" number must be re-keyed to the WORKER instead, since claiming makes the number of units"+
+			" exceed the number of workers", fn.Name.Name),
+	}}
+}
+
+// unparen strips redundant parentheses, which the ceil idiom always carries:
+// `chunk := (n + nw - 1) / nw` parses its numerator as a ParenExpr, not a BinaryExpr.
+func unparen(e ast.Expr) ast.Expr {
+	for {
+		p, ok := e.(*ast.ParenExpr)
+		if !ok {
+			return e
+		}
+		e = p.X
+	}
+}
+
+// isCeilNumerator reports whether x is the `a + d - 1` half of a ceil-division by d.
+func isCeilNumerator(x, d ast.Expr) bool {
+	outer, ok := unparen(x).(*ast.BinaryExpr)
+	if !ok || outer.Op != token.SUB || !isIntLit(outer.Y, "1") {
+		return false
+	}
+	inner, ok := unparen(outer.X).(*ast.BinaryExpr)
+	if !ok || inner.Op != token.ADD {
+		return false
+	}
+	ds := exprText(unparen(d))
+	return exprText(unparen(inner.Y)) == ds || exprText(unparen(inner.X)) == ds
+}
+
+func isIntLit(e ast.Expr, v string) bool {
+	lit, ok := e.(*ast.BasicLit)
+	return ok && lit.Kind == token.INT && lit.Value == v
+}
+
+// enclosingLoopOf returns the innermost loop in root containing n, or nil.
+func enclosingLoopOf(root ast.Node, n ast.Node) ast.Node {
+	var found ast.Node
+	ast.Inspect(root, func(k ast.Node) bool {
+		if loopBody(k) == nil {
+			return true
+		}
+		if k.Pos() <= n.Pos() && n.End() <= k.End() {
+			found = k
+		}
+		return true
+	})
+	return found
+}
+
+// sliceBuiltForOneElementFindings flags PS3012 — a package-level function call whose result is
+// immediately indexed by a constant, `f(x)[0]`. The callee builds a whole collection and the caller
+// keeps one item of it, so every other item and the slice header are pure waste.
+//
+// Restricted to a bare identifier callee. Method chains like t.Shape()[0] or s.Storage().F64()[0]
+// return a view or a field and allocate nothing, and including them buried the real class.
+func sliceBuiltForOneElementFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		lit, ok := ix.Index.(*ast.BasicLit)
+		if !ok || lit.Kind != token.INT {
+			return true
+		}
+		call, ok := ix.X.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		id, ok := call.Fun.(*ast.Ident)
+		if !ok || isBuiltinName(id.Name) {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(ix.Pos()),
+			category: "slice-built-for-one-element",
+			msg: fmt.Sprintf("%s(...)[%s] builds a collection and keeps ONE element of it. Where the"+
+				" callee allocates, that is the whole allocation wasted for one item, and it repeats"+
+				" on every call. MEASURED on nlp QuantMamba2's decode, where rows2D materializes the"+
+				" in_proj output as [][]float64 once per LAYER per token and the caller takes row 0:"+
+				" at seq=1 each call allocates a header slice and a row that live for microseconds,"+
+				" and they were 37%% of all allocation OBJECTS in the step. Replacing the two decode"+
+				" sites with a scratch buffer threaded through the per-stream layer state went"+
+				" -18.37%% B/op and -3.67%% allocs/op across all seven quantization formats, with"+
+				" sec/op -0.54%% (p<=0.01 in every cell). THE FIX IS A SCRATCH PARAMETER, not a cache:"+
+				" put the buffer on whatever object is already per-stream or per-worker, never on a"+
+				" shared model or layer, since those are read concurrently by every stream decoding"+
+				" against the same weights. Check first that the caller only READS the element — the"+
+				" original returns an independent copy, and a scratch buffer is reused, so a site that"+
+				" mutates its row or retains it past the call needs the copy it already has."+
+				" This check cannot see whether the callee allocates at all; confirm that before"+
+				" acting (PERF-HOTNESS-IS-NOT-SYNTAX-001)", id.Name, lit.Value),
+		})
+		return true
+	})
+	return out
+}
+
+// isBuiltinName reports whether an identifier is a Go builtin whose result is never a fresh
+// collection worth avoiding.
+func isBuiltinName(s string) bool {
+	switch s {
+	case "len", "cap", "make", "new", "append", "copy", "min", "max", "complex", "real", "imag":
+		return true
+	}
+	return false
+}
+
+// leakingFormatParamFindings flags PS3013 — a pointer-carrying parameter handed to a fmt call.
+//
+// Passing it as an interface argument makes Go's escape analysis mark the PARAMETER as leaking,
+// and that verdict is a property of the function, not of the path: every caller must then
+// heap-allocate its argument, even though the formatting usually sits on a panic or error branch
+// that never executes.
+func leakingFormatParamFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Type.Params == nil {
+		return nil
+	}
+	leakable := map[string]bool{}
+	for _, f := range fn.Type.Params.List {
+		if !typeCanLeak(f.Type, ns) {
+			continue
+		}
+		for _, nm := range f.Names {
+			if nm.Name != "_" {
+				leakable[nm.Name] = true
+			}
+		}
+	}
+	if len(leakable) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		pkg, ok := sel.X.(*ast.Ident)
+		if !ok || pkg.Name != "fmt" {
+			return true
+		}
+		for _, arg := range call.Args {
+			id, ok := arg.(*ast.Ident)
+			if !ok || !leakable[id.Name] || seen[id.Name] {
+				continue
+			}
+			seen[id.Name] = true
+			out = append(out, finding{
+				pos:      fset.Position(arg.Pos()),
+				category: "leaking-format-param",
+				msg: fmt.Sprintf("%q is a pointer-carrying parameter of %s handed to fmt.%s, which"+
+					" makes escape analysis mark it LEAKING — and that verdict belongs to the"+
+					" function, not to this branch, so EVERY CALLER heap-allocates its argument even"+
+					" though this path usually never runs. MEASURED on tensor.NewOn, whose"+
+					" invalid-shape panic formatted its shape with %%v: the literal at each call site"+
+					" escaped, costing one allocation per tensor CREATED anywhere in the tree."+
+					" Replacing it with shape.String() — a method escape analysis already proves"+
+					" non-escaping — took a Jamba decode step -5.96%% allocs/op and -0.19%% B/op with"+
+					" time unchanged (p=1.000, n=12), and QuantMamba2 decode -8.70%% allocs."+
+					" THE FIX IS A NON-ESCAPING FORMATTER, not deleting the message: give the type a"+
+					" String method that only reads its receiver and build the string from it, or"+
+					" format the fields individually. Verify with go build -gcflags=-m that the"+
+					" parameter changes from `leaking param` to `does not escape`, since a second"+
+					" leak elsewhere in the function keeps the old verdict and the fix buys nothing."+
+					" This check cannot tell whether the parameter already leaks for another reason,"+
+					" so confirm before acting", id.Name, exprText(paramTypeOf(fn, id.Name)), sel.Sel.Name),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// paramTypeOf returns the declared type expression of the named parameter.
+func paramTypeOf(fn *ast.FuncDecl, name string) ast.Expr {
+	for _, f := range fn.Type.Params.List {
+		for _, nm := range f.Names {
+			if nm.Name == name {
+				return f.Type
+			}
+		}
+	}
+	return nil
+}
+
+// typeCanLeak reports whether a parameter type carries a pointer, so that leaking it forces the
+// caller's argument onto the heap. Slices, maps and pointers are syntactic; a NAMED type needs the
+// configured pointerTypeNames list, since with no type checker `Shape` and an int alias look alike.
+func typeCanLeak(t ast.Expr, ns nameSets) bool {
+	switch e := t.(type) {
+	case *ast.ArrayType:
+		return e.Len == nil // slice; a fixed array is a value
+	case *ast.MapType, *ast.StarExpr:
+		return true
+	case *ast.Ident:
+		return ns.pointerTypes[e.Name]
+	case *ast.SelectorExpr:
+		return ns.pointerTypes[e.Sel.Name]
+	}
+	return false
+}
+
+// coupledIndexWeightFindings flags PS3014 — a nested-loop reduction whose accumulated term is
+// scaled by an arithmetic combination of BOTH loop variables, used as a VALUE rather than as an
+// index. That coupling is what makes such a sum look irreducibly quadratic, and it is often not.
+func coupledIndexWeightFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer := loopVarOf(n)
+		if outer == "" {
+			return true
+		}
+		ast.Inspect(loopBody(n), func(m ast.Node) bool {
+			inner := loopVarOf(m)
+			if inner == "" || inner == outer {
+				return true
+			}
+			ast.Inspect(loopBody(m), func(st ast.Node) bool {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Rhs) != 1 {
+					return true
+				}
+				be := coupledFactor(as.Rhs[0], outer, inner)
+				if be == nil {
+					return true
+				}
+				key := fmt.Sprintf("%d", be.Pos())
+				if seen[key] {
+					return true
+				}
+				seen[key] = true
+				out = append(out, finding{
+					pos:      fset.Position(be.Pos()),
+					category: "coupled-index-weight",
+					msg: fmt.Sprintf("this accumulation is scaled by %q, an arithmetic combination of"+
+						" the outer index %q and the inner index %q used as a VALUE. That coupling is"+
+						" what makes a doubly-nested reduction look irreducibly quadratic, and a"+
+						" DIFFERENCE usually is not: split it. MEASURED on the autograd WKV backward,"+
+						" whose dw term is a sum over t and i<t of (t-1-i) times a weight — rewriting"+
+						" (t-1-i) as (t-1) minus i turns one distance-weighted sum into (t-1)*S minus"+
+						" S1, where S accumulates the weights and S1 accumulates i times the weights,"+
+						" both ordinary prefix sums maintained in O(1) per step. dw was the ONLY"+
+						" gradient in that kernel whose weight depended on the distance and the only"+
+						" reason the whole pass stayed quadratic; splitting it took seq=512 from"+
+						" 10335us to 580us, 17.8x, with the cost per doubling of seq falling from"+
+						" 3.85x to 1.81x. PRECONDITION THIS CHECK CANNOT SEE: the rest of the term"+
+						" must factor into parts that depend on t alone and on i alone, or there is"+
+						" nothing to hoist out of the inner sum. A product or a modulus of the two"+
+						" indices generally does not split and is reported only so it can be ruled"+
+						" out deliberately. Index arithmetic is excluded — a[t*n+i] couples the"+
+						" indices to ADDRESS memory, not to weight a value."+
+						" THE SPLIT ONLY PAYS WHEN THE INNER SUM COLLAPSES TO A SCALAR, and that is"+
+						" how to triage this list rather than by syntax. In WKV the distance-weighted"+
+						" term is summed over i into one number per channel, so hoisting (t-1) out"+
+						" leaves two running sums and the inner loop disappears. In ATTENTION the very"+
+						" same shape appears as an ALiBi bias, slopes[h]*float64(j-i) added to a"+
+						" per-pair score that is then used individually — there is no inner reduction"+
+						" to hoist, and the enclosing loop is irreducibly quadratic because it must"+
+						" produce every pair. Five of the six sites in this tree are that case and"+
+						" are NOT candidates (DISTANCE-WEIGHTS-SPLIT-INTO-TWO-PREFIX-SUMS-001)",
+						renderExpr(be), outer, inner),
+				})
+				return true
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// loopVarOf returns the single index variable a loop advances, or "" if it is not that shape.
+func loopVarOf(n ast.Node) string {
+	switch s := n.(type) {
+	case *ast.RangeStmt:
+		if id, ok := s.Key.(*ast.Ident); ok && id.Name != "_" {
+			return id.Name
+		}
+	case *ast.ForStmt:
+		if s.Init == nil {
+			return ""
+		}
+		as, ok := s.Init.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 {
+			return ""
+		}
+		if id, ok := as.Lhs[0].(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
+}
+
+// coupledFactor returns the sub-expression combining both loop variables as a value, or nil.
+//
+// The walk is explicit rather than an ast.Inspect with a parent lookup, because the exclusion is
+// the entire precision of this check and it has to be structural: an INDEX subtree is skipped
+// outright. a[t*n+i] couples the indices to compute an address, which is simply how a 2-D buffer is
+// walked and says nothing about the reduction's complexity; only a coupling used as a FACTOR does.
+func coupledFactor(root ast.Expr, outer, inner string) *ast.BinaryExpr {
+	var walk func(ast.Expr) *ast.BinaryExpr
+	walk = func(e ast.Expr) *ast.BinaryExpr {
+		switch x := e.(type) {
+		case nil:
+			return nil
+		case *ast.IndexExpr:
+			// Descend into the operand (it may itself hold a factor) but never the index.
+			return walk(x.X)
+		case *ast.ParenExpr:
+			return walk(x.X)
+		case *ast.CallExpr:
+			// A coupling only counts when it is converted to a FLOAT. That is the discriminator
+			// between a distance WEIGHT and a flat INDEX: float64(t-1-i) scales a term, whereas
+			// r*d+j addresses one, and without a type checker the conversion is the only reliable
+			// signal. Requiring it took the finding list from 18 to the handful that are real.
+			if isFloatConv(x) && len(x.Args) == 1 {
+				if be, ok := unparen(x.Args[0]).(*ast.BinaryExpr); ok &&
+					isArithOp(be.Op) && mentionsAsValue(be, outer) && mentionsAsValue(be, inner) {
+					return be
+				}
+			}
+			for _, a := range x.Args {
+				if r := walk(a); r != nil {
+					return r
+				}
+			}
+			return nil
+		case *ast.UnaryExpr:
+			return walk(x.X)
+		case *ast.SelectorExpr:
+			return walk(x.X)
+		case *ast.BinaryExpr:
+			if r := walk(x.X); r != nil {
+				return r
+			}
+			return walk(x.Y)
+		}
+		return nil
+	}
+	return walk(root)
+}
+
+// mentionsAsValue reports whether name appears in e OUTSIDE every index subtree.
+//
+// The distinction is the check's precision. l[k][i] * lbar[k][j] mentions both loop indices, but
+// only as SUBSCRIPTS: its value skeleton is l * lbar, which couples nothing and is just how a
+// matmul-shaped term is written. Searching the whole subtree instead flagged 189 sites, essentially
+// all of them this shape.
+func mentionsAsValue(e ast.Expr, name string) bool {
+	switch x := e.(type) {
+	case nil:
+		return false
+	case *ast.Ident:
+		return x.Name == name
+	case *ast.IndexExpr:
+		return mentionsAsValue(x.X, name) // never x.Index
+	case *ast.ParenExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.UnaryExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.SelectorExpr:
+		return mentionsAsValue(x.X, name)
+	case *ast.BinaryExpr:
+		return mentionsAsValue(x.X, name) || mentionsAsValue(x.Y, name)
+	case *ast.CallExpr:
+		// An ELEMENT ACCESSOR's arguments are coordinates, not values: t.AtF64(i, j) addresses an
+		// element exactly as t[i][j] does, and counting those as a coupling flagged 78 sites of
+		// which essentially none were one. A conversion such as float64(t-1-i) is descended, since
+		// that is precisely where a real distance weight appears.
+		if accessorCallName(x) != "" {
+			return false
+		}
+		for _, a := range x.Args {
+			if mentionsAsValue(a, name) {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+// accessorCallName returns the element-accessor name a call invokes, or "".
+func accessorCallName(c *ast.CallExpr) string {
+	switch f := c.Fun.(type) {
+	case *ast.SelectorExpr:
+		if coupledAccessorNames[f.Sel.Name] {
+			return f.Sel.Name
+		}
+	case *ast.Ident:
+		if coupledAccessorNames[f.Name] {
+			return f.Name
+		}
+	}
+	return ""
+}
+
+// coupledAccessorNames are the element accessors whose arguments are coordinates. Kept local and
+// explicit rather than read from elementAccessors, which lists only the tensor methods; `at` is
+// this repository's package-local two-coordinate helper and reads the same way.
+var coupledAccessorNames = map[string]bool{
+	"AtF64": true, "AtF32": true, "At": true, "SetF64": true, "SetF32": true, "Set": true,
+	"at": true, "idx": true, "index": true,
+}
+
+// isFloatConv reports whether a call is a float conversion.
+func isFloatConv(c *ast.CallExpr) bool {
+	id, ok := c.Fun.(*ast.Ident)
+	return ok && (id.Name == "float64" || id.Name == "float32")
+}
+
+func isArithOp(op token.Token) bool {
+	switch op {
+	case token.ADD, token.SUB, token.MUL, token.QUO, token.REM:
+		return true
+	}
+	return false
+}
+
+func mentionsIdent(root ast.Node, name string) bool {
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == name {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// renderExpr prints an expression for a finding message. exprText only renders the x / x.F / x.F[i]
+// shapes a cache-slot message needs and returns "" for anything else, which turned PS3014's message
+// into a bare empty pair of quotes.
+func renderExpr(e ast.Expr) string {
+	var b strings.Builder
+	if err := printer.Fprint(&b, token.NewFileSet(), e); err != nil {
+		return "?"
+	}
+	return b.String()
+}
+
+// --- PS3015: a struct field given an allocation but never read ---
+
+var (
+	deadFieldDeclared = map[string]bool{} // unexported struct field names declared in this package
+	deadFieldRead     = map[string]bool{} // field names read anywhere in this package
+)
+
+// collectWriteOnlyFields records every unexported struct field declared in the package and every
+// field name READ anywhere in it. Matching is by NAME, without types, which is deliberately
+// conservative: a same-named field read elsewhere suppresses the finding rather than risking a
+// false one.
+//
+// Restricted to UNEXPORTED names because those cannot be read outside the package, which is what
+// makes "no reads anywhere here" conclusive.
+func collectWriteOnlyFields(fset *token.FileSet, files []*ast.File) {
+	deadFieldDeclared = map[string]bool{}
+	deadFieldRead = map[string]bool{}
+	for _, f := range files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			st, ok := n.(*ast.StructType)
+			if !ok || st.Fields == nil {
+				return true
+			}
+			for _, fld := range st.Fields.List {
+				for _, nm := range fld.Names {
+					if !nm.IsExported() {
+						deadFieldDeclared[nm.Name] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	for _, f := range files {
+		markFieldReads(f)
+	}
+	// TEST FILES COUNT AS READERS, and they are parsed here rather than taken from the scan set
+	// because the default run excludes them. Without this, any field whose only consumer is a
+	// test reads as dead: nlp's layerSkipDecodeTrace.blockTokens is written in production and
+	// ranged over only by llama_layerskip_decode_internal_test.go, and it was reported until
+	// test files were included. Nothing in a test file is ever REPORTED — they are read for
+	// field mentions alone.
+	dirs := map[string]bool{}
+	for _, f := range files {
+		dirs[filepath.Dir(fset.Position(f.Pos()).Filename)] = true
+	}
+	for dir := range dirs {
+		ents, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range ents {
+			if e.IsDir() || !strings.HasSuffix(e.Name(), "_test.go") {
+				continue
+			}
+			tf, err := parser.ParseFile(fset, filepath.Join(dir, e.Name()), nil, 0)
+			if err != nil {
+				continue
+			}
+			markFieldReads(tf)
+		}
+	}
+}
+
+// markFieldReads records field names appearing anywhere OTHER than as a write target: the left side
+// of an assignment, or the key of a composite literal element.
+func markFieldReads(f *ast.File) {
+	writeTargets := map[ast.Node]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range s.Lhs {
+				switch t := l.(type) {
+				case *ast.SelectorExpr:
+					writeTargets[t.Sel] = true
+				case *ast.IndexExpr:
+					// x.f[i] = v STORES INTO an element. It reads the header to find the
+					// backing array, but it is not a use of the DATA, and treating it as one
+					// is what let a field written only through its own initialization loop
+					// look alive.
+					if sel, ok := t.X.(*ast.SelectorExpr); ok {
+						writeTargets[sel.Sel] = true
+					}
+				}
+			}
+		case *ast.KeyValueExpr:
+			if id, ok := s.Key.(*ast.Ident); ok {
+				writeTargets[id] = true
+			}
+		case *ast.RangeStmt:
+			// `for i := range x.f` with NO value variable ranges for the indices alone, which
+			// an initialization loop does to fill the field. That is not a read of the data
+			// either. `for _, v := range x.f` IS, because v carries an element out, so the
+			// value variable is the discriminator and dropping it would flag genuinely-read
+			// fields.
+			if s.Value != nil && identName(s.Value) != "_" {
+				return true
+			}
+			if sel, ok := s.X.(*ast.SelectorExpr); ok {
+				writeTargets[sel.Sel] = true
+			}
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && !writeTargets[sel.Sel] {
+			deadFieldRead[sel.Sel.Name] = true
+		}
+		return true
+	})
+}
+
+// writeOnlyAllocFieldFindings flags PS3015 — a field handed a fresh allocation and never read.
+func writeOnlyAllocFieldFindings(fset *token.FileSet, f *ast.File) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	report := func(name string, pos token.Pos, what string) {
+		if !deadFieldDeclared[name] || deadFieldRead[name] || seen[name] {
+			return
+		}
+		seen[name] = true
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "write-only-alloc-field",
+			msg: fmt.Sprintf("field %q is given a fresh %s here and is READ NOWHERE in this package,"+
+				" so every construction pays an allocation for a buffer nothing uses. THE COMPILER"+
+				" WILL NOT SAY SO: an unused local is an error, but a struct field assigned in a"+
+				" constructor is a use as far as it is concerned. MEASURED on the autograd WKV"+
+				" backward, where a linear-time rewrite stopped needing the loga and p exponent"+
+				" buffers the quadratic path required; they stayed in the scratch struct and kept"+
+				" being allocated per worker per call. Removing them, together with pooling the"+
+				" scratch, took that kernel from 134 to 46 allocs/op and 434.7 to 278.2 KiB, and the"+
+				" reduced allocator work showed up as a further 15.82%% geomean on TIME. A KERNEL"+
+				" REWRITE IS THE USUAL CAUSE, because the scratch a kernel inherits describes the"+
+				" algorithm it replaced (A-REWRITE-LEAVES-DEAD-SCRATCH-BEHIND-001). Matching is by"+
+				" field NAME and without types, so a same-named field read anywhere in the package"+
+				" suppresses this; the remaining blind spot is a read through reflection, which no"+
+				" AST pass can see", name, what),
+		})
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch s := n.(type) {
+		case *ast.KeyValueExpr:
+			id, ok := s.Key.(*ast.Ident)
+			if ok && allocatingExpr(s.Value) {
+				report(id.Name, id.Pos(), allocKind(s.Value))
+			}
+		case *ast.AssignStmt:
+			for i, l := range s.Lhs {
+				if i >= len(s.Rhs) || !allocatingExpr(s.Rhs[i]) {
+					continue
+				}
+				switch t := l.(type) {
+				case *ast.SelectorExpr:
+					report(t.Sel.Name, t.Sel.Pos(), allocKind(s.Rhs[i]))
+				case *ast.IndexExpr:
+					// x.f[i] = make(...) fills a field ELEMENT by element, which is how an
+					// array-of-slices scratch is initialized. The allocation is just as wasted
+					// when nothing reads f, and reporting only whole-field assignment missed
+					// exactly that shape.
+					if sel, ok := t.X.(*ast.SelectorExpr); ok {
+						report(sel.Sel.Name, sel.Sel.Pos(), allocKind(s.Rhs[i]))
+					}
+				}
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// allocatingExpr reports whether an expression produces a fresh heap object worth paying for.
+func allocatingExpr(e ast.Expr) bool { return allocKind(e) != "" }
+
+func allocKind(e ast.Expr) string {
+	switch x := e.(type) {
+	case *ast.CallExpr:
+		if id, ok := x.Fun.(*ast.Ident); ok {
+			switch id.Name {
+			case "make":
+				return "make"
+			case "new":
+				return "new"
+			}
+		}
+	case *ast.CompositeLit:
+		return "composite literal"
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			if _, ok := x.X.(*ast.CompositeLit); ok {
+				return "composite literal"
+			}
+		}
+	}
+	return ""
+}
+
+// twoDeepIndexNotRangedFindings flags PS3016 — an inner loop reading m[i][k] where the OUTER index
+// is invariant, so the row could be ranged over instead of indexed.
+//
+// Reported only when the loop does NOT already range over a slice: ranging is the fix, so a loop
+// that already does it is the applied form.
+func twoDeepIndexNotRangedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBody(n)
+		if body == nil {
+			return true
+		}
+		k := loopVarOf(n)
+		if k == "" || rangesOverSlice(n) {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			inner, ok := ix.X.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			// COLUMN WALK: m[k][i], the outer subscript moving and the inner invariant. There is
+			// no row to walk ALONG, which is why this was declined for two rounds — but the SLICE
+			// OF ROWS is itself rangeable, and pairing a companion to it removes every check but
+			// the one on the row that comes out. Measured twice: linalg Cholesky back
+			// substitution went 3 checks to 1 for -2.26%% and -2.13%% (p<=0.017, n=12), and
+			// autograd's logdet forward solve went 4 to 1 for -2.23%% and -1.33%% (p<=0.015).
+			if identName(inner.Index) == k && identName(ix.Index) != k {
+				col := identName(ix.Index)
+				base := identName(inner.X)
+				// Keyed by the LOOP as well as the base: the same matrix is usually walked by
+				// both an outer and an inner loop, and a per-function key let the outer
+				// instance mask the inner one — which is the hotter of the two, being O(n)
+				// deeper. autograd's logdet solve reported only its outer write until this.
+				if col == "" || base == "" || assignedWithin(body, col) || seen[base+"#col#"+k] {
+					return true
+				}
+				seen[base+"#col#"+k] = true
+				out = append(out, finding{
+					pos:      fset.Position(ix.Pos()),
+					category: "two-deep-index-not-ranged",
+					msg: fmt.Sprintf("%s[%s][%s] walks DOWN a column: the row subscript moves with"+
+						" this loop and %q is fixed. There is no row to range along, but the SLICE"+
+						" OF ROWS is rangeable — range %s[lo:hi] and pair any companion to the same"+
+						" length, which leaves only the [%s] on the row that comes out. Measured"+
+						" twice: linalg Cholesky back substitution 3 bounds checks to 1 for -2.26%%"+
+						" and -2.13%% (p<=0.017, n=12), autograd logdet forward solve 4 to 1 for"+
+						" -2.23%% and -1.33%% (p<=0.015). Bit-identical — the operands and their"+
+						" ascending order do not change. VERIFY FIRST with"+
+						" -gcflags=-d=ssa/check_bce/debug=1 and count the checks INSIDE the loop"+
+						" against the multiply-adds beside them: the same conversion on a 4x4"+
+						" register tile measured null, because sixteen accumulators amortize a"+
+						" predicted branch to nothing — and so did autograd's conv1d backward, at"+
+						" the TOP of that ratio ranking, because it streams about 200MB per call"+
+						" and a bandwidth-bound loop hides a removed branch just as thoroughly"+
+						" (RANK-BCE-CANDIDATES-BY-CHECKS-OVER-FMA-001,"+
+						" MEMORY-BOUND-HIDES-CHECK-REMOVAL-TOO-001)",
+						base, k, col, col, base, col),
+				})
+				return true
+			}
+			if identName(ix.Index) != k {
+				return true
+			}
+			// The outer subscript must be INVARIANT for the whole loop, not merely different
+			// from this loop's variable. Checking only the latter let the OUTER loop of a nested
+			// pair match l[k][i]: from its point of view i is the moving subscript and k the row,
+			// when k is the inner loop's own variable and there is no fixed row at all.
+			row := identName(inner.Index)
+			if row == "" || row == k || assignedWithin(body, row) {
+				return true
+			}
+			_ = row
+			base := identName(inner.X)
+			if base == "" || seen[base] {
+				return true
+			}
+			seen[base] = true
+			out = append(out, finding{
+				pos:      fset.Position(ix.Pos()),
+				category: "two-deep-index-not-ranged",
+				msg: fmt.Sprintf("%s[%s][%s] indexes two deep with %q invariant in this loop, so every"+
+					" step re-loads the row pointer AND bounds-checks against it. Hoist the row and"+
+					" RANGE over it. THE RANGE IS THE PART THAT PAYS, which is worth stating because"+
+					" the obvious half does not: on linalg Cholesky's forward substitution, hoisting"+
+					" li := l[i] while keeping the integer-bounded loop measured geomean -0.53%%"+
+					" over eleven benchmarks with one cell at +0.41%% (p=0.038), and re-running the"+
+					" two largest shapes at n=12 still failed to reach significance at p=0.060."+
+					" Converting the same site to `for k, lik := range li[:i]` then gave -2.82%%,"+
+					" -3.50%% and -0.79%% (p<=0.043) on three of five cells, geomean -2.08%%. The"+
+					" mechanism is bounds-check elimination, not the pointer reload, and a loop"+
+					" bounded by an int keeps the check however the pointer is held"+
+					" (HOISTING-A-ROW-PAYS-ONLY-VIA-THE-RANGE-001). Bit-identical either way: the"+
+					" operands and their order do not change. PRECONDITION THIS CHECK CANNOT SEE:"+
+					" the range bound must equal the loop's own bound, so a loop running to something"+
+					" other than the row length needs a slice expression rather than a bare range,"+
+					" and one whose OUTER index moves instead — m[k][i] — has no row to range at all"+
+					" and is a different problem", base, identName(inner.Index), k,
+					identName(inner.Index)),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// assignedWithin reports whether a name is defined or assigned anywhere inside a block, which
+// includes serving as a nested loop's variable. Such a name is not invariant for the outer loop.
+func assignedWithin(body *ast.BlockStmt, name string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch s := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range s.Lhs {
+				if identName(l) == name {
+					found = true
+				}
+			}
+		case *ast.RangeStmt:
+			if identName(s.Key) == name || identName(s.Value) == name {
+				found = true
+			}
+		case *ast.IncDecStmt:
+			if identName(s.X) == name {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// rangesOverSlice reports whether a loop already ranges over A ROW, which is the applied form.
+//
+// A BARE IDENTIFIER does not count, and that is the whole subtlety: `for k := range i` over an int
+// is syntactically indistinguishable from `for k := range xs` over a slice, and treating both as
+// applied made this check miss the very site it was built from — Cholesky's forward substitution
+// loops `for k := range i`. Only a row EXPRESSION — a slice of one, an element of a slice-of-slices,
+// or a field — is evidence the fix is already in. Ranging over some other slice is still a
+// candidate, since it is the ROW whose bounds check the range has to eliminate.
+func rangesOverSlice(n ast.Node) bool {
+	rs, ok := n.(*ast.RangeStmt)
+	if !ok {
+		return false
+	}
+	switch rs.X.(type) {
+	case *ast.SliceExpr, *ast.IndexExpr, *ast.SelectorExpr:
+		return true
+	}
+	return false
+}
+
+// companionNotSlicedFindings flags PS3017 — a loop that DOES range over a row but still indexes a
+// second slice with the range key, so only half the bounds checks were removed.
+//
+// This is the shape PS3016 suppresses as "applied", and it is applied only halfway: ranging proves
+// the ROW's index in range and says nothing about the companion's.
+func companionNotSlicedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rs, ok := n.(*ast.RangeStmt)
+		if !ok {
+			return true
+		}
+		key := identName(rs.Key)
+		if key == "" || key == "_" {
+			return true
+		}
+		// Names cut from a slice expression anywhere in this function are treated as already
+		// paired with the row. Conservative: a same-named local sliced elsewhere suppresses.
+		sliced := slicedNames(fn.Body)
+		// THE RANGED THING MUST BE A DELIBERATELY CUT ROW, not any collection. Ranging a field or
+		// a plain slice and indexing a parallel one by the key is ordinary Go — `for i, t := range
+		// obj.Items { out[i] = ... }` — and matching it reported 199 sites, essentially none of
+		// them a numeric kernel. Requiring an explicit cut, or a name that was cut, keeps this to
+		// loops someone converted on purpose.
+		rows := rowNames(fn.Body)
+		if _, isCut := rs.X.(*ast.SliceExpr); !isCut && !sliced[identName(rs.X)] && !rows[identName(rs.X)] {
+			return true
+		}
+		// And it must be a REDUCTION: a compound assignment in the body. Without that there is no
+		// hot inner accumulation for the second bounds check to matter to.
+		if !hasCompoundAssign(rs.Body) {
+			return true
+		}
+		// The companion and the range VALUE must meet in one accumulation — dot += qk[j]*v — which
+		// is the two-operand reduction this transform is about. Requiring only a compound assign
+		// somewhere in the body matched 260 sites once rows were recognized, because `x := y[i]`
+		// is any slice element and most such loops are not numeric kernels at all.
+		val := identName(rs.Value)
+		if val == "" || val == "_" {
+			return true
+		}
+		seen := map[string]bool{}
+		ast.Inspect(rs.Body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok || identName(ix.Index) != key {
+				return true
+			}
+			base := identName(ix.X)
+			if base == "" || sliced[base] || seen[base] || !pairedInReduction(rs.Body, base, val) {
+				return true
+			}
+			seen[base] = true
+			out = append(out, finding{
+				pos:      fset.Position(ix.Pos()),
+				category: "companion-not-sliced",
+				msg: fmt.Sprintf("%s[%s] is indexed by the range key of a loop that already ranges a"+
+					" row, so the ROW's bounds check is gone and this one is NOT. Ranging proves only"+
+					" its own index in range; the compiler cannot relate %q's length to the ranged"+
+					" slice. Cut both to the same length — and for a trailing segment write the"+
+					" relation down, as in yr = yr[:len(lr)], or it still cannot see it. MEASURED as"+
+					" the difference between a half-applied and a finished conversion: linalg"+
+					" Cholesky was converted with only the row ranged for geomean -2.08%%, and adding"+
+					" the companion slice afterwards gave a FURTHER -1.59%% with three of four cells"+
+					" at p=0.000. linalg LU, done with both from the start, went -6.61%% geomean over"+
+					" nine cells. Bit-identical: operands and order do not change, only how the"+
+					" indices are proven (SLICE-BOTH-OPERANDS-NOT-JUST-THE-ROW-001). PRECONDITION"+
+					" THIS CHECK CANNOT SEE: the two must genuinely have the same length over the"+
+					" loop's extent — a companion indexed with an OFFSET, or shorter than the row,"+
+					" needs its own slice expression rather than a bare cut."+
+					" VERIFY WITH THE COMPILER, not by inference: go build"+
+					" -gcflags=-d=ssa/check_bce/debug=1 lists every remaining check with a line, and"+
+					" what matters is the count INSIDE the inner loop, not in the file. Cholesky's"+
+					" accumulate went 3 inner checks to 1 to 0 across the two steps of this"+
+					" conversion, matching -2.08%% then a further -1.59%%; a whole-file count showed"+
+					" 35 to 34 to 34 and would have said the second step did nothing. AND THE WIN"+
+					" SCALES WITH CHECKS PER FMA: the same conversion on backend/cpu's 4x4 register"+
+					" tile took its inner loop from 2 checks to 1 and measured NULL across twelve"+
+					" cells, because sixteen accumulators amortize one predicted branch to nothing."+
+					" A scalar dot product does not", base, key, base),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// pairedInReduction reports whether some += or -= in the block has both the companion and the
+// range value on its right-hand side, which is what a two-operand inner product looks like.
+func pairedInReduction(b *ast.BlockStmt, base, val string) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) || len(as.Rhs) != 1 {
+			return true
+		}
+		// Either the companion is an OPERAND — dot += qk[j]*v — or it is the accumulation
+		// TARGET — qi[j] -= dot*v. Both are the same transform; matching only the operand form
+		// missed the second Gram-Schmidt loop in randomOrthogonal, which is the mirror of the
+		// first and was fixed alongside it.
+		if mentionsIdent(as.Rhs[0], val) &&
+			(mentionsIdent(as.Rhs[0], base) || mentionsIdent(as.Lhs[0], base)) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// hasCompoundAssign reports whether a block accumulates with += or -=.
+func hasCompoundAssign(b *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(b, func(n ast.Node) bool {
+		if as, ok := n.(*ast.AssignStmt); ok &&
+			(as.Tok == token.ADD_ASSIGN || as.Tok == token.SUB_ASSIGN) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// slicedNames collects identifiers assigned from a slice expression — the finished pairing.
+func slicedNames(body *ast.BlockStmt) map[string]bool {
+	return assignedFrom(body, func(e ast.Expr) bool {
+		_, ok := e.(*ast.SliceExpr)
+		return ok
+	})
+}
+
+// rowNames collects identifiers assigned a ROW of a matrix, qi := q[i].
+//
+// These count as ranged rows for PS3017 even though no slice expression is involved, and leaving
+// them out was a real false negative: nlp randomOrthogonal's Gram-Schmidt takes qi := q[i] and then
+// ranges it while indexing a second row, which is the hottest instance of this shape in the tree
+// and was invisible until rows were recognized alongside cuts.
+func rowNames(body *ast.BlockStmt) map[string]bool {
+	return assignedFrom(body, func(e ast.Expr) bool {
+		_, ok := e.(*ast.IndexExpr)
+		return ok
+	})
+}
+
+func assignedFrom(body *ast.BlockStmt, want func(ast.Expr) bool) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, r := range as.Rhs {
+			if !want(r) || i >= len(as.Lhs) {
+				continue
+			}
+			if nm := identName(as.Lhs[i]); nm != "" {
+				out[nm] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// maxNormalizedExpFindings flags PS3018 — math.Exp(x - m) where m was assigned from a max that
+// INCLUDES x, so the call is exp(0) whenever the max picked x, and exp(0) is exactly 1.
+func maxNormalizedExpFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	seen := map[token.Pos]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		// maxOf[name] = the argument expressions of the max assigned to it.
+		maxOf := map[string][]ast.Expr{}
+		for _, st := range blk.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			call, ok := as.Rhs[0].(*ast.CallExpr)
+			if !ok || !isMathCall(call, "Max") || len(call.Args) != 2 {
+				continue
+			}
+			if nm := identName(as.Lhs[0]); nm != "" {
+				maxOf[nm] = call.Args
+			}
+		}
+		if len(maxOf) == 0 {
+			return true
+		}
+		// Calls already guarded by a test of the max against an argument are the APPLIED form —
+		// that guard is exactly the fix — and reporting them files the fix as the defect.
+		guarded := map[token.Pos]bool{}
+		ast.Inspect(blk, func(g ast.Node) bool {
+			ifs, ok := g.(*ast.IfStmt)
+			if !ok {
+				return true
+			}
+			cmp, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok || (cmp.Op != token.NEQ && cmp.Op != token.EQL &&
+				cmp.Op != token.GEQ && cmp.Op != token.LEQ &&
+				cmp.Op != token.GTR && cmp.Op != token.LSS) {
+				return true
+			}
+			if _, isMax := maxOf[identName(cmp.X)]; !isMax {
+				if _, isMax := maxOf[identName(cmp.Y)]; !isMax {
+					return true
+				}
+			}
+			ast.Inspect(ifs, func(h ast.Node) bool {
+				if c, ok := h.(*ast.CallExpr); ok && isMathCall(c, "Exp") {
+					guarded[c.Pos()] = true
+				}
+				return true
+			})
+			return true
+		})
+		ast.Inspect(blk, func(m ast.Node) bool {
+			call, ok := m.(*ast.CallExpr)
+			if !ok || !isMathCall(call, "Exp") || len(call.Args) != 1 || seen[call.Pos()] ||
+				guarded[call.Pos()] {
+				return true
+			}
+			sub, ok := unparen(call.Args[0]).(*ast.BinaryExpr)
+			if !ok || sub.Op != token.SUB {
+				return true
+			}
+			args, ok := maxOf[identName(sub.Y)]
+			if !ok {
+				return true
+			}
+			lhs := renderExpr(unparen(sub.X))
+			for _, a := range args {
+				if renderExpr(unparen(a)) != lhs {
+					continue
+				}
+				seen[call.Pos()] = true
+				out = append(out, finding{
+					pos:      fset.Position(call.Pos()),
+					category: "max-normalized-exp",
+					msg: fmt.Sprintf("math.Exp(%s - %s) where %s is the max OF %s, so this call is"+
+						" exp(0) whenever the max picked it — and exp(0) is exactly 1. Replace the"+
+						" call with the literal when the argument equals the max. MEASURED TWICE: on"+
+						" the RWKV WKV forward scan, where both stabilized pairs had this shape and"+
+						" half of four calls per element were computing a constant, -12.42%% and"+
+						" -11.93%% (p=0.000, n=8) on a kernel that was 75.6%% math.archExp; and on"+
+						" the WKV backward, -13.59%% and -14.87%% (p=0.000, n=12), bit-identical"+
+						" over 6540 gradients across five decay regimes including negative and zero"+
+						" decay. CHECK FOR REPEATS AT THE SAME TIME: this check reports each CALL"+
+						" SITE, and in the backward each of the two exponents appeared TWICE."+
+						" math.Exp is not inlined, so a repeat is a second evaluation and not a"+
+						" subexpression the compiler folds — binding it to a local was half of that"+
+						" win."+
+						" TEST THE MAX AGAINST THE ARGUMENT, do not branch on the original"+
+						" comparison: with a NaN operand math.Max yields NaN, the equality fails and"+
+						" both exponentials still evaluate exactly as before, whereas an if/else on"+
+						" `a >= b` substitutes a 1 the original never produced. THE WIN SCALES WITH"+
+						" 1/N: over a max of N terms this saves one call in N and is not worth the"+
+						" branch; it paid here because N is two. Note also the saving came to a third"+
+						" of what the exp share predicted, so rank by term count rather than by"+
+						" profile share (THE-MAX-NORMALIZED-EXP-IS-EXACTLY-ONE-001)",
+						lhs, identName(sub.Y), identName(sub.Y), renderExpr(args[0])+" and "+renderExpr(args[1])),
+				})
+				break
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// isMathCall reports whether a call is math.<name>.
+func isMathCall(c *ast.CallExpr, name string) bool {
+	sel, ok := c.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != name {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	return ok && pkg.Name == "math"
+}
+
+// unrolledIndexNotWindowedFindings flags PS3019 — a manually unrolled loop bounded by `i+K <= len(x)`
+// whose body indexes x with K distinct constant offsets and never cuts x to the K-wide window.
+//
+// `i+K <= len(x)` does NOT let the prove pass discharge x[i+K-1]: i+K can overflow, so the bound
+// says nothing about i on its own and every one of the K element reads keeps a check. Cutting a
+// K-wide window once per iteration replaces those K checks with ONE slice check, and the window's
+// length is a constant the compiler folds, so the K reads off it are free.
+func unrolledIndexNotWindowedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.ForStmt)
+		if !ok || fl.Cond == nil || fl.Body == nil {
+			return true
+		}
+		lv, k, ok := unrollBound(fl.Cond)
+		if !ok {
+			return true
+		}
+		// Offsets read off each base, and which bases are already cut to a window.
+		offsets := map[string]map[int]bool{}
+		// Report each base at its OWN first read rather than at the loop header: two bases in one
+		// loop would otherwise carry the same position and be deduplicated into a single finding.
+		firstRead := map[string]token.Pos{}
+		ast.Inspect(fl.Body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			base, ok := unparen(ix.X).(*ast.Ident)
+			if !ok {
+				return true
+			}
+			off, ok := constOffsetOf(unparen(ix.Index), lv)
+			if !ok {
+				return true
+			}
+			if offsets[base.Name] == nil {
+				offsets[base.Name] = map[int]bool{}
+			}
+			offsets[base.Name][off] = true
+			if _, seen := firstRead[base.Name]; !seen {
+				firstRead[base.Name] = ix.Pos()
+			}
+			return true
+		})
+		for _, name := range sortedOffsetBases(offsets) {
+			if len(offsets[name]) < 2 {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(firstRead[name]),
+				category: "unrolled-index-not-windowed",
+				msg: fmt.Sprintf("loop is unrolled by %d over %q but reads %s at %d separate"+
+					" constant offsets and never cuts it to the window. `%s+%d <= len(...)` does NOT"+
+					" discharge those reads: %s+%d can overflow, so the prove pass keeps a bounds"+
+					" check on EVERY one of them. Cut a window once per iteration"+
+					" (`w := %s[%s : %s+%d]`) and index the window — ONE slice check for the whole"+
+					" step, and the window length is a constant the compiler folds. MEASURED on nlp"+
+					" dotAndNorm, eight reads to two checks: -16.15%% and -18.55%% (p<=0.001, n=12),"+
+					" geomean -17.36%%. BIT-IDENTICAL — operands and their order are untouched."+
+					" BUT IT DID NOT PAY AT THE SITE IT WAS FOUND ON, and that is the important"+
+					" half: the classic ballTree L2 leaf test went four checks to one and measured"+
+					" -1.11%% against an UNTOUCHED L1 control that moved -1.06%% in the same run, so"+
+					" nothing was attributable. That loop carries a data-dependent early exit whose"+
+					" misprediction dominates, and the checks hide behind it. REQUIRE A BRANCHLESS"+
+					" LOOP BODY with no loop-carried dependency before spending the edit, and run an"+
+					" untouched sibling as a control — this class produces a plausible small win that"+
+					" is really run-to-run drift. REORDERING IS NOT A SUBSTITUTE: reading the highest"+
+					" offset first to establish the rest left all four checks in place. A second"+
+					" operand clamped to the first outside the loop (b = b[:len(a)]) needs no check of"+
+					" its own, so its window is free; without the clamp each operand costs one slice"+
+					" check (PERF-BCE-PAYOFF-NEEDS-BRANCHLESS-001)",
+					k, lv, name, len(offsets[name]), lv, k, lv, k, name, lv, lv, k),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// unrollBound reports the loop variable and the unroll factor of a condition shaped `i+K <= len(x)`
+// or `i+K < len(x)`. K must be a constant of at least 2: an unroll of one is an ordinary loop.
+func unrollBound(cond ast.Expr) (string, int, bool) {
+	cmp, ok := unparen(cond).(*ast.BinaryExpr)
+	if !ok || (cmp.Op != token.LEQ && cmp.Op != token.LSS) {
+		return "", 0, false
+	}
+	call, ok := unparen(cmp.Y).(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return "", 0, false
+	}
+	if fnID, ok := unparen(call.Fun).(*ast.Ident); !ok || fnID.Name != "len" || !isBuiltinName(fnID.Name) {
+		return "", 0, false
+	}
+	add, ok := unparen(cmp.X).(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return "", 0, false
+	}
+	id, ok := unparen(add.X).(*ast.Ident)
+	if !ok {
+		return "", 0, false
+	}
+	k, ok := intLit(unparen(add.Y))
+	if !ok || k < 2 {
+		return "", 0, false
+	}
+	return id.Name, k, true
+}
+
+// constOffsetOf reports the constant offset of an index expression off the loop variable: `i` is 0,
+// `i+3` is 3. Anything else — a different variable, a product, a call — is not a fixed lane of an
+// unrolled step and cannot be covered by one window.
+func constOffsetOf(e ast.Expr, lv string) (int, bool) {
+	if id, ok := e.(*ast.Ident); ok {
+		return 0, id.Name == lv
+	}
+	add, ok := e.(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return 0, false
+	}
+	id, ok := unparen(add.X).(*ast.Ident)
+	if !ok || id.Name != lv {
+		return 0, false
+	}
+	k, ok := intLit(unparen(add.Y))
+	return k, ok
+}
+
+func sortedOffsetBases(m map[string]map[int]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// invariantBehindBoundsCheckFindings flags PS3020 — a counted loop that indexes slices with its
+// loop variable AND recomputes a loop-invariant value on every iteration.
+//
+// The two halves are one defect. Each indexed read carries a bounds check, and a bounds check is a
+// panic edge that splits the body into separate basic blocks; Go's SSA will not hoist across a
+// block that can panic, so the invariant stays inside the loop even though nothing in it moves.
+// Discharging the checks is what makes the hoist possible, which is why the remedy is both edits.
+func invariantBehindBoundsCheckFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.ForStmt)
+		if !ok || fl.Body == nil || fl.Cond == nil {
+			return true
+		}
+		lv := counterName(fl)
+		if lv == "" {
+			return true
+		}
+		assigned := assignedNames(fl.Body)
+		assigned[lv] = true
+		var reported bool
+		ast.Inspect(fl.Body, func(m ast.Node) bool {
+			be, ok := m.(*ast.BinaryExpr)
+			if !ok || reported {
+				return true
+			}
+			switch be.Op {
+			case token.ADD, token.SUB, token.MUL, token.QUO:
+			default:
+				return true
+			}
+			// The invariant must be an OPERAND against an element indexed by the loop variable.
+			// That is what makes it a VALUE the loop recomputes rather than addressing arithmetic,
+			// which folds into an addressing mode and costs nothing.
+			if !pairedWithIndexedRead(fl.Body, be, lv) || !allLoopInvariant(be, assigned) {
+				return true
+			}
+			reported = true
+			out = append(out, finding{
+				pos:      fset.Position(be.Pos()),
+				category: "invariant-behind-bounds-check",
+				msg: fmt.Sprintf("%s does not change across this loop, yet it is evaluated on"+
+					" every iteration. The compiler would normally hoist it — it does not here"+
+					" because the loop indexes slices with %q, each read is a bounds check, and a"+
+					" bounds check is a PANIC EDGE that splits the body into separate basic"+
+					" blocks; Go's SSA will not hoist across a block that can panic. So the two"+
+					" defects are one: the checks cost more than their own instructions because"+
+					" they also trap the invariant. FIX BOTH — range over the destination slice"+
+					" and cut every companion to its length, then lift the invariant to a local"+
+					" above the loop. MEASURED on the rl Polyak soft update, where (1-tau) was"+
+					" rematerialized per element (FMOVD of 1.0 then FSUBD, both visible in"+
+					" -gcflags=-S) behind two bounds checks: the body went from 14 instructions to"+
+					" 5 for -21.30%% on the F64 arm and -18.62%% on the F32 arm (p=0.000, n=12),"+
+					" with an untouched sibling benchmark flat as the control. VERIFY THE FUSION"+
+					" DID NOT MOVE: merging basic blocks can change which multiply the backend"+
+					" contracts into an FMA, and this repo has already recorded a 1-ulp failure"+
+					" from exactly that, so re-read the -S dump and confirm the same FMADDD in the"+
+					" same position before claiming bit-identity",
+					renderExpr(be), lv),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// counterName reports the variable a counted loop advances, or "" when the post statement is not a
+// simple increment of one identifier.
+func counterName(fl *ast.ForStmt) string {
+	switch post := fl.Post.(type) {
+	case *ast.IncDecStmt:
+		if id, ok := unparen(post.X).(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.AssignStmt:
+		if len(post.Lhs) == 1 {
+			if id, ok := unparen(post.Lhs[0]).(*ast.Ident); ok {
+				return id.Name
+			}
+		}
+	}
+	return ""
+}
+
+// assignedNames collects every identifier written in a block, including the base of an indexed
+// assignment, so that anything the loop mutates is excluded from being called invariant.
+func assignedNames(b *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(b, func(n ast.Node) bool {
+		switch a := n.(type) {
+		case *ast.AssignStmt:
+			for _, l := range a.Lhs {
+				switch t := l.(type) {
+				case *ast.Ident:
+					out[t.Name] = true
+				case *ast.IndexExpr:
+					if id, ok := unparen(t.X).(*ast.Ident); ok {
+						out[id.Name] = true
+					}
+				}
+			}
+		case *ast.IncDecStmt:
+			if id, ok := unparen(a.X).(*ast.Ident); ok {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// allLoopInvariant reports whether every leaf of e is a literal or an identifier the loop never
+// writes. Calls, selectors and index expressions are rejected: without a type checker there is no
+// way to know they are pure, and hoisting an impure expression changes behavior.
+func allLoopInvariant(e ast.Expr, assigned map[string]bool) bool {
+	idents, ok := 0, true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if n == nil { // Inspect signals end-of-children with nil; it is not a leaf
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.Ident:
+			idents++
+			if assigned[t.Name] {
+				ok = false
+			}
+		case *ast.BasicLit, *ast.BinaryExpr, *ast.ParenExpr:
+		default:
+			ok = false
+		}
+		return ok
+	})
+	return ok && idents > 0
+}
+
+// pairedWithIndexedRead reports whether e is one side of a binary expression whose other side reads
+// a slice indexed by the loop variable.
+func pairedWithIndexedRead(body *ast.BlockStmt, e ast.Expr, lv string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		be, ok := n.(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		var other ast.Expr
+		switch {
+		case unparen(be.X) == e:
+			other = be.Y
+		case unparen(be.Y) == e:
+			other = be.X
+		default:
+			return true
+		}
+		ast.Inspect(other, func(q ast.Node) bool {
+			if ix, ok := q.(*ast.IndexExpr); ok {
+				if id, ok := unparen(ix.Index).(*ast.Ident); ok && id.Name == lv {
+					found = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return found
+}
+
+// monotoneGuardInLoopFindings flags PS3021 — a counted loop whose body is wrapped in a single guard
+// that moves MONOTONELY with the loop variable and is compared against something invariant.
+//
+// Such a guard does not vary independently: it is false for a run of iterations at one end and true
+// for the rest, so it describes the loop's BOUNDS rather than a per-iteration decision. Computing
+// the crossing point once and starting (or stopping) the loop there removes a branch from every
+// iteration — and, because a branch splits the basic block and Go SSA will not hoist across a block
+// that can panic or diverge, it also frees whatever invariant the guard was trapping.
+func monotoneGuardInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		fl, ok := n.(*ast.ForStmt)
+		if !ok || fl.Body == nil || len(fl.Body.List) == 0 {
+			return true
+		}
+		lv := counterName(fl)
+		if lv == "" {
+			return true
+		}
+		last, ok := fl.Body.List[len(fl.Body.List)-1].(*ast.IfStmt)
+		if !ok || last.Else != nil || last.Init != nil || last.Body == nil || len(last.Body.List) == 0 {
+			return true
+		}
+		cmp, ok := unparen(last.Cond).(*ast.BinaryExpr)
+		if !ok {
+			return true
+		}
+		switch cmp.Op {
+		case token.GEQ, token.GTR, token.LSS, token.LEQ:
+		default:
+			return true // equality is not monotone: it selects one iteration, not a run
+		}
+		// Names bound earlier in the body to an expression that moves with the loop variable.
+		moving := map[string]bool{lv: true}
+		for _, st := range fl.Body.List[:len(fl.Body.List)-1] {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				continue
+			}
+			if id, ok := unparen(as.Lhs[0]).(*ast.Ident); ok && movesWithLoop(as.Rhs[0], moving) {
+				moving[id.Name] = true
+			}
+		}
+		xm, ym := movesWithLoop(cmp.X, moving), movesWithLoop(cmp.Y, moving)
+		if xm == ym {
+			return true // neither side moves, or both do — no single crossing point
+		}
+		invariant := cmp.Y
+		if ym {
+			invariant = cmp.X
+		}
+		if mentionsAnyName(invariant, moving) {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(last.Pos()),
+			category: "monotone-guard-in-loop",
+			msg: fmt.Sprintf("the whole body of this loop sits behind %q, which moves monotonely"+
+				" with %q and is compared against something the loop does not change. A guard like"+
+				" that is not a per-iteration decision — it is false for a RUN of iterations at one"+
+				" end and true for the rest, so it belongs in the loop BOUNDS. Compute the crossing"+
+				" point once outside and start (or stop) the loop there. TWO costs go, not one: the"+
+				" branch per iteration, and whatever loop-invariant the branch was trapping, since"+
+				" it splits the body into its own basic block and Go SSA will not hoist across it."+
+				" MEASURED on the autograd conv1d backward, whose per-tap `j >= 0` was false for"+
+				" only the first K-1 of L positions — 3 of 2048, so 99.85%% pure overhead — and"+
+				" whose loop HEADER profiled as a larger share than either line the guard"+
+				" protected: F32 -7.92%% (p=0.000, n=16). REPORTED HONESTLY: the F64 arm of the"+
+				" same change was directionally -4.7%% but did NOT reach significance at n=16"+
+				" (p=0.210), so expect this to pay when the skipped run is a small fraction and the"+
+				" body is cheap, and to be unmeasurable otherwise. It is still worth applying when"+
+				" bit-identical, because it strictly removes instructions and cannot regress."+
+				" BIT-IDENTICAL by construction: only iterations whose body never executed are"+
+				" skipped, so the surviving ones are the same values in the same order. CHECK THE"+
+				" DIRECTION before rewriting — a guard that is true for a PREFIX bounds the loop"+
+				" above, one true for a suffix bounds it below, and getting it backwards silently"+
+				" drops real work", renderExpr(cmp), lv),
+		})
+		return true
+	})
+	return out
+}
+
+// movesWithLoop reports whether e is an additive expression over identifiers and literals that
+// mentions at least one name already known to advance with the loop. Restricted to + and - because
+// those are the forms whose crossing point is a single index; a product or a modulus can re-enter
+// the guarded region and has no single bound.
+func movesWithLoop(e ast.Expr, moving map[string]bool) bool {
+	found, ok := false, true
+	ast.Inspect(e, func(n ast.Node) bool {
+		if n == nil {
+			return false
+		}
+		switch t := n.(type) {
+		case *ast.Ident:
+			if moving[t.Name] {
+				found = true
+			}
+		case *ast.BasicLit, *ast.ParenExpr:
+		case *ast.BinaryExpr:
+			if t.Op != token.ADD && t.Op != token.SUB {
+				ok = false
+			}
+		default:
+			ok = false
+		}
+		return ok
+	})
+	return ok && found
+}
+
+func mentionsAnyName(e ast.Expr, names map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && names[id.Name] {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// transposePassFindings flags PS3023 — a nested loop that materializes a TRANSPOSED COPY of a matrix
+// this function itself built.
+//
+// This is deliberately the case PS1010 EXCLUDES. That check reports a column walk only when the
+// inner loop assigns to something free of the inner variable, because then interchange is the
+// remedy; a transpose writes the inner variable on the left and, as its comment says, strides
+// whichever way it is run, so interchange buys nothing. The remedy here is not to reorder the copy
+// but to DELETE it: when the source is built in this same function, the producer can write the
+// layout the consumer wants and both the pass and the intermediate disappear.
+func transposePassFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	built := locallyBuiltMatrices(fn)
+	if len(built) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, obody, ok := loopIndexVar(n)
+		if !ok || obody == nil {
+			return true
+		}
+		ast.Inspect(obody, func(m ast.Node) bool {
+			inner, ibody, ok := loopIndexVar(m)
+			if !ok || ibody == nil || inner == outer {
+				return true
+			}
+			for _, st := range ibody.List {
+				as, ok := st.(*ast.AssignStmt)
+				if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+					continue
+				}
+				// A transpose WRITE: the destination moves with the inner variable — usually as an
+				// INDEX, which is why mentionsAsValue is the wrong test here. That is what PS1010
+				// refuses, because interchanging it only moves the stride.
+				if !mentions(as.Lhs[0], inner) {
+					continue
+				}
+				src, ok := transposedRead(as.Rhs[0], inner, outer)
+				if !ok || !built[src] {
+					continue
+				}
+				line := fset.Position(as.Pos()).Line
+				if seen[line] {
+					continue
+				}
+				seen[line] = true
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "transpose-pass-over-built-matrix",
+					msg: fmt.Sprintf("this loop materializes a TRANSPOSED COPY of %s, which this"+
+						" function built itself. PS1010 deliberately does not report it: a"+
+						" transpose writes the inner variable on the left, so INTERCHANGE buys"+
+						" nothing and only moves the stride. The remedy is to DELETE the pass"+
+						" instead — have the producer of %s write the layout this consumer wants,"+
+						" and the copy, the intermediate and its per-row allocations all go."+
+						" MEASURED on the autograd logdet VJP, which solved its triangular inverse"+
+						" row-major and then transposed it because the contraction needs columns:"+
+						" solving straight into column-major went -10.37%% at n=512 and -6.93%% at"+
+						" n=256 (p=0.000, n=12), allocs/op down about a third, with an untouched"+
+						" sibling benchmark flat. Bit-identical there, and it should be wherever"+
+						" the producer merely relabels which slot a value lands in — no operand"+
+						" and no summation order changes."+
+						" TWO COSTS BESIDES THE COPY, both invisible to a line profile. The"+
+						" consumer's inner loop stops walking down a column of a slice-of-slices,"+
+						" so it loses a row-pointer load and a bounds check per element. And if"+
+						" the producer is PARALLEL over the transposed axis, each worker was"+
+						" writing a column — adjacent workers storing into adjacent bytes of the"+
+						" same rows, contending for a cache line on every write — and now owns a"+
+						" contiguous row. CHECK FIRST that the source is not ALSO consumed in its"+
+						" original layout somewhere else; if it is, flipping the producer only"+
+						" moves the transpose rather than removing it", src, src),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// transposedRead reports the base name of a read shaped src[inner][outer] appearing in e.
+func transposedRead(e ast.Expr, inner, outer string) (string, bool) {
+	name, found := "", false
+	ast.Inspect(e, func(n ast.Node) bool {
+		elem, ok := n.(*ast.IndexExpr)
+		if !ok || found {
+			return true
+		}
+		row, ok := unparen(elem.X).(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		rid, ok1 := unparen(row.Index).(*ast.Ident)
+		cid, ok2 := unparen(elem.Index).(*ast.Ident)
+		base, ok3 := unparen(row.X).(*ast.Ident)
+		if ok1 && ok2 && ok3 && rid.Name == inner && cid.Name == outer {
+			name, found = base.Name, true
+		}
+		return true
+	})
+	return name, found
+}
+
+// locallyBuiltMatrices collects names assigned from make of a slice type in this function, which is
+// what makes the producer reachable.
+func locallyBuiltMatrices(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, ok := unparen(as.Lhs[0]).(*ast.Ident)
+		if !ok {
+			return true
+		}
+		call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			return true
+		}
+		fnID, ok := unparen(call.Fun).(*ast.Ident)
+		if !ok || fnID.Name != "make" {
+			return true
+		}
+		if _, isArr := call.Args[0].(*ast.ArrayType); isArr {
+			out[id.Name] = true
+		}
+		return true
+	})
+	return out
+}
+
+// fixedArityVariadicCallFindings flags PS3024 — a call to a VARIADIC dispatch wrapper that passes a
+// fixed number of arguments. Go builds a fresh slice for the variadic pack at every such site, so a
+// wrapper existing only to forward its pack into a dispatch costs one allocation per dispatch, at
+// every caller, forever.
+func fixedArityVariadicCallFindings(fset *token.FileSet, fn *ast.FuncDecl, ns nameSets) []finding {
+	if len(ns.variadicWrappers) == 0 || fn.Body == nil {
+		return nil
+	}
+	wrappers := ns.variadicWrappers
+	// A pooled helper's own fallback call is CORRECT: exec2 and friends hand their fixed
+	// arguments to the variadic form precisely when a recorder is attached, because the tape may
+	// retain the slice. Reporting those would flag the fix as the defect.
+	if functionBorrowsFromPool(fn) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || call.Ellipsis.IsValid() {
+			return true // a genuine spread cannot avoid the pack
+		}
+		name := ""
+		switch f := unparen(call.Fun).(type) {
+		case *ast.Ident:
+			name = f.Name
+		case *ast.SelectorExpr:
+			name = f.Sel.Name
+		}
+		if !wrappers[name] {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			category: "fixed-arity-variadic-call",
+			msg: fmt.Sprintf("%q is a variadic dispatch wrapper and this call passes a FIXED"+
+				" number of arguments, so Go allocates a fresh slice for the variadic pack right"+
+				" here — one allocation per dispatch, at every caller, forever. Call a"+
+				" fixed-arity sibling that borrows a pooled slice instead. MEASURED on nlp, where"+
+				" an MHA method was a byte-for-byte clone of the package's own variadic helper,"+
+				" never touched its receiver, and had thirteen call sites while recorder-guarded"+
+				" pooled siblings for arities one through four sat unused beside it: routing each"+
+				" site to its matching sibling took a 500-token generate from 235.3k to 225.3k"+
+				" allocs/op, -4.26%% (p=0.000, n=10), with an untouched control identical."+
+				" JUDGE THIS ON allocs/op, NOT ns/op — the same change did not separate on time"+
+				" (p=0.143), because the benchmarks reaching it are dominated by backend"+
+				" worker-pool park and wake. IF THE PACKAGE HAS NO POOLED SIBLING, adding one is"+
+				" the work, and check first: nn already ships nnIns1Pool through nnIns3Pool that"+
+				" 43 of its own wrappers bypass. THE POOLED FORM MUST DEFER to the variadic one"+
+				" when a recorder is attached, or the tape retains a slice that is about to be"+
+				" reused. Silent on a genuine spread", name),
+		})
+		return true
+	})
+	return out
+}
+
+// functionBorrowsFromPool reports whether fn takes a slice out of a sync.Pool, which marks it as
+// one of the pooled dispatch helpers rather than a caller that should be using one.
+func functionBorrowsFromPool(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Get" {
+			return true
+		}
+		if id, ok := unparen(sel.X).(*ast.Ident); ok && strings.Contains(strings.ToLower(id.Name), "pool") {
+			found = true
+		}
+		return true
+	})
+	return found
 }

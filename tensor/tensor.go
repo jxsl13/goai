@@ -22,18 +22,75 @@ func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 
 // NewOn allocates a zeroed contiguous tensor on dev, using its allocator. It
 // panics on an invalid dtype or shape (programming error).
+// maxInlineRank is the rank up to which a fresh tensor carries its shape and strides inside its
+// own allocation block.
+//
+// TWO, and the value was measured rather than picked. The block reserves 2*maxInlineRank ints
+// whatever the actual rank, so anything above the real rank is waste on every tensor. Swept on
+// BenchmarkJambaDecode: rank 2, 3 and 4 all give the same 957 allocs/op, but B/op runs 542519,
+// 544834 and 547159 against a 542517 baseline — so 2 buys the whole allocation win for nothing,
+// while 3 and 4 pay bytes for coverage no tensor in these paths needs.
+//
+// Identical allocation counts across the three also say something worth recording: nothing on a
+// decode path here is rank 3 or above. A workload that is would take the fallback below, which is
+// the old behavior, so raising this is a byte-for-coverage trade and never a regression.
+const maxInlineRank = 2
+
+// tensorBlock co-allocates TWO of the objects NewOn always creates together: the Tensor and the
+// backing array for shape and strides.
+//
+// A fresh tensor cost FIVE allocations — Tensor, Storage, the shape/stride array, the data slice,
+// and the interface box Storage.data pays to hold that slice — and a Jamba decode step creates
+// about 158 of them, which was over half its allocation count. Folding the shape/stride array into
+// the Tensor drops that to four.
+//
+// THE STORAGE IS DELIBERATELY NOT IN HERE, and that is the whole point of this paragraph, because
+// putting it here is the obvious next step and it has already been tried and MEASURED WORSE. Views
+// are why. Reshape and friends build a new Tensor pointing at the SAME Storage, so if the Storage
+// lived inside this block, one surviving view would pin the entire block — the original Tensor and
+// its shape/stride buffer included — instead of a bare 48-byte Storage. The A/B was unambiguous:
+// allocations fell about 23%, and the decode step ran 6.86% SLOWER, because retention beat the
+// allocation saving. An allocation count is not the objective; it is a proxy that fails exactly
+// when the removed object outlives the one it was folded into.
+//
+// So: fold objects whose lifetimes are IDENTICAL, never objects one of which can outlive the other.
+// The shape/stride array qualifies — nothing but this Tensor ever points at it.
+type tensorBlock struct {
+	t   Tensor
+	buf [2 * maxInlineRank]int
+}
+
 func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	if !shape.IsValid() {
-		panic(fmt.Sprintf("tensor: invalid shape %v", shape))
+		// shape.String() rather than a %v: passing the slice to Sprintf as an interface makes escape
+		// analysis mark shape as LEAKING, which forces every caller to heap-allocate its shape
+		// literal even though this panic never fires. String is proven non-escaping.
+		panic("tensor: invalid shape " + shape.String())
 	}
-	sh, st := cloneShapeStrides(shape)
-	return &Tensor{
-		storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
-		shape:   sh,
-		strides: st,
-		offset:  0,
-		dev:     dev,
+	n := len(shape)
+	if n == 0 || n > maxInlineRank {
+		// Rank 0 keeps the nil/empty distinction cloneShapeStrides is careful about; high ranks
+		// are rare enough that the block would be waste.
+		sh, st := cloneShapeStrides(shape)
+		return &Tensor{
+			storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
+			shape:   sh,
+			strides: st,
+			offset:  0,
+			dev:     dev,
+		}
 	}
+	blk := &tensorBlock{}
+	sh := Shape(blk.buf[:n:n])
+	st := Strides(blk.buf[n : 2*n : 2*n])
+	acc := 1
+	for i := n - 1; i >= 0; i-- {
+		sh[i] = shape[i]
+		st[i] = acc
+		acc *= shape[i]
+	}
+	blk.t = Tensor{storage: newStorageWith(dev.Allocator(), dtype, acc), shape: sh, strides: st, offset: 0, dev: dev}
+	return &blk.t
 }
 
 // FromFloat64 builds a contiguous F64 tensor from data laid out row-major. len
@@ -538,12 +595,12 @@ func gatherHalfTyped(out, t *Tensor, n int) bool {
 	}
 	inner, sInner := t.shape[nd-1], t.strides[nd-1]
 
-	srcU16, srcIsU16 := t.storage.data.([]uint16)
-	dstU16, dstIsU16 := out.storage.data.([]uint16)
-	srcF32, srcIsF32 := t.storage.data.([]float32)
-	dstF32, dstIsF32 := out.storage.data.([]float32)
-	srcF64, srcIsF64 := t.storage.data.([]float64)
-	dstF64, dstIsF64 := out.storage.data.([]float64)
+	srcU16, srcIsU16 := t.storage.u16, t.storage.u16 != nil
+	dstU16, dstIsU16 := out.storage.u16, out.storage.u16 != nil
+	srcF32, srcIsF32 := t.storage.f32, t.storage.f32 != nil
+	dstF32, dstIsF32 := out.storage.f32, out.storage.f32 != nil
+	srcF64, srcIsF64 := t.storage.f64, t.storage.f64 != nil
+	dstF64, dstIsF64 := out.storage.f64, out.storage.f64 != nil
 	srcBF, dstBF := t.storage.dtype == BF16, out.storage.dtype == BF16
 
 	// decode picks the source reader once; encode picks the destination writer once.

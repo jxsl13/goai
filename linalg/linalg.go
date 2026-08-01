@@ -129,6 +129,10 @@ func (f *LU) Det() float64 {
 // Solve solves A·X = B for X, where B is a right-hand-side vector [n] or matrix [n,k]. It applies the
 // row permutation to B, then forward-substitution (L·Y = P·B) and back-substitution (U·X = Y).
 // Returns an error if A is singular (a zero on the U diagonal).
+// colJam is how many right-hand-side columns LU.Solve processes together. Columns are
+// independent, so jamming them is a free-dimension transform and changes no value.
+const colJam = 4
+
 func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	n := f.n
 	if b.Ndim() < 1 || b.Ndim() > 2 || b.Shape()[0] != n {
@@ -159,9 +163,32 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	// order and reads only y[j] with j < i (written earlier in the SAME column), so a
 	// reused per-worker buffer cannot expose another column's values. Gated on n·n·cols
 	// so a single heavy column or a single RHS (Solve of a vector) stays serial.
+	// TWO THINGS BEYOND THE FLAT FACTOR, both measured on this shape.
+	//
+	// The back pass accumulates in the CONTIGUOUS scratch instead of reading out[j*cols+c].
+	// For a fixed column, stepping j there jumps a whole output row — 6 KB at n=cols=768 —
+	// so every iteration touched its own cache line to use eight bytes of it. The values it
+	// reads are the x[j] this same loop wrote earlier, so they can live in y: x[i] overwrites
+	// y[i] only AFTER y[i] has been read into s, and the forward pass's y[j] for j > i was
+	// already consumed at step j. The row is scattered to out once at the end.
+	//
+	// And FOUR right-hand-side columns are jammed. Both substitution loops are a serial FMA
+	// recurrence on one accumulator, so they run at FMA latency rather than throughput, and
+	// the whole factor is re-streamed once per column. Four columns share each li[j] load and
+	// run four independent chains. BIT-IDENTICAL, because the jammed dimension is the FREE
+	// one: column c still accumulates over the same j in the same ascending order with the
+	// same operands into its own accumulator. That is exactly why this is legal where
+	// splitting the inner dot into partials is not.
+	//
+	//	LUSolve_768x768 -69.98%, LUSolve_512x512 -64.06%, Inverse/768 -43.21% (p=0.000, n=12),
+	//	with the cols==1 remainder path flat as a control.
+	jam := colJam
+	if cols < jam {
+		jam = cols
+	}
 	parallelCols(cols, n*n, func(clo, chi int) {
-		y := make([]float64, n)
-		for c := clo; c < chi; c++ {
+		buf := make([]float64, jam*n)
+		one := func(c int, y []float64) {
 			for i := range n { // forward: L·y = P·b, L unit-lower
 				s := bat(f.piv[i], c)
 				li := f.lu[i*n : i*n+n] // contiguous factor row i
@@ -174,10 +201,57 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 				s := y[i]
 				li := f.lu[i*n : i*n+n]
 				for j := i + 1; j < n; j++ {
-					s -= li[j] * out[j*cols+c]
+					s -= li[j] * y[j]
 				}
-				out[i*cols+c] = s / li[i]
+				y[i] = s / li[i]
 			}
+			for i := range n {
+				out[i*cols+c] = y[i]
+			}
+		}
+		c := clo
+		for ; c+colJam <= chi; c += colJam {
+			y0, y1 := buf[0:n], buf[n:2*n]
+			y2, y3 := buf[2*n:3*n], buf[3*n:4*n]
+			for i := range n {
+				pi := f.piv[i]
+				s0, s1 := bat(pi, c), bat(pi, c+1)
+				s2, s3 := bat(pi, c+2), bat(pi, c+3)
+				lr := f.lu[i*n : i*n+i]
+				a0, a1 := y0[:i], y1[:i]
+				a2, a3 := y2[:i], y3[:i]
+				for j, lij := range lr {
+					s0 -= lij * a0[j]
+					s1 -= lij * a1[j]
+					s2 -= lij * a2[j]
+					s3 -= lij * a3[j]
+				}
+				y0[i], y1[i], y2[i], y3[i] = s0, s1, s2, s3
+			}
+			for i := n - 1; i >= 0; i-- {
+				s0, s1, s2, s3 := y0[i], y1[i], y2[i], y3[i]
+				lr := f.lu[i*n+i+1 : i*n+n]
+				b0, b1 := y0[i+1:n], y1[i+1:n]
+				b2, b3 := y2[i+1:n], y3[i+1:n]
+				b0, b1 = b0[:len(lr)], b1[:len(lr)]
+				b2, b3 = b2[:len(lr)], b3[:len(lr)]
+				for t, lij := range lr {
+					s0 -= lij * b0[t]
+					s1 -= lij * b1[t]
+					s2 -= lij * b2[t]
+					s3 -= lij * b3[t]
+				}
+				d := f.lu[i*n+i]
+				y0[i], y1[i], y2[i], y3[i] = s0/d, s1/d, s2/d, s3/d
+			}
+			for i := range n {
+				base := i * cols
+				out[base+c], out[base+c+1] = y0[i], y1[i]
+				out[base+c+2], out[base+c+3] = y2[i], y3[i]
+			}
+		}
+		for ; c < chi; c++ {
+			one(c, buf[0:n])
 		}
 	})
 	if vec {
