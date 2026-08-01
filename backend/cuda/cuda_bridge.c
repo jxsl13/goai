@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1463,18 +1463,43 @@ int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int c
                      "  int t=threadIdx.x, nt=blockDim.x;\n"
                      "  const float* xr = in + (size_t)row*cols;\n"
                      "  float* yr = out + (size_t)row*cols;\n"
-                     "  double local=0.0;\n"
-                     "  for (int j=t;j<cols;j+=nt){ double v=xr[j]; local+=v*v; }\n"
-                     "  sh[t]=local; __syncthreads();\n"
+                     // GA106 FP64 = 1/64 FP32: sum the squares per thread in FP32 (each thread only
+                     // covers ~cols/nt elements, so the f32 accumulation error is tiny) and combine
+                     // the per-thread partials in DOUBLE for a stable mean-square. Rides the f32
+                     // RMSNorm tolerance; the normalize was already f32.
+                     "  float local=0.0f;\n"
+                     "  for (int j=t;j<cols;j+=nt){ float v=xr[j]; local+=v*v; }\n"
+                     "  sh[t]=(double)local; __syncthreads();\n"
                      "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
                      "  double ms = sh[0]/(double)cols;\n"
                      "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
                      "  for (int j=t;j<cols;j+=nt){ yr[j] = xr[j]*inv*w[j]; }\n"
                      "}\n",
                      "rmsnorm.cu", "rmsnorm_f32", &gRms) != 0) { rc = -2; goto done; }
+    // Shared-cached twin: RMSNorm reads the row from global TWICE (sum-of-squares, then
+    // normalize). Cache it into shared on the first read and reuse it for the normalize
+    // pass — 1 global read + 1 write instead of 2 reads + 1 write. Arithmetic UNCHANGED, so
+    // bit-identical to rmsnorm_f32. Used when the reduction doubles + cached FP32 row fit the
+    // 48KB shared budget; the win appears once the row (cols*4 B) spills L2 (cols>=~4096).
+    if (!gRmsC && compile_kernel(
+                     "extern \"C\" __global__ void rmsnorm_f32c(const float* in, float* out, const float* w, int rows, int cols, float eps){\n"
+                     "  int row = blockIdx.x; if (row>=rows) return;\n"
+                     "  extern __shared__ double smem[];\n"
+                     "  int t=threadIdx.x, nt=blockDim.x;\n"
+                     "  double* red=smem; float* sm=(float*)(red+nt);\n"
+                     "  const float* xr = in + (size_t)row*cols;\n"
+                     "  float* yr = out + (size_t)row*cols;\n"
+                     "  float local=0.0f;\n"
+                     "  for (int j=t;j<cols;j+=nt){ float v=xr[j]; sm[j]=v; local+=v*v; }\n"
+                     "  red[t]=(double)local; __syncthreads();\n"
+                     "  for (int s=nt/2;s>0;s>>=1){ if(t<s) red[t]+=red[t+s]; __syncthreads(); }\n"
+                     "  double ms = red[0]/(double)cols;\n"
+                     "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
+                     "  for (int j=t;j<cols;j+=nt){ yr[j] = sm[j]*inv*w[j]; }\n"
+                     "}\n",
+                     "rmsnorm_c.cu", "rmsnorm_f32c", &gRmsC) != 0) { rc = -2; goto done; }
     {
         int threads = 256, blocks = rows;
-        size_t shmem = (size_t)threads * sizeof(double);
         void* args[6];
         args[0] = &in;
         args[1] = &out;
@@ -1482,7 +1507,13 @@ int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int c
         args[3] = &rows;
         args[4] = &cols;
         args[5] = &eps;
-        rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        size_t cachedShmem = (size_t)threads * sizeof(double) + (size_t)cols * sizeof(float);
+        if (gRmsC && cachedShmem <= 48000) {
+            rc = (cuLaunchKernel(gRmsC, blocks, 1, 1, threads, 1, 1, cachedShmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        } else {
+            size_t shmem = (size_t)threads * sizeof(double);
+            rc = (cuLaunchKernel(gRms, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
     }
 done:
     pthread_mutex_unlock(&gLock);
@@ -1508,9 +1539,9 @@ int cu_rmsnorm_f16(const void* in, void* out, const void* gamma, int rows, int c
             "  int t=threadIdx.x, nt=blockDim.x;\n"
             "  const unsigned short* xr = in + (size_t)row*cols;\n"
             "  unsigned short* yr = out + (size_t)row*cols;\n"
-            "  double local=0.0;\n"
-            "  for(int j=t;j<cols;j+=nt){ double v=h2f(xr[j]); local+=v*v; }\n"
-            "  sh[t]=local; __syncthreads();\n"
+            "  float local=0.0f;\n"
+            "  for(int j=t;j<cols;j+=nt){ float v=h2f(xr[j]); local+=v*v; }\n"
+            "  sh[t]=(double)local; __syncthreads();\n"
             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
             "  double ms=sh[0]/(double)cols;\n"
             "  float inv=(float)(1.0/sqrt(ms+(double)eps));\n"
