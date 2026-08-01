@@ -28,11 +28,16 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		return vt, st, ut, nil
 	}
 	// one-sided Jacobi on the columns of a working copy; V accumulates the right rotations.
+	// V is a FLAT [n*n] row-major buffer, not a slice of rows: the V-rotation below walks a
+	// COLUMN (vmat[k][i], vmat[k][j]) so a row-of-slices layout pointer-chases a different,
+	// independently allocated row per k — the worst pattern for that access. A flat buffer makes
+	// it a constant stride through one allocation and drops n allocations to 1. Index arithmetic
+	// only: the operations, their order and operands are unchanged, so results are bit-identical
+	// (same lever as QR flat-householder #609 and internal/linalg SymEig).
 	col := toColMajor(a, m, n)
-	vmat := make([][]float64, n)
+	vmat := make([]float64, n*n)
 	for i := range n {
-		vmat[i] = make([]float64, n)
-		vmat[i][i] = 1
+		vmat[i*n+i] = 1
 	}
 	const tol = 1e-14
 	for range 100 { // sweeps until convergence (one-sided Jacobi converges in ~10)
@@ -72,9 +77,9 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 					cj[k] = sn*ai + c*aj
 				}
 				for k := range n { // rotate columns i,j of V
-					vi, vj := vmat[k][i], vmat[k][j]
-					vmat[k][i] = c*vi - sn*vj
-					vmat[k][j] = sn*vi + c*vj
+					vi, vj := vmat[k*n+i], vmat[k*n+j]
+					vmat[k*n+i] = c*vi - sn*vj
+					vmat[k*n+j] = sn*vi + c*vj
 				}
 			}
 		}
@@ -111,7 +116,7 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 			}
 		}
 		for k := range n {
-			vOut[k*n+jj] = vmat[k][j]
+			vOut[k*n+jj] = vmat[k*n+j]
 		}
 	}
 	return tensor.FromFloat64(tensor.Shape{m, n}, uMat),
