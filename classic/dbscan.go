@@ -125,15 +125,15 @@ func NewDBSCAN(opts ...DBSCANOption) *DBSCAN {
 	return &DBSCAN{cfg: cfg}
 }
 
+// dbscanSlabBlock is how many ints a core-neighbourhood slab block holds. One allocation per block
+// replaces one per core point; a list longer than this gets its own exact-sized block.
+const dbscanSlabBlock = 4096
+
 // Fit clusters X[n][d] and returns per-sample labels: contiguous cluster ids
 // 0,1,2,… assigned in order of discovery, and [DBSCANLabelNoise] (−1) for noise
 // points. The returned slice aliases the estimator's internal state; the same
 // labels are available afterwards via [DBSCAN.Labels]. Fit errors on empty or
 // ragged input, eps ≤ 0, or minSamples < 1.
-// dbscanSlabBlock is how many ints a core-neighbourhood slab block holds. One allocation per block
-// replaces one per core point; a list longer than this gets its own exact-sized block.
-const dbscanSlabBlock = 4096
-
 func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 	n := len(x)
 	if n == 0 {

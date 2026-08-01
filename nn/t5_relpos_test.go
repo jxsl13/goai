@@ -214,3 +214,19 @@ func ExampleT5RelativeBias() {
 	// Output:
 	// 2.5
 }
+
+// ExampleT5RelativeBias_BiasRow shows the incremental-decode row: the bias a single query at an
+// absolute position sees over all keys, without building the rows before it. It prints the value
+// alongside the same entry taken from the full table, which is what "bit-identical to Bias sliced
+// at that row" means in practice.
+func ExampleT5RelativeBias_BiasRow() {
+	b, _ := nn.NewT5RelativeBias(32, 1, 128, true, tensor.F64)
+	b.Table.SetF64(2.5, nn.T5RelativePositionBucket(1, true, 32, 128), 0) // bias for rel=+1
+
+	ctx := backend.NewContext()
+	row, _ := b.BiasRow(ctx, 0, 2) // query at position 0, keys 0..1
+	full, _ := b.Bias(ctx, 2, 2)   // the whole [2,2] table
+	fmt.Printf("%.1f %.1f\n", row.AtF64(1, 0), full.AtF64(0, 1, 0))
+	// Output:
+	// 2.5 2.5
+}

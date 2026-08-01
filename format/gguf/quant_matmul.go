@@ -32,12 +32,6 @@ const (
 	MXFP4   QuantType = tMXFP4   // OCP microscaling FP4 (gpt-oss): E2M1 elements + E8M0 block scale (§T555)
 )
 
-// QMatMul computes y[M,N] = x[M,K] · dequant(W[N,K])ᵀ where W is stored quantized
-// (row-major, K/32 blocks per row) — a quantized linear layer (weight [out,in]).
-// The weight is dequantized ONE ROW at a time (not the whole matrix), so a
-// quantized model runs without materializing full-precision weights — the point
-// of quantized inference (§T39). Accumulation is f64 (§V10); the dequant per
-// block is the ggml-verified path (§R19/§R21).
 // dotQ4KRowFn is dotQ4_KRow (scalar) by default; the amd64+simd asm kernel overrides
 // it in init() with the 2.6x VPMOVZXBD/FMA row dot (tolerance-gated).
 var dotQ4KRowFn = dotQ4_KRow
@@ -79,6 +73,12 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	wg.Wait()
 }
 
+// QMatMul computes y[M,N] = x[M,K] · dequant(W[N,K])ᵀ where W is stored quantized
+// (row-major, K/32 blocks per row) — a quantized linear layer (weight [out,in]).
+// The weight is dequantized ONE ROW at a time (not the whole matrix), so a
+// quantized model runs without materializing full-precision weights — the point
+// of quantized inference (§T39). Accumulation is f64 (§V10); the dequant per
+// block is the ggml-verified path (§R19/§R21).
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())

@@ -20,8 +20,6 @@ type Tensor struct {
 // New allocates a zeroed contiguous tensor on the default CPU device.
 func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 
-// NewOn allocates a zeroed contiguous tensor on dev, using its allocator. It
-// panics on an invalid dtype or shape (programming error).
 // maxInlineRank is the rank up to which a fresh tensor carries its shape and strides inside its
 // own allocation block.
 //
@@ -60,6 +58,8 @@ type tensorBlock struct {
 	buf [2 * maxInlineRank]int
 }
 
+// NewOn allocates a zeroed contiguous tensor on dev, using its allocator. It
+// panics on an invalid dtype or shape (programming error).
 func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	if !shape.IsValid() {
 		// shape.String() rather than a %v: passing the slice to Sprintf as an interface makes escape

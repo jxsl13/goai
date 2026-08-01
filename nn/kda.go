@@ -7,21 +7,6 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// KimiDeltaAttention computes KDA — the linear-attention core of Kimi Linear
-// (Team Kimi 2025, arXiv:2510.26692, §T559): the Gated Delta Rule with the
-// scalar forget gate refined to a PER-KEY-CHANNEL (diagonal) decay,
-//
-//	S_t = (S_{t−1}·Diag(a_t))·(I − β_t k_t k_tᵀ) + β_t v_t k_tᵀ
-//	o_t = S_t q_t          (memory S ∈ ℝ^{d_v×d_k})
-//
-// a_t ∈ (0,1)^{d_k} forgets each key channel independently (finer-grained
-// memory control — the paper's delta over GatedDeltaNet), β_t ∈ (0,1) is the
-// delta writing strength. With every channel equal (a_t = α_t·1) this IS
-// GatedDeltaNet exactly (the collapse test); Kimi Linear stacks 3 KDA layers
-// per full-attention layer (the hybrid is architecture wiring, not new math).
-// Keys and queries are L2-normalized per row (the DeltaNet convention, matching
-// GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
-// a [seq,d_k]; beta [seq,1].
 // dot4 returns Σ x[i]·y[i] with four independent accumulators, breaking the single-
 // accumulator dependency chain (each add waited a full FP-add latency on the previous)
 // so four chains retire in parallel. Reassociated (four partial sums combined
@@ -45,6 +30,21 @@ func dot4(x, y []float64) float64 {
 	return s
 }
 
+// KimiDeltaAttention computes KDA — the linear-attention core of Kimi Linear
+// (Team Kimi 2025, arXiv:2510.26692, §T559): the Gated Delta Rule with the
+// scalar forget gate refined to a PER-KEY-CHANNEL (diagonal) decay,
+//
+//	S_t = (S_{t−1}·Diag(a_t))·(I − β_t k_t k_tᵀ) + β_t v_t k_tᵀ
+//	o_t = S_t q_t          (memory S ∈ ℝ^{d_v×d_k})
+//
+// a_t ∈ (0,1)^{d_k} forgets each key channel independently (finer-grained
+// memory control — the paper's delta over GatedDeltaNet), β_t ∈ (0,1) is the
+// delta writing strength. With every channel equal (a_t = α_t·1) this IS
+// GatedDeltaNet exactly (the collapse test); Kimi Linear stacks 3 KDA layers
+// per full-attention layer (the hybrid is architecture wiring, not new math).
+// Keys and queries are L2-normalized per row (the DeltaNet convention, matching
+// GatedDeltaNet). Host f64 analysis utility. q,k [seq,d_k]; v [seq,d_v];
+// a [seq,d_k]; beta [seq,1].
 func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error) {
 	// beta is read per row as beta.AtF64(t,0), so it MUST be rank-2 [seq,1] like the
 	// others — guarding only q,k,v,a let a 1-D beta [seq] panic at that access and a
