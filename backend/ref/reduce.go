@@ -1,8 +1,8 @@
 package ref
 
 import (
-	"github.com/jxsl13/goai/internal/parallel"
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/backend"

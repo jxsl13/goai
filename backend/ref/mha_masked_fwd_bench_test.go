@@ -27,9 +27,12 @@ func benchMHAMaskedFwd(b *testing.B, dt tensor.Dtype, seq, dm, heads int) {
 	in := []*tensor.Tensor{mk(0), mk(1), mk(2), mask}
 	attrs := backend.AttnAttrs{Heads: heads}
 	ctx := backend.NewContext()
-	b.ReportAllocs(); b.ResetTimer()
+	b.ReportAllocs()
+	b.ResetTimer()
 	for range b.N {
-		if _, err := backend.Execute(ctx, backend.OpMHAMasked, in, attrs); err != nil { b.Fatal(err) }
+		if _, err := backend.Execute(ctx, backend.OpMHAMasked, in, attrs); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 func BenchmarkMHAMaskedForward_F32_256h8(b *testing.B) { benchMHAMaskedFwd(b, tensor.F32, 256, 512, 8) }

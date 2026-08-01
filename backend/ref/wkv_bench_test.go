@@ -39,5 +39,5 @@ func benchWKV(b *testing.B, dt tensor.Dtype, seq, d int) {
 		}
 	}
 }
-func BenchmarkWKV_F32_512x2048(b *testing.B) { benchWKV(b, tensor.F32, 512, 2048) }
+func BenchmarkWKV_F32_512x2048(b *testing.B)  { benchWKV(b, tensor.F32, 512, 2048) }
 func BenchmarkWKV_F32_1024x1024(b *testing.B) { benchWKV(b, tensor.F32, 1024, 1024) }

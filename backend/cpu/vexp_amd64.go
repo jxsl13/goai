@@ -340,8 +340,8 @@ func vsoftcapF32(dst, src []float32, cap float32) {
 	capV := archsimd.BroadcastFloat32x8(cap)
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		zc := archsimd.LoadFloat32x8Slice(src[i:]).Div(capV)             // x/cap
-		a := zc.AsUint32x8().And(vAbs).AsFloat32x8()                     // |x/cap|
+		zc := archsimd.LoadFloat32x8Slice(src[i:]).Div(capV)            // x/cap
+		a := zc.AsUint32x8().And(vAbs).AsFloat32x8()                    // |x/cap|
 		z := expF32x8(vZero.Sub(a.Add(a)))                              // e^(−2|x/cap|)
 		t := vOne.Sub(z).Div(vOne.Add(z))                               // tanh(|x/cap|)
 		t = t.AsUint32x8().Or(zc.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
