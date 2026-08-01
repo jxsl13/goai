@@ -230,7 +230,7 @@ func (m *TPA) contractFusedF64(a, b *tensor.Tensor, r, t int) (*tensor.Tensor, e
 			for d := 0; d < dh; d++ {
 				var s float64
 				for rr := 0; rr < r; rr++ {
-					s += as[aBase+rr*heads+h] * bs[bBase+rr*dh+d]
+					s += float64(as[aBase+rr*heads+h] * bs[bBase+rr*dh+d])
 				}
 				os[oBase+h*dh+d] = s * inv
 			}
