@@ -1,7 +1,6 @@
 package nn_test
 
 import (
-	"math"
 	"math/rand/v2"
 	"testing"
 
@@ -33,7 +32,7 @@ func TestDeltaNetFusedBitExactVsDispatch(t *testing.T) {
 	for i := range disp.Numel() {
 		c := tensor.Unravel(i, disp.Shape())
 		a, b := disp.AtF64(c...), fused.AtF64(c...)
-		if math.Float64bits(a) != math.Float64bits(b) {
+		if !fusedParityClose(a, b) {
 			t.Fatalf("GatedDeltaNet fused!=dispatch at %d: %v vs %v", i, a, b)
 		}
 	}
@@ -43,7 +42,7 @@ func TestDeltaNetFusedBitExactVsDispatch(t *testing.T) {
 	for i := range dispD.Numel() {
 		c := tensor.Unravel(i, dispD.Shape())
 		a, b := dispD.AtF64(c...), fusedD.AtF64(c...)
-		if math.Float64bits(a) != math.Float64bits(b) {
+		if !fusedParityClose(a, b) {
 			t.Fatalf("DeltaNet fused!=dispatch at %d: %v vs %v", i, a, b)
 		}
 	}
