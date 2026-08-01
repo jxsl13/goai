@@ -3,11 +3,16 @@ package ref
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// maskBufPool recycles the per-head dMask contribution buffer. See the allocation site for why a
+// recycled buffer is safe: every slot is written before it is read.
+var maskBufPool sync.Pool
 
 // mhaMaskedBackwardKernel is the backward of mhaMaskedKernel (§T730): given
 // (Q[sq,dm], K[sk,kv·dk], V[sk,kv·dk], mask, dO[sq,dm]) it returns
@@ -92,9 +97,23 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 		// worker pool, or when the dMask contribution buffer would be too large.
 		const maskBufCap = 128 << 20 // bytes
 		if rep == 1 && heads >= 2 && parallel.Workers() > 1 && (perHead || heads*sq*sk*8 <= maskBufCap) {
+			// The per-head contribution buffer is the largest allocation this kernel makes —
+			// heads*sq*sk float64, 16.7 MB at 8 heads and 512x512 — and it is FULLY OVERWRITTEN
+			// before any read: the inner loop stores maskBuf[mbBase+j] for every j, masked entries
+			// included, with a plain assignment rather than an accumulate. So recycled memory is
+			// indistinguishable from fresh zeroed memory, and the runtime's zeroing of a fresh
+			// 16.7 MB is pure waste that scales with sq*sk while the compute scales with sq*sk*dk.
 			var maskBuf []float64 // [heads*sq*sk] per-head dMask contributions (perHead==false only)
 			if !perHead {
-				maskBuf = make([]float64, heads*sq*sk)
+				n := heads * sq * sk
+				if b, _ := maskBufPool.Get().(*[]float64); b != nil && cap(*b) >= n {
+					maskBuf = (*b)[:n]
+					defer func(p *[]float64) { maskBufPool.Put(p) }(b)
+				} else {
+					maskBuf = make([]float64, n)
+					buf := maskBuf
+					defer func() { maskBufPool.Put(&buf) }()
+				}
 			}
 			parallel.Rows(heads, func(hlo, hhi int) {
 				row := make([]float64, sk)
