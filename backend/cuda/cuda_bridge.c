@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxC = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxC = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxCapC = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1966,13 +1966,43 @@ int cu_attn_softmax_cap(void* x, int rows, int cols, float scale, int offset, in
                              "  for(int j=t;j<=lim;j+=nt){ xr[j]=xr[j]*inv; }\n"
                              "}\n",
                              "attn_softmax_cap.cu", "attn_softmax_cap", &gAttnSoftmaxCap) != 0) { rc = -2; goto done; }
+    // Shared-cached FP32 twin: cache the softcapped value cap*tanhf(x*scale/cap) once
+    // in shared (base kernel recomputes it in the max AND the exp pass), FP32 exp/sum,
+    // double only in the max/sum reductions. tanhf is already f32 (#643). Same lever as
+    // attn_softmax_c, plus it eliminates the redundant softcap recompute.
+    if (!gAttnSoftmaxCapC && compile_kernel(
+                             "extern \"C\" __global__ void attn_softmax_cap_c(float* x, int rows, int cols, float scale, int offset, int seqQ, float cap){\n"
+                             "  int row=blockIdx.x; if(row>=rows) return;\n"
+                             "  int lim = (row % seqQ) + offset; if(lim>=cols) lim=cols-1;\n"
+                             "  extern __shared__ double smem[];\n"
+                             "  int t=threadIdx.x, nt=blockDim.x;\n"
+                             "  double* red=smem; float* sm=(float*)(red+nt);\n"
+                             "  float* xr = x + (size_t)row*cols;\n"
+                             "  float m=-3.4e38f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ float v=cap*tanhf(xr[j]*scale/cap); sm[j]=v; if(j<=lim && v>m) m=v; }\n"
+                             "  red[t]=(double)m; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s && red[t+s]>red[t]) red[t]=red[t+s]; __syncthreads(); }\n"
+                             "  float rowmax=(float)red[0]; __syncthreads();\n"
+                             "  float local=0.0f;\n"
+                             "  for(int j=t;j<cols;j+=nt){ if(j<=lim){ float e=expf(sm[j]-rowmax); sm[j]=e; local+=e; } else { sm[j]=0.0f; } }\n"
+                             "  red[t]=(double)local; __syncthreads();\n"
+                             "  for(int s=nt/2;s>0;s>>=1){ if(t<s) red[t]+=red[t+s]; __syncthreads(); }\n"
+                             "  float inv=(float)(1.0/red[0]);\n"
+                             "  for(int j=t;j<cols;j+=nt){ xr[j]=sm[j]*inv; }\n"
+                             "}\n",
+                             "attn_softmax_cap_c.cu", "attn_softmax_cap_c", &gAttnSoftmaxCapC) != 0) { rc = -2; goto done; }
     {
         int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
-        size_t shmem = (size_t)threads * sizeof(double);
         void* args[7];
         args[0] = &x; args[1] = &rows; args[2] = &cols; args[3] = &scale;
         args[4] = &offset; args[5] = &seqQ; args[6] = &cap;
-        rc = (cuLaunchKernel(gAttnSoftmaxCap, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        size_t cachedShmem = (size_t)threads * sizeof(double) + (size_t)cols * sizeof(float);
+        if (gAttnSoftmaxCapC && cachedShmem <= 48000) {
+            rc = (cuLaunchKernel(gAttnSoftmaxCapC, blocks, 1, 1, threads, 1, 1, cachedShmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        } else {
+            size_t shmem = (size_t)threads * sizeof(double);
+            rc = (cuLaunchKernel(gAttnSoftmaxCap, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
     }
 done:
     pthread_mutex_unlock(&gLock);
