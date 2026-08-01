@@ -3390,11 +3390,12 @@ func stridedInnerReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 				out = append(out, finding{
 					pos:      fset.Position(n.Pos()),
 					category: "strided-inner-reduction",
-					msg: fmt.Sprintf("nested %s/%s loop reduces over %s[%s*%s + %s] — the INNER var %s is the"+
-						" high-stride (×%s) part while the OUTER var %s is contiguous, so the inner loop strides"+
-						" %s by %s every step (cache-thrashing). Interchange to %s-outer/%s-inner so %s is walked"+
-						" contiguously in %s — bit-identical (same ascending-%s reduction order per element)."+
-						" Shipped: MLA value-mix. Benchmark the kernel.",
+					msg: fmt.Sprintf("nested %s/%s loop reduces-over or updates-in-place %s[%s*%s + %s] — the INNER"+
+						" var %s is the high-stride (×%s) part while the OUTER var %s is contiguous, so the inner"+
+						" loop strides %s by %s every step (cache-thrashing). Interchange to %s-outer/%s-inner so %s"+
+						" is walked contiguously in %s — bit-identical (reductions keep the same ascending-%s order;"+
+						" element-wise updates like S[r]*=a[c] are trivially bit-exact). Shipped: MLA value-mix"+
+						" (reduction), KimiDeltaAttention decay #658 (update). Benchmark the kernel.",
 						oName, jName, base, jName, stride, oName, jName, stride, oName, base, stride,
 						jName, oName, base, oName, jName),
 				})
@@ -3411,10 +3412,18 @@ func stridedInnerReductionFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 // and oName the additive (contiguous) part, gated on a += reduction being present. Returns the
 // array base and the textual stride operand.
 func stridedInnerAccess(root ast.Node, jName, oName string) (string, string, bool) {
+	// Gate on a compute op-assign in the loop so pure strided reads (intentional gathers,
+	// dst[o]=ARR[strided]) are not flagged: += is the reduction case (acc += ARR[strided]);
+	// *= / -= catch the in-place strided UPDATE case (ARR[strided] *= expr — e.g. a per-
+	// channel decay S[r*dk+c] *= a[c]), which the interchange fixes just as well and, being
+	// element-wise, is trivially bit-exact. Shipped update case: KimiDeltaAttention decay #658.
 	hasReduce := false
 	ast.Inspect(root, func(n ast.Node) bool {
-		if as, ok := n.(*ast.AssignStmt); ok && as.Tok == token.ADD_ASSIGN {
-			hasReduce = true
+		if as, ok := n.(*ast.AssignStmt); ok {
+			switch as.Tok {
+			case token.ADD_ASSIGN, token.MUL_ASSIGN, token.SUB_ASSIGN:
+				hasReduce = true
+			}
 		}
 		return true
 	})
