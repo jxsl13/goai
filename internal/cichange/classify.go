@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/printer"
 	"go/token"
+	"os"
 	"os/exec"
 	"strings"
 )
@@ -147,8 +148,30 @@ func usesCgo(f *ast.File) bool {
 }
 
 // gitRun executes git with args in dir and returns stdout.
+//
+// The environment is scrubbed of GIT_* on purpose. dir is this function's whole contract, and
+// GIT_DIR silently overrides it: with that variable set, git ignores the working directory and
+// operates on the repository it names instead. Git EXPORTS GIT_DIR for every hook it runs, so a
+// pre-push hook that invokes this tool would have it classify the hook's own repository rather
+// than the one it was pointed at — and the same inheritance let this package's test harness commit
+// into the developer's checkout (see gitFreeEnv's floor in the test file).
 func gitRun(dir string, args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
+	cmd.Env = gitFreeEnv()
 	return cmd.Output()
+}
+
+// gitFreeEnv returns the process environment with every GIT_* variable removed, so a git command
+// obeys the directory it is given rather than an inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE.
+func gitFreeEnv() []string {
+	env := os.Environ()
+	out := env[:0:0]
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
