@@ -145,3 +145,25 @@ func TestQuantizeDoesNotModifyInput(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkReadRawSynth measures the quantized-load path, which had no instrumentation at all.
+// ReadRaw is what a caller uses to load a model WITHOUT materializing full-precision weights, so
+// its cost is the one that matters for quantized inference; Read's dequantization dominates
+// everything on the other path and hid it.
+func BenchmarkReadRawSynth(b *testing.B) {
+	path := writeSynthModel(b, 64, 512, 512)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if _, err := ReadRaw(bytes.NewReader(data)); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := ReadRaw(bytes.NewReader(data)); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
