@@ -330,9 +330,46 @@ func parse(r io.Reader) (*parsed, error) {
 			return nil, fmt.Errorf("gguf: skip padding: %w", err)
 		}
 	}
-	data, err := io.ReadAll(rd.r)
-	if err != nil {
-		return nil, fmt.Errorf("gguf: read data: %w", err)
+	// The data section is sized from the tensor table rather than grown by io.ReadAll. ReadAll
+	// discovers the length by reallocating at about 1.25x, so a large section is allocated several
+	// times over and copied on each growth; the table already says exactly how far the last tensor
+	// reaches. This needs no Stat and no seekable reader — it is derived from bytes already parsed.
+	//
+	// A hostile or truncated file is handled BETTER by this form, not worse: io.ReadFull fails with
+	// ErrUnexpectedEOF naming the shortfall, where ReadAll would return a short section and leave
+	// decodeTensor to report the same file as a per-tensor range error later.
+	// maxPresizedSection bounds what a DECLARED size may make this function allocate. A table is
+	// untrusted input: without this, a file claiming a petabyte-long tensor turns a parse into an
+	// out-of-memory kill, and one claiming an offset near 2^64 overflowed the addition and panicked
+	// in makeslice — which is exactly what the hostile-offset test caught on the first draft here.
+	// Anything above the bound falls back to discovering the length by reading, which allocates
+	// only what the file actually contains and lets decodeTensor report the range error per tensor.
+	const maxPresizedSection = 1 << 40 // 1 TiB: larger than any real model, smaller than a DoS
+	var need uint64
+	for _, ti := range infos {
+		sz, err := byteSize(ti.ggType, ti.shape.Numel())
+		if err != nil {
+			return nil, fmt.Errorf("gguf: tensor %q: %w", ti.name, err)
+		}
+		if ti.offset > math.MaxUint64-uint64(sz) { // subtraction form: the sum would wrap (§B47)
+			need = 0
+			break
+		}
+		if end := ti.offset + uint64(sz); end > need { // offsets are validated per tensor at decode
+			need = end
+		}
+	}
+	var data []byte
+	if need == 0 || need > maxPresizedSection {
+		var err error
+		if data, err = io.ReadAll(rd.r); err != nil {
+			return nil, fmt.Errorf("gguf: read data: %w", err)
+		}
+	} else {
+		data = make([]byte, need)
+		if _, err := io.ReadFull(rd.r, data); err != nil {
+			return nil, fmt.Errorf("gguf: read data (%d bytes): %w", need, err)
+		}
 	}
 
 	return &parsed{version: version, meta: meta, infos: infos, data: data}, nil
