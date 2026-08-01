@@ -3963,8 +3963,20 @@ func Decay(S, at []float64, dv, dk int) {
 		}
 	}
 }`
-	if got := countCat(scanSrc(t, src))["strided-inner-walk"]; got != 1 {
+	fs := scanSrc(t, src)
+	if got := countCat(fs)["strided-inner-walk"]; got != 1 {
 		t.Fatalf("want 1 strided-inner-walk on the column walk, got %d", got)
+	}
+	// The three measurements are what let a reader judge whether this shape is worth acting on at
+	// their site, and the interchange one names the cheapest case to look for. They must survive
+	// into the advice.
+	for _, f := range fs {
+		if f.category != "strided-inner-walk" {
+			continue
+		}
+		if !containsAll(f.msg, "-35.6%", "interchange is the whole fix") {
+			t.Fatalf("message omits the interchange measurement:\n%s", f.msg)
+		}
 	}
 }
 

@@ -27,15 +27,25 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 	// Bulk-extract the values: read contiguous storage directly instead of the
 	// per-element AtF64(Unravel(...)) dispatch (§base-perf: the Unravel/AtF64
 	// anti-pattern; ~2.4× on a whole Quantize call, docs/perf-notes-lowlevel.md).
-	x := make([]float32, n)
+	// The contiguous F32 arm ALIASES the storage rather than copying it. Every quantize* below
+	// only reads its argument — checked across all eight, and it is what their block-scan shape
+	// requires — so the copy was a full-size allocation and memmove for nothing. The other arms
+	// still materialize, because they convert.
+	//
+	// This aliases the CALLER'S tensor when it is already contiguous, so the read-only property is
+	// not a nicety here: an encoder that wrote to its input would corrupt the model being saved.
+	// TestQuantizeDoesNotModifyInput pins it.
+	var x []float32
 	switch c := t.Contiguous(); c.Dtype() {
 	case tensor.F32:
-		copy(x, c.Storage().F32())
+		x = c.Storage().F32()[:n]
 	case tensor.F64:
+		x = make([]float32, n)
 		for i, v := range c.Storage().F64() {
 			x[i] = float32(v)
 		}
 	default:
+		x = make([]float32, n)
 		for i := range n {
 			x[i] = float32(t.AtF64(tensor.Unravel(i, t.Shape())...))
 		}

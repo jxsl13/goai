@@ -118,3 +118,30 @@ func TestParseTruncatedDataSection(t *testing.T) {
 		t.Fatal("a truncated data section parsed without error")
 	}
 }
+
+// TestQuantizeDoesNotModifyInput pins the property that lets the contiguous F32 path alias the
+// caller's storage instead of copying it: no encoder writes to the values it is given.
+//
+// This is not a style assertion. With the alias in place, an encoder that wrote to its input would
+// silently corrupt the tensor being saved — the model on disk and the model in memory would
+// disagree, and nothing else would notice.
+func TestQuantizeDoesNotModifyInput(t *testing.T) {
+	const n = 512
+	for _, qt := range []QuantType{Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4} {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		s := x.Storage().F32()
+		for i := range s {
+			s[i] = float32((i*7)%101-50) * 0.02
+		}
+		before := make([]float32, n)
+		copy(before, s)
+		if _, err := Quantize(x, qt); err != nil {
+			t.Fatalf("quant %d: %v", qt, err)
+		}
+		for i := range s {
+			if s[i] != before[i] {
+				t.Fatalf("quant %d modified its input at %d: %v -> %v", qt, i, before[i], s[i])
+			}
+		}
+	}
+}

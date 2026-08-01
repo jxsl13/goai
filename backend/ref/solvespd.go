@@ -59,20 +59,43 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		}
 		return l.AtF64(i, j)
 	}
-	for c := range k {
-		for i := range n {
-			s := rhs(i, c)
-			for p := range i {
-				s -= lat(i, p) * y[p*k+c]
-			}
-			y[i*k+c] = s / lat(i, i)
+	// The right-hand-side column is the INNER loop, not the outer one. With c outermost every step
+	// of the substitution jumped k elements through y and x and re-fetched one L element per
+	// innermost iteration; with c innermost each step walks two contiguous rows and the L element
+	// is loop-invariant, loaded once per (i,p) instead of once per (i,p,c).
+	//
+	// BIT-IDENTICAL: for each output (i,c) the subtractions still run over ascending p with the
+	// same two operands and the final divide uses the same L[i,i]. Only the interleaving of
+	// INDEPENDENT (i,c) results changes, and the accumulator moving from a register to a float64
+	// slot is exact on this target — there are no extended-precision intermediates.
+	for i := range n {
+		yi := y[i*k : i*k+k]
+		for c := range k {
+			yi[c] = rhs(i, c)
 		}
-		for i := n - 1; i >= 0; i-- {
-			s := y[i*k+c]
-			for p := i + 1; p < n; p++ {
-				s -= lat(p, i) * x[p*k+c] // Lᵀ[i,p] = L[p,i]
+		for p := range i {
+			lip, yp := lat(i, p), y[p*k:p*k+k]
+			for c := range k {
+				yi[c] -= lip * yp[c]
 			}
-			x[i*k+c] = s / lat(i, i)
+		}
+		d := lat(i, i)
+		for c := range k {
+			yi[c] /= d
+		}
+	}
+	for i := n - 1; i >= 0; i-- {
+		xi := x[i*k : i*k+k]
+		copy(xi, y[i*k:i*k+k])
+		for p := i + 1; p < n; p++ {
+			lpi, xp := lat(p, i), x[p*k:p*k+k] // Lᵀ[i,p] = L[p,i]
+			for c := range k {
+				xi[c] -= lpi * xp[c]
+			}
+		}
+		d := lat(i, i)
+		for c := range k {
+			xi[c] /= d
 		}
 	}
 
