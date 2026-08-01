@@ -117,7 +117,8 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 						}
 					}
 					copy(os[i*dm+qOff:i*dm+qOff+dk], obuf)
-				}}
+				}
+			}
 			if heads >= 2 && parallel.Workers() > 1 {
 				// Forward has NO cross-head accumulation: head h writes DISJOINT output
 				// columns [h·dk,(h+1)·dk) and inputs are read-only, so heads run fully in
