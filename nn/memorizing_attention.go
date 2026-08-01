@@ -297,7 +297,9 @@ func memScoresFusedF64(qh, kg *tensor.Tensor, t, topM, dk int) *tensor.Tensor {
 			kb := kBase + mm*dk
 			var s float64
 			for d := 0; d < dk; d++ {
-				s += qs[qBase+d] * ks[kb+d]
+				// rounded before the add: a bare mul-add contracts to FMA on arm64 only, which
+				// is what broke this path's bit-exact pin against dispatch while amd64 CI passed.
+				s += float64(qs[qBase+d] * ks[kb+d])
 			}
 			os[oBase+mm] = s
 		}
@@ -321,7 +323,7 @@ func memOutFusedF64(prob, vg *tensor.Tensor, t, topM, dk int) *tensor.Tensor {
 			p := ps[pBase+mm]
 			vb := vBase + mm*dk
 			for d := 0; d < dk; d++ {
-				os[oBase+d] += p * vs[vb+d]
+				os[oBase+d] += float64(p * vs[vb+d])
 			}
 		}
 	}
