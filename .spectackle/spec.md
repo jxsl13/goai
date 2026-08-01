@@ -428,3 +428,6 @@ IF a layout or interchange transform is judged against existing benchmark cells,
 
 ## INTERCHANGE-BEFORE-TRANSPOSE-001
 IF a column-walked operand sits in a nest whose strided index is carried by an accumulating loop, THEN the developer SHALL move that loop outermost rather than transposing — one kernel measured -38 percent at zero memory against -12.6 percent at +38 percent bytes.
+
+## A-SELF-DEFINED-COMPARISON-IS-A-PROOF-NOT-A-GATE-001
+IF a parity test defines both implementations it compares, THEN the developer SHALL extract the shipped one into a named function the test CALLS — a self-defined pair proved the identity and stayed green when the real code was mutated.
