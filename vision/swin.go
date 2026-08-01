@@ -617,6 +617,98 @@ func (b *SwinBlock) dtype() tensor.Dtype { return b.Wq.Dtype() }
 // windows, then per window and per head computes softmax(QKᵀ/√dₖ + relBias +
 // mask)·V, concatenates heads and windows, and applies the output projection.
 // masks is nil for W-MSA or a per-window additive [M²,M²] mask for SW-MSA.
+// swinF32 and swinF64 read a tensor's typed backing slice, so the fused attention arm below can be
+// written once over a type parameter instead of twice per dtype.
+func swinF32(t *tensor.Tensor) []float32 { return t.Storage().F32() }
+func swinF64(t *tensor.Tensor) []float64 { return t.Storage().F64() }
+
+// swinFusedWindowAttn is the inference arm of windowedAttention: same arithmetic, far fewer
+// dispatches.
+//
+// The per-window per-head loop was about 95% of this package's backend dispatches for about 2% of
+// its arithmetic — roughly ten Execute calls on 256-element tensors per (window, head) pair, each
+// one an output allocation plus an Attrs interface box. Seven of the ten are pure DATA MOVEMENT or
+// elementwise scaling: three column slices, one transpose, the 1/sqrt(dk) scale, the relative-bias
+// add, the mask add, and then two levels of Concat to reassemble what the slices took apart. This
+// arm does all of that as index arithmetic over the packed storage and keeps only the three calls
+// that are real arithmetic: Q·Kᵀ, the softmax, and the weights·V.
+//
+// BIT-IDENTITY. The movement is bit-identical by construction — no value is computed, only copied.
+// The scale/bias/mask chain is bit-identical BECAUSE it is written as three separately rounded
+// statements: fused into one expression, arm64 would contract `s*inv + bias` into an FMA and round
+// once where the dispatched path rounds twice (§PS3025). The two matmuls and the softmax are the
+// backend's own kernels, unchanged, so they cannot drift.
+//
+// The scratch tensors are reused across iterations. That is safe only because this arm runs with no
+// recorder: a taped run keeps its inputs alive for the backward pass, which is why the caller gates
+// on ctx.Recorder == nil and falls back to the dispatched path for training.
+func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock, q, k, v *tensor.Tensor,
+	numWin, n, dk int, inv T, biases, masks []*tensor.Tensor, get func(*tensor.Tensor) []T) (*tensor.Tensor, error) {
+	qs, ks, vs := get(q), get(k), get(v)
+	out := tensor.New(b.dtype(), tensor.Shape{numWin * n, b.Dim})
+	os := get(out)
+	qh := tensor.New(b.dtype(), tensor.Shape{n, dk})
+	kt := tensor.New(b.dtype(), tensor.Shape{dk, n})
+	vh := tensor.New(b.dtype(), tensor.Shape{n, dk})
+	qhs, kts, vhs := get(qh), get(kt), get(vh)
+	for w := range numWin {
+		base := w * n * b.Dim
+		var mk []T
+		if masks != nil {
+			mk = get(masks[w%len(masks)])
+		}
+		for hh := range b.Heads {
+			off := base + hh*dk
+			for i := range n {
+				row := off + i*b.Dim
+				copy(qhs[i*dk:(i+1)*dk], qs[row:row+dk])
+				copy(vhs[i*dk:(i+1)*dk], vs[row:row+dk])
+				krow := ks[row : row+dk]
+				for d := range dk {
+					kts[d*n+i] = krow[d] // the transpose, as the write pattern
+				}
+			}
+			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
+			if err != nil {
+				return nil, err
+			}
+			ss := get(sc)
+			var bh []T
+			if biases != nil {
+				bh = get(biases[hh])
+			}
+			for i := range ss {
+				// Each step is wrapped in a conversion to the type parameter. Separate STATEMENTS
+				// are not enough: the Go spec lets an implementation fuse floating-point operations
+				// ACROSS statements, and on arm64 it does — this loop written as three plain
+				// assignments contracted into an FMADD and diverged from the dispatched path by one
+				// ulp on 66 of 256 logits, which the bit-identity gate caught. Only an explicit
+				// conversion forces the intermediate rounding (§PS3025).
+				ss[i] = T(ss[i] * inv)
+				if bh != nil {
+					ss[i] = T(ss[i] + bh[i])
+				}
+				if mk != nil {
+					ss[i] = T(ss[i] + mk[i])
+				}
+			}
+			wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc)
+			if err != nil {
+				return nil, err
+			}
+			hd, err := swinExec1(ctx, backend.OpMatMul, nil, wgt, vh)
+			if err != nil {
+				return nil, err
+			}
+			hs := get(hd)
+			for i := range n { // scattering here IS both levels of Concat, for free
+				copy(os[off+i*b.Dim:off+i*b.Dim+dk], hs[i*dk:(i+1)*dk])
+			}
+		}
+	}
+	return swinExec1(ctx, backend.OpMatMul, nil, out, b.Wo)
+}
+
 func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor, numWin, m int, masks []*tensor.Tensor) (*tensor.Tensor, error) {
 	n := m * m
 	dk := b.Dim / b.Heads
@@ -640,6 +732,19 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if biases[hh], err = b.Rel.headBias(ctx, hh); err != nil {
 				return nil, err
 			}
+		}
+	}
+	// The fused arm computes the same values with three dispatches per (window, head) instead of
+	// about ten. It is gated on there being no recorder: a taped run needs every intermediate on the
+	// tape for backprop, so training keeps the dispatched path below.
+	if ctx.Recorder == nil {
+		switch b.dtype() {
+		case tensor.F32:
+			return swinFusedWindowAttn(ctx, b, q, k, v, numWin, n, dk,
+				float32(1/math.Sqrt(float64(dk))), biases, masks, swinF32)
+		case tensor.F64:
+			return swinFusedWindowAttn(ctx, b, q, k, v, numWin, n, dk,
+				1/math.Sqrt(float64(dk)), biases, masks, swinF64)
 		}
 	}
 	rowSlice := func(t *tensor.Tensor, w int) (*tensor.Tensor, error) {
