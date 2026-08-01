@@ -51,7 +51,7 @@ static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gR
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
-static CUfunction gArgmax = NULL, gLayerNorm = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
+static CUfunction gArgmax = NULL, gLayerNorm = NULL, gLayerNormC = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
 static int ensure_init(void); // fwd decls (defined later)
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
@@ -1726,23 +1726,54 @@ int cu_layernorm_f32(const void* in, void* out, const void* gamma, const void* b
                            "  int t=threadIdx.x, nt=blockDim.x;\n"
                            "  const float* xr = in + (size_t)row*cols;\n"
                            "  float* yr = out + (size_t)row*cols;\n"
-                           "  double s=0.0; for(int j=t;j<cols;j+=nt) s+=(double)xr[j];\n"
-                           "  sh[t]=s; __syncthreads();\n"
+                           "  float s=0.0f; for(int j=t;j<cols;j+=nt) s+=xr[j];\n"
+                           "  sh[t]=(double)s; __syncthreads();\n"
                            "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
-                           "  double mean=sh[0]/(double)cols; __syncthreads();\n"
-                           "  double v=0.0; for(int j=t;j<cols;j+=nt){ double d=(double)xr[j]-mean; v+=d*d; }\n"
-                           "  sh[t]=v; __syncthreads();\n"
+                           "  float mean=(float)(sh[0]/(double)cols); __syncthreads();\n"
+                           "  float v=0.0f; for(int j=t;j<cols;j+=nt){ float d=xr[j]-mean; v+=d*d; }\n"
+                           "  sh[t]=(double)v; __syncthreads();\n"
                            "  for(int k=nt/2;k>0;k>>=1){ if(t<k) sh[t]+=sh[t+k]; __syncthreads(); }\n"
                            "  double var=sh[0]/(double)cols;\n"
                            "  float inv=(float)(1.0/sqrt(var+(double)eps));\n"
-                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(float)(((double)xr[j]-mean)*inv*(double)g[j]+(double)b[j]); }\n"
+                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(xr[j]-mean)*inv*g[j]+b[j]; }\n"
                            "}\n",
                            "layernorm.cu", "layernorm_f32", &gLayerNorm) != 0) { rc = -2; goto done; }
+    // Shared-cached twin: LayerNorm reads the row from global THREE times (sum, variance,
+    // normalize). Cache it into shared on the first read and reuse it for the variance and
+    // normalize passes — 1 global read + 1 write instead of 3 reads + 1 write. Mean/variance
+    // reductions stay double (as in the non-cached kernel); per-element math stays FP32.
+    // Bit-identical to layernorm_f32 (same values, same order); used when the reduction
+    // doubles + the cached FP32 row fit the 48KB shared budget.
+    if (!gLayerNormC && compile_kernel(
+                           "extern \"C\" __global__ void layernorm_f32c(const float* in, float* out, const float* g, const float* b, int rows, int cols, float eps){\n"
+                           "  int row = blockIdx.x; if (row>=rows) return;\n"
+                           "  extern __shared__ double smem[];\n"
+                           "  int t=threadIdx.x, nt=blockDim.x;\n"
+                           "  double* red=smem; float* sm=(float*)(red+nt);\n"
+                           "  const float* xr = in + (size_t)row*cols;\n"
+                           "  float* yr = out + (size_t)row*cols;\n"
+                           "  float s=0.0f; for(int j=t;j<cols;j+=nt){ float xv=xr[j]; sm[j]=xv; s+=xv; }\n"
+                           "  red[t]=(double)s; __syncthreads();\n"
+                           "  for(int k=nt/2;k>0;k>>=1){ if(t<k) red[t]+=red[t+k]; __syncthreads(); }\n"
+                           "  float mean=(float)(red[0]/(double)cols); __syncthreads();\n"
+                           "  float v=0.0f; for(int j=t;j<cols;j+=nt){ float d=sm[j]-mean; v+=d*d; }\n"
+                           "  red[t]=(double)v; __syncthreads();\n"
+                           "  for(int k=nt/2;k>0;k>>=1){ if(t<k) red[t]+=red[t+k]; __syncthreads(); }\n"
+                           "  double var=red[0]/(double)cols;\n"
+                           "  float inv=(float)(1.0/sqrt(var+(double)eps));\n"
+                           "  for(int j=t;j<cols;j+=nt){ yr[j]=(sm[j]-mean)*inv*g[j]+b[j]; }\n"
+                           "}\n",
+                           "layernorm_c.cu", "layernorm_f32c", &gLayerNormC) != 0) { rc = -2; goto done; }
     {
         int threads = 256, blocks = rows; if (blocks < 1) blocks = 1;
-        size_t shmem = (size_t)threads * sizeof(double);
         void* args[7] = {&in, &out, &gamma, &beta, &rows, &cols, &eps};
-        rc = (cuLaunchKernel(gLayerNorm, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        size_t cachedShmem = (size_t)threads * sizeof(double) + (size_t)cols * sizeof(float);
+        if (gLayerNormC && cachedShmem <= 48000) {
+            rc = (cuLaunchKernel(gLayerNormC, blocks, 1, 1, threads, 1, 1, cachedShmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        } else {
+            size_t shmem = (size_t)threads * sizeof(double);
+            rc = (cuLaunchKernel(gLayerNorm, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
     }
 done:
     pthread_mutex_unlock(&gLock);
