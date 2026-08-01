@@ -123,20 +123,20 @@ func (e *EMA) Update() error {
 			case tensor.F64:
 				d := p.Storage().F64()
 				for i := range avg {
-					avg[i] = e.Decay*avg[i] + (1-e.Decay)*d[i]
+					avg[i] = float64(e.Decay*avg[i]) + float64((1-e.Decay)*d[i])
 				}
 				continue
 			case tensor.F32:
 				d := p.Storage().F32()
 				for i := range avg {
-					avg[i] = e.Decay*avg[i] + (1-e.Decay)*float64(d[i])
+					avg[i] = float64(e.Decay*avg[i]) + float64((1-e.Decay)*float64(d[i]))
 				}
 				continue
 			}
 		}
 		idx := 0
 		readGen(p, func(w float64) {
-			avg[idx] = e.Decay*avg[idx] + (1-e.Decay)*w
+			avg[idx] = float64(e.Decay*avg[idx]) + float64((1-e.Decay)*w)
 			idx++
 		})
 	}
