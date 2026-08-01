@@ -345,6 +345,20 @@ func tanhF32(x float32) float32 {
 // tanh at cap=1, so this is that lane on x/cap, re-scaled by cap.
 func softcapF32(x, cap float32) float32 { return cap * tanhF32(x/cap) }
 
+// softplusF32 is the scalar bit-twin of one softplusF32x8 lane: the overflow-safe
+// softplus(x) = max(x,0) + log(1+e^(−|x|)), evaluated f32-native through the same
+// expF32/logF32 primitives. The log argument 1+e^(−|x|) ∈ (1,2] is always well
+// conditioned, so no branch on the sign of x is needed (unlike ref's f64 form).
+// The len%8 remainder tail and the no-AVX fallback.
+func softplusF32(x float32) float32 {
+	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
+	relu := x
+	if relu < 0 {
+		relu = 0
+	}
+	return relu + logF32(1+expF32(-a))
+}
+
 // logF32 is the scalar instantiation of the vlog pipeline — the tail lanes
 // (len%4) and the type-check fallback build use it. Same operations per
 // element as the NEON lanes (only FMA contraction may differ); the special-

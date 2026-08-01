@@ -131,6 +131,15 @@ func vsoftplusF64(dst, src []float64) {
 	}
 }
 
+// vsoftplusF32 exists only so softplusKernelCPU type-checks off the SIMD build;
+// vexpF32Fast is false here, so the F32 softplus fast path is not taken (the
+// scalar f64 branch runs) and this is dead at run time. Scalar twin regardless.
+func vsoftplusF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = softplusF32(v)
+	}
+}
+
 // vsoftcapF64 exists only so softCapKernelCPU type-checks off the amd64 SIMD
 // build; vexpF64Fast is false here, so it is dead at run time.
 func vsoftcapF64(dst, src []float64, cap float64) {
