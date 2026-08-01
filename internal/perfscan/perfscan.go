@@ -7775,7 +7775,16 @@ func columnWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" folded into two row-major passes; classic ballTree.build did one per"+
 						" dimension beside an enclose() that already walked rows, -18.71%% on"+
 						" BenchmarkKNNFit. Interchange usually preserves each accumulator's summation"+
-						" order, but CONFIRM that at the site rather than assuming it.",
+						" order, but CONFIRM that at the site rather than assuming it."+
+						" INTERCHANGE BEFORE TRANSPOSE, measured head to head on ONE kernel: a QR"+
+						" VJP whose two dominant terms both read down a column went -37.7%% and"+
+						" -38.2%% by moving the accumulating loop outermost, at ZERO extra memory,"+
+						" while transposing the same operands — the remedy that paid on three"+
+						" other kernels — gave only -7.3%% and -12.6%% and cost 38%% more bytes and"+
+						" 195 more allocations for the intermediates. The discriminator is whether"+
+						" the loop carrying the strided index is INDEPENDENT: if it merely"+
+						" accumulates, it can move outermost and no copy is needed at all."+
+						" Transpose only when that loop cannot move.",
 						srcText(fset, ix), inner, outer, inner),
 				})
 				return true

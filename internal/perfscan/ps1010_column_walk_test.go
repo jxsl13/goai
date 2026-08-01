@@ -57,8 +57,15 @@ func f(pts [][]float64, idx []int, d int) {
 			if !strings.Contains(msgs[0], "-23.74%") {
 				t.Fatalf("message omits the measured evidence: %s", msgs[0])
 			}
+			// The head-to-head is what stops a reader reaching for the more expensive remedy
+			// first: on one kernel interchange beat transposing three to one and cost nothing.
+			if !strings.Contains(msgs[0], "INTERCHANGE BEFORE TRANSPOSE") ||
+				!strings.Contains(msgs[0], "ZERO extra memory") {
+				t.Fatalf("message omits the interchange-before-transpose evidence: %s", msgs[0])
+			}
 		})
 	}
+
 }
 
 // Silence floors, one clause each.
