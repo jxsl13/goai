@@ -476,3 +476,23 @@ and ScheduleFreeSGD. Most are elementwise variants where the family evidence pre
 interesting, but PSGDKron (Kronecker-factored preconditioning) and SAM (two forward-backward
 passes per step) are structurally different from the thirteen measured and are the two worth
 benchmarking if anyone extends this.
+
+## T-01KYZ1GQ46EA1BQQDTWA0NEG6W T1039 FMA contraction broke 4 fused-parity pins on arm64; fixed, 6 remain
+kind: task
+state: draft
+created: 2026-08-01
+targets: nn/tpa.go, nn/kan.go, nn/memorizing_attention.go, nn/multi_token_attention.go
+
+PR 704. main was red with 10 nn failures, all of the fused-path-versus-dispatch bit-exactness family; this closes the 4 the recent merge batch introduced and diagnoses the mechanism for all of them.
+
+ROOT CAUSE. Go CONTRACTS `a*b + c` into a fused multiply-add on arm64 and does NOT on amd64. An FMA rounds once where a separate multiply and add round twice, so any fused path written `acc += x * y` computes a different number per architecture. Every one of these tests pins a fused path byte-for-byte against a dispatch path that does not contract the same way, so the pin holds on amd64 and fails on arm64 by exactly one ulp. That is why the PRs merged green: CI runs amd64. The failure is invisible there and unavoidable on any Apple-silicon machine.
+
+THE FIX IS AN EXPLICIT CONVERSION, NOT A VARIABLE. Assigning the product to a local first leaves contraction in place - verified, all 32 FMADDD remained in the TPA loop. Only float64(x*y) suppresses it, which is what the Go spec actually guarantees. That distinction cost one wrong attempt and is the single most useful thing to carry forward.
+
+FIXED, each verified individually: TPA contractFusedF64 (0.14259979878693926 vs ...24), KAN fusedSpline on both its accumulations (1.11e-16), MemorizingAttention memScores and the output accumulation, MTA headConvFused on BOTH dtype arms - the F32 arm is where the test happened to fail, but F64 has the identical shape. nn failures 10 to 6.
+
+KAN is worth singling out: its doc comment already asserted the fused path used "no FMA". On arm64 that was simply untrue, and nothing checked it.
+
+SIX REMAIN, ALL PRE-DATING THE MERGE BATCH: DeltaNet, EMAUpdate, GLA, HGRNSeq, RGLRUSeq, TitansLinear. Same one-ulp signature, but NOT the same fix. Two attempts failed and were reverted rather than shipped: a blanket wrap of every mul-add across deltanet, gla and titans changed nothing, and for EMA neither forcing no-FMA on both paths nor aligning the fast path's expression shape to the reference closed it - the second moved the failing element without fixing it. EMA's reference is a TEST-LOCAL slowEMAUpdate rather than the production generic path, so the two shapes that must agree are not the two that look like they should. Each needs its own diagnosis.
+
+A METHOD ERROR WORTH RECORDING. An earlier report claimed all four fixed. It was wrong: the verification ran on a tree built from the pre-merge main plus one cherry-pick, where three of the four tests DID NOT EXIST, so the -run filter matched nothing and printed ok. A filtered test run proves nothing unless the tests are present - the same class as BENCH-PROVE-THE-CODE-RAN-001, applied to tests rather than benchmarks.

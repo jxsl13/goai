@@ -208,3 +208,6 @@ Rationale: The fused deep-memory Titans path shipped describing itself as bit-ex
 
 ## NN-EXEC-CLONES-BYPASS-THE-POOLS-001
 IF an nn block type is given its own exec dispatch wrapper, THEN the implementing agent SHALL route it through nnIns1Pool..nnIns3Pool instead, since 43 clone wrappers already bypass them across 450 call sites.
+
+## AN-EXPLICIT-CONVERSION-SUPPRESSES-FMA-A-VARIABLE-DOES-NOT-001
+IF a fused path is pinned bit-exact against a path that does not contract the same way, THEN the implementing agent SHALL wrap each product in float64(...); assigning it to a local left all 32 FMADDD in place and arm64 still diverged by 1 ulp.

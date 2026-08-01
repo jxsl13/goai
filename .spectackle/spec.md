@@ -983,3 +983,6 @@ IF a long-lived branch is to be landed after parallel work merged into main, THE
 
 ## GREEN-CHECKS-PROVE-THE-BASE-NOT-THE-TARGET-001
 IF a PR is merged on checks earned against an older base, THEN the implementing agent SHALL rebase and re-run before merging when the target has moved, since 4 fused-parity tests landed red by 1 ulp with all 15 checks green.
+
+## A-FILTERED-TEST-RUN-PROVES-NOTHING-IF-THE-TEST-IS-ABSENT-001
+IF a -run filter reports ok on a tree assembled from an older base, THEN the implementing agent SHALL confirm each named test EXISTS there, since 3 of 4 did not and the empty match read as 3 passes.
