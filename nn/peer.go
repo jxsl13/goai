@@ -198,21 +198,75 @@ func (p *PEER) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, in
 
 // peerTopIndices returns the indices of the k largest values of s, ordered by
 // value descending with ties broken by ascending index (deterministic routing).
-func peerTopIndices(s []float64, k int) []int {
-	idx := make([]int, len(s))
-	for i := range idx {
-		idx[i] = i
+// topKByPref returns the indices [0,length) of the k elements that come FIRST under the
+// strict total order `pref` (pref(a,b) reports index a strictly before index b), in pref
+// order. For k a large fraction of length a full pdqsort is used (bit-identical because pref
+// is a total order — no genuine ties); for k ≪ length a size-k min-heap selects the top-k in
+// O(length·log k) instead of O(length·log length). Same total order ⇒ the selected set and
+// its order are identical to sorting the whole slice and taking the prefix.
+func topKByPref(length, k int, pref func(a, b int) bool) []int {
+	if k > length {
+		k = length
 	}
-	sort.SliceStable(idx, func(a, b int) bool {
-		if s[idx[a]] != s[idx[b]] {
-			return s[idx[a]] > s[idx[b]]
+	if k <= 0 {
+		return nil
+	}
+	if k*3 >= length {
+		all := make([]int, length)
+		for i := range all {
+			all[i] = i
 		}
-		return idx[a] < idx[b]
-	})
-	if k > len(idx) {
-		k = len(idx)
+		sort.Slice(all, func(a, b int) bool { return pref(all[a], all[b]) })
+		return all[:k]
 	}
-	return idx[:k]
+	// Min-heap keyed by "less preferred at the root" (worse(a,b) == pref(b,a)); a more-
+	// preferred candidate evicts the root.
+	worse := func(a, b int) bool { return pref(b, a) }
+	heap := make([]int, 0, k)
+	siftDown := func(j int) {
+		for {
+			l, r, m := 2*j+1, 2*j+2, j
+			if l < len(heap) && worse(heap[l], heap[m]) {
+				m = l
+			}
+			if r < len(heap) && worse(heap[r], heap[m]) {
+				m = r
+			}
+			if m == j {
+				return
+			}
+			heap[j], heap[m] = heap[m], heap[j]
+			j = m
+		}
+	}
+	for i := 0; i < length; i++ {
+		if len(heap) < k {
+			heap = append(heap, i)
+			for j := len(heap) - 1; j > 0; { // sift up
+				p := (j - 1) / 2
+				if !worse(heap[j], heap[p]) {
+					break
+				}
+				heap[j], heap[p] = heap[p], heap[j]
+				j = p
+			}
+		} else if worse(heap[0], i) {
+			heap[0] = i
+			siftDown(0)
+		}
+	}
+	sort.Slice(heap, func(a, b int) bool { return pref(heap[a], heap[b]) })
+	return heap
+}
+
+func peerTopIndices(s []float64, k int) []int {
+	// PEER prunes to subKeyK ≪ n (n = √experts), so the size-k heap is the common case.
+	return topKByPref(len(s), k, func(a, b int) bool { // score desc, ties → lower index
+		if s[a] != s[b] {
+			return s[a] > s[b]
+		}
+		return a < b
+	})
 }
 
 // peerRetrieve performs product-key top-k retrieval over the n² experts whose
@@ -235,22 +289,22 @@ func peerRetrieve(s1, s2 []float64, n, topK, subKeyK int) (flat, sub1, sub2 []in
 			cands = append(cands, cand{i, j, s1[i] + s2[j]})
 		}
 	}
-	sort.SliceStable(cands, func(a, b int) bool {
+	// Select the top-K candidates by (score desc, ties → smaller flat index) with the same
+	// size-K heap — the k'² candidates are scored for only topK ≪ k'² outputs, so a full
+	// sort is wasted. Bit-identical (total order → identical top-K set and order).
+	sel := topKByPref(len(cands), topK, func(a, b int) bool {
 		if cands[a].sc != cands[b].sc {
 			return cands[a].sc > cands[b].sc
 		}
 		return cands[a].i*n+cands[a].j < cands[b].i*n+cands[b].j
 	})
-	if topK > len(cands) {
-		topK = len(cands)
-	}
-	flat = make([]int, topK)
-	sub1 = make([]int, topK)
-	sub2 = make([]int, topK)
-	for c := range topK {
-		flat[c] = cands[c].i*n + cands[c].j
-		sub1[c] = cands[c].i
-		sub2[c] = cands[c].j
+	flat = make([]int, len(sel))
+	sub1 = make([]int, len(sel))
+	sub2 = make([]int, len(sel))
+	for c, ci := range sel {
+		flat[c] = cands[ci].i*n + cands[ci].j
+		sub1[c] = cands[ci].i
+		sub2[c] = cands[ci].j
 	}
 	return flat, sub1, sub2
 }
