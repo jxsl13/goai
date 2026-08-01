@@ -14,6 +14,7 @@
 package gguf
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -429,13 +430,19 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 }
 
 // ReadFile parses a .gguf file.
+//
+// The file is handed to the parser through a large buffered reader. Without it every header field
+// is its own read syscall — a length, then the bytes, for every string — and a llama-family header
+// is dominated by the tokenizer arrays, so a 32k-token vocabulary costs on the order of 160k
+// syscalls before a single tensor is touched. That cost is constant in model size, which makes it
+// worst exactly where the model is small.
 func ReadFile(path string) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return Read(f)
+	return Read(bufio.NewReaderSize(f, 1<<20))
 }
 
 // decodeTensor extracts and (if needed) dequantizes one tensor from data.

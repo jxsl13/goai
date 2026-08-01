@@ -4,6 +4,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -43,9 +44,10 @@ func init() {
 			// pure per-row scratch, fully overwritten before read, never shared across rows.
 			// Bit-identical: each row's softmax + scale·(q−p) uses the same operands in the
 			// same j order regardless of which goroutine runs it.
-			distillParallelRows(b, c, func(rlo, rhi int) {
-				p := make([]float64, c)
-				q := make([]float64, c)
+			distillParallelRows(b, c, func() [2][]float64 {
+				return [2][]float64{make([]float64, c), make([]float64, c)}
+			}, func(rlo, rhi int, s [2][]float64) {
+				p, q := s[0], s[1]
 				for i := rlo; i < rhi; i++ {
 					base := i * c
 					softmaxRowTInto(p, zts[base:base+c], temp)
@@ -60,10 +62,10 @@ func init() {
 			zss := zs.Contiguous().Storage().F32()
 			zts := zt.Contiguous().Storage().F32()
 			ds := gs.Storage().F32()
-			distillParallelRows(b, c, func(rlo, rhi int) {
-				p := make([]float64, c)
-				q := make([]float64, c)
-				row := make([]float64, c) // privatized: teacher/student widen buffer, per-row only
+			distillParallelRows(b, c, func() [3][]float64 {
+				return [3][]float64{make([]float64, c), make([]float64, c), make([]float64, c)}
+			}, func(rlo, rhi int, s [3][]float64) {
+				p, q, row := s[0], s[1], s[2] // row: teacher/student widen buffer
 				for i := rlo; i < rhi; i++ {
 					base := i * c
 					for j := 0; j < c; j++ {
@@ -93,32 +95,43 @@ func init() {
 	})
 }
 
-// distillParallelRows splits b independent batch rows across GOMAXPROCS workers (sibling
-// of conv1dParallelChannels): each worker gets a contiguous [rlo,rhi) row range and
-// allocates its own scratch. Serial below a small work threshold (b·workPerRow) so tiny
-// batches skip the fork/join. Row writes are disjoint, so this is bit-identical to the
-// serial scan.
-func distillParallelRows(b, workPerRow int, body func(rlo, rhi int)) {
+// distillParallelRows runs body over b independent batch rows, claiming them from a cursor rather
+// than dealing one equal chunk per worker. An equal split waits for the slowest chunk, and four of
+// this host's twelve cores are efficiency cores (§PS3011).
+//
+// The scratch comes from newScratch, called ONCE PER WORKER rather than once per claim. That is not
+// a detail: a first version left the allocations inside body and the cursor invoked it 32 times
+// where the split invoked it 12, which bought -7.4% on time at the cost of +26% bytes and +50%
+// allocations. Claiming is only worth it when the per-claim cost is the work itself.
+//
+// Serial below a small work threshold (b·workPerRow) so tiny batches skip the fork/join. Row writes
+// are disjoint, so which worker retires a row cannot change its arithmetic — bit-identical.
+func distillParallelRows[S any](b, workPerRow int, newScratch func() S, body func(rlo, rhi int, s S)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > b {
 		nw = b
 	}
 	if nw <= 1 || b*workPerRow < 1<<15 {
-		body(0, b)
+		body(0, b, newScratch())
 		return
 	}
+	const grain = 4 // rows per claim
+	var next atomic.Int64
 	var wg sync.WaitGroup
-	chunk := (b + nw - 1) / nw
-	for lo := 0; lo < b; lo += chunk {
-		hi := lo + chunk
-		if hi > b {
-			hi = b
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
+	wg.Add(nw)
+	for range nw {
+		go func() {
 			defer wg.Done()
-			body(lo, hi)
-		}(lo, hi)
+			s := newScratch()
+			for {
+				lo := int(next.Add(grain)) - grain
+				if lo >= b {
+					return
+				}
+				hi := min(lo+grain, b)
+				body(lo, hi, s)
+			}
+		}()
 	}
 	wg.Wait()
 }
