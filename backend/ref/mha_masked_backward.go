@@ -71,10 +71,17 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 	vs, vok := f64Data(v)
 	gs, gok := f64Data(g)
 	masks, mok := f64Data(mask)
-	dqs, dqok := f64Data(dQ)
-	dks, dkok := f64Data(dK)
-	dvs, dvok := f64Data(dV)
-	dms, dmok := f64Data(dMask)
+	// OUTPUTS GO THROUGH outF64, NOT f64Data. f64Data is an INPUT view: on F32 it returns a
+	// detached widened copy, so a kernel that accumulates into it writes to a buffer nobody reads
+	// and returns all-zero gradients. That is exactly what happened here — every F32 backward
+	// through this op silently produced zeros, invisible because the only tests touching it built
+	// F64 tensors. outF64 is the output counterpart and carries the flush that narrows the buffer
+	// back into F32 storage.
+	dqs, dqflush, dqok := outF64(dQ)
+	dks, dkflush, dkok := outF64(dK)
+	dvs, dvflush, dvok := outF64(dV)
+	dms, dmflush, dmok := outF64(dMask)
+	flushOut := func() { dqflush(); dkflush(); dvflush(); dmflush() }
 	if qok && kok && vok && gok && mok && dqok && dkok && dvok && dmok {
 		// Parallel-over-heads path. With rep==1 every head owns DISJOINT query/key/value
 		// columns, so dQ/dK/dV are written race-free directly. The only cross-head
@@ -181,6 +188,7 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 					}
 				}
 			}
+			flushOut()
 			return []*tensor.Tensor{dQ, dK, dV, dMask}, nil
 		}
 		{
@@ -259,6 +267,7 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 						}
 					}
 				}
+				flushOut()
 				return []*tensor.Tensor{dQ, dK, dV, dMask}, nil
 			}
 		}
