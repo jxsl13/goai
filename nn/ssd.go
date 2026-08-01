@@ -37,6 +37,15 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	// step into a contiguous buffer instead of re-dispatching AtF64. Bit-identical.
 	xrow := make([]float64, d)
 	crow := make([]float64, n)
+	yrow := make([]float64, d) // out row accumulator (reused by the interchanged path)
+	// The output y_t = Cᵀ_t·h can read the [N,d] state two ways. The natural j-outer form
+	// dots down a STRIDED column h[i*d+j]; the i-outer interchange streams contiguous rows
+	// but writes the accumulator row N times per step. Interchange only pays once the state
+	// N·d is large enough that the strided walk thrashes cache (below ~L1 the state is
+	// resident and the strided reads are free, so the extra writes make it a net loss —
+	// measured regression at N·d=1024, ~1.4-1.7× win at N·d≥8192). Both paths keep the
+	// ascending-i sum, so the result is bit-identical either way; this only picks the layout.
+	interleave := n*d >= 4096
 	for t := range T {
 		at := a.AtF64(t)
 		for j := range d {
@@ -52,12 +61,31 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 				h[base+j] = at*h[base+j] + bi*xrow[j]
 			}
 		}
-		for j := range d {
-			var s float64
-			for i := range n {
-				s += crow[i] * h[i*d+j]
+		if interleave {
+			// i-outer: stream h's CONTIGUOUS row i into the accumulator row (AXPY, no
+			// reduction dependency). Same ascending-i sum → bit-identical.
+			for j := range d {
+				yrow[j] = 0
 			}
-			y.SetF64(s, t, j)
+			for i := range n {
+				ci := crow[i]
+				hrow := h[i*d : i*d+d]
+				for j := range d {
+					yrow[j] += ci * hrow[j]
+				}
+			}
+			for j := range d {
+				y.SetF64(yrow[j], t, j)
+			}
+		} else {
+			// j-outer: small state is cache-resident, so the strided dot wins.
+			for j := range d {
+				var s float64
+				for i := range n {
+					s += crow[i] * h[i*d+j]
+				}
+				y.SetF64(s, t, j)
+			}
 		}
 	}
 	return y, nil
