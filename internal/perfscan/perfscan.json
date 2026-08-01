@@ -103,5 +103,13 @@
   ],
   "topKSelectorFuncs": [
     "topKIndices"
+  ],
+  "inputViewFuncs": [
+    "f64Data",
+    "f32Data"
+  ],
+  "outputViewFuncs": [
+    "outF64",
+    "outF32"
   ]
 }

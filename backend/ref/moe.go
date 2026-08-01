@@ -70,13 +70,20 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 							m = v
 						}
 					}
+					// One exp per logit, not two. The sum pass and the normalize pass were each
+					// calling math.Exp on the same argument, and math.Exp is not inlined, so the
+					// repeat was a second evaluation rather than a subexpression the compiler
+					// folds. Storing the value and reloading it is exact, and sum still
+					// accumulates the same values in the same ascending order.
+					prow := probs[base : base+n]
 					var sum float64
 					for i := range n {
-						sum += math.Exp(ls[base+i] - m)
+						e := math.Exp(ls[base+i] - m)
+						prow[i] = e
+						sum += e
 					}
-					prow := probs[base : base+n]
 					for i := range n {
-						prow[i] = math.Exp(ls[base+i]-m) / sum
+						prow[i] /= sum
 					}
 				}
 			})
@@ -95,13 +102,20 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 							m = v
 						}
 					}
+					// One exp per logit, not two. The sum pass and the normalize pass were each
+					// calling math.Exp on the same argument, and math.Exp is not inlined, so the
+					// repeat was a second evaluation rather than a subexpression the compiler
+					// folds. Storing the value and reloading it is exact, and sum still
+					// accumulates the same values in the same ascending order.
+					prow := probs[base : base+n]
 					var sum float64
 					for i := range n {
-						sum += math.Exp(float64(ls[base+i]) - m)
+						e := math.Exp(float64(ls[base+i]) - m)
+						prow[i] = e
+						sum += e
 					}
-					prow := probs[base : base+n]
 					for i := range n {
-						prow[i] = math.Exp(float64(ls[base+i])-m) / sum
+						prow[i] /= sum
 					}
 				}
 			})
