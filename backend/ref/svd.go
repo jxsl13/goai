@@ -28,18 +28,27 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		return nil, fmt.Errorf("ref: svd needs m ≥ n (tall/square), got %dx%d", m, n)
 	}
 
-	// Flat [m*n] and [n*n] row-major working buffers, not slices of rows. The Jacobi
-	// sweep below walks COLUMNS — acol[k][i] and vmat[k][i] with k varying — so a
-	// row-of-slices layout dereferences a different heap row per step. Flat makes
-	// each walk a constant stride through one allocation and drops m+n allocations
-	// to 2. Index arithmetic only, so the decomposition is bit-identical.
+	// COLUMN-MAJOR working buffers: acol[j*m+k] is row k of column j, vmat[j*n+k] likewise. The
+	// Jacobi sweep is entirely column work — it forms three inner products over a column pair and
+	// then rotates that pair — so with a row-major layout every one of those steps strides by n and
+	// touches its own cache line to use one element. Column-major makes each of them a contiguous
+	// run, and the rotation writes two contiguous columns.
+	//
+	// Flat rather than a slice of columns for the same reason the row-major version was flat: two
+	// allocations instead of m+n. Index arithmetic only, so the decomposition is bit-identical —
+	// every sum keeps its operands and its ascending-k order.
 	acol := make([]float64, m*n) // working copy; columns get orthogonalized into U·Σ
 	if as, ok := f64Data(a); ok {
-		copy(acol, as)
+		for i := range m {
+			row := as[i*n : i*n+n]
+			for j := range n {
+				acol[j*m+i] = row[j]
+			}
+		}
 	} else {
 		for i := range m {
 			for j := range n {
-				acol[i*n+j] = a.AtF64(i, j)
+				acol[j*m+i] = a.AtF64(i, j)
 			}
 		}
 	}
@@ -53,10 +62,11 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 		for i := range n {
 			for j := i + 1; j < n; j++ {
 				var alpha, beta, gamma float64
+				ci, cj := acol[i*m:i*m+m], acol[j*m:j*m+m]
 				for k := range m {
-					alpha += acol[k*n+i] * acol[k*n+i]
-					beta += acol[k*n+j] * acol[k*n+j]
-					gamma += acol[k*n+i] * acol[k*n+j]
+					alpha += ci[k] * ci[k]
+					beta += cj[k] * cj[k]
+					gamma += ci[k] * cj[k]
 				}
 				if alpha == 0 || beta == 0 {
 					continue
@@ -78,14 +88,15 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 				c := 1 / math.Sqrt(1+t*t)
 				sn := c * t
 				for k := range m {
-					ai, aj := acol[k*n+i], acol[k*n+j]
-					acol[k*n+i] = c*ai - sn*aj
-					acol[k*n+j] = sn*ai + c*aj
+					ai, aj := ci[k], cj[k]
+					ci[k] = c*ai - sn*aj
+					cj[k] = sn*ai + c*aj
 				}
+				vi, vj := vmat[i*n:i*n+n], vmat[j*n:j*n+n]
 				for k := range n {
-					vi, vj := vmat[k*n+i], vmat[k*n+j]
-					vmat[k*n+i] = c*vi - sn*vj
-					vmat[k*n+j] = sn*vi + c*vj
+					a, b := vi[k], vj[k]
+					vi[k] = c*a - sn*b
+					vj[k] = sn*a + c*b
 				}
 			}
 		}
@@ -96,8 +107,9 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	sigma := make([]float64, n)
 	for j := range n {
 		var nrm float64
+		cj := acol[j*m : j*m+m]
 		for k := range m {
-			nrm += acol[k*n+j] * acol[k*n+j]
+			nrm += cj[k] * cj[k]
 		}
 		sigma[j] = math.Sqrt(nrm)
 	}
@@ -113,12 +125,14 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	for jj, j := range order {
 		st.SetF64(sigma[j], jj)
 		if sigma[j] > 0 {
+			cj := acol[j*m : j*m+m]
 			for k := range m {
-				ut.SetF64(acol[k*n+j]/sigma[j], k, jj)
+				ut.SetF64(cj[k]/sigma[j], k, jj)
 			}
 		}
+		vj := vmat[j*n : j*n+n]
 		for k := range n {
-			vt.SetF64(vmat[k*n+j], k, jj)
+			vt.SetF64(vj[k], k, jj)
 		}
 	}
 	return []*tensor.Tensor{ut, st, vt}, nil

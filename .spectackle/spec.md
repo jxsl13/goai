@@ -422,3 +422,6 @@ IF a check is validated against pre-fix code recovered with a stash, THEN the de
 
 ## DEVIRTUALIZING-REMOVES-AN-FMA-BARRIER-001
 IF a typed arm replaces a closure-based one and must stay bit-identical, THEN the developer SHALL wrap any product feeding an accumulation in an explicit conversion — the closure call was blocking a fusion the typed arm allows, and 1 ulp drifted.
+
+## SIZE-THE-CELL-PAST-L1-BEFORE-JUDGING-LAYOUT-001
+IF a layout or interchange transform is judged against existing benchmark cells, THEN the developer SHALL add a cell whose working set exceeds L1 first — the same QR transform read -35.0 percent at 128x64 and nothing at 32x16.
