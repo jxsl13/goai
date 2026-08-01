@@ -126,13 +126,13 @@ func (f *LU) Det() float64 {
 	return d
 }
 
-// Solve solves A·X = B for X, where B is a right-hand-side vector [n] or matrix [n,k]. It applies the
-// row permutation to B, then forward-substitution (L·Y = P·B) and back-substitution (U·X = Y).
-// Returns an error if A is singular (a zero on the U diagonal).
 // colJam is how many right-hand-side columns LU.Solve processes together. Columns are
 // independent, so jamming them is a free-dimension transform and changes no value.
 const colJam = 4
 
+// Solve solves A·X = B for X, where B is a right-hand-side vector [n] or matrix [n,k]. It applies the
+// row permutation to B, then forward-substitution (L·Y = P·B) and back-substitution (U·X = Y).
+// Returns an error if A is singular (a zero on the U diagonal).
 func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	n := f.n
 	if b.Ndim() < 1 || b.Ndim() > 2 || b.Shape()[0] != n {
