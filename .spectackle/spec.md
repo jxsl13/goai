@@ -409,3 +409,6 @@ Rationale: GIT_DIR overrides repository discovery entirely: with it set, git ign
 IF an optimization adds a helper, constant or type beside a documented function, THEN the developer SHALL put it above that function s doc comment; a doc binds to the next declaration, and 6 exported symbols lost theirs.
 
 Rationale: A doc comment binds to the declaration that immediately follows it. Optimizations landing a jam constant or a parallel helper between a comment and its function rebound the comment and left DBSCAN.Fit, GradientBoostingRegressor.Predict, QMatMul, LU.Solve, KimiDeltaAttention and tensor.NewOn undocumented; apicheck caught it only at push time, after the commits had merged.
+
+## SEPARATE-STATEMENTS-DO-NOT-STOP-FMA-001
+IF a float chain claiming bit-identity is split into separate statements to avoid contraction, THEN the developer SHALL wrap each step in an explicit conversion (T(x*s) in generic code) — the Go spec fuses across statements, and this diverged on 66 of 256 logits.
