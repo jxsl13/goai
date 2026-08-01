@@ -238,6 +238,14 @@ func (m *MemorizingAttention) memoryAttention(ctx *backend.Context, q *tensor.Te
 		topM = s
 	}
 	scale := 1.0 / math.Sqrt(float64(dk))
+	// Fused inference path (no autograd taping, F64): the two per-head neighbour
+	// contractions are dispatched as generic OpEinsum, whose engine walks every
+	// t·topM·dk index combination (summed axis included) with a per-combo index decode
+	// — dominating the layer for the small per-query neighbour reductions. A direct
+	// typed loop sums the same axis ascending (matching the engine's order = outSub then
+	// summed) → BIT-IDENTICAL, with none of the dispatch. The cheap scale (OpMul) and
+	// softmax stay dispatched. Training keeps the einsums (VJP taping through the live q).
+	fused := ctx.Recorder == nil && m.dtype == tensor.F64
 	heads := make([]*tensor.Tensor, m.Heads)
 	for h := range m.Heads {
 		// Live per-head query slice [T, dk] — the ONLY differentiable operand.
@@ -247,9 +255,12 @@ func (m *MemorizingAttention) memoryAttention(ctx *backend.Context, q *tensor.Te
 		}
 		// Host-side k-NN gather → detached constant neighbours [T, topM, dk].
 		kg, vg := m.Memory.gather(m.dtype, qh, h*dk, dk, topM)
+		t := qh.Shape()[0]
 		// scores[t,mm] = Σ_d qh[t,d]·kg[t,mm,d]
-		scores, err := m.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "td,tmd->tm"}, qh, kg)
-		if err != nil {
+		var scores *tensor.Tensor
+		if fused {
+			scores = memScoresFusedF64(qh, kg, t, topM, dk)
+		} else if scores, err = m.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "td,tmd->tm"}, qh, kg); err != nil {
 			return nil, err
 		}
 		if scores, err = m.exec(ctx, backend.OpMul, nil, scores, tensor.Full(m.dtype, tensor.Shape{1, 1}, scale)); err != nil {
@@ -260,13 +271,61 @@ func (m *MemorizingAttention) memoryAttention(ctx *backend.Context, q *tensor.Te
 			return nil, err
 		}
 		// out[t,d] = Σ_mm prob[t,mm]·vg[t,mm,d]
-		oh, err := m.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "tm,tmd->td"}, prob, vg)
-		if err != nil {
+		var oh *tensor.Tensor
+		if fused {
+			oh = memOutFusedF64(prob, vg, t, topM, dk)
+		} else if oh, err = m.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "tm,tmd->td"}, prob, vg); err != nil {
 			return nil, err
 		}
 		heads[h] = oh
 	}
 	return m.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...) // [T, Dim]
+}
+
+// memScoresFusedF64 is the fused F64 inference form of Einsum("td,tmd->tm"):
+// scores[t,mm] = Σ_d qh[t,d]·kg[t,mm,d]. It sums d ascending — the einsum engine's
+// order is outSub("tm") then the summed d, so d is visited ascending per (t,mm) — with
+// the identical products, so the result is bit-identical to the dispatched einsum.
+func memScoresFusedF64(qh, kg *tensor.Tensor, t, topM, dk int) *tensor.Tensor {
+	qs := qh.Contiguous().Storage().F64() // [t, dk]
+	ks := kg.Contiguous().Storage().F64() // [t, topM, dk]
+	out := tensor.New(tensor.F64, tensor.Shape{t, topM})
+	os := out.Storage().F64()
+	for tt := 0; tt < t; tt++ {
+		qBase, kBase, oBase := tt*dk, tt*topM*dk, tt*topM
+		for mm := 0; mm < topM; mm++ {
+			kb := kBase + mm*dk
+			var s float64
+			for d := 0; d < dk; d++ {
+				s += qs[qBase+d] * ks[kb+d]
+			}
+			os[oBase+mm] = s
+		}
+	}
+	return out
+}
+
+// memOutFusedF64 is the fused F64 inference form of Einsum("tm,tmd->td"):
+// oh[t,d] = Σ_mm prob[t,mm]·vg[t,mm,d]. The einsum engine's order is outSub("td") then
+// the summed m, so for each (t,d) the m terms accumulate ascending; the mm-outer/d-inner
+// loop accumulates os[t,d] over mm ascending too (and walks vg contiguously in d), with
+// the identical products → bit-identical to the dispatched einsum.
+func memOutFusedF64(prob, vg *tensor.Tensor, t, topM, dk int) *tensor.Tensor {
+	ps := prob.Contiguous().Storage().F64() // [t, topM]
+	vs := vg.Contiguous().Storage().F64()   // [t, topM, dk]
+	out := tensor.New(tensor.F64, tensor.Shape{t, dk})
+	os := out.Storage().F64()
+	for tt := 0; tt < t; tt++ {
+		pBase, vBase, oBase := tt*topM, tt*topM*dk, tt*dk
+		for mm := 0; mm < topM; mm++ {
+			p := ps[pBase+mm]
+			vb := vBase + mm*dk
+			for d := 0; d < dk; d++ {
+				os[oBase+d] += p * vs[vb+d]
+			}
+		}
+	}
+	return out
 }
 
 // gatedBlend forms out = g ⊙ mem + (1−g) ⊙ local with the per-head gate
