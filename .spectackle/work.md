@@ -2334,3 +2334,22 @@ WHY THE LAST THREE ARE SERIAL. They all edit that same declaration line, so each
 CUDA CANNOT BE VERIFIED ON THIS HOST - darwin/arm64, no NVIDIA toolchain - so for those four the local gates are gofmt, the non-cgo build and vet, and CI is the real verifier. 679 was merged only after its full check rollup came back green.
 
 ENVIRONMENT DEFECT HIT AND REPAIRED. Mid-campaign every git command in the working worktree began failing with a work-tree error, including in an unrelated sibling worktree. Cause: the main repository is bare and worktrees rely on extensions.worktreeConfig, but this worktree's config.worktree had lost its core.bare=false, so it inherited bare from the main config. Repaired with a scoped `git config --worktree core.bare false`. No work was at risk because everything was committed and pushed, which is the reason to push continuously rather than batch.
+
+## T-01KYYYJ506EGAB6BSVWXW2ZM23 T1036 PR 703 assembled on top of the merged PRs; perfscan unioned
+kind: task
+state: draft
+created: 2026-08-01
+
+PR 703 assembled and pushed after all 52 open PRs were merged.
+
+WHY IT WAS REBUILT RATHER THAN REBASED. Merging the 621-commit branch produced 13 conflicted files, and in most of them BOTH sides had independently optimized the same hot loops - this branch had a KDA decay column-walk fix and Retention output blocking, main had multi-accumulator dots and a loop interchange for the same functions. Taking either side wholesale silently discards a measured optimization, and nothing in the diff shows which. The merge was aborted and this session's work rebuilt on top of main instead: 47 commits touching a known, mostly disjoint file set.
+
+WHAT THAT SURFACED. PR 651 reintroduced the strided out[j*cols+c] read in LU back-substitution that earlier work had removed, and had no column jam. Both were rebuilt AGAINST its flat row-major factor rather than around it, and the win reproduced larger than before: LUSolve_768x768 -72.36%, 512x512 -66.73%, 128x128 -41.62% (p=0.000, n=10), with the cols==1 remainder path flat as a control. New 512 and 768 cells were added first; the pre-existing 64 and 128 cells cannot resolve either transform.
+
+FILE-LEVEL CHERRY-PICKING LEAKS OLDER WORK, and three separate failures proved it. classic/naivebayes.go carried an earlier jointRow signature change that main's own test does not compile against - fixed by taking main's file and applying only this session's hunk. Two autograd bench files needed helpers that live in older test infrastructure, dragging in a dependency chain; they were dropped. nlp/contrastive_search.go could not come at all: this session's windowing applies to a dotAndNorm that does not exist in main, and the 4-partial reassociation it sits on is forbidden by main's TestMaxContextCosineBitExact. That win is real on this branch and NOT portable without changing a bit-exactness pin.
+
+PERFSCAN UNION. The check sets were near-disjoint - 39 checks main lacked, 1 (PS4013) it had - so a three-way merge produced only two conflicts, both resolved as unions. PS4011's over-firing on per-head attention had been fixed twice, differently: main's #685 suppresses attention markers, this branch suppresses architecture-count trip origins after an audit of all 110 hits found zero true positives. Both guards now run, since either matching means the loop is not a scalar recurrence.
+
+TWO COLLISIONS THAT ONLY EXIST AT MERGE TIME. PS6006 was independently assigned by both sides - main's #697 to cross-backend-dtype-gap, this branch to receiver-scratch-buffer - and the local one renumbered to PS6024. sortedKeys was defined on both sides with different signatures, which Go cannot overload. Neither was preventable from one side: the IDs and names were free in every open PR when each was minted. PERF-ID-COLLISION-001 checks open PRs, which is necessary but not sufficient when two branches mint concurrently and neither is a PR yet.
+
+DELIBERATELY NOT IN THE PR: roughly 570 commits of older branch history containing parallel solutions to problems 653, 658, 664, 689, 690 and 691 also solved. Deciding whose version wins is per-file judgment on the user's own parallel work, not something to guess at.

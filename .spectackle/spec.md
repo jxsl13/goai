@@ -977,3 +977,6 @@ IF a rebase stops on a conflict and only some files have been resolved, THEN the
 
 ## NEVER-DISCARD-GOFMT-STDERR-001
 IF gofmt is used as a verification gate, THEN the implementing agent SHALL run it without 2>/dev/null, because -l reports formatting on stdout while PARSE errors go to stderr — the 1 signal that catches conflict markers in files the host does not compile.
+
+## REBUILD-DO-NOT-REBASE-A-LONG-PARALLEL-BRANCH-001
+IF a long-lived branch is to be landed after parallel work merged into main, THEN the implementing agent SHALL rebuild the recent work on top of main instead of merging, since 13 files had BOTH sides optimizing the same loops and a diff cannot show which win is being discarded.
