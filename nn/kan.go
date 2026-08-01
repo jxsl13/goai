@@ -229,7 +229,8 @@ func (l *KANLayer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 // Coef[i,j,c] directly for the inference path (ctx.Recorder == nil). It is bit-identical
 // to the two-einsum path (bic,ijc->bij then bij,ij->bj): the inner Σ_c reproduces the
 // first einsum's spl[b,i,j] and the accumulation over i (increasing) reproduces the
-// second — same operand order, no reduction reorder, no FMA — while avoiding the taped
+// second — same operand order, no reduction reorder, and no FMA because each product is
+// rounded through an explicit conversion — while avoiding the taped
 // [batch,in,out] spl materialization and the generic einsum engine's per-combo index
 // decode. Returns nil (caller uses the einsums) unless basis, Coef and WScale are all
 // F64-contiguous.
@@ -255,9 +256,13 @@ func (l *KANLayer) fusedSpline(basis *tensor.Tensor) *tensor.Tensor {
 				crow := cs[co : co+nbasis : co+nbasis]
 				var acc float64
 				for c := range nbasis {
-					acc += brow[c] * crow[c]
+					// Both products round BEFORE their add. Written bare, the compiler contracts
+					// each into an FMA on arm64 and not on amd64, so this path is a different
+					// number per architecture — which is what broke the bit-exact pin against
+					// the einsum engine while CI (amd64) stayed green.
+					acc += float64(brow[c] * crow[c])
 				}
-				ys[obase+j] += ws[wbase+j] * acc
+				ys[obase+j] += float64(ws[wbase+j] * acc)
 			}
 		}
 	}

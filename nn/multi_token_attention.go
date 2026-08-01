@@ -382,7 +382,9 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 						}
 					} else {
 						for i := 0; i < n; i++ {
-							os[i] += mp[i] * wop
+							// rounded before the add: bare mul-add contracts to FMA on arm64
+							// only, which broke this path's bit-exact pin against dispatch.
+							os[i] += float64(mp[i] * wop)
 						}
 					}
 				}
@@ -406,7 +408,7 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 					}
 				} else {
 					for i := 0; i < n; i++ {
-						os[i] += mp[i] * wop
+						os[i] += float32(mp[i] * wop)
 					}
 				}
 			}
