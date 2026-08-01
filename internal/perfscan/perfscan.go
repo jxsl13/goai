@@ -8888,7 +8888,12 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" -35.6%% and made the factor element loop-invariant, loaded once per (i,p)"+
 						" instead of once per (i,p,c). When the strided operand is indexed by an outer"+
 						" loop that carries no dependence, interchange is the whole fix and costs"+
-						" nothing.",
+						" nothing. THE SIZE DEPENDENCE IS NOT THEORETICAL, and the same kernel"+
+						" measures both ways: a Householder QR interchanged exactly this way went"+
+						" -35.0%% at 128x64 and NOTHING at 32x16, where the whole factorization is"+
+						" L1-resident and the layout it walks stops mattering. Measure the size you"+
+						" care about; a small cell will report a real transform as noise, and a"+
+						" large one will oversell it for a caller who never gets there.",
 						innerVar, buf.Name, outerVar, remedy),
 				})
 				return true

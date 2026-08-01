@@ -3977,6 +3977,11 @@ func Decay(S, at []float64, dv, dk int) {
 		if !containsAll(f.msg, "-35.6%", "interchange is the whole fix") {
 			t.Fatalf("message omits the interchange measurement:\n%s", f.msg)
 		}
+		// The same-kernel size pair is what turns the check's cache caveat from a hedge into
+		// something a reader can act on: one transform, -35.0% at one size and nothing at another.
+		if !containsAll(f.msg, "SIZE DEPENDENCE IS NOT THEORETICAL", "L1-resident") {
+			t.Fatalf("message omits the size-dependence evidence:\n%s", f.msg)
+		}
 	}
 }
 
