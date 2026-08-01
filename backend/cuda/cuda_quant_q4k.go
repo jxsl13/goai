@@ -97,6 +97,16 @@ func (r *ResidentBQ4K) qmatmul(a, out *DeviceF32, beta float32) error {
 	return nil
 }
 
+// qmatmulGEMVForBench / qmatmulMTForBench force a specific kernel regardless of m — used by
+// the in-package crossover benchmark to find the recorder's MT routing threshold (cgo is not
+// permitted in _test.go).
+func (r *ResidentBQ4K) qmatmulGEMVForBench(a, out *DeviceF32) int {
+	return int(C.cu_qmatmul_q4k(a.ptr, r.q, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(0)))
+}
+func (r *ResidentBQ4K) qmatmulMTForBench(a, out *DeviceF32) int {
+	return int(C.cu_qmatmul_q4k_mt(a.ptr, r.q, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.float(0)))
+}
+
 // Free releases the resident Q4_K weight.
 func (r *ResidentBQ4K) Free() {
 	if r.q != nil {

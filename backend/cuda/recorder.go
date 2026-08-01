@@ -533,7 +533,14 @@ func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *Device
 	// path). BIT-IDENTICAL to the GEMV (same fp ops/order — TestCUDAQ4KMatMulMTParity). Mirrors the routing
 	// ResidentBQ4K.qmatmul already has (cuda_quant_q4k.go); this recorder method is the path llamagpu's decoder
 	// actually calls for Q4_K weights, so it was silently stuck on the GEMV for all M. Falls back on error.
-	if m >= 8 {
+	// Threshold m>=4 (measured crossover, cuda_q4k_mt_crossover_bench_internal_test.go): the MT
+	// GEMM decodes each Q4_K block ONCE across all M rows while the GEMV re-decodes it per row,
+	// so MT wins once M amortizes the tiling. m=4 wins at every tested shape (2048² 1.42×,
+	// 2048×5632 1.44×; m=8 1.76×); m=2 is a tie (GEMV ~1-5% ahead — the pad/tiling isn't
+	// amortized yet), so 4 is the no-regression floor. This captures speculative-decode /
+	// small-batch (m=4-7) on the common Q4_K_M format, previously stuck on the GEMV. MT is
+	// BIT-IDENTICAL to the GEMV (TestCUDAQ4KMatMulMTParity), so this is golden-safe.
+	if m >= 4 {
 		if rc := C.cu_qmatmul_q4k_mt(x.ptr, w.q, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc == 0 {
 			return nil
 		}
