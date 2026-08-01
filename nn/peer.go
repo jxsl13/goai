@@ -188,8 +188,27 @@ func (p *PEER) Heads() int { return p.heads }
 // QueryDim returns dk, the per-head query dimension (split into two dk/2 halves).
 func (p *PEER) QueryDim() int { return p.queryDim }
 
+// exec forwards to the pooled fixed-arity helpers rather than handing its variadic pack to
+// backend.Execute. The pack itself is built by the CALLER, so the win is not the pool alone:
+// once this body no longer lets `ins` escape, escape analysis can keep that pack on the
+// caller's stack. Whether it actually does is a measurement, not an assumption (PS3024).
 func (p *PEER) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins ...*tensor.Tensor) (*tensor.Tensor, error) {
-	out, err := backend.Execute(ctx, op, ins, attrs)
+	switch len(ins) {
+	case 1:
+		return execPool1(ctx, op, attrs, ins[0])
+	case 2:
+		return execPool2(ctx, op, attrs, ins[0], ins[1])
+	case 3:
+		return execPool3(ctx, op, attrs, ins[0], ins[1], ins[2])
+	}
+	// The rare arity copies rather than forwarding `ins`. That is the whole point: escape
+	// analysis is per-FUNCTION, so a single path handing the pack to Execute marks the
+	// parameter leaking for EVERY caller, including the pooled ones above — the same verdict
+	// mechanism PS3013 records. Reading `ins` and forwarding a copy keeps it non-escaping, and
+	// the copy is paid only above arity 3.
+	cp := make([]*tensor.Tensor, len(ins))
+	copy(cp, ins)
+	out, err := backend.Execute(ctx, op, cp, attrs)
 	if err != nil {
 		return nil, err
 	}
