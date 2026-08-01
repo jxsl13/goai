@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3030", "fixed-offset-stores-not-windowed", "a counted loop touching ONE slice at three or more distinct CONSTANT offsets from an invariant base plus the loop variable. Each access carries its own bounds check, in a body that may be only a few operations wide. Cut one fixed-length window above the loop and index it by the offsets alone, leaving a single slice check per group. MEASURED on a Q6_K dequantizer with four stores per iteration: -16.5%%, with the compiler's BCE diagnostic confirming four per-store checks gone and one slice check left. PURE ADDRESSING — no value changes, so existing goldens are the right gate. Look for siblings before assuming novelty: that site was the LAST of its family to be cut and the same file's dot-product twin had already done it. Distinct from PS3019, which is about an unrolled loop whose lanes sit at i+0..i+K-1 under a len bound; here the loop steps by one and the offsets are the strides of a packed group", false},
 	{"PS3029", "unbuffered-file-to-parser", "a file handle opened in this function and passed straight to a callee with no buffering in between. If that callee reads FIELD BY FIELD — a length, then the bytes, for every string — each is its own read syscall. Wrap it in bufio.NewReaderSize. MEASURED on a GGUF loader whose header is dominated by tokenizer arrays: a 32k-token vocabulary cost on the order of 160k syscalls before a single tensor was touched, and buffering took the load from 66.0ms to 5.5ms, -91.7%%. The tensor-heavy shape of the same benchmark moved only -18.9%%, which is the tell — THIS COST IS CONSTANT IN FILE SIZE, so it is worst where the file is smallest and it hides completely behind a benchmark that only loads large payloads. Cost is one allocation of the buffer size per open. Silent when the handle goes to a bulk consumer (io.ReadAll, io.Copy, io.ReadFull, an existing bufio wrapper), where buffering buys nothing and costs a copy", false},
 	{"PS3028", "unpooled-fully-overwritten-scratch", "a per-call scratch buffer sized by a product of three or more dimensions, where every write in the function is a plain assignment rather than an accumulate — so no slot is read before it is written and the runtime's zeroing of a fresh allocation buys nothing. Recycle it through a sync.Pool. MEASURED: an attention backward's per-head contribution buffer was 16.7 MB at 8 heads and 512x512; pooling cut allocation bytes 53%%, 25.2 MB to 11.8 MB per call. EXPECT NO SPEEDUP — ns/op did not move at all on that kernel, since a memset is a few percent of a body doing heads*sq*sk*dk MACs. This is a resource finding: its value is that the buffer grows with the square of the sequence while the compute grows with the square times the head dimension, so the ratio worsens with length. BEFORE SHIPPING, PROVE THE OVERWRITE instead of trusting the check: poison every borrowed buffer with NaN and confirm the suite stays green, then delete one write and confirm it reddens — this scanner sees the SHAPE of the writes, not their coverage. Silent when the function already mentions a pool, and when any write to the buffer accumulates", false},
 	{"PS3027", "input-view-on-output-tensor", "a READ-ONLY view helper (configured inputViewFuncs) applied to a tensor the function ALLOCATED as an output. These helpers return the live storage when the dtype matches their element type and a WIDENED COPY when it does not, so on the mismatched dtype a kernel accumulates into a buffer nobody reads and the output comes back untouched — right shape, no error, all zeros. FOUND EXACTLY THIS WAY: a masked-attention backward returned four all-zero gradient tensors on F32 while F64 was correct, so an F32 fine-tune of a trainable attention bias propagated no gradient at all; it survived because every test touching the op built F64 tensors. Use the output counterpart (configured outputViewFuncs), which returns a buffer plus a flush, and call the flush before every fast-path return. Then add a test in the OTHER dtype — this class hides precisely because the fast path is exercised in the dtype where the view happens to alias. Not a performance finding: it is the correctness cost of a devirtualization, which is why it lives with the checks that guard those", false},
@@ -2373,6 +2374,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, inputViewOnOutputTensorFindings(fset, fn, ns)...)
 	out = append(out, unpooledFullyOverwrittenScratchFindings(fset, fn)...)
 	out = append(out, unbufferedFileToParserFindings(fset, fn)...)
+	out = append(out, fixedOffsetStoresNotWindowedFindings(fset, fn)...)
 	out = append(out, maxNormalizedExpFindings(fset, fn)...)
 	out = append(out, indirectColumnGatherFindings(fset, fn)...)
 	out = append(out, innerInvariantRecomputeFindings(fset, fn)...)
@@ -13673,6 +13675,130 @@ func addAssignsTo(list []ast.Stmt, target string) bool {
 		}
 	}
 	return false
+}
+
+// fixedOffsetStoresNotWindowedFindings flags PS3030 — three or more accesses to one slice at
+// CONSTANT offsets from an invariant base plus the loop variable, where one fixed-length window
+// would replace a bounds check per access with a single slice check per group.
+//
+// Distinct from PS3019, which is about an UNROLLED loop whose lanes sit at i+0..i+K-1 under a len
+// bound. Here the loop steps by one and the offsets are the strides of a packed group.
+func fixedOffsetStoresNotWindowedFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		var body *ast.BlockStmt
+		var idx string
+		switch l := n.(type) {
+		case *ast.RangeStmt:
+			body = l.Body
+			if k, ok := l.Key.(*ast.Ident); ok {
+				idx = k.Name
+			}
+		case *ast.ForStmt:
+			body, idx = l.Body, counterName(l)
+		default:
+			return true
+		}
+		if body == nil || idx == "" || idx == "_" {
+			return true
+		}
+		written := assignedNames(body)
+		// key: "slice|base" -> the distinct constant offsets seen on it
+		groups := map[string]map[int]bool{}
+		ast.Inspect(body, func(m ast.Node) bool {
+			ix, ok := m.(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			sl := identName(ix.X)
+			if sl == "" {
+				return true
+			}
+			base, off, ok := baseIdxOffset(ix.Index, idx)
+			if !ok || base == "" || written[base] {
+				return true // no invariant base to slice from
+			}
+			k := sl + "|" + base
+			if groups[k] == nil {
+				groups[k] = map[int]bool{}
+			}
+			groups[k][off] = true
+			return true
+		})
+		for k, offs := range groups {
+			if len(offs) < 3 {
+				continue
+			}
+			span := 0
+			for o := range offs {
+				if o > span {
+					span = o
+				}
+			}
+			sl, base, _ := strings.Cut(k, "|")
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "fixed-offset-stores-not-windowed",
+				msg: fmt.Sprintf("this loop touches %s at %d distinct constant offsets from"+
+					" %s+%s, and each of those carries its own bounds check — one check per element"+
+					" in a body that may be only a few operations wide. Cut ONE fixed-length window"+
+					" above the loop, %s := %s[%s : %s+%d : %s+%d], and index it by the offsets"+
+					" alone; that leaves a single slice check per group. MEASURED on a Q6_K"+
+					" dequantizer with four stores per iteration: -16.5%%, with the compiler's BCE"+
+					" diagnostic confirming the four per-store checks gone and one slice check left."+
+					" PURE ADDRESSING — no value changes, so the existing goldens are the right"+
+					" gate. Look for siblings before assuming: that site was the last of its family"+
+					" to be cut, and the same file's dot-product twin had already done it",
+					sl, len(offs), base, idx, "w", sl, base, base, span+1, base, span+1),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// baseIdxOffset decomposes an index expression of the form base+idx, base+idx+K or idx+base+K into
+// its invariant base name and constant offset. Anything else is not a windowable access.
+func baseIdxOffset(e ast.Expr, idx string) (base string, off int, ok bool) {
+	var walk func(ast.Expr, int) bool
+	seenIdx := false
+	walk = func(x ast.Expr, sign int) bool {
+		switch t := unparen(x).(type) {
+		case *ast.BinaryExpr:
+			if t.Op != token.ADD {
+				return false
+			}
+			return walk(t.X, sign) && walk(t.Y, sign)
+		case *ast.Ident:
+			if t.Name == idx {
+				if seenIdx {
+					return false
+				}
+				seenIdx = true
+				return true
+			}
+			if base != "" {
+				return false
+			}
+			base = t.Name
+			return true
+		case *ast.BasicLit:
+			if t.Kind != token.INT {
+				return false
+			}
+			v, err := strconv.Atoi(t.Value)
+			if err != nil {
+				return false
+			}
+			off += v
+			return true
+		}
+		return false
+	}
+	if !walk(e, 1) || !seenIdx {
+		return "", 0, false
+	}
+	return base, off, true
 }
 
 // unbufferedFileToParserFindings flags PS3029 — a file handle opened here and handed straight to a

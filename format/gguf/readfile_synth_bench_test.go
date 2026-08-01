@@ -1,6 +1,7 @@
 package gguf
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,5 +93,28 @@ func BenchmarkReadFileSynth(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// TestParseTruncatedDataSection pins the error path the presized read introduced. The data section
+// is now allocated from the tensor table and filled with io.ReadFull, so a file whose table
+// promises more bytes than the file holds fails HERE, naming the shortfall, instead of being
+// carried forward as a short section and reported later as a per-tensor range error.
+//
+// Both halves matter: the parse must fail, and it must not panic or allocate on the promise of a
+// table it cannot satisfy.
+func TestParseTruncatedDataSection(t *testing.T) {
+	path := writeSynthModel(t, 4, 128, 64)
+	full, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Read(bytes.NewReader(full)); err != nil {
+		t.Fatalf("the untruncated model must parse: %v", err)
+	}
+	// Drop the last quarter: enough to fall inside the data section, not the header.
+	cut := len(full) - len(full)/4
+	if _, err := Read(bytes.NewReader(full[:cut])); err == nil {
+		t.Fatal("a truncated data section parsed without error")
 	}
 }
