@@ -44,16 +44,21 @@ func dequantQ6_KInto(dst []float32, raw []byte) {
 			for k := range dsc {
 				dsc[k] = d * float32(int8(sc[sco+k]))
 			}
+			// One fixed-length window instead of four checked indexes per iteration: dst[yo+l+96]
+			// forces a bounds check on every store, and there are four stores per l. The two
+			// sibling dequants already cut this window (q4k, q5k) and so does this file's own
+			// dotQ6_KRow — the dequant twin was the holdout. Pure addressing: no value changes.
+			y := dst[yo : yo+128 : yo+128]
 			for l := range 32 {
 				is := l / 16
 				q1 := int(ql[qlo+l]&0xF) | int(qh[qho+l]&3)<<4
 				q2 := int(ql[qlo+l+32]&0xF) | int((qh[qho+l]>>2)&3)<<4
 				q3 := int(ql[qlo+l]>>4) | int((qh[qho+l]>>4)&3)<<4
 				q4 := int(ql[qlo+l+32]>>4) | int((qh[qho+l]>>6)&3)<<4
-				dst[yo+l+0] = dsc[is+0] * float32(q1-32)
-				dst[yo+l+32] = dsc[is+2] * float32(q2-32)
-				dst[yo+l+64] = dsc[is+4] * float32(q3-32)
-				dst[yo+l+96] = dsc[is+6] * float32(q4-32)
+				y[l+0] = dsc[is+0] * float32(q1-32)
+				y[l+32] = dsc[is+2] * float32(q2-32)
+				y[l+64] = dsc[is+4] * float32(q3-32)
+				y[l+96] = dsc[is+6] * float32(q4-32)
 			}
 		}
 	}
