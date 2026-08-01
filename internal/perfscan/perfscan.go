@@ -8877,7 +8877,14 @@ func stridedInnerWalkFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" one cache line of stride, consecutive iterations share a line, and a buffer that"+
 						" fits L1 pays nothing for striding either — read the stride value and the buffer"+
 						" size before acting. 2.40x on NSA P*V and part of KDA's 1.75x were measured AT"+
-						" THOSE SITES, not here.",
+						" THOSE SITES, not here. A THIRD MEASUREMENT, and the cheapest shape to look"+
+						" for: a triangular-solve substitution ran its right-hand-side column index"+
+						" OUTERMOST, so each step jumped k elements through two buffers and re-fetched"+
+						" the same factor element once per column; making that index innermost went"+
+						" -35.6%% and made the factor element loop-invariant, loaded once per (i,p)"+
+						" instead of once per (i,p,c). When the strided operand is indexed by an outer"+
+						" loop that carries no dependence, interchange is the whole fix and costs"+
+						" nothing.",
 						innerVar, buf.Name, outerVar, remedy),
 				})
 				return true
