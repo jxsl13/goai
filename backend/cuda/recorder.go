@@ -501,7 +501,12 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	// rows. ResidentBQ8's q + scales ARE already the MMQ weight format (int8 [N,K] + per-32-block f32
 	// amax/127 scales), so no requantization — only the activation is quantized per row. Decode (M=1) keeps
 	// the GEMV (optimal — MMQ would pad M to 64). Any error falls back to the always-correct GEMV.
-	if m >= 8 && w.n%64 == 0 && w.k%32 == 0 {
+	// Threshold m>=6 (measured crossover, cuda_q8_mmq_crossover_bench_test.go): MMQ pads M to 64
+	// so its cost is ~flat while the GEMV streams the weight M×, so MMQ wins once M amortizes the
+	// pad. m=6 wins at every tested shape (2048² 1.40×, 2048×5632 1.87×, 4096² 2.3×); m=4 only
+	// wins at large n (ties at 2048²), so 6 is the no-regression floor — this captures
+	// speculative-decode / small-batch (m=6-7), previously stuck on the slow GEMV.
+	if m >= 6 && w.n%64 == 0 && w.k%32 == 0 {
 		if err := rec.q8PrefillMMQ(x, w, o, m); err == nil {
 			return nil
 		}
