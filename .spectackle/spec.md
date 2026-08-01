@@ -397,3 +397,13 @@ WHEN a probe reports the test suite still green, the a mutation probe SHALL reje
 
 ## PROC-INTERLEAVE-001
 WHEN a speedup below roughly 10 percent is claimed, the a benchmark A/B SHALL toggle the change in and out within ONE session, at least three alternations, AND discard the run unless each arm spread stays near 5 percent — alternation removes drift between runs, not contention during them.
+
+## GIT-CALLS-MUST-SCRUB-GIT-ENV-001
+IF a git command runs with cmd.Dir set and inherits the process environment, THEN the developer SHALL strip every GIT_* variable from it and add 1 floor proving a decoy repo named by GIT_DIR stays untouched.
+
+Rationale: GIT_DIR overrides repository discovery entirely: with it set, git ignores cmd.Dir and operates on the repository the variable names. Git exports GIT_DIR for every hook it runs, and the pre-push hook runs make preflight, which runs the tests, so internal/cichange committed about 50 fixture commits onto the branch being pushed and replaced the index. The production gitRun had the same defect - dir is its whole contract. The suite had been green because harness and code were BOTH redirected to the same wrong repo and therefore agreed; fixing only one side is what made the failure visible.
+
+## NEW-DECL-GOES-ABOVE-THE-DOC-BLOCK-001
+IF an optimization adds a helper, constant or type beside a documented function, THEN the developer SHALL put it above that function s doc comment; a doc binds to the next declaration, and 6 exported symbols lost theirs.
+
+Rationale: A doc comment binds to the declaration that immediately follows it. Optimizations landing a jam constant or a parallel helper between a comment and its function rebound the comment and left DBSCAN.Fit, GradientBoostingRegressor.Predict, QMatMul, LU.Solve, KimiDeltaAttention and tensor.NewOn undocumented; apicheck caught it only at push time, after the commits had merged.
