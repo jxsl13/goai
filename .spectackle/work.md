@@ -2313,3 +2313,24 @@ kind: radio
 option: A typed fields: an unexported typedAllocator (allocF32/allocF64/allocU16) on heapAllocator and Pool, typed slices in Storage. No unsafe. Storage grows 48 to about 104 bytes, so the pooled small case goes 184 B in 3 allocs to about 216 B in 2 - objects down a third, bytes up about 17%.
 option: B unsafe.Pointer: data becomes an unsafe.Pointer plus the existing dtype and n; F32/F64/U16 become unsafe.Slice. Storage SHRINKS 48 to 40 bytes, so objects AND bytes both improve with no trade. Cost is unsafe in the most foundational type, on the path every tensor takes. Precedent exists in internal/npy, backend/cpu and backend/metal, but this is a different risk class.
 option: C leave it: the box is real but bounded, and Storage is read by every accessor in the package, so neither rewrite is free to review.
+
+## T-01KYYVBKHMESV9SJ4YPG01TSQQ T1034 merge campaign: 49 of 52 PRs merged, gofmt regression fixed, CUDA chain serialized
+kind: task
+state: draft
+created: 2026-08-01
+
+MERGE CAMPAIGN, run on explicit instruction to merge every open PR and then land this session's work as one PR on top.
+
+RESULT SO FAR: 49 of 52 merged. 3 remain (681, 682, 683), all CUDA, all blocked only on serialization rather than on anything unresolved.
+
+WHAT WENT SMOOTHLY. 47 merged in three batches, oldest first, each needing `gh pr ready` because 51 of the 52 were drafts. Merging in ascending order minimized conflicts but did not eliminate them: 5 PRs conflicted as main advanced under them.
+
+THE gofmt REGRESSION, worth recording because it will recur. PR 684 existed precisely to fix a whole-tree gofmt failure on main, and the batch merged right after it REINTRODUCED the same failure in 6 files (from 648, 667, 668, 669, 675). The repo preflight runs gofmt over the whole tree, so main was red and every subsequent push was blocked by the pre-push hook. Fixed by PR 702, the same way 684 did it. The lesson is that a formatting gate which only runs in the pre-push hook and CI, and not in the PR merge gate, will be reintroduced by every batch that does not pass through a local push.
+
+CONFLICT RESOLUTION, two shapes. (1) PR 649, cpu vexp: main had gained softcapF32/vsoftcapF32 from 648 and the PR added softplusF32/softplusF32x8 at the same place. Additive in vexp.go, but in vexp_amd64.go the conflict region cut THROUGH a function body - both sides ended inside a for loop and shared the closing braces after the marker - so naive concatenation produced a file that still compiled on the host and was only caught by gofmt, because vexp_amd64.go is not built on darwin/arm64. Verified afterwards with an explicit GOARCH=amd64 cross-build, which is the only way a formatting or syntax slip in an arch-gated file surfaces on this host. (2) All four CUDA PRs conflicted on ONE line: a long static CUfunction declaration list, each PR adding a different symbol. A scripted union resolver merges them by inserting each new symbol after the same predecessor it follows on its own side, then asserts no symbol was lost. Refuses to act unless both sides are the single-line declaration shape.
+
+WHY THE LAST THREE ARE SERIAL. They all edit that same declaration line, so each merge re-conflicts the others. The chain is rebase, push, wait for CI, merge, repeat. Auto-merge is disabled on this repository, so none of it can be queued.
+
+CUDA CANNOT BE VERIFIED ON THIS HOST - darwin/arm64, no NVIDIA toolchain - so for those four the local gates are gofmt, the non-cgo build and vet, and CI is the real verifier. 679 was merged only after its full check rollup came back green.
+
+ENVIRONMENT DEFECT HIT AND REPAIRED. Mid-campaign every git command in the working worktree began failing with a work-tree error, including in an unrelated sibling worktree. Cause: the main repository is bare and worktrees rely on extensions.worktreeConfig, but this worktree's config.worktree had lost its core.bare=false, so it inherited bare from the main config. Repaired with a scoped `git config --worktree core.bare false`. No work was at risk because everything was committed and pushed, which is the reason to push continuously rather than batch.
