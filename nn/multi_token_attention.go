@@ -314,6 +314,17 @@ func (m *MultiTokenAttention) keyQueryConv(ctx *backend.Context, l *tensor.Tenso
 // o in a group is Σ_p HeadKernel[o,p]·map[group,p]. With HeadKernel = identity this
 // returns the maps unchanged.
 func (m *MultiTokenAttention) headConv(ctx *backend.Context, maps []*tensor.Tensor) ([]*tensor.Tensor, error) {
+	// Fused inference path (no autograd taping): the dense c_h×c_h head-group mixing
+	// out[g+o] = Σ_p HeadKernel[o,p]·maps[g+p] is dispatched below as, per (g,o,p), two
+	// OpSlice (to pull the scalar HeadKernel[o,p] as a [1,1] tensor) + an OpMul (broadcast
+	// [T,T]·[1,1]) + an OpAdd — Heads·(2c_h−1) fresh [T,T] allocations and 2·Heads·c_h²
+	// scalar-slice dispatches per layer. A direct typed loop reads the c_h² kernel scalars
+	// ONCE and accumulates each output over p LEFT-TO-RIGHT (mul then add, no FMA), seeding
+	// from the p=0 product exactly as the dispatch's `acc = term` — BIT-IDENTICAL. Training
+	// keeps the dispatch loop (each OpMul/OpAdd is VJP-taped).
+	if d := maps[0].Dtype(); ctx.Recorder == nil && (d == tensor.F64 || d == tensor.F32) {
+		return m.headConvFused(maps, d)
+	}
 	out := make([]*tensor.Tensor, m.Heads)
 	for g := 0; g < m.Heads; g += m.CH {
 		for o := range m.CH {
@@ -339,6 +350,67 @@ func (m *MultiTokenAttention) headConv(ctx *backend.Context, maps []*tensor.Tens
 				}
 			}
 			out[g+o] = acc
+		}
+	}
+	return out, nil
+}
+
+// headConvFused is the fused typed inference form of headConv: out[g+o] =
+// Σ_p HeadKernel[o,p]·maps[g+p]. It reads the c_h×c_h kernel scalars once and, per output
+// map, accumulates over p left-to-right (mul then add, seeded from the p=0 product) in the
+// map's native dtype — the identical products and identical accumulation order as the
+// per-(g,o,p) OpMul/OpAdd dispatch, so the result is bit-identical. maps are contiguous
+// OpReshape outputs, so raw storage indexing is safe.
+func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtype) ([]*tensor.Tensor, error) {
+	out := make([]*tensor.Tensor, m.Heads)
+	ch := m.CH
+	hk := m.HeadKernel.Contiguous()
+	shp := maps[0].Shape()
+	n := maps[0].Numel()
+	if d == tensor.F64 {
+		w := hk.Storage().F64()
+		for g := 0; g < m.Heads; g += ch {
+			for o := 0; o < ch; o++ {
+				res := tensor.New(tensor.F64, shp)
+				os := res.Storage().F64()
+				for p := 0; p < ch; p++ {
+					wop := w[o*ch+p]
+					mp := maps[g+p].Contiguous().Storage().F64()
+					if p == 0 {
+						for i := 0; i < n; i++ {
+							os[i] = mp[i] * wop
+						}
+					} else {
+						for i := 0; i < n; i++ {
+							os[i] += mp[i] * wop
+						}
+					}
+				}
+				out[g+o] = res
+			}
+		}
+		return out, nil
+	}
+	// F32
+	w := hk.Storage().F32()
+	for g := 0; g < m.Heads; g += ch {
+		for o := 0; o < ch; o++ {
+			res := tensor.New(tensor.F32, shp)
+			os := res.Storage().F32()
+			for p := 0; p < ch; p++ {
+				wop := w[o*ch+p]
+				mp := maps[g+p].Contiguous().Storage().F32()
+				if p == 0 {
+					for i := 0; i < n; i++ {
+						os[i] = mp[i] * wop
+					}
+				} else {
+					for i := 0; i < n; i++ {
+						os[i] += mp[i] * wop
+					}
+				}
+			}
+			out[g+o] = res
 		}
 	}
 	return out, nil
