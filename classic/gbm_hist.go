@@ -2,6 +2,7 @@ package classic
 
 import (
 	"math"
+	"runtime"
 	"sort"
 )
 
@@ -9,6 +10,9 @@ import (
 // from sort.Float64s to the O(n) LSD radix (tree.go's proven transform). Below it the
 // comparison sort's lower constant wins.
 const histRadixCutoff = 512
+
+// gbmHistSetupParWork gates the one-time parallel per-feature binning in newHistBuilder (n·d work).
+const gbmHistSetupParWork = 1 << 17
 
 // radixSortF64 sorts col ascending with an 8-pass LSD radix on the order-preserving u64
 // transform of the float64 bits (negatives → ^bits, non-negatives → bits|sign — monotone in
@@ -109,34 +113,52 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	b := &histBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf, nbins: nbins}
 	b.edges = make([][]float64, d)
 	b.binned = make([]uint16, n*d)
-	col := make([]float64, n)
-	var rkeys, rtmp []uint64
-	if n >= histRadixCutoff {
-		rkeys = make([]uint64, n)
-		rtmp = make([]uint64, n)
-	}
-	for f := 0; f < d; f++ {
-		for i := 0; i < n; i++ {
-			col[i] = x[i][f]
-		}
+	// Bin every feature ONCE (sort → quantile edges → assign bin codes). Features are
+	// independent — each writes only edges[f] and the strided binned[·*d+f] column — so fan the
+	// one-time setup over GOMAXPROCS with PER-WORKER sort scratch (col/rkeys/rtmp). Bit-identical:
+	// each feature's binning is deterministic and independent of the others.
+	binFeatures := func(f0, f1 int) {
+		col := make([]float64, n)
+		var rkeys, rtmp []uint64
 		if n >= histRadixCutoff {
-			radixSortF64(col, rkeys, rtmp)
-		} else {
-			sort.Float64s(col)
+			rkeys = make([]uint64, n)
+			rtmp = make([]uint64, n)
 		}
-		ne := nbins - 1
-		ed := make([]float64, 0, ne)
-		for q := 1; q <= ne; q++ {
-			v := col[q*n/nbins]
-			if len(ed) == 0 || v > ed[len(ed)-1] {
-				ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+		for f := f0; f < f1; f++ {
+			for i := 0; i < n; i++ {
+				col[i] = x[i][f]
+			}
+			if n >= histRadixCutoff {
+				radixSortF64(col, rkeys, rtmp)
+			} else {
+				sort.Float64s(col)
+			}
+			ne := nbins - 1
+			ed := make([]float64, 0, ne)
+			for q := 1; q <= ne; q++ {
+				v := col[q*n/nbins]
+				if len(ed) == 0 || v > ed[len(ed)-1] {
+					ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+				}
+			}
+			b.edges[f] = ed
+			for i := 0; i < n; i++ {
+				// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
+				b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
 			}
 		}
-		b.edges[f] = ed
-		for i := 0; i < n; i++ {
-			// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
-			b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
+	}
+	if d >= 2 && n*d >= gbmHistSetupParWork {
+		nw := runtime.GOMAXPROCS(0)
+		if nw > d {
+			nw = d
 		}
+		_ = parallelBuild(nw, func(c int) error {
+			binFeatures(c*d/nw, (c+1)*d/nw)
+			return nil
+		})
+	} else {
+		binFeatures(0, d)
 	}
 	// One histogram buffer per recursion level (the histogram-subtraction scheme
 	// keeps the parent's histogram live while its children are grown).
