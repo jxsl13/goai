@@ -79,8 +79,13 @@ func init() {
 		// B = Q̄ + Q·copyltu(M)  (m×n). Same interchange: c is read down a column with j innermost,
 		// so k moves outside and c[k] becomes a contiguous row. Each B[i][j] still starts from
 		// Q̄[i][j] and adds the n terms in ascending k.
+		//
+		// Rows are independent — row i reads only qb[i], qd[i] and all of c, and writes only
+		// b[i] — and the per-row cost is the same n*n for every row, so a striped split needs no
+		// balancing. Every B[i][j] still adds its n terms in ascending k, so the result is
+		// bit-identical to the serial loop and the parity test asserts exact equality.
 		b := make([][]float64, m)
-		for i := range m {
+		logdetParallelIdx(m, m*n*n, func(i int) {
 			bi := make([]float64, n)
 			b[i] = bi
 			copy(bi, qb[i])
@@ -91,7 +96,7 @@ func init() {
 					bi[j] += qdik * ck[j]
 				}
 			}
-		}
+		})
 		// Rinv = R⁻¹ (upper-triangular) by back-substitution on R·X = I.
 		rinv := make([][]float64, n)
 		for i := range n {

@@ -2,6 +2,7 @@ package autograd
 
 import (
 	"math"
+	"runtime"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -137,4 +138,72 @@ func qrVJPColumnWalk(m, n int, qd, rd, qb, rb [][]float64) [][]float64 {
 		}
 	}
 	return out
+}
+
+// TestQRVJPStripedRowsMatchSerial locks the striped B loop to the serial one, bit for bit.
+//
+// Row i of B reads only qb[i], qd[i] and all of c, and writes only b[i], so which worker retires a
+// row cannot change its arithmetic — each B[i][j] still adds its n terms in ascending k. That is
+// why the assertion is exact rather than a tolerance: a tolerance here would accept precisely the
+// reassociation the split claims not to do.
+//
+// GOMAXPROCS(1) is the reference because logdetParallelIdx falls back to the plain loop when it
+// resolves one worker. The shape must clear that helper's work < 1<<15 gate — 64*32*32 = 65536 —
+// or both arms would run the same serial code and the test would compare it against itself. 64
+// rows also does not divide 12 workers evenly, so the stride's tail is exercised.
+func TestQRVJPStripedRowsMatchSerial(t *testing.T) {
+	vjp := vjpsMulti[backend.OpQR]
+	if vjp == nil {
+		t.Fatal("no multi-output VJP registered for OpQR")
+	}
+	const m, n = 64, 32
+	mk := func(rows, cols int, f func(i, j int) float64) *tensor.Tensor {
+		x := tensor.New(tensor.F64, tensor.Shape{rows, cols})
+		for i := range rows {
+			for j := range cols {
+				x.SetF64(f(i, j), i, j)
+			}
+		}
+		return x
+	}
+	q := mk(m, n, func(i, j int) float64 {
+		return math.Sqrt(2/float64(m)) * math.Cos(math.Pi*float64(i)*(float64(j)+0.5)/float64(m))
+	})
+	r := mk(n, n, func(i, j int) float64 {
+		if i > j {
+			return 0
+		}
+		if i == j {
+			return 1 + 0.25*float64(i)
+		}
+		return 0.1 * math.Sin(float64(i*3+j))
+	})
+	qb := mk(m, n, func(i, j int) float64 { return math.Cos(float64(i*7+j*3)) * 0.3 })
+	rb := mk(n, n, func(i, j int) float64 { return math.Sin(float64(i*5+j*2)) * 0.2 })
+	run := func() []*tensor.Tensor {
+		out, err := vjp(nil, nil, []*tensor.Tensor{q, r}, nil, []*tensor.Tensor{qb, rb})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	prev := runtime.GOMAXPROCS(1)
+	serial := run()
+	runtime.GOMAXPROCS(prev)
+	striped := run()
+	if len(serial) != len(striped) {
+		t.Fatalf("%d gradients serial, %d striped", len(serial), len(striped))
+	}
+	for g := range serial {
+		sd, pd := serial[g].Storage().F64(), striped[g].Storage().F64()
+		if len(sd) != len(pd) {
+			t.Fatalf("gradient %d: %d values serial, %d striped", g, len(sd), len(pd))
+		}
+		for i := range sd {
+			if math.Float64bits(sd[i]) != math.Float64bits(pd[i]) {
+				t.Fatalf("gradient %d element %d: serial %v, striped %v — the split changed an"+
+					" accumulation", g, i, sd[i], pd[i])
+			}
+		}
+	}
 }
