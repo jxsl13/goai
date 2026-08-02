@@ -26,3 +26,6 @@ WHEN choosing which benchmark cell to optimize, the optimizer SHALL measures eac
 
 ## A-WORK-GATE-IS-VERIFIED-AGAINST-THE-REAL-SHAPE-001
 WHEN a parallel split measures as no change at all, the implementer SHALL prints the gate inputs from the benchmark before concluding anything; the softmax Hessian split read as exactly zero effect because its work estimate came to 252000 against a 262144 threshold and the fork never ran.
+
+## A-TRIANGULAR-INNER-RANGE-IS-BANDED-ON-CUMULATIVE-WORK-001
+WHEN splitting a loop whose iteration a costs m minus a, the optimizer SHALL cuts the bands on cumulative work rather than on iteration count, since an equal-count split gives the first band about 2m over workers times the last bands work and the makespan is the first bands.
