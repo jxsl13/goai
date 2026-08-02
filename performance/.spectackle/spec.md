@@ -50,3 +50,6 @@ WHEN choosing how many outer steps an unrolled body takes per pass, the optimize
 
 ## A-GOGC-SWEEP-DECIDES-WHETHER-ALLOCATION-IS-A-TIME-LEVER-001
 WHEN a CPU profile attributes a large share to the allocator or the scavenger, the optimizer SHALL runs the benchmark at 3 GOGC settings before spending a round on allocation: 100, 400 and 1600 on the GPT decode gave 593, 587 and 596 ms, which closes the question in two minutes and leaves the byte count as a resource finding only.
+
+## POOL-WAIT-IS-DISTINGUISHED-FROM-SCHEDULER-IDLE-001
+WHEN a profile shows most time in pthread_cond_wait, the optimizer SHALL peeks its callers before blaming the worker pool: stopm from findRunnable is the Go scheduler parking idle threads for want of work, not contention, and the batched ViT forward reads as 65 percent wait for that reason while a 3-point sweep of the pool dense-gap moved it 0.4 percent.
