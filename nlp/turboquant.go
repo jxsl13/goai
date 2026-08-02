@@ -355,7 +355,16 @@ func (q *qjlSketch) encode(r []float64) (signs []bool, rnorm float64) {
 // decodeResidual returns the unbiased residual estimate (√(π/2)/√d)·‖r‖·Sᵀ·qjl, where
 // Sᵀ·qjl = (1/√d)·D·H·qjl (H symmetric) is another fwht — O(d log d).
 func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
-	z := make([]float64, q.d)
+	var s tqScratch
+	return q.decodeResidualInto(signs, rnorm, &s)
+}
+
+// decodeResidualInto is decodeResidual writing through a caller-supplied scratch, so a batch of
+// rows reuses two buffers instead of allocating two per row. Both are fully overwritten before
+// they are read — z is filled from every sign and out from every z — so reuse cannot carry a
+// value across rows. Same arithmetic, same order, identical bits.
+func (q *qjlSketch) decodeResidualInto(signs []bool, rnorm float64, sc *tqScratch) []float64 {
+	z := sc.grow(&sc.z, q.d)
 	for i, s := range signs {
 		if s {
 			z[i] = 1
@@ -365,7 +374,7 @@ func (q *qjlSketch) decodeResidual(signs []bool, rnorm float64) []float64 {
 	}
 	fwht(z)                                              // H·qjl
 	scale := math.Sqrt(math.Pi/2) / float64(q.d) * rnorm // (√(π/2)/√d)·‖r‖·(1/√d) = √(π/2)/d·‖r‖
-	out := make([]float64, q.d)
+	out := sc.grow(&sc.res, q.d)
 	for i := range out {
 		out[i] = scale * z[i] * q.signs[i]
 	}
@@ -480,13 +489,44 @@ func (c *TurboQuantKVCache) compress(x []float64) (tqRow, error) {
 	return tqRow{idx: idx, signs: signs, norm: norm, rnorm: rnorm}, nil
 }
 
+// tqScratch holds the per-row intermediates of a reconstruction. Five of the six buffers a row
+// needed were pure scratch — the sketch decode's two, the rotation's two, and the rotated-coord
+// staging — and only the returned row itself outlives the call. One scratch per WORKER makes the
+// allocation count a function of GOMAXPROCS instead of the cache length.
+type tqScratch struct {
+	z, res, ruT, buf, uT []float64
+}
+
+// grow returns *b resliced to n, allocating only when the current capacity is short. Every caller
+// then writes all n entries before reading any, which is what makes reuse invisible.
+func (s *tqScratch) grow(b *[]float64, n int) []float64 {
+	if cap(*b) < n {
+		*b = make([]float64, n)
+	}
+	*b = (*b)[:n]
+	return *b
+}
+
 func (c *TurboQuantKVCache) reconstruct(row tqRow) []float64 {
-	res := c.qjl.decodeResidual(row.signs, row.rnorm) // m coords
-	ruT := make([]float64, c.m)
-	for i := range row.idx {
+	var s tqScratch
+	return c.reconstructInto(row, &s)
+}
+
+// reconstructInto is reconstruct with the intermediates supplied by the caller. Only the returned
+// row is freshly allocated — it is kept by the caller, so it cannot be scratch.
+func (c *TurboQuantKVCache) reconstructInto(row tqRow, sc *tqScratch) []float64 {
+	res := c.qjl.decodeResidualInto(row.signs, row.rnorm, sc) // m coords
+	// Sized by the row's OWN index count rather than c.m, so the buffer is exactly the region the
+	// next loop writes. That is what makes reuse safe without a clearing pass: there is no tail
+	// left over from the previous row to read. A row whose index count disagrees with the rotation
+	// width then fails the length check inside applyInverseInto instead of quietly reading stale
+	// values — compress always produces c.m of them, and this keeps that an enforced invariant
+	// rather than an assumed one.
+	ruT := sc.grow(&sc.ruT, len(row.idx))
+	for i := range ruT {
 		ruT[i] = c.cb[row.idx[i]] + res[i]
 	}
-	uT, _ := c.rot.applyInverse(ruT) // back to dim coords
+	uT, _ := c.rot.applyInverseInto(ruT, sc) // back to dim coords
 	out := make([]float64, c.dim)
 	for i := range uT {
 		out[i] = row.norm * uT[i]
@@ -526,8 +566,9 @@ func (c *TurboQuantKVCache) rows(rs []tqRow) [][]float64 {
 	// buffers locally — no receiver scratch), so the loop fans out over GOMAXPROCS bit-identically
 	// to the serial loop. Gated on len(rs)·dim so a short cache stays serial.
 	parallelChunks(len(rs), len(rs)*c.dim, func(lo, hi int) {
+		var sc tqScratch // one per worker band, not one per row
 		for i := lo; i < hi; i++ {
-			out[i] = c.reconstruct(rs[i])
+			out[i] = c.reconstructInto(rs[i], &sc)
 		}
 	})
 	return out
@@ -596,13 +637,22 @@ func (r *hadamardRotation) apply(x []float64) ([]float64, error) {
 // applyInverse returns Rᵀ·y = D·(1/√m)·H·y, truncated to the original d coordinates (R
 // orthogonal ⇒ R⁻¹ = Rᵀ; H,D symmetric). len(y) must be m.
 func (r *hadamardRotation) applyInverse(y []float64) ([]float64, error) {
+	var s tqScratch
+	return r.applyInverseInto(y, &s)
+}
+
+// applyInverseInto is applyInverse writing through a caller-supplied scratch. The transform buffer
+// is a full copy of y and the output is written for every index, so neither can carry a value from
+// the previous row; the arithmetic is untouched.
+func (r *hadamardRotation) applyInverseInto(y []float64, sc *tqScratch) ([]float64, error) {
 	if len(y) != r.m {
 		return nil, fmt.Errorf("nlp: hadamardRotation.applyInverse wants len %d, got %d", r.m, len(y))
 	}
-	buf := append([]float64(nil), y...)
+	buf := sc.grow(&sc.buf, r.m)
+	copy(buf, y)
 	fwht(buf)
 	inv := 1 / math.Sqrt(float64(r.m))
-	out := make([]float64, r.d)
+	out := sc.grow(&sc.uT, r.d)
 	for i := range out {
 		out[i] = buf[i] * inv * r.signs[i]
 	}

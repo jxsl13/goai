@@ -573,3 +573,114 @@ func TestTurboQuantDeterministic(t *testing.T) {
 		t.Log("note: different-seed reconstruction coincidentally matched at [0][0] (rare, not an error)")
 	}
 }
+
+// TestTurboQuantScratchReuseMatchesFreshBuffers pins the per-worker reconstruction scratch: a row
+// reconstructed as part of a batch must be BIT-IDENTICAL to the same row reconstructed alone.
+//
+// The single-row reconstruction is the reference precisely because it cannot reuse anything — a
+// fresh tqScratch is zero-valued, so any value the batch carries from the previous row shows up as
+// a disagreement. That covers all five reused buffers: the sketch decode's sign vector and result,
+// the rotation's transform buffer and output, and the rotated-coordinate staging.
+//
+// The staging buffer is the one that actually needs the explicit clear, and this fixture is built
+// to reach it: the codebook indices cover fewer coordinates than the padded rotation width, so
+// every entry past len(row.idx) is left at whatever the previous row wrote. A fresh make was
+// zeroed and a reused buffer is not — the exact precondition PS3035 warns about.
+//
+// The batch must be long enough to clear the fan-out's serial gate AND to put more than one row
+// through a single scratch, or the reuse never happens and the test compares one code path
+// against itself.
+func TestTurboQuantScratchReuseMatchesFreshBuffers(t *testing.T) {
+	const dim, bits, rows = 96, 2, 200 // dim is NOT a power of two: the rotation pads to 128
+	c, err := NewTurboQuantKVCache(dim, bits, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for r := range rows {
+		k := make([]float64, dim)
+		v := make([]float64, dim)
+		for i := range dim {
+			k[i] = math.Sin(float64(r*13+i) * 0.31)
+			v[i] = math.Cos(float64(r*7+i) * 0.17)
+		}
+		if err := c.Append(k, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, side := range []struct {
+		name string
+		rs   []tqRow
+		got  [][]float64
+	}{
+		{"keys", c.keys, c.Keys()},
+		{"values", c.vals, c.Values()},
+	} {
+		if len(side.got) != rows {
+			t.Fatalf("%s: %d rows, want %d", side.name, len(side.got), rows)
+		}
+		for i, row := range side.rs {
+			want := c.reconstruct(row) // a virgin scratch, one row
+			for j := range want {
+				if math.Float64bits(side.got[i][j]) != math.Float64bits(want[j]) {
+					t.Fatalf("%s row %d coord %d: batch %v, fresh scratch %v — a reused buffer"+
+						" carried a value across rows", side.name, i, j, side.got[i][j], want[j])
+				}
+			}
+		}
+	}
+}
+
+// TestTurboQuantReconstructedRowsAreDistinct pins that each reconstructed row is its own slice.
+// The intermediates are now shared across a worker's rows; the RESULT must not be, or every row of
+// a band would alias one array and the values would look right only until a caller kept them.
+func TestTurboQuantReconstructedRowsAreDistinct(t *testing.T) {
+	const dim, bits, rows = 64, 2, 128
+	c, err := NewTurboQuantKVCache(dim, bits, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := make([]float64, dim)
+	for r := range rows {
+		for i := range dim {
+			x[i] = math.Sin(float64(r*5+i) * 0.4)
+		}
+		if err := c.Append(x, x); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := make(map[*float64]int, rows)
+	for i, row := range c.Keys() {
+		if len(row) == 0 {
+			t.Fatalf("row %d empty", i)
+		}
+		if j, dup := seen[&row[0]]; dup {
+			t.Fatalf("rows %d and %d share one backing array", j, i)
+		}
+		seen[&row[0]] = i
+	}
+}
+
+// TestTQScratchGrowReslicesToRequest pins the one clause of the scratch contract the end-to-end
+// tests cannot see: grow must reslice to the requested length, not hand back the whole capacity.
+//
+// Every buffer in a reconstruction is asked for the same size on every row, so after the first the
+// capacity always equals the request and a mutation returning cap() stays green through the entire
+// cache. This calls it directly with a shorter request after a longer one — the situation a caller
+// with a variable width would create, and the one that would otherwise expose a stale tail.
+func TestTQScratchGrowReslicesToRequest(t *testing.T) {
+	var s tqScratch
+	long := s.grow(&s.z, 8)
+	for i := range long {
+		long[i] = float64(i + 1)
+	}
+	short := s.grow(&s.z, 3)
+	if len(short) != 3 {
+		t.Fatalf("len %d, want 3 — grow returned the capacity, not the request", len(short))
+	}
+	if cap(short) < 8 {
+		t.Fatalf("cap %d — grow reallocated instead of reusing", cap(short))
+	}
+	if again := s.grow(&s.z, 8); len(again) != 8 || again[7] != 8 {
+		t.Fatalf("regrowing to 8 lost the buffer: len=%d", len(again))
+	}
+}
