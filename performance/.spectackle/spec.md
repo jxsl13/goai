@@ -14,3 +14,6 @@ WHEN sizing a per-worker scratch chunk from a cache-residency target, the optimi
 
 ## A-SERIAL-STRETCH-IS-READ-AGAINST-WALL-CLOCK-NOT-PROFILE-SHARE-001
 WHEN ranking a serial function inside an otherwise parallel path, the optimizer SHALL divides its CPU-profile share by the paths average parallelism before dismissing it, because a serial stretch costs its full CPU time in wall clock; the head mix read as 2 percent of a summed profile at parallelism 6.2 and was 12 percent of the benchmark.
+
+## A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001
+WHEN a CPU profile attributes a large share to runtime.madvise or GC, the optimizer SHALL treats it as a resource finding until a paired benchmark shows otherwise; removing 90 percent of the AQLM encoder allocations moved 45.7 MB per op to 4.4 and the time not at all, because that work overlapped on other threads.
