@@ -443,6 +443,11 @@ type RawFile struct {
 // ReadRaw parses a GGUF stream KEEPING each tensor quantized (QuantTensor) — the inverse of the
 // eager dequantization Read does, so a quantized model can be loaded without ever materializing
 // full-precision weights.
+//
+// Each QuantTensor.Data is a READ-ONLY VIEW into one shared buffer holding the file's data section.
+// Writing through it corrupts other tensors, and retaining any tensor retains the whole section;
+// a caller that wants an independent tensor must copy the slice. This halves both the time and the
+// allocated bytes of a quantized load compared with copying each tensor out.
 func ReadRaw(r io.Reader) (*RawFile, error) {
 	p, err := parse(r)
 	if err != nil {
@@ -459,8 +464,17 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 			return nil, fmt.Errorf("gguf: tensor %q data [%d,+%d) beyond section %d",
 				ti.name, ti.offset, need, len(p.data))
 		}
-		raw := make([]byte, need)
-		copy(raw, p.data[ti.offset:ti.offset+uint64(need)])
+		// Data is a VIEW into the parse buffer, not a copy. Copying it cost a full model-size
+		// allocation and memmove on every load — half the time and half the bytes of ReadRaw
+		// (1002129 -> 504042 ns/op, 18950344 -> 9513152 B/op on a 64-tensor model).
+		//
+		// The contract that buys it, stated because callers depend on it: the bytes are READ-ONLY
+		// (writing through one tensor corrupts its neighbors, since they share one allocation), and
+		// retaining ANY tensor retains the whole section. For the ordinary case — load a model,
+		// keep all of it — that is strictly less memory than before, because the copies were on top
+		// of the buffer they came from. A caller that keeps one tensor and drops the rest should
+		// copy the slice itself.
+		raw := p.data[ti.offset : ti.offset+uint64(need) : ti.offset+uint64(need)]
 		out.Tensors[ti.name] = QuantTensor{Data: raw, GGType: ti.ggType, Shape: ti.shape}
 	}
 	return out, nil

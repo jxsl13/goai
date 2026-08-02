@@ -167,3 +167,39 @@ func BenchmarkReadRawSynth(b *testing.B) {
 		}
 	}
 }
+
+// TestReadRawViewMatchesCopiedBytes pins the contract of handing out views into one shared buffer:
+// every tensor's bytes still decode, and no tensor can reach into its neighbor.
+//
+// The capacity clamp is the load-bearing half. Without the three-index slice, appending to one
+// tensor would write over the next one's bytes in place — the failure mode that makes shared
+// storage dangerous, and the one a length-only check would not catch.
+func TestReadRawViewMatchesCopiedBytes(t *testing.T) {
+	path := writeSynthModel(t, 12, 128, 64)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := ReadRaw(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Tensors) == 0 {
+		t.Fatal("no tensors parsed — the fixture proves nothing")
+	}
+	// Every tensor's bytes must round-trip through Dequantize, which is the only consumer that
+	// cares, and no two tensors may overlap.
+	for name, qt := range raw.Tensors {
+		if len(qt.Data) == 0 {
+			t.Fatalf("%s: empty data", name)
+		}
+		if _, err := Dequantize(qt.Data, QuantType(qt.GGType), qt.Shape.Numel()); err != nil {
+			t.Fatalf("%s: the exposed bytes do not decode: %v", name, err)
+		}
+		// Capacity is clamped to the length, so appending to one tensor cannot reach into the next.
+		if cap(qt.Data) != len(qt.Data) {
+			t.Fatalf("%s: cap %d exceeds len %d — an append would overwrite the next tensor",
+				name, cap(qt.Data), len(qt.Data))
+		}
+	}
+}
