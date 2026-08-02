@@ -447,3 +447,6 @@ IF a loop-invariant branch is hoisted out of a per-element loop, THEN the develo
 
 ## A-DTYPE-SPECIALIZED-ARM-GUARDS-EVERY-TENSOR-IT-READS-001
 IF a dtype-specialized arm is entered on a check covering fewer tensors than it reads, THEN the developer SHALL guard on all of them and send mixed sets to the reference kernel — a query-only guard crashed on an F32 query with an F64 mask.
+
+## A-PARALLEL-GATE-MUST-CLEAR-THE-SERIAL-THRESHOLD-001
+IF a test compares a parallel path against its serial one, THEN the developer SHALL size the fixture past the helper own work threshold — 3 sizes under n*feat=8192 compared the serial path with itself and a row-skipping mutation passed.
