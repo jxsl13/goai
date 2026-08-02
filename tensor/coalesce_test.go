@@ -94,3 +94,36 @@ func TestCoalesceDimsOnlyMergesDensePairs(t *testing.T) {
 		}
 	}
 }
+
+// TestRoundToHalfF32RejectsShortDst pins the one behavior the entry reslice changes: a dst shorter
+// than src is a documented programming error, and it now panics at entry rather than partway
+// through the loop with half the output already written.
+//
+// The output for a correctly sized dst is checked in the same test, because the reslice must not
+// change a single value — it only states a precondition the compiler could not see.
+func TestRoundToHalfF32RejectsShortDst(t *testing.T) {
+	src := []float32{1.5, -2.25, 3.125, 0.1}
+	for _, dt := range []Dtype{F16, BF16, F32} {
+		want := make([]float32, len(src))
+		RoundToHalfF32(want, src, dt)
+		if dt != F32 && want[3] == src[3] {
+			t.Fatalf("%v: 0.1 survived a half round-trip unchanged — the fixture cannot see a "+
+				"rounding change", dt)
+		}
+		got := make([]float32, len(src)+3) // longer than src is legal
+		RoundToHalfF32(got, src, dt)
+		for i := range src {
+			if got[i] != want[i] {
+				t.Fatalf("%v element %d: %v, want %v", dt, i, got[i], want[i])
+			}
+		}
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("%v: a short dst did not panic", dt)
+				}
+			}()
+			RoundToHalfF32(make([]float32, len(src)-1), src, dt)
+		}()
+	}
+}

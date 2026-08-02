@@ -54,6 +54,13 @@ func f16ToF32Bits(h uint16) float32 {
 // intermediate tensor — the AMP master→compute sync fused this from two Casts (two
 // allocations + two passes + a copy) down to one. A non-half dt is a plain copy.
 func RoundToHalfF32(dst, src []float32, dt Dtype) {
+	// One slice check at entry instead of a bounds check per stored element. The loops range over
+	// src and index dst, which the compiler cannot prove is long enough — the documented
+	// len(dst) >= len(src) precondition is not something it can see. Reslicing states it once.
+	//
+	// The only behavior change is that a too-short dst — already a programming error by the doc
+	// above — now panics here rather than partway through the loop.
+	dst = dst[:len(src)]
 	switch dt {
 	case F16:
 		for i, v := range src {
