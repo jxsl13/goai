@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3037", "mis-sized-append-buffer", "a slice made with a stated capacity inside a loop and then appended to from a NESTED loop, so the hint is sized per outer pass while the appends run outer times inner. The hint guarantees the opposite of what it looks like: the slice doubles its way up from the hint to its true size on EVERY outer pass, copying everything it holds each time. MEASURED on a beam search whose hint was 8 per live beam against a true size of one candidate per beam per VOCABULARY ENTRY — that one append line was 2.45 GB of a 2.90 GB benchmark, and hoisting the buffer above the loop with a per-pass truncation took bytes -85.0%% on beam search and -98.0%% on its diverse variant. Judge on B/op first: the time win was -8.8%% and -2.9%%, real but far smaller. Prove nothing survives the reset — dropping the truncation must redden the suite, and on the measured site it did. PS3035 does not cover this: it wants a size the loop does not vary and only sees loops with a range clause or an init statement, and the measured site is a bare condition loop whose hint mentions the collection it iterates", false},
 	{"PS3036", "self-comparison-oracle", "a test that computes BOTH sides of its comparison with the same function and asserts they agree, so the expected value is produced by the code under test. Such a gate can only see state carried BETWEEN calls: any mistake INSIDE the computation changes both sides identically and it stays green. Found exactly that way — a Newton-Schulz orthogonalization gate of this shape passed with two intermediate buffers wired to one slice, and only an independently written reference caught it. Add a slow, obvious implementation with its own buffers and compare to a tolerance when the summation orders differ. SOMETIMES DELIBERATE: comparing one function across a CONFIG difference (GOMAXPROCS 1 against many, a fast path against a fallback) is a real differential test — it still gates only that difference, so document it and keep a separate reference for the arithmetic. Matters because every optimization here is defended by a bit-identity gate, and a gate that cannot fail reports coverage that does not exist. Requires -tests", false},
 	{"PS3035", "loop-hoistable-scratch", "a slice allocated with make at the top of a loop body, sized by something the loop does not vary, that never leaves the iteration — one buffer made and thrown away per pass. Hoist it above the loop. MEASURED on a Cholesky solve whose forward-substitution buffer was allocated per right-hand side: at 128 columns, 133 allocations became 43 and bytes fell 18.1%%. PS2001 does NOT cover this, since it fires only on the configured tensor allocators, so a plain make of a slice in a loop is invisible to every other check in this table. PROVE THE OVERWRITE BEFORE HOISTING: a fresh make is zeroed and a reused buffer is not, so an iteration that reads a slot before writing it would silently start seeing the previous pass\u0027s value — poison with NaN between iterations, confirm green, then delete one write and confirm red. JUDGE ON allocs/op AND B/op; the time win is usually nil and was here at both shapes. A buffer allocated once per WORKER BAND is already in the right place (PS6008) — bounded by GOMAXPROCS", false},
 	{"PS3034", "serial-nest-with-idle-fanout", "a three-deep nest filling a destination the function itself allocated, indexed by the OUTERMOST loop variable so the iterations are independent, running on one core in a package that already declares a fan-out helper. Split the outer loop into bands: each owns whole rows of the destination and every element accumulates in the same order, so the result is BIT-IDENTICAL and the gate asserts exact equality rather than a tolerance. MEASURED on a Muon optimizer step whose flat matmul was 48.8%% of the profile and serial: 195.8ms to 77.4ms, -60.5%%, confirmed in both benchmark orders. GATE ON THE PRODUCT of the loop bounds, not the outer count — Newton-Schulz drives a few rows through a great deal of work each, and a row-count gate leaves exactly that shape serial. Expect allocations to RISE (46 to 568 per step, one closure per band) with bytes flat; that trade is the point. Moving the first band onto the calling goroutine was measured here and did nothing. Silent when any write is indexed without the outer variable, which is a cross-iteration accumulator a split would race on", false},
@@ -1296,6 +1297,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
+		out = append(out, misSizedAppendBufferFindings(fset, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -15391,4 +15393,169 @@ func selfComparisonOracleFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 		return true
 	})
 	return out
+}
+
+// --- PS3037: a per-iteration append buffer whose capacity hint is a factor too small ------------
+
+// misSizedAppendBufferFindings flags PS3037 — a slice made with an explicit capacity inside a loop
+// body and then appended to from a NESTED loop, so the hint is sized per outer pass while the
+// appends run outer times inner.
+//
+// The hint then guarantees the opposite of what it looks like: the slice doubles its way up from
+// the hint to its true size on EVERY outer pass, copying everything it holds each time. In the
+// measured case the hint was 8 per live beam and the true size was one candidate per beam per
+// VOCABULARY ENTRY.
+//
+// PS3035 does not cover this. It requires a size expression that the loop does not vary and only
+// recognizes loops with a range clause or an init statement, and the measured site is
+// `for len(live) > 0` with a hint mentioning live — so it saw nothing.
+func misSizedAppendBufferFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body := loopBodyOf(n)
+		if body == nil {
+			return true
+		}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+				continue
+			}
+			call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+			// Three arguments is the whole point: a capacity was stated deliberately.
+			if !ok || renderExpr(call.Fun) != "make" || len(call.Args) != 3 {
+				continue
+			}
+			if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); !isSlice {
+				continue
+			}
+			name := identName(as.Lhs[0])
+			// Deliberately NOT escapesIteration: that treats any call argument as retention, and
+			// the measured site passes its buffer to slices.SortFunc, which keeps nothing. What
+			// matters here is whether the SLICE ITSELF outlives the pass — returned, or stored
+			// somewhere durable — since the recommendation is to hoist it and truncate.
+			if name == "" || retainedBeyondLoop(fn, name) {
+				continue
+			}
+			inner := innerAppendSubject(body, name)
+			if inner == "" {
+				continue
+			}
+			// The hint is only WRONG if it fails to account for the inner loop. A buffer hinted
+			// at len(r.items) and filled by ranging over r.items is correctly sized however deeply
+			// it nests; the measured defect is a hint that names the OUTER collection and nothing
+			// else. So: silent when the capacity expression mentions what the innermost loop
+			// ranges over.
+			if mentionsIdent(call.Args[2], inner) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(as.Pos()),
+				category: "mis-sized-append-buffer",
+				msg: fmt.Sprintf("%q is made with a stated capacity inside this loop and then"+
+					" appended to from a NESTED loop, so the hint is sized per outer pass while the"+
+					" appends run outer times inner. The hint then guarantees the opposite of what"+
+					" it looks like: the slice doubles its way up from the hint to its true size on"+
+					" EVERY outer pass, copying everything it holds each time. MEASURED on a beam"+
+					" search whose hint was 8 per live beam against a true size of one candidate"+
+					" per beam per VOCABULARY ENTRY: that single append line was 2.45 GB of the"+
+					" benchmark's 2.90 GB, and hoisting the buffer above the loop with a truncation"+
+					" per pass took bytes -85.0%% on beam search and -98.0%% on its diverse variant."+
+					" Hoist it and reset with [:0] — it then reaches its true size once and stays"+
+					" there. JUDGE ON B/op FIRST; the time win was -8.8%% and -2.9%%, real but much"+
+					" smaller than the byte win. PROVE NOTHING SURVIVES THE RESET: the buffer must"+
+					" be truncated before it is refilled, and dropping that truncation must redden"+
+					" the suite — on the measured site it did. PS3035 does not cover this: it wants"+
+					" a size the loop does not vary and only sees loops with a range clause or an"+
+					" init statement, and the measured site is a bare condition loop with a hint"+
+					" that mentions the collection it iterates", name),
+			})
+		}
+		return true
+	})
+	return out
+}
+
+// retainedBeyondLoop reports whether name is returned or stored into an index, a field or through
+// a pointer — the ways a slice survives the iteration that built it.
+func retainedBeyondLoop(fn *ast.FuncDecl, name string) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if root, ok := rootIdentName(unparen(r)); ok && root == name {
+					found = true
+				}
+			}
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if i >= len(x.Lhs) || identName(rhs) != name {
+					continue
+				}
+				switch unparen(x.Lhs[i]).(type) {
+				case *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr:
+					found = true
+				}
+			}
+		case *ast.CallExpr:
+			// Appending the buffer INTO something else keeps it: the collection holds the slice
+			// header, and the next pass would rewrite what was collected. A sort or any other
+			// call that merely reads it does not, which is why only append counts here.
+			if renderExpr(x.Fun) == "append" {
+				for _, a := range x.Args[min(1, len(x.Args)):] {
+					if identName(a) == name {
+						found = true
+					}
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// innerAppendSubject returns the root identifier of what the INNERMOST loop appending to name
+// ranges over, or "" if no loop nested within body appends to it. That subject is what a correctly
+// sized capacity hint would have to mention.
+func innerAppendSubject(body *ast.BlockStmt, name string) string {
+	subject := ""
+	var walk func(n ast.Node, over string, depth int)
+	walk = func(n ast.Node, over string, depth int) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			switch x := m.(type) {
+			case *ast.RangeStmt:
+				sub := over
+				if r, ok := rootIdentName(unparen(x.X)); ok {
+					sub = r
+				}
+				walk(x.Body, sub, depth+1)
+				return false
+			case *ast.ForStmt:
+				walk(x.Body, over, depth+1)
+				return false
+			case *ast.AssignStmt:
+				if depth == 0 || len(x.Lhs) != 1 || len(x.Rhs) != 1 || identName(x.Lhs[0]) != name {
+					return true
+				}
+				c, ok := unparen(x.Rhs[0]).(*ast.CallExpr)
+				if ok && renderExpr(c.Fun) == "append" && len(c.Args) > 0 &&
+					identName(c.Args[0]) == name && subject == "" {
+					subject = over
+					if subject == "" {
+						subject = "\x00" // appended in a loop with no range subject: still a finding
+					}
+				}
+			}
+			return true
+		})
+	}
+	walk(body, "", 0)
+	return subject
 }
