@@ -11,3 +11,6 @@ WHEN gating a blocked or tiled scan against its per-item oracle, the implementer
 
 ## A-MUTATION-THAT-REDDENS-NOTHING-IS-CHECKED-FOR-HAVING-RUN-001
 WHEN a mutation of load-bearing code leaves the suite green, the implementer SHALL confirms the intended test ran under the selector used before concluding anything; a -run pattern that misses a test name reads identical to a passing mutation, and 3 of this rounds first mutations were silent for that reason or for not compiling.
+
+## A-BIT-EXACT-GOLDEN-SKIPS-UNDER-THE-RACE-BUILD-001
+WHEN a test asserts exact floating-point bits against a recorded digest, the implementer SHALL skips it when the race detector is on, because the race build inhibits optimizations the compiler may otherwise make and changes the result; the MLA backward digests differently under -race on the pre-change implementation identically, so 2 of 2 goldens would have failed for the build mode rather than the change.
