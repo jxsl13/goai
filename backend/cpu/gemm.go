@@ -152,7 +152,32 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 // kernel's += contract.
 func gemvF64Cols(A, B, C []float64, k, n, lo, hi int) {
 	c := C[lo:hi:hi]
-	for p := range k {
+	// FOUR B ROWS PER PASS OVER C. The one-row form reads and writes every owned c element once
+	// per k, so each element carries a load-FMA-store chain through memory k times over; taking
+	// four rows at a time keeps the running value in a register across four contributions and
+	// cuts the c traffic and the chain by four.
+	//
+	// BIT-IDENTICAL, and that is the reason for the shape: each element still takes its
+	// contributions one at a time in ascending p (v += a0*b0[j], then a1*b1[j], …), NOT as a
+	// summed group. Adding the four products together first would reassociate and move the last
+	// bits, which the whole matmul parity surface forbids.
+	p := 0
+	for ; p+3 < k; p += 4 {
+		a0, a1, a2, a3 := A[p], A[p+1], A[p+2], A[p+3]
+		b0 := B[p*n+lo : p*n+hi : p*n+hi]
+		b1 := B[(p+1)*n+lo : (p+1)*n+hi : (p+1)*n+hi]
+		b2 := B[(p+2)*n+lo : (p+2)*n+hi : (p+2)*n+hi]
+		b3 := B[(p+3)*n+lo : (p+3)*n+hi : (p+3)*n+hi]
+		for j, v0 := range b0 {
+			v := c[j]
+			v += a0 * v0
+			v += a1 * b1[j]
+			v += a2 * b2[j]
+			v += a3 * b3[j]
+			c[j] = v
+		}
+	}
+	for ; p < k; p++ {
 		ap := A[p]
 		bp := B[p*n+lo : p*n+hi : p*n+hi]
 		for j, bv := range bp {

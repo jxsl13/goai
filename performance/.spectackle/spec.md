@@ -38,3 +38,6 @@ WHEN the parallel-scaling probe is run to rank work, the optimizer SHALL runs it
 
 ## A-POOL-DENSE-RESET-ON-SERIAL-OPS-IS-REJECTED-001
 WHEN considering a reset of the worker-pool dense flag when an op runs serially, the optimizer SHALL does not: measured on 4 decode benchmarks it moved neither wall time nor CPU seconds (user 9.5 to 10.6 both arms), because after the work floor landed the dense classification already times out and the workers are parked on their mailboxes.
+
+## AN-AXPY-UNROLLS-ITS-OUTER-LOOP-ONE-TERM-AT-A-TIME-001
+WHEN an inner loop accumulates into a destination the outer loop does not choose, the optimizer SHALL unrolls the OUTER loop and holds the running element in a register, adding each contribution separately rather than summing the products first; separate adds keep the ascending order and stay bit-identical, and 4 rows per pass took 4 decode benchmarks down 10.8 to 26.7 percent.
