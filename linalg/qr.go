@@ -71,35 +71,53 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 		cols = b.Shape()[1]
 	}
 	out := make([]float64, n*cols) // [n,cols] row-major
-	for c := range cols {
-		cvec := make([]float64, m)
-		for i := range m {
-			if vec {
-				cvec[i] = b.AtF64(i)
-			} else {
-				cvec[i] = b.AtF64(i, c)
-			}
-		}
-		// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
-		for k := range n {
-			s := 0.0
-			for i := k; i < m; i++ {
-				s += vs[k][i] * cvec[i]
-			}
-			bt := betas[k] * s
-			for i := k; i < m; i++ {
-				cvec[i] -= bt * vs[k][i]
-			}
-		}
-		// back-substitute R·x = (Qᵀb)[0:n]
-		for i := n - 1; i >= 0; i-- {
-			sum := cvec[i]
-			for j := i + 1; j < n; j++ {
-				sum -= rm[i*n+j] * out[j*cols+c]
-			}
-			out[i*cols+c] = sum / rm[i*n+i]
-		}
+	// Read the right-hand side through its storage when it is already F64: AtF64 walks the shape
+	// to a flat offset and dispatches on the storage type for every one of the m*cols elements.
+	// Same values out of the same storage; any other dtype or layout keeps the accessor.
+	var bf []float64
+	if bc := b.Contiguous(); bc.Dtype() == tensor.F64 {
+		bf = bc.Storage().F64()
 	}
+	// Right-hand sides are independent: column c reads the reflectors and R, and its own column of
+	// b, and writes only out[·*cols+c]. Every column costs the same Qᵀb plus back substitution, so
+	// equal bands need no balancing, and the buffer is allocated once per WORKER rather than once
+	// per column — inside the band, so the fan-out does not give back the hoist.
+	parallelCols(cols, m*n, func(lo, hi int) {
+		cvec := make([]float64, m)
+		for c := lo; c < hi; c++ {
+			for i := range m {
+				switch {
+				case bf != nil && vec:
+					cvec[i] = bf[i]
+				case bf != nil:
+					cvec[i] = bf[i*cols+c]
+				case vec:
+					cvec[i] = b.AtF64(i)
+				default:
+					cvec[i] = b.AtF64(i, c)
+				}
+			}
+			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
+			for k := range n {
+				s := 0.0
+				for i := k; i < m; i++ {
+					s += vs[k][i] * cvec[i]
+				}
+				bt := betas[k] * s
+				for i := k; i < m; i++ {
+					cvec[i] -= bt * vs[k][i]
+				}
+			}
+			// back-substitute R·x = (Qᵀb)[0:n]
+			for i := n - 1; i >= 0; i-- {
+				sum := cvec[i]
+				for j := i + 1; j < n; j++ {
+					sum -= rm[i*n+j] * out[j*cols+c]
+				}
+				out[i*cols+c] = sum / rm[i*n+i]
+			}
+		}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}
