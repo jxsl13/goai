@@ -35,10 +35,15 @@ func gemv(A, B, C []float64, k, n, lo, hi int) {
 	}
 	// The transform is worthless if it is applied as a summed group, and the test shapes are
 	// what catch the two ways an unrolled body goes wrong, so both have to survive.
+	// Four conditions, every one of them a measurement rather than a design choice: the ordering
+	// rule (the transform is worthless applied as a summed group), the exactness claim, the two
+	// test shapes where an unrolled body goes wrong, and the two ways the transform itself loses —
+	// too many steps per pass, or an inner pass too short to amortize the setup.
 	if !containsAll(fs[0].msg, "ONE AT A TIME, NOT AS A SUM", "BIT-IDENTICAL",
-		"TEST THE REMAINDER AND A NON-ZERO WINDOW") {
-		t.Fatalf("message omits the ordering rule, the exactness claim or the test guidance:\n%s",
-			fs[0].msg)
+		"TEST THE REMAINDER AND A NON-ZERO WINDOW", "FOUR, MEASURED, NOT AS MANY AS FIT",
+		"THE INNER PASS MUST BE LONG") {
+		t.Fatalf("message omits the ordering rule, the exactness claim, the test guidance or a"+
+			" measured limit of the transform:\n%s", fs[0].msg)
 	}
 }
 

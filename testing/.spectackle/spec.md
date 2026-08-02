@@ -17,3 +17,6 @@ WHEN a test asserts exact floating-point bits against a recorded digest, the imp
 
 ## A-GOLDEN-ON-A-ROUNDED-OUTPUT-CANNOT-PIN-SUMMATION-ORDER-001
 WHEN gating a reassociation-sensitive change whose result is stored at lower precision than it is accumulated, the implementer SHALL pins the order on the higher-precision arm and treats the rounded arm as a value check only; reversing the fold order in the f32 MLA arm left its golden green because a float64 accumulator stored back as float32 rounds the difference away, while the identical F64 code reddens.
+
+## THE-NLP-RACE-SUITE-EXCEEDS-40-MINUTES-001
+IF go test ./nlp under the race detector reaches its timeout, THEN the implementer SHALL not read it as a regression signal: it ran past both the 10-minute default and an explicit 40-minute limit on the M2 Pro host with no assertion failure, because the package runs many 500-token generate tests and the race build multiplies them; gate instead on the package owning the edit (backend/cpu passes under -race in 113 seconds) plus the full non-race suite.

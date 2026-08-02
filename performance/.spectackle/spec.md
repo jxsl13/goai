@@ -41,3 +41,9 @@ WHEN considering a reset of the worker-pool dense flag when an op runs serially,
 
 ## AN-AXPY-UNROLLS-ITS-OUTER-LOOP-ONE-TERM-AT-A-TIME-001
 WHEN an inner loop accumulates into a destination the outer loop does not choose, the optimizer SHALL unrolls the OUTER loop and holds the running element in a register, adding each contribution separately rather than summing the products first; separate adds keep the ascending order and stay bit-identical, and 4 rows per pass took 4 decode benchmarks down 10.8 to 26.7 percent.
+
+## AN-OUTER-UNROLL-NEEDS-A-LONG-INNER-PASS-001
+WHEN applying an outer-loop unroll to amortize a destination reload, the optimizer SHALL checks the inner pass length first: the setup is paid once per pass, so a pass of a few dozen elements loses; four-way on a decode kernel whose pass spans the column window gained 17 percent, and the identical transform on an attention accumulation of one head width cost 6 to 9 percent on 3 cells.
+
+## AN-UNROLL-FACTOR-IS-BRACKETED-NOT-MAXIMIZED-001
+WHEN choosing how many outer steps an unrolled body takes per pass, the optimizer SHALL measures at least one factor ABOVE the chosen one: 1, 4 and 8 steps per pass on the decode matrix-vector kernel came to 823, 682 and 937 ms, so the curve turns and doubling past the optimum was 37 percent worse than the optimum.
