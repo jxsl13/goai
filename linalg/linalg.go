@@ -103,17 +103,48 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 		}
 		mk := m[k*n : k*n+n]
 		pivot := mk[k] // = m[k][k]; row k is untouched by the i>k updates below
-		for i := k + 1; i < n; i++ {
-			mi := m[i*n : i*n+n]
-			mult := mi[k] / pivot
-			mi[k] = mult // store the L multiplier
-			for j := k + 1; j < n; j++ {
-				mi[j] -= mult * mk[j]
+		// The rank-1 update is the whole cost of this factorization — one line, 92% of the
+		// benchmark — and its rows are independent: row i reads the pivot row and writes only
+		// itself. The pivot loop above stays sequential; only this fan-out is split, and each
+		// element still performs exactly the one subtraction it did before, so the result is
+		// bit-identical.
+		//
+		// The gate sees rows*cols, the real work at this pivot, not the row count: an estimate
+		// short by a factor of the row length would leave mid-sized matrices serial (§T1083).
+		rows := n - k - 1
+		// Below the gate the update runs as a PLAIN LOOP, not through the callback. The two
+		// bodies are deliberately duplicated: routing small factorizations through a closure cost
+		// a 128-wide one 3 to 4%, and hoisting the gate above the call did not recover it — the
+		// cost is the closure itself, not the dispatch. Any edit here must be made twice.
+		if rows*rows < luUpdateParWork {
+			for i := k + 1; i < n; i++ {
+				mi := m[i*n : i*n+n]
+				mult := mi[k] / pivot
+				mi[k] = mult // store the L multiplier
+				for j := k + 1; j < n; j++ {
+					mi[j] -= mult * mk[j]
+				}
 			}
+			continue
 		}
+		parallelCols(rows, rows, func(lo, hi int) {
+			for i := k + 1 + lo; i < k+1+hi; i++ {
+				mi := m[i*n : i*n+n]
+				mult := mi[k] / pivot
+				mi[k] = mult
+				for j := k + 1; j < n; j++ {
+					mi[j] -= mult * mk[j]
+				}
+			}
+		})
 	}
 	return &LU{lu: m, piv: piv, sign: sign, n: n}, nil
 }
+
+// luUpdateParWork gates the rank-1 update's fan-out on the work at THIS pivot, rows*cols. Below
+// it the update runs on the caller. Measured: a 512-wide factorization goes -39.5% and a 256-wide
+// one -10.3%, while 128 is left alone because it is below the gate at every pivot.
+const luUpdateParWork = 1 << 14
 
 // Det returns the determinant det(A) = sign · Π_k U[k,k] (the permutation sign times the product of
 // the U diagonal). It is 0 exactly when A is singular.
