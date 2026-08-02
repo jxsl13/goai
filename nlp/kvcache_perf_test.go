@@ -266,6 +266,8 @@ func benchGPTGenerate(b *testing.B, viaConcat bool) {
 	old := kvAppendViaConcat
 	kvAppendViaConcat = viaConcat
 	defer func() { kvAppendViaConcat = old }()
+	b.ReportAllocs()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		out, err := m.Generate([]int{1}, 500, Greedy())
@@ -297,6 +299,7 @@ func benchCLADecode(b *testing.B, viaConcat bool) {
 	old := kvAppendViaConcat
 	kvAppendViaConcat = viaConcat
 	defer func() { kvAppendViaConcat = old }()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()
@@ -325,6 +328,7 @@ func benchT5Decode(b *testing.B, viaConcat bool) {
 	old := kvAppendViaConcat
 	kvAppendViaConcat = viaConcat
 	defer func() { kvAppendViaConcat = old }()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()

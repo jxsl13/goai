@@ -187,6 +187,7 @@ func benchPrompt(vocab int) []int {
 func BenchmarkLlamaPromptStepwise(b *testing.B) {
 	m := benchLlama(b)
 	prompt := benchPrompt(m.Config.Vocab)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()
@@ -203,6 +204,7 @@ func BenchmarkLlamaPromptStepwise(b *testing.B) {
 func BenchmarkLlamaPromptPrefill(b *testing.B) {
 	m := benchLlama(b)
 	prompt := benchPrompt(m.Config.Vocab)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()
