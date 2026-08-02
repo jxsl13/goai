@@ -2,7 +2,7 @@ package linalg
 
 import (
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -28,16 +28,19 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		return vt, st, ut, nil
 	}
 	// one-sided Jacobi on the columns of a working copy; V accumulates the right rotations.
-	// V is a FLAT [n*n] row-major buffer, not a slice of rows: the V-rotation below walks a
-	// COLUMN (vmat[k][i], vmat[k][j]) so a row-of-slices layout pointer-chases a different,
-	// independently allocated row per k — the worst pattern for that access. A flat buffer makes
-	// it a constant stride through one allocation and drops n allocations to 1. Index arithmetic
-	// only: the operations, their order and operands are unchanged, so results are bit-identical
-	// (same lever as QR flat-householder #609 and internal/linalg SymEig).
+	// V is held TRANSPOSED in a flat [n*n] buffer — vT[i*n+k] is V[k][i] — because the rotation
+	// touches two COLUMNS of V, and transposed they are two contiguous rows. Held row-major it
+	// strode by n on every one of the 2n reads and 2n writes per rotation, which at n=192 was
+	// about a sixth of the whole factorization; the columns of A next to it were already
+	// contiguous for exactly this reason.
+	//
+	// Layout only: each entry takes the same two multiplies and one add, in the same order, from
+	// the same operands, so every bit of the result is unchanged. The transpose back happens once
+	// when the output is assembled.
 	col := toColMajor(a, m, n)
-	vmat := make([]float64, n*n)
+	vT := make([]float64, n*n) // vT[i*n+k] = V[k][i]
 	for i := range n {
-		vmat[i*n+i] = 1
+		vT[i*n+i] = 1 // the identity is its own transpose
 	}
 	const tol = 1e-14
 	for range 100 { // sweeps until convergence (one-sided Jacobi converges in ~10)
@@ -76,10 +79,11 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 					ci[k] = c*ai - sn*aj
 					cj[k] = sn*ai + c*aj
 				}
-				for k := range n { // rotate columns i,j of V
-					vi, vj := vmat[k*n+i], vmat[k*n+j]
-					vmat[k*n+i] = c*vi - sn*vj
-					vmat[k*n+j] = sn*vi + c*vj
+				vi, vj := vT[i*n:i*n+n], vT[j*n:j*n+n] // rows of vT = columns of V
+				for k := range n {
+					a, b := vi[k], vj[k]
+					vi[k] = c*a - sn*b
+					vj[k] = sn*a + c*b
 				}
 			}
 		}
@@ -102,7 +106,17 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 	for i := range order {
 		order[i] = i
 	}
-	sort.SliceStable(order, func(a, b int) bool { return sigma[order[a]] > sigma[order[b]] })
+	// slices.SortStableFunc, not sort.SliceStable: the latter reaches its swap through reflection
+	// and allocates on every call (PS6009). Same comparator, same stable order.
+	slices.SortStableFunc(order, func(a, b int) int {
+		switch {
+		case sigma[a] > sigma[b]:
+			return -1
+		case sigma[a] < sigma[b]:
+			return 1
+		}
+		return 0
+	})
 
 	uMat := make([]float64, m*n)
 	sVec := make([]float64, n)
@@ -116,7 +130,7 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 			}
 		}
 		for k := range n {
-			vOut[k*n+jj] = vmat[k*n+j]
+			vOut[k*n+jj] = vT[j*n+k]
 		}
 	}
 	return tensor.FromFloat64(tensor.Shape{m, n}, uMat),
