@@ -3,6 +3,8 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/linalg"
@@ -228,7 +230,6 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	}
 	numPairs := kEff * (kEff + 1) / 2
 	grams := make([]float64, numPairs*mAug*mAug)
-	wpair := make([]float64, numPairs)
 	// Per-step line-search trial point, hoisted out of the Newton loop: it is fully
 	// overwritten (trial[i] = theta[i] − α·delta[i] over all p) before forward(trial)
 	// reads it each line-search iteration, single-threaded, and never escapes (only
@@ -292,33 +293,60 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		// pair. Each pair-Gram still sums i ascending with the same (w·row[a])·row[j]
 		// association -> bit-identical; the w==0/wa==0 skips are dropped (adding an
 		// exact 0.0 is identity for the finite softmax weights).
-		for i := range n {
-			pr := probs[i]
-			pp := 0
-			for c1 := range kEff {
-				for c2 := c1; c2 < kEff; c2++ {
-					w := -pr[c1] * pr[c2]
-					if c1 == c2 {
-						w += pr[c1]
+		// The accumulation is a REDUCTION over samples — every sample contributes to every
+		// (pair, feature) window — so the SAMPLE loop cannot be split. Its destination is indexed
+		// by (pair, feature, column) and never by the sample, so the FEATURE dimension partitions
+		// it: a worker that owns features [a0,a1) owns the whole of every window it writes, and
+		// each window still sums its samples in ascending order with the same association. The
+		// split is therefore BIT-IDENTICAL, and the serial form's own claim above still holds.
+		//
+		// The bands are cut on CUMULATIVE work, not on feature count. Feature a writes mAug-a
+		// columns, so an equal-count split hands the first worker twenty times the last one's
+		// work at this shape and the makespan is the first band's.
+		gramBand := func(a0, a1 int) {
+			wp := make([]float64, numPairs) // per worker: the shared one would race
+			for i := range n {
+				pr := probs[i]
+				pp := 0
+				for c1 := range kEff {
+					for c2 := c1; c2 < kEff; c2++ {
+						w := -pr[c1] * pr[c2]
+						if c1 == c2 {
+							w += pr[c1]
+						}
+						wp[pp] = w
+						pp++
 					}
-					wpair[pp] = w
-					pp++
+				}
+				row := xa[i]
+				for a := a0; a < a1; a++ {
+					ra := row[a]
+					r := row[a:mAug]
+					aoff := a*mAug + a
+					aend := a*mAug + mAug
+					for q := 0; q < numPairs; q++ {
+						wa := wp[q] * ra
+						g := grams[q*mm+aoff : q*mm+aend]
+						for j := range g {
+							g[j] += wa * r[j]
+						}
+					}
 				}
 			}
-			row := xa[i]
-			for a := range mAug {
-				ra := row[a]
-				r := row[a:mAug]
-				aoff := a*mAug + a
-				aend := a*mAug + mAug
-				for q := 0; q < numPairs; q++ {
-					wa := wpair[q] * ra
-					g := grams[q*mm+aoff : q*mm+aend]
-					for j := range g {
-						g[j] += wa * r[j]
-					}
-				}
+		}
+		if nw := softmaxGramWorkers(n, mAug, numPairs); nw <= 1 {
+			gramBand(0, mAug)
+		} else {
+			cuts := triangularBands(mAug, nw)
+			var wg sync.WaitGroup
+			for b := 0; b+1 < len(cuts); b++ {
+				wg.Add(1)
+				go func(a0, a1 int) {
+					defer wg.Done()
+					gramBand(a0, a1)
+				}(cuts[b], cuts[b+1])
 			}
+			wg.Wait()
 		}
 		// Scatter each pair-Gram into blocks (c1,c2) and (c2,c1).
 		pp := 0
@@ -638,4 +666,36 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	p.ExplainedVariance = vals[:ncomp]
 	p.Components = vecs[:ncomp]
 	return nil
+}
+
+// softmaxGramParWork gates the feature split in the Hessian accumulation: fork only when the
+// pass — samples times features times class pairs — is large enough to pay for it.
+const softmaxGramParWork = 1 << 15
+
+// softmaxGramWorkers returns how many workers the Gram pass should use, one at least.
+func softmaxGramWorkers(n, mAug, numPairs int) int {
+	w := runtime.GOMAXPROCS(0)
+	if w <= 1 || mAug < 2 || n*mAug*numPairs < softmaxGramParWork {
+		return 1
+	}
+	return min(w, mAug)
+}
+
+// triangularBands cuts [0,m) into at most nw bands of roughly equal WORK for a loop whose
+// iteration a costs m-a. Returned as nw+1 or fewer boundaries, ascending, starting at 0 and
+// ending at m. An equal-count split would be badly skewed: the first band does 2*m/nw times the
+// last band's work.
+func triangularBands(m, nw int) []int {
+	total := m * (m + 1) / 2
+	cuts := make([]int, 0, nw+1)
+	cuts = append(cuts, 0)
+	acc, target, band := 0, total/nw, 1
+	for a := 0; a < m; a++ {
+		acc += m - a
+		if band < nw && acc >= target*band && a+1 < m {
+			cuts = append(cuts, a+1)
+			band++
+		}
+	}
+	return append(cuts, m)
 }

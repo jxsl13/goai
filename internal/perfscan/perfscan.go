@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3046", "item-reduction-into-partitioned-windows", "a loop over items whose inner loops accumulate into a WINDOW of a shared destination, cut at an offset the item does not appear in. The item loop is a REDUCTION and cannot fan out, but the loops that CHOOSE the window already partition the destination into disjoint pieces, and splitting one of those is safe: each worker owns whole windows, every window still sums its items in ascending order, and the result is BIT-IDENTICAL. MEASURED on the softmax regression Hessian, where every sample contributes to every (class pair, feature) window: BenchmarkSoftmaxRegressionFit fell 43.9%%, the two smaller softmax cells 24.5%% and 26.6%%. CUT THE BANDS ON CUMULATIVE WORK WHEN THE INNER RANGE IS TRIANGULAR — a loop whose iteration a writes m-a columns gives its first band about 2m/workers times the last band under an equal-count split. CHECK THE GATE AGAINST THE REAL SHAPE: this one first measured as no change at all because the work estimate fell 4%% short of the threshold and the split never ran. PS3045 is the sibling for a scatter whose offset within the window is chosen by the DATA", false},
 	{"PS3045", "colliding-scatter-with-partitionable-destination", "an item loop whose inner loop over a second dimension accumulates into a destination indexed by that dimension PLUS a data-dependent offset. Two items can land on the same slot, so the ITEM loop cannot fan out — but the inner dimension partitions the destination into disjoint windows, and splitting THERE is safe: each worker owns whole windows, every slot still accumulates its items in ascending item order, and the result is BIT-IDENTICAL. Per-worker partial copies merged afterwards would reassociate every sum and are not. MEASURED on the histogram gradient-boosting builder, where every sample updates one bin of every feature: BenchmarkGBMHist_hist_80k fell 19.0%%, the 20k cell 11.3%%. FLOOR THE WINDOWS PER WORKER — every worker re-walks the WHOLE item list, so that walk is paid once per worker instead of once in total; swept at 20 features on 12 cores, 4 per worker was best and 8 was 10%% worse because it left only two workers. GATE ON items times windows so small calls stay serial", false},
 	{"PS3044", "serial-reduction-blocks-parallel-map", "a loop that computes a per-item value with a call and then folds it into shared state at an index the item does not determine. The fold is a REDUCTION — two items can land on the same slot — so the loop cannot fan out as written, and the call in front of it usually holds all the time. SPLIT THE MAP FROM THE REDUCE: run the call over the items in a parallel pass writing a per-item array, then fold that array in ascending item order exactly as before. No partial sums are merged and every accumulator takes the same terms in the same order, so the result is BIT-IDENTICAL and a golden from the previous implementation gates it. MEASURED on the AQLM encoder k-means assignment, where the nearest-centroid search costs k*dim and the fold costs dim: BenchmarkEncodeAQLM fell 37.2%%. RANK IT AGAINST WALL CLOCK — a serial stretch pays its full CPU time while the rest of the path is parallel. If the map is CHEAP relative to the fold there is nothing here: the extra array and the second pass are then the whole cost", false},
 	{"PS3043", "source-rebound-per-output", "a nest whose OUTER loop owns a destination and whose INNER loop rebinds a source element from a collection. The set of sources does not depend on the outer variable, so it is re-read once per outer iteration and the pass moves outer-count times the source volume through the caches. INTERCHANGE THE LOOPS: bind each source once and update every destination while it is loaded. The per-destination accumulation order is unchanged, so the result stays BIT-IDENTICAL and an existing exact-equality gate still applies. MEASURED on the multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p] written as a loop over outputs re-reading every map — 16 passes over 33 MB per group; BenchmarkMTAForward_ch16 fell 11.7%% once the source loop moved out and the element range was split across workers. THE INTERCHANGE ALONE IS RARELY THE WIN: it makes the destinations live at once, so hold them for a BAND of elements, and check whether the loop was serial while the rest of the path was parallel — a serial stretch costs its full CPU time in wall clock however small its profile share looks", false},
@@ -1308,6 +1309,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sourceReboundPerOutputFindings(fset, fn)...)
 		out = append(out, mapBlockedByReductionFindings(fset, f, fn)...)
 		out = append(out, collidingScatterFindings(fset, f, fn)...)
+		out = append(out, itemReductionWindowFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -16897,4 +16899,153 @@ func boundedByParams(fn *ast.FuncDecl, st ast.Stmt) bool {
 		}
 	}
 	return false
+}
+
+// --- PS3046: an item reduction into windows the inner loops already partition -----------------
+
+// windowedAccumIn returns the name of a slice WINDOW cut inside body from a base that does not
+// depend on the item, and accumulated into. `g := grams[q*mm+aoff : q*mm+aend]` followed by
+// `g[j] += …` is a reduction over items whose destination the inner loops have already carved
+// into disjoint pieces.
+func windowedAccumIn(body ast.Node, item string) (win, base string) {
+	// Names bound in the body from an expression that mentions the item — the strength-reduced
+	// offsets a hand-optimized loop uses. `aoff := a*mAug + a` makes `grams[q*mm+aoff : …]` look
+	// independent of a to a purely syntactic test, which is exactly backwards.
+	derived := map[string]bool{item: true}
+	for range 3 { // a short fixed point: offsets are rarely more than a couple of steps deep
+		ast.Inspect(body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			for nm := range derived {
+				if mentionsIdent(as.Rhs[0], nm) {
+					if lhs := identName(as.Lhs[0]); lhs != "" {
+						derived[lhs] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	dependsOnItem := func(e ast.Expr) bool {
+		if e == nil {
+			return false
+		}
+		for nm := range derived {
+			if mentionsIdent(e, nm) {
+				return true
+			}
+		}
+		return false
+	}
+	cuts := map[string]string{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		se, ok := unparen(as.Rhs[0]).(*ast.SliceExpr)
+		if !ok || se.Low == nil || dependsOnItem(se.Low) || dependsOnItem(se.High) {
+			return true
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			cuts[nm] = renderExpr(se.X)
+		}
+		return true
+	})
+	if len(cuts) == 0 {
+		return "", ""
+	}
+	ast.Inspect(body, func(n ast.Node) bool {
+		if win != "" {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+			return true
+		}
+		ix, ok := unparen(as.Lhs[0]).(*ast.IndexExpr)
+		if !ok || dependsOnItem(ix.Index) {
+			return true
+		}
+		if nm := identName(ix.X); cuts[nm] != "" {
+			win, base = nm, cuts[nm]
+		}
+		return win == ""
+	})
+	return win, base
+}
+
+// itemReductionWindowFindings flags PS3046 — a loop over items whose inner loops accumulate into a
+// WINDOW of a shared destination, cut at an offset the item does not appear in. The item loop is a
+// reduction and cannot fan out; the dimensions that choose the window can, and splitting there
+// keeps every window summing its items in ascending order.
+//
+// MEASURED on the softmax regression Hessian, where every sample contributes to every
+// (class pair, feature) window: BenchmarkSoftmaxRegressionFit fell 43.9% and the two smaller
+// softmax cells 24.5% and 26.6%.
+func itemReductionWindowFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, item := outerLoop(n)
+		if body == nil || item == "" || seen[int(n.Pos())] || loopDepthOf(body) < 2 {
+			return true
+		}
+		fanned := false
+		ast.Inspect(body, func(m ast.Node) bool {
+			c, ok := m.(*ast.CallExpr)
+			if ok && (fanoutReg[f.Name.Name][calleeName(c.Fun)] || calleeName(c.Fun) == "Wait") {
+				fanned = true
+			}
+			return !fanned
+		})
+		if fanned {
+			return true
+		}
+		// If any loop under this one already STARTS at a caller-supplied offset, the dimension that
+		// chooses the window is banded and this is the APPLIED form. Reporting it anyway is the
+		// failure mode that teaches readers to ignore a check: the band function is reached through
+		// a raw goroutine, so nothing else about it looks parallel.
+		banded := false
+		ast.Inspect(body, func(m ast.Node) bool {
+			if fs, ok := m.(*ast.ForStmt); ok && boundedByParams(fn, fs) {
+				banded = true
+			}
+			return !banded
+		})
+		if banded {
+			return true
+		}
+		win, base := windowedAccumIn(body, item)
+		if win == "" {
+			return true
+		}
+		seen[int(n.Pos())] = true
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "item-reduction-into-partitioned-windows",
+			msg: fmt.Sprintf("this loop over %q accumulates into %q, a window of %q cut at an offset"+
+				" %q does not appear in. The item loop is a REDUCTION — every item touches every"+
+				" window — so it cannot fan out; but the loops that CHOOSE the window already"+
+				" partition %q into disjoint pieces, and splitting one of those is safe. Each worker"+
+				" then owns whole windows and every window still sums its items in ascending order,"+
+				" so the result is BIT-IDENTICAL and a golden from the previous implementation gates"+
+				" it. MEASURED on the softmax regression Hessian, where every sample contributes to"+
+				" every (class pair, feature) window: BenchmarkSoftmaxRegressionFit fell 43.9%%, and"+
+				" the two smaller softmax cells 24.5%% and 26.6%%. CUT THE BANDS ON CUMULATIVE WORK"+
+				" WHEN THE INNER RANGE IS TRIANGULAR — a loop whose iteration a writes m-a columns"+
+				" gives its first band about 2m/workers times the last band's work under an"+
+				" equal-count split, and the makespan is the first band's. CHECK THE GATE AGAINST THE"+
+				" REAL SHAPE: this one first measured as no change at all because the work estimate"+
+				" fell 4%% short of the threshold and the split never ran",
+				item, win, base, item, base),
+		})
+		return true
+	})
+	return out
 }
