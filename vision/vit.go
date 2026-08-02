@@ -268,17 +268,15 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
 	patchRows := make([]*tensor.Tensor, B)
 	for b := range B {
-		img, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
-			backend.SliceAttrs{Axis: 0, Start: b, End: b + 1})
+		img, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
 		if err != nil {
 			return nil, err
 		}
-		one, err := backend.Execute(ctx, backend.OpReshape, []*tensor.Tensor{img[0]},
-			backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}})
+		one, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
 		if err != nil {
 			return nil, err
 		}
-		if patchRows[b], err = m.patchify(one[0]); err != nil {
+		if patchRows[b], err = m.patchify(one); err != nil {
 			return nil, err
 		}
 	}
@@ -293,20 +291,19 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	// Prepend the [class] token and add position embeddings per image → packed [B·(N+1), D].
 	seqs := make([]*tensor.Tensor, B)
 	for b := range B {
-		pb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{emb},
-			backend.SliceAttrs{Axis: 0, Start: b * N, End: (b + 1) * N})
+		pb, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * N, End: (b + 1) * N}, emb)
 		if err != nil {
 			return nil, err
 		}
-		cat, err := backend.Execute(ctx, backend.OpConcat, []*tensor.Tensor{m.Class, pb[0]}, backend.ConcatAttrs{Axis: 0})
+		cat, err := visExec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, m.Class, pb)
 		if err != nil {
 			return nil, err
 		}
-		wp, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{cat[0], m.Pos}, nil)
+		wp, err := visExec2(ctx, backend.OpAdd, nil, cat, m.Pos)
 		if err != nil {
 			return nil, err
 		}
-		seqs[b] = wp[0]
+		seqs[b] = wp
 	}
 	packed, err := backend.Execute(ctx, backend.OpConcat, seqs, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
@@ -324,12 +321,11 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	// Gather each image's [class] row (row b·S) → [B, D] and run the classification head once.
 	clsRows := make([]*tensor.Tensor, B)
 	for b := range B {
-		cr, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
-			backend.SliceAttrs{Axis: 0, Start: b * S, End: b*S + 1})
+		cr, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * S, End: b*S + 1}, h)
 		if err != nil {
 			return nil, err
 		}
-		clsRows[b] = cr[0]
+		clsRows[b] = cr
 	}
 	cls, err := backend.Execute(ctx, backend.OpConcat, clsRows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
@@ -352,15 +348,15 @@ func (m *ViT) Features(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	cat, err := backend.Execute(ctx, backend.OpConcat, []*tensor.Tensor{m.Class, x}, backend.ConcatAttrs{Axis: 0})
+	cat, err := visExec2(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, m.Class, x)
 	if err != nil {
 		return nil, err
 	}
-	seq, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{cat[0], m.Pos}, nil)
+	seq, err := visExec2(ctx, backend.OpAdd, nil, cat, m.Pos)
 	if err != nil {
 		return nil, err
 	}
-	h := seq[0]
+	h := seq
 	for _, b := range m.Blocks {
 		if h, err = b.forward(ctx, h); err != nil {
 			return nil, err
@@ -375,12 +371,11 @@ func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	cls, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
-		backend.SliceAttrs{Axis: 0, Start: 0, End: 1}) // the [class] row
+	cls, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: 0, End: 1}, h) // the [class] row
 	if err != nil {
 		return nil, err
 	}
-	return m.Head.Forward(ctx, cls[0]) // [1, classes]
+	return m.Head.Forward(ctx, cls) // [1, classes]
 }
 
 // forwardBatched is vitBlock.forward over a packed [batch·seq, D] batch: identical op sequence, but
@@ -395,29 +390,29 @@ func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch 
 	if err != nil {
 		return nil, err
 	}
-	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, a}, nil)
+	sum, err := visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
-	x = sum[0]
+	x = sum
 	if h, err = b.ln2.Forward(ctx, x); err != nil {
 		return nil, err
 	}
 	if h, err = b.fc1.Forward(ctx, h); err != nil {
 		return nil, err
 	}
-	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{h}, nil)
+	g, err := visExec1(ctx, backend.OpGELU, nil, h)
 	if err != nil {
 		return nil, err
 	}
-	if h, err = b.fc2.Forward(ctx, g[0]); err != nil {
+	if h, err = b.fc2.Forward(ctx, g); err != nil {
 		return nil, err
 	}
-	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, h}, nil)
+	sum, err = visExec2(ctx, backend.OpAdd, nil, x, h)
 	if err != nil {
 		return nil, err
 	}
-	return sum[0], nil
+	return sum, nil
 }
 
 func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
@@ -429,27 +424,27 @@ func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, a}, nil)
+	sum, err := visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
-	x = sum[0]
+	x = sum
 	if h, err = b.ln2.Forward(ctx, x); err != nil {
 		return nil, err
 	}
 	if h, err = b.fc1.Forward(ctx, h); err != nil {
 		return nil, err
 	}
-	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{h}, nil)
+	g, err := visExec1(ctx, backend.OpGELU, nil, h)
 	if err != nil {
 		return nil, err
 	}
-	if h, err = b.fc2.Forward(ctx, g[0]); err != nil {
+	if h, err = b.fc2.Forward(ctx, g); err != nil {
 		return nil, err
 	}
-	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, h}, nil)
+	sum, err = visExec2(ctx, backend.OpAdd, nil, x, h)
 	if err != nil {
 		return nil, err
 	}
-	return sum[0], nil
+	return sum, nil
 }

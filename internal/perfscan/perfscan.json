@@ -100,7 +100,7 @@
     "exec",
     "hcExec",
     "rdropExec",
-    "swinExec1"
+    "visExecN"
   ],
   "topKSelectorFuncs": [
     "topKIndices"
