@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed", false},
 	{"PS3039", "recursive-split-alloc", "a self-recursive function that allocates TWO slices sized by its input, fills them by appending each element to one or the other, and passes them to its own recursive calls — a divide-and-conquer partition written the allocating way. The cost is per NODE of the recursion, so it scales with the tree rather than with the data. Partition in place against one reused buffer instead. MEASURED on a CART builder\u0027s subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. Safe because writing dst[mid] while ranging over dst cannot clobber an unread element (mid advances only on a write, and every write consumes a value already read), and copying the second side back in order preserves what both appends produced. GATE IT WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE: the property tests that usually cover a tree builder stay green for a DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted", false},
 	{"PS3038", "dispatch-literal-slice", "a direct backend.Execute building its input slice inline, in a package that already declares a pooled helper of that arity. The literal is one allocation per dispatch, and Execute drops the slice the instant it returns unless a recorder is attached — which is exactly what the pooled helper checks before borrowing. MEASURED on nn.Linear.Forward, the most-called forward in the package: two literals became two pooled borrows and a per-image MLP-Mixer forward went 3944 to 3687 allocs/op (-6.5%%), a ViT forward -2.0%%. Judge on allocs/op; the time was flat everywhere, since these forwards are dominated by the kernels the slice merely names. THE RECORDER GUARD IS THE CONTRACT: Execute\u0027s tape node stores that exact slice, so a pooled one would be overwritten by the next op and a training run would silently get wrong gradients — use the helper, never inline the borrow. 214 sit in nn alone, so rank by call frequency and convert where a benchmark can see it", false},
 	{"PS3037", "mis-sized-append-buffer", "a slice made with a stated capacity inside a loop and then appended to from a NESTED loop, so the hint is sized per outer pass while the appends run outer times inner. The hint guarantees the opposite of what it looks like: the slice doubles its way up from the hint to its true size on EVERY outer pass, copying everything it holds each time. MEASURED on a beam search whose hint was 8 per live beam against a true size of one candidate per beam per VOCABULARY ENTRY — that one append line was 2.45 GB of a 2.90 GB benchmark, and hoisting the buffer above the loop with a per-pass truncation took bytes -85.0%% on beam search and -98.0%% on its diverse variant. Judge on B/op first: the time win was -8.8%% and -2.9%%, real but far smaller. Prove nothing survives the reset — dropping the truncation must redden the suite, and on the measured site it did. PS3035 does not cover this: it wants a size the loop does not vary and only sees loops with a range clause or an init statement, and the measured site is a bare condition loop whose hint mentions the collection it iterates", false},
@@ -1297,6 +1298,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		}
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
+		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
 		out = append(out, misSizedAppendBufferFindings(fset, fn)...)
@@ -15863,4 +15865,160 @@ func recursiveSplitAllocFindings(fset *token.FileSet, fn *ast.FuncDecl) []findin
 			" DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted",
 			names[0], names[1], self),
 	}}
+}
+
+// --- PS3040: an independent MIDDLE loop under a sequential outer one --------------------------
+
+// innerIndependentUnderSequentialOuterFindings flags PS3040 — a three-deep nest whose outer loop
+// carries a real dependence (it is read, not written, by the body) while the MIDDLE loop is
+// independent: every write is indexed by the middle variable and none by the outer.
+//
+// PS3034 cannot see this and should not: it asks whether the OUTER loop can be split, and here it
+// cannot. The split belongs one level in. That is the shape of every classical factorization —
+// pivot sequentially, update the remaining rows in parallel — and the LU rank-1 update it was
+// built from went -40.8% at 512 wide.
+func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.File,
+	fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	// A nest already sitting inside a fan-out callback is parallel one level OUT, and splitting it
+	// again is not the advice. Without this the triangular solves in this very package report:
+	// their column loop is already the parallel one, and the row loop under it is what this check
+	// would otherwise point at.
+	inFanout := map[ast.Node]bool{}
+	var markFanout func(n ast.Node, inside bool)
+	markFanout = func(n ast.Node, inside bool) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == nil {
+				return false
+			}
+			if inside {
+				inFanout[m] = true
+			}
+			call, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			isFan := fanoutReg[f.Name.Name][calleeName(call.Fun)]
+			for _, a := range call.Args {
+				markFanout(a, inside || isFan)
+			}
+			return false
+		})
+	}
+	markFanout(fn.Body, false)
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, ov := outerLoop(n)
+		if outer == nil || ov == "" || ov == "_" || loopDepthOf(outer) < 2 || inFanout[n] {
+			return true
+		}
+		for _, st := range outer.List {
+			mid, mv := outerLoop(st)
+			if mid == nil || mv == "" || mv == "_" || mv == ov || loopDepthOf(mid) < 1 {
+				continue
+			}
+			// No separate "already fans out" test here. A middle loop whose body IS the
+			// dispatch has a call where its inner loop would be, so the depth requirement above
+			// already skips it, and a nest sitting inside somebody else's callback is caught by
+			// inFanout. A third guard could not redden any fixture the other two do not, so it
+			// was removed rather than kept as untestable.
+			// Every indexed write must name the MIDDLE variable and none may name the outer: that
+			// is what makes the middle loop splittable while the outer one is not.
+			perIter := localBuffersMadeIn(mid)
+			ok, target := true, ""
+			ast.Inspect(mid, func(m ast.Node) bool {
+				as, aok := m.(*ast.AssignStmt)
+				if !aok {
+					return true
+				}
+				for _, lhs := range as.Lhs {
+					ix, iok := unparen(lhs).(*ast.IndexExpr)
+					if !iok {
+						continue
+					}
+					root, _ := rootIdentName(ix.X)
+					if perIter[root] {
+						continue
+					}
+					// Ownership by the MIDDLE variable is the whole test. The outer variable may
+					// appear too — an LU update writes mi[k], the multiplier, at the pivot column
+					// of row i — and rejecting that lost the very site this check was built from.
+					// What matters is that the location belongs to this middle iteration.
+					if !mentionsIdent(ix, mv) && !aliasOfOuter(mid, ix.X, mv) {
+						ok = false
+						return false
+					}
+					if target == "" {
+						target = root
+					}
+				}
+				return true
+			})
+			if !ok || target == "" {
+				continue
+			}
+			// The outer variable must actually be READ in the body, or it is not a dependence and
+			// PS3034's question — can the OUTER loop be split — is the right one instead.
+			//
+			// Only READS count. Counting every index expression made a write to out[i][j] look
+			// like a dependence on i and reported a nest whose OUTER loop is perfectly splittable,
+			// which is the other check's finding and the opposite advice.
+			// The WHOLE left-hand subtree is a write, not just its top node: out[i][j] contains
+			// the nested index out[i], and marking only the outer one left that inner expression
+			// looking like a read of i.
+			written := map[ast.Node]bool{}
+			ast.Inspect(mid, func(m ast.Node) bool {
+				as, aok := m.(*ast.AssignStmt)
+				if !aok {
+					return true
+				}
+				for _, lhs := range as.Lhs {
+					ast.Inspect(unparen(lhs), func(w ast.Node) bool {
+						if w != nil {
+							written[w] = true
+						}
+						return true
+					})
+				}
+				return true
+			})
+			reads := false
+			ast.Inspect(mid, func(m ast.Node) bool {
+				ix, iok := m.(*ast.IndexExpr)
+				if iok && !written[ast.Node(ix)] && mentionsIdent(ix, ov) {
+					reads = true
+				}
+				return true
+			})
+			if !reads {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(st.Pos()),
+				category: "inner-independent-under-sequential-outer",
+				msg: fmt.Sprintf("this loop over %s sits under a SEQUENTIAL loop over %s and is"+
+					" itself independent: every write here is indexed by %s and none by %s, while"+
+					" %s is only read. So the outer loop cannot be split and this one can — split"+
+					" HERE, one level in. That is the shape of every classical factorization:"+
+					" choose a pivot in order, then update the remaining rows in parallel."+
+					" MEASURED on an LU rank-1 update, which was 92%% of its own benchmark on ONE"+
+					" line: -40.8%% at 512 wide and -11.1%% at 256, with 128 unchanged because it"+
+					" sits below the work gate. PS3034 does NOT cover this and should not — it asks"+
+					" whether the OUTER loop can be split, and the answer here is no. TWO THINGS"+
+					" THE CONVERSION NEEDS. Gate on the work at THIS step (rows times columns, not"+
+					" the row count) or mid-sized inputs stay serial while large ones improve, which"+
+					" reads as a size effect. And keep the below-gate path a PLAIN DUPLICATED LOOP:"+
+					" routing a 128-wide factorization through the callback cost 3 to 4%%, and"+
+					" hoisting the gate above the call did not recover it, because the cost is the"+
+					" closure rather than the dispatch. Gate it with an oracle that knows nothing"+
+					" of the internals — solving and checking the residual caught a dropped row"+
+					" that every existing test in the package missed",
+					mv, ov, mv, ov, ov),
+			})
+		}
+		return true
+	})
+	return out
 }
