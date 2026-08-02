@@ -185,3 +185,62 @@ func matmulFlat(a, b []float64, m, k, n int) []float64 {
 		t.Fatalf("%d findings, want 1 — a three-index loop is the same nest", len(fs))
 	}
 }
+
+// TestDetectPS3034_SilentOnEliminationIntoLaterColumns is the false positive the tree sweep
+// produced, kept as a fixture because it is the worst answer this check can give: a sequential
+// elimination reported as parallelizable.
+//
+// The mask write is indexed by the outer variable, so a test that looks only at the destination
+// the function allocated sees an independent nest. The same body then eliminates into columns
+// AHEAD of c, on a matrix it did not allocate, which the next iteration of c reads. Splitting the
+// outer loop would race on exactly that.
+func TestDetectPS3034_SilentOnEliminationIntoLaterColumns(t *testing.T) {
+	src := `package p
+` + fanoutHelperSrc + `
+func prune(wm [][]float64, hinv [][]float64, rows, in int) [][]bool {
+	mask := make([][]bool, rows)
+	for c := 0; c < in; c++ {
+		d := hinv[c][c]
+		for r := range rows {
+			e := wm[r][c] / d
+			mask[r][c] = true
+			for j := c + 1; j < in; j++ {
+				wm[r][j] -= e * hinv[c][j]
+			}
+		}
+	}
+	return mask
+}`
+	if fs := scanSrcFanout(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the body eliminates into columns a later iteration reads:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3034_ReportsThroughAPerIterationBuffer keeps that widening from silencing everything
+// it should not: a buffer the iteration MAKES for itself is invisible to every other iteration, so
+// writing through it says nothing about whether the loop can be split. Without this, the natural
+// fix to the case above — treat every write as evidence of dependence — would silence any nest
+// that uses a scratch row, which is most of them.
+func TestDetectPS3034_ReportsThroughAPerIterationBuffer(t *testing.T) {
+	src := `package p
+` + fanoutHelperSrc + `
+func rowNorms(a []float64, m, k, n int) []float64 {
+	out := make([]float64, m*n)
+	for i := range m {
+		tmp := make([]float64, n)
+		for p := range k {
+			for j := range n {
+				tmp[j] += a[i*k+p] * float64(j)
+			}
+		}
+		for j := range n {
+			out[i*n+j] = tmp[j]
+		}
+	}
+	return out
+}`
+	if fs := scanSrcFanout(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the scratch is made per iteration", len(fs))
+	}
+}
