@@ -245,7 +245,7 @@ type gbmBuilder struct {
 // per-feature O(n) gather+scan over d features (≈ d·n element ops) amortizes the goroutine
 // spawn (parallelBuild is not pooled). Upper tree nodes carry most of the samples/time and are
 // few, so a work gate forks only those. Below it the serial scan (no fork) is faster.
-const gbmSplitParWork = 1 << 17
+const gbmSplitParWork = 1 << 15
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
 func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
