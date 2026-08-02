@@ -431,3 +431,6 @@ IF a column-walked operand sits in a nest whose strided index is carried by an a
 
 ## A-SELF-DEFINED-COMPARISON-IS-A-PROOF-NOT-A-GATE-001
 IF a parity test defines both implementations it compares, THEN the developer SHALL extract the shipped one into a named function the test CALLS — a self-defined pair proved the identity and stayed green when the real code was mutated.
+
+## NEVER-ASK-TAKE-THE-MEASURED-WIN-001
+The agent SHALL implement the measured optimization and document any contract change, rather than raising it as a decision — this was asked once about ReadRaw aliasing and answered as a standing instruction.
