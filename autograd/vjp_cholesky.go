@@ -80,7 +80,12 @@ func init() {
 		for i := range n {
 			linvT[i] = make([]float64, n)
 		}
-		for j := range n {
+		// Columns are independent: column j writes only linvT[j] and reads the factor, so a split
+		// leaves every entry accumulating its own terms in its own order. The work is triangular —
+		// column j costs about (n-j)^2/2 — so the STRIPED helper is the right one; equal bands
+		// would give the first worker the whole wide end. Total work is about n^3/6, which is what
+		// the gate must see (a smaller estimate leaves mid-sized cases serial, §T1083).
+		logdetParallelIdx(n, n*n*n/6, func(j int) {
 			cj := linvT[j]
 			cj[j] = 1 / l[j][j]
 			for i := j + 1; i < n; i++ {
@@ -91,7 +96,7 @@ func init() {
 				}
 				cj[i] = -s / li[i]
 			}
-		}
+		})
 
 		// S = Linvᵀ·P·Linv. First T = P·Linv (P lower), then S = Linvᵀ·T. T is built transposed
 		// with j outermost so each tmpT[j] fills contiguously and both operands of the inner sum
