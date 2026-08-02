@@ -36,3 +36,25 @@ func benchMLAVJP(b *testing.B, seq, heads, dh, dR int) {
 
 func BenchmarkMLAVJPSeq128(b *testing.B) { benchMLAVJP(b, 128, 4, 32, 16) }
 func BenchmarkMLAVJPSeq256(b *testing.B) { benchMLAVJP(b, 256, 4, 32, 16) }
+
+// benchMLAVJPF32 covers the F32 arm, which had no cell. That gap is why the head split shipped
+// for F64 only: the same transform applies here, but a symmetric edit with nothing to measure it
+// against is an argument, not a result.
+func benchMLAVJPF32(b *testing.B, seq, heads, dh, dR int) {
+	vjp := vjps[backend.OpMLA]
+	in64, g64, attrs := mlaBenchInputs(seq, heads, dh, dR)
+	in := make([]*tensor.Tensor, len(in64))
+	for i := range in64 {
+		in[i] = moeCastF32(in64[i])
+	}
+	g := moeCastF32(g64)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := vjp(nil, in, nil, attrs, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMLAVJPSeq256F32(b *testing.B) { benchMLAVJPF32(b, 256, 4, 32, 16) }

@@ -111,3 +111,56 @@ func TestMLAVJPHeadSplitMatchesSerial(t *testing.T) {
 		}
 	}
 }
+
+// TestMLAVJPHeadSplitF32IsBitExact is the same golden for the F32 arm, which is a separate copy of
+// the loop and got the same record-and-fold.
+//
+// TestMLAF32Parity does not cover this. It compares the F32 arm against float32 of the F64 one,
+// which is the right oracle for the arithmetic, but its shape is seq 5 with two heads — far below
+// the fan-out gate — so both arms run unsplit there and the split is invisible to it. This shape
+// splits.
+//
+// WHAT THIS GOLDEN CANNOT SEE, measured rather than assumed: reversing the head order in the fold
+// leaves it green. The shared gradient accumulates in float64 and is stored back as float32, and
+// that rounding swallows the last-bit difference a reordered sum produces. The F64 golden above,
+// on identical code, DOES redden under the same mutation — so the order is pinned there and the
+// values here, and neither test is asked to prove what it cannot.
+func TestMLAVJPHeadSplitF32IsBitExact(t *testing.T) {
+	if raceBuild {
+		t.Skip("the race build changes floating-point results; see racebuild_off.go")
+	}
+	for _, tc := range []struct {
+		name   string
+		causal bool
+		want   uint64
+	}{
+		{"causal", true, 6899433073126379515},
+		{"full", false, 6359307992473138402},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vjp := vjps[backend.OpMLA]
+			in64, g64, attrs := mlaSplitInputs(48, 6, 16, 8, tc.causal)
+			in := make([]*tensor.Tensor, len(in64))
+			for i := range in64 {
+				in[i] = moeCastF32(in64[i])
+			}
+			outs, err := vjp(nil, in, nil, attrs, moeCastF32(g64))
+			if err != nil {
+				t.Fatal(err)
+			}
+			h := uint64(14695981039346656037)
+			for _, o := range outs {
+				if o.Dtype() == tensor.F32 {
+					for _, v := range o.Contiguous().Storage().F32() {
+						h = mlaDigest(h, []float64{float64(v)})
+					}
+					continue
+				}
+				h = mlaDigest(h, o.Contiguous().Storage().F64())
+			}
+			if h != tc.want {
+				t.Fatalf("gradient digest %d, want %d", h, tc.want)
+			}
+		})
+	}
+}
