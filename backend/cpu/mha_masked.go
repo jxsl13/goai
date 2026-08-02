@@ -61,7 +61,12 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	// widening each F32 read per element (float64(x) is identical whether done up-front like
 	// ref or per-access) and narrowing on store → BYTE-IDENTICAL to ref, and we skip ref's
 	// up-front Q/K/V/mask F64 materialization. (head,query-row) pairs are independent.
-	if q.Dtype() == tensor.F32 {
+	// EVERY input must be F32, not just q. The guard used to test q alone and then read k, v, mask
+	// and out as F32 as well, so a mixed set — an F32 query against an F64 additive mask, which is
+	// what a trainable relative-position bias produces — panicked inside Storage().F32(). A dtype
+	// fast path has to be guarded on every tensor it reads, not on the one that named it.
+	if q.Dtype() == tensor.F32 && k.Dtype() == tensor.F32 && v.Dtype() == tensor.F32 &&
+		mask.Dtype() == tensor.F32 && out.Dtype() == tensor.F32 {
 		qs := q.Contiguous().Storage().F32()
 		ks := k.Contiguous().Storage().F32()
 		vs := v.Contiguous().Storage().F32()
@@ -129,6 +134,14 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		return []*tensor.Tensor{out}, nil
 	}
 
+	// Below here everything is read as F64, so a MIXED set — an F32 query against an F64 additive
+	// mask, which is what a trainable relative-position bias produces — belongs to neither arm and
+	// used to panic inside Storage().F64(). Hand those to the reference kernel, which reads through
+	// the dtype-agnostic accessor and is what this op fell back to before the CPU kernel existed.
+	if q.Dtype() != tensor.F64 || k.Dtype() != tensor.F64 || v.Dtype() != tensor.F64 ||
+		mask.Dtype() != tensor.F64 || out.Dtype() != tensor.F64 {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpMHAMasked, in, attrs)
+	}
 	qs := q.Contiguous().Storage().F64()
 	ks := k.Contiguous().Storage().F64()
 	vs := v.Contiguous().Storage().F64()
