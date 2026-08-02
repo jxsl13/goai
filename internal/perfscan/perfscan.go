@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3036", "self-comparison-oracle", "a test that computes BOTH sides of its comparison with the same function and asserts they agree, so the expected value is produced by the code under test. Such a gate can only see state carried BETWEEN calls: any mistake INSIDE the computation changes both sides identically and it stays green. Found exactly that way — a Newton-Schulz orthogonalization gate of this shape passed with two intermediate buffers wired to one slice, and only an independently written reference caught it. Add a slow, obvious implementation with its own buffers and compare to a tolerance when the summation orders differ. SOMETIMES DELIBERATE: comparing one function across a CONFIG difference (GOMAXPROCS 1 against many, a fast path against a fallback) is a real differential test — it still gates only that difference, so document it and keep a separate reference for the arithmetic. Matters because every optimization here is defended by a bit-identity gate, and a gate that cannot fail reports coverage that does not exist. Requires -tests", false},
 	{"PS3035", "loop-hoistable-scratch", "a slice allocated with make at the top of a loop body, sized by something the loop does not vary, that never leaves the iteration — one buffer made and thrown away per pass. Hoist it above the loop. MEASURED on a Cholesky solve whose forward-substitution buffer was allocated per right-hand side: at 128 columns, 133 allocations became 43 and bytes fell 18.1%%. PS2001 does NOT cover this, since it fires only on the configured tensor allocators, so a plain make of a slice in a loop is invisible to every other check in this table. PROVE THE OVERWRITE BEFORE HOISTING: a fresh make is zeroed and a reused buffer is not, so an iteration that reads a slot before writing it would silently start seeing the previous pass\u0027s value — poison with NaN between iterations, confirm green, then delete one write and confirm red. JUDGE ON allocs/op AND B/op; the time win is usually nil and was here at both shapes. A buffer allocated once per WORKER BAND is already in the right place (PS6008) — bounded by GOMAXPROCS", false},
 	{"PS3034", "serial-nest-with-idle-fanout", "a three-deep nest filling a destination the function itself allocated, indexed by the OUTERMOST loop variable so the iterations are independent, running on one core in a package that already declares a fan-out helper. Split the outer loop into bands: each owns whole rows of the destination and every element accumulates in the same order, so the result is BIT-IDENTICAL and the gate asserts exact equality rather than a tolerance. MEASURED on a Muon optimizer step whose flat matmul was 48.8%% of the profile and serial: 195.8ms to 77.4ms, -60.5%%, confirmed in both benchmark orders. GATE ON THE PRODUCT of the loop bounds, not the outer count — Newton-Schulz drives a few rows through a great deal of work each, and a row-count gate leaves exactly that shape serial. Expect allocations to RISE (46 to 568 per step, one closure per band) with bytes flat; that trade is the point. Moving the first band onto the calling goroutine was measured here and did nothing. Silent when any write is indexed without the outer variable, which is a cross-iteration accumulator a split would race on", false},
 	{"PS3033", "per-item-alloc-helper", "a package-local helper that allocates its result with make and returns it, whose every in-file call site is PER ITEM — inside a loop, or inside a helper that is itself only called per item. The buffer outlives nothing, so it belongs to the WORKER rather than the item: take a scratch parameter, grow it only when cap is short, reslice it to the length the caller needs. MEASURED on a k-NN predict where the k-best heap and its backing array, the neighbour weights and the per-class vote accumulator were all per query: 36020 allocations per batch became 92, -99.7%%, bytes -97.7%%, ns/op -4.9%%. JUDGE ON allocs/op AND B/op, NOT ns/op — the time win is the collector not walking those objects, so it is small where memory bandwidth is plentiful and larger where it is not. The reachability is a FIXED POINT, not a single pass: the measured allocator was called from another helper which was called from the per-row callback, so no lexical test sees it. Two conversion traps: every reused buffer must be fully overwritten before it is read (truncate, reslice, CLEAR), and a result the caller KEEPS must still be copied out or every row of a chunk shares one array. Prefer sizing a staging buffer by what the caller will WRITE rather than by the maximum — sized to the write there is no stale tail and no clearing pass, and a mismatched count fails a length check instead of reading the previous item. Silent when a call site stores the result into an index or a field, and on exported helpers, whose callers this file cannot see", false},
@@ -1294,6 +1295,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
+		out = append(out, selfComparisonOracleFindings(fset, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -15156,4 +15158,237 @@ func escapesIteration(fn *ast.FuncDecl, name string) bool {
 		return true
 	})
 	return escapes
+}
+
+// --- PS3036: a gate whose expected value comes from the function under test --------------------
+
+// sameInputs reports whether two calls were handed the SAME inputs: equal arity, and every
+// argument either written identically or bound from an identical defining expression.
+//
+// This is what separates a vacuous gate from a real differential test. Two runs of one entry point
+// with a cpu context and a reference context, or with an F32 and an F64 tensor, are comparing
+// DIFFERENT implementations through one door and are a genuine oracle — their differing arguments
+// are built by different expressions. Two runs over copies of one input made the same way are
+// comparing the code against itself, and nothing inside it can fail.
+func sameInputs(fset *token.FileSet, a, b *ast.CallExpr, defText map[string]string) bool {
+	if a == nil || b == nil || len(a.Args) != len(b.Args) {
+		return false
+	}
+	for i := range a.Args {
+		ta, tb := typeText(fset, a.Args[i]), typeText(fset, b.Args[i])
+		if ta == tb && ta != "" {
+			continue
+		}
+		da, aok := defText[ta]
+		db, bok := defText[tb]
+		if !aok || !bok || da != db || da == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// isAssertionCall reports whether a call looks like an equality assertion — a testing failure
+// method, or a local helper whose name says it compares. Restricting the argument scan to these
+// keeps an ordinary call that merely USES both values from reading as a comparison of them.
+func isAssertionCall(call *ast.CallExpr) bool {
+	name := renderExpr(call.Fun)
+	if i := strings.LastIndex(name, "."); i >= 0 {
+		name = name[i+1:]
+	}
+	switch {
+	case strings.HasPrefix(name, "Fatal"), strings.HasPrefix(name, "Error"):
+		return true
+	case strings.HasPrefix(name, "assert"), strings.HasPrefix(name, "require"),
+		strings.HasPrefix(name, "expect"):
+		return true
+	case strings.Contains(name, "Equal"), strings.Contains(name, "Match"),
+		strings.Contains(name, "Same"), strings.Contains(name, "Close"):
+		return true
+	}
+	return false
+}
+
+// selfComparisonOracleFindings flags PS3036 — a test that computes both sides of its comparison
+// with the SAME function and then asserts they agree.
+//
+// This is not a style complaint. Every optimization in this repository is defended by a
+// bit-identity gate, and a gate built this way can only see state carried BETWEEN calls: any
+// mistake INSIDE the computation changes both sides identically and the test stays green. That is
+// not hypothetical — a Newton-Schulz orthogonalization test written this way passed with two of
+// its intermediate buffers wired to the same slice.
+//
+// Only runs with -tests, since it reads test functions.
+func selfComparisonOracleFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || !strings.HasPrefix(fn.Name.Name, "Test") {
+		return nil
+	}
+	// name -> the callee that produced it, for locals bound to a single call, plus the call node
+	// itself and the source text of every local's defining expression. The texts are what decide
+	// whether the two sides were handed the SAME inputs.
+	from := map[string]string{}
+	site := map[string]*ast.CallExpr{}
+	defText := map[string]string{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || i >= len(as.Lhs) {
+				continue
+			}
+			// Only the FIRST result binds: a (value, err) pair still names the value first.
+			if nm := identName(as.Lhs[0]); nm != "" && nm != "_" && len(as.Rhs) == 1 {
+				if callee := renderExpr(call.Fun); callee != "" {
+					from[nm] = callee
+					site[nm] = call
+				}
+			}
+		}
+		return true
+	})
+	if len(from) < 2 {
+		return nil
+	}
+	// Drop anything that is a test INPUT rather than a test RESULT. Two matrices built by the same
+	// constructor and then fed to the function under test are not a self-oracle, and without this
+	// the check is 893 findings of exactly that. A name passed as an ARGUMENT anywhere in the test
+	// is an input; a name that only ever appears in the comparison is the thing being judged.
+	//
+	// The comparison itself is the exception: an assertion helper takes both sides as arguments,
+	// which is the very shape being looked for.
+	inArg := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || isAssertionCall(call) {
+			return true
+		}
+		for _, a := range call.Args {
+			if nm, ok := rootIdentName(unparen(a)); ok {
+				inArg[nm] = true
+			}
+		}
+		return true
+	})
+	for nm := range from {
+		if inArg[nm] {
+			delete(from, nm)
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+			return true
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			defText[nm] = typeText(fset, as.Rhs[0])
+		}
+		return true
+	})
+	if len(from) < 2 {
+		return nil
+	}
+	// A test that ALSO compares against a value from a different producer has a real oracle, and
+	// the self-comparison beside it is then a deliberate second check rather than the whole gate.
+	hasIndependent := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		chk := func(x, y ast.Expr) {
+			a, aok := rootIdentName(unparen(x))
+			b, bok := rootIdentName(unparen(y))
+			if !aok || !bok || a == b {
+				return
+			}
+			ca, aok := from[a]
+			cb, bok := from[b]
+			if aok && bok && ca != cb {
+				hasIndependent = true
+			}
+		}
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				chk(x.X, x.Y)
+			}
+		case *ast.CallExpr:
+			if isAssertionCall(x) {
+				for i := range x.Args {
+					for j := i + 1; j < len(x.Args); j++ {
+						chk(x.Args[i], x.Args[j])
+					}
+				}
+			}
+		}
+		return true
+	})
+	if hasIndependent {
+		return nil
+	}
+	reported := map[string]bool{}
+	var out []finding
+	report := func(pos token.Pos, a, b, callee string) {
+		key := a + "|" + b
+		if a > b {
+			key = b + "|" + a
+		}
+		if reported[key] {
+			return
+		}
+		reported[key] = true
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "self-comparison-oracle",
+			msg: fmt.Sprintf("%s and %s both come from %s, and this test compares them — so the"+
+				" EXPECTED value is produced by the code under test. A gate built this way can only"+
+				" see state carried BETWEEN calls: any mistake INSIDE the computation changes both"+
+				" sides identically and the test stays green. FOUND EXACTLY THAT WAY: a"+
+				" Newton-Schulz orthogonalization gate of this shape passed with two intermediate"+
+				" buffers wired to the same slice, and only an independently written reference"+
+				" caught it. Add one — a slow, obvious implementation with its own buffers — and"+
+				" compare to a tolerance if the summation orders differ. THIS IS SOMETIMES"+
+				" DELIBERATE: comparing the same function across a CONFIG difference (GOMAXPROCS 1"+
+				" against many, a fast path against a fallback) is a real differential test. It"+
+				" still gates only that difference, so say so in the test's doc and keep a separate"+
+				" reference for the arithmetic. Matters here because every optimization in this"+
+				" repository is defended by a bit-identity gate, and a gate that cannot fail is"+
+				" worse than none: it reports coverage that does not exist. THE SILENCE IS PER"+
+				" TEST FUNCTION, not per file: a reference living in a sibling test covers the"+
+				" code but does not make THIS gate able to fail, so the finding stands and the"+
+				" right response may be one sentence in the doc comment saying what it does and"+
+				" does not catch",
+				a, b, callee),
+		})
+	}
+	pair := func(pos token.Pos, x, y ast.Expr) {
+		a, aok := rootIdentName(unparen(x))
+		b, bok := rootIdentName(unparen(y))
+		if !aok || !bok || a == b {
+			return
+		}
+		if ca, ok := from[a]; ok && from[b] == ca && sameInputs(fset, site[a], site[b], defText) {
+			report(pos, a, b, ca)
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.BinaryExpr:
+			if x.Op == token.EQL || x.Op == token.NEQ {
+				pair(x.Pos(), x.X, x.Y)
+			}
+		case *ast.CallExpr:
+			// An assertion helper: assertBitsEqual(t, got, want, …). Any two arguments tracing
+			// back to one producer are the same defect as a direct comparison.
+			if !isAssertionCall(x) {
+				return true
+			}
+			for i := range x.Args {
+				for j := i + 1; j < len(x.Args); j++ {
+					pair(x.Pos(), x.Args[i], x.Args[j])
+				}
+			}
+		}
+		return true
+	})
+	return out
 }
