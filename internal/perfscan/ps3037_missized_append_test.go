@@ -142,3 +142,63 @@ func expand(live []node, sink *[][]cnd) {
 		t.Fatalf("%d findings, want 0 — the buffer is kept past the pass:\n%s", len(fs), fs[0].msg)
 	}
 }
+
+// TestDetectPS3037_SilentOnACountedInnerLoop is the false-positive class the tree sweep produced
+// right after this check shipped: a buffer sized by the exact span a COUNTED inner loop covers.
+// Comparing the hint against a range subject alone cannot see that — a counted loop has no subject
+// — so every correctly hinted one reported, and all seven remaining candidates in the tree were
+// this shape. The whole loop HEADER is what a correct hint can draw on.
+func TestDetectPS3037_SilentOnACountedInnerLoop(t *testing.T) {
+	src := `package p
+
+func positions(seqs []seqData, skipFirst int) [][]int {
+	var out [][]int
+	for _, sq := range seqs {
+		seq := sq.len
+		valid := make([]int, 0, seq-1-skipFirst)
+		for p := skipFirst; p < seq-1; p++ {
+			valid = append(valid, p)
+		}
+		out = use(out, valid)
+	}
+	return out
+}`
+	if fs := misSizedAppendFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the hint is the counted loop's own span:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3037_ReportsWhenOnlyOneAppendSiteIsSized pins that EVERY append site counts. A
+// diverse beam search appends twice: once per beam to carry a finished hypothesis, which a
+// len(beams) hint covers exactly, and once per beam PER VOCABULARY ENTRY, which it does not.
+// Stopping at the first site found let the correctly sized one vouch for the other, and the check
+// lost this — its own second motivating site — while looking like it had been tightened.
+func TestDetectPS3037_ReportsWhenOnlyOneAppendSiteIsSized(t *testing.T) {
+	src := `package p
+
+func diverse(groups [][]beam, next func([]int) []float64) []cand {
+	var out []cand
+	for step := 0; step < 8; step++ {
+		for _, beams := range groups {
+			cands := make([]cand, 0, len(beams)*8)
+			for pi := range beams {
+				b := beams[pi]
+				if b.done {
+					cands = append(cands, cand{pi, 0, b.score})
+					continue
+				}
+				ls := logSoftmaxRow(next(b.toks))
+				for tok, lp := range ls {
+					cands = append(cands, cand{pi, tok, b.score + lp})
+				}
+			}
+			out = advance(cands)
+		}
+	}
+	return out
+}`
+	if fs := misSizedAppendFindings(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — one append site is sized, the other is not", len(fs))
+	}
+}

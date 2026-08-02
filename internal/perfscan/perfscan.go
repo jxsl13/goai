@@ -15440,16 +15440,40 @@ func misSizedAppendBufferFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 			if name == "" || retainedBeyondLoop(fn, name) {
 				continue
 			}
-			inner := innerAppendSubject(body, name)
-			if inner == "" {
+			inner := innerAppendHeaderIdents(body, name)
+			if len(inner) == 0 {
 				continue
 			}
-			// The hint is only WRONG if it fails to account for the inner loop. A buffer hinted
-			// at len(r.items) and filled by ranging over r.items is correctly sized however deeply
-			// it nests; the measured defect is a hint that names the OUTER collection and nothing
-			// else. So: silent when the capacity expression mentions what the innermost loop
-			// ranges over.
-			if mentionsIdent(call.Args[2], inner) {
+			// The hint is only WRONG if it fails to account for the inner loop. A buffer hinted at
+			// len(r.items) and filled by ranging over r.items is correctly sized however deeply it
+			// nests, and so is one hinted at k+1 and filled by a counted loop to k. The measured
+			// defect is a hint that names the OUTER collection and nothing the inner loop uses.
+			//
+			// Comparing against the range subject alone was not enough: a bare counted inner loop
+			// has no subject, so every correctly hinted one — a JLens position list sized
+			// seq-1-skipFirst and filled by a loop over exactly that span, a speculative decoder
+			// sized k+1 and filled by a loop to k — reported. The whole loop HEADER is what a
+			// correct hint can draw on.
+			// EVERY append site is checked, not the first one found. A diverse beam search appends
+			// to its buffer twice: once per beam to carry a finished hypothesis — correctly
+			// covered by a len(beams) hint — and once per beam PER VOCABULARY ENTRY. Stopping at
+			// the first site let the correctly sized one vouch for the other, and the check lost
+			// its own second motivating site.
+			mis := false
+			for _, hdr := range inner {
+				sized := false
+				for id := range hdr {
+					if mentionsIdent(call.Args[2], id) {
+						sized = true
+						break
+					}
+				}
+				if !sized {
+					mis = true
+					break
+				}
+			}
+			if !mis {
 				continue
 			}
 			out = append(out, finding{
@@ -15521,24 +15545,39 @@ func retainedBeyondLoop(fn *ast.FuncDecl, name string) bool {
 	return found
 }
 
-// innerAppendSubject returns the root identifier of what the INNERMOST loop appending to name
-// ranges over, or "" if no loop nested within body appends to it. That subject is what a correctly
-// sized capacity hint would have to mention.
-func innerAppendSubject(body *ast.BlockStmt, name string) string {
-	subject := ""
-	var walk func(n ast.Node, over string, depth int)
-	walk = func(n ast.Node, over string, depth int) {
+// innerAppendHeaderIdents returns, for EVERY append to name inside a loop nested within body, the
+// identifiers in that loop's header — what it ranges over, or the init, condition and post of a
+// counted loop. A correctly sized capacity hint has to be expressible in those terms, and a buffer
+// is mis-sized when ANY of its append sites is left unaccounted for.
+func innerAppendHeaderIdents(body *ast.BlockStmt, name string) []map[string]bool {
+	var found []map[string]bool
+	var walk func(n ast.Node, hdr map[string]bool, depth int)
+	collect := func(dst map[string]bool, es ...ast.Node) map[string]bool {
+		out := map[string]bool{}
+		for k := range dst {
+			out[k] = true
+		}
+		for _, e := range es {
+			if e == nil {
+				continue
+			}
+			ast.Inspect(e, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					out[id.Name] = true
+				}
+				return true
+			})
+		}
+		return out
+	}
+	walk = func(n ast.Node, hdr map[string]bool, depth int) {
 		ast.Inspect(n, func(m ast.Node) bool {
 			switch x := m.(type) {
 			case *ast.RangeStmt:
-				sub := over
-				if r, ok := rootIdentName(unparen(x.X)); ok {
-					sub = r
-				}
-				walk(x.Body, sub, depth+1)
+				walk(x.Body, collect(nil, x.X), depth+1)
 				return false
 			case *ast.ForStmt:
-				walk(x.Body, over, depth+1)
+				walk(x.Body, collect(nil, x.Init, x.Cond, x.Post), depth+1)
 				return false
 			case *ast.AssignStmt:
 				if depth == 0 || len(x.Lhs) != 1 || len(x.Rhs) != 1 || identName(x.Lhs[0]) != name {
@@ -15546,16 +15585,16 @@ func innerAppendSubject(body *ast.BlockStmt, name string) string {
 				}
 				c, ok := unparen(x.Rhs[0]).(*ast.CallExpr)
 				if ok && renderExpr(c.Fun) == "append" && len(c.Args) > 0 &&
-					identName(c.Args[0]) == name && subject == "" {
-					subject = over
-					if subject == "" {
-						subject = "\x00" // appended in a loop with no range subject: still a finding
+					identName(c.Args[0]) == name {
+					if hdr == nil {
+						hdr = map[string]bool{}
 					}
+					found = append(found, hdr)
 				}
 			}
 			return true
 		})
 	}
-	walk(body, "", 0)
-	return subject
+	walk(body, nil, 0)
+	return found
 }
