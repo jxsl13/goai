@@ -3,6 +3,7 @@ package classic
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 )
 
@@ -238,7 +239,20 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		for _, id := range order {
 			kb[id] = b.x[id][ff]
 		}
-		sort.Slice(order, func(a, c int) bool { return kb[order[a]] < kb[order[c]] })
+		// slices.SortFunc, not sort.Slice: the latter reaches the elements through reflection,
+		// so every call allocates a reflectlite.Swapper AND boxes the slice into an interface.
+		// This one line was 68% of a forest fit's allocations. The comparator is by VALUE here
+		// (order holds ids) rather than by index, and orders the same keys the same way; ties
+		// still resolve unspecified, which the split choice does not depend on.
+		slices.SortFunc(order, func(a, c int) int {
+			switch {
+			case kb[a] < kb[c]:
+				return -1
+			case kb[a] > kb[c]:
+				return 1
+			}
+			return 0
+		})
 		return
 	}
 	k := b.radixKeys[:n]
