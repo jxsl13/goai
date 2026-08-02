@@ -23,3 +23,6 @@ WHEN a scatter-accumulate whose index is a loop dimension times a stride plus a 
 
 ## A-PARALLEL-SCALING-PROBE-RANKS-BEFORE-A-PROFILE-001
 WHEN choosing which benchmark cell to optimize, the optimizer SHALL measures each candidate at GOMAXPROCS 1 and at full width first and works the lowest speedup, because a profile share cannot distinguish serial from parallel time; this found GBMHist at 1.29x among cells scaling 6 to 7x.
+
+## A-WORK-GATE-IS-VERIFIED-AGAINST-THE-REAL-SHAPE-001
+WHEN a parallel split measures as no change at all, the implementer SHALL prints the gate inputs from the benchmark before concluding anything; the softmax Hessian split read as exactly zero effect because its work estimate came to 252000 against a 262144 threshold and the fork never ran.
