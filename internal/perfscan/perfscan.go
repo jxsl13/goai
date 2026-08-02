@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3034", "serial-nest-with-idle-fanout", "a three-deep nest filling a destination the function itself allocated, indexed by the OUTERMOST loop variable so the iterations are independent, running on one core in a package that already declares a fan-out helper. Split the outer loop into bands: each owns whole rows of the destination and every element accumulates in the same order, so the result is BIT-IDENTICAL and the gate asserts exact equality rather than a tolerance. MEASURED on a Muon optimizer step whose flat matmul was 48.8%% of the profile and serial: 195.8ms to 77.4ms, -60.5%%, confirmed in both benchmark orders. GATE ON THE PRODUCT of the loop bounds, not the outer count — Newton-Schulz drives a few rows through a great deal of work each, and a row-count gate leaves exactly that shape serial. Expect allocations to RISE (46 to 568 per step, one closure per band) with bytes flat; that trade is the point. Moving the first band onto the calling goroutine was measured here and did nothing. Silent when any write is indexed without the outer variable, which is a cross-iteration accumulator a split would race on", false},
 	{"PS3033", "per-item-alloc-helper", "a package-local helper that allocates its result with make and returns it, whose every in-file call site is PER ITEM — inside a loop, or inside a helper that is itself only called per item. The buffer outlives nothing, so it belongs to the WORKER rather than the item: take a scratch parameter, grow it only when cap is short, reslice it to the length the caller needs. MEASURED on a k-NN predict where the k-best heap and its backing array, the neighbour weights and the per-class vote accumulator were all per query: 36020 allocations per batch became 92, -99.7%%, bytes -97.7%%, ns/op -4.9%%. JUDGE ON allocs/op AND B/op, NOT ns/op — the time win is the collector not walking those objects, so it is small where memory bandwidth is plentiful and larger where it is not. The reachability is a FIXED POINT, not a single pass: the measured allocator was called from another helper which was called from the per-row callback, so no lexical test sees it. Two conversion traps: every reused buffer must be fully overwritten before it is read (truncate, reslice, CLEAR), and a result the caller KEEPS must still be copied out or every row of a chunk shares one array. Silent when a call site stores the result into an index or a field, and on exported helpers, whose callers this file cannot see", false},
 	{"PS3032", "closure-accessor-in-loop", "a function VALUE obtained from a factory call and then invoked inside a loop, so every element pays an indirect call that cannot be inlined. This is the per-element dispatch anti-pattern one level shallower, and it hides better: a helper handing back readers and writers reads like setup, and the cost is in the calls rather than in the helper. Add typed arms walking raw storage and keep the closure form as the fallback for dtypes the typed arms cannot serve. MEASURED on two pooling backward rules: -48.2%% to -53.2%% across four cells. TWO TRAPS IN THE CONVERSION, both hit while making that change: the closure boundary BLOCKS FMA CONTRACTION that a typed arm allows — a scale product and an accumulating add in one function fuse where a call between them cannot — so wrap the product in an explicit conversion or the arms drift an ulp; and the parity fixture must make an element receive SEVERAL accumulations, or f32 narrowing differences cannot appear and a wrong arm passes. No type information is needed to find this: a name can only be CALLED if it holds a function", false},
 	{"PS3031", "symmetric-pair-computed-twice", "a full i,j nest accumulating a term AND its mirror in the same body, so every pair is formed twice over the full range and the diagonal forms the identical sum twice. Run the inner loop from the outer index and write both positions. BIT-IDENTICAL when the store is a SYMMETRIC combination of the two sums: the full loop stored f(b,a) at the mirrored position where the triangle stores f(a,b), and IEEE addition is commutative, so a+b and b+a have the same bits for every non-NaN operand; each sum keeps its own operands and ascending order, so nothing is reassociated. MEASURED TWICE, both about a third: a Cholesky VJP at -34.33%% and an eigh VJP at -33.9%%. CHECK THE STORE FIRST — if what is written is not symmetric in the two sums the mirror is not free and this does not apply", false},
@@ -1290,6 +1291,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 			continue
 		}
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
+		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -3004,6 +3006,7 @@ func main() {
 	collectIntTypes(parsed)
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
+	collectFanoutHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
@@ -14717,4 +14720,269 @@ func allocatedAndReturnedBuffer(fn *ast.FuncDecl) string {
 		return true
 	})
 	return found
+}
+
+// --- PS3034: an independent nest running serial where the package already has a fan-out --------
+
+// fanoutReg maps a package name to the fan-out helpers it declares: functions whose LAST
+// parameter is a callback over a work index or a half-open range. Package-level, because the
+// helper and the loop that should use it are routinely in different files — nn declares
+// parallelRows in bitnet.go and the serial matmul that wanted it lives in muon.go.
+var fanoutReg = map[string]map[string]bool{}
+
+// collectFanoutHelpers pre-scans every package for those helpers.
+func collectFanoutHelpers(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Type.Params == nil {
+				continue
+			}
+			ps := fn.Type.Params.List
+			if len(ps) == 0 {
+				continue
+			}
+			ft, ok := ps[len(ps)-1].Type.(*ast.FuncType)
+			if !ok || ft.Results != nil && len(ft.Results.List) > 0 || ft.Params == nil {
+				continue
+			}
+			// One index (per item) or two (a half-open range). Anything else is a callback
+			// over values, not over work.
+			nInt := 0
+			for _, p := range ft.Params.List {
+				if id, ok := p.Type.(*ast.Ident); !ok || id.Name != "int" {
+					nInt = -99
+					break
+				}
+				nInt += max(len(p.Names), 1)
+			}
+			if nInt != 1 && nInt != 2 {
+				continue
+			}
+			if fanoutReg[pkg] == nil {
+				fanoutReg[pkg] = map[string]bool{}
+			}
+			fanoutReg[pkg][fn.Name.Name] = true
+		}
+	}
+}
+
+// serialNestWithIdleFanoutFindings flags PS3034 — a three-deep nest that fills a destination this
+// function allocated, indexed by the OUTERMOST loop variable, in a package that already declares
+// a fan-out helper the function never calls.
+func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	// A function that already fans out anywhere is not the subject, whichever loop does it.
+	fansOut := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if nm := calleeName(call.Fun); fanoutReg[f.Name.Name][nm] {
+				fansOut = true
+			}
+		}
+		return true
+	})
+	if fansOut {
+		return nil
+	}
+	dst := allocatedSliceLocals(fn)
+	if len(dst) == 0 {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		// Both loop forms. A three-index `for i := 0; i < m; i++` is the same nest as a range
+		// over the bound, and restricting this to RangeStmt silently skipped every one of them
+		// — including the APPLIED form of the measured case, whose band loop is three-index,
+		// which made the already-fans-out condition look untestable when it was merely unreached.
+		outer, iv := outerLoop(n)
+		if outer == nil || iv == "" || iv == "_" || loopDepthOf(outer) < 2 {
+			return true
+		}
+		// Independence: every write inside the nest must be indexed by an expression naming
+		// the outer variable. A write that is not is a cross-iteration accumulator, and
+		// splitting the outer loop across workers would race on it.
+		target, independent := "", true
+		ast.Inspect(outer, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, lhs := range as.Lhs {
+				ix, ok := unparen(lhs).(*ast.IndexExpr)
+				if !ok {
+					continue
+				}
+				root, _ := rootIdentName(ix.X)
+				if !dst[root] && !dstAliasedIn(fn, root, dst) {
+					continue
+				}
+				if !mentionsIdent(ix.Index, iv) && !aliasOfOuter(outer, ix.X, iv) {
+					independent = false
+					return false
+				}
+				if target == "" {
+					target = root
+				}
+			}
+			return true
+		})
+		if !independent || target == "" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-nest-with-idle-fanout",
+			msg: fmt.Sprintf("this %d-deep nest fills %s — which %s allocated — indexed by the"+
+				" outermost variable %s, so the iterations are independent, and yet it runs on one"+
+				" core while this package already declares a fan-out helper. Split the OUTER loop"+
+				" into bands: each band owns whole rows of the destination, reads whatever it needs"+
+				" of the operands, and every element still accumulates in the same order, so the"+
+				" result is BIT-IDENTICAL and the gate can assert exact equality rather than a"+
+				" tolerance. MEASURED on a Muon optimizer step, where a flat matmul was 48.8%% of"+
+				" the profile and serial: 195.8ms to 77.4ms, -60.5%%, confirmed in both benchmark"+
+				" orders. GATE ON THE PRODUCT of the loop bounds, not the outer count — a"+
+				" Newton-Schulz iteration drives a few rows through a great deal of work each, and"+
+				" a row-count gate leaves exactly that shape serial. Expect allocations to RISE (46"+
+				" to 568 per step here, one closure per band) and bytes to stay flat; that trade is"+
+				" the point, not a regression. Do NOT also move the first band onto the calling"+
+				" goroutine — measured here at no change in time for 41 fewer allocations. Silent"+
+				" when any write is indexed without the outer variable, which is a cross-iteration"+
+				" accumulator that would race",
+				loopDepthOf(outer)+1, target, fn.Name.Name, iv),
+		})
+		return true
+	})
+	return out
+}
+
+// outerLoop returns the body of a loop statement and the name of the variable it counts, for
+// either loop form: `for i := range m` and `for i := 0; i < m; i++` describe the same nest.
+func outerLoop(n ast.Node) (*ast.BlockStmt, string) {
+	switch x := n.(type) {
+	case *ast.RangeStmt:
+		if x.Body == nil {
+			return nil, ""
+		}
+		return x.Body, identName(x.Key)
+	case *ast.ForStmt:
+		if x.Body == nil || x.Init == nil {
+			return nil, ""
+		}
+		as, ok := x.Init.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 {
+			return nil, ""
+		}
+		return x.Body, identName(as.Lhs[0])
+	}
+	return nil, ""
+}
+
+// allocatedSliceLocals returns the locals fn allocates with make and a slice type.
+func allocatedSliceLocals(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || renderExpr(call.Fun) != "make" || len(call.Args) < 2 || i >= len(as.Lhs) {
+				continue
+			}
+			if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); !isSlice {
+				continue
+			}
+			if nm := identName(as.Lhs[i]); nm != "" {
+				out[nm] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// dstAliasedIn reports whether name was defined as a reslice of an allocated destination —
+// `ci := c[i*n : i*n+n]`, the row window an axpy inner loop writes through.
+func dstAliasedIn(fn *ast.FuncDecl, name string, dst map[string]bool) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			if identName(lhs) != name || i >= len(as.Rhs) {
+				continue
+			}
+			if se, ok := unparen(as.Rhs[i]).(*ast.SliceExpr); ok {
+				if root, _ := rootIdentName(se.X); dst[root] {
+					found = true
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// aliasOfOuter reports whether x is a window cut from the destination using the outer variable —
+// the axpy form, where the row is selected once above the inner loop and the inner index alone
+// never mentions the outer variable.
+func aliasOfOuter(body *ast.BlockStmt, x ast.Expr, iv string) bool {
+	name, ok := rootIdentName(x)
+	if !ok {
+		return false
+	}
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			if identName(lhs) != name || i >= len(as.Rhs) {
+				continue
+			}
+			if se, ok := unparen(as.Rhs[i]).(*ast.SliceExpr); ok {
+				if se.Low != nil && mentionsIdent(se.Low, iv) || se.High != nil && mentionsIdent(se.High, iv) {
+					found = true
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+// loopDepthOf returns how many loops are nested below body.
+func loopDepthOf(body *ast.BlockStmt) int {
+	best := 0
+	for _, st := range body.List {
+		var inner *ast.BlockStmt
+		switch x := st.(type) {
+		case *ast.ForStmt:
+			inner = x.Body
+		case *ast.RangeStmt:
+			inner = x.Body
+		case *ast.IfStmt:
+			if d := loopDepthOf(x.Body); d > best {
+				best = d
+			}
+			continue
+		default:
+			continue
+		}
+		if d := 1 + loopDepthOf(inner); d > best {
+			best = d
+		}
+	}
+	return best
 }
