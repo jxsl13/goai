@@ -434,7 +434,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	x, err = swinExec1(ctx, backend.OpAdd, nil, x, a)
+	x, err = swinExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +447,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1(ctx, backend.OpGELU, nil, f1)
+	gelu, err := swinExec1a(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +455,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpAdd, nil, x, f2)
+	return swinExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // forwardOne runs one [C,H,W] image to [1, classes] logits: patch-embed → stages
@@ -586,7 +586,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 			return nil, err
 		}
 	}
-	x, err = swinExec1(ctx, backend.OpAdd, nil, x, a)
+	x, err = swinExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +599,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1(ctx, backend.OpGELU, nil, f1)
+	gelu, err := swinExec1a(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +607,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpAdd, nil, x, f2)
+	return swinExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // dtype reports the block's parameter dtype (from Wq).
@@ -669,7 +669,7 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 					kts[d*n+i] = krow[d] // the transpose, as the write pattern
 				}
 			}
-			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
+			sc, err := swinExec2(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
 			if err != nil {
 				return nil, err
 			}
@@ -707,21 +707,21 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 			}
 		}
 	}
-	return swinExec1(ctx, backend.OpMatMul, nil, out, b.Wo)
+	return swinExec2(ctx, backend.OpMatMul, nil, out, b.Wo)
 }
 
 func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor, numWin, m int, masks []*tensor.Tensor) (*tensor.Tensor, error) {
 	n := m * m
 	dk := b.Dim / b.Heads
-	q, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wq)
+	q, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wq)
 	if err != nil {
 		return nil, err
 	}
-	k, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wk)
+	k, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wk)
 	if err != nil {
 		return nil, err
 	}
-	v, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wv)
+	v, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wv)
 	if err != nil {
 		return nil, err
 	}
@@ -749,10 +749,10 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 		}
 	}
 	rowSlice := func(t *tensor.Tensor, w int) (*tensor.Tensor, error) {
-		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
+		return swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
 	}
 	colSlice := func(t *tensor.Tensor, hh int) (*tensor.Tensor, error) {
-		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
+		return swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
 	}
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
@@ -821,22 +821,22 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpMatMul, nil, cat, b.Wo)
+	return swinExec2(ctx, backend.OpMatMul, nil, cat, b.Wo)
 }
 
 // headBias returns the [M²,M²] relative-position bias matrix for head hh, built
 // as oneHot·Table[:,hh] so it is differentiable w.r.t. the bias table.
 func (r *swinRelBias) headBias(ctx *backend.Context, hh int) (*tensor.Tensor, error) {
 	n := r.m * r.m
-	col, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
+	col, err := swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
 	if err != nil {
 		return nil, err
 	}
-	flat, err := swinExec1(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
+	flat, err := swinExec2(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
+	return swinExec1a(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
 }
 
 // forward downsamples the token grid x[H·W, C] to [(H/2)·(W/2), 2C] by
@@ -881,7 +881,7 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 	}
 	cats := make([]*tensor.Tensor, batch)
 	for bi := range batch {
-		xi, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
+		xi, err := swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -975,7 +975,7 @@ func swinExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tens
 // row-gather: out[i] = t[idx[i]] (grad scatters back), so window partition,
 // cyclic shift, patch-merge grouping, and their inverses are all one gather.
 func swinGather(ctx *backend.Context, t *tensor.Tensor, idx []int, dtype tensor.Dtype) (*tensor.Tensor, error) {
-	return swinExec1(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
+	return swinExec2(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
 }
 
 // swinIdxTensor builds a rank-1 float index tensor (OpEmbed reads indices as
