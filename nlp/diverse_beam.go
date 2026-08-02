@@ -67,6 +67,13 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		grp[g] = []node{{append([]int(nil), start...), 0, 0, false}}
 	}
 
+	// One candidate buffer and one log-softmax row for the whole search, refilled per group and
+	// per beam. Both were made fresh inside the loops: cands with capacity len(beams)*8 against a
+	// true size of len(beams)*vocab, so it doubled its way up on every group of every step. Same
+	// defect and same fix as BeamSearch, where it was 2.45 GB of 2.90 GB. Nothing retains either:
+	// survivors' tokens are copied out and both are truncated or fully rewritten before reuse.
+	var cands []cand
+	var lsBuf []float64
 	for step := 0; step < maxNew; step++ {
 		// token -> #earlier groups (this step) that picked it. Dense []int over the
 		// [0,vocab) token domain (sized on the first logits row) replaces a per-step
@@ -76,7 +83,7 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		anyLive := false
 		for g := 0; g < groups; g++ {
 			beams := grp[g]
-			cands := make([]cand, 0, len(beams)*8)
+			cands = cands[:0]
 			for pi := range beams {
 				b := beams[pi]
 				if b.done {
@@ -84,7 +91,8 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 					continue
 				}
 				anyLive = true
-				ls := logSoftmaxRow(next(b.toks))
+				ls := logSoftmaxRowInto(lsBuf, next(b.toks))
+				lsBuf = ls
 				if stepCount == nil {
 					stepCount = make([]int, len(ls))
 				}
