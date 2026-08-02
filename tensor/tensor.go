@@ -613,25 +613,45 @@ func gatherHalfTyped(out, t *Tensor, n int) bool {
 	// Only the half-cast combinations are claimed here.
 	var run func(dstOff, srcOff int)
 	switch {
+	// The half FLAVOUR is loop-invariant — it is a property of the storage dtype, fixed before the
+	// walk starts — but each arm below used to re-test it per element. Choosing the decoder once
+	// leaves a straight-line body, and reslicing the destination run removes the bounds check the
+	// dst store carried (its sibling gatherCast already does both).
+	// The half FLAVOUR is loop-invariant — a property of the storage dtype, fixed before the walk
+	// starts — so the arms are DUPLICATED rather than selected through a function value. A decoder
+	// held in a variable was tried and measured +51% and +66%: it turns a direct inlinable call
+	// into an indirect one, which costs far more than the well-predicted branch it replaced.
+	// Reslicing the destination run also removes the bounds check its store carried, as the sibling
+	// gatherCast already does.
+	case srcIsU16 && dstIsF32 && srcBF:
+		run = func(dstOff, s int) {
+			out := dstF32[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float32(float64(bf16ToF32(srcU16[s])))
+				s += sInner
+			}
+		}
 	case srcIsU16 && dstIsF32:
 		run = func(dstOff, s int) {
-			for p := 0; p < inner; p++ {
-				if srcBF {
-					dstF32[dstOff+p] = float32(float64(bf16ToF32(srcU16[s])))
-				} else {
-					dstF32[dstOff+p] = float32(float64(f16ToF32(srcU16[s])))
-				}
+			out := dstF32[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float32(float64(f16ToF32(srcU16[s])))
+				s += sInner
+			}
+		}
+	case srcIsU16 && dstIsF64 && srcBF:
+		run = func(dstOff, s int) {
+			out := dstF64[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float64(bf16ToF32(srcU16[s]))
 				s += sInner
 			}
 		}
 	case srcIsU16 && dstIsF64:
 		run = func(dstOff, s int) {
-			for p := 0; p < inner; p++ {
-				if srcBF {
-					dstF64[dstOff+p] = float64(bf16ToF32(srcU16[s]))
-				} else {
-					dstF64[dstOff+p] = float64(f16ToF32(srcU16[s]))
-				}
+			out := dstF64[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float64(f16ToF32(srcU16[s]))
 				s += sInner
 			}
 		}
