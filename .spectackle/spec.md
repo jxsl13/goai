@@ -453,3 +453,6 @@ IF a test compares a parallel path against its serial one, THEN the developer SH
 
 ## CHECK-EVERY-SITE-NOT-THE-FIRST-ONE-FOUND-001
 WHEN a check validates a property against a site inside the code it inspects, the agent SHALL evaluate EVERY such site, since one correctly formed site otherwise vouches for a defective sibling and the check silently loses coverage.
+
+## NEVER-FILTER-TESTS-WITH-RUN-X-001
+WHEN a profile is taken alongside a benchmark, the agent SHALL pass -run =^$ and never -run x, which is a REGEX matching every test whose name contains an x and silently fills the profile with test allocations.
