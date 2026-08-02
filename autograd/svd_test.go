@@ -65,7 +65,11 @@ func svdFwd(a [][]float64, refU [][]float64) (u [][]float64, s []float64, v [][]
 func TestSVDGradcheck(t *testing.T) {
 	rng := rand.New(rand.NewPCG(52, 9))
 	const h = 1e-6
-	shapes := [][2]int{{2, 2}, {3, 3}, {4, 2}, {5, 3}}
+	// 40x32 is here for the row splits inside the rule: it clears their work gates (m*n^2 and n^3
+	// against 1<<15) so the parallel path is checked against finite differences, which is an
+	// INDEPENDENT oracle. The bit-parity test beside it compares the split against itself under
+	// GOMAXPROCS(1) and cannot see a row that both arms skip — the mutations proved exactly that.
+	shapes := [][2]int{{2, 2}, {3, 3}, {4, 2}, {5, 3}, {40, 32}}
 	for _, sh := range shapes {
 		m, n := sh[0], sh[1]
 		a := randRect(rng, m, n)
