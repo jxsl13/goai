@@ -2,6 +2,8 @@ package autograd
 
 import (
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -197,69 +199,107 @@ func init() {
 				dqcs := dqC.Storage().F64()
 				dkcs := dkC.Storage().F64()
 				dvcs := dvC.Storage().F64()
-				a := make([]float64, seq)
-				dA := make([]float64, seq)
-				for h := range heads {
-					hc := h * dh
-					for i := range seq {
-						jmax := seq
-						if causal {
-							jmax = i + 1
+				// Heads write DISJOINT windows of every destination but one: dqC/dkC/dvC at
+				// columns hc = h*dh, dqRrot at (i*heads+h)*dR. The exception is dkRrot, the
+				// SHARED decoupled-key gradient, which every head accumulates at [j*dR+e]. Its
+				// dS factors are therefore RECORDED here and folded in a second pass below, in
+				// the original ascending (head, i, j) order — which is what keeps the whole VJP
+				// bit-identical. Per-head partials summed afterwards would NOT be: the serial
+				// form is one running sum across all heads, and a partial restarts from zero.
+				//
+				// The recording buffer is heads x seq x seq, so heads run in GROUPS sized to
+				// keep it under mlaDSBufBytes. A group of one is the serial form and stays
+				// correct; only the parallelism degrades, and only on very long sequences.
+				grp := max(1, min(heads, mlaDSBufBytes/(8*seq*seq)))
+				dsBuf := make([]float64, grp*seq*seq)
+				for h0 := 0; h0 < heads; h0 += grp {
+					h1 := min(h0+grp, heads)
+					mlaParallelHeads(h0, h1, seq*seq*(dh+dR), func(hlo, hhi int) {
+						a := make([]float64, seq)
+						dA := make([]float64, seq)
+						for h := hlo; h < hhi; h++ {
+							ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
+							hc := h * dh
+							for i := range seq {
+								jmax := seq
+								if causal {
+									jmax = i + 1
+								}
+								// recompute softmax weights a[j]
+								//
+								// PS4008 DECLINED ON TWO MEASUREMENTS, not on argument. The ikj
+								// rewrite was implemented, gated bit-identical and benchmarked
+								// twice: as a pure reorder it is 0.85x, and with the keys
+								// transposed first — the form that made nn.matmulABt win 2.09x —
+								// it is 0.82x, i.e. WORSE. The dot form already exposes
+								// instruction-level parallelism across j, since each (i,j) score
+								// is independent, so there is no serial chain to break; the ikj
+								// form only adds (dh+dR)x the read-modify-write traffic on a[].
+								// See BenchmarkMLAVJPSeq{128,256}.
+								m := math.Inf(-1)
+								for j := range jmax {
+									var s float64
+									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
+									for d := range dh {
+										s += qcs[i*cols+hc+d] * kcs[j*cols+hc+d]
+									}
+									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
+									for e := range dR {
+										s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
+									}
+									s *= scale
+									a[j] = s
+									if s > m {
+										m = s
+									}
+								}
+								var sum float64
+								for j := range jmax {
+									a[j] = math.Exp(a[j] - m)
+									sum += a[j]
+								}
+								var dot float64
+								for j := range jmax {
+									a[j] /= sum
+									var dav float64
+									for d := range dh {
+										gid := gs[i*cols+hc+d]
+										dvcs[j*cols+hc+d] += a[j] * gid
+										dav += gid * vcs[j*cols+hc+d]
+									}
+									dA[j] = dav
+									dot += dav * a[j]
+								}
+								for j := range jmax {
+									dS := scale * a[j] * (dA[j] - dot)
+									for d := range dh {
+										dqcs[i*cols+hc+d] += dS * kcs[j*cols+hc+d]
+										dkcs[j*cols+hc+d] += dS * qcs[i*cols+hc+d]
+									}
+									for e := range dR {
+										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
+									}
+									ds[i*seq+j] = dS
+								}
+							}
 						}
-						// recompute softmax weights a[j]
-						//
-						// PS4008 DECLINED ON TWO MEASUREMENTS, not on argument. The ikj
-						// rewrite was implemented, gated bit-identical and benchmarked
-						// twice: as a pure reorder it is 0.85x, and with the keys
-						// transposed first — the form that made nn.matmulABt win 2.09x —
-						// it is 0.82x, i.e. WORSE. The dot form already exposes
-						// instruction-level parallelism across j, since each (i,j) score
-						// is independent, so there is no serial chain to break; the ikj
-						// form only adds (dh+dR)x the read-modify-write traffic on a[].
-						// See BenchmarkMLAVJPSeq{128,256}.
-						m := math.Inf(-1)
-						for j := range jmax {
-							var s float64
-							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
-							for d := range dh {
-								s += qcs[i*cols+hc+d] * kcs[j*cols+hc+d]
+					})
+					// Fold the recorded factors into the shared decoupled-key gradient in the
+					// ORIGINAL order: heads ascending inside the group, then i, then j. Groups
+					// run in ascending order too, so the whole sequence of adds is the serial
+					// loop's, element for element.
+					for h := h0; h < h1; h++ {
+						ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
+						for i := range seq {
+							jmax := seq
+							if causal {
+								jmax = i + 1
 							}
-							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
-							for e := range dR {
-								s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
-							}
-							s *= scale
-							a[j] = s
-							if s > m {
-								m = s
-							}
-						}
-						var sum float64
-						for j := range jmax {
-							a[j] = math.Exp(a[j] - m)
-							sum += a[j]
-						}
-						var dot float64
-						for j := range jmax {
-							a[j] /= sum
-							var dav float64
-							for d := range dh {
-								gid := gs[i*cols+hc+d]
-								dvcs[j*cols+hc+d] += a[j] * gid
-								dav += gid * vcs[j*cols+hc+d]
-							}
-							dA[j] = dav
-							dot += dav * a[j]
-						}
-						for j := range jmax {
-							dS := scale * a[j] * (dA[j] - dot)
-							for d := range dh {
-								dqcs[i*cols+hc+d] += dS * kcs[j*cols+hc+d]
-								dkcs[j*cols+hc+d] += dS * qcs[i*cols+hc+d]
-							}
-							for e := range dR {
-								dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
-								dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
+							for j := range jmax {
+								dS := ds[i*seq+j]
+								for e := range dR {
+									dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
+								}
 							}
 						}
 					}
@@ -406,4 +446,35 @@ func init() {
 		mlaRopeBack(dkRrot, 1, dR, base, dkRpre)
 		return []*tensor.Tensor{dqC, dkC, dvC, dqRpre, dkRpre}, nil
 	})
+}
+
+// mlaDSBufBytes caps the recording buffer the head split needs — one float64 per
+// (head, query, key) in the group being processed. Sixty-four megabytes holds every head at
+// seq 1024 and four heads at seq 2048; beyond that the group shrinks and the split narrows
+// rather than the memory growing.
+const mlaDSBufBytes = 1 << 26
+
+// mlaParallelHeads runs body over the heads [h0,h1) in GOMAXPROCS bands. Every write inside a
+// head's band lands in that head's own window, so the split cannot change a value; the one
+// shared accumulator is handled by the caller's second pass. Serial below a work threshold.
+func mlaParallelHeads(h0, h1, workPerHead int, body func(hlo, hhi int)) {
+	n := h1 - h0
+	nw := runtime.GOMAXPROCS(0)
+	if nw > n {
+		nw = n
+	}
+	if nw <= 1 || n*workPerHead < 1<<15 {
+		body(h0, h1)
+		return
+	}
+	var wg sync.WaitGroup
+	chunk := (n + nw - 1) / nw
+	for lo := h0; lo < h1; lo += chunk {
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			body(lo, hi)
+		}(lo, min(lo+chunk, h1))
+	}
+	wg.Wait()
 }

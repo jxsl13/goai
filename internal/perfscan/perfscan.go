@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3047", "one-shared-accumulator-blocks-split", "a loop over a dimension whose accumulating writes are ALL indexed by that dimension except ONE. That single exception is the only thing keeping the loop serial. RECORD AND FOLD: run the iterations in parallel, storing the shared accumulator per-item FACTOR into a buffer instead of adding it, then fold that buffer afterwards in the original iteration order — every add then happens in the sequence the serial loop used, so the result is BIT-IDENTICAL, which per-iteration partial sums merged at the end are NOT. MEASURED on the MLA attention backward, where four of five gradients are written at head-chosen columns and the fifth is the shared decoupled-key gradient: BenchmarkMLAVJPSeq256 fell 67.9%% and Seq128 66.7%%. SIZE THE RECORDING BUFFER FIRST — it holds one value per (iteration, inner index) pair, so process iterations in GROUPS that keep it under a budget; a group of one degrades to the serial form and stays correct. THE FOLD MUST REPRODUCE THE ORIGINAL BOUNDS: a triangular inner range folded with the rectangular bound agrees with the serial form on the rectangular case and nowhere else", false},
 	{"PS3046", "item-reduction-into-partitioned-windows", "a loop over items whose inner loops accumulate into a WINDOW of a shared destination, cut at an offset the item does not appear in. The item loop is a REDUCTION and cannot fan out, but the loops that CHOOSE the window already partition the destination into disjoint pieces, and splitting one of those is safe: each worker owns whole windows, every window still sums its items in ascending order, and the result is BIT-IDENTICAL. MEASURED on the softmax regression Hessian, where every sample contributes to every (class pair, feature) window: BenchmarkSoftmaxRegressionFit fell 43.9%%, the two smaller softmax cells 24.5%% and 26.6%%. CUT THE BANDS ON CUMULATIVE WORK WHEN THE INNER RANGE IS TRIANGULAR — a loop whose iteration a writes m-a columns gives its first band about 2m/workers times the last band under an equal-count split. CHECK THE GATE AGAINST THE REAL SHAPE: this one first measured as no change at all because the work estimate fell 4%% short of the threshold and the split never ran. PS3045 is the sibling for a scatter whose offset within the window is chosen by the DATA", false},
 	{"PS3045", "colliding-scatter-with-partitionable-destination", "an item loop whose inner loop over a second dimension accumulates into a destination indexed by that dimension PLUS a data-dependent offset. Two items can land on the same slot, so the ITEM loop cannot fan out — but the inner dimension partitions the destination into disjoint windows, and splitting THERE is safe: each worker owns whole windows, every slot still accumulates its items in ascending item order, and the result is BIT-IDENTICAL. Per-worker partial copies merged afterwards would reassociate every sum and are not. MEASURED on the histogram gradient-boosting builder, where every sample updates one bin of every feature: BenchmarkGBMHist_hist_80k fell 19.0%%, the 20k cell 11.3%%. FLOOR THE WINDOWS PER WORKER — every worker re-walks the WHOLE item list, so that walk is paid once per worker instead of once in total; swept at 20 features on 12 cores, 4 per worker was best and 8 was 10%% worse because it left only two workers. GATE ON items times windows so small calls stay serial", false},
 	{"PS3044", "serial-reduction-blocks-parallel-map", "a loop that computes a per-item value with a call and then folds it into shared state at an index the item does not determine. The fold is a REDUCTION — two items can land on the same slot — so the loop cannot fan out as written, and the call in front of it usually holds all the time. SPLIT THE MAP FROM THE REDUCE: run the call over the items in a parallel pass writing a per-item array, then fold that array in ascending item order exactly as before. No partial sums are merged and every accumulator takes the same terms in the same order, so the result is BIT-IDENTICAL and a golden from the previous implementation gates it. MEASURED on the AQLM encoder k-means assignment, where the nearest-centroid search costs k*dim and the fold costs dim: BenchmarkEncodeAQLM fell 37.2%%. RANK IT AGAINST WALL CLOCK — a serial stretch pays its full CPU time while the rest of the path is parallel. If the map is CHEAP relative to the fold there is nothing here: the extra array and the second pass are then the whole cost", false},
@@ -1310,6 +1311,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, mapBlockedByReductionFindings(fset, f, fn)...)
 		out = append(out, collidingScatterFindings(fset, f, fn)...)
 		out = append(out, itemReductionWindowFindings(fset, f, fn)...)
+		out = append(out, oneSharedAccumulatorFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -17048,4 +17050,193 @@ func itemReductionWindowFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncD
 		return true
 	})
 	return out
+}
+
+// --- PS3047: one shared accumulator away from a split -----------------------------------------
+
+// accumTargets splits a body's accumulating writes into those whose index mentions the loop
+// dimension — private to that iteration — and those whose does not, which every iteration shares.
+// Locals the body itself creates are excluded: they are per-iteration scratch either way.
+func accumTargets(body *ast.BlockStmt, dim string) (private, shared []string) {
+	local := localBuffersMadeIn(body)
+	// Names the body derives FROM the dimension. `hc := h*dh` and then `dvcs[j*cols+hc+d]` is a
+	// head-private write, and a purely syntactic test for h calls it shared — which inverts the
+	// finding. Without this the check was silent on the site it was written for.
+	derived := map[string]bool{dim: true}
+	for range 3 {
+		ast.Inspect(body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			for nm := range derived {
+				if mentionsIdent(as.Rhs[0], nm) {
+					if lhs := identName(as.Lhs[0]); lhs != "" {
+						derived[lhs] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	mentionsDim := func(e ast.Expr) bool {
+		for nm := range derived {
+			if mentionsIdent(e, nm) {
+				return true
+			}
+		}
+		return false
+	}
+	seenP, seenS := map[string]bool{}, map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 {
+			return true
+		}
+		// A read-modify-write spelled as an explicit rounded store is how an f32 accumulator has
+		// to be written when each add must round through float32; it accumulates just as much as
+		// += does, and skipping it made this check silent on the f32 arm of the very function it
+		// was written for. The test has to be narrow: `a[j] = math.Exp(a[j] - m)` also reads its
+		// own cell, and admitting it once suppressed the finding entirely and once produced a
+		// second, wrong finding on the nested loop.
+		roundStore := as.Tok == token.ASSIGN && len(as.Rhs) == 1 &&
+			isRoundedAccumulation(as.Lhs[0], as.Rhs[0])
+		if as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN && !roundStore {
+			return true
+		}
+		e := unparen(as.Lhs[0])
+		if sel, ok := e.(*ast.SelectorExpr); ok {
+			e = unparen(sel.X)
+		}
+		ix, ok := e.(*ast.IndexExpr)
+		if !ok {
+			return true
+		}
+		nm := identName(ix.X)
+		if nm == "" || local[nm] {
+			return true
+		}
+		if mentionsDim(ix.Index) {
+			if !seenP[nm] {
+				seenP[nm] = true
+				private = append(private, nm)
+			}
+			return true
+		}
+		if !seenS[nm] {
+			seenS[nm] = true
+			shared = append(shared, nm)
+		}
+		return true
+	})
+	return private, shared
+}
+
+// oneSharedAccumulatorFindings flags PS3047 — a loop over a dimension whose accumulating writes
+// are ALL indexed by that dimension except one. The exception is the only thing keeping the loop
+// serial, and it does not have to: record the shared accumulator's factor during the parallel pass
+// and fold it afterwards in the original order.
+//
+// MEASURED on the MLA attention backward, where four of five gradients are written at columns the
+// head chooses and the fifth, the shared decoupled-key gradient, is accumulated by every head at
+// the same address. Recording its factors and folding them in ascending (head, query, key) order
+// took BenchmarkMLAVJPSeq256 down 67.9% and Seq128 66.7%, bit-identically.
+func oneSharedAccumulatorFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, dim := outerLoop(n)
+		if body == nil || dim == "" || seen[int(n.Pos())] || loopDepthOf(body) < 2 {
+			return true
+		}
+		fanned := false
+		ast.Inspect(body, func(m ast.Node) bool {
+			if fs, ok := m.(*ast.ForStmt); ok && boundedByParams(fn, fs) {
+				fanned = true
+			}
+			if c, ok := m.(*ast.CallExpr); ok && f.Name != nil && fanoutReg[f.Name.Name][calleeName(c.Fun)] {
+				fanned = true
+			}
+			return !fanned
+		})
+		if fanned {
+			return true
+		}
+		private, shared := accumTargets(body, dim)
+		// The point is a MAJORITY that already partitions. One private destination against three
+		// shared ones is an ordinary reduction, not a loop held back by an exception.
+		if len(private) < 2 || len(shared) != 1 {
+			return true
+		}
+		seen[int(n.Pos())] = true
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "one-shared-accumulator-blocks-split",
+			msg: fmt.Sprintf("this loop over %q accumulates into %d destinations that its own"+
+				" iteration owns (%s — every index mentions %q) and exactly ONE it shares with every"+
+				" other iteration: %q. That single exception is the only thing keeping the loop"+
+				" serial. RECORD AND FOLD: run the iterations in parallel, storing the shared"+
+				" accumulator's per-item FACTOR into a buffer instead of adding it, then fold that"+
+				" buffer afterwards in the original iteration order. Every add then happens in the"+
+				" sequence the serial loop used, so the result is BIT-IDENTICAL — per-iteration"+
+				" partial sums merged at the end are NOT, because the serial form is one running sum"+
+				" and a partial restarts from zero. MEASURED on the MLA attention backward, where"+
+				" four of five gradients are written at head-chosen columns and the fifth is the"+
+				" shared decoupled-key gradient: BenchmarkMLAVJPSeq256 fell 67.9%% and Seq128 66.7%%."+
+				" SIZE THE RECORDING BUFFER FIRST — it holds one value per (iteration, inner index)"+
+				" pair, so process the iterations in GROUPS that keep it under a cache-or-memory"+
+				" budget; a group of one degrades to the serial form and stays correct. THE FOLD"+
+				" MUST REPRODUCE THE ORIGINAL BOUNDS: a triangular inner range folded with the"+
+				" rectangular bound agrees with the serial form on the rectangular case and nowhere"+
+				" else",
+				dim, len(private), strings.Join(private, ", "), dim, shared[0]),
+		})
+		return true
+	})
+	return out
+}
+
+// baseOfIndex peels index and selector layers off e and returns the underlying expression.
+func baseOfIndex(e ast.Expr) ast.Expr {
+	for {
+		switch x := unparen(e).(type) {
+		case *ast.IndexExpr:
+			e = x.X
+		case *ast.SelectorExpr:
+			e = x.X
+		default:
+			return unparen(e)
+		}
+	}
+}
+
+// peelConversions strips type conversions — calls whose callee is a bare identifier — so a value
+// wrapped in float64(...) can be compared with the cell it came from. A qualified call such as
+// math.Exp is NOT a conversion and stops the peel, which is what separates an f32 accumulator
+// from ordinary scratch that happens to read its own cell.
+func peelConversions(e ast.Expr) ast.Expr {
+	for {
+		call, ok := unparen(e).(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return unparen(e)
+		}
+		if _, ok := call.Fun.(*ast.Ident); !ok {
+			return unparen(e)
+		}
+		e = call.Args[0]
+	}
+}
+
+// isRoundedAccumulation reports whether rhs is lhs plus (or minus) something, up to conversions:
+// the explicit-store spelling of an accumulation.
+func isRoundedAccumulation(lhs, rhs ast.Expr) bool {
+	b, ok := peelConversions(rhs).(*ast.BinaryExpr)
+	if !ok || (b.Op != token.ADD && b.Op != token.SUB) {
+		return false
+	}
+	want := renderExpr(lhs)
+	return renderExpr(peelConversions(b.X)) == want || renderExpr(peelConversions(b.Y)) == want
 }
