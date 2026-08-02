@@ -62,6 +62,8 @@ func init() {
 		tmp := make([][]float64, n)
 		for a := range n {
 			tmp[a] = make([]float64, n)
+		}
+		logdetParallelIdx(n, n*n*n, func(a int) {
 			for j := range n {
 				var sum float64 // (mid·Vᵀ)_aj = Σ_b mid[a,b]·V[j,b]
 				for b := range n {
@@ -69,9 +71,11 @@ func init() {
 				}
 				tmp[a][j] = sum
 			}
-		}
+		})
 		abar := tensor.New(ut.Dtype(), tensor.Shape{m, n})
-		for i := range m {
+		// Rows of Ā are independent — row i reads U[i] and all of T and writes only its own row —
+		// and SetF64 lands on distinct offsets, so the split is bit-identical.
+		logdetParallelIdx(m, m*n*n, func(i int) {
 			for j := range n {
 				var sum float64 // (U·T)_ij = Σ_a U[i,a]·T[a,j]
 				for a := range n {
@@ -79,7 +83,7 @@ func init() {
 				}
 				abar.SetF64(sum, i, j)
 			}
-		}
+		})
 
 		// tall correction (m>n): (I − U·Uᵀ)·Ū·diag(1/s)·Vᵀ, added to Ā.
 		if m > n {
@@ -111,8 +115,13 @@ func init() {
 // BIT-IDENTICAL: each proj[b] is the same subtraction sequence over ascending a, and each add still
 // accumulates over ascending b with the same operands.
 func addTallCorrection(abar *tensor.Tensor, w, u, utw, v [][]float64, m, n int) {
-	proj := make([]float64, n)
-	for i := range m {
+	// Rows are independent: row i reads w[i], u[i], utw and v, and writes only Ā's row i. The
+	// projection scratch was ONE buffer for the whole loop, which workers cannot share, so it
+	// becomes one row of a single m*n slab — one allocation rather than one per row, and no
+	// dependence on how the helper assigns indices to workers.
+	projAll := make([]float64, m*n)
+	logdetParallelIdx(m, m*n*n, func(i int) {
+		proj := projAll[i*n : i*n+n : i*n+n]
 		wi, ui := w[i], u[i]
 		for b := range n {
 			proj[b] = wi[b]
@@ -131,7 +140,7 @@ func addTallCorrection(abar *tensor.Tensor, w, u, utw, v [][]float64, m, n int) 
 			}
 			abar.SetF64(abar.AtF64(i, j)+add, i, j)
 		}
-	}
+	})
 }
 
 // matTmulRect returns Xᵀ·Y where X is p×q and Y is p×q, giving a q×q matrix
