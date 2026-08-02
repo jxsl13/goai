@@ -171,21 +171,31 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 // matmulFlat returns C[m,n] = A[m,k]·B[k,n] (row-major flat).
 func matmulFlat(a, b []float64, m, k, n int) []float64 {
 	c := make([]float64, m*n)
-	for i := range m {
-		ci := c[i*n : i*n+n]
-		for p := range k {
-			av := a[i*k+p]
-			if av == 0 {
-				continue
-			}
-			// axpy over equal-length slices (one bounds check each) so the inner mul-add
-			// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
-			bp := b[p*n : p*n+n]
-			for j := range ci {
-				ci[j] += av * bp[j]
+	// Split over ROW BANDS of C. Each band owns its rows outright — it reads all of B and
+	// only its own rows of A — so nothing is shared and every c[i][j] still accumulates its
+	// k products in the same ascending-p order the serial loop used. Bit-identical, which is
+	// what lets the parity test assert exact equality rather than a tolerance.
+	//
+	// This was 48.8%% of a Muon step's profile and ran on one core. The gate is on m*k*n
+	// rather than m: Newton-Schulz drives a handful of rows through a lot of work per row,
+	// and a row-count gate would leave exactly that shape serial.
+	parallelRows(m, k*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			ci := c[i*n : i*n+n]
+			for p := range k {
+				av := a[i*k+p]
+				if av == 0 {
+					continue
+				}
+				// axpy over equal-length slices (one bounds check each) so the inner mul-add
+				// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
+				bp := b[p*n : p*n+n]
+				for j := range ci {
+					ci[j] += av * bp[j]
+				}
 			}
 		}
-	}
+	})
 	return c
 }
 

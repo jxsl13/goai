@@ -144,3 +144,64 @@ func assertBitsEqual(t *testing.T, got, want []float64, what string, m, k int) {
 		}
 	}
 }
+
+// matmulFlatSerialRef is matmulFlat EXACTLY as it stood before the row bands: one goroutine
+// walking every row in ikj order. It is the bit-identity oracle for the split, and it must stay
+// frozen — rewriting it to follow the implementation would make the gate self-fulfilling.
+func matmulFlatSerialRef(a, b []float64, m, k, n int) []float64 {
+	c := make([]float64, m*n)
+	for i := range m {
+		ci := c[i*n : i*n+n]
+		for p := range k {
+			av := a[i*k+p]
+			if av == 0 {
+				continue
+			}
+			bp := b[p*n : p*n+n]
+			for j := range ci {
+				ci[j] += av * bp[j]
+			}
+		}
+	}
+	return c
+}
+
+// TestMatmulFlatBandsMatchSerialExactly holds the parallel matmulFlat bit-identical to the serial
+// form, with no tolerance: a band owns whole rows of C, so every element still accumulates its k
+// products in the same ascending-p order. A tolerance here would accept exactly the reassociation
+// the split is claiming not to do.
+//
+// The shapes are chosen to clear parallelRows' m*k*n >= 1<<14 gate — below it the helper runs the
+// body serially and the test would compare the serial path against itself — and to include a row
+// count that does NOT divide evenly across workers, since an off-by-one in the band arithmetic
+// shows up only in the last, short band. The wide exponent spread in randMat is what makes a
+// reordered accumulation round differently and be caught at all.
+func TestMatmulFlatBandsMatchSerialExactly(t *testing.T) {
+	rng := rand.New(rand.NewSource(20260802))
+	for _, d := range []struct{ m, k, n int }{
+		{64, 64, 64},   // square, evenly divisible
+		{37, 48, 53},   // none of the three divides the worker count
+		{256, 64, 512}, // the Newton-Schulz shape: many rows, heavy per row
+		{3, 512, 512},  // few rows, huge per-row work — the case a row-count gate would miss
+		{1, 256, 256},  // single row: the split degenerates
+		{129, 17, 8},   // odd row count, narrow output
+	} {
+		a := randMat(rng, d.m, d.k)
+		b := randMat(rng, d.k, d.n)
+		// A column of exact zeros exercises the av == 0 skip inside a band.
+		for i := range d.m {
+			a[i*d.k] = 0
+		}
+		got := matmulFlat(a, b, d.m, d.k, d.n)
+		want := matmulFlatSerialRef(a, b, d.m, d.k, d.n)
+		if len(got) != len(want) {
+			t.Fatalf("[%d,%d,%d]: %d values, want %d", d.m, d.k, d.n, len(got), len(want))
+		}
+		for i := range want {
+			if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
+				t.Fatalf("[%d,%d,%d] element %d (row %d): %v, serial %v — the band split changed"+
+					" an accumulation", d.m, d.k, d.n, i, i/d.n, got[i], want[i])
+			}
+		}
+	}
+}
