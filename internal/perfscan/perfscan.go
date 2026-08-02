@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3045", "colliding-scatter-with-partitionable-destination", "an item loop whose inner loop over a second dimension accumulates into a destination indexed by that dimension PLUS a data-dependent offset. Two items can land on the same slot, so the ITEM loop cannot fan out — but the inner dimension partitions the destination into disjoint windows, and splitting THERE is safe: each worker owns whole windows, every slot still accumulates its items in ascending item order, and the result is BIT-IDENTICAL. Per-worker partial copies merged afterwards would reassociate every sum and are not. MEASURED on the histogram gradient-boosting builder, where every sample updates one bin of every feature: BenchmarkGBMHist_hist_80k fell 19.0%%, the 20k cell 11.3%%. FLOOR THE WINDOWS PER WORKER — every worker re-walks the WHOLE item list, so that walk is paid once per worker instead of once in total; swept at 20 features on 12 cores, 4 per worker was best and 8 was 10%% worse because it left only two workers. GATE ON items times windows so small calls stay serial", false},
 	{"PS3044", "serial-reduction-blocks-parallel-map", "a loop that computes a per-item value with a call and then folds it into shared state at an index the item does not determine. The fold is a REDUCTION — two items can land on the same slot — so the loop cannot fan out as written, and the call in front of it usually holds all the time. SPLIT THE MAP FROM THE REDUCE: run the call over the items in a parallel pass writing a per-item array, then fold that array in ascending item order exactly as before. No partial sums are merged and every accumulator takes the same terms in the same order, so the result is BIT-IDENTICAL and a golden from the previous implementation gates it. MEASURED on the AQLM encoder k-means assignment, where the nearest-centroid search costs k*dim and the fold costs dim: BenchmarkEncodeAQLM fell 37.2%%. RANK IT AGAINST WALL CLOCK — a serial stretch pays its full CPU time while the rest of the path is parallel. If the map is CHEAP relative to the fold there is nothing here: the extra array and the second pass are then the whole cost", false},
 	{"PS3043", "source-rebound-per-output", "a nest whose OUTER loop owns a destination and whose INNER loop rebinds a source element from a collection. The set of sources does not depend on the outer variable, so it is re-read once per outer iteration and the pass moves outer-count times the source volume through the caches. INTERCHANGE THE LOOPS: bind each source once and update every destination while it is loaded. The per-destination accumulation order is unchanged, so the result stays BIT-IDENTICAL and an existing exact-equality gate still applies. MEASURED on the multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p] written as a loop over outputs re-reading every map — 16 passes over 33 MB per group; BenchmarkMTAForward_ch16 fell 11.7%% once the source loop moved out and the element range was split across workers. THE INTERCHANGE ALONE IS RARELY THE WIN: it makes the destinations live at once, so hold them for a BAND of elements, and check whether the loop was serial while the rest of the path was parallel — a serial stretch costs its full CPU time in wall clock however small its profile share looks", false},
 	{"PS3042", "whole-tensor-staging-buffer", "a scratch buffer allocated before a fan-out call, sized by the fan-out's ITEM COUNT times a width, and touched only inside the callback. Each band writes and reads only its own rows, so the buffer's SIZE is set by the whole tensor while its WORKING SET is one band: every element the producing stage writes goes out to memory and comes back for the consuming stage. Size it per band or per chunk and hand each band its own window. MEASURED on conv2d, whose im2col column matrix was rows x k — one 512x512 head convolution materialized 138 MB to multiply it by a 66-element weight vector; chunked to an L2-resident window the largest torch conv shape went -11%%, the attention forward -12%%, B/op fell 62-88%%. CHECK WHETHER THE CONSUMER ACCUMULATES: a whole-tensor buffer writes each row's slot once, so an accumulating consumer reads as a store and the pool's zeroing is invisible; a reused window must be cleared between chunks. CAP THE CHUNK AT ONE BAND, or the total becomes workers x chunk — more memory than before on inputs too small to have had a problem", false},
@@ -1306,6 +1307,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, wholeTensorStagingFindings(fset, f, fn)...)
 		out = append(out, sourceReboundPerOutputFindings(fset, fn)...)
 		out = append(out, mapBlockedByReductionFindings(fset, f, fn)...)
+		out = append(out, collidingScatterFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -16675,4 +16677,224 @@ func mapBlockedByReductionFindings(fset *token.FileSet, f *ast.File, fn *ast.Fun
 		return true
 	})
 	return out
+}
+
+// --- PS3045: a colliding scatter whose destination a loop dimension partitions -----------------
+
+// stridedNamesIn returns the names a loop body advances by a loop-invariant step — the
+// strength-reduced form of an index that is affine in the loop variable. `base += nb` inside the
+// feature loop is the same addressing as `f*nb`, and a check that only looked for the loop
+// variable in the index would miss every hand-optimized site.
+func stridedNamesIn(body *ast.BlockStmt, iv string) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		if mentionsIdent(as.Rhs[0], iv) {
+			return true // a step that varies with the loop is not a constant stride
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			out[nm] = true
+		}
+		return true
+	})
+	return out
+}
+
+// dataDependentSum reports whether e is a SUM of a term affine in the loop dimension (the loop
+// variable itself or a constant-stride accumulator) and a term read out of a slice — the
+// signature of dst[f*stride + bin[i]], a scatter whose column is chosen by the loop and whose
+// offset within it is chosen by the data.
+func dataDependentSum(e ast.Expr, iv string, strided map[string]bool) bool {
+	b, ok := unparen(e).(*ast.BinaryExpr)
+	if !ok || b.Op != token.ADD {
+		return false
+	}
+	affine := func(x ast.Expr) bool {
+		if mentionsIdent(x, iv) {
+			return true
+		}
+		for nm := range strided {
+			if mentionsIdent(x, nm) {
+				return true
+			}
+		}
+		return false
+	}
+	dataDep := func(x ast.Expr) bool {
+		found := false
+		ast.Inspect(x, func(n ast.Node) bool {
+			if _, ok := n.(*ast.IndexExpr); ok {
+				found = true
+			}
+			return !found
+		})
+		return found
+	}
+	return (affine(b.X) && dataDep(b.Y)) || (affine(b.Y) && dataDep(b.X))
+}
+
+// collidingScatterFindings flags PS3045 — an item loop whose inner loop over a second dimension
+// accumulates into a destination indexed by that dimension PLUS a data-dependent offset. Two items
+// can land on the same slot, so the item loop cannot fan out; but the second dimension partitions
+// the destination into disjoint windows, and splitting THERE is safe and exact.
+//
+// MEASURED on the histogram gradient boosting builder, where every sample updates one bin of every
+// feature. Splitting the feature range gave each worker a private window while each bin still
+// accumulated its samples in ascending sample order — bit-identical — and BenchmarkGBMHist_hist_80k
+// fell 19.0%, the 20k cell 11.3%.
+func collidingScatterFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		obody, item := outerLoop(n)
+		if obody == nil || item == "" || seen[int(n.Pos())] {
+			return true
+		}
+		fanned := false
+		ast.Inspect(obody, func(m ast.Node) bool {
+			if c, ok := m.(*ast.CallExpr); ok && fanoutReg[f.Name.Name][calleeName(c.Fun)] {
+				fanned = true
+			}
+			return !fanned
+		})
+		if fanned {
+			return true
+		}
+		for _, st := range obody.List {
+			ibody, dim := outerLoop(st)
+			if ibody == nil || dim == "" || dim == item {
+				continue
+			}
+			// A dimension loop whose bounds come from this function's PARAMETERS is the APPLIED
+			// form: the caller already hands each worker a band of it. Without this the check went
+			// on reporting the band function it had just been used to produce, because that
+			// function is reached through a raw goroutine rather than a registered fan-out helper.
+			if boundedByParams(fn, st) {
+				continue
+			}
+			strided := stridedNamesIn(ibody, dim)
+			// The index may be written inline or bound to a local first.
+			idxOf := map[string]ast.Expr{}
+			for _, s := range ibody.List {
+				if as, ok := s.(*ast.AssignStmt); ok && as.Tok == token.DEFINE && len(as.Lhs) == 1 && len(as.Rhs) == 1 {
+					if nm := identName(as.Lhs[0]); nm != "" {
+						idxOf[nm] = as.Rhs[0]
+					}
+				}
+			}
+			dst := ""
+			ast.Inspect(ibody, func(m ast.Node) bool {
+				if dst != "" {
+					return false
+				}
+				var lhs ast.Expr
+				switch x := m.(type) {
+				case *ast.AssignStmt:
+					if len(x.Lhs) != 1 || (x.Tok != token.ADD_ASSIGN && x.Tok != token.SUB_ASSIGN) {
+						return true
+					}
+					lhs = x.Lhs[0]
+				case *ast.IncDecStmt:
+					lhs = x.X
+				default:
+					return true
+				}
+				e := unparen(lhs)
+				if sel, ok := e.(*ast.SelectorExpr); ok { // h[c].sum += y
+					e = unparen(sel.X)
+				}
+				ix, ok := e.(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				idx := ix.Index
+				if nm := identName(idx); nm != "" && idxOf[nm] != nil {
+					idx = idxOf[nm]
+				}
+				if dataDependentSum(idx, dim, strided) {
+					dst = renderExpr(ix.X)
+				}
+				return dst == ""
+			})
+			if dst == "" {
+				continue
+			}
+			seen[int(n.Pos())] = true
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "colliding-scatter-with-partitionable-destination",
+				msg: fmt.Sprintf("this loop over %q accumulates into %q at an index made of the %q"+
+					" dimension PLUS a data-dependent offset. Two items can land on the same slot, so"+
+					" the ITEM loop cannot fan out — but %q partitions %q into disjoint windows, and"+
+					" splitting THERE is safe. SPLIT THE INNER DIMENSION, NOT THE ITEMS: each worker"+
+					" owns whole windows, every slot still accumulates its items in ascending item"+
+					" order, and the result is BIT-IDENTICAL. Per-worker partial copies merged"+
+					" afterwards would reassociate every slot's sum and are not. MEASURED on the"+
+					" histogram gradient-boosting builder, where every sample updates one bin of every"+
+					" feature: BenchmarkGBMHist_hist_80k fell 19.0%%, the 20k cell 11.3%%. FLOOR THE"+
+					" WINDOWS PER WORKER — every worker re-walks the WHOLE item list, so the per-item"+
+					" cost of that walk is paid once per worker instead of once in total; swept at 20"+
+					" features on 12 cores, 4 per worker was best and 8 was 10%% worse because it left"+
+					" only two workers. GATE ON items times windows, so small calls stay serial",
+					item, dst, dim, dim, dst),
+			})
+			return true
+		}
+		return true
+	})
+	return out
+}
+
+// boundedByParams reports whether the loop st takes its start or its limit from a parameter of fn
+// or of any function literal inside it — the signature of a range the caller has already
+// partitioned. The literal half is load-bearing: a fan-out callback's (lo, hi) band is exactly
+// this, and a loop inside such a callback is the APPLIED form of the transform this check
+// recommends.
+func boundedByParams(fn *ast.FuncDecl, st ast.Stmt) bool {
+	fs, ok := st.(*ast.ForStmt)
+	if !ok {
+		return false
+	}
+	params := map[string]bool{}
+	if fn.Type.Params != nil {
+		for _, p := range fn.Type.Params.List {
+			for _, nm := range p.Names {
+				params[nm.Name] = true
+			}
+		}
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit.Type.Params == nil {
+			return true
+		}
+		for _, p := range lit.Type.Params.List {
+			for _, nm := range p.Names {
+				params[nm.Name] = true
+			}
+		}
+		return true
+	})
+	// Only the START matters. A loop whose LIMIT is a parameter is just being told how big the
+	// dimension is — `for f := 0; f < d; f++` with d passed in is the unsplit form, and treating
+	// that as banded silenced the check on the shape it was built for. A caller-supplied OFFSET
+	// is the actual banding signal.
+	as, ok := fs.Init.(*ast.AssignStmt)
+	if !ok {
+		return false
+	}
+	for nm := range params {
+		for _, r := range as.Rhs {
+			if mentionsIdent(r, nm) {
+				return true
+			}
+		}
+	}
+	return false
 }
