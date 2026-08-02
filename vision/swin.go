@@ -3,6 +3,7 @@ package vision
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
@@ -692,11 +693,11 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 					ss[i] = T(ss[i] + mk[i])
 				}
 			}
-			wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc)
+			wgt, err := swinExec1a(ctx, backend.OpSoftmax, nil, sc)
 			if err != nil {
 				return nil, err
 			}
-			hd, err := swinExec1(ctx, backend.OpMatMul, nil, wgt, vh)
+			hd, err := swinExec2(ctx, backend.OpMatMul, nil, wgt, vh)
 			if err != nil {
 				return nil, err
 			}
@@ -781,34 +782,34 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			khT, err := swinExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
+			khT, err := swinExec1a(ctx, backend.OpTranspose, nil, kh) // [dk, n]
 			if err != nil {
 				return nil, err
 			}
-			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
+			sc, err := swinExec2(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
 			if err != nil {
 				return nil, err
 			}
-			if sc, err = swinExec1(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
+			if sc, err = swinExec2(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
 				return nil, err
 			}
 			if biases != nil {
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
+				if sc, err = swinExec2(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
 					return nil, err
 				}
 			}
 			if masks != nil {
 				// masks describe one image's numWin windows; when this runs over B·numWin batched
 				// windows the geometry (and mask) repeats every numWin, so index modulo (§batched).
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
+				if sc, err = swinExec2(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
 					return nil, err
 				}
 			}
-			wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc) // over last axis
+			wgt, err := swinExec1a(ctx, backend.OpSoftmax, nil, sc) // over last axis
 			if err != nil {
 				return nil, err
 			}
-			if heads[hh], err = swinExec1(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
+			if heads[hh], err = swinExec2(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
 				return nil, err
 			}
 		}
@@ -916,6 +917,54 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 // swinExec1 runs a single-output op and unwraps the result.
 func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 	out, err := backend.Execute(ctx, op, in, at)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// swinIns1Pool and swinIns2Pool reuse the input slice backend.Execute takes, for the 1- and
+// 2-input ops on the windowed-attention path. Go builds a fresh slice for a variadic pack at
+// every call site, and windowedAttention issues eight of them per head per window.
+//
+// backend.Execute retains its inputs slice ONLY through ctx.Recorder.Record, which fires when a
+// tape is attached; with a nil Recorder the slice is dead the instant Execute returns, so it goes
+// straight back to the pool. Under a recorder both helpers defer to the variadic form, because
+// Record stores that exact slice in the tape node and a pooled one would be overwritten by the
+// next op — the same contract nlp's exec2 has carried since T960.
+var (
+	swinIns1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
+	swinIns2Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 2); return &s }}
+)
+
+// swinExec1a runs a 1-input op with a pooled input slice when the context is not recording.
+func swinExec1a(ctx *backend.Context, op backend.Op, at backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return swinExec1(ctx, op, at, a)
+	}
+	sp := swinIns1Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0] = a
+	out, err := backend.Execute(ctx, op, s, at)
+	s[0] = nil
+	swinIns1Pool.Put(sp)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// swinExec2 runs a 2-input op with a pooled input slice when the context is not recording.
+func swinExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return swinExec1(ctx, op, at, a, b)
+	}
+	sp := swinIns2Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0], s[1] = a, b
+	out, err := backend.Execute(ctx, op, s, at)
+	s[0], s[1] = nil, nil
+	swinIns2Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}

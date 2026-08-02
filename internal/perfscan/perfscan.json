@@ -96,10 +96,11 @@
     "Context"
   ],
   "variadicDispatchWrappers": [
-    "exec",
     "bitExec",
+    "exec",
     "hcExec",
-    "rdropExec"
+    "rdropExec",
+    "swinExec1"
   ],
   "topKSelectorFuncs": [
     "topKIndices"
