@@ -113,7 +113,12 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 	// §T537 found 46 latent sites. Enforced here by construction.
 	kctx := ctx
 	if ctx.Recorder != nil {
-		kctx = ctx.WithRecorder(nil)
+		// The recorder-free twin is built once when the recording context is constructed, so a
+		// training step no longer allocates a Context per dispatch. A context that predates that
+		// (or is built by hand in a test) still derives one here.
+		if kctx = ctx.noRec; kctx == nil {
+			kctx = ctx.WithRecorder(nil)
+		}
 	}
 	out, err := k(kctx, inputs, attrs)
 	if debugTimeOps {
