@@ -434,7 +434,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	x, err = swinExec2(ctx, backend.OpAdd, nil, x, a)
+	x, err = visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -447,7 +447,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1a(ctx, backend.OpGELU, nil, f1)
+	gelu, err := visExec1(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -455,7 +455,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	return swinExec2(ctx, backend.OpAdd, nil, x, f2)
+	return visExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // forwardOne runs one [C,H,W] image to [1, classes] logits: patch-embed → stages
@@ -586,7 +586,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 			return nil, err
 		}
 	}
-	x, err = swinExec2(ctx, backend.OpAdd, nil, x, a)
+	x, err = visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -599,7 +599,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1a(ctx, backend.OpGELU, nil, f1)
+	gelu, err := visExec1(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -607,7 +607,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	return swinExec2(ctx, backend.OpAdd, nil, x, f2)
+	return visExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // dtype reports the block's parameter dtype (from Wq).
@@ -669,7 +669,7 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 					kts[d*n+i] = krow[d] // the transpose, as the write pattern
 				}
 			}
-			sc, err := swinExec2(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
+			sc, err := visExec2(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
 			if err != nil {
 				return nil, err
 			}
@@ -693,11 +693,11 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 					ss[i] = T(ss[i] + mk[i])
 				}
 			}
-			wgt, err := swinExec1a(ctx, backend.OpSoftmax, nil, sc)
+			wgt, err := visExec1(ctx, backend.OpSoftmax, nil, sc)
 			if err != nil {
 				return nil, err
 			}
-			hd, err := swinExec2(ctx, backend.OpMatMul, nil, wgt, vh)
+			hd, err := visExec2(ctx, backend.OpMatMul, nil, wgt, vh)
 			if err != nil {
 				return nil, err
 			}
@@ -707,21 +707,21 @@ func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock
 			}
 		}
 	}
-	return swinExec2(ctx, backend.OpMatMul, nil, out, b.Wo)
+	return visExec2(ctx, backend.OpMatMul, nil, out, b.Wo)
 }
 
 func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor, numWin, m int, masks []*tensor.Tensor) (*tensor.Tensor, error) {
 	n := m * m
 	dk := b.Dim / b.Heads
-	q, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wq)
+	q, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wq)
 	if err != nil {
 		return nil, err
 	}
-	k, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wk)
+	k, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wk)
 	if err != nil {
 		return nil, err
 	}
-	v, err := swinExec2(ctx, backend.OpMatMul, nil, xWin, b.Wv)
+	v, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wv)
 	if err != nil {
 		return nil, err
 	}
@@ -749,10 +749,10 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 		}
 	}
 	rowSlice := func(t *tensor.Tensor, w int) (*tensor.Tensor, error) {
-		return swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
+		return visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
 	}
 	colSlice := func(t *tensor.Tensor, hh int) (*tensor.Tensor, error) {
-		return swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
+		return visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
 	}
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
@@ -782,61 +782,61 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			khT, err := swinExec1a(ctx, backend.OpTranspose, nil, kh) // [dk, n]
+			khT, err := visExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
 			if err != nil {
 				return nil, err
 			}
-			sc, err := swinExec2(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
+			sc, err := visExec2(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
 			if err != nil {
 				return nil, err
 			}
-			if sc, err = swinExec2(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
+			if sc, err = visExec2(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
 				return nil, err
 			}
 			if biases != nil {
-				if sc, err = swinExec2(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
+				if sc, err = visExec2(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
 					return nil, err
 				}
 			}
 			if masks != nil {
 				// masks describe one image's numWin windows; when this runs over B·numWin batched
 				// windows the geometry (and mask) repeats every numWin, so index modulo (§batched).
-				if sc, err = swinExec2(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
+				if sc, err = visExec2(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
 					return nil, err
 				}
 			}
-			wgt, err := swinExec1a(ctx, backend.OpSoftmax, nil, sc) // over last axis
+			wgt, err := visExec1(ctx, backend.OpSoftmax, nil, sc) // over last axis
 			if err != nil {
 				return nil, err
 			}
-			if heads[hh], err = swinExec2(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
+			if heads[hh], err = visExec2(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
 				return nil, err
 			}
 		}
-		if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
+		if winOuts[w], err = visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
 			return nil, err
 		}
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
 	if err != nil {
 		return nil, err
 	}
-	return swinExec2(ctx, backend.OpMatMul, nil, cat, b.Wo)
+	return visExec2(ctx, backend.OpMatMul, nil, cat, b.Wo)
 }
 
 // headBias returns the [M²,M²] relative-position bias matrix for head hh, built
 // as oneHot·Table[:,hh] so it is differentiable w.r.t. the bias table.
 func (r *swinRelBias) headBias(ctx *backend.Context, hh int) (*tensor.Tensor, error) {
 	n := r.m * r.m
-	col, err := swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
+	col, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
 	if err != nil {
 		return nil, err
 	}
-	flat, err := swinExec2(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
+	flat, err := visExec2(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1a(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
+	return visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
 }
 
 // forward downsamples the token grid x[H·W, C] to [(H/2)·(W/2), 2C] by
@@ -853,7 +853,7 @@ func (mg *swinMerge) forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (
 		}
 		subs[i] = s
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...) // [(H/2)(W/2), 4C]
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...) // [(H/2)(W/2), 4C]
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -881,7 +881,7 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 	}
 	cats := make([]*tensor.Tensor, batch)
 	for bi := range batch {
-		xi, err := swinExec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
+		xi, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -893,11 +893,11 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 			}
 			subs[i] = s
 		}
-		if cats[bi], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...); err != nil { // [(H/2·W/2), 4C]
+		if cats[bi], err = visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...); err != nil { // [(H/2·W/2), 4C]
 			return nil, 0, 0, err
 		}
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, cats...) // [batch·(H/2·W/2), 4C]
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, cats...) // [batch·(H/2·W/2), 4C]
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -914,8 +914,8 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 
 // --- windowing/index helpers (all pure permutations of grid rows) ---
 
-// swinExec1 runs a single-output op and unwraps the result.
-func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
+// visExecN runs a single-output op and unwraps the result.
+func visExecN(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 	out, err := backend.Execute(ctx, op, in, at)
 	if err != nil {
 		return nil, err
@@ -923,7 +923,7 @@ func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*ten
 	return out[0], nil
 }
 
-// swinIns1Pool and swinIns2Pool reuse the input slice backend.Execute takes, for the 1- and
+// visIns1Pool and visIns2Pool reuse the input slice backend.Execute takes, for the 1- and
 // 2-input ops on the windowed-attention path. Go builds a fresh slice for a variadic pack at
 // every call site, and windowedAttention issues eight of them per head per window.
 //
@@ -933,38 +933,38 @@ func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*ten
 // Record stores that exact slice in the tape node and a pooled one would be overwritten by the
 // next op — the same contract nlp's exec2 has carried since T960.
 var (
-	swinIns1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
-	swinIns2Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 2); return &s }}
+	visIns1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
+	visIns2Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 2); return &s }}
 )
 
-// swinExec1a runs a 1-input op with a pooled input slice when the context is not recording.
-func swinExec1a(ctx *backend.Context, op backend.Op, at backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+// visExec1 runs a 1-input op with a pooled input slice when the context is not recording.
+func visExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
 	if ctx.Recorder != nil {
-		return swinExec1(ctx, op, at, a)
+		return visExecN(ctx, op, at, a)
 	}
-	sp := swinIns1Pool.Get().(*[]*tensor.Tensor)
+	sp := visIns1Pool.Get().(*[]*tensor.Tensor)
 	s := *sp
 	s[0] = a
 	out, err := backend.Execute(ctx, op, s, at)
 	s[0] = nil
-	swinIns1Pool.Put(sp)
+	visIns1Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}
 	return out[0], nil
 }
 
-// swinExec2 runs a 2-input op with a pooled input slice when the context is not recording.
-func swinExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tensor.Tensor) (*tensor.Tensor, error) {
+// visExec2 runs a 2-input op with a pooled input slice when the context is not recording.
+func visExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	if ctx.Recorder != nil {
-		return swinExec1(ctx, op, at, a, b)
+		return visExecN(ctx, op, at, a, b)
 	}
-	sp := swinIns2Pool.Get().(*[]*tensor.Tensor)
+	sp := visIns2Pool.Get().(*[]*tensor.Tensor)
 	s := *sp
 	s[0], s[1] = a, b
 	out, err := backend.Execute(ctx, op, s, at)
 	s[0], s[1] = nil, nil
-	swinIns2Pool.Put(sp)
+	visIns2Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}
@@ -975,7 +975,7 @@ func swinExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tens
 // row-gather: out[i] = t[idx[i]] (grad scatters back), so window partition,
 // cyclic shift, patch-merge grouping, and their inverses are all one gather.
 func swinGather(ctx *backend.Context, t *tensor.Tensor, idx []int, dtype tensor.Dtype) (*tensor.Tensor, error) {
-	return swinExec2(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
+	return visExec2(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
 }
 
 // swinIdxTensor builds a rank-1 float index tensor (OpEmbed reads indices as

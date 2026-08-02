@@ -149,16 +149,15 @@ func (m *CNN) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 		// pool the remaining rectangle in one op per dim is not supported; require square.
 		return nil, fmt.Errorf("vision: CNN needs square inputs, got %dx%d after the stages", x.Shape()[2], x.Shape()[3])
 	}
-	gap, err := backend.Execute(ctx, backend.OpAvgPool2D, []*tensor.Tensor{x}, backend.PoolAttrs{Kernel: h})
+	gap, err := visExec1(ctx, backend.OpAvgPool2D, backend.PoolAttrs{Kernel: h}, x)
 	if err != nil {
 		return nil, err
 	}
-	flat, err := backend.Execute(ctx, backend.OpReshape, []*tensor.Tensor{gap[0]},
-		backend.ReshapeAttrs{Shape: tensor.Shape{x.Shape()[0], x.Shape()[1]}})
+	flat, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{x.Shape()[0], x.Shape()[1]}}, gap)
 	if err != nil {
 		return nil, err
 	}
-	return m.Head.Forward(ctx, flat[0])
+	return m.Head.Forward(ctx, flat)
 }
 
 // Params returns every trainable tensor for optimizers.

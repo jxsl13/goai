@@ -328,17 +328,15 @@ func (m *MLPMixer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	B := x.Shape()[0]
 	patchRows := make([]*tensor.Tensor, B)
 	for b := range B {
-		img, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
-			backend.SliceAttrs{Axis: 0, Start: b, End: b + 1})
+		img, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
 		if err != nil {
 			return nil, err
 		}
-		one, err := backend.Execute(ctx, backend.OpReshape, []*tensor.Tensor{img[0]},
-			backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}})
+		one, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
 		if err != nil {
 			return nil, err
 		}
-		if patchRows[b], err = m.mixerPatchify(one[0]); err != nil {
+		if patchRows[b], err = m.mixerPatchify(one); err != nil {
 			return nil, err
 		}
 	}
@@ -362,17 +360,15 @@ func (m *MLPMixer) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	P := h.Shape()[0] / B
 	pooled := make([]*tensor.Tensor, B)
 	for b := range B {
-		hb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
-			backend.SliceAttrs{Axis: 0, Start: b * P, End: (b + 1) * P})
+		hb, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * P, End: (b + 1) * P}, h)
 		if err != nil {
 			return nil, err
 		}
-		pm, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{hb[0]},
-			backend.ReduceAttrs{Axes: []int{0}, KeepDims: true})
+		pm, err := visExec1(ctx, backend.OpMean, backend.ReduceAttrs{Axes: []int{0}, KeepDims: true}, hb)
 		if err != nil {
 			return nil, err
 		}
-		pooled[b] = pm[0]
+		pooled[b] = pm
 	}
 	pool, err := backend.Execute(ctx, backend.OpConcat, pooled, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
@@ -389,12 +385,11 @@ func (m *MLPMixer) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor
 		return nil, err
 	}
 	// Global average pool over the S patches → [1, C].
-	pooled, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{h},
-		backend.ReduceAttrs{Axes: []int{0}, KeepDims: true})
+	pooled, err := visExec1(ctx, backend.OpMean, backend.ReduceAttrs{Axes: []int{0}, KeepDims: true}, h)
 	if err != nil {
 		return nil, err
 	}
-	return m.Head.Forward(ctx, pooled[0]) // [1, classes]
+	return m.Head.Forward(ctx, pooled) // [1, classes]
 }
 
 // forwardBatched is mixerBlock.forward over a packed [batch·P, C] batch (P patches per image). Channel
@@ -411,16 +406,15 @@ func (b *mixerBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batc
 	}
 	tParts := make([]*tensor.Tensor, batch)
 	for i := range batch {
-		hb, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h},
-			backend.SliceAttrs{Axis: 0, Start: i * P, End: (i + 1) * P})
+		hb, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * P, End: (i + 1) * P}, h)
 		if err != nil {
 			return nil, err
 		}
-		ht, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{hb[0]}, nil) // [C, P]
+		ht, err := visExec1(ctx, backend.OpTranspose, nil, hb) // [C, P]
 		if err != nil {
 			return nil, err
 		}
-		tParts[i] = ht[0]
+		tParts[i] = ht
 	}
 	hT, err := backend.Execute(ctx, backend.OpConcat, tParts, backend.ConcatAttrs{Axis: 0}) // [B·C, P]
 	if err != nil {
@@ -430,36 +424,35 @@ func (b *mixerBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batc
 	if err != nil {
 		return nil, err
 	}
-	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{u}, nil)
+	g, err := visExec1(ctx, backend.OpGELU, nil, u)
 	if err != nil {
 		return nil, err
 	}
-	u, err = b.tokenFC2.Forward(ctx, g[0]) // [B·C, P]
+	u, err = b.tokenFC2.Forward(ctx, g) // [B·C, P]
 	if err != nil {
 		return nil, err
 	}
 	bParts := make([]*tensor.Tensor, batch)
 	for i := range batch {
-		ub, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{u},
-			backend.SliceAttrs{Axis: 0, Start: i * C, End: (i + 1) * C})
+		ub, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i * C, End: (i + 1) * C}, u)
 		if err != nil {
 			return nil, err
 		}
-		ut, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{ub[0]}, nil) // [P, C]
+		ut, err := visExec1(ctx, backend.OpTranspose, nil, ub) // [P, C]
 		if err != nil {
 			return nil, err
 		}
-		bParts[i] = ut[0]
+		bParts[i] = ut
 	}
 	tok, err := backend.Execute(ctx, backend.OpConcat, bParts, backend.ConcatAttrs{Axis: 0}) // [B·P, C]
 	if err != nil {
 		return nil, err
 	}
-	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, tok[0]}, nil)
+	sum, err := visExec2(ctx, backend.OpAdd, nil, x, tok[0])
 	if err != nil {
 		return nil, err
 	}
-	x = sum[0]
+	x = sum
 
 	// Channel-mixing: fully batched (row-wise over C).
 	h, err = b.channelNorm.Forward(ctx, x)
@@ -470,19 +463,19 @@ func (b *mixerBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batc
 	if err != nil {
 		return nil, err
 	}
-	g, err = backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{v}, nil)
+	g, err = visExec1(ctx, backend.OpGELU, nil, v)
 	if err != nil {
 		return nil, err
 	}
-	v, err = b.channelFC2.Forward(ctx, g[0]) // [B·P, C]
+	v, err = b.channelFC2.Forward(ctx, g) // [B·P, C]
 	if err != nil {
 		return nil, err
 	}
-	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, v}, nil)
+	sum, err = visExec2(ctx, backend.OpAdd, nil, x, v)
 	if err != nil {
 		return nil, err
 	}
-	return sum[0], nil
+	return sum, nil
 }
 
 // forward runs one Mixer layer on x [S,C]: token-mixing then channel-mixing, each a pre-LayerNorm
@@ -494,31 +487,31 @@ func (b *mixerBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	ht, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{h}, nil) // [C,S]
+	ht, err := visExec1(ctx, backend.OpTranspose, nil, h) // [C,S]
 	if err != nil {
 		return nil, err
 	}
-	u, err := b.tokenFC1.Forward(ctx, ht[0]) // [C, D_token]
+	u, err := b.tokenFC1.Forward(ctx, ht) // [C, D_token]
 	if err != nil {
 		return nil, err
 	}
-	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{u}, nil)
+	g, err := visExec1(ctx, backend.OpGELU, nil, u)
 	if err != nil {
 		return nil, err
 	}
-	u, err = b.tokenFC2.Forward(ctx, g[0]) // [C, S]
+	u, err = b.tokenFC2.Forward(ctx, g) // [C, S]
 	if err != nil {
 		return nil, err
 	}
-	ut, err := backend.Execute(ctx, backend.OpTranspose, []*tensor.Tensor{u}, nil) // [S, C]
+	ut, err := visExec1(ctx, backend.OpTranspose, nil, u) // [S, C]
 	if err != nil {
 		return nil, err
 	}
-	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, ut[0]}, nil)
+	sum, err := visExec2(ctx, backend.OpAdd, nil, x, ut)
 	if err != nil {
 		return nil, err
 	}
-	x = sum[0]
+	x = sum
 
 	// Channel-mixing: mix ACROSS features within each patch. LayerNorm over C, MLP on the feature
 	// axis, residual.
@@ -530,17 +523,17 @@ func (b *mixerBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
-	g, err = backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{v}, nil)
+	g, err = visExec1(ctx, backend.OpGELU, nil, v)
 	if err != nil {
 		return nil, err
 	}
-	v, err = b.channelFC2.Forward(ctx, g[0]) // [S, C]
+	v, err = b.channelFC2.Forward(ctx, g) // [S, C]
 	if err != nil {
 		return nil, err
 	}
-	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, v}, nil)
+	sum, err = visExec2(ctx, backend.OpAdd, nil, x, v)
 	if err != nil {
 		return nil, err
 	}
-	return sum[0], nil
+	return sum, nil
 }
