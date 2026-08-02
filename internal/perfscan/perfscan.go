@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3042", "whole-tensor-staging-buffer", "a scratch buffer allocated before a fan-out call, sized by the fan-out's ITEM COUNT times a width, and touched only inside the callback. Each band writes and reads only its own rows, so the buffer's SIZE is set by the whole tensor while its WORKING SET is one band: every element the producing stage writes goes out to memory and comes back for the consuming stage. Size it per band or per chunk and hand each band its own window. MEASURED on conv2d, whose im2col column matrix was rows x k — one 512x512 head convolution materialized 138 MB to multiply it by a 66-element weight vector; chunked to an L2-resident window the largest torch conv shape went -11%%, the attention forward -12%%, B/op fell 62-88%%. CHECK WHETHER THE CONSUMER ACCUMULATES: a whole-tensor buffer writes each row's slot once, so an accumulating consumer reads as a store and the pool's zeroing is invisible; a reused window must be cleared between chunks. CAP THE CHUNK AT ONE BAND, or the total becomes workers x chunk — more memory than before on inputs too small to have had a problem", false},
 	{"PS3041", "per-item-rescan-of-shared-collection", "an outer loop over items whose body walks a collection held on the receiver — directly, or one same-type method call deep — without that walk depending on the item. Every item re-reads the same memory and reuses none of it, so the pass moves items x collection bytes through the caches and is BANDWIDTH-bound however cheap the arithmetic is. Batch the item loop into TILES: load each element once and do all B items' work on it while it is in cache. MEASURED on the memorizing-attention neighbour search, where each query token scanned the whole key bank alone — tiles of 16 cut BenchmarkMemForward_512 by 24%% and BenchmarkMemGatherLarge by 30%%. CONFIRM THE DIAGNOSIS FIRST: if the collection already fits in L2 the traffic was never the cost and tiling buys nothing. THE TILE MUST NOT REASSOCIATE — give each item its own accumulator and its own result state and visit the collection in the same order, and the output stays bit-identical, which is what lets the existing goldens gate the rewrite. PS3034 and PS3040 are about UNUSED PARALLELISM in a nest; this one fires on a loop that may already be parallel and is still re-streaming its data", false},
 	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed", false},
 	{"PS3039", "recursive-split-alloc", "a self-recursive function that allocates TWO slices sized by its input, fills them by appending each element to one or the other, and passes them to its own recursive calls — a divide-and-conquer partition written the allocating way. The cost is per NODE of the recursion, so it scales with the tree rather than with the data. Partition in place against one reused buffer instead. MEASURED on a CART builder\u0027s subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. Safe because writing dst[mid] while ranging over dst cannot clobber an unread element (mid advances only on a write, and every write consumes a value already read), and copying the second side back in order preserves what both appends produced. GATE IT WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE: the property tests that usually cover a tree builder stay green for a DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted", false},
@@ -1300,6 +1301,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
 		out = append(out, perItemRescanFindings(fset, f, fn)...)
+		out = append(out, wholeTensorStagingFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -16218,6 +16220,170 @@ func perItemRescanFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) [
 				" set competes with the collection for L1",
 				depth, coll, iv, coll),
 		})
+		return true
+	})
+	return out
+}
+
+// --- PS3042: a whole-tensor staging buffer between fused parallel stages -----------------------
+
+// countArgIdent returns the identifier a fan-out call passes as its ITEM COUNT, together with
+// the callback body, when the call has the (n, …, func(lo, hi int)) shape.
+func countArgIdent(call *ast.CallExpr) (string, *ast.BlockStmt) {
+	if len(call.Args) < 2 {
+		return "", nil
+	}
+	lit, ok := unparen(call.Args[len(call.Args)-1]).(*ast.FuncLit)
+	if !ok || lit.Body == nil {
+		return "", nil
+	}
+	n := identName(unparen(call.Args[0]))
+	if n == "" {
+		return "", nil
+	}
+	return n, lit.Body
+}
+
+// productMentions reports whether e is a MULTIPLICATION that mentions name. A buffer sized by
+// the item count ALONE is one slot per item, which is the right size for a per-item result; a
+// buffer sized by the count TIMES a width is a staging area for rows of work.
+func productMentions(e ast.Expr, name string) bool {
+	b, ok := unparen(e).(*ast.BinaryExpr)
+	if !ok || b.Op != token.MUL {
+		return false
+	}
+	return mentionsIdent(b, name)
+}
+
+// wholeTensorStagingFindings flags PS3042 — a scratch buffer allocated before a fan-out call,
+// sized by the fan-out's ITEM COUNT times a width, and used only inside the callback. Each band
+// touches only its own rows, so the buffer's size is set by the whole tensor while its working
+// set is one band's worth: every element written by the producing stage goes out to memory and
+// comes back for the consuming stage.
+//
+// MEASURED on conv2d, where the im2col column matrix was sized rows x k. im2col replicates each
+// input element kh*kw times, so one 512x512 head convolution of the multi-token-attention
+// benchmark materialized 138 MB in order to multiply it by a 66-element weight vector. Sized to
+// an L2-resident chunk instead: the largest torch conv shape -11%, the attention forward -12%,
+// and B/op down 62-88% across the conv benchmarks.
+func wholeTensorStagingFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	// Names this function RETURNS are outputs, not staging: their size is the caller's contract.
+	returned := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		rs, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, r := range rs.Results {
+			for _, nm := range identNamesIn(r) {
+				returned[nm] = true
+			}
+		}
+		return true
+	})
+	// Every buffer this function binds from an allocation, with the size expression it used.
+	sized := map[string]ast.Expr{}
+	pos := map[string]token.Pos{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || i >= len(as.Lhs) {
+				continue
+			}
+			var size ast.Expr
+			switch {
+			case renderExpr(call.Fun) == "make" && len(call.Args) >= 2:
+				if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); isSlice {
+					size = call.Args[1]
+				}
+			case len(call.Args) == 1: // a pooled getter: getF64(rows*k) and friends
+				size = call.Args[0]
+			}
+			if size == nil {
+				continue
+			}
+			if nm := identName(as.Lhs[i]); nm != "" {
+				sized[nm] = size
+				pos[nm] = as.Pos()
+			}
+		}
+		return true
+	})
+	if len(sized) == 0 {
+		return nil
+	}
+	// A pooled buffer is bound TWICE — the pointer from the getter and its dereference — and it
+	// is the dereference the callback uses. Without following that alias the check was silent on
+	// the very site it was built from.
+	alias := map[string][]string{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			st, ok := unparen(rhs).(*ast.StarExpr)
+			if !ok || i >= len(as.Lhs) {
+				continue
+			}
+			if base, nm := identName(st.X), identName(as.Lhs[i]); base != "" && nm != "" {
+				alias[base] = append(alias[base], nm)
+			}
+		}
+		return true
+	})
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !fanoutReg[f.Name.Name][calleeName(call.Fun)] {
+			return true
+		}
+		count, body := countArgIdent(call)
+		if body == nil {
+			return true
+		}
+		for nm, size := range sized {
+			if seen[nm] || returned[nm] || !productMentions(size, count) {
+				continue
+			}
+			used := mentionsIdent(body, nm)
+			for _, a := range alias[nm] {
+				used = used || mentionsIdent(body, a)
+			}
+			if !used {
+				continue
+			}
+			seen[nm] = true
+			out = append(out, finding{
+				pos:      fset.Position(pos[nm]),
+				category: "whole-tensor-staging-buffer",
+				msg: fmt.Sprintf("%q is sized by %q — the fan-out's ITEM COUNT — times a width, and"+
+					" is only touched inside the callback. Each band writes and reads only its own"+
+					" rows, so the buffer's SIZE is set by the whole tensor while its WORKING SET is"+
+					" one band: every element the producing stage writes goes out to memory and comes"+
+					" back for the consuming stage. Size it per band or per chunk instead, hand each"+
+					" band its own window, and the intermediate stays in cache. MEASURED on conv2d,"+
+					" whose im2col column matrix was rows x k: im2col replicates each input element"+
+					" kh*kw times, so one 512x512 head convolution materialized 138 MB to multiply it"+
+					" by a 66-element weight vector — chunked to an L2-resident window the largest"+
+					" torch conv shape went -11%%, the attention forward -12%%, and B/op fell 62-88%%."+
+					" CHECK WHETHER THE CONSUMER ACCUMULATES: a whole-tensor buffer writes each row's"+
+					" slot exactly once, so an accumulating consumer (C[i] += …) reads as a store and"+
+					" the pool's zeroing is invisible; a REUSED window must be cleared between chunks"+
+					" or every chunk after the first adds onto the last one's result. CAP THE CHUNK AT"+
+					" ONE BAND: sized purely by a cache target, the total becomes workers x chunk,"+
+					" which is MORE memory than before on inputs too small to have had a problem",
+					nm, count),
+			})
+		}
 		return true
 	})
 	return out
