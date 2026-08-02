@@ -456,3 +456,6 @@ WHEN a check validates a property against a site inside the code it inspects, th
 
 ## NEVER-FILTER-TESTS-WITH-RUN-X-001
 WHEN a profile is taken alongside a benchmark, the agent SHALL pass -run =^$ and never -run x, which is a REGEX matching every test whose name contains an x and silently fills the profile with test allocations.
+
+## ACCUMULATORS-SHARING-ONE-PASS-ARE-NOT-SEPARABLE-COST-001
+WHEN a profile attributes cost to individual accumulation lines inside one streaming loop, the agent SHALL treat the whole pass as the cost, not the lines; caching two of three accumulators in a memory-bound SVD sweep made it 30 to 50 percent SLOWER because the second pass doubled the traffic.
