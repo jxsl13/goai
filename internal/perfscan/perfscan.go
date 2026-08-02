@@ -14805,9 +14805,18 @@ func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.
 		if outer == nil || iv == "" || iv == "_" || loopDepthOf(outer) < 2 {
 			return true
 		}
-		// Independence: every write inside the nest must be indexed by an expression naming
-		// the outer variable. A write that is not is a cross-iteration accumulator, and
-		// splitting the outer loop across workers would race on it.
+		// Independence: EVERY indexed write inside the nest must be indexed by an expression
+		// naming the outer variable, or go through a window cut with it, or land on a buffer
+		// this iteration created for itself. Anything else is written by one iteration and read
+		// by another, and splitting the outer loop across workers would race on it.
+		//
+		// Checking only writes to the ALLOCATED DESTINATION is not enough, and the tree sweep
+		// proved it: a SparseGPT pruning loop writes its mask at [r][c] — indexed by the outer
+		// variable, so the destination test passes — while the same body eliminates INTO COLUMNS
+		// AHEAD of c on a matrix it did not allocate, which the next iteration of c reads. That
+		// is a sequential elimination reported as parallelizable, the worst answer this check
+		// can give.
+		perIter := localBuffersMadeIn(outer)
 		target, independent := "", true
 		ast.Inspect(outer, func(m ast.Node) bool {
 			as, ok := m.(*ast.AssignStmt)
@@ -14820,14 +14829,14 @@ func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.
 					continue
 				}
 				root, _ := rootIdentName(ix.X)
-				if !dst[root] && !dstAliasedIn(fn, root, dst) {
-					continue
+				if perIter[root] {
+					continue // this iteration made it; no other iteration can see it
 				}
 				if !mentionsIdent(ix.Index, iv) && !aliasOfOuter(outer, ix.X, iv) {
 					independent = false
 					return false
 				}
-				if target == "" {
+				if target == "" && (dst[root] || dstAliasedIn(fn, root, dst)) {
 					target = root
 				}
 			}
@@ -14882,6 +14891,39 @@ func outerLoop(n ast.Node) (*ast.BlockStmt, string) {
 		return x.Body, identName(as.Lhs[0])
 	}
 	return nil, ""
+}
+
+// localBuffersMadeIn returns the names inside body that are bound to a buffer the iteration
+// CREATES — a make or a literal. No other iteration can see one, so writing through it says
+// nothing about whether the loop can be split.
+//
+// Being defined inside the body is not enough on its own: `ci := c[i*n : i*n+n]` is also defined
+// there, and writing through it is a write to c. Excusing every local defined in the body made
+// the measured positive silent, since its inner loop writes only through exactly such a window.
+func localBuffersMadeIn(body *ast.BlockStmt) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			nm := identName(lhs)
+			if nm == "" || i >= len(as.Rhs) {
+				continue
+			}
+			switch r := unparen(as.Rhs[i]).(type) {
+			case *ast.CallExpr:
+				if renderExpr(r.Fun) == "make" {
+					out[nm] = true
+				}
+			case *ast.CompositeLit:
+				out[nm] = true
+			}
+		}
+		return true
+	})
+	return out
 }
 
 // allocatedSliceLocals returns the locals fn allocates with make and a slice type.
