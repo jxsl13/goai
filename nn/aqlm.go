@@ -205,19 +205,24 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 		for j := range k {
 			codebooks[m*k+j] = cb[j]
 		}
-		for i := range residual {
-			b := nearestAQLM(residual[i], cb)
-			codes[i*cfg.m+m] = b
-			for t := range cfg.g {
-				residual[i][t] -= cb[b][t]
+		// Each group's assignment and residual update touch only that group's own row and its own
+		// m-th code slot, and cb is read-only here, so the loop fans out bit-identically.
+		parallelRows(len(residual), k*cfg.g, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				b := nearestAQLM(residual[i], cb)
+				codes[i*cfg.m+m] = b
+				for t := range cfg.g {
+					residual[i][t] -= cb[b][t]
+				}
 			}
-		}
+		})
 	}
 
 	// (2) alternate global codebook refit (codes fixed) and per-group re-encode (codebooks
 	// fixed). Ending on re-encode keeps the codes optimal for the final refit codebooks.
+	sc := newAQLMRefitScratch(cfg.m*k, cfg.g, cfg.m)
 	for range cfg.iters {
-		refitCodebooksAQLM(groups, codes, codebooks, cfg.m, k, cfg.g, cfg.ridge)
+		refitCodebooksAQLM(sc, groups, codes, codebooks, cfg.m, k, cfg.g, cfg.ridge)
 		icmEncodeAQLM(groups, codes, codebooks, cfg.m, k, cfg.g)
 	}
 
@@ -352,14 +357,31 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 		}
 		cent[i] = append([]float64(nil), data[perm[i%n]]...)
 	}
+	// The assignment step is SPLIT from the accumulation step. Finding a point's nearest centroid
+	// costs k*dim and is pure, so it fans out over the points; folding that point into its
+	// centroid's running sum costs dim and is a REDUCTION into shared state, so it stays serial in
+	// ascending point order. Keeping the two apart is what makes the split bit-identical: no
+	// partial sums are merged, and every sum accumulates exactly the terms it did before, in
+	// exactly the same order. This assignment was the encoder's largest serial stretch — 26% of
+	// its CPU, and serial time is wall time.
+	assign := make([]int, n)
+	sums := make([][]float64, k)
+	cnt := make([]int, k)
+	for i := range sums {
+		sums[i] = make([]float64, dim)
+	}
 	for range iters {
-		sums := make([][]float64, k)
-		cnt := make([]int, k)
 		for i := range sums {
-			sums[i] = make([]float64, dim)
+			clear(sums[i])
 		}
-		for _, x := range data {
-			b := nearestAQLM(x, cent)
+		clear(cnt)
+		parallelRows(n, k*dim, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				assign[i] = nearestAQLM(data[i], cent)
+			}
+		})
+		for i, x := range data {
+			b := assign[i]
 			cnt[b]++
 			for t := range dim {
 				sums[b][t] += x[t]
@@ -460,40 +482,58 @@ func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k,
 // (M·2^B)×g unknown X and the per-group one-hot selections as rows of A, the least-squares
 // normal equations are (AᵀA + ridge·I)·X = AᵀG, solved by Gauss-Jordan elimination. The ridge
 // term keeps the system non-singular when some entries are unused (which then refit to zero).
-func refitCodebooksAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k, g int, ridge float64) {
+// aqlmRefitScratch is the working memory one refit needs, owned by the caller so the refinement
+// rounds share it. Every round used to allocate the whole system afresh — the n×n normal matrix,
+// the n×g right-hand side, their row views, the augmented copy the solver made of both, and a
+// row per solution — about 4.5 MB at the default M=2, B=8 shape, ten times per encode. The
+// allocator was returning and refaulting those pages continuously: runtime.madvise alone was
+// 24.6% of the encoder's profile, more than any of its own functions.
+type aqlmRefitScratch struct {
+	aug  []float64 // the augmented system [n, n+g]: normal equations left, right-hand side right
+	swap []float64 // one row, for the pivot exchange
+	cols []int     // the m codebook entries the current group selects
+}
+
+// newAQLMRefitScratch sizes the scratch for an M·2^B unknown system with g columns of
+// right-hand side.
+func newAQLMRefitScratch(n, g, m int) *aqlmRefitScratch {
+	return &aqlmRefitScratch{aug: make([]float64, n*(n+g)), swap: make([]float64, n+g), cols: make([]int, m)}
+}
+
+// refitCodebooksAQLM re-solves ALL codebook entries jointly for the fixed code assignment. It
+// accumulates the normal equations DIRECTLY into the augmented matrix it then eliminates, rather
+// than filling a separate AᵀA and AᵀG for the solver to copy in.
+//
+// Bit-identical to the two-step form: the same counts land in the same cells in the same order,
+// the ridge is added to the same diagonal, and the elimination is the shared routine
+// solveLinearAQLM also calls.
+func refitCodebooksAQLM(sc *aqlmRefitScratch, groups [][]float64, codes []int, codebooks [][]float64, m, k, g int, ridge float64) {
 	n := m * k
-	// ata (n×n) and atg (n×g) each backed by ONE contiguous buffer — the [][] view still
-	// hands solveLinearAQLM its rows, but this drops the 2n per-row allocations per refit
-	// (× iters). Bit-identical: same values, only the row backing changes.
-	ataFlat := make([]float64, n*n)
-	atgFlat := make([]float64, n*g)
-	ata := make([][]float64, n)
-	atg := make([][]float64, n)
-	for i := range n {
-		ata[i] = ataFlat[i*n : i*n+n : i*n+n]
-		atg[i] = atgFlat[i*g : i*g+g : i*g+g]
-	}
-	cols := make([]int, m)
+	stride := n + g
+	aug := sc.aug[:n*stride]
+	clear(aug) // the fresh makes it replaces arrived zeroed
+	cols := sc.cols[:m]
 	for i := range groups {
 		for a := range m {
 			cols[a] = a*k + codes[i*m+a]
 		}
+		gi := groups[i]
 		for a := range m {
-			pa := cols[a]
+			row := aug[cols[a]*stride : cols[a]*stride+stride]
 			for t := range g {
-				atg[pa][t] += groups[i][t]
+				row[n+t] += gi[t]
 			}
 			for b := range m {
-				ata[pa][cols[b]]++
+				row[cols[b]]++
 			}
 		}
 	}
 	for p := range n {
-		ata[p][p] += ridge
+		aug[p*stride+p] += ridge
 	}
-	x := solveLinearAQLM(ata, atg)
+	gaussJordanAQLM(aug, sc.swap, n, stride)
 	for p := range n {
-		copy(codebooks[p], x[p])
+		copy(codebooks[p], aug[p*stride+n:p*stride+stride])
 	}
 }
 
@@ -515,7 +555,23 @@ func solveLinearAQLM(a, b [][]float64) [][]float64 {
 		copy(aug[i*stride:i*stride+n], a[i])
 		copy(aug[i*stride+n:i*stride+stride], b[i])
 	}
-	swap := make([]float64, stride)
+	gaussJordanAQLM(aug, make([]float64, stride), n, stride)
+	x := make([][]float64, n)
+	for i := range n {
+		x[i] = append([]float64(nil), aug[i*stride+n:i*stride+stride]...)
+	}
+	return x
+}
+
+// gaussJordanAQLM reduces the augmented matrix aug [n, stride] in place by Gauss-Jordan
+// elimination with partial pivoting, leaving the solution in columns [n, stride). A near-zero
+// pivot (a fully regularized-away row) leaves that unknown at zero. swap is one row of scratch
+// for the pivot exchange.
+//
+// Split out so the refit path can eliminate the system it accumulated directly, without a
+// separate copy, while solveLinearAQLM keeps its [][]float64 signature and the property test that
+// pins it against an independent implementation of the same algorithm.
+func gaussJordanAQLM(aug, swap []float64, n, stride int) {
 	for c := range n {
 		p := c
 		for r := c + 1; r < n; r++ {
@@ -551,9 +607,4 @@ func solveLinearAQLM(a, b [][]float64) [][]float64 {
 			}
 		}
 	}
-	x := make([][]float64, n)
-	for i := range n {
-		x[i] = append([]float64(nil), aug[i*stride+n:i*stride+stride]...)
-	}
-	return x
 }
