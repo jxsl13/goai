@@ -55,29 +55,53 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 		cols = b.Shape()[1]
 	}
 	out := make([]float64, n*cols) // [n,cols] row-major
-	for c := range cols {
-		y := make([]float64, n)
-		for i := range n { // forward: L·y = b
-			var s float64
-			if vec {
-				s = b.AtF64(i)
-			} else {
-				s = b.AtF64(i, c)
-			}
-			li := lf[i*n : i*n+n] // contiguous factor row i (was l[i], a scattered slice)
-			for k := range i {
-				s -= li[k] * y[k]
-			}
-			y[i] = s / li[i]
-		}
-		for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
-			s := y[i]
-			for k := i + 1; k < n; k++ {
-				s -= lf[k*n+i] * out[k*cols+c] // L[k,i], a strided column read (unchanged)
-			}
-			out[i*cols+c] = s / lf[i*n+i]
-		}
+	// One forward-substitution buffer for the whole solve, not one per right-hand side. Nothing
+	// carries across columns — every entry is written before it is read — so a fresh allocation
+	// per column bought only garbage: 128 columns cost 128 allocations of it.
+	// Read the right-hand side through its storage when it is already F64. AtF64 walks the
+	// shape to a flat offset and dispatches on the storage type for EVERY element, and this
+	// loop touches n*cols of them: it was 9.9%% of the profile at n=256, cols=8. Values are
+	// identical — the same float64 out of the same storage — and any other dtype or layout
+	// falls through to AtF64 unchanged.
+	var bf []float64
+	if bc := b.Contiguous(); bc.Dtype() == tensor.F64 {
+		bf = bc.Storage().F64()
 	}
+	// Right-hand sides are independent: column c reads the factor and its own column of b, and
+	// writes only out[·*cols+c]. Every column costs the same 2*n*n/2 substitution terms, so equal
+	// bands need no balancing, and the work gate keeps a narrow solve serial. The buffer is one
+	// per WORKER — hoisted out of the column loop but inside the band — so the fan-out does not
+	// give back the allocation this loop just stopped making.
+	parallelCols(cols, n*n, func(lo, hi int) {
+		y := make([]float64, n)
+		for c := lo; c < hi; c++ {
+			for i := range n { // forward: L·y = b
+				var s float64
+				switch {
+				case bf != nil && vec:
+					s = bf[i]
+				case bf != nil:
+					s = bf[i*cols+c]
+				case vec:
+					s = b.AtF64(i)
+				default:
+					s = b.AtF64(i, c)
+				}
+				li := lf[i*n : i*n+n] // contiguous factor row i (was l[i], a scattered slice)
+				for k := range i {
+					s -= li[k] * y[k]
+				}
+				y[i] = s / li[i]
+			}
+			for i := n - 1; i >= 0; i-- { // back: Lᵀ·x = y (Lᵀ[i,k] = L[k,i])
+				s := y[i]
+				for k := i + 1; k < n; k++ {
+					s -= lf[k*n+i] * out[k*cols+c] // L[k,i], a strided column read (unchanged)
+				}
+				out[i*cols+c] = s / lf[i*n+i]
+			}
+		}
+	})
 	if vec {
 		return tensor.FromFloat64(tensor.Shape{n}, out), nil
 	}
