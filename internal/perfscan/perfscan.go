@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3033", "per-item-alloc-helper", "a package-local helper that allocates its result with make and returns it, whose every in-file call site is PER ITEM — inside a loop, or inside a helper that is itself only called per item. The buffer outlives nothing, so it belongs to the WORKER rather than the item: take a scratch parameter, grow it only when cap is short, reslice it to the length the caller needs. MEASURED on a k-NN predict where the k-best heap and its backing array, the neighbour weights and the per-class vote accumulator were all per query: 36020 allocations per batch became 92, -99.7%%, bytes -97.7%%, ns/op -4.9%%. JUDGE ON allocs/op AND B/op, NOT ns/op — the time win is the collector not walking those objects, so it is small where memory bandwidth is plentiful and larger where it is not. The reachability is a FIXED POINT, not a single pass: the measured allocator was called from another helper which was called from the per-row callback, so no lexical test sees it. Two conversion traps: every reused buffer must be fully overwritten before it is read (truncate, reslice, CLEAR), and a result the caller KEEPS must still be copied out or every row of a chunk shares one array. Silent when a call site stores the result into an index or a field, and on exported helpers, whose callers this file cannot see", false},
 	{"PS3032", "closure-accessor-in-loop", "a function VALUE obtained from a factory call and then invoked inside a loop, so every element pays an indirect call that cannot be inlined. This is the per-element dispatch anti-pattern one level shallower, and it hides better: a helper handing back readers and writers reads like setup, and the cost is in the calls rather than in the helper. Add typed arms walking raw storage and keep the closure form as the fallback for dtypes the typed arms cannot serve. MEASURED on two pooling backward rules: -48.2%% to -53.2%% across four cells. TWO TRAPS IN THE CONVERSION, both hit while making that change: the closure boundary BLOCKS FMA CONTRACTION that a typed arm allows — a scale product and an accumulating add in one function fuse where a call between them cannot — so wrap the product in an explicit conversion or the arms drift an ulp; and the parity fixture must make an element receive SEVERAL accumulations, or f32 narrowing differences cannot appear and a wrong arm passes. No type information is needed to find this: a name can only be CALLED if it holds a function", false},
 	{"PS3031", "symmetric-pair-computed-twice", "a full i,j nest accumulating a term AND its mirror in the same body, so every pair is formed twice over the full range and the diagonal forms the identical sum twice. Run the inner loop from the outer index and write both positions. BIT-IDENTICAL when the store is a SYMMETRIC combination of the two sums: the full loop stored f(b,a) at the mirrored position where the triangle stores f(a,b), and IEEE addition is commutative, so a+b and b+a have the same bits for every non-NaN operand; each sum keeps its own operands and ascending order, so nothing is reassociated. MEASURED TWICE, both about a third: a Cholesky VJP at -34.33%% and an eigh VJP at -33.9%%. CHECK THE STORE FIRST — if what is written is not symmetric in the two sums the mirror is not free and this does not apply", false},
 	{"PS3030", "fixed-offset-stores-not-windowed", "a counted loop touching ONE slice at three or more distinct CONSTANT offsets from an invariant base plus the loop variable. Each access carries its own bounds check, in a body that may be only a few operations wide. Cut one fixed-length window above the loop and index it by the offsets alone, leaving a single slice check per group. MEASURED on a Q6_K dequantizer with four stores per iteration: -16.5%%, with the compiler's BCE diagnostic confirming four per-store checks gone and one slice check left. PURE ADDRESSING — no value changes, so existing goldens are the right gate. Look for siblings before assuming novelty: that site was the LAST of its family to be cut and the same file's dot-product twin had already done it. Distinct from PS3019, which is about an unrolled loop whose lanes sit at i+0..i+K-1 under a len bound; here the loop steps by one and the offsets are the strides of a packed group", false},
@@ -1292,6 +1293,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
+	out = append(out, perQueryAllocHelperFindings(fset, f)...)
 	out = append(out, scanFusableLoops(fset, f)...)
 	out = append(out, einsumNoInferenceFusionFindings(fset, f)...)
 	// drop sites silenced by an inline //perfscan:ignore directive (per class).
@@ -14417,4 +14419,302 @@ func hasContinue(body *ast.BlockStmt) bool {
 func isUnroundedProduct(e ast.Expr) bool {
 	b, ok := unparen(e).(*ast.BinaryExpr)
 	return ok && b.Op == token.MUL
+}
+
+// --- PS3033: a helper that allocates its result and is only ever called per item ---------------
+
+// perItemCallSite records one in-file call of a package-local function: where it was called from,
+// whether that position is per-item (inside a loop, or inside a function literal handed to
+// another call — the per-row callback shape), and whether the result was stored somewhere that
+// outlives the iteration.
+type perItemCallSite struct {
+	caller  string
+	perItem bool
+	escapes bool
+}
+
+// perQueryAllocHelperFindings flags PS3033 — a package-local helper that allocates its result with
+// make and hands it back, whose every in-file call site is per item.
+//
+// The analysis is a fixed point rather than a single pass because the cost hides one level up:
+// the measured case had the allocating helper called from another helper, which was called from
+// the per-row callback. Only the innermost call is lexically inside anything loop-shaped, so a
+// direct test sees neither. A function whose every call site is per-item IS per-item, and that
+// closes transitively.
+func perQueryAllocHelperFindings(fset *token.FileSet, f *ast.File) []finding {
+	// Functions declared exactly once in this file. A duplicated name (a method on two receivers)
+	// cannot be resolved without types, so it is dropped rather than guessed at.
+	decls := map[string]*ast.FuncDecl{}
+	dup := map[string]bool{}
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		if _, seen := decls[fn.Name.Name]; seen {
+			dup[fn.Name.Name] = true
+		}
+		decls[fn.Name.Name] = fn
+	}
+	sites := map[string][]perItemCallSite{}
+	for name, fn := range decls {
+		if dup[name] {
+			continue
+		}
+		collectPerItemCallSites(fn, decls, dup, sites)
+	}
+	// A function is per-item when it has in-file call sites and every one of them is either
+	// lexically per-item or inside a function that is itself per-item.
+	perItem := map[string]bool{}
+	for changed := true; changed; {
+		changed = false
+		for name, ss := range sites {
+			if perItem[name] || len(ss) == 0 {
+				continue
+			}
+			all := true
+			for _, s := range ss {
+				if !s.perItem && !perItem[s.caller] {
+					all = false
+					break
+				}
+			}
+			if all {
+				perItem[name] = true
+				changed = true
+			}
+		}
+	}
+	var out []finding
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		name := fn.Name.Name
+		// An exported helper can be called from outside this file, where the result may well
+		// outlive the call. Only a package-local one can be reasoned about from here.
+		if dup[name] || !perItem[name] || fn.Name.IsExported() {
+			continue
+		}
+		buf := allocatedAndReturnedBuffer(fn)
+		if buf == "" {
+			continue
+		}
+		esc := false
+		for _, s := range sites[name] {
+			esc = esc || s.escapes
+		}
+		if esc {
+			continue
+		}
+		out = append(out, finding{
+			pos:      fset.Position(fn.Pos()),
+			category: "per-item-alloc-helper",
+			msg: fmt.Sprintf("%s allocates %s with make and returns it, and every call site in this"+
+				" file is PER ITEM — inside a loop, or inside a helper that is itself only called"+
+				" per item. So this allocation happens once per element of every batch, on a path"+
+				" whose whole job is to be called once per element. Nothing about the buffer"+
+				" outlives the call, so it belongs to the WORKER, not to the item: take a scratch"+
+				" parameter, grow it only when cap is short, and reslice it to the length the"+
+				" caller needs. MEASURED on a k-nearest-neighbours predict, where the k-best heap"+
+				" and its backing array, the neighbour weights and the per-class vote accumulator"+
+				" were all per query: 36020 allocations per batch became 92, -99.7%%, bytes -97.7%%,"+
+				" and ns/op -4.9%%. JUDGE THIS ON allocs/op AND B/op, NOT ns/op — the time win is"+
+				" the collector no longer walking those objects, so it is small on a machine with"+
+				" memory bandwidth to spare and larger on one without. TWO THINGS TO GET RIGHT:"+
+				" every reused buffer must be fully overwritten before it is read (truncate the"+
+				" heap, reslice the weights, CLEAR an accumulator), and a result the caller KEEPS"+
+				" must still be copied out — returning the scratch itself gives every row of a"+
+				" chunk one aliased array. Gate it by predicting a batch and comparing against"+
+				" predicting each row alone: a batch of one gets a virgin scratch, so any carried"+
+				" state disagrees. Silent when a call site stores the result into an index or a"+
+				" field, which outlives the iteration, and when the helper is exported",
+				name, buf),
+		})
+	}
+	return out
+}
+
+// collectPerItemCallSites walks fn and records every call to a function declared in this file,
+// tagging the context it was called from.
+func collectPerItemCallSites(fn *ast.FuncDecl, decls map[string]*ast.FuncDecl, dup map[string]bool,
+	sites map[string][]perItemCallSite) {
+	// escaping holds the calls whose result is stored into something that outlives an iteration:
+	// an element of an outer container, a field, or the target of a pointer. Collected first,
+	// because the walk below sees the call without its parent.
+	escaping := map[*ast.CallExpr]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || i >= len(as.Lhs) {
+				continue
+			}
+			switch unparen(as.Lhs[i]).(type) {
+			case *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr:
+				escaping[call] = true
+			}
+		}
+		return true
+	})
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok && renderExpr(call.Fun) == "append" {
+			for _, a := range call.Args { // appending a result keeps it past the iteration
+				if c, ok := unparen(a).(*ast.CallExpr); ok {
+					escaping[c] = true
+				}
+			}
+		}
+		return true
+	})
+	var walk func(n ast.Node, loop bool)
+	walk = func(n ast.Node, loop bool) {
+		if n == nil {
+			return
+		}
+		switch x := n.(type) {
+		case *ast.ForStmt:
+			walk(x.Init, loop)
+			walk(x.Body, true)
+			return
+		case *ast.RangeStmt:
+			walk(x.Body, true)
+			return
+		case *ast.CallExpr:
+			// calleeName takes the selector's last segment, so a method call resolves to the
+			// method name a file-scoped declaration map can match. A package-qualified call
+			// resolves the same way and is filtered by decls: only a name this file declares
+			// counts, which is also why an import shadowing a local function name would be
+			// the one thing this misreads.
+			if name := calleeName(x.Fun); name != "" && decls[name] != nil && !dup[name] {
+				sites[name] = append(sites[name], perItemCallSite{
+					caller: fn.Name.Name, perItem: loop, escapes: escaping[x],
+				})
+			}
+			// A function literal passed as an argument is the per-row callback shape: whoever
+			// receives it decides how often to run it, and the answer is once per element.
+			for _, a := range x.Args {
+				if lit, ok := unparen(a).(*ast.FuncLit); ok {
+					walk(lit.Body, true)
+					continue
+				}
+				walk(a, loop)
+			}
+			walk(x.Fun, loop)
+			return
+		}
+		var kids []ast.Node
+		ast.Inspect(n, func(c ast.Node) bool {
+			if c == nil || c == n {
+				return c == n
+			}
+			kids = append(kids, c)
+			return false
+		})
+		for _, c := range kids {
+			walk(c, loop)
+		}
+	}
+	walk(fn.Body, false)
+}
+
+// allocatedAndReturnedBuffer returns the name of a local slice that fn allocates with make and
+// hands back, or "" if there is none.
+//
+// The make must land on a plain local. That single condition is what makes the APPLIED form
+// silent: once the buffer lives on a caller-supplied scratch, the make targets a field and the
+// returned local is a reslice of it, so the helper stops looking like an allocator — which is
+// exactly what it stopped being.
+func allocatedAndReturnedBuffer(fn *ast.FuncDecl) string {
+	made := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			call, ok := unparen(rhs).(*ast.CallExpr)
+			if !ok || renderExpr(call.Fun) != "make" || len(call.Args) < 2 || i >= len(as.Lhs) {
+				continue // len(args) < 2 excludes maps and channels: only a sized slice
+			}
+			if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); !isSlice {
+				continue
+			}
+			if nm := identName(as.Lhs[i]); nm != "" {
+				made[nm] = true
+			}
+		}
+		return true
+	})
+	if len(made) == 0 {
+		return ""
+	}
+	// A buffer HANDED TO ANYTHING ELSE may be retained by it, and this scanner cannot see where.
+	// The case that forced this: a memoizing helper allocated two rows, stored them in a sync.Map
+	// through a composite literal, and returned them — reusing that buffer would corrupt the
+	// cache for every later reader. len/cap/copy/clear are the exceptions: they cannot retain.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.CallExpr:
+			switch renderExpr(x.Fun) {
+			case "len", "cap", "copy", "clear":
+				return true
+			}
+			for _, a := range x.Args {
+				if nm := identName(a); nm != "" {
+					delete(made, nm)
+				}
+			}
+		case *ast.CompositeLit:
+			for _, e := range x.Elts {
+				if nm := identName(e); nm != "" {
+					delete(made, nm)
+				}
+				if kv, ok := e.(*ast.KeyValueExpr); ok {
+					if nm := identName(kv.Value); nm != "" {
+						delete(made, nm)
+					}
+				}
+			}
+		}
+		return true
+	})
+	// A buffer stored into a field or an element outlives the call and cannot be scratch.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, rhs := range as.Rhs {
+			if i >= len(as.Lhs) {
+				continue
+			}
+			switch unparen(as.Lhs[i]).(type) {
+			case *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr:
+				if nm := identName(rhs); nm != "" {
+					delete(made, nm)
+				}
+			}
+		}
+		return true
+	})
+	var found string
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		ret, ok := n.(*ast.ReturnStmt)
+		if !ok {
+			return true
+		}
+		for _, r := range ret.Results {
+			// The result may be the buffer itself or a reslice of it (cand[:k]).
+			if nm, ok := rootIdentName(unparen(r)); ok && made[nm] && found == "" {
+				found = nm
+			}
+		}
+		return true
+	})
+	return found
 }
