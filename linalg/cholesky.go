@@ -121,16 +121,39 @@ func CholSolve(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 // inside the §V16 1e-9 gate. Same `s / L[j][j]` DIVISION (no hoisted reciprocal).
 func cholFactor(a *tensor.Tensor, n int) ([]float64, error) {
 	lf := make([]float64, n*n)
+	// Read the input through its storage when it is already F64. AtF64 walks the shape to a flat
+	// offset and dispatches on the storage type for EVERY element of the column sweep, and that
+	// was 57%% of this factorization's profile at n=512 — more than four times the arithmetic it
+	// guards. Values are identical; any other dtype or layout keeps the accessor.
+	var af []float64
+	if ac := a.Contiguous(); ac.Dtype() == tensor.F64 {
+		af = ac.Storage().F64()
+	}
 	for j := range n {
 		lj := lf[j*n : j*n+n] // contiguous row j
-		d := a.AtF64(j, j) - dot4(lj, lj, j)
+		ajj := a.AtF64(j, j)
+		if af != nil {
+			ajj = af[j*n+j]
+		}
+		d := ajj - dot4(lj, lj, j)
 		if d <= 0 {
 			return nil, fmt.Errorf("linalg: matrix is not positive definite (non-positive pivot %g at leading minor %d)", d, j)
 		}
 		ljj := math.Sqrt(d)
 		lj[j] = ljj
+		// The two arms are duplicated rather than sharing a helper: this is the inner loop of an
+		// O(n^3) factorization, and routing it through a closure or a per-element branch gives
+		// back what the typed read wins. Any edit has to be made twice.
+		if af != nil {
+			for i := j + 1; i < n; i++ {
+				li := lf[i*n : i*n+n] // contiguous row i
+				s := af[i*n+j] - dot4(li, lj, j)
+				li[j] = s / ljj
+			}
+			continue
+		}
 		for i := j + 1; i < n; i++ {
-			li := lf[i*n : i*n+n] // contiguous row i
+			li := lf[i*n : i*n+n]
 			s := a.AtF64(i, j) - dot4(li, lj, j)
 			li[j] = s / ljj
 		}
