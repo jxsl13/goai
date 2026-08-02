@@ -48,6 +48,14 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 		for i := range n {
 			for j := i + 1; j < n; j++ {
 				ci, cj := col[i], col[j] // contiguous columns i,j (streamed by every loop below)
+				// THREE ACCUMULATORS, ONE PASS — and the two norms are not separable work. A
+				// profile attributes about half this function to the alpha and beta lines, which
+				// invites caching them and recomputing only after a rotation. That was measured
+				// and is 30 to 50%% SLOWER: this loop is bound by streaming the two columns, so
+				// the extra multiply-adds are free, while recomputing the norms after a rotation
+				// is a SECOND pass over the same memory. The cached form cannot win even in
+				// principle — a skipped pair still needs gamma, so it streams the columns either
+				// way. Do not retry it; fewer passes or fewer pairs are the only levers here.
 				var alpha, beta, gamma float64
 				for k := range m {
 					alpha += ci[k] * ci[k]
