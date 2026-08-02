@@ -97,7 +97,7 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 	h := make([][]float64, in)
 	if xf := flatF64(x); xf != nil {
 		var bt []float64
-		c := matmulABtInto(xf, xf, in, samples, bt) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
+		c := matmulABtInto(xf, xf, in, samples, bt, nil) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
 		for i := range in {
 			hi := make([]float64, in)
 			base := i * in

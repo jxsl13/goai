@@ -30,6 +30,7 @@ type Muon struct {
 	NSSteps     int              // Newton-Schulz orthogonalization iteration count (default 5)
 
 	buf [][]float64
+	dir [][]float64 // per-parameter update-direction scratch, shaped at construction
 }
 
 // MuonOption configures a Muon optimizer (functional-options idiom, §C12).
@@ -81,8 +82,12 @@ func NewMuon(params []*tensor.Tensor, lr float64, opts ...MuonOption) *Muon {
 		o(m)
 	}
 	m.buf = make([][]float64, len(params))
+	m.dir = make([][]float64, len(params))
 	for i, p := range params {
 		m.buf[i] = make([]float64, p.Numel())
+		// The update direction is per-parameter scratch with a shape fixed at construction, so it
+		// belongs beside the momentum buffer rather than being remade on every step.
+		m.dir[i] = make([]float64, p.Numel())
 	}
 	return m
 }
@@ -102,7 +107,7 @@ func (mu *Muon) Step(grad GradFn) error {
 		}
 		R, C := p.Shape()[0], p.Shape()[1]
 		beta := mu.Momentum
-		dir := make([]float64, R*C)
+		dir := mu.dir[pi] // reused across steps; every entry is written below before it is read
 		for i := range dir {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
@@ -147,17 +152,24 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 	for i := range X {
 		X[i] *= inv
 	}
-	// One [cc,r] transpose scratch for the whole run: matmulABt's operand shape is
-	// fixed across the iterations, so reusing it drops steps-1 of these allocations.
-	abt := make([]float64, cc*r)
+	// Every buffer the iteration needs has a shape fixed by (r, cc), and none of them outlives
+	// one pass, so they are allocated ONCE for the whole run instead of four per step. At the
+	// benchmarked shape that is the difference between 28 MB of churn per optimizer step and
+	// about 2 MB. The products are accumulated into rather than assigned, so each destination is
+	// cleared first — the runtime was doing exactly that zeroing on every fresh make, which is
+	// why this trades allocation for no arithmetic.
+	abt := make([]float64, cc*r) // matmulABt's transpose scratch
+	aBuf := make([]float64, r*r)
+	a2Buf := make([]float64, r*r)
+	bm := make([]float64, r*r)
+	bxBuf := make([]float64, r*cc)
 	for range steps {
-		A := matmulABtInto(X, X, r, cc, abt) // X·Xᵀ  [r,r]
-		A2 := matmulFlat(A, A, r, r, r)      // A·A   [r,r]
-		bm := make([]float64, r*r)
+		A := matmulABtInto(X, X, r, cc, abt, aBuf) // X·Xᵀ  [r,r]
+		A2 := matmulFlatInto(a2Buf, A, A, r, r, r) // A·A   [r,r]
 		for i := range bm {
 			bm[i] = b*A[i] + c*A2[i]
 		}
-		bx := matmulFlat(bm, X, r, r, cc) // (bA+cA²)·X  [r,cc]
+		bx := matmulFlatInto(bxBuf, bm, X, r, r, cc) // (bA+cA²)·X  [r,cc]
 		for i := range X {
 			X[i] = a*X[i] + bx[i]
 		}
@@ -170,7 +182,20 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 
 // matmulFlat returns C[m,n] = A[m,k]·B[k,n] (row-major flat).
 func matmulFlat(a, b []float64, m, k, n int) []float64 {
-	c := make([]float64, m*n)
+	return matmulFlatInto(nil, a, b, m, k, n)
+}
+
+// matmulFlatInto is matmulFlat writing into a caller-supplied destination, which a loop running
+// the same shape repeatedly can allocate once. dst is CLEARED first: the kernel accumulates, so
+// it needs a zero start — exactly what the runtime hands back from a fresh make, and the reason
+// this costs no arithmetic. A nil or short dst is allocated here, so matmulFlat stays correct.
+func matmulFlatInto(dst, a, b []float64, m, k, n int) []float64 {
+	c := dst
+	if cap(c) < m*n {
+		c = make([]float64, m*n)
+	}
+	c = c[:m*n]
+	clear(c)
 	// Split over ROW BANDS of C. Each band owns its rows outright — it reads all of B and
 	// only its own rows of A — so nothing is shared and every c[i][j] still accumulates its
 	// k products in the same ascending-p order the serial loop used. Bit-identical, which is
@@ -217,15 +242,20 @@ func matmulFlat(a, b []float64, m, k, n int) []float64 {
 // no-op (it turns a -0 accumulator into -0 rather than +0, and 0·±Inf into a
 // skipped NaN), which would break exactness for the sake of a rare branch.
 func matmulABt(a, b []float64, m, k int) []float64 {
-	return matmulABtInto(a, b, m, k, nil)
+	return matmulABtInto(a, b, m, k, nil, nil)
 }
 
 // matmulABtInto is matmulABt with a caller-supplied [k,m] transpose scratch. The
 // shapes are fixed across a newtonSchulz5 run, so hoisting one buffer out of the
 // iteration keeps the ikj rewrite from trading time for garbage. A nil (or too
 // small) scratch is allocated here, so the plain matmulABt stays correct.
-func matmulABtInto(a, b []float64, m, k int, bt []float64) []float64 {
-	c := make([]float64, m*m)
+func matmulABtInto(a, b []float64, m, k int, bt, dst []float64) []float64 {
+	c := dst
+	if cap(c) < m*m {
+		c = make([]float64, m*m)
+	}
+	c = c[:m*m]
+	clear(c)
 	if m == 0 || k == 0 {
 		return c
 	}
