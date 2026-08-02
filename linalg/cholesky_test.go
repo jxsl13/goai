@@ -12,19 +12,29 @@ import (
 )
 
 // spd builds a random symmetric positive-definite matrix A = B·Bᵀ + n·I.
+//
+// It walks the storage rather than AtF64/SetF64 because it is O(n³) and runs once per benchmark
+// invocation: at n=512 the accessor version was 88% of every AtF64 sample in a Cholesky profile,
+// swamping the factorization it exists to feed and making the profile read as though the accessor
+// were the factorization's problem. A fixture that dominates the profile of the thing it sets up
+// is a measurement bug, not a style one.
 func spd(rng *rand.Rand, n int) *tensor.Tensor {
 	b := randRect(rng, n, n)
+	bf := b.Storage().F64()
 	a := tensor.New(tensor.F64, tensor.Shape{n, n})
+	af := a.Storage().F64()
 	for i := range n {
+		bi := bf[i*n : i*n+n]
 		for j := range n {
+			bj := bf[j*n : j*n+n]
 			var s float64
 			for k := range n {
-				s += b.AtF64(i, k) * b.AtF64(j, k) // (B·Bᵀ)[i,j]
+				s += bi[k] * bj[k] // (B·Bᵀ)[i,j]
 			}
 			if i == j {
 				s += float64(n)
 			}
-			a.SetF64(s, i, j)
+			af[i*n+j] = s
 		}
 	}
 	return a
