@@ -35,3 +35,6 @@ WHEN a work-splitting helper picks its worker count, the pool SHALL derives it a
 
 ## A-SCALING-PROBE-COVERS-EVERY-PACKAGE-001
 WHEN the parallel-scaling probe is run to rank work, the optimizer SHALL runs it over every package rather than the ones with obvious kernels; the nlp decode cells were the only ones in the tree scaling BELOW 1x and were found only after 5 rounds of probing elsewhere.
+
+## A-POOL-DENSE-RESET-ON-SERIAL-OPS-IS-REJECTED-001
+WHEN considering a reset of the worker-pool dense flag when an op runs serially, the optimizer SHALL does not: measured on 4 decode benchmarks it moved neither wall time nor CPU seconds (user 9.5 to 10.6 both arms), because after the work floor landed the dense classification already times out and the workers are parked on their mailboxes.

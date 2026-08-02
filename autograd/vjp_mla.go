@@ -314,62 +314,88 @@ func init() {
 				dqcs := dqC.Storage().F32()
 				dkcs := dkC.Storage().F32()
 				dvcs := dvC.Storage().F32()
-				a := make([]float64, seq)
-				dA := make([]float64, seq)
-				for h := range heads {
-					hc := h * dh
-					for i := range seq {
-						jmax := seq
-						if causal {
-							jmax = i + 1
+				// Same split and same exact fold as the F64 arm above: heads own disjoint column
+				// windows of every destination except dkRrot, whose factors are recorded here and
+				// added in the original (head, i, j) order afterwards.
+				grp := max(1, min(heads, mlaDSBufBytes/(8*seq*seq)))
+				dsBuf := make([]float64, grp*seq*seq)
+				for h0 := 0; h0 < heads; h0 += grp {
+					h1 := min(h0+grp, heads)
+					mlaParallelHeads(h0, h1, seq*seq*(dh+dR), func(hlo, hhi int) {
+						a := make([]float64, seq)
+						dA := make([]float64, seq)
+						for h := hlo; h < hhi; h++ {
+							ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
+							hc := h * dh
+							for i := range seq {
+								jmax := seq
+								if causal {
+									jmax = i + 1
+								}
+								// recompute softmax weights a[j] (inputs read as float64 of
+								// the stored float32, exactly as the generic AtF64 path)
+								m := math.Inf(-1)
+								for j := range jmax {
+									var s float64
+									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
+									for d := range dh {
+										s += float64(qcs[i*cols+hc+d]) * float64(kcs[j*cols+hc+d])
+									}
+									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
+									for e := range dR {
+										s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
+									}
+									s *= scale
+									a[j] = s
+									if s > m {
+										m = s
+									}
+								}
+								var sum float64
+								for j := range jmax {
+									a[j] = math.Exp(a[j] - m)
+									sum += a[j]
+								}
+								var dot float64
+								for j := range jmax {
+									a[j] /= sum
+									var dav float64
+									for d := range dh {
+										gid := float64(gs[i*cols+hc+d])
+										// per-add rounding to float32 matches the generic
+										// AtF64+SetF64 accumulation this fast path replaces
+										dvcs[j*cols+hc+d] = float32(float64(dvcs[j*cols+hc+d]) + a[j]*gid)
+										dav += gid * float64(vcs[j*cols+hc+d])
+									}
+									dA[j] = dav
+									dot += dav * a[j]
+								}
+								for j := range jmax {
+									dS := scale * a[j] * (dA[j] - dot)
+									for d := range dh {
+										dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[j*cols+hc+d]))
+										dkcs[j*cols+hc+d] = float32(float64(dkcs[j*cols+hc+d]) + dS*float64(qcs[i*cols+hc+d]))
+									}
+									for e := range dR {
+										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
+									}
+									ds[i*seq+j] = dS
+								}
+							}
 						}
-						// recompute softmax weights a[j] (inputs read as float64 of
-						// the stored float32, exactly as the generic AtF64 path)
-						m := math.Inf(-1)
-						for j := range jmax {
-							var s float64
-							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
-							for d := range dh {
-								s += float64(qcs[i*cols+hc+d]) * float64(kcs[j*cols+hc+d])
+					})
+					for h := h0; h < h1; h++ {
+						ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
+						for i := range seq {
+							jmax := seq
+							if causal {
+								jmax = i + 1
 							}
-							//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
-							for e := range dR {
-								s += qRrot[(i*heads+h)*dR+e] * kRrot[j*dR+e]
-							}
-							s *= scale
-							a[j] = s
-							if s > m {
-								m = s
-							}
-						}
-						var sum float64
-						for j := range jmax {
-							a[j] = math.Exp(a[j] - m)
-							sum += a[j]
-						}
-						var dot float64
-						for j := range jmax {
-							a[j] /= sum
-							var dav float64
-							for d := range dh {
-								gid := float64(gs[i*cols+hc+d])
-								// per-add rounding to float32 matches the generic
-								// AtF64+SetF64 accumulation this fast path replaces
-								dvcs[j*cols+hc+d] = float32(float64(dvcs[j*cols+hc+d]) + a[j]*gid)
-								dav += gid * float64(vcs[j*cols+hc+d])
-							}
-							dA[j] = dav
-							dot += dav * a[j]
-						}
-						for j := range jmax {
-							dS := scale * a[j] * (dA[j] - dot)
-							for d := range dh {
-								dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[j*cols+hc+d]))
-								dkcs[j*cols+hc+d] = float32(float64(dkcs[j*cols+hc+d]) + dS*float64(qcs[i*cols+hc+d]))
-							}
-							for e := range dR {
-								dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
-								dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
+							for j := range jmax {
+								dS := ds[i*seq+j]
+								for e := range dR {
+									dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
+								}
 							}
 						}
 					}

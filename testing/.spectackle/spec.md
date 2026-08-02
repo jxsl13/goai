@@ -14,3 +14,6 @@ WHEN a mutation of load-bearing code leaves the suite green, the implementer SHA
 
 ## A-BIT-EXACT-GOLDEN-SKIPS-UNDER-THE-RACE-BUILD-001
 WHEN a test asserts exact floating-point bits against a recorded digest, the implementer SHALL skips it when the race detector is on, because the race build inhibits optimizations the compiler may otherwise make and changes the result; the MLA backward digests differently under -race on the pre-change implementation identically, so 2 of 2 goldens would have failed for the build mode rather than the change.
+
+## A-GOLDEN-ON-A-ROUNDED-OUTPUT-CANNOT-PIN-SUMMATION-ORDER-001
+WHEN gating a reassociation-sensitive change whose result is stored at lower precision than it is accumulated, the implementer SHALL pins the order on the higher-precision arm and treats the rounded arm as a value check only; reversing the fold order in the f32 MLA arm left its golden green because a float64 accumulator stored back as float32 rounds the difference away, while the identical F64 code reddens.
