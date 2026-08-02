@@ -444,3 +444,6 @@ IF a helper added to a path every call takes allocates before knowing it can hel
 
 ## HOIST-A-BRANCH-BY-DUPLICATING-NOT-BY-A-FUNCTION-VALUE-001
 IF a loop-invariant branch is hoisted out of a per-element loop, THEN the developer SHALL duplicate the loop body per arm — a function value measured +51 and +66.5 percent, making a direct inlinable call indirect.
+
+## A-DTYPE-SPECIALIZED-ARM-GUARDS-EVERY-TENSOR-IT-READS-001
+IF a dtype-specialized arm is entered on a check covering fewer tensors than it reads, THEN the developer SHALL guard on all of them and send mixed sets to the reference kernel — a query-only guard crashed on an F32 query with an F64 mask.
