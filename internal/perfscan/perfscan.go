@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3039", "recursive-split-alloc", "a self-recursive function that allocates TWO slices sized by its input, fills them by appending each element to one or the other, and passes them to its own recursive calls — a divide-and-conquer partition written the allocating way. The cost is per NODE of the recursion, so it scales with the tree rather than with the data. Partition in place against one reused buffer instead. MEASURED on a CART builder\u0027s subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. Safe because writing dst[mid] while ranging over dst cannot clobber an unread element (mid advances only on a write, and every write consumes a value already read), and copying the second side back in order preserves what both appends produced. GATE IT WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE: the property tests that usually cover a tree builder stay green for a DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted", false},
 	{"PS3038", "dispatch-literal-slice", "a direct backend.Execute building its input slice inline, in a package that already declares a pooled helper of that arity. The literal is one allocation per dispatch, and Execute drops the slice the instant it returns unless a recorder is attached — which is exactly what the pooled helper checks before borrowing. MEASURED on nn.Linear.Forward, the most-called forward in the package: two literals became two pooled borrows and a per-image MLP-Mixer forward went 3944 to 3687 allocs/op (-6.5%%), a ViT forward -2.0%%. Judge on allocs/op; the time was flat everywhere, since these forwards are dominated by the kernels the slice merely names. THE RECORDER GUARD IS THE CONTRACT: Execute\u0027s tape node stores that exact slice, so a pooled one would be overwritten by the next op and a training run would silently get wrong gradients — use the helper, never inline the borrow. 214 sit in nn alone, so rank by call frequency and convert where a benchmark can see it", false},
 	{"PS3037", "mis-sized-append-buffer", "a slice made with a stated capacity inside a loop and then appended to from a NESTED loop, so the hint is sized per outer pass while the appends run outer times inner. The hint guarantees the opposite of what it looks like: the slice doubles its way up from the hint to its true size on EVERY outer pass, copying everything it holds each time. MEASURED on a beam search whose hint was 8 per live beam against a true size of one candidate per beam per VOCABULARY ENTRY — that one append line was 2.45 GB of a 2.90 GB benchmark, and hoisting the buffer above the loop with a per-pass truncation took bytes -85.0%% on beam search and -98.0%% on its diverse variant. Judge on B/op first: the time win was -8.8%% and -2.9%%, real but far smaller. Prove nothing survives the reset — dropping the truncation must redden the suite, and on the measured site it did. PS3035 does not cover this: it wants a size the loop does not vary and only sees loops with a range clause or an init statement, and the measured site is a bare condition loop whose hint mentions the collection it iterates", false},
 	{"PS3036", "self-comparison-oracle", "a test that computes BOTH sides of its comparison with the same function and asserts they agree, so the expected value is produced by the code under test. Such a gate can only see state carried BETWEEN calls: any mistake INSIDE the computation changes both sides identically and it stays green. Found exactly that way — a Newton-Schulz orthogonalization gate of this shape passed with two intermediate buffers wired to one slice, and only an independently written reference caught it. Add a slow, obvious implementation with its own buffers and compare to a tolerance when the summation orders differ. SOMETIMES DELIBERATE: comparing one function across a CONFIG difference (GOMAXPROCS 1 against many, a fast path against a fallback) is a real differential test — it still gates only that difference, so document it and keep a separate reference for the arithmetic. Matters because every optimization here is defended by a bit-identity gate, and a gate that cannot fail reports coverage that does not exist. Requires -tests", false},
@@ -1300,6 +1301,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
 		out = append(out, misSizedAppendBufferFindings(fset, fn)...)
 		out = append(out, dispatchLiteralSliceFindings(fset, f, fn)...)
+		out = append(out, recursiveSplitAllocFindings(fset, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -15721,4 +15723,101 @@ func dispatchLiteralSliceFindings(fset *token.FileSet, f *ast.File, fn *ast.Func
 		return true
 	})
 	return out
+}
+
+// --- PS3039: a recursive split allocating both sides instead of partitioning in place ----------
+
+// recursiveSplitAllocFindings flags PS3039 — a self-recursive function that allocates TWO slices
+// sized by its input, fills them by appending each element to one or the other, and passes them to
+// its own recursive calls.
+//
+// That is a divide-and-conquer partition written the allocating way. The cost is per NODE of the
+// recursion, so it scales with the tree rather than with the data, and one reused buffer plus an
+// in-place compaction replaces it exactly.
+func recursiveSplitAllocFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	self := fn.Name.Name
+	// Two sized allocations bound with := at the same level.
+	made := map[string]*ast.AssignStmt{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || renderExpr(call.Fun) != "make" || len(call.Args) < 2 {
+			return true
+		}
+		if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); !isSlice {
+			return true
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			made[nm] = as
+		}
+		return true
+	})
+	// Both must be appended to from the two arms of one branch — the partition itself.
+	appended := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		nm := identName(as.Lhs[0])
+		if nm == "" || made[nm] == nil {
+			return true
+		}
+		c, ok := unparen(as.Rhs[0]).(*ast.CallExpr)
+		if ok && renderExpr(c.Fun) == "append" && len(c.Args) > 0 && identName(c.Args[0]) == nm {
+			appended[nm] = true
+		}
+		return true
+	})
+	// …and both must be handed to a RECURSIVE call, which is what makes the cost per node. That
+	// last count is the only one worth testing: recursed is a subset of appended, which is a
+	// subset of made, so earlier count guards on those two could not redden any fixture the
+	// final one does not already silence. They were removed rather than left as untestable
+	// early-outs.
+	recursed := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || calleeName(call.Fun) != self {
+			return true
+		}
+		for _, a := range call.Args {
+			if nm := identName(a); appended[nm] {
+				recursed[nm] = true
+			}
+		}
+		return true
+	})
+	if len(recursed) < 2 {
+		return nil
+	}
+	names := make([]string, 0, len(recursed))
+	for nm := range recursed {
+		names = append(names, nm)
+	}
+	sort.Strings(names)
+	return []finding{{
+		pos:      fset.Position(made[names[0]].Pos()),
+		category: "recursive-split-alloc",
+		msg: fmt.Sprintf("%s and %s are allocated here, filled by appending each element to one or"+
+			" the other, and handed to %s's own recursive calls — a divide-and-conquer partition"+
+			" written the allocating way. The cost is per NODE of the recursion, so it scales with"+
+			" the TREE rather than with the data. Partition the input IN PLACE against one reused"+
+			" buffer: compact one side forward over the input while collecting the other into the"+
+			" buffer, copy that back after the loop, and recurse on the two subslices. MEASURED on"+
+			" a CART builder's subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes"+
+			" -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. WHY IT IS SAFE:"+
+			" writing dst[mid] while ranging over dst cannot clobber an unread element, because mid"+
+			" advances only on a write and every write consumes a value already read; copying the"+
+			" second side back in order preserves the relative order both appends produced. GATE IT"+
+			" WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE — the property tests that usually"+
+			" cover a tree builder (it beats a single tree, variance falls) stay green for a"+
+			" DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted",
+			names[0], names[1], self),
+	}}
 }
