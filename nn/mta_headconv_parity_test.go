@@ -21,6 +21,12 @@ func TestMTAHeadConvFusedBitExactVsDispatch(t *testing.T) {
 	for _, d := range []tensor.Dtype{tensor.F32, tensor.F64} {
 		for _, cfg := range []struct{ T, dim, heads, cq, ck, ch int }{
 			{16, 128, 8, 3, 5, 4}, {32, 256, 16, 6, 11, 8}, {12, 192, 12, 2, 3, 3},
+			// The head mix splits its element range across workers once the work clears
+			// parallelRows' threshold, and it walks one INPUT map at a time across all ch
+			// outputs. The three configs above are at or below that threshold or leave a single
+			// band, so they gate the arithmetic but not the split. These two do both: several
+			// bands, and one group (heads == ch) as well as two.
+			{64, 256, 16, 4, 7, 16}, {64, 256, 32, 4, 7, 16},
 		} {
 			m, err := nn.NewMultiTokenAttention(d, cfg.dim, cfg.heads, 3,
 				nn.WithMTAKeyQueryKernel(cfg.cq, cfg.ck), nn.WithMTAHeadKernel(cfg.ch))

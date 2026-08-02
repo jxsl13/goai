@@ -11,3 +11,6 @@ WHEN replacing a whole-tensor staging buffer with a reused per-chunk window, the
 
 ## A-CHUNK-SIZE-IS-CAPPED-AT-ONE-BAND-001
 WHEN sizing a per-worker scratch chunk from a cache-residency target, the optimizer SHALL also caps the chunk at one bands worth of rows, so total scratch stays below the buffer it replaces instead of becoming workers times chunk; uncapped it measured -22.7 percent on the largest shape and +14 to +33 percent on small ones.
+
+## A-SERIAL-STRETCH-IS-READ-AGAINST-WALL-CLOCK-NOT-PROFILE-SHARE-001
+WHEN ranking a serial function inside an otherwise parallel path, the optimizer SHALL divides its CPU-profile share by the paths average parallelism before dismissing it, because a serial stretch costs its full CPU time in wall clock; the head mix read as 2 percent of a summed profile at parallelism 6.2 and was 12 percent of the benchmark.
