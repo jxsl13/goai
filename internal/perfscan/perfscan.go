@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3043", "source-rebound-per-output", "a nest whose OUTER loop owns a destination and whose INNER loop rebinds a source element from a collection. The set of sources does not depend on the outer variable, so it is re-read once per outer iteration and the pass moves outer-count times the source volume through the caches. INTERCHANGE THE LOOPS: bind each source once and update every destination while it is loaded. The per-destination accumulation order is unchanged, so the result stays BIT-IDENTICAL and an existing exact-equality gate still applies. MEASURED on the multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p] written as a loop over outputs re-reading every map — 16 passes over 33 MB per group; BenchmarkMTAForward_ch16 fell 11.7%% once the source loop moved out and the element range was split across workers. THE INTERCHANGE ALONE IS RARELY THE WIN: it makes the destinations live at once, so hold them for a BAND of elements, and check whether the loop was serial while the rest of the path was parallel — a serial stretch costs its full CPU time in wall clock however small its profile share looks", false},
 	{"PS3042", "whole-tensor-staging-buffer", "a scratch buffer allocated before a fan-out call, sized by the fan-out's ITEM COUNT times a width, and touched only inside the callback. Each band writes and reads only its own rows, so the buffer's SIZE is set by the whole tensor while its WORKING SET is one band: every element the producing stage writes goes out to memory and comes back for the consuming stage. Size it per band or per chunk and hand each band its own window. MEASURED on conv2d, whose im2col column matrix was rows x k — one 512x512 head convolution materialized 138 MB to multiply it by a 66-element weight vector; chunked to an L2-resident window the largest torch conv shape went -11%%, the attention forward -12%%, B/op fell 62-88%%. CHECK WHETHER THE CONSUMER ACCUMULATES: a whole-tensor buffer writes each row's slot once, so an accumulating consumer reads as a store and the pool's zeroing is invisible; a reused window must be cleared between chunks. CAP THE CHUNK AT ONE BAND, or the total becomes workers x chunk — more memory than before on inputs too small to have had a problem", false},
 	{"PS3041", "per-item-rescan-of-shared-collection", "an outer loop over items whose body walks a collection held on the receiver — directly, or one same-type method call deep — without that walk depending on the item. Every item re-reads the same memory and reuses none of it, so the pass moves items x collection bytes through the caches and is BANDWIDTH-bound however cheap the arithmetic is. Batch the item loop into TILES: load each element once and do all B items' work on it while it is in cache. MEASURED on the memorizing-attention neighbour search, where each query token scanned the whole key bank alone — tiles of 16 cut BenchmarkMemForward_512 by 24%% and BenchmarkMemGatherLarge by 30%%. CONFIRM THE DIAGNOSIS FIRST: if the collection already fits in L2 the traffic was never the cost and tiling buys nothing. THE TILE MUST NOT REASSOCIATE — give each item its own accumulator and its own result state and visit the collection in the same order, and the output stays bit-identical, which is what lets the existing goldens gate the rewrite. PS3034 and PS3040 are about UNUSED PARALLELISM in a nest; this one fires on a loop that may already be parallel and is still re-streaming its data", false},
 	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed", false},
@@ -1302,6 +1303,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
 		out = append(out, perItemRescanFindings(fset, f, fn)...)
 		out = append(out, wholeTensorStagingFindings(fset, f, fn)...)
+		out = append(out, sourceReboundPerOutputFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -16383,6 +16385,151 @@ func wholeTensorStagingFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDe
 					" which is MORE memory than before on inputs too small to have had a problem",
 					nm, count),
 			})
+		}
+		return true
+	})
+	return out
+}
+
+// --- PS3043: a source rebound once per output ------------------------------------------------
+
+// boundIn returns the names defined by := directly in body's own statement list, skipping the
+// statement to exclude (the nested loop whose body is examined separately).
+func boundIn(body *ast.BlockStmt, skip ast.Stmt) map[string]bool {
+	out := map[string]bool{}
+	for _, st := range body.List {
+		if st == skip {
+			continue
+		}
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			continue
+		}
+		for _, lhs := range as.Lhs {
+			if nm := identName(lhs); nm != "" {
+				out[nm] = true
+			}
+		}
+	}
+	return out
+}
+
+// writtenElementOf reports whether body assigns to an element of one of names, which is what
+// makes that name the destination this loop level owns.
+func writtenElementOf(body ast.Node, names map[string]bool) string {
+	hit := ""
+	ast.Inspect(body, func(n ast.Node) bool {
+		if hit != "" {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			ix, ok := unparen(lhs).(*ast.IndexExpr)
+			if !ok {
+				continue
+			}
+			if nm := identName(ix.X); names[nm] {
+				hit = nm
+				return false
+			}
+		}
+		return true
+	})
+	return hit
+}
+
+// sourceReboundBy returns the name of a value bound inside body from an expression that INDEXES a
+// collection with the inner variable and never mentions the outer one. Bound there, it is
+// recomputed in full for every outer iteration.
+func sourceReboundBy(body *ast.BlockStmt, inner, outer string) (name, src string) {
+	for _, st := range body.List {
+		as, ok := st.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			continue
+		}
+		if mentionsIdent(as.Rhs[0], outer) {
+			continue
+		}
+		var ix *ast.IndexExpr
+		ast.Inspect(as.Rhs[0], func(n ast.Node) bool {
+			if e, ok := n.(*ast.IndexExpr); ok && ix == nil && mentionsIdent(e.Index, inner) {
+				ix = e
+			}
+			return ix == nil
+		})
+		if ix == nil {
+			continue
+		}
+		if nm := identName(as.Lhs[0]); nm != "" {
+			return nm, renderExpr(ix)
+		}
+	}
+	return "", ""
+}
+
+// sourceReboundPerOutputFindings flags PS3043 — a nest whose OUTER loop owns a destination and
+// whose INNER loop rebinds a source element from a collection. The set of sources is re-read once
+// per outer iteration although it does not depend on the outer variable, so the pass moves
+// outer-count times the source volume. Interchanging the loops reads each source once.
+//
+// MEASURED on the multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p], written as a loop
+// over outputs re-reading every map: 16 passes over 33 MB per group. With the source loop outside
+// and the element range split across workers, BenchmarkMTAForward_ch16 fell 11.7%.
+func sourceReboundPerOutputFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		obody, outer := outerLoop(n)
+		if obody == nil || outer == "" {
+			return true
+		}
+		for _, st := range obody.List {
+			pbody, inner := outerLoop(st)
+			if pbody == nil || inner == "" || inner == outer {
+				continue
+			}
+			// The interchange is only worth naming when the innermost work is itself a loop:
+			// otherwise the source is one element and rebinding it costs nothing.
+			if loopDepthOf(pbody) < 1 {
+				continue
+			}
+			dst := writtenElementOf(pbody, boundIn(obody, st))
+			if dst == "" {
+				continue
+			}
+			src, from := sourceReboundBy(pbody, inner, outer)
+			if src == "" || seen[int(n.Pos())] {
+				continue
+			}
+			seen[int(n.Pos())] = true
+			out = append(out, finding{
+				pos:      fset.Position(n.Pos()),
+				category: "source-rebound-per-output",
+				msg: fmt.Sprintf("this loop over %q owns the destination %q, and the %q loop inside"+
+					" it rebinds %q from %s — a source that does not depend on %q. So the whole set of"+
+					" sources is re-read once per %q, and the pass moves (count of %q) times the"+
+					" source volume through the caches. INTERCHANGE THE LOOPS: put %q outside, bind"+
+					" each source once, and update every destination while it is loaded. The"+
+					" accumulation order per destination element is unchanged by the interchange, so"+
+					" the result stays BIT-IDENTICAL and an existing exact-equality gate still"+
+					" applies — that is what makes this cheap to verify. MEASURED on the"+
+					" multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p] written as a loop"+
+					" over outputs re-reading every map: 16 passes over 33 MB per group, and"+
+					" BenchmarkMTAForward_ch16 fell 11.7%% once the source loop moved out and the"+
+					" element range was split across workers. THE INTERCHANGE ALONE IS RARELY THE"+
+					" WIN: it makes the destinations live simultaneously, so hold them for a BAND of"+
+					" elements rather than the whole array, and check whether the loop was serial"+
+					" while the rest of the path was parallel — a serial stretch costs its full CPU"+
+					" time in wall clock however small its profile share looks",
+					outer, dst, inner, src, from, outer, outer, outer, inner),
+			})
+			return true
 		}
 		return true
 	})

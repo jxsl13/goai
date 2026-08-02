@@ -370,50 +370,74 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 	if d == tensor.F64 {
 		w := hk.Storage().F64()
 		for g := 0; g < m.Heads; g += ch {
-			for o := 0; o < ch; o++ {
+			mps, oss := make([][]float64, ch), make([][]float64, ch)
+			for j := 0; j < ch; j++ {
+				mps[j] = maps[g+j].Contiguous().Storage().F64()
 				res := tensor.New(tensor.F64, shp)
-				os := res.Storage().F64()
+				oss[j], out[g+j] = res.Storage().F64(), res
+			}
+			// One pass per INPUT map serving every output, over a band of elements — not one
+			// pass per output re-reading every map. The group's ch maps were streamed ch times,
+			// which at the benchmarked shape is 16 passes over 33 MB; now each map is read once
+			// per band while the ch accumulators for that band stay in cache. The band split is
+			// what takes this off the critical path: it was the whole layer's only serial stretch
+			// and, being pure memory traffic, it cost its full CPU time in wall clock.
+			//
+			// Bit-identical: an output element still takes its p=0 product as a store and then
+			// adds p=1..ch-1 in ascending order, which is the order the OpMul/OpAdd dispatch it is
+			// pinned against uses.
+			parallelRows(n, ch*ch, func(lo, hi int) {
 				for p := 0; p < ch; p++ {
-					wop := w[o*ch+p]
-					mp := maps[g+p].Contiguous().Storage().F64()
-					if p == 0 {
-						for i := 0; i < n; i++ {
-							os[i] = mp[i] * wop
-						}
-					} else {
-						for i := 0; i < n; i++ {
-							// rounded before the add: bare mul-add contracts to FMA on arm64
-							// only, which broke this path's bit-exact pin against dispatch.
-							os[i] += float64(mp[i] * wop)
+					mp := mps[p][lo:hi]
+					for o := 0; o < ch; o++ {
+						wop := w[o*ch+p]
+						os := oss[o][lo:hi]
+						os = os[:len(mp)]
+						if p == 0 {
+							for i, v := range mp {
+								os[i] = v * wop
+							}
+						} else {
+							for i, v := range mp {
+								// rounded before the add: bare mul-add contracts to FMA on arm64
+								// only, which broke this path's bit-exact pin against dispatch.
+								os[i] += float64(v * wop)
+							}
 						}
 					}
 				}
-				out[g+o] = res
-			}
+			})
 		}
 		return out, nil
 	}
 	// F32
 	w := hk.Storage().F32()
 	for g := 0; g < m.Heads; g += ch {
-		for o := 0; o < ch; o++ {
+		mps, oss := make([][]float32, ch), make([][]float32, ch)
+		for j := 0; j < ch; j++ {
+			mps[j] = maps[g+j].Contiguous().Storage().F32()
 			res := tensor.New(tensor.F32, shp)
-			os := res.Storage().F32()
+			oss[j], out[g+j] = res.Storage().F32(), res
+		}
+		parallelRows(n, ch*ch, func(lo, hi int) {
 			for p := 0; p < ch; p++ {
-				wop := w[o*ch+p]
-				mp := maps[g+p].Contiguous().Storage().F32()
-				if p == 0 {
-					for i := 0; i < n; i++ {
-						os[i] = mp[i] * wop
-					}
-				} else {
-					for i := 0; i < n; i++ {
-						os[i] += float32(mp[i] * wop)
+				mp := mps[p][lo:hi]
+				for o := 0; o < ch; o++ {
+					wop := w[o*ch+p]
+					os := oss[o][lo:hi]
+					os = os[:len(mp)]
+					if p == 0 {
+						for i, v := range mp {
+							os[i] = v * wop
+						}
+					} else {
+						for i, v := range mp {
+							os[i] += float32(v * wop)
+						}
 					}
 				}
 			}
-			out[g+o] = res
-		}
+		})
 	}
 	return out, nil
 }
