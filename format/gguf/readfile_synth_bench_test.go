@@ -203,3 +203,67 @@ func TestReadRawViewMatchesCopiedBytes(t *testing.T) {
 		}
 	}
 }
+
+// writeSkewedModel builds a model whose tensor sizes are deliberately UNEVEN and whose largest
+// tensors come LAST in file order — the worst case for a cursor that claims tensors in that order,
+// because the biggest piece of work is picked up when the fewest workers remain to overlap it.
+//
+// Real models look like this: an embedding or output matrix dwarfs the per-block weights, and the
+// GGUF writer emits tensors in name order rather than size order.
+func writeSkewedModel(tb testing.TB, small, dim, bigDim, bigs int) string {
+	tb.Helper()
+	f := &File{Version: 3, Tensors: make(map[string]*tensor.Tensor, small+bigs),
+		Metadata: map[string]any{"general.architecture": "llama"}}
+	quant := make(map[string]QuantType, small+bigs)
+	add := func(name string, d int) {
+		w := tensor.New(tensor.F32, tensor.Shape{d, d})
+		s := w.Storage().F32()
+		for i := range s {
+			s[i] = float32((i*11)%97-48) * 0.02
+		}
+		f.Tensors[name] = w
+		quant[name] = Q4_K
+	}
+	for t := range small {
+		add("blk."+string(rune('a'+t%26))+string(rune('0'+t/26))+".w", dim)
+	}
+	for t := range bigs {
+		add("zz.output."+string(rune('0'+t))+".w", bigDim) // sorts last
+	}
+	path := filepath.Join(tb.TempDir(), "skew.gguf")
+	fh, err := os.Create(path)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if err := WriteQuantized(fh, f, quant); err != nil {
+		fh.Close()
+		tb.Fatal(err)
+	}
+	if err := fh.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	return path
+}
+
+// BenchmarkReadFileSkewed is the cell built to see a scheduling change: one tensor dwarfing the
+// rest and claimed LAST in file order, which is the worst case for the decode cursor.
+// BenchmarkReadFileSynth builds UNIFORM tensors, so every claim order produces the same makespan
+// and a scheduling change is invisible against it.
+//
+// What it measured is a NULL RESULT, kept here so the idea is not retried on intuition: claiming
+// largest-first moved this by -2.2%, inside the spread, at both a moderate skew (48 small plus 3
+// big) and this harsh one. The decode is bandwidth-bound and twelve workers already overlap most
+// of the tail, so the imbalance one large tensor creates is a small fraction of the makespan.
+func BenchmarkReadFileSkewed(b *testing.B) {
+	path := writeSkewedModel(b, 11, 96, 1024, 1) // harsher: one tensor dwarfs the rest, claimed last
+	if _, err := ReadFile(path); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := ReadFile(path); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
