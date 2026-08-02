@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3048", "fanout-without-a-work-floor", "a fan-out helper that takes its worker count from GOMAXPROCS and gates only on the TOTAL work, with nothing bounding the work each worker receives. An op just over the total threshold is then split every way the machine allows and each band carries a fraction of the amount that justified splitting at all. DERIVE THE COUNT FROM THE WORK: workers = min(GOMAXPROCS, total/floor), falling back to the serial body at one. MEASURED on this repository CPU pool, where a per-token decode step issues a long run of ops just above the threshold: the profile was 42%% runtime.usleep, 22%% cond_wait and 9%% cond_signal against 14%% arithmetic, and BenchmarkLlamaPromptStepwise ran 2.3x SLOWER at twelve cores than at one. A floor equal to the fan-out threshold took Llama down 36%%, Mixtral 44.7%% and Mamba prefill 27.6%% with the large-op cells unchanged. THE CURVE IS NOT MONOTONE — swept at 2^14 to 2^17 the times were 153, 85, 110 and 127 ms, so pick the floor by measurement. CHANGING THE BAND COUNT MUST NOT CHANGE A VALUE, which the GOMAXPROCS parity tests are what prove", false},
 	{"PS3047", "one-shared-accumulator-blocks-split", "a loop over a dimension whose accumulating writes are ALL indexed by that dimension except ONE. That single exception is the only thing keeping the loop serial. RECORD AND FOLD: run the iterations in parallel, storing the shared accumulator per-item FACTOR into a buffer instead of adding it, then fold that buffer afterwards in the original iteration order — every add then happens in the sequence the serial loop used, so the result is BIT-IDENTICAL, which per-iteration partial sums merged at the end are NOT. MEASURED on the MLA attention backward, where four of five gradients are written at head-chosen columns and the fifth is the shared decoupled-key gradient: BenchmarkMLAVJPSeq256 fell 67.9%% and Seq128 66.7%%. SIZE THE RECORDING BUFFER FIRST — it holds one value per (iteration, inner index) pair, so process iterations in GROUPS that keep it under a budget; a group of one degrades to the serial form and stays correct. THE FOLD MUST REPRODUCE THE ORIGINAL BOUNDS: a triangular inner range folded with the rectangular bound agrees with the serial form on the rectangular case and nowhere else", false},
 	{"PS3046", "item-reduction-into-partitioned-windows", "a loop over items whose inner loops accumulate into a WINDOW of a shared destination, cut at an offset the item does not appear in. The item loop is a REDUCTION and cannot fan out, but the loops that CHOOSE the window already partition the destination into disjoint pieces, and splitting one of those is safe: each worker owns whole windows, every window still sums its items in ascending order, and the result is BIT-IDENTICAL. MEASURED on the softmax regression Hessian, where every sample contributes to every (class pair, feature) window: BenchmarkSoftmaxRegressionFit fell 43.9%%, the two smaller softmax cells 24.5%% and 26.6%%. CUT THE BANDS ON CUMULATIVE WORK WHEN THE INNER RANGE IS TRIANGULAR — a loop whose iteration a writes m-a columns gives its first band about 2m/workers times the last band under an equal-count split. CHECK THE GATE AGAINST THE REAL SHAPE: this one first measured as no change at all because the work estimate fell 4%% short of the threshold and the split never ran. PS3045 is the sibling for a scatter whose offset within the window is chosen by the DATA", false},
 	{"PS3045", "colliding-scatter-with-partitionable-destination", "an item loop whose inner loop over a second dimension accumulates into a destination indexed by that dimension PLUS a data-dependent offset. Two items can land on the same slot, so the ITEM loop cannot fan out — but the inner dimension partitions the destination into disjoint windows, and splitting THERE is safe: each worker owns whole windows, every slot still accumulates its items in ascending item order, and the result is BIT-IDENTICAL. Per-worker partial copies merged afterwards would reassociate every sum and are not. MEASURED on the histogram gradient-boosting builder, where every sample updates one bin of every feature: BenchmarkGBMHist_hist_80k fell 19.0%%, the 20k cell 11.3%%. FLOOR THE WINDOWS PER WORKER — every worker re-walks the WHOLE item list, so that walk is paid once per worker instead of once in total; swept at 20 features on 12 cores, 4 per worker was best and 8 was 10%% worse because it left only two workers. GATE ON items times windows so small calls stay serial", false},
@@ -1312,6 +1313,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, collidingScatterFindings(fset, f, fn)...)
 		out = append(out, itemReductionWindowFindings(fset, f, fn)...)
 		out = append(out, oneSharedAccumulatorFindings(fset, f, fn)...)
+		out = append(out, fanoutWorkFloorFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -17239,4 +17241,127 @@ func isRoundedAccumulation(lhs, rhs ast.Expr) bool {
 	}
 	want := renderExpr(lhs)
 	return renderExpr(peelConversions(b.X)) == want || renderExpr(peelConversions(b.Y)) == want
+}
+
+// --- PS3048: a fan-out helper with no floor on the work each worker gets ----------------------
+
+// dividesBy reports whether body contains a division whose dividend mentions one of names — the
+// shape of "how many workers does this much work justify", as opposed to "how many cores are
+// there".
+func dividesBy(body ast.Node, names, procs map[string]bool) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		b, ok := n.(*ast.BinaryExpr)
+		if !ok || b.Op != token.QUO || found {
+			return !found
+		}
+		// A division BY the worker count is the chunk size, not a decision about how many
+		// workers to wake. Counting it hid the finding on the pool this check was written for,
+		// whose every version computes chunk := (n + workers - 1) / workers.
+		for nm := range procs {
+			if mentionsIdent(b.Y, nm) {
+				return true
+			}
+		}
+		for nm := range names {
+			if mentionsIdent(b.X, nm) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// fanoutWorkFloorFindings flags PS3048 — a fan-out helper that takes its worker count from
+// GOMAXPROCS and gates only on the TOTAL work, with nothing bounding the work each worker
+// receives. An op just over the total threshold is then split every way the machine allows, and
+// each band carries a fraction of the amount that justified splitting at all.
+//
+// MEASURED on this repository's CPU worker pool. A per-token decode step issues a long run of ops
+// sitting just above the threshold; the profile of BenchmarkLlamaPromptStepwise was 42%
+// runtime.usleep, 22% cond_wait and 9% cond_signal against 14% arithmetic, and the benchmark ran
+// 2.3x SLOWER at twelve cores than at one. Deriving the worker count as total/floor, capped at
+// GOMAXPROCS, took Llama down 36%, Mixtral 44.7% and Mamba prefill 27.6%, with the large-op cells
+// unchanged.
+func fanoutWorkFloorFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || fn.Name == nil || !fanoutReg[f.Name.Name][fn.Name.Name] {
+		return nil
+	}
+	// The integer parameters are the candidate work quantities, plus anything derived from them.
+	work := map[string]bool{}
+	if fn.Type.Params != nil {
+		for _, p := range fn.Type.Params.List {
+			if id, ok := p.Type.(*ast.Ident); !ok || id.Name != "int" {
+				continue
+			}
+			for _, nm := range p.Names {
+				work[nm.Name] = true
+			}
+		}
+	}
+	if len(work) == 0 {
+		return nil
+	}
+	for range 3 {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			for nm := range work {
+				if mentionsIdent(as.Rhs[0], nm) {
+					if lhs := identName(as.Lhs[0]); lhs != "" {
+						work[lhs] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	// The names holding the core count, so a division BY one of them can be told apart from a
+	// division that sizes the fan-out.
+	procs := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		call, isCall := unparen(as.Rhs[0]).(*ast.CallExpr)
+		derived := false
+		for nm := range procs {
+			if mentionsIdent(as.Rhs[0], nm) {
+				derived = true
+			}
+		}
+		if (isCall && renderExpr(call.Fun) == "runtime.GOMAXPROCS") || derived {
+			if nm := identName(as.Lhs[0]); nm != "" {
+				procs[nm] = true
+			}
+		}
+		return true
+	})
+	if len(procs) == 0 || dividesBy(fn.Body, work, procs) {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(fn.Pos()),
+		category: "fanout-without-a-work-floor",
+		msg: fmt.Sprintf("%q hands work to as many workers as GOMAXPROCS reports and never divides"+
+			" the work to decide how many are worth waking. A total-work threshold only answers"+
+			" whether to fan out AT ALL; without a second gate on the share each worker receives, an"+
+			" op just over that threshold is split every way the machine allows and every band"+
+			" carries a fraction of the amount that justified splitting once. DERIVE THE COUNT FROM"+
+			" THE WORK: workers = min(GOMAXPROCS, total/floor), and fall back to the serial body when"+
+			" that comes out at one. MEASURED on this repository's CPU pool, where a per-token decode"+
+			" step issues a long run of ops sitting just above the threshold: the profile was 42%%"+
+			" runtime.usleep, 22%% cond_wait and 9%% cond_signal against 14%% arithmetic, and"+
+			" BenchmarkLlamaPromptStepwise ran 2.3x SLOWER at twelve cores than at one. A floor equal"+
+			" to the fan-out threshold itself took Llama down 36%%, Mixtral 44.7%% and Mamba prefill"+
+			" 27.6%% with the large-op cells unchanged. THE CURVE IS NOT MONOTONE — swept at 2^14,"+
+			" 2^15, 2^16 and 2^17 the times were 153, 85, 110 and 127 ms, so pick the floor by"+
+			" measurement and not by argument. CHANGING THE BAND COUNT MUST NOT CHANGE A VALUE: this"+
+			" is only safe where every caller's split is already band-count independent, which the"+
+			" GOMAXPROCS parity tests are what prove", fn.Name.Name),
+	}}
 }
