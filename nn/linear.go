@@ -36,17 +36,18 @@ func (l *Linear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor
 	if x.Shape()[1] != l.W.Shape()[0] {
 		return nil, fmt.Errorf("nn: Linear in-dim %d != x cols %d", l.W.Shape()[0], x.Shape()[1])
 	}
-	out, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{x, l.W}, nil)
+	// execPool2 rather than a slice literal per call: this is the most-called forward in the
+	// package — every MLP block of every model routes through it — and each literal is one
+	// allocation Execute drops the instant it returns. The helper defers to a fresh slice under a
+	// recorder, because the tape node stores that exact slice.
+	y, err := execPool2(ctx, backend.OpMatMul, nil, x, l.W)
 	if err != nil {
 		return nil, err
 	}
-	y := out[0]
 	if l.B != nil {
-		outb, err := backend.Execute(ctx, backend.OpAddBias, []*tensor.Tensor{y, l.B}, nil)
-		if err != nil {
+		if y, err = execPool2(ctx, backend.OpAddBias, nil, y, l.B); err != nil {
 			return nil, err
 		}
-		y = outb[0]
 	}
 	return y, nil
 }

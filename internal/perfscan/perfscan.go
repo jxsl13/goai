@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3038", "dispatch-literal-slice", "a direct backend.Execute building its input slice inline, in a package that already declares a pooled helper of that arity. The literal is one allocation per dispatch, and Execute drops the slice the instant it returns unless a recorder is attached — which is exactly what the pooled helper checks before borrowing. MEASURED on nn.Linear.Forward, the most-called forward in the package: two literals became two pooled borrows and a per-image MLP-Mixer forward went 3944 to 3687 allocs/op (-6.5%%), a ViT forward -2.0%%. Judge on allocs/op; the time was flat everywhere, since these forwards are dominated by the kernels the slice merely names. THE RECORDER GUARD IS THE CONTRACT: Execute\u0027s tape node stores that exact slice, so a pooled one would be overwritten by the next op and a training run would silently get wrong gradients — use the helper, never inline the borrow. 214 sit in nn alone, so rank by call frequency and convert where a benchmark can see it", false},
 	{"PS3037", "mis-sized-append-buffer", "a slice made with a stated capacity inside a loop and then appended to from a NESTED loop, so the hint is sized per outer pass while the appends run outer times inner. The hint guarantees the opposite of what it looks like: the slice doubles its way up from the hint to its true size on EVERY outer pass, copying everything it holds each time. MEASURED on a beam search whose hint was 8 per live beam against a true size of one candidate per beam per VOCABULARY ENTRY — that one append line was 2.45 GB of a 2.90 GB benchmark, and hoisting the buffer above the loop with a per-pass truncation took bytes -85.0%% on beam search and -98.0%% on its diverse variant. Judge on B/op first: the time win was -8.8%% and -2.9%%, real but far smaller. Prove nothing survives the reset — dropping the truncation must redden the suite, and on the measured site it did. PS3035 does not cover this: it wants a size the loop does not vary and only sees loops with a range clause or an init statement, and the measured site is a bare condition loop whose hint mentions the collection it iterates", false},
 	{"PS3036", "self-comparison-oracle", "a test that computes BOTH sides of its comparison with the same function and asserts they agree, so the expected value is produced by the code under test. Such a gate can only see state carried BETWEEN calls: any mistake INSIDE the computation changes both sides identically and it stays green. Found exactly that way — a Newton-Schulz orthogonalization gate of this shape passed with two intermediate buffers wired to one slice, and only an independently written reference caught it. Add a slow, obvious implementation with its own buffers and compare to a tolerance when the summation orders differ. SOMETIMES DELIBERATE: comparing one function across a CONFIG difference (GOMAXPROCS 1 against many, a fast path against a fallback) is a real differential test — it still gates only that difference, so document it and keep a separate reference for the arithmetic. Matters because every optimization here is defended by a bit-identity gate, and a gate that cannot fail reports coverage that does not exist. Requires -tests", false},
 	{"PS3035", "loop-hoistable-scratch", "a slice allocated with make at the top of a loop body, sized by something the loop does not vary, that never leaves the iteration — one buffer made and thrown away per pass. Hoist it above the loop. MEASURED on a Cholesky solve whose forward-substitution buffer was allocated per right-hand side: at 128 columns, 133 allocations became 43 and bytes fell 18.1%%. PS2001 does NOT cover this, since it fires only on the configured tensor allocators, so a plain make of a slice in a loop is invisible to every other check in this table. PROVE THE OVERWRITE BEFORE HOISTING: a fresh make is zeroed and a reused buffer is not, so an iteration that reads a slot before writing it would silently start seeing the previous pass\u0027s value — poison with NaN between iterations, confirm green, then delete one write and confirm red. JUDGE ON allocs/op AND B/op; the time win is usually nil and was here at both shapes. A buffer allocated once per WORKER BAND is already in the right place (PS6008) — bounded by GOMAXPROCS", false},
@@ -1298,6 +1299,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
 		out = append(out, misSizedAppendBufferFindings(fset, fn)...)
+		out = append(out, dispatchLiteralSliceFindings(fset, f, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -3013,6 +3015,7 @@ func main() {
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
 	collectFanoutHelpers(parsed)
+	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
@@ -15597,4 +15600,125 @@ func innerAppendHeaderIdents(body *ast.BlockStmt, name string) []map[string]bool
 	}
 	walk(body, nil, 0)
 	return found
+}
+
+// --- PS3038: a dispatch call building its input slice inline, beside a pooled helper -----------
+
+// execPoolReg maps a package name to the arities its pooled dispatch helpers cover. A helper is a
+// function that borrows its input slice from a sync.Pool and hands it to backend.Execute — the
+// shape nn's execPool1..3, nlp's exec1a/exec2/exec3 and vision's swinExec1a/swinExec2 all have.
+var execPoolReg = map[string]map[int]string{}
+
+// collectExecPoolHelpers pre-scans every package for those helpers, recording the number of
+// tensor parameters each covers.
+func collectExecPoolHelpers(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		pkg := f.Name.Name
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Body == nil || fn.Type.Params == nil {
+				continue
+			}
+			pooled, dispatches := false, false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				switch name := renderExpr(call.Fun); {
+				case strings.HasSuffix(name, "Pool.Get"):
+					pooled = true
+				case name == "backend.Execute":
+					dispatches = true
+				}
+				return true
+			})
+			if !pooled || !dispatches {
+				continue
+			}
+			// Count the trailing *tensor.Tensor parameters: the arity this helper covers.
+			n := 0
+			for _, p := range fn.Type.Params.List {
+				if typeText(token.NewFileSet(), p.Type) == "" {
+					continue
+				}
+				if star, ok := p.Type.(*ast.StarExpr); ok {
+					if renderExpr(star.X) == "tensor.Tensor" {
+						n += max(len(p.Names), 1)
+					}
+				}
+			}
+			if n == 0 {
+				continue
+			}
+			if execPoolReg[pkg] == nil {
+				execPoolReg[pkg] = map[int]string{}
+			}
+			if _, seen := execPoolReg[pkg][n]; !seen {
+				execPoolReg[pkg][n] = fn.Name.Name
+			}
+		}
+	}
+}
+
+// dispatchLiteralSliceFindings flags PS3038 — a direct backend.Execute whose inputs argument is an
+// inline slice literal, in a package that already has a pooled helper of that arity.
+func dispatchLiteralSliceFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil {
+		return nil
+	}
+	byArity := execPoolReg[f.Name.Name]
+	if len(byArity) == 0 {
+		return nil
+	}
+	// The helpers themselves build a literal on purpose: their recorder fallback must hand the
+	// tape a slice of its own. Reporting them would be reporting the applied form.
+	for _, h := range byArity {
+		if h == fn.Name.Name {
+			return nil
+		}
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || renderExpr(call.Fun) != "backend.Execute" || len(call.Args) < 3 {
+			return true
+		}
+		cl, ok := unparen(call.Args[2]).(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		at, ok := cl.Type.(*ast.ArrayType)
+		if !ok || at.Len != nil {
+			return true
+		}
+		helper, covered := byArity[len(cl.Elts)]
+		if !covered || len(cl.Elts) == 0 {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			category: "dispatch-literal-slice",
+			msg: fmt.Sprintf("this backend.Execute builds its %d-input slice inline, in a package"+
+				" that already has %s for exactly that arity. The literal is one allocation per"+
+				" dispatch, and Execute drops the slice the instant it returns unless a recorder"+
+				" is attached — which is what the pooled helper checks before borrowing. MEASURED"+
+				" on nn.Linear.Forward, the most-called forward in the package since every MLP"+
+				" block routes through it: two literals became two pooled borrows and a"+
+				" per-image MLP-Mixer forward went 3944 to 3687 allocs/op, -6.5%%, with a ViT"+
+				" forward at -2.0%%. JUDGE ON allocs/op — the time was flat on every cell, because"+
+				" these forwards are dominated by the kernels the slice merely names. THE"+
+				" RECORDER GUARD IS THE WHOLE CONTRACT: Execute's tape node stores that exact"+
+				" slice, so a pooled one would be overwritten by the next op and a training run"+
+				" would silently get wrong gradients. Use the helper, which defers to a fresh"+
+				" literal when ctx.Recorder is set; never inline the borrow. 214 of these sit in"+
+				" nn alone, so rank by call frequency and convert where a benchmark can see it",
+				len(cl.Elts), helper),
+		})
+		return true
+	})
+	return out
 }
