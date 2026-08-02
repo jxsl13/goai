@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3035", "loop-hoistable-scratch", "a slice allocated with make at the top of a loop body, sized by something the loop does not vary, that never leaves the iteration — one buffer made and thrown away per pass. Hoist it above the loop. MEASURED on a Cholesky solve whose forward-substitution buffer was allocated per right-hand side: at 128 columns, 133 allocations became 43 and bytes fell 18.1%%. PS2001 does NOT cover this, since it fires only on the configured tensor allocators, so a plain make of a slice in a loop is invisible to every other check in this table. PROVE THE OVERWRITE BEFORE HOISTING: a fresh make is zeroed and a reused buffer is not, so an iteration that reads a slot before writing it would silently start seeing the previous pass\u0027s value — poison with NaN between iterations, confirm green, then delete one write and confirm red. JUDGE ON allocs/op AND B/op; the time win is usually nil and was here at both shapes. A buffer allocated once per WORKER BAND is already in the right place (PS6008) — bounded by GOMAXPROCS", false},
 	{"PS3034", "serial-nest-with-idle-fanout", "a three-deep nest filling a destination the function itself allocated, indexed by the OUTERMOST loop variable so the iterations are independent, running on one core in a package that already declares a fan-out helper. Split the outer loop into bands: each owns whole rows of the destination and every element accumulates in the same order, so the result is BIT-IDENTICAL and the gate asserts exact equality rather than a tolerance. MEASURED on a Muon optimizer step whose flat matmul was 48.8%% of the profile and serial: 195.8ms to 77.4ms, -60.5%%, confirmed in both benchmark orders. GATE ON THE PRODUCT of the loop bounds, not the outer count — Newton-Schulz drives a few rows through a great deal of work each, and a row-count gate leaves exactly that shape serial. Expect allocations to RISE (46 to 568 per step, one closure per band) with bytes flat; that trade is the point. Moving the first band onto the calling goroutine was measured here and did nothing. Silent when any write is indexed without the outer variable, which is a cross-iteration accumulator a split would race on", false},
 	{"PS3033", "per-item-alloc-helper", "a package-local helper that allocates its result with make and returns it, whose every in-file call site is PER ITEM — inside a loop, or inside a helper that is itself only called per item. The buffer outlives nothing, so it belongs to the WORKER rather than the item: take a scratch parameter, grow it only when cap is short, reslice it to the length the caller needs. MEASURED on a k-NN predict where the k-best heap and its backing array, the neighbour weights and the per-class vote accumulator were all per query: 36020 allocations per batch became 92, -99.7%%, bytes -97.7%%, ns/op -4.9%%. JUDGE ON allocs/op AND B/op, NOT ns/op — the time win is the collector not walking those objects, so it is small where memory bandwidth is plentiful and larger where it is not. The reachability is a FIXED POINT, not a single pass: the measured allocator was called from another helper which was called from the per-row callback, so no lexical test sees it. Two conversion traps: every reused buffer must be fully overwritten before it is read (truncate, reslice, CLEAR), and a result the caller KEEPS must still be copied out or every row of a chunk shares one array. Silent when a call site stores the result into an index or a field, and on exported helpers, whose callers this file cannot see", false},
 	{"PS3032", "closure-accessor-in-loop", "a function VALUE obtained from a factory call and then invoked inside a loop, so every element pays an indirect call that cannot be inlined. This is the per-element dispatch anti-pattern one level shallower, and it hides better: a helper handing back readers and writers reads like setup, and the cost is in the calls rather than in the helper. Add typed arms walking raw storage and keep the closure form as the fallback for dtypes the typed arms cannot serve. MEASURED on two pooling backward rules: -48.2%% to -53.2%% across four cells. TWO TRAPS IN THE CONVERSION, both hit while making that change: the closure boundary BLOCKS FMA CONTRACTION that a typed arm allows — a scale product and an accumulating add in one function fuse where a call between them cannot — so wrap the product in an explicit conversion or the arms drift an ulp; and the parity fixture must make an element receive SEVERAL accumulations, or f32 narrowing differences cannot appear and a wrong arm passes. No type information is needed to find this: a name can only be CALLED if it holds a function", false},
@@ -1292,6 +1293,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		}
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
+		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 	}
 	// PS5002 is a whole-file structural check (consecutive sibling loops), not a
 	// per-function trigger attribution, so it runs once over the file's blocks.
@@ -15027,4 +15029,128 @@ func loopDepthOf(body *ast.BlockStmt) int {
 		}
 	}
 	return best
+}
+
+// --- PS3035: a loop-invariant scratch buffer allocated once per iteration ----------------------
+
+// loopHoistableScratchFindings flags PS3035 — a slice allocated with make at the top of a loop
+// body, sized by something the loop does not vary, that never leaves the iteration.
+//
+// PS2001 does not cover this: it fires only on the configured TENSOR allocators, so a plain
+// make([]float64, n) inside a loop is invisible to every check in this table. That is how a
+// Cholesky solve came to allocate its forward-substitution buffer once per right-hand side.
+func loopHoistableScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, iv := outerLoop(n)
+		if body == nil {
+			return true
+		}
+		for _, st := range body.List {
+			as, ok := st.(*ast.AssignStmt)
+			if !ok || as.Tok != token.DEFINE {
+				continue
+			}
+			for i, rhs := range as.Rhs {
+				call, ok := unparen(rhs).(*ast.CallExpr)
+				if !ok || renderExpr(call.Fun) != "make" || len(call.Args) < 2 || i >= len(as.Lhs) {
+					continue
+				}
+				if _, isSlice := unparen(call.Args[0]).(*ast.ArrayType); !isSlice {
+					continue
+				}
+				name := identName(as.Lhs[i])
+				if name == "" {
+					continue
+				}
+				// A size that varies with the loop cannot be hoisted without deciding a maximum,
+				// which is a different edit with a different cost.
+				varying := false
+				for _, a := range call.Args[1:] {
+					if iv != "" && mentionsIdent(a, iv) {
+						varying = true
+					}
+				}
+				if varying || escapesIteration(fn, name) {
+					continue
+				}
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "loop-hoistable-scratch",
+					msg: fmt.Sprintf("%q is allocated at the top of this loop, sized by something the"+
+						" loop does not vary, and never leaves the iteration — so the loop makes one"+
+						" of it per pass and throws it away. Hoist it above the loop. MEASURED on a"+
+						" Cholesky solve whose forward-substitution buffer was allocated per"+
+						" right-hand side: at 128 columns, 133 allocations became 43 and bytes fell"+
+						" 18.1%%. PS2001 does NOT cover this — it fires only on the configured tensor"+
+						" allocators, so a plain make of a slice inside a loop is invisible to every"+
+						" other check here. PROVE THE OVERWRITE BEFORE HOISTING: a fresh make is"+
+						" zeroed and a reused buffer is not, so an iteration that READS a slot before"+
+						" writing it would silently start seeing the previous pass's value. Poison the"+
+						" buffer with NaN between iterations and confirm the suite stays green, then"+
+						" delete one write and confirm it reddens. JUDGE ON allocs/op AND B/op — the"+
+						" time win is usually nil, and was here at both shapes measured. If the loop"+
+						" is a WORKER BAND rather than an item loop, this is already the right place"+
+						" (see PS6008): one buffer per worker is bounded by GOMAXPROCS", name),
+				})
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// escapesIteration reports whether name can outlive one pass of the loop that defines it: it is
+// returned, stored into an index, a field or through a pointer, appended somewhere, placed in a
+// composite literal, or handed to a call that might keep it. len, cap, copy and clear cannot keep
+// anything and are exempt.
+func escapesIteration(fn *ast.FuncDecl, name string) bool {
+	escapes := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if escapes {
+			return false
+		}
+		switch x := n.(type) {
+		case *ast.ReturnStmt:
+			for _, r := range x.Results {
+				if root, ok := rootIdentName(unparen(r)); ok && root == name {
+					escapes = true
+				}
+			}
+		case *ast.AssignStmt:
+			for i, rhs := range x.Rhs {
+				if i >= len(x.Lhs) || identName(rhs) != name {
+					continue
+				}
+				switch unparen(x.Lhs[i]).(type) {
+				case *ast.IndexExpr, *ast.SelectorExpr, *ast.StarExpr:
+					escapes = true
+				}
+			}
+		case *ast.CallExpr:
+			switch renderExpr(x.Fun) {
+			case "len", "cap", "copy", "clear":
+				return true
+			}
+			for _, a := range x.Args {
+				if identName(a) == name {
+					escapes = true
+				}
+			}
+		case *ast.CompositeLit:
+			for _, e := range x.Elts {
+				if identName(e) == name {
+					escapes = true
+				}
+				if kv, ok := e.(*ast.KeyValueExpr); ok && identName(kv.Value) == name {
+					escapes = true
+				}
+			}
+		}
+		return true
+	})
+	return escapes
 }
