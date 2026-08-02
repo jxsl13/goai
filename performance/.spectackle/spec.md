@@ -32,3 +32,6 @@ WHEN splitting a loop whose iteration a costs m minus a, the optimizer SHALL cut
 
 ## A-FANOUT-WIDTH-IS-DERIVED-FROM-THE-WORK-001
 WHEN a work-splitting helper picks its worker count, the pool SHALL derives it as min(GOMAXPROCS, total/floor) and runs serial at one, rather than jumping to full width the moment a total-work threshold is cleared; without the floor a per-token decode ran 2.3x slower at 12 cores than at 1, and adding it took 3 decode benchmarks down 27 to 45 percent.
+
+## A-SCALING-PROBE-COVERS-EVERY-PACKAGE-001
+WHEN the parallel-scaling probe is run to rank work, the optimizer SHALL runs it over every package rather than the ones with obvious kernels; the nlp decode cells were the only ones in the tree scaling BELOW 1x and were found only after 5 rounds of probing elsewhere.
