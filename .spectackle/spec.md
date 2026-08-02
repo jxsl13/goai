@@ -450,3 +450,6 @@ IF a dtype-specialized arm is entered on a check covering fewer tensors than it 
 
 ## A-PARALLEL-GATE-MUST-CLEAR-THE-SERIAL-THRESHOLD-001
 IF a test compares a parallel path against its serial one, THEN the developer SHALL size the fixture past the helper own work threshold — 3 sizes under n*feat=8192 compared the serial path with itself and a row-skipping mutation passed.
+
+## CHECK-EVERY-SITE-NOT-THE-FIRST-ONE-FOUND-001
+WHEN a check validates a property against a site inside the code it inspects, the agent SHALL evaluate EVERY such site, since one correctly formed site otherwise vouches for a defective sibling and the check silently loses coverage.

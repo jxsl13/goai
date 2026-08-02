@@ -77,13 +77,16 @@ func (m *Llama) cachedBlockRange(
 			return nil, fmt.Errorf("nlp: LayerSkip cache layer %d starts verification at position %d with %d/%d K/V rows", l, pos, kn, vn)
 		}
 		var err error
-		q, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{
+		// exec1a/exec3 rather than the variadic exec1: Go builds a fresh slice for the variadic
+		// pack at every call site, and these three run per layer per token. The pooled siblings
+		// defer to exec1 under a recorder, so the tape still gets its own slice.
+		q, err = exec1a(layerCtx, backend.OpRoPE, backend.RoPEAttrs{
 			Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos,
 		}, q)
 		if err != nil {
 			return nil, err
 		}
-		k, err = exec1(layerCtx, backend.OpRoPE, backend.RoPEAttrs{
+		k, err = exec1a(layerCtx, backend.OpRoPE, backend.RoPEAttrs{
 			Base: cfg.RopeBase, Heads: kv, PosOffset: pos,
 		}, k)
 		if err != nil {
@@ -93,7 +96,7 @@ func (m *Llama) cachedBlockRange(
 		if trace != nil {
 			trace.blockTokens[l] += rows
 		}
-		return exec1(layerCtx, backend.OpMHA, attn, q, cache.K[l], cache.V[l])
+		return exec3(layerCtx, backend.OpMHA, attn, q, cache.K[l], cache.V[l])
 	})
 }
 
