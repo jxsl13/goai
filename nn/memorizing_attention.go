@@ -566,9 +566,157 @@ func (m *MemMemory) retrieveHead(q []float64, headOff, headDim, topM int) (idx [
 	return idx, scores
 }
 
+// memEnt and memTopHeap are retrieveHead's bounded worst-at-root heap lifted out of that
+// function, so a scan can hold one heap per query row instead of one per call. The order
+// is retrieveHead's: score descending, index ascending, a strict total order.
+type memEnt struct {
+	i int
+	s float64
+}
+
+func memWorse(a, b memEnt) bool {
+	if a.s != b.s {
+		return a.s < b.s
+	}
+	return a.i > b.i
+}
+
+type memTopHeap struct {
+	e    []memEnt
+	topM int
+}
+
+func (h *memTopHeap) siftDown(i int) {
+	for {
+		lo := i
+		if l := 2*i + 1; l < len(h.e) && memWorse(h.e[l], h.e[lo]) {
+			lo = l
+		}
+		if r := 2*i + 2; r < len(h.e) && memWorse(h.e[r], h.e[lo]) {
+			lo = r
+		}
+		if lo == i {
+			return
+		}
+		h.e[i], h.e[lo] = h.e[lo], h.e[i]
+		i = lo
+	}
+}
+
+func (h *memTopHeap) push(e memEnt) {
+	if len(h.e) < h.topM {
+		h.e = append(h.e, e)
+		for j := len(h.e) - 1; j > 0; { // sift up
+			p := (j - 1) / 2
+			if !memWorse(h.e[j], h.e[p]) {
+				break
+			}
+			h.e[j], h.e[p] = h.e[p], h.e[j]
+			j = p
+		}
+		return
+	}
+	if h.topM > 0 && memWorse(h.e[0], e) { // root is the worst kept; e is better
+		h.e[0] = e
+		h.siftDown(0)
+	}
+}
+
+// drain writes the kept entries into idx best-first, emptying the heap.
+func (h *memTopHeap) drain(idx []int) {
+	sort.Slice(h.e, func(a, b int) bool { return memWorse(h.e[b], h.e[a]) })
+	for r := range idx {
+		idx[r] = h.e[r].i
+	}
+	h.e = h.e[:0]
+}
+
+// memGatherTile is how many query rows one pass over the key store serves.
+//
+// The scan is BANDWIDTH-bound, not compute-bound. One query row's search reads the whole
+// key store — at the benchmarked shape, 4096 rows of 64 doubles per head, about 2 MB —
+// and reuses none of it, so running T rows one at a time moved T times that volume
+// through the caches. Widening the innermost work to B queries per loaded key row cuts
+// the traffic by B and hides the accumulator latency for free, because the B dot products
+// are independent. Measured on BenchmarkMemForward_512, minimum of four runs: B=1 (the
+// per-row form) 212 ms, B=4 173, B=8 163, B=16 159, B=32 156. The curve flattens after 16,
+// and the last step is worth 2%, which does not pay for the longer tail a wide tile leaves
+// when a worker's row range is not a multiple of it.
+const memGatherTile = 16
+
+// retrieveTile runs the same bounded top-M search as retrieveHead for a BLOCK of query
+// rows at once, loading each stored key row ONCE and dotting it against every query in
+// the block while it is still in cache. heaps and idxOut are caller-owned scratch, reused
+// across tiles; heaps must have capacity topM and idxOut length at least min(topM, n).
+//
+// Bit-identical to calling retrieveHead per row: every (query, key) dot keeps its own
+// accumulator and its ascending-d summation order, and each heap still sees the keys in
+// ascending index order, so it makes exactly the same accept/reject decisions.
+// retrieveHead is deliberately left as it was, an independent implementation of the same
+// search, which is what makes it usable as the oracle this is tested against.
+func (m *MemMemory) retrieveTile(qt [][]float64, headOff, headDim int, heaps []memTopHeap, idxOut [][]int) {
+	for i := range m.keys {
+		row := m.keys[i][headOff:][:headDim]
+		for j, q := range qt {
+			q = q[:len(row)] // len equality is what elides the bounds check on q[d]
+			var s float64
+			for d, rv := range row {
+				s += q[d] * rv
+			}
+			heaps[j].push(memEnt{i, s})
+		}
+	}
+	for j := range heaps {
+		heaps[j].drain(idxOut[j])
+	}
+}
+
+// gatherRows runs the neighbour search for every query row in [0,t) and hands each row's
+// top-M indices to emit, which writes that row's own output block. The query rows are
+// read out of qs when the query tensor is contiguous F64 and through AtF64 otherwise.
+//
+// The token loop fans out over GOMAXPROCS: each token writes only its own output block
+// and reads the shared read-only m.keys/m.vals, and every worker owns its scratch, so the
+// split cannot change a value. Each worker walks its range in tiles of memGatherTile.
+func (m *MemMemory) gatherRows(qh *tensor.Tensor, qs []float64, qTyped bool, headOff, headDim, topM, t, nKeys int, emit func(ti int, idx []int)) {
+	if topM > nKeys { // retrieveHead's clamp; the output block keeps its declared stride
+		topM = nKeys
+	}
+	parallelRows(t, nKeys*headDim, func(lo, hi int) {
+		b := min(memGatherTile, hi-lo)
+		qflat := make([]float64, b*headDim)
+		ents := make([]memEnt, b*topM)
+		idxFlat := make([]int, b*topM)
+		qt := make([][]float64, b)
+		heaps := make([]memTopHeap, b)
+		idxOut := make([][]int, b)
+		for j := range b {
+			qt[j] = qflat[j*headDim : (j+1)*headDim : (j+1)*headDim]
+			heaps[j] = memTopHeap{e: ents[j*topM : j*topM : (j+1)*topM], topM: topM}
+			idxOut[j] = idxFlat[j*topM : (j+1)*topM]
+		}
+		for base := lo; base < hi; base += b {
+			nb := min(b, hi-base)
+			for j := range nb {
+				if ti := base + j; qTyped {
+					copy(qt[j], qs[ti*headDim:])
+				} else {
+					for d := range headDim {
+						qt[j][d] = qh.AtF64(ti, d)
+					}
+				}
+			}
+			m.retrieveTile(qt[:nb], headOff, headDim, heaps[:nb], idxOut[:nb])
+			for j := range nb {
+				emit(base+j, idxOut[j])
+			}
+		}
+	})
+}
+
 // gather builds the detached neighbour tensors kg,vg [T, topM, headDim] for the
 // whole query segment qh [T, headDim] (already the head's slice), by running
-// retrieveHead per row. headOff is the head's column offset into the stored
+// the tiled neighbour search per row. headOff is the head's column offset into the stored
 // full-width rows. The result tensors are constants (fresh storage), which is
 // what severs the gradient into past segments.
 func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headDim, topM int) (kg, vg *tensor.Tensor) {
@@ -590,28 +738,14 @@ func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headD
 	case tensor.F64:
 		kgs := kg.Storage().F64()
 		vgs := vg.Storage().F64()
-		// Each query token's neighbour search is independent (writes only its own output block,
-		// reads the shared read-only m.keys/m.vals; retrieveHead allocates its own heap), so the
-		// token loop fans out over GOMAXPROCS bit-identically. Per-worker qrow scratch.
-		parallelRows(t, nKeys*headDim, func(lo, hi int) {
-			qrow := make([]float64, headDim)
-			for ti := lo; ti < hi; ti++ {
-				if qTyped {
-					copy(qrow, qs[ti*headDim:ti*headDim+headDim])
-				} else {
-					for d := range headDim {
-						qrow[d] = qh.AtF64(ti, d)
-					}
-				}
-				idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-				obase := ti * topM * headDim
-				for r, id := range idx {
-					kr, vr := m.keys[id], m.vals[id]
-					rb := obase + r*headDim
-					for d := range headDim {
-						kgs[rb+d] = kr[headOff+d]
-						vgs[rb+d] = vr[headOff+d]
-					}
+		m.gatherRows(qh, qs, qTyped, headOff, headDim, topM, t, nKeys, func(ti int, idx []int) {
+			obase := ti * topM * headDim
+			for r, id := range idx {
+				kr, vr := m.keys[id], m.vals[id]
+				rb := obase + r*headDim
+				for d := range headDim {
+					kgs[rb+d] = kr[headOff+d]
+					vgs[rb+d] = vr[headOff+d]
 				}
 			}
 		})
@@ -619,43 +753,25 @@ func (m *MemMemory) gather(dtype tensor.Dtype, qh *tensor.Tensor, headOff, headD
 	case tensor.F32:
 		kgs := kg.Storage().F32()
 		vgs := vg.Storage().F32()
-		parallelRows(t, nKeys*headDim, func(lo, hi int) {
-			qrow := make([]float64, headDim)
-			for ti := lo; ti < hi; ti++ {
-				if qTyped {
-					copy(qrow, qs[ti*headDim:ti*headDim+headDim])
-				} else {
-					for d := range headDim {
-						qrow[d] = qh.AtF64(ti, d)
-					}
-				}
-				idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-				obase := ti * topM * headDim
-				for r, id := range idx {
-					kr, vr := m.keys[id], m.vals[id]
-					rb := obase + r*headDim
-					for d := range headDim {
-						kgs[rb+d] = float32(kr[headOff+d])
-						vgs[rb+d] = float32(vr[headOff+d])
-					}
+		m.gatherRows(qh, qs, qTyped, headOff, headDim, topM, t, nKeys, func(ti int, idx []int) {
+			obase := ti * topM * headDim
+			for r, id := range idx {
+				kr, vr := m.keys[id], m.vals[id]
+				rb := obase + r*headDim
+				for d := range headDim {
+					kgs[rb+d] = float32(kr[headOff+d])
+					vgs[rb+d] = float32(vr[headOff+d])
 				}
 			}
 		})
 		return kg, vg
 	}
 	// Same per-token independence for the AtF64 fallback.
-	parallelRows(t, nKeys*headDim, func(lo, hi int) {
-		qrow := make([]float64, headDim)
-		for ti := lo; ti < hi; ti++ {
+	m.gatherRows(qh, nil, false, headOff, headDim, topM, t, nKeys, func(ti int, idx []int) {
+		for r, id := range idx {
 			for d := range headDim {
-				qrow[d] = qh.AtF64(ti, d)
-			}
-			idx, _ := m.retrieveHead(qrow, headOff, headDim, topM)
-			for r, id := range idx {
-				for d := range headDim {
-					kg.SetF64(m.keys[id][headOff+d], ti, r, d)
-					vg.SetF64(m.vals[id][headOff+d], ti, r, d)
-				}
+				kg.SetF64(m.keys[id][headOff+d], ti, r, d)
+				vg.SetF64(m.vals[id][headOff+d], ti, r, d)
 			}
 		}
 	})
