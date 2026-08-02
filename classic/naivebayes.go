@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync/atomic"
 )
 
 // nbPredictParallel runs body over the rows of x chunk-parallel across GOMAXPROCS (each
@@ -21,17 +22,23 @@ func nbPredictParallel(n, feat int, body func(i int)) {
 	if nw > n {
 		nw = n
 	}
-	csz := (n + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > n {
-			hi = n
+	// Rows are CLAIMED in blocks rather than dealt in one equal chunk per worker. An equal split
+	// waits for the slowest chunk, and four of this host's twelve cores are efficiency cores
+	// (§PS3011). Both of that check's preconditions hold here: a claim's working set is the rows it
+	// covers, and the body allocates nothing per call.
+	const grain = 256 // rows per claim: large enough to amortize the atomic, small enough to balance
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= n {
+				return nil
+			}
+			hi := min(lo+grain, n)
+			for i := lo; i < hi; i++ {
+				body(i)
+			}
 		}
-		for i := lo; i < hi; i++ {
-			body(i)
-		}
-		return nil
 	})
 }
 
