@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3041", "per-item-rescan-of-shared-collection", "an outer loop over items whose body walks a collection held on the receiver — directly, or one same-type method call deep — without that walk depending on the item. Every item re-reads the same memory and reuses none of it, so the pass moves items x collection bytes through the caches and is BANDWIDTH-bound however cheap the arithmetic is. Batch the item loop into TILES: load each element once and do all B items' work on it while it is in cache. MEASURED on the memorizing-attention neighbour search, where each query token scanned the whole key bank alone — tiles of 16 cut BenchmarkMemForward_512 by 24%% and BenchmarkMemGatherLarge by 30%%. CONFIRM THE DIAGNOSIS FIRST: if the collection already fits in L2 the traffic was never the cost and tiling buys nothing. THE TILE MUST NOT REASSOCIATE — give each item its own accumulator and its own result state and visit the collection in the same order, and the output stays bit-identical, which is what lets the existing goldens gate the rewrite. PS3034 and PS3040 are about UNUSED PARALLELISM in a nest; this one fires on a loop that may already be parallel and is still re-streaming its data", false},
 	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed", false},
 	{"PS3039", "recursive-split-alloc", "a self-recursive function that allocates TWO slices sized by its input, fills them by appending each element to one or the other, and passes them to its own recursive calls — a divide-and-conquer partition written the allocating way. The cost is per NODE of the recursion, so it scales with the tree rather than with the data. Partition in place against one reused buffer instead. MEASURED on a CART builder\u0027s subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. Safe because writing dst[mid] while ranging over dst cannot clobber an unread element (mid advances only on a write, and every write consumes a value already read), and copying the second side back in order preserves what both appends produced. GATE IT WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE: the property tests that usually cover a tree builder stay green for a DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted", false},
 	{"PS3038", "dispatch-literal-slice", "a direct backend.Execute building its input slice inline, in a package that already declares a pooled helper of that arity. The literal is one allocation per dispatch, and Execute drops the slice the instant it returns unless a recorder is attached — which is exactly what the pooled helper checks before borrowing. MEASURED on nn.Linear.Forward, the most-called forward in the package: two literals became two pooled borrows and a per-image MLP-Mixer forward went 3944 to 3687 allocs/op (-6.5%%), a ViT forward -2.0%%. Judge on allocs/op; the time was flat everywhere, since these forwards are dominated by the kernels the slice merely names. THE RECORDER GUARD IS THE CONTRACT: Execute\u0027s tape node stores that exact slice, so a pooled one would be overwritten by the next op and a training run would silently get wrong gradients — use the helper, never inline the borrow. 214 sit in nn alone, so rank by call frequency and convert where a benchmark can see it", false},
@@ -1298,6 +1299,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		}
 		out = append(out, scanFunc(fset, fn, wrappers, intKeyMaps, ns)...)
 		out = append(out, serialNestWithIdleFanoutFindings(fset, f, fn)...)
+		out = append(out, perItemRescanFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -16018,6 +16020,204 @@ func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.Fi
 					mv, ov, mv, ov, ov),
 			})
 		}
+		return true
+	})
+	return out
+}
+
+// --- PS3041: a per-item loop that re-streams a shared collection -------------------------------
+
+// recvNameAndType returns the receiver's variable name and its base type name.
+func recvNameAndType(fn *ast.FuncDecl) (name, typ string) {
+	if fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return "", ""
+	}
+	f := fn.Recv.List[0]
+	if len(f.Names) == 1 {
+		name = f.Names[0].Name
+	}
+	t := f.Type
+	if st, ok := t.(*ast.StarExpr); ok {
+		t = st.X
+	}
+	return name, identName(t)
+}
+
+// indexedByLoopVar reports whether anything in body is indexed by an expression mentioning iv.
+// This is what separates PER-ITEM work — a loop whose iteration reaches its own slot — from a
+// loop that merely counts.
+func indexedByLoopVar(body ast.Node, iv string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.IndexExpr:
+			if mentionsIdent(x.Index, iv) {
+				found = true
+			}
+		case *ast.SliceExpr:
+			// A per-item WINDOW counts. Leaving this out made the check silent on the very site
+			// it was built from: that loop reaches its query row as qs[ti*headDim:...] and writes
+			// its output block through an offset computed once, so not one IndexExpr in the body
+			// mentions the loop variable.
+			if (x.Low != nil && mentionsIdent(x.Low, iv)) || (x.High != nil && mentionsIdent(x.High, iv)) {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
+}
+
+// alreadyTiled reports whether n is a loop that advances by something other than one — the
+// APPLIED form of this check, a loop over blocks of items. Without this the check would go on
+// reporting the site after it had been fixed, since the block loop still calls the same scan.
+func alreadyTiled(n ast.Node) bool {
+	fs, ok := n.(*ast.ForStmt)
+	if !ok {
+		return false
+	}
+	as, ok := fs.Post.(*ast.AssignStmt)
+	if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+		return false
+	}
+	lit, ok := unparen(as.Rhs[0]).(*ast.BasicLit)
+	return !ok || lit.Value != "1" // a named or computed step is a tile width
+}
+
+// indexesCollection reports whether body reads coll[key] — the access that distinguishes a walk
+// over a COLLECTION from a range over an integer field that happens to index something else.
+func indexesCollection(body ast.Node, coll, key string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		ix, ok := n.(*ast.IndexExpr)
+		if ok && renderExpr(ix.X) == coll && mentionsIdent(ix.Index, key) {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// sharedFieldScan returns the rendered name of a receiver-held collection that body walks in
+// full WITHOUT reference to iv: a loop whose range expression is recv.field, whose element is
+// then indexed inside the loop. Every pass over the enclosing loop reads exactly the same
+// memory, which is the signature of a re-stream. iv may be empty, which is the case when the
+// scan sits in a callee.
+func sharedFieldScan(body ast.Node, recv, iv string) string {
+	if recv == "" {
+		return ""
+	}
+	hit := ""
+	ast.Inspect(body, func(n ast.Node) bool {
+		if hit != "" {
+			return false
+		}
+		rs, ok := n.(*ast.RangeStmt)
+		if !ok || rs.Body == nil {
+			return true
+		}
+		sel, ok := unparen(rs.X).(*ast.SelectorExpr)
+		if !ok || identName(sel.X) != recv {
+			return true
+		}
+		if iv != "" && mentionsIdent(rs.X, iv) {
+			return true
+		}
+		// The scan must READ THE COLLECTION'S OWN ELEMENTS. Testing only that the body indexes
+		// something by the scan key is not enough and made the first version useless: a
+		// range-over-INT field, `for d := range m.dim`, satisfies it by indexing unrelated
+		// slices, and eight of the nine findings on the first tree-wide run were that.
+		key := identName(rs.Key)
+		if key == "" || !(rs.Value != nil || indexesCollection(rs.Body, renderExpr(rs.X), key)) {
+			return true
+		}
+		hit = renderExpr(rs.X)
+		return false
+	})
+	return hit
+}
+
+// perItemRescanFindings flags PS3041 — an outer loop over items whose body walks a large
+// collection held on the receiver, directly or one same-type method call deep, without that walk
+// depending on the item. Each item re-reads the whole collection, so the pass moves items ×
+// collection bytes through the caches and reuses none of it.
+//
+// MEASURED on the memorizing-attention neighbour search, where each query token scanned the whole
+// key bank on its own. Batching the token loop into tiles of 16 and dotting each loaded key row
+// against all 16 queries cut the traffic by that factor: BenchmarkMemForward_512 −24%,
+// BenchmarkMemGatherLarge −30%, bit-identically, since each dot keeps its own accumulator and
+// summation order and each item keeps its own result heap.
+func perItemRescanFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	recv, typ := recvNameAndType(fn)
+	if fn.Body == nil || recv == "" {
+		return nil
+	}
+	// Same-receiver-type methods declared in this file, so a scan one call deep is visible.
+	sib := map[string]*ast.FuncDecl{}
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd == fn {
+			continue
+		}
+		if r, tp := recvNameAndType(fd); tp == typ && r != "" && fd.Name != nil {
+			sib[fd.Name.Name] = fd
+		}
+	}
+	var out []finding
+	seen := map[int]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, iv := outerLoop(n)
+		if body == nil || iv == "" || alreadyTiled(n) || !indexedByLoopVar(body, iv) {
+			return true
+		}
+		coll, depth := sharedFieldScan(body, recv, iv), "in this loop"
+		if coll == "" { // …or one call deep, on a sibling method of the same receiver type
+			ast.Inspect(body, func(m ast.Node) bool {
+				if coll != "" {
+					return false
+				}
+				call, ok := m.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := unparen(call.Fun).(*ast.SelectorExpr)
+				if !ok || identName(sel.X) != recv || sel.Sel == nil {
+					return true
+				}
+				callee := sib[sel.Sel.Name]
+				if callee == nil {
+					return true
+				}
+				cr, _ := recvNameAndType(callee)
+				if c := sharedFieldScan(callee.Body, cr, ""); c != "" {
+					coll, depth = strings.Replace(c, cr+".", recv+".", 1), "in "+sel.Sel.Name+", which it calls per item"
+				}
+				return true
+			})
+		}
+		if coll == "" || seen[int(n.Pos())] {
+			return true
+		}
+		seen[int(n.Pos())] = true
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "per-item-rescan-of-shared-collection",
+			msg: fmt.Sprintf("this loop does per-item work, and %s it walks %s in full without"+
+				" reference to %q — so every item re-reads the same memory and reuses none of it."+
+				" The pass moves items × collection bytes through the caches, which makes it"+
+				" BANDWIDTH-bound however cheap the arithmetic is. Batch the item loop into TILES:"+
+				" load each element of %s once and do all B items' work on it while it is in cache."+
+				" MEASURED on the memorizing-attention neighbour search, where each query token"+
+				" scanned the whole key bank alone — tiles of 16 cut BenchmarkMemForward_512 by 24%%"+
+				" and BenchmarkMemGatherLarge by 30%%. CONFIRM THE DIAGNOSIS FIRST: if the collection"+
+				" already fits in L2 the traffic was never the cost and tiling buys nothing, so"+
+				" profile before rewriting. THE TILE MUST NOT REASSOCIATE: give each item its own"+
+				" accumulator and its own result state and visit the collection in the same order,"+
+				" and the output stays bit-identical — that is what lets the existing goldens gate"+
+				" the rewrite. Sweep the tile width; the curve flattens once the tile's own working"+
+				" set competes with the collection for L1",
+				depth, coll, iv, coll),
+		})
 		return true
 	})
 	return out
