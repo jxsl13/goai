@@ -17,3 +17,6 @@ WHEN ranking a serial function inside an otherwise parallel path, the optimizer 
 
 ## A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001
 WHEN a CPU profile attributes a large share to runtime.madvise or GC, the optimizer SHALL treats it as a resource finding until a paired benchmark shows otherwise; removing 90 percent of the AQLM encoder allocations moved 45.7 MB per op to 4.4 and the time not at all, because that work overlapped on other threads.
+
+## A-COLLIDING-SCATTER-SPLITS-ON-ITS-DESTINATION-DIMENSION-001
+WHEN a scatter-accumulate whose index is a loop dimension times a stride plus a data-dependent offset, the optimizer SHALL splits the DIMENSION rather than the items, keeping each slot accumulating in ascending item order for a bit-identical result; per-worker partial copies merged afterwards reassociate every sum and are rejected on that ground.
