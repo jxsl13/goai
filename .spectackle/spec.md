@@ -434,3 +434,6 @@ IF a parity test defines both implementations it compares, THEN the developer SH
 
 ## NEVER-ASK-TAKE-THE-MEASURED-WIN-001
 The agent SHALL implement the measured optimization and document any contract change, rather than raising it as a decision — this was asked once about ReadRaw aliasing and answered as a standing instruction.
+
+## WITHHOLD-A-CHECK-THAT-MISSES-ITS-OWN-CASE-001
+IF a drafted check reports 0 findings on the site that motivated it, THEN the developer SHALL withhold it and record the diagnosis in an archived R-item — 3 predicates for the invariant-nest class each failed differently, and only the written-up failures stopped a 4th.

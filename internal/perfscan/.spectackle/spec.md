@@ -10,3 +10,6 @@ Rationale: Check IDs are documented as stable and are the handle used by //perfs
 
 ## PERF-SUPPRESS-INERT-001
 WHEN a //perfscan:ignore directive is written, the a perfscan suppression SHALL re-run the scan and confirm the finding is gone; a directive that fails to apply is silently inert and reads as accepted.
+
+## intent
+- R-01KZ11ASDMFQVS5D6FYJS94MBV Invariant-nest check: three attempts, all withheld — the motivating transform is loop DISTRIBUTION, not hoisting: No action: three predicates drafted and all withheld, with each failure diagnosed. The conclusion is that the motivating transform is loop DISTRIBUTION rather than hoisting — the invariant work is a statement prefix inside a loop that is itself dependent — so no loop-level AST predicate can see it. Recorded to stop a fourth attempt from repeating the first three.
