@@ -14792,19 +14792,35 @@ func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.
 	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
 		return nil
 	}
-	// A function that already fans out anywhere is not the subject, whichever loop does it.
-	fansOut := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if call, ok := n.(*ast.CallExpr); ok {
-			if nm := calleeName(call.Fun); fanoutReg[f.Name.Name][nm] {
-				fansOut = true
+	// Which NESTS are already parallel, not which functions. A whole-function test silenced any
+	// function that fans out ANYWHERE, and the rules in this package routinely convert one loop
+	// and leave three — a Cholesky VJP with three parallel products hid a serial triangular
+	// inverse worth 44.7%% behind exactly that.
+	//
+	// A nest counts as already handled when it is lexically inside a fan-out callback, or when the
+	// fan-out call sits in its own body.
+	inFanout := map[ast.Node]bool{}
+	var markFanout func(n ast.Node, inside bool)
+	markFanout = func(n ast.Node, inside bool) {
+		ast.Inspect(n, func(m ast.Node) bool {
+			if m == nil {
+				return false
 			}
-		}
-		return true
-	})
-	if fansOut {
-		return nil
+			if inside {
+				inFanout[m] = true
+			}
+			call, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			isFan := fanoutReg[f.Name.Name][calleeName(call.Fun)]
+			for _, a := range call.Args {
+				markFanout(a, inside || isFan)
+			}
+			return false
+		})
 	}
+	markFanout(fn.Body, false)
 	dst := allocatedSliceLocals(fn)
 	if len(dst) == 0 {
 		return nil
@@ -14816,7 +14832,17 @@ func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.
 		// — including the APPLIED form of the measured case, whose band loop is three-index,
 		// which made the already-fans-out condition look untestable when it was merely unreached.
 		outer, iv := outerLoop(n)
-		if outer == nil || iv == "" || iv == "_" || loopDepthOf(outer) < 2 {
+		if outer == nil || iv == "" || iv == "_" || loopDepthOf(outer) < 2 || inFanout[n] {
+			return true
+		}
+		already := false
+		ast.Inspect(outer, func(m ast.Node) bool {
+			if call, ok := m.(*ast.CallExpr); ok && fanoutReg[f.Name.Name][calleeName(call.Fun)] {
+				already = true
+			}
+			return true
+		})
+		if already {
 			return true
 		}
 		// Independence: EVERY indexed write inside the nest must be indexed by an expression
@@ -14846,7 +14872,12 @@ func serialNestWithIdleFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.
 				if perIter[root] {
 					continue // this iteration made it; no other iteration can see it
 				}
-				if !mentionsIdent(ix.Index, iv) && !aliasOfOuter(outer, ix.X, iv) {
+				// The whole index CHAIN counts, not just the innermost one. A write to inner[i][j]
+				// is indexed by the outer variable at its first position, and checking only ix.Index
+				// saw the j and called the nest dependent — which is why this check missed the two
+				// largest wins it was built for, an eigh product and a Cholesky inverse.
+				if !mentionsIdent(ix.X, iv) && !mentionsIdent(ix.Index, iv) &&
+					!aliasOfOuter(outer, ix.X, iv) {
 					independent = false
 					return false
 				}
@@ -14965,8 +14996,10 @@ func allocatedSliceLocals(fn *ast.FuncDecl) map[string]bool {
 	return out
 }
 
-// dstAliasedIn reports whether name was defined as a reslice of an allocated destination —
-// `ci := c[i*n : i*n+n]`, the row window an axpy inner loop writes through.
+// dstAliasedIn reports whether name was defined as a window into an allocated destination —
+// `ci := c[i*n : i*n+n]` for a flat buffer, or `cj := linvT[j]` for a slice of slices. Only the
+// slice form was recognized at first, and the index form is the more common one in this tree: it
+// is how every row of a [][]float64 is taken.
 func dstAliasedIn(fn *ast.FuncDecl, name string, dst map[string]bool) bool {
 	found := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
@@ -14978,8 +15011,13 @@ func dstAliasedIn(fn *ast.FuncDecl, name string, dst map[string]bool) bool {
 			if identName(lhs) != name || i >= len(as.Rhs) {
 				continue
 			}
-			if se, ok := unparen(as.Rhs[i]).(*ast.SliceExpr); ok {
-				if root, _ := rootIdentName(se.X); dst[root] {
+			switch r := unparen(as.Rhs[i]).(type) {
+			case *ast.SliceExpr:
+				if root, _ := rootIdentName(r.X); dst[root] {
+					found = true
+				}
+			case *ast.IndexExpr:
+				if root, _ := rootIdentName(r.X); dst[root] {
 					found = true
 				}
 			}
@@ -15007,8 +15045,13 @@ func aliasOfOuter(body *ast.BlockStmt, x ast.Expr, iv string) bool {
 			if identName(lhs) != name || i >= len(as.Rhs) {
 				continue
 			}
-			if se, ok := unparen(as.Rhs[i]).(*ast.SliceExpr); ok {
-				if se.Low != nil && mentionsIdent(se.Low, iv) || se.High != nil && mentionsIdent(se.High, iv) {
+			switch r := unparen(as.Rhs[i]).(type) {
+			case *ast.SliceExpr:
+				if r.Low != nil && mentionsIdent(r.Low, iv) || r.High != nil && mentionsIdent(r.High, iv) {
+					found = true
+				}
+			case *ast.IndexExpr: // cj := linvT[j] — a row selected by the outer variable
+				if mentionsIdent(r.Index, iv) {
 					found = true
 				}
 			}

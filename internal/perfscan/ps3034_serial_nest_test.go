@@ -244,3 +244,103 @@ func rowNorms(a []float64, m, k, n int) []float64 {
 		t.Fatalf("%d findings, want 1 — the scratch is made per iteration", len(fs))
 	}
 }
+
+// TestDetectPS3034_ReportsARowTakenByIndex is the form that made this check miss the two largest
+// wins it was built for. A row of a slice-of-slices is taken by INDEXING — `cj := linvT[j]` — not
+// by slicing, and the alias test only understood the slice form. The nest below is a Cholesky
+// triangular inverse, which went -44.7% once it was found.
+func TestDetectPS3034_ReportsARowTakenByIndex(t *testing.T) {
+	src := `package p
+` + fanoutHelperSrc + `
+func inverse(l [][]float64, n int) [][]float64 {
+	linvT := make([][]float64, n)
+	for i := range n {
+		linvT[i] = make([]float64, n)
+	}
+	for j := range n {
+		cj := linvT[j]
+		cj[j] = 1 / l[j][j]
+		for i := j + 1; i < n; i++ {
+			li := l[i]
+			var s float64
+			for k := j; k < i; k++ {
+				s += li[k] * cj[k]
+			}
+			cj[i] = -s / li[i]
+		}
+	}
+	return linvT
+}`
+	if fs := scanSrcFanout(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the row is taken by index, not by slice", len(fs))
+	}
+}
+
+// TestDetectPS3034_ReportsATwoLevelIndexWrite pins the other half of the same miss: a write to
+// inner[i][j] is indexed by the outer variable at its FIRST position, and checking only the
+// innermost index saw the j and called the nest dependent. That is an eigh VJP product, worth
+// -59.6% once found.
+func TestDetectPS3034_ReportsATwoLevelIndexWrite(t *testing.T) {
+	src := `package p
+` + fanoutHelperSrc + `
+func gram(vT [][]float64, vbT [][]float64, n int) [][]float64 {
+	inner := make([][]float64, n)
+	for i := range n {
+		inner[i] = make([]float64, n)
+	}
+	for i := range n {
+		vTi := vT[i]
+		for j := range n {
+			var p float64
+			vbTj := vbT[j]
+			for r := range n {
+				p += vTi[r] * vbTj[r]
+			}
+			inner[i][j] = p
+		}
+	}
+	return inner
+}`
+	if fs := scanSrcFanout(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the outer index is the first in the chain", len(fs))
+	}
+}
+
+// TestDetectPS3034_ReportsASerialNestBesideAParallelOne pins that the already-fans-out silence is
+// per NEST, not per function. A whole-function test silenced any function that fans out anywhere,
+// and the rules in this package routinely convert one loop and leave three — a Cholesky VJP with
+// three parallel products hid a serial triangular inverse behind exactly that.
+func TestDetectPS3034_ReportsASerialNestBesideAParallelOne(t *testing.T) {
+	src := `package p
+` + fanoutHelperSrc + `
+func both(a [][]float64, n int) [][]float64 {
+	out := make([][]float64, n)
+	for i := range n {
+		out[i] = make([]float64, n)
+	}
+	parallelRows(n, n*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			for j := range n {
+				out[i][j] = a[i][j]
+			}
+		}
+	})
+	other := make([][]float64, n)
+	for i := range n {
+		other[i] = make([]float64, n)
+	}
+	for i := range n {
+		for j := range n {
+			var s float64
+			for k := range n {
+				s += a[i][k] * a[j][k]
+			}
+			other[i][j] = s
+		}
+	}
+	return other
+}`
+	if fs := scanSrcFanout(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the second nest is serial beside a parallel one", len(fs))
+	}
+}
