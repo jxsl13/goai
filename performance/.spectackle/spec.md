@@ -47,3 +47,9 @@ WHEN applying an outer-loop unroll to amortize a destination reload, the optimiz
 
 ## AN-UNROLL-FACTOR-IS-BRACKETED-NOT-MAXIMIZED-001
 WHEN choosing how many outer steps an unrolled body takes per pass, the optimizer SHALL measures at least one factor ABOVE the chosen one: 1, 4 and 8 steps per pass on the decode matrix-vector kernel came to 823, 682 and 937 ms, so the curve turns and doubling past the optimum was 37 percent worse than the optimum.
+
+## A-GOGC-SWEEP-DECIDES-WHETHER-ALLOCATION-IS-A-TIME-LEVER-001
+WHEN a CPU profile attributes a large share to the allocator or the scavenger, the optimizer SHALL runs the benchmark at 3 GOGC settings before spending a round on allocation: 100, 400 and 1600 on the GPT decode gave 593, 587 and 596 ms, which closes the question in two minutes and leaves the byte count as a resource finding only.
+
+## POOL-WAIT-IS-DISTINGUISHED-FROM-SCHEDULER-IDLE-001
+WHEN a profile shows most time in pthread_cond_wait, the optimizer SHALL peeks its callers before blaming the worker pool: stopm from findRunnable is the Go scheduler parking idle threads for want of work, not contention, and the batched ViT forward reads as 65 percent wait for that reason while a 3-point sweep of the pool dense-gap moved it 0.4 percent.

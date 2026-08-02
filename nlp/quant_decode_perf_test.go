@@ -19,6 +19,7 @@ func BenchmarkQuantLlamaGenerate500(b *testing.B) {
 		b.Fatalf("QuantizeLlama: %v", err)
 	}
 	defer q.Close()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		out, err := q.Generate([]int{1}, 500, Greedy())
