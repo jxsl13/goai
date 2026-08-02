@@ -51,9 +51,15 @@ func init() {
 		}
 
 		// inner = diag(w̄) + F ∘ (Vᵀ·V̄).
+		// The three n^3 products below are the whole cost of this rule — 1.28s of a 1.48s profile
+		// at n=256 — and each has an independent outer index writing only its own row, so a
+		// striped split leaves every element accumulating its own terms in its own order. Rows are
+		// allocated before the split so the workers only write into them.
 		inner := make([][]float64, n)
 		for i := range n {
 			inner[i] = make([]float64, n)
+		}
+		logdetParallelIdx(n, n*n*n, func(i int) {
 			vTi := vT[i]
 			for j := range n {
 				var p float64 // (Vᵀ·V̄)_ij = Σ_r V[r,i]·V̄[r,j]
@@ -66,11 +72,13 @@ func init() {
 				}
 			}
 			inner[i][i] += wb[i]
-		}
+		})
 		// G = V·inner·Vᵀ  (T = inner·Vᵀ, then G = V·T).
 		tmp := make([][]float64, n)
 		for a := range n {
 			tmp[a] = make([]float64, n)
+		}
+		logdetParallelIdx(n, n*n*n, func(a int) {
 			for j := range n {
 				var s float64 // (inner·Vᵀ)_aj = Σ_b inner[a,b]·V[j,b]
 				for b := range n {
@@ -78,7 +86,7 @@ func init() {
 				}
 				tmp[a][j] = s
 			}
-		}
+		})
 		abar := tensor.New(vt.Dtype(), tensor.Shape{n, n})
 		// Only the UPPER triangle is computed, and each off-diagonal result is mirrored. The full
 		// double loop formed every pair TWICE: at (j,i) its g is this (i,j)'s gt and vice versa, so

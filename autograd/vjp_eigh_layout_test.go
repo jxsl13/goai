@@ -20,7 +20,11 @@ func TestEighVJPTriangleAndLayoutAreBitIdentical(t *testing.T) {
 	if vjp == nil {
 		t.Fatal("no multi-output VJP registered for OpEigh")
 	}
-	for _, n := range []int{1, 2, 3, 7, 16, 33} {
+	// 48 and 64 CROSS the striped split's work gate (n^3 >= 1<<15 from n=32 up), so the parallel
+	// path is held to the same frozen reference as the serial one — which is a stronger gate than
+	// comparing the parallel path against itself under GOMAXPROCS(1), since the reference is an
+	// independent implementation rather than the same code twice.
+	for _, n := range []int{1, 2, 3, 7, 16, 33, 48, 64} {
 		w := tensor.New(tensor.F64, tensor.Shape{n})
 		wbar := tensor.New(tensor.F64, tensor.Shape{n})
 		v := tensor.New(tensor.F64, tensor.Shape{n, n})
