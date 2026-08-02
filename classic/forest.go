@@ -5,6 +5,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
 // ForestOption configures a [RandomForestClassifier] or [RandomForestRegressor]
@@ -238,18 +239,25 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		}
 		return out, nil
 	}
-	csz := (len(x) + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > len(x) {
-			hi = len(x)
-		}
+	// Rows are CLAIMED in blocks, not dealt one equal chunk per worker. The GOMAXPROCS screen this
+	// change was made under is what selected it: this benchmark got SLOWER from 8 to 12 cores
+	// (139273 -> 165529 ns/op), the signature PS3011 names for efficiency-core imbalance, where a
+	// chunk landing on an E core sets the barrier. The scratch stays PER WORKER, allocated once
+	// outside the claim loop, so claiming costs nothing per claim.
+	const grain = 64
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
 		votes := make([]int, len(m.classes)) // per-worker scratch
-		for i := lo; i < hi; i++ {
-			predictRow(votes, i)
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= len(x) {
+				return nil
+			}
+			hi := min(lo+grain, len(x))
+			for i := lo; i < hi; i++ {
+				predictRow(votes, i)
+			}
 		}
-		return nil
 	})
 	return out, nil
 }

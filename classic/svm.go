@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync/atomic"
 )
 
 // SVMKernel selects the kernel function K(x,z) an [SVC] uses to measure
@@ -577,17 +578,21 @@ func (m *SVC) DecisionFunction(x [][]float64) ([]float64, error) {
 		}
 		return out, nil
 	}
-	csz := (len(x) + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > len(x) {
-			hi = len(x)
+	// Claimed in blocks rather than dealt — see the forest predictor for the screen that selected
+	// this shape. SVCPredict also got SLOWER from 8 to 12 cores (610846 -> 698660 ns/op).
+	const grain = 64
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= len(x) {
+				return nil
+			}
+			hi := min(lo+grain, len(x))
+			for i := lo; i < hi; i++ {
+				out[i] = m.decision(x[i])
+			}
 		}
-		for i := lo; i < hi; i++ {
-			out[i] = m.decision(x[i])
-		}
-		return nil
 	})
 	return out, nil
 }
