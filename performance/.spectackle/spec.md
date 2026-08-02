@@ -8,3 +8,6 @@ WHEN per-item work re-reads a shared collection that the item loop does not inde
 
 ## A-REUSED-STAGING-WINDOW-CHECKS-CONSUMER-ACCUMULATION-001
 WHEN replacing a whole-tensor staging buffer with a reused per-chunk window, the optimizer SHALL establishes whether the consuming kernel stores or ACCUMULATES into it, and clears the window between chunks when it accumulates; the whole-tensor form wrote each row slot once, so an accumulating consumer is indistinguishable from a store there.
+
+## A-CHUNK-SIZE-IS-CAPPED-AT-ONE-BAND-001
+WHEN sizing a per-worker scratch chunk from a cache-residency target, the optimizer SHALL also caps the chunk at one bands worth of rows, so total scratch stays below the buffer it replaces instead of becoming workers times chunk; uncapped it measured -22.7 percent on the largest shape and +14 to +33 percent on small ones.
