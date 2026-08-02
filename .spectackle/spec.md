@@ -441,3 +441,6 @@ IF a drafted check reports 0 findings on the site that motivated it, THEN the de
 
 ## A-UNIVERSAL-PATH-HELPER-MUST-NOT-ALLOCATE-WHEN-IT-CANNOT-HELP-001
 IF a helper added to a path every call takes allocates before knowing it can help, THEN the developer SHALL scan first and return the inputs unchanged when it cannot — 2 unconditional slice allocations turned a -12 percent win into a +18.4 percent regression.
+
+## HOIST-A-BRANCH-BY-DUPLICATING-NOT-BY-A-FUNCTION-VALUE-001
+IF a loop-invariant branch is hoisted out of a per-element loop, THEN the developer SHALL duplicate the loop body per arm — a function value measured +51 and +66.5 percent, making a direct inlinable call indirect.
