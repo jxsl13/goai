@@ -7096,6 +7096,18 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		// A body that calls something the compiler will not fold away is bottlenecked on that
 		// call, not on the reloaded operand, so blocking the loop buys nothing.
 		//
+		// SECOND KNOWN GENUINE CASUALTY, MEASURED: the NSA masked-attention score loop calls a
+		// keep(j) PREDICATE to skip masked keys, and its dot is otherwise the exact shape this
+		// check exists for — one accumulator per key over a query row re-streamed once per key.
+		// The predicate is not the bottleneck: jamming that loop four keys per pass, together
+		// with the P·V accumulation PS3075 reported beside it, took BenchmarkNSABranches from
+		// 29.49 to 14.82 ms, -49.7%%, with a CoPE cell flat as a control. A MASK PREDICATE IS
+		// NOT PER-ELEMENT WORK — it is one branch per key guarding a continue — so a loop whose
+		// only call is a boolean guard is worth reading by hand even though this check declines
+		// it. Widening the predicate to allow that was NOT attempted here: it is calibrated at
+		// 95.7%% precision and 97.8%% recall, and a late change to it would have shipped
+		// unmeasured.
+		//
 		// COUNTED against all 65 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
 		// Removes 19, of which 18 are false positives — 13 are sites this repository itself
 		// labels a generic fallback for exotic or mixed dtypes, reaching every element through
