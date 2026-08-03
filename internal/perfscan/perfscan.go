@@ -214,6 +214,7 @@ var checks = []check{
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
 	{"PS3056", "serial-permutation", "a multi-level nest that only COPIES elements between buffers — every write a read from somewhere else, no accumulation, no arithmetic folding the destination back in — in a package that declares a fan-out helper the function never calls. A permutation has NO dependence between its elements, so splitting the outer loop is race-free and BIT-IDENTICAL at any band count; there is no summation order to preserve because nothing is summed. It is the cheapest parallelization to justify and the easiest to overlook, since it carries no arithmetic to appear in a profile as a kernel. CHECK THE BAND OWNS DISJOINT OUTPUT — a transpose writes COLUMNS of its destination for a band of source rows, disjoint but not obvious, and a data-dependent scatter is not this shape. Gate it with BOTH a value comparison and -race: an overlapping band writes the same values and only the race detector sees it. MEASURED on the GGUF weight transpose, already cache-blocked and still 84%% of its own benchmark at one core: BenchmarkTiedHeadTransposePerCall went 154.2 ms to 49.8, a 66.3%% cut, on the model LOAD path; and on the transpose VJP, -45.7%% F64 and -50.8%% F32", false},
+	{"PS3057", "column-read-through-a-jagged-matrix", "a loop that reads ONE column of a [][]T — an index expression x[row][col] whose ROW varies with the loop and whose COLUMN does not. Each read is a pointer chase into a separate length-d row, so n reads touch n cache lines spread across the whole n*d matrix and use 8 bytes of each; the same access against a feature-major mirror xt[col*n+row] is a scattered read inside ONE contiguous length-n array. Mirror the matrix once where it is already being walked and read the mirror everywhere. It is a PURE COPY, so nothing downstream moves by a bit — which also means only a bit-exact digest can gate it, and that the mirror COSTS n*d elements of memory: state the trade, do not hide it. MEASURED on the GBM exact-split builder, where the gather was 51%% of scanFeatures and 16%% of the package: BenchmarkGBMHist_exact_80k -19.5%%, _20k -13.6%% for +15.6%% bytes, with ForestFit flat as a control. RANK BY THE PRODUCT of the loop bound and how many times the same column is re-read — a column read once is a column that does not repay a mirror", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1330,6 +1331,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, asymmetricDtypeArmFindings(fset, fn)...)
 		out = append(out, sortThenTruncateFindings(fset, fn)...)
 		out = append(out, serialPermutationFindings(fset, f, fn)...)
+		out = append(out, columnReadFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18239,6 +18241,118 @@ func sortThenTruncateFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		return true
 	})
 	return out
+}
+
+// --- PS3057: a column read through a jagged row-major matrix ----------------------------------
+
+// columnIndexPair returns the row and column index expressions of a nested index x[row][col],
+// or nil when e is not one. A double index implies the base is at least [][]T; a single-level
+// slice cannot be indexed twice.
+func columnIndexPair(e ast.Expr) (row, col ast.Expr) {
+	outer, ok := e.(*ast.IndexExpr)
+	if !ok {
+		return nil, nil
+	}
+	inner, ok := outer.X.(*ast.IndexExpr)
+	if !ok {
+		return nil, nil
+	}
+	return inner.Index, outer.Index
+}
+
+// columnReadFindings flags PS3057 — a loop reading one COLUMN of a [][]T, where the row index
+// varies with the loop variable and the column index does not.
+//
+// Restricted to READS on purpose. A column WRITE has the same locality, but a mirror does not
+// fix it: the write would have to land in both copies, which costs more than it saves. The
+// transform is mirror-once-read-many, so only the many-reads side is reported.
+func columnReadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, iv := outerLoop(n)
+		if body == nil || iv == "" {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			// Skip the left-hand side of an assignment: a column write is not this shape.
+			if as, ok := m.(*ast.AssignStmt); ok {
+				for _, r := range as.Rhs {
+					ast.Inspect(r, func(k ast.Node) bool { return collectColumnRead(fset, fn, k, iv, seen, &out) })
+				}
+				return false
+			}
+			return collectColumnRead(fset, fn, m, iv, seen, &out)
+		})
+		return true
+	})
+	return out
+}
+
+// containsIndexExpr reports whether e contains an index expression anywhere inside it.
+func containsIndexExpr(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if _, ok := n.(*ast.IndexExpr); ok {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// collectColumnRead appends a finding when m is a nested index whose row varies with iv and
+// whose column does not. Reported once per (matrix, column) text so a loop body that reads the
+// same column twice does not report twice.
+func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv string,
+	seen map[string]bool, out *[]finding) bool {
+	e, ok := m.(ast.Expr)
+	if !ok {
+		return true
+	}
+	row, col := columnIndexPair(e)
+	if row == nil {
+		return true
+	}
+	if !mentionsIdent(row, iv) || mentionsIdent(col, iv) {
+		return true
+	}
+	// The row must itself be a GATHER — an index into a permutation array — not the loop
+	// variable directly. Both forms read a column, but they are not the same problem. With
+	// x[i][f] the rows are visited in order and a prefetcher can follow the fixed stride;
+	// with x[idx[k]][f] the row is data-dependent and every read is an independent miss.
+	// Without this condition the check reported 118 sites tree-wide instead of 8, and the
+	// extra 110 were overwhelmingly the strided form.
+	if !containsIndexExpr(row) {
+		return true
+	}
+	key := exprText(e)
+	if seen[key] {
+		return false
+	}
+	seen[key] = true
+	*out = append(*out, finding{
+		pos:      fset.Position(e.Pos()),
+		category: "column-read-through-a-jagged-matrix",
+		msg: fmt.Sprintf("%q reads ONE COLUMN of a jagged row-major matrix: the row index varies"+
+			" with the enclosing loop over %q and the column index does not. Every read is a"+
+			" pointer chase into a separate row, so n of them touch n cache lines spread across"+
+			" the whole matrix and use one element of each. Mirror the matrix FEATURE-MAJOR once"+
+			" — xt[col*n+row] — where it is already being walked, and read the mirror here: the"+
+			" same access becomes a scattered read inside ONE contiguous length-n array."+
+			" IT IS A PURE COPY, so nothing downstream moves by a bit. That cuts both ways."+
+			" Only a bit-exact digest can gate it — an accuracy or tolerance comparison passes"+
+			" whatever the layout does — and the mirror COSTS n*d elements of memory, which is a"+
+			" trade to state rather than hide. RANK BY THE PRODUCT of the loop bound and how many"+
+			" times the same column is re-read; a column read once does not repay a mirror."+
+			" MEASURED on the GBM exact-split builder, where this gather was 51%% of scanFeatures"+
+			" and 16%% of the package: BenchmarkGBMHist_exact_80k -19.5%%, _20k -13.6%% for"+
+			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
+	})
+	return false
 }
 
 // --- PS3056: a serial permutation left off the fan-out ----------------------------------------
