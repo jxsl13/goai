@@ -18503,7 +18503,11 @@ func consecutiveLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		var shared map[string]bool
 		var first ast.Node
 		flush := func() {
-			if run >= 3 && len(shared) > 0 && len(out) == 0 {
+			// TWO IS ENOUGH, and that was measured rather than assumed. This check shipped
+			// requiring three because two passes looked like an ordinary fill-then-use; the
+			// DeltaNet recurrence has exactly two over its state and merging them measured
+			// -15.3%%, against -26.4%% for the three-pass gated variant beside it.
+			if run >= 2 && len(shared) > 0 && len(out) == 0 {
 				var buf string
 				for nm := range shared {
 					if buf == "" || nm < buf {
@@ -18523,7 +18527,10 @@ func consecutiveLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" because merging changes only WHEN a row is visited and never how —"+
 						" each row's stages already ran in that order relative to each other."+
 						" THE WIN IS THE BUFFER SIZE, NOT THE LOOP COUNT: the same merge on a"+
-						" 64x64 state, 32 KB and already L1-resident, measured -1.8%%. Check for"+
+						" 64x64 state, 32 KB and already L1-resident, measured -1.8%%, and TWO"+
+						" passes are worth merging as readily as four — the DeltaNet recurrence"+
+						" has exactly two over its state and merging them measured -15.3%%,"+
+						" against -26.4%% for the three-pass gated variant beside it. Check for"+
 						" a cross-index dependency first — a later loop that needs ALL of an"+
 						" earlier loop's output cannot merge", run, bound, buf),
 				})
