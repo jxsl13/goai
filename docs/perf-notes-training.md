@@ -276,3 +276,46 @@ Reading all three took the tree-wide count from 81 to **95**. The index-crossing
 rule in the root resolution is the one that keeps this sound: `dst[k][j]` with
 `k` the item is the item's own row, and reporting it would name a jam with
 nothing to hold.
+
+## The MLA backward's key loop (T1187)
+
+MLA's backward accumulates the query gradient into slots fixed by the **query**
+— `dqC[i][d]` and `dqRrot[i][e]` — while the loop runs over keys. Each was
+loaded and stored once per key for a single multiply-add. Six keys per pass hold
+both in registers; `dkC` is per key and keeps its own store.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMLAVJPSeq256` | 11.58 ms | 9.80 ms | **-15.4%** |
+| `BenchmarkMLAVJPSeq256F32` | 11.50 ms | 9.62 ms | **-16.4%** |
+
+Width 6 is the measured optimum (9.81 ms) with 8 a hair behind (9.83), 4 at 9.99
+and 2 at 10.75. Every width from 2 to 8 leaves the digests unchanged.
+
+### The narrowing arm needs the rounding kept per key
+
+The F32 twin writes `float32` back after **every single accumulation**:
+
+```go
+dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[...]))
+```
+
+So the register held across the group has to be a `float32` rounded at each step.
+Holding it in `float64` and rounding once would be a better-conditioned
+computation — and a different answer. That is the case where the tempting version
+of the transform is not merely riskier but strictly more accurate, which is
+exactly what bit-identity forbids.
+
+### Gate
+
+Five digests over every returned gradient, not just the query one, since the same
+loop writes `dkC` and `dvC` and a bad tail would leave one of those short. Under
+a causal mask the key count is `i+1` and runs over every value from 1 to `seq`,
+so one causal case exercises every remainder at once — including the lengths
+where the jammed loop never runs.
+
+### Still reported
+
+The `dkRrot` second pass. It folds the shared decoupled-key gradient in ascending
+`(head, i, j)` order, which is what keeps the whole VJP bit-identical; jamming
+its item loop would reorder exactly that.

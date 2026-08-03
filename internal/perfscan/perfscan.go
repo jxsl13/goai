@@ -19799,7 +19799,16 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" the top-K blocks and carry a softmax weight of exactly +0, but a"+
 						" per-key branch to skip them measured 8.46 ms against the jam's 7.44,"+
 						" and it is not equivalent anyway — 0 times an infinite or NaN value is"+
-						" NaN rather than zero, which no digest over ordinary data can see",
+						" NaN rather than zero, which no digest over ordinary data can see."+
+						" SIXTH MEASUREMENT, AND BOTH ARMS THIS TIME: the MLA backward accumulates"+
+						" the query gradient into slots fixed by the QUERY while the key loop runs"+
+						" over them, so six keys per pass took MLAVJPSeq256 11.58 to 9.80 ms"+
+						" (-15.4%%) and its F32 twin 11.50 to 9.62 (-16.4%%). THE NARROWING ARM"+
+						" NEEDS THE ROUNDING KEPT PER KEY: that twin writes float32 back after"+
+						" every single accumulation, so the register held across the group must be"+
+						" a float32 rounded at each step — holding it in float64 and rounding once"+
+						" is a better-conditioned computation and a different answer, which is"+
+						" exactly what bit-identity forbids",
 						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false
