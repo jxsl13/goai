@@ -222,6 +222,7 @@ var checks = []check{
 	{"PS3062", "op-with-no-optimized-kernel", "an operation registered in the REFERENCE backend and in no optimized one, so every caller on the default backend runs the correctness implementation. The reference is written to be obviously right, not fast, and the gap is routinely large: OpCholesky had no cpu kernel at all, and giving it one — ref's arithmetic line for line, with four rows taken per pass so the pivot row is loaded once and four independent accumulator chains run instead of one — measured 21.1 ms to 7.0 ms at n=512, a 3.0x, BIT-IDENTICAL to ref in both dtypes. THE FIRST ATTEMPT AT THAT KERNEL WAS SLOWER THAN REF. Fanning out the row update is the classical-factorization shape PS3040 describes and it lost, 24.1 ms against 22.0 with allocations going 6 to 878, because there are n columns and the fork is paid once per column for a row update that shrinks as the factorization proceeds. Arithmetic, not parallelism, was the lever. GATE A NEW KERNEL BIT-FOR-BIT AGAINST REF, not to a tolerance: a tolerance test passes a blocked or reassociated version too, and once one kernel disagrees every cross-backend golden silently becomes a tolerance test", false},
 	{"PS3063", "one-loop-left-serial-in-a-fanning-function", "a serial nest inside a function that ALREADY fans out somewhere else. PS3034 and PS3059 both suppress this case — they require the function to never call a fan-out helper — and that suppression hides the most valuable shape there is, because a function that fans out has already proven the transform is available to it and simply left one loop behind. TWICE MEASURED, both large. The KAN forward fanned out buildBasis and not fusedSpline, which was 84%% of the layer: banding it went 67.28 to 10.90 ms, a 6.2x. The eigendecomposition adjoint fanned out its first two n^3 products and not the triangular third: banding that, plus mirroring the intermediate it reads down its columns, went 18.63 to 8.17 ms at n=256, a 2.3x, of which the banding was about 2x and the mirror about 15%%. CHECK THE WRITES OWN DISJOINT OUTPUT — a triangular loop writing (i,j) and (j,i) does, since a clash would force the two indices equal — and gate with BOTH a bit-exact digest and -race", false},
 	{"PS3064", "jagged-matrix-allocated-row-by-row", "a [][]T allocated as one outer slice and then one make() per ROW, so an r-by-c matrix costs r+1 allocations and its rows land wherever the heap puts them. Back the rows with ONE block and window into it — d[i] = base[i*c:(i+1)*c:(i+1)*c] — and the call sites do not change at all, because the type does not. MEASURED across the three autograd factorization adjoints: allocations per call fell 1886 to 356 on the eigendecomposition, 1762 to 491 on the SVD and 1447 to 429 on the QR, a 70 to 81%% cut. THE CLOCK IS THE SMALLER HALF AND IS SHAPE-DEPENDENT: SVD -8.6%%, eigh -5.4%%, QR flat, with an untouched sibling adjoint flat as a control. Report it as a resource win and let the time be a bonus. CAP THE ROW WINDOW at its own length so an append copies instead of reaching into the next row — nothing in the converted code appends, and the cap is what keeps that from mattering later", false},
+	{"PS3065", "serial-loop-over-an-expensive-call", "a SINGLE loop — no inner loop of its own — that writes an indexed destination from a call to a function which itself loops, in a package that declares a fan-out helper this function never calls. Every nest-based check misses this: PS3034, PS3059 and PS3063 all require depth 2 or more, and a loop whose per-item work lives inside a CALLEE has depth 1 however expensive it is. MEASURED on the RBF kernel cache, where a column is n independent kernel evaluations: BenchmarkSVCFit/n4000_rbf 6.99 to 5.48 ms, -21.5%%, with the GBM fit flat as a control. The fit had scaled at 1.02x on twelve cores before this. BIT-IDENTICAL — each entry performs exactly the arithmetic it did before and only which goroutine performs it moves. EXPECT AMDAHL, NOT THE CORE COUNT: the parallelized part was 40.6%% of a serial profile, so 6x on it is 1.27x overall, and the SMO iteration it feeds is sequential by construction", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1360,6 +1361,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, refOnlyKernelFindings(fset, f, fn, ns)...)
 		out = append(out, serialLoopInFanningFuncFindings(fset, f, fn, ns)...)
 		out = append(out, jaggedMatrixFindings(fset, fn)...)
+		out = append(out, serialLoopOverCallFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3084,6 +3086,7 @@ func main() {
 	collectScratchTypes(parsed)
 	collectFanningFuncs(parsed)
 	collectKernelRegistrations(parsed, ns)
+	collectLoopyFuncs(parsed)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
@@ -18422,6 +18425,107 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3065: a serial loop whose per-item work lives in a callee ------------------------------
+
+// loopyFuncReg maps a package name to the functions and methods in it whose body contains a
+// loop — the ones whose per-call cost is O(something) rather than O(1).
+var loopyFuncReg = map[string]map[string]bool{}
+
+func collectLoopyFuncs(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			loops := false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				switch n.(type) {
+				case *ast.ForStmt, *ast.RangeStmt:
+					loops = true
+				}
+				return !loops
+			})
+			if !loops {
+				continue
+			}
+			if loopyFuncReg[f.Name.Name] == nil {
+				loopyFuncReg[f.Name.Name] = map[string]bool{}
+			}
+			loopyFuncReg[f.Name.Name][fn.Name.Name] = true
+		}
+	}
+}
+
+// serialLoopOverCallFindings flags PS3065 — a single loop writing an indexed destination from a
+// call to a function that itself loops.
+func serialLoopOverCallFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := fanoutReg[f.Name.Name]
+	if callsFanoutHelper(fn.Body, reg) {
+		return nil
+	}
+	loopy := loopyFuncReg[f.Name.Name]
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if len(out) > 0 {
+			return false
+		}
+		body, iv := outerLoop(n)
+		// EXACTLY ONE LOOP. With an inner loop the nest checks own the shape; the whole point
+		// here is the case they cannot see, where the per-item work is behind a call.
+		if body == nil || iv == "" || iv == "_" || loopDepthOf(body) != 0 {
+			return true
+		}
+		if loopSpansAParameterRange(n, declaredParamNames(fn)) {
+			return false
+		}
+		callee, dst := "", ""
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 || callee != "" {
+				return callee == ""
+			}
+			ix, ok := unparen(as.Lhs[0]).(*ast.IndexExpr)
+			if !ok || !mentionsIdent(ix.Index, iv) {
+				return true
+			}
+			c, ok := as.Rhs[0].(*ast.CallExpr)
+			if !ok || !loopy[calleeName(c.Fun)] {
+				return true
+			}
+			callee, dst = calleeName(c.Fun), exprText(ix.X)
+			return false
+		})
+		if callee == "" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-loop-over-an-expensive-call",
+			msg: fmt.Sprintf("this loop fills %q one entry per iteration from %q, which itself"+
+				" loops, and the function never calls the fan-out helper its package declares."+
+				" EVERY NEST-BASED CHECK MISSES THIS: PS3034, PS3059 and PS3063 all require a"+
+				" depth of 2 or more, and a loop whose per-item work lives inside a CALLEE has"+
+				" depth 1 however expensive that callee is. MEASURED on the RBF kernel cache,"+
+				" where a column is n independent kernel evaluations: BenchmarkSVCFit/n4000_rbf"+
+				" 6.99 to 5.48 ms, -21.5%%, with the GBM fit flat as a control, on a fit that had"+
+				" scaled at 1.02x on twelve cores. Bit-identical — each entry performs exactly the"+
+				" arithmetic it did before and only which goroutine performs it moves."+
+				" EXPECT AMDAHL, NOT THE CORE COUNT: the parallelized part was 40.6%% of a serial"+
+				" profile, so 6x on it is 1.27x overall, and the solver it feeds is sequential by"+
+				" construction", dst, callee),
+		})
+		return false
+	})
+	return out
 }
 
 // --- PS3064: a jagged matrix allocated one row at a time -------------------------------------
