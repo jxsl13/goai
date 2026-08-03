@@ -7104,9 +7104,18 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		// 29.49 to 14.82 ms, -49.7%%, with a CoPE cell flat as a control. A MASK PREDICATE IS
 		// NOT PER-ELEMENT WORK — it is one branch per key guarding a continue — so a loop whose
 		// only call is a boolean guard is worth reading by hand even though this check declines
-		// it. Widening the predicate to allow that was NOT attempted here: it is calibrated at
-		// 95.7%% precision and 97.8%% recall, and a late change to it would have shipped
-		// unmeasured.
+		// it. THAT WIDENING IS NOW MADE, IN ITS OWN ROUND AND RE-COUNTED: a call reached only
+		// through an if whose taken branch just skips the item is exempt, and the effect on the
+		// whole tree is 47 to 49 findings — EXACTLY the two backend/ref/mha_masked_backward
+		// sites this note names as the genuine casualty, with nothing lost. Applied to the NSA
+		// score loop as it stood before it was jammed by hand, it reports that too.
+		//
+		// The exemption is narrow on purpose: the else arm still counts, a branch that COMPUTES
+		// rather than skips still counts, and a call inside the sentinel store still counts —
+		// except for math.Inf and math.NaN, which this same note records as constant loads and
+		// which are exactly what a mask bail-out stores. An arbitrary cap on the branch length
+		// was written first and removed: no fixture could isolate it, and it left a skip branch
+		// calling something exempt at any length.
 		//
 		// COUNTED against all 65 hits before shipping (PROC-CHECK-PREDICATE-FIRST-001).
 		// Removes 19, of which 18 are false positives — 13 are sites this repository itself
@@ -7255,6 +7264,30 @@ func loopCallsNonTrivial(body ast.Node) bool {
 		if found {
 			return false
 		}
+		// A GUARD IS NOT THE BOTTLENECK. Both genuine casualties this exclusion is known to
+		// have cost were mask guards — backend/ref/mha_masked_backward.go, where math.Inf and
+		// math.IsInf sit in a bail-out branch, and the NSA score loop, whose keep(j) predicate
+		// gates a continue. A call reached only through an if whose taken branch just SKIPS the
+		// item runs once per item and never on the arithmetic path, so it says nothing about
+		// what the loop is bottlenecked on. Everything else about the if — its else branch, and
+		// any branch that does real work — is still descended into.
+		if ifs, ok := n.(*ast.IfStmt); ok && branchOnlySkips(ifs.Body) {
+			if ifs.Else != nil {
+				ast.Inspect(ifs.Else, func(m ast.Node) bool {
+					if found {
+						return false
+					}
+					if c, ok := m.(*ast.CallExpr); ok {
+						if id, isID := ast.Unparen(c.Fun).(*ast.Ident); !isID || !trivial[id.Name] {
+							found = true
+							return false
+						}
+					}
+					return true
+				})
+			}
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
@@ -7266,6 +7299,70 @@ func loopCallsNonTrivial(body ast.Node) bool {
 		return false
 	})
 	return found
+}
+
+// constantCalls are calls that compile to a constant load rather than a call — the same fact the
+// calibration note above records about math.Inf. A sentinel store using one is not work.
+var constantCalls = map[string]bool{"math.Inf": true, "math.NaN": true}
+
+// callsBeyondConstants is loopCallsNonTrivial with those constants also exempt. It is separate
+// so the main predicate keeps its measured calibration untouched.
+func callsBeyondConstants(n ast.Node) bool {
+	found := false
+	ast.Inspect(n, func(m ast.Node) bool {
+		if found {
+			return false
+		}
+		c, ok := m.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok {
+			if constantCalls[identName(sel.X)+"."+sel.Sel.Name] {
+				return true
+			}
+		}
+		if loopCallsNonTrivial(c) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// branchOnlySkips reports whether a branch body does nothing but abandon the current item — a
+// continue or a break, optionally after assignments. A branch that computes something is real
+// work and its calls still count.
+func branchOnlySkips(b *ast.BlockStmt) bool {
+	if b == nil || len(b.List) == 0 {
+		return false
+	}
+	skips := false
+	for _, st := range b.List {
+		switch t := st.(type) {
+		case *ast.BranchStmt:
+			if t.Tok == token.CONTINUE || t.Tok == token.BREAK {
+				skips = true
+				continue
+			}
+			return false
+		case *ast.AssignStmt:
+			// A bail-out often records a sentinel before skipping, and a store is not work.
+			// A CALL inside that store IS: an arbitrary length cap was written here first and
+			// no fixture could isolate it, while it left `if !ok { x = expensive(); continue }`
+			// exempt at any length. Testing the assignment itself is the condition that was
+			// meant.
+			for _, rhs := range t.Rhs {
+				if callsBeyondConstants(rhs) {
+					return false
+				}
+			}
+		default:
+			return false
+		}
+	}
+	return skips
 }
 
 func stridesByMoreThanOne(post ast.Stmt) bool {
