@@ -259,3 +259,44 @@ The equivalence therefore rests on `internal/fmath`'s own exhaustive pair test.
 These digests catch a **mis-edit** — substituting `Min` for `Max` at one site
 reddens three of the five cases — and the infinities keep the branch-skipping
 equality tests around the max exercised rather than only its ordinary path.
+
+## MoBA's block-selection set: a map in the innermost loop (T1185)
+
+Mixture-of-Block-Attention picks the top-K past blocks per query and attends only
+to those. The membership test lived in a `map[int]bool` **built fresh for every
+query and probed once per key**, which put `runtime.mapaccess1_fast64` at 5.4% of
+the profile on top of an allocation per query. The gate slice was rebuilt per
+query too.
+
+The keys are block indices, dense in `[0, nBlocks)`. A slice is the natural
+container, and a **generation counter** makes the per-query reset free: bump the
+counter, write it at the selected indices, and test equality instead of
+membership — no clear proportional to `nBlocks`.
+
+| Measure | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMoBAAttention` | 10.96 ms | 9.94 ms | **−9.3%** |
+| bytes/op | 2.967 MB | 2.464 MB | **−16.9%** |
+| allocs/op | 20533 | 10301 | **−49.8%** |
+
+### The `len` trap
+
+The selection loop was bounded on `len(selected)`, which a slice does not have.
+An explicit counter is only equivalent when the inserted keys are **distinct** —
+here they are, because the gate loop visits each past block exactly once, so
+every insert is new and counting inserts reproduces the map's length. That has to
+be read off the key source, not assumed.
+
+### The gate is a digest, not a tolerance
+
+A membership set that differs by one element changes *which* keys get scored, and
+every resulting number stays entirely plausible. Four shapes are frozen: a
+sequence that is not a multiple of the block size (so the last block is short),
+a `topK` above the block count (every past block selected), a block-aligned
+shape, and `topK=1` (only the current block ever in the set).
+
+### Not converted
+
+The generic `AtF64` fallback arm carries the same map. It is the slow path taken
+only by dtypes the flat-`float64` fast path cannot expose, and `PS3083` still
+reports it — correctly.

@@ -8,6 +8,13 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// mobaGate pairs a past block with its gate score. Named rather than declared inside the
+// query loop so one buffer can be reused across queries.
+type mobaGate struct {
+	block int
+	score float64
+}
+
 // MoBAAttention computes Mixture of Block Attention (Lu et al. 2025, Moonshot,
 // arXiv:2502.13189, §T557): the MoE principle applied to attention. Keys are
 // split into blocks of blockSize; per head and per query, each PAST block is
@@ -52,6 +59,16 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 			blockLen := make([]int, nBlocks)
 			qrow := make([]float64, dk)
 			scores := make([]float64, seq)
+			// THE SELECTED-BLOCK SET WAS A map[int]bool BUILT PER QUERY and probed once per key in
+			// the innermost loop — 5.4% of this benchmark sat in runtime.mapaccess1_fast64 alone,
+			// on top of a map allocation per query. The keys are block indices, dense in
+			// [0,nBlocks), so a slice is the natural container; stamping it with a generation
+			// counter makes the per-query reset free instead of an nBlocks clear.
+			selStamp := make([]int32, nBlocks)
+			var gen int32
+			// The gate slice was rebuilt per query too. One reused buffer holds the same values in
+			// the same order — it is refilled from scratch on every query.
+			gates := make([]mobaGate, 0, nBlocks)
 			for h := hlo; h < hhi; h++ {
 				off := h * dk
 				for b := range nBlocks {
@@ -73,11 +90,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					for d := range dk {
 						qrow[d] = qs[i*dm+off+d]
 					}
-					type gated struct {
-						block int
-						score float64
-					}
-					var gates []gated
+					gates = gates[:0]
 					for b := 0; b < cur; b++ {
 						pb := poolSum[b*dk : b*dk+dk : b*dk+dk]
 						bl := float64(blockLen[b])
@@ -85,12 +98,17 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 						for d := range dk {
 							sgate += qrow[d] * pb[d] / bl
 						}
-						gates = append(gates, gated{b, sgate})
+						gates = append(gates, mobaGate{b, sgate})
 					}
 					sort.Slice(gates, func(a, b int) bool { return gates[a].score > gates[b].score })
-					selected := map[int]bool{cur: true}
-					for gi := 0; gi < len(gates) && len(selected) < topK; gi++ {
-						selected[gates[gi].block] = true
+					gen++
+					selStamp[cur] = gen
+					nSel := 1
+					// The block indices in gates are distinct — b runs once over [0,cur) — so counting
+					// adds is exactly the map's len, which is what bounded this loop.
+					for gi := 0; gi < len(gates) && nSel < topK; gi++ {
+						selStamp[gates[gi].block] = gen
+						nSel++
 					}
 					m := math.Inf(-1)
 					// Score dot is a latency-bound serial reduction over d; jam two
@@ -99,7 +117,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					// sums d ascending → bit-identical; max is order-free.
 					prev := -1
 					for j := 0; j <= i; j++ {
-						if !selected[j/blockSize] {
+						if selStamp[j/blockSize] != gen {
 							scores[j] = math.Inf(-1)
 							continue
 						}
