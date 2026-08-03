@@ -241,6 +241,79 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 // Reconstruct materializes the approximate weight Ŵ[Rows, Cols] by summing, for every group,
 // the chosen entry of each codebook: Ŵ_group = Σ_m C_m[code_m]. The result carries the dtype
 // of the weight EncodeAQLM was fit on.
+// reconstructTransposedInto writes the reconstructed weight Ŵ (Ŵ_group = Σ_m
+// C_m[code_m]) into dst laid out TRANSPOSED as [In=Cols, Out=Rows], i.e.
+// dst[c, r] = Ŵ[r, c]. It fuses Reconstruct and the [Out,In]→[In,Out] transpose
+// into one pass with direct typed-storage writes (dst dtype F32/F64), skipping the
+// intermediate [Out,In] tensor and every per-element AtF64/SetF64 dispatch.
+//
+// Bit-identical to Reconstruct()-then-transpose: the codebook sum (acc, ascending
+// m then ascending t) is unchanged, and the value is put through the SAME two
+// roundings — first to q.dtype (what Reconstruct's SetF64 would store), then to
+// dst's dtype (what the transpose's SetF64 would store). For an F32 dst the two
+// narrowings collapse to one (float32∘float64∘float32 = float32); the q.dtype==F32
+// intermediate only matters for an F64 dst, handled explicitly.
+func (q *AQLM) reconstructTransposedInto(dst *tensor.Tensor) {
+	gpr := q.Cols / q.GroupSize
+	k := 1 << q.Bits
+	rows := q.Rows
+	acc := make([]float64, q.GroupSize)
+	sum := func(gi int) {
+		for t := range q.GroupSize {
+			acc[t] = 0
+		}
+		for m := range q.NumCodebooks {
+			cb := q.Codebooks[m*k+q.Codes[gi*q.NumCodebooks+m]]
+			for t := range q.GroupSize {
+				acc[t] += cb[t]
+			}
+		}
+	}
+	switch dst.Dtype() {
+	case tensor.F64:
+		ws := dst.Storage().F64() // [Cols*Rows], dst[c,r] = ws[c*rows+r]
+		narrowQ := q.dtype == tensor.F32
+		for r := range rows {
+			for gc := range gpr {
+				sum(r*gpr + gc)
+				col0 := gc * q.GroupSize
+				for t := range q.GroupSize {
+					v := acc[t]
+					if narrowQ {
+						v = float64(float32(v)) // replicate Reconstruct's F32 store
+					}
+					ws[(col0+t)*rows+r] = v
+				}
+			}
+		}
+	case tensor.F32:
+		ws := dst.Storage().F32()
+		for r := range rows {
+			for gc := range gpr {
+				sum(r*gpr + gc)
+				col0 := gc * q.GroupSize
+				for t := range q.GroupSize {
+					ws[(col0+t)*rows+r] = float32(acc[t])
+				}
+			}
+		}
+	default: // exotic dst dtype: fall back to the generic dispatch path
+		for r := range rows {
+			for gc := range gpr {
+				sum(r*gpr + gc)
+				col0 := gc * q.GroupSize
+				for t := range q.GroupSize {
+					v := acc[t]
+					if q.dtype == tensor.F32 {
+						v = float64(float32(v))
+					}
+					dst.SetF64(v, col0+t, r)
+				}
+			}
+		}
+	}
+}
+
 func (q *AQLM) Reconstruct() *tensor.Tensor {
 	w := tensor.New(q.dtype, tensor.Shape{q.Rows, q.Cols})
 	gpr := q.Cols / q.GroupSize
@@ -283,14 +356,15 @@ func (q *AQLM) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 	if x.Ndim() != 2 || x.Shape()[1] != q.Cols {
 		return nil, fmt.Errorf("nn: AQLM.Forward x must be [batch,%d], got %v", q.Cols, x.Shape())
 	}
-	wHat := q.Reconstruct() // [Out, In]
-	// transpose to [In, Out] so a plain row-major matmul computes x·Ŵᵀ.
+	// Reconstruct Ŵ and lay it out transposed [In, Out] in one pass, writing wT's
+	// storage directly. The previous form materialized a full [Out,In] wHat via
+	// Reconstruct (Rows·Cols SetF64 dispatches) and then transposed it with another
+	// Rows·Cols AtF64+SetF64 dispatches — at inference the reconstruct+transpose
+	// dominates the matmul entirely. reconstructTransposedInto does the codebook sum
+	// once and scatters each group's scalars straight into wT[in, out], skipping the
+	// wHat allocation and all per-element dispatch. Bit-identical (§V16.3 parity test).
 	wT := tensor.New(x.Dtype(), tensor.Shape{q.Cols, q.Rows})
-	for r := range q.Rows {
-		for c := range q.Cols {
-			wT.SetF64(wHat.AtF64(r, c), c, r)
-		}
-	}
+	q.reconstructTransposedInto(wT)
 	out, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{x, wT}, nil)
 	if err != nil {
 		return nil, err
