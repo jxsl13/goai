@@ -68,3 +68,6 @@ WHEN a buffer is filled by one call and reduced by the next against an output wi
 
 ## INDEPENDENT-REDUCTIONS-INTERLEAVE-BIT-IDENTICALLY-001
 WHEN several items each reduce the same shared source into their own scalar, the optimizer SHALL takes 4 items per pass with 4 separate accumulators, which keeps every sum in its own ascending order and is therefore bit-identical unlike splitting ONE sum into partials; measured on the k-nearest-neighbour scan at 34.6 percent on MemForward_512 and 44.6 on MemGatherLarge.
+
+## A-MIXED-GROUP-IS-HANDLED-IN-PLACE-NOT-BY-ABANDONING-THE-GROUPING-001
+WHEN a grouped inner loop meets a group whose members are not uniform, the optimizer SHALL processes those members scalar-wise and continues grouping, rather than breaking out for the rest of the row; breaking out measured plus 2 to 3 percent on a general-mask cell while the block-masked one gained 30, and handling in place made both improve.

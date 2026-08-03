@@ -88,8 +88,67 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				}
 				mrow := ms[mOff : mOff+sk]
 				m := math.Inf(-1)
-				for j, mv32 := range mrow {
-					mv := float64(mv32)
+				// FOUR KEYS PER PASS OVER THE QUERY ROW, but only where all four are unmasked.
+				// Each score is a dk-term reduction into one accumulator, so the loop is bound by
+				// the latency of a dependent add chain; four keys give four chains that interleave
+				// and load each query element once. A causal or block mask keeps its live region
+				// contiguous, so nearly every group is all-in or all-out and the four cheap
+				// infinity tests decide which.
+				//
+				// Bit-identical: every score sums its own terms in ascending d into its own
+				// accumulator, and the mask add, the scale and the running maximum are applied to
+				// the keys in ascending j exactly as the one-at-a-time form does.
+				j := 0
+				for ; j+3 < sk; j += 4 {
+					m0, m1 := float64(mrow[j+0]), float64(mrow[j+1])
+					m2, m3 := float64(mrow[j+2]), float64(mrow[j+3])
+					if math.IsInf(m0, -1) || math.IsInf(m1, -1) || math.IsInf(m2, -1) || math.IsInf(m3, -1) {
+						// A MIXED GROUP IS HANDLED IN PLACE, not by abandoning the fast path for
+						// the rest of the row. Breaking out here was measured and is wrong for any
+						// mask whose live region is not a prefix: it sent a whole row to the
+						// scalar loop after one mixed group, and cost 2 to 3% on the general-mask
+						// cell while the block-masked one gained 30%.
+						for o := range 4 {
+							mv := float64(mrow[j+o])
+							if math.IsInf(mv, -1) {
+								row[j+o] = math.Inf(-1)
+								continue
+							}
+							kr := ks[(j+o)*kdm+kvOff : (j+o)*kdm+kvOff+dk]
+							var sv float64
+							for d, qv := range qrow {
+								sv += float64(qv) * float64(kr[d])
+							}
+							sv = sv*scale + mv
+							row[j+o] = sv
+							if sv > m {
+								m = sv
+							}
+						}
+						continue
+					}
+					k0 := ks[(j+0)*kdm+kvOff : (j+0)*kdm+kvOff+dk]
+					k1 := ks[(j+1)*kdm+kvOff : (j+1)*kdm+kvOff+dk]
+					k2 := ks[(j+2)*kdm+kvOff : (j+2)*kdm+kvOff+dk]
+					k3 := ks[(j+3)*kdm+kvOff : (j+3)*kdm+kvOff+dk]
+					var s0, s1, s2, s3 float64
+					for d, qv := range qrow {
+						q := float64(qv)
+						s0 += q * float64(k0[d])
+						s1 += q * float64(k1[d])
+						s2 += q * float64(k2[d])
+						s3 += q * float64(k3[d])
+					}
+					for o, pair := range [4][2]float64{{s0, m0}, {s1, m1}, {s2, m2}, {s3, m3}} {
+						sv := pair[0]*scale + pair[1]
+						row[j+o] = sv
+						if sv > m {
+							m = sv
+						}
+					}
+				}
+				for ; j < sk; j++ {
+					mv := float64(mrow[j])
 					if math.IsInf(mv, -1) {
 						row[j] = math.Inf(-1)
 						continue

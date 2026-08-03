@@ -23,3 +23,6 @@ IF go test ./nlp under the race detector reaches its timeout, THEN the implement
 
 ## A-RANKING-ORACLE-NEEDS-AN-INDEX-DEPENDENT-MUTATION-001
 WHEN mutating a score to test a gate whose observable is a selection or ranking, the implementer SHALL makes the perturbation depend on the ranked dimension and large enough to reorder; a uniform scale or offset of one items scores changes no ranking at all, and 3 mutations designed that way read as green before the fourth reddened 4 tests.
+
+## A-GROUP-UNIFORMITY-TEST-STATES-WHAT-IT-GUARDS-001
+WHEN a grouped kernel checks its group for uniformity, the implementer SHALL records whether that check guards correctness or only speed; dropping 1 of the 4 mask checks in the masked attention kernel leaves the suite green, so it exists to skip wasted work.
