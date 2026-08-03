@@ -216,6 +216,7 @@ var checks = []check{
 	{"PS3056", "serial-permutation", "a multi-level nest that only COPIES elements between buffers — every write a read from somewhere else, no accumulation, no arithmetic folding the destination back in — in a package that declares a fan-out helper the function never calls. A permutation has NO dependence between its elements, so splitting the outer loop is race-free and BIT-IDENTICAL at any band count; there is no summation order to preserve because nothing is summed. It is the cheapest parallelization to justify and the easiest to overlook, since it carries no arithmetic to appear in a profile as a kernel. CHECK THE BAND OWNS DISJOINT OUTPUT — a transpose writes COLUMNS of its destination for a band of source rows, disjoint but not obvious, and a data-dependent scatter is not this shape. Gate it with BOTH a value comparison and -race: an overlapping band writes the same values and only the race detector sees it. MEASURED on the GGUF weight transpose, already cache-blocked and still 84%% of its own benchmark at one core: BenchmarkTiedHeadTransposePerCall went 154.2 ms to 49.8, a 66.3%% cut, on the model LOAD path; and on the transpose VJP, -45.7%% F64 and -50.8%% F32", false},
 	{"PS3057", "column-read-through-a-jagged-matrix", "a loop that reads ONE column of a [][]T — an index expression x[row][col] whose ROW varies with the loop and whose COLUMN does not. Each read is a pointer chase into a separate length-d row, so n reads touch n cache lines spread across the whole n*d matrix and use 8 bytes of each; the same access against a feature-major mirror xt[col*n+row] is a scattered read inside ONE contiguous length-n array. Mirror the matrix once where it is already being walked and read the mirror everywhere. It is a PURE COPY, so nothing downstream moves by a bit — which also means only a bit-exact digest can gate it, and that the mirror COSTS n*d elements of memory: state the trade, do not hide it. MEASURED on the GBM exact-split builder, where the gather was 51%% of scanFeatures and 16%% of the package: BenchmarkGBMHist_exact_80k -19.5%%, _20k -13.6%% for +15.6%% bytes, with ForestFit flat as a control. RANK BY THE PRODUCT of the loop bound and how many times the same column is re-read — a column read once is a column that does not repay a mirror", false},
 	{"PS3058", "per-iteration-scratch-allocation", "a value whose type has a SCRATCH INITIALIZER — a method that assigns 3 or more make() results to its own fields — constructed inside a loop or inside the callback of a fan-out helper. Every iteration allocates the whole working set and throws it away. Recycle it through a sync.Pool: growing each buffer only when the pooled one is too small, and returning it when the iteration finishes. THE SAFETY ARGUMENT IS USUALLY ALREADY MADE: a scratch buffer reused across the thousands of inner steps of ONE iteration is, by that fact, written before it is read, and nothing distinguishes the first step of a new iteration from the hundredth step of the old one. Check for the exception — a buffer the finished product still points into cannot be recycled. EXPECT MEMORY, NOT NECESSARILY TIME. MEASURED on the CART builder inside a random forest fit: ForestFit allocated bytes -42.4%% and allocations -34.4%%, with the wall clock FLAT (111.2 to 108.0 ms, inside the run-to-run spread) because the fit is already parallel and was not allocation-bound. Report it as a resource win or not at all", false},
+	{"PS3059", "serial-nest-writing-through-a-derived-base", "a serial nest, in a package that declares a fan-out helper it never calls, whose every indexed write lands through a base DERIVED from the outermost loop variable — obase := b*out, then dst[obase+j] — with at least one write not naming that variable directly. This is PS3034's blind spot, and it has now cost two finds: PS3034 asks whether each write names the OUTERMOST loop variable, and a nest that hoists its row offset into a local does not. Both misses were large. The GGUF weight transpose was 84%% of its own benchmark at one core (-66.3%% once banded, T1117), and the KAN fused spline was 84%% of its layer's (-83.8%% at 256x256 and -79.0%% at 128x128, a 6.2x, T1123) — in a file whose OTHER hot loop had fanned out since it was written. WIDENING PS3034 WAS TRIED AND REVERTED: following derived names there broke three of its own fixtures and took its tree-wide count from 23 to 33 without flagging the transpose. A separate check with the narrow condition is what works. Check the band owns disjoint output before converting, and gate with BOTH a bit-exact digest and -race — which gate catches what depends on the destination: an accumulated one (+=) double-counts on an overlap so both fire, while a pure permutation writes the same value twice and only -race sees it", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1334,6 +1335,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, serialPermutationFindings(fset, f, fn)...)
 		out = append(out, columnReadFindings(fset, fn)...)
 		out = append(out, perIterationScratchFindings(fset, f, fn)...)
+		out = append(out, derivedBaseNestFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18381,6 +18383,127 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3059: a serial nest writing through a base derived from the outer variable ------------
+
+// namesDerivedFromLoopVar returns the local names in body that are computed, directly or transitively, from
+// ov: "obase := b * out" and then anything computed from obase.
+func namesDerivedFromLoopVar(body *ast.BlockStmt, ov string) map[string]bool {
+	out := map[string]bool{ov: true}
+	for range 4 { // a fixpoint; nests this deep do not chain further in practice
+		grew := false
+		ast.Inspect(body, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != len(as.Rhs) {
+				return true
+			}
+			for i, lhs := range as.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok || out[id.Name] {
+					continue
+				}
+				for nm := range out {
+					if mentionsIdent(as.Rhs[i], nm) {
+						out[id.Name] = true
+						grew = true
+						break
+					}
+				}
+			}
+			return true
+		})
+		if !grew {
+			break
+		}
+	}
+	return out
+}
+
+// derivedBaseNestFindings flags PS3059 — a serial nest whose indexed writes all land through a
+// base derived from the outermost loop variable, with at least one not naming it directly.
+func derivedBaseNestFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	if callsFanoutHelper(fn.Body, fanoutReg[f.Name.Name]) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if len(out) > 0 {
+			return false
+		}
+		// A loop running from one PARAMETER to another has already been handed its band; the
+		// fan-out call is in its caller, where this check cannot see it. Applying this very
+		// check produces such a function — the band body is split out so the two arms share
+		// one copy of the nest — so without this the check reports the site it just fixed.
+		if loopSpansAParameterRange(n, declaredParamNames(fn)) {
+			return false
+		}
+		body, ov := outerLoop(n)
+		if body == nil || ov == "" || ov == "_" || loopDepthOf(body) < 2 {
+			return true
+		}
+		names := namesDerivedFromLoopVar(body, ov)
+		nWrites, viaDerived, dst := 0, false, ""
+		allOwned := true
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok {
+				return true
+			}
+			for _, lhs := range as.Lhs {
+				ix, ok := unparen(lhs).(*ast.IndexExpr)
+				if !ok {
+					continue
+				}
+				nWrites++
+				owned, direct := false, mentionsIdent(ix.Index, ov)
+				for nm := range names {
+					if mentionsIdent(ix.Index, nm) {
+						owned = true
+						break
+					}
+				}
+				if !owned {
+					allOwned = false
+					continue
+				}
+				if !direct {
+					viaDerived = true
+					if dst == "" {
+						dst = exprText(ix.X)
+					}
+				}
+			}
+			return true
+		})
+		if nWrites == 0 || !allOwned || !viaDerived {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-nest-writing-through-a-derived-base",
+			msg: fmt.Sprintf("every indexed write in this nest lands in %q through a base DERIVED"+
+				" from the outer loop variable %q rather than through %q itself, and the function"+
+				" never calls the fan-out helper its package declares. The iterations own disjoint"+
+				" output, so the outer loop bands. THIS IS PS3034'S BLIND SPOT and it has cost two"+
+				" finds: that check asks whether each write NAMES the outermost variable, and a"+
+				" nest that hoists its row offset into a local does not. Both misses were large —"+
+				" the GGUF weight transpose was 84%% of its own benchmark at one core and went"+
+				" -66.3%% once banded, and the KAN fused spline was 84%% of its layer's and went"+
+				" -83.8%% at 256x256, a 6.2x, in a file whose OTHER hot loop had fanned out since"+
+				" it was written. WIDENING PS3034 WAS TRIED AND REVERTED: following derived names"+
+				" there broke three of its own fixtures and took its count from 23 to 33 without"+
+				" flagging the transpose. GATE WITH BOTH A BIT-EXACT DIGEST AND -race, and know"+
+				" which one earns its keep: a destination that ACCUMULATES (+=) double-counts on"+
+				" an overlapping band so both fire, while a pure permutation writes the same value"+
+				" twice and only -race sees it", dst, ov, ov),
+		})
+		return false
+	})
+	return out
 }
 
 // --- PS3058: a per-iteration scratch allocation --------------------------------------------
