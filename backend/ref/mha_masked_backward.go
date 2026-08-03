@@ -165,8 +165,43 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 								row[j] /= sum
 							}
 						}
+						// FOUR KEYS PER PASS OVER THE dO ROW. gi does not vary with the key, so the
+						// key-at-a-time form re-streams it once per key and runs ONE accumulator
+						// chain per key. BIT-IDENTICAL: every dw[j] sums over the same ascending
+						// c into its own accumulator, every dV element takes the same single
+						// addition, and wdot still accumulates in ascending j.
 						var wdot float64
-						for j := 0; j < sk; j++ {
+						jv := 0
+						for ; jv+3 < sk; jv += 4 {
+							b0 := jv*dm + kvOff
+							v0 := vs[b0 : b0+dk : b0+dk]
+							v1 := vs[b0+dm : b0+dm+dk : b0+dm+dk]
+							v2 := vs[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							v3 := vs[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							w0 := dvs[b0 : b0+dk : b0+dk]
+							w1 := dvs[b0+dm : b0+dm+dk : b0+dm+dk]
+							w2 := dvs[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							w3 := dvs[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							r0, r1 := row[jv], row[jv+1]
+							r2, r3 := row[jv+2], row[jv+3]
+							var d0, d1, d2, d3 float64
+							for c := 0; c < dk; c++ {
+								gc := gi[c]
+								d0 += gc * v0[c]
+								d1 += gc * v1[c]
+								d2 += gc * v2[c]
+								d3 += gc * v3[c]
+								w0[c] += r0 * gc
+								w1[c] += r1 * gc
+								w2[c] += r2 * gc
+								w3[c] += r3 * gc
+							}
+							for o, dv := range [4]float64{d0, d1, d2, d3} {
+								dw[jv+o] = dv
+								wdot += row[jv+o] * dv
+							}
+						}
+						for j := jv; j < sk; j++ {
 							vrow := vs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
 							dvrow := dvs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
 							rj := row[j]
@@ -180,7 +215,49 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 						}
 						dqrow := dqs[qbase+qOff : qbase+qOff+dk : qbase+qOff+dk]
 						mbBase := h*sq*sk + i*sk
-						for j := 0; j < sk; j++ {
+						// FOUR KEYS PER PASS. dqrow and qi are BOTH shared across keys, so the
+						// key-at-a-time form makes a full load-store round trip through dqrow for one
+						// addition each and re-reads the query element per key. Holding dqrow[d] in a
+						// local across four additions stores once. BIT-IDENTICAL: dqrow[d] takes the
+						// same four additions in the same ascending j, each dK element takes the same
+						// single addition, and the dscore stores stay in ascending j.
+						jd := 0
+						for ; jd+3 < sk; jd += 4 {
+							var sc [4]float64
+							for o := range 4 {
+								j := jd + o
+								dscore := row[j] * (dw[j] - wdot)
+								if perHead {
+									dms[mBase+j] += dscore
+								} else {
+									maskBuf[mbBase+j] = dscore
+								}
+								sc[o] = dscore * scale
+							}
+							b0 := jd*dm + kvOff
+							k0 := ks[b0 : b0+dk : b0+dk]
+							k1 := ks[b0+dm : b0+dm+dk : b0+dm+dk]
+							k2 := ks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							k3 := ks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							y0 := dks[b0 : b0+dk : b0+dk]
+							y1 := dks[b0+dm : b0+dm+dk : b0+dm+dk]
+							y2 := dks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							y3 := dks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							for d := 0; d < dk; d++ {
+								t := dqrow[d]
+								t += sc[0] * k0[d]
+								t += sc[1] * k1[d]
+								t += sc[2] * k2[d]
+								t += sc[3] * k3[d]
+								dqrow[d] = t
+								qd := qi[d]
+								y0[d] += sc[0] * qd
+								y1[d] += sc[1] * qd
+								y2[d] += sc[2] * qd
+								y3[d] += sc[3] * qd
+							}
+						}
+						for j := jd; j < sk; j++ {
 							dscore := row[j] * (dw[j] - wdot)
 							if perHead {
 								dms[mBase+j] += dscore
@@ -259,8 +336,43 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 								row[j] /= sum
 							}
 						}
+						// FOUR KEYS PER PASS OVER THE dO ROW. gi does not vary with the key, so the
+						// key-at-a-time form re-streams it once per key and runs ONE accumulator
+						// chain per key. BIT-IDENTICAL: every dw[j] sums over the same ascending
+						// c into its own accumulator, every dV element takes the same single
+						// addition, and wdot still accumulates in ascending j.
 						var wdot float64
-						for j := 0; j < sk; j++ {
+						jv := 0
+						for ; jv+3 < sk; jv += 4 {
+							b0 := jv*dm + kvOff
+							v0 := vs[b0 : b0+dk : b0+dk]
+							v1 := vs[b0+dm : b0+dm+dk : b0+dm+dk]
+							v2 := vs[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							v3 := vs[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							w0 := dvs[b0 : b0+dk : b0+dk]
+							w1 := dvs[b0+dm : b0+dm+dk : b0+dm+dk]
+							w2 := dvs[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							w3 := dvs[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							r0, r1 := row[jv], row[jv+1]
+							r2, r3 := row[jv+2], row[jv+3]
+							var d0, d1, d2, d3 float64
+							for c := 0; c < dk; c++ {
+								gc := gi[c]
+								d0 += gc * v0[c]
+								d1 += gc * v1[c]
+								d2 += gc * v2[c]
+								d3 += gc * v3[c]
+								w0[c] += r0 * gc
+								w1[c] += r1 * gc
+								w2[c] += r2 * gc
+								w3[c] += r3 * gc
+							}
+							for o, dv := range [4]float64{d0, d1, d2, d3} {
+								dw[jv+o] = dv
+								wdot += row[jv+o] * dv
+							}
+						}
+						for j := jv; j < sk; j++ {
 							vrow := vs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
 							dvrow := dvs[j*dm+kvOff : j*dm+kvOff+dk : j*dm+kvOff+dk]
 							rj := row[j]
@@ -273,7 +385,45 @@ func mhaMaskedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 							wdot += rj * d
 						}
 						dqrow := dqs[qbase+qOff : qbase+qOff+dk : qbase+qOff+dk]
-						for j := 0; j < sk; j++ {
+						// FOUR KEYS PER PASS. dqrow and qi are BOTH shared across keys, so the
+						// key-at-a-time form makes a full load-store round trip through dqrow for one
+						// addition each and re-reads the query element per key. Holding dqrow[d] in a
+						// local across four additions stores once. BIT-IDENTICAL: dqrow[d] takes the
+						// same four additions in the same ascending j, each dK element takes the same
+						// single addition, and the dscore stores stay in ascending j.
+						jd := 0
+						for ; jd+3 < sk; jd += 4 {
+							var sc [4]float64
+							for o := range 4 {
+								j := jd + o
+								dscore := row[j] * (dw[j] - wdot)
+								dms[mBase+j] += dscore
+								sc[o] = dscore * scale
+							}
+							b0 := jd*dm + kvOff
+							k0 := ks[b0 : b0+dk : b0+dk]
+							k1 := ks[b0+dm : b0+dm+dk : b0+dm+dk]
+							k2 := ks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							k3 := ks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							y0 := dks[b0 : b0+dk : b0+dk]
+							y1 := dks[b0+dm : b0+dm+dk : b0+dm+dk]
+							y2 := dks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+							y3 := dks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+							for d := 0; d < dk; d++ {
+								t := dqrow[d]
+								t += sc[0] * k0[d]
+								t += sc[1] * k1[d]
+								t += sc[2] * k2[d]
+								t += sc[3] * k3[d]
+								dqrow[d] = t
+								qd := qi[d]
+								y0[d] += sc[0] * qd
+								y1[d] += sc[1] * qd
+								y2[d] += sc[2] * qd
+								y3[d] += sc[3] * qd
+							}
+						}
+						for j := jd; j < sk; j++ {
 							dscore := row[j] * (dw[j] - wdot)
 							dms[mBase+j] += dscore
 							ds := dscore * scale
