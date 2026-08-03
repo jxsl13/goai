@@ -227,6 +227,7 @@ var checks = []check{
 	{"PS3067", "sequential-outer-with-an-independent-inner-loop", "a nest whose OUTER loop carries a dependence and whose inner loop is independent — every write in it indexed by the inner variable, none by the outer. Banding the inner loop where it is pays one fork per OUTER step, which has now failed on fork count four times; INTERCHANGE FIRST so the independent index is outermost, then band it once. PS3040 describes the same nest and recommends splitting the inner loop in place, which is right for a factorization whose inner work SHRINKS as the outer index advances and wrong when the inner extent is constant. MEASURED TWICE on constant-extent sweeps: the SparseGPT pruner went 52.27 to 41.83 ms (-20.0%%) and the GPTQ quantizer 55.18 to 44.34 ms (-19.6%%), both with an untouched sibling flat as a control. BIT-IDENTICAL, because the rows do not observe each other and within a row the outer index is still visited in order. TWO THINGS TO CHECK. Any scratch the body reuses must become PER WORKER — a shared sort buffer reddened both the digest and -race. And a CALLER-SUPPLIED CALLBACK invoked inside the nest is now called concurrently: GPTQ's quantizer is a pure function of one value, but that had to become a documented requirement on the exported API rather than an implementation detail", false},
 	{"PS3068", "serial-best-of-scan", "a loop over independent items that keeps a running BEST — a cost compared against an accumulator declared outside the loop, with the winner's fields assigned under a strict < or > — in a package that declares a fan-out helper this function never calls. Chunk the items, let every chunk apply the same rule within itself, then FOLD THE CHUNKS IN ASCENDING ORDER WITH THE SAME STRICT COMPARISON: that reproduces the serial winner exactly, ties included, because first-wins survives both levels. MEASURED on the CART feature scan, which ran at 1.01x on twelve cores: BenchmarkTreeFit 10.20 to 9.69 ms with the forest fit flat as a control. Modest because a tree's work sits in a few large nodes and the rest is below the fork gate — expect the gate to matter more than the core count. A DIGEST WILL NOT GATE THE TIE RULE. Mutations flipping either strict comparison to <= left a bit-exact prediction digest green, because ordinary data produces no exact-cost tie between two items. Manufacture one — duplicate an item so two are exactly equal — and assert the LOWER index wins, in BOTH placements: adjacent items share a chunk and exercise only the inner comparison, distant ones land in different chunks and exercise only the fold", false},
 	{"PS3069", "fanout-queues-jobs-it-does-not-need-to", "a fan-out helper that hands work out through an UNBUFFERED channel, with no path that skips the queue when the job count is already within the worker count. The queue exists so more jobs than workers can be served one at a time; when there are no more, every job pays a rendezvous on top of its goroutine. MEASURED on the classic tree builders, which call their helper with exactly one job per chunk once per NODE, thousands of times per fit: adding a direct fan-out for n <= workers took BenchmarkGBMFit 72.06 to 68.31 ms, -5.2%%, with system CPU 0.43 to 0.37 s and the forest and single-tree cells flat. EXPECT THE SMALLER NUMBER, NOT THE PROFILE'S: 95.6%% of that benchmark's samples were in pthread_cond_wait, pthread_cond_signal and usleep against 1.75%% in the split scan, and the fix was worth 5%% — parked threads are sampled, and sampled is not the same as costing wall clock", false},
+	{"PS3070", "one-threshold-two-regimes", "a tuning constant compared against DIFFERENT quantities in different functions — one threshold serving two callers whose costs do not move together. Whatever value suits one is wrong for the other, and tuning it looks like a tradeoff when it is really a missing second constant. MEASURED: classic's treeRadixCutoff gated both a PER-NODE sort of a shrinking range and a ONE-TIME presort of every row. Lowering it for the first took BenchmarkForestFit 121.5 to 101.3 ms, -16.6%%, and simultaneously cost GBMFit about 25%% and moved the GBM bit-exact digest — which read as a model-behavior change until the constants were split. Split, both are free: ForestFit -16.6%%, GBMFit flat, and BOTH digests pass unchanged. SPLIT FIRST, THEN SWEEP — a sweep of a shared constant measures the sum of two answers and finds neither", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1370,6 +1371,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, interchangeBeforeBandFindings(fset, f, fn)...)
 		out = append(out, serialBestOfScanFindings(fset, f, fn)...)
 		out = append(out, queueingFanoutFindings(fset, f, fn)...)
+		out = append(out, sharedThresholdFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3095,6 +3097,7 @@ func main() {
 	collectFanningFuncs(parsed)
 	collectKernelRegistrations(parsed, ns)
 	collectLoopyFuncs(parsed)
+	collectThresholdComparisons(parsed)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
@@ -18447,6 +18450,119 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3070: one threshold serving two regimes -----------------------------------------------
+
+// thresholdUses maps "pkg.CONST" to the distinct texts it is compared against, and to the
+// functions those comparisons live in.
+var thresholdUses = map[string]map[string]string{}
+
+// collectThresholdComparisons pre-scans for comparisons against an untyped package constant.
+func collectThresholdComparisons(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		consts := map[string]bool{}
+		for _, decl := range f.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok || gd.Tok != token.CONST {
+				continue
+			}
+			for _, sp := range gd.Specs {
+				vs, ok := sp.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				for _, nm := range vs.Names {
+					consts[nm.Name] = true
+				}
+			}
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				be, ok := n.(*ast.BinaryExpr)
+				if !ok {
+					return true
+				}
+				switch be.Op {
+				case token.LSS, token.GTR, token.LEQ, token.GEQ:
+				default:
+					return true
+				}
+				for _, pair := range [][2]ast.Expr{{be.X, be.Y}, {be.Y, be.X}} {
+					id, ok := pair[1].(*ast.Ident)
+					if !ok || !consts[id.Name] {
+						continue
+					}
+					key := f.Name.Name + "." + id.Name
+					if thresholdUses[key] == nil {
+						thresholdUses[key] = map[string]string{}
+					}
+					thresholdUses[key][exprText(pair[0])] = fn.Name.Name
+				}
+				return true
+			})
+		}
+	}
+}
+
+// sharedThresholdFindings flags PS3070 — a constant compared against two or more different
+// quantities, in two or more different functions.
+func sharedThresholdFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil {
+		return nil
+	}
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok || seen[id.Name] {
+			return true
+		}
+		uses := thresholdUses[f.Name.Name+"."+id.Name]
+		if len(uses) < 2 {
+			return true
+		}
+		// TWO REGIMES, NOT TWO CALL SITES: the same quantity tested in two places is one
+		// regime. Require the comparisons to live in different functions as well.
+		fns := map[string]bool{}
+		for _, where := range uses {
+			fns[where] = true
+		}
+		if len(fns) < 2 || !fns[fn.Name.Name] {
+			return true
+		}
+		seen[id.Name] = true
+		var quantities []string
+		for q := range uses {
+			quantities = append(quantities, q)
+		}
+		sort.Strings(quantities)
+		out = append(out, finding{
+			pos:      fset.Position(id.Pos()),
+			category: "one-threshold-two-regimes",
+			msg: fmt.Sprintf("%q is compared against %d DIFFERENT quantities (%s) in %d"+
+				" functions — one threshold serving callers whose costs do not move together."+
+				" Whatever value suits one is wrong for the other, and tuning it looks like a"+
+				" tradeoff when it is really a missing second constant. MEASURED: this"+
+				" repository's tree builders shared one radix cutoff between a PER-NODE sort of"+
+				" a shrinking range and a ONE-TIME presort of every row. Lowering it for the"+
+				" first took BenchmarkForestFit 121.5 to 101.3 ms, -16.6%%, and simultaneously"+
+				" cost GBMFit about 25%% and moved its bit-exact digest — which read as a"+
+				" model-behavior change until the constants were split. Split, both are free:"+
+				" ForestFit -16.6%%, GBMFit flat, BOTH digests unchanged. SPLIT FIRST, THEN"+
+				" SWEEP — a sweep of a shared constant measures the sum of two answers and finds"+
+				" neither", id.Name, len(uses), strings.Join(quantities, ", "), len(fns)),
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3069: a fan-out helper that queues work it need not queue ------------------------------

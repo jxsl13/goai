@@ -313,12 +313,18 @@ func (b *cartBuilder) buildCLogC(n int) {
 // treeRadixCutoff is the index count above which sorting `order` ascending by a
 // feature value switches from the comparison sort to the 8-pass LSD radix. Below it
 // the O(n log n) comparison sort's lower constant wins.
-const treeRadixCutoff = 512
+const treeRadixCutoff = 32
 
-// radixByFeature sorts order ascending by b.x[order[i]][ff]. Tie order is
-// unspecified — irrelevant to split decisions (thresholds sit between DISTINCT
-// values, per initColumns/bestSplitIdx), so the split chosen is identical to the
-// comparison sort's. Closure-free O(n) radix on the order-preserving u64 transform
+// radixByFeature sorts order ascending by b.x[order[i]][ff]. Tie order is unspecified.
+//
+// THE OLD CLAIM THAT TIE ORDER CANNOT MATTER IS TOO STRONG, and it is worth correcting before
+// someone leans on it. It rested on thresholds sitting between DISTINCT values — but the sweep
+// skips a candidate cut when vals[p]-vals[p-1] <= featureThreshold, a TOLERANCE of 1e-7, so
+// values that are distinct yet closer than that behave like ties: reordering them changes
+// which pairs are adjacent and therefore which cuts are considered at all. Two sorts that
+// disagree on such a run can grow different trees. It does not bite here — the CART digests
+// are unchanged after moving the cutoff from 512 to 32 — but swapping either sort for a
+// cheaper one has to be gated on a digest rather than argued from this comment. Closure-free O(n) radix on the order-preserving u64 transform
 // of the float64 bits (negatives → ^bits, non-negatives → bits|sign): monotonic in
 // the float value, so a plain unsigned radix orders it. Uses the reused scratch.
 func (b *cartBuilder) radixByFeature(order []int, ff int) {

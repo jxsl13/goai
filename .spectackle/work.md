@@ -805,3 +805,18 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
+
+## ADR-01KZ3HW0ZSFE7T23XD65GPBRE6 Lower classic treeRadixCutoff from 512 to 32? It is worth 17.3 percent on the forest fit and changes which trees are grown.
+kind: adr
+state: done
+created: 2026-08-03
+context: MEASURED, interleaved over three rounds: BenchmarkForestFit 123.3 to 101.9 ms, minus 17.3 percent, and the variance disappears - 101.9 ms every run at 32 against 123 to 144 ms at 512. TreeFit is flat. The comparison-sort path is about half the forest fit: radixByFeature is 50.7 percent of a parallel profile and its closure comparator, the pdqsort partition and the insertion sort are most of that. Cutoffs of 32 and 128 both land near 102 ms. THE COST: the bit-exact forest digest FAILS at 32, 64 and 128 and passes only at 512, so the change alters which trees are grown. WHY, AND THIS CORRECTS A CLAIM IN THE CODE: radixByFeature documented its unspecified tie order as irrelevant because thresholds sit between distinct values. That is wrong - the sweep skips a candidate cut when the gap between consecutive values is at most featureThreshold, a TOLERANCE of 1e-7, so values that are distinct yet closer than that behave like ties, and reordering them changes which pairs are adjacent and therefore which cuts are considered. Two sorts that disagree on those runs grow different trees. The comment has been corrected; no behavior was changed.
+decision: Keep 512 - preserve the exact trees the frozen digest pins
+consequences: THE QUESTION WAS MALFORMED AND THE ANSWER IS BOTH OPTIONS AT ONCE. treeRadixCutoff was serving two callers with opposite cost profiles: a PER-NODE sort of a shrinking range in the CART builder, which wants a low cutoff, and a ONE-TIME presort of every row in the GBM builder, which wants a high one. Splitting it resolves the tradeoff instead of choosing a side. The GBM presort keeps 512 as the new gbmRadixCutoff - that is the option chosen here - and the CART per-node cutoff drops to 32. With the two separated: BenchmarkForestFit 121.5 to 101.3 ms, minus 16.6 percent with all three new runs below all three base runs; GBMFit flat at 66.5 to 64.0; and BOTH bit-exact digests pass UNCHANGED. The apparent model-behavior change was entirely the shared constant dragging the GBM presort along with the CART one, which also cost GBMFit about 25 percent. No trees change and nothing is re-frozen.
+status: accepted
+
+kind: radio
+option: Keep 512 - preserve the exact trees the frozen digest pins
+option: Lower to 32 and re-freeze the digest - accept different but equally valid trees for 17.3 percent
+option: Lower only for classification, where the risk is smallest, and keep 512 for regression
+choice: Keep 512 - preserve the exact trees the frozen digest pins
