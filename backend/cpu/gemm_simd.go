@@ -54,6 +54,125 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 	}
 }
 
+// gemmATF64Band is the archsimd twin of gemmATF64BandScalar (conv_backward.go):
+// rows [loRow,hiRow) of C[M,N] += Aᵀ·B, A stored [K,M] so Aᵀ[i][p] = A[p*m+i].
+// It vectorizes the free dimension j in 4-wide f64 lanes with SEPARATE Mul then
+// Add (NOT MulAdd/FMA), so each C[i][j] takes exactly the same two roundings per
+// product and the same ascending-p accumulation as the scalar loop — the result
+// is BIT-IDENTICAL to gemmATF64BandScalar (unlike the FMA-fused gemmF64Band,
+// which is only tolerance-close). The accumulator is loaded from C before the
+// p-loop and stored after, preserving the += contract.
+func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
+	if !gemmHasAVX {
+		gemmATF64BandScalar(A, B, C, loRow, hiRow, m, k, n)
+		return
+	}
+	nv := n - n%4  // 4-wide vector boundary
+	nv8 := n - n%8 // 8-wide boundary
+	i := loRow
+	for ; i+3 < hiRow; i += 4 {
+		c0 := C[(i+0)*n : (i+0)*n+n]
+		c1 := C[(i+1)*n : (i+1)*n+n]
+		c2 := C[(i+2)*n : (i+2)*n+n]
+		c3 := C[(i+3)*n : (i+3)*n+n]
+		j := 0
+		// 8-wide body: two column groups per row = 8 accumulator chains in flight.
+		for ; j < nv8; j += 8 {
+			a0 := archsimd.LoadFloat64x4Slice(c0[j:])
+			a0h := archsimd.LoadFloat64x4Slice(c0[j+4:])
+			a1 := archsimd.LoadFloat64x4Slice(c1[j:])
+			a1h := archsimd.LoadFloat64x4Slice(c1[j+4:])
+			a2 := archsimd.LoadFloat64x4Slice(c2[j:])
+			a2h := archsimd.LoadFloat64x4Slice(c2[j+4:])
+			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
+			bo := j
+			for p := 0; p < k; p++ {
+				lo := archsimd.LoadFloat64x4Slice(B[bo:])
+				hi := archsimd.LoadFloat64x4Slice(B[bo+4:])
+				ap := A[p*m+i : p*m+i+4 : p*m+i+4]
+				b0 := archsimd.BroadcastFloat64x4(ap[0])
+				b1 := archsimd.BroadcastFloat64x4(ap[1])
+				b2 := archsimd.BroadcastFloat64x4(ap[2])
+				b3 := archsimd.BroadcastFloat64x4(ap[3])
+				a0 = b0.Mul(lo).Add(a0)
+				a0h = b0.Mul(hi).Add(a0h)
+				a1 = b1.Mul(lo).Add(a1)
+				a1h = b1.Mul(hi).Add(a1h)
+				a2 = b2.Mul(lo).Add(a2)
+				a2h = b2.Mul(hi).Add(a2h)
+				a3 = b3.Mul(lo).Add(a3)
+				a3h = b3.Mul(hi).Add(a3h)
+				bo += n
+			}
+			a0.StoreSlice(c0[j:])
+			a0h.StoreSlice(c0[j+4:])
+			a1.StoreSlice(c1[j:])
+			a1h.StoreSlice(c1[j+4:])
+			a2.StoreSlice(c2[j:])
+			a2h.StoreSlice(c2[j+4:])
+			a3.StoreSlice(c3[j:])
+			a3h.StoreSlice(c3[j+4:])
+		}
+		for ; j < nv; j += 4 { // 4-wide cleanup
+			acc0 := archsimd.LoadFloat64x4Slice(c0[j:])
+			acc1 := archsimd.LoadFloat64x4Slice(c1[j:])
+			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
+			acc3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			bo := j
+			for p := 0; p < k; p++ {
+				bv := archsimd.LoadFloat64x4Slice(B[bo:])
+				ap := A[p*m+i : p*m+i+4 : p*m+i+4]
+				acc0 = archsimd.BroadcastFloat64x4(ap[0]).Mul(bv).Add(acc0)
+				acc1 = archsimd.BroadcastFloat64x4(ap[1]).Mul(bv).Add(acc1)
+				acc2 = archsimd.BroadcastFloat64x4(ap[2]).Mul(bv).Add(acc2)
+				acc3 = archsimd.BroadcastFloat64x4(ap[3]).Mul(bv).Add(acc3)
+				bo += n
+			}
+			acc0.StoreSlice(c0[j:])
+			acc1.StoreSlice(c1[j:])
+			acc2.StoreSlice(c2[j:])
+			acc3.StoreSlice(c3[j:])
+		}
+		for ; j < n; j++ { // scalar column tail
+			s0, s1, s2, s3 := c0[j], c1[j], c2[j], c3[j]
+			bo := j
+			for p := 0; p < k; p++ {
+				bv := B[bo]
+				ap := A[p*m+i : p*m+i+4 : p*m+i+4]
+				s0 += ap[0] * bv
+				s1 += ap[1] * bv
+				s2 += ap[2] * bv
+				s3 += ap[3] * bv
+				bo += n
+			}
+			c0[j], c1[j], c2[j], c3[j] = s0, s1, s2, s3
+		}
+	}
+	for ; i < hiRow; i++ { // remainder rows
+		ci := C[i*n : i*n+n]
+		j := 0
+		for ; j < nv; j += 4 {
+			acc := archsimd.LoadFloat64x4Slice(ci[j:])
+			bo := j
+			for p := 0; p < k; p++ {
+				acc = archsimd.BroadcastFloat64x4(A[p*m+i]).Mul(archsimd.LoadFloat64x4Slice(B[bo:])).Add(acc)
+				bo += n
+			}
+			acc.StoreSlice(ci[j:])
+		}
+		for ; j < n; j++ {
+			s := ci[j]
+			bo := j
+			for p := 0; p < k; p++ {
+				s += A[p*m+i] * B[bo]
+				bo += n
+			}
+			ci[j] = s
+		}
+	}
+}
+
 // gemmF64BandCols computes columns [jLo,jHi) of rows [loRow,hiRow). jLo is
 // 8-aligned (blocks are multiples of 8); jHi==n on the last block carries the
 // 4-wide and scalar tails.
