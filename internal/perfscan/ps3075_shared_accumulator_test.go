@@ -43,7 +43,7 @@ func TestDetectPS3075_SharedAccumulator(t *testing.T) {
 	}
 	// The transform, the ordering condition it rests on, and the gate that can actually see it.
 	if !containsAll(fs[0].msg, "JAM THE ITEM LOOP", "same ascending item order",
-		"CHECK THE GATE MEASURES BIT IDENTITY") {
+		"check the gate measures bit identity") {
 		t.Fatalf("message omits the transform, the ordering rule or the gate warning:\n%s",
 			fs[0].msg)
 	}
@@ -129,5 +129,32 @@ func TestDetectPS3075_SilentOnAStridedIndex(t *testing.T) {
 	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 0 {
 		t.Fatalf("%d findings, want 0 — a strided index is not one element:\n%s",
 			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3075_ThreeClauseInnerLoop pins the form the check could not see until T1183: an
+// inner loop written as `for s := 0; s < n; s++` rather than as a range. The AWQ
+// reconstruction-error kernel is exactly this shape, its accumulate line was 84% of its
+// benchmark's profile, and matching only *ast.RangeStmt walked straight past it — while the
+// check's own description already claimed the shape.
+func TestDetectPS3075_ThreeClauseInnerLoop(t *testing.T) {
+	src := `package p
+
+func reconErr(diff []float64, xf []float64, acc []float64, in, samples int) {
+	for i := 0; i < in; i++ {
+		di, base := diff[i], i*samples
+		for s := 0; s < samples; s++ {
+			acc[s] += di * xf[base+s]
+		}
+	}
+}`
+	fs := sharedAccumulatorFindingsIn(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — a three-clause inner loop is the same accumulator", len(fs))
+	}
+	// The association trap and the gate that catches it are the round's whole lesson.
+	if !containsAll(fs[0].msg, "HOLD THE ACCUMULATOR IN AN EXPLICIT",
+		"GATE IT BY WIDTH INVARIANCE", "bit-identical at EVERY width") {
+		t.Fatalf("message omits the association trap or the width-invariance gate:\n%s", fs[0].msg)
 	}
 }

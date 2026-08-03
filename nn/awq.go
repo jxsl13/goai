@@ -210,7 +210,42 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 				for s := range acc {
 					acc[s] = 0
 				}
-				for i := 0; i < in; i++ {
+				// FOUR RESIDUAL TERMS PER PASS. The inner loop is an axpy into a SHARED
+				// accumulator, so every element costs a load and a store of acc[s]; taking four
+				// i at once loads and stores it once for four products, which is where the time
+				// was — 84% of the benchmark sat on that one line.
+				//
+				// THE ACCUMULATOR IS AN EXPLICIT LOCAL, and that is not a style choice. Written
+				// as `acc[s] += d0*x0 + d1*x1 + ...` the compound assignment adds the SUM OF THE
+				// PRODUCTS to acc[s], which associates differently from the four sequential
+				// additions it replaces and is not bit-identical. Accumulating into `a` reproduces
+				// the original order exactly. The digests below hold at jam widths 2, 4 and 8;
+				// under the compound-assignment form they move at 2 and 6, which is how the
+				// difference was found.
+				i := 0
+				for ; i+7 < in; i += 8 {
+					d0, d1 := diff[i+0], diff[i+1]
+					d2, d3 := diff[i+2], diff[i+3]
+					d4, d5 := diff[i+4], diff[i+5]
+					d6, d7 := diff[i+6], diff[i+7]
+					b0, b1 := (i+0)*samples, (i+1)*samples
+					b2, b3 := (i+2)*samples, (i+3)*samples
+					b4, b5 := (i+4)*samples, (i+5)*samples
+					b6, b7 := (i+6)*samples, (i+7)*samples
+					for s := 0; s < samples; s++ {
+						a := acc[s]
+						a += d0 * xf[b0+s]
+						a += d1 * xf[b1+s]
+						a += d2 * xf[b2+s]
+						a += d3 * xf[b3+s]
+						a += d4 * xf[b4+s]
+						a += d5 * xf[b5+s]
+						a += d6 * xf[b6+s]
+						a += d7 * xf[b7+s]
+						acc[s] = a
+					}
+				}
+				for ; i < in; i++ {
 					di, base := diff[i], i*samples
 					for s := 0; s < samples; s++ {
 						acc[s] += di * xf[base+s]
@@ -233,7 +268,33 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 				for s := range acc {
 					acc[s] = 0
 				}
-				for i := 0; i < in; i++ {
+				// Same eight-wide jam as the F64 arm, and the same explicit local accumulator for
+				// the same reason: the compound-assignment form associates differently. This arm
+				// has no benchmark of its own; it is gated by the F32 digests below.
+				i := 0
+				for ; i+7 < in; i += 8 {
+					d0, d1 := diff[i+0], diff[i+1]
+					d2, d3 := diff[i+2], diff[i+3]
+					d4, d5 := diff[i+4], diff[i+5]
+					d6, d7 := diff[i+6], diff[i+7]
+					b0, b1 := (i+0)*samples, (i+1)*samples
+					b2, b3 := (i+2)*samples, (i+3)*samples
+					b4, b5 := (i+4)*samples, (i+5)*samples
+					b6, b7 := (i+6)*samples, (i+7)*samples
+					for s := 0; s < samples; s++ {
+						a := acc[s]
+						a += d0 * float64(xf[b0+s])
+						a += d1 * float64(xf[b1+s])
+						a += d2 * float64(xf[b2+s])
+						a += d3 * float64(xf[b3+s])
+						a += d4 * float64(xf[b4+s])
+						a += d5 * float64(xf[b5+s])
+						a += d6 * float64(xf[b6+s])
+						a += d7 * float64(xf[b7+s])
+						acc[s] = a
+					}
+				}
+				for ; i < in; i++ {
 					di, base := diff[i], i*samples
 					for s := 0; s < samples; s++ {
 						acc[s] += di * float64(xf[base+s])

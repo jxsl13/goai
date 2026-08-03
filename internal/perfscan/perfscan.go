@@ -19517,15 +19517,15 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 			if found {
 				return false
 			}
-			rs, ok := m.(*ast.RangeStmt)
-			if !ok || rs.Body == nil {
+			// THE INNER LOOP IS NOT ALWAYS A RANGE. Matching only *ast.RangeStmt missed the
+			// AWQ reconstruction-error kernel, whose inner loop is `for s := 0; s < samples;
+			// s++` — the same accumulator shape this check describes, and 84% of its
+			// benchmark's profile. loopVarBody reads both forms.
+			dv, ibody, ok := loopVarBody(m)
+			if !ok {
 				return true
 			}
-			dv := identName(rs.Key)
-			if dv == "" {
-				return true
-			}
-			ast.Inspect(rs.Body, func(w ast.Node) bool {
+			ast.Inspect(ibody, func(w ast.Node) bool {
 				if found {
 					return false
 				}
@@ -19572,10 +19572,17 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" SUBJECT of the inner loop is shared and the outputs are per item; here"+
 						" the outputs are shared and the subject is per item. Neither is"+
 						" reachable from PS6010, which needs the shared operand to appear as an"+
-						" index into a per-output accumulator. CHECK THE GATE MEASURES BIT"+
-						" IDENTITY, not just agreement: swapping two of the four additions must"+
-						" turn the parity test red, or the test cannot see the property this"+
-						" transform preserves. SECOND MEASUREMENT, ON THE SIBLING KERNEL: the"+
+						" index into a per-output accumulator. HOLD THE ACCUMULATOR IN AN EXPLICIT"+
+						" LOCAL — `a := %s[%s]`, four `a += ...`, then one store. Writing it as"+
+						" `%s[%s] += t0 + t1 + t2 + t3` is NOT the same arithmetic: a compound"+
+						" assignment adds the SUM OF THE TERMS to the accumulator, which"+
+						" associates differently from the sequential additions it replaces."+
+						" GATE IT BY WIDTH INVARIANCE, because that difference hides: under the"+
+						" compound form the AWQ digests held at jam widths 4 and 8 and MOVED at"+
+						" 2 and 6, so a test of the shipped width alone would have passed a"+
+						" wrong rewrite. A correct jam is bit-identical at EVERY width. Also"+
+						" check the gate measures bit identity and not just agreement: swapping"+
+						" two of the four additions must turn the parity test red. SECOND MEASUREMENT, ON THE SIBLING KERNEL: the"+
 						" masked-attention kernel carried the identical loop — its SCORE loop had"+
 						" been jammed and this one had not — and jamming it took"+
 						" MHAMaskedF32CPU_1024x1024x64x16 from 118.0 to 89.7 ms, -24.0%%, the 512"+
@@ -19591,7 +19598,7 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" EARLIER VERSION OF THIS CHECK: it addressed the accumulator as os[ob+d]"+
 						" instead of slicing a row first, and the index test only recognized a bare"+
 						" variable. Widening it to a SUM found 11 more sites in the tree",
-						acc, jv, acc, dv),
+						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false
 			})
