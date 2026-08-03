@@ -102,10 +102,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 					tv[j] += wrow[j] * ui
 				}
 			}
-			var nv float64
-			for j := range out {
-				nv += tv[j] * tv[j]
-			}
+			nv := dot4(tv, tv) // Σ_j tv[j]²
 			if nv = math.Sqrt(nv); nv > 0 {
 				for j := range out {
 					vs[j] = tv[j] / nv
@@ -114,10 +111,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 			var nu float64
 			for i := range in {
 				wrow := ws[i*out : i*out+out : i*out+out]
-				var acc float64
-				for j := range out {
-					acc += wrow[j] * vs[j] // contiguous W row · v
-				}
+				acc := dot4(wrow, vs) // contiguous W row · v
 				tu[i] = acc
 				nu += acc * acc
 			}
