@@ -1,6 +1,10 @@
 package simd
 
-import "math"
+import (
+	"math"
+
+	"github.com/jxsl13/goai/internal/fmath"
+)
 
 // wkvScanScalar runs the RWKV-4 WKV recurrence for channels [cLo,cHi) — the
 // numerically-stable log-space scan (Peng et al. 2023). It mirrors the reference
@@ -38,7 +42,7 @@ func wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d, cLo, c
 			// both equality tests fail, and both exps are evaluated exactly as before.
 			// Bit-identical, and math.Exp(0) is exactly 1 so the surviving arithmetic is
 			// unchanged. exp was 75.6%% of this kernel's profile.
-			q := math.Max(pp, ww)
+			q := fmath.Max(pp, ww)
 			e1, e2 := 1.0, 1.0
 			if q != pp {
 				e1 = math.Exp(pp - q)
@@ -48,7 +52,7 @@ func wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d, cLo, c
 			}
 			out[base] = (e1*aa + e2*vv) / (e1*bb + e2)
 			ppw := pp - wc
-			q = math.Max(ppw, kk)
+			q = fmath.Max(ppw, kk)
 			e1, e2 = 1.0, 1.0
 			if q != ppw {
 				e1 = math.Exp(ppw - q)

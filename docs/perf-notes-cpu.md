@@ -161,7 +161,7 @@ Allocation profiles of both:
 - CoPE: **99.6% is `allocF64`, 78.5% of it under `backend.Execute`** — the
   same thing, with almost nothing else in the profile.
 
-At ~101 KB per allocation on MTA and ~221 KB on CoPE, these are whole
+At ≈101 KB per allocation on MTA and ≈221 KB on CoPE, these are whole
 intermediate tensors, one per op in the graph.
 
 ### Three things this is NOT, each ruled out by measurement
@@ -208,14 +208,27 @@ channel — the innermost position there is. Moving those onto `internal/fmath`
 The −13.7% lands almost exactly on `math.archMax`'s 13.1% share of the `nn.WKV`
 profile.
 
-### The F64 arm is flat for a structural reason, not a measurement one
+### The F64 arm was flat because the call is in another package (corrected T1182)
 
-`cpu`'s F64 path dispatches into `simd.WKVScanRangeF64`. The `math.Max` calls
-visible in `backend/cpu/wkv.go`'s F64 region are in the **exotic-dtype
-fallback**, which no registered dtype reaches. The F32 arm is Go, and it moved.
+T1181 recorded this as "the F64 path dispatches into SIMD assembly, so there is
+nothing left to convert." That explanation was wrong. `simd.WKVScanRangeF64` is
+**portable Go** outside the AVX build — `internal/simd/wkv_scalar.go` — and it
+carries two `math.Max` calls per token per channel. The F64 arm was flat because
+the sweep never opened that file, not because the work had left Go.
 
-Rank a candidate by which arm the benchmark actually executes, not by which
-file the call is written in.
+Converting it (T1182) moved the arm the earlier round could not:
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `cpu.BenchmarkWKV_512x1024` (F64) | 3.234 ms | 2.863 ms | **−11.5%** |
+| `cpu.BenchmarkWKVF32Ref_512x1024` | 3.190 ms | 2.632 ms | **−17.5%** |
+| `autograd.BenchmarkWKVBackward_256x1024` | 3.039 ms | 2.750 ms | **−9.5%** |
+
+The generalizable form: a kernel file's own call sites are not the kernel's call
+sites. Follow the dispatch into helper packages before concluding an arm has
+nothing left — and confirm the routing rather than assuming it. Mutating the max
+in `internal/simd/wkv_scalar.go` reddens exactly the two CPU-F64 digests below
+and neither Ref case, which is what proves where that path lands.
 
 ### Rejected: the SVM solver
 
