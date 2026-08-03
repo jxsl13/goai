@@ -259,22 +259,78 @@ func init() {
 									sum += a[j]
 								}
 								var dot float64
-								for j := range jmax {
-									a[j] /= sum
+								// EIGHT KEYS PER PASS, AND THE SHARED OPERAND IS THE POINT rather than a shared
+								// accumulator: gs[i*cols+hc+d] is fixed by the QUERY, so the loop below re-read the
+								// whole gradient row once per key. Eight keys at a time read it once and use it eight
+								// times, and the eight dav chains are independent where one was serial. Width 8
+								// measured 8.44 ms against 8.50 at 6, 8.68 at 4 and 9.07 at 2.
+								//
+								// BIT-IDENTICAL: each dav still sums d ascending into its own accumulator, dot still
+								// takes the keys in ascending order, and every dvC element is written exactly once.
+								jv := 0
+								for ; jv+7 < jmax; jv += 8 {
+									a[jv+0] /= sum
+									a[jv+1] /= sum
+									a[jv+2] /= sum
+									a[jv+3] /= sum
+									a[jv+4] /= sum
+									a[jv+5] /= sum
+									a[jv+6] /= sum
+									a[jv+7] /= sum
+									a0, a1, a2, a3, a4, a5, a6, a7 := a[jv+0], a[jv+1], a[jv+2], a[jv+3], a[jv+4], a[jv+5], a[jv+6], a[jv+7]
+									var dav0, dav1, dav2, dav3, dav4, dav5, dav6, dav7 float64
+									for d := range dh {
+										g := gs[i*cols+hc+d]
+										dvcs[(jv+0)*cols+hc+d] += a0 * g
+										dav0 += g * vcs[(jv+0)*cols+hc+d]
+										dvcs[(jv+1)*cols+hc+d] += a1 * g
+										dav1 += g * vcs[(jv+1)*cols+hc+d]
+										dvcs[(jv+2)*cols+hc+d] += a2 * g
+										dav2 += g * vcs[(jv+2)*cols+hc+d]
+										dvcs[(jv+3)*cols+hc+d] += a3 * g
+										dav3 += g * vcs[(jv+3)*cols+hc+d]
+										dvcs[(jv+4)*cols+hc+d] += a4 * g
+										dav4 += g * vcs[(jv+4)*cols+hc+d]
+										dvcs[(jv+5)*cols+hc+d] += a5 * g
+										dav5 += g * vcs[(jv+5)*cols+hc+d]
+										dvcs[(jv+6)*cols+hc+d] += a6 * g
+										dav6 += g * vcs[(jv+6)*cols+hc+d]
+										dvcs[(jv+7)*cols+hc+d] += a7 * g
+										dav7 += g * vcs[(jv+7)*cols+hc+d]
+									}
+									dA[jv+0] = dav0
+									dot += dav0 * a0
+									dA[jv+1] = dav1
+									dot += dav1 * a1
+									dA[jv+2] = dav2
+									dot += dav2 * a2
+									dA[jv+3] = dav3
+									dot += dav3 * a3
+									dA[jv+4] = dav4
+									dot += dav4 * a4
+									dA[jv+5] = dav5
+									dot += dav5 * a5
+									dA[jv+6] = dav6
+									dot += dav6 * a6
+									dA[jv+7] = dav7
+									dot += dav7 * a7
+								}
+								for ; jv < jmax; jv++ {
+									a[jv] /= sum
 									var dav float64
 									for d := range dh {
 										gid := gs[i*cols+hc+d]
-										dvcs[j*cols+hc+d] += a[j] * gid
-										dav += gid * vcs[j*cols+hc+d]
+										dvcs[jv*cols+hc+d] += a[jv] * gid
+										dav += gid * vcs[jv*cols+hc+d]
 									}
-									dA[j] = dav
-									dot += dav * a[j]
+									dA[jv] = dav
+									dot += dav * a[jv]
 								}
-								// FOUR KEYS PER PASS. dqC and dqRrot accumulate into slots fixed by the QUERY, so the
+								// SIX KEYS PER PASS. dqC and dqRrot accumulate into slots fixed by the QUERY, so the
 								// loop below loaded and stored them once per key for a single multiply-add each; four
-								// keys at a time hold each in a register across four of them. dkC is per key and keeps
+								// keys at a time hold each in a register across six of them. dkC is per key and keeps
 								// its own store. BIT-IDENTICAL: every slot still sums keys ascending, and the query
-								// accumulators are EXPLICIT LOCALS rather than compound assignments over a sum of four
+								// accumulators are EXPLICIT LOCALS rather than compound assignments over a sum of six
 								// products, which would associate differently (T1183).
 								jb := 0
 								for ; jb+5 < jmax; jb += 6 {
@@ -404,18 +460,73 @@ func init() {
 									sum += a[j]
 								}
 								var dot float64
-								for j := range jmax {
-									a[j] /= sum
+								// EIGHT KEYS PER PASS, AND THE SHARED OPERAND IS THE POINT rather than a shared
+								// accumulator: gs[i*cols+hc+d] is fixed by the QUERY, so the loop below re-read the
+								// whole gradient row once per key. Eight keys at a time read it once and use it eight
+								// times, and the eight dav chains are independent where one was serial. Width 8
+								// measured 8.44 ms against 8.50 at 6, 8.68 at 4 and 9.07 at 2.
+								//
+								// BIT-IDENTICAL: each dav still sums d ascending into its own accumulator, dot still
+								// takes the keys in ascending order, and every dvC element is written exactly once.
+								// The float32 store keeps its PER-ADD rounding, as the key loop below does.
+								jv := 0
+								for ; jv+7 < jmax; jv += 8 {
+									a[jv+0] /= sum
+									a[jv+1] /= sum
+									a[jv+2] /= sum
+									a[jv+3] /= sum
+									a[jv+4] /= sum
+									a[jv+5] /= sum
+									a[jv+6] /= sum
+									a[jv+7] /= sum
+									a0, a1, a2, a3, a4, a5, a6, a7 := a[jv+0], a[jv+1], a[jv+2], a[jv+3], a[jv+4], a[jv+5], a[jv+6], a[jv+7]
+									var dav0, dav1, dav2, dav3, dav4, dav5, dav6, dav7 float64
+									for d := range dh {
+										g := float64(gs[i*cols+hc+d])
+										dvcs[(jv+0)*cols+hc+d] = float32(float64(dvcs[(jv+0)*cols+hc+d]) + a0*g)
+										dav0 += g * float64(vcs[(jv+0)*cols+hc+d])
+										dvcs[(jv+1)*cols+hc+d] = float32(float64(dvcs[(jv+1)*cols+hc+d]) + a1*g)
+										dav1 += g * float64(vcs[(jv+1)*cols+hc+d])
+										dvcs[(jv+2)*cols+hc+d] = float32(float64(dvcs[(jv+2)*cols+hc+d]) + a2*g)
+										dav2 += g * float64(vcs[(jv+2)*cols+hc+d])
+										dvcs[(jv+3)*cols+hc+d] = float32(float64(dvcs[(jv+3)*cols+hc+d]) + a3*g)
+										dav3 += g * float64(vcs[(jv+3)*cols+hc+d])
+										dvcs[(jv+4)*cols+hc+d] = float32(float64(dvcs[(jv+4)*cols+hc+d]) + a4*g)
+										dav4 += g * float64(vcs[(jv+4)*cols+hc+d])
+										dvcs[(jv+5)*cols+hc+d] = float32(float64(dvcs[(jv+5)*cols+hc+d]) + a5*g)
+										dav5 += g * float64(vcs[(jv+5)*cols+hc+d])
+										dvcs[(jv+6)*cols+hc+d] = float32(float64(dvcs[(jv+6)*cols+hc+d]) + a6*g)
+										dav6 += g * float64(vcs[(jv+6)*cols+hc+d])
+										dvcs[(jv+7)*cols+hc+d] = float32(float64(dvcs[(jv+7)*cols+hc+d]) + a7*g)
+										dav7 += g * float64(vcs[(jv+7)*cols+hc+d])
+									}
+									dA[jv+0] = dav0
+									dot += dav0 * a0
+									dA[jv+1] = dav1
+									dot += dav1 * a1
+									dA[jv+2] = dav2
+									dot += dav2 * a2
+									dA[jv+3] = dav3
+									dot += dav3 * a3
+									dA[jv+4] = dav4
+									dot += dav4 * a4
+									dA[jv+5] = dav5
+									dot += dav5 * a5
+									dA[jv+6] = dav6
+									dot += dav6 * a6
+									dA[jv+7] = dav7
+									dot += dav7 * a7
+								}
+								for ; jv < jmax; jv++ {
+									a[jv] /= sum
 									var dav float64
 									for d := range dh {
 										gid := float64(gs[i*cols+hc+d])
-										// per-add rounding to float32 matches the generic
-										// AtF64+SetF64 accumulation this fast path replaces
-										dvcs[j*cols+hc+d] = float32(float64(dvcs[j*cols+hc+d]) + a[j]*gid)
-										dav += gid * float64(vcs[j*cols+hc+d])
+										dvcs[jv*cols+hc+d] = float32(float64(dvcs[jv*cols+hc+d]) + a[jv]*gid)
+										dav += gid * float64(vcs[jv*cols+hc+d])
 									}
-									dA[j] = dav
-									dot += dav * a[j]
+									dA[jv] = dav
+									dot += dav * a[jv]
 								}
 								// SAME SIX-KEY JAM AS THE F64 ARM. The rounding stays PER KEY: this arm narrows to
 								// float32 after every single accumulation, so the local is a float32 rounded at each

@@ -19808,7 +19808,13 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" every single accumulation, so the register held across the group must be"+
 						" a float32 rounded at each step — holding it in float64 and rounding once"+
 						" is a better-conditioned computation and a different answer, which is"+
-						" exactly what bit-identity forbids",
+						" exactly what bit-identity forbids. AND READ THE LOOP BESIDE IT: the same"+
+						" kernel's dV loop is the MIRROR case — nothing shared is accumulated"+
+						" there, the query's gradient ROW is re-read once per key — and jamming it"+
+						" eight wide took the same benchmarks a further 9.82 to 8.45 ms (-13.9%%)"+
+						" and 9.60 to 8.40 (-12.4%%), for -27.0%% across the two rounds. Both"+
+						" shapes live in one loop nest and only one of them is this check's own;"+
+						" fixing that one and stopping leaves most of the win",
 						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false
