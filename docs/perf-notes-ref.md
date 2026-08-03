@@ -98,3 +98,51 @@ blocks is **byte**-identical. Measured: Concat 1.89 ms → 57 µs (33×), Slice
 
 Every devirtualized kernel keeps the original loop verbatim as the fallback for
 exotic dtypes, so future dtypes (int/bf16) keep working through `AtF64/SetF64`.
+
+## The masked-attention backward is the largest unoptimized op left (T1175, measured)
+
+`OpMHAMaskedBackward` is registered in **ref only** — `PS3062` lists it among the
+25 ops with no cpu kernel — so every caller on the default backend runs the
+reference implementation. It is not a small op:
+
+    BenchmarkMHAMaskedBackward          5.06 ms
+    BenchmarkMHAMaskedBackward_256h8   23.2  ms
+    BenchmarkMHAMaskedBackward_512h8   89.8  ms
+
+97.35% of that profile is one closure, `mhaMaskedBackwardKernel.func6`, and its
+line-level breakdown against 5.55 s of flat samples is:
+
+    1.11s  dqrow[d] += ds*krow[d]  /  dkrow[d] += ds*qi[d]   (dQ/dK projection)
+    0.98s  maskBuf[mbBase+j] = dscore
+    0.83s  d += gi[c]*vrow[c]  /  dvrow[c] += rj*gi[c]        (dV accumulation)
+    0.34s  sc += qi[d]*krow[d]                                (score dot)
+
+All three arithmetic loops are the shapes with the strongest measured record in
+this tree: a score dot on ONE accumulator over a query row re-streamed once per
+key, a dV accumulation whose `gi` does not vary with the key, and a dQ/dK loop
+whose `dqrow` and `qi` are both shared across keys. The identical transform on
+the **cpu** masked backward measured −45.8% (T1153), and on the NSA masked
+attention −49.7% (T1173).
+
+`PS6010` reports two of these sites as of T1174 — they were excluded before that
+round by the non-foldable-call filter, because the loop's mask guard calls
+`math.IsInf`.
+
+### What the conversion has to get right
+
+- **The loop appears TWICE**, once per mask variant (shared `[sq,sk]` and
+  per-head `[heads,sq,sk]`). A patch anchored on the loop body matches both, and
+  a one-site edit silently measures as no change — which is how this note came
+  to be written instead of the conversion.
+- **There is no live oracle inside ref.** The generic `AtF64` arm is dead for
+  the registered dtypes: `f64Data` succeeds for both F32 and F64, so nothing
+  reaches it. The gate must therefore be a digest frozen on the pre-change code
+  (PERF-TOLERANCE-ORACLE-001), not a comparison between the two arms — and the
+  existing tests do not cover it either, since the parallel-equivalence test
+  compares the kernel with ITSELF and the F32 test is a 1e-5 tolerance.
+- **Adding a cpu kernel instead** keeps ref as the oracle for a future
+  optimized path, which is what PS3062 recommends and what OpCholesky did in
+  T1127 (ref 21.1 ms → cpu 7.0 ms, 3.0×, bit-identical). It costs a 361-line
+  port; jamming ref in place costs about 60 lines across the two sites. The
+  choice is between a preserved oracle and the smaller diff, and it should be
+  made deliberately rather than by whichever is quicker to type.
