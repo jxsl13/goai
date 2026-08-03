@@ -313,25 +313,30 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
         "  int group = qHeads / kvHeads, kvh = h / group, WKV = kvHeads * hd;\n"
         "  int n = seqLens[seq]; int lane = threadIdx.x;\n"
         "  const float* q = Q + (size_t)seq*qHeads*hd + (size_t)h*hd;\n"
-        "  float q0 = q[lane], q1 = q[lane+32];\n"
+        // Each lane carries hd/32 vector elements (rr=2 for hd=64, 4 for hd=128); q2/q3 and
+        // the a2/a3 accumulators below are used only when hd==128, guarded by the warp-uniform
+        // rr>2 (no divergence). Enables Llama-2/Mistral/Qwen2 (hd=128) on this decode path.
+        "  int rr = hd >> 5;\n"
+        "  float q0 = q[lane], q1 = q[lane+32], q2 = 0.f, q3 = 0.f;\n"
+        "  if (rr > 2){ q2 = q[lane+64]; q3 = q[lane+96]; }\n"
         "  const int* bt = blockTables + (size_t)seq*maxBlocks;\n"
         "  float NEGINF = __int_as_float(0xff800000);\n"
-        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
         "  for (int j = 0; j < n; j++){\n"
         "    int phys = bt[j / blockSize] * blockSize + (j % blockSize);\n"
         "    const float* kj = poolK + (size_t)phys*WKV + (size_t)kvh*hd;\n"
-        "    float d = q0*kj[lane] + q1*kj[lane+32];\n"
+        "    float d = q0*kj[lane] + q1*kj[lane+32]; if (rr > 2){ d += q2*kj[lane+64] + q3*kj[lane+96]; }\n"
         "    for (int o=16;o>0;o>>=1) d += __shfl_down_sync(0xffffffffu, d, o);\n"
         "    d = __shfl_sync(0xffffffffu, d, 0) * scale;\n"
         "    float newm = m > d ? m : d;\n"
         "    float corr = __expf(m - newm), p = __expf(d - newm);\n"
         "    l = l*corr + p; m = newm;\n"
         "    const float* vj = poolV + (size_t)phys*WKV + (size_t)kvh*hd;\n"
-        "    a0 = a0*corr + p*vj[lane]; a1 = a1*corr + p*vj[lane+32];\n"
+        "    a0 = a0*corr + p*vj[lane]; a1 = a1*corr + p*vj[lane+32]; if (rr > 2){ a2 = a2*corr + p*vj[lane+64]; a3 = a3*corr + p*vj[lane+96]; }\n"
         "  }\n"
         "  float inv = (l > 0.f) ? 1.f/l : 0.f;\n"
         "  float* o = O + (size_t)seq*qHeads*hd + (size_t)h*hd;\n"
-        "  o[lane] = a0*inv; o[lane+32] = a1*inv;\n"
+        "  o[lane] = a0*inv; o[lane+32] = a1*inv; if (rr > 2){ o[lane+64] = a2*inv; o[lane+96] = a3*inv; }\n"
         "}\n",
         "paged_decode.cu", "paged_decode", &gPagedDecode) != 0) { rc = -2; goto donepd; }
     {

@@ -1008,3 +1008,52 @@ func BenchmarkPagedDecodeSKHd128_b1_len8192_sk1(b *testing.B) { benchPagedDecode
 func BenchmarkPagedDecodeSKHd128_b1_len8192_sk32(b *testing.B) {
 	benchPagedDecodeSKHd128(b, 1, 8192, 32)
 }
+
+// benchPagedDecodeAttnHd128 times the base (production continuous-batching) paged
+// decode at hd=128 — the path cuda_batch_sched uses, previously unavailable for
+// hd=128 models (Llama-2/Mistral/Qwen2). Throughput of the now-enabled GPU path.
+func benchPagedDecodeAttnHd128(b *testing.B, batch, seqLen int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 16, 2, 128
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(13))
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	o, err := pool.BatchedDecodeAttn(q, seqs, qHeads, kvHeads)
+	if err != nil {
+		b.Skipf("hd128 base: %v", err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := pool.BatchedDecodeAttn(q, seqs, qHeads, kvHeads)
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+
+func BenchmarkPagedDecodeAttnHd128_b256_len256(b *testing.B) { benchPagedDecodeAttnHd128(b, 256, 256) }
