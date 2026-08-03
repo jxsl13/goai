@@ -19814,7 +19814,18 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" eight wide took the same benchmarks a further 9.82 to 8.45 ms (-13.9%%)"+
 						" and 9.60 to 8.40 (-12.4%%), for -27.0%% across the two rounds. Both"+
 						" shapes live in one loop nest and only one of them is this check's own;"+
-						" fixing that one and stopping leaves most of the win",
+						" fixing that one and stopping leaves most of the win. COUNT THE MULTIPLIES"+
+						" BEFORE PROMISING BIT IDENTITY, which is the hard-won part: an"+
+						" accumulation whose expression holds ONE multiply has exactly one legal"+
+						" fused-multiply-add contraction, so restructuring cannot change it. An"+
+						" expression that ADDS TWO PRODUCTS — `gamma*S + k*v` — has TWO, and the"+
+						" compiler's pick is NOT stable across a jam. RetNet's recurrent state"+
+						" update moved by one ulp when jammed EVEN AT dk=1, where the jammed body"+
+						" never runs and the surviving tail is textually identical, with the"+
+						" whole-function FMA count going 192 to 196; its sibling output dot, one"+
+						" multiply, jammed cleanly and took BenchmarkRetentionRecurrent_256x256"+
+						" 21.52 to 16.51 ms (-23.3%%), the 512x128 cell -21.1%% and 256x64"+
+						" -27.0%%. The one-multiply loop shipped and the two-multiply one did not",
 						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false

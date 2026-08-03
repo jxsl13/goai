@@ -68,9 +68,55 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 		for j := range dv {
 			orow[j] = 0
 		}
-		for i := range dk {
-			qi := qrow[i]
-			srow := s[i*dv : i*dv+dv]
+		// EIGHT KEYS PER PASS. orow does not vary with the key, so this loop loaded and stored
+		// the whole output row once per key for one multiply-add each; four keys at a time hold
+		// orow[j] in a register across eight of them. BIT-IDENTICAL: orow[j] still sums keys
+		// ascending, into an EXPLICIT LOCAL rather than a compound assignment over a sum of
+		// eight products, which would associate differently (T1183).
+		//
+		// THE STATE-UPDATE LOOP ABOVE IS THE MIRROR SHAPE — vrow is read once per key rather
+		// than accumulated — AND IT CANNOT BE JAMMED THE SAME WAY. Its body is
+		// `gamma*S + k*v`, an add of TWO products, and that expression has two legal
+		// fused-multiply-add contractions: the compiler may fuse either multiply into the add.
+		// Which one it picks is not stable across restructuring. Jamming it moved the output
+		// by one ulp EVEN AT dk=1, where the jammed body never runs and the remaining tail is
+		// textually identical to what is there now; the whole-function FMA count went 192 to
+		// 196. An accumulation is safe to jam when its expression holds ONE multiply, as this
+		// one does, because then only one contraction is legal.
+		ib := 0
+		for ; ib+7 < dk; ib += 8 {
+			q0 := qrow[ib+0]
+			q1 := qrow[ib+1]
+			q2 := qrow[ib+2]
+			q3 := qrow[ib+3]
+			q4 := qrow[ib+4]
+			q5 := qrow[ib+5]
+			q6 := qrow[ib+6]
+			q7 := qrow[ib+7]
+			r0 := s[(ib+0)*dv : (ib+0)*dv+dv]
+			r1 := s[(ib+1)*dv : (ib+1)*dv+dv]
+			r2 := s[(ib+2)*dv : (ib+2)*dv+dv]
+			r3 := s[(ib+3)*dv : (ib+3)*dv+dv]
+			r4 := s[(ib+4)*dv : (ib+4)*dv+dv]
+			r5 := s[(ib+5)*dv : (ib+5)*dv+dv]
+			r6 := s[(ib+6)*dv : (ib+6)*dv+dv]
+			r7 := s[(ib+7)*dv : (ib+7)*dv+dv]
+			for j := range dv {
+				a := orow[j]
+				a += q0 * r0[j]
+				a += q1 * r1[j]
+				a += q2 * r2[j]
+				a += q3 * r3[j]
+				a += q4 * r4[j]
+				a += q5 * r5[j]
+				a += q6 * r6[j]
+				a += q7 * r7[j]
+				orow[j] = a
+			}
+		}
+		for ; ib < dk; ib++ {
+			qi := qrow[ib]
+			srow := s[ib*dv : ib*dv+dv]
 			for j := range dv {
 				orow[j] += qi * srow[j]
 			}
