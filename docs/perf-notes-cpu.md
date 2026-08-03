@@ -145,3 +145,50 @@ callee is cheap relative to an indirect call.
 - `parThreshold`/pool dispatch internals: retuning the crossover or chunk
   count reproduced current behavior at the measured break-even; the fused-pass
   work (§4) attacks the same overhead with better returns.
+
+## Where the allocation actually goes (T1168, measured)
+
+A byte-per-op sweep of the largest cells puts almost all of it in ONE place,
+and it is not a leak, a missing pool or a churn pattern — it is the op API.
+
+    BenchmarkMTAForward_ch16   283 ms   500 MB/op    4942 allocs
+    BenchmarkCoPE_512x256_h4    25 ms   179 MB/op     808 allocs
+
+Allocation profiles of both:
+
+- MTA: **85.6% is `tensor.heapAllocator.allocF32` reached through
+  `tensor.NewOn`** — the output tensor every kernel constructs for its result.
+- CoPE: **99.6% is `allocF64`, 78.5% of it under `backend.Execute`** — the
+  same thing, with almost nothing else in the profile.
+
+At ~101 KB per allocation on MTA and ~221 KB on CoPE, these are whole
+intermediate tensors, one per op in the graph.
+
+### Three things this is NOT, each ruled out by measurement
+
+- **Not GC clearing the scratch pool.** `sync.Pool` is emptied every GC cycle,
+  which would make a pooled buffer allocate on nearly every get under this
+  much pressure. Raising GOGC from 100 to 1600 moved MTA only 498 → 461 MB/op
+  (−7.5%) and did not improve the clock, so at most a fourteenth of the
+  allocation is GC-induced pool loss.
+- **Not a leaking or thrashing scratch pool.** Instrumented over an
+  MHA/Conv/MatMul benchmark set, `getF64` recorded 105 gets against 105 puts —
+  balanced, so nothing leaks — with 12 misses of which only 2 were a buffer
+  being GROWN; the other 10 were first-time creation per P. An 88% hit rate
+  with balanced puts is a pool working as designed, and its bytes in a profile
+  are the one-time fill of the per-worker working set.
+- **Not per-job gather churn.** That pattern is real and was fixed where it
+  occurs (T1167, forest gather, −38.4% bytes), but it does not appear here.
+
+### Why it stays deferred
+
+Kernels RETURN their output tensor to the caller, so recycling one needs
+ownership and lifetime semantics the op API does not have: nothing tells a
+kernel whether its result is a graph temporary that dies at the next op or a
+value the caller keeps. An arena with explicit release, or a tensor whose
+buffer is checked back in by the executor once its consumers have run, is the
+shape of the fix; a pool cannot be bolted on underneath the current contract.
+
+Recorded so the next allocation sweep does not re-derive it: on this tree the
+allocation axis for `nn` and `backend/cpu` ends at the op API, and the pooling
+opportunities BELOW it are already taken.
