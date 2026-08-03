@@ -94,6 +94,12 @@ func NewMuon(params []*tensor.Tensor, lr float64, opts ...MuonOption) *Muon {
 
 // Step applies one Muon update.
 func (mu *Muon) Step(grad GradFn) error {
+	// The gradient callback runs SERIALLY, before anything else, and that is a contract rather
+	// than a convenience: GradFn belongs to the caller and has never been documented as safe to
+	// call from several goroutines. Everything after it touches only this parameter's own
+	// buffers, so the per-parameter work below fans out; the callback does not.
+	grads := make([]*tensor.Tensor, len(mu.Params))
+	work := 0
 	for pi, p := range mu.Params {
 		if p.Ndim() != 2 {
 			return fmt.Errorf("nn: Muon requires 2-D params, got %v (use Adam for the rest)", p.Shape())
@@ -105,6 +111,30 @@ func (mu *Muon) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Muon grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		grads[pi] = g
+		work += p.Numel()
+	}
+	// Parameter pi reads grads[pi] and writes mu.buf[pi], mu.dir[pi] and p itself — all private
+	// to it — so the parameter loop bands, BIT-IDENTICALLY: every parameter's own arithmetic,
+	// including the Newton-Schulz iteration inside it, is untouched and only which goroutine
+	// runs it moves. This is the outer level of a nest whose inner matmuls already fan out, and
+	// it is the level that was missing: a profile of the step spent 62% of its samples in
+	// pthread_cond_wait and pthread_cond_signal and only 32% in the matmul, because each
+	// parameter's five Newton-Schulz iterations fork three times each and nothing overlaps them.
+	parallelRows(len(mu.Params), max(work/max(len(mu.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				mu.stepParam(pi, mu.Params[pi], grads[pi])
+			}
+		}
+	})
+	return nil
+}
+
+// stepParam applies the Muon update to one parameter. Split out so the banded loop above has a
+// body rather than a copy of one.
+func (mu *Muon) stepParam(pi int, p, g *tensor.Tensor) {
+	{
 		R, C := p.Shape()[0], p.Shape()[1]
 		beta := mu.Momentum
 		dir := mu.dir[pi] // reused across steps; every entry is written below before it is read
@@ -127,7 +157,6 @@ func (mu *Muon) Step(grad GradFn) error {
 			p.SetF64(pv, idx...)
 		}
 	}
-	return nil
 }
 
 // newtonSchulz5 returns the semi-orthogonalization of x[rows,cols] via the quintic

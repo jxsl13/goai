@@ -217,6 +217,7 @@ var checks = []check{
 	{"PS3057", "column-read-through-a-jagged-matrix", "a loop that reads ONE column of a [][]T — an index expression x[row][col] whose ROW varies with the loop and whose COLUMN does not. Each read is a pointer chase into a separate length-d row, so n reads touch n cache lines spread across the whole n*d matrix and use 8 bytes of each; the same access against a feature-major mirror xt[col*n+row] is a scattered read inside ONE contiguous length-n array. Mirror the matrix once where it is already being walked and read the mirror everywhere. It is a PURE COPY, so nothing downstream moves by a bit — which also means only a bit-exact digest can gate it, and that the mirror COSTS n*d elements of memory: state the trade, do not hide it. MEASURED on the GBM exact-split builder, where the gather was 51%% of scanFeatures and 16%% of the package: BenchmarkGBMHist_exact_80k -19.5%%, _20k -13.6%% for +15.6%% bytes, with ForestFit flat as a control. RANK BY THE PRODUCT of the loop bound and how many times the same column is re-read — a column read once is a column that does not repay a mirror", false},
 	{"PS3058", "per-iteration-scratch-allocation", "a value whose type has a SCRATCH INITIALIZER — a method that assigns 3 or more make() results to its own fields — constructed inside a loop or inside the callback of a fan-out helper. Every iteration allocates the whole working set and throws it away. Recycle it through a sync.Pool: growing each buffer only when the pooled one is too small, and returning it when the iteration finishes. THE SAFETY ARGUMENT IS USUALLY ALREADY MADE: a scratch buffer reused across the thousands of inner steps of ONE iteration is, by that fact, written before it is read, and nothing distinguishes the first step of a new iteration from the hundredth step of the old one. Check for the exception — a buffer the finished product still points into cannot be recycled. EXPECT MEMORY, NOT NECESSARILY TIME. MEASURED on the CART builder inside a random forest fit: ForestFit allocated bytes -42.4%% and allocations -34.4%%, with the wall clock FLAT (111.2 to 108.0 ms, inside the run-to-run spread) because the fit is already parallel and was not allocation-bound. Report it as a resource win or not at all", false},
 	{"PS3059", "serial-nest-writing-through-a-derived-base", "a serial nest, in a package that declares a fan-out helper it never calls, whose every indexed write lands through a base DERIVED from the outermost loop variable — obase := b*out, then dst[obase+j] — with at least one write not naming that variable directly. This is PS3034's blind spot, and it has now cost two finds: PS3034 asks whether each write names the OUTERMOST loop variable, and a nest that hoists its row offset into a local does not. Both misses were large. The GGUF weight transpose was 84%% of its own benchmark at one core (-66.3%% once banded, T1117), and the KAN fused spline was 84%% of its layer's (-83.8%% at 256x256 and -79.0%% at 128x128, a 6.2x, T1123) — in a file whose OTHER hot loop had fanned out since it was written. WIDENING PS3034 WAS TRIED AND REVERTED: following derived names there broke three of its own fixtures and took its tree-wide count from 23 to 33 without flagging the transpose. A separate check with the narrow condition is what works. Check the band owns disjoint output before converting, and gate with BOTH a bit-exact digest and -race — which gate catches what depends on the destination: an accumulated one (+=) double-counts on an overlap so both fire, while a pure permutation writes the same value twice and only -race sees it", false},
+	{"PS3060", "serial-loop-over-parallel-work", "a loop whose body calls a function that ITSELF fans out, inside a function that does not fan out at all. The inner level is parallel and the outer one is not, so the items run strictly one after another and each pays its own fork and join. THE WIN IS NOT ONLY THE WORK, IT IS THE STALLS: a Muon optimizer step spent 62%% of its profile samples in pthread_cond_wait and pthread_cond_signal and only 32%% in the matmul, because each parameter's five Newton-Schulz iterations fork three times each and nothing overlaps them. Banding the parameter loop returned -34.1%% with only TWO parameters, far more than two-way overlap of the work alone can explain. CALL ANY CALLER-SUPPLIED CALLBACK SERIALLY FIRST: a gradient or loss function belongs to the caller and is not documented as safe to call from several goroutines, so hoist it into a serial pass and fan out only what follows. And size the test above the fan-out helper's work gate, or both arms run serially and an overlapping-band mutation passes", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1336,6 +1337,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, columnReadFindings(fset, fn)...)
 		out = append(out, perIterationScratchFindings(fset, f, fn)...)
 		out = append(out, derivedBaseNestFindings(fset, f, fn)...)
+		out = append(out, serialLoopOverParallelWorkFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3058,6 +3060,7 @@ func main() {
 	collectVariadicSiblings(fset, parsed)
 	collectFanoutHelpers(parsed)
 	collectScratchTypes(parsed)
+	collectFanningFuncs(parsed)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
@@ -18383,6 +18386,117 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3060: a serial loop over work that is itself parallel ---------------------------------
+
+// fansOutReg maps a package name to the functions and methods in it whose body calls one of the
+// package's fan-out helpers. Package-level, because the caller that loops over them is
+// routinely in another file.
+var fansOutReg = map[string]map[string]bool{}
+
+// collectFanningFuncs pre-scans every package for those functions. It runs after
+// collectFanoutHelpers, whose registry it reads.
+func collectFanningFuncs(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
+				continue
+			}
+			if !callsFanoutHelper(fn.Body, fanoutReg[f.Name.Name]) {
+				continue
+			}
+			if fansOutReg[f.Name.Name] == nil {
+				fansOutReg[f.Name.Name] = map[string]bool{}
+			}
+			fansOutReg[f.Name.Name][fn.Name.Name] = true
+		}
+	}
+}
+
+// serialLoopOverParallelWorkFindings flags PS3060 — a serial loop whose body calls a function
+// that fans out, in a function that does not.
+func serialLoopOverParallelWorkFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fansOutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := fansOutReg[f.Name.Name]
+	// A function that already fans out somewhere has made the choice; this check is about the
+	// level that is missing entirely. Self-recursion would otherwise report every fanning
+	// function that loops.
+	if callsFanoutHelper(fn.Body, fanoutReg[f.Name.Name]) || reg[fn.Name.Name] {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if len(out) > 0 {
+			return false
+		}
+		// THE LOOP MUST ITERATE OVER ITEMS, NOT REPEAT A REFINEMENT. A loop with no variable —
+		// "for range steps" — is a sequential refinement almost every time, and the Newton-Schulz
+		// iteration this check was written from is exactly that: step i+1 reads what step i
+		// wrote. Requiring a variable that the body actually uses separates the two, and it is
+		// what stops the check reporting the inside of the function it was just used to fix.
+		var body *ast.BlockStmt
+		iv := ""
+		switch t := n.(type) {
+		case *ast.ForStmt:
+			body = t.Body
+			if as, ok := t.Init.(*ast.AssignStmt); ok && len(as.Lhs) > 0 {
+				if id, ok := as.Lhs[0].(*ast.Ident); ok {
+					iv = id.Name
+				}
+			}
+		case *ast.RangeStmt:
+			body = t.Body
+			if id, ok := t.Key.(*ast.Ident); ok {
+				iv = id.Name
+			}
+		default:
+			return true
+		}
+		if iv == "" || iv == "_" || !mentionsIdent(body, iv) {
+			return true
+		}
+		callee := ""
+		ast.Inspect(body, func(m ast.Node) bool {
+			c, ok := m.(*ast.CallExpr)
+			if !ok || callee != "" {
+				return callee == ""
+			}
+			if nm := calleeName(c.Fun); reg[nm] {
+				callee = nm
+			}
+			return callee == ""
+		})
+		if callee == "" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-loop-over-parallel-work",
+			msg: fmt.Sprintf("this loop calls %q, which ITSELF fans out, from a function that does"+
+				" not fan out at all. The inner level is parallel and the outer one is not, so the"+
+				" items run strictly one after another and each pays its own fork and join."+
+				" THE WIN IS NOT ONLY THE WORK, IT IS THE STALLS: a Muon optimizer step spent 62%%"+
+				" of its profile samples in pthread_cond_wait and pthread_cond_signal and only"+
+				" 32%% in the matmul, because each parameter's five Newton-Schulz iterations fork"+
+				" three times each and nothing overlaps them. Banding the parameter loop returned"+
+				" -34.1%% with only TWO parameters, far more than two-way overlap of the work"+
+				" alone can explain. CALL ANY CALLER-SUPPLIED CALLBACK SERIALLY FIRST — a gradient"+
+				" or loss function belongs to the caller and is not documented as safe to call"+
+				" from several goroutines, so hoist it into a serial pass and fan out only what"+
+				" follows. And SIZE THE TEST ABOVE THE FAN-OUT HELPER'S WORK GATE, or both arms"+
+				" run serially and an overlapping-band mutation passes — which is exactly what"+
+				" happened on the first version of the test for this very change", callee),
+		})
+		return false
+	})
+	return out
 }
 
 // --- PS3059: a serial nest writing through a base derived from the outer variable ------------
