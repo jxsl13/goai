@@ -215,6 +215,7 @@ var checks = []check{
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
 	{"PS3056", "serial-permutation", "a multi-level nest that only COPIES elements between buffers — every write a read from somewhere else, no accumulation, no arithmetic folding the destination back in — in a package that declares a fan-out helper the function never calls. A permutation has NO dependence between its elements, so splitting the outer loop is race-free and BIT-IDENTICAL at any band count; there is no summation order to preserve because nothing is summed. It is the cheapest parallelization to justify and the easiest to overlook, since it carries no arithmetic to appear in a profile as a kernel. CHECK THE BAND OWNS DISJOINT OUTPUT — a transpose writes COLUMNS of its destination for a band of source rows, disjoint but not obvious, and a data-dependent scatter is not this shape. Gate it with BOTH a value comparison and -race: an overlapping band writes the same values and only the race detector sees it. MEASURED on the GGUF weight transpose, already cache-blocked and still 84%% of its own benchmark at one core: BenchmarkTiedHeadTransposePerCall went 154.2 ms to 49.8, a 66.3%% cut, on the model LOAD path; and on the transpose VJP, -45.7%% F64 and -50.8%% F32", false},
 	{"PS3057", "column-read-through-a-jagged-matrix", "a loop that reads ONE column of a [][]T — an index expression x[row][col] whose ROW varies with the loop and whose COLUMN does not. Each read is a pointer chase into a separate length-d row, so n reads touch n cache lines spread across the whole n*d matrix and use 8 bytes of each; the same access against a feature-major mirror xt[col*n+row] is a scattered read inside ONE contiguous length-n array. Mirror the matrix once where it is already being walked and read the mirror everywhere. It is a PURE COPY, so nothing downstream moves by a bit — which also means only a bit-exact digest can gate it, and that the mirror COSTS n*d elements of memory: state the trade, do not hide it. MEASURED on the GBM exact-split builder, where the gather was 51%% of scanFeatures and 16%% of the package: BenchmarkGBMHist_exact_80k -19.5%%, _20k -13.6%% for +15.6%% bytes, with ForestFit flat as a control. RANK BY THE PRODUCT of the loop bound and how many times the same column is re-read — a column read once is a column that does not repay a mirror", false},
+	{"PS3058", "per-iteration-scratch-allocation", "a value whose type has a SCRATCH INITIALIZER — a method that assigns 3 or more make() results to its own fields — constructed inside a loop or inside the callback of a fan-out helper. Every iteration allocates the whole working set and throws it away. Recycle it through a sync.Pool: growing each buffer only when the pooled one is too small, and returning it when the iteration finishes. THE SAFETY ARGUMENT IS USUALLY ALREADY MADE: a scratch buffer reused across the thousands of inner steps of ONE iteration is, by that fact, written before it is read, and nothing distinguishes the first step of a new iteration from the hundredth step of the old one. Check for the exception — a buffer the finished product still points into cannot be recycled. EXPECT MEMORY, NOT NECESSARILY TIME. MEASURED on the CART builder inside a random forest fit: ForestFit allocated bytes -42.4%% and allocations -34.4%%, with the wall clock FLAT (111.2 to 108.0 ms, inside the run-to-run spread) because the fit is already parallel and was not allocation-bound. Report it as a resource win or not at all", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1332,6 +1333,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sortThenTruncateFindings(fset, fn)...)
 		out = append(out, serialPermutationFindings(fset, f, fn)...)
 		out = append(out, columnReadFindings(fset, fn)...)
+		out = append(out, perIterationScratchFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3053,6 +3055,7 @@ func main() {
 	collectIntKeyMaps(parsed)
 	collectVariadicSiblings(fset, parsed)
 	collectFanoutHelpers(parsed)
+	collectScratchTypes(parsed)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
@@ -18353,6 +18356,151 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3058: a per-iteration scratch allocation --------------------------------------------
+
+// scratchTypeReg maps a package name to the types in it that declare a SCRATCH INITIALIZER: a
+// method assigning 3 or more make() results to fields of its own receiver. Package-level for
+// the same reason fanoutReg is — the initializer and the loop that builds one per iteration are
+// routinely in different files.
+var scratchTypeReg = map[string]map[string]bool{}
+
+// scratchInitializers keys "pkg.Method" for the methods that qualified their type, so the
+// finding lands on the initializer rather than on every method of the type.
+var scratchInitializers = map[string]bool{}
+
+// collectScratchTypes pre-scans every package for those types.
+func collectScratchTypes(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 || fn.Body == nil {
+				continue
+			}
+			rt := receiverTypeName(fn.Recv.List[0].Type)
+			if rt == "" || len(fn.Recv.List[0].Names) == 0 {
+				continue
+			}
+			rn := fn.Recv.List[0].Names[0].Name
+			n := 0
+			ast.Inspect(fn.Body, func(m ast.Node) bool {
+				as, ok := m.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for i, lhs := range as.Lhs {
+					sel, ok := lhs.(*ast.SelectorExpr)
+					if !ok {
+						continue
+					}
+					if id, ok := sel.X.(*ast.Ident); !ok || id.Name != rn {
+						continue
+					}
+					if i < len(as.Rhs) && calleeName(peelCall(as.Rhs[i])) == "make" {
+						n++
+					}
+				}
+				return true
+			})
+			if n < 3 {
+				continue
+			}
+			if scratchTypeReg[f.Name.Name] == nil {
+				scratchTypeReg[f.Name.Name] = map[string]bool{}
+			}
+			scratchTypeReg[f.Name.Name][rt] = true
+			scratchInitializers[f.Name.Name+"."+fn.Name.Name] = true
+		}
+	}
+}
+
+// peelCall returns e when it is a call expression, else e itself.
+func peelCall(e ast.Expr) ast.Expr {
+	if c, ok := e.(*ast.CallExpr); ok {
+		return c.Fun
+	}
+	return e
+}
+
+// receiverTypeName returns the bare type name of a method receiver, pointer or not.
+func receiverTypeName(e ast.Expr) string {
+	if st, ok := e.(*ast.StarExpr); ok {
+		e = st.X
+	}
+	if ix, ok := e.(*ast.IndexExpr); ok { // generic receiver
+		e = ix.X
+	}
+	if id, ok := e.(*ast.Ident); ok {
+		return id.Name
+	}
+	return ""
+}
+
+// callsPoolGet reports whether body calls Get on something, which is how a sync.Pool is read.
+func callsPoolGet(body *ast.BlockStmt) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if sel, ok := c.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "Get" {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// perIterationScratchFindings flags PS3058 — a scratch initializer in a package that declares
+// no sync.Pool, so nothing it allocates is ever recycled.
+//
+// REPORTED AT THE INITIALIZER, not at a construction site, and that is a deliberate limit. The
+// value is usually built inside a function CALLED per iteration rather than inline in the loop
+// — the CART builder that motivated this check is constructed in the tree's fit method, which
+// the forest calls once per tree — and following that would need a call graph this tool does
+// not build. The reader ranks it: an initializer whose type is built once per program is
+// nothing, and one built once per work item is the whole allocation profile.
+func perIterationScratchFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return nil
+	}
+	// Suppressed only when THIS initializer already recycles. A package-level test was tried
+	// and is useless: one sync.Pool anywhere in nlp or autograd silenced every initializer in
+	// them, taking the tree-wide count from 8 to 0.
+	if callsPoolGet(fn.Body) {
+		return nil
+	}
+	rt := receiverTypeName(fn.Recv.List[0].Type)
+	if rt == "" || !scratchTypeReg[f.Name.Name][rt] || !scratchInitializers[f.Name.Name+"."+fn.Name.Name] {
+		return nil
+	}
+	return []finding{{
+		pos:      fset.Position(fn.Pos()),
+		category: "per-iteration-scratch-allocation",
+		msg: fmt.Sprintf("%q assigns 3 or more make() results to fields of its %q receiver, and"+
+			" nothing in this package is ever recycled — it declares no sync.Pool. If the type is"+
+			" built once per work item, every item allocates the whole working set and throws it"+
+			" away. RANK IT BY WHERE THE TYPE IS CONSTRUCTED: once per program is nothing, once"+
+			" per work item is the entire allocation profile. This check cannot tell you which,"+
+			" because the construction usually sits in a function CALLED per iteration rather"+
+			" than inline in the loop. THE SAFETY ARGUMENT IS USUALLY ALREADY MADE — a buffer"+
+			" reused across the thousands of inner steps of ONE work item is, by that fact,"+
+			" written before it is read, and nothing distinguishes the first step of a new item"+
+			" from the hundredth step of the old one. Check for the exception: a buffer the"+
+			" finished product still points into cannot be recycled. Grow each pooled buffer"+
+			" only when it is too small, and note that a table whose entries do not depend on"+
+			" the size (c*ln c for c in [0,n]) can be EXTENDED rather than rebuilt."+
+			" EXPECT MEMORY, NOT NECESSARILY TIME. MEASURED on the CART builder inside a random"+
+			" forest fit: ForestFit allocated bytes -42.4%% and allocations -34.4%%, with the"+
+			" wall clock FLAT (111.2 to 108.0 ms, inside the run-to-run spread) because the fit"+
+			" is already parallel and was not allocation-bound. Report it as a resource win or"+
+			" not at all", fn.Name.Name, rt),
+	}}
 }
 
 // --- PS3056: a serial permutation left off the fan-out ----------------------------------------

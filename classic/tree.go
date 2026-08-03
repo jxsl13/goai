@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"sort"
+	"sync"
 )
 
 // Criterion selects the impurity measure a decision tree greedily minimises at
@@ -175,6 +176,53 @@ type cartBuilder struct {
 	// sub-cutoff comparison sort so its comparator reads one contiguous float instead
 	// of chasing b.x[id] (a scattered [][]float64 row pointer) on every comparison.
 	keyByID []float64
+	scratch *cartScratch // pooled backing for the buffers above; nil on the presort path
+}
+
+// cartScratch is the subsampled builder's working memory, recycled ACROSS trees. Recycling it
+// is exactly as safe as the reuse the builder already does across the nodes of one tree: every
+// buffer here is fully written before it is read at each node — keyByID and radixKeys are
+// filled from the node's order, sweepVals from its feature values, leftCnt is zeroed at the top
+// of each sweep, totCnt is recomputed per node — which is what already lets one tree share them
+// between thousands of nodes. Nothing distinguishes the first node of a new tree from the
+// hundredth node of the old one.
+//
+// A random forest built 7 of these per tree and threw them away: initIdx was 32% of the fit's
+// allocated bytes.
+type cartScratch struct {
+	sortBuf   []int
+	radixKeys []uint64
+	radixTmpI []int
+	radixTmpK []uint64
+	sweepVals []float64
+	keyByID   []float64
+	partIdx   []int
+	idxBuf    []int
+	totCnt    []int
+	leftCnt   []int
+	// clogc[c] = c·ln c, and its entries do NOT depend on n — a table built for a bigger
+	// tree stays exactly right for a smaller one, so it is only ever extended.
+	clogc []float64
+}
+
+var cartScratchPool sync.Pool
+
+// grownTo returns s resliced to n, allocating only when its capacity cannot hold n. The
+// returned prefix is NOT cleared: every caller here fills before it reads.
+func grownTo[T any](s []T, n int) []T {
+	if cap(s) >= n {
+		return s[:n]
+	}
+	return make([]T, n)
+}
+
+// release returns the builder's scratch to the pool. Safe because nothing the fit keeps — the
+// node slab and the values inside the nodes — points into any of these buffers.
+func (b *cartBuilder) release() {
+	if b.scratch != nil {
+		cartScratchPool.Put(b.scratch)
+		b.scratch = nil
+	}
 }
 
 // subsampled reports whether per-split feature subsampling is active (the random
@@ -191,17 +239,38 @@ func (b *cartBuilder) subsampled(d int) bool {
 // initIdx allocates the reusable scratch the per-node (subsampled) split finder
 // needs: the class-count buffers and a single sort buffer reused across features.
 func (b *cartBuilder) initIdx(n int) {
-	if !b.regression {
-		b.totCnt = make([]int, b.nClasses)
-		b.leftCnt = make([]int, b.nClasses)
+	sc, _ := cartScratchPool.Get().(*cartScratch)
+	if sc == nil {
+		sc = &cartScratch{}
 	}
-	b.sortBuf = make([]int, n)
-	b.radixKeys = make([]uint64, n)
-	b.radixTmpI = make([]int, n)
-	b.radixTmpK = make([]uint64, n)
-	b.sweepVals = make([]float64, n)
-	b.keyByID = make([]float64, n)
+	b.scratch = sc
+	if !b.regression {
+		sc.totCnt = grownTo(sc.totCnt, b.nClasses)
+		sc.leftCnt = grownTo(sc.leftCnt, b.nClasses)
+		b.totCnt, b.leftCnt = sc.totCnt, sc.leftCnt
+	}
+	sc.sortBuf = grownTo(sc.sortBuf, n)
+	sc.radixKeys = grownTo(sc.radixKeys, n)
+	sc.radixTmpI = grownTo(sc.radixTmpI, n)
+	sc.radixTmpK = grownTo(sc.radixTmpK, n)
+	sc.sweepVals = grownTo(sc.sweepVals, n)
+	sc.keyByID = grownTo(sc.keyByID, n)
+	sc.partIdx = grownTo(sc.partIdx, n)
+	b.sortBuf, b.radixKeys, b.radixTmpI = sc.sortBuf, sc.radixKeys, sc.radixTmpI
+	b.radixTmpK, b.sweepVals, b.keyByID = sc.radixTmpK, sc.sweepVals, sc.keyByID
+	b.partIdx = sc.partIdx
 	b.buildCLogC(n)
+}
+
+// allIdx returns the ascending [0..n) the subsampled build starts from, out of the pooled
+// scratch. buildIdx partitions it in place and the finished tree does not reference it.
+func (b *cartBuilder) allIdx(n int) []int {
+	b.scratch.idxBuf = grownTo(b.scratch.idxBuf, n)
+	idx := b.scratch.idxBuf
+	for i := range idx {
+		idx[i] = i
+	}
+	return idx
 }
 
 // buildCLogC caches clogc[c] = c·ln c for c∈[0,n] when the Entropy criterion is active
@@ -211,10 +280,27 @@ func (b *cartBuilder) buildCLogC(n int) {
 	if b.regression || b.cfg.criterion != Entropy {
 		return
 	}
-	b.clogc = make([]float64, n+1)
-	for c := 1; c <= n; c++ {
-		b.clogc[c] = float64(c) * math.Log(float64(c))
+	sc := b.scratch
+	if sc == nil { // presort path: no pooled scratch
+		b.clogc = make([]float64, n+1)
+		for c := 1; c <= n; c++ {
+			b.clogc[c] = float64(c) * math.Log(float64(c))
+		}
+		return
 	}
+	// Extend only. c·ln c does not depend on n, so entries a previous, larger tree filled
+	// are already the values this one needs, and the O(n) log sweep is paid once per pool
+	// entry rather than once per tree.
+	if from := len(sc.clogc); from < n+1 {
+		sc.clogc = append(sc.clogc, make([]float64, n+1-from)...)
+		if from < 1 {
+			from = 1
+		}
+		for c := from; c <= n; c++ {
+			sc.clogc[c] = float64(c) * math.Log(float64(c))
+		}
+	}
+	b.clogc = sc.clogc
 }
 
 // initColumns argsorts every feature once and allocates the reusable scratch the
@@ -944,7 +1030,8 @@ func (m *DecisionTreeClassifier) fitWithSeed(x [][]float64, y, classes []int, se
 	b := &cartBuilder{x: x, yi: yi, nClasses: len(classes), cfg: m.cfg, rng: &lcg{state: nonzero(seed)}}
 	if b.subsampled(d) {
 		b.initIdx(len(x))
-		m.root = b.buildIdx(allIndices(len(x)), 0)
+		defer b.release()
+		m.root = b.buildIdx(b.allIdx(len(x)), 0)
 	} else {
 		b.initColumns(len(x), d)
 		m.root = b.build(0, len(x), 0)
@@ -1016,7 +1103,8 @@ func (m *DecisionTreeRegressor) fitWithSeed(x [][]float64, y []float64, seed uin
 	b := &cartBuilder{x: x, yf: y, regression: true, cfg: m.cfg, rng: &lcg{state: nonzero(seed)}}
 	if b.subsampled(d) {
 		b.initIdx(len(x))
-		m.root = b.buildIdx(allIndices(len(x)), 0)
+		defer b.release()
+		m.root = b.buildIdx(b.allIdx(len(x)), 0)
 	} else {
 		b.initColumns(len(x), d)
 		m.root = b.build(0, len(x), 0)
