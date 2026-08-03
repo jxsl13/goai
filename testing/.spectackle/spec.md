@@ -26,3 +26,6 @@ WHEN mutating a score to test a gate whose observable is a selection or ranking,
 
 ## A-GROUP-UNIFORMITY-TEST-STATES-WHAT-IT-GUARDS-001
 WHEN a grouped kernel checks its group for uniformity, the implementer SHALL records whether that check guards correctness or only speed; dropping 1 of the 4 mask checks in the masked attention kernel leaves the suite green, so it exists to skip wasted work.
+
+## A-DTYPE-BRANCHED-KERNEL-NEEDS-A-CELL-PER-BRANCH-001
+IF a kernel branches on dtype and only one branch has a benchmark, THEN the implementer SHALL not read that cell as evidence about the other branch: the flash attention f32 path was already unrolled and the f64 path was not, so the f64 change read as 2.1 percent noise against the f32 cell and 36 percent against an f64 one added for it.
