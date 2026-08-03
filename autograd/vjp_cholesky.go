@@ -133,7 +133,42 @@ func init() {
 		// clash would need i1 == j' and j == i2 with j >= i1 and j' >= i2, which forces i1 == i2.
 		logdetParallelIdx(n, n*n*n, func(i int) {
 			ci, ti := linvT[i], tmpT[i]
-			for j := i; j < n; j++ {
+			// FOUR COLUMNS PER PASS OVER ci. The S_ij dot runs from the SAME k = i for every j
+			// and streams the same ci; four of them read it once and run four independent
+			// accumulator chains instead of one. S_ji cannot join them — its lower bound is j,
+			// so the four would each need a different start — and it keeps the scalar form.
+			//
+			// BIT-IDENTICAL: every S_ij still sums over the same ascending k with the same
+			// operands into its own accumulator, and abar is still written in ascending j.
+			jj := i
+			for ; jj+3 < n; jj += 4 {
+				t0, t1 := tmpT[jj+0], tmpT[jj+1]
+				t2, t3 := tmpT[jj+2], tmpT[jj+3]
+				var q0, q1, q2, q3 float64
+				for k := i; k < n; k++ {
+					cv := ci[k]
+					q0 += cv * t0[k]
+					q1 += cv * t1[k]
+					q2 += cv * t2[k]
+					q3 += cv * t3[k]
+				}
+				for d, sij := range [4]float64{q0, q1, q2, q3} {
+					j := jj + d
+					var sji float64
+					cj := linvT[j]
+					for k := j; k < n; k++ {
+						sji += cj[k] * ti[k]
+					}
+					if i == j {
+						abar.SetF64(sij, i, j)
+						continue
+					}
+					v := 0.5 * (sij + sji)
+					abar.SetF64(v, i, j)
+					abar.SetF64(v, j, i)
+				}
+			}
+			for j := jj; j < n; j++ {
 				var sij float64 // S_ij = Σ_k Linvᵀ[i,k]·T[k,j] = Σ_k Linv[k,i]·T[k,j], Linv lower ⇒ k ≥ i
 				var sji float64 // S_ji, Linv lower ⇒ k ≥ j
 				cj, tj := linvT[j], tmpT[j]
