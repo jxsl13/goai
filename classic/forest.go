@@ -407,24 +407,45 @@ func parallelBuild(n int, work func(t int) error) error {
 	if workers < 1 {
 		workers = 1
 	}
-	jobs := make(chan int)
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
 		firstErr error
 	)
+	run := func(t int) {
+		if err := work(t); err != nil {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+	}
+	// NO QUEUE WHEN THERE IS NOTHING TO QUEUE. The channel below exists so more jobs than
+	// workers can be handed out one at a time, and it is pure cost when n <= workers — which is
+	// how the tree builders use this helper: they call it with exactly one job per chunk, once
+	// per NODE, thousands of times per fit. An unbuffered send is a rendezvous, so that path
+	// paid two handoffs per job on top of the goroutine. A GBM fit spent 95.6% of its profile
+	// samples in pthread_cond_wait, pthread_cond_signal and usleep against 1.75% in the split
+	// scan itself.
+	if n <= workers {
+		for t := 0; t < n; t++ {
+			wg.Add(1)
+			go func(t int) {
+				defer wg.Done()
+				run(t)
+			}(t)
+		}
+		wg.Wait()
+		return firstErr
+	}
+	jobs := make(chan int)
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for t := range jobs {
-				if err := work(t); err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
-				}
+				run(t)
 			}
 		}()
 	}
