@@ -175,9 +175,56 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 						orow[d] = 0
 					}
 					if sum > 0 {
-						for j := 0; j <= i; j++ {
-							pj := scores[j] / sum
-							vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+						// EIGHT KEYS PER PASS. orow does not vary with j, so the loop below loaded and
+						// stored the whole output row once per attended key for a single multiply-add each;
+						// eight keys at a time hold orow[d] in a register across eight of them. Widths 6 and
+						// 8 measure the same (7.45 vs 7.44 ms) and 2 leaves half the win on the table (8.35).
+						//
+						// BIT-IDENTICAL: each orow[d] still sums j ascending, and the accumulator is an
+						// EXPLICIT LOCAL — a compound assignment would add the SUM of the eight products,
+						// which associates differently (T1183). Every width from 2 to 8 leaves the digests
+						// unchanged, which is what says the association is right.
+						//
+						// SKIPPING THE UNSELECTED KEYS WAS TRIED AND IS WORSE. Most j are outside the top-K
+						// blocks, so their score is -Inf, their softmax weight is exactly +0, and the d loop
+						// adds nothing — but a per-key branch instead of this jam measured 8.46 ms against
+						// 7.44. It would not be equivalent either: 0 times an infinite or NaN value is NaN,
+						// not zero, so a v with a non-finite entry would get a different answer, and the
+						// digests cannot see that because ordinary data has no infinities.
+						jj := 0
+						for ; jj+7 <= i; jj += 8 {
+							p0 := scores[jj+0] / sum
+							p1 := scores[jj+1] / sum
+							p2 := scores[jj+2] / sum
+							p3 := scores[jj+3] / sum
+							p4 := scores[jj+4] / sum
+							p5 := scores[jj+5] / sum
+							p6 := scores[jj+6] / sum
+							p7 := scores[jj+7] / sum
+							v0 := vs[(jj+0)*dm+off : (jj+0)*dm+off+dk]
+							v1 := vs[(jj+1)*dm+off : (jj+1)*dm+off+dk]
+							v2 := vs[(jj+2)*dm+off : (jj+2)*dm+off+dk]
+							v3 := vs[(jj+3)*dm+off : (jj+3)*dm+off+dk]
+							v4 := vs[(jj+4)*dm+off : (jj+4)*dm+off+dk]
+							v5 := vs[(jj+5)*dm+off : (jj+5)*dm+off+dk]
+							v6 := vs[(jj+6)*dm+off : (jj+6)*dm+off+dk]
+							v7 := vs[(jj+7)*dm+off : (jj+7)*dm+off+dk]
+							for d := range dk {
+								a := orow[d]
+								a += p0 * v0[d]
+								a += p1 * v1[d]
+								a += p2 * v2[d]
+								a += p3 * v3[d]
+								a += p4 * v4[d]
+								a += p5 * v5[d]
+								a += p6 * v6[d]
+								a += p7 * v7[d]
+								orow[d] = a
+							}
+						}
+						for ; jj <= i; jj++ {
+							pj := scores[jj] / sum
+							vrow := vs[jj*dm+off : jj*dm+off+dk : jj*dm+off+dk]
 							for d := range dk {
 								orow[d] += pj * vrow[d]
 							}

@@ -19790,7 +19790,16 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" that matrix fits in cache and the round trip this removes is cheap"+
 						" there. Reading the three spellings took the tree-wide count from 81 to"+
 						" 95. EIGHT WAS THE MEASURED OPTIMUM, not a default: widths 12 and 16"+
-						" regress on register pressure (8.38 and 8.35 ms)",
+						" regress on register pressure (8.38 and 8.35 ms). FIFTH MEASUREMENT, ON"+
+						" AN ATTENTION P-DOT-V: MoBA's output row does not vary with the attended"+
+						" key, so it was loaded and stored once per key for a single multiply-add"+
+						" — jamming eight keys took BenchmarkMoBAAttention 9.92 to 7.49 ms,"+
+						" -24.5%%, with widths 6 and 8 tied and 2 leaving half the win. THE"+
+						" OBVIOUS ALTERNATIVE IS WORSE AND WRONG: most of those keys are outside"+
+						" the top-K blocks and carry a softmax weight of exactly +0, but a"+
+						" per-key branch to skip them measured 8.46 ms against the jam's 7.44,"+
+						" and it is not equivalent anyway — 0 times an infinite or NaN value is"+
+						" NaN rather than zero, which no digest over ordinary data can see",
 						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false

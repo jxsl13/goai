@@ -300,3 +300,31 @@ shape, and `topK=1` (only the current block ever in the set).
 The generic `AtF64` fallback arm carries the same map. It is the slow path taken
 only by dtypes the flat-`float64` fast path cannot expose, and `PS3083` still
 reports it — correctly.
+
+### The P·V accumulation, jammed (T1186)
+
+The same kernel's output row does not vary with the attended key, so the
+accumulation loaded and stored the whole row once per key for a single
+multiply-add each. Eight keys per pass hold `orow[d]` in a register across eight
+of them.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMoBAAttention` | 9.92 ms | 7.49 ms | **-24.5%** |
+
+Widths 6 and 8 tie (7.45 vs 7.44 ms); width 2 leaves half the win (8.35). Every
+width from 2 to 8 leaves the digests unchanged, which is what says the
+association is right — the accumulator is an explicit local, not a compound
+assignment over the sum of eight products.
+
+**The obvious alternative is both slower and wrong.** Most attended keys sit
+outside the top-K blocks, so their score is `-Inf`, their softmax weight is
+exactly `+0`, and the whole inner loop adds nothing. Skipping them with a
+per-key branch measured **8.46 ms against the jam's 7.44** — worse. It would not
+be equivalent either: `0` times an infinite or NaN value is `NaN`, not zero, so a
+`v` holding a non-finite entry would get a different answer. No digest over
+ordinary data can see that, which is the reason to state it rather than to test
+for it.
+
+Still reported by `PS3075`: the per-block key-sum at `moba.go:84`. It is
+`O(seq·dk)` per head against this loop's `O(seq^2·dk)` and was not measured.
