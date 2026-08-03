@@ -62,3 +62,6 @@ WHEN a parallel op finishes with an elementwise pass over its whole output, the 
 
 ## A-BLOCKED-KERNEL-GETS-A-DEGENERATE-SHAPE-PATH-001
 WHEN a blocked kernel can be called with its innermost dimension equal to one, the optimizer SHALL adds a path that keeps the block but holds its accumulators as scalars across the whole reduction; measured 23.4 percent on a 2048-square f64 matrix-vector product, 36.7 in f32 and 17.7 on the conv-shaped case, while the obvious per-row dot was slightly WORSE than the block because the block amortizes its loop over 4 rows.
+
+## A-SINGLE-COLUMN-CONSUMER-MAKES-THE-STAGING-POINTLESS-001
+WHEN a buffer is filled by one call and reduced by the next against an output width that can be one, the optimizer SHALL adds a fused path for width one that visits the same elements in the same order into a single accumulator; on conv2d that took a 256x256 3x3 single-filter convolution down 22.1 percent, and only where padding is absent, because the staged zeros the reduce adds are not the same operation as skipping them.
