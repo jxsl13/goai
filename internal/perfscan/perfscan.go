@@ -19608,10 +19608,11 @@ func serialPermutationFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDec
 	}
 	var out []finding
 	params := declaredParamNames(fn)
+	// EVERY NEST IN THE FUNCTION, not only the first. A function large enough to hold two is
+	// exactly the kind that holds a hot nest behind a cold one, and stopping at one finding
+	// makes which one you hear about an accident of source order. The count is unchanged on
+	// this tree (21), so this buys coverage rather than noise.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if len(out) > 0 {
-			return false
-		}
 		if loopSpansAParameterRange(n, params) {
 			return false // already a band body; its fan-out is in the caller
 		}
