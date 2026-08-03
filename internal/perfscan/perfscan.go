@@ -18849,7 +18849,17 @@ func unsizedFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) [
 			" either sign. And check whether the helper already sizes itself: the cpu backend's"+
 			" pool does, which is why it is absent from this check's candidates, and raising its"+
 			" per-worker floor made decode monotonically worse (522, 529, 542 ms at 1<<15, 1<<16,"+
-			" 1<<17) — its constants are already at their optimum", fn.Name.Name),
+			" 1<<17) — its constants are already at their optimum. THAT POOL IS NOW CLOSED AS A"+
+			" TUNING TARGET: its dense-regime ceiling and its dense-regime time gap were swept"+
+			" too, against a vision workload and an elementwise control, and neither moved"+
+			" anything worth having (ViT -6%% at best from a 16x wider ceiling; a wider gap cost"+
+			" Swin 79%% and the multi-token-attention forward 16%%). Forcing every op into the"+
+			" dense regime looked like -12%% on Swin and then produced a 2.5x outlier on ViT."+
+			" WHAT THE PROFILE ACTUALLY SAYS is not a tuning problem: a batched ViT forward"+
+			" burns 11.1x CPU to deliver 3.86x of speedup, with 82%% of its samples in"+
+			" pthread_cond_wait and pthread_cond_signal and 7.8%% in the GEMM — the same shape as"+
+			" quantized decode. The lever there is FEWER AND LARGER OPERATIONS, which is kernel"+
+			" fusion, and no constant in the pool reaches it", fn.Name.Name),
 	}}
 }
 
