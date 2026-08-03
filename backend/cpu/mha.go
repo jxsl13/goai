@@ -818,7 +818,44 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			a[j] /= sum
 		}
 		var dot float64
-		for j := jmin; j < jmax; j++ {
+		// FOUR KEYS PER PASS OVER THE GRADIENT ROW. gr does not vary with j, so the row-at-a-time
+		// form re-streams it once per key, and each key's dav is a dk-term reduction into a single
+		// accumulator — the two costs this loop is made of. Four keys read gr once and run four
+		// independent dav chains. BIT-IDENTICAL: every dvAcc element still takes the same single
+		// addition, every dav still sums over the same ascending d into its own accumulator, and
+		// dot still accumulates in ascending j.
+		jj := jmin
+		for ; jj+3 < jmax; jj += 4 {
+			b0 := jj*kvDM + kvOff
+			b1, b2, b3 := b0+kvDM, b0+2*kvDM, b0+3*kvDM
+			v0 := v[b0 : b0+dk : b0+dk]
+			v1 := v[b1 : b1+dk : b1+dk]
+			v2 := v[b2 : b2+dk : b2+dk]
+			v3 := v[b3 : b3+dk : b3+dk]
+			e0 := jj * dk
+			dv0 := dvAcc[e0 : e0+dk : e0+dk]
+			dv1 := dvAcc[e0+dk : e0+2*dk : e0+2*dk]
+			dv2 := dvAcc[e0+2*dk : e0+3*dk : e0+3*dk]
+			dv3 := dvAcc[e0+3*dk : e0+4*dk : e0+4*dk]
+			a0, a1, a2, a3 := a[jj], a[jj+1], a[jj+2], a[jj+3]
+			var s0, s1, s2, s3 float64
+			for d, gv := range gr {
+				gid := float64(gv)
+				dv0[d] += a0 * gid
+				dv1[d] += a1 * gid
+				dv2[d] += a2 * gid
+				dv3[d] += a3 * gid
+				s0 += gid * float64(v0[d])
+				s1 += gid * float64(v1[d])
+				s2 += gid * float64(v2[d])
+				s3 += gid * float64(v3[d])
+			}
+			for o, sv := range [4]float64{s0, s1, s2, s3} {
+				dA[jj+o] = sv
+				dot += sv * a[jj+o]
+			}
+		}
+		for j := jj; j < jmax; j++ {
 			kvBase := j*kvDM + kvOff
 			vr := v[kvBase : kvBase+dk : kvBase+dk]
 			dvr := dvAcc[j*dk : j*dk+dk : j*dk+dk]
@@ -836,7 +873,42 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			dqRow[d] = 0
 		}
 		dq := dqRow[:dk]
-		for j := jmin; j < jmax; j++ {
+		// FOUR KEYS PER PASS AGAIN, and here the shared operands are BOTH accumulator and input:
+		// dq is loaded and stored once per pass instead of once per key, and the query element is
+		// read once for four dkAcc rows. BIT-IDENTICAL: dq[d] takes the same four additions in the
+		// same ascending j, only held in a register between them.
+		jd := jmin
+		for ; jd+3 < jmax; jd += 4 {
+			d0 := scale * a[jd] * (dA[jd] - dot)
+			d1 := scale * a[jd+1] * (dA[jd+1] - dot)
+			d2 := scale * a[jd+2] * (dA[jd+2] - dot)
+			d3 := scale * a[jd+3] * (dA[jd+3] - dot)
+			b0 := jd*kvDM + kvOff
+			b1, b2, b3 := b0+kvDM, b0+2*kvDM, b0+3*kvDM
+			k0 := k[b0 : b0+dk : b0+dk]
+			k1 := k[b1 : b1+dk : b1+dk]
+			k2 := k[b2 : b2+dk : b2+dk]
+			k3 := k[b3 : b3+dk : b3+dk]
+			e0 := jd * dk
+			dk0 := dkAcc[e0 : e0+dk : e0+dk]
+			dk1 := dkAcc[e0+dk : e0+2*dk : e0+2*dk]
+			dk2 := dkAcc[e0+2*dk : e0+3*dk : e0+3*dk]
+			dk3 := dkAcc[e0+3*dk : e0+4*dk : e0+4*dk]
+			for d := range dq {
+				qd := float64(qr[d])
+				t := dq[d]
+				t += d0 * float64(k0[d])
+				t += d1 * float64(k1[d])
+				t += d2 * float64(k2[d])
+				t += d3 * float64(k3[d])
+				dq[d] = t
+				dk0[d] += d0 * qd
+				dk1[d] += d1 * qd
+				dk2[d] += d2 * qd
+				dk3[d] += d3 * qd
+			}
+		}
+		for j := jd; j < jmax; j++ {
 			dS := scale * a[j] * (dA[j] - dot)
 			kvBase := j*kvDM + kvOff
 			kr := k[kvBase : kvBase+dk : kvBase+dk]

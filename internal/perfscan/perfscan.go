@@ -231,6 +231,7 @@ var checks = []check{
 	{"PS3071", "local-buffer-escapes-per-call", "a METHOD that declares a local fixed-size byte array and hands a slice of it to another call. If that call takes an interface — io.ReadFull and friends — the slice escapes and the array is HEAP-allocated on every invocation, which a reader primitive pays once per scalar it decodes. Hang the buffer on the receiver, which is already on the heap, and the per-call allocation disappears. MEASURED on the GGUF header reader: u32 and u64 were 1.34M objects of a 4.0M allocation profile, and moving their arrays onto the reader plus reusing one scratch for string bodies took BenchmarkReadFileSynth/header-heavy from 223892 to 95804 allocations, -57.2%%, and 5.45 to 4.50 ms, -17.3%%, with the tensor-heavy and skewed cells cutting allocations by the same proportion. SAFE ONLY IF NOTHING KEEPS THE BUFFER: the string case works because string(b) COPIES. Check every caller before sharing one scratch, and check the type is not used concurrently", false},
 	{"PS3072", "serial-loop-reseeded-from-the-item", "a loop that RESEEDS, from the current item, the state it appears to carry. The carried object is overwritten before it is read, so the iteration is a pure function of its own item and the loop is bandable despite reading as a chain — a shape a scaling probe finds only after the fact. Give every worker its own copy of the reseeded object and of the scratch the body reuses, accumulate any count per worker and fold afterwards, since integer addition is order-free. MEASURED on the watermark detector, whose per-token partial Fisher-Yates reseeds a PCG from (key, previous token) and restores its permutation before the next: BenchmarkWatermarkDetect 39.17 to 7.17 ms, -81.7%%, bit-identical, from a 0.99x scaling ratio. CHECK THE RESTORE — the win depends on the body leaving its scratch as it found it", false},
 	{"PS3073", "invariant-operand-reloaded-per-iteration", "a loop calling a REDUCTION HELPER with one operand that does not vary with the loop variable, so the same memory is re-streamed on every iteration. Jam the loop — 4 iterations per pass, one pass over the shared operand, each result keeping the helper own accumulator count, order and combination, which makes it bit-identical because the jammed dimension is the free one. MEASURED on the linalg Cholesky factorization, whose row update called a 4-accumulator dot with the pivot row shared: Cholesky512 8.99 to 6.25 ms, -30.5%%, Cholesky256 -24.7%%, CholSolve256x128 -13.7%%, bit-identical in both dtype arms, SVD flat as a control. THE SHARING IS THE SINGLE PASS, NOT THE UNROLLING — the same 4 rows written as two 2-row calls reloaded the operand twice and measured nothing. Also measured on the F32 arm of the cpu attention forward, whose F64 sibling had jammed its keys for a long time: MHA512/fwd/cpu 8.42 to 6.73 ms, -20.1%%. THAT ONE FIRST MEASURED FLAT — the five obvious F32 attention cells route to a GEMM kernel and never reach the arm; an execution counter read from a TestMain AFTER m.Run (tests run before benchmarks) found the one cell that did. Written INLINE it also moved an untouched F64 sibling arm by a ULP through a codegen shift; put the jam behind its own function. PS6010 is this transform for an INLINE accumulator loop; this check exists because a reduction behind a CALL is invisible to it", false},
+	{"PS3074", "inner-loop-ranges-over-a-shared-operand", "an item loop whose INNER loop ranges over an operand that does not vary with the item, so the whole operand is re-streamed once per item while the body writes per-item output. Jam the item loop — 4 items per pass over one traversal of the shared operand, each item keeping its own accumulators; a shared accumulator stays bit-identical by being held in a local across the 4 additions in the same ascending item order. MEASURED on the cpu attention backward, whose two key loops re-streamed the gradient row and the query row: BenchmarkMHA512/bwd/cpu 24.73 to 13.40 ms, -45.8%% (1.85x), forward and masked cells flat as controls. THIS IS THE SHAPE PS6010 CANNOT SEE — it requires the shared operand to appear as an INDEX expression, and a range subject never does, which is why the line holding 39%% of that benchmark was reported by nothing", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1378,6 +1379,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, escapingLocalBufferFindings(fset, fn)...)
 		out = append(out, reseededSerialLoopFindings(fset, f, fn)...)
 		out = append(out, invariantOperandReloadFindings(fset, f, fn)...)
+		out = append(out, sharedRangeSubjectFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18457,6 +18459,132 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3074: an inner loop ranging over a shared operand -------------------------------------
+
+// sharedRangeSubjectFindings flags PS3074 — an item loop whose inner loop RANGES over an operand
+// that does not vary with the item, so that operand is re-streamed once per item.
+func sharedRangeSubjectFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// APPLYING THIS CHECK LEAVES A BY-ONE TAIL BEHIND THE JAMMED LOOP, and that tail is the
+	// reported shape exactly: stride one, same body, same shared operand. Collect the subjects
+	// any wide-stride loop in this function already traverses and stay silent about them, or the
+	// check reports its own fix forever.
+	jammed := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		f, ok := n.(*ast.ForStmt)
+		if !ok || f.Body == nil {
+			return true
+		}
+		as, ok := f.Post.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+			return true
+		}
+		if lit, ok := as.Rhs[0].(*ast.BasicLit); !ok || lit.Value == "1" {
+			return true
+		}
+		ast.Inspect(f.Body, func(m ast.Node) bool {
+			if rs, ok := m.(*ast.RangeStmt); ok {
+				if nm := identName(rs.X); nm != "" {
+					jammed[nm] = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		jv, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// A STRIDE TEST ON THIS LOOP WAS TRIED AND REMOVED. It duplicated the jammed-subject
+		// suppression below — a wide-stride loop puts its own range subject into that set — and
+		// no fixture could isolate the two, which is the same reason PS3073 lost its parameter
+		// count.
+		perItem := declaredIn(body) // names rebound per item: the outputs and the item's own rows
+		found := false
+		ast.Inspect(body, func(m ast.Node) bool {
+			if found {
+				return false
+			}
+			rs, ok := m.(*ast.RangeStmt)
+			if !ok || rs.Body == nil {
+				return true
+			}
+			sub := identName(rs.X)
+			if sub == "" || perItem[sub] || mentionsIdent(rs.X, jv) {
+				return true
+			}
+			// A RANGE WITHOUT A VALUE IS NOT STREAMING AN OPERAND. `for d := range dk` counts
+			// an integer and `for cat := range set` walks keys; neither reads a buffer that
+			// jamming could read once. Requiring the value form took the tree-wide count from
+			// 126 to a population whose members are all the measured shape.
+			if rs.Value == nil || identName(rs.Value) == "" {
+				return true
+			}
+			if jammed[sub] {
+				return true
+			}
+			// THE INNER LOOP MUST PRODUCE SOMETHING PER ITEM. A loop that ranges over a shared
+			// slice and writes nothing item-specific is loop-invariant outright, which is a
+			// hoist and not a jam.
+			writesPerItem := false
+			bases := map[string]bool{}
+			ast.Inspect(rs.Body, func(w ast.Node) bool {
+				if ix, ok := w.(*ast.IndexExpr); ok {
+					if b := identName(ix.X); b != "" && (perItem[b] || mentionsIdent(ix.X, jv)) {
+						bases[b] = true
+					}
+				}
+				as, ok := w.(*ast.AssignStmt)
+				if !ok || len(as.Lhs) != 1 {
+					return true
+				}
+				ix, ok := as.Lhs[0].(*ast.IndexExpr)
+				if !ok {
+					return true
+				}
+				if perItem[identName(ix.X)] || mentionsIdent(ix.X, jv) {
+					writesPerItem = true
+				}
+				return true
+			})
+			// TWO DISTINCT PER-ITEM OPERANDS, not one. A body touching a single per-item buffer
+			// is a copy or a normalization pass — real per-item work reads one thing and writes
+			// another, which is also what makes four items worth carrying at once.
+			if !writesPerItem || len(bases) < 2 {
+				return true
+			}
+			found = true
+			out = append(out, finding{
+				pos:      fset.Position(rs.Pos()),
+				category: "inner-loop-ranges-over-a-shared-operand",
+				msg: fmt.Sprintf("this inner loop ranges over %q, which does not vary with %q, so"+
+					" the whole of %q is re-streamed once per item while the body writes"+
+					" per-item output. JAM THE ITEM LOOP — take 4 items per pass and run their"+
+					" bodies together over ONE traversal of %q, giving each item its own"+
+					" accumulators. Bit-identical when every per-item element keeps the same"+
+					" additions in the same order: the jammed dimension is the free one, and a"+
+					" shared accumulator can stay bit-identical too by holding it in a local"+
+					" across the 4 additions in the SAME ascending item order. MEASURED on the"+
+					" cpu attention backward, whose two key loops both re-streamed the gradient"+
+					" row and the query row: BenchmarkMHA512/bwd/cpu 24.73 to 13.40 ms, -45.8%%"+
+					" (1.85x), with the forward and masked cells flat as controls. THIS IS THE"+
+					" SHAPE PS6010 CANNOT SEE: it requires the shared operand to appear as an"+
+					" INDEX expression, and an operand delivered as the RANGE SUBJECT never"+
+					" does, which is why the hottest line of that function — 39%% of the"+
+					" benchmark — was reported by nothing", sub, jv, sub, sub),
+			})
+			return false
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3073: a reduction helper reloading a loop-invariant operand ---------------------------
