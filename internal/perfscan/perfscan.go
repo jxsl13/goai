@@ -18620,10 +18620,9 @@ func serialLoopOverCallFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDe
 	}
 	loopy := loopyFuncReg[f.Name.Name]
 	var out []finding
+	// EVERY loop in the function, not only the first — the same correction PS3059 needed, and
+	// for the same reason: which one you hear about was an accident of source order.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if len(out) > 0 {
-			return false
-		}
 		body, iv := outerLoop(n)
 		// EXACTLY ONE LOOP. With an inner loop the nest checks own the shape; the whole point
 		// here is the case they cannot see, where the per-item work is behind a call.
@@ -18840,10 +18839,9 @@ func serialLoopInFanningFuncFindings(fset *token.FileSet, f *ast.File, fn *ast.F
 		return true
 	})
 	var out []finding
+	// EVERY loop in the function, not only the first — the same correction PS3059 needed, and
+	// for the same reason: which one you hear about was an accident of source order.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if len(out) > 0 {
-			return false
-		}
 		// Anything inside a fan-out callback is already parallel one level out.
 		if c, ok := n.(*ast.CallExpr); ok && reg[calleeName(c.Fun)] {
 			return false
@@ -19281,10 +19279,10 @@ func derivedBaseNestFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl)
 		return nil
 	}
 	var out []finding
+	// EVERY NEST IN THE FUNCTION, not only the first. A function large enough to hold two is
+	// exactly the kind that holds a hot nest behind a cold one, and stopping at one finding
+	// makes which one you hear about an accident of source order.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if len(out) > 0 {
-			return false
-		}
 		// A loop running from one PARAMETER to another has already been handed its band; the
 		// fan-out call is in its caller, where this check cannot see it. Applying this very
 		// check produces such a function — the band body is split out so the two arms share
@@ -19347,7 +19345,12 @@ func derivedBaseNestFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl)
 				" -83.8%% at 256x256, a 6.2x, in a file whose OTHER hot loop had fanned out since"+
 				" it was written. WIDENING PS3034 WAS TRIED AND REVERTED: following derived names"+
 				" there broke three of its own fixtures and took its count from 23 to 33 without"+
-				" flagging the transpose. GATE WITH BOTH A BIT-EXACT DIGEST AND -race, and know"+
+				" flagging the transpose. IT CANNOT SEE WRITES BEHIND A CALL: the ownership test"+
+				" reads the nest's own statements, so a helper invoked from the body — one that"+
+				" fills shared trig scratch per position, say — is invisible to it, and banding"+
+				" the loop naively would race. Three MLA rotary nests this check surfaces are"+
+				" exactly that shape; read the callees before converting."+
+				" GATE WITH BOTH A BIT-EXACT DIGEST AND -race, and know"+
 				" which one earns its keep: a destination that ACCUMULATES (+=) double-counts on"+
 				" an overlapping band so both fire, while a pure permutation writes the same value"+
 				" twice and only -race sees it", dst, ov, ov),
