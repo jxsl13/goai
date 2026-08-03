@@ -328,3 +328,42 @@ for it.
 
 Still reported by `PS3075`: the per-block key-sum at `moba.go:84`. It is
 `O(seq·dk)` per head against this loop's `O(seq^2·dk)` and was not measured.
+
+## RetNet's recurrent decode, and a limit on "bit-identical" (T1189)
+
+`RetentionRecurrent` carries a `[dk,dv]` state across steps. Two loops over the
+key dimension dominate it: the state update `S[i,j] = gamma*S[i,j] + k_i*v_j`
+(35% of the profile) and the output dot `out[j] += q_i*S[i,j]` (40%).
+
+Only the second one shipped.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkRetentionRecurrent_256x256` | 21.52 ms | 16.51 ms | **-23.3%** |
+| `BenchmarkRetentionRecurrent_512x128` | 14.23 ms | 11.22 ms | **-21.1%** |
+| `BenchmarkRetentionRecurrent_256x64` | 1.540 ms | 1.124 ms | **-27.0%** |
+
+### Count the multiplies before promising bit identity
+
+The state update looks like the easier of the two — every `S[i,j]` is written
+once from its own old value, so the keys are genuinely independent and grouping
+them changes no arithmetic at the source level. Jamming it moved the output.
+
+It moved **even at `dk=1`**, where the jammed body never executes and the
+surviving tail is textually identical to the code that was already there. The
+whole-function FMA count went from 192 to 196.
+
+The cause is the expression shape. `gamma*S + k*v` **adds two products**, so two
+fused-multiply-add contractions are legal — fuse either multiply into the add —
+and they round differently. Which one the compiler picks is not stable across
+restructuring the enclosing function. The output dot's `out[j] + q_i*S[i,j]` has
+**one** multiply and therefore one legal contraction, which is why it jams
+cleanly.
+
+So the rule is not about the loop at all: an accumulation is safely jammable when
+its expression holds a single multiply. With two, "the arithmetic is unchanged"
+is a statement about the source that the compiler is free to contradict.
+
+This is also the clearest case yet for freezing bits rather than comparing to a
+tolerance. A one-ulp drift in a recurrence compounds across steps, and no
+gradient check or accuracy assertion would have said a word.
