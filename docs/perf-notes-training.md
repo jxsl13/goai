@@ -156,3 +156,70 @@ non-zero for optional CI gating.
 - `docs/perf-notes-lowlevel.md` — format/parser decode (`rawCopyLE` verbatim
   little-endian bulk copy) and the hostile-header overflow guards.
 - SPEC.md §T910–T912 record the individual changes with their citations.
+
+## AWQ's reconstruction error: an axpy through memory (T1183)
+
+`reconErrMat` computes ‖(W−Ŵ)·X‖_F once per candidate scale in AWQ's calibration
+search. At out=512, in=512, samples=128 it took **20.46 ms**, and 84% of that sat
+on one line:
+
+```go
+for s := 0; s < samples; s++ {
+    acc[s] += di * xf[base+s]
+}
+```
+
+Every element pays a load and a store of `acc[s]` for a single multiply-add. The
+accumulator is shared across the residual index, so taking eight `i` per pass
+loads and stores it once for eight products.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkReconErrMat` (512×512×128) | 20.46 ms | 13.88 ms | **−32.1%** |
+
+Width 8 and width 6 are within 0.2% of each other (13.88 vs 13.91 ms); width 4 is
+14.09 and width 2 is 15.83.
+
+### The compound assignment is not the same arithmetic
+
+The obvious jam is wrong:
+
+```go
+acc[s] += d0*x0 + d1*x1 + d2*x2 + d3*x3   // NOT bit-identical
+```
+
+`+=` adds the **sum of the terms** to the accumulator, which associates
+differently from the four sequential additions it replaces. The correct form
+keeps the original order explicitly:
+
+```go
+a := acc[s]
+a += d0 * xf[b0+s]
+a += d1 * xf[b1+s]
+...
+acc[s] = a
+```
+
+### Width invariance is the gate that catches it
+
+Under the compound form the frozen digests **held at widths 4 and 8 and moved at
+2 and 6**. A test of the shipped width alone would have passed a wrong rewrite —
+and width 4 was the first width tried.
+
+A correct jam is bit-identical at *every* width. The rewrite above was verified at
+2, 3, 4, 5, 6 and 8 before shipping; the digests cover `in ∈ {13, 30, 64, 1}` so
+the tail is exercised, `in=1` skips the jammed loop entirely, and both dtype arms
+are frozen.
+
+That the value hashed is a `float64` **by bits** rather than compared to a
+tolerance matters here for a second reason: Go may contract `x*y + z` into a
+fused multiply-add, and the jammed form has to contract the same way term for
+term.
+
+### The check already claimed this shape and could not see it
+
+`PS3075` describes "an item loop whose inner loop accumulates into a buffer that
+does not vary with the item" — exactly this — but matched only `*ast.RangeStmt`.
+This kernel's inner loop is `for s := 0; s < samples; s++`, so the scan walked
+past the site its own description named. Reading both loop forms took the
+tree-wide count from 55 to **81**.
