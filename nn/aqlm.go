@@ -571,6 +571,10 @@ func solveLinearAQLM(a, b [][]float64) [][]float64 {
 // Split out so the refit path can eliminate the system it accumulated directly, without a
 // separate copy, while solveLinearAQLM keeps its [][]float64 signature and the property test that
 // pins it against an independent implementation of the same algorithm.
+// gaussJordanParWork gates the parallel elimination step. Below it the fork costs more than
+// the update it spreads.
+const gaussJordanParWork = 1 << 14
+
 func gaussJordanAQLM(aug, swap []float64, n, stride int) {
 	for c := range n {
 		p := c
@@ -592,6 +596,37 @@ func gaussJordanAQLM(aug, swap []float64, n, stride int) {
 		crow := aug[c*stride : c*stride+stride]
 		for j := c; j < stride; j++ {
 			crow[j] *= inv
+		}
+		// The pivot loop over c is sequential — step c+1 reads what step c wrote — but THIS
+		// loop is not: row r writes only aug[r*stride:...] and reads crow, which belongs to
+		// row c and is not written here. So the split goes one level in, which is the shape
+		// of every classical factorization: choose a pivot in order, then update the
+		// remaining rows in parallel. BIT-IDENTICAL — each row's arithmetic is untouched and
+		// only which goroutine performs it moves.
+		//
+		// Gated on the work at THIS step, rows times the columns still live, not the row
+		// count: gating on n alone leaves mid-sized systems serial while large ones improve,
+		// which reads as a size effect rather than a threshold. The below-gate arm is a
+		// PLAIN DUPLICATED LOOP rather than a call to the same closure, because the closure
+		// itself costs a few percent on small systems.
+		eliminate := func(rlo, rhi int) {
+			for r := rlo; r < rhi; r++ {
+				if r == c {
+					continue
+				}
+				f := aug[r*stride+c]
+				if f == 0 {
+					continue
+				}
+				rrow := aug[r*stride : r*stride+stride]
+				for j := c; j < stride; j++ {
+					rrow[j] -= f * crow[j]
+				}
+			}
+		}
+		if n*(stride-c) >= gaussJordanParWork {
+			parallelRows(n, stride-c, eliminate)
+			continue
 		}
 		for r := range n {
 			if r == c {
