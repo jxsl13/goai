@@ -439,16 +439,21 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 				// scale, the slope and the maximum are still applied in ascending j.
 				m = scoreRowF32(row, widen(qf, qr), k, g, h, i, jmin, jmax, kvOff, dk)
 			} else {
-				// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term reduction into one
+				// EIGHT KEYS PER PASS OVER THE QUERY ROW — swept, not argued: at 4, 6 and 8 this
+				// arm gave BenchmarkTPAForward_1024 45.22, 43.56 and 42.70 ms and
+				// BenchmarkMHA512/fwd/cpu 6.74, 6.79 and 6.47, with eight ahead of four in all
+				// six paired rounds of the forward cell (PERF-UNROLL-SWEEP-002).
+				//
+				// Each score is a dk-term reduction into one
 				// accumulator, so this loop is bound by the latency of a dependent add chain rather
-				// than by throughput; four keys give four independent chains that interleave, and
-				// each query element is loaded once for all four.
+				// than by throughput; eight keys give eight independent chains that interleave,
+				// and each query element is loaded once for all eight.
 				//
 				// Bit-identical: every score still sums its own terms in ascending d into its own
 				// accumulator, and the scale, the slope and the running maximum are applied to the
 				// keys in ascending j exactly as before.
 				j := jmin
-				for ; j+3 < jmax; j += 4 {
+				for ; j+7 < jmax; j += 8 {
 					b0 := j * g.kvDM
 					k0 := k[b0+kvOff : b0+kvOff+dk : b0+kvOff+dk]
 					b1 := b0 + g.kvDM
@@ -457,15 +462,27 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 					k2 := k[b2+kvOff : b2+kvOff+dk : b2+kvOff+dk]
 					b3 := b2 + g.kvDM
 					k3 := k[b3+kvOff : b3+kvOff+dk : b3+kvOff+dk]
-					var s0, s1, s2, s3 float64
+					b4 := b3 + g.kvDM
+					k4 := k[b4+kvOff : b4+kvOff+dk : b4+kvOff+dk]
+					b5 := b4 + g.kvDM
+					k5 := k[b5+kvOff : b5+kvOff+dk : b5+kvOff+dk]
+					b6 := b5 + g.kvDM
+					k6 := k[b6+kvOff : b6+kvOff+dk : b6+kvOff+dk]
+					b7 := b6 + g.kvDM
+					k7 := k[b7+kvOff : b7+kvOff+dk : b7+kvOff+dk]
+					var s0, s1, s2, s3, s4, s5, s6, s7 float64
 					for d, qv := range qr {
 						q := float64(qv)
 						s0 += q * float64(k0[d])
 						s1 += q * float64(k1[d])
 						s2 += q * float64(k2[d])
 						s3 += q * float64(k3[d])
+						s4 += q * float64(k4[d])
+						s5 += q * float64(k5[d])
+						s6 += q * float64(k6[d])
+						s7 += q * float64(k7[d])
 					}
-					for o, sv := range [4]float64{s0, s1, s2, s3} {
+					for o, sv := range [8]float64{s0, s1, s2, s3, s4, s5, s6, s7} {
 						sv *= g.scale
 						if g.slopes != nil {
 							sv += g.slopes[h] * float64(j+o-(g.off+i))
