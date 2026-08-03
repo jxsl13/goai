@@ -1,5 +1,5 @@
 {
-  "_comment": "GoAI's perfscan vocabulary \u2014 the project-specific function/method names that drive the four DOMAIN checks (PS1001 per-element-dispatch, PS1002 per-element-closure, PS2001 alloc-in-loop, PS4002 scalar-transcendental-vectorizable). The stdlib/language checks need no config. `make perfscan` passes this file via -config; any other repo supplies its own (or none, for stdlib-only scanning).",
+  "_comment": "GoAI's perfscan vocabulary — the project-specific function/method names that drive the four DOMAIN checks (PS1001 per-element-dispatch, PS1002 per-element-closure, PS2001 alloc-in-loop, PS4002 scalar-transcendental-vectorizable). The stdlib/language checks need no config. `make perfscan` passes this file via -config; any other repo supplies its own (or none, for stdlib-only scanning).",
   "elementAccessors": [
     "AtF64",
     "SetF64"
@@ -112,5 +112,12 @@
   "outputViewFuncs": [
     "outF64",
     "outF32"
+  ],
+  "referenceBackendPkg": "ref",
+  "optimizedBackendPkgs": [
+    "cpu"
+  ],
+  "kernelRegisterFuncs": [
+    "add"
   ]
 }

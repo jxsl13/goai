@@ -219,6 +219,7 @@ var checks = []check{
 	{"PS3059", "serial-nest-writing-through-a-derived-base", "a serial nest, in a package that declares a fan-out helper it never calls, whose every indexed write lands through a base DERIVED from the outermost loop variable — obase := b*out, then dst[obase+j] — with at least one write not naming that variable directly. This is PS3034's blind spot, and it has now cost two finds: PS3034 asks whether each write names the OUTERMOST loop variable, and a nest that hoists its row offset into a local does not. Both misses were large. The GGUF weight transpose was 84%% of its own benchmark at one core (-66.3%% once banded, T1117), and the KAN fused spline was 84%% of its layer's (-83.8%% at 256x256 and -79.0%% at 128x128, a 6.2x, T1123) — in a file whose OTHER hot loop had fanned out since it was written. WIDENING PS3034 WAS TRIED AND REVERTED: following derived names there broke three of its own fixtures and took its tree-wide count from 23 to 33 without flagging the transpose. A separate check with the narrow condition is what works. Check the band owns disjoint output before converting, and gate with BOTH a bit-exact digest and -race — which gate catches what depends on the destination: an accumulated one (+=) double-counts on an overlap so both fire, while a pure permutation writes the same value twice and only -race sees it", false},
 	{"PS3060", "serial-loop-over-parallel-work", "a loop whose body calls a function that ITSELF fans out, inside a function that does not fan out at all. The inner level is parallel and the outer one is not, so the items run strictly one after another and each pays its own fork and join. THE WIN IS NOT ONLY THE WORK, IT IS THE STALLS: a Muon optimizer step spent 62%% of its profile samples in pthread_cond_wait and pthread_cond_signal and only 32%% in the matmul, because each parameter's five Newton-Schulz iterations fork three times each and nothing overlaps them. Banding the parameter loop returned -34.1%% with only TWO parameters, far more than two-way overlap of the work alone can explain. CALL ANY CALLER-SUPPLIED CALLBACK SERIALLY FIRST: a gradient or loss function belongs to the caller and is not documented as safe to call from several goroutines, so hoist it into a serial pass and fan out only what follows. And size the test above the fan-out helper's work gate, or both arms run serially and an overlapping-band mutation passes", false},
 	{"PS3061", "fanout-not-sized-to-the-work", "a fan-out helper that always splits into GOMAXPROCS workers, with only an on/off work gate and no term that scales the WORKER COUNT to the work. Above the gate a small item still fans twelve ways, and the wakeups cost more than the split saves. MEASURED on the quantized decode matmul, which is called thousands of times per generation with one activation row: a profile of a 500-token quantized Llama generation spent 88%% of its samples in pthread_cond_signal and pthread_cond_wait and 1.5%% in the kernel itself. One worker per 1<<15 of element-work, capped by GOMAXPROCS, beat BOTH the fixed twelve and no fan-out at all — QuantLlamaGenerate500 549.7 to 527.4 ms, system CPU -27%%, with the prefill cell flat as a control. The on/off gate alone cannot express this: forcing the same call serial cost 8%% wall, and leaving it at twelve burned 42%% more user CPU for that 8%%. Pick the grain by measuring BOTH the clock and the CPU — a coarser grain traded 4%% of the clock for another 44%% of the system time here, and which side of that is right depends on whether the machine serves one request or many", false},
+	{"PS3062", "op-with-no-optimized-kernel", "an operation registered in the REFERENCE backend and in no optimized one, so every caller on the default backend runs the correctness implementation. The reference is written to be obviously right, not fast, and the gap is routinely large: OpCholesky had no cpu kernel at all, and giving it one — ref's arithmetic line for line, with four rows taken per pass so the pivot row is loaded once and four independent accumulator chains run instead of one — measured 21.1 ms to 7.0 ms at n=512, a 3.0x, BIT-IDENTICAL to ref in both dtypes. THE FIRST ATTEMPT AT THAT KERNEL WAS SLOWER THAN REF. Fanning out the row update is the classical-factorization shape PS3040 describes and it lost, 24.1 ms against 22.0 with allocations going 6 to 878, because there are n columns and the fork is paid once per column for a row update that shrinks as the factorization proceeds. Arithmetic, not parallelism, was the lever. GATE A NEW KERNEL BIT-FOR-BIT AGAINST REF, not to a tolerance: a tolerance test passes a blocked or reassociated version too, and once one kernel disagrees every cross-backend golden silently becomes a tolerance test", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -368,6 +369,14 @@ type Config struct {
 	// concat). A cluster of these around a little arithmetic is fusable bit-identically,
 	// because a gather and a scatter cannot change a value. Empty by default.
 	LayoutOpConstants []string `json:"layoutOpConstants,omitempty"`
+	// PS3062 — the package name of the REFERENCE backend and of the optimized backends that
+	// should shadow it, plus the method that registers a kernel. Empty by default: like the
+	// other domain checks, this one stays silent until a project names its own vocabulary, and
+	// the names must come from here rather than from literals in the engine — perfscan never
+	// imports the tree it scans, so it cannot read a project's typed backend constants.
+	ReferenceBackendPkg  string   `json:"referenceBackendPkg,omitempty"`
+	OptimizedBackendPkgs []string `json:"optimizedBackendPkgs,omitempty"`
+	KernelRegisterFuncs  []string `json:"kernelRegisterFuncs,omitempty"`
 	// PointerTypeNames lists NAMED types that carry a pointer (a named slice, map, or struct
 	// holding one). PS3013 needs to know whether a parameter can leak, and with no type checker a
 	// bare identifier like Shape is indistinguishable from an int alias.
@@ -406,6 +415,9 @@ type nameSets struct {
 	pointerTypes                                   map[string]bool
 	variadicWrappers                               map[string]bool
 	topKSelectors                                  map[string]bool
+	refBackendPkg                                  string
+	optBackendPkgs                                 map[string]bool
+	kernelRegisterFuncs                            map[string]bool
 	inputViews, outputViews                        map[string]bool
 }
 
@@ -419,22 +431,25 @@ func toSet(xs []string) map[string]bool {
 
 func (c Config) compile() nameSets {
 	return nameSets{
-		accessors:        toSet(c.ElementAccessors),
-		fastPath:         toSet(c.FastPathHelpers),
-		elemCount:        toSet(c.ElementCountMethods),
-		shapeMethods:     toSet(c.ShapeMethods),
-		indexDecompose:   toSet(c.IndexDecomposeFuncs),
-		allocators:       toSet(c.AllocatorFuncs),
-		visitors:         toSet(c.PerElementVisitors),
-		bulkCopy:         toSet(c.BulkCopyHelpers),
-		vectorized:       toSet(c.VectorizedSiblingFuncs),
-		pureCompute:      toSet(c.PureComputeFuncs),
-		layoutOps:        toSet(c.LayoutOpConstants),
-		pointerTypes:     toSet(c.PointerTypeNames),
-		variadicWrappers: toSet(c.VariadicDispatchWrappers),
-		topKSelectors:    toSet(c.TopKSelectorFuncs),
-		inputViews:       toSet(c.InputViewFuncs),
-		outputViews:      toSet(c.OutputViewFuncs),
+		refBackendPkg:       c.ReferenceBackendPkg,
+		optBackendPkgs:      toSet(c.OptimizedBackendPkgs),
+		kernelRegisterFuncs: toSet(c.KernelRegisterFuncs),
+		accessors:           toSet(c.ElementAccessors),
+		fastPath:            toSet(c.FastPathHelpers),
+		elemCount:           toSet(c.ElementCountMethods),
+		shapeMethods:        toSet(c.ShapeMethods),
+		indexDecompose:      toSet(c.IndexDecomposeFuncs),
+		allocators:          toSet(c.AllocatorFuncs),
+		visitors:            toSet(c.PerElementVisitors),
+		bulkCopy:            toSet(c.BulkCopyHelpers),
+		vectorized:          toSet(c.VectorizedSiblingFuncs),
+		pureCompute:         toSet(c.PureComputeFuncs),
+		layoutOps:           toSet(c.LayoutOpConstants),
+		pointerTypes:        toSet(c.PointerTypeNames),
+		variadicWrappers:    toSet(c.VariadicDispatchWrappers),
+		topKSelectors:       toSet(c.TopKSelectorFuncs),
+		inputViews:          toSet(c.InputViewFuncs),
+		outputViews:         toSet(c.OutputViewFuncs),
 	}
 }
 
@@ -1340,6 +1355,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, derivedBaseNestFindings(fset, f, fn)...)
 		out = append(out, serialLoopOverParallelWorkFindings(fset, f, fn)...)
 		out = append(out, unsizedFanoutFindings(fset, f, fn)...)
+		out = append(out, refOnlyKernelFindings(fset, f, fn, ns)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3063,6 +3079,7 @@ func main() {
 	collectFanoutHelpers(parsed)
 	collectScratchTypes(parsed)
 	collectFanningFuncs(parsed)
+	collectKernelRegistrations(parsed, ns)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectWriteOnlyFields(fset, parsed)
@@ -16083,7 +16100,13 @@ func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.Fi
 					" pays its own fork and there are n of them. Widening or narrowing the gate"+
 					" did not recover it — 1<<12, 1<<14, 1<<16 and 1<<18 were all measured, best"+
 					" at 1<<14. Divide the serial share by the fork count before promising"+
-					" anything",
+					" anything. A SECOND APPLICATION WENT FURTHER AND LOST OUTRIGHT: a Cholesky"+
+					" whose row update was fanned out this way ran SLOWER than the serial"+
+					" reference, 24.1 ms against 22.0 at n=512 with allocations going from 6 to"+
+					" 878, because there are n columns and the row update shrinks as j grows."+
+					" Taking four rows per pass instead — no fan-out at all — went 21.1 to 7.0 ms"+
+					" on the same shape. When the outer loop is long and the inner work shrinks,"+
+					" try the arithmetic before the parallelism",
 					mv, ov, mv, ov, ov),
 			})
 		}
@@ -18388,6 +18411,94 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3062: an op with no optimized kernel --------------------------------------------------
+
+// kernelReg maps a backend package name to the operations it registers a kernel for.
+var kernelReg = map[string]map[string]bool{}
+
+// collectKernelRegistrations pre-scans every package for std.add(backend.OpX, ...) calls.
+func collectKernelRegistrations(files []*ast.File, ns nameSets) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			c, ok := n.(*ast.CallExpr)
+			if !ok || !ns.kernelRegisterFuncs[calleeName(c.Fun)] || len(c.Args) == 0 {
+				return true
+			}
+			sel, ok := c.Args[0].(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			if kernelReg[f.Name.Name] == nil {
+				kernelReg[f.Name.Name] = map[string]bool{}
+			}
+			kernelReg[f.Name.Name][sel.Sel.Name] = true
+			return true
+		})
+	}
+}
+
+// refOnlyKernelFindings flags PS3062 — an op the reference backend implements and the optimized
+// cpu backend does not, reported once at the reference's registration site.
+func refOnlyKernelFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl, ns nameSets) []finding {
+	if fn.Body == nil || f.Name == nil || ns.refBackendPkg == "" || f.Name.Name != ns.refBackendPkg {
+		return nil
+	}
+	// An op is covered when ANY configured optimized backend registers it.
+	covered := func(op string) bool {
+		for pkg := range ns.optBackendPkgs {
+			if kernelReg[pkg][op] {
+				return true
+			}
+		}
+		return false
+	}
+	if len(ns.optBackendPkgs) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || !ns.kernelRegisterFuncs[calleeName(c.Fun)] || len(c.Args) == 0 {
+			return true
+		}
+		sel, ok := c.Args[0].(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		op := sel.Sel.Name
+		if covered(op) || seen[op] {
+			return true
+		}
+		seen[op] = true
+		out = append(out, finding{
+			pos:      fset.Position(c.Pos()),
+			category: "op-with-no-optimized-kernel",
+			msg: fmt.Sprintf("%q is registered here in the REFERENCE backend and in no optimized"+
+				" one, so every caller on the default backend runs the correctness implementation."+
+				" The reference is written to be obviously right, not fast, and the gap is"+
+				" routinely large: OpCholesky was in exactly this position, and giving it a cpu"+
+				" kernel — ref's arithmetic line for line, with FOUR ROWS TAKEN PER PASS so the"+
+				" pivot row is loaded once and four independent accumulator chains run instead of"+
+				" one — went 21.1 ms to 7.0 ms at n=512, a 3.0x, bit-identical to ref in both"+
+				" dtypes. THE FIRST ATTEMPT AT THAT KERNEL WAS SLOWER THAN REF: fanning out the"+
+				" row update is the classical-factorization shape PS3040 describes, and it lost —"+
+				" 24.1 ms against 22.0, with allocations going from 6 to 878 — because there are n"+
+				" columns and the fork is paid once per column for a row update that shrinks as"+
+				" the factorization proceeds. Arithmetic, not parallelism, was the lever."+
+				" GATE THE NEW KERNEL BIT-FOR-BIT AGAINST REF, not to a tolerance: a tolerance"+
+				" test passes a blocked or reassociated version too, and once one kernel disagrees"+
+				" every cross-backend golden silently becomes a tolerance test. RANK BY CALLER"+
+				" HOTNESS — an op nothing calls on a hot path is a gap on paper only", op),
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3061: a fan-out helper that never sizes itself to the work ----------------------------
