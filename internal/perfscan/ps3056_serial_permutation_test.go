@@ -57,7 +57,8 @@ func transpose(src, dst []float64, a, b int) {
 	if len(fs) != 1 {
 		t.Fatalf("%d findings, want 1", len(fs))
 	}
-	if !containsAll(fs[0].msg, "BIT-IDENTICAL at any band count", "CHECK THE BAND OWNS DISJOINT OUTPUT") {
+	if !containsAll(fs[0].msg, "BIT-IDENTICAL at any band count", "CHECK THE BAND OWNS DISJOINT OUTPUT",
+		"GATE IT WITH TWO TESTS, NOT ONE") {
 		t.Fatalf("message omits the exactness claim or the disjointness warning:\n%s", fs[0].msg)
 	}
 }
