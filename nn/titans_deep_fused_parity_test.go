@@ -35,7 +35,11 @@ func TestTitansDeepFusedMatchesDispatch(t *testing.T) {
 	}
 
 	var maxAbs, maxBits float64
-	for _, tc := range []struct{ seq, dim, hid int }{{1, 8, 12}, {5, 16, 8}, {33, 24, 40}, {96, 40, 64}} {
+	// EVERY dim AND hid HERE WAS A MULTIPLE OF FOUR, so when the inner loops were jammed four
+	// units per pass, neither jam's by-one tail ran at all. dim=10 leaves a tail of two and
+	// hid=13 a tail of one; dim=14 and hid=7 leave three.
+	for _, tc := range []struct{ seq, dim, hid int }{{1, 8, 12}, {5, 16, 8}, {33, 24, 40},
+		{96, 40, 64}, {7, 10, 13}, {9, 14, 7}} {
 		m, err := nn.NewNeuralMemory(tensor.F64, tc.dim, tc.hid, 3) // deep (default)
 		if err != nil {
 			t.Fatal(err)
@@ -61,6 +65,11 @@ func TestTitansDeepFusedMatchesDispatch(t *testing.T) {
 			if math.Float64bits(a) != math.Float64bits(b) {
 				maxBits++
 			}
+			// A TOLERANCE, DELIBERATELY. Raising this to a bit-exact assertion was tried and
+			// is wrong: the two paths already disagree by one ulp on this host at seq=1 dim=8
+			// hid=12, before any jam, so the relationship between them is agreement and not
+			// identity. Bit-identity of the fused path against ITSELF is what
+			// TestTitansScanIsBitIdentical freezes.
 			if rel := d / (1 + math.Abs(a)); rel > 1e-9 {
 				t.Fatalf("seq=%d dim=%d hid=%d idx=%d: dispatch %v vs fused %v (rel %g > 1e-9)", tc.seq, tc.dim, tc.hid, i, a, b, rel)
 			}

@@ -7134,6 +7134,11 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 		// though it never mentions ni. Without the closure the shared operand cannot be
 		// told apart from the per-output one.
 		derived := derivedFrom(outVar, outBody)
+		// APPLYING THIS CHECK LEAVES A BY-ONE TAIL, and that tail is the reported shape exactly.
+		// The first site converted on its advice — the Titans deep scan — went on being reported
+		// twice afterwards, from the remainder loops of its own fix. Operands a wide-stride loop
+		// in the same function already amortizes are done.
+		jammedOperands := wideStrideOperands(fn)
 		for _, acc := range scalarAccumulators(outBody) {
 			shared, perOutput := false, false
 			ast.Inspect(outBody, func(m ast.Node) bool {
@@ -7170,14 +7175,26 @@ func outputInvariantReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []find
 			// iteration — the thing unrolling replicates. Without it the check fires on
 			// every scalar reduction that happens to sit inside some loop, which is what
 			// took it to 145 findings tree-wide.
-			if shared && perOutput && storedToIndexOf(outBody, acc, outVar) {
+			if shared && perOutput && storedToIndexOf(outBody, acc, outVar) &&
+				!sharedOperandIsJammed(outBody, acc, derived, outVar, jammedOperands) {
 				out = append(out, finding{
 					pos:      fset.Position(n.Pos()),
 					end:      fset.Position(n.End()),
 					category: "output-invariant-operand-reload",
 					msg: fmt.Sprintf("accumulator %q re-reads an operand that does not vary with output index %q — unrolling"+
 						" the output loop by 4 would let one load feed 4 accumulators (register blocking)."+
-						" NOTHING HERE IS MEASURED, and two things must be checked before acting. Confirm the"+
+						" FIRST MEASURED RESULT, AND IT IS LARGE: the Titans deep scan carried this"+
+						" shape in four inner loops — a hidden-unit dot re-reading the key row and"+
+						" an output dot re-reading the hidden vector, in each of the key and query"+
+						" passes. Jamming all four four units per pass took"+
+						" BenchmarkTitansScanDeep_512x96h192 from 98.97 to 38.73 ms, -60.9%%"+
+						" (2.56x), and the 256x64h128 cell -58.0%%, with an optimizer benchmark"+
+						" flat as a control. THE GATE WAS A TOLERANCE AND HAD TO BE REPLACED: the"+
+						" fused path and its dispatch oracle already disagreed by an ulp on this"+
+						" host before any jam, so bit-identity had to be frozen against the path"+
+						" ITSELF with a digest, at shapes whose dim and hid are NOT multiples of"+
+						" four — every existing shape was, so neither jam's by-one tail ran."+
+						" TWO THINGS MUST STILL BE CHECKED BEFORE ACTING. Confirm the"+
 						" load actually survives register allocation — build with -gcflags='<pkg>=-S' and count"+
 						" loads of that operand in the loop body; a scalar the compiler already keeps in a"+
 						" register gives nothing to amortize. And a body containing a call or a transcendental"+
@@ -18463,6 +18480,70 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// wideStrideOperands returns the base names indexed inside any loop of fn whose stride is more
+// than one — the operands an existing jam already reads once for several items.
+func wideStrideOperands(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	if fn.Body == nil {
+		return out
+	}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		f, ok := n.(*ast.ForStmt)
+		if !ok || f.Body == nil {
+			return true
+		}
+		as, ok := f.Post.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+			return true
+		}
+		if lit, ok := as.Rhs[0].(*ast.BasicLit); !ok || lit.Value == "1" {
+			return true
+		}
+		ast.Inspect(f.Body, func(m ast.Node) bool {
+			if ix, ok := m.(*ast.IndexExpr); ok {
+				if nm := identName(ix.X); nm != "" {
+					out[nm] = true
+				}
+			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// sharedOperandIsJammed reports whether every shared operand this accumulator reads is already
+// amortized by a wide-stride loop elsewhere in the function.
+func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[string]bool,
+	outVar string, jammed map[string]bool) bool {
+	if len(jammed) == 0 {
+		return false
+	}
+	all := true
+	seen := false
+	ast.Inspect(outBody, func(m ast.Node) bool {
+		as, ok := m.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+			return true
+		}
+		if identName(as.Lhs[0]) != acc {
+			return true
+		}
+		for _, ix := range indexExprs(as.Rhs[0]) {
+			base := identName(ix.X)
+			if base == "" || derived[base] || mentions(ix.Index, outVar) {
+				continue
+			}
+			seen = true
+			if !jammed[base] {
+				all = false
+			}
+		}
+		return true
+	})
+	return seen && all
 }
 
 // --- PS3076: an unroll factor fixed at two ---------------------------------------------------
