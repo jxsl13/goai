@@ -237,6 +237,7 @@ var checks = []check{
 	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. TRY internal/fmath FIRST (see PS3082) — it keeps the exact contract, is a smaller edit and measured faster than a chain (40.5 us against 63.6); the chain is the fallback for when the call is already gone. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
 	{"PS3082", "minmax-call-in-a-loop", "math.Min or math.Max called inside a loop. On arm64 math.Min compiles to CALL math.archMin inside a 48-byte frame with a stack-growth check; the min builtin compiles to a single FMIND in a leaf with no frame. THE TWO ARE NOT THE SAME FUNCTION and substituting raw is a real bug: math.Max documents +Inf as beating NaN and math.Min documents -Inf as beating NaN, while the builtins propagate NaN, so they disagree on exactly four ordered pairs. USE internal/fmath, which takes the instruction and consults math only when the instruction returns NaN — the only result the two can disagree on. MEASURED on the reference RL surrogates: PPOClip at batch 4096 100.5 to 41.6 us (-58.7%%), GRPO 126.7 to 79.8 (-37.0%%), GSPO 21.6 to 19.8 (-8.4%%, one clamp per sequence against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON CHAIN — converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%, and was reverted: this replaces CALLS, not branchless code. GATE IT ON ONE PLANTED VALUE PER CALL: a kernel that reduces to a scalar cannot see the divergence, because one NaN poisons the sum and both formulations then agree on NaN", false},
 	{"PS3083", "integer-keyed-map-in-a-loop", "a map with an INTEGER key built inside a loop and probed inside a nested loop. Every probe is a hash and a bucket walk, and every outer pass allocates a fresh map. When the keys are dense in a known range — block indices, row indices, token ids under a vocabulary — a slice is the natural container, and stamping it with a GENERATION COUNTER makes the per-pass reset free instead of a clear proportional to the range. MEASURED on MoBA's top-K block selection, whose membership test ran once per key in the innermost loop: BenchmarkMoBAAttention 10.96 to 9.94 ms (-9.3%%), bytes 2.967 to 2.464 MB (-16.9%%) and allocations 20533 to 10301 (-49.8%%), with runtime.mapaccess1_fast64 at 5.4%% of the profile before. WATCH THE LENGTH: code that bounded a loop on len(m) needs an explicit counter, and that is only equivalent when the inserted keys are DISTINCT — check the source of the keys before trusting it", false},
+	{"PS3084", "two-product-update-in-a-loop", "an in-place update inside a loop whose right-hand side ADDS TWO PRODUCTS and reads the destination back — the linear-recurrence shape `S = a*S + b*x`. It looks like the easiest possible unroll-and-jam target, because each element is written once from its own old value and the iterations are genuinely independent, but IT CANNOT BE JAMMED BIT-IDENTICALLY. Two fused-multiply-add contractions are legal for an add of two products and the compiler's choice does not survive restructuring the enclosing function. MEASURED TWICE: jamming RetNet's recurrent state update moved every digest, INCLUDING at a size where the jammed body never executes and the surviving tail is textually unchanged, with the whole-function FMA count going 192 to 196; Mamba-2's SSD state update did the same on all five of its cases. Their sibling output dots, which add ONE product, jammed cleanly for -23.3%% and -20.9%%. So jam the neighbor and leave this one, or accept a one-ulp change and say so — do not claim bit-identity for it", false},
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
 	{"PS3080", "one-dimensional-accessor-walk", "a loop making 3 or more AtF64/SetF64 calls per element, each indexed by the loop variable ALONE. PS1005 reports the multi-dimensional version and declines this one — it requires 2 or more index arguments — so a rank-1 walk is invisible to it. MEASURED on the PPO clipped-surrogate backward, 4 such calls per element and NO benchmark until one was written: BenchmarkPPOVJP_65536 2000 to 680 microseconds and the 4096 cell 124 to 42, both -66%% (2.9x). Take the typed slice once when every operand is already the right dtype and KEEP the accessor arm, because the output dtype follows the input. The 2 arms cannot be compared as equal bits — the accessor arm stores float32 where the typed one stores float64 — so what must hold is that the accessor result equals the typed one rounded once", false},
@@ -1394,6 +1395,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, minMaxCallInLoopFindings(fset, fn)...)
 		out = append(out, intKeyedMapInLoopFindings(fset, fn)...)
+		out = append(out, twoProductUpdateFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
 		out = append(out, accessorWalk1DFindings(fset, f, fn)...)
@@ -19455,6 +19457,152 @@ func intKeyedMapInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 					" A DIGEST, not a tolerance: a membership set that differs by one element"+
 					" changes WHICH values are computed, and every one of them stays plausible",
 					name, name),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// --- PS3084: a two-product in-place update inside a loop ---------------------------------------
+
+// rootIdent walks an index chain down to the identifier it lives in: h[base+j] gives "h".
+func rootIdent(e ast.Expr) string {
+	for {
+		switch x := unparen(e).(type) {
+		case *ast.Ident:
+			return x.Name
+		case *ast.IndexExpr:
+			e = x.X
+		default:
+			return ""
+		}
+	}
+}
+
+// productOperands returns the two multiplied sub-expressions of `p + q` when BOTH p and q are
+// multiplications, which is the shape with two legal fused-multiply-add contractions.
+func productOperands(e ast.Expr) (ast.Expr, ast.Expr, bool) {
+	add, ok := unparen(e).(*ast.BinaryExpr)
+	if !ok || add.Op != token.ADD {
+		return nil, nil, false
+	}
+	l, lok := unparen(add.X).(*ast.BinaryExpr)
+	r, rok := unparen(add.Y).(*ast.BinaryExpr)
+	if !lok || !rok || l.Op != token.MUL || r.Op != token.MUL {
+		return nil, nil, false
+	}
+	return add.X, add.Y, true
+}
+
+// twoProductUpdateFindings flags PS3084 — an in-place update in a loop whose right-hand side
+// adds two products and reads the destination back.
+func twoProductUpdateFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iv, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// The names this loop rebinds each pass. A recurrence addressed as h[base+j] varies
+		// with the item through `base := i*d`, so testing the loop variable alone would miss
+		// every real site.
+		perItem := declaredIn(body)
+		// THE UPDATE HAS TO SIT IN A LOOP NESTED UNDER THIS ONE. Read from the innermost loop
+		// every name declared outside looks shared, which reported a site where in fact every
+		// factor is per item and no jam is invited at all.
+		type span struct{ lo, hi token.Pos }
+		var nested []span
+		ast.Inspect(body, func(w ast.Node) bool {
+			if w == ast.Node(body) {
+				return true
+			}
+			if _, ib, isLoop := loopVarBody(w); isLoop {
+				nested = append(nested, span{ib.Pos(), ib.End()})
+			}
+			return true
+		})
+		inNested := func(pos token.Pos) bool {
+			for _, sp := range nested {
+				if pos >= sp.lo && pos < sp.hi {
+					return true
+				}
+			}
+			return false
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, isAssign := m.(*ast.AssignStmt)
+			if !isAssign || as.Tok != token.ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				return true
+			}
+			if !inNested(as.Pos()) {
+				return true
+			}
+			lhs, isIndex := as.Lhs[0].(*ast.IndexExpr)
+			if !isIndex {
+				return true
+			}
+			p, q, isTwo := productOperands(as.Rhs[0])
+			if !isTwo {
+				return true
+			}
+			// THE DESTINATION HAS TO BE READ BACK. Without that this is an ordinary write of a
+			// two-term expression, and nothing about it invites a jam; with it, the statement
+			// is a recurrence step and looks like the safest jam in the file.
+			//
+			// Matched on the destination's ROOT IDENTIFIER through the AST, not on rendered
+			// text: exprText returns nothing for a binary expression, so a text-containment
+			// test silently rejected every real site — this check found zero of the two
+			// kernels it was built from until that was fixed.
+			dst := rootIdent(lhs)
+			if dst == "" || (!mentionsIdent(p, dst) && !mentionsIdent(q, dst)) {
+				return true
+			}
+			// AND IT HAS TO BE A SITE SOMEONE WOULD WANT TO JAM, or this is a warning about
+			// nothing: the destination must vary with the item — that is what makes the
+			// iterations look independent — while one of the two products must NOT, since a
+			// shared operand re-read once per item is the whole reason to group them.
+			varies := mentionsIdent(lhs, iv) || mentionsAnyOf(lhs, perItem)
+			// The shared thing is a FACTOR, not a whole product: in `b_i*x[j]` the coefficient
+			// is per item and the vector is not, and testing the product as a unit finds
+			// nothing. Both measured kernels have exactly this shape.
+			shared := func(e ast.Expr) bool {
+				return !mentionsIdent(e, iv) && !mentionsAnyOf(e, perItem)
+			}
+			hasSharedFactor := func(e ast.Expr) bool {
+				mul, ok := unparen(e).(*ast.BinaryExpr)
+				if !ok {
+					return shared(e)
+				}
+				return shared(mul.X) || shared(mul.Y)
+			}
+			if !varies || (!hasSharedFactor(p) && !hasSharedFactor(q)) {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(as.Pos()),
+				category: "two-product-update-in-a-loop",
+				msg: fmt.Sprintf("%q is updated in place from an expression that ADDS TWO"+
+					" PRODUCTS. This is the linear-recurrence shape, and it looks like the"+
+					" easiest unroll-and-jam target in the file: each element is written once"+
+					" from its own old value, so the iterations really are independent and"+
+					" grouping them changes nothing AT THE SOURCE LEVEL. IT STILL CANNOT BE"+
+					" JAMMED BIT-IDENTICALLY. An add of two products has TWO legal"+
+					" fused-multiply-add contractions — either multiply may fuse into the add,"+
+					" and they round differently — and the compiler's choice does not survive"+
+					" restructuring the enclosing function. MEASURED TWICE: jamming RetNet's"+
+					" recurrent state update moved every digest INCLUDING at a size where the"+
+					" jammed body never executes and the surviving tail is textually unchanged,"+
+					" with the whole-function FMA count going 192 to 196; Mamba-2's SSD state"+
+					" update did the same on all five of its cases. THEIR SIBLING OUTPUT DOTS"+
+					" ADD ONE PRODUCT AND JAMMED CLEANLY, for -23.3%% and -20.9%% — so look for"+
+					" the neighbor loop and take that instead. If you want this one anyway, it"+
+					" is a one-ulp change and has to be described as one; do not claim"+
+					" bit-identity", dst),
 			})
 			return true
 		})
