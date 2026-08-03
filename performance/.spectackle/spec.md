@@ -71,3 +71,6 @@ WHEN several items each reduce the same shared source into their own scalar, the
 
 ## A-MIXED-GROUP-IS-HANDLED-IN-PLACE-NOT-BY-ABANDONING-THE-GROUPING-001
 WHEN a grouped inner loop meets a group whose members are not uniform, the optimizer SHALL processes those members scalar-wise and continues grouping, rather than breaking out for the rest of the row; breaking out measured plus 2 to 3 percent on a general-mask cell while the block-masked one gained 30, and handling in place made both improve.
+
+## A-SORT-WHOSE-PREFIX-IS-TAKEN-BECOMES-A-SELECTION-001
+WHEN a slice is sorted in full and then cut to a small prefix, the optimizer SHALL replaces the sort with a bounded worst-at-root heap over the prefix length, which is bit-identical when the comparator is a strict total order; on diverse beam search that took the cheap cell down 90.5 percent and the realistic one 42.7.
