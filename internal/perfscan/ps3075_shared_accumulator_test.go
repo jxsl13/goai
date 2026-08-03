@@ -158,3 +158,86 @@ func reconErr(diff []float64, xf []float64, acc []float64, in, samples int) {
 		t.Fatalf("message omits the association trap or the width-invariance gate:\n%s", fs[0].msg)
 	}
 }
+
+// TestDetectPS3075_SubtractiveAccumulation pins that -= is the same shape as +=. The QR
+// backward's rank-1 update is written with -= and was 50.7% of its benchmark; matching only
+// += walked past it.
+func TestDetectPS3075_SubtractiveAccumulation(t *testing.T) {
+	src := `package p
+
+func rank1(qb, qd, mm [][]float64, m, n int) {
+	for k := range m {
+		qbk, qdk := qb[k], qd[k]
+		for i := range n {
+			qbki := qbk[i]
+			for j := range n {
+				mm[i][j] -= qbki * qdk[j]
+			}
+		}
+	}
+}`
+	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — a subtractive accumulation is the same accumulator", len(fs))
+	}
+}
+
+// TestDetectPS3075_RowAliasedAccumulator pins the alias resolution. `mmi := mm[i]` is rebound
+// on every pass of the item loop while the memory behind it is shared, so a per-item test on
+// the row variable alone hides the buffer.
+func TestDetectPS3075_RowAliasedAccumulator(t *testing.T) {
+	src := `package p
+
+func rank1(qb, qd, mm [][]float64, m, n int) {
+	for k := range m {
+		qbk, qdk := qb[k], qd[k]
+		for i := range n {
+			qbki, mmi := qbk[i], mm[i]
+			for j := range n {
+				mmi[j] -= qbki * qdk[j]
+			}
+		}
+	}
+}`
+	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — the row variable aliases a shared buffer", len(fs))
+	}
+}
+
+// TestDetectPS3075_SilentOnARowAliasOfTheItem pins the other side of that resolution: when the
+// row is taken AT the item index, the buffer really is per item and there is nothing to jam.
+func TestDetectPS3075_SilentOnARowAliasOfTheItem(t *testing.T) {
+	src := `package p
+
+func perItem(src [][]float64, dst [][]float64, m, n int) {
+	for k := range m {
+		row := dst[k]
+		s := src[k]
+		for j := range n {
+			row[j] += s[j] * 2
+		}
+	}
+}`
+	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the row is the item's own output:\n%s", len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3075_SilentOnATwoDimensionalPerItemAccumulator pins the index-crossing rule
+// inside the root resolution. Walking mm[i][j] down to mm is only sound while every index
+// crossed is independent of the item; dst[k][j] with k the item is the item's OWN row, and
+// treating it as shared would report a jam that has nothing to hold.
+func TestDetectPS3075_SilentOnATwoDimensionalPerItemAccumulator(t *testing.T) {
+	src := `package p
+
+func perItemRow(src, dst [][]float64, m, n int) {
+	for k := range m {
+		s := src[k]
+		for j := range n {
+			dst[k][j] += s[j] * 2
+		}
+	}
+}`
+	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — dst[k] is the item's own row:\n%s", len(fs), fs[0].msg)
+	}
+}
