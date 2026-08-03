@@ -275,6 +275,91 @@ func dot4[T float32 | float64](a []float64, b []T) float64 {
 	return (s0 + s1) + (s2 + s3)
 }
 
+// dot4x4 returns the four dots of a against b0..b3 over ONE pass of a. Each is computed exactly
+// as dot4 computes it — four accumulators over the same ascending d, combined as (s0+s1)+(s2+s3),
+// with the <4 remainder folded into the first — so four jammed keys score bit-identically to four
+// dot4 calls. What it buys is the query row: read once for four keys instead of four times, with
+// sixteen independent chains in flight. The F64 score arm has jammed its keys since T9xx; this is
+// the same jam for the arm that pre-widens the query, which could not use it because its
+// reduction sits behind dot4.
+func dot4x4[T float32 | float64](a []float64, b0, b1, b2, b3 []T) (float64, float64, float64, float64) {
+	var p0, p1, p2, p3 float64
+	var q0, q1, q2, q3 float64
+	var r0, r1, r2, r3 float64
+	var t0, t1, t2, t3 float64
+	n := len(a)
+	n = min(n, len(b0), len(b1), min(len(b2), len(b3)))
+	d := 0
+	for ; d+3 < n; d += 4 {
+		a0, a1, a2, a3 := a[d], a[d+1], a[d+2], a[d+3]
+		p0 += a0 * float64(b0[d])
+		p1 += a1 * float64(b0[d+1])
+		p2 += a2 * float64(b0[d+2])
+		p3 += a3 * float64(b0[d+3])
+		q0 += a0 * float64(b1[d])
+		q1 += a1 * float64(b1[d+1])
+		q2 += a2 * float64(b1[d+2])
+		q3 += a3 * float64(b1[d+3])
+		r0 += a0 * float64(b2[d])
+		r1 += a1 * float64(b2[d+1])
+		r2 += a2 * float64(b2[d+2])
+		r3 += a3 * float64(b2[d+3])
+		t0 += a0 * float64(b3[d])
+		t1 += a1 * float64(b3[d+1])
+		t2 += a2 * float64(b3[d+2])
+		t3 += a3 * float64(b3[d+3])
+	}
+	for ; d < n; d++ {
+		av := a[d]
+		p0 += av * float64(b0[d])
+		q0 += av * float64(b1[d])
+		r0 += av * float64(b2[d])
+		t0 += av * float64(b3[d])
+	}
+	return (p0 + p1) + (p2 + p3), (q0 + q1) + (q2 + q3),
+		(r0 + r1) + (r2 + r3), (t0 + t1) + (t2 + t3)
+}
+
+// scoreRowF32 fills row[jmin:jmax) with the scaled (and optionally ALiBi-biased) scores of one
+// query row against the keys, four keys per pass over the query, and returns the running maximum.
+// It is a SEPARATE FUNCTION rather than a branch inside mhaFwd on purpose: written inline, the
+// extra body changed the code the compiler generated for the F64 arm beside it, and one ALiBi
+// element of the F64 parity test moved by a single ULP with no arithmetic of that arm touched.
+// Keeping the jam behind its own call restores that arm to its previous code exactly.
+func scoreRowF32[T float32 | float64](row, qw []float64, k []T, g mhaGeo, h, i, jmin, jmax, kvOff, dk int) float64 {
+	m := math.Inf(-1)
+	j := jmin
+	for ; j+3 < jmax; j += 4 {
+		b0 := j*g.kvDM + kvOff
+		b1, b2, b3 := b0+g.kvDM, b0+2*g.kvDM, b0+3*g.kvDM
+		s0, s1, s2, s3 := dot4x4(qw,
+			k[b0:b0+dk:b0+dk], k[b1:b1+dk:b1+dk],
+			k[b2:b2+dk:b2+dk], k[b3:b3+dk:b3+dk])
+		for o, sv := range [4]float64{s0, s1, s2, s3} {
+			sv *= g.scale
+			if g.slopes != nil {
+				sv += g.slopes[h] * float64(j+o-(g.off+i))
+			}
+			row[j+o] = sv
+			if sv > m {
+				m = sv
+			}
+		}
+	}
+	for ; j < jmax; j++ {
+		kBase := j*g.kvDM + kvOff
+		s := dot4(qw, k[kBase:kBase+dk:kBase+dk]) * g.scale
+		if g.slopes != nil {
+			s += g.slopes[h] * float64(j-(g.off+i))
+		}
+		row[j] = s
+		if s > m {
+			m = s
+		}
+	}
+	return m
+}
+
 // dot4T is dot4 with both operands in their storage type. The pre-widened
 // form (dot4 + widen) was A/B-tested in all three attention kernels: it won
 // ~28% in the forward (whose k-loop is load-bound on the score pass) but
@@ -347,18 +432,12 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 			qr := q[qBase : qBase+dk : qBase+dk]
 			m := math.Inf(-1)
 			if isF32 {
-				qw := widen(qf, qr)
-				for j := jmin; j < jmax; j++ {
-					kBase := j*g.kvDM + kvOff
-					s := dot4(qw, k[kBase:kBase+dk:kBase+dk]) * g.scale
-					if g.slopes != nil {
-						s += g.slopes[h] * float64(j-(g.off+i))
-					}
-					row[j] = s
-					if s > m {
-						m = s
-					}
-				}
+				// FOUR KEYS PER PASS OVER THE QUERY ROW, as the F64 arm below has always done.
+				// This arm could not: its reduction sits behind dot4, so the query row was
+				// re-streamed once per key. Bit-identical — every score keeps dot4's own four
+				// accumulators over the same ascending d and the same combination, and the
+				// scale, the slope and the maximum are still applied in ascending j.
+				m = scoreRowF32(row, widen(qf, qr), k, g, h, i, jmin, jmax, kvOff, dk)
 			} else {
 				// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term reduction into one
 				// accumulator, so this loop is bound by the latency of a dependent add chain rather
