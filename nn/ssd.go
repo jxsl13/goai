@@ -67,9 +67,52 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			for j := range d {
 				yrow[j] = 0
 			}
-			for i := range n {
-				ci := crow[i]
-				hrow := h[i*d : i*d+d]
+			// EIGHT STATE ROWS PER PASS. yrow does not vary with i, so this loop loaded and stored
+			// the whole output row once per state row for one multiply-add each; eight at a time
+			// hold yrow[j] in a register across eight of them. BIT-IDENTICAL: yrow[j] still sums i
+			// ascending, into an EXPLICIT LOCAL rather than a compound assignment over a sum of
+			// eight products, which would associate differently (T1183).
+			//
+			// THE STATE UPDATE ABOVE IS NOT JAMMABLE THE SAME WAY, and it was tried here before
+			// being ruled out: at*h + b_i*x ADDS TWO PRODUCTS, so two fused-multiply-add
+			// contractions are legal and the compiler's choice does not survive the restructuring —
+			// all five digests moved. RetNet showed the same thing in T1189, where the drift
+			// appeared even at a size where the jammed body never runs. This loop has ONE multiply,
+			// so only one contraction is legal and the jam is safe.
+			ib := 0
+			for ; ib+7 < n; ib += 8 {
+				c0 := crow[ib+0]
+				c1 := crow[ib+1]
+				c2 := crow[ib+2]
+				c3 := crow[ib+3]
+				c4 := crow[ib+4]
+				c5 := crow[ib+5]
+				c6 := crow[ib+6]
+				c7 := crow[ib+7]
+				r0 := h[(ib+0)*d : (ib+0)*d+d]
+				r1 := h[(ib+1)*d : (ib+1)*d+d]
+				r2 := h[(ib+2)*d : (ib+2)*d+d]
+				r3 := h[(ib+3)*d : (ib+3)*d+d]
+				r4 := h[(ib+4)*d : (ib+4)*d+d]
+				r5 := h[(ib+5)*d : (ib+5)*d+d]
+				r6 := h[(ib+6)*d : (ib+6)*d+d]
+				r7 := h[(ib+7)*d : (ib+7)*d+d]
+				for j := range d {
+					acc := yrow[j]
+					acc += c0 * r0[j]
+					acc += c1 * r1[j]
+					acc += c2 * r2[j]
+					acc += c3 * r3[j]
+					acc += c4 * r4[j]
+					acc += c5 * r5[j]
+					acc += c6 * r6[j]
+					acc += c7 * r7[j]
+					yrow[j] = acc
+				}
+			}
+			for ; ib < n; ib++ {
+				ci := crow[ib]
+				hrow := h[ib*d : ib*d+d]
 				for j := range d {
 					yrow[j] += ci * hrow[j]
 				}

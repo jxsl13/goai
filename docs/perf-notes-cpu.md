@@ -367,3 +367,40 @@ is a statement about the source that the compiler is free to contradict.
 This is also the clearest case yet for freezing bits rather than comparing to a
 tolerance. A one-ulp drift in a recurrence compounds across steps, and no
 gradient check or accuracy assertion would have said a word.
+
+## Mamba-2's SSD scan, and the two-product rule confirmed (T1190)
+
+`SSDRecurrent` has the same two-loop shape as RetNet: a state update
+`h[i,j] = a_t*h[i,j] + b_i*x_j` and an output dot `y[j] += c_i*h[i,j]`, at 43%
+and 38% of the profile.
+
+The state update was jammed first, deliberately, to test T1189's finding on a
+second kernel. **All five digests moved**, exactly as RetNet's did. The output
+dot, one product, jammed cleanly.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkSSDRecurrent_256d256n128` | 11.33 ms | 8.96 ms | **-20.9%** |
+| `BenchmarkSSDRecurrent_512d128n64` | 5.988 ms | 4.471 ms | **-25.3%** |
+| `BenchmarkSSDRecurrent_256d64n16` | 0.459 ms | 0.459 ms | flat (control) |
+
+The flat cell is a control by construction: at `n*d = 1024` the kernel takes its
+strided output path instead of the interleaved one, and that path is untouched.
+
+### PS3084
+
+The hazard is now a check: an in-place update inside a nested loop whose
+right-hand side adds two products and reads the destination back, where the
+destination varies with the outer loop and some factor does not. **101 sites**,
+overwhelmingly optimizer update rules of the form
+`m[i] = beta*m[i] + (1-beta)*g[i]` — a population worth knowing about, since
+optimizer element loops are a standing perf target here.
+
+It is a warning, not a candidate list: the advice is that jamming these is a
+one-ulp change and must be described as one, and that the neighbor loop adding a
+single product is usually the better target anyway.
+
+Four conditions, each pinned by a fixture that reddens when it alone is removed.
+Two of those fixtures had to be rewritten before they isolated anything: a `+=`
+form is rejected by the operator test and a bare `h = a*h` by the add test, so
+neither ever reached the product count that a mutation was weakening.
