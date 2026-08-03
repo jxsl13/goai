@@ -233,6 +233,7 @@ var checks = []check{
 	{"PS3073", "invariant-operand-reloaded-per-iteration", "a loop calling a REDUCTION HELPER with one operand that does not vary with the loop variable, so the same memory is re-streamed on every iteration. Jam the loop — 4 iterations per pass, one pass over the shared operand, each result keeping the helper own accumulator count, order and combination, which makes it bit-identical because the jammed dimension is the free one. MEASURED on the linalg Cholesky factorization, whose row update called a 4-accumulator dot with the pivot row shared: Cholesky512 8.99 to 6.25 ms, -30.5%%, Cholesky256 -24.7%%, CholSolve256x128 -13.7%%, bit-identical in both dtype arms, SVD flat as a control. THE SHARING IS THE SINGLE PASS, NOT THE UNROLLING — the same 4 rows written as two 2-row calls reloaded the operand twice and measured nothing. Also measured on the F32 arm of the cpu attention forward, whose F64 sibling had jammed its keys for a long time: MHA512/fwd/cpu 8.42 to 6.73 ms, -20.1%%. THAT ONE FIRST MEASURED FLAT — the five obvious F32 attention cells route to a GEMM kernel and never reach the arm; an execution counter read from a TestMain AFTER m.Run (tests run before benchmarks) found the one cell that did. Written INLINE it also moved an untouched F64 sibling arm by a ULP through a codegen shift; put the jam behind its own function. PS6010 is this transform for an INLINE accumulator loop; this check exists because a reduction behind a CALL is invisible to it", false},
 	{"PS3074", "inner-loop-ranges-over-a-shared-operand", "an item loop whose INNER loop ranges over an operand that does not vary with the item, so the whole operand is re-streamed once per item while the body writes per-item output. Jam the item loop — 4 items per pass over one traversal of the shared operand, each item keeping its own accumulators; a shared accumulator stays bit-identical by being held in a local across the 4 additions in the same ascending item order. MEASURED on the cpu attention backward, whose two key loops re-streamed the gradient row and the query row: BenchmarkMHA512/bwd/cpu 24.73 to 13.40 ms, -45.8%% (1.85x), forward and masked cells flat as controls. THIS IS THE SHAPE PS6010 CANNOT SEE — it requires the shared operand to appear as an INDEX expression, and a range subject never does, which is why the line holding 39%% of that benchmark was reported by nothing", false},
 	{"PS3075", "inner-loop-accumulates-into-a-shared-buffer", "an item loop whose INNER loop accumulates into a buffer that does not vary with the item, so every item makes a full load-store round trip through that buffer for one addition each. Jam the item loop — 4 items per pass, holding the accumulator element in a local across their four additions and storing once. BIT-IDENTICAL when the additions keep the same ascending item order. MEASURED on the cpu selective-attention kernel, where this weighted-sum loop was 26%% of the profile and a score loop in the same function 46%%: MHASelectF32CPU_1024x1024x64x16 191.3 to 100.9 ms, -47.3%% (1.90x), the 512 cell -42.7%%, the F64 arm -40.1%%, masked cell flat as a control. THE MIRROR OF PS3074 — there the inner loop SUBJECT is shared and the outputs per item; here the outputs are shared and the subject per item — and neither is reachable from PS6010", false},
+	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1382,6 +1383,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, invariantOperandReloadFindings(fset, f, fn)...)
 		out = append(out, sharedRangeSubjectFindings(fset, fn)...)
 		out = append(out, sharedAccumulatorFindings(fset, fn)...)
+		out = append(out, narrowUnrollFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18461,6 +18463,76 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3076: an unroll factor fixed at two ---------------------------------------------------
+
+// narrowUnrollFindings flags PS3076 — a jammed loop whose stride is 2 while its body already
+// holds several accumulators in locals, which is the shape of an unroll factor that was chosen
+// once and never swept.
+func narrowUnrollFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		f, ok := n.(*ast.ForStmt)
+		if !ok || f.Body == nil {
+			return true
+		}
+		as, ok := f.Post.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+			return true
+		}
+		lit, ok := as.Rhs[0].(*ast.BasicLit)
+		if !ok || lit.Value != "2" {
+			return true
+		}
+		// THE BODY MUST ALREADY BE REGISTER-BLOCKED. A stride of two on an ordinary loop says
+		// nothing; the finding is about a kernel that ALREADY holds its accumulators in locals
+		// and stores them back, because that is where the factor is a tuning choice.
+		held := map[string]bool{}
+		ast.Inspect(f.Body, func(m ast.Node) bool {
+			a, ok := m.(*ast.AssignStmt)
+			if !ok || a.Tok != token.ASSIGN || len(a.Lhs) != 1 || len(a.Rhs) != 1 {
+				return true
+			}
+			ix, ok := a.Lhs[0].(*ast.IndexExpr)
+			if !ok {
+				return true
+			}
+			if nm := identName(a.Rhs[0]); nm != "" {
+				if b := identName(ix.X); b != "" {
+					held[b] = true
+				}
+			}
+			return true
+		})
+		if len(held) < 3 {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(f.Pos()),
+			category: "unroll-factor-fixed-at-two",
+			msg: fmt.Sprintf("this loop is register-blocked over %d accumulators and takes TWO"+
+				" steps per pass. A factor of two is what an argument about register pressure"+
+				" produces; the optimum is what a SWEEP produces, and they were not the same"+
+				" here. MEASURED on the two gemm band kernels, both of which carried a comment"+
+				" reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and"+
+				" eight back at the baseline, and the eight-step arm is what shows the spill"+
+				" boundary is real but was placed two steps too early. BenchmarkMTAForward_ch16"+
+				" 277.2 to 250.3 ms (-9.7%%) and ch8 -9.5%% on the f32 band; GemmDirF64_1024"+
+				" 19.10 to 15.74 ms (-17.6%%) and the 512x2048x2048 cell -11.7%% on the f64"+
+				" band. BIT-IDENTICAL AT ANY FACTOR, which is what makes the sweep cheap: each"+
+				" accumulator still takes one rounding per step in ascending order, never a"+
+				" summed pair — so the existing bit-exact oracle gates every arm of the sweep"+
+				" and the whole experiment costs one measurement each. SWEEP, DO NOT ARGUE: a"+
+				" register-pressure argument cannot see the scheduler, and the only cost of"+
+				" being wrong is one benchmark run", len(held)),
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3075: an inner loop accumulating into a shared buffer ---------------------------------
