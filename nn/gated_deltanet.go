@@ -85,20 +85,31 @@ func GatedDeltaNet(ctx *backend.Context, q, k, v, alpha, beta *tensor.Tensor) (*
 						}
 					}
 				} else {
-					for i := range S { // decayed = α_t · S_{t-1}
-						S[i] *= at
-					}
+					// ONE PASS OVER S, not three. The decay, the delta update and the output
+					// projection each streamed the whole dv-by-dk state, and every one of them
+					// is independent across rows: row r reads and writes only
+					// S[r*dk:(r+1)*dk]. Merged, the row is touched once and stays in cache
+					// through all three stages.
+					//
+					// BIT-IDENTICAL: each element still receives exactly one decay multiply,
+					// each output still accumulates over the same c in the same order, and the
+					// three stages already ran in this order FOR A GIVEN ROW in the split form.
 					for r := range dv {
 						base := r * dk
 						var p float64 // pred_r = Σ_c decayed[r,c]·k[c]
 						for c := range dk {
+							S[base+c] *= at // decayed = α_t · S_{t-1}
 							p += S[base+c] * krow[c]
 						}
 						d := bt * (vrow[r] - p) // β_t·e_r
+						var o float64           // o_t = S_t q_t, on the row just written
 						for c := range dk {
 							S[base+c] += d * krow[c] // S += (β_t e) kᵀ
+							o += S[base+c] * qrow[c]
 						}
+						os[t*dv+r] = o
 					}
+					continue
 				}
 				for r := range dv { // o_t = S_t q_t
 					base := r * dk

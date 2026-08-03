@@ -50,9 +50,12 @@ func step(S, kt, qt, ar, sk, o []float64, dv, dk int) {
 	}
 }
 
-// TestDetectPS3066_SilentOnTwoLoops pins the count. Two passes are common and often deliberate
-// — a fill and a use — and reporting them would bury the four-pass case this exists for.
-func TestDetectPS3066_SilentOnTwoLoops(t *testing.T) {
+// TestDetectPS3066_ReportsTwoLoops pins the threshold, which MOVED on a measurement. The check
+// shipped requiring three sibling loops, on the reasoning that two is an ordinary fill-then-use
+// and reporting it would bury the four-pass case. The DeltaNet recurrence has exactly two
+// passes over its state and merging them measured -15.3%, against -26.4% for the three-pass
+// gated variant beside it, so two is enough. The tree-wide count went 4 to 47.
+func TestDetectPS3066_ReportsTwoLoops(t *testing.T) {
 	src := `package p
 
 func dot(a, b []float64) float64 { return 0 }
@@ -67,8 +70,25 @@ func step(S, kt, ar, sk []float64, dv, dk int) {
 		sk[r] = dot(S[r*dk:r*dk+dk], kt)
 	}
 }`
+	if fs := consecutiveLoopFindingsIn(t, src); len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — two passes over one buffer is the shape", len(fs))
+	}
+}
+
+// TestDetectPS3066_SilentOnASingleLoop pins the floor. One pass has nothing to merge with.
+func TestDetectPS3066_SilentOnASingleLoop(t *testing.T) {
+	src := `package p
+
+func step(S, ar []float64, dv, dk int) {
+	for r := 0; r < dv; r++ {
+		for c := 0; c < dk; c++ {
+			S[r*dk+c] *= ar[c]
+		}
+	}
+}`
 	if fs := consecutiveLoopFindingsIn(t, src); len(fs) != 0 {
-		t.Fatalf("%d findings, want 0 — two passes is not this shape:\n%s", len(fs), fs[0].msg)
+		t.Fatalf("%d findings, want 0 — a single pass has nothing to merge:\n%s",
+			len(fs), fs[0].msg)
 	}
 }
 
