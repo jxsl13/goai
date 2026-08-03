@@ -19,6 +19,12 @@ package cpu
 // (§T12b): each B row is loaded once and reused for four C rows, quartering
 // B-traffic. Every C element still accumulates its k-products in ascending p
 // order, so results stay bit-identical to the reference (§V3, §V11 tol 0).
+// gemmATF64Band (portable build) is just the scalar kernel; the archsimd twin
+// lives in gemm_simd.go.
+func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
+	gemmATF64BandScalar(A, B, C, loRow, hiRow, m, k, n)
+}
+
 func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 	// SINGLE-COLUMN FAST PATH. With n == 1 every C element is a SCALAR, so four of them fit in
 	// registers for the whole k loop and the destination leaves memory entirely — the blocked

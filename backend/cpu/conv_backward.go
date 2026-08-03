@@ -203,12 +203,16 @@ func init() {
 	std.add(backend.OpConv2DBackward, tensor.F64, conv2dBackwardKernel)
 }
 
-// gemmATF64Band computes rows [loRow,hiRow) of C[M,N] += Aᵀ·B where A is stored
-// row-major [K,M] (so Aᵀ[i][p] = A[p*m+i]) — the dW = colsᵀ·dO product without
-// materializing the transpose. Same 4-row register blocking as gemmF64Band and
-// the same ascending-p accumulation per C element, so the result is bit-identical
-// to transposing A and calling gemmF64Band (§V3-style order preservation).
-func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
+// gemmATF64BandScalar computes rows [loRow,hiRow) of C[M,N] += Aᵀ·B where A is
+// stored row-major [K,M] (so Aᵀ[i][p] = A[p*m+i]) — the dW = colsᵀ·dO product
+// without materializing the transpose. Same 4-row register blocking as
+// gemmF64Band and the same ascending-p accumulation per C element, so the result
+// is bit-identical to transposing A and calling gemmF64Band (§V3-style order
+// preservation). It is the portable scalar kernel behind gemmATF64Band, which on
+// amd64+simd dispatches to a bit-identical archsimd twin (gemm_simd.go) that
+// vectorizes the free dimension j with separate Mul+Add (NOT FMA, so the two
+// roundings match this loop exactly); gemm_nosimd.go delegates straight here.
+func gemmATF64BandScalar(A, B, C []float64, loRow, hiRow, m, k, n int) {
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		c0 := C[(i+0)*n : (i+1)*n]
