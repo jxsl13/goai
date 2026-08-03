@@ -78,6 +78,28 @@ func NewSpectralNorm(dtype tensor.Dtype, in, out int, seed uint64, opts ...Spect
 
 // powerIterate refines the u,v buffers by `iters` rounds of power iteration on the
 // CURRENT W, read directly (no tape) so the singular vectors are stop-gradient.
+// dot4 computes Σ_i a[i]·b[i] (len(b) ≥ len(a)) with four independent accumulators
+// so the FADD dependency chain is broken: a single-accumulator dot is latency-bound
+// on the ~4-cycle add, while four chains in flight saturate the 2/cycle FADD
+// throughput. The four partials reassociate the sum vs one accumulator, so the
+// result is within incumbent floating-point tolerance (§V10; the split partials are
+// in fact closer to pairwise summation, i.e. slightly MORE accurate), not bit-exact.
+func dot4(a, b []float64) float64 {
+	var s0, s1, s2, s3 float64
+	n := len(a)
+	i := 0
+	for ; i+3 < n; i += 4 {
+		s0 += a[i] * b[i]
+		s1 += a[i+1] * b[i+1]
+		s2 += a[i+2] * b[i+2]
+		s3 += a[i+3] * b[i+3]
+	}
+	for ; i < n; i++ {
+		s0 += a[i] * b[i]
+	}
+	return (s0 + s1) + (s2 + s3)
+}
+
 func (s *SpectralNorm) powerIterate(iters int) {
 	in, out := s.W.Shape()[0], s.W.Shape()[1]
 	// The two matvecs read W[i,j] and u[i]/v[j] through AtF64 on every (i,j) — 2·in·out
@@ -102,10 +124,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 					tv[j] += wrow[j] * ui
 				}
 			}
-			var nv float64
-			for j := range out {
-				nv += tv[j] * tv[j]
-			}
+			nv := dot4(tv, tv) // Σ_j tv[j]²
 			if nv = math.Sqrt(nv); nv > 0 {
 				for j := range out {
 					vs[j] = tv[j] / nv
@@ -114,10 +133,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 			var nu float64
 			for i := range in {
 				wrow := ws[i*out : i*out+out : i*out+out]
-				var acc float64
-				for j := range out {
-					acc += wrow[j] * vs[j] // contiguous W row · v
-				}
+				acc := dot4(wrow, vs) // contiguous W row · v
 				tu[i] = acc
 				nu += acc * acc
 			}
