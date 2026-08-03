@@ -221,6 +221,7 @@ var checks = []check{
 	{"PS3061", "fanout-not-sized-to-the-work", "a fan-out helper that always splits into GOMAXPROCS workers, with only an on/off work gate and no term that scales the WORKER COUNT to the work. Above the gate a small item still fans twelve ways, and the wakeups cost more than the split saves. MEASURED on the quantized decode matmul, which is called thousands of times per generation with one activation row: a profile of a 500-token quantized Llama generation spent 88%% of its samples in pthread_cond_signal and pthread_cond_wait and 1.5%% in the kernel itself. One worker per 1<<15 of element-work, capped by GOMAXPROCS, beat BOTH the fixed twelve and no fan-out at all — QuantLlamaGenerate500 549.7 to 527.4 ms, system CPU -27%%, with the prefill cell flat as a control. The on/off gate alone cannot express this: forcing the same call serial cost 8%% wall, and leaving it at twelve burned 42%% more user CPU for that 8%%. Pick the grain by measuring BOTH the clock and the CPU — a coarser grain traded 4%% of the clock for another 44%% of the system time here, and which side of that is right depends on whether the machine serves one request or many", false},
 	{"PS3062", "op-with-no-optimized-kernel", "an operation registered in the REFERENCE backend and in no optimized one, so every caller on the default backend runs the correctness implementation. The reference is written to be obviously right, not fast, and the gap is routinely large: OpCholesky had no cpu kernel at all, and giving it one — ref's arithmetic line for line, with four rows taken per pass so the pivot row is loaded once and four independent accumulator chains run instead of one — measured 21.1 ms to 7.0 ms at n=512, a 3.0x, BIT-IDENTICAL to ref in both dtypes. THE FIRST ATTEMPT AT THAT KERNEL WAS SLOWER THAN REF. Fanning out the row update is the classical-factorization shape PS3040 describes and it lost, 24.1 ms against 22.0 with allocations going 6 to 878, because there are n columns and the fork is paid once per column for a row update that shrinks as the factorization proceeds. Arithmetic, not parallelism, was the lever. GATE A NEW KERNEL BIT-FOR-BIT AGAINST REF, not to a tolerance: a tolerance test passes a blocked or reassociated version too, and once one kernel disagrees every cross-backend golden silently becomes a tolerance test", false},
 	{"PS3063", "one-loop-left-serial-in-a-fanning-function", "a serial nest inside a function that ALREADY fans out somewhere else. PS3034 and PS3059 both suppress this case — they require the function to never call a fan-out helper — and that suppression hides the most valuable shape there is, because a function that fans out has already proven the transform is available to it and simply left one loop behind. TWICE MEASURED, both large. The KAN forward fanned out buildBasis and not fusedSpline, which was 84%% of the layer: banding it went 67.28 to 10.90 ms, a 6.2x. The eigendecomposition adjoint fanned out its first two n^3 products and not the triangular third: banding that, plus mirroring the intermediate it reads down its columns, went 18.63 to 8.17 ms at n=256, a 2.3x, of which the banding was about 2x and the mirror about 15%%. CHECK THE WRITES OWN DISJOINT OUTPUT — a triangular loop writing (i,j) and (j,i) does, since a clash would force the two indices equal — and gate with BOTH a bit-exact digest and -race", false},
+	{"PS3064", "jagged-matrix-allocated-row-by-row", "a [][]T allocated as one outer slice and then one make() per ROW, so an r-by-c matrix costs r+1 allocations and its rows land wherever the heap puts them. Back the rows with ONE block and window into it — d[i] = base[i*c:(i+1)*c:(i+1)*c] — and the call sites do not change at all, because the type does not. MEASURED across the three autograd factorization adjoints: allocations per call fell 1886 to 356 on the eigendecomposition, 1762 to 491 on the SVD and 1447 to 429 on the QR, a 70 to 81%% cut. THE CLOCK IS THE SMALLER HALF AND IS SHAPE-DEPENDENT: SVD -8.6%%, eigh -5.4%%, QR flat, with an untouched sibling adjoint flat as a control. Report it as a resource win and let the time be a bonus. CAP THE ROW WINDOW at its own length so an append copies instead of reaching into the next row — nothing in the converted code appends, and the cap is what keeps that from mattering later", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1358,6 +1359,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, unsizedFanoutFindings(fset, f, fn)...)
 		out = append(out, refOnlyKernelFindings(fset, f, fn, ns)...)
 		out = append(out, serialLoopInFanningFuncFindings(fset, f, fn, ns)...)
+		out = append(out, jaggedMatrixFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18420,6 +18422,94 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3064: a jagged matrix allocated one row at a time -------------------------------------
+
+// jaggedMatrixFindings flags PS3064 — an outer make([][]T, r) whose rows are then filled in by a
+// loop of per-row make() calls.
+func jaggedMatrixFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Names assigned an outer make([][]T, ...), and where they were assigned.
+	outer := map[string]ast.Node{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			id, ok := lhs.(*ast.Ident)
+			if !ok || i >= len(as.Rhs) {
+				continue
+			}
+			c, ok := as.Rhs[i].(*ast.CallExpr)
+			if !ok || calleeName(c.Fun) != "make" || len(c.Args) == 0 {
+				continue
+			}
+			at, ok := c.Args[0].(*ast.ArrayType)
+			if !ok || at.Len != nil {
+				continue
+			}
+			if inner, ok := at.Elt.(*ast.ArrayType); !ok || inner.Len != nil {
+				continue
+			}
+			outer[id.Name] = as
+		}
+		return true
+	})
+	if len(outer) == 0 {
+		return nil
+	}
+	var out []finding
+	seen := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, iv := outerLoop(n)
+		if body == nil || iv == "" {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != len(as.Rhs) {
+				return true
+			}
+			for i, lhs := range as.Lhs {
+				ix, ok := unparen(lhs).(*ast.IndexExpr)
+				if !ok {
+					continue
+				}
+				id, ok := ix.X.(*ast.Ident)
+				if !ok || outer[id.Name] == nil || !mentionsIdent(ix.Index, iv) {
+					continue
+				}
+				c, ok := as.Rhs[i].(*ast.CallExpr)
+				if !ok || calleeName(c.Fun) != "make" || seen[id.Name] {
+					continue
+				}
+				seen[id.Name] = true
+				out = append(out, finding{
+					pos:      fset.Position(as.Pos()),
+					category: "jagged-matrix-allocated-row-by-row",
+					msg: fmt.Sprintf("%q is a [][]T whose rows are allocated ONE AT A TIME, so an"+
+						" r-by-c matrix costs r+1 allocations and its rows land wherever the heap"+
+						" puts them. Back them with ONE block and window into it —"+
+						" d[i] = base[i*c:(i+1)*c:(i+1)*c] — and NO CALL SITE CHANGES, because the"+
+						" type does not. MEASURED across the three autograd factorization"+
+						" adjoints: allocations per call fell 1886 to 356 on the"+
+						" eigendecomposition, 1762 to 491 on the SVD and 1447 to 429 on the QR, a"+
+						" 70 to 81%% cut. THE CLOCK IS THE SMALLER HALF AND IS SHAPE-DEPENDENT —"+
+						" SVD -8.6%%, eigh -5.4%%, QR flat, with an untouched sibling adjoint flat"+
+						" as a control — so report it as a resource win and let the time be a"+
+						" bonus. CAP THE ROW WINDOW at its own length so an append copies instead"+
+						" of reaching into the next row", id.Name),
+				})
+			}
+			return true
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3063: one loop left serial in a function that fans out elsewhere ----------------------

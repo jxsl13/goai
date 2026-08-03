@@ -38,11 +38,7 @@ func init() {
 		// Transposed copies make each inner loop walk two contiguous runs; the transpose itself is
 		// O(n^2) against the O(n^3) it feeds. Bit-identical: only where an operand lives changes,
 		// never which operand or in what order (the same argument the Cholesky VJP records).
-		vT := make([][]float64, n)
-		vbT := make([][]float64, n)
-		for i := range n {
-			vT[i], vbT[i] = make([]float64, n), make([]float64, n)
-		}
+		vT, vbT := alloc2D(n, n), alloc2D(n, n)
 		for r := range n {
 			vr, vbr := v[r], vb[r]
 			for c := range n {
@@ -55,10 +51,7 @@ func init() {
 		// at n=256 — and each has an independent outer index writing only its own row, so a
 		// striped split leaves every element accumulating its own terms in its own order. Rows are
 		// allocated before the split so the workers only write into them.
-		inner := make([][]float64, n)
-		for i := range n {
-			inner[i] = make([]float64, n)
-		}
+		inner := alloc2D(n, n)
 		logdetParallelIdx(n, n*n*n, func(i int) {
 			vTi := vT[i]
 			for j := range n {
@@ -74,10 +67,7 @@ func init() {
 			inner[i][i] += wb[i]
 		})
 		// G = V·inner·Vᵀ  (T = inner·Vᵀ, then G = V·T).
-		tmp := make([][]float64, n)
-		for a := range n {
-			tmp[a] = make([]float64, n)
-		}
+		tmp := alloc2D(n, n)
 		logdetParallelIdx(n, n*n*n, func(a int) {
 			for j := range n {
 				var s float64 // (inner·Vᵀ)_aj = Σ_b inner[a,b]·V[j,b]

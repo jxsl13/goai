@@ -59,10 +59,7 @@ func init() {
 			}
 		}
 		// Ā_core = U·mid·Vᵀ : T = mid·Vᵀ, then U·T.
-		tmp := make([][]float64, n)
-		for a := range n {
-			tmp[a] = make([]float64, n)
-		}
+		tmp := alloc2D(n, n)
 		logdetParallelIdx(n, n*n*n, func(a int) {
 			for j := range n {
 				var sum float64 // (mid·Vᵀ)_aj = Σ_b mid[a,b]·V[j,b]
@@ -153,10 +150,7 @@ func addTallCorrection(abar *tensor.Tensor, w, u, utw, v [][]float64, m, n int) 
 //
 // BIT-IDENTICAL: every out[i][j] still sums the same p products in ascending k order.
 func matTmulRect(x, y [][]float64, p, q int) [][]float64 {
-	out := make([][]float64, q)
-	for i := range q {
-		out[i] = make([]float64, q)
-	}
+	out := alloc2D(q, q)
 	for k := range p {
 		xk, yk := x[k], y[k]
 		for i := range q {
