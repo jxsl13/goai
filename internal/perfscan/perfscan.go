@@ -16106,7 +16106,14 @@ func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.Fi
 					" 878, because there are n columns and the row update shrinks as j grows."+
 					" Taking four rows per pass instead — no fan-out at all — went 21.1 to 7.0 ms"+
 					" on the same shape. When the outer loop is long and the inner work shrinks,"+
-					" try the arithmetic before the parallelism",
+					" try the arithmetic before the parallelism."+
+					" AND TEST THE BELOW-GATE ARM AGAINST THE WORK PER WORKER, not against the"+
+					" on/off threshold. A transpose kernel sitting EXACTLY on that threshold"+
+					" routed through the callback, got one worker back, ran inline anyway and"+
+					" paid the escaping closure for nothing — 10%% slower than the reference it"+
+					" replaced, and one extra allocation per call. Gating on 2x the per-worker"+
+					" floor instead brought it back to parity at that size while keeping the"+
+					" 2.2x at a large one",
 					mv, ov, mv, ov, ov),
 			})
 		}
