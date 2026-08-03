@@ -244,7 +244,23 @@ func (l *KANLayer) fusedSpline(basis *tensor.Tensor) *tensor.Tensor {
 	nbasis := l.gridSize + l.splineOrder
 	y := tensor.New(l.dtype, tensor.Shape{B, out})
 	ys := flatF64(y)
-	for b := range B {
+	// Every batch row is independent: row b writes only ys[b*out : (b+1)*out] and reads the
+	// shared basis, coefficients and scales, so banding the batch is race-free and
+	// BIT-IDENTICAL — the accumulation into ys[obase+j] runs over the same i in the same
+	// ascending order inside one band as it did serially, because a band never splits a row.
+	// buildBasis, the other half of this forward, has fanned out since it was written; this
+	// loop is 84% of the layer's benchmark and never did.
+	parallelRows(B, in*out*nbasis, func(blo, bhi int) {
+		fusedSplineBand(ys, bs, cs, ws, blo, bhi, in, out, nbasis)
+	})
+	return y
+}
+
+// fusedSplineBand evaluates batch rows [blo,bhi) of the fused spline. Split out so the
+// below-gate arm and the banded one run the SAME code: this body has four nested loops and a
+// duplicated copy of it would be the kind of thing that drifts.
+func fusedSplineBand(ys, bs, cs, ws []float64, blo, bhi, in, out, nbasis int) {
+	for b := blo; b < bhi; b++ {
 		obase := b * out
 		for i := range in {
 			bo := (b*in + i) * nbasis
@@ -266,7 +282,6 @@ func (l *KANLayer) fusedSpline(basis *tensor.Tensor) *tensor.Tensor {
 			}
 		}
 	}
-	return y
 }
 
 // buildBasis evaluates the G+k B-spline basis functions at every input coordinate x[b,i], returning
