@@ -236,6 +236,7 @@ type gbmBuilder struct {
 	part     []int       // stable-partition scratch (len n)
 	goLeft   []bool      // per-sample split membership during a partition (len n)
 	inSet    []bool      // membership of a round's subsample (len n)
+	xt       []float64   // x FEATURE-MAJOR: xt[f*n+i] = x[i][f] (len n*d, built once, immutable)
 	vals     []float64   // bestSplit scratch: a node's feature values in sorted order (len n)
 	valsW    [][]float64 // per-worker gather scratch for the parallel feature scan (nw × n)
 	partW    [][]int     // per-worker right-partition scratch for the parallel column partition (nw × n)
@@ -259,6 +260,15 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	// same input produces the same permutation, ties included; this is not merely
 	// "unspecified tie order is irrelevant" but an exact match.
 	key := make([]float64, n)
+	// x FEATURE-MAJOR, built here because the presort already materializes each feature as a
+	// contiguous key column and throws it away. The two consumers of x in this builder both
+	// read ONE feature across scattered sample rows — the split scan's gather and the
+	// partition's threshold test — and x[i][f] makes each of those a pointer chase into a
+	// separate length-d row, so a single feature's n reads touch n cache lines spread over
+	// the whole n*d dataset and use 8 bytes of each. Feature-major turns the same access into
+	// a scattered read inside ONE contiguous length-n array. Pure copy: every value is the
+	// same float64, so nothing downstream moves by a bit.
+	b.xt = make([]float64, n*d)
 	var rk, rtk []uint64
 	var rti []int
 	if n >= treeRadixCutoff {
@@ -266,9 +276,11 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	}
 	for f := 0; f < d; f++ {
 		col := mbase[f*n : f*n+n : f*n+n]
+		xf := b.xt[f*n : f*n+n : f*n+n]
 		for i := range col {
 			col[i] = i
 			key[i] = x[i][f]
+			xf[i] = key[i]
 		}
 		if n >= treeRadixCutoff {
 			gbmRadixByKey(col, key, rk, rtk, rti)
@@ -374,8 +386,9 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 func (b *gbmBuilder) scanFeatures(f0, f1, start, n int, total float64, vals []float64) (feat int, thr, gain float64, ok bool) {
 	for f := f0; f < f1; f++ {
 		cf := b.cols[f]
+		xf := b.xt[f*b.n : f*b.n+b.n : f*b.n+b.n]
 		for k := 0; k < n; k++ {
-			vals[k] = b.x[cf[start+k]][f]
+			vals[k] = xf[cf[start+k]]
 		}
 		var leftSum float64
 		for k := 0; k < n-1; k++ {
@@ -436,10 +449,11 @@ func (b *gbmBuilder) bestSplitParallel(start, end, n int, total float64) (feat i
 // place (stable) by the chosen test, returning the boundary mid.
 func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 	col := b.cols[feat]
+	xf := b.xt[feat*b.n : feat*b.n+b.n : feat*b.n+b.n]
 	mid := start // the left count (identical for every feature); computed here to avoid a race
 	for p := start; p < end; p++ {
 		s := col[p]
-		gl := b.x[s][feat] <= thr
+		gl := xf[s] <= thr
 		b.goLeft[s] = gl
 		if gl {
 			mid++
