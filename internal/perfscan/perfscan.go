@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3050", "serial-tail-after-fanout", "a fan-out call followed, in the same function, by a serial elementwise pass over a whole buffer the bands already own. Every worker finishes and then one goroutine walks the entire output again — an Amdahl term that grows with the output rather than with the work. FOLD IT INTO THE BAND: each band owns rows [lo,hi), so doing its own slice there is disjoint, elementwise and BIT-IDENTICAL, because nothing accumulates. MEASURED on the portable f32 matmul, which accumulates into an f64 scratch and narrowed the whole result afterwards: the tail was 6.4%% of a batched vision forward at one worker, and folding it took three of those forwards down 4.7%% to 7.6%% with the f64 matmul beside them flat. GATE IT ON A SENTINEL — pre-fill the output with a value the correct result cannot produce, so a band that narrows the wrong range shows as an untouched cell", false},
 	{"PS3049", "axpy-reloads-its-destination", "a nest whose inner loop accumulates into a destination the OUTER loop does not choose, from operands that move with it. Every outer iteration reads and writes the whole destination again, so each element carries a load-modify-store chain through memory once per outer step. UNROLL THE OUTER LOOP AND HOLD THE RUNNING VALUE: FOUR outer steps per pass, load the element once, add each contribution, store once. Four is measured, not as many as fit: 1, 4 and 8 steps per pass on the decode kernel came to 823 ms, 682 ms and 937 ms. THE INNER PASS MUST BE LONG, because the extra scalars and row bases are set up once per pass — the identical transform on an attention value accumulation of one head width cost 6 to 9%% on three attention cells and was reverted. ADD THEM ONE AT A TIME, NOT AS A SUM — v += a0*x0; v += a1*x1 keeps the ascending accumulation order and is BIT-IDENTICAL, while summing the products first reassociates. MEASURED on the decode matrix-vector kernel, 46.6%% of a generate loop serial profile: four rows per pass took BenchmarkGPTGenerate500RowBuf down 12.6%%, CLA decode 10.8%%, T5 decode 13.5%% and the Llama prompt 26.7%%, with the blocked matmul cells untouched. TEST THE REMAINDER AND A NON-ZERO WINDOW: an unrolled body that rebuilds its source offsets from the loop variable alone agrees with the original on a full-width call and on nothing else", false},
 	{"PS3048", "fanout-without-a-work-floor", "a fan-out helper that takes its worker count from GOMAXPROCS and gates only on the TOTAL work, with nothing bounding the work each worker receives. An op just over the total threshold is then split every way the machine allows and each band carries a fraction of the amount that justified splitting at all. DERIVE THE COUNT FROM THE WORK: workers = min(GOMAXPROCS, total/floor), falling back to the serial body at one. MEASURED on this repository CPU pool, where a per-token decode step issues a long run of ops just above the threshold: the profile was 42%% runtime.usleep, 22%% cond_wait and 9%% cond_signal against 14%% arithmetic, and BenchmarkLlamaPromptStepwise ran 2.3x SLOWER at twelve cores than at one. A floor equal to the fan-out threshold took Llama down 36%%, Mixtral 44.7%% and Mamba prefill 27.6%% with the large-op cells unchanged. THE CURVE IS NOT MONOTONE — swept at 2^14 to 2^17 the times were 153, 85, 110 and 127 ms, so pick the floor by measurement. CHANGING THE BAND COUNT MUST NOT CHANGE A VALUE, which the GOMAXPROCS parity tests are what prove", false},
 	{"PS3047", "one-shared-accumulator-blocks-split", "a loop over a dimension whose accumulating writes are ALL indexed by that dimension except ONE. That single exception is the only thing keeping the loop serial. RECORD AND FOLD: run the iterations in parallel, storing the shared accumulator per-item FACTOR into a buffer instead of adding it, then fold that buffer afterwards in the original iteration order — every add then happens in the sequence the serial loop used, so the result is BIT-IDENTICAL, which per-iteration partial sums merged at the end are NOT. MEASURED on the MLA attention backward, where four of five gradients are written at head-chosen columns and the fifth is the shared decoupled-key gradient: BenchmarkMLAVJPSeq256 fell 67.9%% and Seq128 66.7%%. SIZE THE RECORDING BUFFER FIRST — it holds one value per (iteration, inner index) pair, so process iterations in GROUPS that keep it under a budget; a group of one degrades to the serial form and stays correct. THE FOLD MUST REPRODUCE THE ORIGINAL BOUNDS: a triangular inner range folded with the rectangular bound agrees with the serial form on the rectangular case and nowhere else", false},
@@ -1316,6 +1317,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, oneSharedAccumulatorFindings(fset, f, fn)...)
 		out = append(out, fanoutWorkFloorFindings(fset, f, fn)...)
 		out = append(out, axpyReloadFindings(fset, fn)...)
+		out = append(out, serialTailAfterFanoutFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -17489,5 +17491,104 @@ func axpyReloadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 		}
 		return true
 	})
+	return out
+}
+
+// --- PS3050: a whole-output pass left serial after the fan-out --------------------------------
+
+// elementwisePassOver returns the name of the slice a statement walks end to end, writing each
+// element from the same index of something else — the shape of a narrowing, a cast, or a scale
+// applied to a whole buffer.
+func elementwisePassOver(st ast.Stmt) (dst, src string) {
+	body, iv := outerLoop(st)
+	if body == nil || iv == "" || loopDepthOf(body) > 0 {
+		return "", ""
+	}
+	if rs, ok := st.(*ast.RangeStmt); ok && rs.Value != nil {
+		return "", "" // ranging the values, not an index pass
+	}
+	hit, from := "", ""
+	ast.Inspect(body, func(n ast.Node) bool {
+		if hit != "" {
+			return false
+		}
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		ix, ok := unparen(as.Lhs[0]).(*ast.IndexExpr)
+		if !ok || identName(ix.Index) != iv {
+			return true
+		}
+		// The source has to be indexed by the same variable: an elementwise map, not a reduction
+		// or a scatter. Its NAME matters too — the bands usually own the source (an accumulator
+		// they filled) rather than the destination, and a check that only looked at the
+		// destination was silent on the site it was written for.
+		ast.Inspect(as.Rhs[0], func(m ast.Node) bool {
+			if e, ok := m.(*ast.IndexExpr); ok && identName(e.Index) == iv && from == "" {
+				from = identName(e.X)
+			}
+			return from == ""
+		})
+		if from != "" {
+			hit = identName(ix.X)
+		}
+		return hit == ""
+	})
+	return hit, from
+}
+
+// serialTailAfterFanoutFindings flags PS3050 — a fan-out call followed, in the same function, by a
+// serial elementwise pass over a whole buffer the bands already own. The pass is an Amdahl term
+// bolted onto an otherwise parallel op: every worker finishes, then one goroutine walks the entire
+// output again.
+//
+// MEASURED on the portable f32 matmul, which accumulates into an f64 scratch and then narrowed the
+// whole result to f32 after the parallel section. Each band already owns those rows, so converting
+// them inside the band is disjoint and element-wise — bit-identical — and took three batched
+// vision forwards down 4.7% to 7.6%.
+func serialTailAfterFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	var out []finding
+	for i, st := range fn.Body.List {
+		es, ok := st.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := unparen(es.X).(*ast.CallExpr)
+		if !ok || !fanoutReg[f.Name.Name][calleeName(call.Fun)] || len(call.Args) == 0 {
+			continue
+		}
+		lit, ok := unparen(call.Args[len(call.Args)-1]).(*ast.FuncLit)
+		if !ok || lit.Body == nil {
+			continue
+		}
+		for _, after := range fn.Body.List[i+1:] {
+			dst, src := elementwisePassOver(after)
+			if dst == "" || (!mentionsIdent(lit.Body, dst) && (src == "" || !mentionsIdent(lit.Body, src))) {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(after.Pos()),
+				category: "serial-tail-after-fanout",
+				msg: fmt.Sprintf("this loop walks the whole of %q element by element AFTER the"+
+					" fan-out above, and the bands already touch %q. Every worker finishes and then"+
+					" one goroutine walks the entire buffer again — an Amdahl term bolted onto an"+
+					" otherwise parallel op, and one that grows with the output rather than with the"+
+					" work. FOLD IT INTO THE BAND: each band owns rows [lo,hi) of the buffer, so"+
+					" doing its own slice there is disjoint, elementwise and BIT-IDENTICAL — no"+
+					" accumulation order changes because nothing accumulates. MEASURED on the"+
+					" portable f32 matmul, which accumulates into an f64 scratch and narrowed the"+
+					" whole result afterwards: the tail was 6.4%% of a batched vision forward at one"+
+					" worker, and folding it took three of those forwards down 4.7%% to 7.6%% with the"+
+					" f64 matmul beside them flat. GATE IT ON A SENTINEL: pre-fill the output with a"+
+					" value the correct result cannot produce, so a band that narrows the wrong range"+
+					" shows as an untouched cell rather than as a plausible number", dst, dst),
+			})
+			break
+		}
+	}
 	return out
 }
