@@ -37,6 +37,13 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	// step into a contiguous buffer instead of re-dispatching AtF64. Bit-identical.
 	xrow := make([]float64, d)
 	crow := make([]float64, n)
+	// The output mix walks the state [n,d] contiguously only when it exceeds cache
+	// (see below); yrow scratch is needed only on that path.
+	interleaveOut := n*d >= 1<<13
+	var yrow []float64
+	if interleaveOut {
+		yrow = make([]float64, d)
+	}
 	for t := range T {
 		at := a.AtF64(t)
 		for j := range d {
@@ -52,12 +59,36 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 				h[base+j] = at*h[base+j] + bi*xrow[j]
 			}
 		}
-		for j := range d {
-			var s float64
-			for i := range n {
-				s += crow[i] * h[i*d+j]
+		// Output mix y[t,j] = Σ_i c[t,i]·h[i,j]. When the state [n,d] exceeds cache,
+		// iterate state rows i outer / channels j inner so h[i*d+j] is walked CONTIGUOUSLY
+		// (unit stride) instead of striding by d per step (which touched one useful float
+		// per cache line). Bit-identical either way: for each fixed j the sum accumulates
+		// over i in ascending order (the i=0 term seeds yrow, then ascending i adds on).
+		// Below the cache threshold the strided form is already L1-resident, so the extra
+		// yrow passes would only add overhead — keep it there.
+		if interleaveOut {
+			c0, base0 := crow[0], 0
+			for j := range d {
+				yrow[j] = c0 * h[base0+j]
 			}
-			y.SetF64(s, t, j)
+			for i := 1; i < n; i++ {
+				ci := crow[i]
+				base := i * d
+				for j := range d {
+					yrow[j] += ci * h[base+j]
+				}
+			}
+			for j := range d {
+				y.SetF64(yrow[j], t, j)
+			}
+		} else {
+			for j := range d {
+				var s float64
+				for i := range n {
+					s += crow[i] * h[i*d+j]
+				}
+				y.SetF64(s, t, j)
+			}
 		}
 	}
 	return y, nil
