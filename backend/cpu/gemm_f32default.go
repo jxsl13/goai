@@ -11,11 +11,16 @@ package cpu
 func gemmF32(A, B, C []float32, m, k, n int) {
 	accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
 	acc := *accP
+	// The narrowing runs INSIDE the band, not after it. Each band already owns rows
+	// [loRow,hiRow) of the accumulator, and it owns the same rows of C, so converting them there
+	// is disjoint and element-wise — bit-identical, and it removes a serial O(m*n) pass that every
+	// f32 matmul used to pay after its parallel section. On the batched ViT forward that tail was
+	// 6.4% of the whole forward at one worker, and at twelve it is a pure Amdahl term.
 	parallelWork(m, k*n, func(loRow, hiRow int) {
 		gemmF32Band(A, B, acc, loRow, hiRow, k, n)
+		for i := loRow * n; i < hiRow*n; i++ {
+			C[i] = float32(acc[i])
+		}
 	})
-	for i := range C {
-		C[i] = float32(acc[i])
-	}
 	putF64(accP)
 }
