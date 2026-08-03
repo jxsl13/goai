@@ -88,6 +88,17 @@ func fillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
 // the f64→dtype conversion mirrors storage.setF64 exactly (float32() for F32,
 // f32ToF16/BF16 for the half floats). Non-contiguous or offset views fall back to
 // the general path, so a fill through a transposed view still behaves correctly.
+// THE gen() CALL IS NOT A COST, MEASURED. A profile of five nn benchmarks put 21.75% of them
+// cumulatively in fillGen with 98% of its flat time on `d[i] = gen()`, which reads as a closure
+// call per element. It is not: giving fillUniform its own typed loop with the PCG draw written
+// inline measured 5.84 against 5.89 ms on a 1<<20 F64 fill and 5.77 against 5.77 on F32 — no
+// difference at all, because the generator inlines into this loop and the line is simply where
+// its body is attributed (PERF-PROFILE-LINE-ATTRIBUTION-001).
+//
+// What the 5.5 ns per element buys is the PCG draw, the 53-bit float conversion and the store,
+// and none of those can move without changing the value stream. BenchmarkFillUniformF64 and its
+// siblings exist so the next reader of that profile line can check this in one command instead
+// of re-deriving it.
 func fillGen(t *tensor.Tensor, gen func() float64) {
 	n := t.Numel()
 	if t.IsContiguous() && t.Offset() == 0 {
