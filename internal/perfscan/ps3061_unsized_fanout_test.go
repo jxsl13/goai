@@ -57,11 +57,14 @@ func parallelRows(n, workPerItem int, body func(lo, hi int)) {
 	if len(fs) != 1 {
 		t.Fatalf("%d findings, want 1", len(fs))
 	}
-	// The two things the measurement produced that the argument alone would not: that the
-	// on/off gate cannot express the fix, and that the grain has to be chosen against BOTH
-	// the clock and the CPU because they disagree.
+	// Three things the measurements produced that the argument alone would not: that the on/off
+	// gate cannot express the fix, that the grain has to be chosen against BOTH the clock and
+	// the CPU because they disagree, and — from a later round — that the transform is NEUTRAL
+	// outside the decode regime, so the check's own candidate list must not be worked through
+	// blindly.
 	if !containsAll(fs[0].msg, "THE ON/OFF GATE CANNOT",
-		"PICK THE GRAIN BY MEASURING BOTH THE CLOCK AND THE CPU") {
+		"PICK THE GRAIN BY MEASURING BOTH THE CLOCK AND THE CPU",
+		"DO NOT APPLY THIS BLINDLY TO EVERY HELPER") {
 		t.Fatalf("message omits why the gate is not enough or how to pick the grain:\n%s", fs[0].msg)
 	}
 }
