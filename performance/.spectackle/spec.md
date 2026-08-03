@@ -59,3 +59,6 @@ The cpu band GEMM SHALL holds each destination element in a register across TWO 
 
 ## A-WHOLE-OUTPUT-PASS-BELONGS-INSIDE-THE-BAND-001
 WHEN a parallel op finishes with an elementwise pass over its whole output, the optimizer SHALL moves that pass inside the fan-out callback so each band converts its own rows; it is disjoint and bit-identical because nothing accumulates, and folding the f32 matmul narrowing took 3 batched vision forwards down 4.7 to 7.6 percent.
+
+## A-BLOCKED-KERNEL-GETS-A-DEGENERATE-SHAPE-PATH-001
+WHEN a blocked kernel can be called with its innermost dimension equal to one, the optimizer SHALL adds a path that keeps the block but holds its accumulators as scalars across the whole reduction; measured 23.4 percent on a 2048-square f64 matrix-vector product, 36.7 in f32 and 17.7 on the conv-shaped case, while the obvious per-row dot was slightly WORSE than the block because the block amortizes its loop over 4 rows.

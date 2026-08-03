@@ -20,6 +20,40 @@ package cpu
 // B-traffic. Every C element still accumulates its k-products in ascending p
 // order, so results stay bit-identical to the reference (§V3, §V11 tol 0).
 func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
+	// SINGLE-COLUMN FAST PATH. With n == 1 every C element is a SCALAR, so four of them fit in
+	// registers for the whole k loop and the destination leaves memory entirely — the blocked
+	// form still walks C once per p because its inner loop is written over j, which here runs
+	// once. Not a corner case: a conv2d with one output filter reaches the GEMM as n == 1, and
+	// the multi-token-attention head convolution issues thirty-two of those per forward.
+	//
+	// Bit-identical: each C element still takes its k products in ascending p into the value it
+	// already held.
+	if n == 1 {
+		i := loRow
+		for ; i+3 < hiRow; i += 4 {
+			a0 := A[(i+0)*k : (i+0)*k+k : (i+0)*k+k]
+			a1 := A[(i+1)*k : (i+1)*k+k : (i+1)*k+k]
+			a2 := A[(i+2)*k : (i+2)*k+k : (i+2)*k+k]
+			a3 := A[(i+3)*k : (i+3)*k+k : (i+3)*k+k]
+			v0, v1, v2, v3 := C[i+0], C[i+1], C[i+2], C[i+3]
+			for p, bv := range B[:k] {
+				v0 += a0[p] * bv
+				v1 += a1[p] * bv
+				v2 += a2[p] * bv
+				v3 += a3[p] * bv
+			}
+			C[i+0], C[i+1], C[i+2], C[i+3] = v0, v1, v2, v3
+		}
+		for ; i < hiRow; i++ {
+			ar := A[i*k : i*k+k : i*k+k]
+			v := C[i]
+			for p, bv := range B[:k] {
+				v += ar[p] * bv
+			}
+			C[i] = v
+		}
+		return
+	}
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		c0 := C[(i+0)*n : (i+1)*n]
@@ -101,6 +135,33 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 
 // gemmF32Band is the F32 twin accumulating into an f64 scratch (§V10).
 func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
+	if n == 1 { // see gemmF64Band: with one column the destination lives in registers
+		i := loRow
+		for ; i+3 < hiRow; i += 4 {
+			a0 := A[(i+0)*k : (i+0)*k+k : (i+0)*k+k]
+			a1 := A[(i+1)*k : (i+1)*k+k : (i+1)*k+k]
+			a2 := A[(i+2)*k : (i+2)*k+k : (i+2)*k+k]
+			a3 := A[(i+3)*k : (i+3)*k+k : (i+3)*k+k]
+			v0, v1, v2, v3 := acc[i+0], acc[i+1], acc[i+2], acc[i+3]
+			for p, bv := range B[:k] {
+				bf := float64(bv)
+				v0 += float64(a0[p]) * bf
+				v1 += float64(a1[p]) * bf
+				v2 += float64(a2[p]) * bf
+				v3 += float64(a3[p]) * bf
+			}
+			acc[i+0], acc[i+1], acc[i+2], acc[i+3] = v0, v1, v2, v3
+		}
+		for ; i < hiRow; i++ {
+			ar := A[i*k : i*k+k : i*k+k]
+			v := acc[i]
+			for p, bv := range B[:k] {
+				v += float64(ar[p]) * float64(bv)
+			}
+			acc[i] = v
+		}
+		return
+	}
 	i := loRow
 	for ; i+3 < hiRow; i += 4 {
 		c0 := acc[(i+0)*n : (i+1)*n]
