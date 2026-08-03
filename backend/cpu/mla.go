@@ -173,22 +173,8 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					if causal {
 						jmax = i + 1
 					}
-					m := math.Inf(-1)
-					for j := range jmax {
-						var s float64
-						qb, kb := i*hdh+hc, j*hdh+hc
-						for d := range dh {
-							s += qs[qb+d] * ks[kb+d]
-						}
-						for e := range dR {
-							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
-						}
-						s *= scale
-						a[j] = s
-						if s > m {
-							m = s
-						}
-					}
+					m := mlaScores(a, qs, ks, qR, kR,
+						i*hdh+hc, (i*heads+h)*dR, hc, hdh, dh, dR, jmax, scale)
 					var sum float64
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
@@ -203,16 +189,9 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 						a[j] = a[j] / sum
 					}
 					ob := i*hdh + hc
-					for d := range dh {
-						os[ob+d] = 0
-					}
-					for j := range jmax {
-						w := a[j]
-						vb := j*hdh + hc
-						for d := range dh {
-							os[ob+d] += w * vs[vb+d]
-						}
-					}
+					orow := os[ob : ob+dh : ob+dh]
+					clear(orow)
+					mlaWeightedSum(orow, a, vs, hc, hdh, dh, jmax)
 				}
 			})
 			return []*tensor.Tensor{out}, nil
@@ -233,22 +212,9 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					if causal {
 						jmax = i + 1
 					}
-					m := math.Inf(-1)
-					for j := range jmax {
-						var s float64 // score accumulates in float64; only inputs widen
-						qb, kb := i*hdh+hc, j*hdh+hc
-						for d := range dh {
-							s += float64(qs[qb+d]) * float64(ks[kb+d])
-						}
-						for e := range dR {
-							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
-						}
-						s *= scale
-						a[j] = s
-						if s > m {
-							m = s
-						}
-					}
+					// The score accumulates in float64; only the inputs widen.
+					m := mlaScores(a, qs, ks, qR, kR,
+						i*hdh+hc, (i*heads+h)*dR, hc, hdh, dh, dR, jmax, scale)
 					var sum float64
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
@@ -262,16 +228,8 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 						a[j] = a[j] / sum
 					}
 					ob := i*hdh + hc
-					for d := range dh {
-						acc[d] = 0
-					}
-					for j := range jmax {
-						w := a[j]
-						vb := j*hdh + hc
-						for d := range dh {
-							acc[d] += w * float64(vs[vb+d])
-						}
-					}
+					clear(acc)
+					mlaWeightedSum(acc, a, vs, hc, hdh, dh, jmax)
 					for d := range dh {
 						os[ob+d] = float32(acc[d])
 					}
@@ -321,6 +279,94 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		}
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+// mlaScores fills a[0:jmax) with one query row's scaled scores and returns the running maximum,
+// FOUR KEYS PER PASS. The query row and its rope half do not vary with the key, so the
+// key-at-a-time form re-streams both once per key and runs ONE accumulator chain per score;
+// four keys read each query element once and put four independent chains in flight.
+//
+// BIT-IDENTICAL: every score still sums its dh terms and then its dR terms over the same
+// ascending indices into its own accumulator, is scaled once, and a and the maximum are still
+// written in ascending key order.
+func mlaScores[T float32 | float64](a []float64, qs, ks []T, qR, kR []float64,
+	qb, qRb, hc, hdh, dh, dR, jmax int, scale float64) float64 {
+	m := math.Inf(-1)
+	j := 0
+	for ; j+3 < jmax; j += 4 {
+		k0 := j*hdh + hc
+		k1, k2, k3 := k0+hdh, k0+2*hdh, k0+3*hdh
+		var s0, s1, s2, s3 float64
+		for d := range dh {
+			qv := float64(qs[qb+d])
+			s0 += qv * float64(ks[k0+d])
+			s1 += qv * float64(ks[k1+d])
+			s2 += qv * float64(ks[k2+d])
+			s3 += qv * float64(ks[k3+d])
+		}
+		r0 := j * dR
+		r1, r2, r3 := r0+dR, r0+2*dR, r0+3*dR
+		for e := range dR {
+			qv := qR[qRb+e]
+			s0 += qv * kR[r0+e]
+			s1 += qv * kR[r1+e]
+			s2 += qv * kR[r2+e]
+			s3 += qv * kR[r3+e]
+		}
+		for o, sv := range [4]float64{s0, s1, s2, s3} {
+			sc := sv * scale
+			a[j+o] = sc
+			if sc > m {
+				m = sc
+			}
+		}
+	}
+	for ; j < jmax; j++ {
+		var s float64
+		kb := j*hdh + hc
+		for d := range dh {
+			s += float64(qs[qb+d]) * float64(ks[kb+d])
+		}
+		for e := range dR {
+			s += qR[qRb+e] * kR[j*dR+e]
+		}
+		s *= scale
+		a[j] = s
+		if s > m {
+			m = s
+		}
+	}
+	return m
+}
+
+// mlaWeightedSum accumulates the normalized value rows into acc, FOUR KEYS PER PASS. acc does not
+// vary with the key, so the key-at-a-time form makes a full load-store round trip through it for
+// one addition each; holding acc[d] in a local across four additions stores once.
+//
+// BIT-IDENTICAL: acc[d] takes the same four additions in the same ascending key order, in a
+// register instead of memory, and the value rows are still read contiguously in d.
+func mlaWeightedSum[T float32 | float64](acc, a []float64, vs []T, hc, hdh, dh, jmax int) {
+	j := 0
+	for ; j+3 < jmax; j += 4 {
+		w0, w1, w2, w3 := a[j], a[j+1], a[j+2], a[j+3]
+		v0 := j*hdh + hc
+		v1, v2, v3 := v0+hdh, v0+2*hdh, v0+3*hdh
+		for d := range dh {
+			t := acc[d]
+			t += w0 * float64(vs[v0+d])
+			t += w1 * float64(vs[v1+d])
+			t += w2 * float64(vs[v2+d])
+			t += w3 * float64(vs[v3+d])
+			acc[d] = t
+		}
+	}
+	for ; j < jmax; j++ {
+		w := a[j]
+		vb := j*hdh + hc
+		for d := range dh {
+			acc[d] += w * float64(vs[vb+d])
+		}
+	}
 }
 
 func init() {

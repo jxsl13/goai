@@ -18465,6 +18465,22 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 
 // --- PS3075: an inner loop accumulating into a shared buffer ---------------------------------
 
+// indexIsInnerVar reports whether an index expression is the inner loop variable, alone or as a
+// term of a sum — d, ob+d, base+d+off. Anything multiplying it is a stride and addresses a
+// different element per item, which is not the shape.
+func indexIsInnerVar(e ast.Expr, dv string) bool {
+	switch x := unparen(e).(type) {
+	case *ast.Ident:
+		return x.Name == dv
+	case *ast.BinaryExpr:
+		if x.Op != token.ADD {
+			return false
+		}
+		return indexIsInnerVar(x.X, dv) || indexIsInnerVar(x.Y, dv)
+	}
+	return false
+}
+
 // sharedAccumulatorFindings flags PS3075 — an item loop whose inner loop accumulates into a
 // buffer that does not vary with the item, so that buffer is loaded and stored once per item.
 func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
@@ -18526,7 +18542,11 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 					return true
 				}
 				ix, ok := as.Lhs[0].(*ast.IndexExpr)
-				if !ok || identName(ix.Index) != dv {
+				// THE INDEX IS OFTEN A BASE PLUS THE INNER VARIABLE. A kernel that addresses its
+				// output as os[ob+d] instead of slicing a row first is the same accumulator, and
+				// a bare-identifier test found only the arm of one kernel that happened to use a
+				// scratch slice while missing the arm beside it.
+				if !ok || !indexIsInnerVar(ix.Index, dv) {
 					return true
 				}
 				acc := identName(ix.X)
@@ -18570,7 +18590,16 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" cell -15.2%% and the F64 arm -7.0%%, with a selective-attention cell flat"+
 						" as a control. WHEN THIS CHECK FIRES IN ONE KERNEL, READ ITS SIBLINGS: a"+
 						" half-applied jam is the normal state, because the score loop is the one"+
-						" people look at", acc, jv, acc, dv),
+						" people look at. THIRD MEASUREMENT, AND A SECOND KIND OF HALF-APPLIED:"+
+						" the MLA kernel had this loop AND a single-accumulator score dot re-reading"+
+						" the query row, and jamming both took BenchmarkMLA_cpu_512 from 27.80 to"+
+						" 8.97 ms, -67.7%% (3.1x) — far more than the 76%% profile share of the two"+
+						" loops predicts, because four independent chains fix a latency-bound dot"+
+						" rather than merely removing loads. ONE OF ITS TWO ARMS WAS INVISIBLE TO AN"+
+						" EARLIER VERSION OF THIS CHECK: it addressed the accumulator as os[ob+d]"+
+						" instead of slicing a row first, and the index test only recognized a bare"+
+						" variable. Widening it to a SUM found 11 more sites in the tree",
+						acc, jv, acc, dv),
 				})
 				return false
 			})

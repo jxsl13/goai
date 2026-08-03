@@ -105,3 +105,29 @@ func TestDetectPS3075_SilentWhenAlreadyJammed(t *testing.T) {
 			len(fs), fs[0].msg)
 	}
 }
+
+// TestDetectPS3075_BasePlusInnerVarIndex pins the index form that a bare-identifier test misses.
+// A kernel addressing its output as os[ob+d] rather than slicing a row first is the same shared
+// accumulator — and this is not hypothetical: it is the arm that sat beside a reported one in
+// the same kernel, unreported, until the index test learned to see a sum.
+func TestDetectPS3075_BasePlusInnerVarIndex(t *testing.T) {
+	src := replaceOnce(t, sharedAccFixture, `			obuf[d] += w * vv`,
+		`			obuf[sk+d] += w * vv`)
+	fs := sharedAccumulatorFindingsIn(t, src)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — a base plus the inner variable is still that element",
+			len(fs))
+	}
+}
+
+// TestDetectPS3075_SilentOnAStridedIndex pins the other side of that widening. An index that
+// MULTIPLIES the inner variable addresses a different element per item, so there is no single
+// accumulator element to hold in a register.
+func TestDetectPS3075_SilentOnAStridedIndex(t *testing.T) {
+	src := replaceOnce(t, sharedAccFixture, `			obuf[d] += w * vv`,
+		`			obuf[d*sk] += w * vv`)
+	if fs := sharedAccumulatorFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — a strided index is not one element:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
