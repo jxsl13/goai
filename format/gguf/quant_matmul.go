@@ -307,33 +307,50 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantQ6_KInto(scratch, rowBits)
 		}
 		wf := scratch
-		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
-		// invariant across mi, so 4 independent f64 accumulators break the single-acc FADD
+		// Unroll-and-jam the activation-row (mi) loop by 8 — swept, not argued: at 4, 6, 8 and 10
+		// BenchmarkQuantMamba2Prefill_512 read 307.0, 247.4, 239.9 and 242.5 ms, so eight is the
+		// optimum and ten is already past it. Decode is unaffected either way (m=1 takes the
+		// tail), which the QuantLlamaGenerate500 cell confirms at 505.8 vs 504.4 ms.
+		//
+		// Unroll-and-jam the activation-row (mi) loop: the dequantized weight row wf is
+		// invariant across mi, so 8 independent f64 accumulators break the single-acc FADD
 		// dependency chain (latency-bound → throughput-bound) AND load+convert each wf[ki]
-		// once for 4 rows. Bit-exact: each output keeps its OWN accumulator summing ascending
+		// once for all of them. Bit-exact: each output keeps its OWN accumulator summing ascending
 		// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
 		// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
-		// (the tail handles m<4).
+		// (the tail handles m<8).
 		switch {
 		case xf32 != nil:
 			mi := 0
-			for ; mi+4 <= m; mi += 4 {
+			for ; mi+8 <= m; mi += 8 {
 				r0 := xf32[(mi+0)*k : (mi+0)*k+k]
 				r1 := xf32[(mi+1)*k : (mi+1)*k+k]
 				r2 := xf32[(mi+2)*k : (mi+2)*k+k]
 				r3 := xf32[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
+				r4 := xf32[(mi+4)*k : (mi+4)*k+k]
+				r5 := xf32[(mi+5)*k : (mi+5)*k+k]
+				r6 := xf32[(mi+6)*k : (mi+6)*k+k]
+				r7 := xf32[(mi+7)*k : (mi+7)*k+k]
+				var a0, a1, a2, a3, a4, a5, a6, a7 float64
 				for ki, wv := range wf {
 					w := float64(wv)
 					a0 += float64(r0[ki]) * w
 					a1 += float64(r1[ki]) * w
 					a2 += float64(r2[ki]) * w
 					a3 += float64(r3[ki]) * w
+					a4 += float64(r4[ki]) * w
+					a5 += float64(r5[ki]) * w
+					a6 += float64(r6[ki]) * w
+					a7 += float64(r7[ki]) * w
 				}
 				outf[(mi+0)*n+ni] = float32(a0)
 				outf[(mi+1)*n+ni] = float32(a1)
 				outf[(mi+2)*n+ni] = float32(a2)
 				outf[(mi+3)*n+ni] = float32(a3)
+				outf[(mi+4)*n+ni] = float32(a4)
+				outf[(mi+5)*n+ni] = float32(a5)
+				outf[(mi+6)*n+ni] = float32(a6)
+				outf[(mi+7)*n+ni] = float32(a7)
 			}
 			for ; mi < m; mi++ {
 				row := xf32[mi*k : mi*k+k]
@@ -345,23 +362,35 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		case xf64 != nil:
 			mi := 0
-			for ; mi+4 <= m; mi += 4 {
+			for ; mi+8 <= m; mi += 8 {
 				r0 := xf64[(mi+0)*k : (mi+0)*k+k]
 				r1 := xf64[(mi+1)*k : (mi+1)*k+k]
 				r2 := xf64[(mi+2)*k : (mi+2)*k+k]
 				r3 := xf64[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
+				r4 := xf64[(mi+4)*k : (mi+4)*k+k]
+				r5 := xf64[(mi+5)*k : (mi+5)*k+k]
+				r6 := xf64[(mi+6)*k : (mi+6)*k+k]
+				r7 := xf64[(mi+7)*k : (mi+7)*k+k]
+				var a0, a1, a2, a3, a4, a5, a6, a7 float64
 				for ki, wv := range wf {
 					w := float64(wv)
 					a0 += r0[ki] * w
 					a1 += r1[ki] * w
 					a2 += r2[ki] * w
 					a3 += r3[ki] * w
+					a4 += r4[ki] * w
+					a5 += r5[ki] * w
+					a6 += r6[ki] * w
+					a7 += r7[ki] * w
 				}
 				outf[(mi+0)*n+ni] = float32(a0)
 				outf[(mi+1)*n+ni] = float32(a1)
 				outf[(mi+2)*n+ni] = float32(a2)
 				outf[(mi+3)*n+ni] = float32(a3)
+				outf[(mi+4)*n+ni] = float32(a4)
+				outf[(mi+5)*n+ni] = float32(a5)
+				outf[(mi+6)*n+ni] = float32(a6)
+				outf[(mi+7)*n+ni] = float32(a7)
 			}
 			for ; mi < m; mi++ {
 				row := xf64[mi*k : mi*k+k]
