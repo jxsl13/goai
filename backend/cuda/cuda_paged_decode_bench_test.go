@@ -1000,8 +1000,11 @@ func benchPagedDecodeSKHd128(b *testing.B, batch, seqLen, splitK int) {
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
 }
 
-
-func BenchmarkPagedDecodeSKHd128_b4_len4096_sk1(b *testing.B)  { benchPagedDecodeSKHd128(b, 4, 4096, 1) }
-func BenchmarkPagedDecodeSKHd128_b4_len4096_sk16(b *testing.B) { benchPagedDecodeSKHd128(b, 4, 4096, 16) }
-func BenchmarkPagedDecodeSKHd128_b1_len8192_sk1(b *testing.B)  { benchPagedDecodeSKHd128(b, 1, 8192, 1) }
-func BenchmarkPagedDecodeSKHd128_b1_len8192_sk32(b *testing.B) { benchPagedDecodeSKHd128(b, 1, 8192, 32) }
+func BenchmarkPagedDecodeSKHd128_b4_len4096_sk1(b *testing.B) { benchPagedDecodeSKHd128(b, 4, 4096, 1) }
+func BenchmarkPagedDecodeSKHd128_b4_len4096_sk16(b *testing.B) {
+	benchPagedDecodeSKHd128(b, 4, 4096, 16)
+}
+func BenchmarkPagedDecodeSKHd128_b1_len8192_sk1(b *testing.B) { benchPagedDecodeSKHd128(b, 1, 8192, 1) }
+func BenchmarkPagedDecodeSKHd128_b1_len8192_sk32(b *testing.B) {
+	benchPagedDecodeSKHd128(b, 1, 8192, 32)
+}
