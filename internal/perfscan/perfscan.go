@@ -19602,7 +19602,10 @@ func twoProductUpdateFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" ADD ONE PRODUCT AND JAMMED CLEANLY, for -23.3%% and -20.9%% — so look for"+
 					" the neighbor loop and take that instead. If you want this one anyway, it"+
 					" is a one-ulp change and has to be described as one; do not claim"+
-					" bit-identity", dst),
+					" bit-identity. CONFIRMED ON A THIRD KERNEL: gated linear attention has the"+
+					" same pair, and its one-product output dot jammed for -24.7%% at 512x128"+
+					" and -26.9%% at 256x64 while its two-product state update was left"+
+					" untouched", dst),
 			})
 			return true
 		})

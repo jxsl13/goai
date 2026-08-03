@@ -404,3 +404,26 @@ Four conditions, each pinned by a fixture that reddens when it alone is removed.
 Two of those fixtures had to be rewritten before they isolated anything: a `+=`
 form is rejected by the operator test and a bare `h = a*h` by the add test, so
 neither ever reached the product count that a mutation was weakening.
+
+## Gated linear attention: the third kernel with this pair (T1191)
+
+GLA carries a `[dk,dv]` state and has the now-familiar two loops — a state update
+`S = S*g_i + k_i*v` and an output dot `o[j] += q_i*S[i,j]`. Only the second was
+touched, on the rule established in T1189 and confirmed in T1190.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkGLA_512x128` | 13.27 ms | 9.99 ms | **-24.7%** |
+| `BenchmarkGLA_256x64` | 1.242 ms | 0.908 ms | **-26.9%** |
+
+No new rule this round: `PS3075` found the jammable loop and `PS3084` marks the
+one beside it as off limits, which is exactly the division those two checks
+exist to draw. Four recurrent kernels now follow it — RetNet, Mamba-2 SSD, GLA
+and MLA.
+
+### Not taken
+
+`Mamba2Forward_512` is the largest benchmark in this area at 177 ms and was
+profiled first. It is **72.8% `gemmF64Band`** — the CPU GEMM — so the leverage
+there is in a kernel with a known BLAS-shaped ceiling, not in a loop this
+technique reaches. Left alone deliberately rather than for lack of size.
