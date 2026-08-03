@@ -18624,8 +18624,17 @@ func radixPassFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" the keys there are float64 bit patterns of one feature column, whose sign"+
 					" and exponent bytes barely move within a node and whose high mantissa bytes"+
 					" stop moving deeper in the tree. A column of full-entropy keys skips"+
-					" nothing and the single traversal is then the only gain, so measure the"+
-					" caller rather than assuming the shape pays", shift),
+					" nothing and the single traversal is then the only gain. RANK BY CALL"+
+					" COUNT, WHICH IS WHAT ACTUALLY DECIDES IT. The two halves were separated by"+
+					" measurement: 88.6 to 83.14 ms from the single traversal alone and 83.14 to"+
+					" 79.49 from adding the skip, so both are real and the skip is worth more"+
+					" than its 12.5%% of passes suggests, because a skipped pass drops a random"+
+					" SCATTER and a buffer swap while the counting read had already been"+
+					" amortized. Neither half can reach a sort that runs a few times: the same"+
+					" transform applied to the GBM presort beside it measured FLAT (129.2 vs"+
+					" 130.0 ms), and a counter says why — the CART radix runs 3515136 passes"+
+					" across a fit and the GBM one runs 640. Count the calls before converting"+
+					" the site", shift),
 			})
 			return false
 		})
