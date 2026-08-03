@@ -18530,7 +18530,14 @@ func consecutiveLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" 64x64 state, 32 KB and already L1-resident, measured -1.8%%, and TWO"+
 						" passes are worth merging as readily as four — the DeltaNet recurrence"+
 						" has exactly two over its state and merging them measured -15.3%%,"+
-						" against -26.4%% for the three-pass gated variant beside it. Check for"+
+						" against -26.4%% for the three-pass gated variant beside it."+
+						" MOST CANDIDATES ARE NOT MERGEABLE and the count is not a work list:"+
+						" of the four this check found at its old threshold, three were correct"+
+						" in shape and had to be rejected — the SOAP and Shampoo preconditioners"+
+						" accumulate a whole intermediate ACROSS the shared index before the next"+
+						" loop reads it, and the Titans scan builds its backward vector from"+
+						" every row of a matrix it then overwrites, with a comment saying the"+
+						" old values are required. Check for"+
 						" a cross-index dependency first — a later loop that needs ALL of an"+
 						" earlier loop's output cannot merge", run, bound, buf),
 				})
@@ -19619,6 +19626,16 @@ func serialPermutationFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDec
 	// exactly the kind that holds a hot nest behind a cold one, and stopping at one finding
 	// makes which one you hear about an accident of source order. The count is unchanged on
 	// this tree (21), so this buys coverage rather than noise.
+	//
+	// A KNOWN LIMITATION, MEASURED AND NOT YET EXPLAINED. The LLM.int8 kernel held two nests
+	// of this shape and this check reported only the first — the earlier, colder one — while
+	// the second was 90.9%% of that benchmark and 5.0x once banded. Removing the
+	// one-finding-per-function limit did NOT surface it. The second nest fires when lifted
+	// into a fixture verbatim, with a fan-out helper declared beside it and every condition
+	// logged as satisfied (depth 2, one write, owned, via a derived base), so the shape is
+	// right and something about the surrounding file suppresses it. Three rounds of
+	// bisection did not isolate what. Do not assume this check has enumerated a function's
+	// nests; read the whole function when it reports one.
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if loopSpansAParameterRange(n, params) {
 			return false // already a band body; its fan-out is in the caller
