@@ -52,8 +52,13 @@ func TestMemGatherMatchesPerRowRetrieve(t *testing.T) {
 		t    int
 		proc int
 	}{
-		{"serial-partial-tile", 37, 1},   // 16+16+5 on one worker: reuse plus a short tail
-		{"serial-under-a-tile", 9, 1},    // fewer rows than one tile
+		{"serial-partial-tile", 37, 1}, // 16+16+5 on one worker: reuse plus a short tail
+		{"serial-under-a-tile", 9, 1},  // fewer rows than one tile
+		// 16+7: the query jam takes eight at a time, so a tile of 16 leaves NO remainder and a
+		// tile of 9 leaves one. SEVEN is the length that puts j+7 exactly at the end, which is
+		// where an off-by-one in the jam's bound reads past the last query — with only the other
+		// two lengths present, that mutation stayed green.
+		{"serial-tail-at-the-jam-boundary", 23, 1},
 		{"parallel-many-tiles", 400, 12}, // every worker gets more than one full tile
 	} {
 		t.Run(tc.name, func(t *testing.T) {

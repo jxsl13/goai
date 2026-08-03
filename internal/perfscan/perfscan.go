@@ -18485,7 +18485,7 @@ func narrowUnrollFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			return true
 		}
 		lit, ok := as.Rhs[0].(*ast.BasicLit)
-		if !ok || lit.Value != "2" {
+		if !ok || (lit.Value != "2" && lit.Value != "4") {
 			return true
 		}
 		// THE BODY MUST ALREADY BE REGISTER-BLOCKED. A stride of two on an ordinary loop says
@@ -18508,7 +18508,27 @@ func narrowUnrollFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 			}
 			return true
 		})
-		if len(held) < 3 {
+		// THE TWO SHAPES ARE GATED BY DIFFERENT STRIDES, ON PURPOSE.
+		//
+		// A jam holding INDEXED accumulators in locals is reported only at stride two. At four it
+		// is the gemm C-row block, and that axis was swept and closed: two, six and eight rows
+		// were all worse, and the one pairing that won a cell lost another
+		// (PERF-GEMM-CROW-BLOCK-001). Reporting it again would be reporting a finished
+		// experiment.
+		//
+		// A jam whose accumulators are SCALAR locals — var s0, s1, s2, s3 — feeding a call
+		// rather than an indexed store is reported at both, because four is simply what a first
+		// jam produces and none of those has been swept. The memory-retrieval tile was exactly
+		// that shape at four, and eight measured 9.3% faster.
+		scalars := scalarAccumulators(f.Body)
+		switch {
+		case len(scalars) >= 3:
+			held = map[string]bool{}
+			for _, nm := range scalars {
+				held[nm] = true
+			}
+		case len(held) >= 3 && lit.Value == "2":
+		default:
 			return true
 		}
 		out = append(out, finding{
@@ -18528,7 +18548,15 @@ func narrowUnrollFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				" summed pair — so the existing bit-exact oracle gates every arm of the sweep"+
 				" and the whole experiment costs one measurement each. SWEEP, DO NOT ARGUE: a"+
 				" register-pressure argument cannot see the scheduler, and the only cost of"+
-				" being wrong is one benchmark run", len(held)),
+				" being wrong is one benchmark run. SECOND SWEEP, ON A JAM ALREADY AT FOUR:"+
+				" the memory-retrieval tile scored four queries per pass over each key row, and"+
+				" swept at 6, 8 and 10 it read 103.1, 85.9 and 101.9 ms against 94.7 at four —"+
+				" EIGHT wins by 9.3%% while six and ten are both WORSE THAN FOUR. The curve is"+
+				" not monotone and no argument predicts it; only the measurement does. The"+
+				" oracle that gates it is an independent per-row implementation, and it took a"+
+				" tile length of exactly 7 to make an off-by-one in the jam bound red: with"+
+				" lengths 16 and 9 present but none at 7 mod 8, reading past the last query"+
+				" stayed GREEN", len(held)),
 		})
 		return true
 	})
