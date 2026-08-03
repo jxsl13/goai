@@ -27,12 +27,16 @@ func init() {
 
 		dw := tensor.New(w.Dtype(), w.Shape())
 		dl := tensor.New(l.Dtype(), l.Shape())
-		for i := range b {
-			z := beta * (w.AtF64(i) - l.AtF64(i))
-			sNeg := 1 / (1 + math.Exp(z)) // σ(−z)
-			dw.SetF64(scale*(-beta*sNeg-alpha), i)
-			dl.SetF64(scale*(beta*sNeg), i)
-		}
+		elemVJP(b, []*tensor.Tensor{w, l}, []*tensor.Tensor{dw, dl},
+			func(in, out [][]float64, n int) {
+				wv, lv, dwv, dlv := in[0], in[1], out[0], out[1]
+				for i := range n {
+					z := beta * (wv[i] - lv[i])
+					sNeg := 1 / (1 + math.Exp(z)) // σ(−z)
+					dwv[i] = scale * (-beta*sNeg - alpha)
+					dlv[i] = scale * (beta * sNeg)
+				}
+			})
 		return []*tensor.Tensor{dw, dl}, nil
 	})
 }
