@@ -18556,7 +18556,14 @@ func narrowUnrollFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				" oracle that gates it is an independent per-row implementation, and it took a"+
 				" tile length of exactly 7 to make an off-by-one in the jam bound red: with"+
 				" lengths 16 and 9 present but none at 7 mod 8, reading past the last query"+
-				" stayed GREEN", len(held)),
+				" stayed GREEN. THIRD SWEEP, SAME ANSWER: the masked-attention score jam"+
+				" went 92.58 to 79.92 ms at eight, -13.7%%, with six at 82.59 — eight has now"+
+				" won twice and six has lost twice. NOT EVERY JAM IN A KERNEL IS WORTH"+
+				" SWEEPING: the weighted sum beside that score loop was swept too and six and"+
+				" eight both landed inside the run-to-run spread, because that loop is bound by"+
+				" streaming its value rows rather than by the accumulator round trip the jam to"+
+				" four already removed. Sweep the loop the PROFILE names, not every loop the"+
+				" check reports", len(held)),
 		})
 		return true
 	})

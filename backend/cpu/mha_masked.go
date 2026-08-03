@@ -99,16 +99,25 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				// accumulator, and the mask add, the scale and the running maximum are applied to
 				// the keys in ascending j exactly as the one-at-a-time form does.
 				j := 0
-				for ; j+3 < sk; j += 4 {
+				for ; j+7 < sk; j += 8 {
 					m0, m1 := float64(mrow[j+0]), float64(mrow[j+1])
 					m2, m3 := float64(mrow[j+2]), float64(mrow[j+3])
-					if math.IsInf(m0, -1) || math.IsInf(m1, -1) || math.IsInf(m2, -1) || math.IsInf(m3, -1) {
+					m4, m5 := float64(mrow[j+4]), float64(mrow[j+5])
+					m6, m7 := float64(mrow[j+6]), float64(mrow[j+7])
+					if math.IsInf(m0, -1) ||
+						math.IsInf(m1, -1) ||
+						math.IsInf(m2, -1) ||
+						math.IsInf(m3, -1) ||
+						math.IsInf(m4, -1) ||
+						math.IsInf(m5, -1) ||
+						math.IsInf(m6, -1) ||
+						math.IsInf(m7, -1) {
 						// A MIXED GROUP IS HANDLED IN PLACE, not by abandoning the fast path for
 						// the rest of the row. Breaking out here was measured and is wrong for any
 						// mask whose live region is not a prefix: it sent a whole row to the
 						// scalar loop after one mixed group, and cost 2 to 3% on the general-mask
 						// cell while the block-masked one gained 30%.
-						for o := range 4 {
+						for o := range 8 {
 							mv := float64(mrow[j+o])
 							if math.IsInf(mv, -1) {
 								row[j+o] = math.Inf(-1)
@@ -131,15 +140,23 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 					k1 := ks[(j+1)*kdm+kvOff : (j+1)*kdm+kvOff+dk]
 					k2 := ks[(j+2)*kdm+kvOff : (j+2)*kdm+kvOff+dk]
 					k3 := ks[(j+3)*kdm+kvOff : (j+3)*kdm+kvOff+dk]
-					var s0, s1, s2, s3 float64
+					k4 := ks[(j+4)*kdm+kvOff : (j+4)*kdm+kvOff+dk]
+					k5 := ks[(j+5)*kdm+kvOff : (j+5)*kdm+kvOff+dk]
+					k6 := ks[(j+6)*kdm+kvOff : (j+6)*kdm+kvOff+dk]
+					k7 := ks[(j+7)*kdm+kvOff : (j+7)*kdm+kvOff+dk]
+					var s0, s1, s2, s3, s4, s5, s6, s7 float64
 					for d, qv := range qrow {
 						q := float64(qv)
 						s0 += q * float64(k0[d])
 						s1 += q * float64(k1[d])
 						s2 += q * float64(k2[d])
 						s3 += q * float64(k3[d])
+						s4 += q * float64(k4[d])
+						s5 += q * float64(k5[d])
+						s6 += q * float64(k6[d])
+						s7 += q * float64(k7[d])
 					}
-					for o, pair := range [4][2]float64{{s0, m0}, {s1, m1}, {s2, m2}, {s3, m3}} {
+					for o, pair := range [8][2]float64{{s0, m0}, {s1, m1}, {s2, m2}, {s3, m3}, {s4, m4}, {s5, m5}, {s6, m6}, {s7, m7}} {
 						sv := pair[0]*scale + pair[1]
 						row[j+o] = sv
 						if sv > m {
