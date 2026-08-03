@@ -319,3 +319,26 @@ where the jammed loop never runs.
 The `dkRrot` second pass. It folds the shared decoupled-key gradient in ascending
 `(head, i, j)` order, which is what keeps the whole VJP bit-identical; jamming
 its item loop would reorder exactly that.
+
+### The dV loop beside it (T1188)
+
+The same nest carries the mirror shape: the query's gradient ROW —
+`gs[i*cols+hc+d]` — is fixed by the query and was re-read once per key, while
+nothing shared is accumulated. Eight keys per pass read it once and use it eight
+times, and the eight `dav` chains run independently where one was serial.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMLAVJPSeq256` | 9.82 ms | 8.45 ms | **-13.9%** |
+| `BenchmarkMLAVJPSeq256F32` | 9.60 ms | 8.40 ms | **-12.4%** |
+
+Across T1187 and T1188 together, both arms are down **27.0%** from 11.58 and
+11.50 ms.
+
+Width 8 measured 8.44 ms against 8.50 at 6, 8.68 at 4 and 9.07 at 2. Every width
+from 2 to 8 leaves the digests unchanged.
+
+The two shapes sit in one loop nest and only one of them is a shared accumulator;
+fixing that one and stopping would have left most of the win. `dot` still takes
+the keys in ascending order and every `dvC` element is written exactly once,
+which is what keeps the jam bit-identical.
