@@ -29,3 +29,6 @@ WHEN a grouped kernel checks its group for uniformity, the implementer SHALL rec
 
 ## A-DTYPE-BRANCHED-KERNEL-NEEDS-A-CELL-PER-BRANCH-001
 IF a kernel branches on dtype and only one branch has a benchmark, THEN the implementer SHALL not read that cell as evidence about the other branch: the flash attention f32 path was already unrolled and the f64 path was not, so the f64 change read as 2.1 percent noise against the f32 cell and 36 percent against an f64 one added for it.
+
+## A-TEST-FILE-NAME-MUST-NOT-END-IN-A-GOARCH-OR-GOOS-WORD-001
+IF a Go file name ends with an underscore-separated architecture or OS word before _test.go, THEN the implementer SHALL rename it: Go applies an implicit build constraint, so ps3054_asymmetric_dtype_arm_test.go landed in IgnoredGoFiles on arm64 and all 4 of its fixtures plus 3 mutations of the check read as green without ever running.
