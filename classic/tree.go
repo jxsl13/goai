@@ -3,6 +3,7 @@ package classic
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -159,13 +160,17 @@ type cartBuilder struct {
 	leftCnt []int     // reused running left-count buffer (len nClasses); classification only
 	clogc   []float64 // Entropy only: clogc[c] = c·ln c cache (counts are integers), so a
 	// node's weighted entropy is clogc[n] − Σ clogc[countₖ] with no per-split math.Log.
-	sweepVals []float64  // sweep scratch: a node's feature values in sorted order (len n)
-	allFeats  []int      // reused ascending [0..d) for the all-features split path
-	featPool  []int      // reused pool for feature subsampling (maxFeatures>0)
-	featSub   []int      // reused subsample result (maxFeatures>0)
-	sortBuf   []int      // reused per-feature sort scratch for the subsampled path
-	partIdx   []int      // reused right-side buffer for buildIdx's in-place partition
-	nodeSlab  []cartNode // current node chunk; see newNode
+	sweepVals []float64 // sweep scratch: a node's feature values in sorted order (len n)
+	// per-worker twins of the two sweep scratches, for the parallel feature scan.
+	sweepValsW [][]float64
+	leftCntW   [][]int
+	partW      [][]int
+	allFeats   []int      // reused ascending [0..d) for the all-features split path
+	featPool   []int      // reused pool for feature subsampling (maxFeatures>0)
+	featSub    []int      // reused subsample result (maxFeatures>0)
+	sortBuf    []int      // reused per-feature sort scratch for the subsampled path
+	partIdx    []int      // reused right-side buffer for buildIdx's in-place partition
+	nodeSlab   []cartNode // current node chunk; see newNode
 	// radix-sort scratch (reused): keys = order-preserving u64 of the feature value,
 	// tmpI/tmpK = ping-pong buffers for the 8-pass LSD radix (replaces the sort.Slice
 	// closure sort — the split-search's dominant cost).
@@ -407,6 +412,18 @@ func (b *cartBuilder) initColumns(n, d int) {
 		b.leftCnt = make([]int, b.nClasses)
 	}
 	b.sweepVals = make([]float64, n)
+	nw := runtime.GOMAXPROCS(0)
+	if nw < 1 {
+		nw = 1
+	}
+	b.sweepValsW = make([][]float64, nw)
+	b.leftCntW = make([][]int, nw)
+	b.partW = make([][]int, nw)
+	for c := range b.sweepValsW {
+		b.sweepValsW[c] = make([]float64, n)
+		b.leftCntW[c] = make([]int, b.nClasses)
+		b.partW[c] = make([]int, n)
+	}
 	b.buildCLogC(n)
 	b.allFeats = make([]int, d)
 	for i := range b.allFeats {
@@ -430,23 +447,44 @@ func (b *cartBuilder) partition(start, end, feat int, thr float64) int {
 		s := col[p]
 		b.goLeft[s] = b.x[s][feat] <= thr
 	}
+	// The left count is the same for every feature — it depends only on goLeft — so compute it
+	// once here rather than letting the feature loop carry it out. That is what lets the loop
+	// band: each feature rearranges only its OWN column and needs its own right-side scratch,
+	// with goLeft read-only. Bit-identical: every column gets the same stable rearrangement.
 	mid := start
-	for f := 0; f < d; f++ {
+	for p := start; p < end; p++ {
+		if b.goLeft[col[p]] {
+			mid++
+		}
+	}
+	one := func(f int, part []int) {
 		cf := b.cols[f]
-		w := start
-		r := 0
+		w, r := start, 0
 		for p := start; p < end; p++ {
 			s := cf[p]
 			if b.goLeft[s] {
 				cf[w] = s
 				w++
 			} else {
-				b.part[r] = s
+				part[r] = s
 				r++
 			}
 		}
-		copy(cf[w:end], b.part[:r])
-		mid = w
+		copy(cf[w:end], part[:r])
+	}
+	if len(b.partW) > 1 && d > 1 && d*(end-start) >= treeSplitParWork {
+		_ = parallelBuild(len(b.partW), func(c int) error {
+			f0 := c * d / len(b.partW)
+			f1 := (c + 1) * d / len(b.partW)
+			for f := f0; f < f1; f++ {
+				one(f, b.partW[c])
+			}
+			return nil
+		})
+		return mid
+	}
+	for f := 0; f < d; f++ {
+		one(f, b.part)
 	}
 	return mid
 }
@@ -699,6 +737,18 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 			total[b.yi[i]]++
 		}
 	}
+	// FEATURES ARE INDEPENDENT at a node: each sweep reads its own presorted column plus the
+	// shared read-only y, and writes only its own scratch. The GBM builder has fanned this out
+	// since it was written; the CART builder never did, and a whole tree fit scaled at 1.01x
+	// on twelve cores because of it.
+	//
+	// The reduction reproduces the serial winner EXACTLY. The serial loop visits features in
+	// ascending order and takes a new best only on strict <, so the lowest feature wins a tie;
+	// the parallel version keeps that by having each chunk apply the same rule within itself
+	// and then folding the chunks in ascending order with the same strict <.
+	if len(b.sweepValsW) > 1 && len(feats) > 1 && len(feats)*(end-start) >= treeSplitParWork {
+		return b.bestSplitParallel(feats, start, end, minLeaf, total)
+	}
 	for _, f := range feats {
 		order := b.cols[f][start:end]
 		cost, cut, found := b.sweep(order, f, minLeaf, total)
@@ -718,15 +768,72 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 	return feat, thr, ok
 }
 
+// treeSplitParWork gates the parallel feature scan: fork only when the node's features-times-
+// rows work amortizes the spawn. Upper nodes carry most of the rows and are few, so the gate
+// forks those and leaves the many small ones alone.
+const treeSplitParWork = 1 << 14
+
+// bestSplitParallel scans contiguous feature chunks concurrently, each with its own scratch,
+// then folds the chunk winners in ascending chunk order with the same strict < the serial loop
+// uses — so the chosen split is identical, ties included.
+func (b *cartBuilder) bestSplitParallel(feats []int, start, end, minLeaf int,
+	total []int) (feat int, thr float64, ok bool) {
+	nw := len(b.sweepValsW)
+	if nw > len(feats) {
+		nw = len(feats)
+	}
+	type winner struct {
+		cost float64
+		feat int
+		thr  float64
+		ok   bool
+	}
+	out := make([]winner, nw)
+	_ = parallelBuild(nw, func(c int) error {
+		f0 := c * len(feats) / nw
+		f1 := (c + 1) * len(feats) / nw
+		w := winner{cost: math.Inf(1)}
+		for _, f := range feats[f0:f1] {
+			order := b.cols[f][start:end]
+			cost, cut, found := b.sweepInto(order, f, minLeaf, total, b.sweepValsW[c], b.leftCntW[c])
+			if found && cost < w.cost {
+				a := b.x[order[cut-1]][f]
+				cv := b.x[order[cut]][f]
+				t := (a + cv) / 2
+				if t == cv || math.IsInf(t, 0) {
+					t = a
+				}
+				w = winner{cost: cost, feat: f, thr: t, ok: true}
+			}
+		}
+		out[c] = w
+		return nil
+	})
+	bestCost := math.Inf(1)
+	for _, w := range out { // ascending chunk order, strict < ⇒ lowest feature wins ties
+		if w.ok && w.cost < bestCost {
+			bestCost, feat, thr, ok = w.cost, w.feat, w.thr, true
+		}
+	}
+	return feat, thr, ok
+}
+
 // sweep scans the sorted-by-feature order and returns the minimal weighted child
 // impurity together with the left-child size (cut) achieving it.
 func (b *cartBuilder) sweep(order []int, f, minLeaf int, total []int) (bestCost float64, cut int, found bool) {
+	return b.sweepInto(order, f, minLeaf, total, b.sweepVals, b.leftCnt)
+}
+
+// sweepInto is sweep with its two scratch buffers supplied, so a parallel feature scan can give
+// every worker its own. The serial caller passes the builder's.
+func (b *cartBuilder) sweepInto(order []int, f, minLeaf int, total []int,
+	sweepVals []float64, leftCnt []int) (bestCost float64, cut int, found bool) {
 	n := len(order)
 	bestCost = math.Inf(1)
 	// Hoist this node's sorted feature values once (n gathers into b.x), then the sweep
 	// reads them sequentially. The old inline b.x[order[p]][f] / b.x[order[p-1]][f]
 	// re-gathered every value TWICE across adjacent iterations — halved to one here.
-	vals := b.sweepVals[:n]
+	vals := sweepVals[:n]
 	for k := 0; k < n; k++ {
 		vals[k] = b.x[order[k]][f]
 	}
@@ -762,7 +869,7 @@ func (b *cartBuilder) sweep(order []int, f, minLeaf int, total []int) (bestCost 
 	// the caller computes it once per node and passes it in (integer counts are
 	// order-independent → bit-identical to the old per-feature recount). Only the
 	// per-split left buffer is rebuilt here.
-	left := b.leftCnt
+	left := leftCnt
 	for k := range left {
 		left[k] = 0
 	}
