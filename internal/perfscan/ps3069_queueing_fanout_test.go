@@ -59,7 +59,7 @@ func parallelBuild(n int, work func(t int) error) error {
 	// The honest expectation is the part a reader most needs: the profile share and the
 	// measured payoff differ by more than an order of magnitude here.
 	if !containsAll(fs[0].msg, "EXPECT THE SMALLER NUMBER, NOT THE PROFILE'S",
-		"Parked threads are sampled") {
+		"Parked threads are sampled", "AND RE-SWEEP THE WORK GATES AFTERWARDS") {
 		t.Fatalf("message omits the honest expectation:\n%s", fs[0].msg)
 	}
 }

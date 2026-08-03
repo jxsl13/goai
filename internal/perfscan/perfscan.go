@@ -18499,7 +18499,13 @@ func queueingFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) 
 			" cells flat. EXPECT THE SMALLER NUMBER, NOT THE PROFILE'S — 95.6%% of that"+
 			" benchmark's samples sat in pthread_cond_wait, pthread_cond_signal and usleep"+
 			" against 1.75%% in the split scan, and the fix was worth 5%%. Parked threads are"+
-			" sampled, and sampled is not the same as costing wall clock", fn.Name.Name),
+			" sampled, and sampled is not the same as costing wall clock."+
+			" AND RE-SWEEP THE WORK GATES AFTERWARDS. Every gate that decides whether to fan out"+
+			" was calibrated against the OLD cost of forking; making the helper cheaper leaves"+
+			" them stale and too conservative. The GBM split gate moved from 1<<15 to 1<<13 on"+
+			" that account and bought another 7.7%% — BenchmarkGBMFit 67.02 to 61.86 ms, every"+
+			" run at the new gate below every run at the old — which is more than the helper"+
+			" change itself was worth", fn.Name.Name),
 	}}
 }
 

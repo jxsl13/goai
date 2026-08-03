@@ -244,9 +244,19 @@ type gbmBuilder struct {
 
 // gbmSplitParWork gates the parallel feature scan in bestSplit: fork only when the node's
 // per-feature O(n) gather+scan over d features (≈ d·n element ops) amortizes the goroutine
-// spawn (parallelBuild is not pooled). Upper tree nodes carry most of the samples/time and are
-// few, so a work gate forks only those. Below it the serial scan (no fork) is faster.
-const gbmSplitParWork = 1 << 15
+// spawn. Upper tree nodes carry most of the samples/time and are few, so a work gate forks only
+// those. Below it the serial scan (no fork) is faster.
+//
+// RE-TUNED WHEN THE FORK GOT CHEAPER, from 1<<15 to 1<<13. parallelBuild used to hand every job
+// through an unbuffered channel even when the jobs already fit the workers, which is how this
+// builder calls it; removing that rendezvous made forking cheap enough to be worth doing at
+// smaller nodes. Swept at 1<<12, 1<<13, 1<<14 and 1<<15 against the old value: BenchmarkGBMFit
+// 67.02 to 61.86 ms, -7.7%%, with every run at the new gate below every run at the old, and
+// GBMHist_exact_20k flat as a control because its nodes clear any of these gates anyway.
+//
+// A GATE IS CALIBRATED AGAINST A COST. When the cost moves, the gate is stale — re-sweep it
+// rather than assuming the old constant still holds.
+const gbmSplitParWork = 1 << 13
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
 func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
