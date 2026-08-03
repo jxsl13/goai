@@ -148,7 +148,17 @@ func (m *RandomForestClassifier) Fit(x [][]float64, y []int) error {
 
 	m.trees = make([]*DecisionTreeClassifier, nt)
 	if err := parallelBuild(nt, func(t int) error {
-		bx, by := gatherInt(x, y, samples[t])
+		// RECYCLE THE GATHER BUFFERS ACROSS TREES. Every tree materialized its own row-pointer
+		// slice and label copy — two allocations the size of the training set, once per tree,
+		// and together they were the largest single source of bytes in a forest fit.
+		//
+		// SAFE BECAUSE THE TREE KEEPS NEITHER: fitWithSeed stores only the fitted root, the
+		// class set and the feature count, and the builder that holds x and y dies with the
+		// call. Both buffers are fully overwritten before they are read, so a recycled one
+		// carries nothing forward.
+		gb := gatherPool.Get().(*gatherBuf)
+		defer gatherPool.Put(gb)
+		bx, by := gb.take(x, y, samples[t])
 		tree := NewDecisionTreeClassifier(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
@@ -303,7 +313,11 @@ func (m *RandomForestRegressor) Fit(x [][]float64, y []float64) error {
 
 	m.trees = make([]*DecisionTreeRegressor, nt)
 	if err := parallelBuild(nt, func(t int) error {
-		bx, by := gatherFloat(x, y, samples[t])
+		// The regressor's trees recycle the same way, for the same reason and under the same
+		// retention argument as the classifier's above.
+		gb := gatherPool.Get().(*gatherBuf)
+		defer gatherPool.Put(gb)
+		bx, by := gb.takeFloat(x, y, samples[t])
 		tree := NewDecisionTreeRegressor(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
@@ -466,9 +480,52 @@ func seedState(seed int64) uint64 {
 	return s
 }
 
+// gatherBuf is one tree's row-pointer and label scratch, recycled across trees.
+type gatherBuf struct {
+	bx  [][]float64
+	by  []int
+	byf []float64
+}
+
+var gatherPool = sync.Pool{New: func() any { return &gatherBuf{} }}
+
+// take fills the buffer with the rows idx selects and returns views of exactly that length.
+// Both slices are written at every position, so nothing survives from the previous tree.
+func (g *gatherBuf) take(x [][]float64, y []int, idx []int) ([][]float64, []int) {
+	if cap(g.bx) < len(idx) {
+		g.bx = make([][]float64, len(idx))
+	}
+	if cap(g.by) < len(idx) {
+		g.by = make([]int, len(idx))
+	}
+	bx, by := g.bx[:len(idx)], g.by[:len(idx)]
+	for i, j := range idx {
+		bx[i] = x[j]
+		by[i] = y[j]
+	}
+	return bx, by
+}
+
 func gatherInt(x [][]float64, y []int, idx []int) ([][]float64, []int) {
 	bx := make([][]float64, len(idx))
 	by := make([]int, len(idx))
+	for i, j := range idx {
+		bx[i] = x[j]
+		by[i] = y[j]
+	}
+	return bx, by
+}
+
+// takeFloat is take for a float target. It keeps its own label buffer rather than reinterpreting
+// the integer one, so a buffer recycled between a classifier and a regressor cannot alias.
+func (g *gatherBuf) takeFloat(x [][]float64, y []float64, idx []int) ([][]float64, []float64) {
+	if cap(g.bx) < len(idx) {
+		g.bx = make([][]float64, len(idx))
+	}
+	if cap(g.byf) < len(idx) {
+		g.byf = make([]float64, len(idx))
+	}
+	bx, by := g.bx[:len(idx)], g.byf[:len(idx)]
 	for i, j := range idx {
 		bx[i] = x[j]
 		by[i] = y[j]

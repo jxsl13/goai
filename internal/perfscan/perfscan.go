@@ -236,6 +236,7 @@ var checks = []check{
 	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
 	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
+	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1388,6 +1389,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, narrowUnrollFindings(fset, fn)...)
 		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
+		out = append(out, perJobGatherFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3117,6 +3119,7 @@ func main() {
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
 	collectReductionHelpers(parsed)
+	collectAllocGathers(parsed)
 	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
@@ -18548,6 +18551,108 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 		return true
 	})
 	return seen && all
+}
+
+// --- PS3079: a whole-input allocation once per fan-out job -----------------------------------
+
+// allocGatherReg keys package -> function name for the functions that ALLOCATE and RETURN
+// slices sized by one of their arguments — a gather that materializes a whole input per call.
+var allocGatherReg = map[string]map[string]bool{}
+
+// collectAllocGathers pre-scans every package for those functions.
+func collectAllocGathers(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || fn.Name == nil || fn.Type.Results == nil {
+				continue
+			}
+			if len(fn.Type.Results.List) < 2 {
+				continue // one returned slice is a result; two or more is a materialized view
+			}
+			makes := 0
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				c, ok := n.(*ast.CallExpr)
+				if !ok || identName(c.Fun) != "make" || len(c.Args) != 2 {
+					return true
+				}
+				if _, ok := c.Args[0].(*ast.ArrayType); ok {
+					makes++
+				}
+				return true
+			})
+			if makes < 2 {
+				continue
+			}
+			if allocGatherReg[f.Name.Name] == nil {
+				allocGatherReg[f.Name.Name] = map[string]bool{}
+			}
+			allocGatherReg[f.Name.Name][fn.Name.Name] = true
+		}
+	}
+}
+
+// perJobGatherFindings flags PS3079 — a fan-out body calling a function that allocates a whole
+// input's worth of slices, so every job pays that allocation.
+func perJobGatherFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(allocGatherReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := allocGatherReg[f.Name.Name]
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !fanoutReg[f.Name.Name][calleeName(call.Fun)] {
+			return true
+		}
+		for _, a := range call.Args {
+			lit, ok := a.(*ast.FuncLit)
+			if !ok || lit.Body == nil {
+				continue
+			}
+			// ALREADY RECYCLED IS THE FIX, NOT THE FINDING.
+			if mentionsPool(lit.Body) {
+				continue
+			}
+			found := false
+			ast.Inspect(lit.Body, func(m ast.Node) bool {
+				if found {
+					return false
+				}
+				c, ok := m.(*ast.CallExpr)
+				if !ok || !reg[calleeName(c.Fun)] {
+					return true
+				}
+				found = true
+				out = append(out, finding{
+					pos:      fset.Position(c.Pos()),
+					category: "per-job-whole-input-allocation",
+					msg: fmt.Sprintf("%q allocates and returns slices sized by its input, and"+
+						" this fan-out body calls it once per JOB — every job pays a whole"+
+						" input's worth of allocation. RECYCLE THE BUFFERS through a sync.Pool"+
+						" taken at the top of the job and returned at its end, resizing only"+
+						" when the job needs more than the recycled one holds. MEASURED on the"+
+						" random forest, where each tree materialized its own row-pointer slice"+
+						" and label copy: BenchmarkForestFit went from 33.70 to 20.14 MB per"+
+						" operation, -40.2%%, and 1883 to 1666 allocations, with the wall clock"+
+						" FLAT at 78.4 vs 77.6 ms. EXPECT BYTES, NOT TIME, and say so when"+
+						" reporting it. THE SAFETY QUESTION IS RETENTION, AND IT IS ANSWERABLE:"+
+						" read what the callee stores. The tree fitter keeps only its fitted"+
+						" root, the class set and the feature count, and the builder holding the"+
+						" rows dies with the call, so nothing outlives the job — and both"+
+						" buffers are fully overwritten before being read, so a recycled one"+
+						" carries nothing forward. If either of those is false the pool is a"+
+						" correctness bug, not an optimization", calleeName(c.Fun)),
+				})
+				return false
+			})
+		}
+		return true
+	})
+	return out
 }
 
 // --- PS3078: a radix pass that cannot be skipped ---------------------------------------------
