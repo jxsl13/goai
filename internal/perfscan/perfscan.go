@@ -19324,12 +19324,16 @@ func minMaxCallInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON"+
 					" CHAIN: converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%,"+
 					" and was reverted — this replaces CALLS, not branchless code, so rank a"+
-					" site by whether the call is still there. CHECK WHICH ARM THE BENCHMARK"+
-					" ACTUALLY TAKES: the cpu WKV kernel's F64 path dispatches into SIMD"+
-					" assembly, so its Go-level max sits in a dead exotic-dtype fallback and the"+
-					" F64 benchmark measured flat while the F32 arm, which is Go, measured"+
-					" -17.9%%; the same recurrence in nn measured -13.7%% against an archMax"+
-					" profile share of 13.1%%. AND A SITE IN A PARALLEL SOLVER MAY BE INVISIBLE:"+
+					" site by whether the call is still there. FOLLOW THE DISPATCH INTO HELPER"+
+					" PACKAGES — a kernel file's own call sites are not the kernel's call sites."+
+					" The cpu WKV F64 arm measured FLAT when only backend/cpu/wkv.go was"+
+					" converted, and the reason was not SIMD assembly: simd.WKVScanRangeF64 is"+
+					" portable Go in internal/simd/wkv_scalar.go, and converting THAT moved the"+
+					" same benchmark -11.5%%. Confirm the routing instead of assuming it — a"+
+					" mutation in the helper reddened exactly the two CPU-F64 digests and"+
+					" neither reference case, which is what proved where the path lands. The"+
+					" same recurrence measured -13.7%% in nn against an archMax profile share of"+
+					" 13.1%%, -17.9%% on the cpu F32 scan and -17.5%% on the reference F32 one. AND A SITE IN A PARALLEL SOLVER MAY BE INVISIBLE:"+
 					" the SVM fit was converted at eight sites and measured 6.11 to 6.27 ms,"+
 					" slightly WORSE, because its profile is dominated by scheduler wait — that"+
 					" one was reverted. GATE IT ON ONE PLANTED VALUE PER"+

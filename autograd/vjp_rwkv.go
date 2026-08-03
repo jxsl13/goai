@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -111,7 +112,7 @@ func wkvChannelBackward(seq int, kcol, vcol, gcol []float64, wc, uc float64, sc 
 			z, dt = dgt, 1
 		} else {
 			l := curM - float64(t-1)*wc
-			z = math.Max(l, dgt)
+			z = fmath.Max(l, dgt)
 			el := 1.0
 			if z != l {
 				el = math.Exp(l - z)
@@ -137,7 +138,7 @@ func wkvChannelBackward(seq int, kcol, vcol, gcol []float64, wc, uc float64, sc 
 		// Fold b[t] into the running sums for later steps, rescaling if the maximum grew.
 		nm := b[t]
 		if !math.IsInf(curM, -1) {
-			nm = math.Max(curM, b[t])
+			nm = fmath.Max(curM, b[t])
 			if nm != curM {
 				r := math.Exp(curM - nm)
 				sS, sN, sS1, sN1 = sS*r, sN*r, sS1*r, sN1*r
