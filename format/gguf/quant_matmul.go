@@ -288,7 +288,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// column outf[*n+ni] for all m activation rows. Rows ni are independent (per-ni scratch,
 	// disjoint output column, no cross-ni reduction), so chunk-parallel across GOMAXPROCS is
 	// byte-for-byte identical to the serial loop; the default dtype branch reads x read-only.
-	process := func(scratch []float32, ni int) {
+	dequantInto := func(scratch []float32, ni int) {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		switch qt {
 		case Q8_0:
@@ -306,6 +306,9 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
 		}
+	}
+	process := func(scratch []float32, ni int) {
+		dequantInto(scratch, ni)
 		wf := scratch
 		// Unroll-and-jam the activation-row (mi) loop by 8 — swept, not argued: at 4, 6, 8 and 10
 		// BenchmarkQuantMamba2Prefill_512 read 307.0, 247.4, 239.9 and 242.5 ms, so eight is the
@@ -425,13 +428,131 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		}
 	}
+	// THREE OUTPUT COLUMNS PER PASS. The eight-row jam reads eight activation elements and
+	// one weight element to do eight FMAs, and it runs once per output column — the
+	// activation matrix is streamed n times and the loop is LOAD-bound, which is why
+	// pre-widening it to f64 measured WORSE (see the note above). Three weight rows per
+	// pass give twenty-four FMAs for the same eight activation loads.
+	//
+	// THREE BECAUSE IT WAS SWEPT: at 2, 3 and 4 columns BenchmarkQuantMamba2Prefill_512
+	// read 237.2, 220.3 and 261.3 ms against 270.8 serial-per-column, so four already
+	// spills — twenty-four accumulators fit and thirty-two do not. Passing the scratch
+	// rows as NAMED parameters rather than a slice of slices is worth another 4%: the
+	// swept forms used sc[c][ki] and measured 237.2 at two columns where the named form
+	// measures 222.5.
+	//
+	// BIT-IDENTICAL: every output keeps its OWN accumulator summing ascending ki over the
+	// same operands, exactly as three separate calls produced.
+	process3 := func(sa, sb, scc []float32, ni int) {
+		if xf32 == nil || m < 8 {
+			process(sa, ni)
+			process(sb, ni+1)
+			process(scc, ni+2)
+			return
+		}
+		dequantInto(sa, ni+0)
+		dequantInto(sb, ni+1)
+		dequantInto(scc, ni+2)
+		mi := 0
+		for ; mi+8 <= m; mi += 8 {
+			r0 := xf32[(mi+0)*k : (mi+0)*k+k]
+			r1 := xf32[(mi+1)*k : (mi+1)*k+k]
+			r2 := xf32[(mi+2)*k : (mi+2)*k+k]
+			r3 := xf32[(mi+3)*k : (mi+3)*k+k]
+			r4 := xf32[(mi+4)*k : (mi+4)*k+k]
+			r5 := xf32[(mi+5)*k : (mi+5)*k+k]
+			r6 := xf32[(mi+6)*k : (mi+6)*k+k]
+			r7 := xf32[(mi+7)*k : (mi+7)*k+k]
+			var a0, a1, a2, a3, a4, a5, a6, a7 float64
+			var b0, b1, b2, b3, b4, b5, b6, b7 float64
+			var c0, c1, c2, c3, c4, c5, c6, c7 float64
+			for ki := 0; ki < k; ki++ {
+				w0, w1, w2 := float64(sa[ki]), float64(sb[ki]), float64(scc[ki])
+				v0 := float64(r0[ki])
+				a0 += v0 * w0
+				b0 += v0 * w1
+				c0 += v0 * w2
+				v1 := float64(r1[ki])
+				a1 += v1 * w0
+				b1 += v1 * w1
+				c1 += v1 * w2
+				v2 := float64(r2[ki])
+				a2 += v2 * w0
+				b2 += v2 * w1
+				c2 += v2 * w2
+				v3 := float64(r3[ki])
+				a3 += v3 * w0
+				b3 += v3 * w1
+				c3 += v3 * w2
+				v4 := float64(r4[ki])
+				a4 += v4 * w0
+				b4 += v4 * w1
+				c4 += v4 * w2
+				v5 := float64(r5[ki])
+				a5 += v5 * w0
+				b5 += v5 * w1
+				c5 += v5 * w2
+				v6 := float64(r6[ki])
+				a6 += v6 * w0
+				b6 += v6 * w1
+				c6 += v6 * w2
+				v7 := float64(r7[ki])
+				a7 += v7 * w0
+				b7 += v7 * w1
+				c7 += v7 * w2
+			}
+			outf[(mi+0)*n+ni+0] = float32(a0)
+			outf[(mi+0)*n+ni+1] = float32(b0)
+			outf[(mi+0)*n+ni+2] = float32(c0)
+			outf[(mi+1)*n+ni+0] = float32(a1)
+			outf[(mi+1)*n+ni+1] = float32(b1)
+			outf[(mi+1)*n+ni+2] = float32(c1)
+			outf[(mi+2)*n+ni+0] = float32(a2)
+			outf[(mi+2)*n+ni+1] = float32(b2)
+			outf[(mi+2)*n+ni+2] = float32(c2)
+			outf[(mi+3)*n+ni+0] = float32(a3)
+			outf[(mi+3)*n+ni+1] = float32(b3)
+			outf[(mi+3)*n+ni+2] = float32(c3)
+			outf[(mi+4)*n+ni+0] = float32(a4)
+			outf[(mi+4)*n+ni+1] = float32(b4)
+			outf[(mi+4)*n+ni+2] = float32(c4)
+			outf[(mi+5)*n+ni+0] = float32(a5)
+			outf[(mi+5)*n+ni+1] = float32(b5)
+			outf[(mi+5)*n+ni+2] = float32(c5)
+			outf[(mi+6)*n+ni+0] = float32(a6)
+			outf[(mi+6)*n+ni+1] = float32(b6)
+			outf[(mi+6)*n+ni+2] = float32(c6)
+			outf[(mi+7)*n+ni+0] = float32(a7)
+			outf[(mi+7)*n+ni+1] = float32(b7)
+			outf[(mi+7)*n+ni+2] = float32(c7)
+		}
+		for ; mi < m; mi++ {
+			row := xf32[mi*k : mi*k+k]
+			var t0, t1, t2 float64
+			for ki := 0; ki < k; ki++ {
+				v := float64(row[ki])
+				t0 += v * float64(sa[ki])
+				t1 += v * float64(sb[ki])
+				t2 += v * float64(scc[ki])
+			}
+			outf[mi*n+ni] = float32(t0)
+			outf[mi*n+ni+1] = float32(t1)
+			outf[mi*n+ni+2] = float32(t2)
+		}
+	}
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
 		nw = n
 	}
 	if nw <= 1 || m*n*k < 1<<20 {
 		scratch := make([]float32, k)
-		for ni := range n {
+		sb := make([]float32, k)
+		sc := make([]float32, k)
+		ni := 0
+		for ; ni+3 <= n; ni += 3 {
+			process3(scratch, sb, sc, ni)
+		}
+		for ; ni < n; ni++ {
 			process(scratch, ni)
 		}
 		return out, nil
@@ -451,7 +572,13 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		go func(lo, hi int) {
 			defer wg.Done()
 			scratch := make([]float32, k)
-			for ni := lo; ni < hi; ni++ {
+			sb := make([]float32, k)
+			sc := make([]float32, k)
+			ni := lo
+			for ; ni+3 <= hi; ni += 3 {
+				process3(scratch, sb, sc, ni)
+			}
+			for ; ni < hi; ni++ {
 				process(scratch, ni)
 			}
 		}(lo, hi)
