@@ -64,6 +64,12 @@ func TestMHAMaskedF32CPUByteIdenticalToRef(t *testing.T) {
 	}{
 		{4, 4, 8, 2, 2, false, false}, {5, 7, 16, 4, 2, false, false},
 		{5, 7, 16, 4, 4, true, false}, {64, 96, 32, 8, 8, false, false},
+		// THE JAM TAKES EIGHT KEYS AT A TIME AND THESE TWO LENGTHS ARE WHAT REACH ITS EDGES.
+		// sk=15 puts j+7 exactly at the last key, which is where an off-by-one in the bound
+		// reads past the row; sk=11 leaves a partial group AFTER a full one. The other lengths
+		// are 4 and 7 (below the group, remainder only) and 96 (a whole number of groups), so
+		// neither edge was reachable.
+		{5, 15, 16, 4, 2, false, false}, {5, 11, 16, 4, 4, false, false},
 		{48, 48, 32, 8, 8, false, true}, {48, 48, 32, 8, 2, true, true},
 	} {
 		dm := cfg.dk * cfg.heads
