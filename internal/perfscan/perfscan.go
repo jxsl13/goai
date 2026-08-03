@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
 	{"PS3052", "staged-matrix-reduced-against-one-column", "a buffer filled by one call and consumed by the very next, where the consumer output width is a variable the function never branches on. At width one the staged buffer exists only to be reduced against a SINGLE vector — every value written once and read once, when it could have come straight from the source. ADD A FUSED PATH FOR WIDTH ONE, visiting the same elements in the same order into one accumulator. MEASURED on conv2d, whose im2col matrix writes c*kh*kw values per output pixel: with one output filter the fill was 12.7%% of a multi-token-attention forward against 6.7%% for the GEMM it fed, and fusing took a 256x256 3x3 single-filter convolution down 22.1%% and the forward 3.6%%. MIND THE ZEROS THE STAGING HOLDS — conv2d columns carry zeros for padded taps and the GEMM adds them, so the fused path is exact only without padding; gate on that and test BOTH sides. THE GAIN IS IN THE SHORT KERNELS: 22.1%% at 3x3 against 4.3%% at 6x11, where the staged read was already long enough to amortize", false},
 	{"PS3051", "blocked-kernel-without-a-degenerate-shape-guard", "a kernel that BLOCKS one dimension while iterating another innermost, with nothing special-cased for that inner dimension being 1. At width one the innermost loop runs a single iteration, so the block pays all its slicing and loop machinery to move one element per pass and the accumulators sit in memory when they would fit in registers. ADD THE DEGENERATE PATH: same blocking, accumulators held as SCALARS across the whole reduction, stored once — bit-identical, since each still takes its terms in the same order. MEASURED on the CPU band GEMM, which a conv2d with one output filter reaches as n == 1: a 2048-square matrix-vector product fell 23.4%% in f64 and 36.7%% in f32, the conv-shaped 262144x66 case 17.7%%, the attention forward 6.3%%. MEASURE THE OBVIOUS FORM TOO AND EXPECT IT TO LOSE: a plain per-row dot was tried first and was slightly WORSE than the block it replaced, because the block amortizes its loop over four rows — the win is the registers, not the simpler loop", false},
 	{"PS3050", "serial-tail-after-fanout", "a fan-out call followed, in the same function, by a serial elementwise pass over a whole buffer the bands already own. Every worker finishes and then one goroutine walks the entire output again — an Amdahl term that grows with the output rather than with the work. FOLD IT INTO THE BAND: each band owns rows [lo,hi), so doing its own slice there is disjoint, elementwise and BIT-IDENTICAL, because nothing accumulates. MEASURED on the portable f32 matmul, which accumulates into an f64 scratch and narrowed the whole result afterwards: the tail was 6.4%% of a batched vision forward at one worker, and folding it took three of those forwards down 4.7%% to 7.6%% with the f64 matmul beside them flat. GATE IT ON A SENTINEL — pre-fill the output with a value the correct result cannot produce, so a band that narrows the wrong range shows as an untouched cell", false},
@@ -1322,6 +1323,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, serialTailAfterFanoutFindings(fset, f, fn)...)
 		out = append(out, degenerateShapeGuardFindings(fset, fn)...)
 		out = append(out, stagedSingleColumnFindings(fset, fn)...)
+		out = append(out, independentReductionsFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -17840,4 +17842,139 @@ func stagedSingleColumnFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 		return false
 	})
 	return out
+}
+
+// --- PS3053: independent reductions computed one at a time ------------------------------------
+
+// scalarReductionOverShared reports whether body computes a scalar accumulator by looping over a
+// source that does NOT depend on the enclosing item variable — one dot product per item, over the
+// same data.
+func scalarReductionOverShared(body *ast.BlockStmt, item string) (acc, shared string) {
+	declared := map[string]bool{}
+	for _, st := range body.List {
+		if ds, ok := st.(*ast.DeclStmt); ok {
+			if gd, ok := ds.Decl.(*ast.GenDecl); ok && gd.Tok == token.VAR {
+				for _, sp := range gd.Specs {
+					if vs, ok := sp.(*ast.ValueSpec); ok && len(vs.Values) == 0 {
+						for _, nm := range vs.Names {
+							declared[nm.Name] = true
+						}
+					}
+				}
+			}
+		}
+	}
+	if len(declared) == 0 {
+		return "", ""
+	}
+	for _, st := range body.List {
+		ib, iv := outerLoop(st)
+		if ib == nil || iv == "" || loopDepthOf(ib) > 0 {
+			continue
+		}
+		rs, ok := st.(*ast.RangeStmt)
+		if !ok || mentionsIdent(rs.X, item) {
+			continue // the source must be shared across items, not selected by one
+		}
+		src := identName(rs.X)
+		if src == "" {
+			continue
+		}
+		hit := ""
+		ast.Inspect(ib, func(n ast.Node) bool {
+			as, ok := n.(*ast.AssignStmt)
+			if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+				return true
+			}
+			if nm := identName(as.Lhs[0]); declared[nm] {
+				hit = nm
+			}
+			return hit == ""
+		})
+		if hit != "" {
+			return hit, src
+		}
+	}
+	return "", ""
+}
+
+// independentReductionsFindings flags PS3053 — a loop over items where each item computes its own
+// SCALAR reduction over the same shared source. Every one of those is a dependent add chain, so
+// the loop is bound by add LATENCY rather than throughput, and running the items one at a time
+// leaves the chains end to end when they could interleave.
+//
+// This is not PS3010. That one wants to split a SINGLE sum into partials, which reassociates and
+// moves the last bits. Here the accumulators belong to DIFFERENT results: interleaving four items
+// leaves every sum with its own accumulator and its own ascending order, so it is bit-identical.
+//
+// MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot over the head
+// width was 44.5% of the benchmark: four queries per pass over the key row took
+// BenchmarkMemForward_512 down 34.6%, the 128 cell 22.6% and BenchmarkMemGatherLarge 44.6%.
+func independentReductionsFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if len(out) > 0 {
+			return false
+		}
+		// The item loop must sit INSIDE another loop whose iteration supplies the shared source.
+		// That nesting is the whole shape: the outer loop streams the data once, the inner loop
+		// reduces it separately for each item, and interleaving the items is what stops the data
+		// being re-walked one dependent chain at a time. Without this the check reported 111 sites,
+		// nearly all of them a single reduction with no sibling to interleave with.
+		ob, ov := outerLoop(n)
+		if ob == nil || ov == "" {
+			return true
+		}
+		fromOuter := derivedNames(ob, ov)
+		found := false
+		ast.Inspect(ob, func(m ast.Node) bool {
+			if found || m == n {
+				return !found
+			}
+			body, item := outerLoop(m)
+			if body == nil || item == "" || alreadyTiled(m) {
+				return true
+			}
+			acc, shared := scalarReductionOverShared(body, item)
+			if acc == "" || !fromOuter[shared] {
+				return true
+			}
+			found = true
+			out = append(out, mkIndependentReductionFinding(fset, m, item, acc, shared))
+			return false
+		})
+		return !found
+	})
+	return out
+}
+
+// mkIndependentReductionFinding builds the PS3053 report.
+func mkIndependentReductionFinding(fset *token.FileSet, n ast.Node, item, acc, shared string) finding {
+	{
+		return finding{
+			pos:      fset.Position(n.Pos()),
+			category: "independent-reductions-one-at-a-time",
+			msg: fmt.Sprintf("each %q computes the scalar %q by reducing over %q, which every item"+
+				" shares. A single-accumulator reduction is a DEPENDENT add chain, so this loop is"+
+				" bound by add LATENCY and not by throughput — the multiplies beside it are free —"+
+				" and taking the items one at a time leaves those chains end to end when they could"+
+				" interleave. TAKE FOUR ITEMS PER PASS over %q with four separate accumulators, and"+
+				" load each element of %q once for all four. BIT-IDENTICAL, and that is what"+
+				" separates this from PS3010: there the fix splits ONE sum into partials and"+
+				" reassociates it, here the accumulators belong to DIFFERENT results and each keeps"+
+				" its own terms in its own ascending order. MEASURED on the memorizing-attention"+
+				" k-nearest-neighbour scan, whose per-query dot over the head width was 44.5%% of the"+
+				" benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%% and"+
+				" BenchmarkMemGatherLarge 44.6%%. DESIGN THE MUTATION THAT GATES IT WITH CARE: the observable is"+
+				" which items the scan SELECTS, so a perturbation that scales or shifts one item's"+
+				" scores UNIFORMLY changes no ranking and leaves the oracle green — a 1%% scale and a"+
+				" constant offset both did. It has to depend on the shared source's index and be"+
+				" large enough to reorder the top of the list; at that point the oracle reddens"+
+				" immediately. A last-bit change is genuinely unobservable here, which is a fact"+
+				" about the contract rather than a hole in the test", item, acc, shared, shared, shared),
+		}
+	}
 }
