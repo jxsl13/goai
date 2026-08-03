@@ -183,6 +183,10 @@ type writer struct {
 	w   io.Writer
 	n   int64 // bytes written
 	err error
+	// SCRATCH on the receiver, for the reason the reader's is: wr.write hands the slice to an
+	// io.Writer, an interface, so a LOCAL array escapes and is heap-allocated once per scalar
+	// written. The writer is already on the heap; the buffer costs nothing here.
+	num [8]byte
 }
 
 func (wr *writer) write(p []byte) {
@@ -194,16 +198,24 @@ func (wr *writer) write(p []byte) {
 	wr.err = err
 }
 
+// byte1 writes a single byte through the receiver scratch. The []byte{x} literals it replaces
+// escaped into the io.Writer exactly as the local arrays did, one allocation per byte written.
+func (wr *writer) byte1(v byte) {
+	b := wr.num[:1]
+	b[0] = v
+	wr.write(b)
+}
+
 func (wr *writer) u32(v uint32) {
-	var b [4]byte
-	binary.LittleEndian.PutUint32(b[:], v)
-	wr.write(b[:])
+	b := wr.num[:4]
+	binary.LittleEndian.PutUint32(b, v)
+	wr.write(b)
 }
 
 func (wr *writer) u64(v uint64) {
-	var b [8]byte
-	binary.LittleEndian.PutUint64(b[:], v)
-	wr.write(b[:])
+	b := wr.num[:8]
+	binary.LittleEndian.PutUint64(b, v)
+	wr.write(b)
 }
 
 func (wr *writer) str(s string) {
@@ -263,23 +275,23 @@ func (wr *writer) kv(v any) error {
 func (wr *writer) body(vt uint32, v any) error {
 	switch vt {
 	case vtU8:
-		wr.write([]byte{v.(uint8)})
+		wr.byte1(v.(uint8))
 	case vtI8:
-		wr.write([]byte{byte(v.(int8))})
+		wr.byte1(byte(v.(int8)))
 	case vtBool:
 		var b byte
 		if v.(bool) {
 			b = 1
 		}
-		wr.write([]byte{b})
+		wr.byte1(b)
 	case vtU16:
-		var b [2]byte
-		binary.LittleEndian.PutUint16(b[:], v.(uint16))
-		wr.write(b[:])
+		b := wr.num[:2]
+		binary.LittleEndian.PutUint16(b, v.(uint16))
+		wr.write(b)
 	case vtI16:
-		var b [2]byte
-		binary.LittleEndian.PutUint16(b[:], uint16(v.(int16)))
-		wr.write(b[:])
+		b := wr.num[:2]
+		binary.LittleEndian.PutUint16(b, uint16(v.(int16)))
+		wr.write(b)
 	case vtU32:
 		wr.u32(v.(uint32))
 	case vtI32:
