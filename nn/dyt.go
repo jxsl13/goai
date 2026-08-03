@@ -59,6 +59,22 @@ func (l *DyT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 		}
 		return o[0], nil
 	}
+	// Fused inference path. On a no-recorder (inference) context the three broadcast
+	// elementwise ops around the tanh — α·x, γ⊙·, +β — are folded into two typed
+	// loops, leaving only OpTanh dispatched. This keeps tanh BIT-IDENTICAL to the
+	// dispatch path on every backend (same OpTanh kernel), while the scalar-α prescale
+	// and the per-channel γ/β affine are exact (α·x, γ·t, +β), so the whole result is
+	// bit-identical to the four-op path — at 1 backend dispatch instead of 4, and
+	// without the three full-tensor intermediates. Training (recorder set) keeps the
+	// op chain so every parameter still receives gradient.
+	if ctx.Recorder == nil {
+		d := l.Gamma.Shape()[0]
+		if x.Shape()[x.Ndim()-1] == d {
+			if fused, ok := l.forwardFused(ctx, x, ex, d); ok {
+				return fused, nil
+			}
+		}
+	}
 	ax, err := ex(backend.OpMul, x, l.Alpha) // α·x (scalar α broadcasts over all elements)
 	if err != nil {
 		return nil, err
@@ -72,6 +88,58 @@ func (l *DyT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 		return nil, err
 	}
 	return ex(backend.OpAdd, gt, l.Beta) // + β
+}
+
+// forwardFused implements the fused inference path for F32/F64 (ok=false for other
+// dtypes → caller falls back to the op chain). ax = α·x is built in a typed loop,
+// tanh'd via the identical OpTanh dispatch, then the per-channel affine γ·t+β is
+// applied in a second typed loop that writes the output in place over the tanh
+// buffer. Same arithmetic and order as OpMul/OpTanh/OpMul/OpAdd → bit-identical.
+func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backend.Op, ...*tensor.Tensor) (*tensor.Tensor, error), d int) (*tensor.Tensor, bool) {
+	xc := x.Contiguous()
+	ax := tensor.New(x.Dtype(), x.Shape())
+	alpha := l.Alpha.AtF64(0)
+	switch x.Dtype() {
+	case tensor.F64:
+		xs, as := xc.Storage().F64(), ax.Storage().F64()
+		a := alpha
+		for i, v := range xs {
+			as[i] = v * a // α·x, matches OpMul(x, α) exactly
+		}
+	case tensor.F32:
+		xs, as := xc.Storage().F32(), ax.Storage().F32()
+		a := float32(alpha)
+		for i, v := range xs {
+			as[i] = v * a
+		}
+	default:
+		return nil, false
+	}
+	t, err := ex(backend.OpTanh, ax) // identical tanh kernel → bit-exact vs dispatch
+	if err != nil {
+		return nil, false
+	}
+	switch x.Dtype() {
+	case tensor.F64:
+		gs, bs := l.Gamma.Contiguous().Storage().F64(), l.Beta.Contiguous().Storage().F64()
+		ts := t.Storage().F64()
+		for base := 0; base+d <= len(ts); base += d { // row-major: channel = offset within row
+			row := ts[base : base+d : base+d]
+			for c, tv := range row {
+				row[c] = tv*gs[c] + bs[c] // γ·t + β, matches OpMul(t,γ) then OpAdd(·,β)
+			}
+		}
+	case tensor.F32:
+		gs, bs := l.Gamma.Contiguous().Storage().F32(), l.Beta.Contiguous().Storage().F32()
+		ts := t.Storage().F32()
+		for base := 0; base+d <= len(ts); base += d {
+			row := ts[base : base+d : base+d]
+			for c, tv := range row {
+				row[c] = tv*gs[c] + bs[c]
+			}
+		}
+	}
+	return t, true
 }
 
 // Params returns the trainable α, γ and β.
