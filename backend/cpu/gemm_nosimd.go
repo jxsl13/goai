@@ -26,7 +26,37 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		c1 := C[(i+1)*n : (i+2)*n]
 		c2 := C[(i+2)*n : (i+3)*n]
 		c3 := C[(i+3)*n : (i+4)*n]
-		for p := range k {
+		// Two B rows per pass over the four C rows — see gemmF32Band for the reasoning and the
+		// register-pressure limit. Bit-identical: p then p+1, two separate roundings, ascending.
+		p := 0
+		for ; p+1 < k; p += 2 {
+			bp0 := B[p*n : (p+1)*n]
+			bp1 := B[(p+1)*n : (p+2)*n]
+			a00, a01 := A[(i+0)*k+p], A[(i+0)*k+p+1]
+			a10, a11 := A[(i+1)*k+p], A[(i+1)*k+p+1]
+			a20, a21 := A[(i+2)*k+p], A[(i+2)*k+p+1]
+			a30, a31 := A[(i+3)*k+p], A[(i+3)*k+p+1]
+			for j, b0 := range bp0 {
+				b1 := bp1[j]
+				v0 := c0[j]
+				v0 += a00 * b0
+				v0 += a01 * b1
+				c0[j] = v0
+				v1 := c1[j]
+				v1 += a10 * b0
+				v1 += a11 * b1
+				c1[j] = v1
+				v2 := c2[j]
+				v2 += a20 * b0
+				v2 += a21 * b1
+				c2[j] = v2
+				v3 := c3[j]
+				v3 += a30 * b0
+				v3 += a31 * b1
+				c3[j] = v3
+			}
+		}
+		for ; p < k; p++ {
 			bp := B[p*n : (p+1)*n]
 			a0 := A[(i+0)*k+p]
 			a1 := A[(i+1)*k+p]
@@ -40,9 +70,26 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 			}
 		}
 	}
-	for ; i < hiRow; i++ { // remainder rows
+	for ; i < hiRow; i++ { // remainder rows: a gemv, four B rows per pass
 		ci := C[i*n : (i+1)*n]
-		for p := range k {
+		p := 0
+		for ; p+3 < k; p += 4 {
+			a0, a1 := A[i*k+p], A[i*k+p+1]
+			a2, a3 := A[i*k+p+2], A[i*k+p+3]
+			bp0 := B[p*n : (p+1)*n]
+			bp1 := B[(p+1)*n : (p+2)*n]
+			bp2 := B[(p+2)*n : (p+3)*n]
+			bp3 := B[(p+3)*n : (p+4)*n]
+			for j, b0 := range bp0 {
+				v := ci[j]
+				v += a0 * b0
+				v += a1 * bp1[j]
+				v += a2 * bp2[j]
+				v += a3 * bp3[j]
+				ci[j] = v
+			}
+		}
+		for ; p < k; p++ {
 			aip := A[i*k+p]
 			bp := B[p*n : (p+1)*n]
 			for j, bv := range bp {
@@ -60,7 +107,42 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		c1 := acc[(i+1)*n : (i+2)*n]
 		c2 := acc[(i+2)*n : (i+3)*n]
 		c3 := acc[(i+3)*n : (i+4)*n]
-		for p := range k {
+		// TWO B ROWS PER PASS OVER THE FOUR C ROWS. Each c element was loaded and stored once per
+		// p; holding it across two p steps halves that traffic. Two and not four: four C rows times
+		// four B rows needs sixteen live values plus their scalars, which spills — the same limit
+		// the decode kernel's 1/4/8 sweep found at eight.
+		//
+		// Bit-identical: every element still adds its p then its p+1 contribution as two separate
+		// roundings in ascending order, never as a summed pair.
+		p := 0
+		for ; p+1 < k; p += 2 {
+			bp0 := B[p*n : (p+1)*n]
+			bp1 := B[(p+1)*n : (p+2)*n]
+			a00, a01 := float64(A[(i+0)*k+p]), float64(A[(i+0)*k+p+1])
+			a10, a11 := float64(A[(i+1)*k+p]), float64(A[(i+1)*k+p+1])
+			a20, a21 := float64(A[(i+2)*k+p]), float64(A[(i+2)*k+p+1])
+			a30, a31 := float64(A[(i+3)*k+p]), float64(A[(i+3)*k+p+1])
+			for j, bv0 := range bp0 {
+				b0, b1 := float64(bv0), float64(bp1[j])
+				v0 := c0[j]
+				v0 += a00 * b0
+				v0 += a01 * b1
+				c0[j] = v0
+				v1 := c1[j]
+				v1 += a10 * b0
+				v1 += a11 * b1
+				c1[j] = v1
+				v2 := c2[j]
+				v2 += a20 * b0
+				v2 += a21 * b1
+				c2[j] = v2
+				v3 := c3[j]
+				v3 += a30 * b0
+				v3 += a31 * b1
+				c3[j] = v3
+			}
+		}
+		for ; p < k; p++ {
 			bp := B[p*n : (p+1)*n]
 			a0 := float64(A[(i+0)*k+p])
 			a1 := float64(A[(i+1)*k+p])
@@ -77,7 +159,28 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 	}
 	for ; i < hiRow; i++ {
 		ci := acc[i*n : (i+1)*n]
-		for p := range k {
+		// The single-row tail is a gemv: four B rows per pass, the transform measured on the
+		// decode kernel.
+		p := 0
+		for ; p+3 < k; p += 4 {
+			a0 := float64(A[i*k+p])
+			a1 := float64(A[i*k+p+1])
+			a2 := float64(A[i*k+p+2])
+			a3 := float64(A[i*k+p+3])
+			bp0 := B[p*n : (p+1)*n]
+			bp1 := B[(p+1)*n : (p+2)*n]
+			bp2 := B[(p+2)*n : (p+3)*n]
+			bp3 := B[(p+3)*n : (p+4)*n]
+			for j, bv := range bp0 {
+				v := ci[j]
+				v += a0 * float64(bv)
+				v += a1 * float64(bp1[j])
+				v += a2 * float64(bp2[j])
+				v += a3 * float64(bp3[j])
+				ci[j] = v
+			}
+		}
+		for ; p < k; p++ {
 			aip := float64(A[i*k+p])
 			bp := B[p*n : (p+1)*n]
 			for j, bv := range bp {
