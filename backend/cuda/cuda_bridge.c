@@ -304,7 +304,12 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
         "extern \"C\" __global__ void paged_decode(const float* Q, const float* poolK, const float* poolV,\n"
         "    const int* blockTables, const int* seqLens, float* O,\n"
         "    int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale){\n"
-        "  int h = blockIdx.x, seq = blockIdx.y;\n"
+        // One WARP per (query head, sequence); blockDim.y warps are packed per block so a
+        // 32-thread (single-warp) launch does not cap occupancy at sm_86's 16-blocks/SM limit
+        // (33% -> ~100%). Each warp runs the identical online-softmax scan; only the blockIdx
+        // -> head mapping changes, so the result is byte-identical to the one-warp-per-block form.
+        "  int h = blockIdx.x * blockDim.y + threadIdx.y, seq = blockIdx.y;\n"
+        "  if (h >= qHeads) return;\n"
         "  int group = qHeads / kvHeads, kvh = h / group, WKV = kvHeads * hd;\n"
         "  int n = seqLens[seq]; int lane = threadIdx.x;\n"
         "  const float* q = Q + (size_t)seq*qHeads*hd + (size_t)h*hd;\n"
@@ -333,7 +338,7 @@ int cu_paged_decode_attn(const void* dQ, const void* dPoolK, const void* dPoolV,
         void* args[13] = { (void*)&dQ, (void*)&dPoolK, (void*)&dPoolV, (void*)&dBlockTables,
                            (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd, &blockSize,
                            &maxBlocks, &scale };
-        rc = (cuLaunchKernel(gPagedDecode, (unsigned)qHeads, (unsigned)batch, 1, 32, 1, 1, 0,
+        rc = (cuLaunchKernel(gPagedDecode, (unsigned)((qHeads + 3) / 4), (unsigned)batch, 1, 32, 4, 1, 0,
                              (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donepd:
