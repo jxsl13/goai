@@ -1,42 +1,9 @@
 package autograd
 
 import (
-	"runtime"
-	"sync"
-
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
-
-// conv1dParallelChannels runs body over the D channels in GOMAXPROCS chunks. In the conv1d
-// VJP every write (dxs[..*D+c], dws[c*K+..], dbs[c]) is indexed by channel c, so channels
-// touch DISJOINT memory — chunk-parallel is race-free, and keeping t-outer/k-inner within
-// each channel preserves the per-element ascending-t accumulation → bit-identical to the
-// serial loop. Serial below a small work threshold.
-func conv1dParallelChannels(d, workPerChan int, body func(clo, chi int)) {
-	nw := runtime.GOMAXPROCS(0)
-	if nw > d {
-		nw = d
-	}
-	if nw <= 1 || d*workPerChan < 1<<15 {
-		body(0, d)
-		return
-	}
-	var wg sync.WaitGroup
-	chunk := (d + nw - 1) / nw
-	for lo := 0; lo < d; lo += chunk {
-		hi := lo + chunk
-		if hi > d {
-			hi = d
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			body(lo, hi)
-		}(lo, hi)
-	}
-	wg.Wait()
-}
 
 func init() {
 	// softplus'(x) = σ(x). Dispatch OpSoftplusBackward on the tape's active backend so the
@@ -87,7 +54,7 @@ func init() {
 				// Bit-identical: dbs[c], dws[c*K+k], dxs[j*D+c] are distinct per-c cells, each
 				// still accumulated in ascending-t order (which c we visit at a given t is
 				// irrelevant to a per-c accumulator's summation order).
-				conv1dParallelChannels(D, L*K, func(clo, chi int) {
+				parallelBands(D, L*K, func(clo, chi int) {
 					for t := 0; t < L; t++ {
 						// The taps whose input index falls before the start of the sequence are
 						// skipped by RANGE rather than by a per-tap guard. `if j >= 0` was a
@@ -136,7 +103,7 @@ func init() {
 				}
 				// t-outer / c-inner interchange (see F64 path above): contiguous c-walk over the
 				// [t*D+c] / [j*D+c] flat arrays, bit-identical per-c ascending-t accumulation.
-				conv1dParallelChannels(D, L*K, func(clo, chi int) {
+				parallelBands(D, L*K, func(clo, chi int) {
 					for t := 0; t < L; t++ {
 						// Same guard hoist as the F64 arm above; see the comment there.
 						base := t - (K - 1)

@@ -28,3 +28,26 @@ func BenchmarkTransposeVJP(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkTransposeVJPF32 exists because the F32 arm is a SEPARATE copy of the loop, and a
+// change applied to only one of them measures as a full win on a benchmark that never runs
+// the other. Same shape as the F64 cell so the two are directly comparable.
+func BenchmarkTransposeVJPF32(b *testing.B) {
+	const m, n = 768, 512
+	x := tensor.New(tensor.F32, tensor.Shape{m, n})
+	g := tensor.New(tensor.F32, tensor.Shape{n, m})
+	gs := g.Storage().F32()
+	for i := range gs {
+		gs[i] = float32(i%97) * 0.5
+	}
+	ctx := backend.NewContext()
+	fn := vjps[backend.OpTranspose]
+	in := []*tensor.Tensor{x}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := fn(ctx, in, nil, nil, g); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
