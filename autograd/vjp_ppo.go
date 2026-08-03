@@ -27,19 +27,47 @@ func init() {
 		scale := -gv / float64(b)
 
 		gNew := tensor.New(lpNew.Dtype(), lpNew.Shape())
+		lo, hi := 1-eps, 1+eps
+		// step is one element's contribution, written once and shared by both arms below so the
+		// typed path cannot drift from the accessor path.
+		step := func(lpn, lpo, a float64) float64 {
+			r := math.Exp(lpn - lpo)
+			// THE CLAMP IS A COMPARISON CHAIN, not math.Max(lo, math.Min(hi, r)): those are two
+			// calls per element carrying the full NaN and signed-zero contract. `c <= lo` rather
+			// than `<` is what reproduces math.Max on a negative zero, and NaN compares false
+			// against both bounds so it falls through unchanged, which is what math.Min and
+			// math.Max also return when either operand is NaN.
+			c := r
+			if c > hi {
+				c = hi
+			}
+			if c <= lo {
+				c = lo
+			}
+			if r*a <= c*a { // unclipped branch (dr/dlogπ = r)
+				return a * r
+			}
+			if r > lo && r < hi { // clipped branch but ratio inside the trust region
+				return a * r
+			}
+			return 0 // clamped flat
+		}
+		// TYPED STORAGE WHEN EVERY OPERAND IS ALREADY F64. The accessor arm below pays four
+		// dispatches per element — three AtF64 reads and a SetF64 — each walking the shape to a
+		// flat offset and switching on the storage type. The dtype comes from the input, so the
+		// accessor arm has to stay for anything else.
+		if lpNew.Dtype() == tensor.F64 && lpOld.Dtype() == tensor.F64 && adv.Dtype() == tensor.F64 {
+			ln := lpNew.Contiguous().Storage().F64()
+			lo64 := lpOld.Contiguous().Storage().F64()
+			av := adv.Contiguous().Storage().F64()
+			out := gNew.Storage().F64()
+			for i := range b {
+				out[i] = scale * step(ln[i], lo64[i], av[i])
+			}
+			return []*tensor.Tensor{gNew, nil, nil}, nil
+		}
 		for i := range b {
-			r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
-			a := adv.AtF64(i)
-			surr1 := r * a
-			surr2 := math.Max(1-eps, math.Min(1+eps, r)) * a
-
-			var dobj float64
-			if surr1 <= surr2 {
-				dobj = a * r // unclipped branch (dr/dlogπ = r)
-			} else if r > 1-eps && r < 1+eps {
-				dobj = a * r // clipped branch but ratio inside the trust region
-			} // else: clamped flat → 0
-			gNew.SetF64(scale*dobj, i)
+			gNew.SetF64(scale*step(lpNew.AtF64(i), lpOld.AtF64(i), adv.AtF64(i)), i)
 		}
 		return []*tensor.Tensor{gNew, nil, nil}, nil // logπ_old, advantage frozen
 	})

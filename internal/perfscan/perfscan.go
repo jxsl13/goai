@@ -237,6 +237,7 @@ var checks = []check{
 	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
+	{"PS3080", "one-dimensional-accessor-walk", "a loop making 3 or more AtF64/SetF64 calls per element, each indexed by the loop variable ALONE. PS1005 reports the multi-dimensional version and declines this one — it requires 2 or more index arguments — so a rank-1 walk is invisible to it. MEASURED on the PPO clipped-surrogate backward, 4 such calls per element and NO benchmark until one was written: BenchmarkPPOVJP_65536 2000 to 680 microseconds and the 4096 cell 124 to 42, both -66%% (2.9x). Take the typed slice once when every operand is already the right dtype and KEEP the accessor arm, because the output dtype follows the input. The 2 arms cannot be compared as equal bits — the accessor arm stores float32 where the typed one stores float64 — so what must hold is that the accessor result equals the typed one rounded once", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1390,6 +1391,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
+		out = append(out, accessorWalk1DFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18551,6 +18553,95 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 		return true
 	})
 	return seen && all
+}
+
+// --- PS3080: a one-dimensional per-element accessor walk -------------------------------------
+
+// hasTypedStorageAccess reports whether fn reads a tensor's storage directly — the fast path
+// whose presence means the accessor loop beside it is a deliberate fallback.
+func hasTypedStorageAccess(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || found {
+			return !found
+		}
+		if sel.Sel.Name != "F64" && sel.Sel.Name != "F32" {
+			return true
+		}
+		if c, ok := sel.X.(*ast.CallExpr); ok && calleeName(c.Fun) == "Storage" {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// accessorWalk1DFindings flags PS3080 — a loop calling AtF64 or SetF64 with a SINGLE index that
+// is the loop variable, in a function that never touches typed storage.
+func accessorWalk1DFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || hasTypedStorageAccess(fn) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iv, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		calls := 0
+		var pos token.Pos
+		ast.Inspect(body, func(m ast.Node) bool {
+			c, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			name := calleeName(c.Fun)
+			if name != "AtF64" && name != "SetF64" {
+				return true
+			}
+			// EXACTLY ONE INDEX, AND IT IS THE LOOP VARIABLE. Two or more is the multi-dim walk
+			// PS1005 already reports; ONE is a flat tensor read element by element, which that
+			// check declines by construction and which is why this one exists.
+			idx := c.Args
+			if name == "SetF64" && len(idx) > 0 {
+				idx = idx[1:] // SetF64(value, indices...)
+			}
+			if len(idx) != 1 || identName(idx[0]) != iv {
+				return true
+			}
+			calls++
+			if pos == token.NoPos {
+				pos = c.Pos()
+			}
+			return true
+		})
+		// ONE ACCESSOR IN A LOOP IS ORDINARY. The finding is a loop built OUT of them, where the
+		// dispatch is most of the body rather than an incidental read.
+		if calls < 3 {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "one-dimensional-accessor-walk",
+			msg: fmt.Sprintf("this loop makes %d AtF64/SetF64 calls per element, each indexed by"+
+				" %q alone. Every one walks the shape to a flat offset and switches on the"+
+				" storage type, and on a FLAT tensor that is the whole cost of the read."+
+				" PS1005 REPORTS THE MULTI-DIMENSIONAL VERSION AND DECLINES THIS ONE, which is"+
+				" why it exists: PS1005 requires two or more index arguments, so a rank-1 walk"+
+				" is invisible to it. MEASURED on the PPO clipped-surrogate backward, which made"+
+				" four such calls per element and had no benchmark at all until one was written"+
+				" for it: BenchmarkPPOVJP_65536 went 2000 to 680 microseconds and the 4096 cell"+
+				" 124 to 42, both -66%% (2.9x). TAKE THE TYPED SLICE ONCE when every operand is"+
+				" already the right dtype and KEEP THE ACCESSOR ARM for the rest — the output"+
+				" dtype follows the input here, so the fallback is not optional. THE TWO ARMS"+
+				" CANNOT BE COMPARED AS EQUAL BITS: the accessor arm stores float32 where the"+
+				" typed arm stores float64, so what must hold is that the accessor result equals"+
+				" the typed one rounded ONCE", calls, iv),
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3079: a whole-input allocation once per fan-out job -----------------------------------
