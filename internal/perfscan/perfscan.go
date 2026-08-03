@@ -225,6 +225,7 @@ var checks = []check{
 	{"PS3065", "serial-loop-over-an-expensive-call", "a SINGLE loop — no inner loop of its own — that writes an indexed destination from a call to a function which itself loops, in a package that declares a fan-out helper this function never calls. Every nest-based check misses this: PS3034, PS3059 and PS3063 all require depth 2 or more, and a loop whose per-item work lives inside a CALLEE has depth 1 however expensive it is. MEASURED on the RBF kernel cache, where a column is n independent kernel evaluations: BenchmarkSVCFit/n4000_rbf 6.99 to 5.48 ms, -21.5%%, with the GBM fit flat as a control. The fit had scaled at 1.02x on twelve cores before this. BIT-IDENTICAL — each entry performs exactly the arithmetic it did before and only which goroutine performs it moves. EXPECT AMDAHL, NOT THE CORE COUNT: the parallelized part was 40.6%% of a serial profile, so 6x on it is 1.27x overall, and the SMO iteration it feeds is sequential by construction", false},
 	{"PS3066", "consecutive-loops-over-one-buffer", "three or more sibling loops in one block, all over the same bound, all indexing the same buffer — each streams the whole thing and evicts it before the next one starts. If every index is independent ACROSS the loops, merge them: the buffer is then touched once and stays in cache through all the stages. MEASURED on the Kimi delta-attention step, whose four per-step passes over the dv-by-dk state (scale, S dot k, the rank-1 delta write, S dot q) became one: BenchmarkKDA_F64_256x128 8.71 to 7.33 ms, -15.9%%. BIT-IDENTICAL because merging changes only WHEN a row is visited, never how — each row's stages already ran in that order relative to each other. THE WIN IS THE STATE SIZE, NOT THE LOOP COUNT: the same merge on a 64-by-64 state, 32 KB and already L1-resident, measured -1.8%%. Check for a cross-index dependency first — a later loop that needs ALL of an earlier loop's output cannot merge", false},
 	{"PS3067", "sequential-outer-with-an-independent-inner-loop", "a nest whose OUTER loop carries a dependence and whose inner loop is independent — every write in it indexed by the inner variable, none by the outer. Banding the inner loop where it is pays one fork per OUTER step, which has now failed on fork count four times; INTERCHANGE FIRST so the independent index is outermost, then band it once. PS3040 describes the same nest and recommends splitting the inner loop in place, which is right for a factorization whose inner work SHRINKS as the outer index advances and wrong when the inner extent is constant. MEASURED TWICE on constant-extent sweeps: the SparseGPT pruner went 52.27 to 41.83 ms (-20.0%%) and the GPTQ quantizer 55.18 to 44.34 ms (-19.6%%), both with an untouched sibling flat as a control. BIT-IDENTICAL, because the rows do not observe each other and within a row the outer index is still visited in order. TWO THINGS TO CHECK. Any scratch the body reuses must become PER WORKER — a shared sort buffer reddened both the digest and -race. And a CALLER-SUPPLIED CALLBACK invoked inside the nest is now called concurrently: GPTQ's quantizer is a pure function of one value, but that had to become a documented requirement on the exported API rather than an implementation detail", false},
+	{"PS3068", "serial-best-of-scan", "a loop over independent items that keeps a running BEST — a cost compared against an accumulator declared outside the loop, with the winner's fields assigned under a strict < or > — in a package that declares a fan-out helper this function never calls. Chunk the items, let every chunk apply the same rule within itself, then FOLD THE CHUNKS IN ASCENDING ORDER WITH THE SAME STRICT COMPARISON: that reproduces the serial winner exactly, ties included, because first-wins survives both levels. MEASURED on the CART feature scan, which ran at 1.01x on twelve cores: BenchmarkTreeFit 10.20 to 9.69 ms with the forest fit flat as a control. Modest because a tree's work sits in a few large nodes and the rest is below the fork gate — expect the gate to matter more than the core count. A DIGEST WILL NOT GATE THE TIE RULE. Mutations flipping either strict comparison to <= left a bit-exact prediction digest green, because ordinary data produces no exact-cost tie between two items. Manufacture one — duplicate an item so two are exactly equal — and assert the LOWER index wins, in BOTH placements: adjacent items share a chunk and exercise only the inner comparison, distant ones land in different chunks and exercise only the fold", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1366,6 +1367,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, serialLoopOverCallFindings(fset, f, fn)...)
 		out = append(out, consecutiveLoopFindings(fset, fn)...)
 		out = append(out, interchangeBeforeBandFindings(fset, f, fn)...)
+		out = append(out, serialBestOfScanFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18443,6 +18445,141 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3068: a serial best-of scan over independent items ------------------------------------
+
+// declaredIn returns the names declared by := anywhere inside n.
+func declaredIn(n ast.Node) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(n, func(m ast.Node) bool {
+		as, ok := m.(*ast.AssignStmt)
+		if !ok || as.Tok != token.DEFINE {
+			return true
+		}
+		for _, lhs := range as.Lhs {
+			if id, ok := lhs.(*ast.Ident); ok {
+				out[id.Name] = true
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// serialBestOfScanFindings flags PS3068 — a loop that keeps a running best under a strict
+// comparison, in a function that never fans out.
+func serialBestOfScanFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := fanoutReg[f.Name.Name]
+	// THE FAN-OUT MAY BE ONE CALL AWAY. Applying this check produces a function that dispatches
+	// to a helper which fans out, and the caller itself then contains no helper call at all —
+	// the converted CART feature scan was still reported for exactly that reason. A function
+	// that reaches a fan-out through one of its own package's functions has made the choice.
+	if callsFanoutHelper(fn.Body, reg) || callsFanoutHelper(fn.Body, fansOutReg[f.Name.Name]) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		body, iv := outerLoop(n)
+		if body == nil {
+			return true
+		}
+		// A RANGE OVER VALUES has "_" for its index, and outerLoop reports that. The scan this
+		// check is written from is written that way — for _, f := range feats — so taking the
+		// index alone made the check silent on its own motivating site.
+		if iv == "" || iv == "_" {
+			rs, ok := n.(*ast.RangeStmt)
+			if !ok || rs.Value == nil {
+				return true
+			}
+			id, ok := rs.Value.(*ast.Ident)
+			if !ok || id.Name == "_" {
+				return true
+			}
+			iv = id.Name
+		}
+		if loopSpansAParameterRange(n, declaredParamNames(fn)) {
+			return false
+		}
+		local := declaredIn(body)
+		found := ""
+		ast.Inspect(body, func(m ast.Node) bool {
+			ifs, ok := m.(*ast.IfStmt)
+			if !ok || found != "" {
+				return found == ""
+			}
+			be, ok := ifs.Cond.(*ast.BinaryExpr)
+			if !ok {
+				return true
+			}
+			// The comparison must be STRICT — a first-wins rule — and one side must be a name
+			// the loop does not declare, which is the running accumulator.
+			if be.Op != token.LSS && be.Op != token.GTR {
+				return true
+			}
+			acc := ""
+			for _, e := range []ast.Expr{be.X, be.Y} {
+				if id, ok := e.(*ast.Ident); ok && !local[id.Name] && id.Name != iv {
+					acc = id.Name
+				}
+			}
+			if acc == "" {
+				return true
+			}
+			// The body must write BACK to names the loop does not declare — the winner's
+			// fields. One assignment is an ordinary running total; two or more is a record.
+			n := 0
+			ast.Inspect(ifs.Body, func(k ast.Node) bool {
+				as, ok := k.(*ast.AssignStmt)
+				if !ok {
+					return true
+				}
+				for _, lhs := range as.Lhs {
+					if id, ok := lhs.(*ast.Ident); ok && !local[id.Name] {
+						n++
+					}
+				}
+				return true
+			})
+			if n >= 2 {
+				found = acc
+			}
+			return found == ""
+		})
+		if found == "" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(n.Pos()),
+			category: "serial-best-of-scan",
+			msg: fmt.Sprintf("this loop over %q keeps a running best in %q and records the"+
+				" winner's fields under a STRICT comparison, and the function never calls the"+
+				" fan-out helper its package declares. Chunk the items, let every chunk apply the"+
+				" same rule within itself, then FOLD THE CHUNKS IN ASCENDING ORDER WITH THE SAME"+
+				" STRICT COMPARISON — that reproduces the serial winner exactly, ties included,"+
+				" because first-wins survives both levels. MEASURED on the CART feature scan,"+
+				" which ran at 1.01x on twelve cores: BenchmarkTreeFit 10.20 to 9.69 ms with the"+
+				" forest fit flat as a control. Modest, because a tree's work sits in a few large"+
+				" nodes and the rest is below the fork gate — expect the gate to matter more than"+
+				" the core count. A DIGEST WILL NOT GATE THE TIE RULE: mutations flipping either"+
+				" strict comparison to <= left a bit-exact prediction digest green, because"+
+				" ordinary data produces no exact tie between two items. MANUFACTURE ONE —"+
+				" duplicate an item so two are exactly equal — and assert the LOWER index wins,"+
+				" in BOTH placements: adjacent items share a chunk and exercise only the inner"+
+				" comparison, distant ones land in different chunks and exercise only the fold."+
+				" A KNOWN FALSE POSITIVE REMAINS: a scan inside a function whose CALLER runs it"+
+				" in a fan-out band is already parallel and does not look it. This check sees"+
+				" one call in the other direction — a function that dispatches to a helper which"+
+				" fans out — but not the caller's. Three of its reports in the CART builder are"+
+				" the per-feature cut scan, which runs inside the feature band",
+				iv, found),
+		})
+		return false
+	})
+	return out
 }
 
 // --- PS3067: a sequential outer loop with an independent inner one ---------------------------
