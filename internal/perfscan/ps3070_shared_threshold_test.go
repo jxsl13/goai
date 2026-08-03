@@ -43,9 +43,13 @@ func presort(rows int) bool {
 	if len(fs) == 0 {
 		t.Fatal("0 findings, want at least 1")
 	}
-	// The order of operations is the part that is easy to get wrong: sweeping a shared
-	// constant measures the sum of two answers.
-	if !containsAll(fs[0].msg, "SPLIT FIRST, THEN SWEEP", "missing second constant") {
+	// Two things the message has to carry. The order of operations, which is easy to get
+	// wrong — sweeping a shared constant measures the sum of two answers — and the triage,
+	// because both candidates this check found in its own repository were false positives:
+	// one a numeric guard rather than a knob, one a size gate whose crossover no benchmark
+	// reaches.
+	if !containsAll(fs[0].msg, "SPLIT FIRST, THEN SWEEP", "missing second constant",
+		"TRIAGE BEFORE SPLITTING", "IS THE CROSSOVER BENCHMARKED") {
 		t.Fatalf("message omits the order of operations or the diagnosis:\n%s", fs[0].msg)
 	}
 }
