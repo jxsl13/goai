@@ -242,6 +242,13 @@ type gbmBuilder struct {
 	partW    [][]int     // per-worker right-partition scratch for the parallel column partition (nw × n)
 }
 
+// gbmRadixCutoff is the row count above which the ONE-TIME presort of a feature switches from
+// the comparison sort to the radix. It is deliberately NOT the CART builder's cutoff, which
+// governs a PER-NODE sort of a shrinking range and wants a much lower value: sharing one
+// constant made lowering it for CART regress GBMFit by about 25% and change GBM's trees, and
+// splitting them makes both changes bit-identical in their own path.
+const gbmRadixCutoff = 512
+
 // gbmSplitParWork gates the parallel feature scan in bestSplit: fork only when the node's
 // per-feature O(n) gather+scan over d features (≈ d·n element ops) amortizes the goroutine
 // spawn. Upper tree nodes carry most of the samples/time and are few, so a work gate forks only
@@ -281,7 +288,7 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.xt = make([]float64, n*d)
 	var rk, rtk []uint64
 	var rti []int
-	if n >= treeRadixCutoff {
+	if n >= gbmRadixCutoff {
 		rk, rtk, rti = make([]uint64, n), make([]uint64, n), make([]int, n)
 	}
 	for f := 0; f < d; f++ {
@@ -292,7 +299,7 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 			key[i] = x[i][f]
 			xf[i] = key[i]
 		}
-		if n >= treeRadixCutoff {
+		if n >= gbmRadixCutoff {
 			gbmRadixByKey(col, key, rk, rtk, rti)
 		} else {
 			sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
