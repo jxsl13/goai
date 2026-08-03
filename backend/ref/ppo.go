@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -48,6 +49,14 @@ func ppoClipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 	// around one Exp and a clamp. Flat row-major []float64 views (exact widening for
 	// F32) leave the arithmetic, the clamp and the accumulation order untouched, so
 	// the result is bit-identical; only the loads move.
+	// MIN AND MAX THROUGH internal/fmath, NOT math. On arm64 math.Min compiles to a CALL into
+	// math.archMin inside a 48-byte frame; the min builtin compiles to a single FMIND. They are
+	// not interchangeable — math.Min documents -Inf as beating NaN and the builtin propagates
+	// NaN — and the difference is REACHABLE here, not theoretical: a log-probability of -Inf
+	// makes the ratio exactly +0, and +0 times an infinite advantage is the NaN that pairs with
+	// the -Inf the other surrogate branch produces. fmath takes the instruction and consults
+	// math only when the instruction returns NaN, which is the only result the two can disagree
+	// on, so the loss is bit-identical.
 	lns, ok0 := f64Data(lpNew)
 	los, ok1 := f64Data(lpOld)
 	advs, ok2 := f64Data(adv)
@@ -56,8 +65,8 @@ func ppoClipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 			r := math.Exp(lns[i] - los[i])
 			a := advs[i]
 			surr1 := r * a
-			surr2 := math.Max(1-eps, math.Min(1+eps, r)) * a
-			total += math.Min(surr1, surr2)
+			surr2 := fmath.Max(1-eps, fmath.Min(1+eps, r)) * a
+			total += fmath.Min(surr1, surr2)
 		}
 	} else {
 		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
@@ -65,8 +74,8 @@ func ppoClipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 			r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
 			a := adv.AtF64(i)
 			surr1 := r * a
-			surr2 := math.Max(1-eps, math.Min(1+eps, r)) * a
-			total += math.Min(surr1, surr2)
+			surr2 := fmath.Max(1-eps, fmath.Min(1+eps, r)) * a
+			total += fmath.Min(surr1, surr2)
 		}
 	}
 	out := tensor.NewOn(ctx.Device(), lpNew.Dtype(), tensor.Shape{})

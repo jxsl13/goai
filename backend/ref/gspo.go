@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -55,6 +56,14 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	// exp/clip. AtF64 fallback for exotic dtypes.
 	var sum float64
 	off := 0
+	// MIN AND MAX THROUGH internal/fmath, NOT math. On arm64 math.Min compiles to a CALL into
+	// math.archMin inside a 48-byte frame; the min builtin compiles to a single FMIND. They are
+	// not interchangeable — math.Min documents -Inf as beating NaN and the builtin propagates
+	// NaN — and the difference is REACHABLE here, not theoretical: a log-probability of -Inf
+	// makes the ratio exactly +0, and +0 times an infinite advantage is the NaN that pairs with
+	// the -Inf the other surrogate branch produces. fmath takes the instruction and consults
+	// math only when the instruction returns NaN, which is the only result the two can disagree
+	// on, so the loss is bit-identical.
 	nf, nok := f64Data(lpNew)
 	of, ook := f64Data(lpOld)
 	if nok && ook {
@@ -65,7 +74,7 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 			}
 			s := math.Exp(d / float64(l))
 			a := adv.AtF64(i)
-			surr := math.Min(s*a, math.Max(1-eps, math.Min(1+eps, s))*a)
+			surr := fmath.Min(s*a, fmath.Max(1-eps, fmath.Min(1+eps, s))*a)
 			sum += surr
 			off += l
 		}
@@ -77,7 +86,7 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 			}
 			s := math.Exp(d / float64(l))
 			a := adv.AtF64(i)
-			surr := math.Min(s*a, math.Max(1-eps, math.Min(1+eps, s))*a)
+			surr := fmath.Min(s*a, fmath.Max(1-eps, fmath.Min(1+eps, s))*a)
 			sum += surr
 			off += l
 		}

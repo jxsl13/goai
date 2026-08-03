@@ -234,7 +234,8 @@ var checks = []check{
 	{"PS3074", "inner-loop-ranges-over-a-shared-operand", "an item loop whose INNER loop ranges over an operand that does not vary with the item, so the whole operand is re-streamed once per item while the body writes per-item output. Jam the item loop — 4 items per pass over one traversal of the shared operand, each item keeping its own accumulators; a shared accumulator stays bit-identical by being held in a local across the 4 additions in the same ascending item order. MEASURED on the cpu attention backward, whose two key loops re-streamed the gradient row and the query row: BenchmarkMHA512/bwd/cpu 24.73 to 13.40 ms, -45.8%% (1.85x), forward and masked cells flat as controls. THIS IS THE SHAPE PS6010 CANNOT SEE — it requires the shared operand to appear as an INDEX expression, and a range subject never does, which is why the line holding 39%% of that benchmark was reported by nothing", false},
 	{"PS3075", "inner-loop-accumulates-into-a-shared-buffer", "an item loop whose INNER loop accumulates into a buffer that does not vary with the item, so every item makes a full load-store round trip through that buffer for one addition each. Jam the item loop — 4 items per pass, holding the accumulator element in a local across their four additions and storing once. BIT-IDENTICAL when the additions keep the same ascending item order. MEASURED on the cpu selective-attention kernel, where this weighted-sum loop was 26%% of the profile and a score loop in the same function 46%%: MHASelectF32CPU_1024x1024x64x16 191.3 to 100.9 ms, -47.3%% (1.90x), the 512 cell -42.7%%, the F64 arm -40.1%%, masked cell flat as a control. THE MIRROR OF PS3074 — there the inner loop SUBJECT is shared and the outputs per item; here the outputs are shared and the subject per item — and neither is reachable from PS6010", false},
 	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
-	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
+	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. TRY internal/fmath FIRST (see PS3082) — it keeps the exact contract, is a smaller edit and measured faster than a chain (40.5 us against 63.6); the chain is the fallback for when the call is already gone. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
+	{"PS3082", "minmax-call-in-a-loop", "math.Min or math.Max called inside a loop. On arm64 math.Min compiles to CALL math.archMin inside a 48-byte frame with a stack-growth check; the min builtin compiles to a single FMIND in a leaf with no frame. THE TWO ARE NOT THE SAME FUNCTION and substituting raw is a real bug: math.Max documents +Inf as beating NaN and math.Min documents -Inf as beating NaN, while the builtins propagate NaN, so they disagree on exactly four ordered pairs. USE internal/fmath, which takes the instruction and consults math only when the instruction returns NaN — the only result the two can disagree on. MEASURED on the reference RL surrogates: PPOClip at batch 4096 100.5 to 41.6 us (-58.7%%), GRPO 126.7 to 79.8 (-37.0%%), GSPO 21.6 to 19.8 (-8.4%%, one clamp per sequence against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON CHAIN — converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%, and was reverted: this replaces CALLS, not branchless code. GATE IT ON ONE PLANTED VALUE PER CALL: a kernel that reduces to a scalar cannot see the divergence, because one NaN poisons the sum and both formulations then agree on NaN", false},
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
 	{"PS3080", "one-dimensional-accessor-walk", "a loop making 3 or more AtF64/SetF64 calls per element, each indexed by the loop variable ALONE. PS1005 reports the multi-dimensional version and declines this one — it requires 2 or more index arguments — so a rank-1 walk is invisible to it. MEASURED on the PPO clipped-surrogate backward, 4 such calls per element and NO benchmark until one was written: BenchmarkPPOVJP_65536 2000 to 680 microseconds and the 4096 cell 124 to 42, both -66%% (2.9x). Take the typed slice once when every operand is already the right dtype and KEEP the accessor arm, because the output dtype follows the input. The 2 arms cannot be compared as equal bits — the accessor arm stores float32 where the typed one stores float64 — so what must hold is that the accessor result equals the typed one rounded once", false},
@@ -1390,6 +1391,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sharedAccumulatorFindings(fset, fn)...)
 		out = append(out, narrowUnrollFindings(fset, fn)...)
 		out = append(out, clampInLoopFindings(fset, fn)...)
+		out = append(out, minMaxCallInLoopFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
 		out = append(out, accessorWalk1DFindings(fset, f, fn)...)
@@ -19233,7 +19235,8 @@ func clampInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 						" quantizer, whose profile was 29%% archMin and archMax against 35%% of"+
 						" its own arithmetic: replacing the clamp with a comparison chain took"+
 						" BenchmarkHQQuantize from 77.14 to 37.79 ms, -51.0%% (2.04x), with an"+
-						" optimizer benchmark flat as a control. WRITE THE CHAIN THAT IS ACTUALLY"+
+						" optimizer benchmark flat as a control. TRY internal/fmath FIRST (see PS3082): it keeps the exact math.Min/math.Max contract, is a smaller edit than a chain, and measured FASTER than one — 40.5 us against the chain's 63.6 on the reference PPO surrogate. The chain below is what you fall back to when the call is already gone: converting an EXISTING chain to fmath measured +13%% and was reverted."+
+						" WRITE THE CHAIN THAT IS ACTUALLY"+
 						" EQUIVALENT, not the obvious one: use `if r <= lo { r = lo }`, because"+
 						" `<` lets a NEGATIVE ZERO through where math.Max(0, -0) returns +0, and"+
 						" leave NaN to fall through both bounds untouched, which is what math.Min"+
@@ -19246,6 +19249,88 @@ func clampInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				})
 				return false
 			}
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// --- PS3082: a math.Min/math.Max CALL inside a loop -------------------------------------------
+
+// builtinMinMaxArgs renders the argument pair of every builtin min/max call in fn. A function
+// that already guards a builtin with a math call — take the instruction, fall back on NaN —
+// contains both spellings of the same pair, and the math one is the recovery, not the waste.
+func builtinMinMaxArgs(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || len(c.Args) != 2 {
+			return true
+		}
+		if name := identName(c.Fun); name != "min" && name != "max" {
+			return true
+		}
+		out[exprText(c.Args[0])+","+exprText(c.Args[1])] = true
+		return true
+	})
+	return out
+}
+
+// minMaxCallInLoopFindings flags PS3082 — math.Min or math.Max called inside a loop, where the
+// builtin lowers to one instruction and the math function does not lower at all.
+func minMaxCallInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	guarded := builtinMinMaxArgs(fn)
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			me, ok := m.(ast.Expr)
+			if !ok {
+				return true
+			}
+			which, c, ok := mathMinMaxCall(me)
+			if !ok || len(c.Args) != 2 {
+				return true
+			}
+			if guarded[exprText(c.Args[0])+","+exprText(c.Args[1])] {
+				// Already the guarded form: the builtin runs, and this call is the NaN recovery.
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(c.Pos()),
+				category: "minmax-call-in-a-loop",
+				msg: fmt.Sprintf("math.%s inside a loop is a CALL, not an instruction. On arm64"+
+					" it compiles to CALL math.arch%s inside a 48-byte frame with a"+
+					" stack-growth check, while the %s builtin compiles to a single F%sD in a"+
+					" leaf with no frame at all. THE TWO ARE NOT THE SAME FUNCTION, so"+
+					" substituting the builtin raw is a real bug and not a style change:"+
+					" math.Max documents +Inf as beating NaN and math.Min documents -Inf as"+
+					" beating NaN, while the builtins propagate NaN unconditionally, and they"+
+					" disagree on exactly four ordered pairs. THE DIVERGENCE IS REACHABLE, not"+
+					" theoretical — a log-probability of -Inf makes a ratio exactly +0, and +0"+
+					" times an infinite advantage is the NaN that pairs with the -Inf the other"+
+					" branch produces. USE internal/fmath: it takes the instruction and consults"+
+					" math only when the instruction returns NaN, which is the only result the"+
+					" two can disagree on, so it is bit-identical. MEASURED on the reference RL"+
+					" surrogates: PPOClip at batch 4096 100.5 to 41.6 us (-58.7%%), GRPO 126.7"+
+					" to 79.8 (-37.0%%), GSPO 21.6 to 19.8 (-8.4%%, one clamp per sequence"+
+					" against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON"+
+					" CHAIN: converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%,"+
+					" and was reverted — this replaces CALLS, not branchless code, so rank a"+
+					" site by whether the call is still there. GATE IT ON ONE PLANTED VALUE PER"+
+					" CALL: a kernel that reduces to a scalar CANNOT see the divergence, because"+
+					" one NaN poisons the sum and both formulations then agree on NaN — a"+
+					" whole-grid batch was green under the naive rewrite this check exists to"+
+					" reject",
+					which, which, strings.ToLower(which), strings.ToUpper(which)),
+			})
 			return true
 		})
 		return true
