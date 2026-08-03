@@ -89,9 +89,50 @@ func GatedLinearAttention(ctx *backend.Context, q, k, v, gate *tensor.Tensor) (*
 				for j := range dv {
 					orow[j] = 0
 				}
-				for i := range dk {
-					qi := qrow[i]
-					base := i * dv
+				// EIGHT KEY ROWS PER PASS. orow does not vary with i, so this loop loaded and stored the
+				// whole output row once per key row for one multiply-add each; eight at a time hold
+				// orow[j] in a register across eight of them. BIT-IDENTICAL: orow[j] still sums i
+				// ascending, into an EXPLICIT LOCAL rather than a compound assignment over a sum of eight
+				// products, which would associate differently (T1183).
+				//
+				// THE STATE UPDATE ABOVE IS DELIBERATELY LEFT ALONE. `S*gi + ki*v` adds TWO products, so
+				// two fused-multiply-add contractions are legal and the compiler's pick does not survive
+				// the restructuring — measured on RetNet and on Mamba-2's SSD, where jamming the same
+				// shape moved every digest (PS3084, T1189, T1190). This loop adds ONE product.
+				ib := 0
+				for ; ib+7 < dk; ib += 8 {
+					q0 := qrow[ib+0]
+					q1 := qrow[ib+1]
+					q2 := qrow[ib+2]
+					q3 := qrow[ib+3]
+					q4 := qrow[ib+4]
+					q5 := qrow[ib+5]
+					q6 := qrow[ib+6]
+					q7 := qrow[ib+7]
+					r0 := S[(ib+0)*dv : (ib+0)*dv+dv]
+					r1 := S[(ib+1)*dv : (ib+1)*dv+dv]
+					r2 := S[(ib+2)*dv : (ib+2)*dv+dv]
+					r3 := S[(ib+3)*dv : (ib+3)*dv+dv]
+					r4 := S[(ib+4)*dv : (ib+4)*dv+dv]
+					r5 := S[(ib+5)*dv : (ib+5)*dv+dv]
+					r6 := S[(ib+6)*dv : (ib+6)*dv+dv]
+					r7 := S[(ib+7)*dv : (ib+7)*dv+dv]
+					for j := range dv {
+						acc := orow[j]
+						acc += q0 * r0[j]
+						acc += q1 * r1[j]
+						acc += q2 * r2[j]
+						acc += q3 * r3[j]
+						acc += q4 * r4[j]
+						acc += q5 * r5[j]
+						acc += q6 * r6[j]
+						acc += q7 * r7[j]
+						orow[j] = acc
+					}
+				}
+				for ; ib < dk; ib++ {
+					qi := qrow[ib]
+					base := ib * dv
 					for j := range dv {
 						orow[j] += qi * S[base+j]
 					}
