@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
 	{"PS3052", "staged-matrix-reduced-against-one-column", "a buffer filled by one call and consumed by the very next, where the consumer output width is a variable the function never branches on. At width one the staged buffer exists only to be reduced against a SINGLE vector — every value written once and read once, when it could have come straight from the source. ADD A FUSED PATH FOR WIDTH ONE, visiting the same elements in the same order into one accumulator. MEASURED on conv2d, whose im2col matrix writes c*kh*kw values per output pixel: with one output filter the fill was 12.7%% of a multi-token-attention forward against 6.7%% for the GEMM it fed, and fusing took a 256x256 3x3 single-filter convolution down 22.1%% and the forward 3.6%%. MIND THE ZEROS THE STAGING HOLDS — conv2d columns carry zeros for padded taps and the GEMM adds them, so the fused path is exact only without padding; gate on that and test BOTH sides. THE GAIN IS IN THE SHORT KERNELS: 22.1%% at 3x3 against 4.3%% at 6x11, where the staged read was already long enough to amortize", false},
@@ -1326,6 +1327,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, stagedSingleColumnFindings(fset, fn)...)
 		out = append(out, independentReductionsFindings(fset, fn)...)
 		out = append(out, asymmetricDtypeArmFindings(fset, fn)...)
+		out = append(out, sortThenTruncateFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18134,6 +18136,97 @@ func asymmetricDtypeArmFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding
 				" is usually the faster one, but a helper that reassociates may be gated to a"+
 				" tolerance the other dtype does not have, in which case the scalar arm is correct"+
 				" and needs an EXACT grouping rather than the same call", plain, helper),
+		})
+		return true
+	})
+	return out
+}
+
+// --- PS3055: a full sort whose result is immediately truncated --------------------------------
+
+// sortThenTruncate returns the slice a block sorts and then cuts down to a prefix, together with
+// the bound it cuts to.
+func sortThenTruncate(blk *ast.BlockStmt) (name, bound string, pos token.Pos) {
+	for i := 0; i+1 < len(blk.List); i++ {
+		es, ok := blk.List[i].(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		call, ok := unparen(es.X).(*ast.CallExpr)
+		if !ok || len(call.Args) == 0 {
+			continue
+		}
+		switch calleeName(call.Fun) {
+		case "SortFunc", "SortStableFunc", "Sort", "Slice", "SliceStable":
+		default:
+			continue
+		}
+		sorted := identName(call.Args[0])
+		if sorted == "" {
+			continue
+		}
+		// The very next statement — possibly guarded by a length test — reslices it to a prefix.
+		next := blk.List[i+1]
+		if ifs, ok := next.(*ast.IfStmt); ok && ifs.Body != nil && len(ifs.Body.List) == 1 {
+			next = ifs.Body.List[0]
+		}
+		as, ok := next.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 || identName(as.Lhs[0]) != sorted {
+			continue
+		}
+		se, ok := unparen(as.Rhs[0]).(*ast.SliceExpr)
+		if !ok || se.Low != nil || se.High == nil || identName(se.X) != sorted {
+			continue
+		}
+		if b := renderExpr(se.High); b != "" && b != "len("+sorted+")" {
+			return sorted, b, call.Pos()
+		}
+	}
+	return "", "", token.NoPos
+}
+
+// sortThenTruncateFindings flags PS3055 — a slice sorted in full and then cut to a small prefix.
+// Everything below the cut was ordered for nothing.
+//
+// MEASURED on diverse beam search, which sorted every beam's whole vocabulary expansion to keep a
+// handful: BenchmarkDiverseBeamSearch/cheap fell 90.5% and /realistic 42.7%.
+func sortThenTruncateFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		// Every block, not the first: a function can sort-and-cut in a nested loop AND again at
+		// the end, and stopping at the first hit reported the cheap outer one while hiding the
+		// per-step selection inside the loop, which is the one that costs.
+		name, bound, pos := sortThenTruncate(blk)
+		if name == "" {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "sort-then-truncate",
+			msg: fmt.Sprintf("%q is sorted in FULL and then cut to %s. Everything past the cut was"+
+				" ordered for nothing: the sort is O(n log n) in the candidates and only %s of them"+
+				" survive. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best %s"+
+				" in O(n log %s), and sorting just those at the end reproduces the prefix exactly."+
+				" BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — then the kept set and"+
+				" its order are uniquely determined, so any method that finds them yields the same"+
+				" slice. Check that first: with genuine ties a heap and a sort can disagree about"+
+				" WHICH equal element is kept, and the fix needs the tie-break made explicit before"+
+				" it is exact. MEASURED on diverse beam search, which sorted every beam's whole"+
+				" vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell"+
+				" 90.5%% and /realistic 42.7%%, with plain beam search beside them unmoved. GATE THE"+
+				" ORDER, NOT JUST THE SET: leaving the survivors in heap order rather than sorted"+
+				" passed every existing test of the measured site, because the final result is"+
+				" re-sorted before return and the permutation only shows up through which"+
+				" candidates survive the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the"+
+				" input's array, or the pushes overwrite entries not yet read", name, bound, bound,
+				bound, bound),
 		})
 		return true
 	})
