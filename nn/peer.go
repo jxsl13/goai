@@ -378,40 +378,56 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 			indices[t] = append(indices[t], flatIdx[t]...)
 		}
 
-		// Differentiable gate scores: for slot c, gather s1[t,i_c]+s2[t,j_c] via a
-		// one-hot selection matrix (keeps the score on the tape → grad to K1/K2/Wq).
-		scoreCols := make([]*tensor.Tensor, p.topK)
-		for c := range p.topK {
-			oh1 := tensor.New(s1.Dtype(), s1.Shape())
-			oh2 := tensor.New(s2.Dtype(), s2.Shape())
+		// Differentiable gate scores: for slot c the score is s1[t,i_c]+s2[t,j_c].
+		var scores *tensor.Tensor
+		if ctx.Recorder == nil {
+			// Fused inference gather. The one-hot path below computes, for each slot,
+			// Σ_i s1[t,i]·1{i=i_c} = s1[t,i_c] (every other term is s·0 = 0 exactly for
+			// finite scores, and x+0 = x in IEEE), then adds the two halves. Gathering
+			// s1[t,i_c]+s2[t,j_c] directly is bit-identical yet O(topK·T) instead of
+			// O(topK·T·n) with no [T,n] one-hot allocations (n≈√N is large: PEER §V16.4a).
+			scores = tensor.New(s1.Dtype(), tensor.Shape{tks, p.topK})
 			for t := range tks {
-				oh1.SetF64(1, t, sub1Idx[t][c])
-				oh2.SetF64(1, t, sub2Idx[t][c])
+				for c := range p.topK {
+					scores.SetF64(s1.AtF64(t, sub1Idx[t][c])+s2.AtF64(t, sub2Idx[t][c]), t, c)
+				}
 			}
-			sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
+		} else {
+			// Recording path: keep the one-hot selection on the tape so the gathered
+			// score carries gradient back to K1/K2/Wq.
+			scoreCols := make([]*tensor.Tensor, p.topK)
+			for c := range p.topK {
+				oh1 := tensor.New(s1.Dtype(), s1.Shape())
+				oh2 := tensor.New(s2.Dtype(), s2.Shape())
+				for t := range tks {
+					oh1.SetF64(1, t, sub1Idx[t][c])
+					oh2.SetF64(1, t, sub2Idx[t][c])
+				}
+				sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			scores, err = p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, scoreCols...) // [T,k]
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
-			if err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		scores, err := p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, scoreCols...) // [T,k]
-		if err != nil {
-			return nil, nil, nil, err
 		}
 		gh, err := p.exec(ctx, backend.OpSoftmax, nil, scores) // [T,k] softmax over the k selected
 		if err != nil {
