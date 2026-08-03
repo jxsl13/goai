@@ -366,11 +366,32 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 	}
 	src, dst := order, b.radixTmpI[:n]
 	srcK, dstK := k, b.radixTmpK[:n]
-	var count [256]int
-	for shift := uint(0); shift < 64; shift += 8 {
-		count = [256]int{}
-		for _, u := range srcK {
-			count[(u>>shift)&0xff]++
+	// ALL EIGHT HISTOGRAMS IN ONE TRAVERSAL, so a pass whose byte is CONSTANT can be skipped.
+	// A counting pass in which every key lands in the same bucket is the identity permutation —
+	// a stable sort emits them in the order it read them — so skipping it changes nothing, and
+	// the sorted order is the same permutation the eight-pass form produced.
+	//
+	// It pays because these keys are float64 bit patterns of one feature column: the sign and
+	// exponent bytes barely move within a node, and deeper in the tree the high mantissa bytes
+	// stop moving too. The single traversal is also cheaper than eight separate counting reads
+	// of the same memory.
+	var hist [8][256]int
+	for _, u := range srcK {
+		hist[0][u&0xff]++
+		hist[1][(u>>8)&0xff]++
+		hist[2][(u>>16)&0xff]++
+		hist[3][(u>>24)&0xff]++
+		hist[4][(u>>32)&0xff]++
+		hist[5][(u>>40)&0xff]++
+		hist[6][(u>>48)&0xff]++
+		hist[7][(u>>56)&0xff]++
+	}
+	passes := 0
+	for p := range 8 {
+		shift := uint(p * 8)
+		count := hist[p]
+		if count[(srcK[0]>>shift)&0xff] == n {
+			continue // every key in one bucket: this pass is the identity
 		}
 		sum := 0
 		for i := range count {
@@ -380,16 +401,21 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		}
 		for i, u := range srcK {
 			bkt := (u >> shift) & 0xff
-			p := count[bkt]
+			q := count[bkt]
 			count[bkt]++
-			dst[p] = src[i]
-			dstK[p] = u
+			dst[q] = src[i]
+			dstK[q] = u
 		}
 		src, dst = dst, src
 		srcK, dstK = dstK, srcK
+		passes++
 	}
-	// 8 (even) passes ⇒ src is again the caller's `order` slice, now holding the
-	// sorted indices; no final copy needed.
+	// The eight-pass form always ended on the caller's own slice because eight is even. With
+	// passes skipped the count can be ODD, and then the sorted indices are in the scratch —
+	// copy them home, which the caller's contract requires.
+	if passes%2 == 1 {
+		copy(order, src)
+	}
 }
 
 func (b *cartBuilder) initColumns(n, d int) {

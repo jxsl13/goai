@@ -235,6 +235,7 @@ var checks = []check{
 	{"PS3075", "inner-loop-accumulates-into-a-shared-buffer", "an item loop whose INNER loop accumulates into a buffer that does not vary with the item, so every item makes a full load-store round trip through that buffer for one addition each. Jam the item loop — 4 items per pass, holding the accumulator element in a local across their four additions and storing once. BIT-IDENTICAL when the additions keep the same ascending item order. MEASURED on the cpu selective-attention kernel, where this weighted-sum loop was 26%% of the profile and a score loop in the same function 46%%: MHASelectF32CPU_1024x1024x64x16 191.3 to 100.9 ms, -47.3%% (1.90x), the 512 cell -42.7%%, the F64 arm -40.1%%, masked cell flat as a control. THE MIRROR OF PS3074 — there the inner loop SUBJECT is shared and the outputs per item; here the outputs are shared and the subject per item — and neither is reachable from PS6010", false},
 	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
 	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
+	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1386,6 +1387,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sharedAccumulatorFindings(fset, fn)...)
 		out = append(out, narrowUnrollFindings(fset, fn)...)
 		out = append(out, clampInLoopFindings(fset, fn)...)
+		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18546,6 +18548,90 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 		return true
 	})
 	return seen && all
+}
+
+// --- PS3078: a radix pass that cannot be skipped ---------------------------------------------
+
+// hasTwoDimArray reports whether fn declares a [N][M] array — the all-passes histogram that
+// makes a uniform-pass skip possible.
+func hasTwoDimArray(fn *ast.FuncDecl) bool {
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		at, ok := n.(*ast.ArrayType)
+		if !ok || at.Len == nil {
+			return true
+		}
+		if inner, ok := at.Elt.(*ast.ArrayType); ok && inner.Len != nil {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
+// radixPassFindings flags PS3078 — a byte-wise radix loop that builds its histogram inside the
+// pass, so it cannot know that a pass is the identity and skip it.
+func radixPassFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || hasTwoDimArray(fn) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		f, ok := n.(*ast.ForStmt)
+		if !ok || f.Body == nil {
+			return true
+		}
+		as, ok := f.Post.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+			return true
+		}
+		// A STRIDE OF EIGHT OVER A SHIFT is what makes this a byte-wise radix rather than any
+		// other blocked loop; the same stride on an index is PS3076's business.
+		if lit, ok := as.Rhs[0].(*ast.BasicLit); !ok || lit.Value != "8" {
+			return true
+		}
+		shift := identName(as.Lhs[0])
+		if shift == "" {
+			return true
+		}
+		found := false
+		ast.Inspect(f.Body, func(m ast.Node) bool {
+			if found {
+				return false
+			}
+			inc, ok := m.(*ast.IncDecStmt)
+			if !ok || inc.Tok != token.INC {
+				return true
+			}
+			ix, ok := inc.X.(*ast.IndexExpr)
+			if !ok || !mentionsIdent(ix.Index, shift) {
+				return true
+			}
+			found = true
+			out = append(out, finding{
+				pos:      fset.Position(f.Pos()),
+				category: "radix-pass-cannot-be-skipped",
+				msg: fmt.Sprintf("this byte-wise radix builds its histogram INSIDE the pass over"+
+					" %q, so it can never learn that a pass is the identity. A counting pass in"+
+					" which every key lands in one bucket emits them in the order it read them,"+
+					" so it can be SKIPPED and the sorted order is the same permutation — build"+
+					" all eight histograms in ONE traversal, skip any pass whose bucket holds"+
+					" every key, and copy home when the surviving pass count comes out ODD,"+
+					" which the fixed eight-pass form never had to do. MEASURED on the CART"+
+					" builder, where the per-feature radix was 24%% of the profile:"+
+					" BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, winning every paired round,"+
+					" with GBMFit and the SVC cells flat. IT PAYS ON THE DATA, NOT ON THE CODE —"+
+					" the keys there are float64 bit patterns of one feature column, whose sign"+
+					" and exponent bytes barely move within a node and whose high mantissa bytes"+
+					" stop moving deeper in the tree. A column of full-entropy keys skips"+
+					" nothing and the single traversal is then the only gain, so measure the"+
+					" caller rather than assuming the shape pays", shift),
+			})
+			return false
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3077: a math.Min/math.Max clamp inside a loop -----------------------------------------
