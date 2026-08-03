@@ -53,3 +53,6 @@ WHEN a CPU profile attributes a large share to the allocator or the scavenger, t
 
 ## POOL-WAIT-IS-DISTINGUISHED-FROM-SCHEDULER-IDLE-001
 WHEN a profile shows most time in pthread_cond_wait, the optimizer SHALL peeks its callers before blaming the worker pool: stopm from findRunnable is the Go scheduler parking idle threads for want of work, not contention, and the batched ViT forward reads as 65 percent wait for that reason while a 3-point sweep of the pool dense-gap moved it 0.4 percent.
+
+## THE-BAND-GEMM-HOLDS-C-ACROSS-TWO-B-ROWS-001
+The cpu band GEMM SHALL holds each destination element in a register across TWO source rows in its 4x4 block and FOUR in its single-row tail, adding contributions separately to stay bit-identical; the transform took matmul 35 to 37 percent, conv 21, multi-token attention 28 and 3 vision forwards 17 to 21.
