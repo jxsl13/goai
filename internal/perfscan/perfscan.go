@@ -1391,7 +1391,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
-		out = append(out, accessorWalk1DFindings(fset, fn)...)
+		out = append(out, accessorWalk1DFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3122,6 +3122,7 @@ func main() {
 	collectThresholdUse(fset, parsed)
 	collectReductionHelpers(parsed)
 	collectAllocGathers(parsed)
+	collectTypedExposers(parsed)
 	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
@@ -18557,12 +18558,16 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 
 // --- PS3080: a one-dimensional per-element accessor walk -------------------------------------
 
-// hasTypedStorageAccess reports whether fn reads a tensor's storage directly — the fast path
-// whose presence means the accessor loop beside it is a deliberate fallback.
-func hasTypedStorageAccess(fn *ast.FuncDecl) bool {
+// typedExposerReg keys package -> function name for the helpers that EXPOSE a tensor as a typed
+// slice: their body reads Storage().F64/F32 and they return a slice. A fast path often goes
+// through one of these rather than touching storage inline.
+var typedExposerReg = map[string]map[string]bool{}
+
+// bodyTouchesTypedStorage reports whether n contains a Storage().F64/F32 read.
+func bodyTouchesTypedStorage(n ast.Node) bool {
 	found := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		sel, ok := n.(*ast.SelectorExpr)
+	ast.Inspect(n, func(m ast.Node) bool {
+		sel, ok := m.(*ast.SelectorExpr)
 		if !ok || found {
 			return !found
 		}
@@ -18577,10 +18582,66 @@ func hasTypedStorageAccess(fn *ast.FuncDecl) bool {
 	return found
 }
 
+// collectTypedExposers pre-scans every package for those helpers.
+func collectTypedExposers(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || fn.Name == nil || fn.Type.Results == nil {
+				continue
+			}
+			slice := false
+			for _, r := range fn.Type.Results.List {
+				if _, ok := r.Type.(*ast.ArrayType); ok {
+					slice = true
+				}
+			}
+			if !slice || !bodyTouchesTypedStorage(fn.Body) {
+				continue
+			}
+			if typedExposerReg[f.Name.Name] == nil {
+				typedExposerReg[f.Name.Name] = map[string]bool{}
+			}
+			typedExposerReg[f.Name.Name][fn.Name.Name] = true
+		}
+	}
+}
+
+// hasTypedStorageAccess reports whether fn already has a typed fast path — the presence of which
+// means the accessor loop beside it is a deliberate fallback.
+//
+// A LITERAL Storage().F64() IS NOT THE ONLY FORM, and testing only for it made this check report
+// five reference kernels whose fast path goes through a package helper (f64Data) instead. Their
+// accessor loops sit in an else branch labelled as the fallback for dtypes that helper cannot
+// expose — already-converted code, which is the worst thing a check can send a reader to.
+func hasTypedStorageAccess(f *ast.File, fn *ast.FuncDecl) bool {
+	if bodyTouchesTypedStorage(fn.Body) {
+		return true
+	}
+	if f.Name == nil {
+		return false
+	}
+	reg := typedExposerReg[f.Name.Name]
+	if len(reg) == 0 {
+		return false
+	}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && reg[calleeName(c.Fun)] {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
 // accessorWalk1DFindings flags PS3080 — a loop calling AtF64 or SetF64 with a SINGLE index that
 // is the loop variable, in a function that never touches typed storage.
-func accessorWalk1DFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
-	if fn.Body == nil || hasTypedStorageAccess(fn) {
+func accessorWalk1DFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || hasTypedStorageAccess(f, fn) {
 		return nil
 	}
 	var out []finding
@@ -18637,7 +18698,12 @@ func accessorWalk1DFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 				" dtype follows the input here, so the fallback is not optional. THE TWO ARMS"+
 				" CANNOT BE COMPARED AS EQUAL BITS: the accessor arm stores float32 where the"+
 				" typed arm stores float64, so what must hold is that the accessor result equals"+
-				" the typed one rounded ONCE", calls, iv),
+				" the typed one rounded ONCE. WHEN SEVERAL RULES IN A PACKAGE SHARE THE SHAPE,"+
+				" GIVE THEM ONE WALKER rather than one typed arm each, and hand it CONTIGUOUS"+
+				" SLICES: the preference-optimization backwards went that way at -49.8%% to"+
+				" -86.6%% each, and a first version calling the rule once per element cost half"+
+				" of it — CPO 1888.6 to 1208.8 microseconds against 1888.6 to 817.2 with slices."+
+				" One walker also means ONE arms-agreement test instead of one per rule", calls, iv),
 		})
 		return true
 	})
