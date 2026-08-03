@@ -161,8 +161,8 @@ func (rd *reader) valueDepth(vt uint32, depth int) (any, error) {
 	}
 	switch vt {
 	case vtU8, vtI8, vtBool:
-		var b [1]byte
-		if err := rd.read(b[:]); err != nil {
+		b := rd.num[:1] // receiver scratch: a local array escapes into rd.read (§PS3071)
+		if err := rd.read(b); err != nil {
 			return nil, err
 		}
 		switch vt {
@@ -173,11 +173,11 @@ func (rd *reader) valueDepth(vt uint32, depth int) (any, error) {
 		}
 		return b[0], nil
 	case vtU16, vtI16:
-		var b [2]byte
-		if err := rd.read(b[:]); err != nil {
+		b := rd.num[:2] // receiver scratch, as above
+		if err := rd.read(b); err != nil {
 			return nil, err
 		}
-		v := binary.LittleEndian.Uint16(b[:])
+		v := binary.LittleEndian.Uint16(b)
 		if vt == vtI16 {
 			return int16(v), nil
 		}
