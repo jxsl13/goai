@@ -319,6 +319,21 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
 		// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
 		// (the tail handles m<8).
+		//
+		// THE f32->f64 CONVERSIONS ARE NOT A COST — MEASURED, AND THE ATTEMPT LOST. This loop
+		// converts eight activation elements and one weight element per step, and it runs once
+		// per OUTPUT COLUMN, so an f32 activation matrix is converted n times over. Pre-widening
+		// it once into an m*k f64 buffer removes all of that and measured WORSE:
+		// BenchmarkQuantMamba2Prefill_512 273.5 to 284.1 ms, +3.9%, with decode flat. The loop
+		// is LOAD-bound, so doubling the activation bytes costs more than the conversions saved;
+		// a widening instruction rides in the load pipeline and is close to free.
+		//
+		// The lever that follows from that, and is NOT taken here: blocking over the OUTPUT
+		// COLUMN. Each step reads eight activation elements and one weight element to do eight
+		// FMAs; dequantizing two weight rows per call and computing two outputs per activation
+		// group would give sixteen FMAs for the same eight activation loads. It restructures the
+		// per-column fan-out unit rather than the loop body, so it wants its own round against
+		// the digest this file already carries.
 		switch {
 		case xf32 != nil:
 			mi := 0
