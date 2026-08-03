@@ -667,22 +667,34 @@ func (m *MemMemory) retrieveTile(qt [][]float64, headOff, headDim int, heaps []m
 		// pushed in ascending query order within a group, but the heaps are per query and
 		// independent, so that order was never observable.
 		j := 0
-		for ; j+3 < len(qt); j += 4 {
+		for ; j+7 < len(qt); j += 8 {
 			q0 := qt[j+0][:len(row)] // len equality is what elides the bounds check on q[d]
 			q1 := qt[j+1][:len(row)]
 			q2 := qt[j+2][:len(row)]
 			q3 := qt[j+3][:len(row)]
-			var s0, s1, s2, s3 float64
+			q4 := qt[j+4][:len(row)]
+			q5 := qt[j+5][:len(row)]
+			q6 := qt[j+6][:len(row)]
+			q7 := qt[j+7][:len(row)]
+			var s0, s1, s2, s3, s4, s5, s6, s7 float64
 			for d, rv := range row {
 				s0 += q0[d] * rv
 				s1 += q1[d] * rv
 				s2 += q2[d] * rv
 				s3 += q3[d] * rv
+				s4 += q4[d] * rv
+				s5 += q5[d] * rv
+				s6 += q6[d] * rv
+				s7 += q7[d] * rv
 			}
 			heaps[j+0].push(memEnt{i, s0})
 			heaps[j+1].push(memEnt{i, s1})
 			heaps[j+2].push(memEnt{i, s2})
 			heaps[j+3].push(memEnt{i, s3})
+			heaps[j+4].push(memEnt{i, s4})
+			heaps[j+5].push(memEnt{i, s5})
+			heaps[j+6].push(memEnt{i, s6})
+			heaps[j+7].push(memEnt{i, s7})
 		}
 		for ; j < len(qt); j++ {
 			q := qt[j][:len(row)]

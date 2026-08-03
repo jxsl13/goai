@@ -67,8 +67,10 @@ func TestDetectPS3076_NarrowUnroll(t *testing.T) {
 	}
 }
 
-// TestDetectPS3076_SilentOnAWiderStride pins that this is about the FACTOR. A loop already taking
-// four or six steps has had the choice made deliberately.
+// TestDetectPS3076_SilentOnAWiderStride pins that an INDEXED-accumulator jam is reported at two
+// and not beyond. At four that shape is the gemm C-row block, an axis already swept and closed —
+// two, six and eight rows all measured worse — so reporting it would be reporting a finished
+// experiment.
 func TestDetectPS3076_SilentOnAWiderStride(t *testing.T) {
 	src := replaceOnce(t, narrowUnrollFixture, "	for ; p+1 < k; p += 2 {", "	for ; p+3 < k; p += 4 {")
 	if fs := narrowUnrollFindingsIn(t, src); len(fs) != 0 {
@@ -111,5 +113,65 @@ func TestDetectPS3076_SilentWithoutHeldAccumulators(t *testing.T) {
 			c2[j] = c2[j] + a00*b0 + a01*b1`)
 	if fs := narrowUnrollFindingsIn(t, src); len(fs) != 0 {
 		t.Fatalf("%d findings, want 0 — nothing is held in a local:\n%s", len(fs), fs[0].msg)
+	}
+}
+
+// scalarChainFixture is the second measured shape: a jam whose accumulators are SCALAR locals
+// feeding a call rather than an indexed store, taken four at a time.
+const scalarChainFixture = `package p
+
+type heap struct{ v float64 }
+
+func (h *heap) push(x float64) { h.v += x }
+
+func retrieve(keys [][]float64, qt [][]float64, heaps []heap) {
+	for i := range keys {
+		row := keys[i]
+		j := 0
+		for ; j+3 < len(qt); j += 4 {
+			q0 := qt[j+0][:len(row)]
+			q1 := qt[j+1][:len(row)]
+			q2 := qt[j+2][:len(row)]
+			q3 := qt[j+3][:len(row)]
+			var s0, s1, s2, s3 float64
+			for d, rv := range row {
+				s0 += q0[d] * rv
+				s1 += q1[d] * rv
+				s2 += q2[d] * rv
+				s3 += q3[d] * rv
+			}
+			heaps[j+0].push(s0)
+			heaps[j+1].push(s1)
+			heaps[j+2].push(s2)
+			heaps[j+3].push(s3)
+		}
+	}
+}`
+
+// TestDetectPS3076_ScalarChainJamAtFour pins the second acceptance path. Four is simply what a
+// first jam produces, and nothing about it has been measured — the memory-retrieval tile was
+// exactly this shape at four, and eight measured 9.3%% faster with six and ten both WORSE than
+// four, which is the non-monotone curve no argument would have predicted.
+func TestDetectPS3076_ScalarChainJamAtFour(t *testing.T) {
+	fs := narrowUnrollFindingsIn(t, scalarChainFixture)
+	if len(fs) != 1 {
+		t.Fatalf("%d findings, want 1 — a scalar-chain jam at four is unswept", len(fs))
+	}
+}
+
+// TestDetectPS3076_SilentBelowThreeScalarChains pins the chain count for that path, the same way
+// the indexed path is pinned by its accumulator count.
+func TestDetectPS3076_SilentBelowThreeScalarChains(t *testing.T) {
+	src := replaceOnce(t, scalarChainFixture, `			var s0, s1, s2, s3 float64`,
+		`			var s0 float64
+			s1, s2, s3 := 0.0, 0.0, 0.0`)
+	src = replaceOnce(t, src, `				s1 += q1[d] * rv
+				s2 += q2[d] * rv
+				s3 += q3[d] * rv`, `				s1 = q1[d] * rv
+				s2 = q2[d] * rv
+				s3 = q3[d] * rv`)
+	if fs := narrowUnrollFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — one accumulating chain is not a jam to sweep:\n%s",
+			len(fs), fs[0].msg)
 	}
 }
