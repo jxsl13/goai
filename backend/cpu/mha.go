@@ -360,7 +360,44 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 					}
 				}
 			} else {
-				for j := jmin; j < jmax; j++ {
+				// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term reduction into one
+				// accumulator, so this loop is bound by the latency of a dependent add chain rather
+				// than by throughput; four keys give four independent chains that interleave, and
+				// each query element is loaded once for all four.
+				//
+				// Bit-identical: every score still sums its own terms in ascending d into its own
+				// accumulator, and the scale, the slope and the running maximum are applied to the
+				// keys in ascending j exactly as before.
+				j := jmin
+				for ; j+3 < jmax; j += 4 {
+					b0 := j * g.kvDM
+					k0 := k[b0+kvOff : b0+kvOff+dk : b0+kvOff+dk]
+					b1 := b0 + g.kvDM
+					k1 := k[b1+kvOff : b1+kvOff+dk : b1+kvOff+dk]
+					b2 := b1 + g.kvDM
+					k2 := k[b2+kvOff : b2+kvOff+dk : b2+kvOff+dk]
+					b3 := b2 + g.kvDM
+					k3 := k[b3+kvOff : b3+kvOff+dk : b3+kvOff+dk]
+					var s0, s1, s2, s3 float64
+					for d, qv := range qr {
+						q := float64(qv)
+						s0 += q * float64(k0[d])
+						s1 += q * float64(k1[d])
+						s2 += q * float64(k2[d])
+						s3 += q * float64(k3[d])
+					}
+					for o, sv := range [4]float64{s0, s1, s2, s3} {
+						sv *= g.scale
+						if g.slopes != nil {
+							sv += g.slopes[h] * float64(j+o-(g.off+i))
+						}
+						row[j+o] = sv
+						if sv > m {
+							m = sv
+						}
+					}
+				}
+				for ; j < jmax; j++ {
 					kBase := j*g.kvDM + kvOff
 					kr := k[kBase : kBase+dk : kBase+dk]
 					var s float64
