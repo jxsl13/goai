@@ -65,3 +65,6 @@ WHEN a blocked kernel can be called with its innermost dimension equal to one, t
 
 ## A-SINGLE-COLUMN-CONSUMER-MAKES-THE-STAGING-POINTLESS-001
 WHEN a buffer is filled by one call and reduced by the next against an output width that can be one, the optimizer SHALL adds a fused path for width one that visits the same elements in the same order into a single accumulator; on conv2d that took a 256x256 3x3 single-filter convolution down 22.1 percent, and only where padding is absent, because the staged zeros the reduce adds are not the same operation as skipping them.
+
+## INDEPENDENT-REDUCTIONS-INTERLEAVE-BIT-IDENTICALLY-001
+WHEN several items each reduce the same shared source into their own scalar, the optimizer SHALL takes 4 items per pass with 4 separate accumulators, which keeps every sum in its own ascending order and is therefore bit-identical unlike splitting ONE sum into partials; measured on the k-nearest-neighbour scan at 34.6 percent on MemForward_512 and 44.6 on MemGatherLarge.

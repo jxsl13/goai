@@ -657,8 +657,35 @@ const memGatherTile = 16
 func (m *MemMemory) retrieveTile(qt [][]float64, headOff, headDim int, heaps []memTopHeap, idxOut [][]int) {
 	for i := range m.keys {
 		row := m.keys[i][headOff:][:headDim]
-		for j, q := range qt {
-			q = q[:len(row)] // len equality is what elides the bounds check on q[d]
+		// FOUR QUERIES PER PASS OVER THE KEY ROW. Each score is a dot of headDim terms into ONE
+		// accumulator, so the loop is bound by the latency of that dependent add chain, not by
+		// throughput — the multiplies are free beside it. Four queries give four independent
+		// chains that interleave, and the key element is loaded once and used four times.
+		//
+		// Bit-identical: every score still sums its own terms in ascending d into its own
+		// accumulator, and each heap still sees the keys in ascending index order. The scores are
+		// pushed in ascending query order within a group, but the heaps are per query and
+		// independent, so that order was never observable.
+		j := 0
+		for ; j+3 < len(qt); j += 4 {
+			q0 := qt[j+0][:len(row)] // len equality is what elides the bounds check on q[d]
+			q1 := qt[j+1][:len(row)]
+			q2 := qt[j+2][:len(row)]
+			q3 := qt[j+3][:len(row)]
+			var s0, s1, s2, s3 float64
+			for d, rv := range row {
+				s0 += q0[d] * rv
+				s1 += q1[d] * rv
+				s2 += q2[d] * rv
+				s3 += q3[d] * rv
+			}
+			heaps[j+0].push(memEnt{i, s0})
+			heaps[j+1].push(memEnt{i, s1})
+			heaps[j+2].push(memEnt{i, s2})
+			heaps[j+3].push(memEnt{i, s3})
+		}
+		for ; j < len(qt); j++ {
+			q := qt[j][:len(row)]
 			var s float64
 			for d, rv := range row {
 				s += q[d] * rv

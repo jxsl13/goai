@@ -20,3 +20,6 @@ WHEN gating a reassociation-sensitive change whose result is stored at lower pre
 
 ## THE-NLP-RACE-SUITE-EXCEEDS-40-MINUTES-001
 IF go test ./nlp under the race detector reaches its timeout, THEN the implementer SHALL not read it as a regression signal: it ran past both the 10-minute default and an explicit 40-minute limit on the M2 Pro host with no assertion failure, because the package runs many 500-token generate tests and the race build multiplies them; gate instead on the package owning the edit (backend/cpu passes under -race in 113 seconds) plus the full non-race suite.
+
+## A-RANKING-ORACLE-NEEDS-AN-INDEX-DEPENDENT-MUTATION-001
+WHEN mutating a score to test a gate whose observable is a selection or ranking, the implementer SHALL makes the perturbation depend on the ranked dimension and large enough to reorder; a uniform scale or offset of one items scores changes no ranking at all, and 3 mutations designed that way read as green before the fourth reddened 4 tests.
