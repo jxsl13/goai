@@ -643,7 +643,7 @@ int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* 
     static size_t cPart = 0;
     int rc = -1;
     int group = qHeads / kvHeads;
-    if (hd != 64 || group > 8 || blockSize > 16 || splitK < 1 || splitK > 32) return -4;
+    if ((hd != 64 && hd != 128) || group > 8 || blockSize > 16 || splitK < 1 || splitK > 32) return -4;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto donesk; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donesk; }
@@ -661,7 +661,11 @@ int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* 
         "  float* shq = sh; float* shk = shq + group*hd; float* shv = shk + 32*hp;\n"
         "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
         "  float NEGINF = __int_as_float(0xff800000);\n"
-        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        // Each lane carries hd/32 output-vector elements (rr = 2 for hd=64, 4 for hd=128):
+        // element lane, lane+32, ... lane+(rr-1)*32. a2/a3 are unused (and the branches are
+        // uniform across the warp, no divergence) when hd==64.
+        "  int rr = hd >> 5;\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
         "  for (int base = begin; base < end; base += 32){\n"
         "    int nk = end - base; if (nk > 32) nk = 32;\n"
         "    __syncthreads();\n"
@@ -680,13 +684,13 @@ int cu_paged_decode_attn_gqa_sk(const void* dQ, const void* dPoolK, const void* 
         "      bm = __shfl_sync(0xffffffffu,bm,0);\n"
         "      float newm = m>bm?m:bm; float corr = __expf(m-newm); float p = (lane<nk)?__expf(s-newm):0.f;\n"
         "      float bl = p; for (int o=16;o>0;o>>=1) bl += __shfl_down_sync(0xffffffffu,bl,o); bl = __shfl_sync(0xffffffffu,bl,0);\n"
-        "      l = l*corr + bl; m = newm; a0 *= corr; a1 *= corr;\n"
-        "      for (int j=0;j<nk;j++){ float pj = __shfl_sync(0xffffffffu,p,j); const float* vr = shv + j*hp; a0 += pj*vr[lane]; a1 += pj*vr[lane+32]; }\n"
+        "      l = l*corr + bl; m = newm; a0 *= corr; a1 *= corr; if(rr>2){ a2 *= corr; a3 *= corr; }\n"
+        "      for (int j=0;j<nk;j++){ float pj = __shfl_sync(0xffffffffu,p,j); const float* vr = shv + j*hp; a0 += pj*vr[lane]; a1 += pj*vr[lane+32]; if(rr>2){ a2 += pj*vr[lane+64]; a3 += pj*vr[lane+96]; } }\n"
         "    }\n"
         "  }\n"
         "  if (w < group){ int qh = kvh*group + w;\n"
         "    float* o = part + (size_t)((seq*qHeads + qh)*splitK + c)*(hd+2);\n"
-        "    if (lane==0){ o[0]=m; o[1]=l; } o[2+lane]=a0; o[2+lane+32]=a1; }\n"
+        "    if (lane==0){ o[0]=m; o[1]=l; } o[2+lane]=a0; o[2+lane+32]=a1; if(rr>2){ o[2+lane+64]=a2; o[2+lane+96]=a3; } }\n"
         "}\n",
         "paged_decode_sk_part.cu", "paged_decode_sk_part", &gPagedDecodeSkPart) != 0) { rc = -2; goto donesk; }
     if (!gPagedDecodeSkMerge && compile_kernel(

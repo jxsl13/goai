@@ -854,3 +854,154 @@ func benchPagedDecodeWMMAFlash(b *testing.B, batch, seqLen int) {
 
 func BenchmarkPagedDecodeWMMAFlash_b512_len512(b *testing.B) { benchPagedDecodeWMMAFlash(b, 512, 512) }
 func BenchmarkPagedDecodeWMMAFlash_b512_len128(b *testing.B) { benchPagedDecodeWMMAFlash(b, 512, 128) }
+
+// TestPagedDecodeSKParityHd128 validates the hd=128 split-K paged decode against a
+// host online-softmax reference (the GPU GQA reference kernel is hd=64-only, so it
+// cannot serve as the oracle here). Exercises the generalized a0..a3 accumulators.
+func TestPagedDecodeSKParityHd128(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd, blockSize = 8, 2, 128, 16
+	wkv := kvHeads * hd
+	qWidth := qHeads * hd
+	group := qHeads / kvHeads
+	rng := rand.New(rand.NewSource(41))
+	pool, _ := cuda.NewPagedKVPool(256, blockSize, wkv)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 128, 1, 63, 64, 33}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	kref := make([][]float32, batch)
+	vref := make([][]float32, batch)
+	for si, n := range lens {
+		seqs[si] = pool.NewSeqKV()
+		kf := make([]float32, n*wkv)
+		vf := make([]float32, n*wkv)
+		for i := range kf {
+			kf[i] = float32(rng.NormFloat64()) * 0.3
+			vf[i] = float32(rng.NormFloat64()) * 0.3
+		}
+		dk, _ := cuda.NewDeviceF32(n, wkv)
+		dk.UploadF32(kf)
+		dv, _ := cuda.NewDeviceF32(n, wkv)
+		dv.UploadF32(vf)
+		seqs[si].Append(dk, dv)
+		dk.Free()
+		dv.Free()
+		kref[si] = kf
+		vref[si] = vf
+	}
+	qf := make([]float32, batch*qWidth)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.3
+	}
+	q, _ := cuda.NewDeviceF32(batch, qWidth)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	oSK, err := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oSK.Free()
+	got := make([]float32, batch*qWidth)
+	oSK.DownloadF32(got)
+
+	scale := 1.0 / math.Sqrt(float64(hd))
+	var num, den float64
+	for si := 0; si < batch; si++ {
+		n := lens[si]
+		for h := 0; h < qHeads; h++ {
+			kvh := h / group
+			sc := make([]float64, n)
+			mx := -1e300
+			for j := 0; j < n; j++ {
+				var d float64
+				for c := 0; c < hd; c++ {
+					d += float64(qf[si*qWidth+h*hd+c]) * float64(kref[si][j*wkv+kvh*hd+c])
+				}
+				d *= scale
+				sc[j] = d
+				if d > mx {
+					mx = d
+				}
+			}
+			var sum float64
+			for j := 0; j < n; j++ {
+				sc[j] = math.Exp(sc[j] - mx)
+				sum += sc[j]
+			}
+			for c := 0; c < hd; c++ {
+				var acc float64
+				for j := 0; j < n; j++ {
+					acc += sc[j] / sum * float64(vref[si][j*wkv+kvh*hd+c])
+				}
+				g := float64(got[si*qWidth+h*hd+c])
+				num += (g - acc) * (g - acc)
+				den += acc * acc
+			}
+		}
+	}
+	rms := math.Sqrt(num / den)
+	t.Logf("hd=128 split-K vs host-ref rel-RMS %.3e", rms)
+	if rms > 1e-5 {
+		t.Fatalf("hd=128 split-K parity rel-RMS %.3e too high", rms)
+	}
+}
+
+// benchPagedDecodeSKHd128 times hd=128 split-K paged decode (Llama-2/Mistral/Qwen2 head dim).
+// splitK=1 is the un-parallelized baseline (one block per kv-head/seq scans the whole KV);
+// splitK>1 shards the online-softmax scan across blocks to fill the SMs at long context.
+func benchPagedDecodeSKHd128(b *testing.B, batch, seqLen, splitK int) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 16, 2, 128
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(9))
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	o, err := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, splitK)
+	if err != nil {
+		b.Skipf("sk hd128: %v", err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := pool.BatchedDecodeAttnViewSK(q, view, qHeads, kvHeads, splitK)
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+
+
+func BenchmarkPagedDecodeSKHd128_b4_len4096_sk1(b *testing.B)  { benchPagedDecodeSKHd128(b, 4, 4096, 1) }
+func BenchmarkPagedDecodeSKHd128_b4_len4096_sk16(b *testing.B) { benchPagedDecodeSKHd128(b, 4, 4096, 16) }
+func BenchmarkPagedDecodeSKHd128_b1_len8192_sk1(b *testing.B)  { benchPagedDecodeSKHd128(b, 1, 8192, 1) }
+func BenchmarkPagedDecodeSKHd128_b1_len8192_sk32(b *testing.B) { benchPagedDecodeSKHd128(b, 1, 8192, 32) }
