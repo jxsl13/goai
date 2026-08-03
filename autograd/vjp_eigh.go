@@ -97,24 +97,42 @@ func init() {
 		// loop stored 0.5*(gt+g) at (j,i) where this stores 0.5*(g+gt), and IEEE addition is
 		// commutative — a+b and b+a have the same bits for all non-NaN operands, which these are by
 		// construction. Each individual sum keeps its own ascending-a order and operands.
-		for i := range n {
-			vi := v[i]
-			for j := i; j < n; j++ {
-				var g, gt float64 // G[i,j] and G[j,i]
-				vj := v[j]
-				for a := range n {
-					g += vi[a] * tmp[a][j]
-					gt += vj[a] * tmp[a][i]
-				}
-				if i == j {
-					abar.SetF64(0.5*(g+gt), i, j)
-					continue
-				}
-				m := 0.5 * (g + gt) // Ā = ½(G+Gᵀ) is symmetric
-				abar.SetF64(m, i, j)
-				abar.SetF64(m, j, i)
+		// tmp IS READ DOWN ITS COLUMNS BELOW, one element from each of n separately allocated
+		// rows per inner step, and the triangular loop does that n²/2 times. Mirroring it
+		// transposed costs one O(n²) pass and makes both inner reads contiguous. Pure copy —
+		// every value is the same float64 from a different address.
+		tmpT := make([][]float64, n)
+		for j := range n {
+			row := make([]float64, n)
+			for a := range n {
+				row[a] = tmp[a][j]
 			}
+			tmpT[j] = row
 		}
+		// The triangular loop bands too. Index i writes (i,j) and (j,i) for j ≥ i, so two
+		// different i values never write the same cell: a clash would force them equal. Each
+		// entry keeps its own ascending-a accumulation, so the split is bit-identical.
+		logdetParallelIdx(n, n*n*n/2, func(i int) {
+			vi := v[i]
+			{
+				for j := i; j < n; j++ {
+					var g, gt float64 // G[i,j] and G[j,i]
+					vj := v[j]
+					tj, ti := tmpT[j], tmpT[i]
+					for a, va := range vi {
+						g += va * tj[a]
+						gt += vj[a] * ti[a]
+					}
+					if i == j {
+						abar.SetF64(0.5*(g+gt), i, j)
+						continue
+					}
+					m := 0.5 * (g + gt) // Ā = ½(G+Gᵀ) is symmetric
+					abar.SetF64(m, i, j)
+					abar.SetF64(m, j, i)
+				}
+			}
+		})
 		return []*tensor.Tensor{abar}, nil
 	})
 }
