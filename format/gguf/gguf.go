@@ -99,6 +99,13 @@ type tensorInfo struct {
 type reader struct {
 	r io.Reader
 	n int64 // bytes consumed
+	// SCRATCH, because the fixed-size arrays these primitives used to declare LOCALLY were
+	// heap-allocated on every call: rd.read hands the slice to io.ReadFull, an interface
+	// method, so it escapes and the array escapes with it. A header-heavy file paid one
+	// allocation per scalar — u32 and u64 alone were 1.34M objects of a 4.0M profile.
+	// Hanging the buffers on the reader, which is already on the heap, costs none.
+	num  [8]byte
+	sbuf []byte
 }
 
 func (rd *reader) read(p []byte) error {
@@ -108,19 +115,19 @@ func (rd *reader) read(p []byte) error {
 }
 
 func (rd *reader) u32() (uint32, error) {
-	var b [4]byte
-	if err := rd.read(b[:]); err != nil {
+	b := rd.num[:4]
+	if err := rd.read(b); err != nil {
 		return 0, err
 	}
-	return binary.LittleEndian.Uint32(b[:]), nil
+	return binary.LittleEndian.Uint32(b), nil
 }
 
 func (rd *reader) u64() (uint64, error) {
-	var b [8]byte
-	if err := rd.read(b[:]); err != nil {
+	b := rd.num[:8]
+	if err := rd.read(b); err != nil {
 		return 0, err
 	}
-	return binary.LittleEndian.Uint64(b[:]), nil
+	return binary.LittleEndian.Uint64(b), nil
 }
 
 func (rd *reader) str() (string, error) {
@@ -131,7 +138,12 @@ func (rd *reader) str() (string, error) {
 	if n > 1<<24 {
 		return "", fmt.Errorf("gguf: unreasonable string length %d", n)
 	}
-	b := make([]byte, n)
+	// Read into the reader's own scratch and convert once. The old form allocated the byte
+	// slice AND the string; only the string survives the call, so the slice was pure churn.
+	if cap(rd.sbuf) < int(n) {
+		rd.sbuf = make([]byte, n)
+	}
+	b := rd.sbuf[:n]
 	if err := rd.read(b); err != nil {
 		return "", err
 	}
