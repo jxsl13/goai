@@ -238,6 +238,7 @@ var checks = []check{
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
 	{"PS3080", "one-dimensional-accessor-walk", "a loop making 3 or more AtF64/SetF64 calls per element, each indexed by the loop variable ALONE. PS1005 reports the multi-dimensional version and declines this one — it requires 2 or more index arguments — so a rank-1 walk is invisible to it. MEASURED on the PPO clipped-surrogate backward, 4 such calls per element and NO benchmark until one was written: BenchmarkPPOVJP_65536 2000 to 680 microseconds and the 4096 cell 124 to 42, both -66%% (2.9x). Take the typed slice once when every operand is already the right dtype and KEEP the accessor arm, because the output dtype follows the input. The 2 arms cannot be compared as equal bits — the accessor arm stores float32 where the typed one stores float64 — so what must hold is that the accessor result equals the typed one rounded once", false},
+	{"PS3081", "operand-streamed-once-per-output-unit", "a per-output-unit closure whose loop cuts a slice by an index unrelated to the unit — so that whole operand is streamed again for every output. Block the unit by 3: derive 3 per-unit operands and compute 3 outputs from ONE pass over the shared one. MEASURED on the quantized matmul, 8 activation elements and 1 weight element per 8 FMAs once per output column: BenchmarkQuantMamba2Prefill_512 276.2 to 216.4 ms, -21.6%%, decode flat. THREE, AND SWEPT — 2, 3 and 4 read 237.2, 220.3 and 261.3 against 270.8, so four spills. PASS THE PER-UNIT SCRATCH AS NAMED PARAMETERS, NOT A SLICE OF SLICES: identical arithmetic measured 237.2 against 222.5 at two columns, so an indexed harness understates every arm of the sweep. BIT-IDENTICAL when each output keeps its own accumulator over the same ascending index", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1392,6 +1393,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
 		out = append(out, accessorWalk1DFindings(fset, f, fn)...)
+		out = append(out, perUnitStreamFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18663,6 +18665,162 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 		return true
 	})
 	return seen && all
+}
+
+// --- PS3081: an operand streamed once per output unit -----------------------------------------
+
+// perUnitStreamFindings flags PS3081 — a per-output-unit function whose loop reads a slice
+// indexed WITHOUT the unit variable, so that operand is streamed once per unit.
+func perUnitStreamFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// APPLYING THIS CHECK LEAVES THE PER-UNIT PATH IN PLACE as the tail of the blocked loop, and
+	// that path is the reported shape exactly. A function that already steps its unit by more
+	// than one has made the change; without this it reports its own fix, and reports it twice.
+	blocked := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		f, ok := n.(*ast.ForStmt)
+		if !ok || blocked {
+			return !blocked
+		}
+		as, ok := f.Post.(*ast.AssignStmt)
+		if !ok || as.Tok != token.ADD_ASSIGN || len(as.Rhs) != 1 {
+			return true
+		}
+		stride := identName(as.Lhs[0])
+		if lit, ok := as.Rhs[0].(*ast.BasicLit); ok && lit.Value != "1" && stride != "" {
+			// AND THE LOOP MUST HAND THAT COUNTER TO SOMETHING. A wide stride anywhere in the
+			// function is not evidence; a wide stride whose body PASSES the stepped variable as
+			// an argument is the blocked unit loop this check asks for. Written loosely first,
+			// it suppressed an unrelated fan-out in the mixture-model fitter.
+			ast.Inspect(f.Body, func(m ast.Node) bool {
+				c, ok := m.(*ast.CallExpr)
+				if !ok || len(c.Args) < 2 {
+					return true
+				}
+				for _, a := range c.Args {
+					if mentionsIdent(a, stride) {
+						blocked = true
+						return false
+					}
+				}
+				return true
+			})
+		}
+		return !blocked
+	})
+	if blocked {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		lit, ok := n.(*ast.FuncLit)
+		if !ok || lit.Body == nil || lit.Type.Params == nil {
+			return true
+		}
+		// THE UNIT IS THE LAST PARAMETER OF A PER-UNIT CLOSURE. A fan-out hands one of these an
+		// index and calls it once per output; everything it reads that does not depend on that
+		// index is read again for the next one.
+		var unit string
+		for _, p := range lit.Type.Params.List {
+			if _, ok := p.Type.(*ast.Ident); ok && len(p.Names) > 0 {
+				unit = p.Names[len(p.Names)-1].Name
+			}
+		}
+		if unit == "" || unit == "_" {
+			return true
+		}
+		// The closure must WRITE something indexed by the unit — that is what makes it the
+		// output unit rather than an ordinary callback.
+		writesUnit := false
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			as, ok := m.(*ast.AssignStmt)
+			if !ok || len(as.Lhs) != 1 {
+				return true
+			}
+			if ix, ok := as.Lhs[0].(*ast.IndexExpr); ok && mentionsIdent(ix.Index, unit) {
+				writesUnit = true
+			}
+			return true
+		})
+		if !writesUnit {
+			return true
+		}
+		found := false
+		ast.Inspect(lit.Body, func(m ast.Node) bool {
+			if found {
+				return false
+			}
+			iv, body, ok := loopVarBody(m)
+			if !ok {
+				// A JAMMED LOOP DECLARES ITS COUNTER OUTSIDE ITSELF — `mi := 0` then
+				// `for ; mi+8 <= m; mi += 8` — so the Init is empty and loopVarBody cannot
+				// read it. That is the exact shape this check exists for, and testing only
+				// the Init made it miss the site it was built from.
+				f, isFor := m.(*ast.ForStmt)
+				if !isFor || f.Body == nil {
+					return true
+				}
+				as, isAssign := f.Post.(*ast.AssignStmt)
+				if !isAssign || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 {
+					return true
+				}
+				if iv = identName(as.Lhs[0]); iv == "" {
+					return true
+				}
+				body = f.Body
+			}
+			// EVERYTHING THE CLOSURE ITSELF DECLARES IS PER-UNIT, not just what the loop
+			// declares. A component accumulator allocated at the top of the closure is cut by
+			// an inner index and looks exactly like a shared operand from inside the loop —
+			// which is how the mixture-model fitter read as a finding.
+			local := declaredIn(lit.Body)
+			ast.Inspect(body, func(w ast.Node) bool {
+				if found {
+					return false
+				}
+				se, ok := w.(*ast.SliceExpr)
+				if !ok {
+					return true
+				}
+				base := identName(se.X)
+				if base == "" || local[base] || mentionsIdent(se, unit) {
+					return true
+				}
+				// A slice cut with the LOOP variable and not the unit is the per-item operand
+				// re-cut on every unit — the whole matrix, once per output.
+				if !mentionsIdent(se, iv) {
+					return true
+				}
+				found = true
+				out = append(out, finding{
+					pos:      fset.Position(se.Pos()),
+					category: "operand-streamed-once-per-output-unit",
+					msg: fmt.Sprintf("this closure runs once per output unit %q and cuts %q by"+
+						" %q, an index that has nothing to do with the unit — so the whole of"+
+						" %q is streamed again for every output. BLOCK THE UNIT: take three at a"+
+						" time, derive three per-unit operands, and compute three outputs from"+
+						" ONE pass over the shared one. MEASURED on the quantized matmul, which"+
+						" read eight activation elements and one weight element to do eight"+
+						" FMAs once per output column: BenchmarkQuantMamba2Prefill_512 276.2 to"+
+						" 216.4 ms, -21.6%%, with decode flat because a single row takes the"+
+						" tail. THREE, AND SWEPT — at 2, 3 and 4 the cell read 237.2, 220.3 and"+
+						" 261.3 ms against 270.8, so four already spills. PASS THE PER-UNIT"+
+						" SCRATCH AS NAMED PARAMETERS, NOT A SLICE OF SLICES: identical"+
+						" arithmetic measured 237.2 against 222.5 ms at two columns, so a sweep"+
+						" run through an indexed harness understates every arm and its winner"+
+						" must be re-measured in the shipped form. BIT-IDENTICAL when each"+
+						" output keeps its OWN accumulator over the same ascending index",
+						unit, base, iv, base),
+				})
+				return false
+			})
+			return true
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3080: a one-dimensional per-element accessor walk -------------------------------------
