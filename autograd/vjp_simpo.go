@@ -24,12 +24,16 @@ func init() {
 
 		dw := tensor.New(w.Dtype(), w.Shape())
 		dl := tensor.New(l.Dtype(), l.Shape())
-		for i := range b {
-			z := beta*(w.AtF64(i)-l.AtF64(i)) - gamma
-			sNeg := 1 / (1 + math.Exp(z)) // σ(−z)
-			dw.SetF64(scale*(-beta*sNeg), i)
-			dl.SetF64(scale*(beta*sNeg), i)
-		}
+		elemVJP(b, []*tensor.Tensor{w, l}, []*tensor.Tensor{dw, dl},
+			func(in, out [][]float64, n int) {
+				wv, lv, dwv, dlv := in[0], in[1], out[0], out[1]
+				for i := range n {
+					z := beta*(wv[i]-lv[i]) - gamma
+					sNeg := 1 / (1 + math.Exp(z)) // σ(−z)
+					dwv[i] = scale * (-beta * sNeg)
+					dlv[i] = scale * (beta * sNeg)
+				}
+			})
 		return []*tensor.Tensor{dw, dl}, nil
 	})
 
@@ -46,14 +50,18 @@ func init() {
 
 		dw := tensor.New(w.Dtype(), w.Shape())
 		dl := tensor.New(l.Dtype(), l.Shape())
-		for i := range b {
-			aw, al := w.AtF64(i), l.AtF64(i)
-			pw, pl := math.Exp(aw), math.Exp(al)
-			logOdds := (aw - al) - (math.Log1p(-pw) - math.Log1p(-pl))
-			s := 1 / (1 + math.Exp(logOdds)) // σ(−logOdds)
-			dw.SetF64(scale*(-1-lambda*s/(1-pw)), i)
-			dl.SetF64(scale*(lambda*s/(1-pl)), i)
-		}
+		elemVJP(b, []*tensor.Tensor{w, l}, []*tensor.Tensor{dw, dl},
+			func(in, out [][]float64, n int) {
+				wv, lv, dwv, dlv := in[0], in[1], out[0], out[1]
+				for i := range n {
+					aw, al := wv[i], lv[i]
+					pw, pl := math.Exp(aw), math.Exp(al)
+					logOdds := (aw - al) - (math.Log1p(-pw) - math.Log1p(-pl))
+					s := 1 / (1 + math.Exp(logOdds)) // σ(−logOdds)
+					dwv[i] = scale * (-1 - lambda*s/(1-pw))
+					dlv[i] = scale * (lambda * s / (1 - pl))
+				}
+			})
 		return []*tensor.Tensor{dw, dl}, nil
 	})
 }
