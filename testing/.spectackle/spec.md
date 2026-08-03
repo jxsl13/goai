@@ -32,3 +32,6 @@ IF a kernel branches on dtype and only one branch has a benchmark, THEN the impl
 
 ## A-TEST-FILE-NAME-MUST-NOT-END-IN-A-GOARCH-OR-GOOS-WORD-001
 IF a Go file name ends with an underscore-separated architecture or OS word before _test.go, THEN the implementer SHALL rename it: Go applies an implicit build constraint, so ps3054_asymmetric_dtype_arm_test.go landed in IgnoredGoFiles on arm64 and all 4 of its fixtures plus 3 mutations of the check read as green without ever running.
+
+## A-PARALLEL-TEST-MUST-CLEAR-THE-FANOUT-GATE-001
+IF a test of a banded split uses shapes below the fan-out helper work threshold, THEN the implementer SHALL enlarge them: every shape in the first transpose test was under the 1<<15 gate, so both arms ran serially and a mutation that made bands overlap passed; with 3 larger shapes it trips the race detector.
