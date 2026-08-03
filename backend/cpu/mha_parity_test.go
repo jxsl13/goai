@@ -53,6 +53,10 @@ func TestCPUMHABitIdenticalToRef(t *testing.T) {
 	}
 	cases := []struct{ seq, heads, dk int }{
 		{1, 1, 1}, {4, 1, 3}, {6, 2, 4}, {7, 3, 2}, {16, 4, 8},
+		// dk=6 and seq=9 are the MIXED case the others miss: the jammed dot runs its 4-wide
+		// body once and then a 2-element remainder, and the key loop runs two jammed passes
+		// and then a remainder of one. Every other row is divisible one way or the other.
+		{9, 2, 6},
 	}
 	for _, c := range cases {
 		for _, f32 := range []bool{false, true} {
