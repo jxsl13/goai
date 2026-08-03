@@ -270,16 +270,63 @@ func init() {
 									dA[j] = dav
 									dot += dav * a[j]
 								}
-								for j := range jmax {
-									dS := scale * a[j] * (dA[j] - dot)
+								// FOUR KEYS PER PASS. dqC and dqRrot accumulate into slots fixed by the QUERY, so the
+								// loop below loaded and stored them once per key for a single multiply-add each; four
+								// keys at a time hold each in a register across four of them. dkC is per key and keeps
+								// its own store. BIT-IDENTICAL: every slot still sums keys ascending, and the query
+								// accumulators are EXPLICIT LOCALS rather than compound assignments over a sum of four
+								// products, which would associate differently (T1183).
+								jb := 0
+								for ; jb+5 < jmax; jb += 6 {
+									dS0 := scale * a[jb+0] * (dA[jb+0] - dot)
+									dS1 := scale * a[jb+1] * (dA[jb+1] - dot)
+									dS2 := scale * a[jb+2] * (dA[jb+2] - dot)
+									dS3 := scale * a[jb+3] * (dA[jb+3] - dot)
+									dS4 := scale * a[jb+4] * (dA[jb+4] - dot)
+									dS5 := scale * a[jb+5] * (dA[jb+5] - dot)
 									for d := range dh {
-										dqcs[i*cols+hc+d] += dS * kcs[j*cols+hc+d]
-										dkcs[j*cols+hc+d] += dS * qcs[i*cols+hc+d]
+										qd := dqcs[i*cols+hc+d]
+										qd += dS0 * kcs[(jb+0)*cols+hc+d]
+										dkcs[(jb+0)*cols+hc+d] += dS0 * qcs[i*cols+hc+d]
+										qd += dS1 * kcs[(jb+1)*cols+hc+d]
+										dkcs[(jb+1)*cols+hc+d] += dS1 * qcs[i*cols+hc+d]
+										qd += dS2 * kcs[(jb+2)*cols+hc+d]
+										dkcs[(jb+2)*cols+hc+d] += dS2 * qcs[i*cols+hc+d]
+										qd += dS3 * kcs[(jb+3)*cols+hc+d]
+										dkcs[(jb+3)*cols+hc+d] += dS3 * qcs[i*cols+hc+d]
+										qd += dS4 * kcs[(jb+4)*cols+hc+d]
+										dkcs[(jb+4)*cols+hc+d] += dS4 * qcs[i*cols+hc+d]
+										qd += dS5 * kcs[(jb+5)*cols+hc+d]
+										dkcs[(jb+5)*cols+hc+d] += dS5 * qcs[i*cols+hc+d]
+										dqcs[i*cols+hc+d] = qd
 									}
 									for e := range dR {
-										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
+										qr := dqRrot[(i*heads+h)*dR+e]
+										qr += dS0 * kRrot[(jb+0)*dR+e]
+										qr += dS1 * kRrot[(jb+1)*dR+e]
+										qr += dS2 * kRrot[(jb+2)*dR+e]
+										qr += dS3 * kRrot[(jb+3)*dR+e]
+										qr += dS4 * kRrot[(jb+4)*dR+e]
+										qr += dS5 * kRrot[(jb+5)*dR+e]
+										dqRrot[(i*heads+h)*dR+e] = qr
 									}
-									ds[i*seq+j] = dS
+									ds[i*seq+jb+0] = dS0
+									ds[i*seq+jb+1] = dS1
+									ds[i*seq+jb+2] = dS2
+									ds[i*seq+jb+3] = dS3
+									ds[i*seq+jb+4] = dS4
+									ds[i*seq+jb+5] = dS5
+								}
+								for ; jb < jmax; jb++ {
+									dS := scale * a[jb] * (dA[jb] - dot)
+									for d := range dh {
+										dqcs[i*cols+hc+d] += dS * kcs[jb*cols+hc+d]
+										dkcs[jb*cols+hc+d] += dS * qcs[i*cols+hc+d]
+									}
+									for e := range dR {
+										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[jb*dR+e]
+									}
+									ds[i*seq+jb] = dS
 								}
 							}
 						}
@@ -370,16 +417,61 @@ func init() {
 									dA[j] = dav
 									dot += dav * a[j]
 								}
-								for j := range jmax {
-									dS := scale * a[j] * (dA[j] - dot)
+								// SAME SIX-KEY JAM AS THE F64 ARM. The rounding stays PER KEY: this arm narrows to
+								// float32 after every single accumulation, so the local is a float32 rounded at each
+								// step rather than a float64 rounded once — holding it wider would be a different
+								// and better-conditioned computation, which is exactly what bit-identity forbids.
+								jb := 0
+								for ; jb+5 < jmax; jb += 6 {
+									dS0 := scale * a[jb+0] * (dA[jb+0] - dot)
+									dS1 := scale * a[jb+1] * (dA[jb+1] - dot)
+									dS2 := scale * a[jb+2] * (dA[jb+2] - dot)
+									dS3 := scale * a[jb+3] * (dA[jb+3] - dot)
+									dS4 := scale * a[jb+4] * (dA[jb+4] - dot)
+									dS5 := scale * a[jb+5] * (dA[jb+5] - dot)
 									for d := range dh {
-										dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[j*cols+hc+d]))
-										dkcs[j*cols+hc+d] = float32(float64(dkcs[j*cols+hc+d]) + dS*float64(qcs[i*cols+hc+d]))
+										qd := dqcs[i*cols+hc+d]
+										qd = float32(float64(qd) + dS0*float64(kcs[(jb+0)*cols+hc+d]))
+										dkcs[(jb+0)*cols+hc+d] = float32(float64(dkcs[(jb+0)*cols+hc+d]) + dS0*float64(qcs[i*cols+hc+d]))
+										qd = float32(float64(qd) + dS1*float64(kcs[(jb+1)*cols+hc+d]))
+										dkcs[(jb+1)*cols+hc+d] = float32(float64(dkcs[(jb+1)*cols+hc+d]) + dS1*float64(qcs[i*cols+hc+d]))
+										qd = float32(float64(qd) + dS2*float64(kcs[(jb+2)*cols+hc+d]))
+										dkcs[(jb+2)*cols+hc+d] = float32(float64(dkcs[(jb+2)*cols+hc+d]) + dS2*float64(qcs[i*cols+hc+d]))
+										qd = float32(float64(qd) + dS3*float64(kcs[(jb+3)*cols+hc+d]))
+										dkcs[(jb+3)*cols+hc+d] = float32(float64(dkcs[(jb+3)*cols+hc+d]) + dS3*float64(qcs[i*cols+hc+d]))
+										qd = float32(float64(qd) + dS4*float64(kcs[(jb+4)*cols+hc+d]))
+										dkcs[(jb+4)*cols+hc+d] = float32(float64(dkcs[(jb+4)*cols+hc+d]) + dS4*float64(qcs[i*cols+hc+d]))
+										qd = float32(float64(qd) + dS5*float64(kcs[(jb+5)*cols+hc+d]))
+										dkcs[(jb+5)*cols+hc+d] = float32(float64(dkcs[(jb+5)*cols+hc+d]) + dS5*float64(qcs[i*cols+hc+d]))
+										dqcs[i*cols+hc+d] = qd
 									}
 									for e := range dR {
-										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
+										qr := dqRrot[(i*heads+h)*dR+e]
+										qr += dS0 * kRrot[(jb+0)*dR+e]
+										qr += dS1 * kRrot[(jb+1)*dR+e]
+										qr += dS2 * kRrot[(jb+2)*dR+e]
+										qr += dS3 * kRrot[(jb+3)*dR+e]
+										qr += dS4 * kRrot[(jb+4)*dR+e]
+										qr += dS5 * kRrot[(jb+5)*dR+e]
+										dqRrot[(i*heads+h)*dR+e] = qr
 									}
-									ds[i*seq+j] = dS
+									ds[i*seq+jb+0] = dS0
+									ds[i*seq+jb+1] = dS1
+									ds[i*seq+jb+2] = dS2
+									ds[i*seq+jb+3] = dS3
+									ds[i*seq+jb+4] = dS4
+									ds[i*seq+jb+5] = dS5
+								}
+								for ; jb < jmax; jb++ {
+									dS := scale * a[jb] * (dA[jb] - dot)
+									for d := range dh {
+										dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[jb*cols+hc+d]))
+										dkcs[jb*cols+hc+d] = float32(float64(dkcs[jb*cols+hc+d]) + dS*float64(qcs[i*cols+hc+d]))
+									}
+									for e := range dR {
+										dqRrot[(i*heads+h)*dR+e] += dS * kRrot[jb*dR+e]
+									}
+									ds[i*seq+jb] = dS
 								}
 							}
 						}
