@@ -236,6 +236,7 @@ var checks = []check{
 	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
 	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. TRY internal/fmath FIRST (see PS3082) — it keeps the exact contract, is a smaller edit and measured faster than a chain (40.5 us against 63.6); the chain is the fallback for when the call is already gone. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
 	{"PS3082", "minmax-call-in-a-loop", "math.Min or math.Max called inside a loop. On arm64 math.Min compiles to CALL math.archMin inside a 48-byte frame with a stack-growth check; the min builtin compiles to a single FMIND in a leaf with no frame. THE TWO ARE NOT THE SAME FUNCTION and substituting raw is a real bug: math.Max documents +Inf as beating NaN and math.Min documents -Inf as beating NaN, while the builtins propagate NaN, so they disagree on exactly four ordered pairs. USE internal/fmath, which takes the instruction and consults math only when the instruction returns NaN — the only result the two can disagree on. MEASURED on the reference RL surrogates: PPOClip at batch 4096 100.5 to 41.6 us (-58.7%%), GRPO 126.7 to 79.8 (-37.0%%), GSPO 21.6 to 19.8 (-8.4%%, one clamp per sequence against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON CHAIN — converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%, and was reverted: this replaces CALLS, not branchless code. GATE IT ON ONE PLANTED VALUE PER CALL: a kernel that reduces to a scalar cannot see the divergence, because one NaN poisons the sum and both formulations then agree on NaN", false},
+	{"PS3083", "integer-keyed-map-in-a-loop", "a map with an INTEGER key built inside a loop and probed inside a nested loop. Every probe is a hash and a bucket walk, and every outer pass allocates a fresh map. When the keys are dense in a known range — block indices, row indices, token ids under a vocabulary — a slice is the natural container, and stamping it with a GENERATION COUNTER makes the per-pass reset free instead of a clear proportional to the range. MEASURED on MoBA's top-K block selection, whose membership test ran once per key in the innermost loop: BenchmarkMoBAAttention 10.96 to 9.94 ms (-9.3%%), bytes 2.967 to 2.464 MB (-16.9%%) and allocations 20533 to 10301 (-49.8%%), with runtime.mapaccess1_fast64 at 5.4%% of the profile before. WATCH THE LENGTH: code that bounded a loop on len(m) needs an explicit counter, and that is only equivalent when the inserted keys are DISTINCT — check the source of the keys before trusting it", false},
 	{"PS3078", "radix-pass-cannot-be-skipped", "a byte-wise radix that builds its histogram INSIDE each pass, so it can never learn that a pass is the identity. A counting pass whose keys all land in one bucket emits them in read order and can be skipped: build all 8 histograms in ONE traversal, skip the uniform passes, and copy home when the surviving count is ODD (the fixed 8-pass form never had to). MEASURED on the CART builder, where the per-feature radix was 24%% of the profile: BenchmarkForestFit 88.6 to 79.4 ms, -10.4%%, every paired round, GBMFit and SVC flat. IT PAYS ON THE DATA, NOT THE CODE — float64 bit-keys of one feature column barely move in their sign and exponent bytes within a node. Full-entropy keys skip nothing, so measure the caller", false},
 	{"PS3079", "per-job-whole-input-allocation", "a fan-out body calling a function that ALLOCATES and returns slices sized by its input, so every job pays a whole input\u0027s worth of allocation. Recycle through a sync.Pool taken at the top of the job and returned at its end, resizing only when the job needs more. MEASURED on the random forest, where each tree materialized its own row-pointer slice and label copy: BenchmarkForestFit 33.70 to 20.14 MB/op, -40.2%%, and 1883 to 1666 allocations, with the wall clock FLAT (78.4 vs 77.6 ms). EXPECT BYTES, NOT TIME. THE SAFETY QUESTION IS RETENTION and it is answerable by reading what the callee stores — the tree fitter keeps only its root, class set and feature count — plus whether the buffers are fully overwritten before being read. If either is false the pool is a correctness bug", false},
 	{"PS3080", "one-dimensional-accessor-walk", "a loop making 3 or more AtF64/SetF64 calls per element, each indexed by the loop variable ALONE. PS1005 reports the multi-dimensional version and declines this one — it requires 2 or more index arguments — so a rank-1 walk is invisible to it. MEASURED on the PPO clipped-surrogate backward, 4 such calls per element and NO benchmark until one was written: BenchmarkPPOVJP_65536 2000 to 680 microseconds and the 4096 cell 124 to 42, both -66%% (2.9x). Take the typed slice once when every operand is already the right dtype and KEEP the accessor arm, because the output dtype follows the input. The 2 arms cannot be compared as equal bits — the accessor arm stores float32 where the typed one stores float64 — so what must hold is that the accessor result equals the typed one rounded once", false},
@@ -1392,6 +1393,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, narrowUnrollFindings(fset, fn)...)
 		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, minMaxCallInLoopFindings(fset, fn)...)
+		out = append(out, intKeyedMapInLoopFindings(fset, fn)...)
 		out = append(out, radixPassFindings(fset, fn)...)
 		out = append(out, perJobGatherFindings(fset, f, fn)...)
 		out = append(out, accessorWalk1DFindings(fset, f, fn)...)
@@ -19342,6 +19344,117 @@ func minMaxCallInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" whole-grid batch was green under the naive rewrite this check exists to"+
 					" reject",
 					which, which, strings.ToLower(which), strings.ToUpper(which)),
+			})
+			return true
+		})
+		return true
+	})
+	return out
+}
+
+// --- PS3083: an integer-keyed map built in a loop and probed in a nested one ------------------
+
+// intKeyType reports whether e is an integer type name, the key types for which a slice is a
+// drop-in container. A string- or struct-keyed map has no dense index to fall back on.
+func intKeyType(e ast.Expr) bool {
+	switch identName(e) {
+	case "int", "int8", "int16", "int32", "int64",
+		"uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune":
+		return true
+	}
+	return false
+}
+
+// mapDeclName returns the name a statement binds to a freshly built integer-keyed map, whether
+// written as a composite literal or as make.
+func mapDeclName(n ast.Node) string {
+	as, ok := n.(*ast.AssignStmt)
+	if !ok || len(as.Lhs) != len(as.Rhs) {
+		return ""
+	}
+	for i, rhs := range as.Rhs {
+		var mt *ast.MapType
+		switch r := unparen(rhs).(type) {
+		case *ast.CompositeLit:
+			mt, _ = r.Type.(*ast.MapType)
+		case *ast.CallExpr:
+			if identName(r.Fun) != "make" || len(r.Args) == 0 {
+				continue
+			}
+			mt, _ = r.Args[0].(*ast.MapType)
+		}
+		if mt == nil || !intKeyType(mt.Key) {
+			continue
+		}
+		if nm := identName(as.Lhs[i]); nm != "" {
+			return nm
+		}
+	}
+	return ""
+}
+
+// intKeyedMapInLoopFindings flags PS3083 — an integer-keyed map allocated on each pass of a
+// loop and probed inside a loop nested under it.
+func intKeyedMapInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		ast.Inspect(body, func(m ast.Node) bool {
+			name := mapDeclName(m)
+			if name == "" {
+				return true
+			}
+			// THE PROBE HAS TO BE IN A NESTED LOOP. A map built and read once per pass costs
+			// one allocation, which is worth noting elsewhere; what makes it a hot-path
+			// finding is a hash per element of an inner loop.
+			probed := false
+			ast.Inspect(body, func(w ast.Node) bool {
+				if probed {
+					return false
+				}
+				_, ibody, isLoop := loopVarBody(w)
+				if !isLoop {
+					return true
+				}
+				ast.Inspect(ibody, func(u ast.Node) bool {
+					if ix, isIndex := u.(*ast.IndexExpr); isIndex && identName(ix.X) == name {
+						probed = true
+						return false
+					}
+					return true
+				})
+				return true
+			})
+			if !probed {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(m.Pos()),
+				category: "integer-keyed-map-in-a-loop",
+				msg: fmt.Sprintf("%q is an INTEGER-KEYED map built on every pass of this loop and"+
+					" probed inside a loop nested under it, so each element of the inner loop"+
+					" pays a hash and a bucket walk and each pass pays an allocation. When the"+
+					" keys are dense in a known range — block indices, row indices, token ids"+
+					" under a vocabulary — a slice is the natural container, and STAMPING IT"+
+					" WITH A GENERATION COUNTER makes the per-pass reset free instead of a"+
+					" clear proportional to the range: bump a counter, write it at the selected"+
+					" indices, and test equality instead of membership. MEASURED on MoBA's"+
+					" top-K block selection, whose membership test ran once per key in the"+
+					" innermost loop: BenchmarkMoBAAttention 10.96 to 9.94 ms (-9.3%%), bytes"+
+					" 2.967 to 2.464 MB (-16.9%%), allocations 20533 to 10301 (-49.8%%), with"+
+					" runtime.mapaccess1_fast64 standing at 5.4%% of the profile beforehand."+
+					" WATCH THE LENGTH: code that bounded a loop on len(%s) needs an explicit"+
+					" counter, and the counter is only equivalent when the inserted keys are"+
+					" DISTINCT — read where the keys come from before trusting it. THE GATE IS"+
+					" A DIGEST, not a tolerance: a membership set that differs by one element"+
+					" changes WHICH values are computed, and every one of them stays plausible",
+					name, name),
 			})
 			return true
 		})
