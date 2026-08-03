@@ -63,10 +63,7 @@ func init() {
 			}
 		}
 		// copyltu(M): symmetric from the lower triangle (diagonal once).
-		c := make([][]float64, n)
-		for i := range n {
-			c[i] = make([]float64, n)
-		}
+		c := alloc2D(n, n)
 		for i := range n {
 			for j := range n {
 				if i >= j {
@@ -98,10 +95,7 @@ func init() {
 			}
 		})
 		// Rinv = R⁻¹ (upper-triangular) by back-substitution on R·X = I.
-		rinv := make([][]float64, n)
-		for i := range n {
-			rinv[i] = make([]float64, n)
-		}
+		rinv := alloc2D(n, n)
 		for col := range n {
 			rinv[col][col] = 1 / rd[col][col]
 			for i := col - 1; i >= 0; i-- {
@@ -127,13 +121,52 @@ func init() {
 	})
 }
 
-// to2D copies a rank-2 tensor into a fresh [rows][cols] f64 slice.
-func to2D(t *tensor.Tensor, rows, cols int) [][]float64 {
+// alloc2D returns a [rows][cols] f64 matrix whose rows are windows on ONE backing block.
+// Callers see the same [][]float64 they always did — no call site changes — but the allocation
+// count drops from rows+1 to 2 and the rows become contiguous with each other, which is what
+// the LU factorization's own comment records as the reason it stopped using a jagged matrix.
+// Rows must not be appended to; nothing here does, and a row window is capped at its own length
+// so an append would copy rather than reach into its neighbor.
+func alloc2D(rows, cols int) [][]float64 {
+	base := make([]float64, rows*cols)
 	d := make([][]float64, rows)
 	for i := range rows {
-		d[i] = make([]float64, cols)
+		d[i] = base[i*cols : (i+1)*cols : (i+1)*cols]
+	}
+	return d
+}
+
+// to2D copies a rank-2 tensor into a fresh [rows][cols] f64 matrix.
+//
+// The per-element AtF64 walk is kept only as the fallback. For a contiguous, offset-0 tensor
+// the storage is read through its typed slice instead: exact for F64, and an exact widening for
+// F32, so every value is the one AtF64 would have returned. At the QR adjoint's shape that walk
+// was 1452 allocations per call between this and the matrices below it.
+func to2D(t *tensor.Tensor, rows, cols int) [][]float64 {
+	d := alloc2D(rows, cols)
+	if t.IsContiguous() && t.Offset() == 0 {
+		switch t.Dtype() {
+		case tensor.F64:
+			ts := t.Storage().F64()
+			for i := range rows {
+				copy(d[i], ts[i*cols:(i+1)*cols])
+			}
+			return d
+		case tensor.F32:
+			ts := t.Storage().F32()
+			for i := range rows {
+				row := d[i]
+				for j, v := range ts[i*cols : (i+1)*cols] {
+					row[j] = float64(v) // exact widening, as AtF64 does
+				}
+			}
+			return d
+		}
+	}
+	for i := range rows {
+		row := d[i]
 		for j := range cols {
-			d[i][j] = t.AtF64(i, j)
+			row[j] = t.AtF64(i, j)
 		}
 	}
 	return d
