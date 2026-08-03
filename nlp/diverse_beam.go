@@ -115,7 +115,7 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 			// carried-done cand (tok 0) or the fresh vocab expansion (distinct toks), so
 			// (parent, tok) uniquely orders the appends — ties resolve to that same order,
 			// keeping the top-B' set identical, but with pdqsort's lower constant.
-			slices.SortFunc(cands, func(a, b cand) int {
+			less := func(a, b cand) int {
 				ai, aj := aug(a), aug(b)
 				if ai != aj {
 					if ai > aj {
@@ -136,9 +136,57 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 					return 1
 				}
 				return 0
-			})
-			if len(cands) > bPrime {
-				cands = cands[:bPrime]
+			}
+			// SELECT the top B' rather than SORTING all of them. The candidate list is every
+			// beam's whole vocabulary expansion, and only B' of it survives — sorting the rest is
+			// work thrown away. A bounded worst-at-root heap keeps the best B' in O(N log B')
+			// instead of O(N log N), which at a real vocabulary is the difference between the
+			// selection and everything else in the step.
+			//
+			// Bit-identical, and the comparator is why: it is a STRICT total order — augmented
+			// score, then parent, then token, and (parent, token) is unique across the appends —
+			// so the top-B' set and the order within it are uniquely determined. Whatever
+			// produces that set produces exactly the same slice.
+			if len(cands) > bPrime && bPrime > 0 {
+				worse := func(a, b cand) bool { return less(a, b) > 0 }
+				src := append([]cand(nil), cands...) // the heap is built in cands' own array
+				h := cands[:0:len(cands)]
+				for _, c := range src {
+					if len(h) < bPrime {
+						h = append(h, c)
+						for j := len(h) - 1; j > 0; { // sift up
+							p := (j - 1) / 2
+							if !worse(h[j], h[p]) {
+								break
+							}
+							h[j], h[p] = h[p], h[j]
+							j = p
+						}
+						continue
+					}
+					if !worse(h[0], c) { // the root is the worst kept
+						continue
+					}
+					h[0] = c
+					for i := 0; ; { // sift down
+						lo := i
+						if l := 2*i + 1; l < len(h) && worse(h[l], h[lo]) {
+							lo = l
+						}
+						if r := 2*i + 2; r < len(h) && worse(h[r], h[lo]) {
+							lo = r
+						}
+						if lo == i {
+							break
+						}
+						h[i], h[lo] = h[lo], h[i]
+						i = lo
+					}
+				}
+				slices.SortFunc(h, less)
+				cands = h
+			} else {
+				slices.SortFunc(cands, less)
 			}
 			// materialize toks ONLY for the B' survivors that advance.
 			survivors := make([]node, len(cands))
