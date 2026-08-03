@@ -60,33 +60,53 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		c1 := C[(i+1)*n : (i+2)*n]
 		c2 := C[(i+2)*n : (i+3)*n]
 		c3 := C[(i+3)*n : (i+4)*n]
-		// Two B rows per pass over the four C rows — see gemmF32Band for the reasoning and the
-		// register-pressure limit. Bit-identical: p then p+1, two separate roundings, ascending.
+		// SIX B rows per pass over the four C rows — see gemmF32Band. Bit-identical: p through
+		// p+5, six separate roundings, ascending.
 		p := 0
-		for ; p+1 < k; p += 2 {
+		for ; p+5 < k; p += 6 {
 			bp0 := B[p*n : (p+1)*n]
 			bp1 := B[(p+1)*n : (p+2)*n]
-			a00, a01 := A[(i+0)*k+p], A[(i+0)*k+p+1]
-			a10, a11 := A[(i+1)*k+p], A[(i+1)*k+p+1]
-			a20, a21 := A[(i+2)*k+p], A[(i+2)*k+p+1]
-			a30, a31 := A[(i+3)*k+p], A[(i+3)*k+p+1]
+			bp2 := B[(p+2)*n : (p+3)*n]
+			bp3 := B[(p+3)*n : (p+4)*n]
+			bp4 := B[(p+4)*n : (p+5)*n]
+			bp5 := B[(p+5)*n : (p+6)*n]
+			a00, a01, a02, a03, a04, a05 := A[(i+0)*k+p], A[(i+0)*k+p+1], A[(i+0)*k+p+2], A[(i+0)*k+p+3], A[(i+0)*k+p+4], A[(i+0)*k+p+5]
+			a10, a11, a12, a13, a14, a15 := A[(i+1)*k+p], A[(i+1)*k+p+1], A[(i+1)*k+p+2], A[(i+1)*k+p+3], A[(i+1)*k+p+4], A[(i+1)*k+p+5]
+			a20, a21, a22, a23, a24, a25 := A[(i+2)*k+p], A[(i+2)*k+p+1], A[(i+2)*k+p+2], A[(i+2)*k+p+3], A[(i+2)*k+p+4], A[(i+2)*k+p+5]
+			a30, a31, a32, a33, a34, a35 := A[(i+3)*k+p], A[(i+3)*k+p+1], A[(i+3)*k+p+2], A[(i+3)*k+p+3], A[(i+3)*k+p+4], A[(i+3)*k+p+5]
 			for j, b0 := range bp0 {
-				b1 := bp1[j]
+				b1, b2, b3, b4, b5 := bp1[j], bp2[j], bp3[j], bp4[j], bp5[j]
 				v0 := c0[j]
 				v0 += a00 * b0
 				v0 += a01 * b1
+				v0 += a02 * b2
+				v0 += a03 * b3
+				v0 += a04 * b4
+				v0 += a05 * b5
 				c0[j] = v0
 				v1 := c1[j]
 				v1 += a10 * b0
 				v1 += a11 * b1
+				v1 += a12 * b2
+				v1 += a13 * b3
+				v1 += a14 * b4
+				v1 += a15 * b5
 				c1[j] = v1
 				v2 := c2[j]
 				v2 += a20 * b0
 				v2 += a21 * b1
+				v2 += a22 * b2
+				v2 += a23 * b3
+				v2 += a24 * b4
+				v2 += a25 * b5
 				c2[j] = v2
 				v3 := c3[j]
 				v3 += a30 * b0
 				v3 += a31 * b1
+				v3 += a32 * b2
+				v3 += a33 * b3
+				v3 += a34 * b4
+				v3 += a35 * b5
 				c3[j] = v3
 			}
 		}
@@ -168,38 +188,65 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		c1 := acc[(i+1)*n : (i+2)*n]
 		c2 := acc[(i+2)*n : (i+3)*n]
 		c3 := acc[(i+3)*n : (i+4)*n]
-		// TWO B ROWS PER PASS OVER THE FOUR C ROWS. Each c element was loaded and stored once per
-		// p; holding it across two p steps halves that traffic. Two and not four: four C rows times
-		// four B rows needs sixteen live values plus their scalars, which spills — the same limit
-		// the decode kernel's 1/4/8 sweep found at eight.
+		// SIX B ROWS PER PASS OVER THE FOUR C ROWS. Each c element was loaded and stored once per
+		// p; holding it across six p steps cuts that traffic to a sixth.
 		//
-		// Bit-identical: every element still adds its p then its p+1 contribution as two separate
-		// roundings in ascending order, never as a summed pair.
+		// SIX BECAUSE IT WAS SWEPT, NOT BECAUSE IT WAS ARGUED. This was two for a long time, on
+		// the reasoning that four C rows times four B rows needs sixteen live values plus their
+		// scalars and would spill. The argument was directionally right and numerically wrong:
+		// swept at 3, 4, 6 and 8 the f32 band gave BenchmarkMTAForward_ch16 260.8, 252.3, 250.3
+		// and 277.4 ms against 277.2 at two, so the spill boundary is real and sits at eight.
+		// The f64 band moved with it: GemmDirF64_1024 19.10 to 15.74 ms, -17.6%, and the
+		// 512x2048x2048 cell -11.7%.
+		//
+		// Bit-identical at any factor, which is what makes the sweep cheap: every element still
+		// adds its p, p+1 ... p+5 contributions as separate roundings in ascending order, never
+		// as a summed pair, so TestGemmBandUnrollIsBitExact gates every arm of the sweep.
 		p := 0
-		for ; p+1 < k; p += 2 {
+		for ; p+5 < k; p += 6 {
 			bp0 := B[p*n : (p+1)*n]
 			bp1 := B[(p+1)*n : (p+2)*n]
-			a00, a01 := float64(A[(i+0)*k+p]), float64(A[(i+0)*k+p+1])
-			a10, a11 := float64(A[(i+1)*k+p]), float64(A[(i+1)*k+p+1])
-			a20, a21 := float64(A[(i+2)*k+p]), float64(A[(i+2)*k+p+1])
-			a30, a31 := float64(A[(i+3)*k+p]), float64(A[(i+3)*k+p+1])
+			bp2 := B[(p+2)*n : (p+3)*n]
+			bp3 := B[(p+3)*n : (p+4)*n]
+			bp4 := B[(p+4)*n : (p+5)*n]
+			bp5 := B[(p+5)*n : (p+6)*n]
+			a00, a01, a02, a03, a04, a05 := float64(A[(i+0)*k+p]), float64(A[(i+0)*k+p+1]), float64(A[(i+0)*k+p+2]), float64(A[(i+0)*k+p+3]), float64(A[(i+0)*k+p+4]), float64(A[(i+0)*k+p+5])
+			a10, a11, a12, a13, a14, a15 := float64(A[(i+1)*k+p]), float64(A[(i+1)*k+p+1]), float64(A[(i+1)*k+p+2]), float64(A[(i+1)*k+p+3]), float64(A[(i+1)*k+p+4]), float64(A[(i+1)*k+p+5])
+			a20, a21, a22, a23, a24, a25 := float64(A[(i+2)*k+p]), float64(A[(i+2)*k+p+1]), float64(A[(i+2)*k+p+2]), float64(A[(i+2)*k+p+3]), float64(A[(i+2)*k+p+4]), float64(A[(i+2)*k+p+5])
+			a30, a31, a32, a33, a34, a35 := float64(A[(i+3)*k+p]), float64(A[(i+3)*k+p+1]), float64(A[(i+3)*k+p+2]), float64(A[(i+3)*k+p+3]), float64(A[(i+3)*k+p+4]), float64(A[(i+3)*k+p+5])
 			for j, bv0 := range bp0 {
-				b0, b1 := float64(bv0), float64(bp1[j])
+				b0, b1, b2, b3, b4, b5 := float64(bv0), float64(bp1[j]), float64(bp2[j]), float64(bp3[j]), float64(bp4[j]), float64(bp5[j])
 				v0 := c0[j]
 				v0 += a00 * b0
 				v0 += a01 * b1
+				v0 += a02 * b2
+				v0 += a03 * b3
+				v0 += a04 * b4
+				v0 += a05 * b5
 				c0[j] = v0
 				v1 := c1[j]
 				v1 += a10 * b0
 				v1 += a11 * b1
+				v1 += a12 * b2
+				v1 += a13 * b3
+				v1 += a14 * b4
+				v1 += a15 * b5
 				c1[j] = v1
 				v2 := c2[j]
 				v2 += a20 * b0
 				v2 += a21 * b1
+				v2 += a22 * b2
+				v2 += a23 * b3
+				v2 += a24 * b4
+				v2 += a25 * b5
 				c2[j] = v2
 				v3 := c3[j]
 				v3 += a30 * b0
 				v3 += a31 * b1
+				v3 += a32 * b2
+				v3 += a33 * b3
+				v3 += a34 * b4
+				v3 += a35 * b5
 				c3[j] = v3
 			}
 		}
