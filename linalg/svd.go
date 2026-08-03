@@ -56,6 +56,24 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 				// is a SECOND pass over the same memory. The cached form cannot win even in
 				// principle — a skipped pair still needs gamma, so it streams the columns either
 				// way. Do not retry it; fewer passes or fewer pairs are the only levers here.
+				//
+				// THE OBVIOUS REPAIR TO THAT ATTEMPT WAS ALSO TRIED, AND IS ALSO SLOWER. Keep a
+				// maintained nrm2[] and refresh the two entries INSIDE the rotation loop, from
+				// the values it is already writing. That adds no pass anywhere, so the earlier
+				// note's reasoning does not cover it — and it still lost: SVD_192x192 90.4 to
+				// 109.3 ms, SVD_128x128 26.0 to 30.8, SVDPCA 37.6 to 48.7, with Cholesky512 flat
+				// as a control. Bit-identical throughout (the refresh runs over ascending k with
+				// one accumulator on the same operands), so the digest test stayed green and only
+				// the clock disagreed.
+				//
+				// The reason generalizes past this function: alpha, beta and gamma are three
+				// INDEPENDENT chains over one streamed pair of columns, and independent chains
+				// interleave into the latency of a single chain. The three cost what one costs.
+				// Deleting two of them therefore buys nothing, while the rotation loop that
+				// absorbed the work gained two chains it did not have — a pure transfer of cost
+				// from a loop where it was free to one where it is not. Arithmetic is only worth
+				// removing from a loop that is throughput-bound, and a reduction over streamed
+				// memory usually is not.
 				var alpha, beta, gamma float64
 				for k := range m {
 					alpha += ci[k] * ci[k]

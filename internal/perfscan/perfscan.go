@@ -17980,7 +17980,13 @@ func mkIndependentReductionFinding(fset *token.FileSet, n ast.Node, item, acc, s
 				" constant offset both did. It has to depend on the shared source's index and be"+
 				" large enough to reorder the top of the list; at that point the oracle reddens"+
 				" immediately. A last-bit change is genuinely unobservable here, which is a fact"+
-				" about the contract rather than a hole in the test", item, acc, shared, shared, shared),
+				" about the contract rather than a hole in the test"+
+				" THE CONVERSE DOES NOT HOLD. This transform wins by removing PASSES, not by"+
+				" adding arithmetic, and taking chains AWAY from a reduction that already has"+
+				" several buys nothing: independent chains interleave into the latency of one,"+
+				" so three cost what one costs. Measured twice on the Jacobi SVD, both slower,"+
+				" the second time with no extra pass at all and bit-identical output —"+
+				" SVD_192x192 90.4 to 109.3 ms", item, acc, shared, shared, shared),
 		}
 	}
 }
@@ -18298,6 +18304,47 @@ func pureCopyNest(body *ast.BlockStmt) string {
 // arithmetic. MEASURED on the GGUF weight transpose, which is already cache-blocked and was still
 // 84% of its own benchmark at one core: banding the source rows took
 // BenchmarkTiedHeadTransposePerCall from 154.2 ms to 49.8, a 66.3% cut, on the model LOAD path.
+// loopSpansAParameterRange reports whether a loop runs from one PARAMETER to another, as in
+// "for r := lo; r < hi; r++". Such a function is not a serial nest that forgot to fan out —
+// it IS the body of somebody else's fan-out, handed the band it is meant to cover, and the
+// call to the helper lives in the caller where this check cannot see it. Two conv im2col
+// fill functions were reported for exactly this reason, and both were already running inside
+// a parallel band pass.
+func loopSpansAParameterRange(n ast.Node, params map[string]bool) bool {
+	fs, ok := n.(*ast.ForStmt)
+	if !ok || fs.Init == nil || fs.Cond == nil {
+		return false
+	}
+	as, ok := fs.Init.(*ast.AssignStmt)
+	if !ok || len(as.Rhs) != 1 {
+		return false
+	}
+	lo, ok := as.Rhs[0].(*ast.Ident)
+	if !ok || !params[lo.Name] {
+		return false
+	}
+	be, ok := fs.Cond.(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	hi, ok := be.Y.(*ast.Ident)
+	return ok && params[hi.Name]
+}
+
+// declaredParamNames collects the parameter identifiers of fn.
+func declaredParamNames(fn *ast.FuncDecl) map[string]bool {
+	out := map[string]bool{}
+	if fn.Type == nil || fn.Type.Params == nil {
+		return out
+	}
+	for _, fl := range fn.Type.Params.List {
+		for _, nm := range fl.Names {
+			out[nm.Name] = true
+		}
+	}
+	return out
+}
+
 func serialPermutationFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
 	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
 		return nil
@@ -18313,9 +18360,13 @@ func serialPermutationFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDec
 		return nil
 	}
 	var out []finding
+	params := declaredParamNames(fn)
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if len(out) > 0 {
 			return false
+		}
+		if loopSpansAParameterRange(n, params) {
+			return false // already a band body; its fan-out is in the caller
 		}
 		body, iv := outerLoop(n)
 		if body == nil || iv == "" || loopDepthOf(body) < 2 {
