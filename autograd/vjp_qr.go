@@ -53,7 +53,38 @@ func init() {
 				mmi[j] = s
 			}
 		}
-		for k := range m { // −(Q̄ᵀ·Q)_ij = −Σ_k Q̄[k,i]·Q[k,j]
+		// EIGHT ROWS OF Q PER PASS. M does not vary with k, so the loop above walked the whole
+		// n x n matrix once per row of Q — a load and a store of M[i][j] for one subtraction
+		// each, which was 50.7% of this benchmark on a single line. Taking eight k at once
+		// loads and stores M[i][j] once for eight subtractions. Eight is the measured
+		// optimum: widths 12 and 16 regress on register pressure (8.38 and 8.35 ms against
+		// 7.87), and every width from 2 to 16 leaves the digests unchanged.
+		//
+		// BIT-IDENTICAL: each M[i][j] still sees k ascending, and the accumulator is an
+		// EXPLICIT LOCAL rather than a compound assignment — `mmi[j] -= a0*x0 + a1*x1 + ...`
+		// would subtract the SUM of the terms, which associates differently (T1183).
+		k := 0
+		for ; k+7 < m; k += 8 {
+			qb0, qb1, qb2, qb3, qb4, qb5, qb6, qb7 := qb[k+0], qb[k+1], qb[k+2], qb[k+3], qb[k+4], qb[k+5], qb[k+6], qb[k+7]
+			qd0, qd1, qd2, qd3, qd4, qd5, qd6, qd7 := qd[k+0], qd[k+1], qd[k+2], qd[k+3], qd[k+4], qd[k+5], qd[k+6], qd[k+7]
+			for i := range n {
+				a0, a1, a2, a3, a4, a5, a6, a7 := qb0[i], qb1[i], qb2[i], qb3[i], qb4[i], qb5[i], qb6[i], qb7[i]
+				mmi := mm[i]
+				for j := range n {
+					v := mmi[j]
+					v -= a0 * qd0[j]
+					v -= a1 * qd1[j]
+					v -= a2 * qd2[j]
+					v -= a3 * qd3[j]
+					v -= a4 * qd4[j]
+					v -= a5 * qd5[j]
+					v -= a6 * qd6[j]
+					v -= a7 * qd7[j]
+					mmi[j] = v
+				}
+			}
+		}
+		for ; k < m; k++ {
 			qbk, qdk := qb[k], qd[k]
 			for i := range n {
 				qbki, mmi := qbk[i], mm[i]

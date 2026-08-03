@@ -223,3 +223,56 @@ does not vary with the item" — exactly this — but matched only `*ast.RangeSt
 This kernel's inner loop is `for s := 0; s < samples; s++`, so the scan walked
 past the site its own description named. Reading both loop forms took the
 tree-wide count from 55 to **81**.
+
+## The QR backward's rank-1 update (T1184)
+
+`vjp_qr.go` builds M = R·R̄ᵀ − Q̄ᵀ·Q and the second term is a rank-1 update
+accumulated over the m rows of Q:
+
+```go
+for k := range m {
+    qbk, qdk := qb[k], qd[k]
+    for i := range n {
+        qbki, mmi := qbk[i], mm[i]
+        for j := range n {
+            mmi[j] -= qbki * qdk[j]   // 50.7% of the benchmark
+        }
+    }
+}
+```
+
+M does not vary with k, so the whole n×n matrix is walked once per row of Q — a
+load and a store of `M[i][j]` for a single subtraction each. Taking eight k per
+pass loads and stores it once for eight subtractions.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkQRVJP_256x128` | 10.90 ms | 7.87 ms | **−27.7%** |
+| `BenchmarkQRVJP_128x64` | 1.133 ms | 1.020 ms | −10.0% |
+
+The smaller cell moves less because that matrix fits in cache and the round trip
+being removed is cheap there.
+
+Eight is measured, not assumed: widths 12 and 16 regress on register pressure
+(8.38 and 8.35 ms against 7.87). Every width from 2 to 16 leaves the digests
+unchanged, which is the width-invariance gate from T1183 — the accumulator is an
+explicit local, so the subtractions keep ascending k rather than being folded
+into one compound assignment.
+
+### Three spellings the check could not read
+
+PS3075 describes this shape exactly and missed this site, because it hid behind
+all three at once:
+
+1. It accumulates with `-=`, and the check matched only `+=`. Subtraction is no
+   more associative than addition and the fix is identical.
+2. It addresses the buffer as `mm[i][j]`, and the check expected a bare
+   identifier or a base-plus-variable index — so the root resolved to nothing.
+3. It reaches the row through `mmi := mm[i]`, rebound on every pass of the item
+   loop. A per-item test on the row variable alone hides the shared buffer
+   behind it.
+
+Reading all three took the tree-wide count from 81 to **95**. The index-crossing
+rule in the root resolution is the one that keeps this sound: `dst[k][j]` with
+`k` the item is the item's own row, and reporting it would name a jam with
+nothing to hold.

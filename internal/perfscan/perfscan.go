@@ -19473,6 +19473,60 @@ func indexIsInnerVar(e ast.Expr, dv string) bool {
 	return false
 }
 
+// accumRoot walks an accumulator expression down to the buffer it lives in. A row-major
+// [][]float64 accumulator is written mm[i][j], so the thing being indexed by the inner
+// variable is itself an index expression and a bare-identifier test returns nothing at all.
+// Every index crossed on the way down must be independent of the item, or the memory is the
+// item's own and there is nothing shared to hold in a register.
+func accumRoot(x ast.Expr, item string) (string, bool) {
+	for {
+		switch e := unparen(x).(type) {
+		case *ast.Ident:
+			return e.Name, true
+		case *ast.IndexExpr:
+			if mentionsIdent(e.Index, item) {
+				return "", false
+			}
+			x = e.X
+		default:
+			return "", false
+		}
+	}
+}
+
+// rowAlias resolves a local bound to one row of a bigger buffer — `mmi := mm[i]`, or the same
+// binding inside a multiple assignment — back to that buffer. Without it a shared accumulator
+// reached through a row variable reads as per-item, because the row variable IS declared per
+// item even though the memory behind it is not. That is how the QR backward's rank-1 update
+// stayed invisible: 50.7% of its benchmark sat on `mmi[j] -= qbki * qdk[j]`, and the check
+// walked past it because `mmi` was rebound each pass.
+func rowAlias(body *ast.BlockStmt, name string) (root string, index ast.Expr, ok bool) {
+	ast.Inspect(body, func(n ast.Node) bool {
+		if ok {
+			return false
+		}
+		as, isAssign := n.(*ast.AssignStmt)
+		if !isAssign || len(as.Lhs) != len(as.Rhs) {
+			return true
+		}
+		for i, lhs := range as.Lhs {
+			if identName(lhs) != name {
+				continue
+			}
+			ix, isIndex := unparen(as.Rhs[i]).(*ast.IndexExpr)
+			if !isIndex {
+				continue
+			}
+			if r := identName(ix.X); r != "" {
+				root, index, ok = r, ix.Index, true
+				return false
+			}
+		}
+		return true
+	})
+	return
+}
+
 // sharedAccumulatorFindings flags PS3075 — an item loop whose inner loop accumulates into a
 // buffer that does not vary with the item, so that buffer is loaded and stored once per item.
 func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
@@ -19530,7 +19584,12 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 					return false
 				}
 				as, ok := w.(*ast.AssignStmt)
-				if !ok || as.Tok != token.ADD_ASSIGN || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+				// += OR -=. A subtractive accumulation is the same shape and the same fix, and
+				// it is not a rare spelling: the QR backward's rank-1 update is written with -=
+				// and was 50.7% of its benchmark. Subtraction is no more associative than
+				// addition, so the jam has the identical ordering obligation.
+				if !ok || (as.Tok != token.ADD_ASSIGN && as.Tok != token.SUB_ASSIGN) ||
+					len(as.Lhs) != 1 || len(as.Rhs) != 1 {
 					return true
 				}
 				ix, ok := as.Lhs[0].(*ast.IndexExpr)
@@ -19541,12 +19600,21 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 				if !ok || !indexIsInnerVar(ix.Index, dv) {
 					return true
 				}
-				acc := identName(ix.X)
+				acc, rooted := accumRoot(ix.X, jv)
+				if !rooted || jammed[acc] {
+					return true
+				}
 				// THE ACCUMULATOR MUST OUTLIVE THE ITEM. One rebound per item is the item's own
 				// output and is already written once; the finding is about a buffer every item
-				// reads and writes in turn.
-				if acc == "" || perItem[acc] || mentionsIdent(ix.X, jv) || jammed[acc] {
-					return true
+				// reads and writes in turn. A ROW VARIABLE IS NOT AN EXCEPTION: `mmi := mm[i]`
+				// is rebound per pass while the memory behind it is shared, so resolve the
+				// alias before deciding.
+				if perItem[acc] {
+					root, idx, isRow := rowAlias(body, acc)
+					if !isRow || perItem[root] || jammed[root] || mentionsIdent(idx, jv) {
+						return true
+					}
+					acc = root
 				}
 				// AND THE CONTRIBUTION MUST BE THE ITEM'S. A term that does not vary with the
 				// item makes the whole accumulation loop-invariant, which is a hoist, not a jam.
@@ -19597,7 +19665,19 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" rather than merely removing loads. ONE OF ITS TWO ARMS WAS INVISIBLE TO AN"+
 						" EARLIER VERSION OF THIS CHECK: it addressed the accumulator as os[ob+d]"+
 						" instead of slicing a row first, and the index test only recognized a bare"+
-						" variable. Widening it to a SUM found 11 more sites in the tree",
+						" variable. Widening it to a SUM found 11 more sites in the tree."+
+						" FOURTH MEASUREMENT, AND THREE MORE SPELLINGS THIS CHECK COULD NOT READ:"+
+						" the QR backward's rank-1 update was 50.7%% of its benchmark on ONE line"+
+						" and hid behind all three at once — it accumulates with -= rather than"+
+						" +=, it addresses the buffer as mm[i][j] rather than as a bare name, and"+
+						" it reaches it through a row variable rebound each pass (mmi := mm[i]),"+
+						" which reads as per-item even though the memory is not. Jamming it eight"+
+						" rows wide took BenchmarkQRVJP_256x128 from 10.90 to 7.87 ms, -27.7%%,"+
+						" and the 128x64 cell from 1.133 to 1.020 ms, -10.0%% — smaller because"+
+						" that matrix fits in cache and the round trip this removes is cheap"+
+						" there. Reading the three spellings took the tree-wide count from 81 to"+
+						" 95. EIGHT WAS THE MEASURED OPTIMUM, not a default: widths 12 and 16"+
+						" regress on register pressure (8.38 and 8.35 ms)",
 						acc, jv, acc, dv, acc, dv, acc, dv),
 				})
 				return false
