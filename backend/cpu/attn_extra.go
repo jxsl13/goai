@@ -212,7 +212,43 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						}
 					}
 				} else {
-					for j := j0; j < j1; j++ {
+					// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term reduction into
+					// one accumulator, so the loop is bound by the latency of a dependent add
+					// chain; four keys give four chains that interleave and load each query element
+					// once. This is the UNMASKED block of the flash kernel, where every key in the
+					// block is live, so no uniformity test is needed — the causal edge blocks keep
+					// the branch above.
+					//
+					// Bit-identical: each score sums its own terms in ascending d into its own
+					// accumulator, and the scale and the running block maximum are applied in
+					// ascending j.
+					j := j0
+					for ; j+3 < j1; j += 4 {
+						b0 := j*dkv + kvOff
+						k0 := k[b0 : b0+dk : b0+dk]
+						b1 := b0 + dkv
+						k1 := k[b1 : b1+dk : b1+dk]
+						b2 := b1 + dkv
+						k2 := k[b2 : b2+dk : b2+dk]
+						b3 := b2 + dkv
+						k3 := k[b3 : b3+dk : b3+dk]
+						var s0, s1, s2, s3 float64
+						for d, qv := range qr {
+							q := float64(qv)
+							s0 += q * float64(k0[d])
+							s1 += q * float64(k1[d])
+							s2 += q * float64(k2[d])
+							s3 += q * float64(k3[d])
+						}
+						for o, sv := range [4]float64{s0, s1, s2, s3} {
+							sv *= scale
+							p[j+o-j0] = sv
+							if sv > mBlk {
+								mBlk = sv
+							}
+						}
+					}
+					for ; j < j1; j++ {
 						kBase := j*dkv + kvOff
 						kr := k[kBase : kBase+dk : kBase+dk]
 						var s float64

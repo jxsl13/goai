@@ -55,3 +55,24 @@ func BenchmarkFlashAttnFwdF32_512x8h(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkFlashAttnFwdF64_512x8h covers the F64 arm of the flash kernel, which had no cell.
+// Its F32 twin above rides a separate branch — the f32 path was unroll-and-jammed over four keys
+// by an earlier round and the f64 path was not — so a change to the f64 scores is invisible to
+// every existing benchmark, and measuring one against the other proves nothing.
+func BenchmarkFlashAttnFwdF64_512x8h(b *testing.B) {
+	be, _ := backend.Get(backend.CPU)
+	q := bench.RandF64(tensor.Shape{512, 512}, 1)
+	k := bench.RandF64(tensor.Shape{512, 512}, 2)
+	v := bench.RandF64(tensor.Shape{512, 512}, 3)
+	ctx := backend.NewContext().WithBackend(be)
+	ins := []*tensor.Tensor{q, k, v}
+	attrs := backend.AttnAttrs{Heads: 8, Causal: true, Block: 64}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpFlashAttn, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
