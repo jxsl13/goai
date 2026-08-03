@@ -86,9 +86,25 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 			z := -mn / s
 
 			q := qbuf[:len(wg)] // current integer levels (float-valued); overwritten by round()
+			// THE CLAMP IS A COMPARISON CHAIN, NOT TWO CALLS. math.Min and math.Max are
+			// function calls that carry the full NaN and signed-zero contract, and a profile of
+			// this quantizer put 29% of it in archMin and archMax alone — more than twice its
+			// own arithmetic.
+			//
+			// BIT-IDENTICAL, INCLUDING THE TWO CASES THAT MAKE THE NAIVE REWRITE WRONG.
+			// `r <= 0` rather than `r < 0` is what reproduces math.Max(0, -0) == +0; written
+			// with `<` the negative zero would survive. And NaN compares false against both
+			// bounds, so it falls through unchanged, which is what math.Min and math.Max also
+			// return when either operand is NaN.
 			round := func() {
 				for i, v := range wg {
-					q[i] = math.Min(maxLevel, math.Max(0, math.Round(v/s+z)))
+					r := math.Round(v/s + z)
+					if r <= 0 {
+						r = 0
+					} else if r > maxLevel {
+						r = maxLevel
+					}
+					q[i] = r
 				}
 			}
 			round()

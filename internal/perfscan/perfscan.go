@@ -234,6 +234,7 @@ var checks = []check{
 	{"PS3074", "inner-loop-ranges-over-a-shared-operand", "an item loop whose INNER loop ranges over an operand that does not vary with the item, so the whole operand is re-streamed once per item while the body writes per-item output. Jam the item loop — 4 items per pass over one traversal of the shared operand, each item keeping its own accumulators; a shared accumulator stays bit-identical by being held in a local across the 4 additions in the same ascending item order. MEASURED on the cpu attention backward, whose two key loops re-streamed the gradient row and the query row: BenchmarkMHA512/bwd/cpu 24.73 to 13.40 ms, -45.8%% (1.85x), forward and masked cells flat as controls. THIS IS THE SHAPE PS6010 CANNOT SEE — it requires the shared operand to appear as an INDEX expression, and a range subject never does, which is why the line holding 39%% of that benchmark was reported by nothing", false},
 	{"PS3075", "inner-loop-accumulates-into-a-shared-buffer", "an item loop whose INNER loop accumulates into a buffer that does not vary with the item, so every item makes a full load-store round trip through that buffer for one addition each. Jam the item loop — 4 items per pass, holding the accumulator element in a local across their four additions and storing once. BIT-IDENTICAL when the additions keep the same ascending item order. MEASURED on the cpu selective-attention kernel, where this weighted-sum loop was 26%% of the profile and a score loop in the same function 46%%: MHASelectF32CPU_1024x1024x64x16 191.3 to 100.9 ms, -47.3%% (1.90x), the 512 cell -42.7%%, the F64 arm -40.1%%, masked cell flat as a control. THE MIRROR OF PS3074 — there the inner loop SUBJECT is shared and the outputs per item; here the outputs are shared and the subject per item — and neither is reachable from PS6010", false},
 	{"PS3076", "unroll-factor-fixed-at-two", "a register-blocked loop taking TWO steps per pass. Two is what a register-pressure argument produces; the optimum is what a sweep produces. MEASURED on both gemm band kernels, each carrying a comment reasoning that four would spill: sweeping 3, 4, 6 and 8 found SIX best and eight back at baseline. MTAForward_ch16 277.2 to 250.3 ms (-9.7%%), ch8 -9.5%% on the f32 band; GemmDirF64_1024 19.10 to 15.74 ms (-17.6%%), 512x2048x2048 -11.7%% on the f64 band. BIT-IDENTICAL AT ANY FACTOR — each accumulator takes one rounding per step in ascending order, never a summed pair — so the existing bit-exact oracle gates every arm and the whole sweep costs one measurement each. SWEEP, DO NOT ARGUE", false},
+	{"PS3077", "minmax-clamp-in-a-loop", "math.Min wrapped around math.Max (or the reverse) inside a loop — a two-bound CLAMP written as two function calls that carry the whole NaN and signed-zero contract every iteration. MEASURED on the HQQ quantizer, 29%% of whose profile was archMin and archMax against 35%% of its own arithmetic: a comparison chain took BenchmarkHQQuantize 77.14 to 37.79 ms, -51.0%% (2.04x), an optimizer cell flat as a control. WRITE THE EQUIVALENT CHAIN, NOT THE OBVIOUS ONE: `if r <= lo` and not `<`, because `<` lets a negative zero through where math.Max(0,-0) returns +0; NaN must fall through both bounds untouched. GATE IT TWICE — a bit-for-bit table over -0, +0, NaN, both infinities and each boundary, AND a digest of the caller, since ordinary data never produces the cases that make the naive rewrite wrong", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1384,6 +1385,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sharedRangeSubjectFindings(fset, fn)...)
 		out = append(out, sharedAccumulatorFindings(fset, fn)...)
 		out = append(out, narrowUnrollFindings(fset, fn)...)
+		out = append(out, clampInLoopFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18544,6 +18546,87 @@ func sharedOperandIsJammed(outBody *ast.BlockStmt, acc string, derived map[strin
 		return true
 	})
 	return seen && all
+}
+
+// --- PS3077: a math.Min/math.Max clamp inside a loop -----------------------------------------
+
+// mathMinMaxCall reports whether e is a call to math.Min or math.Max, and which.
+func mathMinMaxCall(e ast.Expr) (string, *ast.CallExpr, bool) {
+	c, ok := unparen(e).(*ast.CallExpr)
+	if !ok {
+		return "", nil, false
+	}
+	sel, ok := c.Fun.(*ast.SelectorExpr)
+	if !ok || identName(sel.X) != "math" {
+		return "", nil, false
+	}
+	if sel.Sel.Name != "Min" && sel.Sel.Name != "Max" {
+		return "", nil, false
+	}
+	return sel.Sel.Name, c, true
+}
+
+// clampInLoopFindings flags PS3077 — a math.Min wrapped around a math.Max (or the reverse)
+// inside a loop: a two-bound clamp written as two function calls.
+func clampInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		_, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		found := false
+		ast.Inspect(body, func(m ast.Node) bool {
+			if found {
+				return false
+			}
+			me, ok := m.(ast.Expr)
+			if !ok {
+				return true
+			}
+			outer, oc, ok := mathMinMaxCall(me)
+			if !ok || len(oc.Args) != 2 {
+				return true
+			}
+			// THE NESTED FORM IS THE ONE THAT IS A CLAMP. A lone math.Min is often a genuine
+			// two-value choice; Min around Max is a value being held between two bounds, which
+			// is what a comparison chain replaces exactly.
+			for _, a := range oc.Args {
+				inner, _, ok := mathMinMaxCall(a)
+				if !ok || inner == outer {
+					continue
+				}
+				found = true
+				out = append(out, finding{
+					pos:      fset.Position(oc.Pos()),
+					category: "minmax-clamp-in-a-loop",
+					msg: fmt.Sprintf("math.%s around math.%s inside a loop is a two-bound CLAMP"+
+						" written as two function calls, and those calls carry the whole NaN and"+
+						" signed-zero contract at every iteration. MEASURED on the HQQ"+
+						" quantizer, whose profile was 29%% archMin and archMax against 35%% of"+
+						" its own arithmetic: replacing the clamp with a comparison chain took"+
+						" BenchmarkHQQuantize from 77.14 to 37.79 ms, -51.0%% (2.04x), with an"+
+						" optimizer benchmark flat as a control. WRITE THE CHAIN THAT IS ACTUALLY"+
+						" EQUIVALENT, not the obvious one: use `if r <= lo { r = lo }`, because"+
+						" `<` lets a NEGATIVE ZERO through where math.Max(0, -0) returns +0, and"+
+						" leave NaN to fall through both bounds untouched, which is what math.Min"+
+						" and math.Max also do when either operand is NaN. GATE IT TWICE — a"+
+						" table comparing the chain to the two calls bit-for-bit over -0, +0,"+
+						" NaN, both infinities and each boundary, AND a digest of the caller,"+
+						" because ordinary data never produces the two cases that make the naive"+
+						" rewrite wrong: the digest stayed GREEN under a `<` for `<=` mutation"+
+						" that the table caught", outer, inner),
+				})
+				return false
+			}
+			return true
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3076: an unroll factor fixed at two ---------------------------------------------------
