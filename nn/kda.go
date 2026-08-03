@@ -99,23 +99,29 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 		for c := range dk {
 			ar[c] = a.AtF64(t, c)
 		}
+		// ONE PASS OVER S PER STEP, not four. The four r-loops that used to run here — scale,
+		// S·k, the rank-1 delta write, S·q — each streamed the whole dv×dk state, and every one
+		// of them is INDEPENDENT ACROSS r: row r reads and writes only S[r*dk:(r+1)*dk] and its
+		// own sk[r]. Merging them touches each row once and keeps it in cache across all four
+		// stages instead of evicting it three times.
+		//
+		// BIT-IDENTICAL: every operation on row r happens in the same order on the same
+		// operands as before. The merge changes only WHEN a row is visited, never how — the two
+		// dot4 calls still see exactly the state the separate loops would have handed them,
+		// because each row's scale precedes its own S·k and its own delta write precedes its
+		// own S·q, which is the order the split loops produced for that row too.
 		for r := range dv {
 			Srow := S[r*dk : r*dk+dk]
 			for c := range dk {
 				Srow[c] *= ar[c]
 			}
-		}
-		for r := range dv {
-			sk[r] = dot4(S[r*dk:r*dk+dk], kt)
-		}
-		for r := range dv {
-			delta := bt * (v.AtF64(t, r) - sk[r])
+			skr := dot4(Srow, kt)
+			sk[r] = skr
+			delta := bt * (v.AtF64(t, r) - skr)
 			for c := range dk {
-				S[r*dk+c] += delta * kt[c]
+				Srow[c] += delta * kt[c]
 			}
-		}
-		for r := range dv {
-			out.SetF64(dot4(S[r*dk:r*dk+dk], qt), t, r)
+			out.SetF64(dot4(Srow, qt), t, r)
 		}
 	}
 	return out, nil
