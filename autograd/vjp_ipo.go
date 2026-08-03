@@ -24,12 +24,16 @@ func init() {
 
 		gpc := tensor.New(pc.Dtype(), pc.Shape())
 		gpl := tensor.New(pl.Dtype(), pl.Shape())
-		for i := range b {
-			h := (pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i))
-			d := scale * (h - target)
-			gpc.SetF64(d, i)
-			gpl.SetF64(-d, i)
-		}
+		elemVJP(b, []*tensor.Tensor{pc, rc, pl, rl}, []*tensor.Tensor{gpc, gpl},
+			func(in, out [][]float64, n int) {
+				pcv, rcv, plv, rlv, a, c := in[0], in[1], in[2], in[3], out[0], out[1]
+				for i := range n {
+					h := (pcv[i] - rcv[i]) - (plv[i] - rlv[i])
+					d := scale * (h - target)
+					a[i] = d
+					c[i] = -d
+				}
+			})
 		return []*tensor.Tensor{gpc, gpl, nil, nil}, nil // reference frozen
 	})
 }

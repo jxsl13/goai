@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -50,64 +51,90 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	// identical — every accumulator (sum, P) is float64 on ALL paths and F32 only
 	// widens the loaded logit. assign is read generically (T reads, dtype-agnostic
 	// index, off the hot N·T path). Contiguous() is called once (self when dense).
-	done := false
+	// Parallel per-token softmax into probs (each token independent → disjoint rows), then a
+	// SERIAL fold of P and the dispatch counts f in token order — byte-identical to the serial
+	// kernel (same per-token softmax, same left-fold), so the scalar loss stays bit-exact.
+	probs := make([]float64, tks*n)
+	filled := false
 	switch logits.Dtype() {
 	case tensor.F64:
 		lc := logits.Contiguous()
 		if lc.Dtype() == tensor.F64 {
 			ls := lc.Storage().F64()
-			for t := range tks {
-				base := t * n
-				m := math.Inf(-1)
-				for i := range n {
-					if v := ls[base+i]; v > m {
-						m = v
+			parallel.Rows(tks, func(tlo, thi int) {
+				for t := tlo; t < thi; t++ {
+					base := t * n
+					m := math.Inf(-1)
+					for i := range n {
+						if v := ls[base+i]; v > m {
+							m = v
+						}
+					}
+					// One exp per logit, not two. The sum pass and the normalize pass were each
+					// calling math.Exp on the same argument, and math.Exp is not inlined, so the
+					// repeat was a second evaluation rather than a subexpression the compiler
+					// folds. Storing the value and reloading it is exact, and sum still
+					// accumulates the same values in the same ascending order.
+					prow := probs[base : base+n]
+					var sum float64
+					for i := range n {
+						e := math.Exp(ls[base+i] - m)
+						prow[i] = e
+						sum += e
+					}
+					for i := range n {
+						prow[i] /= sum
 					}
 				}
-				var sum float64
-				for i := range n {
-					sum += math.Exp(ls[base+i] - m)
-				}
-				for i := range n {
-					P[i] += math.Exp(ls[base+i]-m) / sum
-				}
-				a := int(assign.AtF64(t))
-				if a < 0 || a >= n {
-					return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
-				}
-				f[a]++
-			}
-			done = true
+			})
+			filled = true
 		}
 	case tensor.F32:
 		lc := logits.Contiguous()
 		if lc.Dtype() == tensor.F32 {
 			ls := lc.Storage().F32()
-			for t := range tks {
-				base := t * n
-				m := math.Inf(-1)
-				for i := range n {
-					if v := float64(ls[base+i]); v > m {
-						m = v
+			parallel.Rows(tks, func(tlo, thi int) {
+				for t := tlo; t < thi; t++ {
+					base := t * n
+					m := math.Inf(-1)
+					for i := range n {
+						if v := float64(ls[base+i]); v > m {
+							m = v
+						}
+					}
+					// One exp per logit, not two. The sum pass and the normalize pass were each
+					// calling math.Exp on the same argument, and math.Exp is not inlined, so the
+					// repeat was a second evaluation rather than a subexpression the compiler
+					// folds. Storing the value and reloading it is exact, and sum still
+					// accumulates the same values in the same ascending order.
+					prow := probs[base : base+n]
+					var sum float64
+					for i := range n {
+						e := math.Exp(float64(ls[base+i]) - m)
+						prow[i] = e
+						sum += e
+					}
+					for i := range n {
+						prow[i] /= sum
 					}
 				}
-				var sum float64
-				for i := range n {
-					sum += math.Exp(float64(ls[base+i]) - m)
-				}
-				for i := range n {
-					P[i] += math.Exp(float64(ls[base+i])-m) / sum
-				}
-				a := int(assign.AtF64(t))
-				if a < 0 || a >= n {
-					return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
-				}
-				f[a]++
-			}
-			done = true
+			})
+			filled = true
 		}
 	}
-	if !done {
+	if filled {
+		for t := range tks {
+			base := t * n
+			for i := range n {
+				P[i] += probs[base+i]
+			}
+			a := int(assign.AtF64(t))
+			if a < 0 || a >= n {
+				return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
+			}
+			f[a]++
+		}
+	} else {
 		// Generic fallback for exotic dtypes (verbatim original loop).
 		for t := range tks {
 			m := math.Inf(-1)

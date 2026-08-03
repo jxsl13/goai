@@ -1,6 +1,10 @@
 package simd
 
-import "math"
+import (
+	"math"
+
+	"github.com/jxsl13/goai/internal/fmath"
+)
 
 // wkvScanScalar runs the RWKV-4 WKV recurrence for channels [cLo,cHi) — the
 // numerically-stable log-space scan (Peng et al. 2023). It mirrors the reference
@@ -31,11 +35,31 @@ func wkvScanStateScalar(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d, cLo, c
 			base := t*d + c
 			kk, vv := k[base], v[base]
 			ww := uc + kk
-			q := math.Max(pp, ww)
-			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+			// HALF THESE EXPS ARE PROVABLY ONE. q is the max of its two arguments, so
+			// whichever argument it equals gives exp(x-x) = exp(0), which is exactly 1 — no
+			// call needed. Testing q against each argument rather than branching on the
+			// comparison keeps NaN behavior identical: with a NaN operand math.Max yields NaN,
+			// both equality tests fail, and both exps are evaluated exactly as before.
+			// Bit-identical, and math.Exp(0) is exactly 1 so the surviving arithmetic is
+			// unchanged. exp was 75.6%% of this kernel's profile.
+			q := fmath.Max(pp, ww)
+			e1, e2 := 1.0, 1.0
+			if q != pp {
+				e1 = math.Exp(pp - q)
+			}
+			if q != ww {
+				e2 = math.Exp(ww - q)
+			}
 			out[base] = (e1*aa + e2*vv) / (e1*bb + e2)
-			q = math.Max(pp-wc, kk)
-			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+			ppw := pp - wc
+			q = fmath.Max(ppw, kk)
+			e1, e2 = 1.0, 1.0
+			if q != ppw {
+				e1 = math.Exp(ppw - q)
+			}
+			if q != kk {
+				e2 = math.Exp(kk - q)
+			}
 			aa = e1*aa + e2*vv
 			bb = e1*bb + e2
 			pp = q

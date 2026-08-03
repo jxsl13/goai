@@ -26,16 +26,21 @@ func init() {
 		scale := g.AtF64() * beta / float64(b)
 
 		gp := tensor.New(pl.Dtype(), pl.Shape())
-		for i := range b {
-			r := beta * (pl.AtF64(i) - rl.AtF64(i))
-			if lab.AtF64(i) != 0 { // desirable: L = λ_D·σ(z_ref−r)
-				s := sigmoidStable(zRef - r)
-				gp.SetF64(-scale*lambdaD*s*(1-s), i)
-			} else { // undesirable: L = λ_U·σ(r−z_ref)
-				s := sigmoidStable(r - zRef)
-				gp.SetF64(scale*lambdaU*s*(1-s), i)
-			}
-		}
+		elemVJP(b, []*tensor.Tensor{pl, rl, lab}, []*tensor.Tensor{gp},
+			func(in, out [][]float64, n int) {
+				plv, rlv, lv, o := in[0], in[1], in[2], out[0]
+				for i := range n {
+					r := beta * (plv[i] - rlv[i])
+					if lv[i] != 0 { // desirable: L = λ_D·σ(z_ref−r)
+						s := sigmoidStable(zRef - r)
+						o[i] = -scale * lambdaD * s * (1 - s)
+						continue
+					}
+					// undesirable: L = λ_U·σ(r−z_ref)
+					s := sigmoidStable(r - zRef)
+					o[i] = scale * lambdaU * s * (1 - s)
+				}
+			})
 		return []*tensor.Tensor{gp, nil, nil}, nil // reference, labels frozen
 	})
 }

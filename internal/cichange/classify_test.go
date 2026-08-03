@@ -15,8 +15,10 @@ func scratchRepo(t *testing.T, base, head map[string]string) (string, string, st
 	run := func(args ...string) string {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(),
-			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		cmd.Env = append(gitFreeEnv(),
+			"GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t",
+			// A global core.hooksPath or commit.gpgsign would otherwise reach in here.
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -109,5 +111,60 @@ func TestClassifyMissingBaseFailsOpen(t *testing.T) {
 	dir, _, head := scratchRepo(t, map[string]string{"x.go": goBase}, map[string]string{"README.md": "b"})
 	if got := Classify(defaultConfig(dir), dir, "deadbeef", head); got != Code {
 		t.Fatalf("missing base = %q, want %q", got, Code)
+	}
+}
+
+// TestScratchRepoIgnoresAmbientGitDir is the floor for the env scrub in scratchRepo. GIT_DIR
+// overrides repository discovery, so a helper that inherits it does its committing in whatever
+// repo the variable names, no matter where cmd.Dir points — and git sets GIT_DIR for every hook it
+// runs, which is how `git push` came to rewrite the branch it was pushing. The decoy stands in for
+// the developer's checkout: it must come out of the harness with the same tip and the same index.
+func TestScratchRepoIgnoresAmbientGitDir(t *testing.T) {
+	decoy := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = decoy
+		cmd.Env = append(gitFreeEnv(),
+			"GIT_AUTHOR_NAME=d", "GIT_AUTHOR_EMAIL=d@d", "GIT_COMMITTER_NAME=d", "GIT_COMMITTER_EMAIL=d@d",
+			"GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	read := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = decoy
+		cmd.Env = gitFreeEnv()
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	run("init", "-q")
+	if err := os.WriteFile(filepath.Join(decoy, "only.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "-A")
+	run("commit", "-qm", "decoy")
+	tip, index := read("rev-parse", "HEAD"), read("ls-files")
+
+	t.Setenv("GIT_DIR", filepath.Join(decoy, ".git"))
+	dir, base, head := scratchRepo(t,
+		map[string]string{"x.go": goBase}, map[string]string{"x.go": goBase + "\n// note\n"})
+
+	if got := read("rev-parse", "HEAD"); got != tip {
+		t.Fatalf("the harness committed into the ambient repo: tip %s -> %s", tip, got)
+	}
+	if got := read("ls-files"); got != index {
+		t.Fatalf("the harness replaced the ambient index: %q -> %q", index, got)
+	}
+	// And the same for the code under test: Classify takes a directory, so GIT_DIR must not be
+	// able to redirect it at another repository. Reading the decoy instead would fail to resolve
+	// the scratch revisions and fall through to Code, so this also pins the direction of the bug.
+	if got := Classify(defaultConfig(dir), dir, base, head); got != DocsOnly {
+		t.Fatalf("Classify read the ambient repo instead of dir: got %q, want %q", got, DocsOnly)
 	}
 }

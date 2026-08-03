@@ -30,23 +30,33 @@ func init() {
 		invN := gv / float64(b)
 
 		gNew := tensor.New(lpNew.Dtype(), lpNew.Shape())
-		for i := range b {
-			r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
-			a := adv.AtF64(i)
-			surr1 := r * a
-			surr2 := math.Max(1-eps, math.Min(1+eps, r)) * a
-
-			var dsurr float64
-			if surr1 <= surr2 {
-				dsurr = a * r // unclipped branch (dr/dlogπ = r)
-			} else if r > 1-eps && r < 1+eps {
-				dsurr = a * r // clipped branch but ratio inside the trust region
-			} // else: clamped flat → 0
-
-			d := lpRef.AtF64(i) - lpNew.AtF64(i)
-			dkl := 1 - math.Exp(d) // ∂kl/∂logπθ = 1 − exp(Δ)
-			gNew.SetF64(invN*(-dsurr+beta*dkl), i)
-		}
+		lo, hi := 1-eps, 1+eps
+		elemVJP(b, []*tensor.Tensor{lpNew, lpOld, lpRef, adv}, []*tensor.Tensor{gNew},
+			func(in, out [][]float64, n int) {
+				lnv, lov, lrv, av, o := in[0], in[1], in[2], in[3], out[0]
+				for i := range n {
+					r := math.Exp(lnv[i] - lov[i])
+					a := av[i]
+					// The clip as a comparison chain rather than math.Max(lo, math.Min(hi, r)):
+					// `c <= lo` and not `<` is what reproduces math.Max on a negative zero, and
+					// NaN falls through both bounds as math.Min and math.Max also leave it.
+					c := r
+					if c > hi {
+						c = hi
+					}
+					if c <= lo {
+						c = lo
+					}
+					dsurr := 0.0
+					if r*a <= c*a {
+						dsurr = a * r // unclipped branch (dr/dlogπ = r)
+					} else if r > lo && r < hi {
+						dsurr = a * r // clipped branch but ratio inside the trust region
+					} // else: clamped flat → 0
+					dkl := 1 - math.Exp(lrv[i]-lnv[i]) // ∂kl/∂logπθ = 1 − exp(Δ)
+					o[i] = invN * (-dsurr + beta*dkl)
+				}
+			})
 		return []*tensor.Tensor{gNew, nil, nil, nil}, nil // old, ref, advantage frozen
 	})
 }

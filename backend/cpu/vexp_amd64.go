@@ -325,6 +325,87 @@ func vtanhF32(dst, src []float32) {
 	}
 }
 
+// vsoftcapF32 is the f32-native Gemma-2 logit soft-cap cap·tanh(x/cap) on the AVX2
+// expF32x8 primitive — the vtanhF32 lane pre-scaled by 1/cap and re-scaled by cap
+// (the f32 twin of vsoftcapF64). Rides the model f32 tolerance (ADR-0021; expF32x8
+// is the same ~1-ulp poly the other f32 activations use). The scalar tail/no-AVX
+// fallback runs softcapF32 (its exact scalar twin).
+func vsoftcapF32(dst, src []float32, cap float32) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = softcapF32(v, cap)
+		}
+		return
+	}
+	capV := archsimd.BroadcastFloat32x8(cap)
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		zc := archsimd.LoadFloat32x8Slice(src[i:]).Div(capV)            // x/cap
+		a := zc.AsUint32x8().And(vAbs).AsFloat32x8()                    // |x/cap|
+		z := expF32x8(vZero.Sub(a.Add(a)))                              // e^(−2|x/cap|)
+		t := vOne.Sub(z).Div(vOne.Add(z))                               // tanh(|x/cap|)
+		t = t.AsUint32x8().Or(zc.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
+		t.Mul(capV).StoreSlice(dst[i:])                                 // ·cap
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = softcapF32(src[i], cap)
+	}
+}
+
+// softplusF32x8 is one 8-wide lane of the overflow-safe softplus
+// softplus(x) = max(x,0) + log(1 + e^(−|x|)) on the expF32x8 primitive. The log
+// argument v = 1 + e^(−|x|) ∈ (1,2] is ALWAYS a normal in [1,2), so this reuses
+// the vlogF32 mantissa poly WITHOUT any of its subnormal / zero / negative / Inf
+// special-case handling (v==2 at x=0 folds cleanly: exponent 1, log→ln2). Rides
+// the model f32 tolerance (ADR-0021), same as vtanhF32/vgeluF32/vsiluF32.
+func softplusF32x8(x archsimd.Float32x8) archsimd.Float32x8 {
+	ax := x.AsUint32x8().And(vAbs).AsFloat32x8() // |x|
+	e := expF32x8(vZero.Sub(ax))                 // e^(−|x|) ∈ (0,1]
+	v := vOne.Add(e)                             // 1 + e^(−|x|) ∈ (1,2] — well conditioned
+	// log(v), v ∈ [1,2]: exponent 0 (v<2) or 1 (v==2); mantissa poly, no specials.
+	bx := v.AsUint32x8()
+	ei := bx.ShiftAllRight(23).AsInt32x8().Sub(vBias)
+	m := bx.And(vMant).Or(vExp1).AsFloat32x8() // mantissa ∈ [1,2)
+	fold := m.GreaterEqual(vSqrt2)
+	m = m.Mul(vHalf).Merge(m, fold) // fold m ≥ √2 into [√½,√2)
+	ei = ei.Sub(fold.ToInt32x8())
+	ef := ei.ConvertToFloat32()
+	f := m.Sub(vOne) // Sterbenz-exact
+	z := f.Mul(f)
+	p := vLL0.MulAdd(f, vLL1)
+	p = p.MulAdd(f, vLL2)
+	p = p.MulAdd(f, vLL3)
+	p = p.MulAdd(f, vLL4)
+	p = p.MulAdd(f, vLL5)
+	p = p.MulAdd(f, vLL6)
+	p = p.MulAdd(f, vLL7)
+	p = p.MulAdd(f, vLL8)
+	y := f.Mul(z.Mul(p))
+	y = ef.MulAdd(vLLn2Lo, y)
+	y = y.Sub(vHalf.Mul(z))
+	lg := f.Add(y)
+	lg = ef.MulAdd(vLLn2Hi, lg) // log(v)
+	return x.Max(vZero).Add(lg) // max(x,0) + log(1+e^(−|x|))
+}
+
+// vsoftplusF32 is the f32-native softplus (Mamba Δ / griffin/hymba gates / focal &
+// reward losses) — 8-wide AVX2 softplusF32x8, scalar softplusF32 tail/no-AVX.
+func vsoftplusF32(dst, src []float32) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = softplusF32(v)
+		}
+		return
+	}
+	n8 := len(src) &^ 7
+	for i := 0; i < n8; i += 8 {
+		softplusF32x8(archsimd.LoadFloat32x8Slice(src[i:])).StoreSlice(dst[i:])
+	}
+	for i := n8; i < len(src); i++ {
+		dst[i] = softplusF32(src[i])
+	}
+}
+
 func vlogF32(dst, src []float32) {
 	if !vexpHasAVX {
 		for i, v := range src {

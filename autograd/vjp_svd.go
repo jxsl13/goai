@@ -59,9 +59,8 @@ func init() {
 			}
 		}
 		// Ā_core = U·mid·Vᵀ : T = mid·Vᵀ, then U·T.
-		tmp := make([][]float64, n)
-		for a := range n {
-			tmp[a] = make([]float64, n)
+		tmp := alloc2D(n, n)
+		logdetParallelIdx(n, n*n*n, func(a int) {
 			for j := range n {
 				var sum float64 // (mid·Vᵀ)_aj = Σ_b mid[a,b]·V[j,b]
 				for b := range n {
@@ -69,9 +68,11 @@ func init() {
 				}
 				tmp[a][j] = sum
 			}
-		}
+		})
 		abar := tensor.New(ut.Dtype(), tensor.Shape{m, n})
-		for i := range m {
+		// Rows of Ā are independent — row i reads U[i] and all of T and writes only its own row —
+		// and SetF64 lands on distinct offsets, so the split is bit-identical.
+		logdetParallelIdx(m, m*n*n, func(i int) {
 			for j := range n {
 				var sum float64 // (U·T)_ij = Σ_a U[i,a]·T[a,j]
 				for a := range n {
@@ -79,7 +80,7 @@ func init() {
 				}
 				abar.SetF64(sum, i, j)
 			}
-		}
+		})
 
 		// tall correction (m>n): (I − U·Uᵀ)·Ū·diag(1/s)·Vᵀ, added to Ā.
 		if m > n {
@@ -91,37 +92,72 @@ func init() {
 				}
 			}
 			utw := matTmulRect(u, w, m, n) // Uᵀ·W (n×n)
-			for i := range m {
-				for j := range n {
-					// proj = (W − U·(Uᵀ·W)); add (proj·Vᵀ)_ij.
-					var add float64
-					for b := range n {
-						projib := w[i][b]
-						for a := range n {
-							projib -= u[i][a] * utw[a][b]
-						}
-						add += projib * v[j][b]
-					}
-					abar.SetF64(abar.AtF64(i, j)+add, i, j)
-				}
-			}
+			addTallCorrection(abar, w, u, utw, v, m, n)
 		}
 		return []*tensor.Tensor{abar}, nil
 	})
 }
 
-// matTmulRect returns Xᵀ·Y where X is p×q and Y is p×q, giving a q×q matrix
-// (Xᵀ·Y)[i,j] = Σ_k X[k,i]·Y[k,j].
-func matTmulRect(x, y [][]float64, p, q int) [][]float64 {
-	out := make([][]float64, q)
-	for i := range q {
-		out[i] = make([]float64, q)
-		for j := range q {
-			var s float64
-			for k := range p {
-				s += x[k][i] * y[k][j]
+// addTallCorrection adds (proj·Vᵀ) to Ā, where proj = W − U·(Uᵀ·W) is the part of Ū outside col(U)
+// — the term that exists only for a strictly tall matrix.
+//
+// The projection row depends on i and b ONLY. The original rebuilt it INSIDE the j loop, n times
+// over, which made this term O(m·n³) where O(m·n²) suffices; hoisting it deletes an entire factor
+// of n of arithmetic rather than merely improving locality.
+//
+// It is a named function rather than an inline loop so it can be gated: a test comparing two
+// implementations it defines itself proves a mathematical identity but cannot detect a change to
+// the shipped code, which is what the first version of that test did.
+//
+// BIT-IDENTICAL: each proj[b] is the same subtraction sequence over ascending a, and each add still
+// accumulates over ascending b with the same operands.
+func addTallCorrection(abar *tensor.Tensor, w, u, utw, v [][]float64, m, n int) {
+	// Rows are independent: row i reads w[i], u[i], utw and v, and writes only Ā's row i. The
+	// projection scratch was ONE buffer for the whole loop, which workers cannot share, so it
+	// becomes one row of a single m*n slab — one allocation rather than one per row, and no
+	// dependence on how the helper assigns indices to workers.
+	projAll := make([]float64, m*n)
+	logdetParallelIdx(m, m*n*n, func(i int) {
+		proj := projAll[i*n : i*n+n : i*n+n]
+		wi, ui := w[i], u[i]
+		for b := range n {
+			proj[b] = wi[b]
+		}
+		for a := range n {
+			uia, utwa := ui[a], utw[a]
+			for b := range n {
+				proj[b] -= uia * utwa[b]
 			}
-			out[i][j] = s
+		}
+		for j := range n {
+			var add float64
+			vj := v[j]
+			for b := range n {
+				add += proj[b] * vj[b]
+			}
+			abar.SetF64(abar.AtF64(i, j)+add, i, j)
+		}
+	})
+}
+
+// matTmulRect returns Xᵀ·Y where X is p×q and Y is p×q, giving a q×q matrix
+// (Xᵀ·Y)[i,j] = Σ_k X[k,i]·Y[k,j]. It computes it for two p-by-q matrices, with the CONTRACTION index outermost.
+//
+// Written the obvious way — s accumulating over k innermost — both operands are read down a column
+// and every step jumps a whole row to use eight bytes. The k loop only accumulates, so it can move
+// outside; then x[k] and y[k] are contiguous rows and out[i] is a row (§INTERCHANGE-BEFORE-TRANSPOSE,
+// where the same move beat transposing three to one at zero memory cost).
+//
+// BIT-IDENTICAL: every out[i][j] still sums the same p products in ascending k order.
+func matTmulRect(x, y [][]float64, p, q int) [][]float64 {
+	out := alloc2D(q, q)
+	for k := range p {
+		xk, yk := x[k], y[k]
+		for i := range q {
+			xki, outi := xk[i], out[i]
+			for j := range q {
+				outi[j] += xki * yk[j]
+			}
 		}
 	}
 	return out

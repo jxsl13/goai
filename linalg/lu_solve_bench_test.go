@@ -42,3 +42,10 @@ func benchSolve(b *testing.B, n, cols int) {
 func BenchmarkLUSolve_64x64(b *testing.B)   { benchSolve(b, 64, 64) }
 func BenchmarkLUSolve_128x128(b *testing.B) { benchSolve(b, 128, 128) }
 func BenchmarkLUSolve_128x1(b *testing.B)   { benchSolve(b, 128, 1) } // control: single RHS
+
+// The column jam and the contiguous back-substitution both scale with the RHS width and with n,
+// so the pre-existing 64x64 and 128x128 cells are too small to show what they do. These size the
+// substitution the way real callers hit it — linalg.Inverse solves against an identity, so
+// cols == n, and nn/gptq and nn/sparsegpt call it at Hessian width (PROC-SWEEP-FIXTURE-SCALE-001).
+func BenchmarkLUSolve_512x512(b *testing.B) { benchSolve(b, 512, 512) }
+func BenchmarkLUSolve_768x768(b *testing.B) { benchSolve(b, 768, 768) }

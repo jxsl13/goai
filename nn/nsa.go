@@ -141,7 +141,59 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 	if ks, vs, os := flatF64(k), flatF64(v), flatF64(out); ks != nil && vs != nil && os != nil {
 		dm := k.Shape()[1]
 		m := math.Inf(-1)
-		for j := 0; j <= i; j++ {
+		// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term dot into ONE
+		// accumulator, so the loop runs at add latency rather than throughput, and qrow is
+		// re-streamed once per key. Four keys read it once and interleave four chains.
+		// Bit-identical: every score sums over the same ascending d into its own accumulator,
+		// and the scale, the store and the running maximum stay in ascending j.
+		//
+		// A group straddling the mask takes the original step one key at a time, exactly as the
+		// masked attention kernel does — abandoning the fast path for the rest of the row costs
+		// more than the branch on any mask whose live region is not a prefix.
+		jj := 0
+		for ; jj+3 <= i; jj += 4 {
+			if !keep(jj) || !keep(jj+1) || !keep(jj+2) || !keep(jj+3) {
+				for o := range 4 {
+					j := jj + o
+					if !keep(j) {
+						scores[j] = math.Inf(-1)
+						continue
+					}
+					krow := ks[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+					var sc float64
+					for d := range dk {
+						sc += qrow[d] * krow[d]
+					}
+					sc *= scale
+					scores[j] = sc
+					if sc > m {
+						m = sc
+					}
+				}
+				continue
+			}
+			b0 := jj*dm + off
+			k0 := ks[b0 : b0+dk : b0+dk]
+			k1 := ks[b0+dm : b0+dm+dk : b0+dm+dk]
+			k2 := ks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+			k3 := ks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+			var s0, s1, s2, s3 float64
+			for d := range dk {
+				q := qrow[d]
+				s0 += q * k0[d]
+				s1 += q * k1[d]
+				s2 += q * k2[d]
+				s3 += q * k3[d]
+			}
+			for o, sv := range [4]float64{s0, s1, s2, s3} {
+				sc := sv * scale
+				scores[jj+o] = sc
+				if sc > m {
+					m = sc
+				}
+			}
+		}
+		for j := jj; j <= i; j++ {
 			if !keep(j) {
 				scores[j] = math.Inf(-1)
 				continue
@@ -180,7 +232,29 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 			orow[d] = 0
 		}
 		if sum > 0 {
-			for j := 0; j <= i; j++ {
+			// FOUR KEYS PER PASS AGAIN: orow does not vary with j, so the key-at-a-time form
+			// makes a full load-store round trip through it for one addition each. Holding
+			// orow[d] in a local across four additions stores once. Bit-identical — the same
+			// four additions in the same ascending j, in a register instead of memory.
+			jv := 0
+			for ; jv+3 <= i; jv += 4 {
+				p0, p1 := scores[jv], scores[jv+1]
+				p2, p3 := scores[jv+2], scores[jv+3]
+				b0 := jv*dm + off
+				v0 := vs[b0 : b0+dk : b0+dk]
+				v1 := vs[b0+dm : b0+dm+dk : b0+dm+dk]
+				v2 := vs[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
+				v3 := vs[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
+				for d := range dk {
+					t := orow[d]
+					t += p0 * v0[d]
+					t += p1 * v1[d]
+					t += p2 * v2[d]
+					t += p3 * v3[d]
+					orow[d] = t
+				}
+			}
+			for j := jv; j <= i; j++ {
 				pj := scores[j]
 				vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
 				for d := range dk {

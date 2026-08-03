@@ -2,6 +2,7 @@ package backend
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"slices"
 	"strings"
 
@@ -115,6 +116,19 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 	// per index per combination inside the O(total) contraction loop, so it was the
 	// hottest map in the engine.
 	var val [256]int
+	// The contraction is a sum over the "summed" indices for EACH independent output position
+	// (order lists output indices first, so combo = outPos + outTotal·sumPos). Output positions
+	// therefore parallelize over disjoint writes; the summed loop stays serial per output to keep
+	// the ascending-combo accumulation order — bit-identical to the serial contraction.
+	outTotal := 1
+	for i := range outShape {
+		outTotal *= outShape[i]
+	}
+	if total == 0 || outTotal == 0 {
+		return out, nil
+	}
+	sumTotal := total / outTotal
+	sumOrder := order[len(outSub):]
 	// Typed fast path: when every operand and the output are F64, index the
 	// contiguous backing slices with precomputed row-major strides instead of the
 	// per-combination variadic AtF64/SetF64 dispatch below (each of which recomputes
@@ -137,27 +151,38 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 			opData[k] = c.Storage().F64()
 			opStride[k] = tensor.RowMajorStrides(c.Shape())
 		}
-		for combo := range total {
-			rem := combo
-			for _, ix := range order {
-				val[ix] = rem % size[ix]
-				rem /= size[ix]
-			}
-			prod := 1.0
-			for k, sub := range inSubs {
-				st := opStride[k]
-				off := 0
-				for pos := range len(sub) {
-					off += val[sub[pos]] * st[pos]
+		parallel.Rows(outTotal, func(olo, ohi int) {
+			var val [256]int
+			for oc := olo; oc < ohi; oc++ {
+				rem := oc
+				of := 0
+				for i := range outSub {
+					v := rem % size[outSub[i]]
+					rem /= size[outSub[i]]
+					val[outSub[i]] = v
+					of += v * outStride[i]
 				}
-				prod *= opData[k][off]
+				var acc float64
+				for sc := 0; sc < sumTotal; sc++ {
+					r := sc
+					for _, ix := range sumOrder {
+						val[ix] = r % size[ix]
+						r /= size[ix]
+					}
+					prod := 1.0
+					for k, sub := range inSubs {
+						st := opStride[k]
+						off := 0
+						for pos := range len(sub) {
+							off += val[sub[pos]] * st[pos]
+						}
+						prod *= opData[k][off]
+					}
+					acc += prod
+				}
+				outData[of] = acc
 			}
-			of := 0
-			for i := range len(outSub) {
-				of += val[outSub[i]] * outStride[i]
-			}
-			outData[of] += prod
-		}
+		})
 		return out, nil
 	}
 	// F32 twin of the fast path above: F32 operands otherwise fall through to the
@@ -183,27 +208,38 @@ func EinsumContract(inSubs [][]byte, outSub []byte, operands []*tensor.Tensor) (
 			opData[k] = c.Storage().F32()
 			opStride[k] = tensor.RowMajorStrides(c.Shape())
 		}
-		for combo := range total {
-			rem := combo
-			for _, ix := range order {
-				val[ix] = rem % size[ix]
-				rem /= size[ix]
-			}
-			prod := 1.0
-			for k, sub := range inSubs {
-				st := opStride[k]
-				off := 0
-				for pos := range len(sub) {
-					off += val[sub[pos]] * st[pos]
+		parallel.Rows(outTotal, func(olo, ohi int) {
+			var val [256]int
+			for oc := olo; oc < ohi; oc++ {
+				rem := oc
+				of := 0
+				for i := range outSub {
+					v := rem % size[outSub[i]]
+					rem /= size[outSub[i]]
+					val[outSub[i]] = v
+					of += v * outStride[i]
 				}
-				prod *= float64(opData[k][off])
+				var acc float32
+				for sc := 0; sc < sumTotal; sc++ {
+					r := sc
+					for _, ix := range sumOrder {
+						val[ix] = r % size[ix]
+						r /= size[ix]
+					}
+					prod := 1.0
+					for k, sub := range inSubs {
+						st := opStride[k]
+						off := 0
+						for pos := range len(sub) {
+							off += val[sub[pos]] * st[pos]
+						}
+						prod *= float64(opData[k][off])
+					}
+					acc = float32(float64(acc) + prod)
+				}
+				outData[of] = acc
 			}
-			of := 0
-			for i := range len(outSub) {
-				of += val[outSub[i]] * outStride[i]
-			}
-			outData[of] = float32(float64(outData[of]) + prod)
-		}
+		})
 		return out, nil
 	}
 	coords := make([][]int, len(inSubs))

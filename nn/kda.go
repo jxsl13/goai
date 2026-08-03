@@ -7,6 +7,29 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// dot4 returns Σ x[i]·y[i] with four independent accumulators, breaking the single-
+// accumulator dependency chain (each add waited a full FP-add latency on the previous)
+// so four chains retire in parallel. Reassociated (four partial sums combined
+// (s0+s1)+(s2+s3) plus the <4 tail), so not bit-identical to the ascending sum — rides
+// the model tolerance (the same accumulation numpy/BLAS blocking would produce). len(y)
+// must be ≥ len(x).
+func dot4(x, y []float64) float64 {
+	var s0, s1, s2, s3 float64
+	n := len(x)
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		s0 += x[i] * y[i]
+		s1 += x[i+1] * y[i+1]
+		s2 += x[i+2] * y[i+2]
+		s3 += x[i+3] * y[i+3]
+	}
+	s := (s0 + s1) + (s2 + s3)
+	for ; i < n; i++ {
+		s += x[i] * y[i]
+	}
+	return s
+}
+
 // KimiDeltaAttention computes KDA — the linear-attention core of Kimi Linear
 // (Team Kimi 2025, arXiv:2510.26692, §T559): the Gated Delta Rule with the
 // scalar forget gate refined to a PER-KEY-CHANNEL (diagonal) decay,
@@ -47,6 +70,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	sk := make([]float64, dv)   // S·k scratch
 	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
 	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
+	ar := make([]float64, dk)   // per-step decay row a_t (hoisted for the interchanged decay)
 	for t := range seq {
 		bt := beta.AtF64(t, 0)
 		var qn, kn float64
@@ -68,32 +92,36 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 				kt[c] *= kn
 			}
 		}
-		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ.
+		// decay each key channel, then the delta write S += β(v − S·k)·kᵀ. Hoist a_t's row
+		// once (same dk AtF64 as before), then interchange the decay to r-outer so the inner
+		// loop scales S's CONTIGUOUS row instead of striding S[r*dk+c] down a column (stride
+		// dk) per channel. Bit-exact: an element-wise scale, no reduction to reorder.
 		for c := range dk {
-			ac := a.AtF64(t, c)
-			for r := range dv {
-				S[r*dk+c] *= ac
-			}
+			ar[c] = a.AtF64(t, c)
 		}
+		// ONE PASS OVER S PER STEP, not four. The four r-loops that used to run here — scale,
+		// S·k, the rank-1 delta write, S·q — each streamed the whole dv×dk state, and every one
+		// of them is INDEPENDENT ACROSS r: row r reads and writes only S[r*dk:(r+1)*dk] and its
+		// own sk[r]. Merging them touches each row once and keeps it in cache across all four
+		// stages instead of evicting it three times.
+		//
+		// BIT-IDENTICAL: every operation on row r happens in the same order on the same
+		// operands as before. The merge changes only WHEN a row is visited, never how — the two
+		// dot4 calls still see exactly the state the separate loops would have handed them,
+		// because each row's scale precedes its own S·k and its own delta write precedes its
+		// own S·q, which is the order the split loops produced for that row too.
 		for r := range dv {
-			var s float64
+			Srow := S[r*dk : r*dk+dk]
 			for c := range dk {
-				s += S[r*dk+c] * kt[c]
+				Srow[c] *= ar[c]
 			}
-			sk[r] = s
-		}
-		for r := range dv {
-			delta := bt * (v.AtF64(t, r) - sk[r])
+			skr := dot4(Srow, kt)
+			sk[r] = skr
+			delta := bt * (v.AtF64(t, r) - skr)
 			for c := range dk {
-				S[r*dk+c] += delta * kt[c]
+				Srow[c] += delta * kt[c]
 			}
-		}
-		for r := range dv {
-			var o float64
-			for c := range dk {
-				o += S[r*dk+c] * qt[c]
-			}
-			out.SetF64(o, t, r)
+			out.SetF64(dot4(Srow, qt), t, r)
 		}
 	}
 	return out, nil

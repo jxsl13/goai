@@ -44,6 +44,7 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 	}
 	vs := make([][]float64, n)
 	betas := make([]float64, n)
+	sbuf := make([]float64, n) // per-column reflector dot products, reused across k
 	for k := range n {
 		var nrm float64 // ‖x‖ over rm[k:m, k]
 		for i := k; i < m; i++ {
@@ -72,14 +73,30 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		}
 		beta := 2 / vtv
 		betas[k] = beta
-		for j := k; j < n; j++ { // apply H_k to trailing columns
-			var s float64
-			for i := k; i < m; i++ {
-				s += v[i] * rm[i*n+j]
+		// Apply H_k to the trailing columns with the COLUMN index innermost. Written the other
+		// way round, each step of the inner loop jumps a whole row to use one element and the walk
+		// repeats once per column; with j innermost both passes stream contiguous rows and v[i] is
+		// loop-invariant across the row. The same interchange went -35.6%% on the triangular solve.
+		//
+		// BIT-IDENTICAL: every s[j] still accumulates over ascending i with the same operands, and
+		// every update still subtracts the same product. Only the order in which INDEPENDENT
+		// columns are visited changes.
+		for j := k; j < n; j++ {
+			sbuf[j] = 0
+		}
+		for i := k; i < m; i++ {
+			vi, row := v[i], rm[i*n:i*n+n]
+			for j := k; j < n; j++ {
+				sbuf[j] += vi * row[j]
 			}
-			bs := beta * s
-			for i := k; i < m; i++ {
-				rm[i*n+j] -= bs * v[i]
+		}
+		for j := k; j < n; j++ {
+			sbuf[j] *= beta
+		}
+		for i := k; i < m; i++ {
+			vi, row := v[i], rm[i*n:i*n+n]
+			for j := k; j < n; j++ {
+				row[j] -= sbuf[j] * vi
 			}
 		}
 		rm[k*n+k] = alpha
@@ -110,13 +127,21 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		}
 		v := vs[k]
 		for j := range n {
-			var s float64
-			for i := k; i < m; i++ {
-				s += v[i] * q[i*n+j]
+			sbuf[j] = 0
+		}
+		for i := k; i < m; i++ {
+			vi, row := v[i], q[i*n:i*n+n]
+			for j := range n {
+				sbuf[j] += vi * row[j]
 			}
-			bs := betas[k] * s
-			for i := k; i < m; i++ {
-				q[i*n+j] -= bs * v[i]
+		}
+		for j := range n {
+			sbuf[j] *= betas[k]
+		}
+		for i := k; i < m; i++ {
+			vi, row := v[i], q[i*n:i*n+n]
+			for j := range n {
+				row[j] -= sbuf[j] * vi
 			}
 		}
 	}

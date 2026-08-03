@@ -2,13 +2,18 @@ package classic
 
 import (
 	"math"
+	"runtime"
 	"sort"
+	"sync"
 )
 
 // histRadixCutoff is the column length above which the per-feature quantile sort switches
 // from sort.Float64s to the O(n) LSD radix (tree.go's proven transform). Below it the
 // comparison sort's lower constant wins.
 const histRadixCutoff = 512
+
+// gbmHistSetupParWork gates the one-time parallel per-feature binning in newHistBuilder (n·d work).
+const gbmHistSetupParWork = 1 << 17
 
 // radixSortF64 sorts col ascending with an 8-pass LSD radix on the order-preserving u64
 // transform of the float64 bits (negatives → ^bits, non-negatives → bits|sign — monotone in
@@ -109,34 +114,52 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 	b := &histBuilder{x: x, n: n, d: d, maxDepth: maxDepth, minLeaf: minLeaf, nbins: nbins}
 	b.edges = make([][]float64, d)
 	b.binned = make([]uint16, n*d)
-	col := make([]float64, n)
-	var rkeys, rtmp []uint64
-	if n >= histRadixCutoff {
-		rkeys = make([]uint64, n)
-		rtmp = make([]uint64, n)
-	}
-	for f := 0; f < d; f++ {
-		for i := 0; i < n; i++ {
-			col[i] = x[i][f]
-		}
+	// Bin every feature ONCE (sort → quantile edges → assign bin codes). Features are
+	// independent — each writes only edges[f] and the strided binned[·*d+f] column — so fan the
+	// one-time setup over GOMAXPROCS with PER-WORKER sort scratch (col/rkeys/rtmp). Bit-identical:
+	// each feature's binning is deterministic and independent of the others.
+	binFeatures := func(f0, f1 int) {
+		col := make([]float64, n)
+		var rkeys, rtmp []uint64
 		if n >= histRadixCutoff {
-			radixSortF64(col, rkeys, rtmp)
-		} else {
-			sort.Float64s(col)
+			rkeys = make([]uint64, n)
+			rtmp = make([]uint64, n)
 		}
-		ne := nbins - 1
-		ed := make([]float64, 0, ne)
-		for q := 1; q <= ne; q++ {
-			v := col[q*n/nbins]
-			if len(ed) == 0 || v > ed[len(ed)-1] {
-				ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+		for f := f0; f < f1; f++ {
+			for i := 0; i < n; i++ {
+				col[i] = x[i][f]
+			}
+			if n >= histRadixCutoff {
+				radixSortF64(col, rkeys, rtmp)
+			} else {
+				sort.Float64s(col)
+			}
+			ne := nbins - 1
+			ed := make([]float64, 0, ne)
+			for q := 1; q <= ne; q++ {
+				v := col[q*n/nbins]
+				if len(ed) == 0 || v > ed[len(ed)-1] {
+					ed = append(ed, v) // keep strictly ascending, drop duplicate quantiles
+				}
+			}
+			b.edges[f] = ed
+			for i := 0; i < n; i++ {
+				// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
+				b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
 			}
 		}
-		b.edges[f] = ed
-		for i := 0; i < n; i++ {
-			// bin = #edges strictly < x[i][f]  (SearchFloat64s: first idx with ed[idx] ≥ x)
-			b.binned[i*d+f] = uint16(sort.SearchFloat64s(ed, x[i][f]))
+	}
+	if d >= 2 && n*d >= gbmHistSetupParWork {
+		nw := runtime.GOMAXPROCS(0)
+		if nw > d {
+			nw = d
 		}
+		_ = parallelBuild(nw, func(c int) error {
+			binFeatures(c*d/nw, (c+1)*d/nw)
+			return nil
+		})
+	} else {
+		binFeatures(0, d)
 	}
 	// One histogram buffer per recursion level (the histogram-subtraction scheme
 	// keeps the parent's histogram live while its children are grown).
@@ -168,10 +191,52 @@ func (b *histBuilder) leafNode(idx []int, value float64) *gbmNode {
 // recent full-sample tree (see leafNode); satisfies contribGrower.
 func (b *histBuilder) lastContrib() []float64 { return b.contrib }
 
+// histBuildParWork gates the feature split in buildHist: fork only when the node's work —
+// samples times features — is large enough to pay for it. Small nodes deep in a tree run serial.
+const histBuildParWork = 1 << 17
+
+// histMinFeatPerWorker is the floor on a worker's share of the feature range. Every worker walks
+// the WHOLE sample list, so the per-sample cost of that walk (the row slice, the residual load)
+// is paid once per worker rather than once in total. Giving a worker too few features makes that
+// overhead the dominant term. Swept at d=20 with 12 cores, minimum of three runs on
+// BenchmarkGBMHist_hist_80k: 1 feature 212.7 ms, 2 features 216.8, 4 features 209.7, 8 features
+// 231.4. The floor matters at the TOP end — 8 leaves only two workers — and the 1-to-4 spread is
+// inside the run-to-run noise, so 4 is chosen for the margin it keeps on machines with more cores.
+const histMinFeatPerWorker = 4
+
 // buildHist clears buffer `buf` and accumulates the round target over idx into it.
+//
+// Split over FEATURES, not over samples. Each feature owns a disjoint window h[f*nb:(f+1)*nb] and
+// every sample contributes to exactly one bin of it, so a feature split gives each worker a
+// private region while each bin still accumulates its samples in ascending idx order — the result
+// is BIT-IDENTICAL. A sample-band split would need per-worker partial histograms merged
+// afterwards, which reassociates every bin's sum and is not.
 func (b *histBuilder) buildHist(idx []int, buf int) {
+	d := b.d
+	nw := 1
+	if w := runtime.GOMAXPROCS(0); w > 1 && d >= 2*histMinFeatPerWorker && len(idx)*d >= histBuildParWork {
+		nw = min(w, d/histMinFeatPerWorker)
+	}
+	if nw <= 1 {
+		b.buildHistBand(idx, buf, 0, d)
+		return
+	}
+	chunk := (d + nw - 1) / nw
+	var wg sync.WaitGroup
+	for f0 := 0; f0 < d; f0 += chunk {
+		wg.Add(1)
+		go func(f0, f1 int) {
+			defer wg.Done()
+			b.buildHistBand(idx, buf, f0, f1)
+		}(f0, min(f0+chunk, d))
+	}
+	wg.Wait()
+}
+
+// buildHistBand clears and accumulates the histogram columns of features [f0,f1).
+func (b *histBuilder) buildHistBand(idx []int, buf, f0, f1 int) {
 	h, nb := b.hist[buf], b.nbins
-	for f := 0; f < b.d; f++ {
+	for f := f0; f < f1; f++ {
 		base := f * nb
 		for j := 0; j <= len(b.edges[f]); j++ {
 			h[base+j] = histBin{}
@@ -185,8 +250,8 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 	for _, i := range idx {
 		yi := y[i]
 		br := binned[i*d : i*d+d : i*d+d]
-		base := 0
-		for f := 0; f < d; f++ {
+		base := f0 * nb
+		for f := f0; f < f1; f++ {
 			c := base + int(br[f])
 			h[c].sum += yi
 			h[c].cnt++

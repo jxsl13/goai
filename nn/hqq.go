@@ -86,9 +86,25 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 			z := -mn / s
 
 			q := qbuf[:len(wg)] // current integer levels (float-valued); overwritten by round()
+			// THE CLAMP IS A COMPARISON CHAIN, NOT TWO CALLS. math.Min and math.Max are
+			// function calls that carry the full NaN and signed-zero contract, and a profile of
+			// this quantizer put 29% of it in archMin and archMax alone — more than twice its
+			// own arithmetic.
+			//
+			// BIT-IDENTICAL, INCLUDING THE TWO CASES THAT MAKE THE NAIVE REWRITE WRONG.
+			// `r <= 0` rather than `r < 0` is what reproduces math.Max(0, -0) == +0; written
+			// with `<` the negative zero would survive. And NaN compares false against both
+			// bounds, so it falls through unchanged, which is what math.Min and math.Max also
+			// return when either operand is NaN.
 			round := func() {
 				for i, v := range wg {
-					q[i] = math.Min(maxLevel, math.Max(0, math.Round(v/s+z)))
+					r := math.Round(v/s + z)
+					if r <= 0 {
+						r = 0
+					} else if r > maxLevel {
+						r = maxLevel
+					}
+					q[i] = r
 				}
 			}
 			round()
@@ -98,10 +114,28 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 			for range cfg.iters {
 				// (a) W_e = shrink_p(W − Ŵ, β), Ŵ = s(q − z).
 				// (b) z = mean( q − (W − W_e)/s ), the argmin of the quadratic in z.
+				//
+				// The shrink zeroes |d| ≤ (1/β)·|d|^(p−1), and that test has a CLOSED FORM:
+				// multiplying both sides by |d|^(1−p) (positive) gives |d|^(2−p) ≤ 1/β, so the
+				// shrink returns 0 exactly when |d| ≤ (1/β)^(1/(2−p)). That bound depends only on
+				// β and p, so it is one pow per ITERATION instead of one per weight — and math.Pow
+				// is 55% of this quantizer's profile.
+				//
+				// The cut is pulled DOWN by a relative margin so this stays bit-identical rather
+				// than merely equivalent in real arithmetic. Below cutLow the old code provably
+				// returns 0, so the skip changes nothing; a value inside the margin falls through
+				// to the original path and still evaluates its pow. The margin is many orders
+				// above the rounding of the cut itself and costs only the vanishing fraction of
+				// weights that land inside it.
+				cutLow := math.Pow(1/beta, 1/(2-cfg.p)) * (1 - 1e-12)
 				var zsum float64
 				for i, v := range wg {
 					wHat := s * (q[i] - z)
-					we := shrinkLp(v-wHat, beta, cfg.p)
+					d := v - wHat
+					we := 0.0
+					if d > cutLow || d < -cutLow { // outside the certainly-zero band
+						we = shrinkLp(d, beta, cfg.p)
+					}
 					zsum += q[i] - (v-we)/s
 				}
 				z = zsum / float64(len(wg))

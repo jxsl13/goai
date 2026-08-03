@@ -3,6 +3,7 @@ package vision
 import (
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
@@ -433,7 +434,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	x, err = swinExec1(ctx, backend.OpAdd, nil, x, a)
+	x, err = visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +447,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1(ctx, backend.OpGELU, nil, f1)
+	gelu, err := visExec1(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +455,7 @@ func (b *SwinBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w,
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpAdd, nil, x, f2)
+	return visExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // forwardOne runs one [C,H,W] image to [1, classes] logits: patch-embed → stages
@@ -585,7 +586,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 			return nil, err
 		}
 	}
-	x, err = swinExec1(ctx, backend.OpAdd, nil, x, a)
+	x, err = visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
@@ -598,7 +599,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	gelu, err := swinExec1(ctx, backend.OpGELU, nil, f1)
+	gelu, err := visExec1(ctx, backend.OpGELU, nil, f1)
 	if err != nil {
 		return nil, err
 	}
@@ -606,7 +607,7 @@ func (b *SwinBlock) Forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (*
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpAdd, nil, x, f2)
+	return visExec2(ctx, backend.OpAdd, nil, x, f2)
 }
 
 // dtype reports the block's parameter dtype (from Wq).
@@ -617,18 +618,110 @@ func (b *SwinBlock) dtype() tensor.Dtype { return b.Wq.Dtype() }
 // windows, then per window and per head computes softmax(QKᵀ/√dₖ + relBias +
 // mask)·V, concatenates heads and windows, and applies the output projection.
 // masks is nil for W-MSA or a per-window additive [M²,M²] mask for SW-MSA.
+// swinF32 and swinF64 read a tensor's typed backing slice, so the fused attention arm below can be
+// written once over a type parameter instead of twice per dtype.
+func swinF32(t *tensor.Tensor) []float32 { return t.Storage().F32() }
+func swinF64(t *tensor.Tensor) []float64 { return t.Storage().F64() }
+
+// swinFusedWindowAttn is the inference arm of windowedAttention: same arithmetic, far fewer
+// dispatches.
+//
+// The per-window per-head loop was about 95% of this package's backend dispatches for about 2% of
+// its arithmetic — roughly ten Execute calls on 256-element tensors per (window, head) pair, each
+// one an output allocation plus an Attrs interface box. Seven of the ten are pure DATA MOVEMENT or
+// elementwise scaling: three column slices, one transpose, the 1/sqrt(dk) scale, the relative-bias
+// add, the mask add, and then two levels of Concat to reassemble what the slices took apart. This
+// arm does all of that as index arithmetic over the packed storage and keeps only the three calls
+// that are real arithmetic: Q·Kᵀ, the softmax, and the weights·V.
+//
+// BIT-IDENTITY. The movement is bit-identical by construction — no value is computed, only copied.
+// The scale/bias/mask chain is bit-identical BECAUSE it is written as three separately rounded
+// statements: fused into one expression, arm64 would contract `s*inv + bias` into an FMA and round
+// once where the dispatched path rounds twice (§PS3025). The two matmuls and the softmax are the
+// backend's own kernels, unchanged, so they cannot drift.
+//
+// The scratch tensors are reused across iterations. That is safe only because this arm runs with no
+// recorder: a taped run keeps its inputs alive for the backward pass, which is why the caller gates
+// on ctx.Recorder == nil and falls back to the dispatched path for training.
+func swinFusedWindowAttn[T float32 | float64](ctx *backend.Context, b *SwinBlock, q, k, v *tensor.Tensor,
+	numWin, n, dk int, inv T, biases, masks []*tensor.Tensor, get func(*tensor.Tensor) []T) (*tensor.Tensor, error) {
+	qs, ks, vs := get(q), get(k), get(v)
+	out := tensor.New(b.dtype(), tensor.Shape{numWin * n, b.Dim})
+	os := get(out)
+	qh := tensor.New(b.dtype(), tensor.Shape{n, dk})
+	kt := tensor.New(b.dtype(), tensor.Shape{dk, n})
+	vh := tensor.New(b.dtype(), tensor.Shape{n, dk})
+	qhs, kts, vhs := get(qh), get(kt), get(vh)
+	for w := range numWin {
+		base := w * n * b.Dim
+		var mk []T
+		if masks != nil {
+			mk = get(masks[w%len(masks)])
+		}
+		for hh := range b.Heads {
+			off := base + hh*dk
+			for i := range n {
+				row := off + i*b.Dim
+				copy(qhs[i*dk:(i+1)*dk], qs[row:row+dk])
+				copy(vhs[i*dk:(i+1)*dk], vs[row:row+dk])
+				krow := ks[row : row+dk]
+				for d := range dk {
+					kts[d*n+i] = krow[d] // the transpose, as the write pattern
+				}
+			}
+			sc, err := visExec2(ctx, backend.OpMatMul, nil, qh, kt) // [n, n]
+			if err != nil {
+				return nil, err
+			}
+			ss := get(sc)
+			var bh []T
+			if biases != nil {
+				bh = get(biases[hh])
+			}
+			for i := range ss {
+				// Each step is wrapped in a conversion to the type parameter. Separate STATEMENTS
+				// are not enough: the Go spec lets an implementation fuse floating-point operations
+				// ACROSS statements, and on arm64 it does — this loop written as three plain
+				// assignments contracted into an FMADD and diverged from the dispatched path by one
+				// ulp on 66 of 256 logits, which the bit-identity gate caught. Only an explicit
+				// conversion forces the intermediate rounding (§PS3025).
+				ss[i] = T(ss[i] * inv)
+				if bh != nil {
+					ss[i] = T(ss[i] + bh[i])
+				}
+				if mk != nil {
+					ss[i] = T(ss[i] + mk[i])
+				}
+			}
+			wgt, err := visExec1(ctx, backend.OpSoftmax, nil, sc)
+			if err != nil {
+				return nil, err
+			}
+			hd, err := visExec2(ctx, backend.OpMatMul, nil, wgt, vh)
+			if err != nil {
+				return nil, err
+			}
+			hs := get(hd)
+			for i := range n { // scattering here IS both levels of Concat, for free
+				copy(os[off+i*b.Dim:off+i*b.Dim+dk], hs[i*dk:(i+1)*dk])
+			}
+		}
+	}
+	return visExec2(ctx, backend.OpMatMul, nil, out, b.Wo)
+}
+
 func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor, numWin, m int, masks []*tensor.Tensor) (*tensor.Tensor, error) {
 	n := m * m
 	dk := b.Dim / b.Heads
-	q, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wq)
+	q, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wq)
 	if err != nil {
 		return nil, err
 	}
-	k, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wk)
+	k, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wk)
 	if err != nil {
 		return nil, err
 	}
-	v, err := swinExec1(ctx, backend.OpMatMul, nil, xWin, b.Wv)
+	v, err := visExec2(ctx, backend.OpMatMul, nil, xWin, b.Wv)
 	if err != nil {
 		return nil, err
 	}
@@ -642,11 +735,24 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			}
 		}
 	}
+	// The fused arm computes the same values with three dispatches per (window, head) instead of
+	// about ten. It is gated on there being no recorder: a taped run needs every intermediate on the
+	// tape for backprop, so training keeps the dispatched path below.
+	if ctx.Recorder == nil {
+		switch b.dtype() {
+		case tensor.F32:
+			return swinFusedWindowAttn(ctx, b, q, k, v, numWin, n, dk,
+				float32(1/math.Sqrt(float64(dk))), biases, masks, swinF32)
+		case tensor.F64:
+			return swinFusedWindowAttn(ctx, b, q, k, v, numWin, n, dk,
+				1/math.Sqrt(float64(dk)), biases, masks, swinF64)
+		}
+	}
 	rowSlice := func(t *tensor.Tensor, w int) (*tensor.Tensor, error) {
-		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
+		return visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: w * n, End: (w + 1) * n}, t)
 	}
 	colSlice := func(t *tensor.Tensor, hh int) (*tensor.Tensor, error) {
-		return swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
+		return visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh * dk, End: (hh + 1) * dk}, t)
 	}
 	winOuts := make([]*tensor.Tensor, numWin)
 	for w := range numWin {
@@ -676,61 +782,61 @@ func (b *SwinBlock) windowedAttention(ctx *backend.Context, xWin *tensor.Tensor,
 			if err != nil {
 				return nil, err
 			}
-			khT, err := swinExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
+			khT, err := visExec1(ctx, backend.OpTranspose, nil, kh) // [dk, n]
 			if err != nil {
 				return nil, err
 			}
-			sc, err := swinExec1(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
+			sc, err := visExec2(ctx, backend.OpMatMul, nil, qh, khT) // [n, n]
 			if err != nil {
 				return nil, err
 			}
-			if sc, err = swinExec1(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
+			if sc, err = visExec2(ctx, backend.OpMul, nil, sc, inv); err != nil { // B60: scale via OpMul
 				return nil, err
 			}
 			if biases != nil {
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
+				if sc, err = visExec2(ctx, backend.OpAdd, nil, sc, biases[hh]); err != nil {
 					return nil, err
 				}
 			}
 			if masks != nil {
 				// masks describe one image's numWin windows; when this runs over B·numWin batched
 				// windows the geometry (and mask) repeats every numWin, so index modulo (§batched).
-				if sc, err = swinExec1(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
+				if sc, err = visExec2(ctx, backend.OpAdd, nil, sc, masks[w%len(masks)]); err != nil {
 					return nil, err
 				}
 			}
-			wgt, err := swinExec1(ctx, backend.OpSoftmax, nil, sc) // over last axis
+			wgt, err := visExec1(ctx, backend.OpSoftmax, nil, sc) // over last axis
 			if err != nil {
 				return nil, err
 			}
-			if heads[hh], err = swinExec1(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
+			if heads[hh], err = visExec2(ctx, backend.OpMatMul, nil, wgt, vh); err != nil {
 				return nil, err
 			}
 		}
-		if winOuts[w], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
+		if winOuts[w], err = visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...); err != nil {
 			return nil, err
 		}
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, winOuts...)
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpMatMul, nil, cat, b.Wo)
+	return visExec2(ctx, backend.OpMatMul, nil, cat, b.Wo)
 }
 
 // headBias returns the [M²,M²] relative-position bias matrix for head hh, built
 // as oneHot·Table[:,hh] so it is differentiable w.r.t. the bias table.
 func (r *swinRelBias) headBias(ctx *backend.Context, hh int) (*tensor.Tensor, error) {
 	n := r.m * r.m
-	col, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
+	col, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: hh, End: hh + 1}, r.Table)
 	if err != nil {
 		return nil, err
 	}
-	flat, err := swinExec1(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
+	flat, err := visExec2(ctx, backend.OpMatMul, nil, r.oneHot, col) // [n·n, 1]
 	if err != nil {
 		return nil, err
 	}
-	return swinExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
+	return visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{n, n}}, flat)
 }
 
 // forward downsamples the token grid x[H·W, C] to [(H/2)·(W/2), 2C] by
@@ -747,7 +853,7 @@ func (mg *swinMerge) forward(ctx *backend.Context, x *tensor.Tensor, h, w int) (
 		}
 		subs[i] = s
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...) // [(H/2)(W/2), 4C]
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...) // [(H/2)(W/2), 4C]
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -775,7 +881,7 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 	}
 	cats := make([]*tensor.Tensor, batch)
 	for bi := range batch {
-		xi, err := swinExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
+		xi, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: bi * N, End: (bi + 1) * N}, x)
 		if err != nil {
 			return nil, 0, 0, err
 		}
@@ -787,11 +893,11 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 			}
 			subs[i] = s
 		}
-		if cats[bi], err = swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...); err != nil { // [(H/2·W/2), 4C]
+		if cats[bi], err = visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, subs...); err != nil { // [(H/2·W/2), 4C]
 			return nil, 0, 0, err
 		}
 	}
-	cat, err := swinExec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, cats...) // [batch·(H/2·W/2), 4C]
+	cat, err := visExecN(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, cats...) // [batch·(H/2·W/2), 4C]
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -808,9 +914,57 @@ func (mg *swinMerge) forwardBatched(ctx *backend.Context, x *tensor.Tensor, h, w
 
 // --- windowing/index helpers (all pure permutations of grid rows) ---
 
-// swinExec1 runs a single-output op and unwraps the result.
-func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
+// visExecN runs a single-output op and unwraps the result.
+func visExecN(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 	out, err := backend.Execute(ctx, op, in, at)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// visIns1Pool and visIns2Pool reuse the input slice backend.Execute takes, for the 1- and
+// 2-input ops on the windowed-attention path. Go builds a fresh slice for a variadic pack at
+// every call site, and windowedAttention issues eight of them per head per window.
+//
+// backend.Execute retains its inputs slice ONLY through ctx.Recorder.Record, which fires when a
+// tape is attached; with a nil Recorder the slice is dead the instant Execute returns, so it goes
+// straight back to the pool. Under a recorder both helpers defer to the variadic form, because
+// Record stores that exact slice in the tape node and a pooled one would be overwritten by the
+// next op — the same contract nlp's exec2 has carried since T960.
+var (
+	visIns1Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 1); return &s }}
+	visIns2Pool = sync.Pool{New: func() any { s := make([]*tensor.Tensor, 2); return &s }}
+)
+
+// visExec1 runs a 1-input op with a pooled input slice when the context is not recording.
+func visExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, a *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return visExecN(ctx, op, at, a)
+	}
+	sp := visIns1Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0] = a
+	out, err := backend.Execute(ctx, op, s, at)
+	s[0] = nil
+	visIns1Pool.Put(sp)
+	if err != nil {
+		return nil, err
+	}
+	return out[0], nil
+}
+
+// visExec2 runs a 2-input op with a pooled input slice when the context is not recording.
+func visExec2(ctx *backend.Context, op backend.Op, at backend.Attrs, a, b *tensor.Tensor) (*tensor.Tensor, error) {
+	if ctx.Recorder != nil {
+		return visExecN(ctx, op, at, a, b)
+	}
+	sp := visIns2Pool.Get().(*[]*tensor.Tensor)
+	s := *sp
+	s[0], s[1] = a, b
+	out, err := backend.Execute(ctx, op, s, at)
+	s[0], s[1] = nil, nil
+	visIns2Pool.Put(sp)
 	if err != nil {
 		return nil, err
 	}
@@ -821,7 +975,7 @@ func swinExec1(ctx *backend.Context, op backend.Op, at backend.Attrs, in ...*ten
 // row-gather: out[i] = t[idx[i]] (grad scatters back), so window partition,
 // cyclic shift, patch-merge grouping, and their inverses are all one gather.
 func swinGather(ctx *backend.Context, t *tensor.Tensor, idx []int, dtype tensor.Dtype) (*tensor.Tensor, error) {
-	return swinExec1(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
+	return visExec2(ctx, backend.OpEmbed, nil, t, swinIdxTensor(dtype, idx))
 }
 
 // swinIdxTensor builds a rank-1 float index tensor (OpEmbed reads indices as

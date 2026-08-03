@@ -219,7 +219,7 @@ func slowEMAUpdate(e *EMA) error {
 		}
 		for i := range p.Numel() {
 			w := p.AtF64(tensor.Unravel(i, p.Shape())...)
-			e.avg[pi][i] = e.Decay*e.avg[pi][i] + (1-e.Decay)*w
+			e.avg[pi][i] = float64(e.Decay*e.avg[pi][i]) + float64((1-e.Decay)*w)
 		}
 	}
 	return nil

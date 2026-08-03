@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync/atomic"
 )
 
 // nbPredictParallel runs body over the rows of x chunk-parallel across GOMAXPROCS (each
@@ -21,17 +22,23 @@ func nbPredictParallel(n, feat int, body func(i int)) {
 	if nw > n {
 		nw = n
 	}
-	csz := (n + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > n {
-			hi = n
+	// Rows are CLAIMED in blocks rather than dealt in one equal chunk per worker. An equal split
+	// waits for the slowest chunk, and four of this host's twelve cores are efficiency cores
+	// (§PS3011). Both of that check's preconditions hold here: a claim's working set is the rows it
+	// covers, and the body allocates nothing per call.
+	const grain = 256 // rows per claim: large enough to amortize the atomic, small enough to balance
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= n {
+				return nil
+			}
+			hi := min(lo+grain, n)
+			for i := lo; i < hi; i++ {
+				body(i)
+			}
 		}
-		for i := lo; i < hi; i++ {
-			body(i)
-		}
-		return nil
 	})
 }
 
@@ -168,10 +175,22 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 		counts[yi[i]]++
 	}
 	// per-class means
-	for i := range x {
-		c := yi[i]
-		for j := 0; j < d; j++ {
-			theta[c][j] += x[i][j]
+	//
+	// The row headers are hoisted and both operands cut to one length because the inner loop
+	// otherwise carries three bounds checks — on theta[c], on theta[c][j] and on x[i][j] — and
+	// each is a panic edge that splits the body into a separate basic block. Go's SSA will not
+	// hoist across a block that can panic, so c*24, i*24 and BOTH slice headers were being
+	// recomputed on every j even though all four are invariant in j: 14 of the 19 instructions in
+	// the loop were address arithmetic that should have been loop-invariant. Bit-identical — same
+	// operands, same i-ascending then j-ascending order, one FADDD per term, nothing reassociated.
+	// validateXY rejects ragged input, so the row cuts cannot truncate; a short row would panic at
+	// the slice expression rather than one index later, which is the same panic class.
+	for i, row := range x {
+		tc := theta[yi[i]][:d]
+		r := row[:d]
+		r = r[:len(tc)]
+		for j := range tc {
+			tc[j] += r[j]
 		}
 	}
 	for c := 0; c < nc; c++ {
@@ -180,11 +199,14 @@ func (m *GaussianNB) Fit(x [][]float64, y []int) error {
 		}
 	}
 	// per-class population variances (ddof=0, as in scikit-learn)
-	for i := range x {
+	for i, row := range x {
 		c := yi[i]
-		for j := 0; j < d; j++ {
-			dv := x[i][j] - theta[c][j]
-			sigma[c][j] += dv * dv
+		sc, tc := sigma[c][:d], theta[c][:d]
+		r := row[:d]
+		tc, r = tc[:len(sc)], r[:len(sc)]
+		for j := range sc {
+			dv := r[j] - tc[j]
+			sc[j] += dv * dv
 		}
 	}
 	for c := 0; c < nc; c++ {

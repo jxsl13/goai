@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
-	"github.com/jxsl13/goai/internal/bench"
 	"github.com/jxsl13/goai/backend/cuda"
+	"github.com/jxsl13/goai/internal/bench"
 	"github.com/jxsl13/goai/tensor"
 )
 

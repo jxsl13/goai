@@ -406,15 +406,24 @@ func (d *DQN) learn(k int) error {
 	if err != nil {
 		return err
 	}
-	// predictions without tape to fill non-taken entries
-	qPred, err := forward(backend.NewContext(), d.Net, states)
+	// ONE forward over the online net, not two. The non-taken entries of the target were filled
+	// from a separate untaped forward over the SAME net and the SAME states, with no optimizer step
+	// between it and the taped one below — so the two produced identical values and the first was
+	// pure waste, a full MLP forward over the batch on every environment step.
+	//
+	// The tape is opened before the target is built rather than after. A recorder only appends
+	// nodes as ops execute (it does not change execution), so the values are the same either way;
+	// what changes is that the target loop can now read the taped result.
+	tape := autograd.NewTape()
+	ctx := tape.Context()
+	q, err := forward(ctx, d.Net, states)
 	if err != nil {
 		return err
 	}
 	target := tensor.New(tensor.F64, tensor.Shape{len(batch), k})
 	for i, tr := range batch {
 		for a := range k {
-			target.SetF64(qPred.AtF64(i, a), i, a)
+			target.SetF64(q.AtF64(i, a), i, a)
 		}
 		y := tr.r
 		if !tr.done {
@@ -429,12 +438,6 @@ func (d *DQN) learn(k int) error {
 		target.SetF64(y, i, tr.a)
 	}
 
-	tape := autograd.NewTape()
-	ctx := tape.Context()
-	q, err := forward(ctx, d.Net, states)
-	if err != nil {
-		return err
-	}
 	loss, err := nn.MSE(ctx, q, target)
 	if err != nil {
 		return err

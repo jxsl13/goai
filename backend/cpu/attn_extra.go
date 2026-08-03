@@ -212,7 +212,43 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						}
 					}
 				} else {
-					for j := j0; j < j1; j++ {
+					// FOUR KEYS PER PASS OVER THE QUERY ROW. Each score is a dk-term reduction into
+					// one accumulator, so the loop is bound by the latency of a dependent add
+					// chain; four keys give four chains that interleave and load each query element
+					// once. This is the UNMASKED block of the flash kernel, where every key in the
+					// block is live, so no uniformity test is needed — the causal edge blocks keep
+					// the branch above.
+					//
+					// Bit-identical: each score sums its own terms in ascending d into its own
+					// accumulator, and the scale and the running block maximum are applied in
+					// ascending j.
+					j := j0
+					for ; j+3 < j1; j += 4 {
+						b0 := j*dkv + kvOff
+						k0 := k[b0 : b0+dk : b0+dk]
+						b1 := b0 + dkv
+						k1 := k[b1 : b1+dk : b1+dk]
+						b2 := b1 + dkv
+						k2 := k[b2 : b2+dk : b2+dk]
+						b3 := b2 + dkv
+						k3 := k[b3 : b3+dk : b3+dk]
+						var s0, s1, s2, s3 float64
+						for d, qv := range qr {
+							q := float64(qv)
+							s0 += q * float64(k0[d])
+							s1 += q * float64(k1[d])
+							s2 += q * float64(k2[d])
+							s3 += q * float64(k3[d])
+						}
+						for o, sv := range [4]float64{s0, s1, s2, s3} {
+							sv *= scale
+							p[j+o-j0] = sv
+							if sv > mBlk {
+								mBlk = sv
+							}
+						}
+					}
+					for ; j < j1; j++ {
 						kBase := j*dkv + kvOff
 						kr := k[kBase : kBase+dk : kBase+dk]
 						var s float64
@@ -588,7 +624,39 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				row[i] = 0
 			}
 			gn := gs[n*vd : n*vd+vd : n*vd+vd]
-			for m := 0; m <= n; m++ {
+			m := 0
+			if !isF32 {
+				// FOUR VALUE ROWS PER PASS OVER THE UPSTREAM GRADIENT. Each dp is a vd-term
+				// reduction into one accumulator, so this loop is bound by add latency; four give
+				// four chains that interleave and load each gn element once. The f32 arm below
+				// already reduces four at a time inside dot4T — this is its f64 twin, which had
+				// been left serial and had no benchmark to notice.
+				//
+				// Bit-identical: each dp sums its own terms in ascending j into its own
+				// accumulator, and the decay and the row update are applied in ascending m.
+				for ; m+3 <= n; m += 4 {
+					v0 := vs[(m+0)*vd : (m+0)*vd+vd : (m+0)*vd+vd]
+					v1 := vs[(m+1)*vd : (m+1)*vd+vd : (m+1)*vd+vd]
+					v2 := vs[(m+2)*vd : (m+2)*vd+vd : (m+2)*vd+vd]
+					v3 := vs[(m+3)*vd : (m+3)*vd+vd : (m+3)*vd+vd]
+					var d0, d1, d2, d3 float64
+					for j, gv := range gn {
+						g := float64(gv)
+						d0 += g * float64(v0[j])
+						d1 += g * float64(v1[j])
+						d2 += g * float64(v2[j])
+						d3 += g * float64(v3[j])
+					}
+					for o, dp := range [4]float64{d0, d1, d2, d3} {
+						dA := dp * decay[n-m-o]
+						km := ks[(m+o)*kd : (m+o)*kd+kd : (m+o)*kd+kd]
+						for i, kv := range km {
+							row[i] += dA * float64(kv)
+						}
+					}
+				}
+			}
+			for ; m <= n; m++ {
 				vm := vs[m*vd : m*vd+vd : m*vd+vd]
 				var dp float64
 				if isF32 {
@@ -623,7 +691,43 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 			}
 			km := ks[m*kd : m*kd+kd : m*kd+kd]
 			vm := vs[m*vd : m*vd+vd : m*vd+vd]
-			for n := m; n < l; n++ {
+			n := m
+			if !isF32 {
+				// Four query rows per pass over the key row, the f64 twin of the dot4T the f32 arm
+				// uses below. Only the SCORE is grouped: the rest of each iteration reads its own
+				// gradient row and updates the running rowV and rowK, and stays per-n in ascending
+				// order, so nothing else moves.
+				for ; n+3 < l; n += 4 {
+					q0 := qs[(n+0)*kd : (n+0)*kd+kd : (n+0)*kd+kd]
+					q1 := qs[(n+1)*kd : (n+1)*kd+kd : (n+1)*kd+kd]
+					q2 := qs[(n+2)*kd : (n+2)*kd+kd : (n+2)*kd+kd]
+					q3 := qs[(n+3)*kd : (n+3)*kd+kd : (n+3)*kd+kd]
+					var a0, a1, a2, a3 float64
+					for i, kv := range km {
+						f := float64(kv)
+						a0 += float64(q0[i]) * f
+						a1 += float64(q1[i]) * f
+						a2 += float64(q2[i]) * f
+						a3 += float64(q3[i]) * f
+					}
+					for o, a := range [4]float64{a0, a1, a2, a3} {
+						qn := qs[(n+o)*kd : (n+o)*kd+kd : (n+o)*kd+kd]
+						pnm := a * decay[n+o-m]
+						gn := gs[(n+o)*vd : (n+o)*vd+vd : (n+o)*vd+vd]
+						var dp float64
+						for j, gv := range gn {
+							gnj := float64(gv)
+							dp += gnj * float64(vm[j])
+							rowV[j] += pnm * gnj
+						}
+						dA := dp * decay[n+o-m]
+						for i, qv := range qn {
+							rowK[i] += dA * float64(qv)
+						}
+					}
+				}
+			}
+			for ; n < l; n++ {
 				qn := qs[n*kd : n*kd+kd : n*kd+kd]
 				var a float64
 				if isF32 {

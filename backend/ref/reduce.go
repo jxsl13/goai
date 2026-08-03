@@ -2,6 +2,7 @@ package ref
 
 import (
 	"fmt"
+	"github.com/jxsl13/goai/internal/parallel"
 	"math"
 
 	"github.com/jxsl13/goai/backend"
@@ -116,25 +117,65 @@ func reduceKernel(init float64, combine func(acc, x float64) float64, finalize f
 					break
 				}
 			}
+			leading := count > 1 && !trailing
+			for ax := 1; ax < nd; ax++ {
+				if !reduced[ax-1] && reduced[ax] { // a reduced axis after a kept one breaks the prefix
+					leading = false
+					break
+				}
+			}
 			if trailing {
+				// Each output segment reduces its own contiguous xs[seg*count:(seg+1)*count] run
+				// into acc[seg] — disjoint writes, same ascending combine order per segment — so
+				// the segments parallelize byte-identically.
 				if isSum { // inline `a += x`, no per-element indirect combine call
-					for seg := 0; seg < outNumel; seg++ {
-						a := acc[seg]
-						base := seg * count
-						for k := 0; k < count; k++ {
-							a += xs[base+k]
+					parallel.Rows(outNumel, func(slo, shi int) {
+						for seg := slo; seg < shi; seg++ {
+							a := acc[seg]
+							base := seg * count
+							for k := 0; k < count; k++ {
+								a += xs[base+k]
+							}
+							acc[seg] = a
 						}
-						acc[seg] = a
-					}
+					})
 				} else {
-					for seg := 0; seg < outNumel; seg++ {
-						a := acc[seg]
-						base := seg * count
-						for k := 0; k < count; k++ {
-							a = combine(a, xs[base+k])
+					parallel.Rows(outNumel, func(slo, shi int) {
+						for seg := slo; seg < shi; seg++ {
+							a := acc[seg]
+							base := seg * count
+							for k := 0; k < count; k++ {
+								a = combine(a, xs[base+k])
+							}
+							acc[seg] = a
 						}
-						acc[seg] = a
-					}
+					})
+				}
+			} else if leading {
+				// Reduced axes are the outermost prefix: for each output position of (over the kept
+				// trailing axes, outNumel of them) the inputs are xs[of + r*outNumel] for r=0..count-1
+				// (stride outNumel; ascending r == ascending pos), so outputs parallelize with each
+				// reducing its own strided column in the SAME order the odometer would — bit-identical.
+				if isSum {
+					parallel.Rows(outNumel, func(olo, ohi int) {
+						for of := olo; of < ohi; of++ {
+							a := acc[of]
+							for r := 0; r < count; r++ {
+								a += xs[of+r*outNumel]
+							}
+							acc[of] = a
+						}
+					})
+				} else {
+					parallel.Rows(outNumel, func(olo, ohi int) {
+						for of := olo; of < ohi; of++ {
+							a := acc[of]
+							for r := 0; r < count; r++ {
+								a = combine(a, xs[of+r*outNumel])
+							}
+							acc[of] = a
+						}
+					})
 				}
 			} else {
 				eff := make([]int, nd)
@@ -273,17 +314,22 @@ func argmaxKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			// one store per segment (no odometer, no best[of]/bidx[of] memory RMW). Strict
 			// > with ascending k gives the same lowest-index tie as the odometer.
 			count := shape[nd-1]
-			for seg := 0; seg < outNumel; seg++ {
-				base := seg * count
-				bv := math.Inf(-1)
-				bk := 0
-				for k := 0; k < count; k++ {
-					if v := xs[base+k]; v > bv {
-						bv, bk = v, k
+			// Each output segment scans its own contiguous [count]-run for the argmax with the
+			// lowest-index tie (strict >, ascending k) and writes bidx[seg] — disjoint, so the
+			// segments parallelize byte-identically.
+			parallel.Rows(outNumel, func(slo, shi int) {
+				for seg := slo; seg < shi; seg++ {
+					base := seg * count
+					bv := math.Inf(-1)
+					bk := 0
+					for k := 0; k < count; k++ {
+						if v := xs[base+k]; v > bv {
+							bv, bk = v, k
+						}
 					}
+					bidx[seg] = float64(bk)
 				}
-				bidx[seg] = float64(bk)
-			}
+			})
 		} else {
 			eff := make([]int, nd)
 			for ax := range nd {

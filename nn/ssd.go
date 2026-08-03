@@ -37,6 +37,15 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 	// step into a contiguous buffer instead of re-dispatching AtF64. Bit-identical.
 	xrow := make([]float64, d)
 	crow := make([]float64, n)
+	yrow := make([]float64, d) // out row accumulator (reused by the interchanged path)
+	// The output y_t = Cᵀ_t·h can read the [N,d] state two ways. The natural j-outer form
+	// dots down a STRIDED column h[i*d+j]; the i-outer interchange streams contiguous rows
+	// but writes the accumulator row N times per step. Interchange only pays once the state
+	// N·d is large enough that the strided walk thrashes cache (below ~L1 the state is
+	// resident and the strided reads are free, so the extra writes make it a net loss —
+	// measured regression at N·d=1024, ~1.4-1.7× win at N·d≥8192). Both paths keep the
+	// ascending-i sum, so the result is bit-identical either way; this only picks the layout.
+	interleave := n*d >= 4096
 	for t := range T {
 		at := a.AtF64(t)
 		for j := range d {
@@ -52,12 +61,74 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 				h[base+j] = at*h[base+j] + bi*xrow[j]
 			}
 		}
-		for j := range d {
-			var s float64
-			for i := range n {
-				s += crow[i] * h[i*d+j]
+		if interleave {
+			// i-outer: stream h's CONTIGUOUS row i into the accumulator row (AXPY, no
+			// reduction dependency). Same ascending-i sum → bit-identical.
+			for j := range d {
+				yrow[j] = 0
 			}
-			y.SetF64(s, t, j)
+			// EIGHT STATE ROWS PER PASS. yrow does not vary with i, so this loop loaded and stored
+			// the whole output row once per state row for one multiply-add each; eight at a time
+			// hold yrow[j] in a register across eight of them. BIT-IDENTICAL: yrow[j] still sums i
+			// ascending, into an EXPLICIT LOCAL rather than a compound assignment over a sum of
+			// eight products, which would associate differently (T1183).
+			//
+			// THE STATE UPDATE ABOVE IS NOT JAMMABLE THE SAME WAY, and it was tried here before
+			// being ruled out: at*h + b_i*x ADDS TWO PRODUCTS, so two fused-multiply-add
+			// contractions are legal and the compiler's choice does not survive the restructuring —
+			// all five digests moved. RetNet showed the same thing in T1189, where the drift
+			// appeared even at a size where the jammed body never runs. This loop has ONE multiply,
+			// so only one contraction is legal and the jam is safe.
+			ib := 0
+			for ; ib+7 < n; ib += 8 {
+				c0 := crow[ib+0]
+				c1 := crow[ib+1]
+				c2 := crow[ib+2]
+				c3 := crow[ib+3]
+				c4 := crow[ib+4]
+				c5 := crow[ib+5]
+				c6 := crow[ib+6]
+				c7 := crow[ib+7]
+				r0 := h[(ib+0)*d : (ib+0)*d+d]
+				r1 := h[(ib+1)*d : (ib+1)*d+d]
+				r2 := h[(ib+2)*d : (ib+2)*d+d]
+				r3 := h[(ib+3)*d : (ib+3)*d+d]
+				r4 := h[(ib+4)*d : (ib+4)*d+d]
+				r5 := h[(ib+5)*d : (ib+5)*d+d]
+				r6 := h[(ib+6)*d : (ib+6)*d+d]
+				r7 := h[(ib+7)*d : (ib+7)*d+d]
+				for j := range d {
+					acc := yrow[j]
+					acc += c0 * r0[j]
+					acc += c1 * r1[j]
+					acc += c2 * r2[j]
+					acc += c3 * r3[j]
+					acc += c4 * r4[j]
+					acc += c5 * r5[j]
+					acc += c6 * r6[j]
+					acc += c7 * r7[j]
+					yrow[j] = acc
+				}
+			}
+			for ; ib < n; ib++ {
+				ci := crow[ib]
+				hrow := h[ib*d : ib*d+d]
+				for j := range d {
+					yrow[j] += ci * hrow[j]
+				}
+			}
+			for j := range d {
+				y.SetF64(yrow[j], t, j)
+			}
+		} else {
+			// j-outer: small state is cache-resident, so the strided dot wins.
+			for j := range d {
+				var s float64
+				for i := range n {
+					s += crow[i] * h[i*d+j]
+				}
+				y.SetF64(s, t, j)
+			}
 		}
 	}
 	return y, nil

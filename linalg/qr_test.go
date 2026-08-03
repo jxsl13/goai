@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"testing"
 
 	"github.com/jxsl13/goai/linalg"
@@ -170,4 +171,79 @@ func ExampleLstsq() {
 	c, _ := linalg.Lstsq(a, b)
 	fmt.Printf("slope=%.0f intercept=%.0f\n", c.AtF64(0), c.AtF64(1))
 	// Output: slope=2 intercept=1
+}
+
+// TestLstsqBandsAndTypedReadMatchSerial covers the two changes to Lstsq's per-column work, which
+// interact: the right-hand-side columns are solved in bands, and an F64 right-hand side is read
+// through its storage instead of AtF64.
+//
+// The split is held bit-identical to the GOMAXPROCS(1) path. Column c reads the reflectors, R and
+// its own column of b, and writes only its own output slots, so which worker retires it cannot
+// change its arithmetic — a tolerance would accept exactly the reassociation the split claims not
+// to do. The shape clears parallelCols' work gate, without which both arms run the same code.
+//
+// The typed read is held by feeding the SAME values through inputs that route differently: a plain
+// F64 matrix takes the storage path, a genuinely transposed view is not contiguous, and an F32
+// matrix has no F64 storage at all. Transposing twice would NOT produce a non-contiguous view —
+// the strides come back to where they started — so the view here is built from a buffer that
+// really holds the transpose.
+func TestLstsqBandsAndTypedReadMatchSerial(t *testing.T) {
+	rng := rand.New(rand.NewPCG(21, 22))
+	const m, n, cols = 128, 32, 24
+	a := randRect(rng, m, n)
+	rhs := randRect(rng, m, cols)
+
+	solve := func(b *tensor.Tensor) []float64 {
+		t.Helper()
+		x, err := linalg.Lstsq(a, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]float64, x.Numel())
+		for i := range out {
+			out[i] = x.AtF64(i/cols, i%cols)
+		}
+		return out
+	}
+	prev := runtime.GOMAXPROCS(1)
+	serial := solve(rhs)
+	runtime.GOMAXPROCS(prev)
+
+	tr := tensor.New(tensor.F64, tensor.Shape{cols, m})
+	for i := range m {
+		for j := range cols {
+			tr.SetF64(rhs.AtF64(i, j), j, i)
+		}
+	}
+	view, err := tr.Transpose(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		b    *tensor.Tensor
+	}{
+		{"banded F64", rhs},
+		{"non-contiguous transposed view", view},
+		{"F32 right-hand side", rhs.Cast(tensor.F32)},
+	} {
+		got := solve(c.b)
+		if len(got) != len(serial) {
+			t.Fatalf("%s: %d values, want %d", c.name, len(got), len(serial))
+		}
+		for i := range serial {
+			if c.name == "F32 right-hand side" {
+				// F32 storage rounds the input, so this arm is held to the value rather than the
+				// bits — what it proves is that the fallback RUNS and stays correct.
+				if math.Abs(got[i]-serial[i]) > 1e-3*(1+math.Abs(serial[i])) {
+					t.Fatalf("%s element %d: %v, serial %v", c.name, i, got[i], serial[i])
+				}
+				continue
+			}
+			if math.Float64bits(got[i]) != math.Float64bits(serial[i]) {
+				t.Fatalf("%s element %d: %v, serial %v — the change altered an accumulation",
+					c.name, i, got[i], serial[i])
+			}
+		}
+	}
 }

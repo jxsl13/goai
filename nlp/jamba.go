@@ -181,9 +181,12 @@ type JambaMoE struct {
 }
 
 // Forward computes y = Σ_{i∈topk} softmax(x·Router)_i · Expert_i(x) for each
-// token, with NO renormalization of the top-k weights. Every expert is
-// evaluated densely; unselected experts get weight 0 (numerically identical to
-// sparse dispatch).
+// token, with NO renormalization of the top-k weights. Only the experts some token routed to are
+// evaluated: an unselected expert's contribution is its output times a weight that is EXACTLY
+// zero, and adding an exact zero leaves a finite accumulator unchanged, so the result is the same
+// bits as the dense sum rather than merely close (the two exceptions, a negative-zero accumulator
+// sign and a NaN or Inf escaping an unrouted expert, are the trade [nn.SparseMoE.ForwardDecode]
+// already makes).
 func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
 	logits, err := exec1(ctx, backend.OpMatMul, nil, x, m.Router)
 	if err != nil {
@@ -199,14 +202,26 @@ func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	// 0 otherwise (no renormalization — Jamba's gating).
 	weight := tensor.New(tensor.F64, tensor.Shape{seq, e})
 	ws := weight.Storage().F64()
+	used := make([]bool, e)
 	for t := range seq {
 		for _, i := range topKIndices(scores, t, e, m.TopK) {
 			ws[t*e+i] = scores.AtF64(t, i)
+			used[i] = true
 		}
 	}
 
+	// Evaluate ONLY the experts top-k selected. An unselected expert contributes
+	// expert_i(x) ⊙ 0, so dropping it leaves every surviving addend in the same relative order
+	// and the same value — the two exceptions being a negative-zero accumulator sign and a NaN or
+	// Inf escaping an expert nobody asked for, which is the trade [SparseMoE.ForwardDecode]
+	// already makes. With TopK experts of E routed per token this is the difference between
+	// streaming E sets of expert weights per step and streaming the ones that matter, and these
+	// are GEMVs, so the step is bound by exactly that.
 	var y *tensor.Tensor
 	for i := range e {
+		if !used[i] {
+			continue
+		}
 		out, err := m.Experts[i].Forward(ctx, x) // [seq, dim]
 		if err != nil {
 			return nil, err
@@ -224,6 +239,9 @@ func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
+	}
+	if y == nil { // no tokens, so nothing was routed: keep the old shape rather than a nil
+		return exec1(ctx, backend.OpMul, nil, x, tensor.New(x.Dtype(), tensor.Shape{1}))
 	}
 	return y, nil
 }

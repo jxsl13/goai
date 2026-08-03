@@ -97,7 +97,7 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 	h := make([][]float64, in)
 	if xf := flatF64(x); xf != nil {
 		var bt []float64
-		c := matmulABtInto(xf, xf, in, samples, bt) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
+		c := matmulABtInto(xf, xf, in, samples, bt, nil) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
 		for i := range in {
 			hi := make([]float64, in)
 			base := i * in
@@ -173,47 +173,56 @@ func sparseGPTCore(w, x *tensor.Tensor, damp float64, blockSize int, kOf func(bl
 		bEnd := min(bStart+bs, in)
 		blk := bEnd - bStart
 		k := kOf(blk) // weights to prune per row in this block (unstructured ⌊s·blk⌋ or N:M n)
-		// per-row mask selection over the block using current (compensated) weights.
-		if k > 0 {
-			idx := make([]int, blk)
-			for r := range out {
-				for t := range blk {
-					idx[t] = bStart + t
+		// ROW-OUTER, AND BANDED. The block used to run mask selection over every row and then
+		// walk the columns with the row loop INSIDE, which is one fork per column if the row
+		// loop is split — and there are as many columns as the block is wide. Rows never
+		// interact: row r's mask is chosen from wm[r] alone, its compensation writes only
+		// wm[r] and prunedMask[r], and hinv and dead are read-only here. So the whole block
+		// body runs per row and the fan-out is paid ONCE per block.
+		//
+		// BIT-IDENTICAL. Selecting row r's mask before compensating row r rather than after
+		// selecting every row's changes nothing, because row r's compensation touches no other
+		// row's weights; and within a row the columns are still visited in ascending order and
+		// each j in ascending order after them.
+		parallelRows(out, blk*in, func(rlo, rhi int) {
+			idx := make([]int, blk) // per-worker: the sort below rewrites it for every row
+			for r := rlo; r < rhi; r++ {
+				if k > 0 {
+					for t := range blk {
+						idx[t] = bStart + t
+					}
+					// PS3005 DECLINED ON MEASUREMENT. Hoisting the saliency into a per-row key
+					// column AND the Hessian diagonal out of the row loop was implemented and
+					// benchmarked: an INTERLEAVED same-session A/B put it at 1.0046x
+					// (51,611,491 vs 51,847,204 ns on BenchmarkSparseGPTPrune_64x256, ranges
+					// overlapping). A first, non-interleaved reading suggested 1.048x — that
+					// was machine drift between the two runs, not the change. The sort is a
+					// small share of SparseGPT, which is dominated by the Hessian inverse and
+					// the OBS compensation loops.
+					//perfscan:ignore PS3005 measured 1.0046x interleaved — sort is not the bottleneck
+					sort.SliceStable(idx, func(a, b int) bool {
+						return sgSaliency(wm[r][idx[a]], hinv[idx[a]][idx[a]]) < sgSaliency(wm[r][idx[b]], hinv[idx[b]][idx[b]])
+					})
+					for t := range k {
+						prunedMask[r][idx[t]] = true
+					}
 				}
-				// PS3005 DECLINED ON MEASUREMENT. Hoisting the saliency into a per-row key
-				// column AND the Hessian diagonal out of the row loop was implemented and
-				// benchmarked: an INTERLEAVED same-session A/B put it at 1.0046x
-				// (51,611,491 vs 51,847,204 ns on BenchmarkSparseGPTPrune_64x256, ranges
-				// overlapping). A first, non-interleaved reading suggested 1.048x — that
-				// was machine drift between the two runs, not the change. The sort is a
-				// small share of SparseGPT, which is dominated by the Hessian inverse and
-				// the OBS compensation loops.
-				//perfscan:ignore PS3005 measured 1.0046x interleaved — sort is not the bottleneck
-				sort.SliceStable(idx, func(a, b int) bool {
-					return sgSaliency(wm[r][idx[a]], hinv[idx[a]][idx[a]]) < sgSaliency(wm[r][idx[b]], hinv[idx[b]][idx[b]])
-				})
-				for t := range k {
-					prunedMask[r][idx[t]] = true
+				// process each column in the block: prune→0 with OBS compensation.
+				for c := bStart; c < bEnd; c++ {
+					if dead[c] {
+						prunedMask[r][c] = true
+					}
+					if !prunedMask[r][c] {
+						continue // kept: q = wm[r][c], error 0, no propagation
+					}
+					e := wm[r][c] / hinv[c][c] // pruned: q=0 ⇒ error = W[r,c]/[Hinv]_cc
+					wm[r][c] = 0
+					for j := c + 1; j < in; j++ {
+						wm[r][j] -= e * hinv[c][j]
+					}
 				}
 			}
-		}
-		// process each column in the block: prune→0 with OBS compensation, keep→unchanged.
-		for c := bStart; c < bEnd; c++ {
-			d := hinv[c][c]
-			for r := range out {
-				if dead[c] {
-					prunedMask[r][c] = true
-				}
-				if !prunedMask[r][c] {
-					continue // kept: q = wm[r][c], error 0, no propagation
-				}
-				e := wm[r][c] / d // pruned: q=0 ⇒ error = W[r,c]/[Hinv]_cc
-				wm[r][c] = 0
-				for j := c + 1; j < in; j++ {
-					wm[r][j] -= e * hinv[c][j]
-				}
-			}
-		}
+		})
 	}
 
 	pruned = tensor.New(w.Dtype(), tensor.Shape{out, in})

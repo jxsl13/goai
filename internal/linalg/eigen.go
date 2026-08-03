@@ -10,14 +10,15 @@ import "math"
 // vecs[k] is the eigenvector (length n) for vals[k]. a is not modified.
 func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	n := len(a)
-	// Working copy and eigenvector accumulator are FLAT [n*n] row-major buffers, not
-	// slices of rows. The Jacobi sweep below is O(n³) and two of its three inner
-	// loops walk a COLUMN (m[k][p], v[k][p]) — with a row-of-slices layout every k
-	// dereferences a different, independently allocated row, which is the worst
-	// access pattern that layout has. Flat buffers make those walks a constant stride
-	// through one allocation and drop 2n allocations to 2. Index arithmetic only: the
-	// operations, their order and their operands are unchanged, so results are
-	// bit-identical.
+	// Working copy m and eigenvector accumulator v are FLAT [n*n] buffers, not slices of
+	// rows. The Jacobi sweep below is O(n³); m is walked BOTH row-wise and column-wise so
+	// it stays row-major, but v is only ever touched column-wise (the rotation and the
+	// final extraction), so v is stored COLUMN-major (v[col*n+row]) — that turns its column
+	// walk into a contiguous stream instead of a stride-n crawl, and makes the eigenvector
+	// extraction a straight copy. Flat buffers also drop 2n allocations to 2. Index
+	// arithmetic and storage location only: the operations, their order and their operands
+	// are unchanged, so results are bit-identical. (m's remaining column walk cannot also be
+	// made contiguous without a symmetry-exploiting rewrite that would change the arithmetic.)
 	m := make([]float64, n*n)
 	v := make([]float64, n*n)
 	for i := range n {
@@ -54,10 +55,15 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 					m[p*n+k] = c*mpk - s*mqk
 					m[q*n+k] = s*mpk + c*mqk
 				}
+				// v is stored COLUMN-major (v[col*n+row]), so columns p,q are two
+				// contiguous slices — the rotation streams them instead of striding v by n
+				// per k (as a row-major v[k*n+p] would). Identical values/order, bit-exact.
+				vp := v[p*n : p*n+n]
+				vq := v[q*n : q*n+n]
 				for k := range n {
-					vkp, vkq := v[k*n+p], v[k*n+q]
-					v[k*n+p] = c*vkp - s*vkq
-					v[k*n+q] = s*vkp + c*vkq
+					vkp, vkq := vp[k], vq[k]
+					vp[k] = c*vkp - s*vkq
+					vq[k] = s*vkp + c*vkq
 				}
 			}
 		}
@@ -85,9 +91,7 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	for k, oi := range order {
 		sorted[k] = vals[oi]
 		col := make([]float64, n)
-		for r := range n {
-			col[r] = v[r*n+oi]
-		}
+		copy(col, v[oi*n:oi*n+n]) // eigenvector oi is contiguous column oi (v is column-major)
 		vecs[k] = col
 	}
 	return sorted, vecs

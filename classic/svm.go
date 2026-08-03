@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"sync/atomic"
 )
 
 // SVMKernel selects the kernel function K(x,z) an [SVC] uses to measure
@@ -305,9 +306,12 @@ type kernelCache struct {
 
 func newKernelCache(m *SVC, x [][]float64, n int) *kernelCache {
 	kc := &kernelCache{m: m, x: x, n: n, cols: make(map[int][]float64), diag: make([]float64, n)}
-	for i := range n {
-		kc.diag[i] = m.kernel(x[i], x[i])
-	}
+	// Every diagonal entry is an independent kernel evaluation writing only its own slot.
+	parallelBands(n, len(x[0]), func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			kc.diag[i] = m.kernel(x[i], x[i])
+		}
+	})
 	// Bound the cache to ~64 MB of columns (each column is 8n bytes). This
 	// comfortably holds every column a well-separated fit touches while
 	// capping worst-case memory; a miss merely recomputes, never wrong.
@@ -330,9 +334,16 @@ func (kc *kernelCache) column(i int) []float64 {
 	}
 	col := make([]float64, kc.n)
 	xi := kc.x[i]
-	for t := range kc.n {
-		col[t] = kc.m.kernel(xi, kc.x[t])
-	}
+	// A kernel column is n INDEPENDENT evaluations — entry t reads xi and x[t] and writes only
+	// col[t] — so banding it is race-free and bit-identical: each entry performs exactly the
+	// arithmetic it did before, and only which goroutine performs it moves. This is where the
+	// RBF fit spends its time: kernelCache.column was 40.6% of a serial profile, of which
+	// math.archExp alone is 11.4%, and the whole fit scaled at 1.02x on twelve cores.
+	parallelBands(kc.n, len(xi), func(lo, hi int) {
+		for t := lo; t < hi; t++ {
+			col[t] = kc.m.kernel(xi, kc.x[t])
+		}
+	})
 	if kc.cap > 0 && len(kc.cols) >= kc.cap {
 		evict := kc.order[0]
 		kc.order = kc.order[1:]
@@ -577,17 +588,21 @@ func (m *SVC) DecisionFunction(x [][]float64) ([]float64, error) {
 		}
 		return out, nil
 	}
-	csz := (len(x) + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > len(x) {
-			hi = len(x)
+	// Claimed in blocks rather than dealt — see the forest predictor for the screen that selected
+	// this shape. SVCPredict also got SLOWER from 8 to 12 cores (610846 -> 698660 ns/op).
+	const grain = 64
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= len(x) {
+				return nil
+			}
+			hi := min(lo+grain, len(x))
+			for i := lo; i < hi; i++ {
+				out[i] = m.decision(x[i])
+			}
 		}
-		for i := lo; i < hi; i++ {
-			out[i] = m.decision(x[i])
-		}
-		return nil
 	})
 	return out, nil
 }

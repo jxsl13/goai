@@ -156,3 +156,189 @@ non-zero for optional CI gating.
 - `docs/perf-notes-lowlevel.md` — format/parser decode (`rawCopyLE` verbatim
   little-endian bulk copy) and the hostile-header overflow guards.
 - SPEC.md §T910–T912 record the individual changes with their citations.
+
+## AWQ's reconstruction error: an axpy through memory (T1183)
+
+`reconErrMat` computes ‖(W−Ŵ)·X‖_F once per candidate scale in AWQ's calibration
+search. At out=512, in=512, samples=128 it took **20.46 ms**, and 84% of that sat
+on one line:
+
+```go
+for s := 0; s < samples; s++ {
+    acc[s] += di * xf[base+s]
+}
+```
+
+Every element pays a load and a store of `acc[s]` for a single multiply-add. The
+accumulator is shared across the residual index, so taking eight `i` per pass
+loads and stores it once for eight products.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkReconErrMat` (512×512×128) | 20.46 ms | 13.88 ms | **−32.1%** |
+
+Width 8 and width 6 are within 0.2% of each other (13.88 vs 13.91 ms); width 4 is
+14.09 and width 2 is 15.83.
+
+### The compound assignment is not the same arithmetic
+
+The obvious jam is wrong:
+
+```go
+acc[s] += d0*x0 + d1*x1 + d2*x2 + d3*x3   // NOT bit-identical
+```
+
+`+=` adds the **sum of the terms** to the accumulator, which associates
+differently from the four sequential additions it replaces. The correct form
+keeps the original order explicitly:
+
+```go
+a := acc[s]
+a += d0 * xf[b0+s]
+a += d1 * xf[b1+s]
+...
+acc[s] = a
+```
+
+### Width invariance is the gate that catches it
+
+Under the compound form the frozen digests **held at widths 4 and 8 and moved at
+2 and 6**. A test of the shipped width alone would have passed a wrong rewrite —
+and width 4 was the first width tried.
+
+A correct jam is bit-identical at *every* width. The rewrite above was verified at
+2, 3, 4, 5, 6 and 8 before shipping; the digests cover `in ∈ {13, 30, 64, 1}` so
+the tail is exercised, `in=1` skips the jammed loop entirely, and both dtype arms
+are frozen.
+
+That the value hashed is a `float64` **by bits** rather than compared to a
+tolerance matters here for a second reason: Go may contract `x*y + z` into a
+fused multiply-add, and the jammed form has to contract the same way term for
+term.
+
+### The check already claimed this shape and could not see it
+
+`PS3075` describes "an item loop whose inner loop accumulates into a buffer that
+does not vary with the item" — exactly this — but matched only `*ast.RangeStmt`.
+This kernel's inner loop is `for s := 0; s < samples; s++`, so the scan walked
+past the site its own description named. Reading both loop forms took the
+tree-wide count from 55 to **81**.
+
+## The QR backward's rank-1 update (T1184)
+
+`vjp_qr.go` builds M = R·R̄ᵀ − Q̄ᵀ·Q and the second term is a rank-1 update
+accumulated over the m rows of Q:
+
+```go
+for k := range m {
+    qbk, qdk := qb[k], qd[k]
+    for i := range n {
+        qbki, mmi := qbk[i], mm[i]
+        for j := range n {
+            mmi[j] -= qbki * qdk[j]   // 50.7% of the benchmark
+        }
+    }
+}
+```
+
+M does not vary with k, so the whole n×n matrix is walked once per row of Q — a
+load and a store of `M[i][j]` for a single subtraction each. Taking eight k per
+pass loads and stores it once for eight subtractions.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkQRVJP_256x128` | 10.90 ms | 7.87 ms | **−27.7%** |
+| `BenchmarkQRVJP_128x64` | 1.133 ms | 1.020 ms | −10.0% |
+
+The smaller cell moves less because that matrix fits in cache and the round trip
+being removed is cheap there.
+
+Eight is measured, not assumed: widths 12 and 16 regress on register pressure
+(8.38 and 8.35 ms against 7.87). Every width from 2 to 16 leaves the digests
+unchanged, which is the width-invariance gate from T1183 — the accumulator is an
+explicit local, so the subtractions keep ascending k rather than being folded
+into one compound assignment.
+
+### Three spellings the check could not read
+
+PS3075 describes this shape exactly and missed this site, because it hid behind
+all three at once:
+
+1. It accumulates with `-=`, and the check matched only `+=`. Subtraction is no
+   more associative than addition and the fix is identical.
+2. It addresses the buffer as `mm[i][j]`, and the check expected a bare
+   identifier or a base-plus-variable index — so the root resolved to nothing.
+3. It reaches the row through `mmi := mm[i]`, rebound on every pass of the item
+   loop. A per-item test on the row variable alone hides the shared buffer
+   behind it.
+
+Reading all three took the tree-wide count from 81 to **95**. The index-crossing
+rule in the root resolution is the one that keeps this sound: `dst[k][j]` with
+`k` the item is the item's own row, and reporting it would name a jam with
+nothing to hold.
+
+## The MLA backward's key loop (T1187)
+
+MLA's backward accumulates the query gradient into slots fixed by the **query**
+— `dqC[i][d]` and `dqRrot[i][e]` — while the loop runs over keys. Each was
+loaded and stored once per key for a single multiply-add. Six keys per pass hold
+both in registers; `dkC` is per key and keeps its own store.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMLAVJPSeq256` | 11.58 ms | 9.80 ms | **-15.4%** |
+| `BenchmarkMLAVJPSeq256F32` | 11.50 ms | 9.62 ms | **-16.4%** |
+
+Width 6 is the measured optimum (9.81 ms) with 8 a hair behind (9.83), 4 at 9.99
+and 2 at 10.75. Every width from 2 to 8 leaves the digests unchanged.
+
+### The narrowing arm needs the rounding kept per key
+
+The F32 twin writes `float32` back after **every single accumulation**:
+
+```go
+dqcs[i*cols+hc+d] = float32(float64(dqcs[i*cols+hc+d]) + dS*float64(kcs[...]))
+```
+
+So the register held across the group has to be a `float32` rounded at each step.
+Holding it in `float64` and rounding once would be a better-conditioned
+computation — and a different answer. That is the case where the tempting version
+of the transform is not merely riskier but strictly more accurate, which is
+exactly what bit-identity forbids.
+
+### Gate
+
+Five digests over every returned gradient, not just the query one, since the same
+loop writes `dkC` and `dvC` and a bad tail would leave one of those short. Under
+a causal mask the key count is `i+1` and runs over every value from 1 to `seq`,
+so one causal case exercises every remainder at once — including the lengths
+where the jammed loop never runs.
+
+### Still reported
+
+The `dkRrot` second pass. It folds the shared decoupled-key gradient in ascending
+`(head, i, j)` order, which is what keeps the whole VJP bit-identical; jamming
+its item loop would reorder exactly that.
+
+### The dV loop beside it (T1188)
+
+The same nest carries the mirror shape: the query's gradient ROW —
+`gs[i*cols+hc+d]` — is fixed by the query and was re-read once per key, while
+nothing shared is accumulated. Eight keys per pass read it once and use it eight
+times, and the eight `dav` chains run independently where one was serial.
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkMLAVJPSeq256` | 9.82 ms | 8.45 ms | **-13.9%** |
+| `BenchmarkMLAVJPSeq256F32` | 9.60 ms | 8.40 ms | **-12.4%** |
+
+Across T1187 and T1188 together, both arms are down **27.0%** from 11.58 and
+11.50 ms.
+
+Width 8 measured 8.44 ms against 8.50 at 6, 8.68 at 4 and 9.07 at 2. Every width
+from 2 to 8 leaves the digests unchanged.
+
+The two shapes sit in one loop nest and only one of them is a shared accumulator;
+fixing that one and stopping would have left most of the win. `dot` still takes
+the keys in ascending order and every `dvC` element is written exactly once,
+which is what keeps the jam bit-identical.

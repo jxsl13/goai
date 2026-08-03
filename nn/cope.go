@@ -263,20 +263,31 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		if err != nil {
 			return nil, nil, err
 		}
-		floorP, floorPlus1P, ohLo, ohHi := copePosIndices(p, c.MaxPos)
+		// biasLo[i][j] = qᵢ·E[⌊pᵢⱼ⌋] = z[i,⌊p⌋], biasHi = z[i,⌈p⌉]: a GATHER of two rows of
+		// z per (i,j). Training (autograd) forms it as the one-hot einsum ohLo·z so the
+		// gradient reaches E and p — but for inference (ctx.Recorder == nil) that
+		// materializes two [T,T,MaxPos+1] one-hot tensors and reduces over the entire
+		// position-table axis for what is a single lookup (the dominant cost of the layer,
+		// §C21). The fused path gathers z directly, bit-identical to the einsum on finite z.
+		var floorP, floorPlus1P, biasLo, biasHi *tensor.Tensor
+		if ctx.Recorder == nil {
+			floorP, floorPlus1P, biasLo, biasHi = copeGatherBias(p, z, c.MaxPos)
+		}
+		if biasLo == nil { // training path, or non-F64/non-contiguous: the differentiable one-hot einsum
+			var ohLo, ohHi *tensor.Tensor
+			floorP, floorPlus1P, ohLo, ohHi = copePosIndices(p, c.MaxPos)
+			if biasLo, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohLo, z); err != nil {
+				return nil, nil, err
+			}
+			if biasHi, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohHi, z); err != nil {
+				return nil, nil, err
+			}
+		}
 		wHi, err := c.exec(ctx, backend.OpSub, nil, p, floorP) // p − ⌊p⌋
 		if err != nil {
 			return nil, nil, err
 		}
 		wLo, err := c.exec(ctx, backend.OpSub, nil, floorPlus1P, p) // (⌊p⌋+1) − p = ⌈p⌉−p at non-integers, 1 at integers
-		if err != nil {
-			return nil, nil, err
-		}
-		biasLo, err := c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohLo, z)
-		if err != nil {
-			return nil, nil, err
-		}
-		biasHi, err := c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohHi, z)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -402,6 +413,60 @@ func copePosIndices(p *tensor.Tensor, maxPos int) (floorP, floorPlus1P, ohLo, oh
 		}
 	}
 	return floorP, floorPlus1P, ohLo, ohHi
+}
+
+// copeGatherBias is the inference (ctx.Recorder == nil) fast path for the two
+// interpolation-row lookups of the CoPE position term. It returns floorP=⌊p⌋ and
+// floorPlus1P=⌊p⌋+1 (the interpolation-weight operands, exactly as copePosIndices)
+// plus biasLo[i][j]=z[i,⌊pᵢⱼ⌋] and biasHi[i][j]=z[i,⌈pᵢⱼ⌉] GATHERED directly from
+// z=Qₕ·Eₕᵀ. On finite z this is bit-identical to the differentiable one-hot einsum
+// (copePosIndices' ohLo·z / ohHi·z): that einsum accumulates a single 1.0·z[loIdx]
+// term into a zero-initialized cell amid exact 0.0·z zeros, i.e. 0.0+z[loIdx] — the
+// +0.0 below reproduces its normalization of a −0.0 gathered value. But it avoids
+// building the two [T,T,MaxPos+1] one-hots and reducing over the whole position-table
+// axis — the layer's dominant cost. Returns nil (caller falls back to the einsum path,
+// which also carries the gradient) unless both p and z are F64-contiguous.
+func copeGatherBias(p, z *tensor.Tensor, maxPos int) (floorP, floorPlus1P, biasLo, biasHi *tensor.Tensor) {
+	ps, zs := flatF64(p), flatF64(z)
+	if ps == nil || zs == nil {
+		return nil, nil, nil, nil
+	}
+	dt := p.Dtype()
+	tq, tk := p.Shape()[0], p.Shape()[1]
+	rows := maxPos + 1
+	floorP = tensor.New(dt, tensor.Shape{tq, tk})
+	floorPlus1P = tensor.New(dt, tensor.Shape{tq, tk})
+	biasLo = tensor.New(dt, tensor.Shape{tq, tk})
+	biasHi = tensor.New(dt, tensor.Shape{tq, tk})
+	fps, fp1s := flatF64(floorP), flatF64(floorPlus1P)
+	bls, bhs := flatF64(biasLo), flatF64(biasHi)
+	for i := range tq {
+		zrow := zs[i*rows : i*rows+rows : i*rows+rows]
+		for j := range tk {
+			pv := ps[i*tk+j]
+			if pv < 0 {
+				pv = 0
+			}
+			if pv > float64(maxPos) {
+				pv = float64(maxPos)
+			}
+			fl := math.Floor(pv)
+			loIdx := int(fl)
+			if loIdx > maxPos {
+				loIdx = maxPos
+			}
+			hiIdx := loIdx + 1
+			if hiIdx > maxPos {
+				hiIdx = maxPos
+			}
+			idx := i*tk + j
+			fps[idx] = fl
+			fp1s[idx] = fl + 1
+			bls[idx] = zrow[loIdx] + 0.0 // +0.0: reproduce the einsum's 0.0+z accumulation (−0.0 → +0.0)
+			bhs[idx] = zrow[hiIdx] + 0.0
+		}
+	}
+	return floorP, floorPlus1P, biasLo, biasHi
 }
 
 // copeLowerInclusiveMask builds a [T,T] 0/1 matrix that is 1 where key k ≤ query i

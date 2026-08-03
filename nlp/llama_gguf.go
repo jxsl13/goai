@@ -464,47 +464,44 @@ func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 	// scattered column writes into blocked ones. Pure permutation/convert per
 	// element -> bit-exact.
 	const tile = 64
+	// The source rows split across workers. A band of rows [lo,hi) writes only the destination
+	// COLUMNS [lo,hi), which no other band touches, so the split is race-free — and a transpose is
+	// a pure permutation, so it is bit-identical whatever the band count. This runs on the model
+	// LOAD path, once per weight matrix, and a tied head at a real vocabulary is the largest
+	// single permutation a load performs; left serial it was 84% of its own benchmark.
 	switch tc.Dtype() {
 	case tensor.F64:
 		src := tc.Storage().F64() // [a,b] row-major
-		for ii := 0; ii < a; ii += tile {
-			iMax := ii + tile
-			if iMax > a {
-				iMax = a
-			}
-			for jj := 0; jj < b; jj += tile {
-				jMax := jj + tile
-				if jMax > b {
-					jMax = b
-				}
-				for i := ii; i < iMax; i++ {
-					row := i * b
-					for j := jj; j < jMax; j++ {
-						dst[j*a+i] = src[row+j]
+		parallelChunks(a, a*b, func(lo, hi int) {
+			for ii := lo; ii < hi; ii += tile {
+				iMax := min(ii+tile, hi)
+				for jj := 0; jj < b; jj += tile {
+					jMax := min(jj+tile, b)
+					for i := ii; i < iMax; i++ {
+						row := i * b
+						for j := jj; j < jMax; j++ {
+							dst[j*a+i] = src[row+j]
+						}
 					}
 				}
 			}
-		}
+		})
 	case tensor.F32:
 		src := tc.Storage().F32()
-		for ii := 0; ii < a; ii += tile {
-			iMax := ii + tile
-			if iMax > a {
-				iMax = a
-			}
-			for jj := 0; jj < b; jj += tile {
-				jMax := jj + tile
-				if jMax > b {
-					jMax = b
-				}
-				for i := ii; i < iMax; i++ {
-					row := i * b
-					for j := jj; j < jMax; j++ {
-						dst[j*a+i] = float64(src[row+j])
+		parallelChunks(a, a*b, func(lo, hi int) {
+			for ii := lo; ii < hi; ii += tile {
+				iMax := min(ii+tile, hi)
+				for jj := 0; jj < b; jj += tile {
+					jMax := min(jj+tile, b)
+					for i := ii; i < iMax; i++ {
+						row := i * b
+						for j := jj; j < jMax; j++ {
+							dst[j*a+i] = float64(src[row+j])
+						}
 					}
 				}
 			}
-		}
+		})
 	default:
 		for i := 0; i < a; i++ {
 			for j := 0; j < b; j++ {

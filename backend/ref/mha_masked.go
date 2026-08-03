@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -66,8 +67,7 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				if ms, mok := f64Data(mask); mok {
 					if os, flush, ook := outF64(out); ook {
 						kdm := kvHeads * dk
-						obuf := make([]float64, dk)
-						for h := range heads {
+						doHead := func(h int, row, obuf []float64) {
 							qOff := h * dk
 							kvOff := (h / rep) * dk
 							for i := range sq {
@@ -116,6 +116,24 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 									}
 								}
 								copy(os[i*dm+qOff:i*dm+qOff+dk], obuf)
+							}
+						}
+						if heads >= 2 && parallel.Workers() > 1 {
+							// Forward has NO cross-head accumulation: head h writes DISJOINT output
+							// columns [h·dk,(h+1)·dk) and inputs are read-only, so heads run fully in
+							// parallel with per-worker scratch — byte-identical regardless of head order.
+							parallel.Rows(heads, func(hlo, hhi int) {
+								row := make([]float64, sk)
+								obuf := make([]float64, dk)
+								for h := hlo; h < hhi; h++ {
+									doHead(h, row, obuf)
+								}
+							})
+						} else {
+							row := make([]float64, sk)
+							obuf := make([]float64, dk)
+							for h := range heads {
+								doHead(h, row, obuf)
 							}
 						}
 						flush()

@@ -221,18 +221,31 @@ const pruneSlack = 1e-9
 // ties broken by ascending index — identical to a full brute-force sort by
 // (dist, idx) truncated to k. It assumes k ≤ n.
 func (bt *ballTree) kNN(query []float64, k int) []neighbour {
-	h := &knnHeap{k: k}
+	return bt.kNNInto(query, k, &knnHeap{})
+}
+
+// kNNInto is kNN with the heap supplied by the caller, so a batch of queries reuses one backing
+// array instead of growing a fresh one per query (nil -> 1 -> 2 -> 4 -> 8 as consider appends).
+// The result aliases h.items and stays valid only until the next call on the same heap.
+//
+// Ordering is by the same (distSq, idx) comparison kNN always used. It is an insertion sort
+// rather than sort.Slice because k is small and sort.Slice costs a closure and a reflect-based
+// swapper on every query — cost that scales with the number of QUERIES, not with k.
+func (bt *ballTree) kNNInto(query []float64, k int, h *knnHeap) []neighbour {
+	h.k, h.items = k, h.items[:0]
 	if bt.root != nil {
 		bt.searchKNN(bt.root, query, h, bt.distSq(query, bt.root.centroid))
 	}
 	out := h.items
 	// out[].dist holds distSq (monotone in dist), so the (dist,idx) sort order is identical.
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].dist != out[b].dist {
-			return out[a].dist < out[b].dist
+	for i := 1; i < len(out); i++ {
+		c := out[i]
+		j := i - 1
+		for ; j >= 0 && worseThan(out[j], c); j-- {
+			out[j+1] = out[j]
 		}
-		return out[a].idx < out[b].idx
-	})
+		out[j+1] = c
+	}
 	for i := range out { // convert the k results back to real distances for the caller
 		out[i].dist = bt.toDist(out[i].dist)
 	}

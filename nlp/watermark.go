@@ -242,13 +242,15 @@ func (w *Watermark) Detect(tokens []int) (z float64, green, scored int) {
 	// instead of GreenMask minting a fresh VocabSize perm+mask per token just to
 	// read one entry (that O(T·|V|) allocation is GC-bound, not compute-bound).
 	// The green set per token is identical, so green — and thus z — is unchanged.
-	perm := make([]int, w.VocabSize)
-	for i := range perm {
-		perm[i] = i
-	}
-	swaps := make([]int, w.greenSize())
-	pcg := rand.NewPCG(0, 0)
-	rng := rand.New(pcg)
+	// TOKENS ARE INDEPENDENT. Each step reseeds the generator from (Key, previous token) alone
+	// and restores perm to the identity before the next one, so nothing carries across the
+	// loop but the green COUNT — and that is integer addition, which does not care about
+	// order. Banding the token loop is therefore bit-identical, and the detector scaled at
+	// 0.99x on twelve cores before it.
+	//
+	// Every worker needs its OWN perm, swaps and generator: perm is mutated in place and the
+	// generator is reseeded per token. They are allocated once per DISPATCH, not per token.
+	gsz0 := w.greenSize()
 	// Fuse seedGreen's partial Fisher-Yates with the membership test: perm[k] is
 	// finalized at step k (later steps only touch indices > k), so as soon as the
 	// finalized green member equals tok we know tok is green and can stop — no
@@ -256,27 +258,48 @@ func (w *Watermark) Detect(tokens []int) (z float64, green, scored int) {
 	// token reseeds pcg, so consuming fewer draws never perturbs a later token;
 	// restoreIdentity reverses exactly the swaps performed. Green count (hence z)
 	// is bit-identical to seedGreen + full scan.
-	gsz := w.greenSize()
-	for i := 1; i < len(tokens); i++ {
-		pcg.Seed(w.Key, uint64(tokens[i-1]))
-		tok := tokens[i]
-		done := gsz
-		for k := 0; k < gsz; k++ {
-			j := k + rng.IntN(w.VocabSize-k)
-			perm[k], perm[j] = perm[j], perm[k]
-			swaps[k] = j
-			if perm[k] == tok {
-				green++
-				done = k + 1
-				break
-			}
+	gsz := gsz0
+	counts := make([]int, 0)
+	parallelChunks(len(tokens)-1, (len(tokens)-1)*gsz, func(lo, hi int) {
+		perm := make([]int, w.VocabSize)
+		for i := range perm {
+			perm[i] = i
 		}
-		restoreIdentity(perm, swaps, done)
+		swaps := make([]int, gsz)
+		pcg := rand.NewPCG(0, 0)
+		rng := rand.New(pcg)
+		local := 0
+		for i := lo + 1; i <= hi; i++ {
+			pcg.Seed(w.Key, uint64(tokens[i-1]))
+			tok := tokens[i]
+			done := gsz
+			for k := 0; k < gsz; k++ {
+				j := k + rng.IntN(w.VocabSize-k)
+				perm[k], perm[j] = perm[j], perm[k]
+				swaps[k] = j
+				if perm[k] == tok {
+					local++
+					done = k + 1
+					break
+				}
+			}
+			restoreIdentity(perm, swaps, done)
+		}
+		greenMu.Lock()
+		counts = append(counts, local)
+		greenMu.Unlock()
+	})
+	for _, c := range counts {
+		green += c
 	}
 	T := float64(scored)
 	z = (float64(green) - w.Gamma*T) / math.Sqrt(T*w.Gamma*(1-w.Gamma))
 	return z, green, scored
 }
+
+// greenMu guards the per-worker count hand-off. The counts are summed after the fan-out, so
+// the order they arrive in cannot matter — integer addition is associative and commutative.
+var greenMu sync.Mutex
 
 // IsWatermarked reports whether Detect's z-score exceeds WatermarkZThreshold.
 func (w *Watermark) IsWatermarked(tokens []int) bool {

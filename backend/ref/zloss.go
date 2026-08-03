@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -35,20 +36,29 @@ func zLossKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs)
 	// Devirtualised traversal (§T646 follow-up): flat typed rows instead of the
 	// per-element AtF64 dispatch; same max/exp/log sequence — bit-identical.
 	if zs, ok := f64Data(z); ok {
-		for i := range b {
-			zrow := zs[i*c : i*c+c]
-			m := math.Inf(-1)
-			for _, v := range zrow {
-				if v > m {
-					m = v
+		// Parallelize the per-row logsumexp (the O(b·c) exp compute) over batch rows; each row
+		// writes its own contrib[i], then the batch sum runs SERIALLY in row order — byte-identical
+		// to the serial loop (same per-row lse², same left-fold, no reassociation).
+		contrib := make([]float64, b)
+		parallel.Rows(b, func(ilo, ihi int) {
+			for i := ilo; i < ihi; i++ {
+				zrow := zs[i*c : i*c+c]
+				m := math.Inf(-1)
+				for _, v := range zrow {
+					if v > m {
+						m = v
+					}
 				}
+				var sum float64
+				for _, v := range zrow {
+					sum += math.Exp(v - m)
+				}
+				lse := m + math.Log(sum)
+				contrib[i] = lse * lse
 			}
-			var sum float64
-			for _, v := range zrow {
-				sum += math.Exp(v - m)
-			}
-			lse := m + math.Log(sum)
-			total += lse * lse
+		})
+		for i := range b {
+			total += contrib[i]
 		}
 	} else {
 		// Generic fallback for exotic dtypes (verbatim original loop).

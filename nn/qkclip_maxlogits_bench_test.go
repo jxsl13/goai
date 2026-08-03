@@ -30,5 +30,9 @@ func benchMaxAttentionLogits(b *testing.B, seq, dm, heads int, causal bool) {
 	}
 }
 
-func BenchmarkMaxAttentionLogits_512x512x8(b *testing.B) { benchMaxAttentionLogits(b, 512, 512, 8, true) }
-func BenchmarkMaxAttentionLogits_256x256x4(b *testing.B) { benchMaxAttentionLogits(b, 256, 256, 4, false) }
+func BenchmarkMaxAttentionLogits_512x512x8(b *testing.B) {
+	benchMaxAttentionLogits(b, 512, 512, 8, true)
+}
+func BenchmarkMaxAttentionLogits_256x256x4(b *testing.B) {
+	benchMaxAttentionLogits(b, 256, 256, 4, false)
+}

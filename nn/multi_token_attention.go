@@ -314,6 +314,17 @@ func (m *MultiTokenAttention) keyQueryConv(ctx *backend.Context, l *tensor.Tenso
 // o in a group is Σ_p HeadKernel[o,p]·map[group,p]. With HeadKernel = identity this
 // returns the maps unchanged.
 func (m *MultiTokenAttention) headConv(ctx *backend.Context, maps []*tensor.Tensor) ([]*tensor.Tensor, error) {
+	// Fused inference path (no autograd taping): the dense c_h×c_h head-group mixing
+	// out[g+o] = Σ_p HeadKernel[o,p]·maps[g+p] is dispatched below as, per (g,o,p), two
+	// OpSlice (to pull the scalar HeadKernel[o,p] as a [1,1] tensor) + an OpMul (broadcast
+	// [T,T]·[1,1]) + an OpAdd — Heads·(2c_h−1) fresh [T,T] allocations and 2·Heads·c_h²
+	// scalar-slice dispatches per layer. A direct typed loop reads the c_h² kernel scalars
+	// ONCE and accumulates each output over p LEFT-TO-RIGHT (mul then add, no FMA), seeding
+	// from the p=0 product exactly as the dispatch's `acc = term` — BIT-IDENTICAL. Training
+	// keeps the dispatch loop (each OpMul/OpAdd is VJP-taped).
+	if d := maps[0].Dtype(); ctx.Recorder == nil && (d == tensor.F64 || d == tensor.F32) {
+		return m.headConvFused(maps, d)
+	}
 	out := make([]*tensor.Tensor, m.Heads)
 	for g := 0; g < m.Heads; g += m.CH {
 		for o := range m.CH {
@@ -340,6 +351,93 @@ func (m *MultiTokenAttention) headConv(ctx *backend.Context, maps []*tensor.Tens
 			}
 			out[g+o] = acc
 		}
+	}
+	return out, nil
+}
+
+// headConvFused is the fused typed inference form of headConv: out[g+o] =
+// Σ_p HeadKernel[o,p]·maps[g+p]. It reads the c_h×c_h kernel scalars once and, per output
+// map, accumulates over p left-to-right (mul then add, seeded from the p=0 product) in the
+// map's native dtype — the identical products and identical accumulation order as the
+// per-(g,o,p) OpMul/OpAdd dispatch, so the result is bit-identical. maps are contiguous
+// OpReshape outputs, so raw storage indexing is safe.
+func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtype) ([]*tensor.Tensor, error) {
+	out := make([]*tensor.Tensor, m.Heads)
+	ch := m.CH
+	hk := m.HeadKernel.Contiguous()
+	shp := maps[0].Shape()
+	n := maps[0].Numel()
+	if d == tensor.F64 {
+		w := hk.Storage().F64()
+		for g := 0; g < m.Heads; g += ch {
+			mps, oss := make([][]float64, ch), make([][]float64, ch)
+			for j := 0; j < ch; j++ {
+				mps[j] = maps[g+j].Contiguous().Storage().F64()
+				res := tensor.New(tensor.F64, shp)
+				oss[j], out[g+j] = res.Storage().F64(), res
+			}
+			// One pass per INPUT map serving every output, over a band of elements — not one
+			// pass per output re-reading every map. The group's ch maps were streamed ch times,
+			// which at the benchmarked shape is 16 passes over 33 MB; now each map is read once
+			// per band while the ch accumulators for that band stay in cache. The band split is
+			// what takes this off the critical path: it was the whole layer's only serial stretch
+			// and, being pure memory traffic, it cost its full CPU time in wall clock.
+			//
+			// Bit-identical: an output element still takes its p=0 product as a store and then
+			// adds p=1..ch-1 in ascending order, which is the order the OpMul/OpAdd dispatch it is
+			// pinned against uses.
+			parallelRows(n, ch*ch, func(lo, hi int) {
+				for p := 0; p < ch; p++ {
+					mp := mps[p][lo:hi]
+					for o := 0; o < ch; o++ {
+						wop := w[o*ch+p]
+						os := oss[o][lo:hi]
+						os = os[:len(mp)]
+						if p == 0 {
+							for i, v := range mp {
+								os[i] = v * wop
+							}
+						} else {
+							for i, v := range mp {
+								// rounded before the add: bare mul-add contracts to FMA on arm64
+								// only, which broke this path's bit-exact pin against dispatch.
+								os[i] += float64(v * wop)
+							}
+						}
+					}
+				}
+			})
+		}
+		return out, nil
+	}
+	// F32
+	w := hk.Storage().F32()
+	for g := 0; g < m.Heads; g += ch {
+		mps, oss := make([][]float32, ch), make([][]float32, ch)
+		for j := 0; j < ch; j++ {
+			mps[j] = maps[g+j].Contiguous().Storage().F32()
+			res := tensor.New(tensor.F32, shp)
+			oss[j], out[g+j] = res.Storage().F32(), res
+		}
+		parallelRows(n, ch*ch, func(lo, hi int) {
+			for p := 0; p < ch; p++ {
+				mp := mps[p][lo:hi]
+				for o := 0; o < ch; o++ {
+					wop := w[o*ch+p]
+					os := oss[o][lo:hi]
+					os = os[:len(mp)]
+					if p == 0 {
+						for i, v := range mp {
+							os[i] = v * wop
+						}
+					} else {
+						for i, v := range mp {
+							os[i] += float32(v * wop)
+						}
+					}
+				}
+			}
+		})
 	}
 	return out, nil
 }

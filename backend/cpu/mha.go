@@ -275,6 +275,91 @@ func dot4[T float32 | float64](a []float64, b []T) float64 {
 	return (s0 + s1) + (s2 + s3)
 }
 
+// dot4x4 returns the four dots of a against b0..b3 over ONE pass of a. Each is computed exactly
+// as dot4 computes it — four accumulators over the same ascending d, combined as (s0+s1)+(s2+s3),
+// with the <4 remainder folded into the first — so four jammed keys score bit-identically to four
+// dot4 calls. What it buys is the query row: read once for four keys instead of four times, with
+// sixteen independent chains in flight. The F64 score arm has jammed its keys since T9xx; this is
+// the same jam for the arm that pre-widens the query, which could not use it because its
+// reduction sits behind dot4.
+func dot4x4[T float32 | float64](a []float64, b0, b1, b2, b3 []T) (float64, float64, float64, float64) {
+	var p0, p1, p2, p3 float64
+	var q0, q1, q2, q3 float64
+	var r0, r1, r2, r3 float64
+	var t0, t1, t2, t3 float64
+	n := len(a)
+	n = min(n, len(b0), len(b1), min(len(b2), len(b3)))
+	d := 0
+	for ; d+3 < n; d += 4 {
+		a0, a1, a2, a3 := a[d], a[d+1], a[d+2], a[d+3]
+		p0 += a0 * float64(b0[d])
+		p1 += a1 * float64(b0[d+1])
+		p2 += a2 * float64(b0[d+2])
+		p3 += a3 * float64(b0[d+3])
+		q0 += a0 * float64(b1[d])
+		q1 += a1 * float64(b1[d+1])
+		q2 += a2 * float64(b1[d+2])
+		q3 += a3 * float64(b1[d+3])
+		r0 += a0 * float64(b2[d])
+		r1 += a1 * float64(b2[d+1])
+		r2 += a2 * float64(b2[d+2])
+		r3 += a3 * float64(b2[d+3])
+		t0 += a0 * float64(b3[d])
+		t1 += a1 * float64(b3[d+1])
+		t2 += a2 * float64(b3[d+2])
+		t3 += a3 * float64(b3[d+3])
+	}
+	for ; d < n; d++ {
+		av := a[d]
+		p0 += av * float64(b0[d])
+		q0 += av * float64(b1[d])
+		r0 += av * float64(b2[d])
+		t0 += av * float64(b3[d])
+	}
+	return (p0 + p1) + (p2 + p3), (q0 + q1) + (q2 + q3),
+		(r0 + r1) + (r2 + r3), (t0 + t1) + (t2 + t3)
+}
+
+// scoreRowF32 fills row[jmin:jmax) with the scaled (and optionally ALiBi-biased) scores of one
+// query row against the keys, four keys per pass over the query, and returns the running maximum.
+// It is a SEPARATE FUNCTION rather than a branch inside mhaFwd on purpose: written inline, the
+// extra body changed the code the compiler generated for the F64 arm beside it, and one ALiBi
+// element of the F64 parity test moved by a single ULP with no arithmetic of that arm touched.
+// Keeping the jam behind its own call restores that arm to its previous code exactly.
+func scoreRowF32[T float32 | float64](row, qw []float64, k []T, g mhaGeo, h, i, jmin, jmax, kvOff, dk int) float64 {
+	m := math.Inf(-1)
+	j := jmin
+	for ; j+3 < jmax; j += 4 {
+		b0 := j*g.kvDM + kvOff
+		b1, b2, b3 := b0+g.kvDM, b0+2*g.kvDM, b0+3*g.kvDM
+		s0, s1, s2, s3 := dot4x4(qw,
+			k[b0:b0+dk:b0+dk], k[b1:b1+dk:b1+dk],
+			k[b2:b2+dk:b2+dk], k[b3:b3+dk:b3+dk])
+		for o, sv := range [4]float64{s0, s1, s2, s3} {
+			sv *= g.scale
+			if g.slopes != nil {
+				sv += g.slopes[h] * float64(j+o-(g.off+i))
+			}
+			row[j+o] = sv
+			if sv > m {
+				m = sv
+			}
+		}
+	}
+	for ; j < jmax; j++ {
+		kBase := j*g.kvDM + kvOff
+		s := dot4(qw, k[kBase:kBase+dk:kBase+dk]) * g.scale
+		if g.slopes != nil {
+			s += g.slopes[h] * float64(j-(g.off+i))
+		}
+		row[j] = s
+		if s > m {
+			m = s
+		}
+	}
+	return m
+}
+
 // dot4T is dot4 with both operands in their storage type. The pre-widened
 // form (dot4 + widen) was A/B-tested in all three attention kernels: it won
 // ~28% in the forward (whose k-loop is load-bound on the score pass) but
@@ -347,20 +432,68 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 			qr := q[qBase : qBase+dk : qBase+dk]
 			m := math.Inf(-1)
 			if isF32 {
-				qw := widen(qf, qr)
-				for j := jmin; j < jmax; j++ {
-					kBase := j*g.kvDM + kvOff
-					s := dot4(qw, k[kBase:kBase+dk:kBase+dk]) * g.scale
-					if g.slopes != nil {
-						s += g.slopes[h] * float64(j-(g.off+i))
+				// FOUR KEYS PER PASS OVER THE QUERY ROW, as the F64 arm below has always done.
+				// This arm could not: its reduction sits behind dot4, so the query row was
+				// re-streamed once per key. Bit-identical — every score keeps dot4's own four
+				// accumulators over the same ascending d and the same combination, and the
+				// scale, the slope and the maximum are still applied in ascending j.
+				m = scoreRowF32(row, widen(qf, qr), k, g, h, i, jmin, jmax, kvOff, dk)
+			} else {
+				// EIGHT KEYS PER PASS OVER THE QUERY ROW — swept, not argued: at 4, 6 and 8 this
+				// arm gave BenchmarkTPAForward_1024 45.22, 43.56 and 42.70 ms and
+				// BenchmarkMHA512/fwd/cpu 6.74, 6.79 and 6.47, with eight ahead of four in all
+				// six paired rounds of the forward cell (PERF-UNROLL-SWEEP-002).
+				//
+				// Each score is a dk-term reduction into one
+				// accumulator, so this loop is bound by the latency of a dependent add chain rather
+				// than by throughput; eight keys give eight independent chains that interleave,
+				// and each query element is loaded once for all eight.
+				//
+				// Bit-identical: every score still sums its own terms in ascending d into its own
+				// accumulator, and the scale, the slope and the running maximum are applied to the
+				// keys in ascending j exactly as before.
+				j := jmin
+				for ; j+7 < jmax; j += 8 {
+					b0 := j * g.kvDM
+					k0 := k[b0+kvOff : b0+kvOff+dk : b0+kvOff+dk]
+					b1 := b0 + g.kvDM
+					k1 := k[b1+kvOff : b1+kvOff+dk : b1+kvOff+dk]
+					b2 := b1 + g.kvDM
+					k2 := k[b2+kvOff : b2+kvOff+dk : b2+kvOff+dk]
+					b3 := b2 + g.kvDM
+					k3 := k[b3+kvOff : b3+kvOff+dk : b3+kvOff+dk]
+					b4 := b3 + g.kvDM
+					k4 := k[b4+kvOff : b4+kvOff+dk : b4+kvOff+dk]
+					b5 := b4 + g.kvDM
+					k5 := k[b5+kvOff : b5+kvOff+dk : b5+kvOff+dk]
+					b6 := b5 + g.kvDM
+					k6 := k[b6+kvOff : b6+kvOff+dk : b6+kvOff+dk]
+					b7 := b6 + g.kvDM
+					k7 := k[b7+kvOff : b7+kvOff+dk : b7+kvOff+dk]
+					var s0, s1, s2, s3, s4, s5, s6, s7 float64
+					for d, qv := range qr {
+						q := float64(qv)
+						s0 += q * float64(k0[d])
+						s1 += q * float64(k1[d])
+						s2 += q * float64(k2[d])
+						s3 += q * float64(k3[d])
+						s4 += q * float64(k4[d])
+						s5 += q * float64(k5[d])
+						s6 += q * float64(k6[d])
+						s7 += q * float64(k7[d])
 					}
-					row[j] = s
-					if s > m {
-						m = s
+					for o, sv := range [8]float64{s0, s1, s2, s3, s4, s5, s6, s7} {
+						sv *= g.scale
+						if g.slopes != nil {
+							sv += g.slopes[h] * float64(j+o-(g.off+i))
+						}
+						row[j+o] = sv
+						if sv > m {
+							m = sv
+						}
 					}
 				}
-			} else {
-				for j := jmin; j < jmax; j++ {
+				for ; j < jmax; j++ {
 					kBase := j*g.kvDM + kvOff
 					kr := k[kBase : kBase+dk : kBase+dk]
 					var s float64
@@ -702,7 +835,44 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			a[j] /= sum
 		}
 		var dot float64
-		for j := jmin; j < jmax; j++ {
+		// FOUR KEYS PER PASS OVER THE GRADIENT ROW. gr does not vary with j, so the row-at-a-time
+		// form re-streams it once per key, and each key's dav is a dk-term reduction into a single
+		// accumulator — the two costs this loop is made of. Four keys read gr once and run four
+		// independent dav chains. BIT-IDENTICAL: every dvAcc element still takes the same single
+		// addition, every dav still sums over the same ascending d into its own accumulator, and
+		// dot still accumulates in ascending j.
+		jj := jmin
+		for ; jj+3 < jmax; jj += 4 {
+			b0 := jj*kvDM + kvOff
+			b1, b2, b3 := b0+kvDM, b0+2*kvDM, b0+3*kvDM
+			v0 := v[b0 : b0+dk : b0+dk]
+			v1 := v[b1 : b1+dk : b1+dk]
+			v2 := v[b2 : b2+dk : b2+dk]
+			v3 := v[b3 : b3+dk : b3+dk]
+			e0 := jj * dk
+			dv0 := dvAcc[e0 : e0+dk : e0+dk]
+			dv1 := dvAcc[e0+dk : e0+2*dk : e0+2*dk]
+			dv2 := dvAcc[e0+2*dk : e0+3*dk : e0+3*dk]
+			dv3 := dvAcc[e0+3*dk : e0+4*dk : e0+4*dk]
+			a0, a1, a2, a3 := a[jj], a[jj+1], a[jj+2], a[jj+3]
+			var s0, s1, s2, s3 float64
+			for d, gv := range gr {
+				gid := float64(gv)
+				dv0[d] += a0 * gid
+				dv1[d] += a1 * gid
+				dv2[d] += a2 * gid
+				dv3[d] += a3 * gid
+				s0 += gid * float64(v0[d])
+				s1 += gid * float64(v1[d])
+				s2 += gid * float64(v2[d])
+				s3 += gid * float64(v3[d])
+			}
+			for o, sv := range [4]float64{s0, s1, s2, s3} {
+				dA[jj+o] = sv
+				dot += sv * a[jj+o]
+			}
+		}
+		for j := jj; j < jmax; j++ {
 			kvBase := j*kvDM + kvOff
 			vr := v[kvBase : kvBase+dk : kvBase+dk]
 			dvr := dvAcc[j*dk : j*dk+dk : j*dk+dk]
@@ -720,7 +890,42 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			dqRow[d] = 0
 		}
 		dq := dqRow[:dk]
-		for j := jmin; j < jmax; j++ {
+		// FOUR KEYS PER PASS AGAIN, and here the shared operands are BOTH accumulator and input:
+		// dq is loaded and stored once per pass instead of once per key, and the query element is
+		// read once for four dkAcc rows. BIT-IDENTICAL: dq[d] takes the same four additions in the
+		// same ascending j, only held in a register between them.
+		jd := jmin
+		for ; jd+3 < jmax; jd += 4 {
+			d0 := scale * a[jd] * (dA[jd] - dot)
+			d1 := scale * a[jd+1] * (dA[jd+1] - dot)
+			d2 := scale * a[jd+2] * (dA[jd+2] - dot)
+			d3 := scale * a[jd+3] * (dA[jd+3] - dot)
+			b0 := jd*kvDM + kvOff
+			b1, b2, b3 := b0+kvDM, b0+2*kvDM, b0+3*kvDM
+			k0 := k[b0 : b0+dk : b0+dk]
+			k1 := k[b1 : b1+dk : b1+dk]
+			k2 := k[b2 : b2+dk : b2+dk]
+			k3 := k[b3 : b3+dk : b3+dk]
+			e0 := jd * dk
+			dk0 := dkAcc[e0 : e0+dk : e0+dk]
+			dk1 := dkAcc[e0+dk : e0+2*dk : e0+2*dk]
+			dk2 := dkAcc[e0+2*dk : e0+3*dk : e0+3*dk]
+			dk3 := dkAcc[e0+3*dk : e0+4*dk : e0+4*dk]
+			for d := range dq {
+				qd := float64(qr[d])
+				t := dq[d]
+				t += d0 * float64(k0[d])
+				t += d1 * float64(k1[d])
+				t += d2 * float64(k2[d])
+				t += d3 * float64(k3[d])
+				dq[d] = t
+				dk0[d] += d0 * qd
+				dk1[d] += d1 * qd
+				dk2[d] += d2 * qd
+				dk3[d] += d3 * qd
+			}
+		}
+		for j := jd; j < jmax; j++ {
 			dS := scale * a[j] * (dA[j] - dot)
 			kvBase := j*kvDM + kvOff
 			kr := k[kvBase : kvBase+dk : kvBase+dk]

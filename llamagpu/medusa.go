@@ -186,12 +186,23 @@ func MedusaGenerate(dec HiddenStepper, heads *nlp.MedusaHeads, prompt []int, max
 func headArgmax(hidden []float32, w *tensor.Tensor) int {
 	wd := w.Storage().F32()
 	dim, vocab := w.Shape()[0], w.Shape()[1]
-	best, bestV := 0, float32(math.Inf(-1))
-	for v := range vocab {
-		var s float32
-		for i := range dim {
-			s += hidden[i] * wd[i*vocab+v]
+	// Accumulate across the vocabulary in ROW order. Written the other way round — a scalar sum per
+	// column — every step of the inner loop jumps a whole row to use four bytes, so a [dim,vocab]
+	// weight pulls one cache line per element; here each row is one contiguous streaming pass and
+	// the accumulator vector is reused.
+	//
+	// BIT-IDENTICAL: acc[v] sums the same dim products in the same ascending-i order the scalar did,
+	// starting from the same +0.0. The argmax still scans v ascending keeping the FIRST strict
+	// maximum, so ties break identically.
+	acc := make([]float32, vocab)
+	for i := range dim {
+		hi, row := hidden[i], wd[i*vocab:(i+1)*vocab]
+		for v, wv := range row {
+			acc[v] += hi * wv
 		}
+	}
+	best, bestV := 0, float32(math.Inf(-1))
+	for v, s := range acc {
 		if s > bestV {
 			best, bestV = v, s
 		}

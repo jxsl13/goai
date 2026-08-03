@@ -230,7 +230,23 @@ func llmInt8FlatF64(xf, wf, yf []float64, tokens, cin, cout int, threshold float
 			qwt[j*cin+c] = q(wf[c*cout+j], sw[j])
 		}
 	}
-	for i := range tokens {
+	// TOKEN ROWS ARE INDEPENDENT: row i reads qx[i], the shared read-only qwt and the two
+	// scale vectors, and writes only yf[i*cout:(i+1)*cout]. Banding them is race-free and
+	// bit-identical — every output still accumulates over the same c in the same order into
+	// the same four partials, and only which goroutine performs it moves. This loop was 90.9%
+	// of the benchmark and the whole thing scaled at 1.05x on twelve cores.
+	parallelRows(tokens, cout*cin, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			llmInt8RowsF64(yf, qx, qwt, sx, sw, i, cin, cout)
+		}
+	})
+	return outIdx
+}
+
+// llmInt8RowsF64 computes one token row of the dequantized product. Split out so the banded
+// loop has a body rather than a copy of one.
+func llmInt8RowsF64(yf, qx, qwt, sx, sw []float64, i, cin, cout int) {
+	{
 		qxi := qx[i*cin : i*cin+cin : i*cin+cin]
 		ybase := i * cout
 		for j := range cout {
@@ -253,5 +269,4 @@ func llmInt8FlatF64(xf, wf, yf []float64, tokens, cin, cout int, threshold float
 			yf[ybase+j] += deq
 		}
 	}
-	return outIdx
 }

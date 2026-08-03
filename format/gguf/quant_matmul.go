@@ -32,12 +32,6 @@ const (
 	MXFP4   QuantType = tMXFP4   // OCP microscaling FP4 (gpt-oss): E2M1 elements + E8M0 block scale (§T555)
 )
 
-// QMatMul computes y[M,N] = x[M,K] · dequant(W[N,K])ᵀ where W is stored quantized
-// (row-major, K/32 blocks per row) — a quantized linear layer (weight [out,in]).
-// The weight is dequantized ONE ROW at a time (not the whole matrix), so a
-// quantized model runs without materializing full-precision weights — the point
-// of quantized inference (§T39). Accumulation is f64 (§V10); the dequant per
-// block is the ggml-verified path (§R19/§R21).
 // dotQ4KRowFn is dotQ4_KRow (scalar) by default; the amd64+simd asm kernel overrides
 // it in init() with the 2.6x VPMOVZXBD/FMA row dot (tolerance-gated).
 var dotQ4KRowFn = dotQ4_KRow
@@ -50,10 +44,26 @@ var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf 
 // GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
 // cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
 // small total-work threshold.
+// qmatmulGrain is the element-work one worker must be given before another is added. Measured
+// on BenchmarkQuantLlamaGenerate500 against the fixed GOMAXPROCS split: 1<<15 is 552.9 to 517.6
+// ms with user CPU 18.99 to 16.51 s and system 2.91 to 2.13 s — better on all three. A coarser
+// 1<<16 saves more CPU (16.10 s user, 1.19 s system) and gives back wall clock at 536.1 ms, and
+// 1<<17 and above collapse to serial at about 604 ms.
+const qmatmulGrain = 1 << 15
+
 func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
 		nw = n
+	}
+	// SIZE THE FAN-OUT TO THE WORK, do not just gate it on/off. Decode calls this thousands of
+	// times per generation with one activation row, and splitting a small matmul twelve ways
+	// costs more in wakeups than the split saves: a profile of a 500-token quantized Llama
+	// generation spent 88%% of its samples in pthread_cond_signal and pthread_cond_wait and
+	// 1.5%% in this kernel. One worker per qmatmulGrain of element-work, capped by GOMAXPROCS,
+	// beats both the fixed twelve and no fan-out at all — on wall clock AND on CPU burned.
+	if w := n * workPerRow / qmatmulGrain; w < nw {
+		nw = w
 	}
 	if nw <= 1 || n*workPerRow < 1<<17 {
 		body(0, n)
@@ -79,6 +89,12 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	wg.Wait()
 }
 
+// QMatMul computes y[M,N] = x[M,K] · dequant(W[N,K])ᵀ where W is stored quantized
+// (row-major, K/32 blocks per row) — a quantized linear layer (weight [out,in]).
+// The weight is dequantized ONE ROW at a time (not the whole matrix), so a
+// quantized model runs without materializing full-precision weights — the point
+// of quantized inference (§T39). Accumulation is f64 (§V10); the dequant per
+// block is the ggml-verified path (§R19/§R21).
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
 		return nil, fmt.Errorf("gguf: QMatMul x must be [M,%d], got %v", k, x.Shape())
@@ -272,7 +288,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// column outf[*n+ni] for all m activation rows. Rows ni are independent (per-ni scratch,
 	// disjoint output column, no cross-ni reduction), so chunk-parallel across GOMAXPROCS is
 	// byte-for-byte identical to the serial loop; the default dtype branch reads x read-only.
-	process := func(scratch []float32, ni int) {
+	dequantInto := func(scratch []float32, ni int) {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		switch qt {
 		case Q8_0:
@@ -290,34 +306,69 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
 		}
+	}
+	process := func(scratch []float32, ni int) {
+		dequantInto(scratch, ni)
 		wf := scratch
-		// Unroll-and-jam the activation-row (mi) loop by 4: the dequantized weight row wf is
-		// invariant across mi, so 4 independent f64 accumulators break the single-acc FADD
+		// Unroll-and-jam the activation-row (mi) loop by 8 — swept, not argued: at 4, 6, 8 and 10
+		// BenchmarkQuantMamba2Prefill_512 read 307.0, 247.4, 239.9 and 242.5 ms, so eight is the
+		// optimum and ten is already past it. Decode is unaffected either way (m=1 takes the
+		// tail), which the QuantLlamaGenerate500 cell confirms at 505.8 vs 504.4 ms.
+		//
+		// Unroll-and-jam the activation-row (mi) loop: the dequantized weight row wf is
+		// invariant across mi, so 8 independent f64 accumulators break the single-acc FADD
 		// dependency chain (latency-bound → throughput-bound) AND load+convert each wf[ki]
-		// once for 4 rows. Bit-exact: each output keeps its OWN accumulator summing ascending
+		// once for all of them. Bit-exact: each output keeps its OWN accumulator summing ascending
 		// ki — no reassociation of any individual dot (the §V10 ascending-k order holds). The
 		// dtype switch is hoisted out of the mi loop (loop-invariant). M1 decode is unaffected
-		// (the tail handles m<4).
+		// (the tail handles m<8).
+		//
+		// THE f32->f64 CONVERSIONS ARE NOT A COST — MEASURED, AND THE ATTEMPT LOST. This loop
+		// converts eight activation elements and one weight element per step, and it runs once
+		// per OUTPUT COLUMN, so an f32 activation matrix is converted n times over. Pre-widening
+		// it once into an m*k f64 buffer removes all of that and measured WORSE:
+		// BenchmarkQuantMamba2Prefill_512 273.5 to 284.1 ms, +3.9%, with decode flat. The loop
+		// is LOAD-bound, so doubling the activation bytes costs more than the conversions saved;
+		// a widening instruction rides in the load pipeline and is close to free.
+		//
+		// The lever that follows from that, and is NOT taken here: blocking over the OUTPUT
+		// COLUMN. Each step reads eight activation elements and one weight element to do eight
+		// FMAs; dequantizing two weight rows per call and computing two outputs per activation
+		// group would give sixteen FMAs for the same eight activation loads. It restructures the
+		// per-column fan-out unit rather than the loop body, so it wants its own round against
+		// the digest this file already carries.
 		switch {
 		case xf32 != nil:
 			mi := 0
-			for ; mi+4 <= m; mi += 4 {
+			for ; mi+8 <= m; mi += 8 {
 				r0 := xf32[(mi+0)*k : (mi+0)*k+k]
 				r1 := xf32[(mi+1)*k : (mi+1)*k+k]
 				r2 := xf32[(mi+2)*k : (mi+2)*k+k]
 				r3 := xf32[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
+				r4 := xf32[(mi+4)*k : (mi+4)*k+k]
+				r5 := xf32[(mi+5)*k : (mi+5)*k+k]
+				r6 := xf32[(mi+6)*k : (mi+6)*k+k]
+				r7 := xf32[(mi+7)*k : (mi+7)*k+k]
+				var a0, a1, a2, a3, a4, a5, a6, a7 float64
 				for ki, wv := range wf {
 					w := float64(wv)
 					a0 += float64(r0[ki]) * w
 					a1 += float64(r1[ki]) * w
 					a2 += float64(r2[ki]) * w
 					a3 += float64(r3[ki]) * w
+					a4 += float64(r4[ki]) * w
+					a5 += float64(r5[ki]) * w
+					a6 += float64(r6[ki]) * w
+					a7 += float64(r7[ki]) * w
 				}
 				outf[(mi+0)*n+ni] = float32(a0)
 				outf[(mi+1)*n+ni] = float32(a1)
 				outf[(mi+2)*n+ni] = float32(a2)
 				outf[(mi+3)*n+ni] = float32(a3)
+				outf[(mi+4)*n+ni] = float32(a4)
+				outf[(mi+5)*n+ni] = float32(a5)
+				outf[(mi+6)*n+ni] = float32(a6)
+				outf[(mi+7)*n+ni] = float32(a7)
 			}
 			for ; mi < m; mi++ {
 				row := xf32[mi*k : mi*k+k]
@@ -329,23 +380,35 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		case xf64 != nil:
 			mi := 0
-			for ; mi+4 <= m; mi += 4 {
+			for ; mi+8 <= m; mi += 8 {
 				r0 := xf64[(mi+0)*k : (mi+0)*k+k]
 				r1 := xf64[(mi+1)*k : (mi+1)*k+k]
 				r2 := xf64[(mi+2)*k : (mi+2)*k+k]
 				r3 := xf64[(mi+3)*k : (mi+3)*k+k]
-				var a0, a1, a2, a3 float64
+				r4 := xf64[(mi+4)*k : (mi+4)*k+k]
+				r5 := xf64[(mi+5)*k : (mi+5)*k+k]
+				r6 := xf64[(mi+6)*k : (mi+6)*k+k]
+				r7 := xf64[(mi+7)*k : (mi+7)*k+k]
+				var a0, a1, a2, a3, a4, a5, a6, a7 float64
 				for ki, wv := range wf {
 					w := float64(wv)
 					a0 += r0[ki] * w
 					a1 += r1[ki] * w
 					a2 += r2[ki] * w
 					a3 += r3[ki] * w
+					a4 += r4[ki] * w
+					a5 += r5[ki] * w
+					a6 += r6[ki] * w
+					a7 += r7[ki] * w
 				}
 				outf[(mi+0)*n+ni] = float32(a0)
 				outf[(mi+1)*n+ni] = float32(a1)
 				outf[(mi+2)*n+ni] = float32(a2)
 				outf[(mi+3)*n+ni] = float32(a3)
+				outf[(mi+4)*n+ni] = float32(a4)
+				outf[(mi+5)*n+ni] = float32(a5)
+				outf[(mi+6)*n+ni] = float32(a6)
+				outf[(mi+7)*n+ni] = float32(a7)
 			}
 			for ; mi < m; mi++ {
 				row := xf64[mi*k : mi*k+k]
@@ -365,13 +428,131 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			}
 		}
 	}
+	// THREE OUTPUT COLUMNS PER PASS. The eight-row jam reads eight activation elements and
+	// one weight element to do eight FMAs, and it runs once per output column — the
+	// activation matrix is streamed n times and the loop is LOAD-bound, which is why
+	// pre-widening it to f64 measured WORSE (see the note above). Three weight rows per
+	// pass give twenty-four FMAs for the same eight activation loads.
+	//
+	// THREE BECAUSE IT WAS SWEPT: at 2, 3 and 4 columns BenchmarkQuantMamba2Prefill_512
+	// read 237.2, 220.3 and 261.3 ms against 270.8 serial-per-column, so four already
+	// spills — twenty-four accumulators fit and thirty-two do not. Passing the scratch
+	// rows as NAMED parameters rather than a slice of slices is worth another 4%: the
+	// swept forms used sc[c][ki] and measured 237.2 at two columns where the named form
+	// measures 222.5.
+	//
+	// BIT-IDENTICAL: every output keeps its OWN accumulator summing ascending ki over the
+	// same operands, exactly as three separate calls produced.
+	process3 := func(sa, sb, scc []float32, ni int) {
+		if xf32 == nil || m < 8 {
+			process(sa, ni)
+			process(sb, ni+1)
+			process(scc, ni+2)
+			return
+		}
+		dequantInto(sa, ni+0)
+		dequantInto(sb, ni+1)
+		dequantInto(scc, ni+2)
+		mi := 0
+		for ; mi+8 <= m; mi += 8 {
+			r0 := xf32[(mi+0)*k : (mi+0)*k+k]
+			r1 := xf32[(mi+1)*k : (mi+1)*k+k]
+			r2 := xf32[(mi+2)*k : (mi+2)*k+k]
+			r3 := xf32[(mi+3)*k : (mi+3)*k+k]
+			r4 := xf32[(mi+4)*k : (mi+4)*k+k]
+			r5 := xf32[(mi+5)*k : (mi+5)*k+k]
+			r6 := xf32[(mi+6)*k : (mi+6)*k+k]
+			r7 := xf32[(mi+7)*k : (mi+7)*k+k]
+			var a0, a1, a2, a3, a4, a5, a6, a7 float64
+			var b0, b1, b2, b3, b4, b5, b6, b7 float64
+			var c0, c1, c2, c3, c4, c5, c6, c7 float64
+			for ki := 0; ki < k; ki++ {
+				w0, w1, w2 := float64(sa[ki]), float64(sb[ki]), float64(scc[ki])
+				v0 := float64(r0[ki])
+				a0 += v0 * w0
+				b0 += v0 * w1
+				c0 += v0 * w2
+				v1 := float64(r1[ki])
+				a1 += v1 * w0
+				b1 += v1 * w1
+				c1 += v1 * w2
+				v2 := float64(r2[ki])
+				a2 += v2 * w0
+				b2 += v2 * w1
+				c2 += v2 * w2
+				v3 := float64(r3[ki])
+				a3 += v3 * w0
+				b3 += v3 * w1
+				c3 += v3 * w2
+				v4 := float64(r4[ki])
+				a4 += v4 * w0
+				b4 += v4 * w1
+				c4 += v4 * w2
+				v5 := float64(r5[ki])
+				a5 += v5 * w0
+				b5 += v5 * w1
+				c5 += v5 * w2
+				v6 := float64(r6[ki])
+				a6 += v6 * w0
+				b6 += v6 * w1
+				c6 += v6 * w2
+				v7 := float64(r7[ki])
+				a7 += v7 * w0
+				b7 += v7 * w1
+				c7 += v7 * w2
+			}
+			outf[(mi+0)*n+ni+0] = float32(a0)
+			outf[(mi+0)*n+ni+1] = float32(b0)
+			outf[(mi+0)*n+ni+2] = float32(c0)
+			outf[(mi+1)*n+ni+0] = float32(a1)
+			outf[(mi+1)*n+ni+1] = float32(b1)
+			outf[(mi+1)*n+ni+2] = float32(c1)
+			outf[(mi+2)*n+ni+0] = float32(a2)
+			outf[(mi+2)*n+ni+1] = float32(b2)
+			outf[(mi+2)*n+ni+2] = float32(c2)
+			outf[(mi+3)*n+ni+0] = float32(a3)
+			outf[(mi+3)*n+ni+1] = float32(b3)
+			outf[(mi+3)*n+ni+2] = float32(c3)
+			outf[(mi+4)*n+ni+0] = float32(a4)
+			outf[(mi+4)*n+ni+1] = float32(b4)
+			outf[(mi+4)*n+ni+2] = float32(c4)
+			outf[(mi+5)*n+ni+0] = float32(a5)
+			outf[(mi+5)*n+ni+1] = float32(b5)
+			outf[(mi+5)*n+ni+2] = float32(c5)
+			outf[(mi+6)*n+ni+0] = float32(a6)
+			outf[(mi+6)*n+ni+1] = float32(b6)
+			outf[(mi+6)*n+ni+2] = float32(c6)
+			outf[(mi+7)*n+ni+0] = float32(a7)
+			outf[(mi+7)*n+ni+1] = float32(b7)
+			outf[(mi+7)*n+ni+2] = float32(c7)
+		}
+		for ; mi < m; mi++ {
+			row := xf32[mi*k : mi*k+k]
+			var t0, t1, t2 float64
+			for ki := 0; ki < k; ki++ {
+				v := float64(row[ki])
+				t0 += v * float64(sa[ki])
+				t1 += v * float64(sb[ki])
+				t2 += v * float64(scc[ki])
+			}
+			outf[mi*n+ni] = float32(t0)
+			outf[mi*n+ni+1] = float32(t1)
+			outf[mi*n+ni+2] = float32(t2)
+		}
+	}
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
 		nw = n
 	}
 	if nw <= 1 || m*n*k < 1<<20 {
 		scratch := make([]float32, k)
-		for ni := range n {
+		sb := make([]float32, k)
+		sc := make([]float32, k)
+		ni := 0
+		for ; ni+3 <= n; ni += 3 {
+			process3(scratch, sb, sc, ni)
+		}
+		for ; ni < n; ni++ {
 			process(scratch, ni)
 		}
 		return out, nil
@@ -391,7 +572,13 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		go func(lo, hi int) {
 			defer wg.Done()
 			scratch := make([]float32, k)
-			for ni := lo; ni < hi; ni++ {
+			sb := make([]float32, k)
+			sc := make([]float32, k)
+			ni := lo
+			for ; ni+3 <= hi; ni += 3 {
+				process3(scratch, sb, sc, ni)
+			}
+			for ; ni < hi; ni++ {
 				process(scratch, ni)
 			}
 		}(lo, hi)

@@ -51,9 +51,9 @@ func parallelCols(n, workPerItem int, body func(lo, hi int)) {
 // packed into a single n×n array (L below the diagonal, U on and above). Reuse it to solve several
 // right-hand sides or to get the determinant without refactoring.
 type LU struct {
-	lu   [][]float64 // packed L (strictly-lower, unit) + U (upper), n×n
-	piv  []int       // row permutation: row i of P·A is original row piv[i]
-	sign float64     // (−1)^(#row swaps), for the determinant
+	lu   []float64 // packed L (strictly-lower, unit) + U (upper), FLAT row-major n×n (lu[i*n+j])
+	piv  []int     // row permutation: row i of P·A is original row piv[i]
+	sign float64   // (−1)^(#row swaps), for the determinant
 	n    int
 }
 
@@ -65,7 +65,18 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := toMatrix(a, n)
+	// FLAT row-major working copy (was [][]float64 — one heap slice per row, scattered,
+	// with a slice-header deref on every m[i][j] read inside the O(n³) elimination). A single
+	// contiguous block makes the inner update stream two row slices; row swaps become a
+	// physical element exchange (O(n) each, O(n²) total — negligible vs the O(n³) elimination)
+	// instead of a pointer swap, but produce the same logical matrix. Bit-identical: same pivot
+	// choice, same elimination order, same `m[i][k] / m[k][k]` DIVISION.
+	m := make([]float64, n*n)
+	for i := range n {
+		for j := range n {
+			m[i*n+j] = a.AtF64(i, j)
+		}
+	}
 	piv := make([]int, n)
 	for i := range piv {
 		piv[i] = i
@@ -75,38 +86,80 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 		// partial pivot: largest absolute value in column k, rows k..n−1 (numerical stability)
 		p := k
 		for i := k + 1; i < n; i++ {
-			if math.Abs(m[i][k]) > math.Abs(m[p][k]) {
+			if math.Abs(m[i*n+k]) > math.Abs(m[p*n+k]) {
 				p = i
 			}
 		}
-		if m[p][k] == 0 {
+		if m[p*n+k] == 0 {
 			continue // singular column: U[k,k] stays 0, no elimination
 		}
 		if p != k {
-			m[k], m[p] = m[p], m[k]
+			rk, rp := m[k*n:k*n+n], m[p*n:p*n+n]
+			for j := range n {
+				rk[j], rp[j] = rp[j], rk[j]
+			}
 			piv[k], piv[p] = piv[p], piv[k]
 			sign = -sign
 		}
-		for i := k + 1; i < n; i++ {
-			mult := m[i][k] / m[k][k]
-			m[i][k] = mult // store the L multiplier
-			for j := k + 1; j < n; j++ {
-				m[i][j] -= mult * m[k][j]
+		mk := m[k*n : k*n+n]
+		pivot := mk[k] // = m[k][k]; row k is untouched by the i>k updates below
+		// The rank-1 update is the whole cost of this factorization — one line, 92% of the
+		// benchmark — and its rows are independent: row i reads the pivot row and writes only
+		// itself. The pivot loop above stays sequential; only this fan-out is split, and each
+		// element still performs exactly the one subtraction it did before, so the result is
+		// bit-identical.
+		//
+		// The gate sees rows*cols, the real work at this pivot, not the row count: an estimate
+		// short by a factor of the row length would leave mid-sized matrices serial (§T1083).
+		rows := n - k - 1
+		// Below the gate the update runs as a PLAIN LOOP, not through the callback. The two
+		// bodies are deliberately duplicated: routing small factorizations through a closure cost
+		// a 128-wide one 3 to 4%, and hoisting the gate above the call did not recover it — the
+		// cost is the closure itself, not the dispatch. Any edit here must be made twice.
+		if rows*rows < luUpdateParWork {
+			for i := k + 1; i < n; i++ {
+				mi := m[i*n : i*n+n]
+				mult := mi[k] / pivot
+				mi[k] = mult // store the L multiplier
+				for j := k + 1; j < n; j++ {
+					mi[j] -= mult * mk[j]
+				}
 			}
+			continue
 		}
+		parallelCols(rows, rows, func(lo, hi int) {
+			for i := k + 1 + lo; i < k+1+hi; i++ {
+				mi := m[i*n : i*n+n]
+				mult := mi[k] / pivot
+				mi[k] = mult
+				for j := k + 1; j < n; j++ {
+					mi[j] -= mult * mk[j]
+				}
+			}
+		})
 	}
 	return &LU{lu: m, piv: piv, sign: sign, n: n}, nil
 }
+
+// luUpdateParWork gates the rank-1 update's fan-out on the work at THIS pivot, rows*cols. Below
+// it the update runs on the caller. Measured: a 512-wide factorization goes -39.5% and a 256-wide
+// one -10.3%, while 128 is left alone because it is below the gate at every pivot.
+const luUpdateParWork = 1 << 14
 
 // Det returns the determinant det(A) = sign · Π_k U[k,k] (the permutation sign times the product of
 // the U diagonal). It is 0 exactly when A is singular.
 func (f *LU) Det() float64 {
 	d := f.sign
-	for k := range f.n {
-		d *= f.lu[k][k]
+	n := f.n
+	for k := range n {
+		d *= f.lu[k*n+k]
 	}
 	return d
 }
+
+// colJam is how many right-hand-side columns LU.Solve processes together. Columns are
+// independent, so jamming them is a free-dimension transform and changes no value.
+const colJam = 4
 
 // Solve solves A·X = B for X, where B is a right-hand-side vector [n] or matrix [n,k]. It applies the
 // row permutation to B, then forward-substitution (L·Y = P·B) and back-substitution (U·X = Y).
@@ -117,7 +170,7 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("linalg: Solve rhs must be [%d] or [%d,k], got %v", n, n, b.Shape())
 	}
 	for k := range n {
-		if f.lu[k][k] == 0 {
+		if f.lu[k*n+k] == 0 {
 			return nil, fmt.Errorf("linalg: Solve of a singular matrix (zero pivot at %d)", k)
 		}
 	}
@@ -141,23 +194,95 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 	// order and reads only y[j] with j < i (written earlier in the SAME column), so a
 	// reused per-worker buffer cannot expose another column's values. Gated on n·n·cols
 	// so a single heavy column or a single RHS (Solve of a vector) stays serial.
+	// TWO THINGS BEYOND THE FLAT FACTOR, both measured on this shape.
+	//
+	// The back pass accumulates in the CONTIGUOUS scratch instead of reading out[j*cols+c].
+	// For a fixed column, stepping j there jumps a whole output row — 6 KB at n=cols=768 —
+	// so every iteration touched its own cache line to use eight bytes of it. The values it
+	// reads are the x[j] this same loop wrote earlier, so they can live in y: x[i] overwrites
+	// y[i] only AFTER y[i] has been read into s, and the forward pass's y[j] for j > i was
+	// already consumed at step j. The row is scattered to out once at the end.
+	//
+	// And FOUR right-hand-side columns are jammed. Both substitution loops are a serial FMA
+	// recurrence on one accumulator, so they run at FMA latency rather than throughput, and
+	// the whole factor is re-streamed once per column. Four columns share each li[j] load and
+	// run four independent chains. BIT-IDENTICAL, because the jammed dimension is the FREE
+	// one: column c still accumulates over the same j in the same ascending order with the
+	// same operands into its own accumulator. That is exactly why this is legal where
+	// splitting the inner dot into partials is not.
+	//
+	//	LUSolve_768x768 -69.98%, LUSolve_512x512 -64.06%, Inverse/768 -43.21% (p=0.000, n=12),
+	//	with the cols==1 remainder path flat as a control.
+	jam := colJam
+	if cols < jam {
+		jam = cols
+	}
 	parallelCols(cols, n*n, func(clo, chi int) {
-		y := make([]float64, n)
-		for c := clo; c < chi; c++ {
+		buf := make([]float64, jam*n)
+		one := func(c int, y []float64) {
 			for i := range n { // forward: L·y = P·b, L unit-lower
 				s := bat(f.piv[i], c)
+				li := f.lu[i*n : i*n+n] // contiguous factor row i
 				for j := range i {
-					s -= f.lu[i][j] * y[j]
+					s -= li[j] * y[j]
 				}
 				y[i] = s
 			}
 			for i := n - 1; i >= 0; i-- { // back: U·x = y
 				s := y[i]
+				li := f.lu[i*n : i*n+n]
 				for j := i + 1; j < n; j++ {
-					s -= f.lu[i][j] * out[j*cols+c]
+					s -= li[j] * y[j]
 				}
-				out[i*cols+c] = s / f.lu[i][i]
+				y[i] = s / li[i]
 			}
+			for i := range n {
+				out[i*cols+c] = y[i]
+			}
+		}
+		c := clo
+		for ; c+colJam <= chi; c += colJam {
+			y0, y1 := buf[0:n], buf[n:2*n]
+			y2, y3 := buf[2*n:3*n], buf[3*n:4*n]
+			for i := range n {
+				pi := f.piv[i]
+				s0, s1 := bat(pi, c), bat(pi, c+1)
+				s2, s3 := bat(pi, c+2), bat(pi, c+3)
+				lr := f.lu[i*n : i*n+i]
+				a0, a1 := y0[:i], y1[:i]
+				a2, a3 := y2[:i], y3[:i]
+				for j, lij := range lr {
+					s0 -= lij * a0[j]
+					s1 -= lij * a1[j]
+					s2 -= lij * a2[j]
+					s3 -= lij * a3[j]
+				}
+				y0[i], y1[i], y2[i], y3[i] = s0, s1, s2, s3
+			}
+			for i := n - 1; i >= 0; i-- {
+				s0, s1, s2, s3 := y0[i], y1[i], y2[i], y3[i]
+				lr := f.lu[i*n+i+1 : i*n+n]
+				b0, b1 := y0[i+1:n], y1[i+1:n]
+				b2, b3 := y2[i+1:n], y3[i+1:n]
+				b0, b1 = b0[:len(lr)], b1[:len(lr)]
+				b2, b3 = b2[:len(lr)], b3[:len(lr)]
+				for t, lij := range lr {
+					s0 -= lij * b0[t]
+					s1 -= lij * b1[t]
+					s2 -= lij * b2[t]
+					s3 -= lij * b3[t]
+				}
+				d := f.lu[i*n+i]
+				y0[i], y1[i], y2[i], y3[i] = s0/d, s1/d, s2/d, s3/d
+			}
+			for i := range n {
+				base := i * cols
+				out[base+c], out[base+c+1] = y0[i], y1[i]
+				out[base+c+2], out[base+c+3] = y2[i], y3[i]
+			}
+		}
+		for ; c < chi; c++ {
+			one(c, buf[0:n])
 		}
 	})
 	if vec {

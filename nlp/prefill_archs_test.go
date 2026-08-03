@@ -318,6 +318,7 @@ func benchMixtral(b *testing.B) *nlp.Mixtral {
 func BenchmarkMixtralPromptStepwise(b *testing.B) {
 	m := benchMixtral(b)
 	prompt := benchPrompt(m.Config.Vocab)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()
@@ -335,6 +336,7 @@ func BenchmarkMixtralPromptStepwise(b *testing.B) {
 func BenchmarkMixtralPromptPrefill(b *testing.B) {
 	m := benchMixtral(b)
 	prompt := benchPrompt(m.Config.Vocab)
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		ctx := backend.NewContext()

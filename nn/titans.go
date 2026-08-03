@@ -264,7 +264,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 				out := tensor.NewOn(ctx.Device(), q.Dtype(), tensor.Shape{seq, dim})
 				os := flatF64(out)
 				M := append([]float64(nil), m0...) // mutable copy; M0 is a param, never mutated
-				S := make([]float64, dim*dim)       // momentum state (zero == the nil "first token")
+				S := make([]float64, dim*dim)      // momentum state (zero == the nil "first token")
 				started := false
 				for t := range seq {
 					krow := ks[t*dim : t*dim+dim : t*dim+dim]
@@ -337,7 +337,23 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 						qrow := qs[t*dim : t*dim+dim : t*dim+dim]
 						vrow := vs[t*dim : t*dim+dim : t*dim+dim]
 						etaT, thetaT, keep := ets[t], tts[t], 1-ats[t]
-						for j := range hid { // h = σ(W1_{t-1}·k)
+						jk := 0
+						for ; jk+3 < hid; jk += 4 { // h = σ(W1_{t-1}·k), FOUR HIDDEN UNITS PER PASS over the key row
+							b0, b1, b2, b3 := jk*dim, (jk+1)*dim, (jk+2)*dim, (jk+3)*dim
+							var z0, z1, z2, z3 float64
+							for c := range dim {
+								kv := krow[c]
+								z0 += W1[b0+c] * kv
+								z1 += W1[b1+c] * kv
+								z2 += W1[b2+c] * kv
+								z3 += W1[b3+c] * kv
+							}
+							h[jk+0] = sigmoidStableF64(z0)
+							h[jk+1] = sigmoidStableF64(z1)
+							h[jk+2] = sigmoidStableF64(z2)
+							h[jk+3] = sigmoidStableF64(z3)
+						}
+						for j := jk; j < hid; j++ {
 							b1 := j * dim
 							var z float64
 							for c := range dim {
@@ -345,7 +361,23 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							}
 							h[j] = sigmoidStableF64(z)
 						}
-						for i := range dim { // e2 = 2·(W2_{t-1}·h − v)
+						iq := 0
+						for ; iq+3 < dim; iq += 4 {
+							c0, c1, c2, c3 := iq*hid, (iq+1)*hid, (iq+2)*hid, (iq+3)*hid
+							var o0, o1, o2, o3 float64
+							for j := range hid {
+								hj := h[j]
+								o0 += W2[c0+j] * hj
+								o1 += W2[c1+j] * hj
+								o2 += W2[c2+j] * hj
+								o3 += W2[c3+j] * hj
+							}
+							for d, ov := range [4]float64{o0, o1, o2, o3} {
+								e := ov - vrow[iq+d]
+								e2[iq+d] = e + e
+							}
+						}
+						for i := iq; i < dim; i++ {
 							b2 := i * hid
 							var o float64
 							for j := range hid {
@@ -391,7 +423,23 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							}
 						}
 						started = true
-						for j := range hid { // retrieve: h = σ(W1_t·q)
+						j := 0
+						for ; j+3 < hid; j += 4 { // retrieve: h = σ(W1_t·q), four hidden units per pass
+							b0, b1, b2, b3 := j*dim, (j+1)*dim, (j+2)*dim, (j+3)*dim
+							var z0, z1, z2, z3 float64
+							for c := range dim {
+								qv := qrow[c]
+								z0 += W1[b0+c] * qv
+								z1 += W1[b1+c] * qv
+								z2 += W1[b2+c] * qv
+								z3 += W1[b3+c] * qv
+							}
+							h[j+0] = sigmoidStableF64(z0)
+							h[j+1] = sigmoidStableF64(z1)
+							h[j+2] = sigmoidStableF64(z2)
+							h[j+3] = sigmoidStableF64(z3)
+						}
+						for ; j < hid; j++ {
 							b1 := j * dim
 							var z float64
 							for c := range dim {
@@ -399,7 +447,22 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							}
 							h[j] = sigmoidStableF64(z)
 						}
-						for i := range dim { // o_t = W2_t·h
+						io := 0
+						for ; io+3 < dim; io += 4 {
+							c0, c1, c2, c3 := io*hid, (io+1)*hid, (io+2)*hid, (io+3)*hid
+							var o0, o1, o2, o3 float64
+							for j := range hid {
+								hj := h[j]
+								o0 += W2[c0+j] * hj
+								o1 += W2[c1+j] * hj
+								o2 += W2[c2+j] * hj
+								o3 += W2[c3+j] * hj
+							}
+							for d, ov := range [4]float64{o0, o1, o2, o3} {
+								os[t*dim+io+d] = ov
+							}
+						}
+						for i := io; i < dim; i++ {
 							b2 := i * hid
 							var o float64
 							for j := range hid {

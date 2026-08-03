@@ -305,29 +305,29 @@ func (b *maeBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	if err != nil {
 		return nil, err
 	}
-	sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, a}, nil)
+	sum, err := visExec2(ctx, backend.OpAdd, nil, x, a)
 	if err != nil {
 		return nil, err
 	}
-	x = sum[0]
+	x = sum
 	if h, err = b.ln2.Forward(ctx, x); err != nil {
 		return nil, err
 	}
 	if h, err = b.fc1.Forward(ctx, h); err != nil {
 		return nil, err
 	}
-	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{h}, nil)
+	g, err := visExec1(ctx, backend.OpGELU, nil, h)
 	if err != nil {
 		return nil, err
 	}
-	if h, err = b.fc2.Forward(ctx, g[0]); err != nil {
+	if h, err = b.fc2.Forward(ctx, g); err != nil {
 		return nil, err
 	}
-	sum, err = backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{x, h}, nil)
+	sum, err = visExec2(ctx, backend.OpAdd, nil, x, h)
 	if err != nil {
 		return nil, err
 	}
-	return sum[0], nil
+	return sum, nil
 }
 
 // numPatches is S = (size/patch)².
@@ -428,12 +428,11 @@ func (m *MAE) patchify(img *tensor.Tensor) (*tensor.Tensor, error) {
 func unshuffleRows(ctx *backend.Context, proj, maskToken *tensor.Tensor, keep, masked []int, s int) (*tensor.Tensor, error) {
 	full := make([]*tensor.Tensor, s)
 	for k, orig := range keep {
-		row, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{proj},
-			backend.SliceAttrs{Axis: 0, Start: k, End: k + 1})
+		row, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: k, End: k + 1}, proj)
 		if err != nil {
 			return nil, err
 		}
-		full[orig] = row[0]
+		full[orig] = row
 	}
 	for _, orig := range masked {
 		full[orig] = maskToken // [1, D], the same token at every masked slot
@@ -450,12 +449,11 @@ func unshuffleRows(ctx *backend.Context, proj, maskToken *tensor.Tensor, keep, m
 func gatherRows(ctx *backend.Context, x *tensor.Tensor, idx []int) (*tensor.Tensor, error) {
 	rows := make([]*tensor.Tensor, len(idx))
 	for k, i := range idx {
-		r, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{x},
-			backend.SliceAttrs{Axis: 0, Start: i, End: i + 1})
+		r, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: i, End: i + 1}, x)
 		if err != nil {
 			return nil, err
 		}
-		rows[k] = r[0]
+		rows[k] = r
 	}
 	out, err := backend.Execute(ctx, backend.OpConcat, rows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
@@ -481,12 +479,12 @@ func (m *MAE) Encode(ctx *backend.Context, img *tensor.Tensor) (latent *tensor.T
 	}
 	// Add position embeddings to ALL patches BEFORE masking, so each kept token
 	// carries its own position (the paper adds pos-embed pre-masking).
-	posd, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{emb, m.EncPos}, nil)
+	posd, err := visExec2(ctx, backend.OpAdd, nil, emb, m.EncPos)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	keep, masked = m.Mask()
-	h, err := gatherRows(ctx, posd[0], keep) // [keepCount, encDim] — encoder sees ONLY these
+	h, err := gatherRows(ctx, posd, keep) // [keepCount, encDim] — encoder sees ONLY these
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -538,11 +536,11 @@ func (m *MAE) Reconstruct(ctx *backend.Context, img *tensor.Tensor) (pred *tenso
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	dec, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{seq, m.DecPos}, nil) // + decoder positions
+	dec, err := visExec2(ctx, backend.OpAdd, nil, seq, m.DecPos) // + decoder positions
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	h := dec[0]
+	h := dec
 	for _, b := range m.DecoderBlocks {
 		if h, err = b.forward(ctx, h); err != nil {
 			return nil, nil, nil, err
@@ -577,19 +575,19 @@ func (m *MAE) maskedMSE(ctx *backend.Context, pred, target *tensor.Tensor, maske
 	if err != nil {
 		return nil, err
 	}
-	diff, err := backend.Execute(ctx, backend.OpSub, []*tensor.Tensor{predM, tgtM}, nil)
+	diff, err := visExec2(ctx, backend.OpSub, nil, predM, tgtM)
 	if err != nil {
 		return nil, err
 	}
-	sq, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{diff[0], diff[0]}, nil)
+	sq, err := visExec2(ctx, backend.OpMul, nil, diff, diff)
 	if err != nil {
 		return nil, err
 	}
-	mean, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{sq[0]}, nil)
+	mean, err := visExec1(ctx, backend.OpMean, nil, sq)
 	if err != nil {
 		return nil, err
 	}
-	return mean[0], nil
+	return mean, nil
 }
 
 // MAELoss is the training objective for one [C,H,W] image: the masked-patch

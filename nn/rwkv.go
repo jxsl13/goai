@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -55,11 +56,29 @@ func WKV(k, v, w, u *tensor.Tensor) (*tensor.Tensor, error) {
 				o := t*d + c
 				kk, vv := ks[o], vs[o]
 				ww := uc + kk
-				q := math.Max(pp, ww)
-				e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+				q := fmath.Max(pp, ww)
+				// HALF THESE EXPS ARE PROVABLY ONE: q is the max of its two arguments, so whichever
+				// argument it equals gives exp(x-x) = exp(0), which is exactly 1. Testing q against
+				// each argument rather than branching on the comparison keeps NaN behavior
+				// identical — with a NaN operand math.Max yields NaN, both equality tests fail, and
+				// both exps evaluate exactly as before.
+				e1, e2 := 1.0, 1.0
+				if q != pp {
+					e1 = math.Exp(pp - q)
+				}
+				if q != ww {
+					e2 = math.Exp(ww - q)
+				}
 				os[o] = (e1*aa + e2*vv) / (e1*bb + e2)
-				q = math.Max(pp-wc, kk)
-				e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+				pw := pp - wc
+				q = fmath.Max(pw, kk)
+				e1, e2 = 1.0, 1.0
+				if q != pw {
+					e1 = math.Exp(pw - q)
+				}
+				if q != kk {
+					e2 = math.Exp(kk - q)
+				}
 				aa = e1*aa + e2*vv
 				bb = e1*bb + e2
 				pp = q
@@ -76,11 +95,29 @@ func WKV(k, v, w, u *tensor.Tensor) (*tensor.Tensor, error) {
 				o := t*d + c
 				kk, vv := float64(ks[o]), float64(vs[o])
 				ww := uc + kk
-				q := math.Max(pp, ww)
-				e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
+				q := fmath.Max(pp, ww)
+				// HALF THESE EXPS ARE PROVABLY ONE: q is the max of its two arguments, so whichever
+				// argument it equals gives exp(x-x) = exp(0), which is exactly 1. Testing q against
+				// each argument rather than branching on the comparison keeps NaN behavior
+				// identical — with a NaN operand math.Max yields NaN, both equality tests fail, and
+				// both exps evaluate exactly as before.
+				e1, e2 := 1.0, 1.0
+				if q != pp {
+					e1 = math.Exp(pp - q)
+				}
+				if q != ww {
+					e2 = math.Exp(ww - q)
+				}
 				os[o] = float32((e1*aa + e2*vv) / (e1*bb + e2))
-				q = math.Max(pp-wc, kk)
-				e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
+				pw := pp - wc
+				q = fmath.Max(pw, kk)
+				e1, e2 = 1.0, 1.0
+				if q != pw {
+					e1 = math.Exp(pw - q)
+				}
+				if q != kk {
+					e2 = math.Exp(kk - q)
+				}
 				aa = e1*aa + e2*vv
 				bb = e1*bb + e2
 				pp = q
@@ -94,10 +131,10 @@ func WKV(k, v, w, u *tensor.Tensor) (*tensor.Tensor, error) {
 		for t := range seq {
 			kk, vv := k.AtF64(t, c), v.AtF64(t, c)
 			ww := uc + kk
-			q := math.Max(pp, ww)
+			q := fmath.Max(pp, ww)
 			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
 			out.SetF64((e1*aa+e2*vv)/(e1*bb+e2), t, c)
-			q = math.Max(pp-wc, kk)
+			q = fmath.Max(pp-wc, kk)
 			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
 			aa = e1*aa + e2*vv
 			bb = e1*bb + e2

@@ -621,11 +621,20 @@ func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attr
 		})
 		return []*tensor.Tensor{out}, nil
 	case tensor.F32:
-		// F32 falls to the serial ref kernel today; parallelize it. The stable softplus
-		// (same branch as the F64 path and ref's softplus()) is evaluated in f64 with a
-		// single round on store — bit-identical to ref's F32 path; disjoint outputs.
 		out := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
 		d, o := xc.Storage().F32(), out.Storage().F32()
+		if vexpF32Fast {
+			// SIMD perf build: f32-native vectorized softplus via vsoftplusF32 (8-wide
+			// AVX2 on amd64) instead of the per-element scalar f64 math.Log1p/math.Exp
+			// below — the Mamba Δ / griffin/hymba gate / focal & reward loss hot path.
+			// Rides the ADR-0021 f32 tolerance (same expF32/logF32 primitive as
+			// vtanhF32/vgeluF32); the default build below stays bit-for-bit vs ref.
+			parallel(len(o), func(lo, hi int) { vsoftplusF32(o[lo:hi], d[lo:hi]) })
+			return []*tensor.Tensor{out}, nil
+		}
+		// Default build: the stable softplus (same branch as the F64 path and ref's
+		// softplus()) evaluated in f64 with a single round on store — bit-identical to
+		// ref's F32 path; disjoint outputs.
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				x := float64(d[i])
@@ -669,11 +678,21 @@ func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 		})
 		return []*tensor.Tensor{out}, nil
 	case tensor.F32:
-		// F32 falls to the serial ref kernel today; parallelize it. cap·tanh(x/cap)
-		// evaluated in f64 with a single round on store — bit-identical to ref's F32
-		// path (backend/ref/softcap.go); disjoint output elements → race-free.
 		out := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
 		d, o := xc.Storage().F32(), out.Storage().F32()
+		if vexpF32Fast {
+			// SIMD perf build: f32-native vectorized cap·tanh(x/cap) via vsoftcapF32
+			// (8-wide AVX2 on amd64) instead of the per-element scalar f64 math.Tanh
+			// below — the Gemma-2 attention-logit and [T,vocab] final-logit soft-cap
+			// hot path. Rides the ADR-0021 f32 tolerance (same expF32 primitive as
+			// vtanhF32/vgeluF32); the default build below stays bit-for-bit vs ref.
+			capf := float32(pa.Cap)
+			parallel(len(o), func(lo, hi int) { vsoftcapF32(o[lo:hi], d[lo:hi], capf) })
+			return []*tensor.Tensor{out}, nil
+		}
+		// Default build: cap·tanh(x/cap) in f64 with a single round on store —
+		// bit-identical to ref's F32 path (backend/ref/softcap.go); disjoint output
+		// elements → race-free.
 		parallel(len(o), func(lo, hi int) {
 			for i := lo; i < hi; i++ {
 				o[i] = float32(pa.Cap * math.Tanh(float64(d[i])/pa.Cap))

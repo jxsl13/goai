@@ -57,10 +57,23 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 	live := []node{{append([]int(nil), start...), 0, 0}}
 	var done []Beam
 
+	// One candidate buffer for the whole search, refilled per step.
+	//
+	// It used to be made fresh every step with capacity len(live)*8, which is not the size it
+	// reaches: the expansion appends one candidate per live beam PER VOCABULARY ENTRY, so the
+	// slice grew by repeated doubling from 8*width to width*vocab on every single step, copying
+	// everything it had each time. That one append was 2.45 GB of the benchmark's 2.90 GB. Reusing
+	// the buffer lets it reach its true size once and stay there.
+	//
+	// Nothing retains it: the survivors' token slices are copied out below, and the slice is
+	// truncated to zero before it is read again, so no candidate can survive into the next step.
+	var cand []cnd
+	var lsBuf []float64 // one log-softmax row for the whole search, refilled per beam
 	for len(live) > 0 {
-		cand := make([]cnd, 0, len(live)*8)
+		cand = cand[:0]
 		for p, h := range live {
-			ls := logSoftmaxRow(next(h.toks))
+			ls := logSoftmaxRowInto(lsBuf, next(h.toks))
+			lsBuf = ls
 			for tok, l := range ls {
 				cand = append(cand, cnd{p, tok, h.score + l, h.newLen + 1})
 			}
@@ -134,6 +147,14 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 
 // logSoftmaxRow returns the numerically stable log-softmax of a logit vector.
 func logSoftmaxRow(logits []float64) []float64 {
+	return logSoftmaxRowInto(nil, logits)
+}
+
+// logSoftmaxRowInto is logSoftmaxRow writing into a caller-supplied buffer, so a search that calls
+// it once per beam per step reuses one vocabulary-sized row instead of allocating one each time.
+// Every entry is written before any is read, so reuse cannot carry a value between calls; a nil or
+// short dst is allocated here.
+func logSoftmaxRowInto(dst, logits []float64) []float64 {
 	m := math.Inf(-1)
 	for _, v := range logits {
 		if v > m {
@@ -145,7 +166,11 @@ func logSoftmaxRow(logits []float64) []float64 {
 		sum += math.Exp(v - m)
 	}
 	lse := m + math.Log(sum)
-	out := make([]float64, len(logits))
+	out := dst
+	if cap(out) < len(logits) {
+		out = make([]float64, len(logits))
+	}
+	out = out[:len(logits)]
 	for i, v := range logits {
 		out[i] = v - lse
 	}

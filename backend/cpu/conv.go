@@ -2,6 +2,8 @@ package cpu
 
 import (
 	"fmt"
+	"runtime"
+	"sync/atomic"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -62,25 +64,24 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		})
 	}
 
-	// im2col: cols[r, (c,ky,kx)] with zero padding materialized
-	colsP := getF64(rows * k)
-	defer putF64(colsP)
-	cols := *colsP
 	// wt[(c,ky,kx), f]: transposed weights matching the column order
 	wtP := getF64(k * f)
 	defer putF64(wtP)
 	wt := *wtP
 
-	// GEMM scratch + output, allocated up front so ONE fused row-parallel pass
-	// can run im2col → GEMM band → scatter per disjoint row band. The three
-	// per-row stages were separate parallelWork barriers; the profile showed
-	// ~75% of the op in pool wake/park churn between them. Per row band the
-	// operations (and thus results) are identical — bit-identical output —
-	// but there is now a single fork/join and cols rows are still cache-hot
-	// when the GEMM reads them.
-	prodP := getF64(rows * f)
-	defer putF64(prodP)
-	prod := *prodP
+	// The im2col matrix and the GEMM product are per-WORKER, per-CHUNK scratch, not
+	// whole-tensor buffers. The three per-row stages run fused inside one parallelWork
+	// band — they were separate barriers once, and the profile showed ~75% of the op in
+	// pool wake/park churn between them — but the buffers they hand each other were still
+	// sized rows x k and rows x f, so every column written by im2col went out to DRAM and
+	// came back for the GEMM. im2col replicates each input element kh*kw times, so that
+	// round trip is the dominant traffic in the op: one 512x512 head convolution of the
+	// multi-token-attention benchmark materialized 138 MB to multiply it by a 66-element
+	// weight vector. Sized to a chunk instead, the columns are still in L2 when the GEMM
+	// reads them, and the op's footprint stops scaling with the image.
+	//
+	// Bit-identical: each row's im2col values, its GEMM accumulation order and its scatter
+	// target are untouched — only the buffer they live in while in flight changed.
 	out := tensor.NewOn(ctx.Device(), x.Dtype(), tensor.Shape{n, f, ho, wo})
 	var bs []float64
 	if bias != nil {
@@ -91,22 +92,80 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	}
 	hw := ho * wo
 	work := k + k*f + f // per-row: im2col fill + GEMM row + scatter
+	nw, cw := convSlots(rows, k, f, 8)
+	colsP := getF64(nw * cw * k)
+	defer putF64(colsP)
+	cols := *colsP
+	prodP := getF64(nw * cw * f)
+	defer putF64(prodP)
+	prod := *prodP
+	var slot atomic.Int32
+	// SINGLE-FILTER FUSION. With one output channel the im2col matrix exists only to be reduced
+	// against a single weight vector: it writes c*kh*kw values per output pixel so the GEMM can
+	// read them back once. Computing the dot straight out of the input skips that round trip
+	// entirely — on the multi-token-attention head convolution the fill was 12.7% of the whole
+	// forward against 6.7% for the GEMM it fed.
+	//
+	// Only when there is no padding. With p == 0 every tap is in bounds, so the fused loop
+	// visits exactly the taps the column matrix would have held, in the same (c,ky,kx) order,
+	// with one accumulator — bit-identical. Padding taps are stored as zeros and the GEMM adds
+	// them, and skipping an addition of zero is not the same operation when the accumulator is
+	// negative zero, so the padded case keeps the column matrix.
+	fused1 := f == 1 && p == 0
 	switch x.Dtype() {
 	case tensor.F64:
 		xs, os := xc.Storage().F64(), out.Storage().F64()
 		wtFill(wt, wcont.Storage().F64(), f, k)
 		parallelWork(rows, work, func(lo, hi int) {
-			im2colFillBand(cols, xs, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd)
-			gemmF64Band(cols, wt, prod, lo, hi, k, f)
-			convScatterBand(prod, os, bs, lo, hi, f, hw)
+			sc, sp := convSlice(cols, &slot, cw, k, f)
+			pw := prod[sp : sp+cw*f : sp+cw*f]
+			// The pool hands out a ZEROED window, so the FIRST chunk needs no clearing and
+			// only the chunks that reuse it do. That distinction is what keeps a conv small
+			// enough to fit one chunk per band exactly as cheap as it was before chunking.
+			for base, reused := lo, false; base < hi; base, reused = base+cw, true {
+				end := min(base+cw, hi)
+				if reused {
+					if p > 0 { // padded taps are never written; an unpadded row is filled whole
+						clear(sc[:(end-base)*k])
+					}
+					// gemmF64Band ACCUMULATES into C, so a reused product window starts at zero.
+					clear(pw[:(end-base)*f])
+				}
+				if fused1 {
+					conv1FilterBand(pw, xs, wt, base, end, base, ho, wo, c, kh, kw, s, h, wd)
+				} else {
+					im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
+					gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				}
+				convScatterBand(pw, os, bs, base, end, base, f, hw)
+			}
 		})
 	case tensor.F32:
 		xs, os := xc.Storage().F32(), out.Storage().F32()
 		wtFill(wt, wcont.Storage().F32(), f, k)
 		parallelWork(rows, work, func(lo, hi int) {
-			im2colFillBand(cols, xs, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd)
-			gemmF64Band(cols, wt, prod, lo, hi, k, f)
-			convScatterBand(prod, os, bs, lo, hi, f, hw)
+			sc, sp := convSlice(cols, &slot, cw, k, f)
+			pw := prod[sp : sp+cw*f : sp+cw*f]
+			// The pool hands out a ZEROED window, so the FIRST chunk needs no clearing and
+			// only the chunks that reuse it do. That distinction is what keeps a conv small
+			// enough to fit one chunk per band exactly as cheap as it was before chunking.
+			for base, reused := lo, false; base < hi; base, reused = base+cw, true {
+				end := min(base+cw, hi)
+				if reused {
+					if p > 0 { // padded taps are never written; an unpadded row is filled whole
+						clear(sc[:(end-base)*k])
+					}
+					// gemmF64Band ACCUMULATES into C, so a reused product window starts at zero.
+					clear(pw[:(end-base)*f])
+				}
+				if fused1 {
+					conv1FilterBand(pw, xs, wt, base, end, base, ho, wo, c, kh, kw, s, h, wd)
+				} else {
+					im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
+					gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				}
+				convScatterBand(pw, os, bs, base, end, base, f, hw)
+			}
 		})
 	default:
 		return nil, fmt.Errorf("cpu: unsupported dtype %v", x.Dtype())
@@ -129,15 +188,9 @@ type convGeo struct {
 // both inside the gemmF32Tolerant parity budget.
 func conv2dF32Native(ctx *backend.Context, xc, wcont, bias *tensor.Tensor, g convGeo) ([]*tensor.Tensor, error) {
 	k, rows, f := g.k, g.rows, g.f
-	colsP := getF32(rows * k) // zeroed: padding taps stay 0
-	defer putF32(colsP)
-	cols := *colsP
 	wtP := getF32Raw(k * f) // fully overwritten by wtFill
 	defer putF32(wtP)
 	wt := *wtP
-	prodP := getF32Raw(rows * f) // store semantics: fully written by the gemm
-	defer putF32(prodP)
-	prod := *prodP
 
 	xs, ws := xc.Storage().F32(), wcont.Storage().F32()
 	wtFill(wt, ws, f, k)
@@ -153,19 +206,35 @@ func conv2dF32Native(ctx *backend.Context, xc, wcont, bias *tensor.Tensor, g con
 	}
 	hw := g.ho * g.wo
 	work := k + k*f + f // per-row: im2col fill + GEMM row + scatter
+	nw, cw := convSlots(rows, k, f, 4)
+	colsP := getF32(nw * cw * k) // zeroed: padding taps stay 0
+	defer putF32(colsP)
+	prodP := getF32Raw(nw * cw * f) // store semantics: fully written by the gemm
+	defer putF32(prodP)
+	allCols, allProd := *colsP, *prodP
+	var slot atomic.Int32
 	parallelWork(rows, work, func(lo, hi int) {
-		im2colFillBand(cols, xs, lo, hi, k, g.ho, g.wo, g.c, g.kh, g.kw, g.s, g.p, g.h, g.wd)
-		gemmF32Rows(cols, wt, prod, lo, hi, k, f)
-		for r := lo; r < hi; r++ {
-			ni, rem := r/hw, r%hw
-			pr := prod[r*f : r*f+f : r*f+f]
-			if bs != nil {
-				for fi, v := range pr {
-					os[(ni*f+fi)*hw+rem] = v + bs[fi]
-				}
-			} else {
-				for fi, v := range pr {
-					os[(ni*f+fi)*hw+rem] = v
+		sl := int(slot.Add(1)-1) * cw
+		cols := allCols[sl*k : sl*k+cw*k : sl*k+cw*k]
+		prod := allProd[sl*f : sl*f+cw*f : sl*f+cw*f]
+		for cbase, reused := lo, false; cbase < hi; cbase, reused = cbase+cw, true {
+			cend := min(cbase+cw, hi)
+			if reused && g.p > 0 { // the pool's window arrives zeroed; only a reused one needs clearing
+				clear(cols[:(cend-cbase)*k])
+			}
+			im2colFillBand(cols, xs, cbase, cend, cbase, k, g.ho, g.wo, g.c, g.kh, g.kw, g.s, g.p, g.h, g.wd)
+			gemmF32Rows(cols, wt, prod, 0, cend-cbase, k, f)
+			for r := cbase; r < cend; r++ {
+				ni, rem := r/hw, r%hw
+				pr := prod[(r-cbase)*f : (r-cbase)*f+f : (r-cbase)*f+f]
+				if bs != nil {
+					for fi, v := range pr {
+						os[(ni*f+fi)*hw+rem] = v + bs[fi]
+					}
+				} else {
+					for fi, v := range pr {
+						os[(ni*f+fi)*hw+rem] = v
+					}
 				}
 			}
 		}
@@ -173,12 +242,38 @@ func conv2dF32Native(ctx *backend.Context, xc, wcont, bias *tensor.Tensor, g con
 	return []*tensor.Tensor{out}, nil
 }
 
+// convSlots returns how many scratch slots the conv needs and how many output rows one
+// slot holds. Each parallelWork band claims one slot and walks its rows a slot at a time.
+//
+// The slot is sized so its column matrix and products fit in a couple of hundred kilobytes.
+// im2col replicates every input element kh*kw times, so with a whole-tensor buffer each
+// column went out to DRAM and came straight back for the GEMM. Keeping the slot L2-resident
+// removes that round trip.
+//
+// The row count is ALSO capped at one band's worth, which is what keeps the total scratch
+// below the buffer it replaces instead of workers times a slot. Without the cap, small
+// convolutions — where the old buffer already fit in cache and there was nothing to win —
+// paid more memory than before to gain nothing: measured -22.7% on the largest torch shape
+// but +14 to +33% on the small ones.
+func convSlots(rows, k, f, elem int) (slots, rowsPerSlot int) {
+	slots = max(runtime.GOMAXPROCS(0), 1)
+	band := (rows + slots - 1) / slots
+	target := 1
+	if per := (k + f) * elem; per > 0 {
+		target = max(1, min(convChunkBytes/per, 4096))
+	}
+	return slots, max(1, min(target, band))
+}
+
+// convChunkBytes targets the L2 residency of one slot's column matrix and products.
+const convChunkBytes = 1 << 18
+
 // convScatterBand writes prod rows [lo,hi) — prod[(n,oy,ox), f] — into
 // out[n,f,ho,wo], adding the hoisted bias when present.
-func convScatterBand[T normFloat](prod []float64, os []T, bs []float64, lo, hi, f, hw int) {
+func convScatterBand[T normFloat](prod []float64, os []T, bs []float64, lo, hi, off, f, hw int) {
 	for r := lo; r < hi; r++ {
 		ni, rem := r/hw, r%hw
-		pr := prod[r*f : r*f+f : r*f+f]
+		pr := prod[(r-off)*f : (r-off)*f+f : (r-off)*f+f]
 		if bs != nil {
 			for fi, v := range pr {
 				os[(ni*f+fi)*hw+rem] = T(v + bs[fi])
@@ -201,12 +296,12 @@ func init() {
 // gemm-routed f32-native path — the copy is exact either way) — direct indexed
 // reads instead of the old per-element get closure. Padding taps stay 0
 // (adding 0·w is bit-safe).
-func im2colFillBand[D, T normFloat](cols []D, xs []T, lo, hi, k, ho, wo, c, kh, kw, s, p, h, wd int) {
+func im2colFillBand[D, T normFloat](cols []D, xs []T, lo, hi, off, k, ho, wo, c, kh, kw, s, p, h, wd int) {
 	for r := lo; r < hi; r++ {
 		ni := r / (ho * wo)
 		rem := r % (ho * wo)
 		oy, ox := rem/wo, rem%wo
-		base := r * k
+		base := (r - off) * k // off rebases the write onto a chunk-local matrix; r still addresses x
 		// Along the kernel width the input x-coord ix = ox·s − p + kx steps by 1, so
 		// the in-bounds kx taps form ONE contiguous input run [kxLo,kxHi). Hoist the
 		// x-bounds test out of the inner loop (compute the window once per row) and
@@ -248,5 +343,43 @@ func wtFill[D, T normFloat](wt []D, ws []T, f, k int) {
 		for kk := 0; kk < k; kk++ {
 			wt[kk*f+fi] = D(ws[fi*k+kk])
 		}
+	}
+}
+
+// convSlice claims the next scratch slot for a parallelWork band and returns its column
+// window plus the base offset of its product window. parallelWork calls its body once per
+// band and never more often than GOMAXPROCS, so the counter cannot outrun the slots.
+func convSlice(cols []float64, slot *atomic.Int32, cw, k, f int) ([]float64, int) {
+	s := int(slot.Add(1)-1) * cw
+	return cols[s*k : s*k+cw*k : s*k+cw*k], s * f
+}
+
+// conv1FilterBand computes the single-filter convolution for output rows [lo,hi) directly from
+// the input, without materializing their im2col columns. off rebases the write onto the caller's
+// chunk window, as im2colFillBand does.
+//
+// Requires pad == 0: every tap is then in bounds, so the taps visited here are exactly the
+// entries the column matrix would have carried, walked in the same (channel, ky, kx) order into
+// one accumulator — the same sequence gemmF64Band performs for a single output column.
+func conv1FilterBand[T normFloat](prod []float64, xs []T, wt []float64, lo, hi, off, ho, wo, c, kh, kw, s, h, wd int) {
+	for r := lo; r < hi; r++ {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		oy, ox := rem/wo, rem%wo
+		ix0 := ox * s
+		v := prod[r-off]
+		kk := 0
+		for ci := 0; ci < c; ci++ {
+			for ky := 0; ky < kh; ky++ {
+				rowBase := ((ni*c+ci)*h+oy*s+ky)*wd + ix0
+				src := xs[rowBase : rowBase+kw : rowBase+kw]
+				w := wt[kk : kk+kw : kk+kw]
+				for i, xv := range src {
+					v += float64(xv) * w[i]
+				}
+				kk += kw
+			}
+		}
+		prod[r-off] = v
 	}
 }

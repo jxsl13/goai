@@ -61,13 +61,17 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//     the internal transformer blocks/caches — so it is enabled and gates every push
 	//     (a new undocumented exported public symbol reddens CI). Note apicheck parses
 	//     source (no compile), so it is orthogonal to the cgo/cuda build lanes.
-	//   - internal/mdlint (every *.md) stays OUT until green: it fails on
-	//     .claude/memory tilde debt (T889). Add it here once green.
+	//   - internal/mdlint (every *.md) is now GREEN and enabled. What unblocked it was
+	//     not a markdown cleanup: skipDir excludes .claude and .spectackle, which is
+	//     where the historical red lived (worker memory files and the generated spec
+	//     views). What remains is 83 real documents — README, docs/, package markdown —
+	//     and the gate is not vacuous: a planted heading-jump in docs/ reddens
+	//     TestRepoMarkdownIsClean, checked before enabling.
 	//
 	// Spec integrity itself is no longer gated here: the spec lives in the
 	// server-owned .spectackle/ bundle, which is linted by `spectackle lint` and
 	// verified by `spectackle check` rather than by a Go meta-test.
-	alwaysRun = []string{"internal/perfscan", "internal/apicheck"}
+	alwaysRun = []string{"internal/perfscan", "internal/apicheck", "internal/mdlint"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

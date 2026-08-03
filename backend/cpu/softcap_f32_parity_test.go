@@ -10,7 +10,10 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// The parallel cpu F32 softcap kernel must be byte-identical to the serial ref kernel.
+// The cpu F32 softcap kernel matches the serial ref kernel: byte-identical on the
+// default build (scalar f64 tanh), and within the ADR-0021 f32 envelope on the SIMD
+// perf build (geluF32Tolerant), where it runs the f32-native vsoftcapF32 pipeline —
+// the same tolerant contract as OpTanh/OpGELU F32 (see cpu_test.go).
 func TestSoftCapF32CPUByteIdenticalToRef(t *testing.T) {
 	rng := rand.New(rand.NewSource(29))
 	for _, n := range []int{1, 100, 40000, 262144} { // spans serial and parallel
@@ -30,6 +33,14 @@ func TestSoftCapF32CPUByteIdenticalToRef(t *testing.T) {
 		}
 		cs, rs := gotC[0].Storage().F32(), gotR[0].Storage().F32()
 		for i := range cs {
+			if geluF32Tolerant {
+				// SIMD build: f32-native vsoftcapF32 — |err| ≤ 1e-6 + 2e-4·|ref|, the
+				// shared f32 vexp-pipeline budget (a bit-exact result trivially passes).
+				if d := math.Abs(float64(cs[i]) - float64(rs[i])); d > 1e-6+2e-4*math.Abs(float64(rs[i])) {
+					t.Fatalf("n=%d idx=%d cpu=%v ref=%v (|err|=%.3g)", n, i, cs[i], rs[i], d)
+				}
+				continue
+			}
 			if math.Float32bits(cs[i]) != math.Float32bits(rs[i]) {
 				t.Fatalf("n=%d idx=%d cpu=%v ref=%v", n, i, cs[i], rs[i])
 			}

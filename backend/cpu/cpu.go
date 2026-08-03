@@ -51,6 +51,12 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 // pool dispatch cost changes.
 const parThreshold = 1 << 15 // 32768
 
+// parWorkPerWorker is the minimum share of the total work a band must carry for its worker to be
+// worth waking. The worker count is total/parWorkPerWorker, capped at GOMAXPROCS, so an op grows
+// its fan-out with its size instead of jumping straight to full width the moment it clears
+// parThreshold. See the sweep recorded at the use site.
+const parWorkPerWorker = 1 << 15
+
 // poolBarrier is the completion state of one parallelWork call. pending is the
 // countdown the CALLER spin-waits on (§V22: parking in wg.Wait cost a full
 // M-stop/restart — pthread_cond_wait + _signal + scheduler steal churn — on
@@ -266,6 +272,20 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 	// whose full-width split the old pool handled fine.
 	if dense {
 		workers = max(workers*2/3, 2)
+	}
+	// EVERY WORKER MUST BE GIVEN ENOUGH WORK TO PAY FOR ITS OWN BARRIER. parThreshold decides
+	// whether to fan out AT ALL; without a second gate on the work each participant receives, an
+	// op only just above it is split GOMAXPROCS ways and every band is a fraction of the amount
+	// that justified splitting once. A per-token decode step issues a long run of exactly those
+	// ops, and the pool spends its time waking and parking: on BenchmarkLlamaPromptStepwise the
+	// profile was 42% runtime.usleep, 22% cond_wait and 9% cond_signal against 14% arithmetic,
+	// and the whole benchmark ran 2.3x SLOWER at 12 cores than at 1.
+	if w := total / parWorkPerWorker; w < workers {
+		workers = max(w, 1)
+	}
+	if workers <= 1 {
+		body(0, n)
+		return
 	}
 	chunk := (n + workers - 1) / workers
 	var b poolBarrier

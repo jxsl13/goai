@@ -163,6 +163,18 @@ func vtanhF32(dst, src []float32) {
 	}
 }
 
+// vsoftcapF32 evaluates the Gemma-2 logit soft-cap cap·tanh(x/cap) f32-native.
+// The NEON tanh kernel operates at cap=1, so route the whole slice through a
+// scalar softcapF32 (its exact twin) here rather than a scale→NEON-tanh→scale
+// three-pass; the caller parallelizes across chunks, which is already the win
+// over the ref serial-scalar path. A NEON soft-cap primitive can replace this
+// later. Rides the model f32 tolerance (ADR-0021), same as vtanhF32.
+func vsoftcapF32(dst, src []float32, cap float32) {
+	for i, v := range src {
+		dst[i] = softcapF32(v, cap)
+	}
+}
+
 // vlogQuadsNeonF32 is the 4-wide NEON natural-log kernel (vexp_arm64.s,
 // §T666): dst[i] = log(src[i]) via the Cephes logf reduction — exponent-field
 // extraction (subnormals pre-scaled), m folded to [√½, √2), degree-8 poly in
@@ -221,6 +233,16 @@ func vsoftplusF64(dst, src []float64) {
 		} else {
 			dst[i] = math.Log1p(math.Exp(v))
 		}
+	}
+}
+
+// vsoftplusF32 evaluates softplus f32-native via the scalar softplusF32 twin
+// (max(x,0)+log(1+e^(−|x|)) on the NEON expF32/logF32 primitives). The caller
+// parallelizes across chunks; a NEON softplus lane can replace this later. Rides
+// the model f32 tolerance (ADR-0021), same as vtanhF32.
+func vsoftplusF32(dst, src []float32) {
+	for i, v := range src {
+		dst[i] = softplusF32(v)
 	}
 }
 

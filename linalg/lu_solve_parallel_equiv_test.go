@@ -20,8 +20,8 @@ func TestLUSolveParallelBitExact(t *testing.T) {
 	defer runtime.GOMAXPROCS(prev)
 
 	for trial := 0; trial < 60; trial++ {
-		n := 2 + rng.Intn(48)          // 2..49
-		cols := 1 + rng.Intn(3*n)      // include cols < n, = n, > n and the vec path (cols==1)
+		n := 2 + rng.Intn(48)     // 2..49
+		cols := 1 + rng.Intn(3*n) // include cols < n, = n, > n and the vec path (cols==1)
 		ad := make([]float64, n*n)
 		for i := range ad {
 			ad[i] = rng.NormFloat64()

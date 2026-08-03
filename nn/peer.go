@@ -198,21 +198,75 @@ func (p *PEER) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, in
 
 // peerTopIndices returns the indices of the k largest values of s, ordered by
 // value descending with ties broken by ascending index (deterministic routing).
-func peerTopIndices(s []float64, k int) []int {
-	idx := make([]int, len(s))
-	for i := range idx {
-		idx[i] = i
+// topKByPref returns the indices [0,length) of the k elements that come FIRST under the
+// strict total order `pref` (pref(a,b) reports index a strictly before index b), in pref
+// order. For k a large fraction of length a full pdqsort is used (bit-identical because pref
+// is a total order — no genuine ties); for k ≪ length a size-k min-heap selects the top-k in
+// O(length·log k) instead of O(length·log length). Same total order ⇒ the selected set and
+// its order are identical to sorting the whole slice and taking the prefix.
+func topKByPref(length, k int, pref func(a, b int) bool) []int {
+	if k > length {
+		k = length
 	}
-	sort.SliceStable(idx, func(a, b int) bool {
-		if s[idx[a]] != s[idx[b]] {
-			return s[idx[a]] > s[idx[b]]
+	if k <= 0 {
+		return nil
+	}
+	if k*3 >= length {
+		all := make([]int, length)
+		for i := range all {
+			all[i] = i
 		}
-		return idx[a] < idx[b]
-	})
-	if k > len(idx) {
-		k = len(idx)
+		sort.Slice(all, func(a, b int) bool { return pref(all[a], all[b]) })
+		return all[:k]
 	}
-	return idx[:k]
+	// Min-heap keyed by "less preferred at the root" (worse(a,b) == pref(b,a)); a more-
+	// preferred candidate evicts the root.
+	worse := func(a, b int) bool { return pref(b, a) }
+	heap := make([]int, 0, k)
+	siftDown := func(j int) {
+		for {
+			l, r, m := 2*j+1, 2*j+2, j
+			if l < len(heap) && worse(heap[l], heap[m]) {
+				m = l
+			}
+			if r < len(heap) && worse(heap[r], heap[m]) {
+				m = r
+			}
+			if m == j {
+				return
+			}
+			heap[j], heap[m] = heap[m], heap[j]
+			j = m
+		}
+	}
+	for i := 0; i < length; i++ {
+		if len(heap) < k {
+			heap = append(heap, i)
+			for j := len(heap) - 1; j > 0; { // sift up
+				p := (j - 1) / 2
+				if !worse(heap[j], heap[p]) {
+					break
+				}
+				heap[j], heap[p] = heap[p], heap[j]
+				j = p
+			}
+		} else if worse(heap[0], i) {
+			heap[0] = i
+			siftDown(0)
+		}
+	}
+	sort.Slice(heap, func(a, b int) bool { return pref(heap[a], heap[b]) })
+	return heap
+}
+
+func peerTopIndices(s []float64, k int) []int {
+	// PEER prunes to subKeyK ≪ n (n = √experts), so the size-k heap is the common case.
+	return topKByPref(len(s), k, func(a, b int) bool { // score desc, ties → lower index
+		if s[a] != s[b] {
+			return s[a] > s[b]
+		}
+		return a < b
+	})
 }
 
 // peerRetrieve performs product-key top-k retrieval over the n² experts whose
@@ -235,22 +289,22 @@ func peerRetrieve(s1, s2 []float64, n, topK, subKeyK int) (flat, sub1, sub2 []in
 			cands = append(cands, cand{i, j, s1[i] + s2[j]})
 		}
 	}
-	sort.SliceStable(cands, func(a, b int) bool {
+	// Select the top-K candidates by (score desc, ties → smaller flat index) with the same
+	// size-K heap — the k'² candidates are scored for only topK ≪ k'² outputs, so a full
+	// sort is wasted. Bit-identical (total order → identical top-K set and order).
+	sel := topKByPref(len(cands), topK, func(a, b int) bool {
 		if cands[a].sc != cands[b].sc {
 			return cands[a].sc > cands[b].sc
 		}
 		return cands[a].i*n+cands[a].j < cands[b].i*n+cands[b].j
 	})
-	if topK > len(cands) {
-		topK = len(cands)
-	}
-	flat = make([]int, topK)
-	sub1 = make([]int, topK)
-	sub2 = make([]int, topK)
-	for c := range topK {
-		flat[c] = cands[c].i*n + cands[c].j
-		sub1[c] = cands[c].i
-		sub2[c] = cands[c].j
+	flat = make([]int, len(sel))
+	sub1 = make([]int, len(sel))
+	sub2 = make([]int, len(sel))
+	for c, ci := range sel {
+		flat[c] = cands[ci].i*n + cands[ci].j
+		sub1[c] = cands[ci].i
+		sub2[c] = cands[ci].j
 	}
 	return flat, sub1, sub2
 }
@@ -324,40 +378,56 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 			indices[t] = append(indices[t], flatIdx[t]...)
 		}
 
-		// Differentiable gate scores: for slot c, gather s1[t,i_c]+s2[t,j_c] via a
-		// one-hot selection matrix (keeps the score on the tape → grad to K1/K2/Wq).
-		scoreCols := make([]*tensor.Tensor, p.topK)
-		for c := range p.topK {
-			oh1 := tensor.New(s1.Dtype(), s1.Shape())
-			oh2 := tensor.New(s2.Dtype(), s2.Shape())
+		// Differentiable gate scores: for slot c the score is s1[t,i_c]+s2[t,j_c].
+		var scores *tensor.Tensor
+		if ctx.Recorder == nil {
+			// Fused inference gather. The one-hot path below computes, for each slot,
+			// Σ_i s1[t,i]·1{i=i_c} = s1[t,i_c] (every other term is s·0 = 0 exactly for
+			// finite scores, and x+0 = x in IEEE), then adds the two halves. Gathering
+			// s1[t,i_c]+s2[t,j_c] directly is bit-identical yet O(topK·T) instead of
+			// O(topK·T·n) with no [T,n] one-hot allocations (n≈√N is large: PEER §V16.4a).
+			scores = tensor.New(s1.Dtype(), tensor.Shape{tks, p.topK})
 			for t := range tks {
-				oh1.SetF64(1, t, sub1Idx[t][c])
-				oh2.SetF64(1, t, sub2Idx[t][c])
+				for c := range p.topK {
+					scores.SetF64(s1.AtF64(t, sub1Idx[t][c])+s2.AtF64(t, sub2Idx[t][c]), t, c)
+				}
 			}
-			sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
+		} else {
+			// Recording path: keep the one-hot selection on the tape so the gathered
+			// score carries gradient back to K1/K2/Wq.
+			scoreCols := make([]*tensor.Tensor, p.topK)
+			for c := range p.topK {
+				oh1 := tensor.New(s1.Dtype(), s1.Shape())
+				oh2 := tensor.New(s2.Dtype(), s2.Shape())
+				for t := range tks {
+					oh1.SetF64(1, t, sub1Idx[t][c])
+					oh2.SetF64(1, t, sub2Idx[t][c])
+				}
+				sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
+				if err != nil {
+					return nil, nil, nil, err
+				}
+			}
+			scores, err = p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, scoreCols...) // [T,k]
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
-			if err != nil {
-				return nil, nil, nil, err
-			}
-			scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
-			if err != nil {
-				return nil, nil, nil, err
-			}
-		}
-		scores, err := p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, scoreCols...) // [T,k]
-		if err != nil {
-			return nil, nil, nil, err
 		}
 		gh, err := p.exec(ctx, backend.OpSoftmax, nil, scores) // [T,k] softmax over the k selected
 		if err != nil {

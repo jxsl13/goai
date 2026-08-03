@@ -32,42 +32,6 @@ Also fix the stale section-range header in training.md so it names the range act
 
 Migrated from cavekit SPEC.md T891.
 
-## T-01KYJNDS5MFEDAR0GVMSNG4MHD Clear the remaining documentation debt to a green apicheck gate
-kind: task
-state: active
-created: 2026-07-27
-targets: internal/apicheck
-
-Bring internal/apicheck to exit 0 so the public-API doc gate can be enabled.
-
-Completed so far: 118 nlp struct-field symbols documented with architecture-aware godoc referencing the upstream tensor names (Bert, Gemma, Gemma2, Jamba, Mamba, Mamba2, Mixtral, DeepSeekV2, GraniteMoE, RWKV, T5, Qwen2MoE and the 16 quantized twins), 4 further symbols (classic GradientBoostingRegressor.Predict, safetensors TensorInfo.Name/Dtype/Shape), and the 3 magic backend-name string literals replaced with backend.CPU. Undocumented count went from 140 to 18; the magic-strings test is green.
-
-Remaining: (a) the 18 undocumented symbols are all llamagpu New*Q8CUDA and New*Q4KCUDA constructors owned by the parallel CUDA worker; (b) the runnable-Example requirement of TestPublicAPIDocumentedWithExamples is a separate pass. Justified typeExampleExempt and methodExampleExempt allowlist entries are legitimate for fixture-heavy surfaces and beat boilerplate examples.
-
-Definition of done: go test ./internal/apicheck exits 0, checked unpiped. Unblocks enabling apicheck in the CI always-run set.
-
-Note: godoc and Example edits are .go files, so this consumes CI and belongs to the main agent rather than the docs lane.
-
-Migrated from cavekit SPEC.md T892.
-
-## T-01KYJNDSP0FG4B672MFS69AQ0F Enable apicheck and mdlint in the CI always-run set
-kind: task
-state: active
-created: 2026-07-27
-targets: internal/cichange
-
-The source-walking meta-tests (internal/apicheck, internal/mdlint) walk the whole repo's source and markdown, and no import edge connects them to what they check, so import-graph impact selection never picks them and their invariants can rot red while CI stays green.
-
-Mechanism is already built and live: a config alwaysRun field plus a repeatable -always-run flag; Impact() appends every configured package that exists in the graph to each non-empty selection. Docs-only and empty selections stay at zero runners. Missing packages are tolerated so temporary modules and renames cannot inject a bogus target. Unit tests plus the regression pinning that an nlp-only diff selects apicheck are in place and proven non-vacuous. internal/speccheck is already wired into the default always-run, proving the path end-to-end.
-
-Blocked on: the default alwaysRun set is deliberately empty because enabling apicheck and mdlint while they are red on the committed tree would fail CI on the first push. apicheck is red on the remaining doc debt; mdlint is red on worker markdown.
-
-When both gates are green, this is a one-line change.
-
-Note: the mdlint blocker changes shape once the cavekit spec files are removed, since much of the red is in the generated spec views. Re-measure before flipping.
-
-Migrated from cavekit SPEC.md T893.
-
 ## T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension
 kind: task
 state: done
@@ -841,3 +805,18 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
+
+## ADR-01KZ3HW0ZSFE7T23XD65GPBRE6 Lower classic treeRadixCutoff from 512 to 32? It is worth 17.3 percent on the forest fit and changes which trees are grown.
+kind: adr
+state: done
+created: 2026-08-03
+context: MEASURED, interleaved over three rounds: BenchmarkForestFit 123.3 to 101.9 ms, minus 17.3 percent, and the variance disappears - 101.9 ms every run at 32 against 123 to 144 ms at 512. TreeFit is flat. The comparison-sort path is about half the forest fit: radixByFeature is 50.7 percent of a parallel profile and its closure comparator, the pdqsort partition and the insertion sort are most of that. Cutoffs of 32 and 128 both land near 102 ms. THE COST: the bit-exact forest digest FAILS at 32, 64 and 128 and passes only at 512, so the change alters which trees are grown. WHY, AND THIS CORRECTS A CLAIM IN THE CODE: radixByFeature documented its unspecified tie order as irrelevant because thresholds sit between distinct values. That is wrong - the sweep skips a candidate cut when the gap between consecutive values is at most featureThreshold, a TOLERANCE of 1e-7, so values that are distinct yet closer than that behave like ties, and reordering them changes which pairs are adjacent and therefore which cuts are considered. Two sorts that disagree on those runs grow different trees. The comment has been corrected; no behavior was changed.
+decision: Keep 512 - preserve the exact trees the frozen digest pins
+consequences: THE QUESTION WAS MALFORMED AND THE ANSWER IS BOTH OPTIONS AT ONCE. treeRadixCutoff was serving two callers with opposite cost profiles: a PER-NODE sort of a shrinking range in the CART builder, which wants a low cutoff, and a ONE-TIME presort of every row in the GBM builder, which wants a high one. Splitting it resolves the tradeoff instead of choosing a side. The GBM presort keeps 512 as the new gbmRadixCutoff - that is the option chosen here - and the CART per-node cutoff drops to 32. With the two separated: BenchmarkForestFit 121.5 to 101.3 ms, minus 16.6 percent with all three new runs below all three base runs; GBMFit flat at 66.5 to 64.0; and BOTH bit-exact digests pass UNCHANGED. The apparent model-behavior change was entirely the shared constant dragging the GBM presort along with the CART one, which also cost GBMFit about 25 percent. No trees change and nothing is re-frozen.
+status: accepted
+
+kind: radio
+option: Keep 512 - preserve the exact trees the frozen digest pins
+option: Lower to 32 and re-freeze the digest - accept different but equally valid trees for 17.3 percent
+option: Lower only for classification, where the risk is smallest, and keep 512 for regression
+choice: Keep 512 - preserve the exact trees the frozen digest pins

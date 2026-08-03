@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"runtime"
 	"testing"
 
 	"github.com/jxsl13/goai/linalg"
@@ -11,19 +12,29 @@ import (
 )
 
 // spd builds a random symmetric positive-definite matrix A = B·Bᵀ + n·I.
+//
+// It walks the storage rather than AtF64/SetF64 because it is O(n³) and runs once per benchmark
+// invocation: at n=512 the accessor version was 88% of every AtF64 sample in a Cholesky profile,
+// swamping the factorization it exists to feed and making the profile read as though the accessor
+// were the factorization's problem. A fixture that dominates the profile of the thing it sets up
+// is a measurement bug, not a style one.
 func spd(rng *rand.Rand, n int) *tensor.Tensor {
 	b := randRect(rng, n, n)
+	bf := b.Storage().F64()
 	a := tensor.New(tensor.F64, tensor.Shape{n, n})
+	af := a.Storage().F64()
 	for i := range n {
+		bi := bf[i*n : i*n+n]
 		for j := range n {
+			bj := bf[j*n : j*n+n]
 			var s float64
 			for k := range n {
-				s += b.AtF64(i, k) * b.AtF64(j, k) // (B·Bᵀ)[i,j]
+				s += bi[k] * bj[k] // (B·Bᵀ)[i,j]
 			}
 			if i == j {
 				s += float64(n)
 			}
-			a.SetF64(s, i, j)
+			af[i*n+j] = s
 		}
 	}
 	return a
@@ -133,4 +144,86 @@ func ExampleCholesky() {
 	l, _ := linalg.Cholesky(a)
 	fmt.Printf("%.4f %.4f %.4f\n", l.AtF64(0, 0), l.AtF64(1, 0), l.AtF64(1, 1))
 	// Output: 2.0000 1.0000 1.4142
+}
+
+// TestCholSolveBandsAndTypedReadMatchSerial covers the two independent changes to CholSolve at
+// once, because they interact: the right-hand-side columns are now solved in bands, and an F64
+// right-hand side is read through its storage instead of AtF64.
+//
+// The band split is held bit-identical to the GOMAXPROCS(1) path — a column reads the factor and
+// its own column of b and writes only its own output slots, so which worker retires it cannot
+// change its arithmetic, and a tolerance here would accept exactly the reassociation the split
+// claims not to do. The shape clears parallelCols' cols*n*n < 1<<14 gate, without which both arms
+// would run the same serial code.
+//
+// The typed read is held against the AtF64 path by feeding the SAME values through inputs that
+// route differently: a plain F64 matrix takes the storage path, a transposed view is not
+// contiguous, and an F32 matrix has no F64 storage at all. This is the shape of defect that hides
+// best — a fast path is exercised only in the dtype and layout where it happens to be right, and
+// the other arms are never run.
+func TestCholSolveBandsAndTypedReadMatchSerial(t *testing.T) {
+	rng := rand.New(rand.NewPCG(11, 12))
+	const n, cols = 96, 24
+	a := spd(rng, n)
+	rhs := randRect(rng, n, cols)
+
+	solve := func(b *tensor.Tensor) []float64 {
+		t.Helper()
+		x, err := linalg.CholSolve(a, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := make([]float64, x.Numel())
+		for i := range out {
+			out[i] = x.AtF64(i/cols, i%cols)
+		}
+		return out
+	}
+	prev := runtime.GOMAXPROCS(1)
+	serial := solve(rhs)
+	runtime.GOMAXPROCS(prev)
+
+	// A [cols,n] matrix holding the TRANSPOSE of rhs, viewed back as [n,cols]: the same values in
+	// the same logical positions, but the underlying storage is in the other order. Taking that
+	// storage directly yields a different matrix, so this arm fails loudly if the fast path
+	// forgets to materialize a contiguous copy first. Transposing rhs twice does NOT work — the
+	// strides come back to where they started and the view is contiguous again, which is how the
+	// first version of this fixture passed with the contiguity check removed.
+	tr := tensor.New(tensor.F64, tensor.Shape{cols, n})
+	for i := range n {
+		for j := range cols {
+			tr.SetF64(rhs.AtF64(i, j), j, i)
+		}
+	}
+	view, err := tr.Transpose(1, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		b    *tensor.Tensor
+	}{
+		{"banded F64", rhs},
+		{"non-contiguous transposed view", view},
+		{"F32 right-hand side", rhs.Cast(tensor.F32)},
+	} {
+		got := solve(c.b)
+		if len(got) != len(serial) {
+			t.Fatalf("%s: %d values, want %d", c.name, len(got), len(serial))
+		}
+		for i := range serial {
+			if c.name == "F32 right-hand side" {
+				// F32 storage rounds the input itself, so this arm is held to the value, not
+				// the bits — what it proves is that the path RUNS and stays correct.
+				if math.Abs(got[i]-serial[i]) > 1e-4*(1+math.Abs(serial[i])) {
+					t.Fatalf("%s element %d: %v, serial %v", c.name, i, got[i], serial[i])
+				}
+				continue
+			}
+			if math.Float64bits(got[i]) != math.Float64bits(serial[i]) {
+				t.Fatalf("%s element %d: %v, serial %v — the change altered an accumulation",
+					c.name, i, got[i], serial[i])
+			}
+		}
+	}
 }

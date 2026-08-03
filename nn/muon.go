@@ -30,6 +30,7 @@ type Muon struct {
 	NSSteps     int              // Newton-Schulz orthogonalization iteration count (default 5)
 
 	buf [][]float64
+	dir [][]float64 // per-parameter update-direction scratch, shaped at construction
 }
 
 // MuonOption configures a Muon optimizer (functional-options idiom, §C12).
@@ -81,14 +82,24 @@ func NewMuon(params []*tensor.Tensor, lr float64, opts ...MuonOption) *Muon {
 		o(m)
 	}
 	m.buf = make([][]float64, len(params))
+	m.dir = make([][]float64, len(params))
 	for i, p := range params {
 		m.buf[i] = make([]float64, p.Numel())
+		// The update direction is per-parameter scratch with a shape fixed at construction, so it
+		// belongs beside the momentum buffer rather than being remade on every step.
+		m.dir[i] = make([]float64, p.Numel())
 	}
 	return m
 }
 
 // Step applies one Muon update.
 func (mu *Muon) Step(grad GradFn) error {
+	// The gradient callback runs SERIALLY, before anything else, and that is a contract rather
+	// than a convenience: GradFn belongs to the caller and has never been documented as safe to
+	// call from several goroutines. Everything after it touches only this parameter's own
+	// buffers, so the per-parameter work below fans out; the callback does not.
+	grads := make([]*tensor.Tensor, len(mu.Params))
+	work := 0
 	for pi, p := range mu.Params {
 		if p.Ndim() != 2 {
 			return fmt.Errorf("nn: Muon requires 2-D params, got %v (use Adam for the rest)", p.Shape())
@@ -100,9 +111,33 @@ func (mu *Muon) Step(grad GradFn) error {
 		if !g.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: Muon grad shape %v != param %v", g.Shape(), p.Shape())
 		}
+		grads[pi] = g
+		work += p.Numel()
+	}
+	// Parameter pi reads grads[pi] and writes mu.buf[pi], mu.dir[pi] and p itself — all private
+	// to it — so the parameter loop bands, BIT-IDENTICALLY: every parameter's own arithmetic,
+	// including the Newton-Schulz iteration inside it, is untouched and only which goroutine
+	// runs it moves. This is the outer level of a nest whose inner matmuls already fan out, and
+	// it is the level that was missing: a profile of the step spent 62% of its samples in
+	// pthread_cond_wait and pthread_cond_signal and only 32% in the matmul, because each
+	// parameter's five Newton-Schulz iterations fork three times each and nothing overlaps them.
+	parallelRows(len(mu.Params), max(work/max(len(mu.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				mu.stepParam(pi, mu.Params[pi], grads[pi])
+			}
+		}
+	})
+	return nil
+}
+
+// stepParam applies the Muon update to one parameter. Split out so the banded loop above has a
+// body rather than a copy of one.
+func (mu *Muon) stepParam(pi int, p, g *tensor.Tensor) {
+	{
 		R, C := p.Shape()[0], p.Shape()[1]
 		beta := mu.Momentum
-		dir := make([]float64, R*C)
+		dir := mu.dir[pi] // reused across steps; every entry is written below before it is read
 		for i := range dir {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := g.AtF64(idx...)
@@ -122,7 +157,6 @@ func (mu *Muon) Step(grad GradFn) error {
 			p.SetF64(pv, idx...)
 		}
 	}
-	return nil
 }
 
 // newtonSchulz5 returns the semi-orthogonalization of x[rows,cols] via the quintic
@@ -147,17 +181,24 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 	for i := range X {
 		X[i] *= inv
 	}
-	// One [cc,r] transpose scratch for the whole run: matmulABt's operand shape is
-	// fixed across the iterations, so reusing it drops steps-1 of these allocations.
-	abt := make([]float64, cc*r)
+	// Every buffer the iteration needs has a shape fixed by (r, cc), and none of them outlives
+	// one pass, so they are allocated ONCE for the whole run instead of four per step. At the
+	// benchmarked shape that is the difference between 28 MB of churn per optimizer step and
+	// about 2 MB. The products are accumulated into rather than assigned, so each destination is
+	// cleared first — the runtime was doing exactly that zeroing on every fresh make, which is
+	// why this trades allocation for no arithmetic.
+	abt := make([]float64, cc*r) // matmulABt's transpose scratch
+	aBuf := make([]float64, r*r)
+	a2Buf := make([]float64, r*r)
+	bm := make([]float64, r*r)
+	bxBuf := make([]float64, r*cc)
 	for range steps {
-		A := matmulABtInto(X, X, r, cc, abt) // X·Xᵀ  [r,r]
-		A2 := matmulFlat(A, A, r, r, r)      // A·A   [r,r]
-		bm := make([]float64, r*r)
+		A := matmulABtInto(X, X, r, cc, abt, aBuf) // X·Xᵀ  [r,r]
+		A2 := matmulFlatInto(a2Buf, A, A, r, r, r) // A·A   [r,r]
 		for i := range bm {
 			bm[i] = b*A[i] + c*A2[i]
 		}
-		bx := matmulFlat(bm, X, r, r, cc) // (bA+cA²)·X  [r,cc]
+		bx := matmulFlatInto(bxBuf, bm, X, r, r, cc) // (bA+cA²)·X  [r,cc]
 		for i := range X {
 			X[i] = a*X[i] + bx[i]
 		}
@@ -170,22 +211,45 @@ func newtonSchulz5(x []float64, rows, cols, steps int) []float64 {
 
 // matmulFlat returns C[m,n] = A[m,k]·B[k,n] (row-major flat).
 func matmulFlat(a, b []float64, m, k, n int) []float64 {
-	c := make([]float64, m*n)
-	for i := range m {
-		ci := c[i*n : i*n+n]
-		for p := range k {
-			av := a[i*k+p]
-			if av == 0 {
-				continue
-			}
-			// axpy over equal-length slices (one bounds check each) so the inner mul-add
-			// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
-			bp := b[p*n : p*n+n]
-			for j := range ci {
-				ci[j] += av * bp[j]
+	return matmulFlatInto(nil, a, b, m, k, n)
+}
+
+// matmulFlatInto is matmulFlat writing into a caller-supplied destination, which a loop running
+// the same shape repeatedly can allocate once. dst is CLEARED first: the kernel accumulates, so
+// it needs a zero start — exactly what the runtime hands back from a fresh make, and the reason
+// this costs no arithmetic. A nil or short dst is allocated here, so matmulFlat stays correct.
+func matmulFlatInto(dst, a, b []float64, m, k, n int) []float64 {
+	c := dst
+	if cap(c) < m*n {
+		c = make([]float64, m*n)
+	}
+	c = c[:m*n]
+	clear(c)
+	// Split over ROW BANDS of C. Each band owns its rows outright — it reads all of B and
+	// only its own rows of A — so nothing is shared and every c[i][j] still accumulates its
+	// k products in the same ascending-p order the serial loop used. Bit-identical, which is
+	// what lets the parity test assert exact equality rather than a tolerance.
+	//
+	// This was 48.8%% of a Muon step's profile and ran on one core. The gate is on m*k*n
+	// rather than m: Newton-Schulz drives a handful of rows through a lot of work per row,
+	// and a row-count gate would leave exactly that shape serial.
+	parallelRows(m, k*n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			ci := c[i*n : i*n+n]
+			for p := range k {
+				av := a[i*k+p]
+				if av == 0 {
+					continue
+				}
+				// axpy over equal-length slices (one bounds check each) so the inner mul-add
+				// auto-vectorizes; ikj order + same accumulation order, so bit-identical.
+				bp := b[p*n : p*n+n]
+				for j := range ci {
+					ci[j] += av * bp[j]
+				}
 			}
 		}
-	}
+	})
 	return c
 }
 
@@ -207,15 +271,20 @@ func matmulFlat(a, b []float64, m, k, n int) []float64 {
 // no-op (it turns a -0 accumulator into -0 rather than +0, and 0·±Inf into a
 // skipped NaN), which would break exactness for the sake of a rare branch.
 func matmulABt(a, b []float64, m, k int) []float64 {
-	return matmulABtInto(a, b, m, k, nil)
+	return matmulABtInto(a, b, m, k, nil, nil)
 }
 
 // matmulABtInto is matmulABt with a caller-supplied [k,m] transpose scratch. The
 // shapes are fixed across a newtonSchulz5 run, so hoisting one buffer out of the
 // iteration keeps the ikj rewrite from trading time for garbage. A nil (or too
 // small) scratch is allocated here, so the plain matmulABt stays correct.
-func matmulABtInto(a, b []float64, m, k int, bt []float64) []float64 {
-	c := make([]float64, m*m)
+func matmulABtInto(a, b []float64, m, k int, bt, dst []float64) []float64 {
+	c := dst
+	if cap(c) < m*m {
+		c = make([]float64, m*m)
+	}
+	c = c[:m*m]
+	clear(c)
 	if m == 0 || k == 0 {
 		return c
 	}

@@ -58,6 +58,13 @@ type Context struct {
 	// fits-in-VRAM device — the mechanism exists for T631 low-VRAM layer offload
 	// and heterogeneous spec-decoding, not as a default speedup).
 	opBackends map[Op]Name
+
+	// noRec is this context's recorder-free twin, built once at construction when a Recorder is
+	// attached. Execute must hand kernels a context WITHOUT the recorder (§V25) — a kernel that
+	// re-dispatches would otherwise record the op twice and double its gradients — and deriving
+	// that twin per op allocated a Context on every dispatch of every training step. It is
+	// immutable and shared, which is safe because a Context is read-only once built.
+	noRec *Context
 }
 
 // NewContext returns an eager context bound to the default backend, with no
@@ -67,14 +74,26 @@ func NewContext() *Context { return &Context{Backend: Default()} }
 // WithBackend returns a copy of ctx bound to b (recorder and per-op routing
 // overrides preserved).
 func (c *Context) WithBackend(b Backend) *Context {
-	return &Context{Backend: b, Recorder: c.Recorder, opBackends: c.opBackends}
+	return newContext(b, c.Recorder, c.opBackends)
+}
+
+// newContext builds a Context and, when it records, its recorder-free twin. Every constructor goes
+// through here so no path can produce a recording context whose twin is missing — Execute falls
+// back to deriving one when noRec is nil, so a missed path would be correct but would quietly give
+// back the allocation this exists to remove.
+func newContext(b Backend, r Recorder, ob map[Op]Name) *Context {
+	c := &Context{Backend: b, Recorder: r, opBackends: ob}
+	if r != nil {
+		c.noRec = &Context{Backend: b, opBackends: ob}
+	}
+	return c
 }
 
 // WithRecorder returns a copy of ctx with the given recorder (backend and per-op
 // routing overrides preserved). Used by autograd to switch a computation into
 // recording mode.
 func (c *Context) WithRecorder(r Recorder) *Context {
-	return &Context{Backend: c.Backend, Recorder: r, opBackends: c.opBackends}
+	return newContext(c.Backend, r, c.opBackends)
 }
 
 // WithOpBackend returns a copy of ctx that routes op to the backend registered
@@ -98,7 +117,7 @@ func (c *Context) WithOpBackend(op Op, name Name) *Context {
 		m[k] = v
 	}
 	m[op] = name
-	return &Context{Backend: c.Backend, Recorder: c.Recorder, opBackends: m}
+	return newContext(c.Backend, c.Recorder, m)
 }
 
 // WithLayerBackend is the per-layer convenience over WithOpBackend: it routes
@@ -114,7 +133,7 @@ func (c *Context) WithLayerBackend(name Name, ops ...Op) *Context {
 	for _, op := range ops {
 		m[op] = name
 	}
-	return &Context{Backend: c.Backend, Recorder: c.Recorder, opBackends: m}
+	return newContext(c.Backend, c.Recorder, m)
 }
 
 // Device returns the device of the context's backend.

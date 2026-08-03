@@ -83,6 +83,15 @@ func DeltaNet(ctx *backend.Context, q, k, v, beta *tensor.Tensor) (*tensor.Tenso
 						}
 					}
 				} else {
+					// ONE PASS OVER S, not two. The update and the output projection are
+					// separate loops over the same dv rows of the same state, and each row is
+					// independent of every other: row r reads and writes only S[r*dk:(r+1)*dk].
+					// Merging them touches the row once and keeps it in cache for the second
+					// dot instead of streaming the whole state again.
+					//
+					// BIT-IDENTICAL: every operation on row r happens in the same order on the
+					// same operands. Row r's update already preceded row r's output dot in the
+					// split form, so only WHEN a row is visited moves.
 					for r := range dv {
 						base := r * dk
 						var p float64 // pred_r = Σ_c S[r,c]·k[c]
@@ -90,10 +99,14 @@ func DeltaNet(ctx *backend.Context, q, k, v, beta *tensor.Tensor) (*tensor.Tenso
 							p += S[base+c] * krow[c]
 						}
 						d := bt * (vrow[r] - p)
+						var o float64 // o_t = S_t q_t, on the row just written
 						for c := range dk {
 							S[base+c] += d * krow[c]
+							o += S[base+c] * qrow[c]
 						}
+						os[t*dv+r] = o
 					}
+					continue
 				}
 				for r := range dv { // o_t = S_t q_t
 					base := r * dk

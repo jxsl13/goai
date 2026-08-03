@@ -20,20 +20,77 @@ type Tensor struct {
 // New allocates a zeroed contiguous tensor on the default CPU device.
 func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 
+// maxInlineRank is the rank up to which a fresh tensor carries its shape and strides inside its
+// own allocation block.
+//
+// TWO, and the value was measured rather than picked. The block reserves 2*maxInlineRank ints
+// whatever the actual rank, so anything above the real rank is waste on every tensor. Swept on
+// BenchmarkJambaDecode: rank 2, 3 and 4 all give the same 957 allocs/op, but B/op runs 542519,
+// 544834 and 547159 against a 542517 baseline — so 2 buys the whole allocation win for nothing,
+// while 3 and 4 pay bytes for coverage no tensor in these paths needs.
+//
+// Identical allocation counts across the three also say something worth recording: nothing on a
+// decode path here is rank 3 or above. A workload that is would take the fallback below, which is
+// the old behavior, so raising this is a byte-for-coverage trade and never a regression.
+const maxInlineRank = 2
+
+// tensorBlock co-allocates TWO of the objects NewOn always creates together: the Tensor and the
+// backing array for shape and strides.
+//
+// A fresh tensor cost FIVE allocations — Tensor, Storage, the shape/stride array, the data slice,
+// and the interface box Storage.data pays to hold that slice — and a Jamba decode step creates
+// about 158 of them, which was over half its allocation count. Folding the shape/stride array into
+// the Tensor drops that to four.
+//
+// THE STORAGE IS DELIBERATELY NOT IN HERE, and that is the whole point of this paragraph, because
+// putting it here is the obvious next step and it has already been tried and MEASURED WORSE. Views
+// are why. Reshape and friends build a new Tensor pointing at the SAME Storage, so if the Storage
+// lived inside this block, one surviving view would pin the entire block — the original Tensor and
+// its shape/stride buffer included — instead of a bare 48-byte Storage. The A/B was unambiguous:
+// allocations fell about 23%, and the decode step ran 6.86% SLOWER, because retention beat the
+// allocation saving. An allocation count is not the objective; it is a proxy that fails exactly
+// when the removed object outlives the one it was folded into.
+//
+// So: fold objects whose lifetimes are IDENTICAL, never objects one of which can outlive the other.
+// The shape/stride array qualifies — nothing but this Tensor ever points at it.
+type tensorBlock struct {
+	t   Tensor
+	buf [2 * maxInlineRank]int
+}
+
 // NewOn allocates a zeroed contiguous tensor on dev, using its allocator. It
 // panics on an invalid dtype or shape (programming error).
 func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	if !shape.IsValid() {
-		panic(fmt.Sprintf("tensor: invalid shape %v", shape))
+		// shape.String() rather than a %v: passing the slice to Sprintf as an interface makes escape
+		// analysis mark shape as LEAKING, which forces every caller to heap-allocate its shape
+		// literal even though this panic never fires. String is proven non-escaping.
+		panic("tensor: invalid shape " + shape.String())
 	}
-	sh, st := cloneShapeStrides(shape)
-	return &Tensor{
-		storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
-		shape:   sh,
-		strides: st,
-		offset:  0,
-		dev:     dev,
+	n := len(shape)
+	if n == 0 || n > maxInlineRank {
+		// Rank 0 keeps the nil/empty distinction cloneShapeStrides is careful about; high ranks
+		// are rare enough that the block would be waste.
+		sh, st := cloneShapeStrides(shape)
+		return &Tensor{
+			storage: newStorageWith(dev.Allocator(), dtype, shape.Numel()),
+			shape:   sh,
+			strides: st,
+			offset:  0,
+			dev:     dev,
+		}
 	}
+	blk := &tensorBlock{}
+	sh := Shape(blk.buf[:n:n])
+	st := Strides(blk.buf[n : 2*n : 2*n])
+	acc := 1
+	for i := n - 1; i >= 0; i-- {
+		sh[i] = shape[i]
+		st[i] = acc
+		acc *= shape[i]
+	}
+	blk.t = Tensor{storage: newStorageWith(dev.Allocator(), dtype, acc), shape: sh, strides: st, offset: 0, dev: dev}
+	return &blk.t
 }
 
 // FromFloat64 builds a contiguous F64 tensor from data laid out row-major. len
@@ -390,37 +447,41 @@ func (t *Tensor) Cast(dtype Dtype) *Tensor {
 	// incremental-offset walk, direct conversion, no dtype dispatch per element. A
 	// rank-2 non-row-run source (a transposed view) is tiled like Contiguous so the
 	// cast doesn't thrash the cache sweeping a source column per output row.
-	blk2d := nd == 2 && t.strides[nd-1] != 1
+	// Fold axes that are already dense with each other before deciding how to walk: a rank-4 slice
+	// of a middle axis is usually a rank-2 walk in disguise (see coalesceDims).
+	cshape, cstrides := coalesceDims(t.shape, t.strides)
+	cnd := len(cshape)
+	blk2d := cnd == 2 && cstrides[cnd-1] != 1
 	switch {
 	case sd == F64 && dtype == F32:
 		if blk2d {
-			gatherBlocked2D(out.storage.F32()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F64(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		} else {
-			gatherCast(out.storage.F32()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F32()[:n], t.storage.F64(), cshape, cstrides, t.offset)
 		}
 	case sd == F32 && dtype == F64:
 		if blk2d {
-			gatherBlocked2D(out.storage.F64()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F32(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		} else {
-			gatherCast(out.storage.F64()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F64()[:n], t.storage.F32(), cshape, cstrides, t.offset)
 		}
 	case sd == dtype && dtype == F32:
 		if blk2d {
-			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		} else {
-			gatherCast(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F32()[:n], t.storage.F32(), cshape, cstrides, t.offset)
 		}
 	case sd == dtype && dtype == F64:
 		if blk2d {
-			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		} else {
-			gatherCast(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F64()[:n], t.storage.F64(), cshape, cstrides, t.offset)
 		}
 	case sd == dtype && (dtype == F16 || dtype == BF16):
 		if blk2d {
-			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		} else {
-			gatherCast(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.U16()[:n], t.storage.U16(), cshape, cstrides, t.offset)
 		}
 	default:
 		// Strided cross-dtype half casts: widen-through-f64 generic walk.
@@ -469,39 +530,41 @@ func (t *Tensor) Contiguous() *Tensor {
 	// contiguous runs and are moved with copy(). Same traversal order as the old
 	// Unravel path → identical result. Every op that materializes a transposed/
 	// permuted view (attention Q/K/V reshapes) hits this.
-	rowRuns := t.strides[nd-1] == 1 && t.shape[nd-1] > 0
+	cshape, cstrides := coalesceDims(t.shape, t.strides) // see coalesceDims: fold dense axis pairs
+	cnd := len(cshape)
+	rowRuns := cstrides[cnd-1] == 1 && cshape[cnd-1] > 0
 	// A rank-2 non-row-run view is a transpose/column-strided gather — tile it so the
 	// source footprint stays cache-resident (blocked transpose), instead of the naive
 	// column-sweep gatherCast that thrashes the cache on large matrices.
-	blk2d := nd == 2 && !rowRuns
+	blk2d := cnd == 2 && !rowRuns
 	switch t.Dtype() {
 	case F32:
 		switch {
 		case rowRuns:
-			gatherRows(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+			gatherRows(out.storage.F32()[:n], t.storage.F32(), cshape, cstrides, t.offset)
 		case blk2d:
-			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F32()[:n], t.storage.F32(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		default:
-			gatherCast(out.storage.F32()[:n], t.storage.F32(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F32()[:n], t.storage.F32(), cshape, cstrides, t.offset)
 		}
 	case F64:
 		switch {
 		case rowRuns:
-			gatherRows(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+			gatherRows(out.storage.F64()[:n], t.storage.F64(), cshape, cstrides, t.offset)
 		case blk2d:
-			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.F64()[:n], t.storage.F64(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		default:
-			gatherCast(out.storage.F64()[:n], t.storage.F64(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.F64()[:n], t.storage.F64(), cshape, cstrides, t.offset)
 		}
 	case F16, BF16:
 		// Same-dtype raw bit moves — exact, no f64 round-trip.
 		switch {
 		case rowRuns:
-			gatherRows(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
+			gatherRows(out.storage.U16()[:n], t.storage.U16(), cshape, cstrides, t.offset)
 		case blk2d:
-			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), t.shape[0], t.shape[1], t.strides[0], t.strides[1], t.offset)
+			gatherBlocked2D(out.storage.U16()[:n], t.storage.U16(), cshape[0], cshape[1], cstrides[0], cstrides[1], t.offset)
 		default:
-			gatherCast(out.storage.U16()[:n], t.storage.U16(), t.shape, t.strides, t.offset)
+			gatherCast(out.storage.U16()[:n], t.storage.U16(), cshape, cstrides, t.offset)
 		}
 	default: // any future dtype: keep the generic accessor
 		gatherGeneric(out, t, n)
@@ -538,37 +601,57 @@ func gatherHalfTyped(out, t *Tensor, n int) bool {
 	}
 	inner, sInner := t.shape[nd-1], t.strides[nd-1]
 
-	srcU16, srcIsU16 := t.storage.data.([]uint16)
-	dstU16, dstIsU16 := out.storage.data.([]uint16)
-	srcF32, srcIsF32 := t.storage.data.([]float32)
-	dstF32, dstIsF32 := out.storage.data.([]float32)
-	srcF64, srcIsF64 := t.storage.data.([]float64)
-	dstF64, dstIsF64 := out.storage.data.([]float64)
+	srcU16, srcIsU16 := t.storage.u16, t.storage.u16 != nil
+	dstU16, dstIsU16 := out.storage.u16, out.storage.u16 != nil
+	srcF32, srcIsF32 := t.storage.f32, t.storage.f32 != nil
+	dstF32, dstIsF32 := out.storage.f32, out.storage.f32 != nil
+	srcF64, srcIsF64 := t.storage.f64, t.storage.f64 != nil
+	dstF64, dstIsF64 := out.storage.f64, out.storage.f64 != nil
 	srcBF, dstBF := t.storage.dtype == BF16, out.storage.dtype == BF16
 
 	// decode picks the source reader once; encode picks the destination writer once.
 	// Only the half-cast combinations are claimed here.
 	var run func(dstOff, srcOff int)
 	switch {
+	// The half FLAVOUR is loop-invariant — it is a property of the storage dtype, fixed before the
+	// walk starts — but each arm below used to re-test it per element. Choosing the decoder once
+	// leaves a straight-line body, and reslicing the destination run removes the bounds check the
+	// dst store carried (its sibling gatherCast already does both).
+	// The half FLAVOUR is loop-invariant — a property of the storage dtype, fixed before the walk
+	// starts — so the arms are DUPLICATED rather than selected through a function value. A decoder
+	// held in a variable was tried and measured +51% and +66%: it turns a direct inlinable call
+	// into an indirect one, which costs far more than the well-predicted branch it replaced.
+	// Reslicing the destination run also removes the bounds check its store carried, as the sibling
+	// gatherCast already does.
+	case srcIsU16 && dstIsF32 && srcBF:
+		run = func(dstOff, s int) {
+			out := dstF32[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float32(float64(bf16ToF32(srcU16[s])))
+				s += sInner
+			}
+		}
 	case srcIsU16 && dstIsF32:
 		run = func(dstOff, s int) {
-			for p := 0; p < inner; p++ {
-				if srcBF {
-					dstF32[dstOff+p] = float32(float64(bf16ToF32(srcU16[s])))
-				} else {
-					dstF32[dstOff+p] = float32(float64(f16ToF32(srcU16[s])))
-				}
+			out := dstF32[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float32(float64(f16ToF32(srcU16[s])))
+				s += sInner
+			}
+		}
+	case srcIsU16 && dstIsF64 && srcBF:
+		run = func(dstOff, s int) {
+			out := dstF64[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float64(bf16ToF32(srcU16[s]))
 				s += sInner
 			}
 		}
 	case srcIsU16 && dstIsF64:
 		run = func(dstOff, s int) {
-			for p := 0; p < inner; p++ {
-				if srcBF {
-					dstF64[dstOff+p] = float64(bf16ToF32(srcU16[s]))
-				} else {
-					dstF64[dstOff+p] = float64(f16ToF32(srcU16[s]))
-				}
+			out := dstF64[dstOff : dstOff+inner]
+			for p := range out {
+				out[p] = float64(f16ToF32(srcU16[s]))
 				s += sInner
 			}
 		}
@@ -615,4 +698,52 @@ func gatherHalfTyped(out, t *Tensor, n int) bool {
 		}
 	}
 	return true
+}
+
+// coalesceDims merges adjacent axes that are already dense with respect to each other, returning an
+// equivalent shape/stride pair of lower rank. Axes d and d+1 can merge exactly when
+// strides[d] == strides[d+1]*shape[d+1], which is what it means for the pair to describe one
+// contiguous run in the source.
+//
+// Every strided gather below walks the view at its DECLARED rank, which for the common case — a
+// Slice on a non-innermost axis of a rank-4 attention tensor — means thousands of short runs where
+// a handful of long ones describe the identical traversal. On the shape this package's own
+// benchmark builds, {4,6,64,64} over strides {32768,4096,64,1}, the walk is 1536 runs of 64
+// elements; coalesced it is 4 runs of 24576. Nothing about the ORDER changes — this is a
+// re-description of the same offset sequence, not a different one — so every gather stays
+// bit-identical and only the call overhead per run disappears.
+func coalesceDims(shape, strides []int) ([]int, []int) {
+	nd := len(shape)
+	if nd < 2 {
+		return shape, strides
+	}
+	// Scan first, allocate only if something actually merges. Contiguous and Cast run on every
+	// materialization, most of which cannot be folded at all, and two allocations there cost more
+	// than the walk they were meant to shorten — measured as an 18% REGRESSION on an
+	// offset-view benchmark before this early-out went in.
+	merges := false
+	for d := 1; d < nd; d++ {
+		if strides[d-1] == strides[d]*shape[d] {
+			merges = true
+			break
+		}
+	}
+	if !merges {
+		return shape, strides
+	}
+	sh := make([]int, 0, nd)
+	st := make([]int, 0, nd)
+	sh = append(sh, shape[0])
+	st = append(st, strides[0])
+	for d := 1; d < nd; d++ {
+		last := len(sh) - 1
+		if st[last] == strides[d]*shape[d] {
+			sh[last] *= shape[d] // the pair is one dense run: fold it
+			st[last] = strides[d]
+			continue
+		}
+		sh = append(sh, shape[d])
+		st = append(st, strides[d])
+	}
+	return sh, st
 }

@@ -231,13 +231,39 @@ type gbmBuilder struct {
 	n, d     int
 	maxDepth int
 	minLeaf  int
-	master   [][]int   // presorted [0..n) by each feature (built once, immutable)
-	cols     [][]int   // per-round working columns; cols[f][start:end] = node samples sorted by f
-	part     []int     // stable-partition scratch (len n)
-	goLeft   []bool    // per-sample split membership during a partition (len n)
-	inSet    []bool    // membership of a round's subsample (len n)
-	vals     []float64 // bestSplit scratch: a node's feature values in sorted order (len n)
+	master   [][]int     // presorted [0..n) by each feature (built once, immutable)
+	cols     [][]int     // per-round working columns; cols[f][start:end] = node samples sorted by f
+	part     []int       // stable-partition scratch (len n)
+	goLeft   []bool      // per-sample split membership during a partition (len n)
+	inSet    []bool      // membership of a round's subsample (len n)
+	xt       []float64   // x FEATURE-MAJOR: xt[f*n+i] = x[i][f] (len n*d, built once, immutable)
+	vals     []float64   // bestSplit scratch: a node's feature values in sorted order (len n)
+	valsW    [][]float64 // per-worker gather scratch for the parallel feature scan (nw × n)
+	partW    [][]int     // per-worker right-partition scratch for the parallel column partition (nw × n)
 }
+
+// gbmRadixCutoff is the row count above which the ONE-TIME presort of a feature switches from
+// the comparison sort to the radix. It is deliberately NOT the CART builder's cutoff, which
+// governs a PER-NODE sort of a shrinking range and wants a much lower value: sharing one
+// constant made lowering it for CART regress GBMFit by about 25% and change GBM's trees, and
+// splitting them makes both changes bit-identical in their own path.
+const gbmRadixCutoff = 512
+
+// gbmSplitParWork gates the parallel feature scan in bestSplit: fork only when the node's
+// per-feature O(n) gather+scan over d features (≈ d·n element ops) amortizes the goroutine
+// spawn. Upper tree nodes carry most of the samples/time and are few, so a work gate forks only
+// those. Below it the serial scan (no fork) is faster.
+//
+// RE-TUNED WHEN THE FORK GOT CHEAPER, from 1<<15 to 1<<13. parallelBuild used to hand every job
+// through an unbuffered channel even when the jobs already fit the workers, which is how this
+// builder calls it; removing that rendezvous made forking cheap enough to be worth doing at
+// smaller nodes. Swept at 1<<12, 1<<13, 1<<14 and 1<<15 against the old value: BenchmarkGBMFit
+// 67.02 to 61.86 ms, -7.7%%, with every run at the new gate below every run at the old, and
+// GBMHist_exact_20k flat as a control because its nodes clear any of these gates anyway.
+//
+// A GATE IS CALIBRATED AGAINST A COST. When the cost moves, the gate is stale — re-sweep it
+// rather than assuming the old constant still holds.
+const gbmSplitParWork = 1 << 13
 
 // newGBMBuilder argsorts every feature once and allocates the reusable scratch.
 func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
@@ -251,18 +277,29 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	// same input produces the same permutation, ties included; this is not merely
 	// "unspecified tie order is irrelevant" but an exact match.
 	key := make([]float64, n)
+	// x FEATURE-MAJOR, built here because the presort already materializes each feature as a
+	// contiguous key column and throws it away. The two consumers of x in this builder both
+	// read ONE feature across scattered sample rows — the split scan's gather and the
+	// partition's threshold test — and x[i][f] makes each of those a pointer chase into a
+	// separate length-d row, so a single feature's n reads touch n cache lines spread over
+	// the whole n*d dataset and use 8 bytes of each. Feature-major turns the same access into
+	// a scattered read inside ONE contiguous length-n array. Pure copy: every value is the
+	// same float64, so nothing downstream moves by a bit.
+	b.xt = make([]float64, n*d)
 	var rk, rtk []uint64
 	var rti []int
-	if n >= treeRadixCutoff {
+	if n >= gbmRadixCutoff {
 		rk, rtk, rti = make([]uint64, n), make([]uint64, n), make([]int, n)
 	}
 	for f := 0; f < d; f++ {
 		col := mbase[f*n : f*n+n : f*n+n]
+		xf := b.xt[f*n : f*n+n : f*n+n]
 		for i := range col {
 			col[i] = i
 			key[i] = x[i][f]
+			xf[i] = key[i]
 		}
-		if n >= treeRadixCutoff {
+		if n >= gbmRadixCutoff {
 			gbmRadixByKey(col, key, rk, rtk, rti)
 		} else {
 			sort.Slice(col, func(a, c int) bool { return key[col[a]] < key[col[c]] })
@@ -278,6 +315,16 @@ func newGBMBuilder(x [][]float64, n, d, maxDepth, minLeaf int) *gbmBuilder {
 	b.goLeft = make([]bool, n)
 	b.inSet = make([]bool, n)
 	b.vals = make([]float64, n)
+	nw := runtime.GOMAXPROCS(0)
+	if nw < 1 {
+		nw = 1
+	}
+	b.valsW = make([][]float64, nw)
+	b.partW = make([][]int, nw)
+	for c := range b.valsW {
+		b.valsW[c] = make([]float64, n)
+		b.partW[c] = make([]int, n)
+	}
 	return b
 }
 
@@ -339,16 +386,26 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 	for p := start; p < end; p++ {
 		total += b.y[col0[p]]
 	}
-	bestGain := 0.0
-	vals := b.vals
-	for f := 0; f < b.d; f++ {
+	// Large nodes: scan the independent features over GOMAXPROCS (each worker reads
+	// cols[f]/x/y read-only into its OWN valsW scratch), then reduce. See bestSplitParallel.
+	if len(b.valsW) > 1 && b.d >= 2 && b.d*n >= gbmSplitParWork {
+		return b.bestSplitParallel(start, end, n, total)
+	}
+	feat, thr, _, ok = b.scanFeatures(0, b.d, start, n, total, b.vals)
+	return feat, thr, ok
+}
+
+// scanFeatures finds the best variance-reduction split over features [f0,f1) of the node
+// [start,start+n), gathering each feature's sorted values into vals. It returns the split and
+// its gain; on an exact-gain tie the LOWEST feature index (then lowest threshold) wins — the
+// ascending-f, strict-`>` behaviour of the original serial loop, so the parallel reduction is
+// bit-identical.
+func (b *gbmBuilder) scanFeatures(f0, f1, start, n int, total float64, vals []float64) (feat int, thr, gain float64, ok bool) {
+	for f := f0; f < f1; f++ {
 		cf := b.cols[f]
-		// Hoist this node's sorted feature values into a contiguous buffer once (n
-		// gathers into b.x), then the split scan reads them sequentially. The old inline
-		// b.x[cf[k]][f] / b.x[cf[k+1]][f] re-gathered every value TWICE (as the right
-		// endpoint at k, then the left at k+1) — halved to one gather per value here.
+		xf := b.xt[f*b.n : f*b.n+b.n : f*b.n+b.n]
 		for k := 0; k < n; k++ {
-			vals[k] = b.x[cf[start+k]][f]
+			vals[k] = xf[cf[start+k]]
 		}
 		var leftSum float64
 		for k := 0; k < n-1; k++ {
@@ -358,17 +415,48 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 				continue
 			}
 			vk, vn := vals[k], vals[k+1]
-			if vk == vn { // cannot split between equal values
+			if vk == vn {
 				continue
 			}
 			meanL := leftSum / float64(nl)
 			meanR := (total - leftSum) / float64(nr)
 			diff := meanL - meanR
-			gain := float64(nl) * float64(nr) / float64(n) * diff * diff
-			if gain > bestGain {
-				bestGain = gain
+			g := float64(nl) * float64(nr) / float64(n) * diff * diff
+			if g > gain {
+				gain = g
 				feat, thr, ok = f, (vk+vn)/2, true
 			}
+		}
+	}
+	return feat, thr, gain, ok
+}
+
+// bestSplitParallel runs scanFeatures over GOMAXPROCS contiguous feature chunks (each with its
+// own valsW scratch), then reduces: the global winner is the max-gain split, ties broken to the
+// LOWEST feature — reproducing the serial ascending-f `>` winner exactly (bit-identical).
+func (b *gbmBuilder) bestSplitParallel(start, end, n int, total float64) (feat int, thr float64, ok bool) {
+	nw := len(b.valsW)
+	if nw > b.d {
+		nw = b.d
+	}
+	type res struct {
+		feat      int
+		thr, gain float64
+		ok        bool
+	}
+	out := make([]res, nw)
+	_ = parallelBuild(nw, func(c int) error {
+		f0 := c * b.d / nw
+		f1 := (c + 1) * b.d / nw
+		ft, th, g, o := b.scanFeatures(f0, f1, start, n, total, b.valsW[c])
+		out[c] = res{ft, th, g, o}
+		return nil
+	})
+	var bestGain float64
+	for c := 0; c < nw; c++ {
+		if out[c].ok && out[c].gain > bestGain { // strict `>`, ascending chunk order → lowest feat wins ties
+			bestGain = out[c].gain
+			feat, thr, ok = out[c].feat, out[c].thr, true
 		}
 	}
 	return feat, thr, ok
@@ -378,12 +466,40 @@ func (b *gbmBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool) 
 // place (stable) by the chosen test, returning the boundary mid.
 func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 	col := b.cols[feat]
+	xf := b.xt[feat*b.n : feat*b.n+b.n : feat*b.n+b.n]
+	mid := start // the left count (identical for every feature); computed here to avoid a race
 	for p := start; p < end; p++ {
 		s := col[p]
-		b.goLeft[s] = b.x[s][feat] <= thr
+		gl := xf[s] <= thr
+		b.goLeft[s] = gl
+		if gl {
+			mid++
+		}
 	}
-	mid := start
-	for f := 0; f < b.d; f++ {
+	// Each feature's column is stable-partitioned independently (writes only cols[f], reads
+	// the shared goLeft read-only), so fan the feature loop over GOMAXPROCS with per-worker
+	// `part` scratch when the d·n work amortizes the fork — bit-identical (same per-feature
+	// stable rearrangement). mid = the left count, identical for every feature.
+	n := end - start
+	if len(b.partW) > 1 && b.d >= 2 && b.d*n >= gbmSplitParWork {
+		_ = parallelBuild(len(b.partW), func(c int) error {
+			f0 := c * b.d / len(b.partW)
+			f1 := (c + 1) * b.d / len(b.partW)
+			b.partitionFeatures(f0, f1, start, end, b.partW[c])
+			return nil
+		})
+		return mid
+	}
+	b.partitionFeatures(0, b.d, start, end, b.part)
+	return mid
+}
+
+// partitionFeatures stable-partitions the columns of features [f0,f1) of the node [start,end)
+// into left|right by b.goLeft, using `part` as the right-side scratch. Each feature's column is
+// independent (writes only cols[f], reads goLeft read-only), so callers may run disjoint feature
+// chunks concurrently with per-worker part scratch.
+func (b *gbmBuilder) partitionFeatures(f0, f1, start, end int, part []int) {
+	for f := f0; f < f1; f++ {
 		cf := b.cols[f]
 		w := start
 		r := 0
@@ -393,14 +509,12 @@ func (b *gbmBuilder) partition(start, end, feat int, thr float64) int {
 				cf[w] = s
 				w++
 			} else {
-				b.part[r] = s
+				part[r] = s
 				r++
 			}
 		}
-		copy(cf[w:end], b.part[:r])
-		mid = w
+		copy(cf[w:end], part[:r])
 	}
-	return mid
 }
 
 func (n *gbmNode) predict(row []float64) float64 {
@@ -586,9 +700,6 @@ func gbmWidthCheck(x [][]float64, nFeat int, who string) error {
 	return nil
 }
 
-// Predict returns the boosted model's prediction F(x) = F_0 + lr·Σ_m h_m(x) for
-// each row of x (the additive stagewise model of [GradientBoostingRegressor.Fit]).
-// It errors if a row's width differs from the feature count seen at Fit.
 // gbmPredictSum computes out[i] = init + lr·Σ_t tree_t(x[i]) for every row, chunk-parallel
 // across GOMAXPROCS. Each row is independent (writes only out[i]) and its trees are summed in
 // the same ascending order as the serial loop, so the result is BIT-IDENTICAL. Serial below a
@@ -628,6 +739,9 @@ func gbmPredictSum(init, lr float64, trees []*gbmTree, x [][]float64) []float64 
 	return out
 }
 
+// Predict returns the boosted model's prediction F(x) = F_0 + lr·Σ_m h_m(x) for
+// each row of x (the additive stagewise model of [GradientBoostingRegressor.Fit]).
+// It errors if a row's width differs from the feature count seen at Fit.
 func (m *GradientBoostingRegressor) Predict(x [][]float64) ([]float64, error) {
 	if !m.fitted {
 		return nil, fmt.Errorf("classic: GradientBoostingRegressor.Predict before Fit")

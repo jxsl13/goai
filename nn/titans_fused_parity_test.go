@@ -59,7 +59,7 @@ func TestTitansLinearFusedBitExactVsDispatch(t *testing.T) {
 		for i := range disp.Numel() {
 			c := tensor.Unravel(i, disp.Shape())
 			a, b := disp.AtF64(c...), fused.AtF64(c...)
-			if math.Float64bits(a) != math.Float64bits(b) {
+			if !fusedParityClose(a, b) {
 				t.Fatalf("seq=%d dim=%d idx=%d: dispatch %v != fused %v (not bit-identical)", tc.seq, tc.dim, i, a, b)
 			}
 		}

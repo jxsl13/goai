@@ -14,6 +14,7 @@
 package gguf
 
 import (
+	"bufio"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -98,6 +99,13 @@ type tensorInfo struct {
 type reader struct {
 	r io.Reader
 	n int64 // bytes consumed
+	// SCRATCH, because the fixed-size arrays these primitives used to declare LOCALLY were
+	// heap-allocated on every call: rd.read hands the slice to io.ReadFull, an interface
+	// method, so it escapes and the array escapes with it. A header-heavy file paid one
+	// allocation per scalar — u32 and u64 alone were 1.34M objects of a 4.0M profile.
+	// Hanging the buffers on the reader, which is already on the heap, costs none.
+	num  [8]byte
+	sbuf []byte
 }
 
 func (rd *reader) read(p []byte) error {
@@ -107,19 +115,19 @@ func (rd *reader) read(p []byte) error {
 }
 
 func (rd *reader) u32() (uint32, error) {
-	var b [4]byte
-	if err := rd.read(b[:]); err != nil {
+	b := rd.num[:4]
+	if err := rd.read(b); err != nil {
 		return 0, err
 	}
-	return binary.LittleEndian.Uint32(b[:]), nil
+	return binary.LittleEndian.Uint32(b), nil
 }
 
 func (rd *reader) u64() (uint64, error) {
-	var b [8]byte
-	if err := rd.read(b[:]); err != nil {
+	b := rd.num[:8]
+	if err := rd.read(b); err != nil {
 		return 0, err
 	}
-	return binary.LittleEndian.Uint64(b[:]), nil
+	return binary.LittleEndian.Uint64(b), nil
 }
 
 func (rd *reader) str() (string, error) {
@@ -130,7 +138,12 @@ func (rd *reader) str() (string, error) {
 	if n > 1<<24 {
 		return "", fmt.Errorf("gguf: unreasonable string length %d", n)
 	}
-	b := make([]byte, n)
+	// Read into the reader's own scratch and convert once. The old form allocated the byte
+	// slice AND the string; only the string survives the call, so the slice was pure churn.
+	if cap(rd.sbuf) < int(n) {
+		rd.sbuf = make([]byte, n)
+	}
+	b := rd.sbuf[:n]
 	if err := rd.read(b); err != nil {
 		return "", err
 	}
@@ -148,8 +161,8 @@ func (rd *reader) valueDepth(vt uint32, depth int) (any, error) {
 	}
 	switch vt {
 	case vtU8, vtI8, vtBool:
-		var b [1]byte
-		if err := rd.read(b[:]); err != nil {
+		b := rd.num[:1] // receiver scratch: a local array escapes into rd.read (§PS3071)
+		if err := rd.read(b); err != nil {
 			return nil, err
 		}
 		switch vt {
@@ -160,11 +173,11 @@ func (rd *reader) valueDepth(vt uint32, depth int) (any, error) {
 		}
 		return b[0], nil
 	case vtU16, vtI16:
-		var b [2]byte
-		if err := rd.read(b[:]); err != nil {
+		b := rd.num[:2] // receiver scratch, as above
+		if err := rd.read(b); err != nil {
 			return nil, err
 		}
-		v := binary.LittleEndian.Uint16(b[:])
+		v := binary.LittleEndian.Uint16(b)
 		if vt == vtI16 {
 			return int16(v), nil
 		}
@@ -329,9 +342,46 @@ func parse(r io.Reader) (*parsed, error) {
 			return nil, fmt.Errorf("gguf: skip padding: %w", err)
 		}
 	}
-	data, err := io.ReadAll(rd.r)
-	if err != nil {
-		return nil, fmt.Errorf("gguf: read data: %w", err)
+	// The data section is sized from the tensor table rather than grown by io.ReadAll. ReadAll
+	// discovers the length by reallocating at about 1.25x, so a large section is allocated several
+	// times over and copied on each growth; the table already says exactly how far the last tensor
+	// reaches. This needs no Stat and no seekable reader — it is derived from bytes already parsed.
+	//
+	// A hostile or truncated file is handled BETTER by this form, not worse: io.ReadFull fails with
+	// ErrUnexpectedEOF naming the shortfall, where ReadAll would return a short section and leave
+	// decodeTensor to report the same file as a per-tensor range error later.
+	// maxPresizedSection bounds what a DECLARED size may make this function allocate. A table is
+	// untrusted input: without this, a file claiming a petabyte-long tensor turns a parse into an
+	// out-of-memory kill, and one claiming an offset near 2^64 overflowed the addition and panicked
+	// in makeslice — which is exactly what the hostile-offset test caught on the first draft here.
+	// Anything above the bound falls back to discovering the length by reading, which allocates
+	// only what the file actually contains and lets decodeTensor report the range error per tensor.
+	const maxPresizedSection = 1 << 40 // 1 TiB: larger than any real model, smaller than a DoS
+	var need uint64
+	for _, ti := range infos {
+		sz, err := byteSize(ti.ggType, ti.shape.Numel())
+		if err != nil {
+			return nil, fmt.Errorf("gguf: tensor %q: %w", ti.name, err)
+		}
+		if ti.offset > math.MaxUint64-uint64(sz) { // subtraction form: the sum would wrap (§B47)
+			need = 0
+			break
+		}
+		if end := ti.offset + uint64(sz); end > need { // offsets are validated per tensor at decode
+			need = end
+		}
+	}
+	var data []byte
+	if need == 0 || need > maxPresizedSection {
+		var err error
+		if data, err = io.ReadAll(rd.r); err != nil {
+			return nil, fmt.Errorf("gguf: read data: %w", err)
+		}
+	} else {
+		data = make([]byte, need)
+		if _, err := io.ReadFull(rd.r, data); err != nil {
+			return nil, fmt.Errorf("gguf: read data (%d bytes): %w", need, err)
+		}
 	}
 
 	return &parsed{version: version, meta: meta, infos: infos, data: data}, nil
@@ -405,6 +455,11 @@ type RawFile struct {
 // ReadRaw parses a GGUF stream KEEPING each tensor quantized (QuantTensor) — the inverse of the
 // eager dequantization Read does, so a quantized model can be loaded without ever materializing
 // full-precision weights.
+//
+// Each QuantTensor.Data is a READ-ONLY VIEW into one shared buffer holding the file's data section.
+// Writing through it corrupts other tensors, and retaining any tensor retains the whole section;
+// a caller that wants an independent tensor must copy the slice. This halves both the time and the
+// allocated bytes of a quantized load compared with copying each tensor out.
 func ReadRaw(r io.Reader) (*RawFile, error) {
 	p, err := parse(r)
 	if err != nil {
@@ -421,21 +476,36 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 			return nil, fmt.Errorf("gguf: tensor %q data [%d,+%d) beyond section %d",
 				ti.name, ti.offset, need, len(p.data))
 		}
-		raw := make([]byte, need)
-		copy(raw, p.data[ti.offset:ti.offset+uint64(need)])
+		// Data is a VIEW into the parse buffer, not a copy. Copying it cost a full model-size
+		// allocation and memmove on every load — half the time and half the bytes of ReadRaw
+		// (1002129 -> 504042 ns/op, 18950344 -> 9513152 B/op on a 64-tensor model).
+		//
+		// The contract that buys it, stated because callers depend on it: the bytes are READ-ONLY
+		// (writing through one tensor corrupts its neighbors, since they share one allocation), and
+		// retaining ANY tensor retains the whole section. For the ordinary case — load a model,
+		// keep all of it — that is strictly less memory than before, because the copies were on top
+		// of the buffer they came from. A caller that keeps one tensor and drops the rest should
+		// copy the slice itself.
+		raw := p.data[ti.offset : ti.offset+uint64(need) : ti.offset+uint64(need)]
 		out.Tensors[ti.name] = QuantTensor{Data: raw, GGType: ti.ggType, Shape: ti.shape}
 	}
 	return out, nil
 }
 
 // ReadFile parses a .gguf file.
+//
+// The file is handed to the parser through a large buffered reader. Without it every header field
+// is its own read syscall — a length, then the bytes, for every string — and a llama-family header
+// is dominated by the tokenizer arrays, so a 32k-token vocabulary costs on the order of 160k
+// syscalls before a single tensor is touched. That cost is constant in model size, which makes it
+// worst exactly where the model is small.
 func ReadFile(path string) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return Read(f)
+	return Read(bufio.NewReaderSize(f, 1<<20))
 }
 
 // decodeTensor extracts and (if needed) dequantizes one tensor from data.

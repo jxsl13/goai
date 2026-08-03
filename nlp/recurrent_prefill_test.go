@@ -509,6 +509,7 @@ var benchPrefillPrompt = func() []int {
 func BenchmarkMambaPrefillStepwise(b *testing.B) {
 	m := benchMamba(b)
 	ctx := backend.NewContext()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		st := m.NewDecodeState()
@@ -525,6 +526,7 @@ func BenchmarkMambaPrefillStepwise(b *testing.B) {
 func BenchmarkMambaPrefillBatched(b *testing.B) {
 	m := benchMamba(b)
 	ctx := backend.NewContext()
+	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
 		st := m.NewDecodeState()

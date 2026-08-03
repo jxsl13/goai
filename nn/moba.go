@@ -8,6 +8,13 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// mobaGate pairs a past block with its gate score. Named rather than declared inside the
+// query loop so one buffer can be reused across queries.
+type mobaGate struct {
+	block int
+	score float64
+}
+
 // MoBAAttention computes Mixture of Block Attention (Lu et al. 2025, Moonshot,
 // arXiv:2502.13189, §T557): the MoE principle applied to attention. Keys are
 // split into blocks of blockSize; per head and per query, each PAST block is
@@ -52,6 +59,16 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 			blockLen := make([]int, nBlocks)
 			qrow := make([]float64, dk)
 			scores := make([]float64, seq)
+			// THE SELECTED-BLOCK SET WAS A map[int]bool BUILT PER QUERY and probed once per key in
+			// the innermost loop — 5.4% of this benchmark sat in runtime.mapaccess1_fast64 alone,
+			// on top of a map allocation per query. The keys are block indices, dense in
+			// [0,nBlocks), so a slice is the natural container; stamping it with a generation
+			// counter makes the per-query reset free instead of an nBlocks clear.
+			selStamp := make([]int32, nBlocks)
+			var gen int32
+			// The gate slice was rebuilt per query too. One reused buffer holds the same values in
+			// the same order — it is refilled from scratch on every query.
+			gates := make([]mobaGate, 0, nBlocks)
 			for h := hlo; h < hhi; h++ {
 				off := h * dk
 				for b := range nBlocks {
@@ -73,11 +90,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					for d := range dk {
 						qrow[d] = qs[i*dm+off+d]
 					}
-					type gated struct {
-						block int
-						score float64
-					}
-					var gates []gated
+					gates = gates[:0]
 					for b := 0; b < cur; b++ {
 						pb := poolSum[b*dk : b*dk+dk : b*dk+dk]
 						bl := float64(blockLen[b])
@@ -85,12 +98,17 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 						for d := range dk {
 							sgate += qrow[d] * pb[d] / bl
 						}
-						gates = append(gates, gated{b, sgate})
+						gates = append(gates, mobaGate{b, sgate})
 					}
 					sort.Slice(gates, func(a, b int) bool { return gates[a].score > gates[b].score })
-					selected := map[int]bool{cur: true}
-					for gi := 0; gi < len(gates) && len(selected) < topK; gi++ {
-						selected[gates[gi].block] = true
+					gen++
+					selStamp[cur] = gen
+					nSel := 1
+					// The block indices in gates are distinct — b runs once over [0,cur) — so counting
+					// adds is exactly the map's len, which is what bounded this loop.
+					for gi := 0; gi < len(gates) && nSel < topK; gi++ {
+						selStamp[gates[gi].block] = gen
+						nSel++
 					}
 					m := math.Inf(-1)
 					// Score dot is a latency-bound serial reduction over d; jam two
@@ -99,7 +117,7 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 					// sums d ascending → bit-identical; max is order-free.
 					prev := -1
 					for j := 0; j <= i; j++ {
-						if !selected[j/blockSize] {
+						if selStamp[j/blockSize] != gen {
 							scores[j] = math.Inf(-1)
 							continue
 						}
@@ -157,9 +175,56 @@ func MoBAAttention(q, k, v *tensor.Tensor, heads, blockSize, topK int, scale flo
 						orow[d] = 0
 					}
 					if sum > 0 {
-						for j := 0; j <= i; j++ {
-							pj := scores[j] / sum
-							vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
+						// EIGHT KEYS PER PASS. orow does not vary with j, so the loop below loaded and
+						// stored the whole output row once per attended key for a single multiply-add each;
+						// eight keys at a time hold orow[d] in a register across eight of them. Widths 6 and
+						// 8 measure the same (7.45 vs 7.44 ms) and 2 leaves half the win on the table (8.35).
+						//
+						// BIT-IDENTICAL: each orow[d] still sums j ascending, and the accumulator is an
+						// EXPLICIT LOCAL — a compound assignment would add the SUM of the eight products,
+						// which associates differently (T1183). Every width from 2 to 8 leaves the digests
+						// unchanged, which is what says the association is right.
+						//
+						// SKIPPING THE UNSELECTED KEYS WAS TRIED AND IS WORSE. Most j are outside the top-K
+						// blocks, so their score is -Inf, their softmax weight is exactly +0, and the d loop
+						// adds nothing — but a per-key branch instead of this jam measured 8.46 ms against
+						// 7.44. It would not be equivalent either: 0 times an infinite or NaN value is NaN,
+						// not zero, so a v with a non-finite entry would get a different answer, and the
+						// digests cannot see that because ordinary data has no infinities.
+						jj := 0
+						for ; jj+7 <= i; jj += 8 {
+							p0 := scores[jj+0] / sum
+							p1 := scores[jj+1] / sum
+							p2 := scores[jj+2] / sum
+							p3 := scores[jj+3] / sum
+							p4 := scores[jj+4] / sum
+							p5 := scores[jj+5] / sum
+							p6 := scores[jj+6] / sum
+							p7 := scores[jj+7] / sum
+							v0 := vs[(jj+0)*dm+off : (jj+0)*dm+off+dk]
+							v1 := vs[(jj+1)*dm+off : (jj+1)*dm+off+dk]
+							v2 := vs[(jj+2)*dm+off : (jj+2)*dm+off+dk]
+							v3 := vs[(jj+3)*dm+off : (jj+3)*dm+off+dk]
+							v4 := vs[(jj+4)*dm+off : (jj+4)*dm+off+dk]
+							v5 := vs[(jj+5)*dm+off : (jj+5)*dm+off+dk]
+							v6 := vs[(jj+6)*dm+off : (jj+6)*dm+off+dk]
+							v7 := vs[(jj+7)*dm+off : (jj+7)*dm+off+dk]
+							for d := range dk {
+								a := orow[d]
+								a += p0 * v0[d]
+								a += p1 * v1[d]
+								a += p2 * v2[d]
+								a += p3 * v3[d]
+								a += p4 * v4[d]
+								a += p5 * v5[d]
+								a += p6 * v6[d]
+								a += p7 * v7[d]
+								orow[d] = a
+							}
+						}
+						for ; jj <= i; jj++ {
+							pj := scores[jj] / sum
+							vrow := vs[jj*dm+off : jj*dm+off+dk : jj*dm+off+dk]
 							for d := range dk {
 								orow[d] += pj * vrow[d]
 							}

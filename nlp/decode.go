@@ -107,25 +107,25 @@ func (m *MHA) StepKV(ctx *backend.Context, h, kc, vc *tensor.Tensor) (out, kNew,
 type kvAppend func(kt, vt *tensor.Tensor) (kNew, vNew *tensor.Tensor)
 
 func (m *MHA) stepKV(ctx *backend.Context, h *tensor.Tensor, appendRows kvAppend) (out, kNew, vNew *tensor.Tensor, err error) {
-	q, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wq)
+	q, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wq)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	kt, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wk)
+	kt, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wk)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	vt, err := m.exec(ctx, backend.OpMatMul, nil, h, m.Wv)
+	vt, err := exec2(ctx, backend.OpMatMul, nil, h, m.Wv)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	kNew, vNew = appendRows(kt, vt)
 	// single query at the last position attends to all cached keys → no mask
-	attn, err := m.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
+	attn, err := exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: false}, q, kNew, vNew)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	out, err = m.exec(ctx, backend.OpMatMul, nil, attn, m.Wo)
+	out, err = exec2(ctx, backend.OpMatMul, nil, attn, m.Wo)
 	return out, kNew, vNew, err
 }
 
@@ -204,34 +204,34 @@ func (g *GPT) DecodeStep(ctx *backend.Context, cache *KVCache, token, pos int) (
 			return nil, err
 		}
 		cache.K[l], cache.V[l] = kNew, vNew
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, attnOut); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, attnOut); err != nil {
 			return nil, err
 		}
 		h, err = b.LN2.Forward(ctx, x)
 		if err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
+		if h, err = exec1a(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
+		if h, err = exec2(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
 			return nil, err
 		}
-		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
+		if h, err = exec2(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
-		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
+		if x, err = exec2(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
 	}
 	if x, err = g.LNf.Forward(ctx, x); err != nil {
 		return nil, err
 	}
-	return exec1(ctx, backend.OpMatMul, nil, x, g.Head)
+	return exec2(ctx, backend.OpMatMul, nil, x, g.Head)
 }

@@ -5,6 +5,7 @@ import (
 	"math"
 	"runtime"
 	"sync"
+	"sync/atomic"
 )
 
 // ForestOption configures a [RandomForestClassifier] or [RandomForestRegressor]
@@ -147,7 +148,17 @@ func (m *RandomForestClassifier) Fit(x [][]float64, y []int) error {
 
 	m.trees = make([]*DecisionTreeClassifier, nt)
 	if err := parallelBuild(nt, func(t int) error {
-		bx, by := gatherInt(x, y, samples[t])
+		// RECYCLE THE GATHER BUFFERS ACROSS TREES. Every tree materialized its own row-pointer
+		// slice and label copy — two allocations the size of the training set, once per tree,
+		// and together they were the largest single source of bytes in a forest fit.
+		//
+		// SAFE BECAUSE THE TREE KEEPS NEITHER: fitWithSeed stores only the fitted root, the
+		// class set and the feature count, and the builder that holds x and y dies with the
+		// call. Both buffers are fully overwritten before they are read, so a recycled one
+		// carries nothing forward.
+		gb := gatherPool.Get().(*gatherBuf)
+		defer gatherPool.Put(gb)
+		bx, by := gb.take(x, y, samples[t])
 		tree := NewDecisionTreeClassifier(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
@@ -238,18 +249,25 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 		}
 		return out, nil
 	}
-	csz := (len(x) + nw - 1) / nw
-	_ = parallelBuild(nw, func(c int) error {
-		lo := c * csz
-		hi := lo + csz
-		if hi > len(x) {
-			hi = len(x)
-		}
+	// Rows are CLAIMED in blocks, not dealt one equal chunk per worker. The GOMAXPROCS screen this
+	// change was made under is what selected it: this benchmark got SLOWER from 8 to 12 cores
+	// (139273 -> 165529 ns/op), the signature PS3011 names for efficiency-core imbalance, where a
+	// chunk landing on an E core sets the barrier. The scratch stays PER WORKER, allocated once
+	// outside the claim loop, so claiming costs nothing per claim.
+	const grain = 64
+	var next atomic.Int64
+	_ = parallelBuild(nw, func(int) error {
 		votes := make([]int, len(m.classes)) // per-worker scratch
-		for i := lo; i < hi; i++ {
-			predictRow(votes, i)
+		for {
+			lo := int(next.Add(grain)) - grain
+			if lo >= len(x) {
+				return nil
+			}
+			hi := min(lo+grain, len(x))
+			for i := lo; i < hi; i++ {
+				predictRow(votes, i)
+			}
 		}
-		return nil
 	})
 	return out, nil
 }
@@ -295,7 +313,11 @@ func (m *RandomForestRegressor) Fit(x [][]float64, y []float64) error {
 
 	m.trees = make([]*DecisionTreeRegressor, nt)
 	if err := parallelBuild(nt, func(t int) error {
-		bx, by := gatherFloat(x, y, samples[t])
+		// The regressor's trees recycle the same way, for the same reason and under the same
+		// retention argument as the classifier's above.
+		gb := gatherPool.Get().(*gatherBuf)
+		defer gatherPool.Put(gb)
+		bx, by := gb.takeFloat(x, y, samples[t])
 		tree := NewDecisionTreeRegressor(
 			WithMaxDepth(m.cfg.tree.maxDepth),
 			WithMinSamplesSplit(m.cfg.tree.minSamplesSplit),
@@ -399,24 +421,45 @@ func parallelBuild(n int, work func(t int) error) error {
 	if workers < 1 {
 		workers = 1
 	}
-	jobs := make(chan int)
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
 		firstErr error
 	)
+	run := func(t int) {
+		if err := work(t); err != nil {
+			mu.Lock()
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+	}
+	// NO QUEUE WHEN THERE IS NOTHING TO QUEUE. The channel below exists so more jobs than
+	// workers can be handed out one at a time, and it is pure cost when n <= workers — which is
+	// how the tree builders use this helper: they call it with exactly one job per chunk, once
+	// per NODE, thousands of times per fit. An unbuffered send is a rendezvous, so that path
+	// paid two handoffs per job on top of the goroutine. A GBM fit spent 95.6% of its profile
+	// samples in pthread_cond_wait, pthread_cond_signal and usleep against 1.75% in the split
+	// scan itself.
+	if n <= workers {
+		for t := 0; t < n; t++ {
+			wg.Add(1)
+			go func(t int) {
+				defer wg.Done()
+				run(t)
+			}(t)
+		}
+		wg.Wait()
+		return firstErr
+	}
+	jobs := make(chan int)
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for t := range jobs {
-				if err := work(t); err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
-				}
+				run(t)
 			}
 		}()
 	}
@@ -437,9 +480,52 @@ func seedState(seed int64) uint64 {
 	return s
 }
 
+// gatherBuf is one tree's row-pointer and label scratch, recycled across trees.
+type gatherBuf struct {
+	bx  [][]float64
+	by  []int
+	byf []float64
+}
+
+var gatherPool = sync.Pool{New: func() any { return &gatherBuf{} }}
+
+// take fills the buffer with the rows idx selects and returns views of exactly that length.
+// Both slices are written at every position, so nothing survives from the previous tree.
+func (g *gatherBuf) take(x [][]float64, y []int, idx []int) ([][]float64, []int) {
+	if cap(g.bx) < len(idx) {
+		g.bx = make([][]float64, len(idx))
+	}
+	if cap(g.by) < len(idx) {
+		g.by = make([]int, len(idx))
+	}
+	bx, by := g.bx[:len(idx)], g.by[:len(idx)]
+	for i, j := range idx {
+		bx[i] = x[j]
+		by[i] = y[j]
+	}
+	return bx, by
+}
+
 func gatherInt(x [][]float64, y []int, idx []int) ([][]float64, []int) {
 	bx := make([][]float64, len(idx))
 	by := make([]int, len(idx))
+	for i, j := range idx {
+		bx[i] = x[j]
+		by[i] = y[j]
+	}
+	return bx, by
+}
+
+// takeFloat is take for a float target. It keeps its own label buffer rather than reinterpreting
+// the integer one, so a buffer recycled between a classifier and a regressor cannot alias.
+func (g *gatherBuf) takeFloat(x [][]float64, y []float64, idx []int) ([][]float64, []float64) {
+	if cap(g.bx) < len(idx) {
+		g.bx = make([][]float64, len(idx))
+	}
+	if cap(g.byf) < len(idx) {
+		g.byf = make([]float64, len(idx))
+	}
+	bx, by := g.bx[:len(idx)], g.byf[:len(idx)]
 	for i, j := range idx {
 		bx[i] = x[j]
 		by[i] = y[j]
