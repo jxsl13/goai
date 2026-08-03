@@ -192,3 +192,57 @@ shape of the fix; a pool cannot be bolted on underneath the current contract.
 Recorded so the next allocation sweep does not re-derive it: on this tree the
 allocation axis for `nn` and `backend/cpu` ends at the op API, and the pooling
 opportunities BELOW it are already taken.
+
+## The WKV recurrence: `math.Max` in the innermost position (T1181)
+
+WKV's numerically-stable scan takes a running maximum twice per token per
+channel — the innermost position there is. Moving those onto `internal/fmath`
+(see `perf-notes-ref.md` for why the builtins are not a drop-in) measured:
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `nn.BenchmarkWKV` | 17.71 ms | 15.28 ms | **−13.7%** |
+| `cpu.BenchmarkWKVF32_512x1024` | 3.273 ms | 2.688 ms | **−17.9%** |
+| `cpu.BenchmarkWKV_512x1024` (F64) | 3.275 ms | 3.211 ms | −2.0% |
+
+The −13.7% lands almost exactly on `math.archMax`'s 13.1% share of the `nn.WKV`
+profile.
+
+### The F64 arm is flat for a structural reason, not a measurement one
+
+`cpu`'s F64 path dispatches into `simd.WKVScanRangeF64`. The `math.Max` calls
+visible in `backend/cpu/wkv.go`'s F64 region are in the **exotic-dtype
+fallback**, which no registered dtype reaches. The F32 arm is Go, and it moved.
+
+Rank a candidate by which arm the benchmark actually executes, not by which
+file the call is written in.
+
+### Rejected: the SVM solver
+
+`classic/svm.go` has eight of these calls in its working-set loops. Converted,
+`BenchmarkSVCFit/n4000_rbf` measured 6.11 → 6.27 ms — slightly **worse** — and
+`SVCPredict` was flat at 600 µs. Its profile is dominated by
+`pthread_cond_wait`/`signal`: the fit is parallel and the scalar loop is not
+what it is waiting on. Reverted.
+
+### Unmeasured, and kept anyway
+
+`nlp/rwkv_decode.go` and `nn/rwkv_block.go` carry the same recurrence in
+single-token decode form. There is no decode benchmark in the tree, so these two
+are converted on the strength of the measured twin rather than on their own
+number. The arithmetic is identical and `fmath` is bit-identical to `math`, so
+the only open question was speed, which the twin answers.
+
+### What the gate proves, and what it does not
+
+`nn/wkv_minmax_bitidentity_test.go` freezes five digests, two of them with
+`+Inf`, `-Inf` and `NaN` planted in the same channel. Those hostile cases do
+**not** distinguish `math.Max` from the raw builtin here: WKV carries the
+running maximum forward, so the one pairing the two disagree on turns the
+channel's state to `NaN` either way within the same step. A raw-builtin mutation
+of all six sites leaves every digest unchanged.
+
+The equivalence therefore rests on `internal/fmath`'s own exhaustive pair test.
+These digests catch a **mis-edit** — substituting `Min` for `Max` at one site
+reddens three of the five cases — and the infinities keep the branch-skipping
+equality tests around the max exercised rather than only its ordinary path.

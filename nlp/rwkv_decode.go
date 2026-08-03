@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -180,10 +181,10 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 		for c := range dim {
 			kk, vv := kR[t][c], vR[t][c]
 			ww := ucs[c] + kk
-			q := math.Max(st.PP[c], ww)
+			q := fmath.Max(st.PP[c], ww)
 			e1, e2 := math.Exp(st.PP[c]-q), math.Exp(ww-q)
 			wkv.SetF64((e1*st.AA[c]+e2*vv)/(e1*st.BB[c]+e2), t, c)
-			q = math.Max(st.PP[c]-wcs[c], kk)
+			q = fmath.Max(st.PP[c]-wcs[c], kk)
 			e1, e2 = math.Exp(st.PP[c]-wcs[c]-q), math.Exp(kk-q)
 			st.AA[c] = e1*st.AA[c] + e2*vv
 			st.BB[c] = e1*st.BB[c] + e2

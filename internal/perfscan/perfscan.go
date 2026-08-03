@@ -19324,7 +19324,15 @@ func minMaxCallInLoopFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 					" against a 256-token inner loop). IT DOES NOT BEAT AN EXISTING COMPARISON"+
 					" CHAIN: converting the PPO VJP's chain to fmath went 51.8 to 58.6 us, +13%%,"+
 					" and was reverted — this replaces CALLS, not branchless code, so rank a"+
-					" site by whether the call is still there. GATE IT ON ONE PLANTED VALUE PER"+
+					" site by whether the call is still there. CHECK WHICH ARM THE BENCHMARK"+
+					" ACTUALLY TAKES: the cpu WKV kernel's F64 path dispatches into SIMD"+
+					" assembly, so its Go-level max sits in a dead exotic-dtype fallback and the"+
+					" F64 benchmark measured flat while the F32 arm, which is Go, measured"+
+					" -17.9%%; the same recurrence in nn measured -13.7%% against an archMax"+
+					" profile share of 13.1%%. AND A SITE IN A PARALLEL SOLVER MAY BE INVISIBLE:"+
+					" the SVM fit was converted at eight sites and measured 6.11 to 6.27 ms,"+
+					" slightly WORSE, because its profile is dominated by scheduler wait — that"+
+					" one was reverted. GATE IT ON ONE PLANTED VALUE PER"+
 					" CALL: a kernel that reduces to a scalar CANNOT see the divergence, because"+
 					" one NaN poisons the sum and both formulations then agree on NaN — a"+
 					" whole-grid batch was green under the naive rewrite this check exists to"+

@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -63,10 +64,10 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 		for t := range seq {
 			kk, vv := k.AtF64(t, c), v.AtF64(t, c)
 			ww := uc + kk
-			q := math.Max(pp, ww)
+			q := fmath.Max(pp, ww)
 			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
 			out.SetF64((e1*aa+e2*vv)/(e1*bb+e2), t, c)
-			q = math.Max(pp-wc, kk)
+			q = fmath.Max(pp-wc, kk)
 			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
 			aa = e1*aa + e2*vv
 			bb = e1*bb + e2
@@ -115,10 +116,10 @@ func wkvScanRangeF32(k, v, w, u, out []float32, seq, d, cLo, cHi int) {
 		for t := 0; t < seq; t++ {
 			kk, vv := float64(k[t*d+c]), float64(v[t*d+c])
 			ww := uc + kk
-			q := math.Max(pp, ww)
+			q := fmath.Max(pp, ww)
 			e1, e2 := math.Exp(pp-q), math.Exp(ww-q)
 			out[t*d+c] = float32((e1*aa + e2*vv) / (e1*bb + e2))
-			q = math.Max(pp-wc, kk)
+			q = fmath.Max(pp-wc, kk)
 			e1, e2 = math.Exp(pp-wc-q), math.Exp(kk-q)
 			aa = e1*aa + e2*vv
 			bb = e1*bb + e2
