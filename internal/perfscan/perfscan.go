@@ -224,6 +224,7 @@ var checks = []check{
 	{"PS3064", "jagged-matrix-allocated-row-by-row", "a [][]T allocated as one outer slice and then one make() per ROW, so an r-by-c matrix costs r+1 allocations and its rows land wherever the heap puts them. Back the rows with ONE block and window into it — d[i] = base[i*c:(i+1)*c:(i+1)*c] — and the call sites do not change at all, because the type does not. MEASURED across the three autograd factorization adjoints: allocations per call fell 1886 to 356 on the eigendecomposition, 1762 to 491 on the SVD and 1447 to 429 on the QR, a 70 to 81%% cut. THE CLOCK IS THE SMALLER HALF AND IS SHAPE-DEPENDENT: SVD -8.6%%, eigh -5.4%%, QR flat, with an untouched sibling adjoint flat as a control. Report it as a resource win and let the time be a bonus. CAP THE ROW WINDOW at its own length so an append copies instead of reaching into the next row — nothing in the converted code appends, and the cap is what keeps that from mattering later", false},
 	{"PS3065", "serial-loop-over-an-expensive-call", "a SINGLE loop — no inner loop of its own — that writes an indexed destination from a call to a function which itself loops, in a package that declares a fan-out helper this function never calls. Every nest-based check misses this: PS3034, PS3059 and PS3063 all require depth 2 or more, and a loop whose per-item work lives inside a CALLEE has depth 1 however expensive it is. MEASURED on the RBF kernel cache, where a column is n independent kernel evaluations: BenchmarkSVCFit/n4000_rbf 6.99 to 5.48 ms, -21.5%%, with the GBM fit flat as a control. The fit had scaled at 1.02x on twelve cores before this. BIT-IDENTICAL — each entry performs exactly the arithmetic it did before and only which goroutine performs it moves. EXPECT AMDAHL, NOT THE CORE COUNT: the parallelized part was 40.6%% of a serial profile, so 6x on it is 1.27x overall, and the SMO iteration it feeds is sequential by construction", false},
 	{"PS3066", "consecutive-loops-over-one-buffer", "three or more sibling loops in one block, all over the same bound, all indexing the same buffer — each streams the whole thing and evicts it before the next one starts. If every index is independent ACROSS the loops, merge them: the buffer is then touched once and stays in cache through all the stages. MEASURED on the Kimi delta-attention step, whose four per-step passes over the dv-by-dk state (scale, S dot k, the rank-1 delta write, S dot q) became one: BenchmarkKDA_F64_256x128 8.71 to 7.33 ms, -15.9%%. BIT-IDENTICAL because merging changes only WHEN a row is visited, never how — each row's stages already ran in that order relative to each other. THE WIN IS THE STATE SIZE, NOT THE LOOP COUNT: the same merge on a 64-by-64 state, 32 KB and already L1-resident, measured -1.8%%. Check for a cross-index dependency first — a later loop that needs ALL of an earlier loop's output cannot merge", false},
+	{"PS3067", "sequential-outer-with-an-independent-inner-loop", "a nest whose OUTER loop carries a dependence and whose inner loop is independent — every write in it indexed by the inner variable, none by the outer. Banding the inner loop where it is pays one fork per OUTER step, which has now failed on fork count four times; INTERCHANGE FIRST so the independent index is outermost, then band it once. PS3040 describes the same nest and recommends splitting the inner loop in place, which is right for a factorization whose inner work SHRINKS as the outer index advances and wrong when the inner extent is constant. MEASURED TWICE on constant-extent sweeps: the SparseGPT pruner went 52.27 to 41.83 ms (-20.0%%) and the GPTQ quantizer 55.18 to 44.34 ms (-19.6%%), both with an untouched sibling flat as a control. BIT-IDENTICAL, because the rows do not observe each other and within a row the outer index is still visited in order. TWO THINGS TO CHECK. Any scratch the body reuses must become PER WORKER — a shared sort buffer reddened both the digest and -race. And a CALLER-SUPPLIED CALLBACK invoked inside the nest is now called concurrently: GPTQ's quantizer is a pure function of one value, but that had to become a documented requirement on the exported API rather than an implementation detail", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1364,6 +1365,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, jaggedMatrixFindings(fset, fn)...)
 		out = append(out, serialLoopOverCallFindings(fset, f, fn)...)
 		out = append(out, consecutiveLoopFindings(fset, fn)...)
+		out = append(out, interchangeBeforeBandFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18441,6 +18443,127 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3067: a sequential outer loop with an independent inner one ---------------------------
+
+// interchangeBeforeBandFindings flags PS3067 — a nest whose outer loop carries a dependence and
+// whose inner loop is independent, where the fix is to INTERCHANGE and band the outer position
+// rather than to split the inner loop where it stands.
+//
+// This is PS3040's nest seen from the other side. That check is right for a factorization,
+// whose inner extent shrinks as the outer index advances so the rows really must be split per
+// pivot; it is wrong for a sweep whose inner extent is CONSTANT, where interchanging turns one
+// fork per outer step into one fork per call. The two are told apart here by whether the inner
+// loop's bound mentions the outer variable.
+func interchangeBeforeBandFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := fanoutReg[f.Name.Name]
+	if callsFanoutHelper(fn.Body, reg) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		outer, ov := outerLoop(n)
+		if outer == nil || ov == "" || ov == "_" || loopDepthOf(outer) < 1 {
+			return true
+		}
+		if loopSpansAParameterRange(n, declaredParamNames(fn)) {
+			return false
+		}
+		for _, st := range outer.List {
+			mid, mv := outerLoop(st)
+			if mid == nil || mv == "" || mv == "_" || mv == ov {
+				continue
+			}
+			// THE INDEPENDENT LOOP MUST CARRY REAL WORK — a loop of its own inside it. Without
+			// this the check reported 210 sites tree-wide, nearly all of them ordinary
+			// elementwise inner loops where an interchange buys nothing and the fork gate would
+			// keep them serial anyway. Both measured cases have a compensation loop inside.
+			if loopDepthOf(mid) < 1 {
+				continue
+			}
+			// CONSTANT INNER EXTENT is what separates this from PS3040. The shrink lives in
+			// the INIT as often as in the bound — for i := k+1; i < n; i++ has a bound of n and
+			// is still a triangle — so both are tested.
+			if fs, ok := st.(*ast.ForStmt); ok {
+				if (fs.Init != nil && stmtMentions(fs.Init, ov)) ||
+					(fs.Cond != nil && exprMentions(fs.Cond, ov)) {
+					continue
+				}
+			}
+			ok, dst := true, ""
+			ast.Inspect(mid, func(m ast.Node) bool {
+				as, aok := m.(*ast.AssignStmt)
+				if !aok {
+					return true
+				}
+				for _, lhs := range as.Lhs {
+					ix, iok := unparen(lhs).(*ast.IndexExpr)
+					if !iok {
+						continue
+					}
+					// A JAGGED WRITE HAS TWO INDICES and the owning one is the INNER one:
+					// wm[r][j] parses as (wm[r])[j], so testing only the outer index asks
+					// whether j names the row variable and always answers no. Walk the chain.
+					base, idxs := ix.X, []ast.Expr{ix.Index}
+					for {
+						inner, more := unparen(base).(*ast.IndexExpr)
+						if !more {
+							break
+						}
+						idxs = append(idxs, inner.Index)
+						base = inner.X
+					}
+					owned := false
+					for _, e := range idxs {
+						if mentionsIdent(e, ov) {
+							ok = false
+						}
+						if mentionsIdent(e, mv) {
+							owned = true
+						}
+					}
+					if !owned {
+						ok = false
+						continue
+					}
+					if dst == "" {
+						dst = exprText(base)
+					}
+				}
+				return true
+			})
+			if !ok || dst == "" {
+				continue
+			}
+			out = append(out, finding{
+				pos:      fset.Position(st.Pos()),
+				category: "sequential-outer-with-an-independent-inner-loop",
+				msg: fmt.Sprintf("the loop over %q is independent — every indexed write in it,"+
+					" including into %q, names %q and none names the enclosing %q — while the"+
+					" loop over %q carries a dependence. Banding %q WHERE IT STANDS pays one"+
+					" fork per %q step, which has failed on fork count four times in this"+
+					" repository. INTERCHANGE FIRST so %q is outermost, then band it once per"+
+					" call. PS3040 describes the same nest and recommends the in-place split;"+
+					" that is right for a factorization, whose inner extent SHRINKS as the outer"+
+					" index advances, and wrong here, where the inner extent is constant."+
+					" MEASURED TWICE: the SparseGPT pruner went 52.27 to 41.83 ms (-20.0%%) and"+
+					" the GPTQ quantizer 55.18 to 44.34 ms (-19.6%%), both bit-identical with an"+
+					" untouched sibling flat as a control. TWO THINGS TO CHECK: any scratch the"+
+					" body reuses must become PER WORKER, since a shared sort buffer reddened"+
+					" both the digest and -race; and a CALLER-SUPPLIED CALLBACK inside the nest"+
+					" is now called concurrently, which had to become a documented requirement"+
+					" on GPTQ's exported API rather than an implementation detail",
+					mv, dst, mv, ov, ov, mv, ov, mv),
+			})
+			return false
+		}
+		return true
+	})
+	return out
 }
 
 // --- PS3066: consecutive loops that each stream one buffer -----------------------------------
