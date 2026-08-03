@@ -18558,7 +18558,16 @@ func sharedThresholdFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl)
 				" model-behavior change until the constants were split. Split, both are free:"+
 				" ForestFit -16.6%%, GBMFit flat, BOTH digests unchanged. SPLIT FIRST, THEN"+
 				" SWEEP — a sweep of a shared constant measures the sum of two answers and finds"+
-				" neither", id.Name, len(uses), strings.Join(quantities, ", "), len(fns)),
+				" neither."+
+				" TRIAGE BEFORE SPLITTING, because two false-positive classes account for every"+
+				" candidate this check found in its own repository. FIRST, IS IT A KNOB AT ALL:"+
+				" a numeric guard — an underflow floor reused on two different quantities — is a"+
+				" CORRECTNESS bound, and splitting it buys nothing and risks the invariant."+
+				" SECOND, IS THE CROSSOVER BENCHMARKED: a size gate at 16 whose only benchmarks"+
+				" run at 512 and 1024 cannot be swept at all, and a value nothing measures is"+
+				" not a tuning opportunity but an unfalsifiable constant. Add a cell in the"+
+				" crossover region or leave it alone; do not split on the shape alone",
+				id.Name, len(uses), strings.Join(quantities, ", "), len(fns)),
 		})
 		return true
 	})
