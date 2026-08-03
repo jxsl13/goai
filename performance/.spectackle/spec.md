@@ -56,3 +56,6 @@ WHEN a profile shows most time in pthread_cond_wait, the optimizer SHALL peeks i
 
 ## THE-BAND-GEMM-HOLDS-C-ACROSS-TWO-B-ROWS-001
 The cpu band GEMM SHALL holds each destination element in a register across TWO source rows in its 4x4 block and FOUR in its single-row tail, adding contributions separately to stay bit-identical; the transform took matmul 35 to 37 percent, conv 21, multi-token attention 28 and 3 vision forwards 17 to 21.
+
+## A-WHOLE-OUTPUT-PASS-BELONGS-INSIDE-THE-BAND-001
+WHEN a parallel op finishes with an elementwise pass over its whole output, the optimizer SHALL moves that pass inside the fan-out callback so each band converts its own rows; it is disjoint and bit-identical because nothing accumulates, and folding the f32 matmul narrowing took 3 batched vision forwards down 4.7 to 7.6 percent.
