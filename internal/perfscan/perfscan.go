@@ -213,6 +213,7 @@ var checks = []check{
 	{"PS3005", "indirect-key-comparator", "a sort of an index slice whose comparator dereferences the sorted element into a 2-D structure — hoist the key into a flat column first", false},
 	{"PS3007", "set-map-from-slice", "a membership SET (map[K]bool / map[K]struct{}) built by ranging a slice and then probed inside a loop. PS3003 excludes set-shaped maps because a sparse set is not the dense [0,N) lookup a slice would replace — true of DENSIFICATION, but this is a different transform: when the set's contents come from a slice the caller already owns, the fix is no map at all. MEASURED: nlp applyDRY hashed its sequence-breaker set once per window position, with runtime.mapaccess1_fast64 at 1.14s of the function's 1.99s cumulative (57%% of its own time); scanning DRYBreakers directly took BenchmarkApplyDRY 19.52us to 15.87us, -18.72%% at p=0.002 (n=6, interleaved, both arm orders), allocations unchanged, and mapaccess1_fast64 left the profile. The same measurement bounds the transform: forced onto each arm the crossover is 8-16 elements on an M2 Pro, so this is a SMALL-SET fix and large sets should keep the map. Silent on a set written after its build loop (a mutable working set genuinely needs a map) and on a build already guarded by a size THRESHOLD on the source, which is code that has taken this advice already — but NOT on an emptiness guard (len(src) > 0), whose branch is the only path rather than a fallback. Hotness is not visible to the AST: confirm the source is small and the probe repeats, then benchmark", false},
 	{"PS3008", "monotone-bail-per-element", "a loop accumulating a provably NON-NEGATIVE term (x*x with identical operands, math.Abs, math.Hypot, or a sum of those) into a scalar that is tested against a threshold on EVERY iteration. The accumulator never decreases, so once it passes the threshold it stays past it: testing every 4th iteration returns the SAME answer and removes a data-dependent branch the predictor cannot learn. MEASURED on classic ballTree.within, the leaf test DBSCAN runs per candidate pair, where a line-level profile put the branch at 450ms against 30ms for the subtraction and square it guarded — checking every 4th dimension gave BenchmarkDBSCANFit -17.41%% at eps=2 (p=0.000) and -8.51%% at eps=4 (p=0.010), geomean -13.07%%, allocations unchanged, exact-label goldens green. The non-negativity is the CORRECTNESS condition and is required syntactically, since a signed term can dip back under the threshold and moving its test would change the answer. Keep one accumulator in the same order so the sum stays bit-identical, and end the scalar tail with !(acc > thr) rather than acc <= thr — with a NaN term the original never bailed and returned its not-exceeded answer, and <= flips it. Silent once the loop strides by more than 1, which is the applied form. Hotness is not visible: benchmark the enclosing operation before restructuring a cold bail-out", false},
+	{"PS3052", "staged-matrix-reduced-against-one-column", "a buffer filled by one call and consumed by the very next, where the consumer output width is a variable the function never branches on. At width one the staged buffer exists only to be reduced against a SINGLE vector — every value written once and read once, when it could have come straight from the source. ADD A FUSED PATH FOR WIDTH ONE, visiting the same elements in the same order into one accumulator. MEASURED on conv2d, whose im2col matrix writes c*kh*kw values per output pixel: with one output filter the fill was 12.7%% of a multi-token-attention forward against 6.7%% for the GEMM it fed, and fusing took a 256x256 3x3 single-filter convolution down 22.1%% and the forward 3.6%%. MIND THE ZEROS THE STAGING HOLDS — conv2d columns carry zeros for padded taps and the GEMM adds them, so the fused path is exact only without padding; gate on that and test BOTH sides. THE GAIN IS IN THE SHORT KERNELS: 22.1%% at 3x3 against 4.3%% at 6x11, where the staged read was already long enough to amortize", false},
 	{"PS3051", "blocked-kernel-without-a-degenerate-shape-guard", "a kernel that BLOCKS one dimension while iterating another innermost, with nothing special-cased for that inner dimension being 1. At width one the innermost loop runs a single iteration, so the block pays all its slicing and loop machinery to move one element per pass and the accumulators sit in memory when they would fit in registers. ADD THE DEGENERATE PATH: same blocking, accumulators held as SCALARS across the whole reduction, stored once — bit-identical, since each still takes its terms in the same order. MEASURED on the CPU band GEMM, which a conv2d with one output filter reaches as n == 1: a 2048-square matrix-vector product fell 23.4%% in f64 and 36.7%% in f32, the conv-shaped 262144x66 case 17.7%%, the attention forward 6.3%%. MEASURE THE OBVIOUS FORM TOO AND EXPECT IT TO LOSE: a plain per-row dot was tried first and was slightly WORSE than the block it replaced, because the block amortizes its loop over four rows — the win is the registers, not the simpler loop", false},
 	{"PS3050", "serial-tail-after-fanout", "a fan-out call followed, in the same function, by a serial elementwise pass over a whole buffer the bands already own. Every worker finishes and then one goroutine walks the entire output again — an Amdahl term that grows with the output rather than with the work. FOLD IT INTO THE BAND: each band owns rows [lo,hi), so doing its own slice there is disjoint, elementwise and BIT-IDENTICAL, because nothing accumulates. MEASURED on the portable f32 matmul, which accumulates into an f64 scratch and narrowed the whole result afterwards: the tail was 6.4%% of a batched vision forward at one worker, and folding it took three of those forwards down 4.7%% to 7.6%% with the f64 matmul beside them flat. GATE IT ON A SENTINEL — pre-fill the output with a value the correct result cannot produce, so a band that narrows the wrong range shows as an untouched cell", false},
 	{"PS3049", "axpy-reloads-its-destination", "a nest whose inner loop accumulates into a destination the OUTER loop does not choose, from operands that move with it. Every outer iteration reads and writes the whole destination again, so each element carries a load-modify-store chain through memory once per outer step. UNROLL THE OUTER LOOP AND HOLD THE RUNNING VALUE: FOUR outer steps per pass, load the element once, add each contribution, store once. Four is measured, not as many as fit: 1, 4 and 8 steps per pass on the decode kernel came to 823 ms, 682 ms and 937 ms. THE INNER PASS MUST BE LONG, because the extra scalars and row bases are set up once per pass — the identical transform on an attention value accumulation of one head width cost 6 to 9%% on three attention cells and was reverted. ADD THEM ONE AT A TIME, NOT AS A SUM — v += a0*x0; v += a1*x1 keeps the ascending accumulation order and is BIT-IDENTICAL, while summing the products first reassociates. MEASURED on the decode matrix-vector kernel, 46.6%% of a generate loop serial profile: four rows per pass took BenchmarkGPTGenerate500RowBuf down 12.6%%, CLA decode 10.8%%, T5 decode 13.5%% and the Llama prompt 26.7%%, with the blocked matmul cells untouched. TEST THE REMAINDER AND A NON-ZERO WINDOW: an unrolled body that rebuilds its source offsets from the loop variable alone agrees with the original on a full-width call and on nothing else", false},
@@ -1320,6 +1321,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, axpyReloadFindings(fset, fn)...)
 		out = append(out, serialTailAfterFanoutFindings(fset, f, fn)...)
 		out = append(out, degenerateShapeGuardFindings(fset, fn)...)
+		out = append(out, stagedSingleColumnFindings(fset, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -17731,6 +17733,109 @@ func degenerateShapeGuardFindings(fset *token.FileSet, fn *ast.FuncDecl) []findi
 				" WORSE than the block it replaced, because the block amortizes its loop over four"+
 				" rows at once — the win comes from the registers, not from the simpler loop",
 				dim, dim),
+		})
+		return false
+	})
+	return out
+}
+
+// --- PS3052: a staged matrix reduced against a single column ----------------------------------
+
+// stagedThenReduced returns the buffer two consecutive calls share — the first filling it, the
+// second consuming it — together with the identifier the second passes as its output width.
+func stagedThenReduced(body *ast.BlockStmt) (buf, width string, pos token.Pos) {
+	for i := 0; i+1 < len(body.List); i++ {
+		first, ok := body.List[i].(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		fc, ok := unparen(first.X).(*ast.CallExpr)
+		if !ok || len(fc.Args) == 0 {
+			continue
+		}
+		fill := identName(fc.Args[0])
+		if fill == "" {
+			continue
+		}
+		second, ok := body.List[i+1].(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		sc, ok := unparen(second.X).(*ast.CallExpr)
+		if !ok || len(sc.Args) < 2 || identName(sc.Args[0]) != fill {
+			continue
+		}
+		// The consumer's LAST integer-looking argument is taken as the output width: these
+		// kernels are written (A, B, C, lo, hi, k, n).
+		w := identName(sc.Args[len(sc.Args)-1])
+		if w == "" {
+			continue
+		}
+		return fill, w, fc.Pos()
+	}
+	return "", "", token.NoPos
+}
+
+// stagedSingleColumnFindings flags PS3052 — a buffer filled by one call and immediately consumed
+// by another, where the consumer's output width is a variable the function never branches on. At
+// width one the staged buffer exists only to be reduced against a single vector: it is written
+// once and read once, and the values could have come straight from the source.
+//
+// MEASURED on conv2d. Its im2col matrix writes c*kh*kw values per output pixel so the GEMM can
+// read them back, and with one output filter the fill was 12.7% of the multi-token-attention
+// forward against 6.7% for the GEMM it fed. Computing the dot directly, when there is no padding,
+// took a 256x256 3x3 single-filter convolution down 22.1% and that forward 3.6%.
+func stagedSingleColumnFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if len(out) > 0 {
+			return false
+		}
+		blk, ok := n.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		buf, width, pos := stagedThenReduced(blk)
+		if buf == "" {
+			return true
+		}
+		branched := false
+		ast.Inspect(fn.Body, func(m ast.Node) bool {
+			b, ok := m.(*ast.BinaryExpr)
+			if !ok || (b.Op != token.EQL && b.Op != token.LSS && b.Op != token.LEQ && b.Op != token.GTR) {
+				return true
+			}
+			if _, isLit := unparen(b.Y).(*ast.BasicLit); isLit && mentionsIdent(b.X, width) {
+				branched = true
+			}
+			return !branched
+		})
+		if branched {
+			return true
+		}
+		out = append(out, finding{
+			pos:      fset.Position(pos),
+			category: "staged-matrix-reduced-against-one-column",
+			msg: fmt.Sprintf("%q is filled here and consumed by the very next call, whose output"+
+				" width is %q — and nothing in this function branches on %q being 1. At width one"+
+				" the staged buffer exists only to be reduced against a SINGLE vector: every value"+
+				" is written once and read once, and it could have come straight from the source."+
+				" ADD A FUSED PATH FOR WIDTH ONE that computes the reduction directly, visiting the"+
+				" same elements in the same order into one accumulator. MEASURED on conv2d, whose"+
+				" im2col matrix writes c*kh*kw values per output pixel so the GEMM can read them"+
+				" back: with one output filter the fill was 12.7%% of a multi-token-attention forward"+
+				" against 6.7%% for the GEMM it fed, and fusing took a 256x256 3x3 single-filter"+
+				" convolution down 22.1%% and the forward 3.6%%. MIND THE ZEROS THE STAGING HOLDS:"+
+				" conv2d's columns carry zeros for padded taps and the GEMM adds them, so the fused"+
+				" path is only exact where there is no padding — skipping an addition of zero is not"+
+				" the same operation when the accumulator is negative zero. Gate the fusion on that"+
+				" and test BOTH sides of the gate, or a fusion that ignores it passes the unpadded"+
+				" case and nothing else. THE GAIN IS IN THE SHORT KERNELS: the same fusion was worth"+
+				" 22.1%% at a 3x3 kernel and 4.3%% at 6x11, where the staged read was already"+
+				" contiguous and long enough to amortize", buf, width, width),
 		})
 		return false
 	})

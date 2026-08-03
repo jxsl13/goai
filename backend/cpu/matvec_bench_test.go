@@ -41,3 +41,27 @@ func BenchmarkMatVecF32_2048x2048(b *testing.B) { benchMatVec(b, tensor.F32, 204
 // The narrow-k shape a conv2d produces: many rows, a short reduction. The multi-token-attention
 // head convolution runs 262144 rows against a 66-element kernel.
 func BenchmarkMatVecF64_262144x66(b *testing.B) { benchMatVec(b, tensor.F64, 262144, 66) }
+
+// benchConvSingleFilter times a conv2d with ONE output filter — the shape a per-head or per-map
+// convolution produces, and the one the multi-token-attention layer issues thirty-two of per
+// forward. The existing Conv2D cells all use 64 or 128 filters, so the single-filter path, where
+// the im2col matrix exists only to be reduced against one weight vector, had no cell.
+func benchConvSingleFilter(b *testing.B, h, w, kh, kw int) {
+	be, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(be)
+	x := bench.RandF32(tensor.Shape{1, 1, h, w}, 1)
+	k := bench.RandF32(tensor.Shape{1, 1, kh, kw}, 2)
+	attrs := backend.ConvAttrs{Stride: 1, Pad: 0}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, backend.OpConv2D, []*tensor.Tensor{x, k}, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkConv2DSingleFilter_517x522x6x11(b *testing.B) {
+	benchConvSingleFilter(b, 517, 522, 6, 11)
+}
+func BenchmarkConv2DSingleFilter_256x256x3x3(b *testing.B) { benchConvSingleFilter(b, 256, 256, 3, 3) }
