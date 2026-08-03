@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/fmath"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -53,6 +54,14 @@ func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	// dispatches per element around one Exp, a clamp and a second Exp. Flat
 	// row-major []float64 views (exact widening for F32) leave the arithmetic, the
 	// clamp and the accumulation order untouched — bit-identical.
+	// MIN AND MAX THROUGH internal/fmath, NOT math. On arm64 math.Min compiles to a CALL into
+	// math.archMin inside a 48-byte frame; the min builtin compiles to a single FMIND. They are
+	// not interchangeable — math.Min documents -Inf as beating NaN and the builtin propagates
+	// NaN — and the difference is REACHABLE here, not theoretical: a log-probability of -Inf
+	// makes the ratio exactly +0, and +0 times an infinite advantage is the NaN that pairs with
+	// the -Inf the other surrogate branch produces. fmath takes the instruction and consults
+	// math only when the instruction returns NaN, which is the only result the two can disagree
+	// on, so the loss is bit-identical.
 	nsv, ok0 := f64Data(lpNew)
 	osv, ok1 := f64Data(lpOld)
 	rsv, ok2 := f64Data(lpRef)
@@ -61,7 +70,7 @@ func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 		for i := range b {
 			r := math.Exp(nsv[i] - osv[i])
 			a := asv[i]
-			surr := math.Min(r*a, math.Max(1-eps, math.Min(1+eps, r))*a)
+			surr := fmath.Min(r*a, fmath.Max(1-eps, fmath.Min(1+eps, r))*a)
 			d := rsv[i] - nsv[i]
 			kl := math.Exp(d) - d - 1 // Schulman k3, unbiased, ≥ 0
 			total += surr - beta*kl
@@ -71,7 +80,7 @@ func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 		for i := range b {
 			r := math.Exp(lpNew.AtF64(i) - lpOld.AtF64(i))
 			a := adv.AtF64(i)
-			surr := math.Min(r*a, math.Max(1-eps, math.Min(1+eps, r))*a)
+			surr := fmath.Min(r*a, fmath.Max(1-eps, fmath.Min(1+eps, r))*a)
 			d := lpRef.AtF64(i) - lpNew.AtF64(i)
 			kl := math.Exp(d) - d - 1
 			total += surr - beta*kl

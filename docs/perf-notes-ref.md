@@ -146,3 +146,91 @@ round by the non-foldable-call filter, because the loop's mask guard calls
   port; jamming ref in place costs about 60 lines across the two sites. The
   choice is between a preserved oracle and the smaller diff, and it should be
   made deliberately rather than by whichever is quicker to type.
+
+## `math.Min`/`math.Max` are calls; the builtins are instructions (T1180)
+
+`math.Min` and the `min` builtin are not the same function, and the gap between
+them is expensive. On arm64 the library function compiles to
+
+```
+TEXT MathMin(SB), ABIInternal, $48-16
+CALL math.archMin(SB)
+CALL runtime.morestack_noctxt(SB)
+```
+
+while the builtin compiles to a single `FMIND` in a leaf with no frame at all.
+Inside an element loop that is the difference between one instruction and a
+non-inlinable call, and there are 86 such call sites in the tree
+(`perfscan -checks PS3082`).
+
+### Why the substitution is not a rename
+
+`math.Max` documents `+Inf` as beating `NaN` and `math.Min` documents `-Inf` as
+beating `NaN`; the builtins propagate `NaN` unconditionally, as the language
+spec requires. Over every ordered pair drawn from
+`{NaN, ±Inf, ±0, ±1, ±MaxFloat64, ±SmallestNonzero}` the two formulations
+disagree on exactly four: `Max(NaN, +Inf)`, `Max(+Inf, NaN)`, `Min(NaN, -Inf)`
+and `Min(-Inf, NaN)`.
+
+That divergence is reachable in this code, not theoretical. A log-probability of
+`-Inf` — an ordinary `log 0` — makes the PPO ratio exactly `+0`, and `+0` times
+an infinite advantage is the `NaN` that pairs with the `-Inf` the other
+surrogate branch produces. A raw substitution turns a finite loss into `NaN`
+there.
+
+### The recovery
+
+The two can only ever disagree **on a NaN result**: whenever they differ, the
+builtin is the one returning `NaN`. So take the instruction and consult `math`
+only when the instruction says `NaN`. That is `internal/fmath`, and the branch
+predicts perfectly on ordinary data.
+
+A `Clamp(v, lo, hi)` wrapper was written and removed: composing the two bodies
+puts it over the inliner's cost budget, which turns it into exactly the
+per-element call the package exists to avoid.
+
+### Measured
+
+| Benchmark | before | after | delta |
+|---|---|---|---|
+| `BenchmarkPPOClip_4096` (ref) | 100.5 µs | 41.6 µs | **−58.7%** |
+| `BenchmarkGRPO_4096` (ref) | 126.7 µs | 79.8 µs | **−37.0%** |
+| `BenchmarkGSPO` (ref) | 21.6 µs | 19.8 µs | −8.4% |
+
+GSPO is the small one because its clamp runs once per sequence against a
+256-token inner sum — the site is real and ranked out by execution count.
+
+### Rejected, with numbers
+
+- **Converting an existing comparison chain.** The PPO VJP already used the
+  chain PS3077 recommends. Rewriting it onto `fmath` measured 51.8 → 58.6 µs,
+  **+13%**, and was reverted. `fmath` replaces *calls*; against branchless code
+  it only adds a guard. Rank a site by whether the call is still there.
+- **The GSPO VJP clamp.** Converted, measured flat (254.4 → 250.5 µs, inside the
+  spread), reverted. One clamp per sequence against a 256-token inner loop.
+- **Reslicing the operands so the bounds checks fold.** 63.6 → 64.7 µs on the
+  PPO loop: no effect, slightly negative.
+- **The naive comparison chain for the outer `math.Min(surr1, surr2)`.** Worth
+  another 24% and semantically wrong: `math.Min(+0, -0)` is `-0`, and a `<`
+  chain keeps `+0`.
+
+### What the gate has to get right
+
+A kernel that reduces to a scalar **cannot see this divergence**. The first
+version of `rl_minmax_oracle_test.go` swept the whole hostile grid in one batch
+and was green under the raw-builtin rewrite it exists to reject: one `NaN`
+anywhere poisons the sum, and both formulations then agree on `NaN`. The gate
+plants **one hostile triple per kernel call**.
+
+Two further traps in the same file, both found by the control run rather than by
+reasoning:
+
+- The oracle must mirror the kernel's accumulator, including its initial `+0`.
+  `0 + -0` is `+0`, so an oracle that negates the term directly reports a sign
+  flip the kernel never produces.
+- `GRPOAttrs.WithDefaults` rewrites a zero `Beta` to `0.04`, so a case passing
+  `0` tests `0.04` against an oracle using `0` and fails on the KL term.
+
+NaN *payload* is deliberately not compared: the kernel's `NaN` comes from a
+runtime helper and the oracle's from inlined arithmetic, and they differ. Payload
+is not part of the contract; `NaN`-versus-not-`NaN` and the sign of a zero are.
