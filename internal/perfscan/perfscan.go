@@ -18563,7 +18563,14 @@ func sharedAccumulatorFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding 
 						" index into a per-output accumulator. CHECK THE GATE MEASURES BIT"+
 						" IDENTITY, not just agreement: swapping two of the four additions must"+
 						" turn the parity test red, or the test cannot see the property this"+
-						" transform preserves", acc, jv, acc, dv),
+						" transform preserves. SECOND MEASUREMENT, ON THE SIBLING KERNEL: the"+
+						" masked-attention kernel carried the identical loop — its SCORE loop had"+
+						" been jammed and this one had not — and jamming it took"+
+						" MHAMaskedF32CPU_1024x1024x64x16 from 118.0 to 89.7 ms, -24.0%%, the 512"+
+						" cell -15.2%% and the F64 arm -7.0%%, with a selective-attention cell flat"+
+						" as a control. WHEN THIS CHECK FIRES IN ONE KERNEL, READ ITS SIBLINGS: a"+
+						" half-applied jam is the normal state, because the score loop is the one"+
+						" people look at", acc, jv, acc, dv),
 				})
 				return false
 			})
