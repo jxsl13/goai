@@ -180,3 +180,75 @@ func vjp(v [][]float64, dst []float64, out *T, n int) {
 		t.Fatalf("%d findings, want 0 — already inside the callback:\n%s", len(fs), fs[0].msg)
 	}
 }
+
+// TestDetectPS3063_SilentOnAClosureCalledFromTheCallback pins the first of two false positives
+// the check shipped with. The literal is assigned to a name at the top of the function and only
+// invoked from inside the fan-out, so nothing about its syntax says it is already parallel. The
+// conv2d backward kernel declares its col2im that way and was reported for it.
+func TestDetectPS3063_SilentOnAClosureCalledFromTheCallback(t *testing.T) {
+	src := `package p
+
+func parallelIdx(n, work int, body func(i int)) {
+	for i := 0; i < n; i++ {
+		body(i)
+	}
+}
+
+func kernel(dst []float64, v [][]float64, n int) {
+	col2im := func(ni int) {
+		for j := 0; j < n; j++ {
+			for a := 0; a < n; a++ {
+				for b := 0; b < n; b++ {
+					dst[ni*n+j] = v[a][b]
+				}
+			}
+		}
+	}
+	parallelIdx(n, n*n*n, func(ni int) {
+		col2im(ni)
+	})
+}`
+	if fs := leftSerialFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the closure runs inside the callback:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3063_SilentWhenTheNestItselfDispatches pins the second. Two shapes hide here and
+// one test covers both: a converted loop keeps a plain duplicated arm beside its gated dispatch
+// — PS3040's own advice — so the two sit in one block; and a sequential outer loop that fans
+// out its inner one is PS3040's shape and contains the dispatch directly. The LU factorization
+// and the AQLM Gauss-Jordan are both already converted and both were reported by their leftovers.
+func TestDetectPS3063_SilentWhenTheNestItselfDispatches(t *testing.T) {
+	src := `package p
+
+func parallelIdx(n, work int, body func(i int)) {
+	for i := 0; i < n; i++ {
+		body(i)
+	}
+}
+
+func factor(m []float64, n int) {
+	parallelIdx(n, n*n, func(i int) {
+		m[i] = 0
+	})
+	for k := 0; k < n; k++ {
+		rows := n - k - 1
+		if rows*n >= 1<<14 {
+			parallelIdx(rows, rows*n, func(i int) {
+				m[(k+1+i)*n+k] = 0
+			})
+			continue
+		}
+		for i := k + 1; i < n; i++ {
+			for j := k; j < n; j++ {
+				m[i*n+j] -= m[k*n+j]
+			}
+		}
+	}
+}`
+	if fs := leftSerialFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the nest contains its own dispatch:\n%s",
+			len(fs), fs[0].msg)
+	}
+}

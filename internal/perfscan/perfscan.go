@@ -18464,6 +18464,41 @@ func serialLoopInFanningFuncFindings(fset *token.FileSet, f *ast.File, fn *ast.F
 	if !callsFanoutHelper(fn.Body, reg) {
 		return nil // PS3034 and PS3059 own the function that never fans out at all
 	}
+	// A CLOSURE CALLED FROM INSIDE A CALLBACK IS ALREADY PARALLEL, and it does not look it:
+	// the literal is assigned to a name at the top of the function and only invoked from
+	// within the fan-out, so nothing about its syntax says so. The conv2d backward kernel
+	// declares col2im that way and was reported for it.
+	fanned := map[*ast.FuncLit]bool{}
+	assigned := map[string]*ast.FuncLit{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		id, iok := as.Lhs[0].(*ast.Ident)
+		fl, fok := as.Rhs[0].(*ast.FuncLit)
+		if iok && fok {
+			assigned[id.Name] = fl
+		}
+		return true
+	})
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		c, ok := n.(*ast.CallExpr)
+		if !ok || !reg[calleeName(c.Fun)] {
+			return true
+		}
+		ast.Inspect(c, func(m ast.Node) bool {
+			ic, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if fl := assigned[calleeName(ic.Fun)]; fl != nil {
+				fanned[fl] = true
+			}
+			return true
+		})
+		return true
+	})
 	var out []finding
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		if len(out) > 0 {
@@ -18473,11 +18508,24 @@ func serialLoopInFanningFuncFindings(fset *token.FileSet, f *ast.File, fn *ast.F
 		if c, ok := n.(*ast.CallExpr); ok && reg[calleeName(c.Fun)] {
 			return false
 		}
+		if fl, ok := n.(*ast.FuncLit); ok && fanned[fl] {
+			return false
+		}
 		body, ov := outerLoop(n)
 		if body == nil || ov == "" || ov == "_" || loopDepthOf(body) < 2 {
 			return true
 		}
 		if loopSpansAParameterRange(n, declaredParamNames(fn)) {
+			return false
+		}
+		// THE NEST ITSELF MUST NOT CONTAIN A DISPATCH. Two shapes hide here and one test
+		// covers both. A converted loop keeps a plain duplicated arm beside its gated
+		// dispatch — the advice PS3040 gives, since routing small inputs through the callback
+		// costs a few percent — so the two sit in one block; and a sequential outer loop that
+		// fans out its inner one, which is PS3040's own shape, contains the dispatch directly.
+		// The LU factorization and the AQLM Gauss-Jordan are both already converted and both
+		// were reported by their own leftovers. This is the THIRD check to need this guard.
+		if callsFanoutHelper(body, reg) {
 			return false
 		}
 		names := namesDerivedFromLoopVar(body, ov)
