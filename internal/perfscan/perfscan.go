@@ -230,6 +230,7 @@ var checks = []check{
 	{"PS3070", "one-threshold-two-regimes", "a tuning constant compared against DIFFERENT quantities in different functions — one threshold serving two callers whose costs do not move together. Whatever value suits one is wrong for the other, and tuning it looks like a tradeoff when it is really a missing second constant. MEASURED: classic's treeRadixCutoff gated both a PER-NODE sort of a shrinking range and a ONE-TIME presort of every row. Lowering it for the first took BenchmarkForestFit 121.5 to 101.3 ms, -16.6%%, and simultaneously cost GBMFit about 25%% and moved the GBM bit-exact digest — which read as a model-behavior change until the constants were split. Split, both are free: ForestFit -16.6%%, GBMFit flat, and BOTH digests pass unchanged. SPLIT FIRST, THEN SWEEP — a sweep of a shared constant measures the sum of two answers and finds neither", false},
 	{"PS3071", "local-buffer-escapes-per-call", "a METHOD that declares a local fixed-size byte array and hands a slice of it to another call. If that call takes an interface — io.ReadFull and friends — the slice escapes and the array is HEAP-allocated on every invocation, which a reader primitive pays once per scalar it decodes. Hang the buffer on the receiver, which is already on the heap, and the per-call allocation disappears. MEASURED on the GGUF header reader: u32 and u64 were 1.34M objects of a 4.0M allocation profile, and moving their arrays onto the reader plus reusing one scratch for string bodies took BenchmarkReadFileSynth/header-heavy from 223892 to 95804 allocations, -57.2%%, and 5.45 to 4.50 ms, -17.3%%, with the tensor-heavy and skewed cells cutting allocations by the same proportion. SAFE ONLY IF NOTHING KEEPS THE BUFFER: the string case works because string(b) COPIES. Check every caller before sharing one scratch, and check the type is not used concurrently", false},
 	{"PS3072", "serial-loop-reseeded-from-the-item", "a loop that RESEEDS, from the current item, the state it appears to carry. The carried object is overwritten before it is read, so the iteration is a pure function of its own item and the loop is bandable despite reading as a chain — a shape a scaling probe finds only after the fact. Give every worker its own copy of the reseeded object and of the scratch the body reuses, accumulate any count per worker and fold afterwards, since integer addition is order-free. MEASURED on the watermark detector, whose per-token partial Fisher-Yates reseeds a PCG from (key, previous token) and restores its permutation before the next: BenchmarkWatermarkDetect 39.17 to 7.17 ms, -81.7%%, bit-identical, from a 0.99x scaling ratio. CHECK THE RESTORE — the win depends on the body leaving its scratch as it found it", false},
+	{"PS3073", "invariant-operand-reloaded-per-iteration", "a loop calling a REDUCTION HELPER with one operand that does not vary with the loop variable, so the same memory is re-streamed on every iteration. Jam the loop — 4 iterations per pass, one pass over the shared operand, each result keeping the helper own accumulator count, order and combination, which makes it bit-identical because the jammed dimension is the free one. MEASURED on the linalg Cholesky factorization, whose row update called a 4-accumulator dot with the pivot row shared: Cholesky512 8.99 to 6.25 ms, -30.5%%, Cholesky256 -24.7%%, CholSolve256x128 -13.7%%, bit-identical in both dtype arms, SVD flat as a control. THE SHARING IS THE SINGLE PASS, NOT THE UNROLLING — the same 4 rows written as two 2-row calls reloaded the operand twice and measured nothing. PS6010 is this transform for an INLINE accumulator loop; this check exists because a reduction behind a CALL is invisible to it", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1376,6 +1377,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, sharedThresholdFindings(fset, f, fn)...)
 		out = append(out, escapingLocalBufferFindings(fset, fn)...)
 		out = append(out, reseededSerialLoopFindings(fset, f, fn)...)
+		out = append(out, invariantOperandReloadFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -3104,6 +3106,7 @@ func main() {
 	collectThresholdComparisons(parsed)
 	collectExecPoolHelpers(parsed)
 	collectThresholdUse(fset, parsed)
+	collectReductionHelpers(parsed)
 	collectWriteOnlyFields(fset, parsed)
 	for _, f := range parsed {
 		for _, fd := range scanFile(fset, f, ns) {
@@ -18454,6 +18457,143 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3073: a reduction helper reloading a loop-invariant operand ---------------------------
+
+// reductionHelperReg keys package -> function name for the functions that ARE a reduction over
+// their slice parameters: a loop that accumulates with += into locals and returns them. The dot
+// helpers of a factorization are the shape; a check that only recognizes an INLINE accumulator
+// loop cannot see them, which is exactly how the site this check was built from stayed hidden.
+// The value is one flag per PARAMETER POSITION, true where that parameter is a slice. A scalar
+// argument is not an operand — it streams no memory — and reading every argument alike reported
+// the trailing length of a dot as the shared operand.
+var reductionHelperReg = map[string]map[string][]bool{}
+
+// collectReductionHelpers pre-scans every package for those functions.
+func collectReductionHelpers(files []*ast.File) {
+	for _, f := range files {
+		if f.Name == nil {
+			continue
+		}
+		for _, decl := range f.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil || fn.Name == nil || fn.Type.Results == nil {
+				continue
+			}
+			// A COUNT OF SLICE PARAMETERS IS NOT A GATE. Requiring two of them was tried and
+			// removed: the report already needs one varying and one invariant SLICE ARGUMENT,
+			// so a helper with fewer can never reach it, and no fixture could isolate the
+			// count from the argument test it duplicated.
+			var isSlice []bool
+			for _, p := range fn.Type.Params.List {
+				_, sl := p.Type.(*ast.ArrayType)
+				for range max(len(p.Names), 1) {
+					isSlice = append(isSlice, sl)
+				}
+			}
+			acc := false
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				as, ok := n.(*ast.AssignStmt)
+				if !ok || as.Tok != token.ADD_ASSIGN {
+					return true
+				}
+				if _, ok := as.Lhs[0].(*ast.Ident); ok {
+					acc = true
+				}
+				return true
+			})
+			if !acc {
+				continue
+			}
+			if reductionHelperReg[f.Name.Name] == nil {
+				reductionHelperReg[f.Name.Name] = map[string][]bool{}
+			}
+			reductionHelperReg[f.Name.Name][fn.Name.Name] = isSlice
+		}
+	}
+}
+
+// invariantOperandReloadFindings flags PS3073 — a loop calling a reduction helper with one
+// operand that does not vary with the loop variable, so that operand is re-streamed once per
+// iteration.
+func invariantOperandReloadFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(reductionHelperReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	reg := reductionHelperReg[f.Name.Name]
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iv, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// AN ARGUMENT THAT DOES NOT SPELL THE LOOP VARIABLE STILL VARIES WITH IT. The per-item
+		// operand of a row update is re-sliced at the top of the body — li := lf[i*n:...] — and
+		// reaches the call as a bare identifier, so testing the argument alone finds NO varying
+		// operand and reports nothing at all. Names bound inside the body are the varying ones;
+		// this set is what identifies them, not a suppression.
+		rebound := declaredIn(body)
+		found := false // one finding per loop, so a second nest in the same function still reports
+		ast.Inspect(body, func(m ast.Node) bool {
+			if found {
+				return false
+			}
+			c, ok := m.(*ast.CallExpr)
+			if !ok || len(c.Args) < 2 {
+				return true
+			}
+			isSlice := reg[calleeName(c.Fun)]
+			if len(isSlice) != len(c.Args) {
+				return true
+			}
+			// BOTH HALVES ARE REQUIRED. An argument that varies with the loop makes the call
+			// per-iteration work; one that does not is the operand being re-read for nothing.
+			// A call whose arguments ALL vary reloads nothing, and one where none varies is
+			// loop-invariant outright, which is a different (and larger) finding.
+			varying, invariant := "", ""
+			for ai, a := range c.Args {
+				nm := baseIdentName(a)
+				if nm == "" || !isSlice[ai] {
+					continue
+				}
+				if mentionsIdent(a, iv) || rebound[nm] {
+					varying = nm
+				} else if invariant == "" {
+					invariant = nm
+				}
+			}
+			if varying == "" || invariant == "" {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(c.Pos()),
+				category: "invariant-operand-reloaded-per-iteration",
+				msg: fmt.Sprintf("%q is a reduction over its slice arguments, and this loop calls"+
+					" it once per %q with %q re-read every time: %q does not vary with the loop,"+
+					" so the same memory is streamed on every iteration. JAM THE LOOP — take 4"+
+					" iterations per pass and compute their reductions in ONE pass over the"+
+					" shared operand, each keeping its own accumulators. That is bit-identical"+
+					" when every result keeps the helper's own accumulator count, order and"+
+					" combination: the jammed dimension is the free one. MEASURED on the linalg"+
+					" Cholesky factorization, whose row update called a 4-accumulator dot with"+
+					" the pivot row as the shared operand: Cholesky512 8.99 to 6.25 ms, -30.5%%,"+
+					" Cholesky256 -24.7%%, CholSolve256x128 -13.7%%, bit-identical in both dtype"+
+					" arms with an SVD cell flat as a control. THE SHARING IS THE SINGLE PASS,"+
+					" NOT THE UNROLLING — writing the same 4 rows as two calls to a 2-row helper"+
+					" reloaded the operand twice and measured NOTHING (6.99 ms, the 2-row"+
+					" number). AND THE JAM MUST REACH EVERY ARM: this factorization has a second"+
+					" dtype path with the same loop, which a digest over one dtype would never"+
+					" have covered. PS6010 IS THE SAME TRANSFORM FOR AN INLINE LOOP — this check"+
+					" exists because a reduction behind a CALL is invisible to it",
+					calleeName(c.Fun), iv, invariant, invariant),
+			})
+			found = true
+			return false
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3072: a serial loop that reseeds its own state ----------------------------------------
