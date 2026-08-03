@@ -100,6 +100,18 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	defer putF64(prodP)
 	prod := *prodP
 	var slot atomic.Int32
+	// SINGLE-FILTER FUSION. With one output channel the im2col matrix exists only to be reduced
+	// against a single weight vector: it writes c*kh*kw values per output pixel so the GEMM can
+	// read them back once. Computing the dot straight out of the input skips that round trip
+	// entirely — on the multi-token-attention head convolution the fill was 12.7% of the whole
+	// forward against 6.7% for the GEMM it fed.
+	//
+	// Only when there is no padding. With p == 0 every tap is in bounds, so the fused loop
+	// visits exactly the taps the column matrix would have held, in the same (c,ky,kx) order,
+	// with one accumulator — bit-identical. Padding taps are stored as zeros and the GEMM adds
+	// them, and skipping an addition of zero is not the same operation when the accumulator is
+	// negative zero, so the padded case keeps the column matrix.
+	fused1 := f == 1 && p == 0
 	switch x.Dtype() {
 	case tensor.F64:
 		xs, os := xc.Storage().F64(), out.Storage().F64()
@@ -119,8 +131,12 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					// gemmF64Band ACCUMULATES into C, so a reused product window starts at zero.
 					clear(pw[:(end-base)*f])
 				}
-				im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
-				gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				if fused1 {
+					conv1FilterBand(pw, xs, wt, base, end, base, ho, wo, c, kh, kw, s, h, wd)
+				} else {
+					im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
+					gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				}
 				convScatterBand(pw, os, bs, base, end, base, f, hw)
 			}
 		})
@@ -142,8 +158,12 @@ func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					// gemmF64Band ACCUMULATES into C, so a reused product window starts at zero.
 					clear(pw[:(end-base)*f])
 				}
-				im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
-				gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				if fused1 {
+					conv1FilterBand(pw, xs, wt, base, end, base, ho, wo, c, kh, kw, s, h, wd)
+				} else {
+					im2colFillBand(sc, xs, base, end, base, k, ho, wo, c, kh, kw, s, p, h, wd)
+					gemmF64Band(sc, wt, pw, 0, end-base, k, f)
+				}
 				convScatterBand(pw, os, bs, base, end, base, f, hw)
 			}
 		})
@@ -332,4 +352,34 @@ func wtFill[D, T normFloat](wt []D, ws []T, f, k int) {
 func convSlice(cols []float64, slot *atomic.Int32, cw, k, f int) ([]float64, int) {
 	s := int(slot.Add(1)-1) * cw
 	return cols[s*k : s*k+cw*k : s*k+cw*k], s * f
+}
+
+// conv1FilterBand computes the single-filter convolution for output rows [lo,hi) directly from
+// the input, without materializing their im2col columns. off rebases the write onto the caller's
+// chunk window, as im2colFillBand does.
+//
+// Requires pad == 0: every tap is then in bounds, so the taps visited here are exactly the
+// entries the column matrix would have carried, walked in the same (channel, ky, kx) order into
+// one accumulator — the same sequence gemmF64Band performs for a single output column.
+func conv1FilterBand[T normFloat](prod []float64, xs []T, wt []float64, lo, hi, off, ho, wo, c, kh, kw, s, h, wd int) {
+	for r := lo; r < hi; r++ {
+		ni := r / (ho * wo)
+		rem := r % (ho * wo)
+		oy, ox := rem/wo, rem%wo
+		ix0 := ox * s
+		v := prod[r-off]
+		kk := 0
+		for ci := 0; ci < c; ci++ {
+			for ky := 0; ky < kh; ky++ {
+				rowBase := ((ni*c+ci)*h+oy*s+ky)*wd + ix0
+				src := xs[rowBase : rowBase+kw : rowBase+kw]
+				w := wt[kk : kk+kw : kk+kw]
+				for i, xv := range src {
+					v += float64(xv) * w[i]
+				}
+				kk += kw
+			}
+		}
+		prod[r-off] = v
+	}
 }
