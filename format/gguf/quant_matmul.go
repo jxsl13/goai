@@ -44,10 +44,26 @@ var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf 
 // GOMAXPROCS. Each output row is an independent dequant-dot (disjoint outf[...ni], no
 // cross-ni reduction), so chunking is bit-identical to the serial loop. Serial below a
 // small total-work threshold.
+// qmatmulGrain is the element-work one worker must be given before another is added. Measured
+// on BenchmarkQuantLlamaGenerate500 against the fixed GOMAXPROCS split: 1<<15 is 552.9 to 517.6
+// ms with user CPU 18.99 to 16.51 s and system 2.91 to 2.13 s — better on all three. A coarser
+// 1<<16 saves more CPU (16.10 s user, 1.19 s system) and gives back wall clock at 536.1 ms, and
+// 1<<17 and above collapse to serial at about 604 ms.
+const qmatmulGrain = 1 << 15
+
 func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
 		nw = n
+	}
+	// SIZE THE FAN-OUT TO THE WORK, do not just gate it on/off. Decode calls this thousands of
+	// times per generation with one activation row, and splitting a small matmul twelve ways
+	// costs more in wakeups than the split saves: a profile of a 500-token quantized Llama
+	// generation spent 88%% of its samples in pthread_cond_signal and pthread_cond_wait and
+	// 1.5%% in this kernel. One worker per qmatmulGrain of element-work, capped by GOMAXPROCS,
+	// beats both the fixed twelve and no fan-out at all — on wall clock AND on CPU burned.
+	if w := n * workPerRow / qmatmulGrain; w < nw {
+		nw = w
 	}
 	if nw <= 1 || n*workPerRow < 1<<17 {
 		body(0, n)
