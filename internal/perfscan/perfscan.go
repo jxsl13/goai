@@ -18480,7 +18480,20 @@ func unsizedFanoutFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) [
 			" twelve burned 42%% more user CPU to buy that 8%% back. PICK THE GRAIN BY MEASURING"+
 			" BOTH THE CLOCK AND THE CPU — a coarser grain traded 4%% of the clock for another"+
 			" 44%% of the system time here, and which side of that is right depends on whether the"+
-			" machine serves one request or many", fn.Name.Name),
+			" machine serves one request or many."+
+			" DO NOT APPLY THIS BLINDLY TO EVERY HELPER — IT IS NEUTRAL OUTSIDE THE DECODE REGIME."+
+			" The same transform on the nn helpers, which serve large ops called a few times"+
+			" rather than small ops called thousands of times, measured FLAT on three benchmarks"+
+			" and flat on CPU: HQQuantize 91.2 to 90.3 ms, KAN 11.99 to 11.91, TPA 55.9 to 54.2,"+
+			" user CPU 25.7-26.1 s on both arms. It was not shipped, because neutral is not a"+
+			" reason to add a knob. What made the decode case different is CALL FREQUENCY AT"+
+			" NEAR-GATE WORK: thousands of calls per generation, each just above the threshold."+
+			" A first, short run there read as a 6%% REGRESSION and a longer one showed noise —"+
+			" measure this one with enough iterations to separate the arms before believing"+
+			" either sign. And check whether the helper already sizes itself: the cpu backend's"+
+			" pool does, which is why it is absent from this check's candidates, and raising its"+
+			" per-worker floor made decode monotonically worse (522, 529, 542 ms at 1<<15, 1<<16,"+
+			" 1<<17) — its constants are already at their optimum", fn.Name.Name),
 	}}
 }
 
