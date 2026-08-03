@@ -231,7 +231,7 @@ var checks = []check{
 	{"PS3043", "source-rebound-per-output", "a nest whose OUTER loop owns a destination and whose INNER loop rebinds a source element from a collection. The set of sources does not depend on the outer variable, so it is re-read once per outer iteration and the pass moves outer-count times the source volume through the caches. INTERCHANGE THE LOOPS: bind each source once and update every destination while it is loaded. The per-destination accumulation order is unchanged, so the result stays BIT-IDENTICAL and an existing exact-equality gate still applies. MEASURED on the multi-token-attention head mix, out[o] = sum_p w[o,p]*maps[p] written as a loop over outputs re-reading every map — 16 passes over 33 MB per group; BenchmarkMTAForward_ch16 fell 11.7%% once the source loop moved out and the element range was split across workers. THE INTERCHANGE ALONE IS RARELY THE WIN: it makes the destinations live at once, so hold them for a BAND of elements, and check whether the loop was serial while the rest of the path was parallel — a serial stretch costs its full CPU time in wall clock however small its profile share looks", false},
 	{"PS3042", "whole-tensor-staging-buffer", "a scratch buffer allocated before a fan-out call, sized by the fan-out's ITEM COUNT times a width, and touched only inside the callback. Each band writes and reads only its own rows, so the buffer's SIZE is set by the whole tensor while its WORKING SET is one band: every element the producing stage writes goes out to memory and comes back for the consuming stage. Size it per band or per chunk and hand each band its own window. MEASURED on conv2d, whose im2col column matrix was rows x k — one 512x512 head convolution materialized 138 MB to multiply it by a 66-element weight vector; chunked to an L2-resident window the largest torch conv shape went -11%%, the attention forward -12%%, B/op fell 62-88%%. CHECK WHETHER THE CONSUMER ACCUMULATES: a whole-tensor buffer writes each row's slot once, so an accumulating consumer reads as a store and the pool's zeroing is invisible; a reused window must be cleared between chunks. CAP THE CHUNK AT ONE BAND, or the total becomes workers x chunk — more memory than before on inputs too small to have had a problem", false},
 	{"PS3041", "per-item-rescan-of-shared-collection", "an outer loop over items whose body walks a collection held on the receiver — directly, or one same-type method call deep — without that walk depending on the item. Every item re-reads the same memory and reuses none of it, so the pass moves items x collection bytes through the caches and is BANDWIDTH-bound however cheap the arithmetic is. Batch the item loop into TILES: load each element once and do all B items' work on it while it is in cache. MEASURED on the memorizing-attention neighbour search, where each query token scanned the whole key bank alone — tiles of 16 cut BenchmarkMemForward_512 by 24%% and BenchmarkMemGatherLarge by 30%%. CONFIRM THE DIAGNOSIS FIRST: if the collection already fits in L2 the traffic was never the cost and tiling buys nothing. THE TILE MUST NOT REASSOCIATE — give each item its own accumulator and its own result state and visit the collection in the same order, and the output stays bit-identical, which is what lets the existing goldens gate the rewrite. PS3034 and PS3040 are about UNUSED PARALLELISM in a nest; this one fires on a loop that may already be parallel and is still re-streaming its data", false},
-	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed", false},
+	{"PS3040", "inner-independent-under-sequential-outer", "a three-deep nest whose outer loop carries a real dependence — it is read, never written — while the MIDDLE loop is independent: every write is indexed by the middle variable and none by the outer. The outer cannot be split and the middle can, so the fan-out belongs one level in. That is the shape of every classical factorization: pivot in order, update the remaining rows in parallel. MEASURED on an LU rank-1 update that was 92%% of its own benchmark on ONE line: -40.8%% at 512 wide, -11.1%% at 256, 128 unchanged below the gate. PS3034 does not cover this and should not — it asks whether the OUTER loop can be split. Two conversion requirements: gate on the work at THIS step (rows times columns, not the row count) or mid-sized inputs stay serial and it reads as a size effect; and keep the below-gate path a PLAIN duplicated loop, because routing a 128-wide factorization through the callback cost 3 to 4%% that hoisting the gate did not recover. Gate it with an oracle blind to the internals — a solve residual caught a dropped row that every existing test in the package missed. EXPECT LESS THAN THE SERIAL SHARE PROMISES, and by a lot when the outer loop is long: a Gauss-Jordan solve that was 40%% of an AQLM encode's wall clock returned only 6.6%% end to end, because EVERY pivot step pays its own fork and there are n of them. Widening or narrowing the gate did not recover it (1<<12, 1<<14, 1<<16 and 1<<18 all measured, best at 1<<14). Divide the serial share by the fork count before promising anything", false},
 	{"PS3039", "recursive-split-alloc", "a self-recursive function that allocates TWO slices sized by its input, fills them by appending each element to one or the other, and passes them to its own recursive calls — a divide-and-conquer partition written the allocating way. The cost is per NODE of the recursion, so it scales with the tree rather than with the data. Partition in place against one reused buffer instead. MEASURED on a CART builder\u0027s subsampled path: 352029 to 192021 allocs/op (-45.5%%), bytes -63.9%%, ns/op -6.8%% to -9.2%% against a control drifting under 2%%. Safe because writing dst[mid] while ranging over dst cannot clobber an unread element (mid advances only on a write, and every write consumes a value already read), and copying the second side back in order preserves what both appends produced. GATE IT WITH AN EXACT GOLDEN GENERATED FROM THE OLD CODE: the property tests that usually cover a tree builder stay green for a DIFFERENT tree, and on the measured site they stayed green with the copy-back deleted", false},
 	{"PS3038", "dispatch-literal-slice", "a direct backend.Execute building its input slice inline, in a package that already declares a pooled helper of that arity. The literal is one allocation per dispatch, and Execute drops the slice the instant it returns unless a recorder is attached — which is exactly what the pooled helper checks before borrowing. MEASURED on nn.Linear.Forward, the most-called forward in the package: two literals became two pooled borrows and a per-image MLP-Mixer forward went 3944 to 3687 allocs/op (-6.5%%), a ViT forward -2.0%%. Judge on allocs/op; the time was flat everywhere, since these forwards are dominated by the kernels the slice merely names. THE RECORDER GUARD IS THE CONTRACT: Execute\u0027s tape node stores that exact slice, so a pooled one would be overwritten by the next op and a training run would silently get wrong gradients — use the helper, never inline the borrow. 214 sit in nn alone, so rank by call frequency and convert where a benchmark can see it", false},
 	{"PS3037", "mis-sized-append-buffer", "a slice made with a stated capacity inside a loop and then appended to from a NESTED loop, so the hint is sized per outer pass while the appends run outer times inner. The hint guarantees the opposite of what it looks like: the slice doubles its way up from the hint to its true size on EVERY outer pass, copying everything it holds each time. MEASURED on a beam search whose hint was 8 per live beam against a true size of one candidate per beam per VOCABULARY ENTRY — that one append line was 2.45 GB of a 2.90 GB benchmark, and hoisting the buffer above the loop with a per-pass truncation took bytes -85.0%% on beam search and -98.0%% on its diverse variant. Judge on B/op first: the time win was -8.8%% and -2.9%%, real but far smaller. Prove nothing survives the reset — dropping the truncation must redden the suite, and on the measured site it did. PS3035 does not cover this: it wants a size the loop does not vary and only sees loops with a range clause or an init statement, and the measured site is a bare condition loop whose hint mentions the collection it iterates", false},
@@ -15914,6 +15914,19 @@ func recursiveSplitAllocFindings(fset *token.FileSet, fn *ast.FuncDecl) []findin
 // cannot. The split belongs one level in. That is the shape of every classical factorization —
 // pivot sequentially, update the remaining rows in parallel — and the LU rank-1 update it was
 // built from went -40.8% at 512 wide.
+// callsFanoutHelper reports whether body calls one of the package's fan-out helpers anywhere
+// inside it.
+func callsFanoutHelper(body *ast.BlockStmt, reg map[string]bool) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if c, ok := n.(*ast.CallExpr); ok && reg[calleeName(c.Fun)] {
+			found = true
+		}
+		return !found
+	})
+	return found
+}
+
 func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.File,
 	fn *ast.FuncDecl) []finding {
 	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
@@ -15951,16 +15964,21 @@ func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.Fi
 		if outer == nil || ov == "" || ov == "_" || loopDepthOf(outer) < 2 || inFanout[n] {
 			return true
 		}
+		// THE SPLIT MAY ALREADY BE HERE. Applying this check leaves a below-gate arm that is a
+		// PLAIN DUPLICATED LOOP — the check's own advice, because routing small inputs through
+		// the callback costs a few percent — and that duplicate is this exact shape. It sits as
+		// a sibling of the gated dispatch inside the same outer body, so neither the depth test
+		// nor inFanout sees it, and the check reported the very site it had just been used to
+		// fix. An earlier note here said a third guard could redden no fixture the other two do
+		// not; that was true until the transform shipped and produced this one.
+		if callsFanoutHelper(outer, fanoutReg[f.Name.Name]) {
+			return true
+		}
 		for _, st := range outer.List {
 			mid, mv := outerLoop(st)
 			if mid == nil || mv == "" || mv == "_" || mv == ov || loopDepthOf(mid) < 1 {
 				continue
 			}
-			// No separate "already fans out" test here. A middle loop whose body IS the
-			// dispatch has a call where its inner loop would be, so the depth requirement above
-			// already skips it, and a nest sitting inside somebody else's callback is caught by
-			// inFanout. A third guard could not redden any fixture the other two do not, so it
-			// was removed rather than kept as untestable.
 			// Every indexed write must name the MIDDLE variable and none may name the outer: that
 			// is what makes the middle loop splittable while the outer one is not.
 			perIter := localBuffersMadeIn(mid)
@@ -16051,7 +16069,14 @@ func innerIndependentUnderSequentialOuterFindings(fset *token.FileSet, f *ast.Fi
 					" hoisting the gate above the call did not recover it, because the cost is the"+
 					" closure rather than the dispatch. Gate it with an oracle that knows nothing"+
 					" of the internals — solving and checking the residual caught a dropped row"+
-					" that every existing test in the package missed",
+					" that every existing test in the package missed."+
+					" EXPECT LESS THAN THE SERIAL SHARE PROMISES, and by a lot when the outer"+
+					" loop is long: a Gauss-Jordan solve that was 40%% of an AQLM encode's wall"+
+					" clock returned only 6.6%% end to end, because EVERY step of the outer loop"+
+					" pays its own fork and there are n of them. Widening or narrowing the gate"+
+					" did not recover it — 1<<12, 1<<14, 1<<16 and 1<<18 were all measured, best"+
+					" at 1<<14. Divide the serial share by the fork count before promising"+
+					" anything",
 					mv, ov, mv, ov, ov),
 			})
 		}

@@ -58,7 +58,11 @@ func Factor(m []float64, n int) {
 	}
 	// Both conversion requirements have to survive, because both were learned the hard way: the
 	// work estimate and the duplicated serial body.
-	if !containsAll(fs[0].msg, "rows times columns", "PLAIN DUPLICATED LOOP", "one level in") {
+	// The last phrase is the calibration a second application produced: banding a serial
+	// section that was 40% of a wall clock returned 6.6%, because every step of the outer loop
+	// pays its own fork.
+	if !containsAll(fs[0].msg, "rows times columns", "PLAIN DUPLICATED LOOP", "one level in",
+		"EXPECT LESS THAN THE SERIAL SHARE PROMISES") {
 		t.Fatalf("message omits the gate estimate, the closure cost or the advice:\n%s", fs[0].msg)
 	}
 }
@@ -198,5 +202,53 @@ func eliminate(m []float64, n int) {
 	if fs := innerIndependentFindings(t, src); len(fs) != 0 {
 		t.Fatalf("%d findings, want 0 — the middle loop's body is already the fan-out:\n%s",
 			len(fs), fs[0].msg)
+	}
+}
+
+// TestDetectPS3040_SilentOnItsOwnBelowGateArm pins the false positive this check produced on
+// the very site it had just been used to fix. Applying it leaves a below-gate arm that is a
+// PLAIN DUPLICATED LOOP — this check's own advice, because routing small inputs through the
+// callback costs a few percent — and that duplicate is exactly the shape it looks for. It is a
+// SIBLING of the gated dispatch, not inside it, so neither the depth test nor the in-callback
+// test sees it.
+func TestDetectPS3040_SilentOnItsOwnBelowGateArm(t *testing.T) {
+	src := `package p
+
+func parallelRows(n, work int, body func(lo, hi int)) { body(0, n) }
+
+func solve(aug []float64, n, stride int) {
+	for c := 0; c < n; c++ {
+		crow := aug[c*stride : c*stride+stride]
+		elim := func(rlo, rhi int) {
+			for r := rlo; r < rhi; r++ {
+				if r == c {
+					continue
+				}
+				f := aug[r*stride+c]
+				rrow := aug[r*stride : r*stride+stride]
+				for j := c; j < stride; j++ {
+					rrow[j] -= f * crow[j]
+				}
+			}
+		}
+		if n*(stride-c) >= 1<<14 {
+			parallelRows(n, stride-c, elim)
+			continue
+		}
+		for r := 0; r < n; r++ {
+			if r == c {
+				continue
+			}
+			f := aug[r*stride+c]
+			rrow := aug[r*stride : r*stride+stride]
+			for j := c; j < stride; j++ {
+				rrow[j] -= f * crow[j]
+			}
+		}
+	}
+}`
+	if fs := innerIndependentFindings(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the split is already here and this is its below-gate"+
+			" twin:\n%s", len(fs), fs[0].msg)
 	}
 }
