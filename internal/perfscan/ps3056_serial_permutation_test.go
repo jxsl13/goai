@@ -124,3 +124,28 @@ func transpose(src, dst []float64, a, b int) {
 		t.Fatalf("%d findings, want 0 — already banded:\n%s", len(fs), fs[0].msg)
 	}
 }
+
+// TestDetectPS3056_SilentOnABandBody pins the false positive this cost two reports. A
+// function whose nest runs from one PARAMETER to another has already been handed its band;
+// the fan-out call is in its caller, where this check cannot see it. Both conv im2col fill
+// functions were reported for this reason and both were already running inside a parallel
+// band pass.
+func TestDetectPS3056_SilentOnABandBody(t *testing.T) {
+	src := `package p
+
+func parallelChunks(d, w int, body func(lo, hi int)) { body(0, d) }
+
+func fillBand(dst, src []float64, lo, hi, b int) {
+	for r := lo; r < hi; r++ {
+		for j := 0; j < b; j++ {
+			for k := 0; k < b; k++ {
+				dst[(r*b+j)*b+k] = src[(j*b+r)*b+k]
+			}
+		}
+	}
+}`
+	if fs := permutationFindingsIn(t, src); len(fs) != 0 {
+		t.Fatalf("%d findings, want 0 — the band is a parameter, so the fan-out is the caller's:\n%s",
+			len(fs), fs[0].msg)
+	}
+}
