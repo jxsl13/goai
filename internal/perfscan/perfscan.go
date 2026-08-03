@@ -229,6 +229,7 @@ var checks = []check{
 	{"PS3069", "fanout-queues-jobs-it-does-not-need-to", "a fan-out helper that hands work out through an UNBUFFERED channel, with no path that skips the queue when the job count is already within the worker count. The queue exists so more jobs than workers can be served one at a time; when there are no more, every job pays a rendezvous on top of its goroutine. MEASURED on the classic tree builders, which call their helper with exactly one job per chunk once per NODE, thousands of times per fit: adding a direct fan-out for n <= workers took BenchmarkGBMFit 72.06 to 68.31 ms, -5.2%%, with system CPU 0.43 to 0.37 s and the forest and single-tree cells flat. EXPECT THE SMALLER NUMBER, NOT THE PROFILE'S: 95.6%% of that benchmark's samples were in pthread_cond_wait, pthread_cond_signal and usleep against 1.75%% in the split scan, and the fix was worth 5%% — parked threads are sampled, and sampled is not the same as costing wall clock", false},
 	{"PS3070", "one-threshold-two-regimes", "a tuning constant compared against DIFFERENT quantities in different functions — one threshold serving two callers whose costs do not move together. Whatever value suits one is wrong for the other, and tuning it looks like a tradeoff when it is really a missing second constant. MEASURED: classic's treeRadixCutoff gated both a PER-NODE sort of a shrinking range and a ONE-TIME presort of every row. Lowering it for the first took BenchmarkForestFit 121.5 to 101.3 ms, -16.6%%, and simultaneously cost GBMFit about 25%% and moved the GBM bit-exact digest — which read as a model-behavior change until the constants were split. Split, both are free: ForestFit -16.6%%, GBMFit flat, and BOTH digests pass unchanged. SPLIT FIRST, THEN SWEEP — a sweep of a shared constant measures the sum of two answers and finds neither", false},
 	{"PS3071", "local-buffer-escapes-per-call", "a METHOD that declares a local fixed-size byte array and hands a slice of it to another call. If that call takes an interface — io.ReadFull and friends — the slice escapes and the array is HEAP-allocated on every invocation, which a reader primitive pays once per scalar it decodes. Hang the buffer on the receiver, which is already on the heap, and the per-call allocation disappears. MEASURED on the GGUF header reader: u32 and u64 were 1.34M objects of a 4.0M allocation profile, and moving their arrays onto the reader plus reusing one scratch for string bodies took BenchmarkReadFileSynth/header-heavy from 223892 to 95804 allocations, -57.2%%, and 5.45 to 4.50 ms, -17.3%%, with the tensor-heavy and skewed cells cutting allocations by the same proportion. SAFE ONLY IF NOTHING KEEPS THE BUFFER: the string case works because string(b) COPIES. Check every caller before sharing one scratch, and check the type is not used concurrently", false},
+	{"PS3072", "serial-loop-reseeded-from-the-item", "a loop that RESEEDS, from the current item, the state it appears to carry. The carried object is overwritten before it is read, so the iteration is a pure function of its own item and the loop is bandable despite reading as a chain — a shape a scaling probe finds only after the fact. Give every worker its own copy of the reseeded object and of the scratch the body reuses, accumulate any count per worker and fold afterwards, since integer addition is order-free. MEASURED on the watermark detector, whose per-token partial Fisher-Yates reseeds a PCG from (key, previous token) and restores its permutation before the next: BenchmarkWatermarkDetect 39.17 to 7.17 ms, -81.7%%, bit-identical, from a 0.99x scaling ratio. CHECK THE RESTORE — the win depends on the body leaving its scratch as it found it", false},
 	{"PS3055", "sort-then-truncate", "a slice sorted in FULL and then cut to a small prefix. Everything past the cut was ordered for nothing. SELECT INSTEAD OF SORTING: a bounded worst-at-root heap keeps the best k in O(n log k), and sorting just those reproduces the prefix exactly. BIT-IDENTICAL WHEN THE COMPARATOR IS A STRICT TOTAL ORDER — check that first, since with genuine ties a heap and a sort can disagree about which equal element is kept. MEASURED on diverse beam search, which sorted every beam whole vocabulary expansion to keep a handful: BenchmarkDiverseBeamSearch/cheap fell 90.5%% and /realistic 42.7%%, with plain beam search unmoved. GATE THE ORDER, NOT JUST THE SET — leaving the survivors in heap order passed every existing test of the measured site, because the result is re-sorted before return and the permutation only shows up in the NEXT step. BUILD THE HEAP FROM A COPY if it reuses the input array", false},
 	{"PS3054", "asymmetric-dtype-arm", "an if/else on a TYPE-ASSERTION flag whose arms are not the same shape: one spells its reduction out as a scalar loop while the other hands the same work to a helper. That is a half-finished optimization — one dtype unrolled or vectorized, the twin left — and it survives because the suite usually has a cell for the optimized dtype only. BRING THE ARMS LEVEL, AND ADD THE MISSING CELL FIRST: a change to one arm reads as NOISE against a benchmark entering the other. MEASURED TWICE — the flash attention f64 scores read 7.38/7.22/7.63 ms against the f32 cell and -35.7%% against an f64 cell added for them; the retention backward had the same split in two places and matching them took BenchmarkRetentionBwdF64 down 25.3%% with the f32 cell unmoved. CHECK WHICH ARM IS BEHIND: a helper that reassociates may be gated to a tolerance the other dtype lacks, in which case the scalar arm is correct and needs an EXACT grouping rather than the same call", false},
 	{"PS3053", "independent-reductions-one-at-a-time", "a loop over items where each computes its own SCALAR reduction over the same shared source. A single-accumulator reduction is a DEPENDENT add chain, so the loop is bound by add LATENCY not throughput, and running the items one at a time leaves the chains end to end when they could interleave. TAKE FOUR ITEMS PER PASS with four separate accumulators, loading each source element once for all four. BIT-IDENTICAL, which is what separates this from PS3010: there the fix splits ONE sum into partials and reassociates, here the accumulators belong to DIFFERENT results and each keeps its own ascending order. MEASURED on the memorizing-attention k-nearest-neighbour scan, whose per-query dot was 44.5%% of the benchmark: BenchmarkMemForward_512 fell 34.6%%, the 128 cell 22.6%%, BenchmarkMemGatherLarge 44.6%%. DESIGN THE GATING MUTATION WITH CARE — the observable is which items get SELECTED, so a perturbation that scales or shifts one item's scores uniformly changes no ranking and leaves the oracle green (a 1%% scale and a constant offset both did); it must depend on the shared source's index and be large enough to reorder", false},
@@ -1374,6 +1375,7 @@ func scanFile(fset *token.FileSet, f *ast.File, ns nameSets) []finding {
 		out = append(out, queueingFanoutFindings(fset, f, fn)...)
 		out = append(out, sharedThresholdFindings(fset, f, fn)...)
 		out = append(out, escapingLocalBufferFindings(fset, fn)...)
+		out = append(out, reseededSerialLoopFindings(fset, f, fn)...)
 		out = append(out, innerIndependentUnderSequentialOuterFindings(fset, f, fn)...)
 		out = append(out, loopHoistableScratchFindings(fset, fn)...)
 		out = append(out, selfComparisonOracleFindings(fset, fn)...)
@@ -18452,6 +18454,91 @@ func collectColumnRead(fset *token.FileSet, fn *ast.FuncDecl, m ast.Node, iv str
 			" +15.6%% bytes, with ForestFit flat as a control", key, iv),
 	})
 	return false
+}
+
+// --- PS3072: a serial loop that reseeds its own state ----------------------------------------
+
+// reseedNames are the calls that put a carried object back into a state determined ENTIRELY by
+// their arguments. A generator reseeded from the item is a pure function of that item, whatever
+// it computed for the previous one.
+var reseedNames = map[string]bool{"Seed": true, "Reset": true, "Reinit": true, "Rewind": true}
+
+// reseededSerialLoopFindings flags PS3072 — a loop that reseeds, from the current item, the
+// state it appears to carry, in a function that never fans out.
+func reseededSerialLoopFindings(fset *token.FileSet, f *ast.File, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil || f.Name == nil || len(fanoutReg[f.Name.Name]) == 0 {
+		return nil
+	}
+	if callsFanoutHelper(fn.Body, fanoutReg[f.Name.Name]) ||
+		callsFanoutHelper(fn.Body, fansOutReg[f.Name.Name]) {
+		return nil
+	}
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		iv, body, ok := loopVarBody(n)
+		if !ok {
+			return true
+		}
+		// PER-ITEM WORK, NOT A COPY. A reseed in a loop whose body is straight-line is a few
+		// nanoseconds either way; the shape only pays when each item runs its own inner loop.
+		if !containsLoop(body) {
+			return true
+		}
+		// State DECLARED IN THE LOOP is already private to the iteration and says nothing.
+		inner := declaredIn(body)
+		ast.Inspect(body, func(m ast.Node) bool {
+			if len(out) > 0 {
+				return false
+			}
+			c, ok := m.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := c.Fun.(*ast.SelectorExpr)
+			if !ok || !reseedNames[sel.Sel.Name] {
+				return true
+			}
+			recv, ok := sel.X.(*ast.Ident)
+			if !ok || inner[recv.Name] {
+				return true
+			}
+			// THE ARGUMENT IS THE WHOLE ARGUMENT. A reseed from a constant genuinely carries the
+			// generator forward and the iterations are a chain; a reseed that mentions the loop
+			// variable makes every iteration reproducible from the item alone.
+			fromItem := false
+			for _, a := range c.Args {
+				if mentionsIdent(a, iv) {
+					fromItem = true
+				}
+			}
+			if !fromItem {
+				return true
+			}
+			out = append(out, finding{
+				pos:      fset.Position(c.Pos()),
+				category: "serial-loop-reseeded-from-the-item",
+				msg: fmt.Sprintf("this loop reseeds %q from the current item — %q takes an"+
+					" argument built from %q — so the state it appears to carry across"+
+					" iterations is DEAD: whatever the previous item computed is overwritten"+
+					" before it is read, and the iteration is a pure function of its own item."+
+					" A loop like this READS as sequential and is not, which is why it survives"+
+					" a scaling probe unnoticed. BAND IT, giving every worker its own copy of"+
+					" the reseeded object and of any scratch the body reuses, and check what"+
+					" ELSE crosses iterations: a running COUNT or SUM crosses, but integer"+
+					" addition is order-free, so accumulate per worker and fold afterwards."+
+					" MEASURED on the watermark detector, whose per-token partial Fisher-Yates"+
+					" reseeds a PCG from (key, previous token) and restores its permutation"+
+					" before the next: BenchmarkWatermarkDetect went from 39.17 to 7.17 ms,"+
+					" -81.7%%, bit-identical, with a scaling ratio of 0.99x before the change."+
+					" CHECK THE RESTORE — the win depends on the body leaving its scratch as it"+
+					" found it; if it does not, the copy per worker is what makes that true",
+					recv.Name, sel.Sel.Name, iv),
+			})
+			return false
+		})
+		return true
+	})
+	return out
 }
 
 // --- PS3071: a local buffer that escapes on every call ---------------------------------------
