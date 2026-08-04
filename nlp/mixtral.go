@@ -57,6 +57,63 @@ func (c MixtralConfig) kvHeads() int {
 	return c.KVHeads
 }
 
+// NewMixtral builds a random-initialized Mixtral at the given geometry (Xavier-uniform projections,
+// self-initialized SparseMoE experts+router) — the Mixtral twin of NewLlama, for tests/benchmarks that
+// need a Mixtral without a checkpoint (e.g. Q4_K MoE serving validation, which needs Dim/Hidden % 256).
+func NewMixtral(cfg MixtralConfig, seed uint64) (*Mixtral, error) {
+	if cfg.Heads <= 0 || cfg.Dim%cfg.Heads != 0 {
+		return nil, fmt.Errorf("nlp: Mixtral dim %d not divisible by heads %d", cfg.Dim, cfg.Heads)
+	}
+	kv := cfg.kvHeads()
+	if cfg.Heads%kv != 0 {
+		return nil, fmt.Errorf("nlp: Mixtral heads %d not divisible by kv_heads %d", cfg.Heads, kv)
+	}
+	dk := cfg.Dim / cfg.Heads
+	if dk%2 != 0 {
+		return nil, fmt.Errorf("nlp: Mixtral head dim %d must be even for RoPE", dk)
+	}
+	if cfg.Experts <= 0 || cfg.Hidden <= 0 {
+		return nil, fmt.Errorf("nlp: Mixtral needs Experts>0 and Hidden>0, got %d/%d", cfg.Experts, cfg.Hidden)
+	}
+	kvDim := kv * dk
+	m := &Mixtral{Config: cfg}
+	m.TokEmb = tensor.New(tensor.F64, tensor.Shape{cfg.Vocab, cfg.Dim})
+	nn.XavierUniform(m.TokEmb, cfg.Vocab, cfg.Dim, seed)
+	s := seed + 1
+	ones := func(n int) *tensor.Tensor {
+		t := tensor.New(tensor.F64, tensor.Shape{n})
+		for i := range n {
+			t.SetF64(1, i)
+		}
+		return t
+	}
+	proj := func(in, out int) *tensor.Tensor {
+		t := tensor.New(tensor.F64, tensor.Shape{in, out})
+		nn.XavierUniform(t, in, out, s)
+		s++
+		return t
+	}
+	eps := cfg.Eps
+	if eps <= 0 {
+		eps = 1e-5
+	}
+	for range cfg.Layers {
+		m.Blocks = append(m.Blocks, &MixtralBlock{
+			AttnNorm: &nn.RMSNorm{Gamma: ones(cfg.Dim), Eps: eps},
+			Wq:       proj(cfg.Dim, cfg.Dim),
+			Wk:       proj(cfg.Dim, kvDim),
+			Wv:       proj(cfg.Dim, kvDim),
+			Wo:       proj(cfg.Dim, cfg.Dim),
+			FFNNorm:  &nn.RMSNorm{Gamma: ones(cfg.Dim), Eps: eps},
+			MoE:      nn.NewSparseMoE(tensor.F64, cfg.Dim, cfg.Hidden, cfg.Experts, cfg.TopK, s),
+		})
+		s += uint64(cfg.Experts)*8 + 8
+	}
+	m.Norm = &nn.RMSNorm{Gamma: ones(cfg.Dim), Eps: eps}
+	m.Out = proj(cfg.Dim, cfg.Vocab)
+	return m, nil
+}
+
 // Forward computes logits [seq, vocab] for the prompt tokens.
 func (m *Mixtral) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, error) {
 	return m.forwardCapture(ctx, tokens, nil, false)
