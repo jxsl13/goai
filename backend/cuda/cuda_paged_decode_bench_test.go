@@ -1213,3 +1213,156 @@ func BenchmarkDecodeHd128_b256_len2048_base(b *testing.B) {
 func BenchmarkDecodeHd128_b256_len2048_gqa(b *testing.B) {
 	benchDecodeGQAvsBaseHd128(b, 256, 2048, true)
 }
+
+// TestPagedDecodeGQAf16ParityHd128 validates the hd=128 f16-KV GQA decode against a
+// host online-softmax reference. f16 KV (~2^-11 rel) → a looser bound than the f32 paths.
+func TestPagedDecodeGQAf16ParityHd128(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd, blockSize = 8, 2, 128, 16
+	wkv := kvHeads * hd
+	qWidth := qHeads * hd
+	group := qHeads / kvHeads
+	rng := rand.New(rand.NewSource(59))
+	pool, _ := cuda.NewPagedKVPool(256, blockSize, wkv)
+	defer pool.Free()
+	lens := []int{20, 47, 5, 128, 1, 63, 64, 33}
+	batch := len(lens)
+	seqs := make([]*cuda.SeqKV, batch)
+	kref := make([][]float32, batch)
+	vref := make([][]float32, batch)
+	for si, n := range lens {
+		seqs[si] = pool.NewSeqKV()
+		kf := make([]float32, n*wkv)
+		vf := make([]float32, n*wkv)
+		for i := range kf {
+			kf[i] = float32(rng.NormFloat64()) * 0.3
+			vf[i] = float32(rng.NormFloat64()) * 0.3
+		}
+		dk, _ := cuda.NewDeviceF32(n, wkv)
+		dk.UploadF32(kf)
+		dv, _ := cuda.NewDeviceF32(n, wkv)
+		dv.UploadF32(vf)
+		seqs[si].Append(dk, dv)
+		dk.Free()
+		dv.Free()
+		kref[si] = kf
+		vref[si] = vf
+	}
+	qf := make([]float32, batch*qWidth)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.3
+	}
+	q, _ := cuda.NewDeviceF32(batch, qWidth)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	o, err := pool.BatchedDecodeAttnViewGQAf16(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer o.Free()
+	got := make([]float32, batch*qWidth)
+	o.DownloadF32(got)
+	scale := 1.0 / math.Sqrt(float64(hd))
+	var num, den float64
+	for si := 0; si < batch; si++ {
+		n := lens[si]
+		for h := 0; h < qHeads; h++ {
+			kvh := h / group
+			sc := make([]float64, n)
+			mx := -1e300
+			for j := 0; j < n; j++ {
+				var d float64
+				for c := 0; c < hd; c++ {
+					d += float64(qf[si*qWidth+h*hd+c]) * float64(kref[si][j*wkv+kvh*hd+c])
+				}
+				d *= scale
+				sc[j] = d
+				if d > mx {
+					mx = d
+				}
+			}
+			var sum float64
+			for j := 0; j < n; j++ {
+				sc[j] = math.Exp(sc[j] - mx)
+				sum += sc[j]
+			}
+			for c := 0; c < hd; c++ {
+				var acc float64
+				for j := 0; j < n; j++ {
+					acc += sc[j] / sum * float64(vref[si][j*wkv+kvh*hd+c])
+				}
+				g := float64(got[si*qWidth+h*hd+c])
+				num += (g - acc) * (g - acc)
+				den += acc * acc
+			}
+		}
+	}
+	rms := math.Sqrt(num / den)
+	t.Logf("hd=128 f16-GQA vs host-ref rel-RMS %.3e", rms)
+	if rms > 5e-3 {
+		t.Fatalf("hd=128 f16-GQA rel-RMS %.3e too high", rms)
+	}
+}
+
+func benchDecodeGQAf16Hd128(b *testing.B, batch, seqLen int, f16 bool) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const qHeads, kvHeads, hd = 16, 2, 128
+	kvW := kvHeads * hd
+	rng := rand.New(rand.NewSource(23))
+	pool, _ := cuda.NewPagedKVPool(batch*((seqLen+16)/16+1), 16, kvW)
+	defer pool.Free()
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+		kf := make([]float32, seqLen*kvW)
+		for j := range kf {
+			kf[j] = float32(rng.NormFloat64()) * 0.1
+		}
+		dk, _ := cuda.NewDeviceF32(seqLen, kvW)
+		dk.UploadF32(kf)
+		seqs[i].Append(dk, dk)
+		dk.Free()
+	}
+	qf := make([]float32, batch*qHeads*hd)
+	for i := range qf {
+		qf[i] = float32(rng.NormFloat64()) * 0.1
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qf)
+	defer q.Free()
+	view, _ := pool.UploadBatchView(seqs)
+	defer view.Free()
+	run := func() (*cuda.DeviceF32, error) {
+		if f16 {
+			return pool.BatchedDecodeAttnViewGQAf16(q, view, qHeads, kvHeads)
+		}
+		return pool.BatchedDecodeAttnViewGQA(q, view, qHeads, kvHeads)
+	}
+	o, err := run()
+	if err != nil {
+		b.Skipf("hd128: %v", err)
+	}
+	o.Free()
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		o, _ := run()
+		o.Free()
+	}
+	cuda.GraphSync()
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "attn/s")
+}
+
+func BenchmarkDecodeHd128_b256_len2048_gqaf32(b *testing.B) {
+	benchDecodeGQAf16Hd128(b, 256, 2048, false)
+}
+func BenchmarkDecodeHd128_b256_len2048_gqaf16(b *testing.B) {
+	benchDecodeGQAf16Hd128(b, 256, 2048, true)
+}
