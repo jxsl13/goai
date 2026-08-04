@@ -5,7 +5,9 @@ package llamagpu
 import (
 	"fmt"
 	"math"
+	"os"
 	"runtime"
+	"sort"
 
 	"github.com/jxsl13/goai/backend/cuda"
 	"github.com/jxsl13/goai/nlp"
@@ -179,6 +181,22 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 			return nil, err
 		}
 		gd.layers[i] = l
+	}
+	// Warm lazy device allocations (notably the flash-decode split-K scratch, allocated on first use)
+	// with one throwaway eager forwardBody, so a later CUDA-graph capture never cudaMallocs DURING
+	// capture — which fails. Inputs are uninitialized (the logits are discarded); the KV caches touched
+	// at pos 0 are re-zeroed. Without this, Generate/GenerateGreedy fail when they are the first flash
+	// user (masked in the test suite only because an earlier eager test warms the scratch first).
+	if err = gd.pos.Set(0); err != nil {
+		return nil, err
+	}
+	if err = gd.forwardBody(); err != nil {
+		return nil, err
+	}
+	for _, l := range gd.layers {
+		if err = l.cache.ZeroCache(); err != nil {
+			return nil, err
+		}
 	}
 	ok = true
 	return gd, nil
@@ -411,18 +429,25 @@ func (gd *GraphLlamaDecoder) captureGraph() error {
 	return nil
 }
 
-// stepGraph replays the captured decode graph for one token at pos, returning host logits.
-func (gd *GraphLlamaDecoder) stepGraph(token, pos int) ([]float32, error) {
+// stepGraphLaunch replays the captured decode graph for one token at pos, leaving the result in the
+// device logits buffer (gd.logits) — no host copy. The greedy/top-k sampling paths consume gd.logits
+// on device (Argmax / TopK); only the flexible CPU-sampler fallback copies the whole vector to host.
+func (gd *GraphLlamaDecoder) stepGraphLaunch(token, pos int) error {
 	if err := gd.pos.Set(pos); err != nil {
-		return nil, err
+		return err
 	}
 	if err := gd.emb.EmbedInto([]int32{int32(token)}, gd.dx); err != nil {
-		return nil, err
+		return err
 	}
 	if err := gd.graph.Launch(); err != nil {
-		return nil, err
+		return err
 	}
-	if err := cuda.GraphSync(); err != nil {
+	return cuda.GraphSync()
+}
+
+// stepGraph replays the captured decode graph for one token at pos, returning host logits.
+func (gd *GraphLlamaDecoder) stepGraph(token, pos int) ([]float32, error) {
+	if err := gd.stepGraphLaunch(token, pos); err != nil {
 		return nil, err
 	}
 	l, err := gd.logits.ToHost()
@@ -442,32 +467,103 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 		return nil, fmt.Errorf("llamagpu: prompt (%d) >= maxLen (%d)", len(prompt), gd.maxLen)
 	}
 	out := append([]int(nil), prompt...)
-	logits, err := gd.prefillForward(prompt)
+	logits, err := gd.prefillForward(prompt) // host logits for the first token
 	if err != nil {
 		return nil, err
 	}
 	if err := gd.captureGraph(); err != nil {
 		return nil, err
 	}
+	// On-device top-k sampling fast-path (§topk): for a penalty-free TopK sampler the whole-vocab D2H +
+	// CPU sort per token collapses to a GPU TopK(K) (K·8 bytes out) + a CPU draw over K candidates —
+	// bit-identical to the full-vocab sampler (K⊇top-k; candidates fed in vocab-index order so the draw
+	// order and rng match). sp==nil ⟹ the flexible CPU-sampler fallback (full ToHost).
+	sp, fastK := gd.fastTopKSample(s)
 	pos := len(prompt)
 	buf := make([]float64, gd.vocab)
 	for range maxNew {
 		if pos >= gd.maxLen {
 			break
 		}
-		for i, x := range logits {
-			buf[i] = float64(x)
+		var next int
+		if sp != nil && logits == nil { // decode step, logits resident — sample from the on-device top-k
+			gi, gv, e := gd.logits.TopK(fastK)
+			if e != nil {
+				return nil, e
+			}
+			next = sampleTopKCandidates(sp, gi, gv)
+		} else { // first token (prefill host logits) or CPU-sampler fallback
+			for i, x := range logits {
+				buf[i] = float64(x)
+			}
+			next = s.SampleWithHistory(buf, out)
 		}
-		next := s.SampleWithHistory(buf, out)
 		out = append(out, next)
-		l, err := gd.stepGraph(next, pos)
-		if err != nil {
-			return nil, err
+		if sp != nil {
+			if e := gd.stepGraphLaunch(next, pos); e != nil { // no host copy — next iter reads gd.logits
+				return nil, e
+			}
+			logits = nil
+		} else {
+			l, e := gd.stepGraph(next, pos)
+			if e != nil {
+				return nil, e
+			}
+			logits = l
 		}
-		logits = l
 		pos++
 	}
 	return out, nil
+}
+
+// fastTopKSample returns (sampler, K) when s is an on-device-samplable *nlp.Sampler — a penalty-free
+// TopK sampler whose selection is confined to the top-TopK, so a GPU TopK(K>TopK) superset lets the CPU
+// draw exactly on K candidates. Returns (nil, 0) for any other sampler (penalties, TopK off/too large,
+// a non-*Sampler impl, or GOAI_CUDA_TOPK_SAMPLE=0) → the flexible full-vocab fallback.
+func (gd *GraphLlamaDecoder) fastTopKSample(s nlp.TokenSampler) (*nlp.Sampler, int) {
+	if os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0" {
+		return nil, 0
+	}
+	sp, ok := s.(*nlp.Sampler)
+	if !ok {
+		return nil, 0
+	}
+	// Penalties rewrite arbitrary tokens' logits from history, so a raw-logit top-k is not the effective
+	// top-k → require them off (RepeatPenalty 0 or 1 are both no-ops). XTC/MinP/Typical/TopP are fine:
+	// they only ever shrink the post-TopK set, which stays ⊆ the K candidates.
+	if !(sp.RepeatPenalty == 0 || sp.RepeatPenalty == 1) || sp.FreqPenalty != 0 || sp.PresencePenalty != 0 || sp.DRYMultiplier != 0 {
+		return nil, 0
+	}
+	if sp.TopK <= 0 || sp.TopK > 240 { // K = TopK+16 must stay within the cu_topk cap (256)
+		return nil, 0
+	}
+	k := sp.TopK + 16 // margin so a tie at rank TopK can't push a real top-TopK token out of the K set
+	if k > gd.vocab {
+		k = gd.vocab
+	}
+	return sp, k
+}
+
+// sampleTopKCandidates draws exactly as the full-vocab sampler would, but over just the K GPU top-k
+// candidates: it feeds them to sp.Sample in ASCENDING VOCAB-INDEX order so the multinomial's cumulative
+// scan visits the selected tokens in the same order (and consumes the same rng) as the full-vocab path,
+// then maps the chosen local index back to its vocab id. Exact for the penalty-free TopK case (K⊇top-k).
+func sampleTopKCandidates(sp *nlp.Sampler, gi []int32, gv []float32) int {
+	k := len(gi)
+	order := make([]int, k)
+	for j := range order {
+		order[j] = j
+	}
+	sort.Slice(order, func(a, b int) bool { return gi[order[a]] < gi[order[b]] })
+	vals := make([]float64, k)
+	for j, o := range order {
+		vals[j] = float64(gv[o])
+	}
+	local := sp.Sample(vals)
+	if local < 0 || local >= k {
+		local = 0 // degenerate (no positive mass) — the sampler already fell back to argmax on vals
+	}
+	return int(gi[order[local]])
 }
 
 // GenerateGreedy decodes maxNew tokens by argmax, doing the argmax ON THE GPU (cu_argmax_f32) so each
