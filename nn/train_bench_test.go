@@ -264,6 +264,38 @@ func BenchmarkShampooStepOnlyVec(b *testing.B) {
 	}
 }
 
+// squareMatrixFixture builds nParams independent [dim,dim] matrix parameters with
+// deterministic gradients — the regime where Shampoo/SOAP's per-parameter O(dim³)
+// eigendecompositions dominate, so per-parameter fan-out is what wins.
+func squareMatrixFixture(nParams, dim int) ([]*tensor.Tensor, nn.GradFn) {
+	params := make([]*tensor.Tensor, nParams)
+	grads := map[*tensor.Tensor]*tensor.Tensor{}
+	for i := range params {
+		params[i] = tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		g := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		gd := g.Storage().F64()
+		for j := range gd {
+			gd[j] = float64((j+i)%17) * 1e-3
+		}
+		grads[params[i]] = g
+	}
+	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+}
+
+// BenchmarkShampooStepMulti8x512 times a refresh-every-step (RootEvery=1) Shampoo update
+// over 8 independent [512,512] matrix parameters — the eigendecomposition-bound regime the
+// per-parameter fan-out targets.
+func BenchmarkShampooStepMulti8x512(b *testing.B) {
+	params, gf := squareMatrixFixture(8, 512)
+	opt := nn.NewShampoo(params, 1e-3) // RootEvery defaults to 1 → every step refreshes
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkClipGradNorm times the global-norm pass plus one clipped read of
 // every gradient — the per-step cost of gradient clipping.
 func BenchmarkClipGradNorm(b *testing.B) {

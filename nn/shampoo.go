@@ -39,8 +39,6 @@ type Shampoo struct {
 
 	step int
 	st   []*shampooState
-
-	gmScr, tScr, ghScr, rgScr [][]float64 // pooled per-step matrix scratch (gradient matrix, T=G·R⁻¹ᐟ⁴, Ĝ), grown on demand
 }
 
 // growMat returns buf reshaped to r×c, reusing the outer slice and each row where they
@@ -67,6 +65,12 @@ type shampooState struct {
 	l, r   [][]float64 // matrix-param preconditioners L (m×m), R (n×n)
 	li, ri [][]float64 // cached inverse fourth roots (recomputed every RootEvery steps)
 	v      []float64   // diagonal AdaGrad accumulator for non-matrix params
+
+	// per-parameter matrix scratch (gradient matrix, R-gram, T=G·R⁻¹ᐟ⁴, Ĝ), grown on demand and
+	// reused across steps (0 allocs after warm-up). Owning it per-parameter — instead of on the
+	// optimizer — is what lets Step fan out across parameters: each stepParam touches only its own
+	// state slot and its own scratch, so no two goroutines share a buffer.
+	gmScr, tScr, ghScr, rgScr [][]float64
 }
 
 // ShampooOption configures a Shampoo optimizer (functional-options idiom, §C12).
@@ -116,139 +120,162 @@ func NewShampoo(params []*tensor.Tensor, lr float64, opts ...ShampooOption) *Sha
 func (s *Shampoo) Step(grad GradFn) error {
 	refresh := s.step%s.RootEvery == 0
 	s.step++
+	// GradFn is the caller's and is not documented thread-safe, so gather every gradient SERIALLY
+	// first; the per-parameter gram/inverse-root/precondition/update below touches only that
+	// parameter's own shampooState slot, its own p, and its own scratch, so it fans out —
+	// BIT-IDENTICALLY, since each parameter's arithmetic is untouched and only which goroutine runs
+	// it moves. The expensive refresh-step eigendecompositions (invMatrixRoot→SymEig on L and R)
+	// then run concurrently across parameters. (The per-parameter L/R pair still overlaps internally
+	// too, so a single-parameter Step keeps its 2-way concurrency.)
+	grads := make([]*tensor.Tensor, len(s.Params))
+	work := 0
 	for pi, p := range s.Params {
 		g := grad(p)
 		if g == nil {
 			continue
 		}
-		if s.st[pi] == nil {
-			s.st[pi] = &shampooState{}
+		grads[pi] = g
+		work += p.Numel()
+	}
+	parallelRows(len(s.Params), max(work/max(len(s.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				s.stepParam(pi, s.Params[pi], grads[pi], refresh)
+			}
 		}
-		st := s.st[pi]
+	})
+	return nil
+}
 
-		if p.Ndim() == 2 {
-			m, n := p.Shape()[0], p.Shape()[1]
-			// pooled per-step gradient matrix (was matAt(g), m+1 allocs/step) — fully
-			// overwritten before read, so reusing the receiver scratch is bit-identical.
-			s.gmScr = growMat(s.gmScr, m, n)
-			gm := s.gmScr
-			for i := range m {
-				for j := range n {
-					gm[i][j] = g.AtF64(i, j)
+// stepParam applies one Shampoo update to a single parameter. It reads and writes only s.st[pi],
+// p, and that parameter's own scratch, so the loop in Step bands it across parameters.
+func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
+	if s.st[pi] == nil {
+		s.st[pi] = &shampooState{}
+	}
+	st := s.st[pi]
+
+	if p.Ndim() == 2 {
+		m, n := p.Shape()[0], p.Shape()[1]
+		// pooled per-step gradient matrix (was matAt(g), m+1 allocs/step) — fully
+		// overwritten before read, so reusing the receiver scratch is bit-identical.
+		st.gmScr = growMat(st.gmScr, m, n)
+		gm := st.gmScr
+		for i := range m {
+			for j := range n {
+				gm[i][j] = g.AtF64(i, j)
+			}
+		}
+		if st.l == nil { // initialize preconditioners to ε·I
+			st.l = eyeScaled(m, s.Eps)
+			st.r = eyeScaled(n, s.Eps)
+		}
+		// L += G·Gᵀ and R += Gᵀ·G are SYMMETRIC (gm[i][k]·gm[j][k] == gm[j][k]·gm[i][k],
+		// same k-order); invMatrixRoot→SymEig reads the full matrix, so accumulate only
+		// the upper triangle + diagonal and mirror once — halves the O(m²n)+O(n²m) grams.
+		// Bit-identical: the original two triangles were already exactly equal.
+		for i := range m {
+			for j := i; j < m; j++ {
+				var acc float64
+				for k := range n {
+					acc += gm[i][k] * gm[j][k]
+				}
+				st.l[i][j] += acc
+				if j != i {
+					st.l[j][i] = st.l[i][j]
 				}
 			}
-			if st.l == nil { // initialize preconditioners to ε·I
-				st.l = eyeScaled(m, s.Eps)
-				st.r = eyeScaled(n, s.Eps)
+		}
+		// R-gram reblocked to row-contiguous rank-1 accumulation (see soap.go): k
+		// innermost strides down a column across jagged gm rows; accumulate
+		// ascending-k outer products into a pooled scratch, add once. Same
+		// ascending-k order into a +0 accumulator ⇒ BIT-IDENTICAL.
+		st.rgScr = growMat(st.rgScr, n, n)
+		rg := st.rgScr
+		for i := range n {
+			ri := rg[i]
+			for j := i; j < n; j++ {
+				ri[j] = 0
 			}
-			// L += G·Gᵀ and R += Gᵀ·G are SYMMETRIC (gm[i][k]·gm[j][k] == gm[j][k]·gm[i][k],
-			// same k-order); invMatrixRoot→SymEig reads the full matrix, so accumulate only
-			// the upper triangle + diagonal and mirror once — halves the O(m²n)+O(n²m) grams.
-			// Bit-identical: the original two triangles were already exactly equal.
-			for i := range m {
-				for j := i; j < m; j++ {
-					var acc float64
-					for k := range n {
-						acc += gm[i][k] * gm[j][k]
-					}
-					st.l[i][j] += acc
-					if j != i {
-						st.l[j][i] = st.l[i][j]
-					}
-				}
-			}
-			// R-gram reblocked to row-contiguous rank-1 accumulation (see soap.go): k
-			// innermost strides down a column across jagged gm rows; accumulate
-			// ascending-k outer products into a pooled scratch, add once. Same
-			// ascending-k order into a +0 accumulator ⇒ BIT-IDENTICAL.
-			s.rgScr = growMat(s.rgScr, n, n)
-			rg := s.rgScr
+		}
+		for k := range m {
+			gk := gm[k]
 			for i := range n {
+				av := gk[i]
 				ri := rg[i]
 				for j := i; j < n; j++ {
-					ri[j] = 0
+					ri[j] += av * gk[j]
 				}
 			}
-			for k := range m {
-				gk := gm[k]
-				for i := range n {
-					av := gk[i]
-					ri := rg[i]
-					for j := i; j < n; j++ {
-						ri[j] += av * gk[j]
-					}
-				}
-			}
-			for i := range n {
-				for j := i; j < n; j++ {
-					st.r[i][j] += rg[i][j]
-					if j != i {
-						st.r[j][i] = st.r[i][j]
-					}
-				}
-			}
-			if refresh || st.li == nil {
-				// L^{−1/4} and R^{−1/4} are independent O(n³) eigensolves (each its own SymEig +
-				// reconstruction, no shared state) — run them concurrently. BIT-IDENTICAL: each is
-				// deterministic and reads/writes disjoint state, so the result is order-independent.
-				var wg sync.WaitGroup
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					st.ri = invMatrixRoot(st.r, 4, s.Eps) // R^{−1/4}
-				}()
-				st.li = invMatrixRoot(st.l, 4, s.Eps) // L^{−1/4}
-				wg.Wait()
-			}
-			li, ri := st.li, st.ri
-			// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.
-			s.tScr = growMat(s.tScr, m, n) // pooled T scratch (was make per step)
-			s.ghScr = growMat(s.ghScr, m, n)
-			t, gh := s.tScr, s.ghScr
-			shampooPrecondInto(gh, t, li, gm, ri, m, n)
-			for i := range m {
-				for j := range n {
-					p.SetF64(p.AtF64(i, j)-s.LR*gh[i][j], i, j) // W −= η·Ĝ
-				}
-			}
-			continue
 		}
+		for i := range n {
+			for j := i; j < n; j++ {
+				st.r[i][j] += rg[i][j]
+				if j != i {
+					st.r[j][i] = st.r[i][j]
+				}
+			}
+		}
+		if refresh || st.li == nil {
+			// L^{−1/4} and R^{−1/4} are independent O(n³) eigensolves (each its own SymEig +
+			// reconstruction, no shared state) — run them concurrently. BIT-IDENTICAL: each is
+			// deterministic and reads/writes disjoint state, so the result is order-independent.
+			var wg sync.WaitGroup
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				st.ri = invMatrixRoot(st.r, 4, s.Eps) // R^{−1/4}
+			}()
+			st.li = invMatrixRoot(st.l, 4, s.Eps) // L^{−1/4}
+			wg.Wait()
+		}
+		li, ri := st.li, st.ri
+		// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.
+		st.tScr = growMat(st.tScr, m, n) // pooled T scratch (was make per step)
+		st.ghScr = growMat(st.ghScr, m, n)
+		t, gh := st.tScr, st.ghScr
+		shampooPrecondInto(gh, t, li, gm, ri, m, n)
+		for i := range m {
+			for j := range n {
+				p.SetF64(p.AtF64(i, j)-s.LR*gh[i][j], i, j) // W −= η·Ĝ
+			}
+		}
+		return
+	}
 
-		// non-matrix parameter: diagonal AdaGrad (Shampoo order-1, exponent −1/2).
-		nEl := p.Numel()
-		if st.v == nil {
-			st.v = make([]float64, nEl)
-		}
-		v := st.v
-		// Typed fast paths (contiguous f64/f32 pairs): flat loops, accumulator and
-		// update arithmetic in float64 exactly as the generic path computes them.
-		if pf := flatF64(p); pf != nil {
-			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					v[i] += gv * gv
-					pf[i] = pf[i] - s.LR*gv/(math.Sqrt(v[i])+s.Eps)
-				}
-				continue
+	// non-matrix parameter: diagonal AdaGrad (Shampoo order-1, exponent −1/2).
+	nEl := p.Numel()
+	if st.v == nil {
+		st.v = make([]float64, nEl)
+	}
+	v := st.v
+	// Typed fast paths (contiguous f64/f32 pairs): flat loops, accumulator and
+	// update arithmetic in float64 exactly as the generic path computes them.
+	if pf := flatF64(p); pf != nil {
+		if gf := flatF64(g); gf != nil {
+			for i, gv := range gf {
+				v[i] += gv * gv
+				pf[i] = pf[i] - s.LR*gv/(math.Sqrt(v[i])+s.Eps)
 			}
-		} else if pf := flatF32(p); pf != nil {
-			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					v[i] += gv * gv
-					pf[i] = float32(float64(pf[i]) - s.LR*gv/(math.Sqrt(v[i])+s.Eps))
-				}
-				continue
-			}
+			return
 		}
-		// Generic fallback: any dtype/layout via the widening accessors.
-		for i := range nEl {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			v[i] += gv * gv
-			p.SetF64(p.AtF64(idx...)-s.LR*gv/(math.Sqrt(v[i])+s.Eps), idx...)
+	} else if pf := flatF32(p); pf != nil {
+		if gf := flatF32(g); gf != nil {
+			for i := range gf {
+				gv := float64(gf[i])
+				v[i] += gv * gv
+				pf[i] = float32(float64(pf[i]) - s.LR*gv/(math.Sqrt(v[i])+s.Eps))
+			}
+			return
 		}
 	}
-	return nil
+	// Generic fallback: any dtype/layout via the widening accessors.
+	for i := range nEl {
+		idx := tensor.Unravel(i, p.Shape())
+		gv := g.AtF64(idx...)
+		v[i] += gv * gv
+		p.SetF64(p.AtF64(idx...)-s.LR*gv/(math.Sqrt(v[i])+s.Eps), idx...)
+	}
 }
 
 // eyeScaled returns an n×n matrix e·I.
