@@ -244,6 +244,8 @@ int cu_ldmatrix_probe2(void* dOut);
 int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
 // cu_append_dpos_i8: quantize one [kvHeads*hd] f32 row to int8 (per-head scale max/127) at row *dPos.
 int cu_append_dpos_i8(void* dstI8, void* dScale, const void* src, const void* dPos, int kvHeads, int hd);
+// cu_quant_batch_i8: batched prefill int8 quantize of m tokens [m,kvHeads*hd] f32 -> int8 + per-(token,head) scale.
+int cu_quant_batch_i8(void* dstI8, void* dScale, const void* src, int m, int kvHeads, int hd);
 // cu_download_i8: copy n device bytes to host.
 int cu_download_i8(const void* dsrc, signed char* dst, int n);
 // cu_matmul_f16w_acc16: drop-in f32-output twin of cu_matmul_f16w with f16 accumulate (+convert).

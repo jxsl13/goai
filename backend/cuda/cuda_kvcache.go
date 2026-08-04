@@ -309,3 +309,18 @@ func GroupedQueryAttentionKVI8DposFlashInto(q *DeviceF32, c *KVCacheI8, qHeads, 
 	}
 	return nil
 }
+
+// PrefillKV quantizes m tokens of K and V ([m, wkv] f32, RoPE'd) into the int8 cache at rows
+// 0..m-1 — the batched prefill counterpart of AppendDpos, replacing the f32 cache's raw K/V blit.
+func (c *KVCacheI8) PrefillKV(k, v *DeviceF32, m int) error {
+	if k.cols != c.wkv || v.cols != c.wkv || k.rows != m || v.rows != m {
+		return fmt.Errorf("cuda: KVCacheI8 PrefillKV needs [%d,%d] k/v, got k%v v%v", m, c.wkv, k.shape(), v.shape())
+	}
+	if rc := C.cu_quant_batch_i8(c.dK, c.sK, k.ptr, C.int(m), C.int(c.kvHeads), C.int(c.hd)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheI8 PrefillKV K failed (code %d)", int(rc))
+	}
+	if rc := C.cu_quant_batch_i8(c.dV, c.sV, v.ptr, C.int(m), C.int(c.kvHeads), C.int(c.hd)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheI8 PrefillKV V failed (code %d)", int(rc))
+	}
+	return nil
+}

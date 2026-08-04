@@ -7938,6 +7938,42 @@ done_i8:
     return rc;
 }
 
+// cu_quant_batch_i8 quantizes m tokens of [m, kvHeads*hd] f32 K/V to int8 with per-(token,head)
+// symmetric scales — the batched prefill counterpart of cu_append_dpos_i8 (which does one token at
+// *pos). Grid = m*kvHeads blocks (block b → token b/kvHeads, head b%kvHeads), blockDim 128 ≥ hd.
+static CUfunction gQuantBatchI8 = NULL;
+int cu_quant_batch_i8(void* dstI8, void* dScale, const void* src, int m, int kvHeads, int hd) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done_qb; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done_qb; }
+    if (!gQuantBatchI8 && compile_kernel(
+        "extern \"C\" __global__ void quant_batch_i8(signed char* dst, float* scale, const float* src, int m, int kvHeads, int hd){\n"
+        "  int b = blockIdx.x; int tok = b / kvHeads, head = b % kvHeads; int tid = threadIdx.x;\n"
+        "  int wkv = kvHeads * hd; size_t base = (size_t)tok*wkv + (size_t)head*hd;\n"
+        "  __shared__ float sm[128];\n"
+        "  float a = (tid < hd) ? fabsf(src[base+tid]) : 0.0f;\n"
+        "  sm[tid] = a; __syncthreads();\n"
+        "  for (int s = 64; s > 0; s >>= 1) { if (tid < s) sm[tid] = fmaxf(sm[tid], sm[tid+s]); __syncthreads(); }\n"
+        "  float mx = sm[0];\n"
+        "  float sc = (mx > 0.0f) ? (mx / 127.0f) : 1.0f;\n"
+        "  if (tid == 0) scale[(size_t)tok*kvHeads + head] = sc;\n"
+        "  if (tid < hd) {\n"
+        "    float q = rintf(src[base+tid] / sc); q = fmaxf(-127.0f, fminf(127.0f, q));\n"
+        "    dst[base+tid] = (signed char)q;\n"
+        "  }\n"
+        "}\n",
+        "quant_batch_i8.cu", "quant_batch_i8", &gQuantBatchI8) != 0) { rc = -2; goto done_qb; }
+    {
+        void* args[6];
+        args[0] = &dstI8; args[1] = &dScale; args[2] = &src; args[3] = &m; args[4] = &kvHeads; args[5] = &hd;
+        rc = (cuLaunchKernel(gQuantBatchI8, m*kvHeads, 1, 1, 128, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done_qb:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_download_i8 copies n signed bytes device→host.
 int cu_download_i8(const void* dsrc, signed char* dst, int n) {
     int rc = -1;
