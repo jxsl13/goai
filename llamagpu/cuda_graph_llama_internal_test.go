@@ -171,3 +171,65 @@ func must0(t *testing.T, err error) {
 		t.Fatal(err)
 	}
 }
+
+// TestGraphLlamaBatchedPrefillSpeed times batched prefill vs the naive per-token eager prefill for a
+// realistic prompt length on real TinyLlama — the batched pass reads each weight ONCE across M rows
+// (WMMA tensor-core GEMM at M>=48) instead of M weight-bandwidth-bound M=1 GEMVs.
+func TestGraphLlamaBatchedPrefillSpeed(t *testing.T) {
+	if testing.Short() {
+		t.Skip("model-loading integration test")
+	}
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	if _, err := os.Stat(glModelPath); err != nil {
+		t.Skipf("model not present (%s)", glModelPath)
+	}
+	f, err := gguf.ReadFile(glModelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := nlp.LlamaFromGGUF(f.Metadata, f.Tensors)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const M = 128
+	prompt := make([]int, M)
+	for i := range prompt {
+		prompt[i] = (i*131 + 1) % model.Config.Vocab
+	}
+	// batched
+	gdB, err := NewLlamaQ4KGraphCUDA(model, M+8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	must0(t, func() error { _, e := gdB.prefillForward(prompt); return e }())
+	must0(t, cuda.GraphSync())
+	t0 := time.Now()
+	_, err = gdB.prefillForward(prompt)
+	must0(t, err)
+	must0(t, cuda.GraphSync())
+	batched := time.Since(t0)
+	gdB.Release()
+	// eager per-token
+	gdE, err := NewLlamaQ4KGraphCUDA(model, M+8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gdE.Release()
+	for i, tok := range prompt {
+		if _, err := gdE.stepEager(tok, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must0(t, cuda.GraphSync())
+	t1 := time.Now()
+	for i, tok := range prompt {
+		if _, err := gdE.stepEager(tok, i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must0(t, cuda.GraphSync())
+	eager := time.Since(t1)
+	t.Logf("prefill M=%d: batched %v vs eager-per-token %v (%.2fx)", M, batched, eager, float64(eager)/float64(batched))
+}

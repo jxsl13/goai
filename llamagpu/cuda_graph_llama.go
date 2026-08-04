@@ -4,6 +4,7 @@ package llamagpu
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 
 	"github.com/jxsl13/goai/backend/cuda"
@@ -35,8 +36,11 @@ type GraphLlamaDecoder struct {
 	inv                *cuda.DeviceF32
 	graph              *cuda.CapturedGraph
 
-	heads, kv, vocab, maxLen int
-	eps                      float64
+	rec   *cuda.Recorder
+	scale float32
+
+	heads, kv, hd, dim, hidden, vocab, maxLen int
+	eps                                       float64
 }
 
 type graphLlamaLayer struct {
@@ -75,7 +79,11 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 		}
 		return r, nil
 	}
-	gd := &GraphLlamaDecoder{heads: cfg.Heads, kv: kv, vocab: cfg.Vocab, maxLen: maxLen, eps: cfg.Eps}
+	gd := &GraphLlamaDecoder{
+		heads: cfg.Heads, kv: kv, hd: hd, dim: cfg.Dim, hidden: cfg.Hidden,
+		vocab: cfg.Vocab, maxLen: maxLen, eps: cfg.Eps,
+		scale: float32(1.0 / math.Sqrt(float64(hd))),
+	}
 	// A failure part-way must not leak the device buffers already allocated.
 	ok := false
 	defer func() {
@@ -84,6 +92,9 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 		}
 	}()
 	var err error
+	if gd.rec, err = cuda.NewRecorder(); err != nil {
+		return nil, err
+	}
 	if gd.emb, err = cuda.NewResidentB(cast(m.TokEmb)); err != nil {
 		return nil, err
 	}
@@ -201,6 +212,115 @@ func (gd *GraphLlamaDecoder) forwardBody() error {
 	return gd.out.QMatMulInto(gd.dh, gd.logits)
 }
 
+// prefillForward processes ALL prompt tokens (M = len(tokens)) in ONE batched pass — weight-read-once
+// WMMA matmuls (QMatMulInto routes M>=48 to the tensor-core prefill GEMM) + a single causal GQA
+// attention per layer, instead of M eager decode steps that re-read every weight M times. It writes
+// the prompt's RoPE'd K and V into each layer's KV cache (rows 0..M-1) so the subsequent graph decode
+// attends to them, and returns the LAST token's logits (host) — the logits for the first generated
+// token. M-sized scratch is allocated here and freed on return.
+func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
+	m := len(tokens)
+	ids := make([]int32, m)
+	for i, t := range tokens {
+		ids[i] = int32(t)
+	}
+	var err error
+	nb := func(cols int) *cuda.DeviceF32 {
+		if err != nil {
+			return nil
+		}
+		var d *cuda.DeviceF32
+		d, err = cuda.NewDeviceF32(m, cols)
+		return d
+	}
+	dxM, dhM, dh2M := nb(gd.dim), nb(gd.dim), nb(gd.dim)
+	dqM, daM := nb(gd.heads*gd.hd), nb(gd.heads*gd.hd)
+	wkv := gd.kv * gd.hd
+	dkM, dvM := nb(wkv), nb(wkv)
+	dgM, duM := nb(gd.hidden), nb(gd.hidden)
+	dlM := nb(gd.vocab)
+	bufs := []*cuda.DeviceF32{dxM, dhM, dh2M, dqM, daM, dkM, dvM, dgM, duM, dlM}
+	defer func() {
+		for _, b := range bufs {
+			if b != nil {
+				b.Free()
+			}
+		}
+	}()
+	if err != nil {
+		return nil, err
+	}
+	if err = gd.emb.EmbedInto(ids, dxM); err != nil {
+		return nil, err
+	}
+	for _, l := range gd.layers {
+		if err = dxM.RMSNormInto(l.gAttn, float32(gd.eps), dhM); err != nil {
+			return nil, err
+		}
+		if err = l.wq.QMatMulInto(dhM, dqM); err != nil {
+			return nil, err
+		}
+		if err = l.wk.QMatMulInto(dhM, dkM); err != nil {
+			return nil, err
+		}
+		if err = l.wv.QMatMulInto(dhM, dvM); err != nil {
+			return nil, err
+		}
+		// RoPE the M query/key rows at positions 0..M-1 (posDiv=1, the RoPEDposInv default the decode
+		// path uses — so the prompt K cached here rotates identically to decode-appended K).
+		if err = dqM.RoPEAtBand(gd.inv, 0, gd.heads, gd.hd, 0, 1, gd.heads*gd.hd); err != nil {
+			return nil, err
+		}
+		if err = dkM.RoPEAtBand(gd.inv, 0, gd.kv, gd.hd, 0, 1, wkv); err != nil {
+			return nil, err
+		}
+		// causal GQA attention over the prompt's own K/V (no cache needed for prefill attention).
+		if err = gd.rec.MHA(dqM, dkM, dvM, daM, m, m, gd.heads*gd.hd, gd.heads, gd.kv, gd.hd, 1, 0, gd.scale); err != nil {
+			return nil, err
+		}
+		if err = l.wo.QMatMulAccInto(daM, dxM); err != nil {
+			return nil, err
+		}
+		// populate the decode KV cache with the prompt's RoPE'd K and un-rotated V (rows 0..M-1).
+		if err = gd.rec.Blit(dkM, 0, l.cache.K(), 0, m*wkv); err != nil {
+			return nil, err
+		}
+		if err = gd.rec.Blit(dvM, 0, l.cache.V(), 0, m*wkv); err != nil {
+			return nil, err
+		}
+		if err = dxM.RMSNormInto(l.gFFN, float32(gd.eps), dh2M); err != nil {
+			return nil, err
+		}
+		if err = l.wg.QMatMulInto(dh2M, dgM); err != nil {
+			return nil, err
+		}
+		if err = l.wu.QMatMulInto(dh2M, duM); err != nil {
+			return nil, err
+		}
+		if err = dgM.SwiGLU(duM); err != nil {
+			return nil, err
+		}
+		if err = l.wd.QMatMulAccInto(dgM, dxM); err != nil {
+			return nil, err
+		}
+	}
+	if err = dxM.RMSNormInto(gd.norm, float32(gd.eps), dhM); err != nil {
+		return nil, err
+	}
+	if err = gd.out.QMatMulInto(dhM, dlM); err != nil {
+		return nil, err
+	}
+	if err = gd.rec.Wait(); err != nil {
+		return nil, err
+	}
+	full, err := dlM.ToHost()
+	if err != nil {
+		return nil, err
+	}
+	fs := full.Storage().F32()
+	return fs[(m-1)*gd.vocab:], nil // last row = logits for the first generated token
+}
+
 // stepEager runs one full decode step (embedding token at pos), executing eagerly, and returns the
 // host logits — used for prefill and as the fallback before the graph is captured.
 func (gd *GraphLlamaDecoder) stepEager(token, pos int) ([]float32, error) {
@@ -273,13 +393,9 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 		return nil, fmt.Errorf("llamagpu: prompt (%d) >= maxLen (%d)", len(prompt), gd.maxLen)
 	}
 	out := append([]int(nil), prompt...)
-	var logits []float32
-	for i, tok := range prompt {
-		l, err := gd.stepEager(tok, i)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
+	logits, err := gd.prefillForward(prompt)
+	if err != nil {
+		return nil, err
 	}
 	if err := gd.captureGraph(); err != nil {
 		return nil, err
@@ -318,31 +434,26 @@ func (gd *GraphLlamaDecoder) GenerateGreedy(prompt []int, maxNew int) ([]int, er
 		return nil, fmt.Errorf("llamagpu: prompt (%d) >= maxLen (%d)", len(prompt), gd.maxLen)
 	}
 	out := append([]int(nil), prompt...)
-	for i, tok := range prompt {
-		if err := gd.pos.Set(i); err != nil {
-			return nil, err
-		}
-		if err := gd.emb.EmbedInto([]int32{int32(tok)}, gd.dx); err != nil {
-			return nil, err
-		}
-		if err := gd.forwardBody(); err != nil {
-			return nil, err
-		}
+	logits, err := gd.prefillForward(prompt) // batched prefill → host logits for the first token
+	if err != nil {
+		return nil, err
 	}
 	if err := gd.captureGraph(); err != nil {
 		return nil, err
 	}
+	next, best := 0, float32(-1e38)
+	for i, x := range logits {
+		if x > best {
+			best, next = x, i
+		}
+	}
 	pos := len(prompt)
 	for range maxNew {
-		if pos >= gd.maxLen {
-			break
-		}
-		next := gd.logits.Argmax() // GPU argmax over the current logits (device-resident)
 		out = append(out, next)
 		if pos+1 >= gd.maxLen {
 			break
 		}
-		if err := gd.pos.Set(pos); err != nil {
+		if err := gd.pos.Set(pos); err != nil { // process `next` at pos → gd.logits for the following token
 			return nil, err
 		}
 		if err := gd.emb.EmbedInto([]int32{int32(next)}, gd.dx); err != nil {
@@ -354,6 +465,7 @@ func (gd *GraphLlamaDecoder) GenerateGreedy(prompt []int, maxNew int) ([]int, er
 		if err := cuda.GraphSync(); err != nil {
 			return nil, err
 		}
+		next = gd.logits.Argmax() // GPU argmax, 1-int transfer
 		pos++
 	}
 	return out, nil
@@ -380,6 +492,9 @@ func (gd *GraphLlamaDecoder) Release() {
 	}
 	if gd.pos != nil {
 		gd.pos.Free()
+	}
+	if gd.rec != nil {
+		gd.rec.Free()
 	}
 	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.logits, gd.inv} {
 		free(d)
