@@ -54,6 +54,21 @@ func (r *ResidentBQ4K) QMatMulInto(a, out *DeviceF32) error {
 	return r.qmatmul(a, out, 0)
 }
 
+// QMatMulMoeInto is the Q4_K twin of ResidentBQ8.QMatMulMoeInto: a token (output row) whose expert
+// routing weight moeGate[row*gateStride+expertIdx] is 0 skips the dequant+dot K-loop and writes 0 —
+// bit-identical to the dense eval + RowAxpy(weight=0), ~E/K faster for Q4_K MoE decode. Explicit m for
+// the flat llamagpu scratch buffers. beta=0.
+func (r *ResidentBQ4K) QMatMulMoeInto(a, out, moeGate *DeviceF32, m, gateStride, expertIdx int) error {
+	if r.q == nil || a.ptr == nil || out.ptr == nil || moeGate.ptr == nil {
+		return fmt.Errorf("cuda: Q4_K QMatMulMoeInto on a freed handle")
+	}
+	gp := unsafe.Pointer(uintptr(moeGate.ptr) + uintptr(expertIdx)*4)
+	if rc := C.cu_qmatmul_q4k_moe(a.ptr, r.q, out.ptr, C.int(m), C.int(r.k), C.int(r.n), gp, C.int(gateStride)); rc != 0 {
+		return fmt.Errorf("cuda: Q4_K moe-gated matmul failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulWMMAInto computes out[M,N] = a[M,K]·dequant(W) on TENSOR CORES: it dequantizes the
 // Q4_K weight to a contiguous f16 [K,N] matrix once, converts the f32 activation to f16, and
 // runs the f16 WMMA GEMM — replacing the scalar acc[8] GEMV (cu_qmatmul_q4k_mt) for compute-bound

@@ -96,7 +96,10 @@ func (c cRec) Binary(a, b, o buffer, op int) error {
 // QMatMulResidentMoE routes a Q8 expert GEMV through the moeW-gated kernel (skips non-selected tokens'
 // weight-stream, bit-identical to dense+RowAxpy-w0). Non-Q8 quant → dense QMatMulResident (correct).
 func (c cRec) QMatMulResidentMoE(x buffer, w qweight, o buffer, m int, moeGate buffer, gateStride, ex int) error {
-	if rw, ok := w.(*cuda.ResidentBQ8); ok {
+	switch rw := w.(type) {
+	case *cuda.ResidentBQ8:
+		return rw.QMatMulMoeInto(cb(x), cb(o), cb(moeGate), m, gateStride, ex)
+	case *cuda.ResidentBQ4K:
 		return rw.QMatMulMoeInto(cb(x), cb(o), cb(moeGate), m, gateStride, ex)
 	}
 	return c.QMatMulResident(x, w, o, m)
