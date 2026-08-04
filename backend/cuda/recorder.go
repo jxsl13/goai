@@ -646,36 +646,18 @@ func (rec *Recorder) q8PrefillMMQ(x *DeviceF32, w *ResidentBQ8, o *DeviceF32, m 
 // deviates from the MT path's bit-identical arithmetic by ~1e-4 rel — the same tolerance llama.cpp's
 // tensor-core Q4_K prefill rides (§incumbent-tolerance), and only on the M-large prefill path.
 func (rec *Recorder) q4kPrefillWMMA(x *DeviceF32, w *ResidentBQ4K, o *DeviceF32, m int) error {
-	if w.n%16 != 0 || w.k%16 != 0 {
-		return fmt.Errorf("cuda: q4k WMMA needs N,K %%16==0 (got N=%d K=%d)", w.n, w.k)
-	}
-	mPad := ((m + 15) / 16) * 16
-	bf16 := C.cu_alloc_u16(C.int(w.k * w.n))  // dequantized weight [K,N] f16
-	af16 := C.cu_alloc_u16(C.int(mPad * w.k)) // activation [mPad,K] f16
-	dC := C.cu_alloc_f32(C.int(mPad * w.n))   // [mPad,N] f32 output scratch
-	if bf16 == nil || af16 == nil || dC == nil {
-		C.cu_free_f32(bf16)
-		C.cu_free_f32(af16)
-		C.cu_free_f32(dC)
-		return fmt.Errorf("cuda: q4k WMMA scratch alloc failed")
+	bf16 := C.cu_alloc_u16(C.int(w.k * w.n)) // dequantized weight [K,N] f16
+	if bf16 == nil {
+		return fmt.Errorf("cuda: q4k WMMA weight scratch alloc failed")
 	}
 	defer C.cu_free_f32(bf16)
-	defer C.cu_free_f32(af16)
-	defer C.cu_free_f32(dC)
 	if rc := C.cu_dequant_q4k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q4k WMMA dequant failed (code %d)", int(rc))
 	}
-	// Only the real m rows are converted; pad rows [m,mPad) stay uninitialized and produce ignored
-	// outputs (row-independent GEMM), matching q8PrefillMMQ's uninitialized-pad-rows contract.
-	if rc := C.cu_cvt_f32_to_f16(af16, x.ptr, C.long(m*w.k)); rc != 0 {
-		return fmt.Errorf("cuda: q4k WMMA activation convert failed (code %d)", int(rc))
-	}
-	if rc := C.cu_wmma_gemm(unsafe.Pointer(&wmmaGemmFatbin[0]), C.int(len(wmmaGemmFatbin)),
-		af16, bf16, dC, C.int(mPad), C.int(w.k), C.int(w.n)); rc != 0 {
-		return fmt.Errorf("cuda: q4k WMMA gemm failed (code %d)", int(rc))
-	}
-	if rc := C.cu_blit(o.ptr, C.int(0), dC, C.int(0), C.int(m*w.n)); rc != 0 {
-		return fmt.Errorf("cuda: q4k WMMA result copy failed (code %d)", int(rc))
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm on
+	// FFN prefill shapes, no M-pad / activation scratch / output copy. Same f16-input tolerance.
+	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: q4k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
 }
