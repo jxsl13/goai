@@ -4347,6 +4347,67 @@ doneq5kdq:
     return rc;
 }
 
+static CUfunction gDequantQ3KF16 = NULL; // Q3_K weight -> contiguous f16 [K,N] (tensor-core prefill)
+
+// cu_dequant_q3k_to_f16: expand the REPACKED ggml Q3_K weight (meta[18B] = 16 pre-decoded 6-bit
+// scales + f16 d, qs[64B], hmask[32B] per super-block) into a contiguous f16 [K,N] matrix for the
+// tensor-core prefill GEMM (vs the scalar acc GEMV cu_qmatmul_q3k). Lane decomposition + math mirror
+// qmatmul_q3k EXACTLY (is=lane>>1 owns 8 contiguous elems; dl = d·(sc6−32); SYMMETRIC no-min
+// y = dl·(lowbits − (hset ? 0 : 4)) inverted-hmask arithmetic), forward-scatter to B[k*N+n].
+int cu_dequant_q3k_to_f16(const void* dMeta, const void* dQs, const void* dHm, void* dBf16, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneq3kdq; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneq3kdq; }
+    if (!gDequantQ3KF16 && compile_kernel(
+        "__device__ __forceinline__ float f16f(unsigned short h){\n"
+        "  unsigned s = (h & 0x8000u) << 16;\n"
+        "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+        "  return __uint_as_float(__float_as_uint(v) | s);\n"
+        "}\n"
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void dequant_q3k_f16(const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, unsigned short* B, int K, int N){\n"
+        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+        "  int lane = threadIdx.x & 31;\n"
+        "  if (warp >= (long)N) return;\n"
+        "  int n = (int)warp;\n"
+        "  int sbs = K >> 8;\n"
+        "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+        "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+        "  int shift = 2*jj, hbit = nb*4 + jj;\n"
+        "  int yi = nb*128 + jj*32 + g + l0;\n"
+        "  int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+        "  for (int w = 0; w < sbs; w++){\n"
+        "    size_t sb = (size_t)(n*sbs + w);\n"
+        "    const unsigned char* mp = meta + sb*18;\n"
+        "    float dl = f16f((unsigned short)(mp[16] | (mp[17]<<8))) * (float)((int)mp[is] - 32);\n"
+        "    const unsigned char* qp = qsb + sb*64 + qsrel;\n"
+        "    const unsigned char* hp = hmb + sb*32 + hmrel;\n"
+        "    unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+        "    unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+        "    int kbase = w*256 + yi;\n"
+        "    #pragma unroll\n"
+        "    for (int t = 0; t < 8; t++){\n"
+        "      unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+        "      unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+        "      int lowb = (qb >> shift) & 3;\n"
+        "      int hset = (hb >> hbit) & 1;\n"
+        "      B[(size_t)(kbase+t)*N + n] = f2h(dl * (float)(lowb - (hset ? 0 : 4)));\n"
+        "    }\n"
+        "  }\n"
+        "}\n",
+        "dequant_q3k_f16.cu", "dequant_q3k_f16", &gDequantQ3KF16) != 0) { rc = -2; goto doneq3kdq; }
+    {
+        long total = (long)N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[6] = { (void*)&dMeta, (void*)&dQs, (void*)&dHm, &dBf16, &K, &N };
+        rc = (cuLaunchKernel(gDequantQ3KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneq3kdq:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // IQ4 nonlinear codebook (kvalues_iq4nl) — shared by IQ4_NL and IQ4_XS; nibble → value.
 // IQ4 codebook at file scope as __device__ const (L1-cached global) — an inside-kernel const
 // array lands in per-thread local memory, and __constant__ serializes divergent per-lane indices.
