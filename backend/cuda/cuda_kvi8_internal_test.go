@@ -231,3 +231,47 @@ func benchKVFlash(b *testing.B, seqKV int, i8 bool) {
 }
 func BenchmarkKVFlash_f16_len4096(b *testing.B) { benchKVFlash(b, 4096, false) }
 func BenchmarkKVFlash_i8_len4096(b *testing.B)  { benchKVFlash(b, 4096, true) }
+
+// TestKVCacheI8PrefillMatchesAppend checks the batched prefill quantize produces the SAME int8+scales
+// as m per-token AppendDpos calls (both compute per-(token,head) max/127 deterministically).
+func TestKVCacheI8PrefillMatchesAppend(t *testing.T) {
+	if !Available() {
+		t.Skip("no gpu")
+	}
+	const kvHeads, hd, m = 4, 64, 20
+	const wkv = kvHeads * hd
+	rng := rand.New(rand.NewSource(3))
+	kv := make([]float32, m*wkv)
+	for i := range kv {
+		kv[i] = float32(rng.NormFloat64() * (1 + float64(i%kvHeads)))
+	}
+	// batched
+	cb, _ := NewKVCacheI8(m, kvHeads, hd)
+	defer cb.Free()
+	dkm, _ := NewDeviceF32(m, wkv)
+	defer dkm.Free()
+	must(t, dkm.UploadF32(kv))
+	must(t, cb.PrefillKV(dkm, dkm, m))
+	batched, err := cb.downloadKForTest()
+	must(t, err)
+	// per-token
+	ca, _ := NewKVCacheI8(m, kvHeads, hd)
+	defer ca.Free()
+	pos, _ := NewDevicePos()
+	defer pos.Free()
+	row, _ := NewDeviceF32(1, wkv)
+	defer row.Free()
+	for tok := 0; tok < m; tok++ {
+		must(t, row.UploadF32(kv[tok*wkv:(tok+1)*wkv]))
+		must(t, pos.Set(tok))
+		must(t, ca.AppendDpos(row, row, pos))
+	}
+	perTok, err := ca.downloadKForTest()
+	must(t, err)
+	for i := 0; i < m*wkv; i++ {
+		if batched[i] != perTok[i] {
+			t.Fatalf("mismatch at %d: batched %v vs per-token %v", i, batched[i], perTok[i])
+		}
+	}
+	t.Logf("batched prefill quantize == per-token append over %d tokens", m)
+}
