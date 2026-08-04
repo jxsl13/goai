@@ -51,6 +51,43 @@ func (r *ResidentBQ2K) QMatMulInto(a, out *DeviceF32) error {
 	return r.qmatmul(a, out, 0)
 }
 
+// QMatMulWMMAInto: tensor-core Q2_K prefill (dequant Q2_K -> f16 [K,N] + f16 WMMA GEMM),
+// replacing the scalar acc GEMV for compute-bound M. Rides f16-accum tolerance. M,N,K %16==0.
+func (r *ResidentBQ2K) QMatMulWMMAInto(a, out *DeviceF32) error {
+	if r.q == nil || a.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: Q2_K WMMA matmul on a freed handle")
+	}
+	if a.cols != r.k || out.rows != a.rows || out.cols != r.n {
+		return fmt.Errorf("cuda: Q2_K WMMA matmul shape a[%d,%d]-B[%d,%d]->out[%d,%d]", a.rows, a.cols, r.k, r.n, out.rows, out.cols)
+	}
+	m := a.rows
+	if m%16 != 0 || r.n%16 != 0 || r.k%16 != 0 {
+		return fmt.Errorf("cuda: Q2_K WMMA matmul needs M,N,K %%16==0 (got M=%d N=%d K=%d)", m, r.n, r.k)
+	}
+	bf16 := C.cu_alloc_u16(C.int(r.k * r.n))
+	if bf16 == nil {
+		return fmt.Errorf("cuda: Q2_K WMMA weight scratch alloc failed")
+	}
+	defer C.cu_free_f32(bf16)
+	af16 := C.cu_alloc_u16(C.int(m * r.k))
+	if af16 == nil {
+		return fmt.Errorf("cuda: Q2_K WMMA activation scratch alloc failed")
+	}
+	defer C.cu_free_f32(af16)
+	if rc := C.cu_dequant_q2k_to_f16(r.q, bf16, C.int(r.k), C.int(r.n)); rc != 0 {
+		return fmt.Errorf("cuda: Q2_K dequant-to-f16 failed (code %d)", int(rc))
+	}
+	if rc := C.cu_cvt_f32_to_f16(af16, a.ptr, C.long(m*r.k)); rc != 0 {
+		return fmt.Errorf("cuda: Q2_K WMMA activation convert failed (code %d)", int(rc))
+	}
+	rc := C.cu_wmma_gemm(unsafe.Pointer(&wmmaGemmFatbin[0]), C.int(len(wmmaGemmFatbin)),
+		af16, bf16, out.ptr, C.int(m), C.int(r.k), C.int(r.n))
+	if rc != 0 {
+		return fmt.Errorf("cuda: Q2_K WMMA gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulAccInto computes c += a·dequant(W) in place (beta=1) — fuses a transformer
 // residual add into the projection (the o and down projections).
 func (r *ResidentBQ2K) QMatMulAccInto(a, c *DeviceF32) error {
