@@ -135,6 +135,7 @@ int cu_argmax_batched_f16(const void* x16, int* hostOut, int rows, int cols); //
 void* cu_upload_i8(const signed char* src, int n);
 // cu_qmatmul_q8: out[M,N] = a[M,K]·dequant(W), W = transposed Q8 q[N,K] + per-32-block scales[N,nb].
 int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut, int M, int K, int N, int nb, float beta);
+int cu_qmatmul_q8_moe(const void* dA, const void* dQ, const void* dScales, void* dOut, int M, int K, int N, int nb, const void* dMoeGate, int gateStride);
 // cu_qmatmul_q4: out[M,N] = a·dequant(W4), W4 = asymmetric Q4 (packed nibbles q[N,K/2] +
 // per-32-block f32 scale + f32 min), dequant w = min + nibble·scale. K must be a mult of 256.
 int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const void* dMins, void* dOut, int M, int K, int N, int nb, float beta);

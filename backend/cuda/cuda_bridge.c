@@ -2876,7 +2876,7 @@ done:
 // less bandwidth than f32 — the decode (M=1, memory-bound GEMV) win. One thread
 // per output element loops its K contraction over blocks. §PERF quantization arc.
 static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, void* dOut,
-                          int M, int K, int N, int nb, float beta, const void* dGate) {
+                          int M, int K, int N, int nb, float beta, const void* dGate, const void* dMoeGate, int gateStride) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
@@ -2894,12 +2894,13 @@ static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, v
                        //    (owning k=l*4..l*4+3, all inside one block) uses scale
                        //    sr[base + l/8].
                        //  - SCALAR (else): lane l → k=b*32+l, coalesced int8.
-                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta, const float* gate){\n"
+                       "extern \"C\" __global__ void qmatmul_q8(const float* a, const signed char* q, const float* scales, float* out, int M, int K, int N, int nb, float beta, const float* gate, const float* moeGate, int gateStride){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  long total = (long)M*N;\n"
                        "  if (warp >= total) return;\n"
                        "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f) out[warp]=0.0f; return; }\n"
                        "  const float* ar = a + (size_t)m*K;\n"
                        "  const signed char* qr = q + (size_t)n*K;\n"
                        "  const float* sr = scales + (size_t)n*nb;\n"
@@ -2950,9 +2951,9 @@ static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, v
     {
         long total = (long)M * N * 32; // one warp (32 threads) per output element
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[10];
+        void* args[12];
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
-        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta; args[9] = &dGate;
+        args[4] = &M; args[5] = &K; args[6] = &N; args[7] = &nb; args[8] = &beta; args[9] = &dGate; args[10] = &dMoeGate; args[11] = &gateStride;
         rc = (cuLaunchKernel(gQgemv, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
@@ -2962,7 +2963,14 @@ done:
 
 int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOut,
                   int M, int K, int N, int nb, float beta) {
-    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, beta, NULL);
+    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, beta, NULL, NULL, 0);
+}
+
+// cu_qmatmul_q8_moe: MoE-gated Q8 GEMV. moeGate = the expert's routing-weight column (moeW[:,ex]);
+// gateStride = nExperts. Tokens with moeGate[m*gateStride]==0 (non-selected) skip the weight K-loop
+// and write out=0 — bit-identical to dense eval (RowAxpy w=0), ~E/K decode speedup, graph stays static.
+int cu_qmatmul_q8_moe(const void* dA, const void* dQ, const void* dScales, void* dOut, int M, int K, int N, int nb, const void* dMoeGate, int gateStride) {
+    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, 0.0f, NULL, dMoeGate, gateStride);
 }
 
 // cu_qmatmul_q8_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — the up-projection GEMV with
@@ -2970,7 +2978,7 @@ int cu_qmatmul_q8(const void* dA, const void* dQ, const void* dScales, void* dOu
 // launch and a full hidden-vector round-trip. gate has out's [M,N] layout.
 int cu_qmatmul_q8_swiglu(const void* dA, const void* dQ, const void* dScales, const void* dGate, void* dOut,
                          int M, int K, int N, int nb) {
-    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, 0.0f, dGate);
+    return q8_gemv_launch(dA, dQ, dScales, dOut, M, K, N, nb, 0.0f, dGate, NULL, 0);
 }
 
 // cu_qmatmul_q4: out[M,N] = a[M,K]·dequant(W4), W4 = ASYMMETRIC Q4 stored TRANSPOSED —

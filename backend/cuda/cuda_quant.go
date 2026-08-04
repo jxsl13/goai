@@ -112,6 +112,27 @@ func (r *ResidentBQ8) QMatMulDevice(a *DeviceF32) (*DeviceF32, error) {
 
 // QMatMulInto computes out = a·dequant(B) into the caller's fixed buffer (beta=0)
 // — the persistent-buffer Q8 matmul for the fixed-buffer / graph decode path.
+// QMatMulMoeInto is QMatMulInto with per-token MoE gating: for output row m, if this expert's routing
+// weight moeGate[m*gateStride + expertIdx] is 0.0 (the token did not select this expert), the GEMV skips
+// the weight-streaming K-loop and writes out[m,:]=0. Bit-identical to the dense eval whose non-selected
+// experts are zeroed by RowAxpy(weight=0), but ~E/K faster at decode (only the top-K experts stream
+// their weight). All E expert dispatches stay recorded so a captured CUDA graph remains static. beta=0.
+func (r *ResidentBQ8) QMatMulMoeInto(a, out, moeGate *DeviceF32, gateStride, expertIdx int) error {
+	if r.q == nil || a.ptr == nil || out.ptr == nil || moeGate.ptr == nil {
+		return fmt.Errorf("cuda: QMatMulMoeInto on a freed handle")
+	}
+	if a.cols != r.k || out.rows != a.rows || out.cols != r.n {
+		return fmt.Errorf("cuda: QMatMulMoeInto shape a[%d,%d]·B[%d,%d]→out[%d,%d]", a.rows, a.cols, r.k, r.n, out.rows, out.cols)
+	}
+	// &moeGate[expertIdx]; the kernel reads moeGate[m*gateStride]. Device pointer — GC-immovable, so the
+	// uintptr offset is safe (unlike a Go heap pointer).
+	gp := unsafe.Pointer(uintptr(moeGate.ptr) + uintptr(expertIdx)*4)
+	if rc := C.cu_qmatmul_q8_moe(a.ptr, r.q, r.scales, out.ptr, C.int(a.rows), C.int(r.k), C.int(r.n), C.int(r.nb), gp, C.int(gateStride)); rc != 0 {
+		return fmt.Errorf("cuda: Q8 moe-gated matmul failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 func (r *ResidentBQ8) QMatMulInto(a, out *DeviceF32) error {
 	if r.q == nil || a.ptr == nil || out.ptr == nil {
 		return fmt.Errorf("cuda: QMatMulInto on a freed handle")
