@@ -282,6 +282,8 @@ int cu_zero_u16(void* d, int n);
 int cu_append_dpos_f16(void* dst16, const void* src, const void* dPos, int wkv);
 int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, void* dOut,
                           int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
+// cu_gqa_flash_i8_dpos: flash decode over an int8 KV cache (int8 K/V + per-(token,head) f32 scales dKs/dVs).
+int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const void* dKs, const void* dVs, void* dOut, int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);

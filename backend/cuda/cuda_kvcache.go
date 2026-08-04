@@ -280,3 +280,32 @@ func (c *KVCacheI8) downloadKForTest() ([]float32, error) {
 	}
 	return out, nil
 }
+
+// GroupedQueryAttentionKVI8DposFlashInto is the flash decode attention over an int8 cache: identical
+// organization to the f16 path but K/V global reads are a quarter of f32 (half of f16) and dequant
+// (int8·per-token-scale) happens in shared. q is [1, qHeads·hd]; out [1, qHeads·hd]. hd ≤ 128, group ≤ 8.
+func GroupedQueryAttentionKVI8DposFlashInto(q *DeviceF32, c *KVCacheI8, qHeads, kvHeads int, off *DevicePos, out *DeviceF32) error {
+	if q.ptr == nil || c.dK == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: GQA-i8-flash on a freed handle")
+	}
+	if q.rows != 1 {
+		return fmt.Errorf("cuda: GQA-i8-flash needs seqQ==1 (decode), got %d", q.rows)
+	}
+	wq := q.cols
+	if qHeads <= 0 || kvHeads <= 0 || qHeads%kvHeads != 0 || wq%qHeads != 0 {
+		return fmt.Errorf("cuda: GQA-i8-flash bad head config")
+	}
+	hd := wq / qHeads
+	if kvHeads*hd != c.wkv {
+		return fmt.Errorf("cuda: GQA-i8-flash cache width %d, want %d", c.wkv, kvHeads*hd)
+	}
+	if out.rows != 1 || out.cols != wq {
+		return fmt.Errorf("cuda: GQA-i8-flash out shape [%d,%d], want [1,%d]", out.rows, out.cols, wq)
+	}
+	if rc := C.cu_gqa_flash_i8_dpos(q.ptr, c.dK, c.dV, c.sK, c.sV, out.ptr,
+		C.int(c.maxSeq), C.int(qHeads), C.int(kvHeads), C.int(hd),
+		C.float(1/math.Sqrt(float64(hd))), off.ptr); rc != 0 {
+		return fmt.Errorf("cuda: GQA-i8-flash failed (code %d)", int(rc))
+	}
+	return nil
+}
