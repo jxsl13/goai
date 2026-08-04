@@ -93,7 +93,7 @@ func (r *ResidentBQ4K) QMatMulWMMAInto(a, out *DeviceF32) error {
 	if rc := C.cu_dequant_q4k_to_f16(r.q, bf16, C.int(r.k), C.int(r.n)); rc != 0 {
 		return fmt.Errorf("cuda: Q4_K dequant-to-f16 failed (code %d)", int(rc))
 	}
-	if rc := C.cu_matmul_f16w(a.ptr, bf16, out.ptr, C.int(m), C.int(r.k), C.int(r.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(a.ptr, bf16, out.ptr, m, r.k, r.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: Q4_K cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil

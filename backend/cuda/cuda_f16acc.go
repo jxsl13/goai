@@ -74,6 +74,21 @@ func matmulF16w(a, w, c unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_matmul_f16w(a, w, c, C.int(m), C.int(k), C.int(n), C.float(0)))
 }
 
+// matmulF16wPrefill is the accumulate-aware entry point for the quant-prefill GEMMs (the k-quant
+// PrefillWMMA recorder path and the Resident*.QMatMulWMMAInto methods): after the weight is
+// dequantized to f16 [K,N] it runs c = a·W (+beta·c) on the tensor cores, choosing f16 ACCUMULATE
+// (cu_matmul_f16w_acc16, CUBLAS_COMPUTE_16F) when f16AccEnabled() — GeForce runs f32-accumulate at
+// half rate, so f16-accum ≈1.5-2× the compute-bound GEMM — and f32 accumulate otherwise. Identical
+// signature to cu_matmul_f16w; the acc16 path is the same one already default-ON and real-model
+// validated (TinyLlama + Qwen 0.5/1.5/3B) for the f16-WEIGHT prefill (cuda_f16.go), extended here to
+// the quant serving path. GOAI_CUDA_F16ACC=0 forces f32 accumulate for exactness on demand.
+func matmulF16wPrefill(a, w, c unsafe.Pointer, m, k, n int, beta float32) C.int {
+	if f16AccEnabled() {
+		return C.cu_matmul_f16w_acc16(a, w, c, C.int(m), C.int(k), C.int(n), C.float(beta))
+	}
+	return C.cu_matmul_f16w(a, w, c, C.int(m), C.int(k), C.int(n), C.float(beta))
+}
+
 func matmulF16acc16(a, w, c unsafe.Pointer, m, k, n int) int {
 	return int(C.cu_matmul_f16acc16(a, w, c, C.int(m), C.int(k), C.int(n)))
 }
