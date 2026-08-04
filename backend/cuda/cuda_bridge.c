@@ -4325,14 +4325,24 @@ int cu_dequant_q5k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "    const unsigned char* qh = blk + 16;\n"
         "    const unsigned char* qs = blk + 48;\n"
         "    size_t kb = (size_t)w*256;\n"
-        "    #pragma unroll 4\n"
-        "    for (int e = 0; e < 256; e++){\n"
-        "      int g = e >> 6, i = e & 63, half = i >> 5, l = i & 31, is = 2*g + half;\n"
-        "      int qlByte = qs[g*32 + l];\n"
-        "      int nib = half ? (qlByte >> 4) : (qlByte & 0xF);\n"
-        "      int hbit = (qh[l] >> is) & 1;\n"
-        "      float q5 = (float)(nib | (hbit << 4));\n"
-        "      B[(kb + e)*N + n] = f2h(c1[is]*q5 - c2[is]);\n"
+        // Read the 128 qs bytes as 32 uint (4B) loads — each qs byte fetched ONCE (both its low+high
+        // nibbles decoded) instead of 256 single-byte reads that fetched each byte twice (mirror of
+        // the shipped Q4_K fix #904). qs=blk+48 is 4-aligned (176B block ÷4). qs byte byteIdx=g*32+l
+        // feeds element g*64+l (sub-block 2g, low nibble) and g*64+32+l (sub-block 2g+1, high nibble),
+        // with qh[l] bit `is` as the 5th bit — the same (element, value) pairs → bit-identical.
+        "    #pragma unroll\n"
+        "    for (int u = 0; u < 32; u++){\n"
+        "      unsigned qsw = *(const unsigned*)(qs + u*4);\n"
+        "      #pragma unroll\n"
+        "      for (int bb = 0; bb < 4; bb++){\n"
+        "        int byteIdx = u*4 + bb, g = byteIdx >> 5, l = byteIdx & 31;\n"
+        "        unsigned char qlB = (unsigned char)((qsw >> (bb*8)) & 0xFFu), qhB = qh[l];\n"
+        "        int isLo = 2*g, isHi = 2*g + 1;\n"
+        "        int q5Lo = (qlB & 0xF) | (((qhB >> isLo) & 1) << 4);\n"
+        "        int q5Hi = (qlB >> 4)  | (((qhB >> isHi) & 1) << 4);\n"
+        "        B[(kb + (size_t)g*64 + l)*N + n]      = f2h(c1[isLo]*(float)q5Lo - c2[isLo]);\n"
+        "        B[(kb + (size_t)g*64 + 32 + l)*N + n] = f2h(c1[isHi]*(float)q5Hi - c2[isHi]);\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "}\n",
