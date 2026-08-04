@@ -740,7 +740,7 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
                                  float scale) {
     int rc = -1;
     int group = qHeads / kvHeads;
-    if (hd != 64 || group > 8 || blockSize > 16) return -4;
+    if ((hd != 64 && hd != 128) || group > 8 || blockSize > 16) return -4;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto donepgf; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donepgf; }
@@ -760,7 +760,8 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "  unsigned short* shv = shk + 32*hp;                        // [32*hp] u16 V tile\n"
         "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
         "  float NEGINF = __int_as_float(0xff800000);\n"
-        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f;\n"
+        "  int rr = hd >> 5;\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
         "  for (int base = 0; base < n; base += 32){\n"
         "    int nk = n - base; if (nk > 32) nk = 32;\n"
         "    __syncthreads();\n"
@@ -796,11 +797,11 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "      for (int o=16;o>0;o>>=1) bl += __shfl_down_sync(0xffffffffu,bl,o);\n"
         "      bl = __shfl_sync(0xffffffffu,bl,0);\n"
         "      l = l*corr + bl; m = newm;\n"
-        "      a0 *= corr; a1 *= corr;\n"
+        "      a0 *= corr; a1 *= corr; if (rr > 2){ a2 *= corr; a3 *= corr; }\n"
         "      for (int j=0;j<nk;j++){\n"
         "        float pj = __shfl_sync(0xffffffffu,p,j);\n"
         "        const unsigned short* vr = shv + j*hp;\n"
-        "        a0 += pj*h2f(vr[lane]); a1 += pj*h2f(vr[lane+32]);\n"
+        "        a0 += pj*h2f(vr[lane]); a1 += pj*h2f(vr[lane+32]); if (rr > 2){ a2 += pj*h2f(vr[lane+64]); a3 += pj*h2f(vr[lane+96]); }\n"
         "      }\n"
         "    }\n"
         "  }\n"
@@ -808,7 +809,7 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
         "    int qh = kvh*group + w;\n"
         "    float inv = (l>0.f)?1.f/l:0.f;\n"
         "    float* o = O + (size_t)seq*qHeads*hd + (size_t)qh*hd;\n"
-        "    o[lane] = a0*inv; o[lane+32] = a1*inv;\n"
+        "    o[lane] = a0*inv; o[lane+32] = a1*inv; if (rr > 2){ o[lane+64] = a2*inv; o[lane+96] = a3*inv; }\n"
         "  }\n"
         "}\n",
         "paged_decode_gqa_f16.cu", "paged_decode_gqa_f16", &gPagedDecodeGqaF16) != 0) { rc = -2; goto donepgf; }
