@@ -4207,6 +4207,71 @@ doneq40dq:
     return rc;
 }
 
+static CUfunction gDequantQ6KF16 = NULL; // Q6_K weight -> contiguous f16 [K,N] (tensor-core prefill)
+
+// cu_dequant_q6k_to_f16: expand the ggml Q6_K weight (per-output-row, 210-byte super-blocks) into
+// a contiguous f16 [K,N] matrix for the tensor-core prefill GEMM (vs the scalar acc GEMV
+// cu_qmatmul_q6k). Lane decomposition + math mirror qmatmul_q6k EXACTLY (g=lane>>4 128-group,
+// i=(lane&15)*2; q6 = ql-nibble | qh-2bits<<4, four quadrants g*128+{i,i+32,i+64,i+96}+t scaled by
+// d·sc[is..is+6]; y = d·sc·(q6−32)), forward-scatter to B[k*N+n].
+int cu_dequant_q6k_to_f16(const void* dQ, void* dBf16, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneq6kdq; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneq6kdq; }
+    if (!gDequantQ6KF16 && compile_kernel(
+        "__device__ __forceinline__ float f16f(unsigned short h){\n"
+        "  unsigned s = (h & 0x8000u) << 16;\n"
+        "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+        "  return __uint_as_float(__float_as_uint(v) | s);\n"
+        "}\n"
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void dequant_q6k_f16(const unsigned char* q, unsigned short* B, int K, int N){\n"
+        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+        "  int lane = threadIdx.x & 31;\n"
+        "  if (warp >= (long)N) return;\n"
+        "  int n = (int)warp;\n"
+        "  int sbs = K >> 8;\n"
+        "  const unsigned char* qr = q + (size_t)n*sbs*210;\n"
+        "  int g = lane >> 4, i = (lane & 15) * 2;\n"
+        "  int is = i >> 4;\n"
+        "  for (int w = 0; w < sbs; w++){\n"
+        "    const unsigned char* blk = qr + (size_t)w*210;\n"
+        "    const unsigned char* ql = blk + g*64;\n"
+        "    const unsigned char* qh = blk + 128 + g*32;\n"
+        "    const signed char* sc = (const signed char*)(blk + 192) + g*8;\n"
+        "    float d = f16f((unsigned short)(blk[208] | (blk[209]<<8)));\n"
+        "    float s0 = d*(float)sc[is],   s2 = d*(float)sc[is+2];\n"
+        "    float s4 = d*(float)sc[is+4], s6 = d*(float)sc[is+6];\n"
+        "    unsigned int b1 = (unsigned)ql[i] | ((unsigned)ql[i+1]<<8);\n"
+        "    unsigned int b2 = (unsigned)ql[i+32] | ((unsigned)ql[i+33]<<8);\n"
+        "    unsigned int hh = (unsigned)qh[i] | ((unsigned)qh[i+1]<<8);\n"
+        "    int kbase = w*256 + g*128 + i;\n"
+        "    for (int t = 0; t < 2; t++){\n"
+        "      unsigned int lo = (b1 >> (8*t)) & 0xffu, hi = (b2 >> (8*t)) & 0xffu, h = (hh >> (8*t)) & 0xffu;\n"
+        "      float q1 = (float)((int)((lo & 15u) | ((h & 3u) << 4)) - 32);\n"
+        "      float q2 = (float)((int)((hi & 15u) | (((h >> 2) & 3u) << 4)) - 32);\n"
+        "      float q3 = (float)((int)((lo >> 4) | (((h >> 4) & 3u) << 4)) - 32);\n"
+        "      float q4 = (float)((int)((hi >> 4) | (((h >> 6) & 3u) << 4)) - 32);\n"
+        "      B[(size_t)(kbase + t)*N + n]      = f2h(s0*q1);\n"
+        "      B[(size_t)(kbase + 32 + t)*N + n] = f2h(s2*q2);\n"
+        "      B[(size_t)(kbase + 64 + t)*N + n] = f2h(s4*q3);\n"
+        "      B[(size_t)(kbase + 96 + t)*N + n] = f2h(s6*q4);\n"
+        "    }\n"
+        "  }\n"
+        "}\n",
+        "dequant_q6k_f16.cu", "dequant_q6k_f16", &gDequantQ6KF16) != 0) { rc = -2; goto doneq6kdq; }
+    {
+        long total = (long)N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
+        rc = (cuLaunchKernel(gDequantQ6KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneq6kdq:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // IQ4 nonlinear codebook (kvalues_iq4nl) — shared by IQ4_NL and IQ4_XS; nibble → value.
 // IQ4 codebook at file scope as __device__ const (L1-cached global) — an inside-kernel const
 // array lands in per-thread local memory, and __constant__ serializes divergent per-lane indices.
