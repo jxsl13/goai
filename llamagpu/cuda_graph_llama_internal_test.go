@@ -135,6 +135,99 @@ func benchGraphPrefill(b *testing.B, seq int) {
 func BenchmarkGraphLlamaPrefill512(b *testing.B) { benchGraphPrefill(b, 512) }
 func BenchmarkGraphLlamaPrefill128(b *testing.B) { benchGraphPrefill(b, 128) }
 
+// BenchmarkGraphLlamaGenerate times end-to-end sampled generation (prefill + maxNew decode+sample) at a
+// LARGE vocab — the regime where the per-token full-logits D2H + CPU full-vocab sort dominates. A/B with
+// GOAI_CUDA_TOPK_SAMPLE=0 (fallback) vs default (on-device top-k) isolates the sampling win.
+func benchGenerate(b *testing.B, vocab, maxNew int) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: vocab, Ctx: 128, Dim: 256, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		b.Fatal(err)
+	}
+	gd, err := NewLlamaQ4KGraphCUDA(m, cfg.Ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer gd.Release()
+	prompt := []int{1, 2, 3, 4}
+	mk := func() nlp.TokenSampler {
+		return nlp.NewSampler(1, nlp.WithTemperature(0.8), nlp.WithTopK(40), nlp.WithTopP(0.9))
+	}
+	if _, err := gd.Generate(prompt, 2, mk()); err != nil { // prime (capture graph)
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := gd.Generate(prompt, maxNew, mk()); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(maxNew)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+func BenchmarkGraphLlamaGenerate128k(b *testing.B) { benchGenerate(b, 128000, 64) }
+func BenchmarkGraphLlamaGenerate32k(b *testing.B)  { benchGenerate(b, 32000, 64) }
+
+// TestGraphLlamaTopKSampleMatchesFallback proves the on-device top-k sampling fast-path produces the
+// EXACT same token sequence as the full-vocab CPU sampler fallback (GOAI_CUDA_TOPK_SAMPLE=0) for a
+// penalty-free TopK sampler with the same seed — the GPU TopK(K) superset + vocab-index-ordered draw
+// must reproduce the full-vocab top-k/top-p/multinomial bit-for-bit, or the fast-path is unsound.
+func TestGraphLlamaTopKSampleMatchesFallback(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 2048, Ctx: 128, Dim: 256, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := []int{1, 9, 42, 17}
+	const maxNew = 48
+	mkSampler := func() nlp.TokenSampler {
+		return nlp.NewSampler(1234, nlp.WithTemperature(0.8), nlp.WithTopK(40), nlp.WithTopP(0.92))
+	}
+	// fast-path (default: GPU TopK + on-device sampling)
+	gdF, err := NewLlamaQ4KGraphCUDA(m, cfg.Ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fast, err := gdF.Generate(prompt, maxNew, mkSampler())
+	gdF.Release()
+	if err != nil {
+		t.Fatalf("fast Generate: %v", err)
+	}
+	// forced fallback (full-vocab CPU sampler)
+	t.Setenv("GOAI_CUDA_TOPK_SAMPLE", "0")
+	gdS, err := NewLlamaQ4KGraphCUDA(m, cfg.Ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow, err := gdS.Generate(prompt, maxNew, mkSampler())
+	gdS.Release()
+	if err != nil {
+		t.Fatalf("fallback Generate: %v", err)
+	}
+	if len(fast) != len(slow) {
+		t.Fatalf("length mismatch: fast %d, fallback %d", len(fast), len(slow))
+	}
+	for i := range fast {
+		if fast[i] != slow[i] {
+			t.Fatalf("token %d: fast=%d fallback=%d — on-device top-k sampling diverges from the full-vocab sampler", i, fast[i], slow[i])
+		}
+	}
+	t.Logf("on-device top-k sampling == full-vocab fallback over %d tokens (TopK=40, TopP=0.92, temp=0.8)", len(fast))
+}
+
 func glTestArgmax(v []float32) int {
 	best, bi := v[0], 0
 	for i, x := range v {
