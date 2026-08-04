@@ -188,6 +188,15 @@ func (a *APOLLO) Step(grad GradFn) error {
 	b1c := 1 - math.Pow(a.Beta1, float64(a.t))
 	b2c := 1 - math.Pow(a.Beta2, float64(a.t))
 
+	// Phase A (serial, in parameter order): gather gradients and perform every consumption of the
+	// shared seeded a.rng — the (re)seed at init and at each Gap boundary — plus the moment-buffer
+	// allocation that depends on the freshly chosen rank. This is O(1)–O(state) per parameter and
+	// keeps the seeded draw ORDER identical to the original serial loop, so the trajectory is
+	// bit-for-bit unchanged. GradFn is the caller's and not documented thread-safe, so it too runs
+	// here. The heavy per-parameter compute (projection regen, sketch matmul, Adam, channel scaling,
+	// write-back) is rng-free and deferred to Phase B.
+	grads := make([]*tensor.Tensor, len(a.Params))
+	work := 0
 	for pi, p := range a.Params {
 		gt := grad(p)
 		if gt == nil {
@@ -196,27 +205,15 @@ func (a *APOLLO) Step(grad GradFn) error {
 		if !gt.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: APOLLO grad shape %v != param %v", gt.Shape(), p.Shape())
 		}
+		grads[pi] = gt
+		work += p.Numel()
 		st := a.st[pi]
-
-		// Non-matrix parameters: plain Adam on the full gradient (the paper applies
-		// the projected scaling only to 2-D weights, as GaLore does).
 		if p.Ndim() != 2 {
 			if st == nil {
-				st = &apolloState{m: make([]float64, p.Numel()), v: make([]float64, p.Numel())}
-				a.st[pi] = st
-			}
-			for i := range p.Numel() {
-				idx := tensor.Unravel(i, p.Shape())
-				gv := gt.AtF64(idx...)
-				st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*gv
-				st.v[i] = a.Beta2*st.v[i] + (1-a.Beta2)*gv*gv
-				upd := (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + a.Eps)
-				p.SetF64(p.AtF64(idx...)-a.LR*upd, idx...)
+				a.st[pi] = &apolloState{m: make([]float64, p.Numel()), v: make([]float64, p.Numel())}
 			}
 			continue
 		}
-
-		mat := matAt(gt)
 		rows, cols := p.Shape()[0], p.Shape()[1]
 		if st == nil {
 			st = &apolloState{}
@@ -231,94 +228,130 @@ func (a *APOLLO) Step(grad GradFn) error {
 		} else if a.Gap > 0 && a.t%a.Gap == 0 {
 			a.reseed(st, rows, cols) // fresh random seed; keep moments
 		}
+	}
 
-		// Sketch the gradient (R = P·G or G·Pᵀ) and run Adam on the sketch only.
-		proj := st.projection(rows, cols)
-		red := galoreProjectDown(mat, proj, st.left)
-		upd := make([]float64, len(red))
+	// Phase B (parallel): the rng-free per-parameter compute. Each parameter touches only its own
+	// a.st[pi] slot, its own p, and self-contained scratch, so it fans out across cores
+	// BIT-IDENTICALLY — only which goroutine runs a parameter moves. The per-step projection is still
+	// regenerated from the stored seed inside stepParamCompute, preserving APOLLO's no-matrix-storage
+	// memory claim (nothing is cached between steps).
+	parallelRows(len(a.Params), max(work/max(len(a.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				a.stepParamCompute(pi, a.Params[pi], grads[pi], b1c, b2c)
+			}
+		}
+	})
+	return nil
+}
+
+// stepParamCompute runs the rng-free APOLLO update for one parameter (own state slot / own p /
+// self-contained scratch, so Phase B bands it across parameters). Its state must already have been
+// (re)seeded and its moment buffers allocated by Phase A.
+func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64) {
+	st := a.st[pi]
+
+	// Non-matrix parameters: plain Adam on the full gradient (the paper applies
+	// the projected scaling only to 2-D weights, as GaLore does).
+	if p.Ndim() != 2 {
+		for i := range p.Numel() {
+			idx := tensor.Unravel(i, p.Shape())
+			gv := gt.AtF64(idx...)
+			st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*gv
+			st.v[i] = a.Beta2*st.v[i] + (1-a.Beta2)*gv*gv
+			upd := (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + a.Eps)
+			p.SetF64(p.AtF64(idx...)-a.LR*upd, idx...)
+		}
+		return
+	}
+
+	mat := matAt(gt)
+	rows, cols := p.Shape()[0], p.Shape()[1]
+	// Sketch the gradient (R = P·G or G·Pᵀ) and run Adam on the sketch only.
+	proj := st.projection(rows, cols)
+	red := galoreProjectDown(mat, proj, st.left)
+	upd := make([]float64, len(red))
+	for i := range red {
+		st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*red[i]
+		st.v[i] = a.Beta2*st.v[i] + (1-a.Beta2)*red[i]*red[i]
+		upd[i] = (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + a.Eps)
+	}
+
+	// Channel-wise (or tensor-wise for Mini) scaling factors s = ‖Ř‖/‖R‖.
+	// The sketch's channel axis is the larger dim: columns j when left
+	// (red is [r,cols] row-major), rows i otherwise (red is [rows,r]).
+	r := st.rank
+	ratio := func(nUpd, nRaw float64) float64 {
+		if nRaw == 0 {
+			return 0 // zero sketch ⇒ no scaling information; skip the channel
+		}
+		return math.Sqrt(nUpd) / math.Sqrt(nRaw)
+	}
+	var s []float64
+	switch {
+	case a.Mini: // single tensor-wise factor
+		var nu, nr float64
 		for i := range red {
-			st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*red[i]
-			st.v[i] = a.Beta2*st.v[i] + (1-a.Beta2)*red[i]*red[i]
-			upd[i] = (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + a.Eps)
+			nu += upd[i] * upd[i]
+			nr += red[i] * red[i]
 		}
-
-		// Channel-wise (or tensor-wise for Mini) scaling factors s = ‖Ř‖/‖R‖.
-		// The sketch's channel axis is the larger dim: columns j when left
-		// (red is [r,cols] row-major), rows i otherwise (red is [rows,r]).
-		r := st.rank
-		ratio := func(nUpd, nRaw float64) float64 {
-			if nRaw == 0 {
-				return 0 // zero sketch ⇒ no scaling information; skip the channel
-			}
-			return math.Sqrt(nUpd) / math.Sqrt(nRaw)
-		}
-		var s []float64
-		switch {
-		case a.Mini: // single tensor-wise factor
+		s = []float64{ratio(nu, nr)}
+	case st.left: // s[j] over columns of the [r,cols] sketch
+		s = make([]float64, cols)
+		for j := range cols {
 			var nu, nr float64
-			for i := range red {
-				nu += upd[i] * upd[i]
-				nr += red[i] * red[i]
+			for k := range r {
+				nu += upd[k*cols+j] * upd[k*cols+j]
+				nr += red[k*cols+j] * red[k*cols+j]
 			}
-			s = []float64{ratio(nu, nr)}
-		case st.left: // s[j] over columns of the [r,cols] sketch
-			s = make([]float64, cols)
-			for j := range cols {
-				var nu, nr float64
-				for k := range r {
-					nu += upd[k*cols+j] * upd[k*cols+j]
-					nr += red[k*cols+j] * red[k*cols+j]
-				}
-				s[j] = ratio(nu, nr)
-			}
-		default: // s[i] over rows of the [rows,r] sketch
-			s = make([]float64, rows)
-			for i := range rows {
-				var nu, nr float64
-				for k := range r {
-					nu += upd[i*r+k] * upd[i*r+k]
-					nr += red[i*r+k] * red[i*r+k]
-				}
-				s[i] = ratio(nu, nr)
-			}
+			s[j] = ratio(nu, nr)
 		}
-
-		// Scale the RAW full-rank gradient channel-wise: u = s ⊙ G (the weight and
-		// its update stay full-rank; only the moments above were low-rank).
-		var norm float64
+	default: // s[i] over rows of the [rows,r] sketch
+		s = make([]float64, rows)
 		for i := range rows {
-			for j := range cols {
-				f := s[0]
-				if !a.Mini {
-					if st.left {
-						f = s[j]
-					} else {
-						f = s[i]
-					}
-				}
-				mat[i][j] *= f
-				norm += mat[i][j] * mat[i][j]
+			var nu, nr float64
+			for k := range r {
+				nu += upd[i*r+k] * upd[i*r+k]
+				nr += red[i*r+k] * red[i*r+k]
 			}
-		}
-		norm = math.Sqrt(norm)
-
-		// Norm-Growth Limiter (eq. 4): cap this step's update norm at γ× the last.
-		if a.Gamma > 0 && st.prev > 0 && norm > a.Gamma*st.prev {
-			clip := a.Gamma * st.prev / norm
-			for i := range rows {
-				for j := range cols {
-					mat[i][j] *= clip
-				}
-			}
-			norm = a.Gamma * st.prev
-		}
-		st.prev = norm
-
-		for i := range rows {
-			for j := range cols {
-				p.SetF64(p.AtF64(i, j)-a.LR*a.Scale*mat[i][j], i, j)
-			}
+			s[i] = ratio(nu, nr)
 		}
 	}
-	return nil
+
+	// Scale the RAW full-rank gradient channel-wise: u = s ⊙ G (the weight and
+	// its update stay full-rank; only the moments above were low-rank).
+	var norm float64
+	for i := range rows {
+		for j := range cols {
+			f := s[0]
+			if !a.Mini {
+				if st.left {
+					f = s[j]
+				} else {
+					f = s[i]
+				}
+			}
+			mat[i][j] *= f
+			norm += mat[i][j] * mat[i][j]
+		}
+	}
+	norm = math.Sqrt(norm)
+
+	// Norm-Growth Limiter (eq. 4): cap this step's update norm at γ× the last.
+	if a.Gamma > 0 && st.prev > 0 && norm > a.Gamma*st.prev {
+		clip := a.Gamma * st.prev / norm
+		for i := range rows {
+			for j := range cols {
+				mat[i][j] *= clip
+			}
+		}
+		norm = a.Gamma * st.prev
+	}
+	st.prev = norm
+
+	for i := range rows {
+		for j := range cols {
+			p.SetF64(p.AtF64(i, j)-a.LR*a.Scale*mat[i][j], i, j)
+		}
+	}
 }
