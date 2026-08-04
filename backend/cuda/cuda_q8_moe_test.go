@@ -60,7 +60,7 @@ func TestCUDAQ8MoeGateParity(t *testing.T) {
 	g1, err := cuda.NewDeviceF32(M, N)
 	must(t, err)
 	defer g1.Free()
-	must(t, r.QMatMulMoeInto(da, g1, gate, 1, 0))
+	must(t, r.QMatMulMoeInto(da, g1, gate, M, 1, 0))
 	got1 := make([]float32, M*N)
 	must(t, g1.DownloadF32(got1))
 	for i := range ref {
@@ -82,7 +82,7 @@ func TestCUDAQ8MoeGateParity(t *testing.T) {
 	g2, err := cuda.NewDeviceF32(M, N)
 	must(t, err)
 	defer g2.Free()
-	must(t, r.QMatMulMoeInto(da, g2, gate, 1, 0))
+	must(t, r.QMatMulMoeInto(da, g2, gate, M, 1, 0))
 	got2 := make([]float32, M*N)
 	must(t, g2.DownloadF32(got2))
 	for m := 0; m < M; m++ {
