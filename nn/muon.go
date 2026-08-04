@@ -134,27 +134,38 @@ func (mu *Muon) Step(grad GradFn) error {
 // stepParam applies the Muon update to one parameter. Split out so the banded loop above has a
 // body rather than a copy of one.
 func (mu *Muon) stepParam(pi int, p, g *tensor.Tensor) {
-	{
-		R, C := p.Shape()[0], p.Shape()[1]
-		beta := mu.Momentum
-		dir := mu.dir[pi] // reused across steps; every entry is written below before it is read
-		for i := range dir {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			mu.buf[pi][i] = beta*mu.buf[pi][i] + (1-beta)*gv // lerp momentum
-			if mu.Nesterov {
-				dir[i] = (1-beta)*gv + beta*mu.buf[pi][i]
-			} else {
-				dir[i] = mu.buf[pi][i]
-			}
+	R, C := p.Shape()[0], p.Shape()[1]
+	beta := mu.Momentum
+	dir := mu.dir[pi] // reused across steps; every entry is written below before it is read
+	buf := mu.buf[pi]
+	// Typed FLAT access: for a 2-D contiguous tensor logical (r,c) is flat index i, so replace the
+	// per-element AtF64(Unravel(i))/SetF64 — a divmod + virtual dispatch each — with a direct
+	// []float64 read/write (PS1005). BIT-IDENTICAL: same values in the same order. g is read-only so
+	// Contiguous() (a no-op for an already-flat grad) is safe; p is written in place only when it is
+	// directly flat-writable (contiguous + offset 0, detected by Contiguous() returning it unchanged).
+	gf := g.Contiguous().Storage().F64()
+	for i := range dir {
+		gv := gf[i]
+		buf[i] = beta*buf[i] + (1-beta)*gv // lerp momentum
+		if mu.Nesterov {
+			dir[i] = (1-beta)*gv + beta*buf[i]
+		} else {
+			dir[i] = buf[i]
 		}
-		o := newtonSchulz5(dir, R, C, mu.NSSteps)
-		scale := math.Sqrt(math.Max(1, float64(R)/float64(C)))
+	}
+	o := newtonSchulz5(dir, R, C, mu.NSSteps)
+	scale := math.Sqrt(math.Max(1, float64(R)/float64(C)))
+	wd := 1 - mu.LR*mu.WeightDecay
+	if p.Contiguous() == p {
+		pf := p.Storage().F64()
+		for i := range o {
+			pf[i] = pf[i]*wd - mu.LR*scale*o[i] // decoupled wd + orthogonal step
+		}
+	} else {
 		for i := range o {
 			idx := tensor.Unravel(i, p.Shape())
-			pv := p.AtF64(idx...)
-			pv = pv*(1-mu.LR*mu.WeightDecay) - mu.LR*scale*o[i] // decoupled wd + orthogonal step
-			p.SetF64(pv, idx...)
+			pf := p.AtF64(idx...)
+			p.SetF64(pf*wd-mu.LR*scale*o[i], idx...)
 		}
 	}
 }
