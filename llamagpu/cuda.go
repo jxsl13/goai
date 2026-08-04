@@ -421,6 +421,25 @@ func NewPhiQ8CUDA(m *nlp.Phi) (*Decoder, error) {
 // projections to resident Q8_0 while the top-k ROUTER stays f32 (d.f32Lin) — Q8 rounding in the router
 // logits could flip expert selection. Sparse-MoE decode streams many expert matrices per token, so this
 // is the largest Q8 decode win. Qwen3-MoE loads as an nlp.Mixtral, so NewQwen3MoEQ8CUDA == NewMixtralQ8CUDA.
+// cudaQ4KOps is cudaQ8Ops with resident-Q4_K quantization (0.5625 B/weight vs Q8 1.0625 — ~2x less
+// VRAM). Every projection with K%256==0 becomes a resident Q4_K weight; MoE experts (ResidentBQ4K) then
+// get the gated sparse decode (cu_qmatmul_q4k_moe) automatically via cRec.QMatMulResidentMoE.
+func cudaQ4KOps() backendOps {
+	o := cudaQ8Ops()
+	o.quantizeF32 = cudaQ4KResident
+	return o
+}
+
+// NewMixtralQ4KCUDA uploads an nlp.Mixtral with Q4_K-quantized weights (experts included) — the Q4_K_M
+// MoE path: ~2x less VRAM than NewMixtralQ8CUDA plus the ~E/K gated expert decode. Requires every
+// projection K (=Dim; per-expert Dim/Hidden) %256==0. Qwen3-MoE loads as an nlp.Mixtral, so it applies too.
+func NewMixtralQ4KCUDA(m *nlp.Mixtral) (*Decoder, error) {
+	if !cuda.Available() {
+		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
+	}
+	return newMixtralDecoder(m, cudaQ4KOps())
+}
+
 func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
