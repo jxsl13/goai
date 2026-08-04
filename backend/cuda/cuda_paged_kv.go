@@ -502,8 +502,8 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQAQio(q *DeviceF16, view *PagedBatch
 		return nil, fmt.Errorf("cuda: GQAQio bad head config q=%d kv=%d width=%d", qHeads, kvHeads, qCols)
 	}
 	hd := qCols / qHeads
-	if hd != 64 {
-		return nil, fmt.Errorf("cuda: GQAQio requires hd==64 (got %d)", hd)
+	if hd != 64 && hd != 128 {
+		return nil, fmt.Errorf("cuda: GQAQio requires hd==64 or 128 (got %d)", hd)
 	}
 	if kvHeads*hd != p.wkv {
 		return nil, fmt.Errorf("cuda: GQAQio kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
@@ -571,8 +571,8 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQAf16Qio(q16 unsafe.Pointer, qCols i
 		return nil, fmt.Errorf("cuda: GQAf16Qio bad head config q=%d kv=%d width=%d", qHeads, kvHeads, qCols)
 	}
 	hd := qCols / qHeads
-	if hd != 64 {
-		return nil, fmt.Errorf("cuda: GQAf16Qio requires hd==64 (got %d)", hd)
+	if hd != 64 && hd != 128 {
+		return nil, fmt.Errorf("cuda: GQAf16Qio requires hd==64 or 128 (got %d)", hd)
 	}
 	if kvHeads*hd != p.wkv {
 		return nil, fmt.Errorf("cuda: GQAf16Qio kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
