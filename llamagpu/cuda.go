@@ -1290,13 +1290,25 @@ func NewGPTCUDA(m *nlp.GPT) (*GPTDecoder, error) {
 	})
 }
 
-// cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU as Q8.
-// The CUDA backend has ONE quant kernel (Q8 GEMV), so — unlike metal/vulkan, which keep
-// each native ggml type and dequantize in-kernel — any source type (Q4_K, Q6_K, …) is
-// dequantized to f32 and re-quantized to a uniform resident Q8_0. That's a faithful Q8
-// inference path (Q8→f32→Q8 is near-lossless; lower-bit sources lose only what they
-// already lost). NewResidentBQ8 wants [In,Out], so the dequantized [Out,In] is transposed.
+// cudaUploadQWeight makes a ggml quantized [Out,In] weight resident on the GPU.
+//
+// Q4_K sources stay NATIVE: the raw GGUF Q4_K blocks (row-major [Out][In/256] super-blocks — exactly
+// what NewResidentBQ4KFromBlocks wants) upload as-is, keeping the format's 0.5625 B/weight (vs 1.0625
+// upcast to Q8) — ~2× less VRAM and less decode bandwidth, at IDENTICAL accuracy (Q4_K→f32→Q8 adds
+// nothing a Q4_K weight didn't already lose). Q4_K's resident dispatch (QMatMulResidentQ4K) already
+// serves the GEMV decode AND the tensor-core WMMA prefill, and the GGUF-block path is exactly the one
+// TestCUDAQ4KMatMulParity validates against the exact-dequant reference. Any error falls through to Q8.
+//
+// Other source types (Q5_K, Q6_K, …) have no native CUDA resident dispatch yet, so they are
+// dequantized to f32 and re-quantized to a uniform resident Q8_0 (a faithful, near-lossless path).
+// NewResidentBQ8 wants [In,Out], so the dequantized [Out,In] is transposed.
 func cudaUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
+	if qt == 12 /* tQ4_K */ && k%256 == 0 {
+		if rw, err := cuda.NewResidentBQ4KFromBlocks(weight, k, n); err == nil {
+			return rw, nil
+		}
+		// fall through to the always-correct Q8 path on any error
+	}
 	f32, err := gguf.QuantTensor{Data: weight, GGType: qt, Shape: tensor.Shape{n, k}}.Dequantize()
 	if err != nil {
 		return nil, fmt.Errorf("llamagpu: CUDA dequant qt=%d [%d,%d]: %w", qt, n, k, err)
