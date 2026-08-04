@@ -3291,38 +3291,42 @@ int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
         "}\n"
         "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        // COALESCED: one COLUMN per thread (threadIdx.x → contiguous n), so at each step of the inner
+        // element loop a warp writes B[k*N + n..n+31] = 32 CONTIGUOUS f16 → coalesced writes (the
+        // warp-per-column variant wrote N-strided → 29 GB/s, 12× under roofline; a per-element variant
+        // fixed writes but strided the reads + re-read metadata 256×). Each lane streams its own column's
+        // contiguous super-blocks and decodes the 8 sub-block scales ONCE per super-block. Per-element
+        // ggml layout: super-block sb=k/256, intra=k%256, group g=intra/64 → sub-blocks (2g low, 2g+1
+        // high) — the same mapping as the scalar qmatmul_q4k, so the dequant values are identical.
         "extern \"C\" __global__ void dequant_q4k_f16(const unsigned char* q, unsigned short* B, int K, int N){\n"
-        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
-        "  int lane = threadIdx.x & 31;\n"
-        "  if (warp >= (long)N) return;\n"
-        "  int n = (int)warp;\n"
+        "  int n = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (n >= N) return;\n"
         "  int sbs = K >> 8;\n"
-        "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
-        "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+        "  const unsigned char* qn = q + (size_t)n*sbs*144;\n"
         "  for (int w = 0; w < sbs; w++){\n"
-        "    const unsigned char* blk = qr + (size_t)w*144;\n"
-        "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n"
+        "    const unsigned char* blk = qn + (size_t)w*144;\n"
         "    float d = f16f(*(const unsigned short*)blk);\n"
         "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
-        "    float scL, mnL, scH, mnH;\n"
-        "    get_sm(2*p,   blk+4, &scL, &mnL);\n"
-        "    get_sm(2*p+1, blk+4, &scH, &mnH);\n"
-        "    float c1L = d*scL, c2L = dmin*mnL, c1H = d*scH, c2H = dmin*mnH;\n"
-        "    int kb = w*256 + p*64 + i0;\n"
-        "    for (int j = 0; j < 4; j++){\n"
-        "      float ql = (float)((qw >> (j*8)) & 0xFu);\n"
-        "      float qh = (float)((qw >> (j*8+4)) & 0xFu);\n"
-        "      B[(size_t)(kb+j)*N + n]    = f2h(c1L*ql - c2L);\n"
-        "      B[(size_t)(kb+32+j)*N + n] = f2h(c1H*qh - c2H);\n"
+        "    float c1[8], c2[8];\n"
+        "    #pragma unroll\n"
+        "    for (int s = 0; s < 8; s++){ float sc, mn; get_sm(s, blk+4, &sc, &mn); c1[s]=d*sc; c2[s]=dmin*mn; }\n"
+        "    const unsigned char* qs = blk + 16;\n"
+        "    size_t kb = (size_t)w*256;\n"
+        "    #pragma unroll 4\n"
+        "    for (int e = 0; e < 256; e++){\n"                       // each e: warp writes 32 contiguous n → coalesced
+        "      int g = e >> 6, i = e & 63, isHigh = i >> 5;\n"
+        "      int byteIdx = g*32 + (i & 31), is = 2*g + isHigh;\n"
+        "      unsigned char qb = qs[byteIdx];\n"
+        "      float qv = (float)(isHigh ? (qb >> 4) : (qb & 0xF));\n"
+        "      B[(kb + e)*N + n] = f2h(c1[is]*qv - c2[is]);\n"
         "    }\n"
         "  }\n"
         "}\n",
         "dequant_q4k_f16.cu", "dequant_q4k_f16", &gDequantQ4KF16) != 0) { rc = -2; goto donedq; }
     {
-        long total = (long)N * 32;
-        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        int threads = 256, bx = (N + threads - 1) / threads; if (bx < 1) bx = 1;
         void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
-        rc = (cuLaunchKernel(gDequantQ4KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gDequantQ4KF16, bx, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donedq:
     pthread_mutex_unlock(&gLock);

@@ -522,11 +522,13 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 // pass (a full f16 [K,N] scratch round-trip — ~64 MB of extra traffic at 4096², dominating the runtime
 // at small m) isn't amortized over enough rows and the MT decode-GEMV wins; at/above it the f16
 // tensor-core GEMM dominates. From the MT-vs-WMMA crossover bench (4096²,
-// cuda_q4k_wmma_crossover_bench_internal_test.go): m=16-48 MT wins clearly, m=64 a tie (WMMA ~6%
-// slower), m=128 WMMA 1.60×, m=256 2.00×, m=512 3.24×. 128 is the no-regression floor — it captures
-// the bulk of real prompt-prefill lengths while never regressing the small-batch/speculative range.
-// (The Marlin-style dequant-in-tile GEMM would erase the scratch round-trip and lower this floor.)
-const q4kWMMAThreshold = 128
+// cuda_q4k_wmma_crossover_bench_internal_test.go), with the coalesced-write dequant
+// (cu_dequant_q4k_to_f16 at 62 GB/s vs the old warp-per-column 29 GB/s): m=16 MT wins, m=32 a tie
+// (WMMA ~3%, within bench noise), m=48 WMMA 1.35×, m=64 1.61×, m=128 2.42×, m=256 2.71×. 48 is the
+// no-regression floor. (The 29 GB/s dequant pinned this at 128; halving its ~64 MB f16-scratch
+// round-trip cost with coalesced writes dropped the crossover to 48 and raised every win. The
+// remaining lever is a Marlin-style dequant-IN-tile GEMM that erases the round-trip entirely.)
+const q4kWMMAThreshold = 48
 
 // QMatMulResidentQ4K records o[m, w.n] = x[m, w.k]·dequant(w) for a resident Q4_K (4-bit k-quant
 // super-block) weight — the aggressive-quant decode path. Q4_K is 2× smaller than Q8 (enables models that
