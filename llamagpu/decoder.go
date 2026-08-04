@@ -2911,40 +2911,40 @@ func (d *Decoder) dropPending() {
 // recording the whole layer stack + vocab head into one command buffer, and returns the [vocab]
 // logits. pos must be < the model's Ctx. Sequential calls run the §T614 encode-overlap: while the
 // GPU executes this step, the next position's command buffer is pre-encoded on the host.
-func (d *Decoder) Step(token, pos int) ([]float32, error) {
+func (d *Decoder) stepInto(token, pos int) error {
 	if pos < 0 || pos >= d.maxLen {
-		return nil, fmt.Errorf("llamagpu(%s): pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
+		return fmt.Errorf("llamagpu(%s): pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
 	}
 	if token < 0 || token >= d.v {
-		return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
+		return fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
 	}
-	// Mamba/Mamba-2 carry per-block conv/SSM state across Step calls with no KV cache; a fresh
+	// Mamba/Mamba-2/RWKV carry per-block conv/SSM state across Step calls with no KV cache; a fresh
 	// sequence (pos==0) must start from zeroed state.
 	if pos == 0 {
 		if d.mamba {
 			if err := d.resetMambaState(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if d.mamba2 {
 			if err := d.resetMamba2State(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if d.rwkv {
 			if err := d.resetRWKVState(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		if d.jamba { // reset the Mamba-layer conv/SSM state (attention layers' KV cache overwrites from row 0)
 			if err := d.resetMambaState(); err != nil {
-				return nil, err
+				return err
 			}
 		}
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
 	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
-		return nil, err
+		return err
 	}
 	var r recorder
 	if d.pending != nil && d.pendingPos == pos {
@@ -2953,18 +2953,16 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 		d.dropPending()
 		var err error
 		if r, err = d.encodeStep(pos); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if err := r.Commit(); err != nil {
 		r.Free()
-		return nil, err
+		return err
 	}
-	// encode-overlap (§T614): pre-encode pos+1 while the GPU executes pos. Failure is not
-	// fatal — the next Step simply encodes fresh. Gated on asyncEncode: the vulkan bridge's
-	// single global recording context cannot hold a second open recorder. Disabled for Mamba:
-	// its blocks mutate resident conv/SSM state, so a pre-encoded pos+1 must not be recorded
-	// until pos's state writes are committed.
+	// encode-overlap (§T614): pre-encode pos+1 while the GPU executes pos. Failure is not fatal — the
+	// next Step simply encodes fresh. Disabled for Mamba: its blocks mutate resident conv/SSM state, so
+	// a pre-encoded pos+1 must not be recorded until pos's state writes are committed.
 	if d.ops.asyncEncode && !d.mamba && !d.mamba2 && !d.rwkv && pos+1 < d.maxLen {
 		if nr, err := d.encodeStep(pos + 1); err == nil {
 			d.pending, d.pendingPos = nr, pos+1
@@ -2972,9 +2970,19 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 	}
 	if err := r.Wait(); err != nil {
 		r.Free()
-		return nil, err
+		return err
 	}
 	r.Free()
+	return nil
+}
+
+// Step records and executes one decode step for token at pos, returning the host logits [d.v]. It wraps
+// stepInto (which leaves the result in the device logits buffer) with the whole-vocab host download; the
+// on-device sampling fast-path (Generate) instead reads the device logits directly via a top-k.
+func (d *Decoder) Step(token, pos int) ([]float32, error) {
+	if err := d.stepInto(token, pos); err != nil {
+		return nil, err
+	}
 	out := make([]float32, d.v)
 	if err := d.logits.b.DownloadF32(out); err != nil {
 		return nil, err
@@ -3106,22 +3114,45 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 		return nil, err
 	}
 	pos := len(prompt)
-	logits := all[(len(prompt)-1)*d.v:] // last row = logits after the full prompt
+	logits := all[(len(prompt)-1)*d.v:] // host logits after the full prompt (first token)
 	buf := make([]float64, d.v)
+	// On-device top-k sampling fast-path: for a penalty-free TopK sampler AND a device logits buffer that
+	// can TopK (CUDA), skip the whole-vocab host download + CPU sort each token — read the K highest
+	// logits on device and draw over them, bit-identical to the full-vocab sampler (see fastTopKSampler /
+	// sampleTopKCandidates). Any other sampler/backend takes the flexible host path.
+	sp, fastK := fastTopKSampler(s, d.v)
+	dt, hasDev := d.logits.b.(deviceTopKer)
+	fast := sp != nil && hasDev
 	for range maxNew {
 		if pos >= d.maxLen {
 			break
 		}
-		for i, x := range logits {
-			buf[i] = float64(x)
+		var next int
+		if fast && logits == nil { // decode step, logits resident on device (first d.v of the buffer)
+			gi, gv, e := dt.TopKN(d.v, fastK)
+			if e != nil {
+				return nil, e
+			}
+			next = sampleTopKCandidates(sp, gi, gv)
+		} else { // first token (prefill host logits) or the full-vocab fallback
+			for i, x := range logits {
+				buf[i] = float64(x)
+			}
+			next = s.SampleWithHistory(buf, out)
 		}
-		next := s.SampleWithHistory(buf, out)
 		out = append(out, next)
-		l, err := d.Step(next, pos)
-		if err != nil {
-			return nil, err
+		if fast {
+			if e := d.stepInto(next, pos); e != nil { // leaves logits on device — no host download
+				return nil, e
+			}
+			logits = nil
+		} else {
+			l, e := d.Step(next, pos)
+			if e != nil {
+				return nil, e
+			}
+			logits = l
 		}
-		logits = l
 		pos++
 	}
 	return out, nil

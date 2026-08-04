@@ -5,9 +5,7 @@ package llamagpu
 import (
 	"fmt"
 	"math"
-	"os"
 	"runtime"
-	"sort"
 
 	"github.com/jxsl13/goai/backend/cuda"
 	"github.com/jxsl13/goai/nlp"
@@ -478,7 +476,7 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 	// CPU sort per token collapses to a GPU TopK(K) (K·8 bytes out) + a CPU draw over K candidates —
 	// bit-identical to the full-vocab sampler (K⊇top-k; candidates fed in vocab-index order so the draw
 	// order and rng match). sp==nil ⟹ the flexible CPU-sampler fallback (full ToHost).
-	sp, fastK := gd.fastTopKSample(s)
+	sp, fastK := fastTopKSampler(s, gd.vocab)
 	pos := len(prompt)
 	buf := make([]float64, gd.vocab)
 	for range maxNew {
@@ -514,56 +512,6 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 		pos++
 	}
 	return out, nil
-}
-
-// fastTopKSample returns (sampler, K) when s is an on-device-samplable *nlp.Sampler — a penalty-free
-// TopK sampler whose selection is confined to the top-TopK, so a GPU TopK(K>TopK) superset lets the CPU
-// draw exactly on K candidates. Returns (nil, 0) for any other sampler (penalties, TopK off/too large,
-// a non-*Sampler impl, or GOAI_CUDA_TOPK_SAMPLE=0) → the flexible full-vocab fallback.
-func (gd *GraphLlamaDecoder) fastTopKSample(s nlp.TokenSampler) (*nlp.Sampler, int) {
-	if os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0" {
-		return nil, 0
-	}
-	sp, ok := s.(*nlp.Sampler)
-	if !ok {
-		return nil, 0
-	}
-	// Penalties rewrite arbitrary tokens' logits from history, so a raw-logit top-k is not the effective
-	// top-k → require them off (RepeatPenalty 0 or 1 are both no-ops). XTC/MinP/Typical/TopP are fine:
-	// they only ever shrink the post-TopK set, which stays ⊆ the K candidates.
-	if !(sp.RepeatPenalty == 0 || sp.RepeatPenalty == 1) || sp.FreqPenalty != 0 || sp.PresencePenalty != 0 || sp.DRYMultiplier != 0 {
-		return nil, 0
-	}
-	if sp.TopK <= 0 || sp.TopK > 240 { // K = TopK+16 must stay within the cu_topk cap (256)
-		return nil, 0
-	}
-	k := sp.TopK + 16 // margin so a tie at rank TopK can't push a real top-TopK token out of the K set
-	if k > gd.vocab {
-		k = gd.vocab
-	}
-	return sp, k
-}
-
-// sampleTopKCandidates draws exactly as the full-vocab sampler would, but over just the K GPU top-k
-// candidates: it feeds them to sp.Sample in ASCENDING VOCAB-INDEX order so the multinomial's cumulative
-// scan visits the selected tokens in the same order (and consumes the same rng) as the full-vocab path,
-// then maps the chosen local index back to its vocab id. Exact for the penalty-free TopK case (K⊇top-k).
-func sampleTopKCandidates(sp *nlp.Sampler, gi []int32, gv []float32) int {
-	k := len(gi)
-	order := make([]int, k)
-	for j := range order {
-		order[j] = j
-	}
-	sort.Slice(order, func(a, b int) bool { return gi[order[a]] < gi[order[b]] })
-	vals := make([]float64, k)
-	for j, o := range order {
-		vals[j] = float64(gv[o])
-	}
-	local := sp.Sample(vals)
-	if local < 0 || local >= k {
-		local = 0 // degenerate (no positive mass) — the sampler already fell back to argmax on vals
-	}
-	return int(gi[order[local]])
 }
 
 // GenerateGreedy decodes maxNew tokens by argmax, doing the argmax ON THE GPU (cu_argmax_f32) so each
