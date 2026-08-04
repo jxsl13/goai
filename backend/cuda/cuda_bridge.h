@@ -172,6 +172,7 @@ int cu_qmatmul_mxfp4_mt(const void* dA, const void* dScale, const void* dNib, vo
 // cu_qmatmul_q40: out[M,N] = a·dequant(Q4_0), REPACKED into dScale (nblk f16/row) + dNib
 // (nblk×16 nibble bytes/row, 16-aligned) for coalesced reads. y = d·(nibble−8). K%32==0. GEMV.
 int cu_qmatmul_q40(const void* dA, const void* dScale, const void* dNib, void* dOut, int M, int K, int N, float beta);
+int cu_dequant_q40_to_f16(const void* dScale, const void* dNib, void* dBf16, int K, int N);
 // cu_qmatmul_q2k: out[M,N] = a·dequant(W), W = ggml Q2_K 84-byte super-blocks per output row
 // (asymmetric affine, 4-bit sub-scale+min nibbles, 2-bit quants). K%256==0. DECODE GEMV.
 int cu_qmatmul_q2k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);

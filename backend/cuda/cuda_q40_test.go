@@ -96,3 +96,97 @@ func TestCUDAQ40MatMulParity(t *testing.T) {
 		t.Fatalf("Q4_0 GEMV beta=1 deviates: maxAbs %.3e", maxAbs)
 	}
 }
+
+// TestCUDAQ40WMMAParity validates the tensor-core Q4_0 prefill (dequant→f16→WMMA)
+// against the scalar GEMV, within f16-accumulate tolerance.
+func TestCUDAQ40WMMAParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const M, K, N = 64, 512, 64
+	rng := rand.New(rand.NewSource(87))
+	w := tensor.New(tensor.F64, tensor.Shape{K, N})
+	ws := w.Storage().F64()
+	for i := range ws {
+		ws[i] = rng.NormFloat64() * 0.1
+	}
+	qi, err := quantQ40(w)
+	must(t, err)
+	rq := qi.(*cuda.ResidentBQ40)
+	af := make([]float32, M*K)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.2
+	}
+	da, _ := cuda.NewDeviceF32(M, K)
+	must(t, da.UploadF32(af))
+	defer da.Free()
+	ref, _ := cuda.NewDeviceF32(M, N)
+	defer ref.Free()
+	got, _ := cuda.NewDeviceF32(M, N)
+	defer got.Free()
+	must(t, rq.QMatMulInto(da, ref))
+	must(t, rq.QMatMulWMMAInto(da, got))
+	a := make([]float32, M*N)
+	b := make([]float32, M*N)
+	ref.DownloadF32(a)
+	got.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	rel := math.Sqrt(num / den)
+	t.Logf("Q4_0 WMMA prefill vs scalar GEMV: rel-RMS %.3e", rel)
+	if rel > 2e-2 {
+		t.Fatalf("Q4_0 WMMA diverges: rel-RMS %.3e", rel)
+	}
+}
+
+func benchQ40Prefill(b *testing.B, M, K, N int, wmma bool) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	rng := rand.New(rand.NewSource(2))
+	w := tensor.New(tensor.F64, tensor.Shape{K, N})
+	ws := w.Storage().F64()
+	for i := range ws {
+		ws[i] = rng.NormFloat64() * 0.1
+	}
+	qi, err := quantQ40(w)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rq := qi.(*cuda.ResidentBQ40)
+	af := make([]float32, M*K)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.2
+	}
+	da, _ := cuda.NewDeviceF32(M, K)
+	da.UploadF32(af)
+	defer da.Free()
+	out, _ := cuda.NewDeviceF32(M, N)
+	defer out.Free()
+	run := func() error {
+		if wmma {
+			return rq.QMatMulWMMAInto(da, out)
+		}
+		return rq.QMatMulInto(da, out)
+	}
+	if err := run(); err != nil {
+		b.Skipf("q40: %v", err)
+	}
+	cuda.GraphSync()
+	b.ResetTimer()
+	for range b.N {
+		run()
+	}
+	cuda.GraphSync()
+}
+
+func BenchmarkQ40Prefill_M512_K4096_N4096_scalar(b *testing.B) {
+	benchQ40Prefill(b, 512, 4096, 4096, false)
+}
+func BenchmarkQ40Prefill_M512_K4096_N4096_wmma(b *testing.B) {
+	benchQ40Prefill(b, 512, 4096, 4096, true)
+}
