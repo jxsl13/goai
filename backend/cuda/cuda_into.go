@@ -30,6 +30,22 @@ func (d *DeviceF32) Argmax() int {
 	return int(C.cu_argmax_f32(d.ptr, C.int(d.rows*d.cols)))
 }
 
+// TopK returns the k highest (index, value) pairs computed on device, descending — only k·8 bytes are
+// downloaded (vs the whole logit vector), the on-device counterpart to Argmax for top-k sampling. k
+// must be in [1, min(256, n)].
+func (d *DeviceF32) TopK(k int) ([]int32, []float32, error) {
+	n := d.rows * d.cols
+	if k < 1 || k > 256 || k > n {
+		return nil, nil, fmt.Errorf("cuda: TopK k=%d out of range for n=%d (1..min(256,n))", k, n)
+	}
+	idx := make([]int32, k)
+	val := make([]float32, k)
+	if rc := C.cu_topk_f32(d.ptr, C.int(n), C.int(k), (*C.int)(&idx[0]), (*C.float)(&val[0])); rc != 0 {
+		return nil, nil, fmt.Errorf("cuda: TopK failed (code %d)", int(rc))
+	}
+	return idx, val, nil
+}
+
 // LayerNormInto writes LayerNorm(d)·gamma + beta into out over the last axis
 // (torch LayerNorm), leaving d unchanged. gamma/beta are resident [cols] vectors.
 func (d *DeviceF32) LayerNormInto(gamma, beta *ResidentVec, eps float32, out *DeviceF32) error {
