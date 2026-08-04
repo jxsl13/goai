@@ -120,6 +120,29 @@ func (r *ResidentBQ4K) QMatMulAccInto(a, c *DeviceF32) error {
 	return r.qmatmul(a, c, 1)
 }
 
+// QMatMulWMMAAccInto computes c += a·dequant(W) on TENSOR CORES (dequant Q4_K→f16 once, then cuBLAS f16
+// GEMM with beta=1) — the accumulate/residual-fuse twin of the recorder's q4kPrefillWMMA, for the o and
+// down projections in PREFILL (m large). Several× the scalar-MT QMatMulAccInto that qmatmul routes m>=2
+// to (MT has no WMMA path), matching what the eager Decoder already does for these projections. Explicit
+// m for the flat llamagpu scratch buffers (no shape check). Rides the incumbent f16-accum tolerance.
+func (r *ResidentBQ4K) QMatMulWMMAAccInto(a, c *DeviceF32, m int) error {
+	if r.q == nil || a.ptr == nil || c.ptr == nil {
+		return fmt.Errorf("cuda: Q4_K WMMA acc matmul on a freed handle")
+	}
+	bf16 := C.cu_alloc_u16(C.int(r.k * r.n))
+	if bf16 == nil {
+		return fmt.Errorf("cuda: Q4_K WMMA acc weight scratch alloc failed")
+	}
+	defer C.cu_free_f32(bf16)
+	if rc := C.cu_dequant_q4k_to_f16(r.q, bf16, C.int(r.k), C.int(r.n)); rc != 0 {
+		return fmt.Errorf("cuda: Q4_K WMMA acc dequant failed (code %d)", int(rc))
+	}
+	if rc := matmulF16wPrefill(a.ptr, bf16, c.ptr, m, r.k, r.n, 1); rc != 0 {
+		return fmt.Errorf("cuda: Q4_K WMMA acc gemm failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 func (r *ResidentBQ4K) qmatmul(a, out *DeviceF32, beta float32) error {
 	if r.q == nil || a.ptr == nil || out.ptr == nil {
 		return fmt.Errorf("cuda: Q4_K matmul on a freed handle")

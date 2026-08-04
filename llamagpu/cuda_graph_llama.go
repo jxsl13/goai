@@ -306,7 +306,17 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		if err = gd.rec.MHA(dqM, dkM, dvM, daM, m, m, gd.heads*gd.hd, gd.heads, gd.kv, gd.hd, 1, 0, gd.scale); err != nil {
 			return nil, err
 		}
-		if err = l.wo.QMatMulAccInto(daM, dxM); err != nil {
+		// PREFILL: route the residual-add o/down projections to the tensor-core WMMA acc (dequant→cuBLAS
+		// f16 GEMM, beta=1) — ~3× the scalar-MT that QMatMulAccInto uses (MT has no WMMA path, so wo/wd
+		// were silently stuck on it while wqkv/wgu already used WMMA, making graph prefill 3× slower than
+		// the eager Decoder). Matches what the eager Decoder does; f16-accum incumbent tolerance. m<48
+		// (tiny prompts) keeps the bit-exact MT path.
+		if m >= 48 {
+			err = l.wo.QMatMulWMMAAccInto(daM, dxM, m)
+		} else {
+			err = l.wo.QMatMulAccInto(daM, dxM)
+		}
+		if err != nil {
 			return nil, err
 		}
 		// populate the decode KV cache with the prompt's RoPE'd K and un-rotated V (rows 0..M-1).
@@ -334,7 +344,12 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		if err = dgM.SwiGLU(duM); err != nil {
 			return nil, err
 		}
-		if err = l.wd.QMatMulAccInto(dgM, dxM); err != nil {
+		if m >= 48 { // PREFILL: tensor-core WMMA acc for the down projection too (see wo above)
+			err = l.wd.QMatMulWMMAAccInto(dgM, dxM, m)
+		} else {
+			err = l.wd.QMatMulAccInto(dgM, dxM)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
