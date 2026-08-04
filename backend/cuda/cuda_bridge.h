@@ -242,6 +242,10 @@ int cu_ldmatrix_probe(void* dOut);
 // cu_ldmatrix_probe2: map ldmatrix.x2.b16 for the B fragment (dOut = 64 u32).
 int cu_ldmatrix_probe2(void* dOut);
 int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
+// cu_append_dpos_i8: quantize one [kvHeads*hd] f32 row to int8 (per-head scale max/127) at row *dPos.
+int cu_append_dpos_i8(void* dstI8, void* dScale, const void* src, const void* dPos, int kvHeads, int hd);
+// cu_download_i8: copy n device bytes to host.
+int cu_download_i8(const void* dsrc, signed char* dst, int n);
 // cu_matmul_f16w_acc16: drop-in f32-output twin of cu_matmul_f16w with f16 accumulate (+convert).
 int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_gemm_f16_pure: pure f16 GEMM (f16 in/out, no per-call conversions) — isolates the A1 conversion cost.
@@ -278,6 +282,8 @@ int cu_zero_u16(void* d, int n);
 int cu_append_dpos_f16(void* dst16, const void* src, const void* dPos, int wkv);
 int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, void* dOut,
                           int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
+// cu_gqa_flash_i8_dpos: flash decode over an int8 KV cache (int8 K/V + per-(token,head) f32 scales dKs/dVs).
+int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const void* dKs, const void* dVs, void* dOut, int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);

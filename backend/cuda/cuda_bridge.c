@@ -7719,6 +7719,139 @@ done:
     return rc;
 }
 
+// cu_gqa_flash_i8_dpos: cu_gqa_flash_f16_dpos over an int8 KV cache with per-(token,head) f32
+// scales — K/V global reads are HALF the f16 bytes (quarter of f32) and shared use is smaller
+// (better occupancy). Mirrors the f16 partial kernel exactly, replacing h2f(x) with (float)x and
+// folding the per-token scale out of the reduction: s = (Σ q·int8_k)·kscale·scale, and the V
+// accumulation weights pj by vscale. Reuses the shared f32 merge kernel. hd ≤ 128, group ≤ 8.
+static CUfunction gGqaFlashPartI8 = NULL;
+int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const void* dKs, const void* dVs,
+                         void* dOut, int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff) {
+    static void* sPart = NULL;
+    static size_t cPart = 0;
+    int rc = -1;
+    int group = qHeads / kvHeads;
+    if (hd > 128 || group > 8) return -4;
+    int splitK = seqKV / 32;
+    if (splitK < 1) splitK = 1;
+    if (splitK > 32) splitK = 32;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done_i8f; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done_i8f; }
+    if (!gGqaFlashPartI8 && compile_kernel(
+        "extern \"C\" __global__ void gqa_flash_partial_i8(const float* q, const signed char* k, const signed char* v,\n"
+        "    const float* ks, const float* vs, float* part,\n"
+        "    int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff, int splitK){\n"
+        "  int kvh = blockIdx.x / splitK, c = blockIdx.x % splitK;\n"
+        "  int group = qHeads / kvHeads, WKV = kvHeads * hd;\n"
+        "  int lim = *dOff; if (lim >= seqKV) lim = seqKV - 1;\n"
+        "  int total = lim + 1;\n"
+        "  int chunk = (seqKV + splitK - 1) / splitK;\n"
+        "  int begin = c * chunk, end = begin + chunk; if (end > total) end = total;\n"
+        "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
+        "  int hp = hd + 1;\n"
+        "  extern __shared__ float sh[];\n"
+        "  float* shq = sh;\n"
+        "  signed char* shk = (signed char*)(shq + group * hd);\n"
+        "  signed char* shv = shk + 32 * hp;\n"
+        "  float* shks = (float*)(shv + 32 * hp);\n"
+        "  float* shvs = shks + 32;\n"
+        "  for (int i = t; i < group * hd; i += nt) shq[i] = q[(size_t)kvh * group * hd + i];\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
+        "  for (int base = begin; base < end; base += 32) {\n"
+        "    int nk = end - base; if (nk > 32) nk = 32;\n"
+        "    __syncthreads();\n"
+        "    for (int i = t; i < nk * hd; i += nt) {\n"
+        "      int j = i / hd, d = i - j * hd;\n"
+        "      size_t src = (size_t)(base + j) * WKV + (size_t)kvh * hd + d;\n"
+        "      shk[j * hp + d] = k[src];\n"
+        "      shv[j * hp + d] = v[src];\n"
+        "    }\n"
+        "    for (int j = t; j < nk; j += nt) {\n"
+        "      shks[j] = ks[(size_t)(base + j) * kvHeads + kvh];\n"
+        "      shvs[j] = vs[(size_t)(base + j) * kvHeads + kvh];\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "    if (w < group) {\n"
+        "      float s = NEGINF;\n"
+        "      if (lane < nk) {\n"
+        "        const signed char* kr = shk + lane * hp;\n"
+        "        const float* qh = shq + w * hd;\n"
+        "        float dot = 0.f;\n"
+        "        for (int d = 0; d < hd; d++) dot += qh[d] * (float)kr[d];\n"
+        "        s = dot * shks[lane] * scale;\n"
+        "      }\n"
+        "      float bm = s;\n"
+        "      for (int o = 16; o > 0; o >>= 1) { float z = __shfl_down_sync(0xffffffffu, bm, o); if (z > bm) bm = z; }\n"
+        "      bm = __shfl_sync(0xffffffffu, bm, 0);\n"
+        "      float newm = m > bm ? m : bm;\n"
+        "      float corr = __expf(m - newm);\n"
+        "      float p = (lane < nk) ? __expf(s - newm) : 0.f;\n"
+        "      float bl = p;\n"
+        "      for (int o = 16; o > 0; o >>= 1) bl += __shfl_down_sync(0xffffffffu, bl, o);\n"
+        "      bl = __shfl_sync(0xffffffffu, bl, 0);\n"
+        "      l = l * corr + bl; m = newm;\n"
+        "      a0 *= corr; a1 *= corr; a2 *= corr; a3 *= corr;\n"
+        "      for (int j = 0; j < nk; j++) {\n"
+        "        float pj = __shfl_sync(0xffffffffu, p, j);\n"
+        "        float pjv = pj * shvs[j];\n"
+        "        const signed char* vr = shv + j * hp;\n"
+        "        if (lane < hd)      a0 += pjv * (float)vr[lane];\n"
+        "        if (lane + 32 < hd) a1 += pjv * (float)vr[lane + 32];\n"
+        "        if (lane + 64 < hd) a2 += pjv * (float)vr[lane + 64];\n"
+        "        if (lane + 96 < hd) a3 += pjv * (float)vr[lane + 96];\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  if (w < group) {\n"
+        "    int qh = kvh * group + w;\n"
+        "    float* o = part + (size_t)(qh * splitK + c) * (hd + 2);\n"
+        "    if (lane == 0) { o[0] = m; o[1] = l; }\n"
+        "    if (lane < hd)      o[2 + lane] = a0;\n"
+        "    if (lane + 32 < hd) o[2 + lane + 32] = a1;\n"
+        "    if (lane + 64 < hd) o[2 + lane + 64] = a2;\n"
+        "    if (lane + 96 < hd) o[2 + lane + 96] = a3;\n"
+        "  }\n"
+        "}\n",
+        "gqa_flash_partial_i8.cu", "gqa_flash_partial_i8", &gGqaFlashPartI8) != 0) { rc = -2; goto done_i8f; }
+    if (!gGqaFlashMerge && compile_kernel(
+        "extern \"C\" __global__ void gqa_flash_merge(const float* part, float* out, int qHeads, int hd, int splitK){\n"
+        "  int qh = blockIdx.x; if (qh >= qHeads) return;\n"
+        "  int t = threadIdx.x, nt = blockDim.x;\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  float M = NEGINF;\n"
+        "  for (int s = 0; s < splitK; s++) { const float* p = part + (size_t)(qh*splitK+s)*(hd+2); if (p[1] > 0.f && p[0] > M) M = p[0]; }\n"
+        "  float L = 0.f;\n"
+        "  for (int s = 0; s < splitK; s++) { const float* p = part + (size_t)(qh*splitK+s)*(hd+2); if (p[1] > 0.f) L += p[1] * __expf(p[0] - M); }\n"
+        "  float invL = 1.f / L;\n"
+        "  for (int d = t; d < hd; d += nt) {\n"
+        "    float a = 0.f;\n"
+        "    for (int s = 0; s < splitK; s++) { const float* p = part + (size_t)(qh*splitK+s)*(hd+2); if (p[1] > 0.f) a += __expf(p[0] - M) * p[2 + d]; }\n"
+        "    out[qh * hd + d] = a * invL;\n"
+        "  }\n"
+        "}\n",
+        "gqa_flash_merge.cu", "gqa_flash_merge", &gGqaFlashMerge) != 0) { rc = -2; goto done_i8f; }
+    if (ensure_devp(&sPart, &cPart, (size_t)qHeads * splitK * (hd + 2) * sizeof(float)) != 0) { rc = -9; goto done_i8f; }
+    {
+        int threads = 256;
+        int blocks = kvHeads * splitK;
+        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 1) * sizeof(signed char) + 2u * 32u * sizeof(float);
+        void* args[13];
+        args[0] = &dQ; args[1] = &dK8; args[2] = &dV8; args[3] = &dKs; args[4] = &dVs; args[5] = &sPart;
+        args[6] = &seqKV; args[7] = &qHeads; args[8] = &kvHeads; args[9] = &hd;
+        args[10] = &scale; args[11] = &dOff; args[12] = &splitK;
+        if (cuLaunchKernel(gGqaFlashPartI8, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { rc = -3; goto done_i8f; }
+        int mthreads = 128;
+        void* margs[5];
+        margs[0] = &sPart; margs[1] = &dOut; margs[2] = &qHeads; margs[3] = &hd; margs[4] = &splitK;
+        rc = (cuLaunchKernel(gGqaFlashMerge, qHeads, 1, 1, mthreads, 1, 1, 0, (CUstream)gStream, margs, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done_i8f:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_append_dpos_f16 converts one token's wkv f32 values to f16 (round-to-
 // nearest-even, mirrors kCvtF16ManualSrc) and writes them into the u16 cache at
 // row *dPos — the f16 KV-cache append (graph-capturable).
@@ -7762,6 +7895,55 @@ int cu_append_dpos_f16(void* dst16, const void* src, const void* dPos, int wkv) 
         rc = (cuLaunchKernel(gAppendDposF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_append_dpos_i8 quantizes one token's [kvHeads*hd] f32 row to int8 with a PER-HEAD
+// symmetric scale (max|·|/127), writing the int8 values at row *dPos of dstI8 and the hd-shared
+// scale at index (*dPos)*kvHeads + head of dScale. Per-head (not per-token-whole-row) keeps
+// accuracy when heads differ in magnitude, and is graph-capturable (device pos). One block per
+// head, blockDim 128 ≥ hd; the block reduces |·| to the head max in shared, then quantizes.
+static CUfunction gAppendDposI8 = NULL;
+int cu_append_dpos_i8(void* dstI8, void* dScale, const void* src, const void* dPos, int kvHeads, int hd) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done_i8; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done_i8; }
+    if (!gAppendDposI8 && compile_kernel(
+        "extern \"C\" __global__ void append_dpos_i8(signed char* dst, float* scale, const float* src, const int* dPos, int kvHeads, int hd){\n"
+        "  int head = blockIdx.x; int tid = threadIdx.x;\n"
+        "  __shared__ float sm[128];\n"
+        "  int base = head*hd;\n"
+        "  float a = (tid < hd) ? fabsf(src[base+tid]) : 0.0f;\n"
+        "  sm[tid] = a; __syncthreads();\n"
+        "  for (int s = 64; s > 0; s >>= 1) { if (tid < s) sm[tid] = fmaxf(sm[tid], sm[tid+s]); __syncthreads(); }\n"
+        "  float mx = sm[0];\n"
+        "  float sc = (mx > 0.0f) ? (mx / 127.0f) : 1.0f;\n"
+        "  if (tid == 0) scale[(size_t)(*dPos)*kvHeads + head] = sc;\n"
+        "  if (tid < hd) {\n"
+        "    float q = rintf(src[base+tid] / sc);\n"
+        "    q = fmaxf(-127.0f, fminf(127.0f, q));\n"
+        "    dst[(size_t)(*dPos)*kvHeads*hd + base + tid] = (signed char)q;\n"
+        "  }\n"
+        "}\n",
+        "append_dpos_i8.cu", "append_dpos_i8", &gAppendDposI8) != 0) { rc = -2; goto done_i8; }
+    {
+        void* args[6];
+        args[0] = &dstI8; args[1] = &dScale; args[2] = &src; args[3] = &dPos; args[4] = &kvHeads; args[5] = &hd;
+        rc = (cuLaunchKernel(gAppendDposI8, kvHeads, 1, 1, 128, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done_i8:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_download_i8 copies n signed bytes device→host.
+int cu_download_i8(const void* dsrc, signed char* dst, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0 && cuCtxSetCurrent(gCtx) == CUDA_SUCCESS)
+        rc = (cudaMemcpy(dst, dsrc, (size_t)n, cudaMemcpyDeviceToHost) == cudaSuccess) ? 0 : -2;
     pthread_mutex_unlock(&gLock);
     return rc;
 }
