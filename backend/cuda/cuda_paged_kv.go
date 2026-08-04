@@ -644,8 +644,8 @@ func (p *PagedKVPool) BatchedDecodeAttn(q *DeviceF32, seqs []*SeqKV, qHeads, kvH
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttn bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
 	}
 	hd := q.cols / qHeads
-	if hd != 64 {
-		return nil, fmt.Errorf("cuda: BatchedDecodeAttn requires hd==64 (got %d)", hd)
+	if hd != 64 && hd != 128 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttn requires hd==64 or 128 (got %d)", hd)
 	}
 	if kvHeads*hd != p.wkv {
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttn kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
