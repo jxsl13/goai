@@ -411,8 +411,8 @@ func (p *PagedKVPool) BatchedDecodeAttnView(q *DeviceF32, view *PagedBatchView, 
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
 	}
 	hd := q.cols / qHeads
-	if hd != 64 {
-		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView requires hd==64 (got %d)", hd)
+	if hd != 64 && hd != 128 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView requires hd==64 or 128 (got %d)", hd)
 	}
 	if kvHeads*hd != p.wkv {
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnView kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
@@ -465,8 +465,8 @@ func (p *PagedKVPool) BatchedDecodeAttnViewGQA(q *DeviceF32, view *PagedBatchVie
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA bad head config q=%d kv=%d width=%d", qHeads, kvHeads, q.cols)
 	}
 	hd := q.cols / qHeads
-	if hd != 64 {
-		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA requires hd==64 (got %d)", hd)
+	if hd != 64 && hd != 128 {
+		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA requires hd==64 or 128 (got %d)", hd)
 	}
 	if kvHeads*hd != p.wkv {
 		return nil, fmt.Errorf("cuda: BatchedDecodeAttnViewGQA kvHeads*hd=%d != pool wkv=%d", kvHeads*hd, p.wkv)
