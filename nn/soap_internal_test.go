@@ -2,7 +2,10 @@ package nn
 
 import (
 	"math"
+	"math/rand/v2"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 // §V16 tier-1: the eigenbasis rotations are exact inverses (Q_L, Q_R orthogonal), so
@@ -39,3 +42,26 @@ func TestSOAPRotationInverse(t *testing.T) {
 		}
 	}
 }
+
+func benchSOAPStep(b *testing.B, nParams, dim int) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	params := make([]*tensor.Tensor, nParams)
+	grads := make(map[*tensor.Tensor]*tensor.Tensor, nParams)
+	for i := range params {
+		p := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		gv := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		gs := gv.Storage().F64()
+		for k := range gs {
+			gs[k] = rng.NormFloat64()
+		}
+		params[i], grads[p] = p, gv
+	}
+	opt := NewSOAP(params, 1e-3, WithSOAPFreq(1)) // Freq=1: eigenbasis refresh every step
+	gf := func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+	opt.Step(gf)
+	b.ResetTimer()
+	for range b.N {
+		opt.Step(gf)
+	}
+}
+func BenchmarkSOAPStep_8x512(b *testing.B) { benchSOAPStep(b, 8, 512) }
