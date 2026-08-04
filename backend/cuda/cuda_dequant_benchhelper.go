@@ -16,3 +16,7 @@ func freeF32ForBench(p unsafe.Pointer)      { C.cu_free_f32(p) }
 func dequantQ4KForBench(r *ResidentBQ4K, bf16 unsafe.Pointer, k, n int) int {
 	return int(C.cu_dequant_q4k_to_f16(r.q, bf16, C.int(k), C.int(n)))
 }
+
+func dequantQ6KForBench(r *ResidentBQ6K, bf16 unsafe.Pointer, k, n int) int {
+	return int(C.cu_dequant_q6k_to_f16(r.q, bf16, C.int(k), C.int(n)))
+}
