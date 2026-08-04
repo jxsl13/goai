@@ -2,6 +2,7 @@ package nn
 
 import (
 	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/internal/linalg"
 	"github.com/jxsl13/goai/tensor"
@@ -187,8 +188,17 @@ func (s *Shampoo) Step(grad GradFn) error {
 				}
 			}
 			if refresh || st.li == nil {
+				// L^{−1/4} and R^{−1/4} are independent O(n³) eigensolves (each its own SymEig +
+				// reconstruction, no shared state) — run them concurrently. BIT-IDENTICAL: each is
+				// deterministic and reads/writes disjoint state, so the result is order-independent.
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					st.ri = invMatrixRoot(st.r, 4, s.Eps) // R^{−1/4}
+				}()
 				st.li = invMatrixRoot(st.l, 4, s.Eps) // L^{−1/4}
-				st.ri = invMatrixRoot(st.r, 4, s.Eps) // R^{−1/4}
+				wg.Wait()
 			}
 			li, ri := st.li, st.ri
 			// Ĝ = L^{−1/4}·G·R^{−1/4}: first T = G·R^{−1/4} [m,n], then L^{−1/4}·T.

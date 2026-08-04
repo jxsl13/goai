@@ -3,6 +3,7 @@ package nn
 import (
 	"math"
 	"math/rand"
+	"sync"
 	"testing"
 )
 
@@ -74,3 +75,38 @@ func boolf(b bool) float64 {
 }
 func BenchmarkInvMatrixRoot_256(b *testing.B) { benchIMR(b, 256) }
 func BenchmarkInvMatrixRoot_512(b *testing.B) { benchIMR(b, 512) }
+
+func twoRootMats(n int) ([][]float64, [][]float64) {
+	rng := rand.New(rand.NewSource(4))
+	mk := func() [][]float64 {
+		mat := make([][]float64, n)
+		for i := range n {
+			mat[i] = make([]float64, n)
+			for j := 0; j <= i; j++ {
+				v := rng.NormFloat64()*0.1 + boolf(i == j)
+				mat[i][j], mat[j][i] = v, v
+			}
+		}
+		return mat
+	}
+	return mk(), mk()
+}
+func BenchmarkTwoInvRootSerial_512(b *testing.B) {
+	l, r := twoRootMats(512)
+	b.ResetTimer()
+	for range b.N {
+		_ = invMatrixRoot(l, 4, 1e-4)
+		_ = invMatrixRoot(r, 4, 1e-4)
+	}
+}
+func BenchmarkTwoInvRootConcurrent_512(b *testing.B) {
+	l, r := twoRootMats(512)
+	b.ResetTimer()
+	for range b.N {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = invMatrixRoot(r, 4, 1e-4) }()
+		_ = invMatrixRoot(l, 4, 1e-4)
+		wg.Wait()
+	}
+}
