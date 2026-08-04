@@ -847,6 +847,73 @@ func (rec *Recorder) q2kPrefillWMMA(x *DeviceF32, w *ResidentBQ2K, o *DeviceF32,
 	return nil
 }
 
+// q3kWMMAThreshold is the m at/above which QMatMulResidentQ3K routes prefill to the tensor-core WMMA
+// path. Q3_K's dequant is NOT yet coalesced (unlike Q4_K #878 / Q6_K #880 / Q5_K #882 / Q2_K #883),
+// so its WMMA fixed cost is higher → the conservative pre-coalescing floor of 128 (Q3_K WMMA
+// M512/K4096/N4096 = 4.31ms vs MT 13.09ms = 3.04×, #876). Below it the MT decode wins. A follow-up
+// coalescing of the 3-plane meta/qs/hmask dequant would lower this like the other formats.
+const q3kWMMAThreshold = 128
+
+// QMatMulResidentQ3K records o[m,N] = x[m,K]·dequant(w) for a resident Q3_K (3-bit k-quant, repacked
+// meta/qs/hmask planes) weight — the Q3_K twin of the other K-quant recorder paths (GEMV decode m<2 /
+// weight-read-once MT m>=2 / tensor-core WMMA prefill m>=q3kWMMAThreshold). Falls back to GEMV on error.
+func (rec *Recorder) QMatMulResidentQ3K(x *DeviceF32, w *ResidentBQ3K, o *DeviceF32, m int) error {
+	if x.ptr == nil || w.meta == nil || o.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentQ3K on a freed handle")
+	}
+	if m >= q3kWMMAThreshold && w.n%16 == 0 && w.k%16 == 0 {
+		if err := rec.q3kPrefillWMMA(x, w, o, m); err == nil {
+			return nil
+		}
+	}
+	if m >= 2 {
+		if rc := C.cu_qmatmul_q3k_mt(x.ptr, w.meta, w.qs, w.hm, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc == 0 {
+			return nil
+		}
+	}
+	if rc := C.cu_qmatmul_q3k(x.ptr, w.meta, w.qs, w.hm, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentQ3K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// q3kPrefillWMMA is the Q3_K twin of the other *PrefillWMMA helpers: dequant the resident Q3_K weight
+// (repacked meta/qs/hmask planes) to a contiguous f16 [K,N] scratch once (cu_dequant_q3k_to_f16),
+// convert the activation to f16, run the f16 tensor-core GEMM into an [mPad,N] scratch (M padded ×16),
+// copy the first m rows out.
+func (rec *Recorder) q3kPrefillWMMA(x *DeviceF32, w *ResidentBQ3K, o *DeviceF32, m int) error {
+	if w.n%16 != 0 || w.k%16 != 0 {
+		return fmt.Errorf("cuda: q3k WMMA needs N,K %%16==0 (got N=%d K=%d)", w.n, w.k)
+	}
+	mPad := ((m + 15) / 16) * 16
+	bf16 := C.cu_alloc_u16(C.int(w.k * w.n))
+	af16 := C.cu_alloc_u16(C.int(mPad * w.k))
+	dC := C.cu_alloc_f32(C.int(mPad * w.n))
+	if bf16 == nil || af16 == nil || dC == nil {
+		C.cu_free_f32(bf16)
+		C.cu_free_f32(af16)
+		C.cu_free_f32(dC)
+		return fmt.Errorf("cuda: q3k WMMA scratch alloc failed")
+	}
+	defer C.cu_free_f32(bf16)
+	defer C.cu_free_f32(af16)
+	defer C.cu_free_f32(dC)
+	if rc := C.cu_dequant_q3k_to_f16(w.meta, w.qs, w.hm, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q3k WMMA dequant failed (code %d)", int(rc))
+	}
+	if rc := C.cu_cvt_f32_to_f16(af16, x.ptr, C.long(m*w.k)); rc != 0 {
+		return fmt.Errorf("cuda: q3k WMMA activation convert failed (code %d)", int(rc))
+	}
+	if rc := C.cu_wmma_gemm(unsafe.Pointer(&wmmaGemmFatbin[0]), C.int(len(wmmaGemmFatbin)),
+		af16, bf16, dC, C.int(mPad), C.int(w.k), C.int(w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q3k WMMA gemm failed (code %d)", int(rc))
+	}
+	if rc := C.cu_blit(o.ptr, C.int(0), dC, C.int(0), C.int(m*w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q3k WMMA result copy failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // Commit is a no-op: ops are already enqueued on the stream as recorded.
 func (rec *Recorder) Commit() error { return nil }
 
