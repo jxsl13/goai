@@ -282,6 +282,21 @@ func squareMatrixFixture(nParams, dim int) ([]*tensor.Tensor, nn.GradFn) {
 	return params, func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
 }
 
+// BenchmarkQGaLoreStepMulti8x512 times a refresh-every-step (Gap=1) Q-GaLore update over 8
+// independent [512,512] matrix parameters — the SVD-subspace-refresh-bound regime the
+// per-parameter fan-out targets. Adaptive refresh is left on (the default paper mode) so the
+// benchmark exercises the shipping configuration.
+func BenchmarkQGaLoreStepMulti8x512(b *testing.B) {
+	params, gf := squareMatrixFixture(8, 512)
+	opt := nn.NewQGaLore(params, 1e-3, nn.WithQGaLoreGap(1))
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkShampooStepMulti8x512 times a refresh-every-step (RootEvery=1) Shampoo update
 // over 8 independent [512,512] matrix parameters — the eigendecomposition-bound regime the
 // per-parameter fan-out targets.

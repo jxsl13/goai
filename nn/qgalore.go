@@ -495,6 +495,17 @@ func (g *QGaLore) StateBytes() int {
 }
 
 // Step applies one Q-GaLore update. Parameters with a nil gradient are skipped.
+// qgalorePending carries a matrix parameter's not-yet-applied weight update from the parallel
+// compute phase to the serial write phase. next holds the fp weights before the (rng-consuming)
+// weight quantization; a nil next means the parameter did all its own writing in the compute phase
+// (non-matrix Adam) or had no gradient.
+type qgalorePending struct {
+	p          *tensor.Tensor
+	st         *qgaloreState
+	next       []float64
+	rows, cols int
+}
+
 func (g *QGaLore) Step(grad GradFn) error {
 	g.t++
 	b1c := 1 - math.Pow(g.Beta1, float64(g.t))
@@ -503,6 +514,10 @@ func (g *QGaLore) Step(grad GradFn) error {
 	paperMode := quant
 	bs := g.BlockSize
 
+	// GradFn is the caller's and is not documented thread-safe, so gather every gradient SERIALLY
+	// first, validating shapes here where an error can still be returned.
+	grads := make([]*tensor.Tensor, len(g.Params))
+	work := 0
 	for pi, p := range g.Params {
 		gt := grad(p)
 		if gt == nil {
@@ -511,89 +526,125 @@ func (g *QGaLore) Step(grad GradFn) error {
 		if !gt.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: QGaLore grad shape %v != param %v", gt.Shape(), p.Shape())
 		}
-		st := g.st[pi]
+		grads[pi] = gt
+		work += p.Numel()
+	}
 
-		// Non-matrix parameters: plain fp Adam on the full gradient, exactly as GaLore
-		// (the projection — and the quantization — apply only to 2-D weights).
-		if p.Ndim() != 2 {
-			if st == nil {
-				st = &qgaloreState{mf: make([]float64, p.Numel()), vf: make([]float64, p.Numel())}
-				g.st[pi] = st
+	// Phase A (parallel): the rng-free per-parameter compute — the expensive part, in particular the
+	// SVD subspace refresh (galoreProjection→SVD) plus project-down / subspace-Adam / moment
+	// requant / project-up. Each parameter touches only its own qgaloreState slot, its own p, and
+	// self-contained scratch, so it fans out BIT-IDENTICALLY. Matrix parameters defer their
+	// rng-CONSUMING weight quantization (the ONLY use of the shared g.rng) to Phase B, so the seeded
+	// stochastic-rounding draw ORDER is preserved exactly; non-matrix Adam is rng-free and writes p
+	// directly here.
+	pend := make([]qgalorePending, len(g.Params))
+	parallelRows(len(g.Params), max(work/max(len(g.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				pend[pi] = g.stepParamCompute(pi, g.Params[pi], grads[pi], b1c, b2c, quant, paperMode, bs)
 			}
-			for i := range p.Numel() {
-				idx := tensor.Unravel(i, p.Shape())
-				gv := gt.AtF64(idx...)
-				st.mf[i] = g.Beta1*st.mf[i] + (1-g.Beta1)*gv
-				st.vf[i] = g.Beta2*st.vf[i] + (1-g.Beta2)*gv*gv
-				upd := (st.mf[i] / b1c) / (math.Sqrt(st.vf[i]/b2c) + g.Eps)
-				p.SetF64(p.AtF64(idx...)-g.LR*upd, idx...)
-			}
+		}
+	})
+
+	// Phase B (serial, in parameter order): apply the rng-dependent weight quantization and write
+	// each matrix parameter back. Consuming g.rng here — in the SAME parameter order as the original
+	// serial loop — makes the seeded draw sequence, and thus every weight, bit-identical.
+	for pi := range g.Params {
+		pd := pend[pi]
+		if pd.next == nil {
 			continue
 		}
-
-		mat := matAt(gt)
-		rows, cols := p.Shape()[0], p.Shape()[1]
-		if st == nil {
-			proj, left := galoreProjection(mat, g.Rank)
-			r := len(proj)
-			n := r * cols
-			if !left {
-				n = rows * r
-			}
-			st = &qgaloreState{left: left, n: n, gap: g.Gap}
-			st.prevProjectionVector = append([]float64(nil), proj[0]...)
-			st.svdCount = 1
-			st.setProjection(proj, bs, paperMode && g.ProjectionQuant)
-			if quant {
-				nb := numBlocks(n, bs)
-				st.mq, st.vq = make([]int8, n), make([]int8, n)
-				st.ms, st.vs = make([]float64, nb), make([]float64, nb)
-			} else {
-				st.mf, st.vf = make([]float64, n), make([]float64, n)
-			}
-			g.st[pi] = st
-		} else if st.gap > 0 && g.t%st.gap == 0 {
-			g.refreshProjection(st, mat, paperMode) // refresh subspace; keep moments
-		}
-
-		// project → dequantize moments → Adam in subspace → requantize → project back.
-		proj := st.projection(bs)
-		red := galoreProjectDown(mat, proj, st.left)
-		mf, vf := st.mf, st.vf
-		if quant {
-			mf = make([]float64, st.n)
-			vf = make([]float64, st.n)
-			dequantizeBlockwise(st.mq, st.ms, bs, mf)
-			dequantizeBlockwise(st.vq, st.vs, bs, vf)
-		}
-		upd := make([]float64, len(red))
-		for i := range red {
-			mf[i] = g.Beta1*mf[i] + (1-g.Beta1)*red[i]
-			vf[i] = g.Beta2*vf[i] + (1-g.Beta2)*red[i]*red[i]
-			upd[i] = (mf[i] / b1c) / (math.Sqrt(vf[i]/b2c) + g.Eps)
-		}
-		if quant {
-			quantizeBlockwise(mf, bs, st.mq, st.ms)
-			quantizeBlockwise(vf, bs, st.vq, st.vs)
-		}
-		n := galoreProjectUp(upd, proj, st.left, rows, cols)
-		next := make([]float64, 0, rows*cols)
-		for i := range rows {
-			for j := range cols {
-				next = append(next, p.AtF64(i, j)-g.LR*g.Scale*n[i][j])
-			}
-		}
 		if paperMode && g.WeightQuant {
-			st.wq, st.weightScales, st.weightZeros = quantizeAffine(next, bs, 8, true, g.rng.Float64)
-			dequantizeAffine(st.wq, st.weightScales, st.weightZeros, bs, next)
+			pd.st.wq, pd.st.weightScales, pd.st.weightZeros = quantizeAffine(pd.next, bs, 8, true, g.rng.Float64)
+			dequantizeAffine(pd.st.wq, pd.st.weightScales, pd.st.weightZeros, bs, pd.next)
 		} else {
-			st.wq, st.weightScales, st.weightZeros = nil, nil, nil
+			pd.st.wq, pd.st.weightScales, pd.st.weightZeros = nil, nil, nil
 		}
-		for i := range rows {
-			for j := range cols {
-				p.SetF64(next[i*cols+j], i, j)
+		for i := range pd.rows {
+			for j := range pd.cols {
+				pd.p.SetF64(pd.next[i*pd.cols+j], i, j)
 			}
 		}
 	}
 	return nil
+}
+
+// stepParamCompute runs the rng-free part of one parameter's update. Non-matrix parameters do plain
+// Adam and write p directly (returning a nil-next pending); matrix parameters run the projection /
+// subspace Adam / project-back and return the fp weights in pending.next for Phase B to quantize
+// (with the shared rng) and write. It reads/writes only g.st[pi], p, and self-contained scratch.
+func (g *QGaLore) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64, quant, paperMode bool, bs int) qgalorePending {
+	st := g.st[pi]
+
+	// Non-matrix parameters: plain fp Adam on the full gradient, exactly as GaLore
+	// (the projection — and the quantization — apply only to 2-D weights).
+	if p.Ndim() != 2 {
+		if st == nil {
+			st = &qgaloreState{mf: make([]float64, p.Numel()), vf: make([]float64, p.Numel())}
+			g.st[pi] = st
+		}
+		for i := range p.Numel() {
+			idx := tensor.Unravel(i, p.Shape())
+			gv := gt.AtF64(idx...)
+			st.mf[i] = g.Beta1*st.mf[i] + (1-g.Beta1)*gv
+			st.vf[i] = g.Beta2*st.vf[i] + (1-g.Beta2)*gv*gv
+			upd := (st.mf[i] / b1c) / (math.Sqrt(st.vf[i]/b2c) + g.Eps)
+			p.SetF64(p.AtF64(idx...)-g.LR*upd, idx...)
+		}
+		return qgalorePending{}
+	}
+
+	mat := matAt(gt)
+	rows, cols := p.Shape()[0], p.Shape()[1]
+	if st == nil {
+		proj, left := galoreProjection(mat, g.Rank)
+		r := len(proj)
+		n := r * cols
+		if !left {
+			n = rows * r
+		}
+		st = &qgaloreState{left: left, n: n, gap: g.Gap}
+		st.prevProjectionVector = append([]float64(nil), proj[0]...)
+		st.svdCount = 1
+		st.setProjection(proj, bs, paperMode && g.ProjectionQuant)
+		if quant {
+			nb := numBlocks(n, bs)
+			st.mq, st.vq = make([]int8, n), make([]int8, n)
+			st.ms, st.vs = make([]float64, nb), make([]float64, nb)
+		} else {
+			st.mf, st.vf = make([]float64, n), make([]float64, n)
+		}
+		g.st[pi] = st
+	} else if st.gap > 0 && g.t%st.gap == 0 {
+		g.refreshProjection(st, mat, paperMode) // refresh subspace; keep moments
+	}
+
+	// project → dequantize moments → Adam in subspace → requantize → project back.
+	proj := st.projection(bs)
+	red := galoreProjectDown(mat, proj, st.left)
+	mf, vf := st.mf, st.vf
+	if quant {
+		mf = make([]float64, st.n)
+		vf = make([]float64, st.n)
+		dequantizeBlockwise(st.mq, st.ms, bs, mf)
+		dequantizeBlockwise(st.vq, st.vs, bs, vf)
+	}
+	upd := make([]float64, len(red))
+	for i := range red {
+		mf[i] = g.Beta1*mf[i] + (1-g.Beta1)*red[i]
+		vf[i] = g.Beta2*vf[i] + (1-g.Beta2)*red[i]*red[i]
+		upd[i] = (mf[i] / b1c) / (math.Sqrt(vf[i]/b2c) + g.Eps)
+	}
+	if quant {
+		quantizeBlockwise(mf, bs, st.mq, st.ms)
+		quantizeBlockwise(vf, bs, st.vq, st.vs)
+	}
+	n := galoreProjectUp(upd, proj, st.left, rows, cols)
+	next := make([]float64, 0, rows*cols)
+	for i := range rows {
+		for j := range cols {
+			next = append(next, p.AtF64(i, j)-g.LR*g.Scale*n[i][j])
+		}
+	}
+	return qgalorePending{p: p, st: st, next: next, rows: rows, cols: cols}
 }
