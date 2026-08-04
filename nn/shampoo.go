@@ -265,15 +265,26 @@ func invMatrixRoot(mat [][]float64, power int, eps float64) [][]float64 {
 		}
 		d[k] = math.Pow(lam, -1.0/float64(power))
 	}
+	// (V·diag(d)·Vᵀ)_ij = Σ_k vecs[k][i]·d_k·vecs[k][j]. The natural k-inner form strides vecs[k][i]
+	// down a column across the jagged eigenvector rows — a cache miss per element once n² exceeds
+	// cache. Reblock to k-OUTER rank-1: for each eigenvector row vecs[k], accumulate (d_k·vecs[k])⊗
+	// vecs[k], so both operands and the write stream are stride-1 in the inner j loop. BIT-IDENTICAL —
+	// float mult commutes (d_k·vecs[k][i] == vecs[k][i]·d_k) and each out[i][j] still sums over k in
+	// ascending order from a zeroed cell. Now worth it (~38% of invMatrixRoot) after SymEig's 8.9x
+	// speedup (#890/#891) shrank the eigensolve that used to dominate (was <1%).
 	out := make([][]float64, n)
 	for i := range n {
 		out[i] = make([]float64, n)
-		for j := range n {
-			var acc float64 // (V·diag(d)·Vᵀ)_ij = Σ_k vecs[k][i]·d_k·vecs[k][j]
-			for k := range n {
-				acc += vecs[k][i] * d[k] * vecs[k][j]
+	}
+	for k := range n {
+		vk := vecs[k]
+		dk := d[k]
+		for i := range n {
+			c := dk * vk[i]
+			oi := out[i]
+			for j := range n {
+				oi[j] += c * vk[j]
 			}
-			out[i][j] = acc
 		}
 	}
 	return out
