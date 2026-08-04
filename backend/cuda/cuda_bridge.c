@@ -4094,6 +4094,63 @@ done:
     return rc;
 }
 
+static CUfunction gDequantQ2KF16 = NULL; // Q2_K weight -> contiguous f16 [K,N] (tensor-core prefill)
+
+// cu_dequant_q2k_to_f16: expand the ggml Q2_K weight (per-output-row, 84-byte super-blocks) into
+// a contiguous f16 [K,N] matrix for the tensor-core prefill GEMM (vs the scalar acc GEMV
+// cu_qmatmul_q2k). Lane decomposition + math mirror qmatmul_q2k EXACTLY (is=lane>>1 sub-block,
+// dl=d·(sc&0xF), ml=dmin·(sc>>4); each lane writes 8 elements at k=w·256+yi+t, q2=(qs[t]>>shift)&3,
+// w = dl·q2 − ml), forward-scatter.
+int cu_dequant_q2k_to_f16(const void* dQ, void* dBf16, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneq2kdq; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneq2kdq; }
+    if (!gDequantQ2KF16 && compile_kernel(
+        "__device__ __forceinline__ float f16f(unsigned short h){\n"
+        "  unsigned s = (h & 0x8000u) << 16;\n"
+        "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+        "  return __uint_as_float(__float_as_uint(v) | s);\n"
+        "}\n"
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void dequant_q2k_f16(const unsigned char* q, unsigned short* B, int K, int N){\n"
+        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+        "  int lane = threadIdx.x & 31;\n"
+        "  if (warp >= (long)N) return;\n"
+        "  int n = (int)warp;\n"
+        "  int sbs = K >> 8;\n"
+        "  const unsigned char* qr = q + (size_t)n*sbs*84;\n"
+        "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
+        "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+        "  int shift = 2*jj;\n"
+        "  int yi = nb*128 + jj*32 + g + l0;\n"
+        "  int qsoff = 16 + nb*32 + g + l0;\n"
+        "  for (int w = 0; w < sbs; w++){\n"
+        "    const unsigned char* blk = qr + (size_t)w*84;\n"
+        "    float d = f16f((unsigned short)(blk[80] | (blk[81]<<8)));\n"
+        "    float dmin = f16f((unsigned short)(blk[82] | (blk[83]<<8)));\n"
+        "    unsigned sc = blk[is];\n"
+        "    float dl = d * (float)(sc & 0xF), ml = dmin * (float)(sc >> 4);\n"
+        "    const unsigned char* qs = blk + qsoff;\n"
+        "    int kbase = w*256 + yi;\n"
+        "    for (int t = 0; t < 8; t++){\n"
+        "      float q2 = (float)((qs[t] >> shift) & 3);\n"
+        "      B[(size_t)(kbase+t)*N + n] = f2h(dl*q2 - ml);\n"
+        "    }\n"
+        "  }\n"
+        "}\n",
+        "dequant_q2k_f16.cu", "dequant_q2k_f16", &gDequantQ2KF16) != 0) { rc = -2; goto doneq2kdq; }
+    {
+        long total = (long)N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
+        rc = (cuLaunchKernel(gDequantQ2KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneq2kdq:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 static CUfunction gDequantQ40F16 = NULL; // Q4_0 weight -> contiguous f16 [K,N] (tensor-core prefill)
 
 // cu_dequant_q40_to_f16: expand the (repacked) ggml Q4_0 weight — separate f16 scales (block-major
