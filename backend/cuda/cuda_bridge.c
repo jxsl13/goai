@@ -4295,51 +4295,42 @@ int cu_dequant_q5k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
         "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
         "}\n"
+        // COALESCED (mirrors #878/#880): one COLUMN per thread + inner 0..255 element loop, so a warp
+        // writes 32 contiguous n at each element (vs the warp-per-column N-strided writes). Per-element
+        // ggml Q5_K mapping (g=e>>6 group, half=(e&63)>>5, l=e&31): sub-block is=2g+half, ql byte
+        // qs[g*32+l] (low nibble if half==0 else high), 5th bit qh[l] bit is; q5 = nibble | (bit<<4);
+        // w = d·sc·q5 − dmin·mn. Equivalent element-for-element to the warp-interleaved decode. The 8
+        // sub-block affine scales (c1=d·sc, c2=dmin·mn) are decoded ONCE per super-block.
         "extern \"C\" __global__ void dequant_q5k_f16(const unsigned char* q, unsigned short* B, int K, int N){\n"
-        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
-        "  int lane = threadIdx.x & 31;\n"
-        "  if (warp >= (long)N) return;\n"
-        "  int n = (int)warp;\n"
+        "  int n = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (n >= N) return;\n"
         "  int sbs = K >> 8;\n"
-        "  const unsigned char* qr = q + (size_t)n*sbs*176;\n"
-        "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
-        "  int slo = 2*p, shi = 2*p + 1;\n"
+        "  const unsigned char* qn = q + (size_t)n*sbs*176;\n"
         "  for (int w = 0; w < sbs; w++){\n"
-        "    const unsigned char* blk = qr + (size_t)w*176;\n"
-        "    unsigned int qw  = *(const unsigned int*)(blk + 48 + lane*4);\n"
-        "    unsigned int qhw = *(const unsigned int*)(blk + 16 + i0);\n"
-        "    float d = f16f(*(const unsigned short*)blk);\n"
-        "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
-        "    float scL, mnL, scH, mnH;\n"
-        "    get_sm(slo, blk+4, &scL, &mnL);\n"
-        "    get_sm(shi, blk+4, &scH, &mnH);\n"
-        "    float c1L = d*scL, c2L = dmin*mnL, c1H = d*scH, c2H = dmin*mnH;\n"
-        "    int kb = w*256 + p*64 + i0;\n"
-        "    unsigned qb0=qhw&0xFFu, qb1=(qhw>>8)&0xFFu, qb2=(qhw>>16)&0xFFu, qb3=(qhw>>24)&0xFFu;\n"
-        "    float lo0=(float)((qw&0xFu)      |(((qb0>>slo)&1u)<<4));\n"
-        "    float lo1=(float)(((qw>>8)&0xFu) |(((qb1>>slo)&1u)<<4));\n"
-        "    float lo2=(float)(((qw>>16)&0xFu)|(((qb2>>slo)&1u)<<4));\n"
-        "    float lo3=(float)(((qw>>24)&0xFu)|(((qb3>>slo)&1u)<<4));\n"
-        "    float hi0=(float)(((qw>>4)&0xFu) |(((qb0>>shi)&1u)<<4));\n"
-        "    float hi1=(float)(((qw>>12)&0xFu)|(((qb1>>shi)&1u)<<4));\n"
-        "    float hi2=(float)(((qw>>20)&0xFu)|(((qb2>>shi)&1u)<<4));\n"
-        "    float hi3=(float)(((qw>>28)&0xFu)|(((qb3>>shi)&1u)<<4));\n"
-        "    B[(size_t)(kb+0)*N + n] = f2h(c1L*lo0 - c2L);\n"
-        "    B[(size_t)(kb+1)*N + n] = f2h(c1L*lo1 - c2L);\n"
-        "    B[(size_t)(kb+2)*N + n] = f2h(c1L*lo2 - c2L);\n"
-        "    B[(size_t)(kb+3)*N + n] = f2h(c1L*lo3 - c2L);\n"
-        "    B[(size_t)(kb+32)*N + n] = f2h(c1H*hi0 - c2H);\n"
-        "    B[(size_t)(kb+33)*N + n] = f2h(c1H*hi1 - c2H);\n"
-        "    B[(size_t)(kb+34)*N + n] = f2h(c1H*hi2 - c2H);\n"
-        "    B[(size_t)(kb+35)*N + n] = f2h(c1H*hi3 - c2H);\n"
+        "    const unsigned char* blk = qn + (size_t)w*176;\n"
+        "    float d = f16f(*(const unsigned short*)blk), dmin = f16f(*(const unsigned short*)(blk+2));\n"
+        "    float c1[8], c2[8];\n"
+        "    #pragma unroll\n"
+        "    for (int s = 0; s < 8; s++){ float sc, mn; get_sm(s, blk+4, &sc, &mn); c1[s]=d*sc; c2[s]=dmin*mn; }\n"
+        "    const unsigned char* qh = blk + 16;\n"
+        "    const unsigned char* qs = blk + 48;\n"
+        "    size_t kb = (size_t)w*256;\n"
+        "    #pragma unroll 4\n"
+        "    for (int e = 0; e < 256; e++){\n"
+        "      int g = e >> 6, i = e & 63, half = i >> 5, l = i & 31, is = 2*g + half;\n"
+        "      int qlByte = qs[g*32 + l];\n"
+        "      int nib = half ? (qlByte >> 4) : (qlByte & 0xF);\n"
+        "      int hbit = (qh[l] >> is) & 1;\n"
+        "      float q5 = (float)(nib | (hbit << 4));\n"
+        "      B[(kb + e)*N + n] = f2h(c1[is]*q5 - c2[is]);\n"
+        "    }\n"
         "  }\n"
         "}\n",
         "dequant_q5k_f16.cu", "dequant_q5k_f16", &gDequantQ5KF16) != 0) { rc = -2; goto doneq5kdq; }
     {
-        long total = (long)N * 32;
-        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        int threads = 256, bx = (N + threads - 1) / threads; if (bx < 1) bx = 1;
         void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
-        rc = (cuLaunchKernel(gDequantQ5KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        rc = (cuLaunchKernel(gDequantQ5KF16, bx, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 doneq5kdq:
     pthread_mutex_unlock(&gLock);

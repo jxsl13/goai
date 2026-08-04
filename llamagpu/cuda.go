@@ -100,6 +100,8 @@ func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 		return c.r.QMatMulResidentQ4K(cb(x), rw, cb(o), m) // Q4_K: aggressive-quant decode GEMV + tensor-core prefill
 	case *cuda.ResidentBQ6K:
 		return c.r.QMatMulResidentQ6K(cb(x), rw, cb(o), m) // Q6_K: 6-bit k-quant decode GEMV + tensor-core prefill
+	case *cuda.ResidentBQ5K:
+		return c.r.QMatMulResidentQ5K(cb(x), rw, cb(o), m) // Q5_K: 5-bit k-quant decode GEMV + tensor-core prefill
 	default:
 		return fmt.Errorf("llamagpu: cuda QMatMulResident: unsupported resident weight %T", w)
 	}
@@ -1316,6 +1318,15 @@ func cudaUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 		// serves the GEMV decode AND the tensor-core WMMA prefill (#874/#880). Raw GGUF Q6_K blocks
 		// are row-major [Out][In/256] 210-byte super-blocks = NewResidentBQ6KFromBlocks's input.
 		if rw, err := cuda.NewResidentBQ6KFromBlocks(weight, k, n); err == nil {
+			return rw, nil
+		}
+		// fall through to Q8 on any error
+	}
+	if qt == 13 /* tQ5_K */ && k%256 == 0 {
+		// Q5_K (0.6875 B/w vs Q8 1.0625, ~1.5× less VRAM): native via QMatMulResidentQ5K (GEMV decode
+		// + tensor-core WMMA prefill). Raw GGUF Q5_K blocks are row-major [Out][In/256] 176-byte
+		// super-blocks = NewResidentBQ5KFromBlocks's input.
+		if rw, err := cuda.NewResidentBQ5KFromBlocks(weight, k, n); err == nil {
 			return rw, nil
 		}
 		// fall through to Q8 on any error
