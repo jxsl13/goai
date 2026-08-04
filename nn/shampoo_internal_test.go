@@ -2,6 +2,7 @@ package nn
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 )
 
@@ -49,3 +50,27 @@ func matMul2(a, b [][]float64) [][]float64 {
 	}
 	return out
 }
+
+func benchIMR(b *testing.B, n int) {
+	rng := rand.New(rand.NewSource(2))
+	mat := make([][]float64, n)
+	for i := range n {
+		mat[i] = make([]float64, n)
+		for j := 0; j <= i; j++ {
+			v := rng.NormFloat64()*0.1 + boolf(i == j)
+			mat[i][j], mat[j][i] = v, v
+		}
+	}
+	b.ResetTimer()
+	for range b.N {
+		_ = invMatrixRoot(mat, 4, 1e-12)
+	}
+}
+func boolf(b bool) float64 {
+	if b {
+		return 4
+	}
+	return 0
+}
+func BenchmarkInvMatrixRoot_256(b *testing.B) { benchIMR(b, 256) }
+func BenchmarkInvMatrixRoot_512(b *testing.B) { benchIMR(b, 512) }
