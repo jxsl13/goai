@@ -30,10 +30,6 @@ type SOAP struct {
 
 	t  int
 	st []*soapState
-
-	// pooled per-step matrix scratch (matAt gradient, rotate-forward gp, nprime, rotate-back
-	// upd, and the rotate intermediate) — fully overwritten before read, so reuse is bit-exact.
-	gmScr, gpScr, nprScr, updScr, rotTScr, rgScr [][]float64
 }
 
 type soapState struct {
@@ -41,6 +37,10 @@ type soapState struct {
 	ql, qr [][]float64 // eigenbases
 	m, v   [][]float64 // Adam moments in the rotated space (matrix params)
 	mv, vv []float64   // Adam moments for non-matrix params
+	// PER-PARAMETER pooled scratch (was shared on the optimizer): moving it here lets the
+	// parameter loop run in parallel — each parameter owns its buffers, sized to its own dims and
+	// reused across steps (0 allocs after warm-up), so no goroutine shares scratch with another.
+	gmScr, gpScr, nprScr, updScr, rotTScr, rgScr [][]float64
 }
 
 // SOAPOption configures a SOAP optimizer (functional-options idiom, §C12).
@@ -96,6 +96,14 @@ func (s *SOAP) Step(grad GradFn) error {
 	c2 := 1 - math.Pow(s.Beta2, float64(s.t))
 	b1, b2 := s.Beta1, s.Beta2
 
+	// GradFn is the caller's and is not documented thread-safe, so gather every gradient SERIALLY
+	// first; the per-parameter preconditioner EMA / eigenbasis refresh / rotate-Adam-rotate below
+	// touches only that parameter's own soapState (its L/R, eigenbases, moments and its now-private
+	// scratch) and its own p, so it fans out — BIT-IDENTICALLY, since each parameter's arithmetic is
+	// untouched and only which goroutine runs it moves. The refresh-step eigendecompositions
+	// (eigenBasis→SymEig) then run concurrently across parameters.
+	grads := make([]*tensor.Tensor, len(s.Params))
+	work := 0
 	for pi, p := range s.Params {
 		g := grad(p)
 		if g == nil {
@@ -104,134 +112,135 @@ func (s *SOAP) Step(grad GradFn) error {
 		if s.st[pi] == nil {
 			s.st[pi] = &soapState{}
 		}
-		st := s.st[pi]
-
-		if p.Ndim() == 2 {
-			m, n := p.Shape()[0], p.Shape()[1]
-			s.gmScr = growMat(s.gmScr, m, n)
-			matAtInto(s.gmScr, g)
-			gm := s.gmScr
-			if st.l == nil {
-				st.l, st.r = zeroSq(m), zeroSq(n)
-				st.m, st.v = zeroMat(m, n), zeroMat(m, n)
-				st.ql, st.qr = eyeMat(m), eyeMat(n)
+		grads[pi] = g
+		work += p.Numel()
+	}
+	parallelRows(len(s.Params), max(work/max(len(s.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				s.stepParam(pi, s.Params[pi], grads[pi], c1, c2, b1, b2)
 			}
-			// preconditioner EMAs — L (m×m) and R (n×n) stay SYMMETRIC (gm[i][k]·gm[j][k]
-			// commutative, same k-order; the EMA of a symmetric input is symmetric) and
-			// eigenBasis reads the full matrix, so EMA only the upper triangle + diagonal
-			// and mirror once (bit-identical, PS5002). Halves both O(m²n) and O(n²m) grams.
-			for i := range m {
-				for j := i; j < m; j++ {
-					var acc float64
-					for k := range n {
-						acc += gm[i][k] * gm[j][k]
-					}
-					st.l[i][j] = b2*st.l[i][j] + (1-b2)*acc
-					if j != i {
-						st.l[j][i] = st.l[i][j]
-					}
+		}
+	})
+	return nil
+}
+
+// stepParam applies the SOAP update to one parameter using that parameter's own state and scratch,
+// so the loop above bands across cores.
+func (s *SOAP) stepParam(pi int, p, g *tensor.Tensor, c1, c2, b1, b2 float64) {
+	st := s.st[pi]
+	if p.Ndim() == 2 {
+		m, n := p.Shape()[0], p.Shape()[1]
+		st.gmScr = growMat(st.gmScr, m, n)
+		matAtInto(st.gmScr, g)
+		gm := st.gmScr
+		if st.l == nil {
+			st.l, st.r = zeroSq(m), zeroSq(n)
+			st.m, st.v = zeroMat(m, n), zeroMat(m, n)
+			st.ql, st.qr = eyeMat(m), eyeMat(n)
+		}
+		for i := range m {
+			for j := i; j < m; j++ {
+				var acc float64
+				for k := range n {
+					acc += gm[i][k] * gm[j][k]
+				}
+				st.l[i][j] = b2*st.l[i][j] + (1-b2)*acc
+				if j != i {
+					st.l[j][i] = st.l[i][j]
 				}
 			}
-			// R-gram reblocked to row-contiguous rank-1 accumulation: the naive
-			// gm[k][i]·gm[k][j] with k innermost strides DOWN a column across jagged gm
-			// rows (L2-bound + serial FMA chain). Accumulate ascending-k outer products
-			// into a pooled scratch (gm[k] loaded once, walked contiguously), blend once.
-			// Same ascending-k summation order into a +0 accumulator ⇒ BIT-IDENTICAL.
-			s.rgScr = growMat(s.rgScr, n, n)
-			rg := s.rgScr
+		}
+		st.rgScr = growMat(st.rgScr, n, n)
+		rg := st.rgScr
+		for i := range n {
+			ri := rg[i]
+			for j := i; j < n; j++ {
+				ri[j] = 0
+			}
+		}
+		for k := range m {
+			gk := gm[k]
 			for i := range n {
+				av := gk[i]
 				ri := rg[i]
 				for j := i; j < n; j++ {
-					ri[j] = 0
+					ri[j] += av * gk[j]
 				}
 			}
-			for k := range m {
-				gk := gm[k]
-				for i := range n {
-					av := gk[i]
-					ri := rg[i]
-					for j := i; j < n; j++ {
-						ri[j] += av * gk[j]
-					}
-				}
-			}
-			for i := range n {
-				for j := i; j < n; j++ {
-					st.r[i][j] = b2*st.r[i][j] + (1-b2)*rg[i][j]
-					if j != i {
-						st.r[j][i] = st.r[i][j]
-					}
-				}
-			}
-			// eigenbasis refresh: rotate M' into the new basis (V' kept in place).
-			if s.t == 1 || s.t%s.Freq == 0 {
-				mOrig := rotateBack(st.ql, st.m, st.qr) // M' back to original space (old Q)
-				st.ql, st.qr = eigenBasis(st.l), eigenBasis(st.r)
-				st.m = rotateForward(st.ql, mOrig, st.qr) // into the new basis
-			}
-			// rotate gradient, Adam in the rotated space, rotate the update back.
-			s.gpScr = growMat(s.gpScr, m, n)
-			s.rotTScr = growMat(s.rotTScr, m, n)
-			rotateForwardInto(s.gpScr, s.rotTScr, st.ql, gm, st.qr)
-			gp := s.gpScr
-			s.nprScr = growMat(s.nprScr, m, n)
-			nprime := s.nprScr
-			for i := range m {
-				for j := range n {
-					st.m[i][j] = b1*st.m[i][j] + (1-b1)*gp[i][j]
-					st.v[i][j] = b2*st.v[i][j] + (1-b2)*gp[i][j]*gp[i][j]
-					nprime[i][j] = (st.m[i][j] / c1) / (math.Sqrt(st.v[i][j]/c2) + s.Eps)
-				}
-			}
-			s.updScr = growMat(s.updScr, m, n)
-			rotateBackInto(s.updScr, s.rotTScr, st.ql, nprime, st.qr)
-			upd := s.updScr
-			for i := range m {
-				for j := range n {
-					p.SetF64(p.AtF64(i, j)-s.LR*upd[i][j], i, j)
-				}
-			}
-			continue
 		}
+		for i := range n {
+			for j := i; j < n; j++ {
+				st.r[i][j] = b2*st.r[i][j] + (1-b2)*rg[i][j]
+				if j != i {
+					st.r[j][i] = st.r[i][j]
+				}
+			}
+		}
+		if s.t == 1 || s.t%s.Freq == 0 {
+			mOrig := rotateBack(st.ql, st.m, st.qr)
+			st.ql, st.qr = eigenBasis(st.l), eigenBasis(st.r)
+			st.m = rotateForward(st.ql, mOrig, st.qr)
+		}
+		st.gpScr = growMat(st.gpScr, m, n)
+		st.rotTScr = growMat(st.rotTScr, m, n)
+		rotateForwardInto(st.gpScr, st.rotTScr, st.ql, gm, st.qr)
+		gp := st.gpScr
+		st.nprScr = growMat(st.nprScr, m, n)
+		nprime := st.nprScr
+		for i := range m {
+			for j := range n {
+				st.m[i][j] = b1*st.m[i][j] + (1-b1)*gp[i][j]
+				st.v[i][j] = b2*st.v[i][j] + (1-b2)*gp[i][j]*gp[i][j]
+				nprime[i][j] = (st.m[i][j] / c1) / (math.Sqrt(st.v[i][j]/c2) + s.Eps)
+			}
+		}
+		st.updScr = growMat(st.updScr, m, n)
+		rotateBackInto(st.updScr, st.rotTScr, st.ql, nprime, st.qr)
+		upd := st.updScr
+		for i := range m {
+			for j := range n {
+				p.SetF64(p.AtF64(i, j)-s.LR*upd[i][j], i, j)
+			}
+		}
+		return
+	}
 
-		// non-matrix parameter: plain bias-corrected Adam.
-		nEl := p.Numel()
-		if st.mv == nil {
-			st.mv, st.vv = make([]float64, nEl), make([]float64, nEl)
-		}
-		mv, vv := st.mv, st.vv
-		// Typed fast paths (contiguous f64/f32 pairs): flat loops, moments and the
-		// update arithmetic in float64 exactly as the generic path computes them.
-		if pf := flatF64(p); pf != nil {
-			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					mv[i] = b1*mv[i] + (1-b1)*gv
-					vv[i] = b2*vv[i] + (1-b2)*gv*gv
-					pf[i] = pf[i] - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps)
-				}
-				continue
+	// non-matrix parameter: plain bias-corrected Adam.
+	nEl := p.Numel()
+	if st.mv == nil {
+		st.mv, st.vv = make([]float64, nEl), make([]float64, nEl)
+	}
+	mv, vv := st.mv, st.vv
+	if pf := flatF64(p); pf != nil {
+		if gf := flatF64(g); gf != nil {
+			for i, gv := range gf {
+				mv[i] = b1*mv[i] + (1-b1)*gv
+				vv[i] = b2*vv[i] + (1-b2)*gv*gv
+				pf[i] = pf[i] - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps)
 			}
-		} else if pf := flatF32(p); pf != nil {
-			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					mv[i] = b1*mv[i] + (1-b1)*gv
-					vv[i] = b2*vv[i] + (1-b2)*gv*gv
-					pf[i] = float32(float64(pf[i]) - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps))
-				}
-				continue
-			}
+			return
 		}
-		// Generic fallback: any dtype/layout via the widening accessors.
-		for i := range nEl {
-			idx := tensor.Unravel(i, p.Shape())
-			gv := g.AtF64(idx...)
-			mv[i] = b1*mv[i] + (1-b1)*gv
-			vv[i] = b2*vv[i] + (1-b2)*gv*gv
-			p.SetF64(p.AtF64(idx...)-s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps), idx...)
+	} else if pf := flatF32(p); pf != nil {
+		if gf := flatF32(g); gf != nil {
+			for i := range gf {
+				gv := float64(gf[i])
+				mv[i] = b1*mv[i] + (1-b1)*gv
+				vv[i] = b2*vv[i] + (1-b2)*gv*gv
+				pf[i] = float32(float64(pf[i]) - s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps))
+			}
+			return
 		}
 	}
-	return nil
+	// Generic fallback: any dtype/layout via the widening accessors.
+	shape := p.Shape()
+	for i := range nEl {
+		idx := tensor.Unravel(i, shape)
+		gv := g.AtF64(idx...)
+		mv[i] = b1*mv[i] + (1-b1)*gv
+		vv[i] = b2*vv[i] + (1-b2)*gv*gv
+		p.SetF64(p.AtF64(idx...)-s.LR*(mv[i]/c1)/(math.Sqrt(vv[i]/c2)+s.Eps), idx...)
+	}
 }
 
 func zeroSq(n int) [][]float64 { return zeroMat(n, n) }
