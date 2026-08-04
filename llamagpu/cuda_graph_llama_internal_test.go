@@ -93,6 +93,48 @@ func TestGraphLlamaDecodeMatchesEager(t *testing.T) {
 	t.Logf("GraphLlamaDecoder: graph decode == eager decode over %d tokens (capture/replay correct)", len(graph))
 }
 
+// BenchmarkGraphLlamaPrefill times the graph decoder's batched prefillForward on real TinyLlama — the
+// path the wo/wd WMMA routing speeds up (~3× over the prior scalar-MT o/down projections).
+func benchGraphPrefill(b *testing.B, seq int) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	if _, err := os.Stat(glModelPath); err != nil {
+		b.Skipf("model not present (%s)", glModelPath)
+	}
+	f, err := gguf.ReadFile(glModelPath)
+	if err != nil {
+		b.Fatal(err)
+	}
+	model, err := nlp.LlamaFromGGUF(f.Metadata, f.Tensors)
+	if err != nil {
+		b.Fatal(err)
+	}
+	gd, err := NewLlamaQ4KGraphCUDA(model, seq+8)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer gd.Release()
+	prompt := make([]int, seq)
+	for i := range prompt {
+		prompt[i] = (i*7 + 1) % model.Config.Vocab
+	}
+	if _, err := gd.prefillForward(prompt); err != nil { // prime
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := gd.prefillForward(prompt); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+func BenchmarkGraphLlamaPrefill512(b *testing.B) { benchGraphPrefill(b, 512) }
+func BenchmarkGraphLlamaPrefill128(b *testing.B) { benchGraphPrefill(b, 128) }
+
 func glTestArgmax(v []float32) int {
 	best, bi := v[0], 0
 	for i, x := range v {
