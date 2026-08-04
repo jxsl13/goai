@@ -297,6 +297,21 @@ func BenchmarkQGaLoreStepMulti8x512(b *testing.B) {
 	}
 }
 
+// BenchmarkAPOLLOStepMulti8x512 times an APOLLO update over 8 independent [512,512] matrix
+// parameters at the default Gap (subspace reseed every 200 steps). The per-step cost is dominated
+// by the random-projection sketch (galoreProjectDown) and, on the current code, a full regeneration
+// of the r×d Gaussian projection via NormFloat64 every step.
+func BenchmarkAPOLLOStepMulti8x512(b *testing.B) {
+	params, gf := squareMatrixFixture(8, 512)
+	opt := nn.NewAPOLLO(params, 1e-3, 1)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := opt.Step(gf); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkShampooStepMulti8x512 times a refresh-every-step (RootEvery=1) Shampoo update
 // over 8 independent [512,512] matrix parameters — the eigendecomposition-bound regime the
 // per-parameter fan-out targets.
