@@ -131,6 +131,7 @@ func (g *GatedAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*tenso
 		return nil, err
 	}
 	chunk := func(i int) (*tensor.Tensor, error) {
+		//perfscan:ignore PS3024 OpSlice QKV-split dispatch in attention-dominated forward
 		return g.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i * g.Dim, End: (i + 1) * g.Dim}, p)
 	}
 	q, err := chunk(0)
@@ -147,6 +148,7 @@ func (g *GatedAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	}
 	// SDPA core: fused causal multi-head attention (head split/softmax/concat
 	// internal) — the raw head concat [T, Dim], NO output projection.
+	//perfscan:ignore PS3024 single OpMHA dispatch; attention/matmul dominates
 	attn, err := g.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: g.Heads, Causal: true}, q, k, v)
 	if err != nil {
 		return nil, err
@@ -156,6 +158,7 @@ func (g *GatedAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSigmoid gate dispatch; matmul-dominated forward
 	gate, err := g.exec(ctx, backend.OpSigmoid, nil, gl)
 	if err != nil {
 		return nil, err
@@ -166,6 +169,7 @@ func (g *GatedAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*tenso
 		}
 	}
 	// Y = (G ⊙ SDPA) · W_O: gate the raw attention output, THEN project.
+	//perfscan:ignore PS3024 OpMul gate dispatch; matmul-dominated forward
 	gated, err := g.exec(ctx, backend.OpMul, nil, attn, gate)
 	if err != nil {
 		return nil, err
@@ -181,10 +185,12 @@ func (g *GatedAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*tenso
 func (g *GatedAttention) expandHeadGate(ctx *backend.Context, gate *tensor.Tensor, t int) (*tensor.Tensor, error) {
 	cols := make([]*tensor.Tensor, g.Heads)
 	for h := range g.Heads {
+		//perfscan:ignore PS3024 OpSlice in per-head loop, low trip-count, headwise-only
 		c, err := g.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h, End: h + 1}, gate) // [T,1]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 OpBroadcast per-head loop, low trip-count | per-head broadcast alloc, low trip-count headwise expand
 		if cols[h], err = g.exec(ctx, backend.OpBroadcast, backend.BroadcastAttrs{Shape: tensor.Shape{t, g.HeadDim}}, c); err != nil {
 			return nil, err
 		}

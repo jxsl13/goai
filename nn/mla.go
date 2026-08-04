@@ -67,6 +67,7 @@ func (m *MLA) exec(ctx *backend.Context, op backend.Op, attrs backend.Attrs, ins
 
 // Forward computes MLA for h[seq, d], returning u[seq, d].
 func (m *MLA) Forward(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 MLA forward matmul-dominated, no scalar hot loop
 	mm := func(x, w *tensor.Tensor) (*tensor.Tensor, error) { return m.exec(ctx, backend.OpMatMul, nil, x, w) }
 
 	cKV, err := mm(h, m.WDKV)
@@ -98,6 +99,7 @@ func (m *MLA) Forward(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, e
 		return nil, err
 	}
 
+	//perfscan:ignore PS3024 OpMLA fused-kernel dispatch, matmul-dominated
 	o, err := m.exec(ctx, backend.OpMLA, backend.MLAAttrs{Heads: m.Heads, Causal: m.Causal},
 		qC, kC, vC, qRpre, kRpre)
 	if err != nil {

@@ -80,6 +80,7 @@ func NewEmbeddingPadded(dtype tensor.Dtype, vocab, dim, padIdx int, seed uint64)
 	}
 	w := tensor.New(dtype, tensor.Shape{vocab, dim})
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
+	//perfscan:ignore PS1002 model-construction weight fill, one-time init
 	fillGen(w, func() float64 { return rng.NormFloat64() })
 	e := &Embedding{W: w, PadIdx: -1}
 	if padIdx >= 0 {
@@ -109,6 +110,7 @@ func (e *Embedding) Forward(ctx *backend.Context, ids *tensor.Tensor) (*tensor.T
 		return nil, fmt.Errorf("nn: Embedding ids dtype %v != table dtype %v", ids.Dtype(), e.W.Dtype())
 	}
 	vocab := e.W.Shape()[0]
+	//perfscan:ignore PS1001 id validation O(m) dominated by OpEmbed gather O(m*dim)
 	for i := range ids.Numel() {
 		v := ids.AtF64(i)
 		if v != float64(int(v)) {
@@ -118,6 +120,7 @@ func (e *Embedding) Forward(ctx *backend.Context, ids *tensor.Tensor) (*tensor.T
 			return nil, fmt.Errorf("nn: Embedding id %d at position %d outside vocab %d", int(v), i, vocab)
 		}
 	}
+	//perfscan:ignore PS3038 resource-only 2-elem slice alloc per dispatch
 	out, err := backend.Execute(ctx, backend.OpEmbed, []*tensor.Tensor{e.W, ids}, nil)
 	if err != nil {
 		return nil, err

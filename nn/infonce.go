@@ -59,6 +59,7 @@ func InfoNCE(ctx *backend.Context, a, b *tensor.Tensor, temperature float64, nor
 	}
 	// targets = [0,1,…,n−1] (each row/column's positive is on the diagonal).
 	targets := tensor.New(a.Dtype(), tensor.Shape{n})
+	//perfscan:ignore PS1001 O(n) diagonal label init, trivial
 	for i := range n {
 		targets.SetF64(float64(i), i)
 	}
@@ -141,6 +142,7 @@ func NTXentLoss(ctx *backend.Context, a, b *tensor.Tensor, temperature float64, 
 	// mask: 0 off-diagonal, ntxentMaskNegInf on the diagonal (self-exclusion). Constant, so its
 	// gradient contribution is zero and s stays differentiable in sim.
 	mask := tensor.New(sim.Dtype(), sim.Shape())
+	//perfscan:ignore PS1005 O(2n) diagonal mask init « matmul/softmax
 	for i := range twoN {
 		mask.SetF64(ntxentMaskNegInf, i, i)
 	}

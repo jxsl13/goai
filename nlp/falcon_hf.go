@@ -84,6 +84,7 @@ func FalconFromHF(ts map[string]*tensor.Tensor, cfg FalconConfig) (*Falcon, erro
 	}
 
 	m := &Falcon{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3032,PS3060 per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("transformer.h.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) { return get(p + name) }

@@ -76,6 +76,7 @@ func T5FromHF(ts map[string]*tensor.Tensor, cfg T5Config) (*T5, error) {
 	cfg.Gated = gated
 	m.Config = cfg
 
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("encoder.block.%d.", l)
 		w := func(name string) (*tensor.Tensor, error) {

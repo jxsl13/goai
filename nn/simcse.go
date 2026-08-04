@@ -132,6 +132,7 @@ func SimCSELoss(ctx *backend.Context, z1, z2 *tensor.Tensor, opts ...SimCSEOptio
 	}
 	// targets = [0,1,…,B−1]: the positive for anchor i is z2[i] on the diagonal.
 	targets := tensor.New(a.Dtype(), tensor.Shape{n})
+	//perfscan:ignore PS1001 1D target arange fill, n=batch low trip
 	for i := range n {
 		targets.SetF64(float64(i), i)
 	}

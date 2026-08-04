@@ -56,6 +56,7 @@ func wkvKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 					wc, uc := ws[c], us[c]
 					aa, bb, pp := 0.0, 0.0, -1e38 // running numerator, denominator, max exponent
 					for t := range seq {
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						kk, vv := ks[t*d+c], vs[t*d+c]
 						ww := uc + kk
 						q := fmath.Max(pp, ww)
@@ -83,6 +84,7 @@ func wkvKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 					wc, uc := float64(ws[c]), float64(us[c])
 					aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
 					for t := range seq {
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						kk, vv := float64(ks[t*d+c]), float64(vs[t*d+c])
 						ww := uc + kk
 						q := fmath.Max(pp, ww)

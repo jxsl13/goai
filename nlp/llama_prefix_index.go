@@ -40,6 +40,7 @@ func (p *LlamaPrefixPool) match(salt string, prompt []int) (slot, lcp int, exact
 		return -1, 0, false
 	}
 	pos := 0
+	//perfscan:ignore PS3003 radix-tree walk per request not per-token, map inherent
 	for pos < len(prompt) {
 		child := node.children[prompt[pos]]
 		if child == nil {
@@ -67,6 +68,7 @@ func (p *LlamaPrefixPool) addRadix(slot int) {
 	}
 	root.best = slot
 	node, pos := root, 0
+	//perfscan:ignore PS3003 radix insert per request, tree map inherent
 	for pos < len(s.tokens) {
 		first := s.tokens[pos]
 		child := node.children[first]
@@ -113,6 +115,7 @@ func (p *LlamaPrefixPool) touchRadix(slot int) {
 	}
 	node.best = slot
 	pos := 0
+	//perfscan:ignore PS3003 radix touch per request, map inherent
 	for pos < len(s.tokens) {
 		child := node.children[s.tokens[pos]]
 		if child == nil || commonTokenPrefix(child.edge, s.tokens[pos:]) != len(child.edge) {

@@ -56,6 +56,7 @@ func NewResidentBQ8(b *tensor.Tensor) (*ResidentBQ8, error) {
 			}
 			var amax float32
 			for kk := k0; kk < k1; kk++ {
+				//perfscan:ignore PS5007,PS6011 load-time weight quantization (NewResidentBQ8)
 				if a := float32(math.Abs(float64(bf[kk*n+col]))); a > amax {
 					amax = a
 				}

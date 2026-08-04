@@ -203,9 +203,11 @@ func (m *QuantCohere) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd dispatch wrapper in forward graph; kernel-dominated, resource-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd dispatch wrapper; kernel-dominated, resource-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
@@ -307,15 +309,18 @@ func (m *QuantCohere) DecodeStep(ctx *backend.Context, cache *CohereCache, token
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 OpRoPE dispatch in decode; RoPE kernel-dominated, resource-only | OpRoPE dispatch wrapper; kernel-dominated, r
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 OpRoPE dispatch wrapper; kernel-dominated, resource-only
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 OpMHA dispatch; attention kernel-dominated, resource-only | OpMHA dispatch wrapper; attention-dominated, resou
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err
@@ -328,9 +333,11 @@ func (m *QuantCohere) DecodeStep(ctx *backend.Context, cache *CohereCache, token
 			return nil, err
 		}
 		// Sum both sublayer outputs onto the raw residual — the float DecodeStep's order.
+		//perfscan:ignore PS6017 OpAdd residual dispatch; kernel-dominated, resource-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch; kernel-dominated, resource-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

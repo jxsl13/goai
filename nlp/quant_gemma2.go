@@ -206,6 +206,7 @@ func (m *QuantGemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-layer residual OpAdd, memory-bound full-tensor, dispatch negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -222,6 +223,7 @@ func (m *QuantGemma2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tenso
 		if ff, err = b.PostFFNNorm.Forward(ctx, ff); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-layer residual OpAdd, memory-bound full-tensor, dispatch negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -293,47 +295,58 @@ func (m *QuantGemma2) cappedAttention(ctx *backend.Context, b *QuantGemma2Block,
 	}
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
+	//perfscan:ignore PS5001 integer index divide h/rep (kvHead), not continuous; low trip-count
 	for h := range cfg.Heads {
 		kvHead := h / rep
+		//perfscan:ignore PS6017 per-head attention slice, matmul-dominated (PS4011 false-positive)
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head attention slice, matmul-dominated (PS4011 false-positive)
 		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head attention slice, matmul-dominated (PS4011 false-positive)
 		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, v)
 		if err != nil {
 			return nil, err
 		}
 		// scores = Qh·Khᵀ  [seq,seq]
+		//perfscan:ignore PS6017 per-head transpose, matmul-dominated attention loop
 		khT, err := exec1(ctx, backend.OpTranspose, nil, kh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head QKt matmul is the dominant cost itself
 		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
+		//perfscan:ignore PS6017 per-head scale mul, matmul-dominated attention loop
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores, before the mask
 		if cfg.AttnLogitCap > 0 {
+			//perfscan:ignore PS6016,PS6017 per-head softcap, matmul-dominated attention loop
 			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}
 		// + causal mask, then softmax over keys (last axis)
+		//perfscan:ignore PS6017 per-head mask add, matmul-dominated attention loop
 		if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head softmax, matmul-dominated attention loop
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head probs·V matmul is dominant cost itself
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [seq,hd]
 		if err != nil {
 			return nil, err
@@ -396,6 +409,7 @@ func (m *QuantGemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-layer decode residual OpAdd, memory-bound, dispatch negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -412,6 +426,7 @@ func (m *QuantGemma2) DecodeStep(ctx *backend.Context, cache *Gemma2Cache, token
 		if ff, err = b.PostFFNNorm.Forward(ctx, ff); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-layer decode residual OpAdd, memory-bound, dispatch negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -471,43 +486,53 @@ func (m *QuantGemma2) cappedDecodeAttention(ctx *backend.Context, b *QuantGemma2
 	scaleT := m.queryScaleF32()
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
+	//perfscan:ignore PS5001 integer index divide h/rep (kvHead), not continuous; low trip-count
 	for h := range cfg.Heads {
 		kvHead := h / rep
+		//perfscan:ignore PS6017,PS6018 per-head decode slice, projection-dominated decode step
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head decode slice, projection-dominated decode step
 		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head decode slice, projection-dominated decode step
 		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew)
 		if err != nil {
 			return nil, err
 		}
 		// scores = qh·khᵀ  [1,sk]
+		//perfscan:ignore PS6017 per-head decode transpose, projection-dominated decode step
 		khT, err := exec1(ctx, backend.OpTranspose, nil, kh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head decode matmul, projection-dominated decode step
 		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
+		//perfscan:ignore PS6017 per-head decode scale mul, projection-dominated decode step
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores (no mask for a single query)
 		if cfg.AttnLogitCap > 0 {
+			//perfscan:ignore PS6016,PS6017 per-head decode softcap, projection-dominated decode step
 			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 per-head decode softmax, projection-dominated decode step
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head decode matmul, projection-dominated decode step
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [1,hd]
 		if err != nil {
 			return nil, err

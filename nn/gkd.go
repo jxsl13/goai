@@ -29,18 +29,22 @@ func GKDLoss(ctx *backend.Context, studentLogits, teacherLogits *tensor.Tensor, 
 	if beta < 0 || beta > 1 {
 		return nil, fmt.Errorf("nn: GKDLoss beta must be in [0,1], got %g", beta)
 	}
+	//perfscan:ignore PS3024 rdropExec variadic-pack alloc, resource-only; softmax op dominates
 	p, err := rdropExec(ctx, backend.OpSoftmax, nil, teacherLogits) // P = teacher
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; softmax op dominates
 	q, err := rdropExec(ctx, backend.OpSoftmax, nil, studentLogits) // Q = student
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; log op dominates
 	logP, err := rdropExec(ctx, backend.OpLog, nil, p)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; log op dominates
 	logQ, err := rdropExec(ctx, backend.OpLog, nil, q)
 	if err != nil {
 		return nil, err
@@ -55,12 +59,15 @@ func GKDLoss(ctx *backend.Context, studentLogits, teacherLogits *tensor.Tensor, 
 	default:
 		// M = β·P + (1−β)·Q = Q + β·(P−Q)
 		var pmq, m, logM, klP, klQ, scaledQ *tensor.Tensor
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; vocab-op dominated loss
 		if pmq, err = rdropExec(ctx, backend.OpSub, nil, p, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; axpy op dominates
 		if m, err = rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: beta}, pmq, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; log op dominates
 		if logM, err = rdropExec(ctx, backend.OpLog, nil, m); err != nil {
 			return nil, err
 		}
@@ -71,15 +78,18 @@ func GKDLoss(ctx *backend.Context, studentLogits, teacherLogits *tensor.Tensor, 
 			return nil, err
 		}
 		// terms = β·klP + (1−β)·klQ
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; axpy op dominates
 		if scaledQ, err = rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 1 - beta}, klQ, tensor.New(klQ.Dtype(), klQ.Shape())); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; axpy op dominates
 		terms, err = rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: beta}, klP, scaledQ)
 	}
 	if err != nil {
 		return nil, err
 	}
 
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; sum op dominates
 	total, err := rdropExec(ctx, backend.OpSum, nil, terms) // Σ over all elements
 	if err != nil {
 		return nil, err
@@ -87,14 +97,17 @@ func GKDLoss(ctx *backend.Context, studentLogits, teacherLogits *tensor.Tensor, 
 	d := studentLogits.Shape()[studentLogits.Ndim()-1]
 	rows := studentLogits.Numel() / d
 	// mean over rows
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; final mean axpy
 	return rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 1 / float64(rows)}, total, tensor.New(studentLogits.Dtype(), tensor.Shape{}))
 }
 
 // klTerms returns the elementwise KL contribution a·(logA − logB) (summed later).
 func klTerms(ctx *backend.Context, a, logA, logB *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 klTerms variadic-pack alloc, resource-only; sub op dominates
 	diff, err := rdropExec(ctx, backend.OpSub, nil, logA, logB)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; mul op dominates
 	return rdropExec(ctx, backend.OpMul, nil, a, diff)
 }

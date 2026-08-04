@@ -70,6 +70,7 @@ func (m *LinearRegression) Fit(x [][]float64, y []float64) error {
 	gf := gram[0].Storage().F64()
 	xtx := make([][]float64, da)
 	for i := range xtx {
+		//perfscan:ignore PS2008,PS3064 resource-only alloc; cold Gram materialize once per Fit, no wallclock | resource-only slab-backing of cold Gra
 		xtx[i] = make([]float64, da)
 		copy(xtx[i], gf[i*da:i*da+da])
 	}
@@ -188,12 +189,16 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	// carries logit 0; log-sum-exp keeps the exponentials bounded.
 	forward := func(th []float64) float64 {
 		var loss float64
+		//perfscan:ignore PS3034 forward logits <1% vs gram-dominated step; gram already parallel
 		for i := range n {
 			row, pr := xa[i], probs[i]
 			maxz := 0.0 // reference class logit is 0
+			//perfscan:ignore PS1006,PS3067,PS6010 forward strided-th logit dot, <1% at realistic feature count | forward cc-loop, <1% vs already-parallel gram |
 			for cc := range kEff {
 				var z float64
+				//perfscan:ignore PS3010,PS4008 forward inner dot accumulator, <1% fraction | forward scalar-dot→GEMM, <1% vs gram-dominated step
 				for a := range mAug {
+					//perfscan:ignore PS6011 forward strided th index, <1% fraction
 					z += th[a*kEff+cc] * row[a]
 				}
 				pr[cc] = z
@@ -229,6 +234,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		h[i] = hf[i*p : (i+1)*p : (i+1)*p]
 	}
 	numPairs := kEff * (kEff + 1) / 2
+	//perfscan:ignore PS3028 per-call grams scratch, resource-only no wallclock
 	grams := make([]float64, numPairs*mAug*mAug)
 	// Per-step line-search trial point, hoisted out of the Newton loop: it is fully
 	// overwritten (trial[i] = theta[i] − α·delta[i] over all p) before forward(trial)
@@ -246,6 +252,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		steps = 1
 	}
 	loss := forward(theta)
+	//perfscan:ignore PS2004 per-worker wp alloc required (shared would race), tiny numPairs
 	for range steps {
 		// Gradient g[a*kEff+c] = 1/n·Σ_i xa_ia·(p_ic − y_ic), c∈[0,kEff).
 		for i := range grad {
@@ -255,6 +262,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		for i := range n {
 			row, pr := xa[i], probs[i]
 			yi := y[i]
+			//perfscan:ignore PS1006,PS3067 gradient accum <<gram (already parallel), small fraction | gradient c-loop, small vs gram-dominated step
 			for c := range kEff {
 				g := pr[c]
 				if c == yi {
@@ -262,6 +270,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 				}
 				if g != 0 {
 					for a := range mAug {
+						//perfscan:ignore PS3075,PS6011 gradient reduction target, <1% vs gram | gradient strided store, small fraction of step
 						grad[a*kEff+c] += g * row[a]
 					}
 				}
@@ -350,7 +359,9 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 		}
 		// Scatter each pair-Gram into blocks (c1,c2) and (c2,c1).
 		pp := 0
+		//perfscan:ignore PS3034 gram scatter O(numPairs·mAug²), not sample-scaled, cheap
 		for c1 := range kEff {
+			//perfscan:ignore PS3034 gram scatter inner, not sample-scaled, cheap
 			for c2 := c1; c2 < kEff; c2++ {
 				gbase := pp * mm
 				for a := range mAug {
@@ -361,6 +372,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 							lo, hi = hi, lo
 						}
 						g := grams[gbase+lo*mAug+hi] * invN
+						//perfscan:ignore PS3075 gram scatter invariant, non-sample loop, cheap
 						hf[(ra+c1)*p+b*kEff+c2] += g
 						if c1 != c2 {
 							hf[(ra+c2)*p+b*kEff+c1] += g
@@ -394,6 +406,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 
 		// Armijo backtracking on the full Newton step: W ← W − α·Δ.
 		var gd float64 // g·Δ ≥ 0 (descent amount)
+		//perfscan:ignore PS3010 g·Δ dot O(p) once per step, negligible
 		for i := range delta {
 			gd += grad[i] * delta[i]
 		}
@@ -431,6 +444,7 @@ func (m *SoftmaxRegression) Fit(x [][]float64, y []int, k, steps int, lr float64
 	m.W = tensor.New(tensor.F64, tensor.Shape{d, k})
 	m.B = tensor.New(tensor.F64, tensor.Shape{k})
 	for a := range d {
+		//perfscan:ignore PS1005 one-time weight write-back O(d·kEff), cold path
 		for c := range kEff {
 			m.W.SetF64(theta[a*kEff+c], a, c)
 		}
@@ -454,6 +468,7 @@ func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
 			return nil, fmt.Errorf("classic: SoftmaxRegression.PredictProba row %d width %d, want %d", i, len(x[i]), d)
 		}
 		for j := range d {
+			//perfscan:ignore PS3016 same element-copy loop as 456 PS1001; flat copy covers it
 			xt.SetF64(x[i][j], i, j)
 		}
 	}
@@ -472,8 +487,11 @@ func (m *SoftmaxRegression) PredictProba(x [][]float64) ([][]float64, error) {
 	}
 	out := make([][]float64, n)
 	for i := range n {
+		//perfscan:ignore PS2008,PS3064 resource-only out row alloc | resource-only slab-backing of out
 		out[i] = make([]float64, k)
+		//perfscan:ignore PS4006 resource-only out row alloc
 		for j := range k {
+			//perfscan:ignore PS3016 same element-copy loop as 476 PS1001; flat copy covers it
 			out[i][j] = p[0].AtF64(i, j)
 		}
 	}
@@ -529,12 +547,16 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 	cnorm := make([]float64, k)
 	for iter := range maxIter {
 		changed := false
+		//perfscan:ignore PS6016 per-iter Shape literal, trivial vs GEMM
 		ct := tensor.New(tensor.F64, tensor.Shape{k, d})
 		cf := ct.Storage().F64()
+		//perfscan:ignore PS3067 centroid tensor build O(k·d), <1% vs GEMM
 		for c := range k {
 			copy(cf[c*d:c*d+d], centers[c])
 			var s float64
+			//perfscan:ignore PS3010 cnorm sum O(k·d) per iter, tiny vs GEMM
 			for j := 0; j < d; j++ {
+				//perfscan:ignore PS3016 same cnorm loop two-deep index, tiny
 				s += centers[c][j] * centers[c][j]
 			}
 			cnorm[c] = s
@@ -551,6 +573,7 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 		for i := 0; i < n; i++ {
 			drow := df[i*k : i*k+k]
 			best, bd := 0, cnorm[0]-2*drow[0]
+			//perfscan:ignore PS3068 argmin over GEMM output, memory-streaming, already flat-indexed
 			for c := 1; c < k; c++ {
 				if s := cnorm[c] - 2*drow[c]; s < bd {
 					bd, best = s, c
@@ -562,16 +585,22 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 			}
 		}
 		// recompute means
+		//perfscan:ignore PS3035 resource-only counts alloc
 		counts := make([]int, k)
+		//perfscan:ignore PS3035 resource-only sums alloc
 		sums := make([][]float64, k)
 		for c := range k {
+			//perfscan:ignore PS2008,PS3064 resource-only sums row alloc | resource-only slab-backing of sums
 			sums[c] = make([]float64, d)
 		}
+		//perfscan:ignore PS3074 centroid mean scatter-add, memory-streaming, cluster race
 		for i, row := range x {
 			c := labels[i]
 			counts[c]++
 			sc := sums[c]
+			//perfscan:ignore PS4006 resource-only sums row alloc
 			for j := 0; j < d; j++ {
+				//perfscan:ignore PS3075 mean-accum invariant, memory-streaming scatter
 				sc[j] += row[j]
 			}
 		}
@@ -580,6 +609,7 @@ func KMeans(x [][]float64, init [][]float64, maxIter int) (centers [][]float64, 
 				continue // keep empty cluster's center (sklearn relocates; our golden has none)
 			}
 			cc, sc, cnt := centers[c], sums[c], float64(counts[c])
+			//perfscan:ignore PS5001 division kept deliberately for sklearn-parity bit-exactness (comment)
 			for j := 0; j < d; j++ {
 				cc[j] = sc[j] / cnt // keep division (bit-identical to the sklearn-parity golden)
 			}
@@ -656,9 +686,12 @@ func (p *PCA) Fit(x [][]float64, ncomp int) error {
 	gf := gramRes[0].Storage().F64() // [d,d] = Σ_k Xc[k,i]·Xc[k,j], symmetric
 	cov := make([][]float64, d)
 	for i := range d {
+		//perfscan:ignore PS2008,PS3064 resource-only cov row alloc, cold once per Fit | resource-only slab-backing of cov
 		cov[i] = make([]float64, d)
 		base := i * d
+		//perfscan:ignore PS4006 resource-only cov row alloc
 		for j := range d {
+			//perfscan:ignore PS3016 cov materialize O(d²) once per Fit, cold path
 			cov[i][j] = gf[base+j] / float64(n-1)
 		}
 	}

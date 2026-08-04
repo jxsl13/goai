@@ -626,6 +626,8 @@ func sortIdxDescByKey(idx []int, key []float64) {
 // ~6% slower at n=512, ~1.17× faster at n=1024, and 2.4× at n=2048 (its fixed
 // 8-pass + allocation overhead amortises out), so 1024 captures every sort that
 // benefits while leaving small sorts on the lower-constant comparison path.
+//
+//perfscan:ignore PS6023 tuned const threshold with documented crossover, not a loop
 const radixSortCutoff = 1024
 
 // sortIdxDescByProb orders idx so that key[idx[0]] ≥ key[idx[1]] ≥ … for
@@ -666,6 +668,7 @@ func sortIdxDescByProb(idx []int, key []float64) {
 		bits[i] = ^math.Float64bits(key[id])
 	}
 	var count [256]int
+	//perfscan:ignore PS3078 already the optimized LSD-radix path (this IS the win)
 	for shift := uint(0); shift < 64; shift += 8 {
 		for i := range count {
 			count[i] = 0
@@ -679,6 +682,7 @@ func sortIdxDescByProb(idx []int, key []float64) {
 			count[i] = sum
 			sum += c
 		}
+		//perfscan:ignore PS4004 false-positive: radix histogram scatter, not a contiguous copy run
 		for i := 0; i < n; i++ {
 			b := (bits[i] >> shift) & 0xff
 			pos := count[b]
@@ -740,6 +744,7 @@ func nucleusTopP(probs []float64, p float64) {
 	}
 	defer nucleusIdxPool.Put(idx) // covers the early-return paths; idx is not retained
 	var sumSq float64             // Σp² — accumulated for free in the index-init pass
+	//perfscan:ignore PS3010 iota fill and Sigma-p2 already fused into one pass
 	for i := range idx {
 		idx[i] = i
 		sumSq += probs[i] * probs[i]
@@ -889,6 +894,7 @@ func sortIdxAscByScore(idx []int, key []float64) {
 		bits[i] = math.Float64bits(key[id]) // ascending bits ⇒ ascending value (key ≥ 0)
 	}
 	var count [256]int
+	//perfscan:ignore PS3078 already-optimized radix path (AscByScore sibling)
 	for shift := uint(0); shift < 64; shift += 8 {
 		for i := range count {
 			count[i] = 0
@@ -902,6 +908,7 @@ func sortIdxAscByScore(idx []int, key []float64) {
 			count[i] = sum
 			sum += c
 		}
+		//perfscan:ignore PS4004 false-positive: radix scatter is non-contiguous permutation
 		for i := 0; i < n; i++ {
 			b := (bits[i] >> shift) & 0xff
 			pos := count[b]
@@ -966,6 +973,7 @@ func typicalTruncate(probs []float64, tau float64) {
 	// bit-identical to recomputing it (the §T628/1e-12 parity holds) while halving the
 	// transcendental work — the dominant cost of this, the slowest truncation sampler.
 	var h float64 // Shannon entropy in nats over the current distribution
+	//perfscan:ignore PS3066 niche typical-sampler; F64 log already cached/halved, non-default path
 	for i, p := range probs {
 		idx[i] = i
 		if p > 0 {
@@ -1355,6 +1363,8 @@ func truncateAboveKeeping(probs []float64, thresh float64, top int) {
 // rowLogits copies row 0 of a [1,vocab] logits tensor to a slice. On the hot
 // per-token sampling path, so it uses typed []T access (§base-perf) instead of a
 // per-element AtF64 dispatch over the whole vocab.
+//
+//perfscan:ignore PS3033,PS6004 already-typed F64/F32 fast path; AtF64 default is exotic-dtype fallback | verification-only class, no wall-clo
 func rowLogits(t *tensor.Tensor) []float64 {
 	v := t.Shape()[1]
 	out := make([]float64, v)

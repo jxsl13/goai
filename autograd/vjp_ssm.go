@@ -82,7 +82,9 @@ func init() {
 				}
 
 				// recompute forward, storing Ā and h for every timestep
+				//perfscan:ignore PS3028 reverse-scan scratch alloc, resource-only, compute-dominated
 				abar := make([]float64, L*D*N)
+				//perfscan:ignore PS3028 reverse-scan h buffer alloc, resource-only
 				h := make([]float64, L*D*N)
 				state := make([]float64, D*N)
 				abrow := make([]float64, N) // Ā over the state dim, one 4-wide exp per (t,d)
@@ -132,6 +134,7 @@ func init() {
 						}
 						if hasSkip {
 							duTD += skips[d] * gy
+							//perfscan:ignore PS3075 trivial per-d skip accumulation, low trip count
 							dskips[d] += ut * gy
 						}
 						dus[t*D+d] = duTD
@@ -159,7 +162,9 @@ func init() {
 				// recompute forward, storing Ā and h for every timestep (state and
 				// the saved buffers stay float64, exactly as the generic path — which
 				// reads inputs through AtF64 — computes them)
+				//perfscan:ignore PS3028 F32-path scratch alloc, resource-only
 				abar := make([]float64, L*D*N)
+				//perfscan:ignore PS3028 F32-path h buffer alloc, resource-only
 				h := make([]float64, L*D*N)
 				state := make([]float64, D*N)
 				abrow := make([]float64, N) // Ā over the state dim
@@ -227,7 +232,9 @@ func init() {
 		}
 
 		// generic fallback (mixed or exotic dtypes) — the original AtF64/SetF64 loop
+		//perfscan:ignore PS3028 generic fallback scratch alloc, exotic-dtype path
 		abar := make([]float64, L*D*N)
+		//perfscan:ignore PS3028 generic fallback h alloc, exotic-dtype path
 		h := make([]float64, L*D*N)
 		state := make([]float64, D*N)
 		for t := range L {
@@ -247,6 +254,7 @@ func init() {
 		dhNext := make([]float64, D*N) // dh[t+1]; starts at dh[L]=0
 		dht := make([]float64, D*N)
 		for t := L - 1; t >= 0; t-- {
+			//perfscan:ignore PS3040,PS3067 generic exotic-dtype fallback loop, fast paths handle F64/F32 | exotic-dtype fallback d-loop, declined-dtype b
 			for d := range D {
 				gy := g.AtF64(t, d)
 				dtv := delta.AtF64(t, d)

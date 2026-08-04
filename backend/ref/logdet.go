@@ -22,6 +22,7 @@ func logdetKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 	l := lout[0]
 	n := l.Shape()[0]
 	var acc float64 // f64 accumulation (§V10)
+	//perfscan:ignore PS1001 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for i := range n {
 		acc += math.Log(l.AtF64(i, i))
 	}
@@ -31,6 +32,7 @@ func logdetKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpLogDet, tensor.F32, logdetKernel)
 	std.add(backend.OpLogDet, tensor.F64, logdetKernel)
 }

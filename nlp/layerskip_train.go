@@ -200,6 +200,7 @@ func (m *Llama) LayerSkipLoss(ctx *backend.Context, tokens []int, targets *tenso
 			total = loss
 			continue
 		}
+		//perfscan:ignore PS6017 alloc-only, low trip-count over exit layers, OpAdd-dominated
 		if total, err = exec1(ctx, backend.OpAdd, nil, total, loss); err != nil {
 			return nil, err
 		}

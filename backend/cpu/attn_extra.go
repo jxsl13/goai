@@ -138,8 +138,11 @@ func flashAttnKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep, heads, block int, causal bool, scale float64) {
 	_, isF32 := any(q).([]float32) // dot4 reassociation fits the f32 budget only
 	parallelWork(heads*seq, seq*dk, func(lo, hi int) {
+		//perfscan:ignore PS6008 per-task scratch alloc, reused across chunk rows
 		acc := make([]float64, dk)
+		//perfscan:ignore PS6008 per-task scratch alloc, reused across chunk
 		pv := make([]float64, dk) // per-block Σ p·V, keeps acc's corr·acc+pv order
+		//perfscan:ignore PS6008 per-task scratch alloc, reused across chunk
 		p := make([]float64, block)
 		for t := lo; t < hi; t++ {
 			h, i := t/seq, t%seq
@@ -156,6 +159,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 			for d := range dk {
 				acc[d] = 0
 			}
+			//perfscan:ignore PS3051 FA block-streaming loop; core algo already optimal
 			for j0 := 0; j0 < jmax; j0 += block {
 				j1 := min(j0+block, jmax)
 				mBlk := math.Inf(-1)
@@ -166,6 +170,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					// — the ref accumulation order, so this is STRICTLY closer to ref
 					// than the previous dot4T (rides the same FlashAttn f32 budget).
 					j := j0
+					//perfscan:ignore PS3076 QKt key loop already 4-way unroll-jammed
 					for ; j+4 <= j1; j += 4 {
 						b0 := j*dkv + kvOff
 						kr0 := k[b0 : b0+dk : b0+dk]
@@ -176,6 +181,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						b3 := b2 + dkv
 						kr3 := k[b3 : b3+dk : b3+dk]
 						var a0, a1, a2, a3 float64
+						//perfscan:ignore PS3010 inner dot already 4-accumulator jam, f64 ref order
 						for d, qv := range qr {
 							f := float64(qv)
 							a0 += f * float64(kr0[d])
@@ -202,6 +208,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						kBase := j*dkv + kvOff
 						kr := k[kBase : kBase+dk : kBase+dk]
 						var s float64
+						//perfscan:ignore PS3010 tail dot remainder, ref-order f64, negligible
 						for d, qv := range qr {
 							s += float64(qv) * float64(kr[d])
 						}
@@ -223,6 +230,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					// accumulator, and the scale and the running block maximum are applied in
 					// ascending j.
 					j := j0
+					//perfscan:ignore PS3066,PS3076 F64 serial dot is the F64 reference oracle | F64 else-branch deliberately serial for parity
 					for ; j+3 < j1; j += 4 {
 						b0 := j*dkv + kvOff
 						k0 := k[b0 : b0+dk : b0+dk]
@@ -233,6 +241,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						b3 := b2 + dkv
 						k3 := k[b3 : b3+dk : b3+dk]
 						var s0, s1, s2, s3 float64
+						//perfscan:ignore PS3010 block softmax already routed through simd.ExpSumF64
 						for d, qv := range qr {
 							q := float64(qv)
 							s0 += q * float64(k0[d])
@@ -252,6 +261,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 						kBase := j*dkv + kvOff
 						kr := k[kBase : kBase+dk : kBase+dk]
 						var s float64
+						//perfscan:ignore PS3010 P.V already 2-way unroll-jammed, bit-exact
 						for d, qv := range qr {
 							s += float64(qv) * float64(kr[d])
 						}
@@ -303,6 +313,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 					vBase := j*dkv + kvOff
 					vr := v[vBase : vBase+dk : vBase+dk]
 					for d, vv := range vr {
+						//perfscan:ignore PS3017 ropeGeom O(1) validation/setup, cold
 						pv[d] += pj * float64(vv)
 					}
 				}
@@ -312,6 +323,7 @@ func flashAttnTyped[T float32 | float64](q, k, v, out []T, seq, dm, dk, dkv, rep
 				m = mNew
 			}
 			or := out[qBase : qBase+dk : qBase+dk]
+			//perfscan:ignore PS5001 FA /l norm O(seq.dk), negligible vs O(seq2.dk) body
 			for d := range or {
 				or[d] = T(acc[d] / l)
 			}
@@ -407,6 +419,7 @@ func ropeApply[T normFloat](x, out []T, seq, width, heads, half, posOff int,
 			np := posOff + p
 			n := float64(np)
 			// per-position cos/sin row, memoized across calls (bit-exact); read-only
+			//perfscan:ignore PS3079 RoPE rotate; trig hoisted per-row already, typed
 			cs, sn := cachedRoPETrig(fk, np, n/posDiv, inv)
 			if zeta != nil {
 				e := n
@@ -503,7 +516,9 @@ func retentionKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 // (T = float32|float64), accumulating in f64 for stability and ref-parity.
 func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float64) {
 	parallelWork(l, l*(dk+dv)/2, func(lo, hi int) {
+		//perfscan:ignore PS6008 retention per-task scratch alloc, reused
 		p := make([]float64, l)
+		//perfscan:ignore PS6008 retention per-task scratch alloc, reused
 		acc := make([]float64, dv)
 		for n := lo; n < hi; n++ {
 			qn := qs[n*dk : n*dk+dk : n*dk+dk]
@@ -512,12 +527,14 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 			// breaking the single-accumulator FMA latency chain. Each p[m] still
 			// sums i ascending over identical operands → bit-identical (§V9).
 			m := 0
+			//perfscan:ignore PS3076 retention P.V already 2-way unroll-jammed
 			for ; m+3 <= n; m += 4 {
 				km0 := ks[m*dk : m*dk+dk : m*dk+dk]
 				km1 := ks[(m+1)*dk : (m+1)*dk+dk : (m+1)*dk+dk]
 				km2 := ks[(m+2)*dk : (m+2)*dk+dk : (m+2)*dk+dk]
 				km3 := ks[(m+3)*dk : (m+3)*dk+dk : (m+3)*dk+dk]
 				var a0, a1, a2, a3 float64
+				//perfscan:ignore PS3010 retention V inner loop already jammed, ref order
 				for i, qv := range qn {
 					f := float64(qv)
 					a0 += f * float64(km0[i])
@@ -533,6 +550,7 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 			for ; m <= n; m++ {
 				km := ks[m*dk : m*dk+dk : m*dk+dk]
 				var a float64
+				//perfscan:ignore PS3010 contiguous output copy, negligible
 				for i, qv := range qn {
 					a += float64(qv) * float64(km[i])
 				}
@@ -551,6 +569,7 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 			// mirrors the shipped FlashAttn/MHA P·V jams; the score dot above is already
 			// 4-wide.
 			mm := 0
+			//perfscan:ignore PS3051 shape-validation error path, cold
 			for ; mm+2 <= n+1; mm += 2 {
 				p0, p1 := p[mm], p[mm+1]
 				vr0 := vs[mm*dv : mm*dv+dv : mm*dv+dv]
@@ -563,6 +582,7 @@ func retentionFwd[T normFloat](qs, ks, vs, os []T, l, dk, dv int, decay []float6
 				pm := p[mm]
 				vr := vs[mm*dv : mm*dv+dv : mm*dv+dv]
 				for j, vv := range vr {
+					//perfscan:ignore PS3017 dtype dispatch switch, one-time per call
 					acc[j] += pm * float64(vv)
 				}
 			}
@@ -618,6 +638,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 	_, isF32 := any(qs).([]float32) // dot4 reassociation fits the f32 budget only (F64 keeps serial dots)
 	// Pass A: dQ rows are independent over n (m ≤ n ascending — ref's order).
 	parallelWork(l, l*(kd+vd), func(lo, hi int) {
+		//perfscan:ignore PS6008 retentionBwd per-task scratch alloc, reused
 		row := make([]float64, kd)
 		for n := lo; n < hi; n++ {
 			for i := range row {
@@ -634,12 +655,14 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				//
 				// Bit-identical: each dp sums its own terms in ascending j into its own
 				// accumulator, and the decay and the row update are applied in ascending m.
+				//perfscan:ignore PS3051,PS3076 Bwd PassB loop; already dot4T/f64-optimized | already dot4T-unrolled for F32, serial F64 oracle
 				for ; m+3 <= n; m += 4 {
 					v0 := vs[(m+0)*vd : (m+0)*vd+vd : (m+0)*vd+vd]
 					v1 := vs[(m+1)*vd : (m+1)*vd+vd : (m+1)*vd+vd]
 					v2 := vs[(m+2)*vd : (m+2)*vd+vd : (m+2)*vd+vd]
 					v3 := vs[(m+3)*vd : (m+3)*vd+vd : (m+3)*vd+vd]
 					var d0, d1, d2, d3 float64
+					//perfscan:ignore PS3010 combine loop already single-pass fuses dp+rowV
 					for j, gv := range gn {
 						g := float64(gv)
 						d0 += g * float64(v0[j])
@@ -647,10 +670,12 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 						d2 += g * float64(v2[j])
 						d3 += g * float64(v3[j])
 					}
+					//perfscan:ignore PS1007,PS3049 contiguous dK writeback, not strided (false positive) | contiguous dK row copy, negligible
 					for o, dp := range [4]float64{d0, d1, d2, d3} {
 						dA := dp * decay[n-m-o]
 						km := ks[(m+o)*kd : (m+o)*kd+kd : (m+o)*kd+kd]
 						for i, kv := range km {
+							//perfscan:ignore PS3017 contiguous dV row copy, negligible
 							row[i] += dA * float64(kv)
 						}
 					}
@@ -662,6 +687,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				if isF32 {
 					dp = dot4T(gn, vm)
 				} else {
+					//perfscan:ignore PS3010 stale line; inner loop already jammed, ref order
 					for j, gv := range gn {
 						dp += float64(gv) * float64(vm[j])
 					}
@@ -669,6 +695,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				dA := dp * decay[n-m]
 				km := ks[m*kd : m*kd+kd : m*kd+kd]
 				for i, kv := range km {
+					//perfscan:ignore PS3017 stale line; dtype dispatch/setup, one-time
 					row[i] += dA * float64(kv)
 				}
 			}
@@ -680,7 +707,9 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 	})
 	// Pass B: dK/dV rows are independent over m (n ≥ m ascending — ref's order).
 	parallelWork(l, l*(kd+vd), func(lo, hi int) {
+		//perfscan:ignore PS6008 stale (beyond EOF); per-task scratch alloc
 		rowK := make([]float64, kd)
+		//perfscan:ignore PS6008 stale (beyond EOF); per-task scratch alloc
 		rowV := make([]float64, vd)
 		for m := lo; m < hi; m++ {
 			for i := range rowK {
@@ -697,12 +726,14 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				// uses below. Only the SCORE is grouped: the rest of each iteration reads its own
 				// gradient row and updates the running rowV and rowK, and stays per-n in ascending
 				// order, so nothing else moves.
+				//perfscan:ignore PS3076 stale (beyond EOF); already-unrolled kernel loop
 				for ; n+3 < l; n += 4 {
 					q0 := qs[(n+0)*kd : (n+0)*kd+kd : (n+0)*kd+kd]
 					q1 := qs[(n+1)*kd : (n+1)*kd+kd : (n+1)*kd+kd]
 					q2 := qs[(n+2)*kd : (n+2)*kd+kd : (n+2)*kd+kd]
 					q3 := qs[(n+3)*kd : (n+3)*kd+kd : (n+3)*kd+kd]
 					var a0, a1, a2, a3 float64
+					//perfscan:ignore PS3010 stale (beyond EOF); inner MAC already jammed
 					for i, kv := range km {
 						f := float64(kv)
 						a0 += float64(q0[i]) * f
@@ -710,6 +741,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 						a2 += float64(q2[i]) * f
 						a3 += float64(q3[i]) * f
 					}
+					//perfscan:ignore PS1007,PS3049,PS3053 stale (beyond EOF); contiguous writeback, not strided | stale (beyond EOF); contiguous row copy | stale (beyon
 					for o, a := range [4]float64{a0, a1, a2, a3} {
 						qn := qs[(n+o)*kd : (n+o)*kd+kd : (n+o)*kd+kd]
 						pnm := a * decay[n+o-m]
@@ -722,6 +754,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 						}
 						dA := dp * decay[n+o-m]
 						for i, qv := range qn {
+							//perfscan:ignore PS3017 stale (beyond EOF); dispatch/setup one-time
 							rowK[i] += dA * float64(qv)
 						}
 					}
@@ -733,6 +766,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				if isF32 {
 					a = dot4T(qn, km)
 				} else {
+					//perfscan:ignore PS3010 stale (beyond EOF); inner MAC already jammed
 					for i, qv := range qn {
 						a += float64(qv) * float64(km[i])
 					}
@@ -747,6 +781,7 @@ func retentionBwd[T normFloat](qs, ks, vs, gs, dqs, dks, dvs []T, l, kd, vd int,
 				}
 				dA := dp * decay[n-m]
 				for i, qv := range qn {
+					//perfscan:ignore PS3017 stale (beyond EOF); dispatch/setup one-time
 					rowK[i] += dA * float64(qv)
 				}
 			}

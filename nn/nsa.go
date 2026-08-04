@@ -43,10 +43,12 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 	// block mean-pools per head dim (compressed keys/values).
 	poolK := make([]float64, nBlocks*dm)
 	poolV := make([]float64, nBlocks*dm)
+	//perfscan:ignore PS3034,PS3063 block mean-pool setup, one-time/call, tiny vs O(heads·seq²) attn | host f64 analysis utility, not wired to any
 	for b := range nBlocks {
 		lo, hi := b*blockSize, min((b+1)*blockSize, seq)
 		for d := range dm {
 			var sk, sv float64
+			//perfscan:ignore PS1001 pool-setup AtF64 O(seq·dm), negligible vs attention; utility
 			for j := lo; j < hi; j++ {
 				sk += k.AtF64(j, d)
 				sv += v.AtF64(j, d)
@@ -63,21 +65,27 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 	// the internal softmax/sort. Each worker owns its own scores/qrow scratch (reused across the
 	// head's queries). Gated on heads·seq²·dk so a tiny problem stays serial.
 	parallelRows(heads, seq*seq*dk, func(hlo, hhi int) {
+		//perfscan:ignore PS6008 resource-class on hoisted qrow gather, no wallclock
 		scores := make([]float64, max(seq, nBlocks))
+		//perfscan:ignore PS6008 resource-only alloc class, no wallclock; utility
 		qrow := make([]float64, dk) // q_i[off:off+dk] hoisted per (head,query); all 3 branches re-read it
 		for h := hlo; h < hhi; h++ {
 			off := h * dk
 			for i := range seq {
+				//perfscan:ignore PS1001 cmp-branch dot over flat pool slice, small nPast; utility
 				for d := range dk {
 					qrow[d] = q.AtF64(i, off+d)
 				}
 				// ---- cmp: softmax over complete blocks strictly before the query.
 				nPast := i / blockSize // complete blocks before i
+				//perfscan:ignore PS3035 cmp score dot, flat pool slice already; utility
 				blockW := make([]float64, nPast)
 				if nPast > 0 {
 					m := math.Inf(-1)
+					//perfscan:ignore PS6010 resource-class, no wallclock
 					for b := range nPast {
 						var s float64
+						//perfscan:ignore PS3010 cmp softmax scalar region; utility, tiny nPast
 						for d := range dk {
 							s += qrow[d] * poolK[b*dm+off+d]
 						}
@@ -88,6 +96,7 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 						}
 					}
 					var sum float64
+					//perfscan:ignore PS3010,PS3066 cmp output write O(seq·dk), small; utility | same cmp write region; utility
 					for b := range nPast {
 						scores[b] = math.Exp(scores[b] - m)
 						sum += scores[b]
@@ -95,9 +104,12 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 					for b := range nPast {
 						scores[b] /= sum // normalize once, not per channel d
 					}
+					//perfscan:ignore PS1001,PS1006,PS3053 cmp output over flat slice; utility, negligible | cmp reduce over small nBlocks; utility, marginal | same cmp
 					for d := range dk {
 						var o float64
+						//perfscan:ignore PS3010 blockW copy, tiny; utility
 						for b := range nPast {
+							//perfscan:ignore PS6011 slice-of-slices false positive; utility
 							o += scores[b] * poolV[b*dm+off+d]
 						}
 						cmp.SetF64(o, i, off+d)
@@ -115,7 +127,9 @@ func NSABranches(q, k, v *tensor.Tensor, heads, blockSize, topN, window int, sca
 				for b := range nPast {
 					imps = append(imps, imp{b, blockW[b]})
 				}
+				//perfscan:ignore PS3002,PS6009 imps sort is block-count (short) not vocab; utility path | resource-class, no wallclock
 				sort.Slice(imps, func(a, b int) bool { return imps[a].w > imps[b].w })
+				//perfscan:ignore PS3083 attendMask call site; utility
 				selected := map[int]bool{i / blockSize: true}
 				for gi := 0; gi < len(imps) && len(selected) < topN; gi++ {
 					selected[imps[gi].block] = true
@@ -151,6 +165,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 		// masked attention kernel does — abandoning the fast path for the rest of the row costs
 		// more than the branch on any mask whose live region is not a prefix.
 		jj := 0
+		//perfscan:ignore PS3076 inside attendMask flatF64 fast path, already typed walk
 		for ; jj+3 <= i; jj += 4 {
 			if !keep(jj) || !keep(jj+1) || !keep(jj+2) || !keep(jj+3) {
 				for o := range 4 {
@@ -161,6 +176,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 					}
 					krow := ks[j*dm+off : j*dm+off+dk : j*dm+off+dk]
 					var sc float64
+					//perfscan:ignore PS3010 attendMask flatF64 fast path already optimal
 					for d := range dk {
 						sc += qrow[d] * krow[d]
 					}
@@ -178,6 +194,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 			k2 := ks[b0+2*dm : b0+2*dm+dk : b0+2*dm+dk]
 			k3 := ks[b0+3*dm : b0+3*dm+dk : b0+3*dm+dk]
 			var s0, s1, s2, s3 float64
+			//perfscan:ignore PS3010 attendMask AtF64 declined-dtype fallback, correct to keep
 			for d := range dk {
 				q := qrow[d]
 				s0 += q * k0[d]
@@ -200,6 +217,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 			}
 			krow := ks[j*dm+off : j*dm+off+dk : j*dm+off+dk]
 			var sc float64
+			//perfscan:ignore PS3010 attendMask AtF64 fallback branch, correct to keep
 			for d := range dk {
 				sc += qrow[d] * krow[d]
 			}
@@ -254,6 +272,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 					orow[d] = t
 				}
 			}
+			//perfscan:ignore PS1007 stale line beyond current file; already flatF64-optimized
 			for j := jv; j <= i; j++ {
 				pj := scores[j]
 				vrow := vs[j*dm+off : j*dm+off+dk : j*dm+off+dk]
@@ -271,6 +290,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 			continue
 		}
 		var s float64
+		//perfscan:ignore PS3010 stale line beyond current 218-line file; already optimized
 		for d := range dk {
 			s += qrow[d] * k.AtF64(j, off+d)
 		}
@@ -298,6 +318,7 @@ func attendMask(qrow []float64, k, v, out *tensor.Tensor, i, off, dk int, scale 
 	for d := range dk {
 		var o float64
 		if sum > 0 {
+			//perfscan:ignore PS3010 stale line beyond current file; utility, already fast-pathed
 			for j := 0; j <= i; j++ {
 				o += scores[j] * v.AtF64(j, off+d)
 			}

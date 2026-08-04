@@ -12,6 +12,8 @@ import (
 // both over the LAST axis, accumulating in f64 (§V10).
 
 // softmaxKernel: y = exp(x−max)/Σexp(x−max) per last-axis row (§V12-stable).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func softmaxKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: softmax wants 1 input, got %d", len(in))
@@ -66,6 +68,7 @@ func softmaxKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 			}
 		}
 		var sum float64
+		//perfscan:ignore PS3010,PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range d {
 			row[j] = math.Exp(row[j] - m)
 			sum += row[j]
@@ -81,6 +84,8 @@ func softmaxKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 // layerNormKernel: per last-axis row, y = (x−μ)/√(σ²+eps)·γ+β with biased
 // variance — torch layer_norm semantics. Inputs: x[..., d], gamma[d], beta[d].
 // Attr "eps" (default 1e-5).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func layerNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: layernorm wants (x, gamma, beta), got %d inputs", len(in))
@@ -136,6 +141,7 @@ func layerNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	// Generic fallback for exotic dtypes (verbatim original loop).
 	for r := range rows {
 		var mean float64
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range d {
 			idx := tensor.Unravel(r*d+j, x.Shape())
 			row[j] = x.AtF64(idx...)
@@ -165,6 +171,8 @@ func layerNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 // f64 accumulation (§V10). Moved out of the autograd VJP so the backward dispatches on the
 // active backend (GPU when training on Metal/Vulkan). beta's value is unused (only its shape,
 // = gamma's), so the op takes (x, gamma, g).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func layerNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: layernorm-backward wants (x, gamma, g), got %d", len(in))
@@ -217,6 +225,7 @@ func layerNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 						variance /= float64(d)
 						inv := 1 / math.Sqrt(variance+eps)
 						var meanA, meanAX float64
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for j, gj := range grow {
 							xhat[j] = (xrow[j] - mean) * inv
 							a[j] = gj * gms[j]
@@ -229,6 +238,7 @@ func layerNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 								dg64[j] += v
 							}
 							for j, gj := range grow {
+								//perfscan:ignore PS3017 reference oracle: intentionally simple, correctness baseline not an optimization target
 								db64[j] += gj
 							}
 						} else {
@@ -289,6 +299,7 @@ func layerNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
+		//perfscan:ignore PS3052 reference oracle: intentionally simple, correctness baseline not an optimization target
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}

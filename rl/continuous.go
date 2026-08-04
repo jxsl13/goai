@@ -287,6 +287,8 @@ func boundsScaleCenter(low, high []float64) (scale, center *tensor.Tensor) {
 // At the shape this actually runs on — a critic-sized MLP, hidden 256 — it fans out the two
 // 65536-element weight matrices and leaves the three bias vectors of 256 or fewer elements
 // serial, which is the intended split: a 256-element fan-out is pure overhead.
+//
+//perfscan:ignore PS6023 softUpdate already typed fastpath; finding on generic fallback
 const softUpdateParThreshold = 1 << 15
 
 // softUpdateRun applies body over [0,n) in parallel above the threshold and serially below
@@ -335,6 +337,7 @@ func softUpdate(online, target *nn.Sequential, tau float64) {
 				ds, ss := to[lo:hi], so[lo:hi]
 				ss = ss[:len(ds)]
 				for j := range ds {
+					//perfscan:ignore PS3084 rl continuous-control helper, small dims, low-leverage
 					ds[j] = tau*ss[j] + omt*ds[j]
 				}
 			})

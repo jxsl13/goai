@@ -63,6 +63,7 @@ func MambaFromHF(ts map[string]*tensor.Tensor, cfg MambaConfig) (*Mamba, error) 
 	cfg.Layers = layers
 
 	m := &Mamba{Config: cfg, Embed: cloneF64(emb)} // [vocab,d_model], no transpose
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("backbone.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

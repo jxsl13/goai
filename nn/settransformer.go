@@ -78,6 +78,7 @@ func mhaHeads(ctx *backend.Context, q, k, v *tensor.Tensor, heads int) (*tensor.
 		return o[0], nil
 	}
 	slice := func(t *tensor.Tensor, h int) (*tensor.Tensor, error) {
+		//perfscan:ignore PS6018 per-head slice closure, matmul-dominated attention
 		return ex(backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * dk, End: (h + 1) * dk}, t)
 	}
 	outs := make([]*tensor.Tensor, heads)
@@ -235,6 +236,7 @@ func (m *MAB) Forward(ctx *backend.Context, x, y *tensor.Tensor) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 residual OpAdd dispatch, matmul-dominated block
 	h0, err := m.exec(ctx, backend.OpAdd, nil, x, proj) // residual on the query set
 	if err != nil {
 		return nil, err
@@ -248,6 +250,7 @@ func (m *MAB) Forward(ctx *backend.Context, x, y *tensor.Tensor) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpReLU single dispatch, matmul-dominated block
 	r, err := m.exec(ctx, backend.OpReLU, nil, f1)
 	if err != nil {
 		return nil, err
@@ -256,6 +259,7 @@ func (m *MAB) Forward(ctx *backend.Context, x, y *tensor.Tensor) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 residual OpAdd dispatch, matmul-dominated block
 	h1, err := m.exec(ctx, backend.OpAdd, nil, h, f2)
 	if err != nil {
 		return nil, err

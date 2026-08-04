@@ -27,6 +27,7 @@ func einsumKernel(_ *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpEinsum, tensor.F32, einsumKernel)
 	std.add(backend.OpEinsum, tensor.F64, einsumKernel)
 }

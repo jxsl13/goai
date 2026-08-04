@@ -74,7 +74,9 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		os := out.Storage().F32()
 		kdm := kvHeads * dk
 		parallelWork(heads*sq, sk*dk, func(lo, hi int) {
+			//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 			row := make([]float64, sk)
+			//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 			obuf := make([]float64, dk)
 			for idx := lo; idx < hi; idx++ {
 				h := idx / sq
@@ -99,6 +101,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				// accumulator, and the mask add, the scale and the running maximum are applied to
 				// the keys in ascending j exactly as the one-at-a-time form does.
 				j := 0
+				//perfscan:ignore PS3066 already 8-key-jammed score fastpath plus remainder
 				for ; j+7 < sk; j += 8 {
 					m0, m1 := float64(mrow[j+0]), float64(mrow[j+1])
 					m2, m3 := float64(mrow[j+2]), float64(mrow[j+3])
@@ -117,6 +120,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 						// mask whose live region is not a prefix: it sent a whole row to the
 						// scalar loop after one mixed group, and cost 2 to 3% on the general-mask
 						// cell while the block-masked one gained 30%.
+						//perfscan:ignore PS3053 rare mixed-mask-group in-place handler; boundary case
 						for o := range 8 {
 							mv := float64(mrow[j+o])
 							if math.IsInf(mv, -1) {
@@ -125,6 +129,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 							}
 							kr := ks[(j+o)*kdm+kvOff : (j+o)*kdm+kvOff+dk]
 							var sv float64
+							//perfscan:ignore PS3010 dk-dot in rare mixed-mask-group handler; boundary
 							for d, qv := range qrow {
 								sv += float64(qv) * float64(kr[d])
 							}
@@ -172,6 +177,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 					}
 					krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
 					var s float64
+					//perfscan:ignore PS3010 <8 remainder of 8-key-jammed score loop
 					for d, qv := range qrow {
 						s += float64(qv) * float64(krow[d])
 					}
@@ -220,7 +226,9 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	kdm := kvHeads * dk
 
 	parallelWork(heads*sq, sk*dk, func(lo, hi int) {
+		//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 		row := make([]float64, sk)
+		//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 		obuf := make([]float64, dk)
 		for idx := lo; idx < hi; idx++ {
 			h := idx / sq
@@ -241,6 +249,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				}
 				krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
 				var s float64
+				//perfscan:ignore PS3010 F64 masked score kept sequential-dot for bit-exact ref parity
 				for d, qv := range qrow {
 					s += qv * krow[d]
 				}
@@ -285,6 +294,7 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func mhaWeightedSum[T float32 | float64](obuf, row []float64, vs []T, sum float64,
 	sk, kdm, kvOff, dk int) {
 	j := 0
+	//perfscan:ignore PS3066,PS5001 already 4-key-jammed weighted-sum fastpath plus remainder | division kept for bit-exact ref parity (shared F64
 	for ; j+3 < sk; j += 4 {
 		w0, w1 := row[j]/sum, row[j+1]/sum
 		w2, w3 := row[j+2]/sum, row[j+3]/sum
@@ -303,10 +313,12 @@ func mhaWeightedSum[T float32 | float64](obuf, row []float64, vs []T, sum float6
 			obuf[d] = t
 		}
 	}
+	//perfscan:ignore PS5001 <4 remainder; division kept for F64 bit-exact parity
 	for ; j < sk; j++ {
 		w := row[j] / sum
 		vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk : j*kdm+kvOff+dk]
 		for d, vv := range vrow {
+			//perfscan:ignore PS3017 <4 remainder; bounds-check micro-note, negligible
 			obuf[d] += w * float64(vv)
 		}
 	}

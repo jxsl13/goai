@@ -140,6 +140,7 @@ func distillParallelRows[S any](b, workPerRow int, newScratch func() S, body fun
 // into out (len(out) == len(zrow)). Same passes as softmaxRowT on a typed slice.
 func softmaxRowTInto(out, zrow []float64, temp float64) {
 	m := math.Inf(-1)
+	//perfscan:ignore PS5001 divide by temp; bit-identity required, memory-bound softmax
 	for j := range zrow {
 		if v := zrow[j] / temp; v > m {
 			m = v
@@ -157,6 +158,8 @@ func softmaxRowTInto(out, zrow []float64, temp float64) {
 }
 
 // softmaxRowT returns the stable softmax of row i of z scaled by 1/temp.
+//
+//perfscan:ignore PS3033 softmaxRowT alloc on declined-dtype fallback; fast path hoists
 func softmaxRowT(z *tensor.Tensor, i, c int, temp float64) []float64 {
 	m := math.Inf(-1)
 	for j := range c {
@@ -166,6 +169,7 @@ func softmaxRowT(z *tensor.Tensor, i, c int, temp float64) []float64 {
 	}
 	out := make([]float64, c)
 	var sum float64
+	//perfscan:ignore PS3066 false-positive: softmax max/exp/sum passes have data dependency
 	for j := range c {
 		e := math.Exp(z.AtF64(i, j)/temp - m)
 		out[j] = e

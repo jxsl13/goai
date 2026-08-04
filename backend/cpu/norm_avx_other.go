@@ -38,11 +38,13 @@ func sumF32(x []float32) float64 {
 	var s0, s1, s2, s3 float64
 	i := 0
 	for ; i+3 < len(x); i += 4 {
+		//perfscan:ignore PS3019 non-amd64-SIMD fallback (dead on amd64 build); already 4-way unrolled
 		s0 += float64(x[i])
 		s1 += float64(x[i+1])
 		s2 += float64(x[i+2])
 		s3 += float64(x[i+3])
 	}
+	//perfscan:ignore PS3010 scalar remainder tail of already-4-way sum; amd64 uses vectorized norm
 	for ; i < len(x); i++ {
 		s0 += float64(x[i])
 	}
@@ -54,6 +56,7 @@ func sumSqF32(x []float32) float64 {
 	var s0, s1, s2, s3 float64
 	i := 0
 	for ; i+3 < len(x); i += 4 {
+		//perfscan:ignore PS3019 non-amd64-SIMD fallback; already 4-way unrolled f64
 		v0, v1, v2, v3 := float64(x[i]), float64(x[i+1]), float64(x[i+2]), float64(x[i+3])
 		s0 += v0 * v0
 		s1 += v1 * v1
@@ -72,6 +75,7 @@ func varSumF32(x []float32, mu float64) float64 {
 	var s0, s1, s2, s3 float64
 	i := 0
 	for ; i+3 < len(x); i += 4 {
+		//perfscan:ignore PS3019 non-amd64-SIMD fallback; already 4-way unrolled f64
 		d0 := float64(x[i]) - mu
 		d1 := float64(x[i+1]) - mu
 		d2 := float64(x[i+2]) - mu

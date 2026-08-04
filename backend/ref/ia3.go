@@ -13,6 +13,8 @@ import (
 // the atomic (IA)³ operation — applied to attention keys (l_k), values (l_v) and
 // the feed-forward hidden activations (l_ff). x may be any rank ≥ 1 whose last
 // dimension equals len(l); rows = numel/d are scaled identically.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ia3Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: ia3 wants (x, l), got %d inputs", len(in))

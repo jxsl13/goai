@@ -47,8 +47,11 @@ func SelfExtendRelPos(q, k, window, group int) int {
 func SelfExtendPositions(seqLen, window, group int) [][]int {
 	m := make([][]int, seqLen)
 	for q := range seqLen {
+		//perfscan:ignore PS2008,PS3064 resource-only alloc, analysis-scale position-matrix helper | resource-only alloc, analysis-scale helper not in
 		m[q] = make([]int, seqLen)
+		//perfscan:ignore PS4006 resource-only, analysis helper, not hot path
 		for k := 0; k <= q; k++ {
+			//perfscan:ignore PS3016 analysis-scale position build, not the attention path
 			m[q][k] = SelfExtendRelPos(q, k, window, group)
 		}
 	}
@@ -59,6 +62,8 @@ func SelfExtendPositions(seqLen, window, group int) [][]int {
 // kernel's exact half-split convention and RoPEFreqs frequencies) — Self-Extend's
 // grouped source needs positions ⌊p/G⌋(+shift), which are not affine in p and so
 // cannot be expressed with OpRoPE's PosOffset.
+//
+//perfscan:ignore PS6004 PS6004 is test-coverage class, not a throughput win
 func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tensor {
 	seq, width := x.Shape()[0], x.Shape()[1]
 	hd := width / heads
@@ -76,6 +81,7 @@ func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tens
 		for p := 0; p < seq; p++ {
 			n := float64(pos[p]) / posDiv
 			for i := 0; i < half; i++ {
+				//perfscan:ignore PS5008 already math.Sincos; self-extend RoPE known-flat/analysis
 				cosA[i], sinA[i] = math.Cos(n*inv[i]), math.Sin(n*inv[i])
 			}
 			prow := p * width
@@ -93,6 +99,7 @@ func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tens
 		for p := 0; p < seq; p++ {
 			n := float64(pos[p]) / posDiv
 			for i := 0; i < half; i++ {
+				//perfscan:ignore PS5008 already math.Sincos; self-extend RoPE known-flat/analysis
 				cosA[i], sinA[i] = math.Cos(n*inv[i]), math.Sin(n*inv[i])
 			}
 			prow := p * width
@@ -111,6 +118,7 @@ func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tens
 			for h := 0; h < heads; h++ {
 				b := h * hd
 				for i := 0; i < half; i++ {
+					//perfscan:ignore PS5005,PS5008 default-dtype fallback arm (F32/F64 already hoist), analysis-scale | already math.Sincos in default fallback a
 					c, s := math.Cos(n*inv[i]), math.Sin(n*inv[i])
 					lo, hi := xc.AtF64(p, b+i), xc.AtF64(p, b+i+half)
 					out.SetF64(lo*c-hi*s, p, b+i)
@@ -129,6 +137,7 @@ func hostRoPE(x *tensor.Tensor, pos []int, heads int, base float64) *tensor.Tens
 func selfExtendPos(seq, window, group int) (qpos, kpos []int) {
 	qpos, kpos = make([]int, seq), make([]int, seq)
 	shift := window - window/group
+	//perfscan:ignore PS5001 integer div, tiny O(seq) one-time position build
 	for p := range seq {
 		qpos[p] = p/group + shift
 		kpos[p] = p / group
@@ -210,6 +219,7 @@ func (m *Llama) SelfExtendForward(ctx *backend.Context, tokens []int, window, gr
 	sel := tensor.New(tensor.F64, tensor.Shape{seq, seq})
 	neg := math.Inf(-1)
 	for i := range seq {
+		//perfscan:ignore PS1005 one-time seq² selector fill, multi-layer-attention-dominated, analysis-scale
 		for j := range seq {
 			switch {
 			case j > i:

@@ -49,6 +49,7 @@ func NewResidentBQ4(b *tensor.Tensor) (*ResidentBQ4, error) {
 			k0 := blk * qBlock
 			mn, mx := float32(math.MaxFloat32), float32(-math.MaxFloat32)
 			for kk := k0; kk < k0+qBlock; kk++ {
+				//perfscan:ignore PS6011 load-time Q4 weight quantization (NewResidentBQ4)
 				v := bf[kk*n+col]
 				if v < mn {
 					mn = v
@@ -65,6 +66,7 @@ func NewResidentBQ4(b *tensor.Tensor) (*ResidentBQ4, error) {
 				inv = 1 / s
 			}
 			for kk := k0; kk < k0+qBlock; kk++ {
+				//perfscan:ignore PS6011 load-time Q4 weight quantization (NewResidentBQ4)
 				nib := int32(math.Round(float64((bf[kk*n+col] - mn) * inv)))
 				if nib < 0 {
 					nib = 0

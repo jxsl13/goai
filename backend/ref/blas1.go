@@ -25,6 +25,8 @@ func sameShapeDtype(a, b *tensor.Tensor) error {
 }
 
 // dotKernel computes the full inner product sum(a_i*b_i) over all elements.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func dotKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: dot wants 2 inputs, got %d", len(in))
@@ -43,12 +45,14 @@ func dotKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	case tensor.F64:
 		as := a.Contiguous().Storage().F64()[:n]
 		bs := b.Contiguous().Storage().F64()[:n]
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i, av := range as {
 			acc += av * bs[i]
 		}
 	case tensor.F32:
 		as := a.Contiguous().Storage().F32()[:n]
 		bs := b.Contiguous().Storage().F32()[:n]
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i, av := range as {
 			acc += float64(av) * float64(bs[i])
 		}
@@ -65,6 +69,8 @@ func dotKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 }
 
 // nrm2Kernel computes the Euclidean norm via the scaled LAPACK dnrm2 algorithm.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func nrm2Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: nrm2 wants 1 input, got %d", len(in))
@@ -154,6 +160,7 @@ func axpyKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
+		//perfscan:ignore PS3052 reference oracle: intentionally simple, correctness baseline not an optimization target
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}

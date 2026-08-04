@@ -133,6 +133,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic exec1, resource-only 1-alloc no wallclock
 		h, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -140,6 +141,7 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if h, err = quantProjBias(ctx, h, l.wo, l.bo); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic exec1, resource-only 1-alloc no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
@@ -150,12 +152,14 @@ func (b *QuantBert) Forward(ctx *backend.Context, tokens, segments []int) (*tens
 		if h, err = quantProjBias(ctx, x, l.w1, l.b1); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic exec1, resource-only 1-alloc no wallclock
 		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
 		if h, err = quantProjBias(ctx, h, l.w2, l.b2); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic exec1, resource-only 1-alloc no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}

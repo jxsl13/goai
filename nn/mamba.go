@@ -88,10 +88,12 @@ func (m *MambaBlock) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 		return nil, err
 	}
 	// causal depthwise conv + SiLU
+	//perfscan:ignore PS3024 OpConv1D graph dispatch, full backend kernel, autograd-recorded
 	xc, err := m.exec(ctx, backend.OpConv1D, nil, xin, m.ConvW, m.ConvB)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSiLU graph dispatch, full backend kernel
 	if xc, err = m.exec(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
@@ -104,6 +106,7 @@ func (m *MambaBlock) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSoftplus graph dispatch, full backend kernel
 	delta, err := m.exec(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
@@ -117,24 +120,29 @@ func (m *MambaBlock) Forward(ctx *backend.Context, u *tensor.Tensor) (*tensor.Te
 		return nil, err
 	}
 	// A = −exp(A_log)
+	//perfscan:ignore PS3024 OpExp graph dispatch, full backend kernel
 	expA, err := m.exec(ctx, backend.OpExp, nil, m.ALog)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpNeg graph dispatch, full backend kernel
 	A, err := m.exec(ctx, backend.OpNeg, nil, expA)
 	if err != nil {
 		return nil, err
 	}
 	// selective scan
+	//perfscan:ignore PS3024 OpSSM graph dispatch, full backend kernel
 	y, err := m.exec(ctx, backend.OpSSM, nil, xc, delta, A, bMat, cMat, m.Dskip)
 	if err != nil {
 		return nil, err
 	}
 	// gate y ⊙ SiLU(z), then down-project
+	//perfscan:ignore PS3024 OpSiLU graph dispatch, full backend kernel
 	gate, err := m.exec(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpMul graph dispatch, full backend kernel
 	if y, err = m.exec(ctx, backend.OpMul, nil, y, gate); err != nil {
 		return nil, err
 	}

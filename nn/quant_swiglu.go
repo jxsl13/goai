@@ -22,6 +22,7 @@ func (s *QuantSwiGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 quant-matmul-dominated FFN; SiLU dispatch not loop
 	act, err := backend.Execute(ctx, backend.OpSiLU, []*tensor.Tensor{gate}, nil)
 	if err != nil {
 		return nil, err
@@ -30,6 +31,7 @@ func (s *QuantSwiGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 quant-matmul-dominated FFN; Mul dispatch not loop
 	h, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{act[0], up}, nil)
 	if err != nil {
 		return nil, err

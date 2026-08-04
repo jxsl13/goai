@@ -75,6 +75,7 @@ func LoadGPT2(path string) (*Tokenizer, error) {
 		return nil, err
 	}
 	defer f.Close()
+	//perfscan:ignore PS3029 LoadGPT2 file-load cold path
 	return readTiktoken(f)
 }
 
@@ -124,6 +125,7 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 		parts = make([]bpePart, len(piece)+1)
 	}
 	minRank, minI := math.MaxInt, -1
+	//perfscan:ignore PS3068 already zero-alloc merge, per-word piece len small
 	for i := 0; i < len(piece)-1; i++ {
 		r, id := math.MaxInt, 0
 		if t.pairRank != nil {
@@ -172,6 +174,7 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 		parts = append(parts[:i+1], parts[i+2:]...) // drop the merged-away boundary
 		// rescan for the new leftmost-min pair (exclude the trailing sentinel).
 		minRank, minI = math.MaxInt, -1
+		//perfscan:ignore PS3068 rescan over small per-word piece, optimized tiktoken algo
 		for j := 0; j < len(parts)-1; j++ {
 			if parts[j].rank < minRank {
 				minRank, minI = parts[j].rank, j

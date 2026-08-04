@@ -164,6 +164,7 @@ func (m *StableLM) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 residual OpAdd single backend op, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -175,6 +176,7 @@ func (m *StableLM) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 residual OpAdd single backend op, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

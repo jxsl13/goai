@@ -25,6 +25,8 @@ import (
 // ε from attrs["epsilon"] (default 0.2), β from attrs["beta"] (default 0.04).
 // logπ_old, logπ_ref and Â are rollout-time constants, so gradients flow only
 // into logπθ (the k3 term keeps π_θ near π_ref). Accumulation in f64 (§V10).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: grpo wants (logpNew, logpOld, logpRef, advantage), got %d inputs", len(in))
@@ -92,6 +94,7 @@ func grpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpGRPO, tensor.F32, grpoKernel)
 	std.add(backend.OpGRPO, tensor.F64, grpoKernel)
 }

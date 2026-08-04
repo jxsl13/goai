@@ -77,15 +77,18 @@ func (m *Nemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, token,
 		}
 		// Partial split-half RoPE the single token at its absolute position, then append
 		// k,v to the cache.
+		//perfscan:ignore PS6016 RoPEAttrs literal, resource-only alloc dwarfed by kernel
 		if q, err = partialRoPE(ctx, q, cfg.Heads, rot, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 RoPEAttrs literal, resource-only alloc
 		if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 AttnAttrs literal, resource-only alloc | variadic exec1 OpMHA, resource-only 1-alloc <1% ceiling
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err

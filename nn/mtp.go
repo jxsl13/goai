@@ -50,22 +50,27 @@ func MultiTokenLoss(ctx *backend.Context, heads []*tensor.Tensor, targets *tenso
 	}
 
 	var total *tensor.Tensor
+	//perfscan:ignore PS4011 per-head architectural fan-out; CrossEntropy matmul dominates dispatch
 	for i, h := range heads {
 		shift := i + 1
+		//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 		logits, err := exec(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: 0, End: seq - shift}, h)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 		tgt, err := exec(backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: shift, End: seq}, targets)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 		ce, err := exec(backend.OpCrossEntropy, nil, logits, tgt)
 		if err != nil {
 			return nil, err
 		}
 		if total == nil {
 			total = ce
+			//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 		} else if total, err = exec(backend.OpAdd, nil, total, ce); err != nil {
 			return nil, err
 		}

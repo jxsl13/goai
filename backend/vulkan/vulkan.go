@@ -2261,12 +2261,14 @@ func mhaBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Att
 		if rc == 0 {
 			rep := heads / kvHeads
 			dks, dvs := dK.Storage().F32(), dV.Storage().F32()
+			//perfscan:ignore PS5001 integer div in outer head loop, only heads iterations
 			for h := 0; h < heads; h++ {
 				hh := h / rep
 				for i := 0; i < seq; i++ {
 					src := (h*seq + i) * dk
 					dst := i*dkv + hh*dk
 					for d := 0; d < dk; d++ {
+						//perfscan:ignore PS3075 memory-bound GQA grad reduction, tail of GPU kernel
 						dks[dst+d] += dKt[src+d]
 						dvs[dst+d] += dVt[src+d]
 					}

@@ -243,6 +243,7 @@ func (m *QuantMamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3060 per-layer forward driver loop, matmul-bound layers
 	for i := range m.Layers {
 		n, err := m.Layers[i].Norm.Forward(ctx, h)
 		if err != nil {
@@ -252,6 +253,7 @@ func (m *QuantMamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 single OpAdd dispatch, not a loop kernel
 		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
@@ -331,10 +333,13 @@ func (b *QuantMambaMixer) forward(ctx *backend.Context, u *tensor.Tensor) (*tens
 // re-exponentiation.
 func (m *QuantMamba) NewDecodeState() *MambaDecodeState {
 	st := &MambaDecodeState{Layers: make([]MambaLayerState, len(m.Layers))}
+	//perfscan:ignore PS3059 one-time NewDecodeState init, cold path
 	for l := range m.Layers {
 		mb := m.Layers[l].Mixer
 		a := make([]float64, mb.DInner*mb.N)
+		//perfscan:ignore PS3067 one-time state-init A copy, cold path
 		for d := range mb.DInner {
+			//perfscan:ignore PS1005 one-time AtF64 A-copy at state init, cold
 			for n := range mb.N {
 				a[d*mb.N+n] = mb.A.AtF64(d, n)
 			}
@@ -372,11 +377,13 @@ func (b *QuantMambaMixer) step(ctx *backend.Context, ls *MambaLayerState, u *ten
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3012 single rows2D extraction, trivial
 	xrow := rows2D(xin)[0]
 
 	// Causal depthwise conv over the sliding window; keep only the last row.
 	win := tensor.New(xin.Dtype(), tensor.Shape{K, D})
 	for r := range K - 1 {
+		//perfscan:ignore PS1005 window build K*D SetF64 <<projection GEMVs per token
 		for c := range D {
 			win.SetF64(ls.ConvBuf[r*D+c], r, c)
 		}
@@ -421,9 +428,13 @@ func (b *QuantMambaMixer) step(ctx *backend.Context, ls *MambaLayerState, u *ten
 	}
 
 	// One step of the S6 recurrence, replaying the OpSSM kernel loop.
+	//perfscan:ignore PS3012 single-row rows2D extraction, trivial
 	uu := rows2D(xc)[0]
+	//perfscan:ignore PS3012 single-row rows2D extraction, trivial
 	dd := rows2D(delta)[0]
+	//perfscan:ignore PS3012 single-row rows2D extraction, trivial
 	bb := rows2D(bRow)[0]
+	//perfscan:ignore PS3012 single-row rows2D extraction, trivial
 	cc := rows2D(cRow)[0]
 	y := tensor.New(xc.Dtype(), tensor.Shape{1, D})
 	for d := range D {
@@ -477,6 +488,7 @@ func (m *QuantMamba) DecodeStep(ctx *backend.Context, st *MambaDecodeState, toke
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 single OpAdd dispatch in layer loop, not a kernel
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}

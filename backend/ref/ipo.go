@@ -19,6 +19,8 @@ import (
 // attrs["beta"], default 0.1), unlike DPO's logistic −log σ — so it regularizes
 // to a bounded margin instead of pushing it to infinity (§R58). Accumulation in
 // f64 (§V10). Output scalar.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ipoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: ipo wants (policyChosen, policyRejected, refChosen, refRejected), got %d inputs", len(in))
@@ -71,6 +73,7 @@ func ipoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpIPO, tensor.F32, ipoKernel)
 	std.add(backend.OpIPO, tensor.F64, ipoKernel)
 }

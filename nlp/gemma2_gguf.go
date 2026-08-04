@@ -24,7 +24,8 @@ const (
 const (
 	gemma2DefaultAttnCap  = 50.0
 	gemma2DefaultFinalCap = 30.0
-	gemma2DefaultSWA      = 4096
+	//perfscan:ignore PS6023 test-coverage request for gemma2DefaultSWA; not a code/perf change
+	gemma2DefaultSWA = 4096
 )
 
 // Gemma2FromGGUF builds a [Gemma2] from the metadata and (dequantized) tensor maps of
@@ -110,6 +111,7 @@ func Gemma2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Ge
 
 	// Embedding stored unscaled — the √dim normalizer is Gemma2.Forward's job.
 	m := &Gemma2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load transpose (gemma2 FromGGUF); one-time cold
 	for l := range layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -129,7 +131,9 @@ func Gemma2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Ge
 		names := []string{"attn_norm.weight", "attn_q.weight", "attn_k.weight", "attn_v.weight",
 			"attn_output.weight", "post_attention_norm.weight", "ffn_norm.weight",
 			"ffn_gate.weight", "ffn_up.weight", "ffn_down.weight", "post_ffw_norm.weight"}
+		//perfscan:ignore PS3035 resource-only per-loop alloc in load path; time win nil
 		w := make([]*tensor.Tensor, len(names))
+		//perfscan:ignore PS3066 load-path sibling loops; cold one-time
 		for i, n := range names {
 			if w[i], err = g(n); err != nil {
 				return nil, err
@@ -305,6 +309,7 @@ func Gemma2ToGGUF(m *Gemma2) (map[string]any, map[string]*tensor.Tensor) {
 		"token_embd.weight":  cloneF64(m.TokEmb),
 		"output_norm.weight": cloneF64(m.FinalNorm.Gamma), // pre-folded (+1) on disk, as stored
 	}
+	//perfscan:ignore PS3060 ToGGUF export transpose; one-time cold
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.InputNorm.Gamma)

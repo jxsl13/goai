@@ -84,6 +84,8 @@ type specialFrag struct {
 
 // add registers marker texts, ignoring empty ones, then re-sorts the buckets so matching
 // stays deterministic regardless of insertion order.
+//
+//perfscan:ignore PS3058 tokenizer add() one-time registration; resource-only
 func (s *specialSet) add(specials map[string]int) {
 	if s.byText == nil {
 		s.byText = make(map[string]int, len(specials))
@@ -96,12 +98,15 @@ func (s *specialSet) add(specials map[string]int) {
 	}
 	s.byFirst = make(map[byte][]string, len(s.byText))
 	s.byID = make(map[int]string, len(s.byText))
+	//perfscan:ignore PS3003 one-time tokenizer registration loop; cold path
 	for text := range s.byText {
 		s.byFirst[text[0]] = append(s.byFirst[text[0]], text)
 		s.byID[s.byText[text]] = text
 	}
+	//perfscan:ignore PS3003 one-time tokenizer registration loop; cold path
 	for b := range s.byFirst {
 		bucket := s.byFirst[b]
+		//perfscan:ignore PS3002,PS6009 sort in one-time tokenizer registration; tiny buckets | reflect-swapper sort in cold registration; tiny bucket
 		sort.Slice(bucket, func(i, j int) bool {
 			if len(bucket[i]) != len(bucket[j]) {
 				return len(bucket[i]) > len(bucket[j]) // longest match wins
@@ -153,6 +158,7 @@ func (s *specialSet) split(text string) []specialFrag {
 	last := 0
 	for i := 0; i < len(text); {
 		matched := ""
+		//perfscan:ignore PS3003 encode-time map[byte] read; tokenizer, not model compute
 		for _, c := range s.byFirst[text[i]] {
 			if len(c) <= len(text)-i && text[i:i+len(c)] == c {
 				matched = c

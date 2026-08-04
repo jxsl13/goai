@@ -55,6 +55,7 @@ func MaxAttentionLogits(q, k *tensor.Tensor, heads int, scale float64, causal bo
 							s3 += qrow[d+3] * krow[d+3]
 						}
 						s := s0 + s1 + s2 + s3
+						//perfscan:ignore PS3010 host probe util + already flatF64 fastpath (AtF64 fallback)
 						for ; d < dk; d++ {
 							s += qrow[d] * krow[d]
 						}
@@ -128,6 +129,7 @@ func QKClip(wq, wk *tensor.Tensor, heads int, maxLogits []float64, tau float64) 
 		for _, w := range []*tensor.Tensor{wq, wk} {
 			rows := w.Shape()[0]
 			for r := range rows {
+				//perfscan:ignore PS1001 rare per-step corrective rescale, clipped heads only
 				for c := h * dk; c < (h+1)*dk; c++ {
 					w.SetF64(w.AtF64(r, c)*gamma, r, c)
 				}

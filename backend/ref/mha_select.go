@@ -19,6 +19,8 @@ import (
 // heads/GQA/scale follow AttnAttrs; causal/window/ALiBi are NOT applied (the
 // selector expresses the structure). A fully-excluded row outputs zeros.
 // Inference-only: no VJP is registered.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 6 {
 		return nil, fmt.Errorf("ref: mha_select wants (Q1,K1,Q2,K2,V,sel), got %d inputs", len(in))
@@ -76,6 +78,7 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				for i := range sq {
 					srow := sels[i*sk : i*sk+sk]
 					m := math.Inf(-1)
+					//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j, sv := range srow {
 						if math.IsInf(sv, -1) {
 							row[j] = math.Inf(-1)
@@ -86,6 +89,7 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 							qrow, krow = qs2[i*dm+qOff:i*dm+qOff+dk], ks2[j*kdm+kvOff:j*kdm+kvOff+dk]
 						}
 						var s float64
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for d, qv := range qrow {
 							s += qv * krow[d]
 						}
@@ -108,10 +112,12 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 						obuf[d] = 0
 					}
 					if sum > 0 {
+						//perfscan:ignore PS1007,PS3049 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for j := range sk {
 							w := row[j] / sum
 							vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
 							for d, vv := range vrow {
+								//perfscan:ignore PS3017,PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 								obuf[d] += w * vv
 							}
 						}
@@ -124,7 +130,9 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				// columns [h·dk,(h+1)·dk) and inputs are read-only, so heads run fully in
 				// parallel with per-worker scratch — byte-identical regardless of head order.
 				parallel.Rows(heads, func(hlo, hhi int) {
+					//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 					row := make([]float64, sk)
+					//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 					obuf := make([]float64, dk)
 					for h := hlo; h < hhi; h++ {
 						doHead(h, row, obuf)
@@ -179,6 +187,7 @@ func mhaSelectKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 			for d := range dk {
 				var o float64
 				if sum > 0 {
+					//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range sk {
 						o += (row[j] / sum) * v.AtF64(j, kvOff+d)
 					}

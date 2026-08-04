@@ -12,6 +12,8 @@ import (
 // (worker w handles idx = w, w+nw, …) so a triangular per-index load balances. work is the
 // total inner-iteration estimate; below a threshold it runs serially to avoid goroutine
 // overhead. Callers must ensure each i writes DISJOINT memory (see the Ā loop).
+//
+//perfscan:ignore PS3048,PS3061,PS6021 init/RegisterVJP signature; one-time registration | init closure signature; one-time registration | verificati
 func logdetParallelIdx(n, work int, body func(i int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
@@ -55,8 +57,10 @@ func init() {
 		// dense f64 copy of L (lower triangle)
 		l := make([][]float64, n)
 		for i := range n {
+			//perfscan:ignore PS2008,PS3064 resource-only alloc, no wallclock | abar-alloc indirection; subsumed by PS4006 flatten
 			l[i] = make([]float64, n)
 			for j := 0; j <= i; j++ {
+				//perfscan:ignore PS3016 same abar loop; subsumed by PS4006 flatten
 				l[i][j] = lt.AtF64(i, j)
 			}
 		}
@@ -75,6 +79,7 @@ func init() {
 		// is unchanged and bit-identical to serial.
 		linvT := make([][]float64, n)
 		for i := range n {
+			//perfscan:ignore PS2008,PS3064 resource-only alloc, no wallclock | indirection; subsumed by PS4006 flatten
 			linvT[i] = make([]float64, n)
 		}
 		logdetParallelIdx(n, n*n*n/6, func(j int) {
@@ -92,6 +97,7 @@ func init() {
 				cv := col[j:i]
 				cv = cv[:len(lrow)]
 				var s float64
+				//perfscan:ignore PS3010 range on linv loop; subsumed by PS4006 flatten
 				for t, lik := range lrow {
 					s += lik * cv[t]
 				}
@@ -112,6 +118,7 @@ func init() {
 			for j := i; j < n; j++ {
 				rj := linvT[j]
 				var s float64
+				//perfscan:ignore PS3010 same forward-sub loop; subsumed by PS4006 flatten
 				for k := j; k < n; k++ { // k ≥ max(i,j) = j
 					s += ri[k] * rj[k]
 				}

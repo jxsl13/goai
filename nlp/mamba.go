@@ -74,6 +74,7 @@ func (m *Mamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 alloc-only; OpAdd dispatch dominates variadic slice
 		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}

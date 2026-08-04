@@ -15,6 +15,8 @@ import (
 // models, not just read them. Encoding follows ggml-quants.c exactly: per 32-block,
 // Q8_0 uses d=amax/127 with roundf quants; Q4_0 uses the signed max, d=max/−8 and
 // nibble=min(15,⌊x/d+8.5⌋). Values already on the quantization grid round-trip exactly.
+//
+//perfscan:ignore PS6004 Quantize is one-time model-write path; resource-only
 func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 	n := t.Numel()
 	be := blockElems // 32 for Q8_0/Q4_0
@@ -154,11 +156,13 @@ func quantizeQ8_0(x []float32) []byte {
 func quantizeQ4_0(x []float32) []byte {
 	nb := len(x) / blockElems
 	out := make([]byte, nb*18)
+	//perfscan:ignore PS5007 1/d already per-block hoisted; cold write path
 	for b := range nb {
 		blk := x[b*blockElems : (b+1)*blockElems]
 		var max float32 // the element with the largest absolute value, sign kept
 		var amax float32
 		for _, v := range blk {
+			//perfscan:ignore PS3068 cold quantize write path, trip-count 16
 			if a := float32(math.Abs(float64(v))); a > amax {
 				amax, max = a, v
 			}

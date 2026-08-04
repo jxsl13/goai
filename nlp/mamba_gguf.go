@@ -405,6 +405,7 @@ func equalsTransposed(head, emb *tensor.Tensor) bool {
 	}
 	v, d := emb.Shape()[0], emb.Shape()[1]
 	for i := range v {
+		//perfscan:ignore PS1001 tied-head equality check at GGUF conversion, one-time load
 		for j := range d {
 			if emb.AtF64(i, j) != head.AtF64(j, i) {
 				return false

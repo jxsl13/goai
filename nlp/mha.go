@@ -119,6 +119,7 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 		return nil, err
 	}
 	parts := make([]*tensor.Tensor, batch)
+	//perfscan:ignore PS4011 per-batch attention dispatch, matmul-dominated false-positive
 	for b := range batch {
 		sl := func(t *tensor.Tensor) (*tensor.Tensor, error) {
 			return exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: (b + 1) * seq}, t)
@@ -137,8 +138,10 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 		}
 		var ab *tensor.Tensor
 		if m.Mask != nil { // §T508: mask expresses the structure; Causal is NOT also applied
+			//perfscan:ignore PS6016 per-batch slice closure alloc, attention-dominated
 			ab, err = exec4(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
 		} else {
+			//perfscan:ignore PS6016 per-batch slice closure alloc, attention-dominated
 			ab, err = exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, qb, kb, vb)
 		}
 		if err != nil {

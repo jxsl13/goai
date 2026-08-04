@@ -231,7 +231,9 @@ func newRewardBackbone(fname string, cfg RewardModelConfig, seed uint64) (*GPT, 
 		attn.Causal = true // reward models read solutions left-to-right, like their LM backbone
 		g.Blocks = append(g.Blocks, &Block{
 			LN1: ln(), LN2: ln(), Attn: attn,
+			//perfscan:ignore PS6016 reward-model construction/init, cold
 			W1: randn(s+4, cfg.Dim, 4*cfg.Dim), B1: tensor.New(tensor.F64, tensor.Shape{4 * cfg.Dim}),
+			//perfscan:ignore PS6016 reward-model construction/init, cold
 			W2: randn(s+5, 4*cfg.Dim, cfg.Dim), B2: tensor.New(tensor.F64, tensor.Shape{cfg.Dim}),
 		})
 	}
@@ -286,6 +288,7 @@ func rewardLogits(ctx *backend.Context, g *GPT, bias *tensor.Tensor, tokens, pos
 func rewardBCE(ctx *backend.Context, logits *tensor.Tensor, labels []float64) (*tensor.Tensor, error) {
 	pos := tensor.New(logits.Dtype(), logits.Shape()) // y
 	neg := tensor.New(logits.Dtype(), logits.Shape()) // 1−y
+	//perfscan:ignore PS1005 SetF64 over n scored positions, low trip-count
 	for k, y := range labels {
 		if y < 0 || y > 1 {
 			return nil, fmt.Errorf("nlp: reward label %d = %g outside [0,1]", k, y)

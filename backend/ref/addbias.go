@@ -93,9 +93,12 @@ func addBiasBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.
 	case tensor.F64:
 		gs := g.Contiguous().Storage().F64()
 		dbs := db.Storage().F64()
+		//perfscan:ignore PS1006 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range n {
 			var s float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for i := range m {
+				//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 				s += gs[i*n+j]
 			}
 			dbs[j] = s
@@ -104,9 +107,12 @@ func addBiasBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.
 	case tensor.F32:
 		gs := g.Contiguous().Storage().F32()
 		dbs := db.Storage().F32()
+		//perfscan:ignore PS1006 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range n {
 			var s float64 // column-sum accumulates in float64; only the store rounds
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for i := range m {
+				//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 				s += float64(gs[i*n+j])
 			}
 			dbs[j] = float32(s)

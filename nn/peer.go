@@ -216,6 +216,7 @@ func topKByPref(length, k int, pref func(a, b int) bool) []int {
 		for i := range all {
 			all[i] = i
 		}
+		//perfscan:ignore PS3002,PS6009 dimension-sized n sort; radix precond fails, win is partial-select | resource-only class, no wall-clock
 		sort.Slice(all, func(a, b int) bool { return pref(all[a], all[b]) })
 		return all[:k]
 	}
@@ -255,6 +256,7 @@ func topKByPref(length, k int, pref func(a, b int) bool) []int {
 			siftDown(0)
 		}
 	}
+	//perfscan:ignore PS3002,PS6009 cands sort over small pruned k'^2 set, low-trip | resource-only class, no wall-clock
 	sort.Slice(heap, func(a, b int) bool { return pref(heap[a], heap[b]) })
 	return heap
 }
@@ -324,14 +326,17 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 	tks := x.Shape()[0]
 	half := p.queryDim / 2
 
+	//perfscan:ignore PS3024 per-op dispatch count, size-invisible, autograd-tape-required
 	q, err := p.exec(ctx, backend.OpMatMul, nil, x, p.Wq) // [T, H·dk]
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 	k1t, err := p.exec(ctx, backend.OpTranspose, nil, p.K1) // [dk/2, n]
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 	k2t, err := p.exec(ctx, backend.OpTranspose, nil, p.K2) // [dk/2, n]
 	if err != nil {
 		return nil, nil, nil, err
@@ -340,36 +345,46 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 	indices = make([][]int, tks)
 	gateCols := make([]*tensor.Tensor, 0, p.heads) // per-head [T,k] gate blocks
 
+	//perfscan:ignore PS2004 per-call scratch alloc, resource-only, PEER non-incumbent
 	for h := range p.heads {
 		off := h * p.queryDim
+		//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 		qh, err := p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: off, End: off + p.queryDim}, q)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
 		q1, err := p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: half}, qh)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
 		q2, err := p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: half, End: p.queryDim}, qh)
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 		s1, err := p.exec(ctx, backend.OpMatMul, nil, q1, k1t) // [T, n]
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 		s2, err := p.exec(ctx, backend.OpMatMul, nil, q2, k2t) // [T, n]
 		if err != nil {
 			return nil, nil, nil, err
 		}
 
 		// Host-side product-key retrieval per token (discrete, non-differentiable).
+		//perfscan:ignore PS3035 host one-hot/index build, sparse 1/token write, low-trip
 		flatIdx := make([][]int, tks) // [T][k] flat expert indices
+		//perfscan:ignore PS3035 host one-hot/index build, sparse 1/token write, low-trip
 		sub1Idx := make([][]int, tks) // [T][k] first sub-key indices
+		//perfscan:ignore PS3035 host one-hot/index build, sparse 1/token write, low-trip
 		sub2Idx := make([][]int, tks) // [T][k] second sub-key indices
 		r1 := make([]float64, p.n)
 		r2 := make([]float64, p.n)
 		for t := range tks {
+			//perfscan:ignore PS1001 sparse 1/token host write or matmul-dominated readback; PEER non-incumbent
 			for i := range p.n {
 				r1[i] = s1.AtF64(t, i)
 				r2[i] = s2.AtF64(t, i)
@@ -386,8 +401,10 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 			// finite scores, and x+0 = x in IEEE), then adds the two halves. Gathering
 			// s1[t,i_c]+s2[t,j_c] directly is bit-identical yet O(topK·T) instead of
 			// O(topK·T·n) with no [T,n] one-hot allocations (n≈√N is large: PEER §V16.4a).
+			//perfscan:ignore PS6016 resource-only class, no wall-clock
 			scores = tensor.New(s1.Dtype(), tensor.Shape{tks, p.topK})
 			for t := range tks {
+				//perfscan:ignore PS1001 per-element on [T,1] tape op, gather/matmul-dominated
 				for c := range p.topK {
 					scores.SetF64(s1.AtF64(t, sub1Idx[t][c])+s2.AtF64(t, sub2Idx[t][c]), t, c)
 				}
@@ -399,26 +416,34 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 			for c := range p.topK {
 				oh1 := tensor.New(s1.Dtype(), s1.Shape())
 				oh2 := tensor.New(s2.Dtype(), s2.Shape())
+				//perfscan:ignore PS1001 per-element on [T,d] tape op, gather/matmul-dominated
 				for t := range tks {
+					//perfscan:ignore PS3016 elementwise broadcast Mul on autograd tape, gather-dominated
 					oh1.SetF64(1, t, sub1Idx[t][c])
+					//perfscan:ignore PS3016 elementwise broadcast Mul on autograd tape, gather-dominated
 					oh2.SetF64(1, t, sub2Idx[t][c])
 				}
+				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 				sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
 				if err != nil {
 					return nil, nil, nil, err
 				}
+				//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
 				sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
 				if err != nil {
 					return nil, nil, nil, err
 				}
+				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 				sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
 				if err != nil {
 					return nil, nil, nil, err
 				}
+				//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
 				sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
 				if err != nil {
 					return nil, nil, nil, err
 				}
+				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 				scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
 				if err != nil {
 					return nil, nil, nil, err
@@ -429,6 +454,7 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 				return nil, nil, nil, err
 			}
 		}
+		//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 		gh, err := p.exec(ctx, backend.OpSoftmax, nil, scores) // [T,k] softmax over the k selected
 		if err != nil {
 			return nil, nil, nil, err
@@ -437,38 +463,49 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 
 		// Expert MLP + gated combine, one retrieval slot at a time.
 		for c := range p.topK {
+			//perfscan:ignore PS6016 resource-only class, no wall-clock
 			fidx := tensor.New(tensor.F64, tensor.Shape{tks})
+			//perfscan:ignore PS1001 per-element on tape op, gather/matmul-dominated
 			for t := range tks {
+				//perfscan:ignore PS3016 elementwise broadcast Mul on autograd tape, gather-dominated
 				fidx.SetF64(float64(flatIdx[t][c]), t)
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			ug, err := p.exec(ctx, backend.OpEmbed, nil, p.U, fidx) // [T,d] gathered u_e
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			vg, err := p.exec(ctx, backend.OpEmbed, nil, p.V, fidx) // [T,d] gathered v_e
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			xu, err := p.exec(ctx, backend.OpMul, nil, x, ug) // [T,d] elementwise x⊙u_e
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
 			pre, err := p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, xu) // [T,1] u_eᵀx
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			act, err := p.exec(ctx, backend.OpGELU, nil, pre) // [T,1] GELU(u_eᵀx)
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			gcol, err := p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: c, End: c + 1}, gh) // [T,1]
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			coef, err := p.exec(ctx, backend.OpMul, nil, act, gcol) // [T,1] g_e·GELU(u_eᵀx)
 			if err != nil {
 				return nil, nil, nil, err
 			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 			contrib, err := p.exec(ctx, backend.OpMul, nil, vg, coef) // [T,d]·[T,1] broadcast
 			if err != nil {
 				return nil, nil, nil, err
@@ -476,6 +513,7 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 			if y == nil {
 				y = contrib
 			} else {
+				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
 				y, err = p.exec(ctx, backend.OpAdd, nil, y, contrib)
 				if err != nil {
 					return nil, nil, nil, err

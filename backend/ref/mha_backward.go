@@ -23,6 +23,8 @@ import (
 // Causal masking drops j>i (A there is 0), so no gradient flows to masked pairs.
 // ALiBi (§R60) and sliding-window (§R62) match the forward. f64 accumulation
 // (§V10). Training always has sq==sk (KV-cache decode is inference-only).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: mha-backward wants (Q,K,V,dO), got %d inputs", len(in))
@@ -107,6 +109,7 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 				}
 				s *= scale
 				if slopes != nil {
+					//perfscan:ignore PS3014 reference oracle: intentionally simple, correctness baseline not an optimization target
 					s += slopes[h] * float64(j-i) // ALiBi bias (sq==sk → abs pos = i)
 				}
 				a[j] = s
@@ -115,6 +118,7 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010,PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := jmin; j < jmax; j++ {
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
@@ -159,6 +163,7 @@ func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 	for h := 0; h < heads; h++ {
 		qOff := h * dk
 		kvOff := (h / rep) * dk
+		//perfscan:ignore PS3043 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := 0; i < seq; i++ {
 			jmax := seq
 			if causal {
@@ -173,14 +178,19 @@ func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 			qrow := qs[i*dm+qOff : i*dm+qOff+dk]
 			// recompute A[i,:] (same as forward)
 			m := math.Inf(-1)
+			//perfscan:ignore PS3053,PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := jmin; j < jmax; j++ {
 				krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
 				var s float64
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for d, qv := range qrow {
+					//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 					s += qv * krow[d]
 				}
+				//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 				s *= scale
 				if slopes != nil {
+					//perfscan:ignore PS3014,PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 					s += slopes[h] * float64(j-i) // ALiBi bias (sq==sk → abs pos = i)
 				}
 				a[j] = s
@@ -189,6 +199,7 @@ func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010,PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := jmin; j < jmax; j++ {
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
@@ -204,11 +215,14 @@ func mhaBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs []T,
 				vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
 				dvrow := dvs[j*kdm+kvOff : j*kdm+kvOff+dk]
 				var dav float64
+				//perfscan:ignore PS3010,PS3074 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for d, gid := range grow {
 					dvrow[d] = T(float64(dvrow[d]) + aj*gid)
+					//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 					dav += gid * vrow[d]
 				}
 				dA[j] = dav
+				//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 				dot += dav * aj
 			}
 			// dS = A⊙(dA − dot); dQ/dK via bilinear form with scale

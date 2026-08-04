@@ -11,6 +11,8 @@ import (
 
 // mlaRopeFwd applies rotate_half RoPE per head to src[seq, nheads*dR] → flat
 // slice (layout (p*nheads+h)*dR+e), matching backend/ref mlaRoPE.
+//
+//perfscan:ignore PS3033 mlaRopeFwd called 2x/backward not per-item; dst is returned output
 func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	half := dR / 2
 	// θ_e = base^(-2e/dR) depends only on e; cos/sin of p·θ_e depend only on (p,e).
@@ -24,6 +26,7 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	sinP := make([]float64, half)
 	seq := src.Shape()[0]
 	cols := src.Shape()[1] // nheads*dR
+	//perfscan:ignore PS3028 resource-only; dst is returned output, not poolable scratch
 	dst := make([]float64, seq*nheads*dR)
 	switch src.Dtype() {
 	case tensor.F64:
@@ -31,8 +34,10 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 		for p := range seq {
 			for e := range half {
 				ang := float64(p) * thetaTab[e]
+				//perfscan:ignore PS5008 RoPE precompute amortized; trig <10%, measured flat R-01KYRJ6RW1FJ0
 				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 			}
+			//perfscan:ignore PS3040 RoPE precompute memory-streaming, dwarfed by seq-squared attention
 			for h := range nheads {
 				for e := range half {
 					c, s := cosP[e], sinP[e]
@@ -48,8 +53,10 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 		for p := range seq {
 			for e := range half {
 				ang := float64(p) * thetaTab[e]
+				//perfscan:ignore PS5008 F32 RoPE precompute trig amortized, measured flat
 				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 			}
+			//perfscan:ignore PS3040 F32 RoPE precompute memory-streaming, dwarfed by attention
 			for h := range nheads {
 				for e := range half {
 					c, s := cosP[e], sinP[e]
@@ -65,6 +72,7 @@ func mlaRopeFwd(src *tensor.Tensor, nheads, dR int, base float64) []float64 {
 	for p := range seq {
 		for e := range half {
 			ang := float64(p) * thetaTab[e]
+			//perfscan:ignore PS5008 exotic-dtype generic fallback (cold); RoPE trig amortized flat
 			cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 		}
 		for h := range nheads {
@@ -103,8 +111,10 @@ func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tenso
 		for p := range seq {
 			for e := range half {
 				ang := float64(p) * thetaTab[e]
+				//perfscan:ignore PS5008 RoPE-back precompute trig amortized, measured flat
 				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 			}
+			//perfscan:ignore PS3040 RoPE-back precompute memory-streaming, dwarfed by attention
 			for h := range nheads {
 				for e := range half {
 					c, s := cosP[e], sinP[e]
@@ -121,8 +131,10 @@ func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tenso
 		for p := range seq {
 			for e := range half {
 				ang := float64(p) * thetaTab[e]
+				//perfscan:ignore PS5008 F32 RoPE-back precompute trig amortized flat
 				cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 			}
+			//perfscan:ignore PS3040 F32 RoPE-back precompute memory-streaming, dwarfed by attention
 			for h := range nheads {
 				for e := range half {
 					c, s := cosP[e], sinP[e]
@@ -139,6 +151,7 @@ func mlaRopeBack(grad []float64, nheads, dR int, base float64, out *tensor.Tenso
 	for p := range seq {
 		for e := range half {
 			ang := float64(p) * thetaTab[e]
+			//perfscan:ignore PS5008 exotic-dtype generic RoPE-back fallback (cold)
 			cosP[e], sinP[e] = math.Cos(ang), math.Sin(ang)
 		}
 		for h := range nheads {
@@ -215,7 +228,9 @@ func init() {
 				for h0 := 0; h0 < heads; h0 += grp {
 					h1 := min(h0+grp, heads)
 					mlaParallelHeads(h0, h1, seq*seq*(dh+dR), func(hlo, hhi int) {
+						//perfscan:ignore PS6008 a per-worker scratch, once per band, negligible vs seq2-dh body
 						a := make([]float64, seq)
+						//perfscan:ignore PS6008 dA per-worker scratch, once per band, negligible vs body
 						dA := make([]float64, seq)
 						for h := hlo; h < hhi; h++ {
 							ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
@@ -237,6 +252,7 @@ func init() {
 								// form only adds (dh+dR)x the read-modify-write traffic on a[].
 								// See BenchmarkMLAVJPSeq{128,256}.
 								m := math.Inf(-1)
+								//perfscan:ignore PS6010 score dot streams k[j]; q-row cache-resident, PS4008 measured 0.82-0.85x
 								for j := range jmax {
 									var s float64
 									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
@@ -254,6 +270,7 @@ func init() {
 									}
 								}
 								var sum float64
+								//perfscan:ignore PS3010 reassociates softmax sum; breaks bit-identity
 								for j := range jmax {
 									a[j] = math.Exp(a[j] - m)
 									sum += a[j]
@@ -268,6 +285,7 @@ func init() {
 								// BIT-IDENTICAL: each dav still sums d ascending into its own accumulator, dot still
 								// takes the keys in ascending order, and every dvC element is written exactly once.
 								jv := 0
+								//perfscan:ignore PS3066 softmax stages score-max-exp-sum-value carry dependencies, cannot merge
 								for ; jv+7 < jmax; jv += 8 {
 									a[jv+0] /= sum
 									a[jv+1] /= sum
@@ -398,9 +416,11 @@ func init() {
 							if causal {
 								jmax = i + 1
 							}
+							//perfscan:ignore PS3040 shared-key fold deliberately serial in (h,i,j) order for bit-identity
 							for j := range jmax {
 								dS := ds[i*seq+j]
 								for e := range dR {
+									//perfscan:ignore PS3075 shared-key fold, dR-small inner, bit-identity-order-locked
 									dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
 								}
 							}
@@ -425,7 +445,9 @@ func init() {
 				for h0 := 0; h0 < heads; h0 += grp {
 					h1 := min(h0+grp, heads)
 					mlaParallelHeads(h0, h1, seq*seq*(dh+dR), func(hlo, hhi int) {
+						//perfscan:ignore PS6008 F32 a per-worker scratch, once per band, negligible vs body
 						a := make([]float64, seq)
+						//perfscan:ignore PS6008 F32 dA per-worker scratch, once per band, negligible
 						dA := make([]float64, seq)
 						for h := hlo; h < hhi; h++ {
 							ds := dsBuf[(h-h0)*seq*seq : (h-h0+1)*seq*seq]
@@ -438,6 +460,7 @@ func init() {
 								// recompute softmax weights a[j] (inputs read as float64 of
 								// the stored float32, exactly as the generic AtF64 path)
 								m := math.Inf(-1)
+								//perfscan:ignore PS6010 F32 score dot streams k[j]; q-row cache-resident, PS4008 measured worse
 								for j := range jmax {
 									var s float64
 									//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
@@ -455,6 +478,7 @@ func init() {
 									}
 								}
 								var sum float64
+								//perfscan:ignore PS3010 reassociates F32 softmax sum; breaks bit-identity
 								for j := range jmax {
 									a[j] = math.Exp(a[j] - m)
 									sum += a[j]
@@ -520,6 +544,7 @@ func init() {
 								for ; jv < jmax; jv++ {
 									a[jv] /= sum
 									var dav float64
+									//perfscan:ignore PS3010 reassociates F32 dav value-dot; breaks bit-identity
 									for d := range dh {
 										gid := float64(gs[i*cols+hc+d])
 										dvcs[jv*cols+hc+d] = float32(float64(dvcs[jv*cols+hc+d]) + a[jv]*gid)
@@ -594,9 +619,11 @@ func init() {
 							if causal {
 								jmax = i + 1
 							}
+							//perfscan:ignore PS3040 F32 shared-key fold serial in (h,i,j) order for bit-identity
 							for j := range jmax {
 								dS := ds[i*seq+j]
 								for e := range dR {
+									//perfscan:ignore PS3075 F32 shared-key fold, dR-small, bit-identity-order-locked
 									dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
 								}
 							}
@@ -621,6 +648,7 @@ func init() {
 					}
 					// recompute softmax weights a[j]
 					m := math.Inf(-1)
+					//perfscan:ignore PS3040 exotic-dtype generic fallback (cold) score loop
 					for j := range jmax {
 						var s float64
 						//perfscan:ignore PS4008 measured 0.85x reordered, 0.82x transposed
@@ -638,6 +666,7 @@ func init() {
 						}
 					}
 					var sum float64
+					//perfscan:ignore PS3010 generic fallback (cold) softmax sum reassoc
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
@@ -662,6 +691,7 @@ func init() {
 						}
 						for e := range dR {
 							dqRrot[(i*heads+h)*dR+e] += dS * kRrot[j*dR+e]
+							//perfscan:ignore PS3075 generic fallback (cold), bit-identity-locked fold
 							dkRrot[j*dR+e] += dS * qRrot[(i*heads+h)*dR+e]
 						}
 					}
@@ -686,6 +716,8 @@ const mlaDSBufBytes = 1 << 26
 // mlaParallelHeads runs body over the heads [h0,h1) in GOMAXPROCS bands. Every write inside a
 // head's band lands in that head's own window, so the split cannot change a value; the one
 // shared accumulator is handled by the caller's second pass. Serial below a work threshold.
+//
+//perfscan:ignore PS3048,PS3061 already work-gated; splits over heads, each carries seq2-dh | head-granular split work-gated; realistic seq fe
 func mlaParallelHeads(h0, h1, workPerHead int, body func(hlo, hhi int)) {
 	n := h1 - h0
 	nw := runtime.GOMAXPROCS(0)
@@ -697,6 +729,7 @@ func mlaParallelHeads(h0, h1, workPerHead int, body func(hlo, hhi int)) {
 		return
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 homogeneous amd64 host, few heads, body allocs a/dA (PS3011 anti-condition)
 	chunk := (n + nw - 1) / nw
 	for lo := h0; lo < h1; lo += chunk {
 		wg.Add(1)

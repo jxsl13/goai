@@ -213,6 +213,7 @@ func SaveFile(path string, t *tensor.Tensor) error {
 	if err != nil {
 		return err
 	}
+	//perfscan:ignore PS3029 .npy Save serialization, one-time IO
 	if err := Save(f, t); err != nil {
 		f.Close()
 		return err

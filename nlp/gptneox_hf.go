@@ -72,6 +72,7 @@ func GPTNeoXFromHF(ts map[string]*tensor.Tensor, cfg GPTNeoXConfig) (*GPTNeoX, e
 	}
 
 	m := &GPTNeoX{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3032,PS3060 model-load layer loop, cold
 	for l := range layers {
 		p := fmt.Sprintf("gpt_neox.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) { return get(p + name) }
@@ -164,6 +165,7 @@ func splitNeoXQKV(qkv *tensor.Tensor, heads, headDim int) (q, k, v *tensor.Tenso
 			for d := range headDim {
 				src := h*3*headDim + which*headDim + d
 				dst := h*headDim + d
+				//perfscan:ignore PS1001 QKV split weight copy at load, cold
 				for c := range in {
 					out.SetF64(qkv.AtF64(src, c), dst, c)
 				}

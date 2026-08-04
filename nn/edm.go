@@ -17,9 +17,12 @@ package nn
 type Denoiser func(x []float64, sigma float64) []float64
 
 // edmDeriv returns d = (x − D(x;σ))/σ, the ODE right-hand side at (x, σ).
+//
+//perfscan:ignore PS3033 diffusion deriv loop; denoiser model-forward dominates, <1pct
 func edmDeriv(d Denoiser, x []float64, sigma float64) []float64 {
 	den := d(x, sigma)
 	out := make([]float64, len(x))
+	//perfscan:ignore PS5001 invariant 1/sigma but denoiser-forward-dominated sampler loop
 	for i := range x {
 		out[i] = (x[i] - den[i]) / sigma
 	}

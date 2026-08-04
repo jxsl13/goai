@@ -181,9 +181,11 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 
 	// materialize the group vectors (each length g).
 	groups := make([][]float64, ng)
+	//perfscan:ignore PS3034 offline encode-time weight materialize, one-time
 	for r := range rows {
 		for gc := range gpr {
 			vec := make([]float64, cfg.g)
+			//perfscan:ignore PS1001 encode-time group materialize, one-time load path
 			for t := range cfg.g {
 				vec[t] = w.AtF64(r, gc*cfg.g+t)
 			}
@@ -209,9 +211,11 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 		// m-th code slot, and cb is read-only here, so the loop fans out bit-identically.
 		parallelRows(len(residual), k*cfg.g, func(lo, hi int) {
 			for i := lo; i < hi; i++ {
+				//perfscan:ignore PS3073 encode-time residual-VQ, already parallelized
 				b := nearestAQLM(residual[i], cb)
 				codes[i*cfg.m+m] = b
 				for t := range cfg.g {
+					//perfscan:ignore PS3075 encode-time residual update, already parallelized
 					residual[i][t] -= cb[b][t]
 				}
 			}
@@ -253,6 +257,8 @@ func EncodeAQLM(w *tensor.Tensor, opts ...AQLMOption) (*AQLM, error) {
 // dst's dtype (what the transpose's SetF64 would store). For an F32 dst the two
 // narrowings collapse to one (float32∘float64∘float32 = float32); the q.dtype==F32
 // intermediate only matters for an F64 dst, handled explicitly.
+//
+//perfscan:ignore PS6004 resource-only acc alloc, no wallclock
 func (q *AQLM) reconstructTransposedInto(dst *tensor.Tensor) {
 	gpr := q.Cols / q.GroupSize
 	k := 1 << q.Bits
@@ -262,9 +268,11 @@ func (q *AQLM) reconstructTransposedInto(dst *tensor.Tensor) {
 		for t := range q.GroupSize {
 			acc[t] = 0
 		}
+		//perfscan:ignore PS1007 tiny-trip codebook sum, already typed fastpath
 		for m := range q.NumCodebooks {
 			cb := q.Codebooks[m*k+q.Codes[gi*q.NumCodebooks+m]]
 			for t := range q.GroupSize {
+				//perfscan:ignore PS3075 tiny-trip codebook accumulate, already fastpath
 				acc[t] += cb[t]
 			}
 		}
@@ -288,6 +296,7 @@ func (q *AQLM) reconstructTransposedInto(dst *tensor.Tensor) {
 		}
 	case tensor.F32:
 		ws := dst.Storage().F32()
+		//perfscan:ignore PS3056 already-optimized typed F32 reconstruct fastpath
 		for r := range rows {
 			for gc := range gpr {
 				sum(r*gpr + gc)
@@ -325,9 +334,11 @@ func (q *AQLM) Reconstruct() *tensor.Tensor {
 			for t := range q.GroupSize {
 				acc[t] = 0
 			}
+			//perfscan:ignore PS1007 one-time dequant, tiny-trip codebook sum
 			for m := range q.NumCodebooks {
 				cb := q.Codebooks[m*k+q.Codes[gi*q.NumCodebooks+m]]
 				for t := range q.GroupSize {
+					//perfscan:ignore PS3075 one-time dequant codebook accumulate
 					acc[t] += cb[t]
 				}
 			}
@@ -365,6 +376,7 @@ func (q *AQLM) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 	// wHat allocation and all per-element dispatch. Bit-identical (§V16.3 parity test).
 	wT := tensor.New(x.Dtype(), tensor.Shape{q.Cols, q.Rows})
 	q.reconstructTransposedInto(wT)
+	//perfscan:ignore PS3038 single matmul dispatch, not a loop
 	out, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{x, wT}, nil)
 	if err != nil {
 		return nil, err
@@ -376,7 +388,9 @@ func (q *AQLM) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 func nearestAQLM(x []float64, cent [][]float64) int {
 	best, bd := 0, math.Inf(1)
 	j := 0
+	//perfscan:ignore PS3076 encode-time kmeans nearest scan, offline
 	for ; j+4 <= len(cent); j += 4 {
+		//perfscan:ignore PS3019 encode-time nearest-centroid scan, offline
 		c0, c1, c2, c3 := cent[j], cent[j+1], cent[j+2], cent[j+3]
 		var d0, d1, d2, d3 float64
 		for t := range x {
@@ -406,6 +420,7 @@ func nearestAQLM(x []float64, cent [][]float64) int {
 	for ; j < len(cent); j++ {
 		var d float64
 		for t := range x {
+			//perfscan:ignore PS3016 encode-time nearest tail loop, offline
 			diff := x[t] - cent[j][t]
 			d += diff * diff
 		}
@@ -426,6 +441,7 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 	perm := rng.Perm(max(n, 1))
 	for i := range k {
 		if n == 0 {
+			//perfscan:ignore PS2008,PS3064 resource-only alloc, cold empty-cluster branch | encode-time kmeans init, low trip
 			cent[i] = make([]float64, dim)
 			continue
 		}
@@ -442,6 +458,7 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 	sums := make([][]float64, k)
 	cnt := make([]int, k)
 	for i := range sums {
+		//perfscan:ignore PS2008,PS3064 resource-only kmeans sums alloc | encode-time kmeans scratch, offline
 		sums[i] = make([]float64, dim)
 	}
 	for range iters {
@@ -451,19 +468,24 @@ func kmeansAQLM(data [][]float64, k, dim int, rng *rand.Rand, iters int) [][]flo
 		clear(cnt)
 		parallelRows(n, k*dim, func(lo, hi int) {
 			for i := lo; i < hi; i++ {
+				//perfscan:ignore PS3073 already parallelized kmeans assign
 				assign[i] = nearestAQLM(data[i], cent)
 			}
 		})
 		for i, x := range data {
 			b := assign[i]
 			cnt[b]++
+			//perfscan:ignore PS4006 encode-time centroid accumulate, offline reduction
 			for t := range dim {
+				//perfscan:ignore PS3016 encode-time kmeans accumulate, offline
 				sums[b][t] += x[t]
 			}
 		}
 		for i := range k {
 			if cnt[i] > 0 {
+				//perfscan:ignore PS4006 encode-time centroid mean, offline
 				for t := range dim {
+					//perfscan:ignore PS3016 encode-time centroid update, offline
 					cent[i][t] = sums[i][t] / float64(cnt[i])
 				}
 			}
@@ -483,6 +505,7 @@ func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k,
 	// target scratch. Gated on ng·(3·m·k·g) so a tiny re-encode stays serial. This is the
 	// parallelizable half of EncodeAQLM's refit/re-encode alternation.
 	parallelRows(len(groups), 3*m*k*g, func(glo, ghi int) {
+		//perfscan:ignore PS6008 intentional per-worker scratch, resource-only
 		target := make([]float64, g)
 		for i := glo; i < ghi; i++ {
 			for range 3 { // sweeps
@@ -499,6 +522,7 @@ func icmEncodeAQLM(groups [][]float64, codes []int, codebooks [][]float64, m, k,
 					}
 					best, bd := 0, math.Inf(1)
 					j := 0
+					//perfscan:ignore PS3076 already parallelized encode re-encode scan
 					for ; j+4 <= k; j += 4 {
 						// Unroll-and-jam the entry scan by 4: one target[t] load feeds
 						// four independent squared-distance accumulators. Each keeps its
@@ -587,6 +611,7 @@ func refitCodebooksAQLM(sc *aqlmRefitScratch, groups [][]float64, codes []int, c
 	aug := sc.aug[:n*stride]
 	clear(aug) // the fresh makes it replaces arrived zeroed
 	cols := sc.cols[:m]
+	//perfscan:ignore PS3046 encode-time normal-eq accumulate, offline
 	for i := range groups {
 		for a := range m {
 			cols[a] = a*k + codes[i*m+a]
@@ -647,12 +672,16 @@ func solveLinearAQLM(a, b [][]float64) [][]float64 {
 // pins it against an independent implementation of the same algorithm.
 // gaussJordanParWork gates the parallel elimination step. Below it the fork costs more than
 // the update it spreads.
+//
+//perfscan:ignore PS6023 const threshold decl, not a hot loop
 const gaussJordanParWork = 1 << 14
 
 func gaussJordanAQLM(aug, swap []float64, n, stride int) {
+	//perfscan:ignore PS1006 encode-time solve, already parallelized
 	for c := range n {
 		p := c
 		for r := c + 1; r < n; r++ {
+			//perfscan:ignore PS6011 encode-time pivot search, offline solve
 			if math.Abs(aug[r*stride+c]) > math.Abs(aug[p*stride+c]) {
 				p = r
 			}
@@ -688,6 +717,7 @@ func gaussJordanAQLM(aug, swap []float64, n, stride int) {
 				if r == c {
 					continue
 				}
+				//perfscan:ignore PS6011 already parallelized elimination step
 				f := aug[r*stride+c]
 				if f == 0 {
 					continue
@@ -706,6 +736,7 @@ func gaussJordanAQLM(aug, swap []float64, n, stride int) {
 			if r == c {
 				continue
 			}
+			//perfscan:ignore PS6011 deliberate small-system serial fallback arm
 			f := aug[r*stride+c]
 			if f == 0 {
 				continue

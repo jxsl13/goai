@@ -15,6 +15,8 @@ import (
 // keeps the softmax normalizer from drifting (numerical stability). Unlike OpCrossEntropy it takes
 // ONLY logits (no targets) — for the MoE router logits or any auxiliary use. Accumulation is f64
 // (§V10); the max-shift keeps exp in range (§V12).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func zLossKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: zloss wants (logits), got %d inputs", len(in))
@@ -57,6 +59,7 @@ func zLossKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs)
 				contrib[i] = lse * lse
 			}
 		})
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			total += contrib[i]
 		}
@@ -83,6 +86,7 @@ func zLossKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs)
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpZLoss, tensor.F32, zLossKernel)
 	std.add(backend.OpZLoss, tensor.F64, zLossKernel)
 }

@@ -81,6 +81,7 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 		trimmed := make([][]float64, len(models)) // [t][p] trimmed τ̂
 		for t := range models {
 			tau := make([]float64, n)
+			//perfscan:ignore PS3016 offline one-time TIES model-merge; trip=few models
 			mt := models[t][i]
 			if mf := flatF64(mt); mf != nil {
 				for p := range tau {
@@ -103,7 +104,9 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 		rf64, rf32 := flatF64(res), flatF32(res) // res is fresh + contiguous
 		for p := range n {
 			var sum float64
+			//perfscan:ignore PS3010 offline model-merge sum over handful of models; not hot
 			for t := range models {
+				//perfscan:ignore PS1010,PS3016 offline one-time model-merge over small model list | offline one-time model-merge bounds-check
 				sum += trimmed[t][p]
 			}
 			var merged float64
@@ -112,6 +115,7 @@ func TIESMerge(base []*tensor.Tensor, models [][]*tensor.Tensor, density, lambda
 				var agg float64
 				var cnt int
 				for t := range models {
+					//perfscan:ignore PS1010 offline one-time model-merge over small model list
 					v := trimmed[t][p]
 					if v != 0 && math.Signbit(v) == want {
 						agg += v

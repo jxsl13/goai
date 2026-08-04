@@ -183,6 +183,7 @@ func NewPSGDKron(params []*tensor.Tensor, lr float64, opts ...PSGDKronOption) *P
 	o.dR = make([][]float64, len(params))
 	o.cols = make([]int, len(params))
 	maxN, maxCols := 0, 0
+	//perfscan:ignore PS3065 NewPSGDKron construction, one-time init
 	for i, p := range params {
 		n := p.Numel()
 		sh := p.Shape()
@@ -246,6 +247,7 @@ func (o *PSGDKron) Factors(i int) (left, right []float64) {
 // preconditioner (and draws no probe). A grad/param shape mismatch errors like the other
 // optimizers.
 func (o *PSGDKron) Step(grad GradFn) error {
+	//perfscan:ignore PS3044 outer param-loop low-trip; body already flat typed buffers
 	for pi, p := range o.Params {
 		g := grad(p)
 		if g == nil {

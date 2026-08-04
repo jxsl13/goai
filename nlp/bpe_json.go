@@ -140,6 +140,7 @@ func (t *BPETokenizer) ToJSON() ([]byte, error) {
 	for m, r := range t.mergeRank {
 		ms = append(ms, mr{m, r})
 	}
+	//perfscan:ignore PS3002,PS6009 BPE-to-HF JSON export sort; one-time serialization | same JSON-export path; cold
 	sort.Slice(ms, func(a, b int) bool { return ms[a].r < ms[b].r })
 	merges := make([]string, len(ms))
 	for i, e := range ms {

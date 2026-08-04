@@ -39,6 +39,7 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 	for i := range nP {
 		shape := gradSamples[0][i].Shape()
 		for s := range nS {
+			//perfscan:ignore PS3016 shape-validation loop, once-per-task cold path
 			if !gradSamples[s][i].Shape().Equal(shape) {
 				return nil, fmt.Errorf("nn: MASImportance sample %d param %d shape %v != %v", s, i, gradSamples[s][i].Shape(), shape)
 			}
@@ -66,9 +67,11 @@ func MASImportance(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 				}
 			}
 			if allFlat {
+				//perfscan:ignore PS1007,PS3044 already flat+parallel accumulate, once-per-task statistic | same flat fast-path, memory-bound once-per-task
 				for s := range nS {
 					gf := flatF64(gradSamples[s][i])
 					for e := range af {
+						//perfscan:ignore PS3075 already-optimized flat abs-sum, once-per-task, memory-bound
 						af[e] += math.Abs(gf[e])
 					}
 				}

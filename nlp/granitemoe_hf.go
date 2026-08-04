@@ -104,6 +104,7 @@ func GraniteMoeFromHF(ts map[string]*tensor.Tensor, cfg GraniteMoeConfig) (*Gran
 	cfg.Layers = layers
 
 	m := &GraniteMoE{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -188,6 +189,7 @@ func graniteMoeExperts(ts map[string]*tensor.Tensor, p string, cfg GraniteMoeCon
 
 	moe := nn.NewSparseMoE(tensor.F64, cfg.Dim, ffn, experts, cfg.TopK, 0)
 	moe.Router.W = transpose2D(router) // [E,dim] → [dim,E]
+	//perfscan:ignore PS3060 per-expert MoE loader loop; cold
 	for e := range experts {
 		guE := sub3D(gu, e)                                          // [2·ffn, dim]
 		moe.Experts[e].Wgate = transpose2D(sliceRows(guE, 0, ffn))   // [dim, ffn]

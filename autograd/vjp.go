@@ -179,6 +179,7 @@ func bcastSumRows[T interface{ ~float32 | ~float64 }](dst, src []T, gs tensor.Sh
 			}
 		case e == 0:
 			acc := dst[dOff] // typed T — see the bit-identity note above
+			//perfscan:ignore PS3010 already typed flat fastpath; memory-bound sum reduction, kept scalar for bit-identity
 			for j := range row {
 				acc += row[j]
 			}

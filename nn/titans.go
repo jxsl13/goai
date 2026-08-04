@@ -296,6 +296,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 					for i := range dim { // o_t = M_t · q_t
 						base := i * dim
 						var o float64
+						//perfscan:ignore PS3010,PS4008 same linear retrieve nest as flagged :296
 						for c := range dim {
 							o += M[base+c] * qrow[c] // ascending c, M_t
 						}
@@ -338,9 +339,11 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 						vrow := vs[t*dim : t*dim+dim : t*dim+dim]
 						etaT, thetaT, keep := ets[t], tts[t], 1-ats[t]
 						jk := 0
+						//perfscan:ignore PS3066,PS3076,PS4003 already 4-way fused deep h-loop; stages distinct | loop already register-blocked 4-way | sigmoid interleaved i
 						for ; jk+3 < hid; jk += 4 { // h = σ(W1_{t-1}·k), FOUR HIDDEN UNITS PER PASS over the key row
 							b0, b1, b2, b3 := jk*dim, (jk+1)*dim, (jk+2)*dim, (jk+3)*dim
 							var z0, z1, z2, z3 float64
+							//perfscan:ignore PS3010 z0 is one of 4 independent accumulators z0-z3; ILP present
 							for c := range dim {
 								kv := krow[c]
 								z0 += W1[b0+c] * kv
@@ -353,18 +356,22 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							h[jk+2] = sigmoidStableF64(z2)
 							h[jk+3] = sigmoidStableF64(z3)
 						}
+						//perfscan:ignore PS3067,PS4003 hid%4 scalar tail, trip <4 | sigmoid in low-trip remainder tail
 						for j := jk; j < hid; j++ {
 							b1 := j * dim
 							var z float64
+							//perfscan:ignore PS3010 tail dot, trip <4
 							for c := range dim {
 								z += W1[b1+c] * krow[c]
 							}
 							h[j] = sigmoidStableF64(z)
 						}
 						iq := 0
+						//perfscan:ignore PS3076 already 4-way register-blocked forward-o loop
 						for ; iq+3 < dim; iq += 4 {
 							c0, c1, c2, c3 := iq*hid, (iq+1)*hid, (iq+2)*hid, (iq+3)*hid
 							var o0, o1, o2, o3 float64
+							//perfscan:ignore PS3010 o0 is one of 4 independent accumulators
 							for j := range hid {
 								hj := h[j]
 								o0 += W2[c0+j] * hj
@@ -380,6 +387,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 						for i := iq; i < dim; i++ {
 							b2 := i * hid
 							var o float64
+							//perfscan:ignore PS3010 dim%4 scalar tail, trip <4
 							for j := range hid {
 								o += W2[b2+j] * h[j]
 							}
@@ -393,6 +401,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							b2 := i * hid
 							ei := e2[i]
 							for j := range hid {
+								//perfscan:ignore PS3075 same back-accum nest as flagged :392
 								back[j] += W2[b2+j] * ei
 							}
 						}
@@ -424,9 +433,11 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 						}
 						started = true
 						j := 0
+						//perfscan:ignore PS3076,PS4003 already 4-way retrieve-h loop | sigmoid interleaved in 4-way dot, <10% of scan
 						for ; j+3 < hid; j += 4 { // retrieve: h = σ(W1_t·q), four hidden units per pass
 							b0, b1, b2, b3 := j*dim, (j+1)*dim, (j+2)*dim, (j+3)*dim
 							var z0, z1, z2, z3 float64
+							//perfscan:ignore PS3010 z0 is one of 4 independent accumulators
 							for c := range dim {
 								qv := qrow[c]
 								z0 += W1[b0+c] * qv
@@ -439,18 +450,22 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 							h[j+2] = sigmoidStableF64(z2)
 							h[j+3] = sigmoidStableF64(z3)
 						}
+						//perfscan:ignore PS4003 sigmoid in low-trip remainder tail
 						for ; j < hid; j++ {
 							b1 := j * dim
 							var z float64
+							//perfscan:ignore PS3010 tail dot, trip <4
 							for c := range dim {
 								z += W1[b1+c] * qrow[c]
 							}
 							h[j] = sigmoidStableF64(z)
 						}
 						io := 0
+						//perfscan:ignore PS3076 already 4-way register-blocked retrieve-o loop
 						for ; io+3 < dim; io += 4 {
 							c0, c1, c2, c3 := io*hid, (io+1)*hid, (io+2)*hid, (io+3)*hid
 							var o0, o1, o2, o3 float64
+							//perfscan:ignore PS3010 o0 is one of 4 independent accumulators
 							for j := range hid {
 								hj := h[j]
 								o0 += W2[c0+j] * hj
@@ -465,6 +480,7 @@ func (m *NeuralMemory) Scan(ctx *backend.Context, q, k, v, eta, theta, alpha *te
 						for i := io; i < dim; i++ {
 							b2 := i * hid
 							var o float64
+							//perfscan:ignore PS3010,PS4008 dim%4 scalar tail, trip <4 | transpose-to-axpy not worth on <4 trip tail
 							for j := range hid {
 								o += W2[b2+j] * h[j]
 							}
@@ -803,6 +819,7 @@ func (b *Titans) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor
 	// interleave h before x: concat on the feature axis, then a row-major
 	// reshape yields [h_1; x_1; h_2; x_2; …] — one memory-context token
 	// before each input token (single-token-segment MAC).
+	//perfscan:ignore PS6018 data-movement scaffolding; dominated by Memory scan+InProj matmul+attention
 	pairs, err := ex(backend.OpConcat, backend.ConcatAttrs{Axis: 1}, h, x) // [T, 2·Dim]
 	if err != nil {
 		return nil, err

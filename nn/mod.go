@@ -91,6 +91,7 @@ func (m *MixtureOfDepths) Route(ctx *backend.Context, x *tensor.Tensor) (gathere
 	k := m.NumProcessed(seq)
 	idx := topKIndices(logits, k) // ascending token positions
 	S := tensor.New(x.Dtype(), tensor.Shape{k, seq})
+	//perfscan:ignore PS1005 k-entry one-hot fill, matmul-dominated Route, low trip
 	for i, p := range idx {
 		S.SetF64(1, i, p)
 	}
@@ -156,6 +157,7 @@ func topKIndices(col *tensor.Tensor, k int) []int {
 	// the lower position) — identical order to the previous SliceStable (which, from the
 	// pos=0..seq-1 identity, resolved equal scores by ascending position), but pdqsort is
 	// ~2-5× faster than SliceStable's symMerge. Bit-identical selection.
+	//perfscan:ignore PS6009 resource-only alloc at already-flagged sort site
 	sort.Slice(pos, func(a, b int) bool {
 		if sa, sb := scores[pos[a]], scores[pos[b]]; sa != sb {
 			return sa > sb

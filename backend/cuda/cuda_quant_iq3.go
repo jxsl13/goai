@@ -73,6 +73,7 @@ func iq3xxsGrid() (unsafe.Pointer, error) {
 				j := r >> 1
 				half := r & 1
 				base := b*256 + g*32 + j*8 + half*4
+				//perfscan:ignore PS5001 one-time IQ3 grid reconstruct (sync.Once)
 				for k := 0; k < 4; k++ {
 					grid[idx*4+k] = df[base+k] / db
 				}
@@ -196,6 +197,7 @@ func iq3sGrid() (unsafe.Pointer, error) {
 				j := r >> 1
 				half := r & 1
 				base := b*256 + g*32 + j*8 + half*4
+				//perfscan:ignore PS4004 trivial [0,4) unit-stride move, one-time grid build
 				for k := 0; k < 4; k++ {
 					grid[idx*4+k] = df[base+k] // db = 1.0
 				}

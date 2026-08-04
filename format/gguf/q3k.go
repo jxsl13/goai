@@ -68,6 +68,7 @@ func dequantQ3_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 // dequantQ3_KInto is dequantQ3_K writing into a caller-provided dst — lets QMatMul
 // reuse one row buffer across all weight rows. Byte-for-byte the tensor form.
 func dequantQ3_KInto(dst []float32, raw []byte) {
+	//perfscan:ignore PS3059 dequant already chunk-parallel across rows in QMatMul; full-tensor use is load-time
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q3kBlockSize:]
 		hm := blk[0:32]
@@ -114,11 +115,13 @@ func dequantQ3_KInto(dst []float32, raw []byte) {
 func quantizeQ3_K(x []float32) []byte {
 	nb := len(x) / qkK
 	out := make([]byte, nb*q3kBlockSize)
+	//perfscan:ignore PS3043 quantizeQ3_K encoder, cold offline path
 	for b := range nb {
 		blk := x[b*qkK : (b+1)*qkK]
 		// per-sub-block effective scale and the super-block max
 		var scale [16]float32
 		var maxScale float32
+		//perfscan:ignore PS3067 quantize encoder loop, cold offline path
 		for is := range 16 {
 			nblock, r := is/8, is%8
 			j, g := r/2, (r%2)*16
@@ -157,6 +160,7 @@ func quantizeQ3_K(x []float32) []byte {
 			j, g := r/2, (r%2)*16
 			dl := d * float32(int(sc6[is])-32)
 			mbit := byte(1) << (4*nblock + j)
+			//perfscan:ignore PS5001 quantize encoder inner loop, cold offline path
 			for l := range 16 {
 				p := nblock*128 + j*32 + g + l
 				q3 := 4

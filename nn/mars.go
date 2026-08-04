@@ -237,19 +237,24 @@ func (a *MARS) Step(grad GradFn) error {
 					if useCorr {
 						for i, gv := range gf {
 							ci := gv + factor*(gv-gp[i])
+							//perfscan:ignore PS3084 moment recurrence; rule self-declares not bit-jammable, leave it
 							m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+							//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule, bandwidth-bound
 							v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
 							pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 							gp[i] = gv
 						}
 					} else {
 						for i, gv := range gf {
+							//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
 							m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+							//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
 							v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
 							pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 							gp[i] = gv
 						}
 					}
+					//perfscan:ignore PS6024 receiver-scratch concurrency note, not a throughput win; Step not concurrent
 					a.seen[pi] = true
 					continue
 				}
@@ -262,7 +267,9 @@ func (a *MARS) Step(grad GradFn) error {
 				}
 				a.clip(c)
 				for i, gv := range gf {
+					//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
 					m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+					//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
 					pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 					gp[i] = gv
@@ -277,7 +284,9 @@ func (a *MARS) Step(grad GradFn) error {
 						for i := range gf {
 							gv := float64(gf[i])
 							ci := gv + factor*(gv-gp[i])
+							//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
 							m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+							//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
 							v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
 							pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 							gp[i] = gv
@@ -285,7 +294,9 @@ func (a *MARS) Step(grad GradFn) error {
 					} else {
 						for i := range gf {
 							gv := float64(gf[i])
+							//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
 							m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+							//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
 							v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
 							pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 							gp[i] = gv
@@ -306,7 +317,9 @@ func (a *MARS) Step(grad GradFn) error {
 				}
 				a.clip(c)
 				for i := range gf {
+					//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
 					m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+					//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
 					v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
 					pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 					gp[i] = float64(gf[i])
@@ -327,10 +340,13 @@ func (a *MARS) Step(grad GradFn) error {
 			}
 		}
 		a.clip(c)
+		//perfscan:ignore PS5001 generic exotic-dtype fallback, cold path via AtF64/Unravel
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, shape)
 			gv := g.AtF64(idx...)
+			//perfscan:ignore PS3084 moment recurrence in cold generic fallback; not bit-jammable
 			m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+			//perfscan:ignore PS3084 variance recurrence in cold generic fallback; not bit-jammable
 			v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
 			p.SetF64(p.AtF64(idx...)*decay-a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps), idx...)
 			gp[i] = gv

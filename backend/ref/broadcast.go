@@ -58,6 +58,7 @@ func broadcastRuns[T refFloat](dst, src []T, shape, eff []int, n int) {
 				break
 			}
 			idx[d] = 0
+			//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 			ioff -= eff[d] * shape[d]
 		}
 	}
@@ -116,6 +117,7 @@ func broadcastKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpBroadcast, tensor.F32, broadcastKernel)
 	std.add(backend.OpBroadcast, tensor.F64, broadcastKernel)
 }

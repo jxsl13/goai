@@ -13,6 +13,8 @@ import (
 // §5.1-5.2, LAPACK dgeqrf): A = Q·R with Q ∈ Rᵐˣⁿ orthonormal columns (QᵀQ = Iₙ) and
 // R ∈ Rⁿˣⁿ upper-triangular. Householder QR is backward-stable. Two outputs [Q, R];
 // all arithmetic is f64 (§V10), F32 input factors in f64 and narrows on store.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: qr wants 1 input, got %d", len(in))
@@ -45,12 +47,16 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 	vs := make([][]float64, n)
 	betas := make([]float64, n)
 	sbuf := make([]float64, n) // per-column reflector dot products, reused across k
+	//perfscan:ignore PS1006 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for k := range n {
 		var nrm float64 // ‖x‖ over rm[k:m, k]
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := k; i < m; i++ {
+			//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 			nrm += rm[i*n+k] * rm[i*n+k]
 		}
 		nrm = math.Sqrt(nrm)
+		//perfscan:ignore PS2008 reference oracle: intentionally simple, correctness baseline not an optimization target
 		v := make([]float64, m)
 		vs[k] = v
 		if nrm == 0 {
@@ -60,11 +66,14 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		if rm[k*n+k] < 0 {
 			alpha = nrm
 		}
+		//perfscan:ignore PS4004,PS4006 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := k; i < m; i++ {
+			//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 			v[i] = rm[i*n+k]
 		}
 		v[k] -= alpha
 		var vtv float64
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := k; i < m; i++ {
 			vtv += v[i] * v[i]
 		}
@@ -87,6 +96,7 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		for i := k; i < m; i++ {
 			vi, row := v[i], rm[i*n:i*n+n]
 			for j := k; j < n; j++ {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				sbuf[j] += vi * row[j]
 			}
 		}
@@ -132,6 +142,7 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 		for i := k; i < m; i++ {
 			vi, row := v[i], q[i*n:i*n+n]
 			for j := range n {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				sbuf[j] += vi * row[j]
 			}
 		}
@@ -155,6 +166,7 @@ func qrKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*te
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpQR, tensor.F32, qrKernel)
 	std.add(backend.OpQR, tensor.F64, qrKernel)
 }

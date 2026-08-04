@@ -170,6 +170,7 @@ func ReadFile(path string) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	defer f.Close()
+	//perfscan:ignore PS3029 ReadFile disk I/O cold path
 	return Read(f)
 }
 
@@ -262,6 +263,7 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 
 	var sb strings.Builder
 	sb.WriteString("(")
+	//perfscan:ignore PS2002 header builder over few dims, once per write, cold I/O
 	for i, d := range t.Shape() {
 		if i > 0 {
 			sb.WriteString(", ")
@@ -300,6 +302,7 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 	case tensor.F32:
 		src := t.Storage().F32()
 		b := make([]byte, min(4*len(src), chunkBytes))
+		//perfscan:ignore PS2002 already 256KiB-chunk encode; disk-write cold path
 		for len(src) > 0 {
 			m := min(len(src), len(b)/4)
 			c := b[:4*m]
@@ -316,6 +319,7 @@ func Write(w io.Writer, t *tensor.Tensor) error {
 	case tensor.F64:
 		src := t.Storage().F64()
 		b := make([]byte, min(8*len(src), chunkBytes))
+		//perfscan:ignore PS2002 F64 chunked encode, disk-write cold path
 		for len(src) > 0 {
 			m := min(len(src), len(b)/8)
 			c := b[:8*m]
@@ -339,6 +343,7 @@ func WriteFile(path string, t *tensor.Tensor) error {
 	if err != nil {
 		return err
 	}
+	//perfscan:ignore PS3029 WriteFile disk I/O cold path
 	if err := Write(f, t); err != nil {
 		f.Close()
 		return err

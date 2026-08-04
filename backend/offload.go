@@ -139,6 +139,7 @@ func PlanOffload(cfg OffloadConfig) (OffloadPlan, error) {
 		order[i] = i
 	}
 	if cfg.Hotness != nil {
+		//perfscan:ignore PS3002,PS6009 one-time layer-plan sort, tiny n (layers) | one-time layer-plan sort, tiny n
 		sort.SliceStable(order, func(a, b int) bool {
 			return cfg.Hotness[order[a]] > cfg.Hotness[order[b]]
 		})

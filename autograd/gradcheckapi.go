@@ -96,7 +96,9 @@ func GradCheck(f func(ctx *backend.Context, inputs []*tensor.Tensor) (*tensor.Te
 	shapes := make([]tensor.Shape, len(inputs))
 	for i, x := range inputs {
 		shapes[i] = x.Shape()
+		//perfscan:ignore PS2008,PS3064 gradcheck snapshot alloc, resource-only test util | alloc, gradcheck verification utility
 		data[i] = make([]float64, x.Numel())
+		//perfscan:ignore PS1001,PS4006 gradcheck snapshot AtF64, reference test tool | gradcheck snapshot loop, test utility
 		for j := range data[i] {
 			data[i][j] = x.AtF64(tensor.Unravel(j, shapes[i])...)
 		}
@@ -131,6 +133,7 @@ func GradCheck(f func(ctx *backend.Context, inputs []*tensor.Tensor) (*tensor.Te
 		return out.AtF64(), nil
 	}
 	for i := range inputs {
+		//perfscan:ignore PS1001 finite-diff checker, O(Numel) by design, test tool
 		for j := range data[i] {
 			orig := data[i][j]
 			data[i][j] = orig + cfg.eps
@@ -147,6 +150,7 @@ func GradCheck(f func(ctx *backend.Context, inputs []*tensor.Tensor) (*tensor.Te
 			fd := (fp - fm) / (2 * cfg.eps)
 			coords := tensor.Unravel(j, shapes[i])
 			analytic := grads[i].AtF64(coords...)
+			//perfscan:ignore PS3082 gradcheck compare, verification utility not hot path
 			if math.Abs(fd-analytic) > cfg.rtol*math.Max(1, math.Abs(fd)) {
 				return fmt.Errorf(
 					"autograd: GradCheck: input %d element %d %v: finite-difference %.10g vs analytic %.10g (|Δ|=%.3g > rtol %g · max(1,|fd|), eps %g) — the VJP producing this gradient disagrees with the forward",

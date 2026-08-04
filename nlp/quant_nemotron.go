@@ -167,12 +167,15 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 partialRoPE attrs per-layer; invariant-only, op-dominated
 		if q, err = partialRoPE(ctx, q, cfg.Heads, rot, backend.RoPEAttrs{Base: cfg.RopeBase}); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 partialRoPE attrs per-layer; invariant-only, op-dominated
 		if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase}); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpMHA dispatch in forward loop; attention-dominated
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -180,6 +183,7 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch; negligible vs layer GEMMs
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -192,6 +196,7 @@ func (m *QuantNemotron) Forward(ctx *backend.Context, tokens []int) (*tensor.Ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch; negligible vs MLP GEMMs
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
@@ -274,15 +279,18 @@ func (m *QuantNemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, t
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 partialRoPE decode attrs per-layer; invariant-only, op-dominated
 		if q, err = partialRoPE(ctx, q, cfg.Heads, rot, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 partialRoPE decode attrs per-layer; invariant-only, op-dominated
 		if k, err = partialRoPE(ctx, k, kv, rot, backend.RoPEAttrs{Base: cfg.RopeBase, PosOffset: pos}); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 AttnAttrs literal per-layer decode; invariant-only, MHA-dominated | OpMHA decode dispatch; attention-dominated
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err
@@ -290,6 +298,7 @@ func (m *QuantNemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, t
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch; negligible vs layer GEMMs
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -301,6 +310,7 @@ func (m *QuantNemotron) DecodeStep(ctx *backend.Context, cache *NemotronCache, t
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch; negligible vs MLP GEMMs
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

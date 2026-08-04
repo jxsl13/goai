@@ -42,6 +42,7 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 	fillTrig := func(p int) {
 		fp := float64(p)
 		for e := range half {
+			//perfscan:ignore PS5008 MLA RoPE trig attn-dominated, already hoisted per-position (hot-fraction rule)
 			cosA[e], sinA[e] = math.Cos(fp*thetas[e]), math.Sin(fp*thetas[e])
 		}
 	}
@@ -49,6 +50,7 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 	case tensor.F64:
 		if sc := src.Contiguous(); sc.Dtype() == tensor.F64 {
 			s := sc.Storage().F64()
+			//perfscan:ignore PS3059 RoPE precompute O(seq·h·dR) negligible vs attn-dominated MLA; attn already parallel
 			for p := range seq {
 				fillTrig(p)
 				for h := range nheads {
@@ -56,7 +58,9 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 					out := (p*nheads + h) * dR
 					for e := range half {
 						x0, x1 := s[row+e], s[row+e+half]
+						//perfscan:ignore PS6012 FMA-contraction numerics/portability lint, no wallclock win
 						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						//perfscan:ignore PS6012 FMA-contraction numerics lint, no wallclock win
 						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
@@ -66,6 +70,7 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 	case tensor.F32:
 		if sc := src.Contiguous(); sc.Dtype() == tensor.F32 {
 			s := sc.Storage().F32()
+			//perfscan:ignore PS3059 RoPE precompute negligible vs attn (F32 fast path)
 			for p := range seq {
 				fillTrig(p)
 				for h := range nheads {
@@ -73,7 +78,9 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 					out := (p*nheads + h) * dR
 					for e := range half {
 						x0, x1 := float64(s[row+e]), float64(s[row+e+half])
+						//perfscan:ignore PS6012 FMA-contraction numerics lint, no wallclock win
 						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						//perfscan:ignore PS6012 FMA-contraction numerics lint, no wallclock win
 						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
@@ -82,13 +89,16 @@ func mlaRoPECPU(src *tensor.Tensor, nheads, dR int, base float64, dst []float64)
 		}
 	}
 	// Generic fallback for exotic dtypes.
+	//perfscan:ignore PS3059 exotic-dtype generic fallback, cold path
 	for p := range seq {
 		fillTrig(p)
 		for h := range nheads {
 			out := (p*nheads + h) * dR
 			for e := range half {
 				x0, x1 := src.AtF64(p, h*dR+e), src.AtF64(p, h*dR+e+half)
+				//perfscan:ignore PS6012 FMA lint in exotic-dtype fallback
 				dst[out+e] = x0*cosA[e] - x1*sinA[e]
+				//perfscan:ignore PS6012 FMA lint in exotic-dtype fallback
 				dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 			}
 		}
@@ -164,6 +174,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			qs, ks, vs := qcc.Storage().F64(), kcc.Storage().F64(), vcc.Storage().F64()
 			os := out.Storage().F64()
 			parallelWork(heads*seq, seq*dh, func(plo, phi int) {
+				//perfscan:ignore PS6008 per-worker scratch, once per worker-chunk not per element; intended
 				a := make([]float64, seq)
 				for pidx := plo; pidx < phi; pidx++ {
 					h := pidx / seq
@@ -176,6 +187,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					m := mlaScores(a, qs, ks, qR, kR,
 						i*hdh+hc, (i*heads+h)*dR, hc, hdh, dh, dR, jmax, scale)
 					var sum float64
+					//perfscan:ignore PS3010,PS3066 softmax-denom add hidden behind math.Exp (exp-dominated loop) | false-positive: 2nd loop needs completed sum,
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
@@ -190,6 +202,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					}
 					ob := i*hdh + hc
 					orow := os[ob : ob+dh : ob+dh]
+					//perfscan:ignore PS3052 degenerate only at jmax==1 (single position), negligible
 					clear(orow)
 					mlaWeightedSum(orow, a, vs, hc, hdh, dh, jmax)
 				}
@@ -202,7 +215,9 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			qs, ks, vs := qcc.Storage().F32(), kcc.Storage().F32(), vcc.Storage().F32()
 			os := out.Storage().F32()
 			parallelWork(heads*seq, seq*dh, func(plo, phi int) {
+				//perfscan:ignore PS6008 per-worker scratch once per chunk (F32 path); intended
 				a := make([]float64, seq)
+				//perfscan:ignore PS6008 per-worker acc scratch once per chunk; intended
 				acc := make([]float64, dh) // float64 output accumulators (the store rounds once)
 				for pidx := plo; pidx < phi; pidx++ {
 					h := pidx / seq
@@ -216,6 +231,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 					m := mlaScores(a, qs, ks, qR, kR,
 						i*hdh+hc, (i*heads+h)*dR, hc, hdh, dh, dR, jmax, scale)
 					var sum float64
+					//perfscan:ignore PS3010 exp-dominated softmax denom (F32 path)
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
@@ -247,11 +263,13 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 				jmax = i + 1
 			}
 			m := math.Inf(-1)
+			//perfscan:ignore PS3040 exotic-dtype generic fallback, cold path
 			for j := range jmax {
 				var s float64
 				for d := range dh {
 					s += qC.AtF64(i, hc+d) * kC.AtF64(j, hc+d)
 				}
+				//perfscan:ignore PS3010,PS4008 exotic-dtype generic fallback, cold path
 				for e := range dR {
 					s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
 				}
@@ -262,6 +280,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010 exotic-dtype generic fallback, cold path
 			for j := range jmax {
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
@@ -271,6 +290,7 @@ func mlaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 			}
 			for d := range dh {
 				var o float64
+				//perfscan:ignore PS3010 exotic-dtype generic fallback, cold path
 				for j := range jmax {
 					o += a[j] * vC.AtF64(j, hc+d)
 				}
@@ -293,10 +313,12 @@ func mlaScores[T float32 | float64](a []float64, qs, ks []T, qR, kR []float64,
 	qb, qRb, hc, hdh, dh, dR, jmax int, scale float64) float64 {
 	m := math.Inf(-1)
 	j := 0
+	//perfscan:ignore PS3066,PS3076 false-positive: main+remainder of unrolled loop, not fusable siblings | already 4-way unrolled (s0-s3), at Zen
 	for ; j+3 < jmax; j += 4 {
 		k0 := j*hdh + hc
 		k1, k2, k3 := k0+hdh, k0+2*hdh, k0+3*hdh
 		var s0, s1, s2, s3 float64
+		//perfscan:ignore PS3010 false-positive: already 4 independent chains s0-s3 in flight
 		for d := range dh {
 			qv := float64(qs[qb+d])
 			s0 += qv * float64(ks[k0+d])
@@ -306,6 +328,7 @@ func mlaScores[T float32 | float64](a []float64, qs, ks []T, qR, kR []float64,
 		}
 		r0 := j * dR
 		r1, r2, r3 := r0+dR, r0+2*dR, r0+3*dR
+		//perfscan:ignore PS3010 false-positive: already 4 chains s0-s3 (dR loop)
 		for e := range dR {
 			qv := qR[qRb+e]
 			s0 += qv * kR[r0+e]
@@ -324,9 +347,11 @@ func mlaScores[T float32 | float64](a []float64, qs, ks []T, qR, kR []float64,
 	for ; j < jmax; j++ {
 		var s float64
 		kb := j*hdh + hc
+		//perfscan:ignore PS3010 remainder tail loop, <4 trips
 		for d := range dh {
 			s += float64(qs[qb+d]) * float64(ks[kb+d])
 		}
+		//perfscan:ignore PS3010 remainder tail dR loop, <4 trips
 		for e := range dR {
 			s += qR[qRb+e] * kR[j*dR+e]
 		}
@@ -347,6 +372,7 @@ func mlaScores[T float32 | float64](a []float64, qs, ks []T, qR, kR []float64,
 // register instead of memory, and the value rows are still read contiguously in d.
 func mlaWeightedSum[T float32 | float64](acc, a []float64, vs []T, hc, hdh, dh, jmax int) {
 	j := 0
+	//perfscan:ignore PS3066 false-positive: main+remainder of unrolled weighted-sum
 	for ; j+3 < jmax; j += 4 {
 		w0, w1, w2, w3 := a[j], a[j+1], a[j+2], a[j+3]
 		v0 := j*hdh + hc

@@ -52,6 +52,7 @@ func NewResidentMMQ(b *tensor.Tensor) (*ResidentMMQ, error) {
 		for blk := 0; blk < nb; blk++ {
 			var amax float32
 			for j := 0; j < 32; j++ {
+				//perfscan:ignore PS5007,PS6011 load-time weight quantization (NewResidentMMQ)
 				v := float32(math.Abs(float64(src[(blk*32+j)*n+row]))) // B[blk*32+j][row]
 				if v > amax {
 					amax = v

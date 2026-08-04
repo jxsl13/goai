@@ -131,22 +131,27 @@ func (h *Hopfield) Update(ctx *backend.Context, xi *tensor.Tensor) (*tensor.Tens
 	if xi.Ndim() != 2 || xi.Shape()[1] != h.Dim {
 		return nil, fmt.Errorf("nn: Hopfield query wants [Q,%d], got %v", h.Dim, xi.Shape())
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	yt, err := h.exec(ctx, backend.OpTranspose, nil, h.Stored) // [Dim,N]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	scores, err := h.exec(ctx, backend.OpMatMul, nil, xi, yt) // [Q,N] = ξ·Yᵀ
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	scaled, err := h.exec(ctx, backend.OpMul, nil, scores, scalarTensor(xi.Dtype(), h.Beta)) // β·(ξ·Yᵀ)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	p, err := h.exec(ctx, backend.OpSoftmax, nil, scaled) // softmax over stored patterns
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	return h.exec(ctx, backend.OpMatMul, nil, p, h.Stored) // [Q,Dim] = p·Y
 }
 

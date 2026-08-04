@@ -197,6 +197,7 @@ func (s *StickBreakingAttention) Forward(ctx *backend.Context, x *tensor.Tensor)
 	for h := range s.Heads {
 		lo, hi := h*s.HeadDim, (h+1)*s.HeadDim
 		slice := func(m *tensor.Tensor) (*tensor.Tensor, error) {
+			//perfscan:ignore PS3024,PS6018 per-head slice dispatch, matmul-dominated | slice-closure alloc per head, resource-only trivial
 			return s.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 		}
 		qh, err := slice(q)
@@ -211,18 +212,22 @@ func (s *StickBreakingAttention) Forward(ctx *backend.Context, x *tensor.Tensor)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head transpose, matmul-dominated
 		khT, err := s.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 dominant per-head QK matmul itself
 		z, err := s.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 scalar OpMul, matmul-dominated
 		if z, err = s.exec(ctx, backend.OpMul, nil, z, invSqrtD); err != nil {
 			return nil, err
 		}
 		if s.biases != nil {
+			//perfscan:ignore PS3024 per-head bias add, matmul-dominated
 			if z, err = s.exec(ctx, backend.OpAdd, nil, z, s.biases[h]); err != nil { // broadcast [1,1]
 				return nil, err
 			}
@@ -231,6 +236,7 @@ func (s *StickBreakingAttention) Forward(ctx *backend.Context, x *tensor.Tensor)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 dominant weight-value matmul itself
 		if heads[h], err = s.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil { // [T, HeadDim]
 			return nil, err
 		}
@@ -337,6 +343,7 @@ func stickBreakingWeights(ctx *backend.Context, z, mask *tensor.Tensor) (*tensor
 func sbCausalMask01(dtype tensor.Dtype, t int) *tensor.Tensor {
 	m := tensor.New(dtype, tensor.Shape{t, t})
 	for i := range t {
+		//perfscan:ignore PS1005 O(T2) mask built once/forward, reused all heads, matmul-dominated
 		for j := 0; j <= i; j++ {
 			m.SetF64(1, i, j)
 		}

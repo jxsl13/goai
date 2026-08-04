@@ -59,9 +59,12 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 		// reused rank slice and a []bool membership set (both cleared between the worker's queries)
 		// plus the attendMask scores buffer. Gated on seq·seq·dm.
 		parallelRows(seq, seq*dm, func(lo, hi int) {
+			//perfscan:ignore PS6008 per-worker scratch, dispatch once/call, GOMAXPROCS-bounded sanctioned
 			rank := make([]ranked, 0, seq)
+			//perfscan:ignore PS6008 per-worker scratch, sanctioned bounded
 			sel := make([]bool, seq)
 			var setIdx []int
+			//perfscan:ignore PS6008 per-worker scratch, sanctioned bounded
 			scores := make([]float64, seq)
 			for i := lo; i < hi; i++ {
 				qir := qis[i*idxWidth : i*idxWidth+idxWidth : i*idxWidth+idxWidth]
@@ -72,6 +75,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 					for h := range idxHeads {
 						base := h * idxDim
 						var dot float64
+						//perfscan:ignore PS4012 f64 exact dot not quantized dequant; PS3010 covers reassoc
 						for d := range idxDim {
 							dot += qir[base+d] * kjr[base+d]
 						}
@@ -81,6 +85,7 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 					}
 					rank = append(rank, ranked{j, s})
 				}
+				//perfscan:ignore PS3002 same per-query sort as PS6009; SortFunc cleaner, radix composite halves payoff
 				sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
 				setIdx = setIdx[:0]
 				sel[i] = true
@@ -107,7 +112,9 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 	}
 	// Same per-query independence as the fast path; each worker owns scores/qrow.
 	parallelRows(seq, seq*dm, func(lo, hi int) {
+		//perfscan:ignore PS6008 declined-dtype (non-F64) fallback path, cold; also sanctioned
 		scores := make([]float64, seq)
+		//perfscan:ignore PS6008 declined-dtype fallback path, cold
 		qrow := make([]float64, dk)
 		for i := lo; i < hi; i++ {
 			var rank []ranked
@@ -124,7 +131,9 @@ func DSAAttention(q, k, v, qIdx, kIdx *tensor.Tensor, w []float64, heads, topK i
 				}
 				rank = append(rank, ranked{j, s})
 			}
+			//perfscan:ignore PS3002,PS6009 declined-dtype fallback path, cold
 			sort.Slice(rank, func(a, b int) bool { return rank[a].s > rank[b].s })
+			//perfscan:ignore PS3083 declined-dtype fallback; fast path already uses []bool sel
 			selected := map[int]bool{i: true} // the query itself is always attended
 			for ri := 0; ri < len(rank) && len(selected) < topK; ri++ {
 				selected[rank[ri].j] = true

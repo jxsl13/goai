@@ -89,6 +89,7 @@ func OLMo2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*OLM
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &OLMo2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 GGUF loader loop, one-time model load
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -282,6 +283,7 @@ func OLMo2ToGGUF(m *OLMo2) (map[string]any, map[string]*tensor.Tensor) {
 		"output_norm.weight": cloneF64(m.Norm.Gamma),
 		"output.weight":      transpose2D(m.Out), // [dim,vocab] → [vocab,dim] (untied head, required by the arch)
 	}
+	//perfscan:ignore PS3060 GGUF export loop, one-time
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_q.weight"] = transpose2D(b.Wq) // GoAI [in,out] → GGUF [out,in]

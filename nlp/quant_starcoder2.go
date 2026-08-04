@@ -174,12 +174,15 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 resource-only 1-alloc hoist (~9.5ns); matmul-dominated block loop | resource-only 1-alloc/call (1-2% ceiling);
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 resource-only 1-alloc hoist; matmul-dominated | resource-only 1-alloc/call; unbenchmarked quant path
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc/call; MHA dispatch, unbenchmarked
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -187,6 +190,7 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if a, err = quantProjBias(ctx, a, b.Wo, b.Bo); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc/call; unbenchmarked quant path
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -199,6 +203,7 @@ func (m *QuantStarCoder2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc/call; unbenchmarked quant path
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
@@ -274,15 +279,18 @@ func (m *QuantStarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cach
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 resource-only 1-alloc hoist; per-block decode, matmul-dominated | resource-only 1-alloc/call; unbenchmarked de
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 resource-only 1-alloc hoist; matmul-dominated | resource-only 1-alloc/call; unbenchmarked decode path
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 resource-only 1-alloc hoist; MHA attrs, matmul-dominated | resource-only 1-alloc/call; unbenchmarked decode pa
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err
@@ -290,6 +298,7 @@ func (m *QuantStarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cach
 		if a, err = quantProjBias(ctx, a, b.Wo, b.Bo); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc/call; unbenchmarked decode path
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -301,6 +310,7 @@ func (m *QuantStarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cach
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc/call; unbenchmarked decode path
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

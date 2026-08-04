@@ -167,6 +167,7 @@ func vicCovarianceTerm(ctx *backend.Context, z *tensor.Tensor, coeff float64) (*
 	// zero the diagonal, keep the off-diagonal squared entries.
 	offMask := tensor.New(z.Dtype(), tensor.Shape{d, d})
 	for i := range d {
+		//perfscan:ignore PS1001 mask build O(D^2) dominated by cov matmul O(D^2*N)
 		for j := range d {
 			if i != j {
 				offMask.SetF64(1, i, j)
@@ -186,10 +187,12 @@ func vicCovarianceTerm(ctx *backend.Context, z *tensor.Tensor, coeff float64) (*
 
 // vicCenter subtracts the per-dimension batch mean from z [N,D].
 func vicCenter(ctx *backend.Context, z *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	mean, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{z}, backend.ReduceAttrs{Axes: []int{0}, KeepDims: true})
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	o, err := backend.Execute(ctx, backend.OpSub, []*tensor.Tensor{z, mean[0]}, nil)
 	if err != nil {
 		return nil, err

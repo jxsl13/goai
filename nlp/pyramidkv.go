@@ -35,6 +35,7 @@ func PyramidKVBudgets(numLayers, totalBudget, minBudget int) []int {
 	bMax := 2*avg - float64(minBudget) // (bMax + minBudget)/2 = avg conserves the total
 	out := make([]int, numLayers)
 	sum := 0
+	//perfscan:ignore PS3010 config budget calc, low trip-count over layers, cold
 	for l := range out {
 		b := bMax - (bMax-float64(minBudget))*float64(l)/float64(numLayers-1)
 		out[l] = int(math.Round(b))

@@ -740,6 +740,8 @@ func GroupedQueryAttentionTF32(q, k, v *DeviceF32, qHeads, kvHeads int, causal b
 // wmmaMaxSeq caps the fused-attention fast path by the kernel's shared-memory budget: it stages
 // 16·seq f32 scores (16·seq·4 B); Ampere's opt-in dynamic-shared max is ~99 KB, so seq ≤ 1536
 // keeps it ≤ 96 KB. Larger seq (or a device with less shared) falls through to the triple.
+//
+//perfscan:ignore PS6023 verification-gap (test to write), not a throughput change
 const wmmaMaxSeq = 1536
 
 func gqaCore(q, k, v *DeviceF32, qHeads, kvHeads, hd, offset int, tf32 bool) (*DeviceF32, error) {

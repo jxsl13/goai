@@ -230,12 +230,14 @@ func (m *JambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic-slice alloc; expert-forward/matmul dominated, resource-only
 		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
 		if y == nil {
 			y = term
+			//perfscan:ignore PS6017 variadic-slice alloc; matmul-dominated layer loop, resource-only
 		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
@@ -293,22 +295,27 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 		var mix *tensor.Tensor
 		if l.Attn != nil {
 			// NoPE grouped-query causal attention: q/k are NOT rotated.
+			//perfscan:ignore PS6017 variadic-slice alloc; OpMatMul dominated, resource-only no wallclock
 			q, err := exec1(ctx, backend.OpMatMul, nil, xb, l.Attn.Wq)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 variadic-slice alloc; OpMatMul dominated, resource-only no wallclock
 			k, err := exec1(ctx, backend.OpMatMul, nil, xb, l.Attn.Wk)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 variadic-slice alloc; OpMatMul dominated, resource-only no wallclock
 			v, err := exec1(ctx, backend.OpMatMul, nil, xb, l.Attn.Wv)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 variadic-slice alloc; OpMHA dominated, resource-only no wallclock
 			a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 variadic-slice alloc; OpMatMul dominated, resource-only no wallclock
 			if mix, err = exec1(ctx, backend.OpMatMul, nil, a, l.Attn.Wo); err != nil {
 				return nil, err
 			}
@@ -317,6 +324,7 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 variadic-slice alloc; OpAdd on large tensor, resource-only no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
@@ -334,6 +342,7 @@ func (m *Jamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, err
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 variadic-slice alloc; matmul-dominated layer loop, resource-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}

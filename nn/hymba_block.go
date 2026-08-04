@@ -188,6 +188,7 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	t := x.Shape()[0]
 	if b.MetaTokens != nil { // §2.3: prepend the learned meta tokens (sliced off below)
 		var err error
+		//perfscan:ignore PS3024,PS6018 OpConcat fused-op dispatch, negligible vs compute | meta-token concat runs only when enabled, once per forward
 		if x, err = b.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, b.MetaTokens, x); err != nil {
 			return nil, err
 		}
@@ -200,6 +201,7 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 		return nil, err
 	}
 	chunk := func(i int) (*tensor.Tensor, error) {
+		//perfscan:ignore PS3024 OpSlice chunk dispatch, VJP-backed fused op negligible
 		return b.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i * b.DInner, End: (i + 1) * b.DInner}, p)
 	}
 	q, err := chunk(0)
@@ -225,6 +227,7 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	// Attention branch: the fused causal multi-head softmax-attention core
 	// (head split/concat internal) on the shared projection — NO per-branch
 	// out-proj; the raw head concat goes straight to the fusion.
+	//perfscan:ignore PS3024 OpMHA fused dispatch, attention-compute-dominated
 	attn, err := b.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: b.Heads, Causal: true}, q, k, v)
 	if err != nil {
 		return nil, err
@@ -246,12 +249,15 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpMul beta1 dispatch, negligible vs matmuls
 	if na, err = b.exec(ctx, backend.OpMul, nil, na, b.Beta1); err != nil { // β₁ ⊙ norm(attn), broadcast [1,DInner]
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpMul beta2 dispatch, negligible vs matmuls
 	if ns, err = b.exec(ctx, backend.OpMul, nil, ns, b.Beta2); err != nil { // β₂ ⊙ norm(ssm)
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpAdd fusion dispatch, negligible
 	fused, err := b.exec(ctx, backend.OpAdd, nil, na, ns)
 	if err != nil {
 		return nil, err
@@ -262,6 +268,7 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	}
 	if b.MetaTokens != nil { // drop the meta rows: caller always sees [T, DModel]
 		m := b.MetaTokens.Shape()[0]
+		//perfscan:ignore PS3024 OpSlice meta-row drop dispatch, once per forward
 		return b.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: m, End: m + t}, out)
 	}
 	return out, nil
@@ -274,10 +281,12 @@ func (b *HymbaBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 // the y ⊙ SiLU(z) gate. Identical math to MambaBlock's interior, minus its
 // out-proj (Hymba's out-proj is shared with the attention branch).
 func (b *HymbaBlock) ssmBranch(ctx *backend.Context, xs, z *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 OpConv1D fused dispatch, kernel-compute-dominated
 	xc, err := b.exec(ctx, backend.OpConv1D, nil, xs, b.ConvW, b.ConvB)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSiLU fused-op dispatch, negligible
 	if xc, err = b.exec(ctx, backend.OpSiLU, nil, xc); err != nil {
 		return nil, err
 	}
@@ -289,6 +298,7 @@ func (b *HymbaBlock) ssmBranch(ctx *backend.Context, xs, z *tensor.Tensor) (*ten
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSoftplus fused-op dispatch, negligible
 	delta, err := b.exec(ctx, backend.OpSoftplus, nil, dtPre)
 	if err != nil {
 		return nil, err
@@ -301,22 +311,27 @@ func (b *HymbaBlock) ssmBranch(ctx *backend.Context, xs, z *tensor.Tensor) (*ten
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpExp on A_log dispatch, tiny param tensor
 	expA, err := b.exec(ctx, backend.OpExp, nil, b.ALog)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpNeg dispatch, tiny param tensor
 	a, err := b.exec(ctx, backend.OpNeg, nil, expA)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSSM fused selective-scan dispatch, scan-compute-dominated
 	y, err := b.exec(ctx, backend.OpSSM, nil, xc, delta, a, bMat, cMat, b.Dskip)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpSiLU gate dispatch, negligible
 	gate, err := b.exec(ctx, backend.OpSiLU, nil, z)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpMul gate dispatch, negligible vs compute
 	return b.exec(ctx, backend.OpMul, nil, y, gate)
 }
 

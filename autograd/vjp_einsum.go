@@ -44,12 +44,14 @@ func init() {
 			return nil, fmt.Errorf("autograd: einsum gradient with a repeated index shared across operands (%q) not supported", pa.Spec)
 		}
 		grads := make([]*tensor.Tensor, len(in))
+		//perfscan:ignore PS3034 loop over few operands, EinsumContract-dominated
 		for k := range in {
 			// dedupK collapses repeated letters of sₖ to their first occurrence; the
 			// swap rule is computed over dedupK, then scattered onto the diagonal.
 			dedupK, firstPos := dedupSub(inSubs[k])
 			gInSubs := make([][]byte, 0, len(in)+len(dedupK))
 			gOperands := make([]*tensor.Tensor, 0, len(in)+len(dedupK))
+			//perfscan:ignore PS3083 per-operand map alloc over <=26 letters, trivial
 			avail := map[byte]bool{}
 			for m := range in {
 				if m == k {
@@ -68,6 +70,7 @@ func init() {
 			}
 			// Reduction indices of dedupK (summed out) get a broadcast gradient: inject
 			// a ones vector of the right size and subscript.
+			//perfscan:ignore PS3003 map read over <=26 index letters, low trip-count
 			for _, c := range dedupK {
 				if !avail[c] {
 					ones := tensor.Ones(in[k].Dtype(), tensor.Shape{in[k].Shape()[firstPos[c]]})
@@ -94,6 +97,7 @@ func init() {
 // from each letter to its first position in s.
 func dedupSub(s []byte) (dedup []byte, firstPos map[byte]int) {
 	firstPos = make(map[byte]int, len(s))
+	//perfscan:ignore PS3003 dedupSub map read over letters, trivial trip-count
 	for pos, c := range s {
 		if _, ok := firstPos[c]; !ok {
 			firstPos[c] = pos
@@ -109,9 +113,11 @@ func dedupSub(s []byte) (dedup []byte, firstPos map[byte]int) {
 func scatterDiag(gDedup *tensor.Tensor, sk []byte, akShape tensor.Shape, dedupK []byte, firstPos map[byte]int, dt tensor.Dtype) *tensor.Tensor {
 	dA := tensor.New(dt, akShape)
 	coord := make([]int, len(dedupK))
+	//perfscan:ignore PS1001 scatterDiag only on rare repeated-index (diagonal/trace) einsum backward
 	for pos := range akShape.Numel() {
 		idx := tensor.Unravel(pos, akShape)
 		onDiag := true
+		//perfscan:ignore PS3003 map read in scatterDiag, gated on rare repeated-index einsum
 		for p, c := range sk {
 			if idx[p] != idx[firstPos[c]] { // occurrences of c must share a coordinate
 				onDiag = false
@@ -121,6 +127,7 @@ func scatterDiag(gDedup *tensor.Tensor, sk []byte, akShape tensor.Shape, dedupK 
 		if !onDiag {
 			continue // off the diagonal ⇒ zero gradient
 		}
+		//perfscan:ignore PS3003 map read in scatterDiag, gated on rare repeated-index einsum
 		for di, c := range dedupK {
 			coord[di] = idx[firstPos[c]]
 		}

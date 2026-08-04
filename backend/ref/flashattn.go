@@ -28,6 +28,8 @@ import (
 // blocks wholly past i and caps the diagonal block at j≤i. Requires sq==sk. The result
 // is exact (equals OpMHA up to floating-point reassociation, not an approximation);
 // gradients use the standard softmax-attention backward (§R72). f64 accum (§V10).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: flashattn wants (Q,K,V), got %d inputs", len(in))
@@ -92,9 +94,11 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 								j1 := min(j0+block, jmax)
 								// block scores S and its row max
 								mBlk := math.Inf(-1)
+								//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 								for j := j0; j < j1; j++ {
 									krow := ks[j*dkv+kvOff : j*dkv+kvOff+dk]
 									var s float64
+									//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 									for d, qv := range qrow {
 										s += qv * krow[d]
 									}
@@ -120,10 +124,12 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 								for d := range pv {
 									pv[d] = 0
 								}
+								//perfscan:ignore PS1007,PS3049 reference oracle: intentionally simple, correctness baseline not an optimization target
 								for j := j0; j < j1; j++ {
 									pj := p[j-j0]
 									vrow := vs[j*dkv+kvOff : j*dkv+kvOff+dk]
 									for d, vv := range vrow {
+										//perfscan:ignore PS3017,PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 										pv[d] += pj * vv
 									}
 								}
@@ -133,6 +139,7 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 								m = mNew
 							}
 							orow := os[i*dm+qOff : i*dm+qOff+dk]
+							//perfscan:ignore PS5001 reference oracle: intentionally simple, correctness baseline not an optimization target
 							for d := range dk {
 								orow[d] = acc[d] / l // single final normalization
 							}
@@ -188,6 +195,7 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				l = corr*l + pSum
 				for d := range dk {
 					var pv float64
+					//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := j0; j < j1; j++ {
 						pv += p[j-j0] * v.AtF64(j, kvOff+d)
 					}
@@ -195,6 +203,7 @@ func flashAttnKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 				}
 				m = mNew
 			}
+			//perfscan:ignore PS5001 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for d := range dk {
 				out.SetF64(acc[d]/l, i, qOff+d) // single final normalization
 			}

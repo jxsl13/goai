@@ -168,6 +168,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic pack; MHA matmul-dominated, no wall-clock
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -175,6 +176,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic pack; residual-add dispatch, no wall-clock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -187,6 +189,7 @@ func (m *QuantMPT) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, 
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic pack; residual-add dispatch, no wall-clock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
@@ -266,6 +269,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
+		//perfscan:ignore PS6017 resource-only variadic pack; MHA decode dominated
 		a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
 		if err != nil {
 			return nil, err
@@ -273,6 +277,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		if a, err = b.Wo.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic pack; residual-add dispatch, no wall-clock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -284,6 +289,7 @@ func (m *QuantMPT) DecodeStep(ctx *backend.Context, cache *MPTCache, token, pos 
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic pack; residual-add dispatch, no wall-clock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

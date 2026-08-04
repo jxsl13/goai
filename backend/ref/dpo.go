@@ -19,6 +19,8 @@ import (
 // −log σ(z) is evaluated as the numerically stable softplus(−z) = max(−z,0) +
 // log(1+exp(−|z|)) so extreme margins never overflow (§V12). Accumulation in f64
 // (§V10). β is read from attrs["beta"] (default 0.1). Output is a scalar.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func dpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: dpo wants (policyChosen, policyRejected, refChosen, refRejected), got %d inputs", len(in))
@@ -54,12 +56,14 @@ func dpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	pls, ok2 := f64Data(pl)
 	rls, ok3 := f64Data(rl)
 	if ok0 && ok1 && ok2 && ok3 {
+		//perfscan:ignore PS4003 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			delta := beta * ((pcs[i] - rcs[i]) - (pls[i] - rls[i]))
 			total += softplus(-delta) // −log σ(delta)
 		}
 	} else {
 		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		//perfscan:ignore PS4003 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			delta := beta * ((pc.AtF64(i) - rc.AtF64(i)) - (pl.AtF64(i) - rl.AtF64(i)))
 			total += softplus(-delta) // −log σ(delta)
@@ -79,6 +83,7 @@ func softplus(u float64) float64 {
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpDPO, tensor.F32, dpoKernel)
 	std.add(backend.OpDPO, tensor.F64, dpoKernel)
 }

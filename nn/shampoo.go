@@ -53,6 +53,7 @@ func growMat(buf [][]float64, r, c int) [][]float64 {
 	}
 	for i := range buf {
 		if cap(buf[i]) < c {
+			//perfscan:ignore PS2008,PS3064 growMat scratch helper; allocs warm-up only, 0 steady-state; resource-only | growMat scratch reshape helper; w
 			buf[i] = make([]float64, c)
 		} else {
 			buf[i] = buf[i][:c]
@@ -163,6 +164,7 @@ func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
 		gm := st.gmScr
 		for i := range m {
 			for j := range n {
+				//perfscan:ignore PS3016 O(mn) grad copy dominated by O(m2n) gram + O(n3) eigen
 				gm[i][j] = g.AtF64(i, j)
 			}
 		}
@@ -174,9 +176,12 @@ func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
 		// same k-order); invMatrixRoot→SymEig reads the full matrix, so accumulate only
 		// the upper triangle + diagonal and mirror once — halves the O(m²n)+O(n²m) grams.
 		// Bit-identical: the original two triangles were already exactly equal.
+		//perfscan:ignore PS3059 L-gram already symmetric-triangle reduced; Step parallelizes across params
 		for i := range m {
+			//perfscan:ignore PS3040,PS6010 already symmetric-triangle gram; niche 2nd-order optimizer | resource-only strided note; gram already reblocke
 			for j := i; j < m; j++ {
 				var acc float64
+				//perfscan:ignore PS3010 contiguous f64 gram dot, cache-optimal; f64 dot at-ceiling
 				for k := range n {
 					acc += gm[i][k] * gm[j][k]
 				}
@@ -204,12 +209,14 @@ func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
 				av := gk[i]
 				ri := rg[i]
 				for j := i; j < n; j++ {
+					//perfscan:ignore PS3075 R-gram already k-outer rank-1 reblocked (soap.go)
 					ri[j] += av * gk[j]
 				}
 			}
 		}
 		for i := range n {
 			for j := i; j < n; j++ {
+				//perfscan:ignore PS3016 O(n2) triangle mirror-add, trivial vs gram/eigen
 				st.r[i][j] += rg[i][j]
 				if j != i {
 					st.r[j][i] = st.r[i][j]
@@ -237,6 +244,7 @@ func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
 		shampooPrecondInto(gh, t, li, gm, ri, m, n)
 		for i := range m {
 			for j := range n {
+				//perfscan:ignore PS3016 O(mn) weight update dominated by O(m2n) gram + O(n3) eigen
 				p.SetF64(p.AtF64(i, j)-s.LR*gh[i][j], i, j) // W −= η·Ĝ
 			}
 		}
@@ -282,6 +290,7 @@ func (s *Shampoo) stepParam(pi int, p, g *tensor.Tensor, refresh bool) {
 func eyeScaled(n int, e float64) [][]float64 {
 	m := make([][]float64, n)
 	for i := range n {
+		//perfscan:ignore PS2008,PS3064 eyeScaled one-time preconditioner init (st.l==nil) | eyeScaled cold init, runs once per param
 		m[i] = make([]float64, n)
 		m[i][i] = e
 	}
@@ -310,7 +319,9 @@ func invMatrixRoot(mat [][]float64, power int, eps float64) [][]float64 {
 	// ascending order from a zeroed cell. Now worth it (~38% of invMatrixRoot) after SymEig's 8.9x
 	// speedup (#890/#891) shrank the eigensolve that used to dominate (was <1%).
 	out := make([][]float64, n)
+	//perfscan:ignore PS3066 invMatrixRoot out-row alloc; amortized refresh, reconstruction
 	for i := range n {
+		//perfscan:ignore PS2008,PS3064 reconstruction out alloc; amortized refresh, niche optimizer | same amortized eigensolve reconstruction alloc
 		out[i] = make([]float64, n)
 	}
 	for k := range n {
@@ -319,7 +330,9 @@ func invMatrixRoot(mat [][]float64, power int, eps float64) [][]float64 {
 		for i := range n {
 			c := dk * vk[i]
 			oi := out[i]
+			//perfscan:ignore PS4006 reconstruction already k-outer reblocked; flatten marginal, amortized, niche
 			for j := range n {
+				//perfscan:ignore PS3075 reconstruction rank-1 already reblocked + invariant hoisted
 				oi[j] += c * vk[j]
 			}
 		}
@@ -337,26 +350,33 @@ func invMatrixRoot(mat [][]float64, power int, eps float64) [][]float64 {
 // outputs are visited changes. gh and t are pooled scratch and are accumulated into,
 // so both are zeroed here; TestShampooPrecondCrossReferenceExact feeds dirty buffers.
 func shampooPrecondInto(gh, t, li, gm, ri [][]float64, m, n int) {
+	//perfscan:ignore PS3066 clear() scratch zeroing, trivial vs precond matmul
 	for i := range m {
 		clear(t[i][:n])
 		clear(gh[i][:n])
 	}
+	//perfscan:ignore PS3043 precond T-product already ikj/axpy (PS4008 done)
 	for i := range m {
 		gmi, ti := gm[i], t[i][:n]
+		//perfscan:ignore PS1007 already ikj order, inner-j contiguous; false strided
 		for k := range n {
 			av := gmi[k]
 			rk := ri[k][:n]
 			for j := range ti {
+				//perfscan:ignore PS3025,PS3075 precond axpy inner already optimized | same optimized axpy rank-1 update
 				ti[j] += av * rk[j]
 			}
 		}
 	}
+	//perfscan:ignore PS3043 second precond product already ikj/axpy
 	for i := range m {
 		lii, ghi := li[i], gh[i][:n]
+		//perfscan:ignore PS1007 already ikj, contiguous inner-j; false strided
 		for k := range m {
 			av := lii[k]
 			tk := t[k][:n]
 			for j := range ghi {
+				//perfscan:ignore PS3025,PS3075 precond axpy inner already optimized | same optimized axpy update
 				ghi[j] += av * tk[j]
 			}
 		}

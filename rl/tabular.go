@@ -164,6 +164,7 @@ func oneHotStateIndex(numStates int) func(obs []float64) (int, error) {
 // determinism.
 func (a *tabularAgent) greedyAction(s int) int {
 	best, bv := 0, a.Q[s][0]
+	//perfscan:ignore PS3068 argmax over small numActions, low trip count
 	for act := 1; act < a.numActions; act++ {
 		if v := a.Q[s][act]; v > bv {
 			bv, best = v, act
@@ -211,6 +212,7 @@ func (a *tabularAgent) GreedyAction(stateIdx int) int { return a.greedyAction(st
 // the full deterministic policy extracted from the learned Q-table.
 func (a *tabularAgent) Policy() []int {
 	p := make([]int, a.numStates)
+	//perfscan:ignore PS3065 one-time policy extraction, small per-state work
 	for s := range p {
 		p[s] = a.greedyAction(s)
 	}
@@ -261,6 +263,7 @@ func (q *QLearning) Episode(env Env) (float64, error) {
 			}
 			target += q.Gamma * q.maxQ(s2) // off-policy: greedy bootstrap
 		}
+		//perfscan:ignore PS6007 inherently sequential MDP rollout scalar TD update
 		q.Q[s][a] += q.Alpha * (target - q.Q[s][a])
 		if done {
 			break

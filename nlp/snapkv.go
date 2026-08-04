@@ -127,6 +127,7 @@ func aggregatePrefixAttn(obsAttn [][]float64, winStart int) []float64 {
 	// Clamping cannot change behavior: r0[j] already panicked when a row was shorter than agg, so
 	// the failure domain is identical — only the panic's site moves one step earlier.
 	for ; h+4 <= len(obsAttn); h += 4 {
+		//perfscan:ignore PS3019 stale line/no unrolled-window loop; prefill memory-bound maxpool
 		r0, r1 := obsAttn[h][:len(agg)], obsAttn[h+1][:len(agg)]
 		r2, r3 := obsAttn[h+2][:len(agg)], obsAttn[h+3][:len(agg)]
 		for j := range agg {

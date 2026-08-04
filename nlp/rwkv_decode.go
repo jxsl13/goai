@@ -93,11 +93,13 @@ func (m *RWKV) DecodeStep(ctx *backend.Context, st *RWKVDecodeState, token int) 
 func rwkvShiftRows(prev []float64, xn *tensor.Tensor) *tensor.Tensor {
 	T, dim := xn.Shape()[0], xn.Shape()[1]
 	sh := tensor.New(xn.Dtype(), tensor.Shape{T, dim})
+	//perfscan:ignore PS1005 single shift row (dim); dwarfed by O(T·dim²) projections
 	for c, v := range prev {
 		sh.SetF64(v, 0, c)
 	}
 	rows := rows2D(xn)
 	for t := 1; t < T; t++ {
+		//perfscan:ignore PS1001 O(T·dim) shift-copy dwarfed by O(T·dim²) projections
 		for c := range dim {
 			sh.SetF64(rows[t-1][c], t, c)
 		}
@@ -178,7 +180,9 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 	kR, vR := rows2D(k), rows2D(v)
 	wkv := tensor.New(x.Dtype(), tensor.Shape{T, dim})
 	for t := range T {
+		//perfscan:ignore PS1001 WKV scan O(T·dim) transcendental-body; dwarfed by projections
 		for c := range dim {
+			//perfscan:ignore PS3016 transcendental-dominated inner body; bounds-check-elim negligible
 			kk, vv := kR[t][c], vR[t][c]
 			ww := ucs[c] + kk
 			q := fmath.Max(st.PP[c], ww)
@@ -186,7 +190,9 @@ func rwkvBlockPrefill(ctx *backend.Context, b *nn.RWKVBlock, st *nn.RWKVState, x
 			wkv.SetF64((e1*st.AA[c]+e2*vv)/(e1*st.BB[c]+e2), t, c)
 			q = fmath.Max(st.PP[c]-wcs[c], kk)
 			e1, e2 = math.Exp(st.PP[c]-wcs[c]-q), math.Exp(kk-q)
+			//perfscan:ignore PS3025 numerics/FMA-parity lint, not a throughput win
 			st.AA[c] = e1*st.AA[c] + e2*vv
+			//perfscan:ignore PS3025 numerics/FMA-parity lint, not a throughput win
 			st.BB[c] = e1*st.BB[c] + e2
 			st.PP[c] = q
 		}

@@ -169,6 +169,7 @@ func asInt(v any) (int, bool) {
 // run interprets the pickle and returns the top-of-stack value at STOP.
 func (u *unpickler) run() (any, error) {
 	u.memo = map[int]any{}
+	//perfscan:ignore PS3003 unpickle memo map read, one-time checkpoint load
 	for {
 		op, err := u.byte()
 		if err != nil {
@@ -511,6 +512,7 @@ func doReduce(fn, args any) (any, error) {
 	return nil, fmt.Errorf("pytorch: disallowed reduce %s.%s", g.module, g.name)
 }
 
+//perfscan:ignore PS3033 intTuple parse, one-time checkpoint load
 func intTuple(v any) ([]int, error) {
 	t, ok := v.([]any)
 	if !ok {
@@ -556,6 +558,8 @@ func setItems(target any, items []any) error {
 // --- loading ---------------------------------------------------------------
 
 // contiguousStride returns the C-order stride for a shape.
+//
+//perfscan:ignore PS3033 contiguousStride, one-time checkpoint load
 func contiguousStride(shape []int) []int {
 	s := make([]int, len(shape))
 	acc := 1
@@ -588,6 +592,7 @@ func numelOf(shape []int) (int, error) {
 	n := 1
 	for _, d := range shape {
 		if d < 0 {
+			//perfscan:ignore PS3013 numelOf shape validation, one-time load
 			return 0, fmt.Errorf("pytorch: negative dimension in shape %v", shape)
 		}
 		if d != 0 && n > maxElems/d {
@@ -808,6 +813,7 @@ func LoadFile(path string) (map[string]*tensor.Tensor, error) {
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3029 Load file helper, one-time checkpoint deserialize
 	return Load(f, info.Size())
 }
 

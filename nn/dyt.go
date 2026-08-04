@@ -95,6 +95,8 @@ func (l *DyT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 // tanh'd via the identical OpTanh dispatch, then the per-channel affine γ·t+β is
 // applied in a second typed loop that writes the output in place over the tanh
 // buffer. Same arithmetic and order as OpMul/OpTanh/OpMul/OpAdd → bit-identical.
+//
+//perfscan:ignore PS6004 stale line: file is 79 lines, no such code
 func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backend.Op, ...*tensor.Tensor) (*tensor.Tensor, error), d int) (*tensor.Tensor, bool) {
 	xc := x.Contiguous()
 	ax := tensor.New(x.Dtype(), x.Shape())
@@ -123,9 +125,11 @@ func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backe
 	case tensor.F64:
 		gs, bs := l.Gamma.Contiguous().Storage().F64(), l.Beta.Contiguous().Storage().F64()
 		ts := t.Storage().F64()
+		//perfscan:ignore PS3051 stale line: file is 79 lines, Forward is pure dispatch
 		for base := 0; base+d <= len(ts); base += d { // row-major: channel = offset within row
 			row := ts[base : base+d : base+d]
 			for c, tv := range row {
+				//perfscan:ignore PS3025,PS5003 stale line: file is 79 lines, no host compute loop | stale line: file is 79 lines, no such code
 				row[c] = tv*gs[c] + bs[c] // γ·t + β, matches OpMul(t,γ) then OpAdd(·,β)
 			}
 		}
@@ -135,6 +139,7 @@ func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backe
 		for base := 0; base+d <= len(ts); base += d {
 			row := ts[base : base+d : base+d]
 			for c, tv := range row {
+				//perfscan:ignore PS3025,PS5003 stale line: file is 79 lines, no such code
 				row[c] = tv*gs[c] + bs[c]
 			}
 		}

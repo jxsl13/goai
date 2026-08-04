@@ -94,6 +94,7 @@ func softmaxTyped[T normFloat](x, out []T, rows, d int) {
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3054 F64 hot path vectorized (ExpSumF64); f32 scalar declined arm
 			if isF64 {
 				sum = simd.ExpSumF64(of64[base:base+d], xf64[base:base+d], m)
 			} else {
@@ -114,6 +115,8 @@ func softmaxTyped[T normFloat](x, out []T, rows, d int) {
 // wideSoftmaxMinD gates the intra-row parallel path: below this width the
 // per-pass fan-out overhead beats the win; above it a single row is enough
 // work to split. 8192 ≈ 4 pool dispatches' worth of exp calls per worker.
+//
+//perfscan:ignore PS6023 threshold-coverage lint, no wall-clock win
 const wideSoftmaxMinD = 8192
 
 // softmaxWide is softmax for few-rows × huge-d inputs, parallel WITHIN the row.

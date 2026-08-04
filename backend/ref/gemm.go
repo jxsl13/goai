@@ -12,6 +12,8 @@ import (
 // inputs through AtF64, so transposed/sliced views work unchanged (no trans
 // flags needed). This is the truth against which the SIMD/blocked GEMM (§T12) is
 // validated (§V3, §V9) — clarity over speed.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: matmul wants 2 inputs, got %d", len(in))
@@ -49,9 +51,11 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 				for i := 0; i < m; i++ {
 					arow := as[i*k : i*k+k]
 					orow := os[i*n : i*n+n]
+					//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := 0; j < n; j++ {
 						brow := bt[j*k : j*k+k]
 						var acc float64
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for p, av := range arow {
 							acc += av * brow[p]
 						}

@@ -187,6 +187,7 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 		// Each list is cut with a three-index slice so its capacity stops at its own end; without
 		// that cap an append by a future reader would overwrite the next list in the block.
 		var slab []int
+		//perfscan:ignore PS2004 one-time Fit; escaping neighbor slice, resource-only
 		for i := lo; i < hi; i++ {
 			if tree != nil {
 				buf = tree.radius(x[i], m.cfg.eps, buf)
@@ -199,6 +200,7 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 				}
 			}
 			core := len(buf) >= m.cfg.minSamples
+			//perfscan:ignore PS6024 receiver output not scratch; one-time fit false positive
 			m.core[i] = core
 			// Only CORE neighbourhoods are ever read: the flood fill below dereferences
 			// neighbors[cur] solely under `if m.core[cur]`, and nothing else in the file
@@ -225,6 +227,7 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 		neigh(0, n)
 	} else {
 		var wg sync.WaitGroup
+		//perfscan:ignore PS3011 one-time fit already parallel; static-vs-dynamic chunk marginal
 		chunk := (n + ng - 1) / ng
 		for lo := 0; lo < n; lo += chunk {
 			hi := lo + chunk
@@ -250,6 +253,7 @@ func (m *DBSCAN) Fit(x [][]float64) ([]int, error) {
 	}
 	label := 0
 	var stack []int
+	//perfscan:ignore PS3059 inherently-serial DFS flood; one-time fit
 	for i := range n {
 		if labels[i] != DBSCANLabelNoise || !m.core[i] {
 			continue
@@ -285,6 +289,7 @@ func (m *DBSCAN) dist(a, b []float64, eps2 float64) bool {
 	switch m.cfg.metric {
 	case DBSCANManhattan:
 		var s float64
+		//perfscan:ignore PS3010 low-trip dim reduction; one-time fit
 		for i := range a {
 			s += math.Abs(a[i] - b[i])
 		}

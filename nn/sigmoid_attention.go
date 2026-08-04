@@ -235,6 +235,7 @@ func (s *SigmoidAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	for h := range s.Heads {
 		lo, hi := h*s.HeadDim, (h+1)*s.HeadDim
 		slice := func(m *tensor.Tensor) (*tensor.Tensor, error) {
+			//perfscan:ignore PS3024,PS6018 per-head slice dispatch, matmul-dominated MHA loop | per-head head-slice, matmul-dominated
 			return s.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 		}
 		qh, err := slice(q)
@@ -249,18 +250,22 @@ func (s *SigmoidAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head transpose dispatch, matmul-dominated
 		khT, err := s.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 the per-head matmul dispatch itself, low head count
 		sc, err := s.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head scale mul, matmul-dominated
 		if sc, err = s.exec(ctx, backend.OpMul, nil, sc, invSqrtD); err != nil { // B60: OpMul, scale may be tiny
 			return nil, err
 		}
 		if s.causal {
+			//perfscan:ignore PS3024 per-head mask add, matmul-dominated
 			if sc, err = s.exec(ctx, backend.OpAdd, nil, sc, mask); err != nil {
 				return nil, err
 			}
@@ -269,6 +274,7 @@ func (s *SigmoidAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head output matmul dispatch, matmul-dominated
 		if heads[h], err = s.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil { // [T, HeadDim]
 			return nil, err
 		}
@@ -303,10 +309,12 @@ func (s *SigmoidAttention) Params() []*tensor.Tensor {
 // OpAdd and OpSigmoid are both VJP-backed, so the operation is differentiable in
 // both the scores and (when learnable) the bias.
 func sigmoidWeights(ctx *backend.Context, scores, bias *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 add+sigmoid fusion, small fraction vs per-head matmuls
 	shifted, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{scores, bias}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 sigmoid dispatch, matmul-dominated attention path
 	out, err := backend.Execute(ctx, backend.OpSigmoid, []*tensor.Tensor{shifted[0]}, nil)
 	if err != nil {
 		return nil, err

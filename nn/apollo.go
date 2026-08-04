@@ -163,8 +163,11 @@ func apolloProjection(rows, cols, rank int, seed1, seed2 uint64) (proj [][]float
 	rng := rand.New(rand.NewPCG(seed1, seed2))
 	proj = make([][]float64, r)
 	for k := range r {
+		//perfscan:ignore PS2008,PS3064 resource-only per-step proj alloc, no wallclock | proj generation NormFloat64/RNG-bound; alloc-class
 		proj[k] = make([]float64, d)
+		//perfscan:ignore PS4006 proj gen RNG-bound, per-step; consumer hoists row ptr
 		for i := range d {
+			//perfscan:ignore PS3016 proj gen loop RNG-bound; resource
 			proj[k][i] = rng.NormFloat64() * std
 		}
 	}
@@ -254,6 +257,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 	// Non-matrix parameters: plain Adam on the full gradient (the paper applies
 	// the projected scaling only to 2-D weights, as GaLore does).
 	if p.Ndim() != 2 {
+		//perfscan:ignore PS5001 per-element sqrt dominates; invariant-divide hoist <1.2x
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := gt.AtF64(idx...)
@@ -271,6 +275,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 	proj := st.projection(rows, cols)
 	red := galoreProjectDown(mat, proj, st.left)
 	upd := make([]float64, len(red))
+	//perfscan:ignore PS5001 sketch Adam loop O(r·dim) small + per-elem sqrt-dominated
 	for i := range red {
 		st.m[i] = a.Beta1*st.m[i] + (1-a.Beta1)*red[i]
 		st.v[i] = a.Beta2*st.v[i] + (1-a.Beta2)*red[i]*red[i]
@@ -291,6 +296,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 	switch {
 	case a.Mini: // single tensor-wise factor
 		var nu, nr float64
+		//perfscan:ignore PS3010 raw-grad scaling O(numel) but Step is projection-matmul(×rank)-dominated
 		for i := range red {
 			nu += upd[i] * upd[i]
 			nr += red[i] * red[i]
@@ -298,10 +304,14 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 		s = []float64{ratio(nu, nr)}
 	case st.left: // s[j] over columns of the [r,cols] sketch
 		s = make([]float64, cols)
+		//perfscan:ignore PS1006 false-positive: mat[i][j] j-inner is contiguous matAt row, not strided
 		for j := range cols {
 			var nu, nr float64
+			//perfscan:ignore PS3010 clip loop rarely taken + projection-dominated Step
 			for k := range r {
+				//perfscan:ignore PS6011 mat is [][]float64 slice-of-slices, false positive
 				nu += upd[k*cols+j] * upd[k*cols+j]
+				//perfscan:ignore PS6011 slice-of-slices false positive
 				nr += red[k*cols+j] * red[k*cols+j]
 			}
 			s[j] = ratio(nu, nr)
@@ -310,6 +320,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 		s = make([]float64, rows)
 		for i := range rows {
 			var nu, nr float64
+			//perfscan:ignore PS3010 clip loop, projection-matmul-dominated Step
 			for k := range r {
 				nu += upd[i*r+k] * upd[i*r+k]
 				nr += red[i*r+k] * red[i*r+k]
@@ -331,6 +342,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 					f = s[i]
 				}
 			}
+			//perfscan:ignore PS3016 matrix update O(numel) ~1/rank of Step; projection dominates
 			mat[i][j] *= f
 			norm += mat[i][j] * mat[i][j]
 		}
@@ -350,6 +362,7 @@ func (a *APOLLO) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float64
 	st.prev = norm
 
 	for i := range rows {
+		//perfscan:ignore PS1001 matrix SetF64/AtF64 O(numel) ~1/rank of Step; projection matmul dominates
 		for j := range cols {
 			p.SetF64(p.AtF64(i, j)-a.LR*a.Scale*mat[i][j], i, j)
 		}

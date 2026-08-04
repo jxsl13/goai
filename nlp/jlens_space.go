@@ -184,11 +184,13 @@ func JSpaceDecompose(lens *JLens, model LensReadoutModel, h *tensor.Tensor, laye
 	dec := &JSpaceDecomposition{InputNorm: norm2(r)}
 	compIdx := map[int]int{} // token → index into dec.Components
 	g := make([]float64, dim)
+	//perfscan:ignore PS3003 compIdx probed <=k=25 times total; negligible
 	for step := 0; step < k; step++ {
 		// Greedy atom: max positive correlation with the residual.
 		best, bestC := -1, 0.0
 		for i, d := range atoms {
 			var c float64
+			//perfscan:ignore PS3010 inner corr dot; reassoc perturbs argmax; subsumed by :190 parallelization
 			for b, rb := range r {
 				c += d[b] * rb
 			}
@@ -207,6 +209,7 @@ func JSpaceDecompose(lens *JLens, model LensReadoutModel, h *tensor.Tensor, laye
 		var ctrlGain float64
 		for i := 0; i < ctrl; i++ {
 			var n2, c float64
+			//perfscan:ignore PS3010 control loop dominated by dim NormFloat64 RNG; dot small share
 			for b := range g {
 				g[b] = rng.NormFloat64()
 				n2 += g[b] * g[b]
@@ -214,6 +217,7 @@ func JSpaceDecompose(lens *JLens, model LensReadoutModel, h *tensor.Tensor, laye
 			if n2 == 0 {
 				continue
 			}
+			//perfscan:ignore PS3010 random-control loop RNG-dominated; non-bit-identical
 			for b, rb := range r {
 				c += g[b] * rb
 			}
@@ -229,6 +233,7 @@ func JSpaceDecompose(lens *JLens, model LensReadoutModel, h *tensor.Tensor, laye
 
 		// Accept: subtract the projection, merge re-selections.
 		for b, db := range atoms[best] {
+			//perfscan:ignore PS3075 projection subtract k<=25 steps; tiny share vs vocab scans
 			r[b] -= bestC * db
 		}
 		tok := atomTok[best]

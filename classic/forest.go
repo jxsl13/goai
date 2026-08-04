@@ -205,6 +205,7 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 	off := 0
 	for t, tree := range m.trees {
 		tv := flat[off : off+len(tree.classes)]
+		//perfscan:ignore PS3003 pos map read is once-per-Predict vote-table setup, not per-sample
 		for ci, label := range tree.classes {
 			tv[ci] = pos[label]
 		}
@@ -257,6 +258,7 @@ func (m *RandomForestClassifier) Predict(x [][]float64) ([]int, error) {
 	const grain = 64
 	var next atomic.Int64
 	_ = parallelBuild(nw, func(int) error {
+		//perfscan:ignore PS6008 Fit setup, one-time; build already parallelized
 		votes := make([]int, len(m.classes)) // per-worker scratch
 		for {
 			lo := int(next.Add(grain)) - grain
@@ -355,6 +357,7 @@ func (m *RandomForestRegressor) Predict(x [][]float64) ([]float64, error) {
 	// Serial below a small work threshold.
 	predictRow := func(i int) {
 		var s float64
+		//perfscan:ignore PS3010 goroutine job-dispatch worker loop, not a compute kernel
 		for _, tree := range m.trees {
 			s += tree.root.predict(x[i]).value
 		}
@@ -398,6 +401,7 @@ func deriveTreeInputs(n, nTrees int, seed int64) (samples [][]int, seeds []uint6
 	rng := &lcg{state: seedState(seed)}
 	samples = make([][]int, nTrees)
 	seeds = make([]uint64, nTrees)
+	//perfscan:ignore PS3065 gatherFloat row-pointer copy, once-per-tree bootstrap setup
 	for t := 0; t < nTrees; t++ {
 		samples[t] = bootstrap(n, rng)
 		seeds[t] = rng.next()
@@ -410,6 +414,8 @@ func deriveTreeInputs(n, nTrees int, seed int64) (samples [][]int, seeds []uint6
 // data (e.g. trees[t]); parallelBuild adds no shared mutable state beyond the
 // first-error latch. It returns the first error reported by any worker (after
 // all workers drain), or nil.
+//
+//perfscan:ignore PS3048,PS3061 gather pointer-copy, Fit bootstrap setup | same gather setup, row-header copy
 func parallelBuild(n int, work func(t int) error) error {
 	if n <= 0 {
 		return nil

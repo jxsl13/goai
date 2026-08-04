@@ -70,14 +70,17 @@ func MaxContextCosine(candReps, contextReps [][]float64) []float64 {
 		for v := lo; v < hi; v++ {
 			cand := candReps[v]
 			var na float64
+			//perfscan:ignore PS3010 niche decode path, cosine dot << per-step forward
 			for i := range cand {
 				na += cand[i] * cand[i]
 			}
 			best := 0.0
 			if na != 0 {
 				sna := math.Sqrt(na)
+				//perfscan:ignore PS3053 two scalar sqrts per cosine, niche path
 				for _, ctx := range contextReps {
 					var dot, nb float64
+					//perfscan:ignore PS3010 cosine dot, niche decode path, low leverage
 					for i := range cand {
 						dot += cand[i] * ctx[i]
 						nb += ctx[i] * ctx[i]

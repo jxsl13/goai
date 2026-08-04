@@ -31,6 +31,7 @@ func NewDeepNorm(dtype tensor.Dtype, d int, alpha float64) *DeepNorm {
 // sublayerOut is the already-computed sublayer output G(x). Both ops run through ctx so
 // gradients flow with no layer-specific autograd code.
 func (d *DeepNorm) Forward(ctx *backend.Context, x, sublayerOut *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	r, err := backend.Execute(ctx, backend.OpAXPY, []*tensor.Tensor{x, sublayerOut}, backend.AXPYAttrs{Alpha: d.Alpha})
 	if err != nil {
 		return nil, err

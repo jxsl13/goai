@@ -52,6 +52,7 @@ func conv1dKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 				}
 				for c := 0; c < D; c++ {
 					var acc float64
+					//perfscan:ignore PS3010,PS4008 short K-tap inner loop, already parallel typed fastpath | conv width K~4 tiny, strided x access, not matmul do
 					for k := kStart; k < K; k++ {
 						acc += ws[c*K+k] * xs[(t-(K-1)+k)*D+c]
 					}
@@ -79,6 +80,7 @@ func conv1dKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 				}
 				for c := 0; c < D; c++ {
 					var acc float64
+					//perfscan:ignore PS3010 F32 short-K loop, already optimized parallel fastpath
 					for k := kStart; k < K; k++ {
 						acc += float64(ws[c*K+k]) * float64(xs[(t-(K-1)+k)*D+c])
 					}

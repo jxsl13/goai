@@ -76,6 +76,7 @@ func BertFromHF(ts map[string]*tensor.Tensor, cfg BertConfig) (*Bert, error) {
 	cfg.Layers = layers
 	m.Config = cfg
 
+	//perfscan:ignore PS3060 per-layer weight-load loop; one-time model load
 	for l := range layers {
 		p := fmt.Sprintf("encoder.layer.%d.", l)
 		proj := func(name string) (w, b *tensor.Tensor, err error) {
@@ -201,6 +202,7 @@ func DistilBertFromHF(ts map[string]*tensor.Tensor, cfg BertConfig) (*Bert, erro
 	}
 	cfg.Layers = layers
 	m.Config = cfg
+	//perfscan:ignore PS3060 DistilBERT per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("transformer.layer.%d.", l)
 		proj := func(name string) (w, b *tensor.Tensor, err error) {

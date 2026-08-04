@@ -243,6 +243,7 @@ func softplusScalar(x float64) float64 {
 func SoftplusNegLLSumF64(f, y []float64) float64 {
 	if !hasAVX || !hasFMA {
 		var s float64
+		//perfscan:ignore PS3010,PS4003 non-AVX scalar fallback; AVX path is the hot one | non-AVX scalar fallback branch
 		for i := range f {
 			s += softplusScalar((1 - 2*y[i]) * f[i])
 		}
@@ -258,6 +259,7 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 	var lanes [4]float64
 	acc.StoreSlice(lanes[:])
 	s := lanes[0] + lanes[1] + lanes[2] + lanes[3]
+	//perfscan:ignore PS3010,PS4003 AVX scalar tail loop (<4 elems)
 	for ; i < n; i++ {
 		s += softplusScalar((1 - 2*y[i]) * f[i])
 	}
@@ -572,10 +574,13 @@ func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, 
 		return
 	}
 	nMain := N - N%4
+	//perfscan:ignore PS1006 already-optimized AVX SSM scan; t-stride forced by sequential recurrence
 	for d := dLo; d < dHi; d++ {
 		base := d * N
 		for t := 0; t < L; t++ {
+			//perfscan:ignore PS6011 t-strided read forced by sequential scan; n-loop already vectorized
 			dt := delta[t*D+d]
+			//perfscan:ignore PS6011 t-strided read forced by sequential scan; n-loop already vectorized
 			ut := u[t*D+d]
 			tn := t * N
 			dtVec := archsimd.BroadcastFloat64x4(dt)
@@ -595,6 +600,7 @@ func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, 
 				y += dsk[d] * ut
 			}
 			var yt float64
+			//perfscan:ignore PS3010 scalar N-tail loop (<4 state elems)
 			for n := nMain; n < N; n++ {
 				abar := math.Exp(dt * as[base+n])
 				hv := abar*h[base+n] + dt*bs[tn+n]*ut
@@ -620,6 +626,7 @@ func FWHTF64(a []float64) {
 			for i := 0; i < n; i += h << 1 {
 				for j := i; j < i+h; j++ {
 					x, y := a[j], a[j+h]
+					//perfscan:ignore PS4010 h=1,2 stages stride<4 can't vectorize; h>=4 already SIMD
 					a[j], a[j+h] = x+y, x-y
 				}
 			}

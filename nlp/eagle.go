@@ -90,6 +90,7 @@ func NewEagleHead(dtype tensor.Dtype, dim, vocab int, seed uint64, opts ...Eagle
 	rng := rand.New(rand.NewPCG(seed, 0xea91e))
 	randn := func(shape ...int) *tensor.Tensor {
 		w := tensor.New(dtype, tensor.Shape(shape))
+		//perfscan:ignore PS1001 one-time weight init (randn in NewEagleHead constructor); cold
 		for i := range w.Numel() {
 			w.SetF64(rng.NormFloat64()*0.02, tensor.Unravel(i, w.Shape())...)
 		}
@@ -199,6 +200,7 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 		return nil, fmt.Errorf("nlp: EagleLoss hidden must be [%d,%d] (base.ForwardHidden of tokens)", n, head.Dim)
 	}
 	// draft inputs: features f_0..f_{n-2} and embeddings of tokens 1..n-1
+	//perfscan:ignore PS6018 training-loss path w/ recorder active (fused nil-path off); cheap slice
 	feats, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: 0, End: n - 1}, hidden)
 	if err != nil {
 		return nil, err
@@ -354,10 +356,12 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 		if err != nil {
 			return nil, stats, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul/Forward
 		f, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: len(out) - 1, End: len(out)}, hidden)
 		if err != nil {
 			return nil, stats, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 		lg, err := exec1(ctx, backend.OpMatMul, nil, f, base.Head)
 		if err != nil {
 			return nil, stats, err
@@ -373,6 +377,7 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 			if f, err = head.Predict(ctx, f, emb); err != nil {
 				return nil, stats, err
 			}
+			//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 			if lg, err = exec1(ctx, backend.OpMatMul, nil, f, base.Head); err != nil {
 				return nil, stats, err
 			}

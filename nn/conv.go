@@ -81,6 +81,7 @@ func (l *MaxPool2D) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Ten
 	if l.Kernel <= 0 {
 		return nil, fmt.Errorf("nn: MaxPool2D kernel must be > 0, got %d", l.Kernel)
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpMaxPool2D, []*tensor.Tensor{x}, backend.PoolAttrs{Kernel: l.Kernel, Stride: l.Stride})
 	if err != nil {
 		return nil, err

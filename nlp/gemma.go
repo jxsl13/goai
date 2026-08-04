@@ -131,35 +131,43 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (Wq) per layer; matmul-dominated
 		q, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wq)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (Wk) per layer; matmul-dominated
 		k, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wk)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (Wv) per layer; matmul-dominated
 		v, err := exec1(ctx, backend.OpMatMul, nil, xb, b.Wv)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 RoPEAttrs struct literal per layer; resource-only, negligible vs op | exec1 OpRoPE dispatch per layer; op-domi
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 RoPEAttrs literal per layer; resource-only alloc, negligible | exec1 OpRoPE dispatch per layer; op-dominated
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
 		}
 		if capture != nil {
 			capture(l, k, v)
 		}
+		//perfscan:ignore PS6017 exec1 OpMHA dispatch per layer; attention-dominated
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (Wo) per layer; matmul-dominated
 		o, err := exec1(ctx, backend.OpMatMul, nil, a, b.Wo)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpAdd residual per layer; op-dominated, negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
@@ -172,6 +180,7 @@ func (m *Gemma) forwardCapture(ctx *backend.Context, tokens []int, capture func(
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpAdd residual per layer; op-dominated, negligible
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}

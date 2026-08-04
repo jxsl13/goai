@@ -58,6 +58,7 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			bi := b.AtF64(t, i)
 			base := i * d
 			for j := range d {
+				//perfscan:ignore PS3084 two-product recurrence, documented non-jammable (FMA drift)
 				h[base+j] = at*h[base+j] + bi*xrow[j]
 			}
 		}
@@ -80,6 +81,7 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			// appeared even at a size where the jammed body never runs. This loop has ONE multiply,
 			// so only one contraction is legal and the jam is safe.
 			ib := 0
+			//perfscan:ignore PS3066 already hand-blocked 8-way optimal output loop
 			for ; ib+7 < n; ib += 8 {
 				c0 := crow[ib+0]
 				c1 := crow[ib+1]
@@ -122,9 +124,12 @@ func SSDRecurrent(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			}
 		} else {
 			// j-outer: small state is cache-resident, so the strided dot wins.
+			//perfscan:ignore PS1006 deliberate small-state j-outer path (interchange regresses <N·d 4096)
 			for j := range d {
 				var s float64
+				//perfscan:ignore PS3010 deliberate small-state dot, tol-gated multi-acc
 				for i := range n {
+					//perfscan:ignore PS6011 deliberate small-state strided path (documented)
 					s += crow[i] * h[i*d+j]
 				}
 				y.SetF64(s, t, j)
@@ -175,15 +180,18 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 			for j := i - 1; j >= 0; j-- {
 				decayrow[j] = decayrow[j+1] * arow[j+1]
 			}
+			//perfscan:ignore PS1007 already the yrow AXPY accumulator (documented)
 			for j := 0; j <= i; j++ {
 				brow := bs[j*n : j*n+n : j*n+n]
 				var cb float64
+				//perfscan:ignore PS3010,PS4012 O(n) C·B dot, tol-gated reassociation | false-positive: decay scale not quant dequant
 				for k := range n {
 					cb += crow[k] * brow[k]
 				}
 				m := cb * decayrow[j]
 				xrow := xs[j*d : j*d+d : j*d+d]
 				for dd := range d {
+					//perfscan:ignore PS3075 yrow is the AXPY accumulator row, inherent
 					yrow[dd] += m * xrow[dd]
 				}
 			}
@@ -204,13 +212,16 @@ func SSDQuadratic(x, a, b, c *tensor.Tensor) (*tensor.Tensor, error) {
 		for j := i - 1; j >= 0; j-- {
 			decayrow[j] = decayrow[j+1] * arow[j+1]
 		}
+		//perfscan:ignore PS1007 exotic-dtype fallback branch (f64 takes fast path)
 		for j := 0; j <= i; j++ {
 			var cb float64
+			//perfscan:ignore PS3010 exotic-dtype fallback branch dot
 			for k := range n {
 				cb += crow[k] * b.AtF64(j, k)
 			}
 			m := cb * decayrow[j]
 			for dd := range d {
+				//perfscan:ignore PS3075 exotic-dtype fallback branch
 				yrow[dd] += m * x.AtF64(j, dd)
 			}
 		}

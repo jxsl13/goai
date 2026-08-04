@@ -61,6 +61,7 @@ func embedF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([
 		m := idx.Shape()[0]
 		ids := make([]int32, m)
 		inRange := m > 0
+		//perfscan:ignore PS1001 index-to-int32 over seq len; tiny, GEMM-dominated forward
 		for i := 0; i < m; i++ {
 			ti := int(idx.AtF64(i))
 			if ti < 0 || ti >= n {

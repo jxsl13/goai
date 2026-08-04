@@ -72,7 +72,9 @@ func crossEntropyKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	zs := z.Contiguous().Storage().F32()
 	losses := make([]float64, b) // per-row losses: parallel fill, serial sum (deterministic)
 	parallelWork(b, 8*c, func(lo, hi int) {
+		//perfscan:ignore PS6008 already per-band scratch (once per chunk), not per-row
 		scratch := make([]float32, c)
+		//perfscan:ignore PS4002 math.Log one-per-row not per-element; c-wide exp already vexp'd
 		for i := lo; i < hi; i++ {
 			row := zs[i*c : (i+1)*c : (i+1)*c]
 			m := rowMaxF32(row) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
@@ -85,6 +87,7 @@ func crossEntropyKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 				for _, v := range row {
 					rowSum += float64(v)
 				}
+				//perfscan:ignore PS3020 per-row scalar label-smoothing, not a per-element indexed loop
 				loss = lse - (1-eps)*float64(row[tis[i]]) - (eps/float64(c))*rowSum
 			}
 			if pa.ZLoss != 0 {
@@ -137,6 +140,7 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 	scale := float32(gv / float64(b))
 	q0 := eps / float32(c)
 	parallelWork(b, 8*c, func(lo, hi int) {
+		//perfscan:ignore PS3044,PS4002 rows write disjoint dz rows; no shared-slot reduction, already parallel | math.Log one-per-row (zl branch); ex
 		for i := lo; i < hi; i++ {
 			zr := zs[i*c : (i+1)*c : (i+1)*c]
 			dr := dzs[i*c : (i+1)*c : (i+1)*c]
@@ -217,6 +221,7 @@ func crossEntropyF64CPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 				}
 			}
 			var sum, rowSum float64
+			//perfscan:ignore PS3010 F64 byte-identical to ref; add follows Exp (compute-bound not latency)
 			for j := 0; j < c; j++ {
 				sum += math.Exp(zs[base+j] - m)
 				rowSum += zs[base+j]
@@ -224,6 +229,7 @@ func crossEntropyF64CPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 			lse := m + math.Log(sum)
 			loss := lse - zs[base+tis[i]]
 			if eps != 0 {
+				//perfscan:ignore PS3020 per-row scalar label-smoothing, not per-element loop
 				loss = lse - (1-eps)*zs[base+tis[i]] - (eps/float64(c))*rowSum
 			}
 			losses[i] = loss
@@ -298,6 +304,7 @@ func crossEntropyBackwardF64CPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 				lseTerm = 2 * zl * (m + math.Log(sum))
 			}
 			ti := tis[i]
+			//perfscan:ignore PS5001 F64 keeps /sum for byte-identity to ref (F32 twin uses inv under tolerance)
 			for j := 0; j < c; j++ {
 				p := dzs[base+j] / sum
 				q := eps / float64(c)

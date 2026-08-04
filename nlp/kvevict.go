@@ -119,6 +119,8 @@ func H2OKeep(scores []float64, recent, budget int) []int {
 // GatherRows selects rows idx (in order) from t[n,d] → [len(idx),d]. Used to apply
 // an eviction policy's kept-index list to a cached K or V tensor (inference-only,
 // no gradient path).
+//
+//perfscan:ignore PS6004 resource-only class; occasional eviction gather
 func GatherRows(t *tensor.Tensor, idx []int) *tensor.Tensor {
 	d := t.Shape()[1]
 	out := tensor.New(t.Dtype(), tensor.Shape{len(idx), d})
@@ -195,6 +197,7 @@ func (c *KVCache) EvictStreaming(sink, recent int) {
 		return
 	}
 	keep := StreamingKeep(n, sink, recent)
+	//perfscan:ignore PS3065 already-optimized quickselect replacing full sort
 	for l := range c.K {
 		if c.K[l] != nil {
 			c.K[l] = GatherRows(c.K[l], keep)

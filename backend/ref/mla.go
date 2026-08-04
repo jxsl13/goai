@@ -39,6 +39,7 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 	fillTrig := func(p int) {
 		fp := float64(p)
 		for e := range half {
+			//perfscan:ignore PS5008 reference oracle: intentionally simple, correctness baseline not an optimization target
 			cosA[e], sinA[e] = math.Cos(fp*thetas[e]), math.Sin(fp*thetas[e])
 		}
 	}
@@ -53,7 +54,9 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 					out := (p*nheads + h) * dR
 					for e := range half {
 						x0, x1 := s[row+e], s[row+e+half]
+						//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
@@ -70,7 +73,9 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 					out := (p*nheads + h) * dR
 					for e := range half {
 						x0, x1 := float64(s[row+e]), float64(s[row+e+half])
+						//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dst[out+e] = x0*cosA[e] - x1*sinA[e]
+						//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 					}
 				}
@@ -85,7 +90,9 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 			out := (p*nheads + h) * dR
 			for e := range half {
 				x0, x1 := src.AtF64(p, h*dR+e), src.AtF64(p, h*dR+e+half)
+				//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 				dst[out+e] = x0*cosA[e] - x1*sinA[e]
+				//perfscan:ignore PS6012 reference oracle: intentionally simple, correctness baseline not an optimization target
 				dst[out+e+half] = x1*cosA[e] + x0*sinA[e]
 			}
 		}
@@ -169,12 +176,15 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						jmax = i + 1
 					}
 					m := math.Inf(-1)
+					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						var s float64
 						qb, kb := i*hdh+hc, j*hdh+hc
+						//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for d := range dh {
 							s += qs[qb+d] * ks[kb+d]
 						}
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for e := range dR {
 							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
 						}
@@ -185,6 +195,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						}
 					}
 					var sum float64
+					//perfscan:ignore PS3010,PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
@@ -203,6 +214,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						w := a[j]
 						vb := j*hdh + hc
 						for d := range dh {
+							//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 							os[ob+d] += w * vs[vb+d]
 						}
 					}
@@ -223,12 +235,15 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						jmax = i + 1
 					}
 					m := math.Inf(-1)
+					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						var s float64 // score accumulates in float64; only inputs widen
 						qb, kb := i*hdh+hc, j*hdh+hc
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for d := range dh {
 							s += float64(qs[qb+d]) * float64(ks[kb+d])
 						}
+						//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for e := range dR {
 							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
 						}
@@ -239,6 +254,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						}
 					}
 					var sum float64
+					//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						a[j] = math.Exp(a[j] - m)
 						sum += a[j]
@@ -253,10 +269,12 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 					for d := range dh {
 						acc[d] = 0
 					}
+					//perfscan:ignore PS1007 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						w := a[j]
 						vb := j*hdh + hc
 						for d := range dh {
+							//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 							acc[d] += w * float64(vs[vb+d])
 						}
 					}
@@ -282,6 +300,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 				for d := range dh {
 					s += qC.AtF64(i, hc+d) * kC.AtF64(j, hc+d)
 				}
+				//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for e := range dR {
 					s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
 				}
@@ -292,6 +311,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := range jmax {
 				a[j] = math.Exp(a[j] - m)
 				sum += a[j]
@@ -301,6 +321,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			}
 			for d := range dh {
 				var o float64
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for j := range jmax {
 					o += a[j] * vC.AtF64(j, hc+d)
 				}

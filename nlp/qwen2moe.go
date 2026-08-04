@@ -143,15 +143,18 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 OpRoPE exec attrs, attn-dominated resource-micro
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 OpRoPE exec attrs, attn-dominated resource-micro
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv}, k); err != nil {
 			return nil, err
 		}
 		if capture != nil {
 			capture(l, k, v)
 		}
+		//perfscan:ignore PS6017 OpMHA exec, attention-dominated resource-micro
 		a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 		if err != nil {
 			return nil, err
@@ -160,6 +163,7 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd exec in forward loop, op-dominated resource-micro
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, o); err != nil {
 			return nil, err
 		}
@@ -172,6 +176,7 @@ func (m *Qwen2MoE) forwardCapture(ctx *backend.Context, tokens []int, capture fu
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd exec in forward loop, op-dominated resource-micro
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}

@@ -63,8 +63,11 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 	// own C[i,j].
 	parallelRows(m, n, func(lo, hi int) {
 		for i := lo; i < hi; i++ {
+			//perfscan:ignore PS2008,PS3064 resource-only per-row alloc; own desc says no speedup | resource-only [][]->flat allocs, no wallclock
 			k[i] = make([]float64, n)
+			//perfscan:ignore PS1001,PS4006 AtF64 inside exp-per-element parallel K-build; transcendental-dominated | row-hoist on exp-dominated parallel
 			for j := range n {
+				//perfscan:ignore PS3016 range/hoist on exp-per-element loop; exp dominates
 				k[i][j] = math.Exp(-(cost.AtF64(i, j) - minC) / eps)
 			}
 		}
@@ -84,8 +87,10 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 		// u-update before the v-update reads it. Bit-identical: each u[i] sums over j in the same
 		// ascending order.
 		parallelRows(m, n, func(lo, hi int) {
+			//perfscan:ignore PS6010 u-update dot row-contiguous, v cache-resident; register-block marginal
 			for i := lo; i < hi; i++ {
 				var kv float64
+				//perfscan:ignore PS3010 same contiguous u-update dot; reassoc non-bit-identical, minor
 				for j := range n {
 					kv += k[i][j] * v[j]
 				}
@@ -96,9 +101,12 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 		})
 		// v = c ⊘ (Kᵀ u): each v[j] independent (sum over i in ascending order from +0, unchanged).
 		parallelRows(n, m, func(lo, hi int) {
+			//perfscan:ignore PS6010 v-update cache issue is column access; see :102 interchange
 			for j := lo; j < hi; j++ {
 				var ktu float64
+				//perfscan:ignore PS3010 same v-update nest as :102; subsumed by interchange
 				for i := range m {
+					//perfscan:ignore PS3016 same column walk; PS1010 interchange covers it
 					ktu += k[i][j] * u[i]
 				}
 				if ktu > 0 {
@@ -112,6 +120,7 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 	// P[i,j] = u[i]·K[i,j]·v[j]: each cell independent, each row writes only its own cells of p.
 	parallelRows(m, n, func(lo, hi int) {
 		for i := lo; i < hi; i++ {
+			//perfscan:ignore PS1001 one-time parallel output store, small share; dtype-var dual path
 			for j := range n {
 				p.SetF64(u[i]*k[i][j]*v[j], i, j)
 			}

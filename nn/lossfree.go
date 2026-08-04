@@ -52,6 +52,7 @@ func (b *LossFreeBalancer) Route(affinity []float64, k int) (experts []int, weig
 	for i := range order {
 		order[i] = i
 	}
+	//perfscan:ignore PS3002,PS6009 radix on small numExperts loses to pdqsort | permutation-sort transform on small n loses
 	sort.SliceStable(order, func(a, c int) bool {
 		return affinity[order[a]]+b.Bias[order[a]] > affinity[order[c]]+b.Bias[order[c]]
 	})

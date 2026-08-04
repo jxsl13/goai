@@ -90,11 +90,13 @@ func init() {
 					}
 				}
 				var sum float64
+				//perfscan:ignore PS3010 exp-dominated reduction over n experts, add in latency shadow
 				for i := range n {
 					p[i] = math.Exp(ls[base+i] - m)
 					sum += p[i]
 				}
 				var c float64 // Σ_i F_i·p_{t,i}
+				//perfscan:ignore PS3066 false-positive: 2nd loop needs full reduction c, not mergeable
 				for i := range n {
 					p[i] /= sum
 					c += F[i] * p[i]
@@ -115,6 +117,7 @@ func init() {
 					}
 				}
 				var sum float64
+				//perfscan:ignore PS3010 exp-dominated softmax reduction over n, latency shadow
 				for i := range n {
 					p[i] = math.Exp(float64(ls[base+i]) - m)
 					sum += p[i]
@@ -140,6 +143,7 @@ func init() {
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010 exotic-dtype fallback, exp-dominated, cold
 			for i := range n {
 				p[i] = math.Exp(logits.AtF64(t, i) - m)
 				sum += p[i]
@@ -205,14 +209,17 @@ func init() {
 					for t := tLo; t < tHi; t++ {
 						wb, eb := t*e, t*d
 						var denom float64
+						//perfscan:ignore PS3010 denom reduction over top-k e (2-8), low trip count
 						for i := range e {
 							denom += ws[wb+i]
 						}
 						if denom <= 0 {
 							continue // no selected expert → zero gradients this token
 						}
+						//perfscan:ignore PS3067 tokens already parallel via moeParallelTokens
 						for j := range d {
 							var acc float64
+							//perfscan:ignore PS3010 acc reduction over e (2-8 experts), low trip count
 							for i := range e {
 								acc += (ws[wb+i] / denom) * es[i][eb+j]
 							}
@@ -250,14 +257,17 @@ func init() {
 					for t := tLo; t < tHi; t++ {
 						wb, eb := t*e, t*d
 						var denom float64
+						//perfscan:ignore PS3010 denom reduction over top-k e (2-8), low trip count
 						for i := range e {
 							denom += float64(ws[wb+i])
 						}
 						if denom <= 0 {
 							continue // no selected expert → zero gradients this token
 						}
+						//perfscan:ignore PS3067 tokens already parallel via moeParallelTokens
 						for j := range d {
 							var acc float64
+							//perfscan:ignore PS3010 acc reduction over e (2-8 experts), low trip count
 							for i := range e {
 								acc += (float64(ws[wb+i]) / denom) * float64(es[i][eb+j])
 							}
@@ -288,8 +298,10 @@ func init() {
 				if denom <= 0 {
 					continue // no selected expert → zero gradients this token
 				}
+				//perfscan:ignore PS3067 exotic-dtype fallback, cold path
 				for j := range d {
 					var acc float64
+					//perfscan:ignore PS3010 exotic-dtype fallback acc, cold path
 					for i := range e {
 						acc += (w.AtF64(t, i) / denom) * experts[i].AtF64(t, j)
 					}
@@ -339,6 +351,7 @@ func init() {
 					}
 				}
 				var sum float64
+				//perfscan:ignore PS3010 z-loss exp-dominated reduction, add in latency shadow
 				for j := range c {
 					sum += math.Exp(zs[base+j] - m)
 				}
@@ -361,6 +374,7 @@ func init() {
 					}
 				}
 				var sum float64
+				//perfscan:ignore PS3010 z-loss F32 exp-dominated reduction, latency shadow
 				for j := range c {
 					sum += math.Exp(float64(zs[base+j]) - m)
 				}

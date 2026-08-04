@@ -45,6 +45,7 @@ func q8FusedDecodeM1SIMD(row []float32, weight []byte, n, k, rowBytes int, outf 
 		var buf [8]float32
 		acc.StoreSlice(buf[:])
 		accF := float64(buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7])
+		//perfscan:ignore PS3010 hand SIMD Q8 matmul at-ceiling; absent in this worktree
 		for i := kb; i < k; i++ {
 			o := (i / 32) * 34
 			d := f16ToF32(binary.LittleEndian.Uint16(rb[o : o+2]))

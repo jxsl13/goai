@@ -17,6 +17,7 @@ func prefixTreeMask(prefixLen int, treeMask *tensor.Tensor) *tensor.Tensor {
 	neg := math.Inf(-1)
 	m := tensor.New(tensor.F64, tensor.Shape{seq, seq})
 	for i := range seq {
+		//perfscan:ignore PS1005 per-round mask build dwarfed by verification forward; ref path
 		for j := range seq {
 			switch {
 			case i < prefixLen: // prefix row: ordinary causal
@@ -39,6 +40,7 @@ func treeEmbed(g *GPT, toks, pos []int) *tensor.Tensor {
 	dim := g.TokEmb.Shape()[1]
 	x := tensor.New(g.TokEmb.Dtype(), tensor.Shape{len(toks), dim})
 	for i, tok := range toks {
+		//perfscan:ignore PS1001 tiny per-round tree embed, dominated by forward
 		for d := range dim {
 			x.SetF64(g.TokEmb.AtF64(tok, d)+g.PosEmb.AtF64(pos[i], d), i, d)
 		}
@@ -109,10 +111,12 @@ func MedusaGenerateTree(model *GPT, heads *MedusaHeads, prompt []int, maxNew int
 			return nil, stats, err
 		}
 		last := hidden.Shape()[0] - 1
+		//perfscan:ignore PS6017 resource-only variadic exec1 (1 alloc), spec-decode ref path
 		lastRow, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: last, End: last + 1}, hidden)
 		if err != nil {
 			return nil, stats, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic exec1, spec-decode ref path
 		mature, err := exec1(ctx, backend.OpMatMul, nil, lastRow, model.Head)
 		if err != nil {
 			return nil, stats, err

@@ -69,6 +69,7 @@ func CohereFromHF(ts map[string]*tensor.Tensor, cfg CohereConfig) (*Cohere, erro
 	kv := cfg.kvHeads()
 
 	m := &Cohere{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -162,6 +163,7 @@ func permuteInterleaveToSplit(w *tensor.Tensor, heads, headDim int) *tensor.Tens
 			src1 := base + 2*i + 1  // interleaved odd channel
 			dst0 := base + i        // split-half: first half
 			dst1 := base + i + half // split-half: second half
+			//perfscan:ignore PS1001 RoPE row-permute at load; one-time
 			for c := range in {
 				res.SetF64(w.AtF64(src0, c), dst0, c)
 				res.SetF64(w.AtF64(src1, c), dst1, c)

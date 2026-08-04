@@ -108,9 +108,11 @@ func DeltaNet(ctx *backend.Context, q, k, v, beta *tensor.Tensor) (*tensor.Tenso
 					}
 					continue
 				}
+				//perfscan:ignore PS6010 t==0 output block runs once per sequence (t>0 continues); negligible share
 				for r := range dv { // o_t = S_t q_t
 					base := r * dk
 					var o float64
+					//perfscan:ignore PS3010,PS4008 t==0 run-once output dot; negligible vs seq-1 merged-loop steps | t==0 run-once output dot; not on hot per-ste
 					for c := range dk {
 						o += S[base+c] * qrow[c]
 					}

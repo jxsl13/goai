@@ -48,6 +48,7 @@ func reshapeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpReshape, tensor.F32, reshapeKernel)
 	std.add(backend.OpReshape, tensor.F64, reshapeKernel)
 }

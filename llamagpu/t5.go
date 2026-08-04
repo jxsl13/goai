@@ -116,6 +116,7 @@ func (e *GPUT5) relPosBias(seq int) ([]float32, error) {
 		return nil, err
 	}
 	bias = bias.Contiguous()
+	//perfscan:ignore PS3028 necessary per-forward output buffer alloc
 	out := make([]float32, e.heads*seq*seq)
 	for h := 0; h < e.heads; h++ {
 		for i := 0; i < seq; i++ {

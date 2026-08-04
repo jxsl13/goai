@@ -268,14 +268,17 @@ func gemmF32BandNeonCols(A, B, packed, C []float32, loRow, hiRow, k, n, jLo, jHi
 // SAXPY the k rank-1 updates over the contiguous B row slice — ascending p,
 // store semantics preserved via the explicit clear.
 func gemmF32RowsScalar(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) {
+	//perfscan:ignore PS3043 arm64 <4-row remainder fallback; asm tile is the f32 GEMM hot path
 	for i := loRow; i < hiRow; i++ {
 		ci := C[i*n+jLo : i*n+jHi]
 		clear(ci)
 		ai := A[i*k : (i+1)*k]
+		//perfscan:ignore PS1007,PS3049 remainder-row scalar fallback superseded by asm tile
 		for p := 0; p < k; p++ {
 			ap := ai[p]
 			bp := B[p*n+jLo : p*n+jHi]
 			for j, bv := range bp {
+				//perfscan:ignore PS3075 remainder-row scalar fallback superseded by asm tile
 				ci[j] += ap * bv
 			}
 		}

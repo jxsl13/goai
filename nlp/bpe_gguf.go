@@ -121,6 +121,7 @@ func (t *BPETokenizer) pairRankAt(mapped string, parts []ggufPart, k int) int {
 	if k+2 >= len(parts) {
 		return math.MaxInt
 	}
+	//perfscan:ignore PS3004 zero-alloc substring map lookup, small piece
 	if rk, ok := t.mergeRank[[2]string{
 		mapped[parts[k].start:parts[k+1].start],
 		mapped[parts[k+1].start:parts[k+2].start],
@@ -160,6 +161,7 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 	// (first wins on ties) with minRank = MaxInt reproduces the old ascending scan
 	// exactly: an unmergeable pair (rank MaxInt) is never selected.
 	minRank, minI := math.MaxInt, -1
+	//perfscan:ignore PS3068 seed loop over small per-word piece, optimized
 	for k := 0; k < len(parts)-1; k++ {
 		parts[k].rank = t.pairRankAt(mapped, parts, k)
 		if parts[k].rank < minRank {
@@ -174,6 +176,7 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 		}
 		parts[i].rank = t.pairRankAt(mapped, parts, i)
 		minRank, minI = math.MaxInt, -1 // rescan the cached ranks for the new leftmost min
+		//perfscan:ignore PS3068 rescan over small per-word piece, optimized
 		for k := 0; k < len(parts)-1; k++ {
 			if parts[k].rank < minRank {
 				minRank, minI = parts[k].rank, k

@@ -191,7 +191,9 @@ func cudaQ4KResident(w *tensor.Tensor) (qweight, error) {
 	wt := make([]float32, nn*kk)                          // [N,K]
 	for col := 0; col < nn; col++ {
 		base := col * kk
+		//perfscan:ignore PS4004 one-time Q4_K weight repack/quantize at model load
 		for r := 0; r < kk; r++ {
+			//perfscan:ignore PS6011 load-time resident-block construction; cold
 			wt[base+r] = bf[r*nn+col]
 		}
 	}

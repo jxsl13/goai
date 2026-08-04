@@ -86,6 +86,7 @@ func MPTFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*MPT, 
 	}
 
 	m := &MPT{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 GGUF loader per-layer loop, one-time model load
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -254,6 +255,7 @@ func MPTToGGUF(m *MPT) (map[string]any, map[string]*tensor.Tensor) {
 		"output_norm.weight": cloneF64(m.FinalNorm.Gamma),
 		// No output.weight: the head is tied (the converter emits none for MPT).
 	}
+	//perfscan:ignore PS3060 GGUF export per-layer loop, one-time
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.Norm1.Gamma)

@@ -34,11 +34,14 @@ func RoPEFreqs(hd int, a RoPEAttrs) (inv []float64, posDiv float64) {
 	if s := a.YaRNScale; s > 1 {
 		L := a.YaRNOrigCtx
 		low, high := yarnCorrectionRange(a.YaRNBetaFast, a.YaRNBetaSlow, hd, base, L)
+		//perfscan:ignore PS5001 one-time freq-table setup (hd/2 iters), YaRN-only; divide-in-loop win ~0
 		for i := range half {
 			gamma := (float64(i) - low) / (high - low) // linear ramp
+			//perfscan:ignore PS3077,PS3082 tiny YaRN-only freq-setup clamp, not a hot kernel
 			gamma = math.Max(0, math.Min(1, gamma))
 			// γ=0 (small i, high freq) → extrapolate θ_i; γ=1 (large i, low freq)
 			// → interpolate θ_i/s; blend linearly in between.
+			//perfscan:ignore PS6012 FMA bit-exactness correctness lint, not a throughput win
 			inv[i] = (1-gamma)*inv[i] + gamma*(inv[i]/s)
 		}
 		return inv, 1

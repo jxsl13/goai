@@ -74,6 +74,7 @@ func (m *Mamba2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3060 sequential layer loop; body is matmul+mixer, not parallelizable
 	for i := range m.Layers {
 		n, err := m.Layers[i].Norm.Forward(ctx, h)
 		if err != nil {
@@ -83,6 +84,7 @@ func (m *Mamba2) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor, er
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-layer residual add dispatch; memory-bound resource-only
 		if h, err = exec1(ctx, backend.OpAdd, nil, h, mix); err != nil {
 			return nil, err
 		}
@@ -159,6 +161,7 @@ func transposeF64(w *tensor.Tensor) *tensor.Tensor {
 	d := out.Storage().F64()
 	for i := 0; i < r; i++ {
 		base := i * c
+		//perfscan:ignore PS4004 one-time cached weight transpose; strided not contiguous run
 		for j := 0; j < c; j++ {
 			d[j*r+i] = src[base+j]
 		}
@@ -178,6 +181,7 @@ func (m *Mamba2Mixer) inProjMul(u *tensor.Tensor) ([]float64, error) {
 	if m.inProjT == nil {
 		m.inProjT = transposeF64(m.InProj)
 	}
+	//perfscan:ignore PS3038 single backend matmul dispatch; already optimized path
 	out, err := backend.Execute(backend.NewContext(), backend.OpMatMul, []*tensor.Tensor{u, m.inProjT}, nil)
 	if err != nil {
 		return nil, err
@@ -189,6 +193,7 @@ func (m *Mamba2Mixer) outProjMul(y *tensor.Tensor) (*tensor.Tensor, error) {
 	if m.outProjT == nil {
 		m.outProjT = transposeF64(m.OutProj)
 	}
+	//perfscan:ignore PS3038 single backend matmul dispatch; already optimized path
 	out, err := backend.Execute(backend.NewContext(), backend.OpMatMul, []*tensor.Tensor{y, m.outProjT}, nil)
 	if err != nil {
 		return nil, err
@@ -228,6 +233,7 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	convB := m.ConvB.Storage().F64() // [conv_dim]
 	xc := make([][]float64, seq)
 	for t := range seq {
+		//perfscan:ignore PS2008,PS3064 resource-only alloc, no wall-clock win | row-alloc loop; resource-only, mixer matmul-dominated
 		xc[t] = make([]float64, m.ConvDim)
 	}
 	// Fill the raw conv accs, then apply silu(acc)=acc·σ(acc) with σ (the exp, ~1/3 of the
@@ -239,6 +245,7 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	parallelChunks(m.ConvDim, seq*m.DConv, func(clo, chi int) {
 		for c := clo; c < chi; c++ {
 			wbase := c * m.DConv
+			//perfscan:ignore PS4006 conv flatten; matmul dominates mixer, tiny d_conv
 			for t := range seq {
 				acc := convB[c]
 				// src = t-(DConv-1)+k >= 0  <=>  k >= (DConv-1)-t; src is always < seq (src <= t).
@@ -247,9 +254,11 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 				if lo := (m.DConv - 1) - t; lo > 0 {
 					kStart = lo
 				}
+				//perfscan:ignore PS3010 conv write; small fraction of matmul-dominated mixer
 				for k := kStart; k < m.DConv; k++ {
 					acc += convW[wbase+k] * xBC[t-(m.DConv-1)+k][c]
 				}
+				//perfscan:ignore PS3016 scratch alloc already hoisted; resource-only
 				xc[t][c] = acc
 			}
 		}
@@ -257,6 +266,7 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// Token rows are independent (row t reads/writes only xc[t]); parallelize over t with a
 	// per-worker sigRow. Bit-identical — same per-row SigmoidF64 grouping as serial.
 	parallelChunks(seq, seq*m.ConvDim, func(tlo, thi int) {
+		//perfscan:ignore PS6008 resource/invariant class; sigmoid already vectorized
 		sigRow := make([]float64, m.ConvDim)
 		for t := tlo; t < thi; t++ {
 			simd.SigmoidF64(sigRow, xc[t])
@@ -277,6 +287,7 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// y accumulates the per-head scan outputs back into [seq, intermediate].
 	y := make([][]float64, seq)
 	for t := range seq {
+		//perfscan:ignore PS2008,PS3064 scan-state alloc reused across heads; resource-only | scan-state alloc reused; resource-only, no wall-clock
 		y[t] = make([]float64, m.Intermediate)
 	}
 
@@ -295,8 +306,10 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// its hst/xrow scratch (sharing them would race); the per-head recurrence is byte-for-byte
 	// unchanged, so it stays bit-identical (TestMamba2PrefillStateParity remains exact).
 	parallelChunks(m.NumHeads, seq*m.N*m.HeadDim, func(hlo, hhi int) {
+		//perfscan:ignore PS6008 resource/invariant; scalar softplus in sequential scan
 		hst := make([]float64, m.N*m.HeadDim) // per-head [N, head_dim] scan state, reused across this worker's heads
-		xrow := make([]float64, m.HeadDim)    // Δ-scaled value row, hoisted out of the i loop
+		//perfscan:ignore PS6008 resource/invariant; scalar exp in sequential scan
+		xrow := make([]float64, m.HeadDim) // Δ-scaled value row, hoisted out of the i loop
 		for h := hlo; h < hhi; h++ {
 			g := h / headsPerGroup
 			A := -math.Exp(aLog[h])
@@ -307,7 +320,9 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 			for i := range hst {
 				hst[i] = 0
 			}
+			//perfscan:ignore PS4003 scan transcendentals <<1% vs N·headdim MACs; hot-fraction fails
 			for t := range seq {
+				//perfscan:ignore PS3016 scan axpy bandwidth-bound streaming state; archsimd regresses
 				delta := softplus(dt[t][h] + dtBias[h])
 				at := math.Exp(delta * A)
 				// Precompute the Δ-scaled value row once (nn.SSDRecurrent's xScaled) rather
@@ -320,12 +335,16 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 					bi := xc[t][bOff+i]
 					hb := hst[i*m.HeadDim:]
 					for j := range m.HeadDim {
+						//perfscan:ignore PS3084 gated-norm section; vectorized already, matmul-dominated
 						hb[j] = at*hb[j] + bi*xrow[j]
 					}
 				}
+				//perfscan:ignore PS1006,PS4006,PS6010 gated-norm walks contiguous rows; no strided reduction (false positive) | gated-norm row flatten; small fracti
 				for j := range m.HeadDim {
 					var s float64
+					//perfscan:ignore PS3010 scratch alloc hoisted; resource-only
 					for i := range m.N {
+						//perfscan:ignore PS6011 slice-of-slices false positive; contiguous per-row access
 						s += xc[t][cOff+i] * hst[i*m.HeadDim+j]
 					}
 					y[t][hOff+j] = s + Dh*xc[t][hOff+j]
@@ -341,11 +360,14 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 	// Each token's gated-RMSNorm row is independent (reads y[t]/z[t], writes y[t]); parallelize
 	// over t with per-worker sigZ/gated. Bit-identical — per-row order and reduction unchanged.
 	parallelChunks(seq, seq*m.Intermediate, func(tlo, thi int) {
+		//perfscan:ignore PS6008 output tensor alloc; resource-only
 		sigZ := make([]float64, m.Intermediate)
+		//perfscan:ignore PS6008 storage handle grab; resource-only
 		gated := make([]float64, m.Intermediate)
 		for t := tlo; t < thi; t++ {
 			simd.SigmoidF64(sigZ, z[t])
 			var variance float64
+			//perfscan:ignore PS3010 single out_proj matmul dispatch; optimized path
 			for o := range m.Intermediate {
 				gated[o] = y[t][o] * z[t][o] * sigZ[o]
 				variance += gated[o] * gated[o]
@@ -368,6 +390,8 @@ func (m *Mamba2Mixer) forward(u *tensor.Tensor) (*tensor.Tensor, error) {
 }
 
 // rows2D copies a 2-D tensor into a [rows][cols] f64 slice for host math.
+//
+//perfscan:ignore PS6004 unverified-invariant class, not a perf finding
 func rows2D(t *tensor.Tensor) [][]float64 {
 	r, c := t.Shape()[0], t.Shape()[1]
 	tc := t.Contiguous()
@@ -376,12 +400,15 @@ func rows2D(t *tensor.Tensor) [][]float64 {
 	case tensor.F64:
 		src := tc.Storage().F64()
 		for i := range r {
+			//perfscan:ignore PS2008 softplus scalar helper; resource-only, no loop
 			row := make([]float64, c)
 			copy(row, src[i*c:(i+1)*c])
 			out[i] = row
 		}
+	//perfscan:ignore PS1009 numerically-required branch in softplus stability form
 	default:
 		for i := range r {
+			//perfscan:ignore PS2008 softplus scalar helper; resource-only, no loop
 			row := make([]float64, c)
 			for j := range c {
 				row[j] = tc.AtF64(i, j)

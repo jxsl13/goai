@@ -357,6 +357,8 @@ func quantRowBytes(ggType uint32, dataLen, rows, cols int) (int, error) {
 // values exactly (transpose2D widens to F64; the quantized pipeline's router must stay
 // at the f32 the file stores so the GGUF path is bit-equal to [QuantizeMixtral]'s
 // f32-cloned router).
+//
+//perfscan:ignore PS6004 invariant-verify class, not a perf finding
 func f32Transpose(t *tensor.Tensor) *tensor.Tensor {
 	a, b := t.Shape()[0], t.Shape()[1]
 	out := tensor.New(tensor.F32, tensor.Shape{b, a})
@@ -367,6 +369,7 @@ func f32Transpose(t *tensor.Tensor) *tensor.Tensor {
 		src := tc.Storage().F32()
 		for i := 0; i < a; i++ {
 			row := i * b
+			//perfscan:ignore PS4004 false-positive: transpose strided dst, not contiguous memmove; load-time
 			for j := 0; j < b; j++ {
 				dst[j*a+i] = src[row+j]
 			}

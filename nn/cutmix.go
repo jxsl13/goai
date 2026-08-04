@@ -115,11 +115,14 @@ func cutmixPaste(x *tensor.Tensor, perm []int, C, H, W, y1, y2, x1, x2 int) *ten
 	case flatF64(x) != nil:
 		xf, of := flatF64(x), out.Storage().F64()
 		copy(of, xf)
+		//perfscan:ignore PS3056,PS3059 data-aug box-copy fastpath, memory-bound vs training step | data-aug box-copy fastpath, memory-bound
 		for b := range B {
 			for ch := range C {
 				dstBase := (b*C + ch) * H * W
 				srcBase := (perm[b]*C + ch) * H * W
+				//perfscan:ignore PS3067 data-aug box-copy fastpath, memory-bound
 				for yy := y1; yy < y2; yy++ {
+					//perfscan:ignore PS4004 box-row memmove; dominated by full-tensor copy above, memory-bound
 					for xx := x1; xx < x2; xx++ {
 						of[dstBase+yy*W+xx] = xf[srcBase+yy*W+xx]
 					}
@@ -129,11 +132,14 @@ func cutmixPaste(x *tensor.Tensor, perm []int, C, H, W, y1, y2, x1, x2 int) *ten
 	case flatF32(x) != nil:
 		xf, of := flatF32(x), out.Storage().F32()
 		copy(of, xf)
+		//perfscan:ignore PS3056,PS3059 F32 box-copy fastpath, memory-bound
 		for b := range B {
 			for ch := range C {
 				dstBase := (b*C + ch) * H * W
 				srcBase := (perm[b]*C + ch) * H * W
+				//perfscan:ignore PS3067 F32 box-copy fastpath, memory-bound
 				for yy := y1; yy < y2; yy++ {
+					//perfscan:ignore PS4004 F32 box-row memmove, memory-bound aug path
 					for xx := x1; xx < x2; xx++ {
 						of[dstBase+yy*W+xx] = xf[srcBase+yy*W+xx]
 					}

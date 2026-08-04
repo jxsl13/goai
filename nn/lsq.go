@@ -43,6 +43,7 @@ func LSQInitStep(v *tensor.Tensor, qp int) float64 {
 		return 1
 	}
 	var sum float64
+	//perfscan:ignore PS1001 LSQInitStep one-time step-size init
 	for i := range n {
 		sum += math.Abs(v.AtF64(tensor.Unravel(i, v.Shape())...))
 	}

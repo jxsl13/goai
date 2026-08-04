@@ -84,6 +84,7 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 		for g := 0; g < groups; g++ {
 			beams := grp[g]
 			cands = cands[:0]
+			//perfscan:ignore PS4006 small group*beamwidth structure, not a hot matrix
 			for pi := range beams {
 				b := beams[pi]
 				if b.done {
@@ -183,13 +184,17 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 						i = lo
 					}
 				}
+				//perfscan:ignore PS3002 sort of heap-selected B' (small); tie-break key not radix-able
 				slices.SortFunc(h, less)
 				cands = h
 			} else {
+				//perfscan:ignore PS3002 else arm for small candidate set; large sets take heap path
 				slices.SortFunc(cands, less)
 			}
 			// materialize toks ONLY for the B' survivors that advance.
+			//perfscan:ignore PS2008 survivor materialization alloc, resource-only no wallclock
 			survivors := make([]node, len(cands))
+			//perfscan:ignore PS3074 beam token materialization, inherent per-survivor copy
 			for i, c := range cands {
 				p := beams[c.parent]
 				if !fresh(c) {
@@ -220,6 +225,7 @@ func DiverseBeamSearch(next NextLogits, start []int, width, groups, maxNew, eos 
 			out = append(out, Beam{b.toks, b.score / lenPenalty(b.newLen)})
 		}
 	}
+	//perfscan:ignore PS3002,PS3055,PS6009,PS6022 one-time final output sort, small groups*width set | one-time final sort of small set then truncate | one-time
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
 	if len(out) > width {
 		out = out[:width]

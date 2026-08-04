@@ -142,6 +142,7 @@ func readIndexFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	//perfscan:ignore PS3029 readIndexFile, one-time model-load IO
 	data, err := io.ReadAll(io.LimitReader(f, maxHeaderSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("safetensors: read index %s: %w", path, err)

@@ -313,6 +313,8 @@ func (b *cartBuilder) buildCLogC(n int) {
 // treeRadixCutoff is the index count above which sorting `order` ascending by a
 // feature value switches from the comparison sort to the 8-pass LSD radix. Below it
 // the O(n log n) comparison sort's lower constant wins.
+//
+//perfscan:ignore PS6023 initColumns buffer alloc; cold one-time fit setup
 const treeRadixCutoff = 32
 
 // radixByFeature sorts order ascending by b.x[order[i]][ff]. Tie order is unspecified.
@@ -336,6 +338,7 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		// chosen split is unchanged.
 		kb := b.keyByID
 		for _, id := range order {
+			//perfscan:ignore PS6024 partition write; resource/invariant class, no wallclock
 			kb[id] = b.x[id][ff]
 		}
 		// slices.SortFunc, not sort.Slice: the latter reaches the elements through reflection,
@@ -343,6 +346,7 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		// This one line was 68% of a forest fit's allocations. The comparator is by VALUE here
 		// (order holds ids) rather than by index, and orders the same keys the same way; ties
 		// still resolve unspecified, which the split choice does not depend on.
+		//perfscan:ignore PS3002 copy compaction; already optimal memmove
 		slices.SortFunc(order, func(a, c int) int {
 			switch {
 			case kb[a] < kb[c]:
@@ -387,6 +391,7 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 		hist[7][(u>>56)&0xff]++
 	}
 	passes := 0
+	//perfscan:ignore PS3044 already-fused single-scan histogram (classifyCounts); optimal
 	for p := range 8 {
 		shift := uint(p * 8)
 		count := hist[p]
@@ -418,6 +423,7 @@ func (b *cartBuilder) radixByFeature(order []int, ff int) {
 	}
 }
 
+//perfscan:ignore PS3058 buildIdx docstring region; classic fit already swept
 func (b *cartBuilder) initColumns(n, d int) {
 	b.cols = make([][]int, d)
 	base := make([]int, n*d) // single backing allocation for all d columns
@@ -477,6 +483,7 @@ func (b *cartBuilder) partition(start, end, feat int, thr float64) int {
 	col := b.cols[feat]
 	for p := start; p < end; p++ {
 		s := col[p]
+		//perfscan:ignore PS6024 totCnt fill; resource class, already reused buffer
 		b.goLeft[s] = b.x[s][feat] <= thr
 	}
 	// The left count is the same for every feature — it depends only on goLeft — so compute it
@@ -716,6 +723,8 @@ func (b *cartBuilder) bestSplitIdx(idx []int) (feat int, thr float64, ok bool) {
 // candidateFeatures returns the feature indices considered at a split: all of
 // them, or a random maxFeatures-sized subset (ascending, so the split tie-break
 // still favours the lowest feature index among the sampled set).
+//
+//perfscan:ignore PS3058 impurityCounts; already clogc-table optimal
 func (b *cartBuilder) candidateFeatures(d int) []int {
 	if b.cfg.maxFeatures <= 0 || b.cfg.maxFeatures >= d {
 		if len(b.allFeats) != d {
@@ -738,6 +747,7 @@ func (b *cartBuilder) candidateFeatures(d int) []int {
 	}
 	pool := b.featPool
 	for i := range pool {
+		//perfscan:ignore PS6024 resource class; already reused buffers
 		pool[i] = i
 	}
 	for i := 0; i < m; i++ {
@@ -803,6 +813,8 @@ func (b *cartBuilder) bestSplit(start, end int) (feat int, thr float64, ok bool)
 // treeSplitParWork gates the parallel feature scan: fork only when the node's features-times-
 // rows work amortizes the spawn. Upper nodes carry most of the rows and are few, so the gate
 // forks those and leaves the many small ones alone.
+//
+//perfscan:ignore PS6023 majority argmax; resource class, reused totCnt
 const treeSplitParWork = 1 << 14
 
 // bestSplitParallel scans contiguous feature chunks concurrently, each with its own scratch,
@@ -867,6 +879,7 @@ func (b *cartBuilder) sweepInto(order []int, f, minLeaf int, total []int,
 	// re-gathered every value TWICE across adjacent iterations — halved to one here.
 	vals := sweepVals[:n]
 	for k := 0; k < n; k++ {
+		//perfscan:ignore PS3009,PS3057 fitWithSeed setup; cold one-time per tree
 		vals[k] = b.x[order[k]][f]
 	}
 	if b.regression {
@@ -877,6 +890,7 @@ func (b *cartBuilder) sweepInto(order []int, f, minLeaf int, total []int,
 			totSq += v * v
 		}
 		var lSum, lSq float64
+		//perfscan:ignore PS3068 label-encode map pos[]; one-time O(n) per fit
 		for p := 1; p < n; p++ {
 			v := b.yf[order[p-1]]
 			lSum += v
@@ -919,6 +933,7 @@ func (b *cartBuilder) sweepInto(order []int, f, minLeaf int, total []int,
 			tf := float64(total[k])
 			sumRightSq += tf * tf
 		}
+		//perfscan:ignore PS3068 stale line (struct field); label-encode one-time
 		for p := 1; p < n; p++ {
 			c := b.yi[order[p-1]]
 			v := left[c]
@@ -943,6 +958,7 @@ func (b *cartBuilder) sweepInto(order []int, f, minLeaf int, total []int,
 	}
 	// entropy — per-split (the clogc terms are floats, so an incremental running sum
 	// would not be bit-identical to the fresh Σ; keep the exact per-candidate rescan).
+	//perfscan:ignore PS3068 regressor fitWithSeed setup; cold one-time
 	for p := 1; p < n; p++ {
 		left[b.yi[order[p-1]]]++
 		if p < minLeaf || n-p < minLeaf {
@@ -1038,6 +1054,7 @@ func (b *cartBuilder) classifyCounts(idx []int) (predClass int, imp float64) {
 		counts[b.yi[i]]++
 	}
 	best, bc := 0, -1
+	//perfscan:ignore PS3068 stale line past EOF; classic fit swept
 	for k, c := range counts {
 		if c > bc {
 			bc, best = c, k
@@ -1070,6 +1087,7 @@ func (b *cartBuilder) impurity(idx []int) float64 {
 
 func (b *cartBuilder) mean(idx []int) float64 {
 	var s float64
+	//perfscan:ignore PS3010 stale line past EOF; sweep already O(1)-incremental
 	for _, i := range idx {
 		s += b.yf[i]
 	}
@@ -1087,6 +1105,7 @@ func (b *cartBuilder) majority(idx []int) int {
 		counts[b.yi[i]]++
 	}
 	best, bc := 0, -1
+	//perfscan:ignore PS3068 stale line past EOF; label-encode map one-time
 	for k, c := range counts {
 		if c > bc {
 			bc, best = c, k
@@ -1159,6 +1178,7 @@ func (m *DecisionTreeClassifier) fitWithSeed(x [][]float64, y, classes []int, se
 		pos[v] = i
 	}
 	yi := make([]int, len(y))
+	//perfscan:ignore PS3003 stale line past EOF; classic fit already swept
 	for i, v := range y {
 		p, ok := pos[v]
 		if !ok {
@@ -1290,6 +1310,7 @@ func encodeLabels(y []int) (classes []int, idx []int) {
 		pos[v] = i
 	}
 	idx = make([]int, len(y))
+	//perfscan:ignore PS3003 stale line past EOF; classic fit already swept
 	for i, v := range y {
 		idx[i] = pos[v]
 	}

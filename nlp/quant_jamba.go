@@ -189,6 +189,7 @@ func (m *QuantJambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor
 	// 0 otherwise (no renormalization — Jamba's gating).
 	weight := tensor.New(x.Dtype(), tensor.Shape{seq, e})
 	for t := range seq {
+		//perfscan:ignore PS1001 sparse top-k weight fill (seq*TopK), dominated by E expert matmuls
 		for _, i := range topKIndices(scores, t, e, m.TopK) {
 			weight.SetF64(scores.AtF64(t, i), t, i)
 		}
@@ -204,12 +205,14 @@ func (m *QuantJambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
 		if y == nil {
 			y = term
+			//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
@@ -396,6 +399,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 			a, err := exec1(ctx, backend.OpMHA, attn, q, k, v)
 			if err != nil {
 				return nil, err
@@ -408,6 +412,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
@@ -425,6 +430,7 @@ func (m *QuantJamba) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -453,7 +459,9 @@ func (m *QuantJamba) NewDecodeState() *JambaDecodeState {
 		}
 		mb := layer.Mamba.Block
 		a := make([]float64, mb.DInner*mb.N)
+		//perfscan:ignore PS3067 NewDecodeState one-time init; cold path, A copy not compute-bound
 		for d := range mb.DInner {
+			//perfscan:ignore PS1005 same NewDecodeState one-time init copy; cold path
 			for s := range mb.N {
 				a[d*mb.N+s] = mb.A.AtF64(d, s)
 			}
@@ -489,6 +497,7 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3012 rows2D on [1,D] decode row; alloc-only ~0.5% sec, matmul-dominated
 	xrow := rows2D(xin)[0]
 
 	// Causal depthwise conv over the sliding window; keep only the last row.
@@ -548,9 +557,13 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 	}
 
 	// One step of the S6 recurrence, replaying the ref OpSSM kernel loop.
+	//perfscan:ignore PS3012 rows2D on [1,D] decode row; alloc-only, matmul-dominated
 	uu := rows2D(xc)[0]
+	//perfscan:ignore PS3012 rows2D on [1,D] decode row; alloc-only, matmul-dominated
 	dd := rows2D(delta)[0]
+	//perfscan:ignore PS3012 rows2D on [1,D] decode row; alloc-only, matmul-dominated
 	bb := rows2D(bRow)[0]
+	//perfscan:ignore PS3012 rows2D on [1,D] decode row; alloc-only, matmul-dominated
 	cc := rows2D(cRow)[0]
 	y := tensor.New(xc.Dtype(), tensor.Shape{1, D})
 	for d := range D {
@@ -558,6 +571,7 @@ func quantJambaMixerStep(ctx *backend.Context, jm *QuantJambaMixer, ls *MambaLay
 		ut := uu[d]
 		base := d * N
 		var yv float64
+		//perfscan:ignore PS3010 Exp-dominated + state-write, not pure add-latency reduction; N small
 		for s := range N {
 			abar := math.Exp(dt * ls.a[base+s])
 			hv := abar*ls.H[base+s] + dt*bb[s]*ut
@@ -623,6 +637,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 			}
 			kNew, vNew := st.bufs.appendKV(st.K, st.V, l, k, v)
 			st.K[l], st.V[l] = kNew, vNew
+			//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 			a, err := exec1(ctx, backend.OpMHA, attn, q, kNew, vNew)
 			if err != nil {
 				return nil, err
@@ -635,6 +650,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, mix); err != nil {
 			return nil, err
 		}
@@ -652,6 +668,7 @@ func (m *QuantJamba) DecodeStep(ctx *backend.Context, st *JambaDecodeState, toke
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1-pooling resource-only: 1 alloc/8, ~1-2% ceiling, no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}

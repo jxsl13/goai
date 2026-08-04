@@ -145,6 +145,7 @@ func sumF32(x []float32) float64 {
 		hi = hi.Add(v.GetHi().ConvertToFloat64())
 	}
 	s := horizF64x4(lo) + horizF64x4(hi)
+	//perfscan:ignore PS3010 scalar remainder tail of already-AVX-vectorized sumF32
 	for i := n8; i < len(x); i++ {
 		s += float64(x[i])
 	}

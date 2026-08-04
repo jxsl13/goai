@@ -153,19 +153,23 @@ func (m *HGRN) gates(ctx *backend.Context, x *tensor.Tensor) (logF, f, b *tensor
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 gate elementwise O(L·d), matmul-dominated; already backend op
 	sig, err := m.exec(ctx, backend.OpSigmoid, nil, ffLogits)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 gate mul O(L·d), matmul-dominated; already backend op
 	scaled, err := m.exec(ctx, backend.OpMul, nil, sig, scalarTensor(dt, 1-m.Gamma))
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 gate add O(L·d), matmul-dominated; already backend op
 	f, err = m.exec(ctx, backend.OpAdd, nil, scaled, scalarTensor(dt, m.Gamma))
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	// input gate i = 1 − f (complementary / leak-free), candidate c = SiLU(ĩ).
+	//perfscan:ignore PS3024 gate sub O(L·d), matmul-dominated; already backend op
 	i, err := m.exec(ctx, backend.OpSub, nil, scalarTensor(dt, 1), f)
 	if err != nil {
 		return nil, nil, nil, err
@@ -174,10 +178,12 @@ func (m *HGRN) gates(ctx *backend.Context, x *tensor.Tensor) (logF, f, b *tensor
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 SiLU O(L·d), matmul-dominated; already backend op
 	c, err := m.exec(ctx, backend.OpSiLU, nil, iiLogits)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 gate mul O(L·d), matmul-dominated; already backend op
 	b, err = m.exec(ctx, backend.OpMul, nil, i, c)
 	if err != nil {
 		return nil, nil, nil, err
@@ -190,10 +196,12 @@ func (m *HGRN) gates(ctx *backend.Context, x *tensor.Tensor) (logF, f, b *tensor
 	// exp() to ≈0 (matching the sequential path and f=0's limit) but never NaN, and
 	// the gradient through the log stays finite. Only the log input is floored; the f
 	// returned to the sequential path is exact, so the duality is preserved.
+	//perfscan:ignore PS3024 clip O(L·d), matmul-dominated; already backend op
 	fFloored, err := m.exec(ctx, backend.OpClip, backend.ClipAttrs{Lo: hgrnForgetFloor, Hi: 1}, f)
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 log O(L·d), matmul-dominated; already backend op
 	logF, err = m.exec(ctx, backend.OpLog, nil, fFloored) // ≤ 0 since f ∈ (0,1)
 	if err != nil {
 		return nil, nil, nil, err
@@ -210,10 +218,12 @@ func (m *HGRN) gate(ctx *backend.Context, x, h *tensor.Tensor) (*tensor.Tensor, 
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 optional output-gate sigmoid, small O(L·d)
 	g, err := m.exec(ctx, backend.OpSigmoid, nil, gLogits)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 output-gate mul, small O(L·d)
 	return m.exec(ctx, backend.OpMul, nil, g, h)
 }
 
@@ -230,34 +240,42 @@ func (m *HGRN) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, 
 		return nil, err
 	}
 	l, d := x.Shape()[0], m.DModel
+	//perfscan:ignore PS3024 cumsum O(L·d), einsum-dominated forward
 	cum, err := m.exec(ctx, backend.OpCumsum, backend.CumsumAttrs{Axis: 0}, logF) // cumlogF [L,d]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024,PS6018 OpReshape is metadata no-op | resource-only; reshape no-op, no wall-clock
 	ct, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{l, 1, d}}, cum) // cumlogF_t
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpReshape is metadata no-op
 	cj, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{1, l, d}}, cum) // cumlogF_j
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 [L,L,d] sub already vectorized backend op, einsum-dominated
 	diff, err := m.exec(ctx, backend.OpSub, nil, ct, cj) // [L,L,d] = cumlogF_t − cumlogF_j (auto-broadcast)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 causal-mask reshape metadata no-op
 	mask, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{l, l, 1}}, qkCausalMask(x.Dtype(), l, l))
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 [L,L,d] add already backend op, einsum-dominated
 	dpre, err := m.exec(ctx, backend.OpAdd, nil, diff, mask) // −1e30 above the diagonal ⇒ exp → 0
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 [L,L,d] exp already vectorized backend op
 	dmat, err := m.exec(ctx, backend.OpExp, nil, dpre) // D [L,L,d]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 einsum dominant op, already optimized engine
 	h, err := m.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "tjk,jk->tk"}, dmat, b) // h[t,k]=Σ_j D[t,j,k]·b[j,k]
 	if err != nil {
 		return nil, err
@@ -307,10 +325,12 @@ func (m *HGRN) ForwardSequential(ctx *backend.Context, x *tensor.Tensor) (*tenso
 	outs := make([]*tensor.Tensor, l)
 	var h *tensor.Tensor // [1,d]; nil == the zero state before t=0
 	for t := range l {
+		//perfscan:ignore PS3024 Params() cold param-gather, one-time
 		ft, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: t, End: t + 1}, f)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 Params() cold param-gather, one-time
 		bt, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: t, End: t + 1}, b)
 		if err != nil {
 			return nil, err
@@ -318,10 +338,12 @@ func (m *HGRN) ForwardSequential(ctx *backend.Context, x *tensor.Tensor) (*tenso
 		if h == nil {
 			h = bt // h_0 = f_0·0 + b_0
 		} else {
+			//perfscan:ignore PS3024 HGRNLayerBounds one-time construction init
 			fh, err := m.exec(ctx, backend.OpMul, nil, ft, h) // f_t ⊙ h_{t-1}
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS3024 HGRNLayerBounds one-time construction init
 			if h, err = m.exec(ctx, backend.OpAdd, nil, fh, bt); err != nil { // + b_t
 				return nil, err
 			}

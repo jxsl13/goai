@@ -57,6 +57,7 @@ func GreedySoup(models [][]*tensor.Tensor, valAcc []float64, eval func([]*tensor
 	for i := range order {
 		order[i] = i
 	}
+	//perfscan:ignore PS3002,PS6009 tiny n (models), eval-dominated cold merge path | tiny n cold model-merge sort
 	sort.SliceStable(order, func(a, b int) bool { return valAcc[order[a]] > valAcc[order[b]] })
 
 	best := eval(averageModels(models, order[:1])) // the top model is always the first ingredient
@@ -113,6 +114,7 @@ func averageModels(models [][]*tensor.Tensor, idxs []int) []*tensor.Tensor {
 		// accumulate each contiguous model directly from its backing []T — no per-element
 		// Unravel/AtF64 dispatch. Same model-then-element order (so the float sum is
 		// unchanged) and the same *inv rescale as the generic walk → bit-identical.
+		//perfscan:ignore PS1007 one-time model merge, already typed+parallel fast path
 		for _, t := range idxs {
 			mp := models[t][i]
 			if mf := flatF64(mp); mf != nil {

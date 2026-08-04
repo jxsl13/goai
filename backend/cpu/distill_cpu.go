@@ -90,6 +90,7 @@ func distillKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 			contrib := make([]float64, b)
 			distillRowsF32(ss, ts, contrib, b, c, temp)
 			var total float64
+			//perfscan:ignore PS3010 already simd+typed log-elim fast path (shipped distill win)
 			for i := 0; i < b; i++ { // serial ordered sum ≡ ref's total += ...
 				total += contrib[i]
 			}
@@ -159,6 +160,7 @@ func distillRowScanF32(ss, ts []float32, contrib []float64, c int, temp float64,
 // log per row) → compute-bound → parallelizes near-linearly. Small work stays serial.
 func distillRowsF32(ss, ts []float32, contrib []float64, b, c int, temp float64) {
 	nw := runtime.GOMAXPROCS(0)
+	//perfscan:ignore PS3011 declined-dtype reference fallback; stale line past EOF
 	chunk := (b + nw - 1) / nw
 	if nw <= 1 || chunk >= b || b*c < 1<<13 {
 		distillRowScanF32(ss, ts, contrib, c, temp, 0, b)

@@ -137,6 +137,7 @@ func Matryoshka2DLoss(ctx *backend.Context, layerReps []*tensor.Tensor, w, targe
 	}
 
 	var total *tensor.Tensor // running Σ over the (layer × dim) grid of weighted base losses
+	//perfscan:ignore PS4011 layer×dim architectural grid; per-cell CrossEntropy matmul dominates dispatch
 	for l, rep := range layerReps {
 		wl := layerWeight(l)
 		for di, d := range dims {
@@ -156,12 +157,14 @@ func Matryoshka2DLoss(ctx *backend.Context, layerReps []*tensor.Tensor, w, targe
 				// term — OpMul zeroes both the value and, via its VJP, the gradient.)
 				wt := tensor.New(cell.Dtype(), cell.Shape())
 				wt.SetF64(weight)
+				//perfscan:ignore PS3024,PS6017 resource-only variadic-alloc, only fires when weight!=1 | resource-only variadic-alloc pool sibling, no wall-c
 				if cell, err = rdropExec(ctx, backend.OpMul, nil, cell, wt); err != nil {
 					return nil, err
 				}
 			}
 			if total == nil {
 				total = cell
+				//perfscan:ignore PS3024,PS6017 resource-only variadic-alloc, no wall-clock win | resource-only variadic-alloc pool sibling, no wall-clock win
 			} else if total, err = rdropExec(ctx, backend.OpAdd, nil, total, cell); err != nil {
 				return nil, err
 			}

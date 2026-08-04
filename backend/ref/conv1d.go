@@ -108,6 +108,7 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			}
 			for c := range D {
 				var acc float64
+				//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for k := kStart; k < K; k++ {
 					acc += ws[c*K+k] * xs[(t-(K-1)+k)*D+c]
 				}
@@ -133,6 +134,7 @@ func conv1dKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			}
 			for c := range D {
 				var acc float64 // accumulate in float64; only the store rounds
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for k := kStart; k < K; k++ {
 					acc += float64(ws[c*K+k]) * float64(xs[(t-(K-1)+k)*D+c])
 				}

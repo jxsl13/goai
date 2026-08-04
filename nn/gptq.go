@@ -79,6 +79,7 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 		var bt []float64
 		c := matmulABtInto(xf, xf, in, samples, bt, nil) // c[i*in+j] = Σ_k X[i,k]·X[j,k]
 		for i := range in {
+			//perfscan:ignore PS2008 one-time offline GPTQ weight quantization; cold-path alloc
 			hi := make([]float64, in)
 			base := i * in
 			for j := range in {
@@ -87,13 +88,17 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 			h[i] = hi
 		}
 	} else {
+		//perfscan:ignore PS3034 offline quantize AtF64 fallback (non-contiguous declined path); cold
 		for i := range in {
+			//perfscan:ignore PS2008,PS3064 offline quantize Hessian alloc; one-time cold | offline quantize [][]T rows; one-time cold
 			h[i] = make([]float64, in)
+			//perfscan:ignore PS4006 offline quantize Hessian fill; one-time cold
 			for j := range in {
 				var s float64
 				for k := range samples {
 					s += x.AtF64(i, k) * x.AtF64(j, k)
 				}
+				//perfscan:ignore PS3016 offline quantize AtF64 fallback; one-time cold
 				h[i][j] = 2 * s
 			}
 		}
@@ -102,6 +107,7 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 
 	// dead columns (no calibration signal) → quantize to 0; then dampen the diagonal.
 	var meanDiag float64
+	//perfscan:ignore PS3010 offline quantize meanDiag reduction; one-time cold
 	for i := range in {
 		meanDiag += h[i][i]
 	}
@@ -110,6 +116,7 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 		if h[i][i] == 0 {
 			h[i][i] = 1
 			for r := range out {
+				//perfscan:ignore PS3016 offline quantize dead-col zeroing; one-time cold
 				wm[r][i] = 0
 			}
 		}
@@ -135,8 +142,11 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 	}
 	hinv := make([][]float64, in)
 	for i := range in {
+		//perfscan:ignore PS2008,PS3064 offline quantize hinv alloc; one-time cold | offline quantize [][]T hinv; one-time cold
 		hinv[i] = make([]float64, in)
+		//perfscan:ignore PS4006 offline quantize hinv fill; one-time cold
 		for j := i; j < in; j++ {
+			//perfscan:ignore PS3016 offline quantize hinv copy; one-time cold
 			hinv[i][j] = lo.AtF64(j, i) // upper = Lᵀ
 		}
 	}
@@ -156,12 +166,15 @@ func GPTQuantize(w, x *tensor.Tensor, quant func(float64) float64, opts ...GPTQO
 	// caller's callback rather than an implementation detail — see the doc comment.
 	parallelRows(out, in*in, func(rlo, rhi int) {
 		for r := rlo; r < rhi; r++ {
+			//perfscan:ignore PS3044 offline quantize column sweep, already row-banded parallel; cold
 			for i := range in {
+				//perfscan:ignore PS3016 offline quantize weight write; one-time cold
 				wi := wm[r][i]
 				qv := quant(wi)
 				q.SetF64(qv, r, i)
 				e := (wi - qv) / hinv[i][i] // per-row error, scaled by the inverse-Hessian diagonal
 				for j := i + 1; j < in; j++ {
+					//perfscan:ignore PS3075 offline quantize error compensation; one-time cold
 					wm[r][j] -= e * hinv[i][j] // compensate the not-yet-quantized columns
 				}
 			}

@@ -112,6 +112,7 @@ func NewGrokfastMA(base Optimizer, params []*tensor.Tensor, opts ...GrokfastMAOp
 func (g *GrokfastMA) Step(grad GradFn) error {
 	filtered := g.filtered
 	clear(filtered) // reused map: drop last step's entries
+	//perfscan:ignore PS3044 outer param loop, one grad query per param
 	for i, p := range g.Params {
 		gr := grad(p)
 		if gr == nil {
@@ -128,6 +129,7 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 		if !evict {
 			g.filled[i]++
 		}
+		//perfscan:ignore PS6024 scalar ring-pos bookkeeping once per param
 		g.pos[i] = (g.pos[i] + 1) % g.Window
 
 		ghat := g.out[i] // reused per-param output tensor, overwritten below
@@ -144,6 +146,7 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 		// the multi-pass form, so the running sum and every output are bit-identical.
 		if gf, hf := flatF64(gr), flatF64(ghat); gf != nil && hf != nil {
 			if evict {
+				//perfscan:ignore PS4004,PS5001 flat[k]=gf[k] fused into single-pass, not standalone memmove | div in memory-streaming fused optimizer sweep,
 				for k := 0; k < n; k++ {
 					s := sum[k] - flat[k] + gf[k]
 					sum[k] = s
@@ -155,6 +158,7 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 					hf[k] = gv
 				}
 			} else {
+				//perfscan:ignore PS4004,PS5001 fused single-pass write, not standalone memmove | div hidden under 6-array streaming fused sweep
 				for k := 0; k < n; k++ {
 					s := sum[k] + gf[k]
 					sum[k] = s
@@ -191,6 +195,7 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 			sum[k] += flat[k]
 		}
 		if hf := flatF32(ghat); hf != nil {
+			//perfscan:ignore PS5001 declined-dtype F32/general fallback path
 			for k := range n {
 				gv := flat[k]
 				if amplify {
@@ -199,6 +204,7 @@ func (g *GrokfastMA) Step(grad GradFn) error {
 				hf[k] = float32(gv)
 			}
 		} else {
+			//perfscan:ignore PS5001 declined-dtype general fallback path
 			for k := range n {
 				gv := flat[k]
 				if amplify {

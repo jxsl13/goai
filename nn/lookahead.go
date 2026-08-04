@@ -69,6 +69,7 @@ func NewLookahead(base Optimizer, params []*tensor.Tensor, opts ...LookaheadOpti
 	l.slow = make([][]float64, len(params))
 	for i, p := range params {
 		l.slow[i] = make([]float64, p.Numel())
+		//perfscan:ignore PS1001 NewLookahead constructor slow-weight init, one-time
 		for k := range p.Numel() {
 			l.slow[i][k] = p.AtF64(tensor.Unravel(k, p.Shape())...)
 		}
@@ -92,11 +93,13 @@ func (l *Lookahead) Step(grad GradFn) error {
 		// Contiguous fast paths (§base-perf: no per-element Unravel/AtF64/SetF64).
 		if pf := flatF64(p); pf != nil {
 			for i := range pf {
+				//perfscan:ignore PS3084 already flat fast-path; slow-sync every-k, memory-bound copy
 				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*pf[i] // φ ← (1−α)φ + α·θ
 				pf[i] = slow[i]                               // θ ← φ (reset)
 			}
 		} else if pf := flatF32(p); pf != nil {
 			for i := range pf {
+				//perfscan:ignore PS3084 f32 flat fast-path; every-k memory-bound, negligible vs step
 				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*float64(pf[i])
 				pf[i] = float32(slow[i])
 			}
@@ -104,6 +107,7 @@ func (l *Lookahead) Step(grad GradFn) error {
 			for i := range p.Numel() {
 				idx := tensor.Unravel(i, p.Shape())
 				theta := p.AtF64(idx...)
+				//perfscan:ignore PS3084 declined-dtype generic Unravel fallback, correct to keep
 				slow[i] = (1-l.Alpha)*slow[i] + l.Alpha*theta
 				p.SetF64(slow[i], idx...)
 			}

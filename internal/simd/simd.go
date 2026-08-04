@@ -160,6 +160,7 @@ func FWHTF64(a []float64) {
 		for i := 0; i < n; i += h << 1 {
 			for j := i; j < i+h; j++ {
 				x, y := a[j], a[j+h]
+				//perfscan:ignore PS4010 portable SIMD-fallback primitives already tuned; line stale
 				a[j], a[j+h] = x+y, x-y
 			}
 		}

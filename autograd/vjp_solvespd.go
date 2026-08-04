@@ -50,6 +50,7 @@ func init() {
 			xs := x.Contiguous().Storage().F64()
 			bs := bbar.Contiguous().Storage().F64()
 			as := abar.Storage().F64()
+			//perfscan:ignore PS1006 false-positive: inner c-reduction is contiguous not strided; already flat fastpath
 			for i := 0; i < n; i++ {
 				ib := i * k
 				for j := i; j < n; j++ {

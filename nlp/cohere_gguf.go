@@ -95,6 +95,7 @@ func CohereFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Co
 	}
 
 	m := &Cohere{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load layer loop, cold
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -305,6 +306,7 @@ func CohereToGGUF(m *Cohere) (map[string]any, map[string]*tensor.Tensor) {
 	if hd <= 0 {
 		hd = c.Dim / c.Heads
 	}
+	//perfscan:ignore PS3060 model-export layer loop, cold
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.InputNorm.Gamma)
@@ -337,6 +339,7 @@ func permuteSplitToInterleave(w *tensor.Tensor, heads, headDim int) *tensor.Tens
 			src1 := base + i + half // split-half: second half
 			dst0 := base + 2*i      // interleaved even channel
 			dst1 := base + 2*i + 1  // interleaved odd channel
+			//perfscan:ignore PS1001 weight permute at save, one-time cold
 			for c := range in {
 				res.SetF64(w.AtF64(src0, c), dst0, c)
 				res.SetF64(w.AtF64(src1, c), dst1, c)

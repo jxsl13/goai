@@ -80,6 +80,7 @@ func QuantizeNF4(w []float64, blockSize int) (packed []uint8, absmax []float64) 
 			}
 		}
 		absmax[b] = am
+		//perfscan:ignore PS5001 one-time load quant; divide feeds nearestNF4 quantize
 		for i := lo; i < hi; i++ {
 			var idx uint8 = 7 // all-zero block → exact 0.0
 			if am > 0 {
@@ -154,9 +155,11 @@ func QuantizeScalesNF4(absmax []float64, blockSize2 int) (codes []int8, absmax2 
 			}
 		}
 		absmax2[b] = am2
+		//perfscan:ignore PS5001 one-time scale double-quant; divide feeds round
 		for i := lo; i < hi; i++ {
 			if am2 > 0 {
 				q := math.Round((absmax[i] - offset) / am2 * 127)
+				//perfscan:ignore PS3077,PS3082 clamp in one-time scale-quant loop; cold | minmax clamp in one-time scale-quant loop; cold
 				codes[i] = int8(math.Max(-127, math.Min(127, q)))
 			}
 		}
@@ -207,6 +210,7 @@ func NewQLoRA(w *tensor.Tensor, blockSize, r int, alpha float64, seed uint64) (*
 	}
 	flat := make([]float64, in*out)
 	for i := range in {
+		//perfscan:ignore PS1001 NewQLoRA one-time construction flatten; load-time
 		for j := range out {
 			flat[i*out+j] = w.AtF64(i, j)
 		}
@@ -246,18 +250,22 @@ func (q *QLoRALinear) exec(ctx *backend.Context, op backend.Op, attrs backend.At
 // Forward computes y = x·dequant_NF4(W) + (alpha/r)·(x·A)·B. The dequantized base
 // is a constant (frozen), so gradients flow only into the adapter A and B.
 func (q *QLoRALinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 variadic slice alloc wrapping matmul; matmul-dominated
 	base, err := q.exec(ctx, backend.OpMatMul, nil, x, q.Base(x.Dtype()))
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc wrapping matmul; matmul-dominated
 	xa, err := q.exec(ctx, backend.OpMatMul, nil, x, q.A)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc wrapping matmul; matmul-dominated
 	delta, err := q.exec(ctx, backend.OpMatMul, nil, xa, q.B)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic AXPY wrapper; matmul-dominated forward
 	return q.exec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: q.Alpha / float64(q.R)}, delta, base)
 }
 

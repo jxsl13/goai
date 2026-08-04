@@ -95,6 +95,7 @@ func SinusoidalPositionalEncodingConcat(seqLen, dModel int, base float64, dtype 
 	parallelRows(seqLen, half, func(lo, hi int) {
 		for pos := lo; pos < hi; pos++ {
 			fp := float64(pos)
+			//perfscan:ignore PS1005 freqs already hoisted, sin/cos-dominated, PE table built once
 			for i := range half {
 				angle := fp * freqs[i]
 				sin, cos := math.Sincos(angle) // one argument reduction feeds both (bit-identical)

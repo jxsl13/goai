@@ -1165,6 +1165,7 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		d.qkNorm = true
 		return mk(flat1D(n.Gamma)).b
 	}
+	//perfscan:ignore PS3032 model-build weight-upload loop over blocks, one-time
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: linS(b.Wo, resMult),
@@ -1235,6 +1236,7 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newStableLMDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1292,6 +1294,7 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 		logitScale = float32(cfg.LogitScale)
 	}
 	linS := d.mkLinS(mk, ops, &err)
+	//perfscan:ignore PS3032 newCohereDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1365,6 +1368,7 @@ func newNemotronDecoder(m *nlp.Nemotron, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newNemotronDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1439,6 +1443,7 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newGemmaDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -1548,6 +1553,7 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 	d.mlaKV = mk(make([]float32, c*cfg.Heads*kvHead))
 	d.mlaAttn = mk(make([]float32, c*cfg.Heads*cfg.VHead))
 
+	//perfscan:ignore PS3032 newDeepSeekV2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqA: lin(b.WqA), wqB: lin(b.WqB), wkvA: lin(b.WkvA), wkvB: lin(b.WkvB), wo: lin(b.Wo),
@@ -1628,6 +1634,7 @@ func newMambaDecoder(m *nlp.Mamba, ops backendOps) (*Decoder, error) {
 		}
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
+	//perfscan:ignore PS3032 newMambaDecoder block-upload, one-time model build
 	for _, ly := range m.Layers {
 		mx := ly.Mixer
 		// A = −exp(A_log), precomputed on the host (ALog is [dInner, N], row-major — the SSMStep layout).
@@ -1720,6 +1727,7 @@ func newJambaDecoder(m *nlp.Jamba, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err) // Q8_0 when ops.quantizeF32 set (NewJambaQ8CUDA), else f32
+	//perfscan:ignore PS3032 newJambaDecoder block-upload, one-time model build
 	for _, ly := range m.Layers {
 		gb := block{
 			gAttn: mk(flat1D(ly.InputNorm.Gamma)).b, // input_layernorm (mixer pre-norm)
@@ -1823,6 +1831,7 @@ func newMamba2Decoder(m *nlp.Mamba2, ops backendOps) (*Decoder, error) {
 		}
 		return f32Linear{w: mk(flat2DT(w)).b, k: in, n: out}
 	}
+	//perfscan:ignore PS3032 newMamba2Decoder block-upload, one-time model build
 	for _, ly := range m.Layers {
 		mx := ly.Mixer
 		aLog := flat1D(mx.ALog)
@@ -1921,6 +1930,7 @@ func newRWKVDecoder(m *nlp.RWKV, ops backendOps) (*Decoder, error) {
 		return mk(o).b
 	}
 	zeros := func() buffer { return mk(make([]float32, d.d)).b }
+	//perfscan:ignore PS3032 newRWKVDecoder block-upload, one-time model build
 	for _, bl := range m.Blocks {
 		gb := block{
 			gAttn: mk(flat1D(bl.LN1.Gamma)).b, bAttn: mk(flat1D(bl.LN1.Beta)).b, // LN1
@@ -1977,6 +1987,7 @@ func newFalconDecoder(m *nlp.Falcon, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newFalconDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2040,6 +2051,7 @@ func newOLMo2Decoder(m *nlp.OLMo2, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newOLMo2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2120,6 +2132,7 @@ func newGemma2Decoder(m *nlp.Gemma2, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	fused := d.mkFused(mk, ops, &err)
 	lin := d.mkLin(mk, ops, &err)
+	//perfscan:ignore PS3032 newGemma2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2177,6 +2190,7 @@ func newMPTDecoder(m *nlp.MPT, ops backendOps) (*Decoder, error) {
 
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newMPTDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2247,6 +2261,7 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 		d.qkNorm = true
 		return mk(flat1D(n.Gamma)).b
 	}
+	//perfscan:ignore PS3032 newMixtralDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2313,6 +2328,7 @@ func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
 		}
 		return mk(append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)).b
 	}
+	//perfscan:ignore PS3032 newQwen2MoEDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2391,6 +2407,7 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 	lin := d.mkLin(mk, ops, &err)
 	linS := d.mkLinS(mk, ops, &err) // ResidualMult / logit-scale fold — quantize-aware (Q8 under the hook)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newGraniteMoEDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2455,6 +2472,7 @@ func newOLMoEDecoder(m *nlp.OLMoE, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	//perfscan:ignore PS3032 newOLMoEDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
@@ -2509,6 +2527,7 @@ func newStarCoder2Decoder(m *nlp.StarCoder2, ops backendOps) (*Decoder, error) {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
 	}
+	//perfscan:ignore PS3032 newStarCoder2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv),
@@ -2585,6 +2604,7 @@ func newPhiDecoder(m *nlp.Phi, ops backendOps) (*Decoder, error) {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
 	}
+	//perfscan:ignore PS3032 newPhiDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv),
@@ -2660,6 +2680,7 @@ func newGPTNeoXDecoder(m *nlp.GPTNeoX, ops backendOps) (*Decoder, error) {
 		fb := append(append(append([]float32{}, flat1D(bq)...), flat1D(bk)...), flat1D(bv)...)
 		return mk(fb).b
 	}
+	//perfscan:ignore PS3032 newGPTNeoXDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv),
@@ -2726,6 +2747,7 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		d.qweights = append(d.qweights, w)
 		return quantLinear{w: w}
 	}
+	//perfscan:ignore PS3032 newQuantDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		gb := block{
 			wqkv: qfused(b.Wq, b.Wk, b.Wv), wo: qlin(b.Wo),
@@ -3145,6 +3167,7 @@ const (
 // bit-identical to the per-element loops they replace.
 func forEachRowBlockF32(t *tensor.Tensor, fn func(j0 int, blk []float32)) {
 	rows, cols := t.Shape()[0], t.Shape()[1]
+	//perfscan:ignore PS2001 Cast alloc per row-BLOCK (256), model-build bulk-slice upload, amortized
 	for j0 := 0; j0 < rows; j0 += rowBlock {
 		j1 := min(j0+rowBlock, rows)
 		blk, err := t.Slice(0, j0, j1)
@@ -3221,6 +3244,8 @@ func flat1D(t *tensor.Tensor) []float32 {
 
 // embedRow reads one row of an embedding table as float32. It is on the per-token decode path, so
 // it takes the bulk-slice route too: one row view, one typed conversion, no per-element dispatch.
+//
+//perfscan:ignore PS3033 one small row alloc/token, resource-only, negligible vs forward
 func embedRow(table *tensor.Tensor, row, cols int) []float32 {
 	o := make([]float32, cols)
 	r, err := table.Slice(0, row, row+1)

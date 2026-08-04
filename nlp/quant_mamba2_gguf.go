@@ -110,6 +110,7 @@ func QuantMamba2FromGGUF(meta map[string]any, tensors map[string]gguf.QuantTenso
 	}
 
 	q := &QuantMamba2{Config: cfg, Embed: emb}
+	//perfscan:ignore PS5001 invariant-divide zero expected win on elementwise; GGUF load
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		get := func(name string) (gguf.QuantTensor, error) {

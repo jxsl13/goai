@@ -16,6 +16,8 @@ import (
 // both models share while keeping fluency.
 
 // logSoftmax returns the log-probabilities of logits (numerically stable).
+//
+//perfscan:ignore PS3033 logSoftmax vocab scan « two-model forward; memory-bound
 func logSoftmax(logits []float64) []float64 {
 	m := math.Inf(-1)
 	for _, v := range logits {

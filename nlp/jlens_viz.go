@@ -150,6 +150,7 @@ func JLensHTML(model LensReadoutModel, lens *JLens, tokens []int, opts ...JLensH
 	for _, tid := range tracked {
 		grid := make([][]int, R)
 		for r := range grid {
+			//perfscan:ignore PS2008,PS3064 HTML viz tooling, cold path, resource-only | HTML viz generation, cold one-time tooling
 			grid[r] = make([]int, T)
 		}
 		data.Ranks[strconv.Itoa(tid)] = grid
@@ -175,7 +176,9 @@ func JLensHTML(model LensReadoutModel, lens *JLens, tokens []int, opts ...JLensH
 		if o.occK > 0 {
 			data.Occ[ri] = make([]int, T)
 			for p := 0; p < T; p++ {
+				//perfscan:ignore PS6016 viz builder alloc, cold tooling path
 				h := tensor.New(tensor.F64, tensor.Shape{lens.Dim})
+				//perfscan:ignore PS1005 AtF64 walk builds HTML viz, cold one-time
 				for b := 0; b < lens.Dim; b++ {
 					h.SetF64(resids[row.Layer].AtF64(p, b), b)
 				}
@@ -211,12 +214,14 @@ func JLensHTML(model LensReadoutModel, lens *JLens, tokens []int, opts ...JLensH
 		fmt.Fprintf(&b, "<div class=\"jlv-colhead\"><span class=\"jlv-tok\">%s</span><span class=\"jlv-pos\">%d</span></div>", esc(o.text(tid)), p)
 	}
 	b.WriteString("\n")
+	//perfscan:ignore PS2002 Grow on HTML builder, cold viz path
 	for ri, row := range sl.Rows {
 		label := fmt.Sprintf("L%d", row.Layer)
 		if row.Layer == lens.Layers {
 			label = "out" // identity transport: the model's actual output row
 		}
 		fmt.Fprintf(&b, "<div class=\"jlv-rowhead\">%s</div>", label)
+		//perfscan:ignore PS2002 Grow on HTML builder, cold viz path
 		for p := 0; p < T; p++ {
 			cls := "jlv-cell"
 			if row.Rank[p] == 0 {

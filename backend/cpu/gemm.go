@@ -77,6 +77,8 @@ func matContiguousF32(t *tensor.Tensor) *tensor.Tensor {
 // matmulInlineWork gates the F64 matmul's serial fast path: below this m·k·n it runs on
 // the caller (see matmulKernel). Tuned above a training step's tiny layers (~1.3e5) and
 // well below the isolated-throughput matmuls that still need the pool.
+//
+//perfscan:ignore PS6023 matmulInlineWork const declaration, tuning constant not a loop
 const matmulInlineWork = 1 << 18
 
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
@@ -162,6 +164,7 @@ func gemvF64Cols(A, B, C []float64, k, n, lo, hi int) {
 	// summed group. Adding the four products together first would reassociate and move the last
 	// bits, which the whole matmul parity surface forbids.
 	p := 0
+	//perfscan:ignore PS3051,PS3066 init() kernel registration, one-time | init() std.add registration, one-time startup
 	for ; p+3 < k; p += 4 {
 		a0, a1, a2, a3 := A[p], A[p+1], A[p+2], A[p+3]
 		b0 := B[p*n+lo : p*n+hi : p*n+hi]

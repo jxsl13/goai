@@ -105,6 +105,7 @@ func (d *DropPath) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 			mask.SetF64(perSample[idx[0]], idx...) // broadcast the per-sample value over the rest
 		}
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{x, mask}, nil)
 	if err != nil {
 		return nil, err

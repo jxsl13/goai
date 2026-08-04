@@ -269,6 +269,7 @@ func SaveFile(path string, tensors map[string]*tensor.Tensor, meta map[string]st
 	if err != nil {
 		return err
 	}
+	//perfscan:ignore PS3029 SaveFile write path, one-time export
 	if err := Save(f, tensors, meta); err != nil {
 		f.Close()
 		return err
@@ -341,6 +342,7 @@ func loadFrom(r io.Reader, fileSize int64) (map[string]*tensor.Tensor, map[strin
 	}
 	// Sort by (begin, end): zero-size tensors share their begin with the next
 	// tensor's, so the end tie-break keeps them ahead of it (§B21).
+	//perfscan:ignore PS3002,PS6009 one-time load sort over ~N tensors by int offset | one-time load sort, swapper alloc negligible
 	sort.Slice(entries, func(i, j int) bool {
 		a, b := entries[i].e.DataOffsets, entries[j].e.DataOffsets
 		if a[0] != b[0] {
@@ -523,5 +525,6 @@ func LoadFile(path string) (map[string]*tensor.Tensor, map[string]string, error)
 	if err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3029 one-time load; safetensors reads bulk JSON header, not field-by-field
 	return loadFrom(f, fi.Size())
 }

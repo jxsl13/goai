@@ -16,6 +16,8 @@ import (
 //	dX[n,c,iy,ix] += dO[n,f,oy,ox]·W[f,c,ky,kx]
 //	dW[f,c,ky,kx] += dO[n,f,oy,ox]·X[n,c,iy,ix]
 //	dBias[f]       = Σ dO[n,f,·,·]
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func conv2dBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: conv2d-backward wants (X,W,dO), got %d inputs", len(in))

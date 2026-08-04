@@ -55,12 +55,14 @@ func (s *Sampler) applyDRY(logits []float64, history []int) {
 	// brk[j] == breaker[window[j]] by construction.
 	brk := make([]bool, L)
 	for j, t := range window {
+		//perfscan:ignore PS3007 already-optimized precompute once; tiny sampling window
 		brk[j] = breaker[t]
 	}
 	// For each earlier position i: k = longest common suffix of window[:i] and
 	// window[:L] not crossing a breaker. Continuing with window[i] would extend
 	// that k-repetition, so window[i] is penalized by multiplier·base^(k−allowed).
 	pen := map[int]float64{}
+	//perfscan:ignore PS3003 DRY penalty map; small window, sampling <<forward
 	for i := 0; i < L; i++ {
 		tok := window[i]
 		if tok < 0 || tok >= len(logits) || brk[i] {

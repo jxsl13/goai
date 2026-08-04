@@ -60,6 +60,7 @@ func Qwen2MoeFromHF(ts map[string]*tensor.Tensor, cfg Qwen2MoeConfig) (*Qwen2MoE
 	cfg.Layers = layers
 
 	m := &Qwen2MoE{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 HF loader per-layer loop, one-time model load
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -106,6 +107,7 @@ func Qwen2MoeFromHF(ts map[string]*tensor.Tensor, cfg Qwen2MoeConfig) (*Qwen2MoE
 			return nil, err
 		}
 		// Sparse routed experts: reuse the Mixtral fused loader (identical layout).
+		//perfscan:ignore PS6016 MoE loader call in load loop, one-time
 		moe, err := mixtralMoE(ts, p, MixtralConfig{Dim: cfg.Dim, TopK: cfg.TopK})
 		if err != nil {
 			return nil, err

@@ -93,25 +93,31 @@ func MiniLMRelationMaps(ctx *backend.Context, x, y *tensor.Tensor, heads int) ([
 	maps := make([]*tensor.Tensor, 0, heads)
 	for h := range heads {
 		attrs := backend.SliceAttrs{Axis: 1, Start: h * dh, End: (h + 1) * dh}
+		//perfscan:ignore PS3024,PS6017,PS6018 per-head OpSlice in matmul-dominated distillation loss | resource-only; per-head slice dispatch, matmul-domina
 		xh, err := rdropExec(ctx, backend.OpSlice, attrs, x) // [seq, dh]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 per-head OpSlice, matmul-dominated distillation loss | resource-only; per-head slice dispatch
 		yh, err := rdropExec(ctx, backend.OpSlice, attrs, y) // [seq, dh]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 per-head OpTranspose, matmul-dominated loss | resource-only; per-head transpose dispatch
 		yt, err := rdropExec(ctx, backend.OpTranspose, nil, yh) // [dh, seq]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 the OpMatMul itself, already optimized kernel | resource-only; matmul dispatch is the dominant cost
 		s, err := rdropExec(ctx, backend.OpMatMul, nil, xh, yt) // [seq, seq]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 per-head broadcast scale, matmul-dominated | resource-only; scale dispatch
 		if s, err = rdropExec(ctx, backend.OpMul, nil, s, invSqrt); err != nil { // broadcast [seq,seq]·[1,1]
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 OpSoftmax optimized kernel, per-head | resource-only; softmax dispatch
 		m, err := rdropExec(ctx, backend.OpSoftmax, nil, s) // row softmax
 		if err != nil {
 			return nil, err
@@ -198,6 +204,7 @@ func MiniLMLoss(ctx *backend.Context, studentQ, studentK, studentV, teacherQ, te
 
 	// Detach the teacher: it is a frozen target, no gradient may flow to it.
 	for i, t := range teacher {
+		//perfscan:ignore PS3024,PS6017 teacher detach, x3 only, trivial | resource-only; StopGradient dispatch x3
 		d, err := rdropExec(ctx, backend.OpStopGradient, nil, t)
 		if err != nil {
 			return nil, err
@@ -231,11 +238,14 @@ func MiniLMLoss(ctx *backend.Context, studentQ, studentK, studentV, teacherQ, te
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS4011 per-head loop false positive, matmul/elementwise-dominated
 		for h := range heads {
+			//perfscan:ignore PS3024,PS6017 per-head OpLog on [seq,seq] map, distillation loss | resource-only; log dispatch
 			logT, err := rdropExec(ctx, backend.OpLog, nil, tMaps[h])
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS3024,PS6017 per-head OpLog, elementwise KL term | resource-only; log dispatch
 			logS, err := rdropExec(ctx, backend.OpLog, nil, sMaps[h])
 			if err != nil {
 				return nil, err
@@ -244,18 +254,21 @@ func MiniLMLoss(ctx *backend.Context, studentQ, studentK, studentV, teacherQ, te
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS3024,PS6017 per-head OpSum reduction, distillation loss | resource-only; sum dispatch
 			s, err := rdropExec(ctx, backend.OpSum, nil, terms) // Σ over rows and columns
 			if err != nil {
 				return nil, err
 			}
 			if total == nil {
 				total = s
+				//perfscan:ignore PS3024,PS6017 per-head accumulate OpAdd, trivial | resource-only; add dispatch
 			} else if total, err = rdropExec(ctx, backend.OpAdd, nil, total, s); err != nil {
 				return nil, err
 			}
 		}
 	}
 	// mean over heads and query positions (v1 Eq. 5–6): ÷ (heads·seq)
+	//perfscan:ignore PS3024 final OpAXPY scale, once per call
 	return rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 1 / float64(heads*seq)},
 		total, tensor.New(studentQ.Dtype(), tensor.Shape{}))
 }

@@ -54,6 +54,7 @@ func DeepSeekV2FromHF(ts map[string]*tensor.Tensor, cfg DeepSeekV2Config) (*Deep
 	}
 
 	m := &DeepSeekV2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load layer loop, cold
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -270,6 +271,7 @@ func deinterleaveRoPE(w *tensor.Tensor, heads, block, peOffset, ropeDim int) *te
 	res := tensor.New(tensor.F64, tensor.Shape{out, in})
 	// Copy every row as-is first; the pe rows are then overwritten in permuted order.
 	for r := range out {
+		//perfscan:ignore PS1001 RoPE weight de-interleave copy at load, cold
 		for c := range in {
 			res.SetF64(w.AtF64(r, c), r, c)
 		}
@@ -282,6 +284,7 @@ func deinterleaveRoPE(w *tensor.Tensor, heads, block, peOffset, ropeDim int) *te
 			src1 := base + 2*i + 1  // interleaved odd channel
 			dst0 := base + i        // split-half: first half
 			dst1 := base + i + half // split-half: second half
+			//perfscan:ignore PS1001 RoPE permute at load, cold
 			for c := range in {
 				res.SetF64(w.AtF64(src0, c), dst0, c)
 				res.SetF64(w.AtF64(src1, c), dst1, c)

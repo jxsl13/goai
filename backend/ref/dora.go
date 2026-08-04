@@ -21,6 +21,8 @@ import (
 // separately-learned m — the decomposition that lets DoRA update magnitude and
 // direction independently. At init m = ‖W₀‖ and ΔV = 0, giving W' = W₀ exactly.
 // Accumulation in f64 (§V10). inputs: [V, m].
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func doraWeightKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: doraweight wants (V, m), got %d inputs", len(in))
@@ -51,6 +53,7 @@ func doraWeightKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 				for i := 0; i < rows; i++ {
 					vrow := vs[i*cols : i*cols+cols]
 					for j, x := range vrow {
+						//perfscan:ignore PS3017 reference oracle: intentionally simple, correctness baseline not an optimization target
 						nrm[j] += x * x
 					}
 				}
@@ -63,6 +66,7 @@ func doraWeightKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 					orow := os[base : base+cols]
 					for j, x := range vrow {
 						if n := nrm[j]; n > 0 {
+							//perfscan:ignore PS5003 reference oracle: intentionally simple, correctness baseline not an optimization target
 							orow[j] = ms[j] * x / n
 						} else {
 							orow[j] = 0

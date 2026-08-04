@@ -70,6 +70,7 @@ func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
 	nv := n - n%4  // 4-wide vector boundary
 	nv8 := n - n%8 // 8-wide boundary
 	i := loRow
+	//perfscan:ignore PS3066 already-optimized bit-exact F64 kernel; index compute amortized outside k*n inner loop
 	for ; i+3 < hiRow; i += 4 {
 		c0 := C[(i+0)*n : (i+0)*n+n]
 		c1 := C[(i+1)*n : (i+1)*n+n]
@@ -181,6 +182,7 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 	nv := jLo + span - span%4  // 4-wide vector boundary
 	nv8 := jLo + span - span%8 // 8-wide boundary (two Float64x4 per row)
 	i := loRow
+	//perfscan:ignore PS3066 already the hoisted-slice optimized gemmF64BandCols tile form
 	for ; i+3 < hiRow; i += 4 {
 		// Hoisted k-length A row slices (p < k == len(ar0) eliminates the four A
 		// bounds checks) and a running bo offset (strength-reduces p*n+j): same
@@ -327,6 +329,7 @@ var gemmHasFMA = archsimd.X86.FMA()
 // f32-native result is within the ADR-0021 tolerance of ref, not bit-exact.
 func gemmF32(A, B, C []float32, m, k, n int) {
 	if !gemmHasFMA {
+		//perfscan:ignore PS3042 no-FMA pre-Haswell fallback, pooled alloc, rare path
 		accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
 		acc := *accP
 		parallelWork(m, k*n, func(loRow, hiRow int) {
@@ -516,6 +519,7 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 	nv16 := jLo + span - span%16
 	nv := jLo + span - span%8
 	i := loRow
+	//perfscan:ignore PS3066 already-optimized f32 hoisted-slice register-tile kernel
 	for ; i+3 < hiRow; i += 4 {
 		// Hoisted k-length A row slices: the p-loop condition p < k == len(a0)
 		// lets the compiler eliminate all four A bounds checks, and the running
@@ -628,11 +632,13 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 // gemmF32BandScalarF64 is the bit-exact f64-accumulating fallback (no FMA).
 func gemmF32BandScalarF64(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 	i := loRow
+	//perfscan:ignore PS3051,PS3066 no-FMA f64-accum fallback tile, rare declined path | no-FMA fallback row-tile, rare path
 	for ; i+3 < hiRow; i += 4 {
 		c0 := acc[(i+0)*n : (i+1)*n]
 		c1 := acc[(i+1)*n : (i+2)*n]
 		c2 := acc[(i+2)*n : (i+3)*n]
 		c3 := acc[(i+3)*n : (i+4)*n]
+		//perfscan:ignore PS1007,PS3044,PS3049 no-FMA fallback inner, rare declined path | no-FMA fallback, rare path
 		for p := range k {
 			bp := B[p*n : (p+1)*n]
 			a0 := float64(A[(i+0)*k+p])
@@ -641,19 +647,25 @@ func gemmF32BandScalarF64(A, B []float32, acc []float64, loRow, hiRow, k, n int)
 			a3 := float64(A[(i+3)*k+p])
 			for j, bv := range bp {
 				bf := float64(bv)
+				//perfscan:ignore PS3025 deliberate no-FMA bit-exact fallback, MulAdd forbidden by design
 				c0[j] += a0 * bf
+				//perfscan:ignore PS3025 no-FMA bit-exact fallback, no FMA by design
 				c1[j] += a1 * bf
+				//perfscan:ignore PS3025 no-FMA bit-exact fallback, no FMA by design
 				c2[j] += a2 * bf
+				//perfscan:ignore PS3025 no-FMA bit-exact fallback, no FMA by design
 				c3[j] += a3 * bf
 			}
 		}
 	}
 	for ; i < hiRow; i++ {
 		ci := acc[i*n : (i+1)*n]
+		//perfscan:ignore PS1007,PS3044,PS3049 no-FMA fallback remainder rows, rare path | no-FMA fallback remainder, rare path
 		for p := range k {
 			aip := float64(A[i*k+p])
 			bp := B[p*n : (p+1)*n]
 			for j, bv := range bp {
+				//perfscan:ignore PS3025,PS3075 no-FMA bit-exact fallback, FMA forbidden by design | no-FMA fallback accumulate, rare path
 				ci[j] += aip * float64(bv)
 			}
 		}
@@ -665,10 +677,12 @@ func gemmF32BandScalarF64(A, B []float32, acc []float64, loRow, hiRow, k, n int)
 func gemmF64BandScalar(A, B, C []float64, loRow, hiRow, k, n int) {
 	for i := loRow; i < hiRow; i++ {
 		ci := C[i*n : i*n+n]
+		//perfscan:ignore PS1007,PS3049 pre-AVX scalar fallback, vanishingly rare CPU | pre-AVX scalar fallback, vanishingly rare
 		for p := 0; p < k; p++ {
 			aip := A[i*k+p]
 			bp := B[p*n : p*n+n]
 			for j, bv := range bp {
+				//perfscan:ignore PS3075 pre-AVX scalar fallback accumulate, vanishingly rare
 				ci[j] += aip * bv
 			}
 		}

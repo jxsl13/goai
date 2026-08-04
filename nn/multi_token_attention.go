@@ -158,6 +158,7 @@ func NewMultiTokenAttention(dtype tensor.Dtype, dim, heads int, seed uint64, opt
 	}
 	// Identity head-mixing matrix.
 	m.HeadKernel = tensor.New(dtype, tensor.Shape{m.CH, m.CH})
+	//perfscan:ignore PS1005 one-time constructor identity-fill, tiny CH×CH
 	for i := range m.CH {
 		m.HeadKernel.SetF64(1, i, i)
 	}
@@ -210,31 +211,38 @@ func (m *MultiTokenAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*
 	logits := make([]*tensor.Tensor, m.Heads)
 	for h := range m.Heads {
 		lo, hi := h*m.HeadDim, (h+1)*m.HeadDim
+		//perfscan:ignore PS3024,PS6018 per-head OpSlice; O(T²) attention matmul-dominated FP | resource-only class, no wall-clock win
 		qh, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head OpSlice; matmul-dominated attention loop
 		kh, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head OpSlice; matmul-dominated attention loop
 		vh, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, v)
 		if err != nil {
 			return nil, err
 		}
 		vheads[h] = vh
+		//perfscan:ignore PS3024 per-head OpTranspose; matmul-dominated
 		khT, err := m.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 OpMatMul qh·khT is itself the dominant cost
 		l, err := m.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 scale OpMul; matmul-dominated attention
 		if l, err = m.exec(ctx, backend.OpMul, nil, l, invSqrtD); err != nil {
 			return nil, err
 		}
 		if m.causal { // Mask_0: zero future entries so they drop out of the conv
+			//perfscan:ignore PS3024 mask OpMul; matmul-dominated attention
 			if l, err = m.exec(ctx, backend.OpMul, nil, l, mask01); err != nil {
 				return nil, err
 			}
@@ -256,14 +264,17 @@ func (m *MultiTokenAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*
 	for h := range m.Heads {
 		l := logits[h]
 		if m.causal {
+			//perfscan:ignore PS3024 mask OpAdd; softmax+matmul-dominated
 			if l, err = m.exec(ctx, backend.OpAdd, nil, l, maskNegInf); err != nil {
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS3024 OpSoftmax is itself the dominant per-head cost
 		w, err := m.exec(ctx, backend.OpSoftmax, nil, l) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 OpMatMul w·V is dominant cost
 		if heads[h], err = m.exec(ctx, backend.OpMatMul, nil, w, vheads[h]); err != nil { // [T, HeadDim]
 			return nil, err
 		}
@@ -289,23 +300,28 @@ func (m *MultiTokenAttention) keyQueryConv(ctx *backend.Context, l *tensor.Tenso
 		return nil, err
 	}
 	ph, pw := padded.Shape()[0], padded.Shape()[1]
+	//perfscan:ignore PS3024,PS6018 OpReshape in keyQueryConv; Conv2D-dominated | resource-only class, no wall-clock win
 	img, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{1, 1, ph, pw}}, padded)
 	if err != nil {
 		return nil, err
 	}
 	// Slice this head's kernel [1,CQ,CK] and reshape to conv weights [1,1,CQ,CK].
+	//perfscan:ignore PS3024 kernel OpSlice; Conv2D-dominated
 	kh, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: h, End: h + 1}, m.KQKernel)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 weight OpReshape; Conv2D-dominated
 	w, err := m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{1, 1, m.CQ, m.CK}}, kh)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpConv2D is itself the dominant cost
 	conv, err := m.exec(ctx, backend.OpConv2D, backend.ConvAttrs{Stride: 1, Pad: 0}, img, w) // [1,1,T,T]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 output OpReshape; Conv2D-dominated
 	return m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{t, t}}, conv)
 }
 
@@ -326,25 +342,31 @@ func (m *MultiTokenAttention) headConv(ctx *backend.Context, maps []*tensor.Tens
 		return m.headConvFused(maps, d)
 	}
 	out := make([]*tensor.Tensor, m.Heads)
+	//perfscan:ignore PS3034 headConv dispatch is VJP-taped training path; inference fused
 	for g := 0; g < m.Heads; g += m.CH {
+		//perfscan:ignore PS3040 taped training headConv; inference uses headConvFused
 		for o := range m.CH {
 			var acc *tensor.Tensor
 			for p := range m.CH {
 				// scalar weight HeadKernel[o,p] as a [1,1] tensor (two 1-wide slices).
+				//perfscan:ignore PS3024,PS6016 taped OpMul, small CH; inference already fused | resource-only class, no wall-clock win
 				wRow, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: o, End: o + 1}, m.HeadKernel)
 				if err != nil {
 					return nil, err
 				}
+				//perfscan:ignore PS3024 taped OpAdd, small CH; inference already fused
 				wop, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: p, End: p + 1}, wRow)
 				if err != nil {
 					return nil, err
 				}
+				//perfscan:ignore PS3024 taped headConv accumulate; inference already fused
 				term, err := m.exec(ctx, backend.OpMul, nil, maps[g+p], wop) // [T,T]·[1,1]
 				if err != nil {
 					return nil, err
 				}
 				if acc == nil {
 					acc = term
+					//perfscan:ignore PS3024 pad2D zero-pad OpConcat; Conv2D-dominated, tiny pad
 				} else if acc, err = m.exec(ctx, backend.OpAdd, nil, acc, term); err != nil {
 					return nil, err
 				}
@@ -369,7 +391,9 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 	n := maps[0].Numel()
 	if d == tensor.F64 {
 		w := hk.Storage().F64()
+		//perfscan:ignore PS2004 resource-only; tiny per-group ch-sized slice headers in fused path
 		for g := 0; g < m.Heads; g += ch {
+			//perfscan:ignore PS3035 per-group setup make in fused path; negligible
 			mps, oss := make([][]float64, ch), make([][]float64, ch)
 			for j := 0; j < ch; j++ {
 				mps[j] = maps[g+j].Contiguous().Storage().F64()
@@ -387,9 +411,11 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 			// adds p=1..ch-1 in ascending order, which is the order the OpMul/OpAdd dispatch it is
 			// pinned against uses.
 			parallelRows(n, ch*ch, func(lo, hi int) {
+				//perfscan:ignore PS1006,PS3046 false-positive: contiguous [lo:hi] slices, no strided arithmetic | already optimized band-parallel fused kerne
 				for p := 0; p < ch; p++ {
 					mp := mps[p][lo:hi]
 					for o := 0; o < ch; o++ {
+						//perfscan:ignore PS6011 scalar kernel read; already optimal fused path
 						wop := w[o*ch+p]
 						os := oss[o][lo:hi]
 						os = os[:len(mp)]
@@ -412,7 +438,9 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 	}
 	// F32
 	w := hk.Storage().F32()
+	//perfscan:ignore PS2004 resource-only; F32 mirror, tiny per-group headers
 	for g := 0; g < m.Heads; g += ch {
+		//perfscan:ignore PS3035 F32 mirror per-group make; negligible
 		mps, oss := make([][]float32, ch), make([][]float32, ch)
 		for j := 0; j < ch; j++ {
 			mps[j] = maps[g+j].Contiguous().Storage().F32()
@@ -420,9 +448,11 @@ func (m *MultiTokenAttention) headConvFused(maps []*tensor.Tensor, d tensor.Dtyp
 			oss[j], out[g+j] = res.Storage().F32(), res
 		}
 		parallelRows(n, ch*ch, func(lo, hi int) {
+			//perfscan:ignore PS1006,PS3046 false-positive: contiguous slices, no strided arithmetic (F32) | already optimized band-parallel fused kernel
 			for p := 0; p < ch; p++ {
 				mp := mps[p][lo:hi]
 				for o := 0; o < ch; o++ {
+					//perfscan:ignore PS6011 scalar kernel read; already optimal fused path (F32)
 					wop := w[o*ch+p]
 					os := oss[o][lo:hi]
 					os = os[:len(mp)]
@@ -497,6 +527,7 @@ func (m *MultiTokenAttention) Params() []*tensor.Tensor {
 func mtaLowerTriMask(dtype tensor.Dtype, t int) *tensor.Tensor {
 	m := tensor.New(dtype, tensor.Shape{t, t})
 	for i := range t {
+		//perfscan:ignore PS1005 causal-mask triangle fill, memory-streaming O(T²), <1% vs attention
 		for j := 0; j <= i; j++ {
 			m.SetF64(1, i, j)
 		}

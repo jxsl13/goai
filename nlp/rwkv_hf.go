@@ -89,6 +89,7 @@ func RWKVFromHF(ts map[string]*tensor.Tensor, cfg RWKVConfig) (*RWKV, error) {
 		Head:   transpose2D(head), // [dim,vocab], untied
 	}
 
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("rwkv.blocks.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

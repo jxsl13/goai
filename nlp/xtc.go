@@ -32,6 +32,7 @@ func (s *Sampler) applyXTC(probs []float64) {
 	// find the qualifiers and the least probable among them.
 	count := 0
 	minIdx, minP := -1, 2.0
+	//perfscan:ignore PS3068 memory-streaming min-scan, niche prob-gated sampler
 	for i, p := range probs {
 		if p >= s.XTCThreshold {
 			count++

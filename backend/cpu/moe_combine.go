@@ -53,6 +53,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 			for t := lo; t < hi; t++ {
 				wbase := t * e
 				var denom float64
+				//perfscan:ignore PS3010 denom sum over few experts (low trip); reassoc breaks byte-identity
 				for i := 0; i < e; i++ {
 					denom += ws[wbase+i]
 				}
@@ -60,6 +61,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 				for j := 0; j < d; j++ {
 					var acc float64
 					if denom > 0 {
+						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
 						for i := 0; i < e; i++ {
 							acc += (ws[wbase+i] / denom) * ecs[i][base+j]
 						}
@@ -88,6 +90,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 			for t := lo; t < hi; t++ {
 				wbase := t * e
 				var denom float64
+				//perfscan:ignore PS3010 denom sum over few experts (low trip); reassoc breaks byte-identity
 				for i := 0; i < e; i++ {
 					denom += float64(ws[wbase+i])
 				}
@@ -95,6 +98,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 				for j := 0; j < d; j++ {
 					var acc float64
 					if denom > 0 {
+						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
 						for i := 0; i < e; i++ {
 							acc += (float64(ws[wbase+i]) / denom) * float64(ecs[i][base+j])
 						}
@@ -112,12 +116,15 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 func moeCombineFallback(_ *backend.Context, _ []*tensor.Tensor, out, w *tensor.Tensor, experts []*tensor.Tensor, tks, d, e int) ([]*tensor.Tensor, error) {
 	for t := 0; t < tks; t++ {
 		var denom float64
+		//perfscan:ignore PS1005 exotic/non-contiguous fallback path (declined-dtype), ref-matching
 		for i := 0; i < e; i++ {
 			denom += w.AtF64(t, i)
 		}
+		//perfscan:ignore PS1005 exotic/non-contiguous fallback path (declined-dtype), ref-matching
 		for j := 0; j < d; j++ {
 			var acc float64
 			if denom > 0 {
+				//perfscan:ignore PS1005,PS3010 exotic/non-contiguous fallback path (declined-dtype), ref-matching | reduction over few experts in exotic fall
 				for i := 0; i < e; i++ {
 					acc += (w.AtF64(t, i) / denom) * experts[i].AtF64(t, j)
 				}

@@ -21,6 +21,8 @@ import (
 // default 1) weights the behavior-cloning regularizer — λ=0 leaves the bare
 // reference-free preference term. Stable via softplus (§V12), f64 accum (§V10).
 // Contrast SimPO: length-NORMALIZED reward + target margin γ and NO NLL term.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func cpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	b, err := checkPair("cpo", in)
 	if err != nil {
@@ -56,6 +58,7 @@ func cpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpCPO, tensor.F32, cpoKernel)
 	std.add(backend.OpCPO, tensor.F64, cpoKernel)
 }

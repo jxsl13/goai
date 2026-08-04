@@ -96,6 +96,7 @@ func newConfig(root string, ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string)
 		c.ignoreParts = append(c.ignoreParts, filepath.Clean(ap))
 	}
 	compile := func(pats []string, dst *[]*regexp.Regexp, flagName string) error {
+		//perfscan:ignore PS2005 CI-diff tooling regexp compile, not runtime
 		for _, pat := range pats {
 			re, err := regexp.Compile(pat)
 			if err != nil {

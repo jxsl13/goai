@@ -199,6 +199,7 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 
 	slice := func(m *tensor.Tensor, h int) (*tensor.Tensor, error) {
 		lo, hi := h*c.HeadDim, (h+1)*c.HeadDim
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		return c.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 	}
 
@@ -217,10 +218,12 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		khT, err := c.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim,T]
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		scores, err := c.exec(ctx, backend.OpMatMul, nil, qh, khT) // Qₕ·Kₕᵀ = [T,T]
 		if err != nil {
 			return nil, nil, err
@@ -230,10 +233,13 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		// diagonal-inclusive future k > i so the count is causal.
 		var gate *tensor.Tensor
 		if c.gatesOne {
+			//perfscan:ignore PS6016 resource-only shape-literal alloc; no wallclock
 			gate = tensor.Ones(x.Dtype(), tensor.Shape{t, t})
+			//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		} else if gate, err = c.exec(ctx, backend.OpSigmoid, nil, scores); err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		gmasked, err := c.exec(ctx, backend.OpMul, nil, gate, lowerIncl) // gₖ for k≤i, else 0
 		if err != nil {
 			return nil, nil, err
@@ -245,6 +251,7 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 resource-only variadic-pack alloc; no wallclock (p=0.143) | resource-only ClipAttrs-literal alloc; no wallcloc
 		if p, err = c.exec(ctx, backend.OpClip, backend.ClipAttrs{Lo: 0, Hi: float64(c.MaxPos)}, p); err != nil {
 			return nil, nil, err
 		}
@@ -255,10 +262,12 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		// weighted by (⌈p⌉−p) and (p−⌊p⌋) — the differentiable interpolation weights
 		// carry the gradient back to p (hence the gates, hence q,k), while the einsum
 		// carries it to E.
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		ehT, err := c.exec(ctx, backend.OpTranspose, nil, c.PosEmb[h]) // [HeadDim, MaxPos+1]
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		z, err := c.exec(ctx, backend.OpMatMul, nil, qh, ehT) // [T, MaxPos+1]
 		if err != nil {
 			return nil, nil, err
@@ -276,46 +285,57 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		if biasLo == nil { // training path, or non-F64/non-contiguous: the differentiable one-hot einsum
 			var ohLo, ohHi *tensor.Tensor
 			floorP, floorPlus1P, ohLo, ohHi = copePosIndices(p, c.MaxPos)
+			//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 			if biasLo, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohLo, z); err != nil {
 				return nil, nil, err
 			}
+			//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 			if biasHi, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohHi, z); err != nil {
 				return nil, nil, err
 			}
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		wHi, err := c.exec(ctx, backend.OpSub, nil, p, floorP) // p − ⌊p⌋
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		wLo, err := c.exec(ctx, backend.OpSub, nil, floorPlus1P, p) // (⌊p⌋+1) − p = ⌈p⌉−p at non-integers, 1 at integers
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		posLo, err := c.exec(ctx, backend.OpMul, nil, wLo, biasLo) // §B60: OpMul (weights can be 0)
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		posHi, err := c.exec(ctx, backend.OpMul, nil, wHi, biasHi)
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		posBias, err := c.exec(ctx, backend.OpAdd, nil, posLo, posHi)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		// Lᵢⱼ = qᵢ·kⱼ + qᵢ·e[pᵢⱼ], + causal mask, softmax, ·V.
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		lg, err := c.exec(ctx, backend.OpAdd, nil, scores, posBias)
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		if lg, err = c.exec(ctx, backend.OpAdd, nil, lg, mask); err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		w, err := c.exec(ctx, backend.OpSoftmax, nil, lg)
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
 		if headsOut[h], err = c.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil {
 			return nil, nil, err
 		}
@@ -389,6 +409,7 @@ func copePosIndices(p *tensor.Tensor, maxPos int) (floorP, floorPlus1P, ohLo, oh
 	ohLo = tensor.New(dt, tensor.Shape{tq, tk, rows})
 	ohHi = tensor.New(dt, tensor.Shape{tq, tk, rows})
 	for i := range tq {
+		//perfscan:ignore PS1001 training-path index build feeding dominant one-hot einsum; small share
 		for j := range tk {
 			pv := p.AtF64(i, j)
 			if pv < 0 {
@@ -477,6 +498,7 @@ func copeGatherBias(p, z *tensor.Tensor, maxPos int) (floorP, floorPlus1P, biasL
 func copeLowerInclusiveMask(dtype tensor.Dtype, t int) *tensor.Tensor {
 	m := tensor.New(dtype, tensor.Shape{t, t})
 	for i := range t {
+		//perfscan:ignore PS1005 one-shot causal mask build; tiny share vs per-head matmuls/einsums
 		for k := 0; k <= i; k++ {
 			m.SetF64(1, i, k)
 		}
