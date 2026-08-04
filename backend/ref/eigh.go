@@ -11,8 +11,8 @@ import (
 // eighKernel computes the eigendecomposition of a real SYMMETRIC matrix,
 // A = V·diag(w)·Vᵀ (numpy.linalg.eigh / LAPACK dsyev): w holds the real eigenvalues
 // ASCENDING and the COLUMNS of V are the orthonormal eigenvectors (VᵀV = I,
-// A·V[:,k] = w[k]·V[:,k]). It symmetrizes the input to (A+Aᵀ)/2 and runs the cyclic
-// Jacobi method (internal/linalg.SymEig — shared kernel, also used by PCA/GaLore),
+// A·V[:,k] = w[k]·V[:,k]). It symmetrizes the input to (A+Aᵀ)/2 and runs the tridiag+QL
+// method (internal/linalg.SymEig — shared kernel, also used by PCA/GaLore),
 // then reverses SymEig's descending order to ascending. Two outputs [w, V]; f64
 // arithmetic (§V10), F32 input factors in f64 and narrows on store.
 func eighKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
