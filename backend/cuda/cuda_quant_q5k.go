@@ -129,3 +129,10 @@ func (r *ResidentBQ5K) Free() {
 		r.q = nil
 	}
 }
+
+// Close frees the resident weight, satisfying the llamagpu qweight interface (so a Q5_K resident from
+// a native Q5_K GGUF upload is dispatched by the recorder's QMatMulResidentQ5K alongside Q8/Q4_K/Q6_K).
+func (r *ResidentBQ5K) Close() error {
+	r.Free()
+	return nil
+}
