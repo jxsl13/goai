@@ -140,3 +140,13 @@ func BenchmarkGaLoreGtGKOuter(b *testing.B) {
 		_ = galoreGtGKOuter(g)
 	}
 }
+
+func benchGaloreProj(b *testing.B, m, n, rank int) {
+	g := galoreRandG(m, n)
+	b.ResetTimer()
+	for range b.N {
+		_, _ = galoreProjection(g, rank)
+	}
+}
+func BenchmarkGaloreProj_2048x512_r128(b *testing.B) { benchGaloreProj(b, 2048, 512, 128) }
+func BenchmarkGaloreProj_8192x512_r128(b *testing.B) { benchGaloreProj(b, 8192, 512, 128) }
