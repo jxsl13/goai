@@ -8,24 +8,24 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// TestEighVJPIsBitIdentical freezes the eigendecomposition adjoint. The two changes it gates —
-// reading the intermediate through a transposed mirror, and banding the triangular loop — both
-// claim to move no value, and a gradient is the last place a small drift would be noticed
-// because training absorbs it.
+// TestEighVJPIsBitIdentical freezes the eigendecomposition adjoint on the output of a REAL
+// OpEigh (so the VJP is exercised on genuine eigenvector/eigenvalue layout, not a synthetic
+// basis). The two changes it gates — reading the intermediate through a transposed mirror, and
+// banding the triangular loop — both claim to move no value, so the optimized VJP must match the
+// verbatim column-walk reference (eighVJPFullColumnWalk) BIT for bit.
+//
+// It compares against that independent reference rather than a frozen absolute digest so the
+// assertion is invariant to the SymEig algorithm and to platform FMA rounding (the previous
+// absolute digest was pinned to one platform's eigendecomposition bits and could not survive a
+// change to the eigensolver): both the optimized path and the reference consume the SAME OpEigh
+// output, so their bit-identity is a property of the VJP arithmetic alone.
 //
 // The sizes straddle the fan-out gate: 6 and 12 run the triangular loop inline, 48 and 64 band
 // it, and 48 is not a multiple of the worker count.
 func TestEighVJPIsBitIdentical(t *testing.T) {
-	cases := []struct {
-		n    int
-		want uint64
-	}{
-		{6, 275940546675640912}, {12, 11743736518440278093}, {48, 11927342901561703116}, {64, 13416730849446074620},
-	}
 	fn := vjpsMulti[backend.OpEigh]
 	ctx := backend.NewContext()
-	for _, c := range cases {
-		n := c.n
+	for _, n := range []int{6, 12, 48, 64} {
 		a := tensor.New(tensor.F64, tensor.Shape{n, n})
 		for i := range n {
 			for j := range n {
@@ -51,17 +51,28 @@ func TestEighVJPIsBitIdentical(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		h := uint64(14695981039346656037)
+		// verbatim column-walk reference, fed the SAME OpEigh (w, V) and adjoints
+		wv := make([]float64, n)
+		wbv := make([]float64, n)
+		vv := make([][]float64, n)
+		vbv := make([][]float64, n)
 		for i := range n {
+			wv[i] = out[0].AtF64(i)
+			wbv[i] = wb.AtF64(i)
+			vv[i], vbv[i] = make([]float64, n), make([]float64, n)
 			for j := range n {
-				b := math.Float64bits(g[0].AtF64(i, j))
-				for s := 0; s < 64; s += 8 {
-					h = (h ^ (b>>s)&0xff) * 1099511628211
-				}
+				vv[i][j] = out[1].AtF64(i, j)
+				vbv[i][j] = vb.AtF64(i, j)
 			}
 		}
-		if h != c.want {
-			t.Fatalf("n=%d digest %d, want %d", n, h, c.want)
+		want := eighVJPFullColumnWalk(n, wv, wbv, vv, vbv)
+		for i := range n {
+			for j := range n {
+				if math.Float64bits(g[0].AtF64(i, j)) != math.Float64bits(want[i][j]) {
+					t.Fatalf("n=%d [%d,%d]: optimized %v, column-walk reference %v — not bit-identical",
+						n, i, j, g[0].AtF64(i, j), want[i][j])
+				}
+			}
 		}
 	}
 }

@@ -11,9 +11,10 @@ import (
 // Eigh computes the eigendecomposition of a real SYMMETRIC matrix, A = V·diag(w)·Vᵀ
 // (numpy.linalg.eigh / LAPACK dsyev, §R119): w holds the real eigenvalues in ASCENDING order
 // (w₀ ≤ w₁ ≤ … ≤ wₙ₋₁) and the COLUMNS of V are the corresponding orthonormal eigenvectors, so
-// A·V[:,k] = w[k]·V[:,k] and VᵀV = I. It uses the cyclic (two-sided) Jacobi eigenvalue method, which
-// is unconditionally stable for symmetric input and computes small eigenvalues to high relative
-// accuracy. a must be square and symmetric (checked to a relative tolerance). Returns fresh f64
+// A·V[:,k] = w[k]·V[:,k] and VᵀV = I. It uses Householder tridiagonalization followed by the
+// implicit-shift symmetric QL algorithm (the LAPACK dsyev family), backward stable for symmetric
+// input with a bounded iteration count. a must be square and symmetric (checked to a relative
+// tolerance). Returns fresh f64
 // tensors: w of shape [n] and V of shape [n,n]; the input is not mutated.
 func Eigh(a *tensor.Tensor) (w, v *tensor.Tensor, err error) {
 	n, err := squareN(a)
