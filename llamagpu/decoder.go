@@ -87,6 +87,16 @@ type linear interface {
 	// the add into the matmul (one dispatch); the quantized weight has no accumulate path,
 	// so it multiplies into scratch and adds — the pre-fusion two-dispatch shape.
 	recordAdd(r recorder, x, scratch, dst buffer, m int) error
+	// recordMoE is record() with per-token MoE expert gating: on a recorder that implements the gated
+	// path (CUDA Q8), a token whose routing weight moeGate[row*gateStride+ex]==0 skips the weight-stream
+	// (bit-identical to record + the RowAxpy weight-0 combine, ~E/K faster). Dense-falls-back otherwise.
+	recordMoE(r recorder, x, o buffer, m int, moeGate buffer, gateStride, ex int) error
+}
+
+// moeGatedRecorder is the optional gated-expert-GEMV extension, implemented only by the CUDA recorder for
+// Q8 experts; quantLinear.recordMoE type-asserts it and dense-falls-back when absent.
+type moeGatedRecorder interface {
+	QMatMulResidentMoE(x buffer, w qweight, o buffer, m int, moeGate buffer, gateStride, ex int) error
 }
 
 type f32Linear struct {
@@ -113,6 +123,17 @@ func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error 
 		r.QMatMulResident(x, l.w, scratch, m),
 		r.Binary(dst, scratch, dst, binaryAdd),
 	)
+}
+
+func (l f32Linear) recordMoE(r recorder, x, o buffer, m int, _ buffer, _, _ int) error {
+	return l.record(r, x, o, m) // f32 MoE experts (rare) use the dense path
+}
+
+func (l quantLinear) recordMoE(r recorder, x, o buffer, m int, moeGate buffer, gateStride, ex int) error {
+	if mg, ok := r.(moeGatedRecorder); ok {
+		return mg.QMatMulResidentMoE(x, l.w, o, m, moeGate, gateStride, ex)
+	}
+	return l.record(r, x, o, m)
 }
 
 // recorder is one open batched command buffer (metal.Recorder / vulkan.Recorder); the adapter
@@ -492,12 +513,12 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 	for ex := range b.moeExperts {
 		xp := b.moeExperts[ex]
 		e = firstErr(e,
-			xp.wG.record(r, in, d.gate.b, rows),
-			xp.wU.record(r, in, d.up.b, rows),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),            // silu(gate)·up
-			xp.wD.record(r, d.gate.b, d.mo.b, rows),                       // expert output → mo (non-accumulating)
-			r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1), // extract weight column [rows]
-			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),              // dx += w_ex · expert_ex
+			xp.wG.recordMoE(r, in, d.gate.b, rows, d.moeW.b, d.nExperts, ex),
+			xp.wU.recordMoE(r, in, d.up.b, rows, d.moeW.b, d.nExperts, ex),
+			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),                   // silu(gate)·up
+			xp.wD.recordMoE(r, d.gate.b, d.mo.b, rows, d.moeW.b, d.nExperts, ex), // expert output → mo
+			r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1),        // extract weight column [rows]
+			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),                     // dx += w_ex · expert_ex
 		)
 	}
 	if b.moeShared.wG != nil {
