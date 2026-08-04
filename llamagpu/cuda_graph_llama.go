@@ -31,7 +31,7 @@ type GraphLlamaDecoder struct {
 	pos    *cuda.DevicePos
 
 	dx, dh, dh2             *cuda.DeviceF32
-	dq, dk, dv, da          *cuda.DeviceF32
+	dqkv, dq, dk, dv, da    *cuda.DeviceF32 // dq/dk/dv are Views into the fused q|k|v buffer dqkv
 	dgu, dgate, dup, logits *cuda.DeviceF32 // dgate/dup are Views into the fused gate|up buffer dgu
 	inv                     *cuda.DeviceF32
 	graph                   *cuda.CapturedGraph
@@ -44,10 +44,10 @@ type GraphLlamaDecoder struct {
 }
 
 type graphLlamaLayer struct {
-	gAttn, gFFN    *cuda.ResidentVec
-	wq, wk, wv, wo *cuda.ResidentBQ4K
-	wgu, wd        *cuda.ResidentBQ4K // wgu = row-fused ffn_gate|ffn_up (one N=2·hidden GEMV → SwiGLU over halves)
-	cache          *cuda.KVCache
+	gAttn, gFFN *cuda.ResidentVec
+	wqkv, wo    *cuda.ResidentBQ4K // wqkv = col-fused attn_q|attn_k|attn_v (one N=(heads+2·kv)·hd GEMV → RoPE/append over slices)
+	wgu, wd     *cuda.ResidentBQ4K // wgu = col-fused ffn_gate|ffn_up (one N=2·hidden GEMV → SwiGLU over halves)
+	cache       *cuda.KVCache
 }
 
 // NewLlamaQ4KGraphCUDA builds a graph-captured Q4_K decode path for a Llama model. Every projection
@@ -116,11 +116,20 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 		return d
 	}
 	gd.dx, gd.dh, gd.dh2 = buf(cfg.Dim), buf(cfg.Dim), buf(cfg.Dim)
-	gd.dq, gd.da = buf(wqW), buf(wqW)
-	gd.dk, gd.dv = buf(wkv), buf(wkv)
+	gd.da = buf(wqW)
+	gd.dqkv = buf(wqW + 2*wkv)   // fused q|k|v output; dq/dk/dv View its three slices (q=heads·hd, k/v=kv·hd)
 	gd.dgu = buf(2 * cfg.Hidden) // fused gate|up output; dgate/dup View its two halves
 	gd.logits = buf(cfg.Vocab)
 	if err != nil {
+		return nil, err
+	}
+	if gd.dq, err = gd.dqkv.View(0, 1, wqW); err != nil {
+		return nil, err
+	}
+	if gd.dk, err = gd.dqkv.View(wqW, 1, wkv); err != nil {
+		return nil, err
+	}
+	if gd.dv, err = gd.dqkv.View(wqW+wkv, 1, wkv); err != nil {
 		return nil, err
 	}
 	if gd.dgate, err = gd.dgu.View(0, 1, cfg.Hidden); err != nil {
@@ -152,17 +161,20 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 			dst **cuda.ResidentBQ4K
 			w   *tensor.Tensor
 		}{
-			{&l.wq, blk.Wq}, {&l.wk, blk.Wk}, {&l.wv, blk.Wv}, {&l.wo, blk.Wo},
-			{&l.wd, blk.FFN.Wdown},
+			{&l.wo, blk.Wo}, {&l.wd, blk.FFN.Wdown},
 		} {
 			if *wp.dst, err = q(wp.w); err != nil {
 				return nil, err
 			}
 		}
-		// Row-fuse ffn_gate|ffn_up into ONE Q4_K projection: Q4_K quantizes per super-block along K
-		// within each output row, so stacking along output rows (N) leaves every row's quantization
-		// byte-identical to encoding gate/up separately — the fused GEMV is bit-exact, only the launch
-		// (and weight-stream setup) is merged. Decode does one N=2·hidden GEMV then SwiGLU over the halves.
+		// Column-fuse attn_q|attn_k|attn_v (and ffn_gate|ffn_up) into ONE Q4_K projection each. Q4_K
+		// quantizes each output row's K independently, so concatenating along the output dimension leaves
+		// every row's bytes identical to encoding the projections separately — the fused GEMV is bit-exact,
+		// only the launch (and weight-stream setup) is merged. Decode does one N=(heads+2·kv)·hd GEMV then
+		// RoPE/KV-append over the q/k/v slices, and one N=2·hidden GEMV then SwiGLU over the gate/up halves.
+		if l.wqkv, err = q(concatCols1F32(cast(blk.Wq), cast(blk.Wk), cast(blk.Wv))); err != nil {
+			return nil, err
+		}
 		if l.wgu, err = q(concatCols1F32(cast(blk.FFN.Wgate), cast(blk.FFN.Wup))); err != nil {
 			return nil, err
 		}
@@ -178,13 +190,7 @@ func (gd *GraphLlamaDecoder) forwardBody() error {
 		if err := gd.dx.RMSNormInto(l.gAttn, float32(gd.eps), gd.dh); err != nil {
 			return err
 		}
-		if err := l.wq.QMatMulInto(gd.dh, gd.dq); err != nil {
-			return err
-		}
-		if err := l.wk.QMatMulInto(gd.dh, gd.dk); err != nil {
-			return err
-		}
-		if err := l.wv.QMatMulInto(gd.dh, gd.dv); err != nil {
+		if err := l.wqkv.QMatMulInto(gd.dh, gd.dqkv); err != nil { // one N=(heads+2·kv)·hd GEMV → [q|k|v]
 			return err
 		}
 		if err := gd.dq.RoPEDposInv(gd.heads, gd.inv, gd.pos, 0); err != nil {
@@ -248,9 +254,10 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 	wkv := gd.kv * gd.hd
 	dkM, dvM := nb(wkv), nb(wkv)
 	dgM, duM := nb(gd.hidden), nb(gd.hidden)
-	dguM := nb(2 * gd.hidden) // fused gate|up prefill output [m,2·hidden]; split per-row into dgM/duM
+	dguM := nb(2 * gd.hidden)           // fused gate|up prefill output [m,2·hidden]; split per-row into dgM/duM
+	dqkvM := nb(gd.heads*gd.hd + 2*wkv) // fused q|k|v prefill output [m,(heads+2·kv)·hd]; split into dqM/dkM/dvM
 	dlM := nb(gd.vocab)
-	bufs := []*cuda.DeviceF32{dxM, dhM, dh2M, dqM, daM, dkM, dvM, dgM, duM, dguM, dlM}
+	bufs := []*cuda.DeviceF32{dxM, dhM, dh2M, dqM, daM, dkM, dvM, dgM, duM, dguM, dqkvM, dlM}
 	defer func() {
 		for _, b := range bufs {
 			if b != nil {
@@ -271,13 +278,20 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		// WMMA tensor-core prefill (#877) via the recorder — ~2.4x the scalar MT that QMatMulInto routes
 		// M>1 to. f16-accum; the eager reference (generateEager in the test) shares this same
 		// prefillForward, so the graph-vs-eager oracle stays exact regardless.
-		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wq, dqM, m); err != nil {
+		// One fused q|k|v GEMM → [m,(heads+2·kv)·hd], then split each row's slices (columns
+		// [0,q)=q, [q,q+kv)=k, [q+kv,q+2kv)=v) into the contiguous [m,·] q/k/v buffers the RoPE/MHA
+		// path expects. Prefill is weight-read-once, so the extra strided copies are cheap.
+		qN, totN := gd.heads*gd.hd, gd.heads*gd.hd+2*wkv
+		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wqkv, dqkvM, m); err != nil {
 			return nil, err
 		}
-		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wk, dkM, m); err != nil {
+		if err = gd.rec.Copy2D(dqkvM, 0, totN, dqM, 0, qN, m, qN); err != nil {
 			return nil, err
 		}
-		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wv, dvM, m); err != nil {
+		if err = gd.rec.Copy2D(dqkvM, qN, totN, dkM, 0, wkv, m, wkv); err != nil {
+			return nil, err
+		}
+		if err = gd.rec.Copy2D(dqkvM, qN+wkv, totN, dvM, 0, wkv, m, wkv); err != nil {
 			return nil, err
 		}
 		// RoPE the M query/key rows at positions 0..M-1 (posDiv=1, the RoPEDposInv default the decode
@@ -517,7 +531,7 @@ func (gd *GraphLlamaDecoder) Release() {
 		gd.rec.Free()
 	}
 	// dgate/dup are non-owning Views into dgu (their Free is a no-op); dgu owns the buffer.
-	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgu, gd.dgate, gd.dup, gd.logits, gd.inv} {
+	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dqkv, gd.dq, gd.dk, gd.dv, gd.da, gd.dgu, gd.dgate, gd.dup, gd.logits, gd.inv} {
 		free(d)
 	}
 	if gd.graph != nil {
@@ -536,7 +550,7 @@ func (gd *GraphLlamaDecoder) Release() {
 		if l.cache != nil {
 			l.cache.Free()
 		}
-		for _, w := range []*cuda.ResidentBQ4K{l.wq, l.wk, l.wv, l.wo, l.wgu, l.wd} {
+		for _, w := range []*cuda.ResidentBQ4K{l.wqkv, l.wo, l.wgu, l.wd} {
 			if w != nil {
 				w.Free()
 			}
