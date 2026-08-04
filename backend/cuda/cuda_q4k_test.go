@@ -274,3 +274,60 @@ func BenchmarkQ4KPrefill_M512_K4096_N4096_scalar(b *testing.B) {
 func BenchmarkQ4KPrefill_M512_K4096_N4096_wmma(b *testing.B) {
 	benchQ4KPrefill(b, 512, 4096, 4096, true)
 }
+
+// TestCUDAQ4KRecorderPrefillWMMAParity validates the PRODUCTION Q4_K prefill wiring: the public
+// recorder entry Recorder.QMatMulResidentQ4K at m>=q4kWMMAThreshold routes to the tensor-core WMMA
+// path (dequant→f16→wmma, with M-padding + copy-out), and its result must match the trusted M-tiled
+// GEMV (ResidentBQ4K.QMatMulInto, bit-identical to the scalar decode) within f16-accum tolerance.
+// m=70 is deliberately not a multiple of 16, exercising the pad-to-80 + first-70-rows copy-out.
+func TestCUDAQ4KRecorderPrefillWMMAParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const M, K, N = 130, 512, 256 // M>=q4kWMMAThreshold(128) triggers WMMA, M not %16 (pads to 144), K%256==0, N%16==0
+	rng := rand.New(rand.NewSource(41))
+	w := tensor.New(tensor.F64, tensor.Shape{K, N})
+	ws := w.Storage().F64()
+	for i := range ws {
+		ws[i] = rng.NormFloat64() * 0.1
+	}
+	qi, err := quantQ4K(w)
+	must(t, err)
+	rq := qi.(*cuda.ResidentBQ4K)
+	defer rq.Free()
+	rec, err := cuda.NewRecorder()
+	must(t, err)
+	defer rec.Free()
+	af := make([]float32, M*K)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.2
+	}
+	da, _ := cuda.NewDeviceF32(M, K)
+	must(t, da.UploadF32(af))
+	defer da.Free()
+	ref, _ := cuda.NewDeviceF32(M, N)
+	defer ref.Free()
+	got, _ := cuda.NewDeviceF32(M, N)
+	defer got.Free()
+	must(t, rq.QMatMulInto(da, ref))                // MT GEMV oracle (m>=2 → cu_qmatmul_q4k_mt)
+	must(t, rec.QMatMulResidentQ4K(da, rq, got, M)) // production entry, M>=64 → WMMA
+	must(t, rec.Wait())
+	a := make([]float32, M*N)
+	b := make([]float32, M*N)
+	ref.DownloadF32(a)
+	got.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	rel := math.Sqrt(num / den)
+	t.Logf("Q4_K recorder prefill WMMA vs MT oracle (M=%d→pad%d, N=%d): rel-RMS %.3e", M, ((M+15)/16)*16, N, rel)
+	if den == 0 || math.IsNaN(rel) {
+		t.Fatalf("degenerate reference (den=%g rel=%g)", den, rel)
+	}
+	if rel > 2e-2 {
+		t.Fatalf("Q4_K recorder WMMA diverges: rel-RMS %.3e", rel)
+	}
+}

@@ -517,6 +517,17 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	return nil
 }
 
+// q4kWMMAThreshold is the m (row count) at/above which QMatMulResidentQ4K routes prefill to the
+// tensor-core WMMA path instead of the scalar M-tiled GEMV. Below it the fixed O(K·N) weight-dequant
+// pass (a full f16 [K,N] scratch round-trip — ~64 MB of extra traffic at 4096², dominating the runtime
+// at small m) isn't amortized over enough rows and the MT decode-GEMV wins; at/above it the f16
+// tensor-core GEMM dominates. From the MT-vs-WMMA crossover bench (4096²,
+// cuda_q4k_wmma_crossover_bench_internal_test.go): m=16-48 MT wins clearly, m=64 a tie (WMMA ~6%
+// slower), m=128 WMMA 1.60×, m=256 2.00×, m=512 3.24×. 128 is the no-regression floor — it captures
+// the bulk of real prompt-prefill lengths while never regressing the small-batch/speculative range.
+// (The Marlin-style dequant-in-tile GEMM would erase the scratch round-trip and lower this floor.)
+const q4kWMMAThreshold = 128
+
 // QMatMulResidentQ4K records o[m, w.n] = x[m, w.k]·dequant(w) for a resident Q4_K (4-bit k-quant
 // super-block) weight — the aggressive-quant decode path. Q4_K is 2× smaller than Q8 (enables models that
 // don't fit at Q8, matching the ggml Q4_K_M accuracy) but has NO int-tensor-core prefill GEMM, so this is
@@ -540,6 +551,16 @@ func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *Device
 	// amortized yet), so 4 is the no-regression floor. This captures speculative-decode /
 	// small-batch (m=4-7) on the common Q4_K_M format, previously stuck on the GEMV. MT is
 	// BIT-IDENTICAL to the GEMV (TestCUDAQ4KMatMulMTParity), so this is golden-safe.
+	// PREFILL (m>=q4kWMMAThreshold, N%16==0): route to the tensor-core WMMA path — dequant the Q4_K
+	// weight to f16 ONCE and run the f16 tensor-core GEMM, several× faster than the scalar MT decode
+	// GEMV once M amortizes the O(K·N) dequant pass (M512/K4096/N4096: MT 13.98ms → WMMA 4.32ms = 3.24×).
+	// f16-accum (~1e-4 rel vs the bit-identical MT path), the incumbent Q4_K prefill tolerance. Falls back
+	// to MT on any error (N%16!=0, alloc fail) — always-correct.
+	if m >= q4kWMMAThreshold && w.n%16 == 0 && w.k%16 == 0 {
+		if err := rec.q4kPrefillWMMA(x, w, o, m); err == nil {
+			return nil
+		}
+	}
 	if m >= 4 {
 		if rc := C.cu_qmatmul_q4k_mt(x.ptr, w.q, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc == 0 {
 			return nil
@@ -577,6 +598,51 @@ func (rec *Recorder) q8PrefillMMQ(x *DeviceF32, w *ResidentBQ8, o *DeviceF32, m 
 	}
 	if rc := C.cu_blit(o.ptr, C.int(0), dC, C.int(0), C.int(m*w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q8 MMQ result copy failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// q4kPrefillWMMA computes o[m,N] = x[m,K]·dequant(w) on TENSOR CORES for compute-bound Q4_K
+// prefill: it dequantizes the resident Q4_K weight to a contiguous f16 [K,N] matrix ONCE, converts
+// the f32 activation to f16, and runs the f16 WMMA GEMM (cu_wmma_gemm) — the tensor-core replacement
+// for the scalar M-tiled GEMV (cu_qmatmul_q4k_mt), which streams a scalar decode-multiply per output.
+// M is padded up to a multiple of 16 (WMMA tiles 16×16×16; pad rows produce ignored outputs — the
+// GEMM is row-independent, exactly like q8PrefillMMQ pads to 64), the result lands in an [mPad,N]
+// scratch, and the first m rows are copied out. Requires N,K %16==0 (Q4_K K%256==0 always holds);
+// returns an error otherwise so the caller falls back to the always-correct MT GEMV. The f16-accum
+// deviates from the MT path's bit-identical arithmetic by ~1e-4 rel — the same tolerance llama.cpp's
+// tensor-core Q4_K prefill rides (§incumbent-tolerance), and only on the M-large prefill path.
+func (rec *Recorder) q4kPrefillWMMA(x *DeviceF32, w *ResidentBQ4K, o *DeviceF32, m int) error {
+	if w.n%16 != 0 || w.k%16 != 0 {
+		return fmt.Errorf("cuda: q4k WMMA needs N,K %%16==0 (got N=%d K=%d)", w.n, w.k)
+	}
+	mPad := ((m + 15) / 16) * 16
+	bf16 := C.cu_alloc_u16(C.int(w.k * w.n))  // dequantized weight [K,N] f16
+	af16 := C.cu_alloc_u16(C.int(mPad * w.k)) // activation [mPad,K] f16
+	dC := C.cu_alloc_f32(C.int(mPad * w.n))   // [mPad,N] f32 output scratch
+	if bf16 == nil || af16 == nil || dC == nil {
+		C.cu_free_f32(bf16)
+		C.cu_free_f32(af16)
+		C.cu_free_f32(dC)
+		return fmt.Errorf("cuda: q4k WMMA scratch alloc failed")
+	}
+	defer C.cu_free_f32(bf16)
+	defer C.cu_free_f32(af16)
+	defer C.cu_free_f32(dC)
+	if rc := C.cu_dequant_q4k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q4k WMMA dequant failed (code %d)", int(rc))
+	}
+	// Only the real m rows are converted; pad rows [m,mPad) stay uninitialized and produce ignored
+	// outputs (row-independent GEMM), matching q8PrefillMMQ's uninitialized-pad-rows contract.
+	if rc := C.cu_cvt_f32_to_f16(af16, x.ptr, C.long(m*w.k)); rc != 0 {
+		return fmt.Errorf("cuda: q4k WMMA activation convert failed (code %d)", int(rc))
+	}
+	if rc := C.cu_wmma_gemm(unsafe.Pointer(&wmmaGemmFatbin[0]), C.int(len(wmmaGemmFatbin)),
+		af16, bf16, dC, C.int(mPad), C.int(w.k), C.int(w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q4k WMMA gemm failed (code %d)", int(rc))
+	}
+	if rc := C.cu_blit(o.ptr, C.int(0), dC, C.int(0), C.int(m*w.n)); rc != 0 {
+		return fmt.Errorf("cuda: q4k WMMA result copy failed (code %d)", int(rc))
 	}
 	return nil
 }
