@@ -201,10 +201,10 @@ func GroupedQueryAttentionKVF16DposFlashInto(q *DeviceF32, c *KVCacheF16, qHeads
 // (one per head per token) keep accuracy when heads differ in magnitude and are graph-capturable.
 // Decode-only, via the int8 flash attention path (added alongside this type).
 type KVCacheI8 struct {
-	dK, dV              unsafe.Pointer // int8 [maxSeq*kvHeads*hd]
-	sK, sV              unsafe.Pointer // f32  [maxSeq*kvHeads] per-(token,head) scales
-	maxSeq, wkv         int
-	kvHeads, hd         int
+	dK, dV      unsafe.Pointer // int8 [maxSeq*kvHeads*hd]
+	sK, sV      unsafe.Pointer // f32  [maxSeq*kvHeads] per-(token,head) scales
+	maxSeq, wkv int
+	kvHeads, hd int
 }
 
 // NewKVCacheI8 allocates int8 K/V + f32 per-head scale buffers for maxSeq tokens of kvHeads·hd width.

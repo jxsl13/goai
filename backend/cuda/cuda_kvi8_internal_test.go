@@ -139,7 +139,7 @@ func TestKVCacheI8FlashParity(t *testing.T) {
 	}
 	defer dq.Free()
 	must(t, dq.UploadF32(q))
-	must(t, pos.Set(seqKV - 1)) // offset = last token
+	must(t, pos.Set(seqKV-1)) // offset = last token
 	o16, _ := NewDeviceF32(1, wq)
 	defer o16.Free()
 	o8, _ := NewDeviceF32(1, wq)
