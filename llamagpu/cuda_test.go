@@ -144,3 +144,51 @@ func TestCUDAQuantGenerateValid(t *testing.T) {
 	}
 	t.Logf("llamagpu NewQuantCUDA (Q8) greedy: %d-token prompt → %d valid tokens", len(prompt), len(out))
 }
+
+// TestCUDAQuantGenerateValidQ4K drives a Q4_K-quantized Llama through NewQuantCUDA, exercising the
+// NATIVE Q4_K serving path added to cudaUploadQWeight (the raw GGUF Q4_K blocks upload as a resident
+// Q4_K weight — 0.5625 B/w, ~2× less VRAM than the Q8 upcast — dispatched via QMatMulResidentQ4K's
+// GEMV decode + tensor-core WMMA prefill). Dims are multiples of 256 so every projection's K qualifies.
+// Contract (as for the Q8 variant): valid, prefix-preserving, correct-length greedy generation.
+func TestCUDAQuantGenerateValidQ4K(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 256, Ctx: 128, Dim: 256, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qm, err := nlp.QuantizeLlama(m, gguf.Q4_K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer qm.Close()
+	dec, err := llamagpu.NewQuantCUDA(qm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dec.Release()
+
+	prompt := []int{1, 9, 42, 17}
+	const maxNew = 24
+	out, err := dec.Generate(prompt, maxNew, nlp.Greedy())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != len(prompt)+maxNew {
+		t.Fatalf("generated %d tokens, want %d", len(out)-len(prompt), maxNew)
+	}
+	for i, tok := range out {
+		if i < len(prompt) && tok != prompt[i] {
+			t.Fatalf("prompt prefix violated at %d: %d != %d", i, tok, prompt[i])
+		}
+		if tok < 0 || tok >= cfg.Vocab {
+			t.Fatalf("token[%d]=%d out of vocab %d", i, tok, cfg.Vocab)
+		}
+	}
+	t.Logf("llamagpu NewQuantCUDA (native Q4_K) greedy: %d-token prompt → %d valid tokens", len(prompt), len(out))
+}
