@@ -58,12 +58,17 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 		}
 	}
 	k := make([][]float64, m)
-	for i := range m {
-		k[i] = make([]float64, n)
-		for j := range n {
-			k[i][j] = math.Exp(-(cost.AtF64(i, j) - minC) / eps)
+	// K = exp(−(C−minC)/ε) is one independent transcendental per cell, and each row writes only
+	// k[i], so fan the m rows across cores — bit-identical, every cell is a pure function of its
+	// own C[i,j].
+	parallelRows(m, n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			k[i] = make([]float64, n)
+			for j := range n {
+				k[i][j] = math.Exp(-(cost.AtF64(i, j) - minC) / eps)
+			}
 		}
-	}
+	})
 
 	u := make([]float64, m)
 	v := make([]float64, n)
@@ -74,31 +79,43 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 		v[j] = 1
 	}
 	for range iters {
-		for i := range m { // u = r ⊘ (K v)
-			var kv float64
-			for j := range n {
-				kv += k[i][j] * v[j]
+		// u = r ⊘ (K v): each u[i] is an independent dot of row k[i] with the (read-only) v, and
+		// writes only u[i] → fan the rows across cores. The parallelRows barrier completes the full
+		// u-update before the v-update reads it. Bit-identical: each u[i] sums over j in the same
+		// ascending order.
+		parallelRows(m, n, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				var kv float64
+				for j := range n {
+					kv += k[i][j] * v[j]
+				}
+				if kv > 0 {
+					u[i] = r[i] / kv
+				}
 			}
-			if kv > 0 {
-				u[i] = r[i] / kv
+		})
+		// v = c ⊘ (Kᵀ u): each v[j] independent (sum over i in ascending order from +0, unchanged).
+		parallelRows(n, m, func(lo, hi int) {
+			for j := lo; j < hi; j++ {
+				var ktu float64
+				for i := range m {
+					ktu += k[i][j] * u[i]
+				}
+				if ktu > 0 {
+					v[j] = c[j] / ktu
+				}
 			}
-		}
-		for j := range n { // v = c ⊘ (Kᵀ u)
-			var ktu float64
-			for i := range m {
-				ktu += k[i][j] * u[i]
-			}
-			if ktu > 0 {
-				v[j] = c[j] / ktu
-			}
-		}
+		})
 	}
 
 	p := tensor.New(cost.Dtype(), tensor.Shape{m, n})
-	for i := range m {
-		for j := range n {
-			p.SetF64(u[i]*k[i][j]*v[j], i, j)
+	// P[i,j] = u[i]·K[i,j]·v[j]: each cell independent, each row writes only its own cells of p.
+	parallelRows(m, n, func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			for j := range n {
+				p.SetF64(u[i]*k[i][j]*v[j], i, j)
+			}
 		}
-	}
+	})
 	return p, nil
 }
