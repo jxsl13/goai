@@ -257,13 +257,16 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		if err = dxM.RMSNormInto(l.gAttn, float32(gd.eps), dhM); err != nil {
 			return nil, err
 		}
-		if err = l.wq.QMatMulInto(dhM, dqM); err != nil {
+		// WMMA tensor-core prefill (#877) via the recorder — ~2.4x the scalar MT that QMatMulInto routes
+		// M>1 to. f16-accum; the eager reference (generateEager in the test) shares this same
+		// prefillForward, so the graph-vs-eager oracle stays exact regardless.
+		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wq, dqM, m); err != nil {
 			return nil, err
 		}
-		if err = l.wk.QMatMulInto(dhM, dkM); err != nil {
+		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wk, dkM, m); err != nil {
 			return nil, err
 		}
-		if err = l.wv.QMatMulInto(dhM, dvM); err != nil {
+		if err = gd.rec.QMatMulResidentQ4K(dhM, l.wv, dvM, m); err != nil {
 			return nil, err
 		}
 		// RoPE the M query/key rows at positions 0..M-1 (posDiv=1, the RoPEDposInv default the decode
@@ -291,10 +294,10 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		if err = dxM.RMSNormInto(l.gFFN, float32(gd.eps), dh2M); err != nil {
 			return nil, err
 		}
-		if err = l.wg.QMatMulInto(dh2M, dgM); err != nil {
+		if err = gd.rec.QMatMulResidentQ4K(dh2M, l.wg, dgM, m); err != nil {
 			return nil, err
 		}
-		if err = l.wu.QMatMulInto(dh2M, duM); err != nil {
+		if err = gd.rec.QMatMulResidentQ4K(dh2M, l.wu, duM, m); err != nil {
 			return nil, err
 		}
 		if err = dgM.SwiGLU(duM); err != nil {
@@ -307,7 +310,7 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 	if err = dxM.RMSNormInto(gd.norm, float32(gd.eps), dhM); err != nil {
 		return nil, err
 	}
-	if err = gd.out.QMatMulInto(dhM, dlM); err != nil {
+	if err = gd.rec.QMatMulResidentQ4K(dhM, gd.out, dlM, m); err != nil {
 		return nil, err
 	}
 	if err = gd.rec.Wait(); err != nil {

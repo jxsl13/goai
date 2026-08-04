@@ -18,13 +18,11 @@ const glModelPath = "../models/tinyllama-1.1b-chat-q8_0.gguf"
 // graph path must reproduce exactly.
 func (gd *GraphLlamaDecoder) generateEager(prompt []int, maxNew int) ([]int, error) {
 	out := append([]int(nil), prompt...)
-	var logits []float32
-	for i, tok := range prompt {
-		l, err := gd.stepEager(tok, i)
-		if err != nil {
-			return nil, err
-		}
-		logits = l
+	// Share the SAME batched prefill as Generate so the graph-vs-eager oracle isolates the DECODE
+	// mechanism (graph replay vs eager launches) — identical prefill (incl. its f16-accum WMMA).
+	logits, err := gd.prefillForward(prompt)
+	if err != nil {
+		return nil, err
 	}
 	pos := len(prompt)
 	for range maxNew {
