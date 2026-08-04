@@ -3264,6 +3264,69 @@ done:
     return rc;
 }
 
+static CUfunction gDequantQ4KF16 = NULL; // Q4_K weight -> contiguous f16 [K,N] (for tensor-core prefill GEMM)
+
+// cu_dequant_q4k_to_f16: expand the ggml Q4_K weight (stored per OUTPUT row n as sbs=K/256
+// super-blocks of 144 B) into a CONTIGUOUS f16 matrix B[K,N] (row-major, B[k*N+n] = w[n,k]).
+// This feeds the existing f16 WMMA GEMM so Q4_K PREFILL runs on tensor cores instead of the
+// scalar acc[8] GEMV (cu_qmatmul_q4k_mt). The dequant math and the lane->element layout mirror
+// qmatmul_q4k EXACTLY (low nibbles of blk[16+lane*4] -> elements kb..kb+3 in sub-block 2p, high
+// nibbles -> kb+32..kb+35 in sub-block 2p+1; w = d·sc·q − dmin·mn), so a·dequant here is
+// bit-consistent with the scalar path up to the f16 rounding the tensor-core path already rides.
+int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donedq; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donedq; }
+    if (!gDequantQ4KF16 && compile_kernel(
+        "__device__ __forceinline__ float f16f(unsigned short h){\n"
+        "  unsigned s = (h & 0x8000u) << 16;\n"
+        "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+        "  return __uint_as_float(__float_as_uint(v) | s);\n"
+        "}\n"
+        "__device__ __forceinline__ void get_sm(int j, const unsigned char* q, float* sc, float* mn){\n"
+        "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
+        "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
+        "}\n"
+        "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        "extern \"C\" __global__ void dequant_q4k_f16(const unsigned char* q, unsigned short* B, int K, int N){\n"
+        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
+        "  int lane = threadIdx.x & 31;\n"
+        "  if (warp >= (long)N) return;\n"
+        "  int n = (int)warp;\n"
+        "  int sbs = K >> 8;\n"
+        "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
+        "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
+        "  for (int w = 0; w < sbs; w++){\n"
+        "    const unsigned char* blk = qr + (size_t)w*144;\n"
+        "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n"
+        "    float d = f16f(*(const unsigned short*)blk);\n"
+        "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
+        "    float scL, mnL, scH, mnH;\n"
+        "    get_sm(2*p,   blk+4, &scL, &mnL);\n"
+        "    get_sm(2*p+1, blk+4, &scH, &mnH);\n"
+        "    float c1L = d*scL, c2L = dmin*mnL, c1H = d*scH, c2H = dmin*mnH;\n"
+        "    int kb = w*256 + p*64 + i0;\n"
+        "    for (int j = 0; j < 4; j++){\n"
+        "      float ql = (float)((qw >> (j*8)) & 0xFu);\n"
+        "      float qh = (float)((qw >> (j*8+4)) & 0xFu);\n"
+        "      B[(size_t)(kb+j)*N + n]    = f2h(c1L*ql - c2L);\n"
+        "      B[(size_t)(kb+32+j)*N + n] = f2h(c1H*qh - c2H);\n"
+        "    }\n"
+        "  }\n"
+        "}\n",
+        "dequant_q4k_f16.cu", "dequant_q4k_f16", &gDequantQ4KF16) != 0) { rc = -2; goto donedq; }
+    {
+        long total = (long)N * 32;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+        void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
+        rc = (cuLaunchKernel(gDequantQ4KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donedq:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_q4k_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — see cu_qmatmul_q8_swiglu.
 int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
                           int M, int K, int N) {
