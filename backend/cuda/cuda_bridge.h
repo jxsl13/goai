@@ -183,6 +183,8 @@ int cu_qmatmul_q2k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, 
 // cu_qmatmul_q3k: out[M,N] = a·dequant(W), W = ggml Q3_K 110-byte super-blocks per output row
 // (symmetric, signed 6-bit sub-scales, 3-bit quants via qs low-2 + hmask high-1). K%256==0. GEMV.
 int cu_qmatmul_q3k(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
+// cu_dequant_q3k_to_f16: expand repacked Q3_K (meta/qs/hmask) -> contiguous f16 [K,N] for the tensor-core prefill GEMM.
+int cu_dequant_q3k_to_f16(const void* dMeta, const void* dQs, const void* dHm, void* dBf16, int K, int N);
 // cu_qmatmul_q3k_mt: weight-read-once M-tiled GEMM for M>1 — Q3_K twin of cu_qmatmul_q4k_mt.
 // Bit-identical arithmetic to cu_qmatmul_q3k. K%256==0.
 int cu_qmatmul_q3k_mt(const void* dA, const void* dMeta, const void* dQs, const void* dHm, void* dOut, int M, int K, int N, float beta);
