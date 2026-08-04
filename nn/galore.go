@@ -134,14 +134,24 @@ func galoreProjection(g [][]float64, rank int) (proj [][]float64, left bool) {
 	for i := range n {
 		gtg[i] = make([]float64, n)
 	}
+	// GᵀG is symmetric, so accumulate only the UPPER triangle (j≥i) and mirror once — halving the
+	// O(m·n²) gram. BIT-IDENTICAL: gtg[j][i] = Σ_k g[k][j]·g[k][i] equals gtg[i][j] = Σ_k g[k][i]·g[k][j]
+	// term-for-term (float mult commutes, same ascending-k order), so the mirror reproduces the value
+	// the full loop would have computed. (Now worth it — SymEig's 8.9× speedup #890/#891 shrank the
+	// eigensolve, so the gram is a much larger fraction of galoreProjection than before.)
 	for k := range m {
 		gk := g[k]
 		for i := range n {
 			gki := gk[i]
 			gi := gtg[i]
-			for j := range n {
+			for j := i; j < n; j++ {
 				gi[j] += gki * gk[j]
 			}
+		}
+	}
+	for i := range n {
+		for j := i + 1; j < n; j++ {
+			gtg[j][i] = gtg[i][j]
 		}
 	}
 	_, vecs := linalg.SymEig(gtg)
