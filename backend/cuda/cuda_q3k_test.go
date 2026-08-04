@@ -195,3 +195,58 @@ func BenchmarkQ3KPrefill_M512_K4096_N4096_scalar(b *testing.B) {
 func BenchmarkQ3KPrefill_M512_K4096_N4096_wmma(b *testing.B) {
 	benchQ3KPrefill(b, 512, 4096, 4096, true)
 }
+
+// TestCUDAQ3KRecorderPrefillWMMAParity validates the production Q3_K prefill wiring: the public
+// Recorder.QMatMulResidentQ3K at m>=q3kWMMAThreshold routes to the tensor-core WMMA path, matching
+// the trusted M-tiled GEMV (QMatMulInto) within f16-accum tolerance. m=130 exercises pad-to-144.
+func TestCUDAQ3KRecorderPrefillWMMAParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const M, K, N = 130, 512, 256
+	rng := rand.New(rand.NewSource(73))
+	w := tensor.New(tensor.F64, tensor.Shape{K, N})
+	ws := w.Storage().F64()
+	for i := range ws {
+		ws[i] = rng.NormFloat64() * 0.1
+	}
+	qi, err := quantQ3K(w)
+	must(t, err)
+	rq := qi.(*cuda.ResidentBQ3K)
+	defer rq.Free()
+	rec, err := cuda.NewRecorder()
+	must(t, err)
+	defer rec.Free()
+	af := make([]float32, M*K)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.2
+	}
+	da, _ := cuda.NewDeviceF32(M, K)
+	must(t, da.UploadF32(af))
+	defer da.Free()
+	ref, _ := cuda.NewDeviceF32(M, N)
+	defer ref.Free()
+	got, _ := cuda.NewDeviceF32(M, N)
+	defer got.Free()
+	must(t, rq.QMatMulInto(da, ref))
+	must(t, rec.QMatMulResidentQ3K(da, rq, got, M))
+	must(t, rec.Wait())
+	a := make([]float32, M*N)
+	b := make([]float32, M*N)
+	ref.DownloadF32(a)
+	got.DownloadF32(b)
+	var num, den float64
+	for i := range a {
+		d := float64(a[i] - b[i])
+		num += d * d
+		den += float64(a[i]) * float64(a[i])
+	}
+	rel := math.Sqrt(num / den)
+	t.Logf("Q3_K recorder prefill WMMA vs MT oracle (M=%d→pad%d): rel-RMS %.3e", M, ((M+15)/16)*16, rel)
+	if den == 0 || math.IsNaN(rel) {
+		t.Fatalf("degenerate reference (den=%g rel=%g)", den, rel)
+	}
+	if rel > 2e-2 {
+		t.Fatalf("Q3_K recorder WMMA diverges: rel-RMS %.3e", rel)
+	}
+}
