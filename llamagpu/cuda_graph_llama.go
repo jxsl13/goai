@@ -30,11 +30,11 @@ type GraphLlamaDecoder struct {
 	layers []*graphLlamaLayer
 	pos    *cuda.DevicePos
 
-	dx, dh, dh2        *cuda.DeviceF32
-	dq, dk, dv, da     *cuda.DeviceF32
-	dgate, dup, logits *cuda.DeviceF32
-	inv                *cuda.DeviceF32
-	graph              *cuda.CapturedGraph
+	dx, dh, dh2             *cuda.DeviceF32
+	dq, dk, dv, da          *cuda.DeviceF32
+	dgu, dgate, dup, logits *cuda.DeviceF32 // dgate/dup are Views into the fused gate|up buffer dgu
+	inv                     *cuda.DeviceF32
+	graph                   *cuda.CapturedGraph
 
 	rec   *cuda.Recorder
 	scale float32
@@ -46,7 +46,7 @@ type GraphLlamaDecoder struct {
 type graphLlamaLayer struct {
 	gAttn, gFFN    *cuda.ResidentVec
 	wq, wk, wv, wo *cuda.ResidentBQ4K
-	wg, wu, wd     *cuda.ResidentBQ4K
+	wgu, wd        *cuda.ResidentBQ4K // wgu = row-fused ffn_gate|ffn_up (one N=2·hidden GEMV → SwiGLU over halves)
 	cache          *cuda.KVCache
 }
 
@@ -118,9 +118,15 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 	gd.dx, gd.dh, gd.dh2 = buf(cfg.Dim), buf(cfg.Dim), buf(cfg.Dim)
 	gd.dq, gd.da = buf(wqW), buf(wqW)
 	gd.dk, gd.dv = buf(wkv), buf(wkv)
-	gd.dgate, gd.dup = buf(cfg.Hidden), buf(cfg.Hidden)
+	gd.dgu = buf(2 * cfg.Hidden) // fused gate|up output; dgate/dup View its two halves
 	gd.logits = buf(cfg.Vocab)
 	if err != nil {
+		return nil, err
+	}
+	if gd.dgate, err = gd.dgu.View(0, 1, cfg.Hidden); err != nil {
+		return nil, err
+	}
+	if gd.dup, err = gd.dgu.View(cfg.Hidden, 1, cfg.Hidden); err != nil {
 		return nil, err
 	}
 	if gd.inv, err = cuda.BuildRoPEInv(hd, cfg.RopeBase); err != nil {
@@ -147,11 +153,18 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 			w   *tensor.Tensor
 		}{
 			{&l.wq, blk.Wq}, {&l.wk, blk.Wk}, {&l.wv, blk.Wv}, {&l.wo, blk.Wo},
-			{&l.wg, blk.FFN.Wgate}, {&l.wu, blk.FFN.Wup}, {&l.wd, blk.FFN.Wdown},
+			{&l.wd, blk.FFN.Wdown},
 		} {
 			if *wp.dst, err = q(wp.w); err != nil {
 				return nil, err
 			}
+		}
+		// Row-fuse ffn_gate|ffn_up into ONE Q4_K projection: Q4_K quantizes per super-block along K
+		// within each output row, so stacking along output rows (N) leaves every row's quantization
+		// byte-identical to encoding gate/up separately — the fused GEMV is bit-exact, only the launch
+		// (and weight-stream setup) is merged. Decode does one N=2·hidden GEMV then SwiGLU over the halves.
+		if l.wgu, err = q(concatCols1F32(cast(blk.FFN.Wgate), cast(blk.FFN.Wup))); err != nil {
+			return nil, err
 		}
 		gd.layers[i] = l
 	}
@@ -193,13 +206,10 @@ func (gd *GraphLlamaDecoder) forwardBody() error {
 		if err := gd.dx.RMSNormInto(l.gFFN, float32(gd.eps), gd.dh2); err != nil {
 			return err
 		}
-		if err := l.wg.QMatMulInto(gd.dh2, gd.dgate); err != nil {
+		if err := l.wgu.QMatMulInto(gd.dh2, gd.dgu); err != nil { // one N=2·hidden GEMV → [gate|up]
 			return err
 		}
-		if err := l.wu.QMatMulInto(gd.dh2, gd.dup); err != nil {
-			return err
-		}
-		if err := gd.dgate.SwiGLU(gd.dup); err != nil {
+		if err := gd.dgate.SwiGLU(gd.dup); err != nil { // SwiGLU over the two halves of dgu, in place into dgate
 			return err
 		}
 		if err := l.wd.QMatMulAccInto(gd.dgate, gd.dx); err != nil {
@@ -238,8 +248,9 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 	wkv := gd.kv * gd.hd
 	dkM, dvM := nb(wkv), nb(wkv)
 	dgM, duM := nb(gd.hidden), nb(gd.hidden)
+	dguM := nb(2 * gd.hidden) // fused gate|up prefill output [m,2·hidden]; split per-row into dgM/duM
 	dlM := nb(gd.vocab)
-	bufs := []*cuda.DeviceF32{dxM, dhM, dh2M, dqM, daM, dkM, dvM, dgM, duM, dlM}
+	bufs := []*cuda.DeviceF32{dxM, dhM, dh2M, dqM, daM, dkM, dvM, dgM, duM, dguM, dlM}
 	defer func() {
 		for _, b := range bufs {
 			if b != nil {
@@ -294,10 +305,16 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 		if err = dxM.RMSNormInto(l.gFFN, float32(gd.eps), dh2M); err != nil {
 			return nil, err
 		}
-		if err = gd.rec.QMatMulResidentQ4K(dh2M, l.wg, dgM, m); err != nil {
+		// One fused gate|up GEMM → [m,2·hidden], then split each row's halves (columns [0,h)=gate,
+		// [h,2h)=up) into the contiguous [m,h] SwiGLU inputs. Prefill is batched (weight-read-once),
+		// so the extra strided copies are cheap; the win is fewer weight-stream setups + one GEMM.
+		if err = gd.rec.QMatMulResidentQ4K(dh2M, l.wgu, dguM, m); err != nil {
 			return nil, err
 		}
-		if err = gd.rec.QMatMulResidentQ4K(dh2M, l.wu, duM, m); err != nil {
+		if err = gd.rec.Copy2D(dguM, 0, 2*gd.hidden, dgM, 0, gd.hidden, m, gd.hidden); err != nil {
+			return nil, err
+		}
+		if err = gd.rec.Copy2D(dguM, gd.hidden, 2*gd.hidden, duM, 0, gd.hidden, m, gd.hidden); err != nil {
 			return nil, err
 		}
 		if err = dgM.SwiGLU(duM); err != nil {
@@ -499,7 +516,8 @@ func (gd *GraphLlamaDecoder) Release() {
 	if gd.rec != nil {
 		gd.rec.Free()
 	}
-	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgate, gd.dup, gd.logits, gd.inv} {
+	// dgate/dup are non-owning Views into dgu (their Free is a no-op); dgu owns the buffer.
+	for _, d := range []*cuda.DeviceF32{gd.dx, gd.dh, gd.dh2, gd.dq, gd.dk, gd.dv, gd.da, gd.dgu, gd.dgate, gd.dup, gd.logits, gd.inv} {
 		free(d)
 	}
 	if gd.graph != nil {
@@ -518,11 +536,40 @@ func (gd *GraphLlamaDecoder) Release() {
 		if l.cache != nil {
 			l.cache.Free()
 		}
-		for _, w := range []*cuda.ResidentBQ4K{l.wq, l.wk, l.wv, l.wo, l.wg, l.wu, l.wd} {
+		for _, w := range []*cuda.ResidentBQ4K{l.wq, l.wk, l.wv, l.wo, l.wgu, l.wd} {
 			if w != nil {
 				w.Free()
 			}
 		}
 	}
 	gd.layers = nil
+}
+
+// concatCols1F32 concatenates [K,Ni] f32 weight tensors (the [in,out] layout cudaQ4KResident wants,
+// K=contracted dim on axis 0, output width on axis 1) along axis 1 into one [K,ΣNi] tensor — the
+// output-fusion that merges ffn_gate|ffn_up (and could merge q|k|v) into a single Q4_K projection.
+// cudaQ4KResident transposes to [N,K] and quantizes each output row's K independently, so the fused
+// weight's output row n<N0 is input 0's output n (its same K values) — bit-exact vs the separate
+// projections; only the GEMV launch and weight-stream setup are merged.
+func concatCols1F32(ts ...*tensor.Tensor) *tensor.Tensor {
+	rows := ts[0].Shape()[0]
+	widths := make([]int, len(ts))
+	srcs := make([][]float32, len(ts))
+	ntot := 0
+	for i, t := range ts {
+		widths[i] = t.Shape()[1]
+		ntot += widths[i]
+		srcs[i] = t.Cast(tensor.F32).Contiguous().Storage().F32()
+	}
+	out := tensor.New(tensor.F32, tensor.Shape{rows, ntot})
+	of := out.Storage().F32()
+	for r := 0; r < rows; r++ {
+		off := r * ntot
+		for i := range ts {
+			w := widths[i]
+			copy(of[off:off+w], srcs[i][r*w:r*w+w])
+			off += w
+		}
+	}
+	return out
 }
