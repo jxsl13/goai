@@ -35,7 +35,19 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	d := make([]float64, n) // diagonal / eigenvalues
 	e := make([]float64, n) // subdiagonal
 	tred2(z, n, d, e)
-	tql2(z, n, d, e)
+	// Transpose the Householder Q to COLUMN-major (zc[c*n+r] = column c of Q) before the QL
+	// sweep. tql2's dominant O(n³) cost is the per-rotation eigenvector update, which touches
+	// two logical COLUMNS across all n rows — column-strided (stride n) in row-major z, but two
+	// contiguous slices in zc. The O(n²) transpose is negligible against the O(n³) sweep.
+	// Storage layout only: the QL arithmetic, its order and operands are unchanged (bit-identical).
+	zc := make([]float64, n*n)
+	for r := range n {
+		zr := z[r*n : r*n+n]
+		for c := range n {
+			zc[c*n+r] = zr[c]
+		}
+	}
+	tql2(zc, n, d, e)
 
 	// extract + sort descending (same output layout the callers expect).
 	order := make([]int, n)
@@ -56,9 +68,7 @@ func SymEig(a [][]float64) (vals []float64, vecs [][]float64) {
 	for k, oi := range order {
 		vals[k] = d[oi]
 		col := make([]float64, n)
-		for r := range n {
-			col[r] = z[r*n+oi] // eigenvector oi is column oi of z
-		}
+		copy(col, zc[oi*n:oi*n+n]) // eigenvector oi is column oi of Q = contiguous row oi of zc
 		vecs[k] = col
 	}
 	return vals, vecs
@@ -146,8 +156,9 @@ func tred2(z []float64, n int, d, e []float64) {
 
 // tql2 diagonalizes the symmetric tridiagonal matrix (diagonal d, subdiagonal e) by the
 // implicit-shift QL algorithm with Wilkinson shifts, accumulating the plane rotations into
-// the eigenvector matrix z (which enters as the Householder Q from tred2). On return d holds
-// the eigenvalues (unordered) and column c of z is the eigenvector for d[c]. EISPACK tql2 /
+// the eigenvector matrix z (which enters as the Householder Q from tred2, stored COLUMN-major:
+// z[c*n+r] is row r of column c). On return d holds the eigenvalues (unordered) and column c
+// of z (the contiguous slice z[c*n:(c+1)*n]) is the eigenvector for d[c]. EISPACK tql2 /
 // Numerical Recipes §11.3, 0-indexed. (Golub & Van Loan §8.3.3.)
 func tql2(z []float64, n int, d, e []float64) {
 	if n == 1 {
@@ -200,10 +211,14 @@ func tql2(z []float64, n int, d, e []float64) {
 				p = s * r
 				d[i+1] = g + p
 				g = c*r - b
+				// z is COLUMN-major here, so eigenvector columns i and i+1 are two contiguous
+				// slices — the rotation streams them instead of striding z by n per row k.
+				ci := z[i*n : i*n+n]
+				ci1 := z[(i+1)*n : (i+1)*n+n]
 				for k := 0; k < n; k++ { // accumulate the rotation into eigenvector columns i, i+1
-					f = z[k*n+i+1]
-					z[k*n+i+1] = s*z[k*n+i] + c*f
-					z[k*n+i] = c*z[k*n+i] - s*f
+					f = ci1[k]
+					ci1[k] = s*ci[k] + c*f
+					ci[k] = c*ci[k] - s*f
 				}
 			}
 			if broke {
