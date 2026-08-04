@@ -216,6 +216,8 @@ int cu_qmatmul_iq1s(const void* dA, const void* dQ, const void* dGrid, void* dOu
 int cu_qmatmul_iq1m(const void* dA, const void* dQ, const void* dGrid, void* dOut, int M, int K, int N, float beta);
 // cu_qmatmul_q6k: out[M,N] = a·dequant(W), W = ggml Q6_K 210-byte super-blocks per output row.
 int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+// cu_dequant_q6k_to_f16: expand Q6_K weight -> contiguous f16 [K,N] for the tensor-core prefill GEMM.
+int cu_dequant_q6k_to_f16(const void* dQ, void* dBf16, int K, int N);
 // cu_qmatmul_q6k_mt: weight-read-once M-tiled GEMM for M>1 — Q6_K twin of cu_qmatmul_q4k_mt,
 // decodes each Q6_K sub-block once per warp and reuses across an MT-row tile. Bit-identical. K%256==0.
 int cu_qmatmul_q6k_mt(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
