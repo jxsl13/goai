@@ -102,6 +102,8 @@ func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 		return c.r.QMatMulResidentQ6K(cb(x), rw, cb(o), m) // Q6_K: 6-bit k-quant decode GEMV + tensor-core prefill
 	case *cuda.ResidentBQ5K:
 		return c.r.QMatMulResidentQ5K(cb(x), rw, cb(o), m) // Q5_K: 5-bit k-quant decode GEMV + tensor-core prefill
+	case *cuda.ResidentBQ2K:
+		return c.r.QMatMulResidentQ2K(cb(x), rw, cb(o), m) // Q2_K: 2-bit k-quant (0.25 B/w) decode GEMV + tensor-core prefill
 	default:
 		return fmt.Errorf("llamagpu: cuda QMatMulResident: unsupported resident weight %T", w)
 	}
@@ -1327,6 +1329,16 @@ func cudaUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 		// + tensor-core WMMA prefill). Raw GGUF Q5_K blocks are row-major [Out][In/256] 176-byte
 		// super-blocks = NewResidentBQ5KFromBlocks's input.
 		if rw, err := cuda.NewResidentBQ5KFromBlocks(weight, k, n); err == nil {
+			return rw, nil
+		}
+		// fall through to Q8 on any error
+	}
+	if qt == 10 /* tQ2_K */ && k%256 == 0 {
+		// Q2_K (0.25 B/w vs Q8 1.0625, ~4× less VRAM): the aggressive-quant option — a Q2_K GGUF upcast
+		// to Q8 may not even fit the 12GB 3060, so keeping it native is enabling, not just faster. Native
+		// via QMatMulResidentQ2K (GEMV decode + tensor-core WMMA prefill). Raw GGUF Q2_K blocks are
+		// row-major [Out][In/256] 84-byte super-blocks = NewResidentBQ2KFromBlocks's input.
+		if rw, err := cuda.NewResidentBQ2KFromBlocks(weight, k, n); err == nil {
 			return rw, nil
 		}
 		// fall through to Q8 on any error
