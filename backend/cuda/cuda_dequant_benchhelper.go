@@ -24,3 +24,7 @@ func dequantQ6KForBench(r *ResidentBQ6K, bf16 unsafe.Pointer, k, n int) int {
 func dequantQ5KForBench(r *ResidentBQ5K, bf16 unsafe.Pointer, k, n int) int {
 	return int(C.cu_dequant_q5k_to_f16(r.q, bf16, C.int(k), C.int(n)))
 }
+
+func dequantQ2KForBench(r *ResidentBQ2K, bf16 unsafe.Pointer, k, n int) int {
+	return int(C.cu_dequant_q2k_to_f16(r.q, bf16, C.int(k), C.int(n)))
+}

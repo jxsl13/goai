@@ -81,3 +81,28 @@ func benchDequantQ5K(b *testing.B, k, n int) {
 }
 
 func BenchmarkDequantQ5K_4096x4096(b *testing.B) { benchDequantQ5K(b, 4096, 4096) }
+
+func benchDequantQ2K(b *testing.B, k, n int) {
+	if !Available() {
+		b.Skip("no gpu")
+	}
+	raw := make([]byte, (k*n/256)*84)
+	rq, err := NewResidentBQ2KFromBlocks(raw, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	bf16 := allocU16ForBench(k * n)
+	defer func() { rq.Free(); freeF32ForBench(bf16) }()
+	dequantQ2KForBench(rq, bf16, k, n)
+	GraphSync()
+	gb := (float64(k*n*2) + float64((k*n/256)*84)) / 1e9
+	b.ResetTimer()
+	for range b.N {
+		dequantQ2KForBench(rq, bf16, k, n)
+	}
+	GraphSync()
+	b.StopTimer()
+	b.ReportMetric(gb/(b.Elapsed().Seconds()/float64(b.N)), "GB/s")
+}
+
+func BenchmarkDequantQ2K_4096x4096(b *testing.B) { benchDequantQ2K(b, 4096, 4096) }
