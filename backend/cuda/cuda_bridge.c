@@ -7766,6 +7766,55 @@ done:
     return rc;
 }
 
+// cu_append_dpos_i8 quantizes one token's [kvHeads*hd] f32 row to int8 with a PER-HEAD
+// symmetric scale (max|·|/127), writing the int8 values at row *dPos of dstI8 and the hd-shared
+// scale at index (*dPos)*kvHeads + head of dScale. Per-head (not per-token-whole-row) keeps
+// accuracy when heads differ in magnitude, and is graph-capturable (device pos). One block per
+// head, blockDim 128 ≥ hd; the block reduces |·| to the head max in shared, then quantizes.
+static CUfunction gAppendDposI8 = NULL;
+int cu_append_dpos_i8(void* dstI8, void* dScale, const void* src, const void* dPos, int kvHeads, int hd) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done_i8; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done_i8; }
+    if (!gAppendDposI8 && compile_kernel(
+        "extern \"C\" __global__ void append_dpos_i8(signed char* dst, float* scale, const float* src, const int* dPos, int kvHeads, int hd){\n"
+        "  int head = blockIdx.x; int tid = threadIdx.x;\n"
+        "  __shared__ float sm[128];\n"
+        "  int base = head*hd;\n"
+        "  float a = (tid < hd) ? fabsf(src[base+tid]) : 0.0f;\n"
+        "  sm[tid] = a; __syncthreads();\n"
+        "  for (int s = 64; s > 0; s >>= 1) { if (tid < s) sm[tid] = fmaxf(sm[tid], sm[tid+s]); __syncthreads(); }\n"
+        "  float mx = sm[0];\n"
+        "  float sc = (mx > 0.0f) ? (mx / 127.0f) : 1.0f;\n"
+        "  if (tid == 0) scale[(size_t)(*dPos)*kvHeads + head] = sc;\n"
+        "  if (tid < hd) {\n"
+        "    float q = rintf(src[base+tid] / sc);\n"
+        "    q = fmaxf(-127.0f, fminf(127.0f, q));\n"
+        "    dst[(size_t)(*dPos)*kvHeads*hd + base + tid] = (signed char)q;\n"
+        "  }\n"
+        "}\n",
+        "append_dpos_i8.cu", "append_dpos_i8", &gAppendDposI8) != 0) { rc = -2; goto done_i8; }
+    {
+        void* args[6];
+        args[0] = &dstI8; args[1] = &dScale; args[2] = &src; args[3] = &dPos; args[4] = &kvHeads; args[5] = &hd;
+        rc = (cuLaunchKernel(gAppendDposI8, kvHeads, 1, 1, 128, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done_i8:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_download_i8 copies n signed bytes device→host.
+int cu_download_i8(const void* dsrc, signed char* dst, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() == 0 && cuCtxSetCurrent(gCtx) == CUDA_SUCCESS)
+        rc = (cudaMemcpy(dst, dsrc, (size_t)n, cudaMemcpyDeviceToHost) == cudaSuccess) ? 0 : -2;
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_append_dpos writes wkv floats from src into dst at row offset *dPos (device
 // int) — the KV-cache append with a device-side position (graph-capturable).
 int cu_append_dpos(void* dst, const void* src, const void* dPos, int wkv) {

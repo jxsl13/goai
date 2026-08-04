@@ -193,3 +193,90 @@ func GroupedQueryAttentionKVF16DposFlashInto(q *DeviceF32, c *KVCacheF16, qHeads
 	}
 	return nil
 }
+
+// KVCacheI8 is KVCache with int8 storage + a per-(token,head) f32 scale — a QUARTER of the f32
+// bytes (half of f16), the flash decode kernel's bandwidth currency, at the cost of int8 rounding.
+// K/V rows are symmetric-quantized per head on append (scale = max|·|/127); the flash kernel
+// dequantizes tiles (int8·scale) in shared memory, mirroring the f16 path's h2f. Per-head scales
+// (one per head per token) keep accuracy when heads differ in magnitude and are graph-capturable.
+// Decode-only, via the int8 flash attention path (added alongside this type).
+type KVCacheI8 struct {
+	dK, dV              unsafe.Pointer // int8 [maxSeq*kvHeads*hd]
+	sK, sV              unsafe.Pointer // f32  [maxSeq*kvHeads] per-(token,head) scales
+	maxSeq, wkv         int
+	kvHeads, hd         int
+}
+
+// NewKVCacheI8 allocates int8 K/V + f32 per-head scale buffers for maxSeq tokens of kvHeads·hd width.
+func NewKVCacheI8(maxSeq, kvHeads, hd int) (*KVCacheI8, error) {
+	if maxSeq <= 0 || kvHeads <= 0 || hd <= 0 || hd > 128 {
+		return nil, fmt.Errorf("cuda: KVCacheI8 bad dims maxSeq=%d kvHeads=%d hd=%d", maxSeq, kvHeads, hd)
+	}
+	wkv := kvHeads * hd
+	c := &KVCacheI8{maxSeq: maxSeq, wkv: wkv, kvHeads: kvHeads, hd: hd}
+	c.dK = C.cu_alloc_i8(C.int(maxSeq * wkv))
+	c.dV = C.cu_alloc_i8(C.int(maxSeq * wkv))
+	c.sK = C.cu_alloc_f32(C.int(maxSeq * kvHeads))
+	c.sV = C.cu_alloc_f32(C.int(maxSeq * kvHeads))
+	if c.dK == nil || c.dV == nil || c.sK == nil || c.sV == nil {
+		c.Free()
+		return nil, fmt.Errorf("cuda: KVCacheI8 alloc failed")
+	}
+	return c, nil
+}
+
+// AppendDpos quantizes one token's k and v rows ([1,wkv] f32, already RoPE'd) to int8 with per-head
+// scales and writes them at row *pos — the graph-capturable int8 append.
+func (c *KVCacheI8) AppendDpos(k, v *DeviceF32, pos *DevicePos) error {
+	if k.cols != c.wkv || v.cols != c.wkv || k.rows != 1 || v.rows != 1 {
+		return fmt.Errorf("cuda: KVCacheI8 AppendDpos needs [1,%d] k/v, got k%v v%v", c.wkv, k.shape(), v.shape())
+	}
+	if rc := C.cu_append_dpos_i8(c.dK, c.sK, k.ptr, pos.ptr, C.int(c.kvHeads), C.int(c.hd)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheI8 AppendDpos K failed (code %d)", int(rc))
+	}
+	if rc := C.cu_append_dpos_i8(c.dV, c.sV, v.ptr, pos.ptr, C.int(c.kvHeads), C.int(c.hd)); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheI8 AppendDpos V failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// Free releases all four buffers.
+func (c *KVCacheI8) Free() {
+	if c.dK != nil {
+		C.cu_free_f32(c.dK)
+	}
+	if c.dV != nil {
+		C.cu_free_f32(c.dV)
+	}
+	if c.sK != nil {
+		C.cu_free_f32(c.sK)
+	}
+	if c.sV != nil {
+		C.cu_free_f32(c.sV)
+	}
+	c.dK, c.dV, c.sK, c.sV = nil, nil, nil, nil
+}
+
+// downloadKForTest reads the int8 K buffer and its scales back to host and returns the dequantized
+// K rows (row-major [maxSeq*wkv]) — used only by the roundtrip parity test.
+func (c *KVCacheI8) downloadKForTest() ([]float32, error) {
+	q := make([]int8, c.maxSeq*c.wkv)
+	sc := make([]float32, c.maxSeq*c.kvHeads)
+	if rc := C.cu_download_i8(c.dK, (*C.schar)(unsafe.Pointer(&q[0])), C.int(len(q))); rc != 0 {
+		return nil, fmt.Errorf("cuda: download i8 K failed (%d)", int(rc))
+	}
+	if rc := C.cu_download_f32(c.sK, (*C.float)(unsafe.Pointer(&sc[0])), C.int(len(sc))); rc != 0 {
+		return nil, fmt.Errorf("cuda: download K scale failed (%d)", int(rc))
+	}
+	out := make([]float32, c.maxSeq*c.wkv)
+	for tok := 0; tok < c.maxSeq; tok++ {
+		for h := 0; h < c.kvHeads; h++ {
+			s := sc[tok*c.kvHeads+h]
+			for d := 0; d < c.hd; d++ {
+				idx := tok*c.wkv + h*c.hd + d
+				out[idx] = float32(q[idx]) * s
+			}
+		}
+	}
+	return out, nil
+}

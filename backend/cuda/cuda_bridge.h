@@ -242,6 +242,10 @@ int cu_ldmatrix_probe(void* dOut);
 // cu_ldmatrix_probe2: map ldmatrix.x2.b16 for the B fragment (dOut = 64 u32).
 int cu_ldmatrix_probe2(void* dOut);
 int cu_download_u16(const void* dsrc, unsigned short* dst, int n);
+// cu_append_dpos_i8: quantize one [kvHeads*hd] f32 row to int8 (per-head scale max/127) at row *dPos.
+int cu_append_dpos_i8(void* dstI8, void* dScale, const void* src, const void* dPos, int kvHeads, int hd);
+// cu_download_i8: copy n device bytes to host.
+int cu_download_i8(const void* dsrc, signed char* dst, int n);
 // cu_matmul_f16w_acc16: drop-in f32-output twin of cu_matmul_f16w with f16 accumulate (+convert).
 int cu_matmul_f16w_acc16(const void* dA32, const void* dW16, void* dC32, int M, int K, int N, float beta);
 // cu_gemm_f16_pure: pure f16 GEMM (f16 in/out, no per-call conversions) — isolates the A1 conversion cost.
