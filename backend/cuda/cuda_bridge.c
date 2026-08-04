@@ -51,7 +51,7 @@ static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gR
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
-static CUfunction gArgmax = NULL, gLayerNorm = NULL, gLayerNormC = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
+static CUfunction gArgmax = NULL, gTopK = NULL, gLayerNorm = NULL, gLayerNormC = NULL, gAddBias = NULL; // greedy argmax; layernorm; broadcast bias-add
 static CUfunction gCopy2d = NULL; // strided 2D copy (fused-QKV band extraction, llamagpu adapter)
 static int ensure_init(void); // fwd decls (defined later)
 static int compile_kernel(const char* src, const char* name, const char* entry, CUfunction* out);
@@ -100,6 +100,62 @@ static int compile_kernel(const char* src, const char* name, const char* entry, 
 // cu_argmax_f32 returns argmax_i x[i] (greedy token) — one block reduction over
 // the [n] logits on device, downloading only the 4-byte index instead of the full
 // [1,vocab] logit vector (128 KB for vocab=32000) every decode token.
+// cu_topk_f32: the K highest (index, value) pairs of x[0..n) → host outIdx[K]/outVal[K], descending.
+// One block, K passes of the argmax reduction over a SCRATCH COPY (each found max marked -inf so the
+// next pass excludes it) — O(K·n) but K is tiny (<=256) and only K·8 bytes leave the device (vs the
+// whole n-float logits vector). Powers on-device top-k SAMPLING: a penalty-free TopK=k sampler needs
+// only a SUPERSET of the top-k (K>k), so CPU temp/top-p/multinomial on these K candidates is exact.
+// Returns 0 on success. Ties at the K boundary are harmless to callers using k<K.
+int cu_topk_f32(const void* dX, int n, int K, int* outIdx, float* outVal) {
+    static float* gScratch = NULL; static int gScratchN = 0;
+    static int* gOutIdx = NULL; static float* gOutVal = NULL; static int gOutK = 0;
+    int rc = -1;
+    if (K < 1 || K > 256 || n < 1 || K > n) return -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto donetk; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { goto donetk; }
+    if (gScratchN < n) {
+        if (gScratch) cudaFree(gScratch);
+        if (cudaMalloc((void**)&gScratch, (size_t)n * sizeof(float)) != cudaSuccess) { gScratch = NULL; gScratchN = 0; goto donetk; }
+        gScratchN = n;
+    }
+    if (gOutK < K) {
+        if (gOutIdx) cudaFree(gOutIdx);
+        if (gOutVal) cudaFree(gOutVal);
+        if (cudaMalloc((void**)&gOutIdx, (size_t)K * sizeof(int)) != cudaSuccess) { gOutIdx = NULL; gOutK = 0; goto donetk; }
+        if (cudaMalloc((void**)&gOutVal, (size_t)K * sizeof(float)) != cudaSuccess) { gOutVal = NULL; gOutK = 0; goto donetk; }
+        gOutK = K;
+    }
+    if (!gTopK && compile_kernel(
+            "extern \"C\" __global__ void topk_f32(float* s, int n, int K, int* outIdx, float* outVal){\n"
+            "  extern __shared__ char sh[];\n"
+            "  float* sv = (float*)sh; int* si = (int*)(sv + blockDim.x);\n"
+            "  int t = threadIdx.x, nt = blockDim.x;\n"
+            "  for (int k = 0; k < K; k++){\n"
+            "    float bv = -1e30f; int bi = 0;\n"
+            "    for (int i = t; i < n; i += nt){ float v = s[i]; if (v > bv){ bv = v; bi = i; } }\n"
+            "    sv[t] = bv; si[t] = bi; __syncthreads();\n"
+            "    for (int d = nt/2; d > 0; d >>= 1){ if (t < d && sv[t+d] > sv[t]){ sv[t] = sv[t+d]; si[t] = si[t+d]; } __syncthreads(); }\n"
+            "    if (t == 0){ outIdx[k] = si[0]; outVal[k] = sv[0]; s[si[0]] = -1e30f; }\n"
+            "    __syncthreads();\n"
+            "  }\n"
+            "}\n", "topk.cu", "topk_f32", &gTopK) != 0) { goto donetk; }
+    if (cudaMemcpyAsync(gScratch, dX, (size_t)n * sizeof(float), cudaMemcpyDeviceToDevice, gStream) != cudaSuccess) { goto donetk; }
+    {
+        int threads = 256;
+        size_t shmem = (size_t)threads * (sizeof(float) + sizeof(int));
+        void* args[5] = { &gScratch, &n, &K, &gOutIdx, &gOutVal };
+        if (cuLaunchKernel(gTopK, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { goto donetk; }
+        if (cudaMemcpyAsync(outIdx, gOutIdx, (size_t)K * sizeof(int), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donetk; }
+        if (cudaMemcpyAsync(outVal, gOutVal, (size_t)K * sizeof(float), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donetk; }
+        if (cudaStreamSynchronize(gStream) != cudaSuccess) { goto donetk; }
+        rc = 0;
+    }
+donetk:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int cu_argmax_f32(const void* x, int n) {
     static int* dIdx = NULL;
     int rc = -1, host = -1;
