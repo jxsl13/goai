@@ -3312,13 +3312,22 @@ int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "    for (int s = 0; s < 8; s++){ float sc, mn; get_sm(s, blk+4, &sc, &mn); c1[s]=d*sc; c2[s]=dmin*mn; }\n"
         "    const unsigned char* qs = blk + 16;\n"
         "    size_t kb = (size_t)w*256;\n"
-        "    #pragma unroll 4\n"
-        "    for (int e = 0; e < 256; e++){\n"                       // each e: warp writes 32 contiguous n → coalesced
-        "      int g = e >> 6, i = e & 63, isHigh = i >> 5;\n"
-        "      int byteIdx = g*32 + (i & 31), is = 2*g + isHigh;\n"
-        "      unsigned char qb = qs[byteIdx];\n"
-        "      float qv = (float)(isHigh ? (qb >> 4) : (qb & 0xF));\n"
-        "      B[(kb + e)*N + n] = f2h(c1[is]*qv - c2[is]);\n"
+        // Read the 128 nibble bytes as 32 uint (4B) loads — each byte fetched ONCE (both its low+high
+        // nibbles decoded here) instead of the prior 256 single-byte reads that fetched every byte
+        // twice; cuts read transactions ~8x (the 1-byte scattered reads were the dequant's bottleneck).
+        // Bit-identical: byteIdx=G*32+J maps low nibble->element G*64+J (sub-block 2G), high nibble->
+        // G*64+32+J (sub-block 2G+1) — the same (element, value) pairs as the per-e loop.
+        "    #pragma unroll\n"
+        "    for (int u = 0; u < 32; u++){\n"
+        "      unsigned qw = *(const unsigned*)(qs + u*4);\n"
+        "      #pragma unroll\n"
+        "      for (int bb = 0; bb < 4; bb++){\n"
+        "        int byteIdx = u*4 + bb, g = byteIdx >> 5, jj = byteIdx & 31;\n"
+        "        unsigned char qb = (unsigned char)((qw >> (bb*8)) & 0xFFu);\n"
+        "        int isLo = 2*g, isHi = 2*g + 1, eLo = g*64 + jj;\n"
+        "        B[(kb + eLo)*N + n]      = f2h(c1[isLo]*(float)(qb & 0xF) - c2[isLo]);\n"
+        "        B[(kb + eLo + 32)*N + n] = f2h(c1[isHi]*(float)(qb >> 4) - c2[isHi]);\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "}\n",
