@@ -658,9 +658,9 @@ func (rec *Recorder) q4kPrefillWMMA(x *DeviceF32, w *ResidentBQ4K, o *DeviceF32,
 	if rc := C.cu_dequant_q4k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q4k WMMA dequant failed (code %d)", int(rc))
 	}
-	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm on
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in; f16 or f32 accum per f16AccEnabled) — ~2.2x the hand cu_wmma_gemm on
 	// FFN prefill shapes, no M-pad / activation scratch / output copy. Same f16-input tolerance.
-	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(x.ptr, bf16, o.ptr, m, w.k, w.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: q4k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
@@ -679,9 +679,9 @@ func (rec *Recorder) q6kPrefillWMMA(x *DeviceF32, w *ResidentBQ6K, o *DeviceF32,
 	if rc := C.cu_dequant_q6k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q6k WMMA dequant failed (code %d)", int(rc))
 	}
-	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in; f16 or f32 accum per f16AccEnabled) — ~2.2x the hand cu_wmma_gemm
 	// on FFN prefill shapes, and no M-pad / activation scratch / output copy (#906). Same tolerance.
-	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(x.ptr, bf16, o.ptr, m, w.k, w.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: q6k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
@@ -730,9 +730,9 @@ func (rec *Recorder) q5kPrefillWMMA(x *DeviceF32, w *ResidentBQ5K, o *DeviceF32,
 	if rc := C.cu_dequant_q5k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q5k WMMA dequant failed (code %d)", int(rc))
 	}
-	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in; f16 or f32 accum per f16AccEnabled) — ~2.2x the hand cu_wmma_gemm
 	// on FFN prefill shapes, and no M-pad / activation scratch / output copy (#906). Same tolerance.
-	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(x.ptr, bf16, o.ptr, m, w.k, w.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: q5k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
@@ -781,9 +781,9 @@ func (rec *Recorder) q2kPrefillWMMA(x *DeviceF32, w *ResidentBQ2K, o *DeviceF32,
 	if rc := C.cu_dequant_q2k_to_f16(w.q, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q2k WMMA dequant failed (code %d)", int(rc))
 	}
-	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in; f16 or f32 accum per f16AccEnabled) — ~2.2x the hand cu_wmma_gemm
 	// on FFN prefill shapes, and no M-pad / activation scratch / output copy (#906). Same tolerance.
-	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(x.ptr, bf16, o.ptr, m, w.k, w.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: q2k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
@@ -834,9 +834,9 @@ func (rec *Recorder) q3kPrefillWMMA(x *DeviceF32, w *ResidentBQ3K, o *DeviceF32,
 	if rc := C.cu_dequant_q3k_to_f16(w.meta, w.qs, w.hm, bf16, C.int(w.k), C.int(w.n)); rc != 0 {
 		return fmt.Errorf("cuda: q3k WMMA dequant failed (code %d)", int(rc))
 	}
-	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand cu_wmma_gemm
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in; f16 or f32 accum per f16AccEnabled) — ~2.2x the hand cu_wmma_gemm
 	// on FFN prefill shapes, and no M-pad / activation scratch / output copy (#906). Same tolerance.
-	if rc := C.cu_matmul_f16w(x.ptr, bf16, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(x.ptr, bf16, o.ptr, m, w.k, w.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: q3k prefill cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil

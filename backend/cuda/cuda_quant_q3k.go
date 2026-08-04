@@ -126,7 +126,7 @@ func (r *ResidentBQ3K) QMatMulWMMAInto(a, out *DeviceF32) error {
 	}
 	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand
 	// cu_wmma_gemm on prefill shapes; converts the activation internally (#906).
-	if rc := C.cu_matmul_f16w(a.ptr, bf16, out.ptr, C.int(m), C.int(r.k), C.int(r.n), C.float(0)); rc != 0 {
+	if rc := matmulF16wPrefill(a.ptr, bf16, out.ptr, m, r.k, r.n, 0); rc != 0 {
 		return fmt.Errorf("cuda: Q3_K cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
