@@ -121,21 +121,13 @@ func (r *ResidentBQ3K) QMatMulWMMAInto(a, out *DeviceF32) error {
 		return fmt.Errorf("cuda: Q3_K WMMA weight scratch alloc failed")
 	}
 	defer C.cu_free_f32(bf16)
-	af16 := C.cu_alloc_u16(C.int(m * r.k)) // activation [M,K] f16
-	if af16 == nil {
-		return fmt.Errorf("cuda: Q3_K WMMA activation scratch alloc failed")
-	}
-	defer C.cu_free_f32(af16)
 	if rc := C.cu_dequant_q3k_to_f16(r.meta, r.qs, r.hm, bf16, C.int(r.k), C.int(r.n)); rc != 0 {
 		return fmt.Errorf("cuda: Q3_K dequant-to-f16 failed (code %d)", int(rc))
 	}
-	if rc := C.cu_cvt_f32_to_f16(af16, a.ptr, C.long(m*r.k)); rc != 0 {
-		return fmt.Errorf("cuda: Q3_K WMMA activation convert failed (code %d)", int(rc))
-	}
-	rc := C.cu_wmma_gemm(unsafe.Pointer(&wmmaGemmFatbin[0]), C.int(len(wmmaGemmFatbin)),
-		af16, bf16, out.ptr, C.int(m), C.int(r.k), C.int(r.n))
-	if rc != 0 {
-		return fmt.Errorf("cuda: Q3_K WMMA gemm failed (code %d)", int(rc))
+	// cuBLAS f16 tensor-core GEMM (cublasGemmEx, f16 in / f32 accum) — ~2.2x the hand
+	// cu_wmma_gemm on prefill shapes; converts the activation internally (#906).
+	if rc := C.cu_matmul_f16w(a.ptr, bf16, out.ptr, C.int(m), C.int(r.k), C.int(r.n), C.float(0)); rc != 0 {
+		return fmt.Errorf("cuda: Q3_K cuBLAS f16 gemm failed (code %d)", int(rc))
 	}
 	return nil
 }
