@@ -124,15 +124,24 @@ func galoreProjection(g [][]float64, rank int) (proj [][]float64, left bool) {
 		return vecs[:r], true
 	}
 	// GᵀG [n,n]; eigenvectors are the right singular vectors of G.
+	// k-OUTER rank-1 reblock (PS4009): the natural gtg[i][j]=Σ_k g[k][i]·g[k][j] has
+	// k innermost, so g[k][i] strides by n each step — every load a cache miss once
+	// n·m exceeds cache (12.85× slower at m=4096,n=1024). Accumulating one contiguous
+	// row g[k] into gtg at a time makes both operands and the write stream stride-1 in
+	// the inner j loop. BIT-IDENTICAL: each gtg[i][j] still sums over k in ascending
+	// order from a freshly-zeroed cell.
 	gtg := make([][]float64, n)
 	for i := range n {
 		gtg[i] = make([]float64, n)
-		for j := range n {
-			var s float64
-			for k := range m {
-				s += g[k][i] * g[k][j]
+	}
+	for k := range m {
+		gk := g[k]
+		for i := range n {
+			gki := gk[i]
+			gi := gtg[i]
+			for j := range n {
+				gi[j] += gki * gk[j]
 			}
-			gtg[i][j] = s
 		}
 	}
 	_, vecs := linalg.SymEig(gtg)

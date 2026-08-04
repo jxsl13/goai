@@ -55,3 +55,88 @@ func TestGaLoreProjectionRankExact(t *testing.T) {
 		}
 	}
 }
+
+// galoreGtGStrided is the ORIGINAL k-inner form of the GᵀG gram (m>n branch of
+// galoreProjection): gtg[i][j]=Σ_k g[k][i]·g[k][j] with k innermost, so g[k][i]
+// strides by n each step (cache-hostile when n·m exceeds cache).
+func galoreGtGStrided(g [][]float64) [][]float64 {
+	m, n := len(g), len(g[0])
+	gtg := make([][]float64, n)
+	for i := range n {
+		gtg[i] = make([]float64, n)
+		for j := range n {
+			var s float64
+			for k := range m {
+				s += g[k][i] * g[k][j]
+			}
+			gtg[i][j] = s
+		}
+	}
+	return gtg
+}
+
+// galoreGtGKOuter is the k-OUTER rank-1 reblock (PS4009): for each row g[k] (one
+// contiguous read) accumulate the outer product into gtg. BIT-IDENTICAL to the
+// strided form — each gtg[i][j] still sums over k in ascending order from a zeroed
+// cell — but both operands and the write stream are stride-1 in the inner j loop.
+func galoreGtGKOuter(g [][]float64) [][]float64 {
+	m, n := len(g), len(g[0])
+	gtg := make([][]float64, n)
+	for i := range n {
+		gtg[i] = make([]float64, n)
+	}
+	for k := range m {
+		gk := g[k]
+		for i := range n {
+			gki := gk[i]
+			gi := gtg[i]
+			for j := range n {
+				gi[j] += gki * gk[j]
+			}
+		}
+	}
+	return gtg
+}
+
+func galoreRandG(m, n int) [][]float64 {
+	rng := rand.New(rand.NewPCG(11, 22))
+	g := make([][]float64, m)
+	for i := range m {
+		g[i] = make([]float64, n)
+		for j := range n {
+			g[i][j] = rng.NormFloat64()
+		}
+	}
+	return g
+}
+
+// TestGaLoreGtGReblockExact proves the k-outer reblock is BIT-IDENTICAL to the strided form.
+func TestGaLoreGtGReblockExact(t *testing.T) {
+	for _, d := range [][2]int{{64, 48}, {200, 96}, {512, 128}} {
+		g := galoreRandG(d[0], d[1])
+		a, b := galoreGtGStrided(g), galoreGtGKOuter(g)
+		for i := range a {
+			for j := range a[i] {
+				if a[i][j] != b[i][j] {
+					t.Fatalf("m=%d n=%d [%d][%d]: strided %v != kouter %v", d[0], d[1], i, j, a[i][j], b[i][j])
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkGaLoreGtGStrided(b *testing.B) {
+	g := galoreRandG(4096, 1024)
+	b.ResetTimer()
+	for range b.N {
+		_ = galoreGtGStrided(g)
+	}
+}
+
+func BenchmarkGaLoreGtGKOuter(b *testing.B) {
+	g := galoreRandG(4096, 1024)
+	b.ResetTimer()
+	for range b.N {
+		_ = galoreGtGKOuter(g)
+	}
+}
