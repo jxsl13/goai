@@ -248,7 +248,14 @@ func (g *GaLore) Step(grad GradFn) error {
 	g.t++
 	b1c := 1 - math.Pow(g.Beta1, float64(g.t))
 	b2c := 1 - math.Pow(g.Beta2, float64(g.t))
-
+	// GradFn is the caller's and is not documented thread-safe, so gather every gradient SERIALLY
+	// first; the per-parameter projection/Adam/update below touches only that parameter's own
+	// galoreState slot, its own p, and self-contained scratch (matAt/galoreProjection/ProjectDown/Up
+	// each allocate their own buffers), so it fans out — BIT-IDENTICALLY, since each parameter's
+	// arithmetic is untouched and only which goroutine runs it moves. The expensive refresh-step
+	// eigendecomposition (galoreProjection→SymEig) then runs concurrently across parameters.
+	grads := make([]*tensor.Tensor, len(g.Params))
+	work := 0
 	for pi, p := range g.Params {
 		gt := grad(p)
 		if gt == nil {
@@ -257,55 +264,64 @@ func (g *GaLore) Step(grad GradFn) error {
 		if !gt.Shape().Equal(p.Shape()) {
 			return fmt.Errorf("nn: GaLore grad shape %v != param %v", gt.Shape(), p.Shape())
 		}
-		st := g.st[pi]
-
-		// Non-matrix parameters: plain Adam on the full gradient (paper applies the
-		// projection only to 2-D weights).
-		if p.Ndim() != 2 {
-			if st == nil {
-				st = &galoreState{m: make([]float64, p.Numel()), v: make([]float64, p.Numel())}
-				g.st[pi] = st
+		grads[pi] = gt
+		work += p.Numel()
+	}
+	parallelRows(len(g.Params), max(work/max(len(g.Params), 1), 1), func(plo, phi int) {
+		for pi := plo; pi < phi; pi++ {
+			if grads[pi] != nil {
+				g.stepParam(pi, g.Params[pi], grads[pi], b1c, b2c)
 			}
-			for i := range p.Numel() {
-				idx := tensor.Unravel(i, p.Shape())
-				gv := gt.AtF64(idx...)
-				st.m[i] = g.Beta1*st.m[i] + (1-g.Beta1)*gv
-				st.v[i] = g.Beta2*st.v[i] + (1-g.Beta2)*gv*gv
-				upd := (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + g.Eps)
-				p.SetF64(p.AtF64(idx...)-g.LR*upd, idx...)
-			}
-			continue
 		}
+	})
+	return nil
+}
 
-		mat := matAt(gt)
-		rows, cols := p.Shape()[0], p.Shape()[1]
+// stepParam applies the GaLore update to one parameter (own state/scratch, so the loop above bands).
+func (g *GaLore) stepParam(pi int, p, gt *tensor.Tensor, b1c, b2c float64) {
+	st := g.st[pi]
+	// Non-matrix parameters: plain Adam on the full gradient (paper applies the projection only to 2-D).
+	if p.Ndim() != 2 {
 		if st == nil {
-			proj, left := galoreProjection(mat, g.Rank)
-			r := len(proj)
-			red := r * cols
-			if !left {
-				red = rows * r
-			}
-			st = &galoreState{proj: proj, left: left, m: make([]float64, red), v: make([]float64, red)}
+			st = &galoreState{m: make([]float64, p.Numel()), v: make([]float64, p.Numel())}
 			g.st[pi] = st
-		} else if g.Gap > 0 && g.t%g.Gap == 0 {
-			st.proj, st.left = galoreProjection(mat, g.Rank) // refresh subspace; keep moments
 		}
-
-		// project → Adam in subspace → project back.
-		red := galoreProjectDown(mat, st.proj, st.left)
-		upd := make([]float64, len(red))
-		for i := range red {
-			st.m[i] = g.Beta1*st.m[i] + (1-g.Beta1)*red[i]
-			st.v[i] = g.Beta2*st.v[i] + (1-g.Beta2)*red[i]*red[i]
-			upd[i] = (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + g.Eps)
+		for i := range p.Numel() {
+			idx := tensor.Unravel(i, p.Shape())
+			gv := gt.AtF64(idx...)
+			st.m[i] = g.Beta1*st.m[i] + (1-g.Beta1)*gv
+			st.v[i] = g.Beta2*st.v[i] + (1-g.Beta2)*gv*gv
+			upd := (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + g.Eps)
+			p.SetF64(p.AtF64(idx...)-g.LR*upd, idx...)
 		}
-		n := galoreProjectUp(upd, st.proj, st.left, rows, cols)
-		for i := range rows {
-			for j := range cols {
-				p.SetF64(p.AtF64(i, j)-g.LR*g.Scale*n[i][j], i, j)
-			}
+		return
+	}
+	mat := matAt(gt)
+	rows, cols := p.Shape()[0], p.Shape()[1]
+	if st == nil {
+		proj, left := galoreProjection(mat, g.Rank)
+		r := len(proj)
+		red := r * cols
+		if !left {
+			red = rows * r
+		}
+		st = &galoreState{proj: proj, left: left, m: make([]float64, red), v: make([]float64, red)}
+		g.st[pi] = st
+	} else if g.Gap > 0 && g.t%g.Gap == 0 {
+		st.proj, st.left = galoreProjection(mat, g.Rank) // refresh subspace; keep moments
+	}
+	// project → Adam in subspace → project back.
+	red := galoreProjectDown(mat, st.proj, st.left)
+	upd := make([]float64, len(red))
+	for i := range red {
+		st.m[i] = g.Beta1*st.m[i] + (1-g.Beta1)*red[i]
+		st.v[i] = g.Beta2*st.v[i] + (1-g.Beta2)*red[i]*red[i]
+		upd[i] = (st.m[i] / b1c) / (math.Sqrt(st.v[i]/b2c) + g.Eps)
+	}
+	nm := galoreProjectUp(upd, st.proj, st.left, rows, cols)
+	for i := range rows {
+		for j := range cols {
+			p.SetF64(p.AtF64(i, j)-g.LR*g.Scale*nm[i][j], i, j)
 		}
 	}
-	return nil
 }

@@ -4,6 +4,8 @@ import (
 	"math"
 	"math/rand/v2"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 // matmul is a tiny dense [m,k]·[k,n] helper for building low-rank test gradients.
@@ -150,3 +152,27 @@ func benchGaloreProj(b *testing.B, m, n, rank int) {
 }
 func BenchmarkGaloreProj_2048x512_r128(b *testing.B) { benchGaloreProj(b, 2048, 512, 128) }
 func BenchmarkGaloreProj_8192x512_r128(b *testing.B) { benchGaloreProj(b, 8192, 512, 128) }
+
+func benchGaLoreStep(b *testing.B, nParams, dim int) {
+	rng := rand.New(rand.NewPCG(7, 8))
+	params := make([]*tensor.Tensor, nParams)
+	grads := make(map[*tensor.Tensor]*tensor.Tensor, nParams)
+	for i := range params {
+		p := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		gv := tensor.New(tensor.F64, tensor.Shape{dim, dim})
+		gs := gv.Storage().F64()
+		for k := range gs {
+			gs[k] = rng.NormFloat64()
+		}
+		params[i] = p
+		grads[p] = gv
+	}
+	opt := NewGaLore(params, 1e-3, WithGaLoreRank(dim/4), WithGaLoreGap(1)) // Gap=1: refresh every step
+	gf := func(p *tensor.Tensor) *tensor.Tensor { return grads[p] }
+	opt.Step(gf) // warm state
+	b.ResetTimer()
+	for range b.N {
+		opt.Step(gf)
+	}
+}
+func BenchmarkGaLoreStep_8x512(b *testing.B) { benchGaLoreStep(b, 8, 512) }
