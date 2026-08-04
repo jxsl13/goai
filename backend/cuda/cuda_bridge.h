@@ -143,6 +143,7 @@ int cu_qmatmul_q4(const void* dA, const void* dQ, const void* dScales, const voi
 // q[N, K/256 * 144] (144-byte blocks: f16 d + f16 dmin + 12B packed 6-bit scales/mins + 128B
 // nibbles), dequant y = d*sc6*nibble - dmin*min6 per 32-sub-block. K%256==0. DECODE-ONLY (GEMV).
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta);
+int cu_qmatmul_q4k_moe(const void* dA, const void* dQ, void* dOut, int M, int K, int N, const void* dMoeGate, int gateStride);
 // cu_dequant_q4k_to_f16: expand Q4_K weight -> contiguous f16 [K,N] for the tensor-core prefill GEMM.
 int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N);
 int cu_dequant_q2k_to_f16(const void* dQ, void* dBf16, int K, int N);

@@ -3038,7 +3038,7 @@ done:
 // 2p, the high nibbles 2p+1). Dequant y = d*sc6*q - dmin*min6. SAME warp-per-output GEMV shape
 // as cu_qmatmul_q4; 0.5625 B/weight = 25% fewer bytes than the asymmetric Q4 (0.75) at much
 // higher accuracy (super-block-scaled 6-bit sub-scales vs one f32 scale+min per 32). K%256==0.
-static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta, const void* dGate) {
+static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta, const void* dGate, const void* dMoeGate, int gateStride) {
     int rc = -1;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
@@ -3053,11 +3053,12 @@ static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, in
                        "  if (j<4){ *sc=(float)(q[j]&63); *mn=(float)(q[j+4]&63); }\n"
                        "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
                        "}\n"
-                       "extern \"C\" __global__ void qmatmul_q4k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta, const float* gate){\n"
+                       "extern \"C\" __global__ void qmatmul_q4k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta, const float* gate, const float* moeGate, int gateStride){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
                        "  if (warp >= (long)M*N) return;\n"
                        "  int m = (int)(warp / N), n = (int)(warp % N);\n"
+                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f) out[warp]=0.0f; return; }\n"
                        "  const float* ar = a + (size_t)m*K;\n"
                        "  int sbs = K >> 8;\n"
                        "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
@@ -3092,9 +3093,9 @@ static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, in
     {
         long total = (long)M * N * 32;
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[8];
+        void* args[10];
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
-        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta; args[7] = &dGate;
+        args[3] = &M; args[4] = &K; args[5] = &N; args[6] = &beta; args[7] = &dGate; args[8] = &dMoeGate; args[9] = &gateStride;
         rc = (cuLaunchKernel(gQgemv4k, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
@@ -3103,7 +3104,13 @@ done:
 }
 
 int cu_qmatmul_q4k(const void* dA, const void* dQ, void* dOut, int M, int K, int N, float beta) {
-    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, beta, NULL);
+    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, beta, NULL, NULL, 0);
+}
+
+// cu_qmatmul_q4k_moe: MoE-gated Q4_K decode GEMV. Rows whose expert routing weight
+// moeGate[row*gateStride]==0 skip the dequant+dot K-loop and write 0. beta=0.
+int cu_qmatmul_q4k_moe(const void* dA, const void* dQ, void* dOut, int M, int K, int N, const void* dMoeGate, int gateStride) {
+    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, 0.0f, NULL, dMoeGate, gateStride);
 }
 
 // cu_qmatmul_q4k_mt: weight-read-once GEMM for M>1 (prefill/batch). The GEMV above launches
@@ -3353,7 +3360,7 @@ donedq:
 // cu_qmatmul_q4k_swiglu: out = silu(gate) ⊙ (a·dequant(W)) — see cu_qmatmul_q8_swiglu.
 int cu_qmatmul_q4k_swiglu(const void* dA, const void* dQ, const void* dGate, void* dOut,
                           int M, int K, int N) {
-    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, 0.0f, dGate);
+    return q4k_gemv_launch(dA, dQ, dOut, M, K, N, 0.0f, dGate, NULL, 0);
 }
 
 // cu_qmatmul_q4k_pre: out[M,N] = a·dequant(W), W = Q4_K with PRE-DECODED sub-block scales
