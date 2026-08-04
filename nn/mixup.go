@@ -190,16 +190,19 @@ func MixupLoss(ctx *backend.Context, logits, targetsA, targetsB *tensor.Tensor, 
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	termA, err := backend.Execute(ctx, backend.OpMul,
 		[]*tensor.Tensor{ceA, scalarZero(ceA.Dtype(), lambda)}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	termB, err := backend.Execute(ctx, backend.OpMul,
 		[]*tensor.Tensor{ceB, scalarZero(ceB.Dtype(), 1-lambda)}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	out, err := backend.Execute(ctx, backend.OpAdd,
 		[]*tensor.Tensor{termA[0], termB[0]}, nil)
 	if err != nil {

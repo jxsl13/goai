@@ -69,6 +69,7 @@ func quantizeQ5_K(x []float32) []byte {
 		blk := x[b*qkK : (b+1)*qkK]
 		var scales, mins [q4kSubs]float32
 		var maxScale, maxMin float32
+		//perfscan:ignore PS3067 quantizeQ5_K encoder, cold offline path
 		for j := range q4kSubs {
 			lo, hi := blk[j*32], blk[j*32]
 			for i := 1; i < 32; i++ {
@@ -172,6 +173,7 @@ func dotQ5_KRow(row []float32, raw []byte, k int) float64 {
 			base := yo + pair*64
 			xlo, xhi := row[base:base+32], row[base+32:base+64]
 			sh := 2 * pair
+			//perfscan:ignore PS3066 two 32B nibble passes L1-resident; fusion reorders adds vs gated general path
 			for l, q := range ql {
 				h := qh[l] >> sh
 				lo := int(q&0xF) | int(h&1)<<4

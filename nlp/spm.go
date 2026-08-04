@@ -69,6 +69,7 @@ func NewSPM(vocab []UnigramPiece, opts ...SPMOption) (*SPM, error) {
 	for i := range s.byteID {
 		s.byteID[i] = -1
 	}
+	//perfscan:ignore PS3001 tokenizer vocab build, one-time
 	for i, p := range vocab {
 		if _, dup := s.id[p.Piece]; dup {
 			return nil, fmt.Errorf("nlp: SPM duplicate piece %q", p.Piece)
@@ -240,6 +241,7 @@ func (s *SPM) spmBounds(str string) []int {
 	start, end, prev := sp.start[:m], sp.end[:m], sp.prev[:m]
 	next, gen, alive := sp.next[:m], sp.gen[:m], sp.alive[:m]
 	clear(gen) // pooled buffer is dirty; gen relies on zero-init (the lgen/rgen generation guard)
+	//perfscan:ignore PS4004 Viterbi lattice init, pooled buffers, memory-streaming
 	for k := 0; k < m; k++ {
 		start[k] = starts[k]
 		if k+1 < m {
@@ -318,6 +320,7 @@ func (s *SPM) spmBounds(str string) []int {
 func (s *SPM) Decode(ids []int) string {
 	var b strings.Builder
 	b.Grow(len(ids) * 4) // pre-size (§T929): avoid the log(n) growth-buffer churn; Grow is capacity-only, output byte-identical
+	//perfscan:ignore PS3001 Decode string-build already optimized (Grow/Sscanf-gate)
 	for _, id := range ids {
 		if id < 0 || id >= len(s.pieces) {
 			if t, ok := s.specials.textForID(id); ok {

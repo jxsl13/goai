@@ -168,6 +168,7 @@ func init() {
 	}
 	gridMap := [3]float32{-1, 0, 1}
 	for e := range 2048 {
+		//perfscan:ignore PS3040 IQ1 grid codebook decode in init, one-time
 		for b := range 2 {
 			hi := unhex(iq1GridHex[e*4+b*2])
 			lo := unhex(iq1GridHex[e*4+b*2+1])

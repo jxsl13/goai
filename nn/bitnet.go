@@ -14,6 +14,8 @@ import (
 // [lo,hi) sub-range concurrently. Bodies must write only within their own range (no shared
 // writes / no cross-range reduction), so the result is identical to the serial loop. Runs
 // serial below a small work threshold to avoid fork/join overhead on tiny tensors.
+//
+//perfscan:ignore PS3048,PS3061 QAT-fill fan-out helper; fill is fraction of matmul, worker-floor tuning resource-only | same helper; fanout-s
 func parallelRange(n int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw <= 1 || n < 1<<14 {
@@ -21,6 +23,7 @@ func parallelRange(n int, body func(lo, hi int)) {
 		return
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 static-chunk barrier; E-core imbalance <1pct of matmul-dominated forward
 	chunk := (n + nw - 1) / nw
 	for lo := 0; lo < n; lo += chunk {
 		hi := lo + chunk
@@ -40,6 +43,8 @@ func parallelRange(n int, body func(lo, hi int)) {
 // n·workPerItem (not n) so a small row count with heavy rows (e.g. 512 rows of 4096) still
 // fans out. body must touch only rows in its [lo,hi) range, so the result is identical to
 // the serial loop.
+//
+//perfscan:ignore PS3048,PS3061 parallelRows fan-out; act-fill fraction of matmul, tuning resource-only | same helper; fanout worker-count tun
 func parallelRows(n, workPerItem int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw <= 1 || n < 2 || n*workPerItem < 1<<14 {
@@ -50,6 +55,7 @@ func parallelRows(n, workPerItem int, body func(lo, hi int)) {
 		nw = n
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 static-chunk barrier in parallelRows; low-leverage training fill
 	chunk := (n + nw - 1) / nw
 	for lo := 0; lo < n; lo += chunk {
 		hi := lo + chunk
@@ -200,11 +206,13 @@ func (l *BitLinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Ten
 			return nil, err
 		}
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only; one matmul dispatch per forward
 	y, err := bitExec(ctx, backend.OpMatMul, nil, h, weff)
 	if err != nil {
 		return nil, err
 	}
 	if l.B != nil {
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only; one bias dispatch per forward
 		return bitExec(ctx, backend.OpAddBias, nil, y, l.B)
 	}
 	return y, nil
@@ -263,6 +271,7 @@ func bitTernaryFill(w, q *tensor.Tensor) float64 {
 		case tensor.F64:
 			wd, qd := w.Storage().F64(), q.Storage().F64()
 			var sum float64
+			//perfscan:ignore PS3010 absmean sum must match serial oracle; reassoc breaks parity, low-leverage
 			for i := range n {
 				sum += math.Abs(wd[i])
 			}
@@ -272,8 +281,10 @@ func bitTernaryFill(w, q *tensor.Tensor) float64 {
 			// shared scale, with no cross-element reduction — so a disjoint-range fan-out is
 			// bit-identical to the serial loop (pass 1's gamma stays serial for an exact sum).
 			parallelRange(n, func(lo, hi int) {
+				//perfscan:ignore PS5001 divide feeds math.Round quantizer; reciprocal-hoist unsafe per PS5001 rule
 				for i := lo; i < hi; i++ {
 					t := math.Round(wd[i] / scale)
+					//perfscan:ignore PS3077,PS3082 ternary clamp, fraction of matmul; builtin min/max signed-zero parity risk | same clamp; low-leverage, bit-exa
 					qd[i] = scale * math.Max(-1, math.Min(1, t))
 				}
 			})
@@ -281,14 +292,17 @@ func bitTernaryFill(w, q *tensor.Tensor) float64 {
 		case tensor.F32:
 			wd, qd := w.Storage().F32(), q.Storage().F32()
 			var sum float64
+			//perfscan:ignore PS3010 F32 absmean sum, oracle-exact serial; small fraction of matmul
 			for i := range n {
 				sum += math.Abs(float64(wd[i]))
 			}
 			gamma := sum / float64(n)
 			scale := math.Max(gamma, bitnetScaleFloor)
 			parallelRange(n, func(lo, hi int) {
+				//perfscan:ignore PS5001 F32 divide feeds math.Round; hoist unsafe per PS5001 rule
 				for i := lo; i < hi; i++ {
 					t := math.Round(float64(wd[i]) / scale)
+					//perfscan:ignore PS3077,PS3082 F32 ternary clamp; low-leverage, parity-constrained | same F32 clamp; low-leverage/parity
 					qd[i] = float32(scale * math.Max(-1, math.Min(1, t)))
 				}
 			})
@@ -304,6 +318,7 @@ func bitTernaryFill(w, q *tensor.Tensor) float64 {
 	for i := range n {
 		c := tensor.Unravel(i, w.Shape())
 		t := math.Round(w.AtF64(c...) / scale)
+		//perfscan:ignore PS3077,PS3082 non-contiguous fallback; AtF64/SetF64-dispatch-dominated, minmax negligible | same fallback path; dispatch-dom
 		q.SetF64(scale*math.Max(-1, math.Min(1, t)), c...)
 	}
 	return gamma
@@ -346,8 +361,11 @@ func bitAct8Fill(x, q *tensor.Tensor) {
 							absmax = a
 						}
 					}
+					//perfscan:ignore PS3082 per-row scale math.Max, once per row, negligible
 					s := 127 / math.Max(absmax, bitnetScaleFloor)
+					//perfscan:ignore PS5001 v/s must match serial oracle; act-fill fraction of matmul
 					for c := range cols {
+						//perfscan:ignore PS3077,PS3082 act clamp; low-leverage, bit-exact-oracle constrained | same act clamp; low-leverage/parity
 						v := math.Max(-128, math.Min(127, math.Round(xd[base+c]*s)))
 						qd[base+c] = v / s
 					}
@@ -365,8 +383,11 @@ func bitAct8Fill(x, q *tensor.Tensor) {
 							absmax = a
 						}
 					}
+					//perfscan:ignore PS3082 F32 per-row scale math.Max, once per row, negligible
 					s := 127 / math.Max(absmax, bitnetScaleFloor)
+					//perfscan:ignore PS5001 F32 v/s must match oracle; act-fill fraction of matmul
 					for c := range cols {
+						//perfscan:ignore PS3077,PS3082 F32 act clamp; low-leverage/parity | same F32 clamp; low-leverage/parity
 						v := math.Max(-128, math.Min(127, math.Round(float64(xd[base+c])*s)))
 						qd[base+c] = float32(v / s)
 					}
@@ -382,8 +403,10 @@ func bitAct8Fill(x, q *tensor.Tensor) {
 				absmax = a
 			}
 		}
+		//perfscan:ignore PS3082 non-contiguous fallback; AtF64-dispatch-dominated
 		s := 127 / math.Max(absmax, bitnetScaleFloor)
 		for c := range cols {
+			//perfscan:ignore PS3077,PS3082 fallback clamp; per-element dispatch-dominated | same fallback clamp; dispatch-dominated
 			v := math.Max(-128, math.Min(127, math.Round(x.AtF64(r, c)*s)))
 			q.SetF64(v/s, r, c)
 		}
@@ -400,14 +423,17 @@ func BitNetBitsPerWeight() float64 { return math.Log2(3) }
 // backward identity into v (OpStopGradient has a zero-grad VJP), the same idiom as
 // LSQQuantize and FSQ.Quantize.
 func bitSTE(ctx *backend.Context, v, q *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 bitSTE variadic-pack alloc, resource-only, one dispatch/forward
 	delta, err := bitExec(ctx, backend.OpSub, nil, q, v)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only, one dispatch/forward
 	deltaSG, err := bitExec(ctx, backend.OpStopGradient, nil, delta)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only, one dispatch/forward
 	return bitExec(ctx, backend.OpAdd, nil, v, deltaSG)
 }
 

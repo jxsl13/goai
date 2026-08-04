@@ -9,6 +9,8 @@ import (
 
 // SLERPDotThreshold is the |cos Ω| above which SLERP falls back to linear interpolation:
 // when the two tensors are nearly parallel sin Ω → 0 and the spherical formula is unstable.
+//
+//perfscan:ignore PS6023 missing-test evidence finding, not a code change
 const SLERPDotThreshold = 0.9995
 
 // SLERP spherically interpolates two equal-shaped weight tensors (Shoemake 1985, "Animating

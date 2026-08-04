@@ -14,6 +14,7 @@ func dotQ4KRowAsm(x *float32, raw *byte, scales *float32, nsb int) float32
 
 func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 	nsb := (k + qkK - 1) / qkK
+	//perfscan:ignore PS3028 hand-AVX Q4_K dot at-ceiling; absent in this worktree
 	scales := make([]float32, nsb*4*4) // 4 pairs × 4 vals per super-block
 	for sb := 0; sb < nsb; sb++ {
 		blk := raw[sb*q4kBlockSize : sb*q4kBlockSize+q4kBlockSize]

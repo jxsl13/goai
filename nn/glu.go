@@ -76,23 +76,28 @@ func (g *GLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	if x.Shape()[x.Ndim()-1] != g.Wgate.Shape()[0] {
 		return nil, fmt.Errorf("nn: %s in-dim %d != x last %d", g.name, g.Wgate.Shape()[0], x.Shape()[x.Ndim()-1])
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc; measured no ns/op separation (p=0.143)
 	gate, err := g.exec(ctx, backend.OpMatMul, x, g.Wgate)
 	if err != nil {
 		return nil, err
 	}
 	if g.act != backend.OpInvalid { // Bilinear leaves the gate linear
+		//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 		if gate, err = g.exec(ctx, g.act, gate); err != nil {
 			return nil, err
 		}
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	up, err := g.exec(ctx, backend.OpMatMul, x, g.Wup)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	h, err := g.exec(ctx, backend.OpMul, gate, up)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	return g.exec(ctx, backend.OpMatMul, h, g.Wdown)
 }
 

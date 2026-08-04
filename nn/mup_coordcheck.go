@@ -244,6 +244,7 @@ func (m *coordMLP) forward(ctx *backend.Context, x *tensor.Tensor) (pre []*tenso
 			return nil, nil, err
 		}
 		pre = append(pre, z)
+		//perfscan:ignore PS3038 coord-check diagnostic dispatch; resource-only slice alloc
 		act, err := backend.Execute(ctx, backend.OpReLU, []*tensor.Tensor{z}, nil)
 		if err != nil {
 			return nil, nil, err
@@ -254,6 +255,7 @@ func (m *coordMLP) forward(ctx *backend.Context, x *tensor.Tensor) (pre []*tenso
 	if err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3038 coord-check diagnostic dispatch; resource-only slice alloc
 	out, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{raw, m.mult}, nil)
 	if err != nil {
 		return nil, nil, err
@@ -263,14 +265,17 @@ func (m *coordMLP) forward(ctx *backend.Context, x *tensor.Tensor) (pre []*tenso
 
 // mseLoss is the sum of squared errors between logit and target, differentiable through ctx.
 func mseLoss(ctx *backend.Context, logit, tgt *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 mseLoss diagnostic dispatch; resource-only slice alloc
 	diff, err := backend.Execute(ctx, backend.OpSub, []*tensor.Tensor{logit, tgt}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 mseLoss diagnostic dispatch; resource-only slice alloc
 	sq, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{diff[0], diff[0]}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 mseLoss diagnostic dispatch; resource-only slice alloc
 	s, err := backend.Execute(ctx, backend.OpSum, []*tensor.Tensor{sq[0]}, nil)
 	if err != nil {
 		return nil, err
@@ -311,7 +316,9 @@ func CoordCheckStable(t *CoordTable) ([]float64, error) {
 			if !(v > 0) || math.IsInf(v, 0) || math.IsNaN(v) {
 				return nil, fmt.Errorf("nn: CoordCheckStable non-positive RMS %g at [%d][%d]", v, wi, l)
 			}
+			//perfscan:ignore PS3082 minmax over tiny width table; diagnostic-only
 			mins[l] = math.Min(mins[l], v)
+			//perfscan:ignore PS3082 minmax over tiny width table; diagnostic-only
 			maxs[l] = math.Max(maxs[l], v)
 		}
 	}
@@ -326,6 +333,7 @@ func CoordCheckStable(t *CoordTable) ([]float64, error) {
 func rms(t *tensor.Tensor) float64 {
 	n := t.Numel()
 	var s float64
+	//perfscan:ignore PS1001 rms walk in coord-check diagnostic; cold path
 	for i := 0; i < n; i++ {
 		v := t.AtF64(tensor.Unravel(i, t.Shape())...)
 		s += v * v
@@ -335,6 +343,7 @@ func rms(t *tensor.Tensor) float64 {
 
 // fill sets every element of t to v.
 func fill(t *tensor.Tensor, v float64) {
+	//perfscan:ignore PS1001 fill helper in diagnostic; cold path
 	for i := 0; i < t.Numel(); i++ {
 		t.SetF64(v, tensor.Unravel(i, t.Shape())...)
 	}
@@ -344,6 +353,7 @@ func fill(t *tensor.Tensor, v float64) {
 func randTensor(shape tensor.Shape, std float64, seed uint64) *tensor.Tensor {
 	t := tensor.New(tensor.F64, shape)
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
+	//perfscan:ignore PS1001 randTensor one-time diagnostic init; cold path
 	for i := 0; i < t.Numel(); i++ {
 		t.SetF64(rng.NormFloat64()*std, tensor.Unravel(i, shape)...)
 	}

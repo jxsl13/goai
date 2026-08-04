@@ -144,6 +144,7 @@ func (t *Tape) runBackward() error {
 	if t.hooks != nil {
 		t.hookFired = make(map[*tensor.Tensor]bool, len(t.hooks))
 	}
+	//perfscan:ignore PS3003 vjps[op] lookup once per node negligible vs the VJP tensor op it selects
 	for i := len(t.nodes) - 1; i >= 0; i-- {
 		n := t.nodes[i]
 		// Gradient hooks on n's outputs fire HERE: every consumer of those

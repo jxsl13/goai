@@ -132,6 +132,7 @@ func (p *EntropyPatcher) Entropies(ctx *backend.Context, data []byte) ([]float64
 		return nil, err
 	}
 	lc := logits.Contiguous()
+	//perfscan:ignore PS3065 entropy postproc ~1/vocab of preceding byte-LM forward; negligible share
 	for i := 1; i < len(data); i++ {
 		h[i] = ByteEntropy(logitsRow(lc, i-1, bltVocab, bltVocab))
 	}
@@ -555,14 +556,17 @@ func (m *BLT) embed(ctx *backend.Context, data []byte) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	for j, n := range m.Config.HashNGrams {
+		//perfscan:ignore PS6016 resource-only shape-literal alloc in ngram loop
 		idx := tensor.New(m.HashEmb[j].Dtype(), tensor.Shape{seq})
 		for i, id := range hashNGramIDs(data, n, m.Config.HashVocab) {
 			idx.SetF64(float64(id), i)
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; embed/matmul-dominated
 		eh, err := exec1(ctx, backend.OpEmbed, nil, m.HashEmb[j], idx)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; embed/matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, eh); err != nil {
 			return nil, err
 		}
@@ -629,46 +633,58 @@ func runByteBlocks(ctx *backend.Context, x *tensor.Tensor, blocks []*Block, wind
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		q, err := exec1(ctx, backend.OpMatMul, nil, h, b.Attn.Wq)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		k, err := exec1(ctx, backend.OpMatMul, nil, h, b.Attn.Wk)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		v, err := exec1(ctx, backend.OpMatMul, nil, h, b.Attn.Wv)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; MHA-dominated block loop
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: b.Attn.Heads, Causal: true, Window: window}, q, k, v)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if a, err = exec1(ctx, backend.OpMatMul, nil, a, b.Attn.Wo); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
 		if h, err = b.LN2.Forward(ctx, x); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W1); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B1); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; GELU/matmul-dominated block loop
 		if h, err = exec1(ctx, backend.OpGELU, nil, h); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if h, err = exec1(ctx, backend.OpMatMul, nil, h, b.W2); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if h, err = exec1(ctx, backend.OpAddBias, nil, h, b.B2); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only variadic-pack alloc; matmul-dominated block loop
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, h); err != nil {
 			return nil, err
 		}
@@ -687,11 +703,13 @@ func bltPoolMask(dtype tensor.Dtype, lens []int, seq int) (mnorm, span *tensor.T
 	span = tensor.New(dtype, tensor.Shape{p, seq})
 	start := 0
 	for i, l := range lens {
+		//perfscan:ignore PS1005 host pool-mask build O(P*seq) << cross-attn matmuls; small share
 		for j := range seq {
 			if j < start || j >= start+l {
 				span.SetF64(bltNegInf, i, j)
 			}
 		}
+		//perfscan:ignore PS1005 host pool-mnorm build << cross-attn matmuls; small share
 		for j := start; j < start+l; j++ {
 			mnorm.SetF64(1/float64(l), i, j)
 		}
@@ -719,6 +737,7 @@ func bltDecoderMask(dtype tensor.Dtype, lens []int, seq int) (mask, gate *tensor
 		start += l
 	}
 	for i := range seq {
+		//perfscan:ignore PS1005 host decoder-mask build << decoder cross-attn matmuls; small share
 		for k := range p {
 			if k >= pidx[i] {
 				mask.SetF64(bltNegInf, i, k)
@@ -806,7 +825,9 @@ func newByteBlocks(n, dim, heads int, eps float64, seed uint64) ([]*Block, error
 		attn.Causal = true
 		blocks = append(blocks, &Block{
 			LN1: bltLN(dim, eps), LN2: bltLN(dim, eps), Attn: attn,
+			//perfscan:ignore PS6016 model construction one-time; block-init loop, cold path
 			W1: bltRand(s+4, dim, 4*dim), B1: tensor.New(tensor.F64, tensor.Shape{4 * dim}),
+			//perfscan:ignore PS6016 model construction one-time; block-init loop, cold path
 			W2: bltRand(s+5, 4*dim, dim), B2: tensor.New(tensor.F64, tensor.Shape{dim}),
 		})
 	}
@@ -839,6 +860,8 @@ func bltLN(d int, eps float64) *nn.LayerNorm {
 
 // bytesToInts widens a byte sequence to the []int token form the GPT backbone
 // consumes (byte value = token id; tokenizer-free).
+//
+//perfscan:ignore PS3033 one alloc per forward not per-item; alloc-only, ns marginal
 func bytesToInts(data []byte) []int {
 	out := make([]int, len(data))
 	for i, b := range data {

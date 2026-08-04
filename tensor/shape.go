@@ -71,6 +71,7 @@ func (s Shape) String() string {
 	}
 	var b strings.Builder
 	b.WriteByte('(')
+	//perfscan:ignore PS2002 cold debug String(); loop=ndim ~2-5, no Grow gain
 	for i, d := range s {
 		if i > 0 {
 			b.WriteString(", ")

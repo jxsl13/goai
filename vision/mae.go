@@ -392,6 +392,7 @@ func (m *MAE) patchify(img *tensor.Tensor) (*tensor.Tensor, error) {
 	n := grid * grid
 	read := makeReader(img.Contiguous())
 	data := make([]float64, 0, n*m.channels*p*p)
+	//perfscan:ignore PS3032 memory-streaming gather, no arith/FMA; once-per-image prep, encoder-dominated
 	for py := range grid {
 		for px := range grid {
 			for c := range m.channels {

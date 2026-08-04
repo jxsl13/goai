@@ -50,6 +50,7 @@ func GemmaFromHF(ts map[string]*tensor.Tensor, cfg GemmaConfig) (*Gemma, error) 
 	}
 
 	m := &Gemma{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 HF Gemma loader, one-time model load
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

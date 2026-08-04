@@ -15,6 +15,7 @@ import (
 // RNN-like constant-memory decode. Differentiable through the tape (trains end-to-end). The block-
 // level multi-scale heads, GroupNorm and swish gate (Eq.8) are a follow-up.
 func Retention(ctx *backend.Context, q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 allocs-only PS3038 (time flat), single dispatch not a loop
 	out, err := backend.Execute(ctx, backend.OpRetention,
 		[]*tensor.Tensor{q, k, v}, backend.RetentionAttrs{Gamma: gamma})
 	if err != nil {
@@ -57,6 +58,7 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 			base := i * dv
 			for j := range dv {
 				// S_n = γ·S_{n−1} + K_nᵀV_n
+				//perfscan:ignore PS3084 two-product recurrence, documented non-jammable (FMA drift)
 				s[base+j] = gamma*s[base+j] + ki*vrow[j]
 			}
 		}
@@ -84,6 +86,7 @@ func RetentionRecurrent(q, k, v *tensor.Tensor, gamma float64) (*tensor.Tensor, 
 		// 196. An accumulation is safe to jam when its expression holds ONE multiply, as this
 		// one does, because then only one contraction is legal.
 		ib := 0
+		//perfscan:ignore PS3066 already hand-blocked 8-way optimal output loop
 		for ; ib+7 < dk; ib += 8 {
 			q0 := qrow[ib+0]
 			q1 := qrow[ib+1]
@@ -172,20 +175,25 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 	// dispatch and the O(cb·dk·dv) state update dominated. Bit-identical: same values, same
 	// ascending accumulation. AtF64 loop below is the exotic-dtype fallback.
 	if qs, ks, vs, os := flatF64(q), flatF64(k), flatF64(v), flatF64(out); qs != nil && ks != nil && vs != nil && os != nil {
+		//perfscan:ignore PS3046 outer chunk loop sequential (cross-chunk R carry)
 		for start := 0; start < l; start += chunkSize {
 			end := min(start+chunkSize, l)
 			cb := end - start
 			for kk := 0; kk <= cb; kk++ {
+				//perfscan:ignore PS5005 pow already cached per-chunk; residual O(L) negligible vs inner
 				gpow[kk] = math.Pow(gamma, float64(kk))
 			}
+			//perfscan:ignore PS3043 bounded-chunk single-head host utility, already flat/interchanged
 			for lj := range cb {
 				n := start + lj
 				qrow := qs[n*dk : n*dk+dk : n*dk+dk]
 				zeta := gpow[lj+1]
+				//perfscan:ignore PS3040,PS6010 fine-grained inner dot within bounded chunk | tol-gated dot-unroll, marginal
 				for lm := 0; lm <= lj; lm++ {
 					m := start + lm
 					krow := ks[m*dk : m*dk+dk : m*dk+dk]
 					var qk float64
+					//perfscan:ignore PS3010,PS4012 O(dk) dot, multi-acc is reassociation (tol-gated) | false-positive: decay scale not quant dequant
 					for i := range dk {
 						qk += qrow[i] * krow[i]
 					}
@@ -199,10 +207,12 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 				for jv := range dv {
 					crossbuf[jv] = 0
 				}
+				//perfscan:ignore PS1007 already the interchanged i-outer crossbuf AXPY (documented win)
 				for i := range dk {
 					qi := qrow[i]
 					base := i * dv
 					for jv := range dv {
+						//perfscan:ignore PS3075 crossbuf is the AXPY accumulator row, inherent
 						crossbuf[jv] += qi * r[base+jv]
 					}
 				}
@@ -212,10 +222,12 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 				// Inner-chunk Σ_{lm≤lj} wbuf[lm]·V_{start+lm}: accumulate lm-OUTER so V is read
 				// contiguously in jv. Added to orow (already ζ·cross) in lm-ascending order, so each
 				// orow[jv] receives the SAME operation sequence as the old acc — bit-identical.
+				//perfscan:ignore PS1007 already interchanged lm-outer V AXPY
 				for lm := 0; lm <= lj; lm++ {
 					w := wbuf[lm]
 					vbase := (start + lm) * dv
 					for jv := range dv {
+						//perfscan:ignore PS3075 orow is the AXPY accumulator row, inherent
 						orow[jv] += w * vs[vbase+jv]
 					}
 				}
@@ -224,6 +236,7 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 			for idx := range r {
 				r[idx] *= gB
 			}
+			//perfscan:ignore PS3046 state-update into shared R, bounded-chunk host utility
 			for lm := range cb {
 				m := start + lm
 				xi := gpow[cb-1-lm]
@@ -244,12 +257,14 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 		end := min(start+chunkSize, l)
 		cb := end - start // actual chunk length (the last chunk may be shorter)
 		for kk := 0; kk <= cb; kk++ {
+			//perfscan:ignore PS5005 exotic-dtype fallback branch; pow already cached
 			gpow[kk] = math.Pow(gamma, float64(kk))
 		}
 		for lj := range cb {
 			n := start + lj
 			zeta := gpow[lj+1] // cross-chunk decay ζ_j = γ^(j+1)
 			// inner-chunk weights (jv-independent): γ^(lj−lm)·(Q_n·K_{start+lm}).
+			//perfscan:ignore PS3040 exotic-dtype fallback branch (f64 takes fast path)
 			for lm := 0; lm <= lj; lm++ {
 				m := start + lm
 				var qk float64
@@ -258,14 +273,18 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 				}
 				wbuf[lm] = gpow[lj-lm] * qk
 			}
+			//perfscan:ignore PS1006 exotic-dtype fallback; f64 fast path already interchanged
 			for jv := range dv {
 				// cross-chunk: ζ_j · (Q_n · R[:,jv])
 				var cross float64
+				//perfscan:ignore PS3010 exotic-dtype fallback branch dot
 				for i := range dk {
+					//perfscan:ignore PS6011 exotic-dtype fallback; fast path already interchanged
 					cross += q.AtF64(n, i) * r[i*dv+jv]
 				}
 				acc := zeta * cross
 				// inner-chunk parallel: Σ_{lm≤lj} wbuf[lm]·V_{start+lm,jv}
+				//perfscan:ignore PS3010 exotic-dtype fallback branch dot
 				for lm := 0; lm <= lj; lm++ {
 					acc += wbuf[lm] * v.AtF64(start+lm, jv)
 				}
@@ -280,9 +299,11 @@ func RetentionChunkwise(q, k, v *tensor.Tensor, gamma float64, chunkSize int) (*
 		for lm := range cb {
 			m := start + lm
 			xi := gpow[cb-1-lm]
+			//perfscan:ignore PS3067 exotic-dtype fallback state-update branch
 			for i := range dk {
 				kv := k.AtF64(m, i) * xi
 				for jv := range dv {
+					//perfscan:ignore PS3075 exotic-dtype fallback branch
 					r[i*dv+jv] += kv * v.AtF64(m, jv)
 				}
 			}

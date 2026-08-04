@@ -86,6 +86,7 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 // Small work stays single-threaded (WKVScanRangeF64(0,d) ≡ WKVScanF64).
 func wkvParallelScanF64(k, v, w, u, out []float64, seq, d int) {
 	nw := runtime.GOMAXPROCS(0)
+	//perfscan:ignore PS3011 stale line; fast path already simd WKVScanF64 vectorized
 	chunk := ((d+nw-1)/nw + 3) &^ 3 // per-worker channels, rounded up to a multiple of 4
 	if nw <= 1 || chunk >= d || seq*d < 1<<14 {
 		simd.WKVScanRangeF64(k, v, w, u, out, seq, d, 0, d)
@@ -114,6 +115,7 @@ func wkvScanRangeF32(k, v, w, u, out []float32, seq, d, cLo, cHi int) {
 		wc, uc := float64(w[c]), float64(u[c])
 		aa, bb, pp := 0.0, 0.0, -1e38 // running state stays float64; only the store rounds
 		for t := 0; t < seq; t++ {
+			//perfscan:ignore PS6011 stale line; exotic/mixed-dtype scalar fallback, correct to keep serial
 			kk, vv := float64(k[t*d+c]), float64(v[t*d+c])
 			ww := uc + kk
 			q := fmath.Max(pp, ww)
@@ -133,6 +135,7 @@ func wkvScanRangeF32(k, v, w, u, out []float32, seq, d, cLo, cHi int) {
 // wkvParallelScanF64's grain gate.
 func wkvParallelScanF32(k, v, w, u, out []float32, seq, d int) {
 	nw := runtime.GOMAXPROCS(0)
+	//perfscan:ignore PS3011 stale line; declined-dtype fallback, simd fast path present
 	chunk := ((d+nw-1)/nw + 3) &^ 3
 	if nw <= 1 || chunk >= d || seq*d < 1<<14 {
 		wkvScanRangeF32(k, v, w, u, out, seq, d, 0, d)

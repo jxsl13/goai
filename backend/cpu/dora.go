@@ -40,10 +40,12 @@ func doraWeightKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 		os := out.Storage().F64()
 		parallelWork(cols, 2*rows, func(jlo, jhi int) {
 			w := jhi - jlo
+			//perfscan:ignore PS6008 per-worker nrm scratch bounded by GOMAXPROCS; sanctioned
 			nrm := make([]float64, w)
 			for i := 0; i < rows; i++ {
 				vrow := vs[i*cols+jlo : i*cols+jhi]
 				for jj, x := range vrow {
+					//perfscan:ignore PS3017 bounds-check micro-opt in already-parallel memory-bound kernel
 					nrm[jj] += x * x
 				}
 			}
@@ -69,11 +71,13 @@ func doraWeightKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 		os := out.Storage().F32()
 		parallelWork(cols, 2*rows, func(jlo, jhi int) {
 			w := jhi - jlo
+			//perfscan:ignore PS6008 per-worker nrm scratch bounded by GOMAXPROCS; sanctioned
 			nrm := make([]float64, w)
 			for i := 0; i < rows; i++ {
 				base := i*cols + jlo
 				for jj := 0; jj < w; jj++ {
 					x := float64(vs[base+jj])
+					//perfscan:ignore PS3075 memory-streaming norm accum in already-parallel bandwidth-bound kernel
 					nrm[jj] += x * x
 				}
 			}

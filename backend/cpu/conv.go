@@ -16,6 +16,7 @@ import (
 // f64 (§V10); f32 narrows once on store. Pooling stays on the reference
 // kernels via fallback (§I4) — conv is where the GEMM payoff lives.
 
+//perfscan:ignore PS6004 error-path Errorf, cold
 func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 && len(in) != 3 {
 		return nil, fmt.Errorf("cpu: conv2d wants (x, w[, bias]), got %d inputs", len(in))
@@ -222,6 +223,7 @@ func conv2dF32Native(ctx *backend.Context, xc, wcont, bias *tensor.Tensor, g con
 			if reused && g.p > 0 { // the pool's window arrives zeroed; only a reused one needs clearing
 				clear(cols[:(cend-cbase)*k])
 			}
+			//perfscan:ignore PS3052 im2col already branch-hoisted contiguous-copy fast path
 			im2colFillBand(cols, xs, cbase, cend, cbase, k, g.ho, g.wo, g.c, g.kh, g.kw, g.s, g.p, g.h, g.wd)
 			gemmF32Rows(cols, wt, prod, 0, cend-cbase, k, f)
 			for r := cbase; r < cend; r++ {
@@ -374,6 +376,7 @@ func conv1FilterBand[T normFloat](prod []float64, xs []T, wt []float64, lo, hi, 
 				rowBase := ((ni*c+ci)*h+oy*s+ky)*wd + ix0
 				src := xs[rowBase : rowBase+kw : rowBase+kw]
 				w := wt[kk : kk+kw : kk+kw]
+				//perfscan:ignore PS3010 line out of range (file 253 lines), stale; conv already GEMM-optimized
 				for i, xv := range src {
 					v += float64(xv) * w[i]
 				}

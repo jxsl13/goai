@@ -275,6 +275,7 @@ func quantSSMMixerFromGGUF(tensors map[string]gguf.QuantTensor, p string, dModel
 	if qm.A.Ndim() != 2 || qm.A.Shape()[0] != dInner || qm.A.Shape()[1] != n {
 		return nil, fmt.Errorf("nlp: GGUF %sssm_a %v, want [d_inner, d_state] = [%d, %d]", p, qm.A.Shape(), dInner, n)
 	}
+	//perfscan:ignore PS1001 A-sign validation at GGUF load, one-time
 	for i := range qm.A.Numel() {
 		idx := tensor.Unravel(i, qm.A.Shape())
 		if v := qm.A.AtF64(idx...); v >= 0 {

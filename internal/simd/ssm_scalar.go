@@ -9,13 +9,17 @@ import "math"
 // ascending-n and h[d·N+n] evolves in the same t sequence. The portable scan and the AVX
 // range scan's non-AVX / N-tail fall back here.
 func ssmScanDRangeScalar(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, dHi int) {
+	//perfscan:ignore PS1006 false-positive: inner n-loop already contiguous; delta hoisted per-(d,t)
 	for d := dLo; d < dHi; d++ {
 		base := d * N
 		for t := 0; t < L; t++ {
+			//perfscan:ignore PS6011 loop-invariant delta load hoisted above inner n-loop, not strided
 			dt := delta[t*D+d]
+			//perfscan:ignore PS6011 loop-invariant u load hoisted above inner n-loop, not strided
 			ut := u[t*D+d]
 			tn := t * N
 			var y float64
+			//perfscan:ignore PS3010 low trip-count N~16 state dim; byte-for-byte ref-parity blocks reassoc
 			for n := 0; n < N; n++ {
 				abar := math.Exp(dt * as[base+n])
 				hv := abar*h[base+n] + dt*bs[tn+n]*ut
@@ -52,6 +56,7 @@ func ssmScanScalar(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, nLo, nH
 			base := d * N
 			tn := t * N
 			var y float64
+			//perfscan:ignore PS3010 N-dim reduction low trip-count + bit-exact reference-parity contract
 			for n := nLo; n < nHi; n++ {
 				abar := math.Exp(dt * as[base+n])
 				hv := abar*h[base+n] + dt*bs[tn+n]*ut

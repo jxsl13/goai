@@ -30,6 +30,7 @@ func NgramLookup(seq []int, maxNgram, draftLen int) []int {
 			}
 			from := start + size
 			end := min(from+draftLen, n)
+			//perfscan:ignore PS3021 small bounded draft-slice copy per spec round
 			if from < end {
 				return append([]int(nil), seq[from:end]...)
 			}
@@ -97,6 +98,7 @@ func PromptLookupDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int
 		vocab := len(ps[0])
 		qs := make([][]float64, k)
 		for i, t := range toks {
+			//perfscan:ignore PS2008 resource-only alloc, low trip count (k drafts)
 			q := make([]float64, vocab)
 			if t >= 0 && t < vocab {
 				q[t] = 1

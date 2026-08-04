@@ -66,6 +66,7 @@ func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gem
 
 	// Embedding stored unscaled — the √dim normalizer is Gemma.Forward's job.
 	m := &Gemma{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 GGUF→model load loop, one-time
 	for l := range layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -77,7 +78,9 @@ func GemmaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Gem
 		}
 		names := []string{"attn_norm.weight", "attn_q.weight", "attn_k.weight", "attn_v.weight",
 			"attn_output.weight", "ffn_norm.weight", "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight"}
+		//perfscan:ignore PS3035 alloc hoist in one-time load loop (resource-only, cold)
 		w := make([]*tensor.Tensor, len(names))
+		//perfscan:ignore PS3066 9-element names fusion in one-time load loop
 		for i, n := range names {
 			if w[i], err = g(n); err != nil {
 				return nil, err
@@ -250,6 +253,7 @@ func GemmaToGGUF(m *Gemma) (map[string]any, map[string]*tensor.Tensor) {
 		"token_embd.weight":  cloneF64(m.TokEmb),
 		"output_norm.weight": cloneF64(m.FinalNorm.Gamma), // pre-folded (+1) on disk, as stored
 	}
+	//perfscan:ignore PS3060 model→GGUF export loop, one-time
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.AttnNorm.Gamma)

@@ -50,14 +50,17 @@ func RLOOLoss(ctx *backend.Context, logp, advantage *tensor.Tensor) (*tensor.Ten
 	if !logp.Shape().Equal(advantage.Shape()) {
 		return nil, fmt.Errorf("nn: RLOO logp shape %v != advantage %v", logp.Shape(), advantage.Shape())
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	prod, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{advantage, logp}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	m, err := backend.Execute(ctx, backend.OpMean, []*tensor.Tensor{prod[0]}, backend.ReduceAttrs{})
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only slice-literal alloc per dispatch
 	neg, err := backend.Execute(ctx, backend.OpNeg, []*tensor.Tensor{m[0]}, nil)
 	if err != nil {
 		return nil, err

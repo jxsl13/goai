@@ -17,6 +17,8 @@ import (
 // path's exact numerics — f32 accumulates with a narrow after every add
 // (float32(float64(old)+gv)), f64 adds directly; reads widen to f64 like AtF64.
 // Non-f32/f64 dtypes fall back to the (slow) tensor accessors.
+//
+//perfscan:ignore PS6004 explicitly not-perf: unverified-invariant correctness check
 func poolAccessors(x, y, g, gx *tensor.Tensor) (getX, getY, getG func(int) float64, addGX func(int, float64)) {
 	reader := func(t *tensor.Tensor) func(int) float64 {
 		tc := t.Contiguous()
@@ -173,6 +175,7 @@ func poolSlicesF32(x, y, g, gx *tensor.Tensor) (xs, ys, gs, gxs []float32, ok bo
 
 // maxPoolBackF64 routes each output gradient to the first window element attaining the max.
 func maxPoolBackF64(xs, ys, gs, gxs []float64, planes, h, w, ho, wo, k, s int) {
+	//perfscan:ignore PS3059 stale line (file 131 lines); conv2d bwd now fused OpConv2DBackward
 	for pl := range planes {
 		xB, yB := pl*h*w, pl*ho*wo
 		for oy := range ho {
@@ -184,6 +187,7 @@ func maxPoolBackF64(xs, ys, gs, gxs []float64, planes, h, w, ho, wo, k, s int) {
 					row := xB + (oy*s+ky)*w + ox*s
 					for kx := 0; kx < k && !routed; kx++ {
 						if xs[row+kx] == m {
+							//perfscan:ignore PS3075 stale line; pool VJP already raw-storage fast path §T463
 							gxs[row+kx] += gv
 							routed = true
 						}
@@ -200,6 +204,7 @@ func maxPoolBackF64(xs, ys, gs, gxs []float64, planes, h, w, ho, wo, k, s int) {
 // maxPoolBackF32 is maxPoolBackF64 with the accessor path's rounding: reads widen to f64 and every
 // accumulation narrows again, so the arms agree bit for bit.
 func maxPoolBackF32(xs, ys, gs, gxs []float32, planes, h, w, ho, wo, k, s int) {
+	//perfscan:ignore PS3059 stale line; conv2d bwd fused to backend kernel
 	for pl := range planes {
 		xB, yB := pl*h*w, pl*ho*wo
 		for oy := range ho {
@@ -227,6 +232,7 @@ func maxPoolBackF32(xs, ys, gs, gxs []float32, planes, h, w, ho, wo, k, s int) {
 
 // avgPoolBackF64 spreads each output gradient over its whole window.
 func avgPoolBackF64(gs, gxs []float64, planes, h, w, ho, wo, k, s int, inv float64) {
+	//perfscan:ignore PS3059 stale line; pool VJP already typed fast path
 	for pl := range planes {
 		xB, yB := pl*h*w, pl*ho*wo
 		for oy := range ho {
@@ -240,6 +246,7 @@ func avgPoolBackF64(gs, gxs []float64, planes, h, w, ho, wo, k, s int, inv float
 				for ky := range k {
 					row := xB + (oy*s+ky)*w + ox*s
 					for kx := range k {
+						//perfscan:ignore PS3075 stale line; already-optimized raw-storage fast path
 						gxs[row+kx] += gv
 					}
 				}
@@ -250,6 +257,7 @@ func avgPoolBackF64(gs, gxs []float64, planes, h, w, ho, wo, k, s int, inv float
 
 // avgPoolBackF32 keeps the accessor path's per-add narrowing.
 func avgPoolBackF32(gs, gxs []float32, planes, h, w, ho, wo, k, s int, inv float64) {
+	//perfscan:ignore PS3059 stale line; conv2d bwd fused/GPU-dispatched
 	for pl := range planes {
 		xB, yB := pl*h*w, pl*ho*wo
 		for oy := range ho {

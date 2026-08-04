@@ -38,7 +38,9 @@ func init() {
 							jMax := min(jj+blockT, n)
 							for i := ii; i < iMax; i++ {
 								dbase := i * n
+								//perfscan:ignore PS4004 false-positive: transpose read gs[j*m+i] strided, no contiguous run for copy
 								for j := jj; j < jMax; j++ {
+									//perfscan:ignore PS6011 inherent transpose stride, already cache-tiled+parallel; resource-only
 									ds[dbase+j] = gs[j*m+i]
 								}
 							}
@@ -58,7 +60,9 @@ func init() {
 							jMax := min(jj+blockT, n)
 							for i := ii; i < iMax; i++ {
 								dbase := i * n
+								//perfscan:ignore PS4004 false-positive: F32 transpose read strided, copy inapplicable
 								for j := jj; j < jMax; j++ {
+									//perfscan:ignore PS6011 inherent transpose stride, already tiled+parallel; resource-only
 									ds[dbase+j] = gs[j*m+i]
 								}
 							}

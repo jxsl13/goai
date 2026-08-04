@@ -135,6 +135,7 @@ func (m *OLMo2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 residual OpAdd single backend op, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -146,6 +147,7 @@ func (m *OLMo2) hiddenCapture(ctx *backend.Context, x *tensor.Tensor, capture fu
 		if f, err = b.PostFFNNorm.Forward(ctx, f); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 residual OpAdd single backend op, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

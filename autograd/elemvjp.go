@@ -46,6 +46,7 @@ func elemVJP(n int, ins, outs []*tensor.Tensor, step func(in, out [][]float64, n
 	// Fallback: materialize through the accessors, run the SAME step, scatter back. One step
 	// implementation serves both arms, so they cannot drift apart.
 	for k, t := range ins {
+		//perfscan:ignore PS2008 alloc in non-F64 fallback arm; resource-only
 		buf := make([]float64, n)
 		for i := range n {
 			buf[i] = t.AtF64(i)
@@ -53,10 +54,12 @@ func elemVJP(n int, ins, outs []*tensor.Tensor, step func(in, out [][]float64, n
 		is[k] = buf
 	}
 	for k := range outs {
+		//perfscan:ignore PS2008,PS3064 alloc in non-F64 fallback arm; resource-only | fallback scratch alloc; F64 typed arm is fast path
 		os[k] = make([]float64, n)
 	}
 	step(is, os, n)
 	for k, t := range outs {
+		//perfscan:ignore PS4006 1-D scatter loop, no [][] to flatten (false positive)
 		for i := range n {
 			t.SetF64(os[k][i], i)
 		}

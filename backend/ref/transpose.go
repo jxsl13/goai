@@ -59,6 +59,7 @@ func transposeTiled[T float32 | float64](os, xs []T, m, n int) {
 			}
 			for i := i0; i < iMax; i++ {
 				xrow := xs[i*n : i*n+n]
+				//perfscan:ignore PS4004 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for j := j0; j < jMax; j++ {
 					os[j*m+i] = xrow[j]
 				}

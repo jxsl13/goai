@@ -261,6 +261,7 @@ func (g *RegexGuide) closure(raw []uint32) []uint32 {
 			// drop
 		}
 	}
+	//perfscan:ignore PS3002,PS6009 sort of small memoized NFA state set; guided decode | small memoized closure set; cold-ish
 	sort.Slice(rest, func(i, j int) bool { return rest[i] < rest[j] })
 	return rest
 }

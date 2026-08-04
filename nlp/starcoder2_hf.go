@@ -65,6 +65,7 @@ func StarCoder2FromHF(ts map[string]*tensor.Tensor, cfg StarCoder2Config) (*Star
 	}
 
 	m := &StarCoder2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

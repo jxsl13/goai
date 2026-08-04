@@ -42,6 +42,7 @@ func (l *AvgPool2D) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Ten
 	if l.Stride < 0 {
 		return nil, fmt.Errorf("nn: AvgPool2D stride must be >= 0 (0 → kernel), got %d", l.Stride)
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpAvgPool2D, []*tensor.Tensor{x}, backend.PoolAttrs{Kernel: l.Kernel, Stride: l.Stride})
 	if err != nil {
 		return nil, err

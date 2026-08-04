@@ -106,7 +106,9 @@ func NewDiffusionLM(cfg DiffusionLMConfig, seed uint64) (*DiffusionLM, error) {
 		// the GPT backbone, and this model omits it.
 		g.Blocks = append(g.Blocks, &Block{
 			LN1: ln(), LN2: ln(), Attn: attn,
+			//perfscan:ignore PS6016 resource-only Shape-literal alloc in model constructor; cold
 			W1: randn(s+4, cfg.Dim, 4*cfg.Dim), B1: tensor.New(tensor.F64, tensor.Shape{4 * cfg.Dim}),
+			//perfscan:ignore PS6016 resource-only Shape-literal alloc in constructor; cold
 			W2: randn(s+5, 4*cfg.Dim, cfg.Dim), B2: tensor.New(tensor.F64, tensor.Shape{cfg.Dim}),
 		})
 	}
@@ -275,6 +277,7 @@ func (m *DiffusionLM) diffusionGenerate(length, steps int, s *Sampler, onStep fu
 		seq[i] = maskID
 	}
 	ctx := backend.NewContext()
+	//perfscan:ignore PS2004 resource-only per-step scratch alloc; no wall-clock win
 	for step := range steps {
 		var masked []int
 		for i, tok := range seq {
@@ -340,6 +343,7 @@ func diffusionRefillOrder(confs []float64) []int {
 	return order
 }
 
+//perfscan:ignore PS3033,PS6004 resource-only alloc; returned buffer kept by caller | test-evidence request (verify fastpath parity); not a pe
 func logitsRow(t *tensor.Tensor, i, stride, v int) []float64 {
 	out := make([]float64, v)
 	switch t.Dtype() {

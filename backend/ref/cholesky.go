@@ -15,6 +15,8 @@ import (
 // exact zeros above it. The Cholesky–Banachiewicz recurrence accumulates in
 // float64 (§V10); an F32 input is computed in f64 and narrowed on store. A
 // non-positive pivot means A is not positive-definite and is reported as an error.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: cholesky wants 1 input, got %d", len(in))
@@ -53,6 +55,7 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		ljj := math.Sqrt(d)
 		lj[j] = ljj
 		// below the diagonal: L[i,j] = (A[i,j] − Σ_{k<j} L[i,k]·L[j,k]) / L[j,j]
+		//perfscan:ignore PS5001 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := j + 1; i < n; i++ {
 			li := l[i*n : i*n+n]
 			s := at(i, j)
@@ -65,6 +68,7 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{n, n})
 	if os, flush, ok := outF64(out); ok {
 		for i := range n {
+			//perfscan:ignore PS4004 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := 0; j <= i; j++ {
 				os[i*n+j] = l[i*n+j]
 			}

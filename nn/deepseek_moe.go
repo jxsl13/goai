@@ -58,6 +58,7 @@ func (m *DeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLo
 		if err != nil {
 			return nil, nil, err
 		}
+		//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 		sum, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{y, out}, nil)
 		if err != nil {
 			return nil, nil, err

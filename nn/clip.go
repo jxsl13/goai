@@ -115,6 +115,7 @@ func CLIPLoss(ctx *backend.Context, image, text *tensor.Tensor, scale *CLIPLogit
 		return nil, err
 	}
 	targets := tensor.New(image.Dtype(), tensor.Shape{n})
+	//perfscan:ignore PS1001 1D target arange fill, n=batch low trip
 	for i := range n {
 		targets.SetF64(float64(i), i)
 	}

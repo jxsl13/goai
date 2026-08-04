@@ -34,6 +34,7 @@ func Names(path string) ([]TensorInfo, map[string]string, error) {
 		return nil, nil, err
 	}
 	defer f.Close()
+	//perfscan:ignore PS3029 Names header-only inspect; cold load
 	_, raw, meta, err := readHeaderRaw(f)
 	if err != nil {
 		return nil, nil, err
@@ -74,6 +75,7 @@ func LoadTensor(path, name string) (*tensor.Tensor, error) {
 		return nil, err
 	}
 	defer f.Close()
+	//perfscan:ignore PS3029 LoadTensor single-tensor cold load
 	hlen, raw, _, err := readHeaderRaw(f)
 	if err != nil {
 		return nil, err

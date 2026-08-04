@@ -15,6 +15,8 @@ import (
 
 // conv2dKernel: x[N,C,H,W] ⋆ w[F,C,KH,KW] (+ bias[F]) → out[N,F,Ho,Wo] with
 // Ho = (H+2p−KH)/s+1. Attrs: "stride" (default 1), "pad" (default 0).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func conv2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 && len(in) != 3 {
 		return nil, fmt.Errorf("ref: conv2d wants (x, w[, bias]), got %d inputs", len(in))
@@ -164,6 +166,7 @@ func poolDims(x *tensor.Tensor, attrs backend.Attrs) (n, c, h, w, k, s, ho, wo i
 	return n, c, h, w, k, s, ho, wo, nil
 }
 
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func maxPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: maxpool2d wants 1 input, got %d", len(in))
@@ -207,9 +210,11 @@ func maxPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	for ni := range n {
 		for ci := range c {
 			for oy := range ho {
+				//perfscan:ignore PS1005 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for ox := range wo {
 					best := math.Inf(-1)
 					for ky := range k {
+						//perfscan:ignore PS1005 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for kx := range k {
 							if v := x.AtF64(ni, ci, oy*s+ky, ox*s+kx); v > best {
 								best = v
@@ -224,6 +229,7 @@ func maxPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	return []*tensor.Tensor{out}, nil
 }
 
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func avgPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: avgpool2d wants 1 input, got %d", len(in))
@@ -266,9 +272,11 @@ func avgPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	for ni := range n {
 		for ci := range c {
 			for oy := range ho {
+				//perfscan:ignore PS1005 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for ox := range wo {
 					var acc float64
 					for ky := range k {
+						//perfscan:ignore PS1005 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for kx := range k {
 							acc += x.AtF64(ni, ci, oy*s+ky, ox*s+kx)
 						}
@@ -283,6 +291,7 @@ func avgPool2dKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
+		//perfscan:ignore PS3052 reference oracle: intentionally simple, correctness baseline not an optimization target
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}

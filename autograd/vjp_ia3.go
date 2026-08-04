@@ -27,14 +27,17 @@ func init() {
 			if lc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 				xs, ls, gs := xc.Storage().F64(), lc.Storage().F64(), gc.Storage().F64()
 				dxs, dls := dx.Storage().F64(), dl.Storage().F64()
+				//perfscan:ignore PS1007 F64 typed fast-path loop; memory-bound simple-product IA3 backward
 				for r := 0; r < rows; r++ {
 					base := r * d
 					for j := 0; j < d; j++ {
 						gv := gs[base+j]
 						dxs[base+j] = gv * ls[j]
+						//perfscan:ignore PS3075 dl reduction in typed fast path; memory-streaming products, not compute-bound
 						acc[j] += gv * xs[base+j]
 					}
 				}
+				//perfscan:ignore PS4004 tiny d-length tail copy; negligible vs rows×d main loop
 				for j := 0; j < d; j++ {
 					dls[j] = acc[j]
 				}
@@ -44,11 +47,13 @@ func init() {
 			if lc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 				xs, ls, gs := xc.Storage().F32(), lc.Storage().F32(), gc.Storage().F32()
 				dxs, dls := dx.Storage().F32(), dl.Storage().F32()
+				//perfscan:ignore PS1007 F32 typed fast-path loop; memory-bound simple-product backward
 				for r := 0; r < rows; r++ {
 					base := r * d
 					for j := 0; j < d; j++ {
 						gv := float64(gs[base+j])
 						dxs[base+j] = float32(gv * float64(ls[j]))
+						//perfscan:ignore PS3075 dl reduction in F32 fast path; memory-streaming products
 						acc[j] += gv * float64(xs[base+j])
 					}
 				}
@@ -63,6 +68,7 @@ func init() {
 				idx := tensor.Unravel(r*d+j, x.Shape())
 				gv := g.AtF64(idx...)
 				dx.SetF64(gv*l.AtF64(j), idx...)
+				//perfscan:ignore PS3075 generic AtF64 fallback reduction; declined-dtype branch, correct to keep
 				acc[j] += gv * x.AtF64(idx...)
 			}
 		}

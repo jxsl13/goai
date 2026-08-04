@@ -24,6 +24,7 @@ func Eigh(a *tensor.Tensor) (w, v *tensor.Tensor, err error) {
 	ma := toMatrix(a, n)
 	for i := range n {
 		for j := i + 1; j < n; j++ {
+			//perfscan:ignore PS3016 symmetry-validation loop once/call, tiny vs O(n^3) SymEig
 			if math.Abs(ma[i][j]-ma[j][i]) > 1e-9*(math.Abs(ma[i][j])+math.Abs(ma[j][i]))+1e-12 {
 				return nil, nil, fmt.Errorf("linalg: Eigh needs a symmetric matrix; A[%d,%d]=%g != A[%d,%d]=%g",
 					i, j, ma[i][j], j, i, ma[j][i])
@@ -37,6 +38,7 @@ func Eigh(a *tensor.Tensor) (w, v *tensor.Tensor, err error) {
 		src := n - 1 - k // ascending index k ← descending index n−1−k
 		wOut[k] = vals[src]
 		for r := range n {
+			//perfscan:ignore PS3016,PS6011 eigenvector reorder O(n^2) << SymEig O(n^3) | false-positive: slice-of-slices vecs[src][r], no strided arithme
 			vOut[r*n+k] = vecs[src][r] // column k of V is the k-th (ascending) eigenvector
 		}
 	}

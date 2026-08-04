@@ -75,15 +75,18 @@ func (m *StarCoder2) DecodeStep(ctx *backend.Context, cache *StarCoder2Cache, to
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 loop-invariant RoPEAttrs box; matmul-dominated decode | resource-only variadic pack; RoPE dispatch, no wall-cl
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 loop-invariant RoPEAttrs box; matmul-dominated decode | resource-only variadic pack; RoPE dispatch, no wall-cl
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 loop-invariant AttnAttrs box; MHA-dominated decode | 3-arg MHA has no pooled sibling; resource-only
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err

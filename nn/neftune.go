@@ -49,6 +49,7 @@ func NEFTune(ctx *backend.Context, emb *tensor.Tensor, alpha float64, rng *rand.
 			noise.SetF64((rng.Float64()*2-1)*mag, idx...) // Uniform(−mag, +mag)
 		}
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{emb, noise}, nil)
 	if err != nil {
 		return nil, err

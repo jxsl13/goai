@@ -222,6 +222,7 @@ func (m *GaussianMixture) Covariance(k int) [][]float64 {
 	d := m.nFeat
 	out := make([][]float64, d)
 	for i := range out {
+		//perfscan:ignore PS2008,PS3064 Covariance() getter cold path; fresh d×d returned on demand | Covariance() getter, small d×d built on demand;
 		out[i] = make([]float64, d)
 	}
 	if m.cfg.covariance == GMMDiag {
@@ -242,6 +243,8 @@ func (m *GaussianMixture) Covariance(k int) [][]float64 {
 // error on empty, ragged, or too-small input (K samples are required), on a
 // negative regularization, or if a covariance becomes non-positive-definite
 // despite the ridge (raise WithGMMRegCovar).
+//
+//perfscan:ignore PS3058 Fit is one-time training entry; scratch already pooled+slab'd
 func (m *GaussianMixture) Fit(x [][]float64) error {
 	n := len(x)
 	k := m.cfg.k
@@ -364,6 +367,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		if math.IsInf(mx, -1) {
 			for c := range k {
 				lr[c] -= mx
+				//perfscan:ignore PS3016 degenerate all-−Inf fallback branch, rarely executed
 				resp[i][c] = math.Exp(lr[c])
 			}
 			return mx // degenerate all-−Inf row: preserve the scalar semantics
@@ -420,6 +424,7 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 		}
 	}
 	var total float64
+	//perfscan:ignore PS3010 deliberate bit-identical ascending sum, O(n) vs O(n·k·d²)
 	for i := range llBuf { // ascending, exactly the serial accumulation order
 		total += llBuf[i]
 	}
@@ -429,6 +434,8 @@ func (m *GaussianMixture) eStep(x [][]float64, resp, logResp [][]float64) (float
 // forComponents runs body over disjoint component ranges, serially when the fan-out cannot pay and
 // in parallel otherwise. The gate mirrors the full-covariance branch's: one worker per component at
 // most, and a work floor below which the goroutine round trip costs more than the loop.
+//
+//perfscan:ignore PS3048,PS3061 forComponents has explicit work floor <1<<14, caps nw to k | worker count capped to component count k (small);
 func forComponents(k, work int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > k {
@@ -454,6 +461,8 @@ func forComponents(k, work int, body func(lo, hi int)) {
 
 // mStep recomputes Weights, Means and covariances (with Cholesky factors for
 // GMMFull) from the responsibilities resp.
+//
+//perfscan:ignore PS3058 mStep alloc O(k·d) negligible vs O(n·k·d²) compute per step
 func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	n, d, k := len(x), m.nFeat, m.cfg.k
 	nk := make([]float64, k)
@@ -507,10 +516,13 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 		for ; c < chi; c++ {
 			mean := make([]float64, d)
 			var sum float64
+			//perfscan:ignore PS1007 scalar tail for k%4 components; main path 4-wide jammed
 			for i := range n {
+				//perfscan:ignore PS3016 scalar tail (k%4) c-invariant read; main path jammed
 				r := resp[i][c]
 				sum += r
 				for j := range d {
+					//perfscan:ignore PS3016,PS3075 scalar tail (k%4); 4-wide main path already hoists xi | scalar tail (k%4) mean accumulation, low leverage
 					mean[j] += r * x[i][j]
 				}
 			}
@@ -588,6 +600,7 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 				v := make([]float64, d)
 				iv := make([]float64, d)
 				inv := 1.0 / (nk[c] + 1e-300)
+				//perfscan:ignore PS1007 scalar tail (k%4) variance accum; main path 4-wide jammed
 				for i := range n {
 					r := resp[i][c]
 					for j := range d {
@@ -642,6 +655,7 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 	body := func(c int, cen []float64) {
 		s := make([]float64, d*d)
 		inv := 1.0 / (nk[c] + 1e-300)
+		//perfscan:ignore PS3046 already component-parallel + lower-tri axpy; sample reduction inherent
 		for i := range n {
 			r := resp[i][c]
 			xi, mc := x[i], m.Means[c]
@@ -699,6 +713,7 @@ func (m *GaussianMixture) mStep(x [][]float64, resp [][]float64) error {
 			if hi > k {
 				hi = k
 			}
+			//perfscan:ignore PS6008 cen is per-worker (hoisted outside component loop); correct hoist
 			cen := make([]float64, d) // per-worker
 			for c := lo; c < hi; c++ {
 				body(c, cen)
@@ -721,6 +736,7 @@ func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64,
 	if m.cfg.covariance == GMMDiag {
 		mc, ivc := m.Means[c], m.invCov[c] // hoist the component slices out of the j-loop
 		var quad float64
+		//perfscan:ignore PS3010 single-component fallback; diag batch path is 4-wide jammed
 		for j := 0; j < d; j++ {
 			dv := x[j] - mc[j]
 			quad += dv * dv * ivc[j]
@@ -733,11 +749,13 @@ func (m *GaussianMixture) logGaussian(x []float64, c int, y []float64) (float64,
 	for i := range d {
 		s := x[i] - m.Means[c][i]
 		for j := range i {
+			//perfscan:ignore PS3016 single-component solve fallback; batch path ranges hoisted rows
 			s -= l[i][j] * y[j]
 		}
 		y[i] = s * id[i]
 	}
 	var quad float64
+	//perfscan:ignore PS3010 single-component fallback; batch path 4 independent partials
 	for i := range d {
 		quad += y[i] * y[i]
 	}
@@ -761,6 +779,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 	const log2pi = 1.8378770664093453
 	dlog2pi := float64(d) * log2pi
 	c := 0
+	//perfscan:ignore PS3076 4-wide main + 2-wide tail already sweep-tuned for small k
 	for ; c+4 <= k; c += 4 {
 		l0, l1, l2, l3 := m.chol[c], m.chol[c+1], m.chol[c+2], m.chol[c+3]
 		id0, id1, id2, id3 := m.invCholDiag[c], m.invCholDiag[c+1], m.invCholDiag[c+2], m.invCholDiag[c+3]
@@ -795,6 +814,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 			y3[i] = s3 * id3[i]
 		}
 		var q0, q1, q2, q3 float64
+		//perfscan:ignore PS3010 already 4 independent partial accumulators q0-q3
 		for i := range d {
 			q0 += y0[i] * y0[i]
 			q1 += y1[i] * y1[i]
@@ -839,6 +859,7 @@ func (m *GaussianMixture) logGaussianFullBatch(x []float64, ld []float64, y4 [4]
 			y1[i] = s1 * id1[i]
 		}
 		var q0, q1 float64
+		//perfscan:ignore PS3010 2-wide tail jam already has 2 independent partials
 		for i := range d {
 			q0 += y0[i] * y0[i]
 			q1 += y1[i] * y1[i]
@@ -870,10 +891,12 @@ func (m *GaussianMixture) logGaussianDiagBatch(x []float64, ld []float64) {
 	const log2pi = 1.8378770664093453
 	dlog2pi := float64(d) * log2pi
 	c := 0
+	//perfscan:ignore PS3076 4-wide jam (already swept), not fixed-at-two
 	for ; c+4 <= k; c += 4 {
 		m0, m1, m2, m3 := m.Means[c], m.Means[c+1], m.Means[c+2], m.Means[c+3]
 		v0, v1, v2, v3 := m.invCov[c], m.invCov[c+1], m.invCov[c+2], m.invCov[c+3]
 		var q0, q1, q2, q3 float64
+		//perfscan:ignore PS3010 already 4 independent partials q0-q3 in diag batch
 		for j := 0; j < d; j++ {
 			xj := x[j]
 			a0 := xj - m0[j]
@@ -893,6 +916,7 @@ func (m *GaussianMixture) logGaussianDiagBatch(x []float64, ld []float64) {
 	for ; c < k; c++ {
 		mc, ivc := m.Means[c], m.invCov[c]
 		var quad float64
+		//perfscan:ignore PS3010 scalar tail (k%4); diag batch path 4-wide
 		for j := 0; j < d; j++ {
 			dv := x[j] - mc[j]
 			quad += dv * dv * ivc[j]
@@ -1111,6 +1135,7 @@ func gmmCholesky(a []float64, d int) ([][]float64, float64, error) {
 		l[i] = lslab[i*d : i*d+d : i*d+d]
 	}
 	var half float64
+	//perfscan:ignore PS3034 Cholesky inherently serial (triangular dep); already per-component parallel
 	for i := range d {
 		for j := 0; j <= i; j++ {
 			sum := a[i*d+j]
@@ -1124,6 +1149,7 @@ func gmmCholesky(a []float64, d int) ([][]float64, float64, error) {
 				l[i][i] = math.Sqrt(sum)
 				half += math.Log(l[i][i])
 			} else {
+				//perfscan:ignore PS3016 Cholesky kernel, small d, serial dependency; per-component parallel
 				l[i][j] = sum / l[j][j]
 			}
 		}
@@ -1179,6 +1205,7 @@ func gmmKMeansPP(x [][]float64, k int, seed int64) [][]float64 {
 		for i := range n {
 			var dd float64
 			for j := range d {
+				//perfscan:ignore PS3016 k-means++ init one-time warm-start, cold path
 				dv := x[i][j] - last[j]
 				dd += dv * dv
 			}

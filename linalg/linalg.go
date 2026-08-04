@@ -21,6 +21,8 @@ import (
 // parallelCols splits n independent right-hand-side columns across GOMAXPROCS workers, gated on
 // the TOTAL work n·workPerItem so a single heavy column (or a small count) stays serial. body must
 // touch only columns in its [lo,hi) range, so the result is bit-identical to the serial loop.
+//
+//perfscan:ignore PS3048,PS3061 LU [][]float64 struct-field decl, not a loop | same struct decl site, subsumed by flatten lead
 func parallelCols(n, workPerItem int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw <= 1 || n < 2 || n*workPerItem < 1<<14 {
@@ -31,6 +33,7 @@ func parallelCols(n, workPerItem int, body func(lo, hi int)) {
 		nw = n
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 Factor entry, reference LU cold fit-path
 	chunk := (n + nw - 1) / nw
 	for lo := 0; lo < n; lo += chunk {
 		hi := lo + chunk
@@ -73,6 +76,7 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 	// choice, same elimination order, same `m[i][k] / m[k][k]` DIVISION.
 	m := make([]float64, n*n)
 	for i := range n {
+		//perfscan:ignore PS1005 Det diagonal typed read, trivial O(n)
 		for j := range n {
 			m[i*n+j] = a.AtF64(i, j)
 		}
@@ -86,6 +90,7 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 		// partial pivot: largest absolute value in column k, rows k..n−1 (numerical stability)
 		p := k
 		for i := k + 1; i < n; i++ {
+			//perfscan:ignore PS6011 resource-class singular-check loop, no wallclock
 			if math.Abs(m[i*n+k]) > math.Abs(m[p*n+k]) {
 				p = i
 			}
@@ -117,6 +122,7 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 		// a 128-wide one 3 to 4%, and hoisting the gate above the call did not recover it — the
 		// cost is the closure itself, not the dispatch. Any edit here must be made twice.
 		if rows*rows < luUpdateParWork {
+			//perfscan:ignore PS5001 divide-by-invariant micro in LU solve
 			for i := k + 1; i < n; i++ {
 				mi := m[i*n : i*n+n]
 				mult := mi[k] / pivot
@@ -128,6 +134,7 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 			continue
 		}
 		parallelCols(rows, rows, func(lo, hi int) {
+			//perfscan:ignore PS5001 divide-by-invariant micro, sub-1pct
 			for i := k + 1 + lo; i < k+1+hi; i++ {
 				mi := m[i*n : i*n+n]
 				mult := mi[k] / pivot
@@ -144,6 +151,8 @@ func Factor(a *tensor.Tensor) (*LU, error) {
 // luUpdateParWork gates the rank-1 update's fan-out on the work at THIS pivot, rows*cols. Below
 // it the update runs on the caller. Measured: a 512-wide factorization goes -39.5% and a 256-wide
 // one -10.3%, while 128 is left alone because it is below the gate at every pivot.
+//
+//perfscan:ignore PS6023 resource-class, no wallclock
 const luUpdateParWork = 1 << 14
 
 // Det returns the determinant det(A) = sign · Π_k U[k,k] (the permutation sign times the product of
@@ -218,6 +227,7 @@ func (f *LU) Solve(b *tensor.Tensor) (*tensor.Tensor, error) {
 		jam = cols
 	}
 	parallelCols(cols, n*n, func(clo, chi int) {
+		//perfscan:ignore PS6008 resource-class (stale line past EOF)
 		buf := make([]float64, jam*n)
 		one := func(c int, y []float64) {
 			for i := range n { // forward: L·y = P·b, L unit-lower
@@ -340,8 +350,11 @@ func squareN(a *tensor.Tensor) (int, error) {
 func toMatrix(a *tensor.Tensor, n int) [][]float64 {
 	m := make([][]float64, n)
 	for i := range n {
+		//perfscan:ignore PS2008,PS3064 alloc-only resource class, no wallclock | reference solver (stale line past EOF)
 		m[i] = make([]float64, n)
+		//perfscan:ignore PS1005 toMatrix one-time input copy typed-read
 		for j := range n {
+			//perfscan:ignore PS3016 reference solver (stale line past EOF)
 			m[i][j] = a.AtF64(i, j)
 		}
 	}

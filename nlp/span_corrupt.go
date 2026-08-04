@@ -69,6 +69,7 @@ func T5Corrupt(tokens []int, density, meanSpan float64, sentinelBase int, rng *r
 func T5Reconstruct(input, target []int, sentinelBase int) (doc []int, ok bool) {
 	spans := make(map[int][]int)
 	cur := -1
+	//perfscan:ignore PS3003 T5 data-prep util, sparse sentinel keys, cold path
 	for _, t := range target {
 		if t >= sentinelBase {
 			cur = t
@@ -83,6 +84,7 @@ func T5Reconstruct(input, target []int, sentinelBase int) (doc []int, ok bool) {
 		}
 	}
 	doc = make([]int, 0, len(input))
+	//perfscan:ignore PS3003 T5 data-prep util, sparse sentinel keys, cold path
 	for _, t := range input {
 		if t >= sentinelBase {
 			span, seen := spans[t]

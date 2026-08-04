@@ -17,6 +17,8 @@ import (
 // causal/window/ALiBi are NOT applied — the mask expresses the structure.
 // A fully-masked row outputs zeros. OpMHAMaskedBackward provides the VJP used
 // for training, including gradients for a trainable additive mask.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: mha_masked wants (Q,K,V,mask), got %d inputs", len(in))
@@ -78,6 +80,7 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 								}
 								mrow := ms[mOff : mOff+sk]
 								m := math.Inf(-1)
+								//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 								for j, mv := range mrow {
 									if math.IsInf(mv, -1) {
 										row[j] = math.Inf(-1)
@@ -85,6 +88,7 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 									}
 									krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
 									var s float64
+									//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 									for d, qv := range qrow {
 										s += qv * krow[d]
 									}
@@ -107,10 +111,12 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 									obuf[d] = 0
 								}
 								if sum > 0 {
+									//perfscan:ignore PS1007,PS3049 reference oracle: intentionally simple, correctness baseline not an optimization target
 									for j := range sk {
 										w := row[j] / sum
 										vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
 										for d, vv := range vrow {
+											//perfscan:ignore PS3017,PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 											obuf[d] += w * vv
 										}
 									}
@@ -123,7 +129,9 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 							// columns [h·dk,(h+1)·dk) and inputs are read-only, so heads run fully in
 							// parallel with per-worker scratch — byte-identical regardless of head order.
 							parallel.Rows(heads, func(hlo, hhi int) {
+								//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 								row := make([]float64, sk)
+								//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 								obuf := make([]float64, dk)
 								for h := hlo; h < hhi; h++ {
 									doHead(h, row, obuf)
@@ -182,6 +190,7 @@ func mhaMaskedKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 			for d := range dk {
 				var o float64
 				if sum > 0 {
+					//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range sk {
 						o += (row[j] / sum) * v.AtF64(j, kvOff+d)
 					}

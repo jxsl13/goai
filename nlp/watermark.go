@@ -261,10 +261,12 @@ func (w *Watermark) Detect(tokens []int) (z float64, green, scored int) {
 	gsz := gsz0
 	counts := make([]int, 0)
 	parallelChunks(len(tokens)-1, (len(tokens)-1)*gsz, func(lo, hi int) {
+		//perfscan:ignore PS6008 already-fused partial Fisher-Yates, offline detection path
 		perm := make([]int, w.VocabSize)
 		for i := range perm {
 			perm[i] = i
 		}
+		//perfscan:ignore PS6008 already-fused partial Fisher-Yates, offline detection path
 		swaps := make([]int, gsz)
 		pcg := rand.NewPCG(0, 0)
 		rng := rand.New(pcg)

@@ -47,11 +47,14 @@ func MedusaTreeMask(parent []int) (mask *tensor.Tensor, depth []int) {
 	mask = tensor.New(tensor.F64, tensor.Shape{n, n})
 	depth = make([]int, n)
 	neg := math.Inf(-1)
+	//perfscan:ignore PS1005 tree mask [n,n] build, tiny n candidate tree, setup path
 	for i := range n {
+		//perfscan:ignore PS1005 tree mask fill, tiny n, setup path
 		for j := range n {
 			mask.SetF64(neg, i, j)
 		}
 		mask.SetF64(0, i, i) // a token always attends to itself
+		//perfscan:ignore PS1005 ancestor walk over tiny tree; setup path
 		for a := parent[i]; a != -1; a = parent[a] {
 			mask.SetF64(0, i, a) // …and to every ancestor on its path to the root
 		}
@@ -122,7 +125,9 @@ func NewMedusaHeads(k, dim, vocab int, seed uint64, opts ...MedusaHeadsOption) (
 	rng := rand.New(rand.NewPCG(seed, 0x6d3d))
 	m := &MedusaHeads{W: make([]*tensor.Tensor, k)}
 	for h := range k {
+		//perfscan:ignore PS6016 Shape literal in head-init loop; one-time constructor
 		w := tensor.New(cfg.dtype, tensor.Shape{dim, vocab})
+		//perfscan:ignore PS1001 SetF64 weight random init; one-time constructor
 		for i := range w.Numel() {
 			w.SetF64(rng.NormFloat64()*0.02, tensor.Unravel(i, w.Shape())...)
 		}
@@ -140,6 +145,7 @@ func (m *MedusaHeads) Params() []*tensor.Tensor { return m.W }
 func (m *MedusaHeads) Logits(ctx *backend.Context, hidden *tensor.Tensor) ([]*tensor.Tensor, error) {
 	out := make([]*tensor.Tensor, len(m.W))
 	for h, w := range m.W {
+		//perfscan:ignore PS6017 variadic exec1 over K heads; matmul-dominated, resource-only
 		l, err := exec1(ctx, backend.OpMatMul, nil, hidden, w)
 		if err != nil {
 			return nil, err
@@ -186,11 +192,13 @@ func MedusaGenerate(model *GPT, heads *MedusaHeads, prompt []int, maxNew int, ep
 			return nil, stats, err
 		}
 		last := hidden.Shape()[0] - 1
+		//perfscan:ignore PS3038 inline-slice alloc; analysis-scale decode, matmul-dominated
 		lastRow, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{hidden},
 			backend.SliceAttrs{Axis: 0, Start: last, End: last + 1})
 		if err != nil {
 			return nil, stats, err
 		}
+		//perfscan:ignore PS3038 inline-slice alloc; matmul dispatch, resource-only
 		mature, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{lastRow[0], model.Head}, nil)
 		if err != nil {
 			return nil, stats, err

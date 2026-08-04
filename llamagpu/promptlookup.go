@@ -66,6 +66,7 @@ func PromptLookupGenerate(target Stepper, prompt []int, maxNew, maxNgram, draftL
 			if g < 0 || g >= v {
 				return nil, stats, fmt.Errorf("llamagpu: n-gram guess %d out of vocab %d", g, v)
 			}
+			//perfscan:ignore PS2008 resource-class alloc; tiny k-1 one-hot draft build
 			q := make([]float64, v)
 			q[g] = 1
 			qs[i] = q

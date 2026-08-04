@@ -132,6 +132,7 @@ func (e *GPUBert) summedEmbedding(tokens, segments []int) ([]float32, error) {
 			return nil, fmt.Errorf("llamagpu(%s): segment id %d outside token-type vocab %d", e.ops.name, seg, e.typeVocab)
 		}
 		row := out[i*e.dim : (i+1)*e.dim]
+		//perfscan:ignore PS1005 embed gather O(s·d) « transformer forward, sub-1pct
 		for j := 0; j < e.dim; j++ {
 			v := e.tokEmb.AtF64(tok, j) + e.posEmb.AtF64(pos, j)
 			if e.segEmb != nil {

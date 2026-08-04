@@ -528,6 +528,8 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 // no-regression floor. (The 29 GB/s dequant pinned this at 128; halving its ~64 MB f16-scratch
 // round-trip cost with coalesced writes dropped the crossover to 48 and raised every win. The
 // remaining lever is a Marlin-style dequant-IN-tile GEMM that erases the round-trip entirely.)
+//
+//perfscan:ignore PS6023 cgo GPU-dispatch wrapper; no host wall-clock loop
 const q4kWMMAThreshold = 48
 
 // QMatMulResidentQ4K records o[m, w.n] = x[m, w.k]·dequant(w) for a resident Q4_K (4-bit k-quant
@@ -578,6 +580,8 @@ func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *Device
 // path. Q6_K's coalesced dequant (#880, ~57 GB/s) matches Q4_K's, and Q6_K's scalar MT decode is
 // HEAVIER (6-bit unpack) so WMMA overtakes it no later than Q4_K's benched floor of 48 — a
 // conservative, no-regression threshold (Q6_K WMMA M512/K4096/N4096 = 3.72ms vs MT 16.47ms = 4.43×).
+//
+//perfscan:ignore PS6023 inside Free() cleanup; cold teardown path
 const q6kWMMAThreshold = 48
 
 // QMatMulResidentQ6K records o[m,N] = x[m,K]·dequant(w) for a resident Q6_K (6-bit k-quant) weight —
@@ -687,6 +691,8 @@ func (rec *Recorder) q6kPrefillWMMA(x *DeviceF32, w *ResidentBQ6K, o *DeviceF32,
 // path. Q5_K's dequant is more ALU-bound (per-element get_sm + qh-bit) so its coalesced dequant runs
 // ~34 GB/s (vs Q4_K's 62) → a higher WMMA fixed cost, so this floor is set conservatively above Q4_K's
 // 48 (Q5_K WMMA M512/K4096/N4096 = 4.16ms vs MT 17.09ms = 4.11×). No regression below it (MT decode).
+//
+//perfscan:ignore PS6023 stale line beyond EOF; file only 583 lines
 const q5kWMMAThreshold = 64
 
 // QMatMulResidentQ5K records o[m,N] = x[m,K]·dequant(w) for a resident Q5_K (5-bit k-quant) weight —
@@ -735,6 +741,8 @@ func (rec *Recorder) q5kPrefillWMMA(x *DeviceF32, w *ResidentBQ5K, o *DeviceF32,
 // q2kWMMAThreshold is the m at/above which QMatMulResidentQ2K routes prefill to the tensor-core WMMA
 // path. Q2_K's coalesced dequant (57 GB/s, like Q6_K) → the Q6_K floor of 48 applies (Q2_K WMMA
 // M512/K4096/N4096 = 3.57ms vs MT 12.62ms = 3.53×). No regression below it (MT decode).
+//
+//perfscan:ignore PS6023 stale line beyond EOF; file only 583 lines
 const q2kWMMAThreshold = 48
 
 // QMatMulResidentQ2K records o[m,N] = x[m,K]·dequant(w) for a resident Q2_K (2-bit k-quant, 0.25 B/w)
@@ -786,6 +794,8 @@ func (rec *Recorder) q2kPrefillWMMA(x *DeviceF32, w *ResidentBQ2K, o *DeviceF32,
 // so its WMMA fixed cost is higher → the conservative pre-coalescing floor of 128 (Q3_K WMMA
 // M512/K4096/N4096 = 4.31ms vs MT 13.09ms = 3.04×, #876). Below it the MT decode wins. A follow-up
 // coalescing of the 3-plane meta/qs/hmask dequant would lower this like the other formats.
+//
+//perfscan:ignore PS6023 stale line beyond EOF; file only 583 lines
 const q3kWMMAThreshold = 128
 
 // QMatMulResidentQ3K records o[m,N] = x[m,K]·dequant(w) for a resident Q3_K (3-bit k-quant, repacked

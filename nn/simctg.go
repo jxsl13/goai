@@ -64,6 +64,7 @@ func SimCTGContrastiveLoss(ctx *backend.Context, h *tensor.Tensor, margin float6
 	ident := tensor.New(h.Dtype(), tensor.Shape{n, n})
 	off := tensor.New(h.Dtype(), tensor.Shape{n, n})
 	for i := range n {
+		//perfscan:ignore PS1001 constant identity fill, matmul-dominated loss
 		for j := range n {
 			if i == j {
 				ident.SetF64(1, i, j)

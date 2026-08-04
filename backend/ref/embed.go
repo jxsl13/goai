@@ -136,8 +136,10 @@ func embedBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpEmbed, tensor.F32, embedKernel)
 	std.add(backend.OpEmbed, tensor.F64, embedKernel)
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpEmbedBackward, tensor.F32, embedBackwardKernel)
 	std.add(backend.OpEmbedBackward, tensor.F64, embedBackwardKernel)
 }

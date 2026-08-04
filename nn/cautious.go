@@ -162,6 +162,7 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 				buildStep(g.AtF64(tensor.Unravel(i, g.Shape())...), i)
 			}
 		}
+		//perfscan:ignore PS3082 false-positive: single math.Max per step, not per-element loop
 		scale := float64(n) / math.Max(float64(kept), 1e-3*float64(n)) // = CautiousMask's 1/mean(mask)
 		// Apply decoupled weight decay (outside the mask) then the masked+rescaled step.
 		if pf := flatF64(p); pf != nil {

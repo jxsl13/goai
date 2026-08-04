@@ -34,12 +34,14 @@ func MeanPool(emb *tensor.Tensor, mask []bool) ([]float64, error) {
 	read := embReader(emb.Contiguous())
 	out := make([]float64, d)
 	count := 0
+	//perfscan:ignore PS1007,PS3032 MeanPool <1pct of embedding forward, memory-bound sum | post-forward pooling, negligible share of model
 	for i := range seq {
 		if mask != nil && !mask[i] {
 			continue
 		}
 		count++
 		for j := range d {
+			//perfscan:ignore PS3075 memory-bound accumulate, tiny share of model
 			out[j] += read(i*d + j)
 		}
 	}
@@ -100,6 +102,7 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 	// accumulates in the identical j=0..dim-1 order over the identical operands, so score =
 	// dot/√(qNorm·nc) is bit-identical to the per-candidate nq form → identical ranking.
 	var qNorm float64
+	//perfscan:ignore PS3010 query self-norm already hoisted, one-time per call
 	for j := range query {
 		qNorm += query[j] * query[j]
 	}
@@ -109,6 +112,7 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 			return nil, fmt.Errorf("nlp: candidate %d has dim %d, query has %d", i, len(c), len(query))
 		}
 		var dot, nc float64
+		//perfscan:ignore PS3010 rerank dot over small top-k, memory-bound tight dot
 		for j := range query {
 			dot += query[j] * c[j]
 			nc += c[j] * c[j]
@@ -121,6 +125,7 @@ func CosineRerank(query []float64, candidates [][]float64) ([]RerankResult, erro
 	}
 	// (Score desc, Index asc) is already a TOTAL order — Index is unique — so stability
 	// is redundant; unstable sort.Slice (pdqsort) yields the identical ranking faster.
+	//perfscan:ignore PS3002 rerank slice top-k sized not vocab, radix loses
 	slices.SortFunc(out, func(a, b RerankResult) int {
 		if a.Score != b.Score {
 			if a.Score > b.Score {

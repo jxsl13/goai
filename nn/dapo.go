@@ -219,6 +219,7 @@ func DAPOLoss(ctx *backend.Context, logpNew, logpOld, logpRef, advantage *tensor
 		}
 	} else {
 		w := 1 / float64(n)
+		//perfscan:ignore PS1001 1D weight fill, elementwise-dominated RL loss
 		for i := 0; i < n; i++ {
 			weights.SetF64(w, i)
 		}

@@ -18,6 +18,7 @@ func transposeBand[T float32 | float64](os, xs []T, m, n, lo, hi int) {
 			jMax := min(j0+blk, n)
 			for i := i0; i < iMax; i++ {
 				xrow := xs[i*n : i*n+n]
+				//perfscan:ignore PS4004 false-positive: transpose write is stride-m, no contiguous run for copy()
 				for j := j0; j < jMax; j++ {
 					os[j*m+i] = xrow[j]
 				}

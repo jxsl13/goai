@@ -52,6 +52,7 @@ func SaveFile(path string, arrays map[string]*tensor.Tensor) error {
 	if err != nil {
 		return err
 	}
+	//perfscan:ignore PS3029 SaveFile error-path Close; one-time archive write
 	if err := Save(f, arrays); err != nil {
 		f.Close()
 		return err
@@ -99,5 +100,6 @@ func LoadFile(path string) (map[string]*tensor.Tensor, error) {
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3029 LoadFile; one-time archive load
 	return Load(f, info.Size())
 }

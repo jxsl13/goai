@@ -56,6 +56,7 @@ func dot3F32(u, g, x []float32) float64 {
 		s2 += float64(u[i+2]) * float64(g[i+2]) * float64(x[i+2])
 		s3 += float64(u[i+3]) * float64(g[i+3]) * float64(x[i+3])
 	}
+	//perfscan:ignore PS3010 unrolled-tail remainder of dot3F32, low trip-count <4
 	for ; i < len(u) && i < len(g) && i < len(x); i++ {
 		s0 += float64(u[i]) * float64(g[i]) * float64(x[i])
 	}
@@ -152,6 +153,7 @@ func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
 			var ms float64
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD sumSqF32
 			if isF32 {
 				ms = sumSqF32(x32[base : base+d])
 			} else {
@@ -165,6 +167,7 @@ func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 				rmsNormNormalizeF32(x32[base:base+d], g32, o32[base:base+d], float32(inv))
 				continue
 			}
+			//perfscan:ignore PS3074 f64/non-SIMD fallback; f32 hot path uses rmsNormNormalizeF32
 			for j, g := range gm {
 				or[j] = T(float64(xr[j]) * inv * float64(g))
 			}
@@ -242,11 +245,13 @@ func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
 			var mean, varsum float64
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD sumF32
 			if isF32 {
 				row := x32[base : base+d]
 				mean = sumF32(row) / float64(d)
 				varsum = varSumF32(row, mean)
 			} else {
+				//perfscan:ignore PS3010 f64 reference mean loop; f32 hot path is SIMD
 				for j := 0; j < d; j++ {
 					mean += float64(xr[j])
 				}
@@ -261,6 +266,7 @@ func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64
 				layerNormNormalizeF32(x32[base:base+d], g32, b32, o32[base:base+d], float32(mean), float32(inv))
 				continue
 			}
+			//perfscan:ignore PS3074 f64/non-SIMD fallback normalize; fast path continues past
 			for j, g := range gm {
 				or[j] = T((float64(xr[j])-mean)*inv*float64(g) + float64(bt[j]))
 			}
@@ -323,6 +329,7 @@ func rmsNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 	parallelWork(d, 2*rows, func(lo, hi int) {
 		for j := lo; j < hi; j++ {
 			var acc float64
+			//perfscan:ignore PS3010 declined-dtype mixed closure fallback (dtype-mismatch only)
 			for r := range rows {
 				acc += ur(r*d+j) * xr(r*d+j) * inv[r]
 			}
@@ -349,6 +356,7 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 			ur := up[base : base+d : base+d]
 			dr := dx[base : base+d : base+d]
 			var ms, s float64
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD sumSqF32
 			if isF32 {
 				ms = sumSqF32(x32[base : base+d])
 			} else {
@@ -359,9 +367,11 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 			}
 			iv := 1 / math.Sqrt(ms/float64(d)+eps)
 			inv[r] = iv
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD dot3F32
 			if isF32 {
 				s = dot3F32(u32[base:base+d], g32, x32[base:base+d])
 			} else {
+				//perfscan:ignore PS3010 f64 reference s-loop; f32 hot path is SIMD
 				for j := 0; j < d; j++ {
 					a := float64(ur[j]) * float64(gm[j])
 					s += a * float64(xr[j])
@@ -375,12 +385,15 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 				// hoisted c = r²·s/d (f32 budget absorbs the regrouping);
 				// f64 keeps ref's exact per-element expression below.
 				c := iv * iv * s / float64(d)
+				//perfscan:ignore PS3074 non-amd64 f32 fallback; amd64 hot path uses rmsNormDxF32
 				for j, g := range gm {
 					a := float64(ur[j]) * float64(g)
+					//perfscan:ignore PS6012 resource-only in non-SIMD f32 fallback dx loop
 					dr[j] = T(iv * (a - float64(xr[j])*c))
 				}
 			} else {
 				for j, g := range gm {
+					//perfscan:ignore PS6012 resource-only in f64 reference dx loop
 					a := float64(ur[j]) * float64(g)
 					dr[j] = T(iv * (a - float64(xr[j])*iv*iv*s/float64(d)))
 				}
@@ -393,7 +406,9 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 	// each dγ_j still accumulates rows ascending — identical values (§V9).
 	nb := (d + normColBlock - 1) / normColBlock
 	parallelWork(nb, 3*rows*normColBlock, func(blo, bhi int) {
+		//perfscan:ignore PS6008 128-elem scratch alloc once per parallel block-range, not per element
 		acc := make([]float64, normColBlock)
+		//perfscan:ignore PS3043 outer block loop of already column-blocked backward pass
 		for b := blo; b < bhi; b++ {
 			j0 := b * normColBlock
 			j1 := min(j0+normColBlock, d)
@@ -402,6 +417,7 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 			for jj := range ac {
 				ac[jj] = 0
 			}
+			//perfscan:ignore PS1007,PS3049 already column-blocked hot backward pass; this is the optimization | already column-blocked contiguous-read ba
 			for r := 0; r < rows; r++ {
 				base := r * d
 				ur := up[base+j0 : base+j1 : base+j1]
@@ -412,6 +428,7 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 					// the sum matches ref's scratch-rounded contraction regardless of
 					// gc's FMA-fusion choice (parity-fragility fix, ref-parity ulp
 					// test; carried over from the main-branch norm bugfix in 4060f93).
+					//perfscan:ignore PS3075 deliberate float64() parity fence; already-optimized contiguous accumulate
 					ac[jj] += float64(float64(uv) * float64(xr[jj]) * ivr)
 				}
 			}
@@ -500,6 +517,7 @@ func layerNormBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs
 				dg += ur(r*d+j) * xhat
 				db += ur(r*d + j)
 			}
+			//perfscan:ignore PS3052 declined-dtype mixed closure fallback column pass
 			dgw(j, dg)
 			dbw(j, db)
 		}
@@ -524,11 +542,13 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 			ur := up[base : base+d : base+d]
 			dr := dx[base : base+d : base+d]
 			var mu, variance float64
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD sumF32
 			if isF32 {
 				row := x32[base : base+d]
 				mu = sumF32(row) / float64(d)
 				variance = varSumF32(row, mu) / float64(d)
 			} else {
+				//perfscan:ignore PS3010 f64 reference mu loop; f32 hot path SIMD
 				for j := 0; j < d; j++ {
 					mu += float64(xr[j])
 				}
@@ -542,6 +562,7 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 			iv := 1 / math.Sqrt(variance+eps)
 			mean[r], inv[r] = mu, iv
 			var meanA, meanAX float64
+			//perfscan:ignore PS3054 f32 fast path already dispatches SIMD lnGradSumsF32
 			if isF32 {
 				meanA, meanAX = lnGradSumsF32(u32[base:base+d], g32, x32[base:base+d], mu, iv)
 			} else {
@@ -558,8 +579,10 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 				layerNormDxF32(u32[base:base+d], g32, x32[base:base+d], d32[base:base+d],
 					float32(mu), float32(iv), float32(meanA), float32(meanAX))
 			} else {
+				//perfscan:ignore PS3074 non-SIMD f32 fallback dx loop; amd64 uses layerNormDxF32
 				for j, g := range gm {
 					xhat := (float64(xr[j]) - mu) * iv
+					//perfscan:ignore PS6012 resource-only in non-SIMD fallback dx loop
 					a := float64(ur[j]) * float64(g)
 					dr[j] = T(iv * (a - meanA - xhat*meanAX))
 				}
@@ -570,7 +593,9 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 	// reads; each dγ_j/dβ_j still sums rows ascending — identical values.
 	nb := (d + normColBlock - 1) / normColBlock
 	parallelWork(nb, 4*rows*normColBlock, func(blo, bhi int) {
+		//perfscan:ignore PS6008 128-elem scratch alloc once per block-range, not per element
 		accG := make([]float64, normColBlock)
+		//perfscan:ignore PS6008 128-elem scratch alloc once per block-range, not per element
 		accB := make([]float64, normColBlock)
 		for b := blo; b < bhi; b++ {
 			j0 := b * normColBlock
@@ -581,6 +606,7 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 				ag[jj] = 0
 				ab[jj] = 0
 			}
+			//perfscan:ignore PS3049 already column-blocked hot backward pass; this is the optimization
 			for r := 0; r < rows; r++ {
 				base := r * d
 				ur := up[base+j0 : base+j1 : base+j1]
@@ -591,6 +617,7 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 					u := float64(uv)
 					// float64() fence (see rmsNormBwd): plain mul-then-add matching
 					// ref, contraction-independent (main-branch bugfix 4060f93).
+					//perfscan:ignore PS3075 deliberate float64() parity fence; already-optimized accumulate
 					ag[jj] += float64(u * xhat)
 					ab[jj] += u
 				}
@@ -637,6 +664,7 @@ func normEps(attrs backend.Attrs) float64 {
 
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
+		//perfscan:ignore PS3052 init() kernel registration, one-time
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}

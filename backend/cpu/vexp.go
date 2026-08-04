@@ -31,6 +31,7 @@ const (
 	// exponent field (n > 127). The softmax feeds x−max ≤ 0, so the hi clamp
 	// is defensive only.
 	expLoClamp = -87.33654
+	//perfscan:ignore PS6023 const declaration (expHiClamp), not a loop; false positive
 	expHiClamp = 88.0
 	// expMagic = 1.5·2^23: adding then subtracting it rounds an f32 in
 	// (−2^22, 2^22) to the nearest integer (round-half-even, matching the NEON
@@ -138,6 +139,7 @@ func geluGradF32(x, g float32) float32 {
 	s = geluA2 + s*t
 	s = geluA1 + s*t
 	e := expF32(-(a * a)) // e^(−x²/2): shared by erf and pdf
+	//perfscan:ignore PS3070 geluGradF32 scalar tail-lane fallback (NEON prod on arm64); not a loop
 	if !(e > geluGradPdfMin) {
 		e = 0
 	}
@@ -200,6 +202,7 @@ func siluF32(x float32) float32 {
 func siluGradF32(x, g float32) float32 {
 	a := math.Float32frombits(math.Float32bits(x) &^ (1 << 31)) // |x|
 	z := expF32(-a)
+	//perfscan:ignore PS3070 siluGradF32 scalar tail-lane fallback; amd64 uses f64 path, not this
 	if !(z > geluGradPdfMin) {
 		z = 0
 	}
@@ -270,22 +273,24 @@ func sigmoidF32(x float32) float32 {
 // ref exactly: log(±0) = −Inf, log(x<0) = NaN, log(+Inf) = +Inf, NaN
 // propagates.
 const (
-	expFullHiClamp = 89.0                               // > the Inf cutoff; safe with split scaling (n ≤ 129)
-	expFullInfCut  = 88.72283172607421875               // bits 0x42B17217: largest f32 with finite f32(exp(x))
-	logSqrtHalfx2  = float32(1.41421353816986083984375) // bits 0x3FB504F3: f32(√2), the m-fold threshold
-	logMinNormal   = float32(1.1754943508222875e-38)    // bits 0x00800000: smallest normal f32
-	logTwoP25      = float32(1 << 25)                   // subnormal pre-scale
-	logLn2Hi       = float32(0.693359375)               // same hi/lo split as exp
-	logLn2Lo       = float32(-2.12194440e-4)            //
-	logL0          = float32(7.0376836292e-2)
-	logL1          = float32(-1.1514610310e-1)
-	logL2          = float32(1.1676998740e-1)
-	logL3          = float32(-1.2420140846e-1)
-	logL4          = float32(1.4249322787e-1)
-	logL5          = float32(-1.6668057665e-1)
-	logL6          = float32(2.0000714765e-1)
-	logL7          = float32(-2.4999993993e-1)
-	logL8          = float32(3.3333331174e-1)
+	//perfscan:ignore PS6023 const declaration (expFullHiClamp); false positive
+	expFullHiClamp = 89.0 // > the Inf cutoff; safe with split scaling (n ≤ 129)
+	//perfscan:ignore PS6023 const declaration (expFullInfCut); false positive
+	expFullInfCut = 88.72283172607421875               // bits 0x42B17217: largest f32 with finite f32(exp(x))
+	logSqrtHalfx2 = float32(1.41421353816986083984375) // bits 0x3FB504F3: f32(√2), the m-fold threshold
+	logMinNormal  = float32(1.1754943508222875e-38)    // bits 0x00800000: smallest normal f32
+	logTwoP25     = float32(1 << 25)                   // subnormal pre-scale
+	logLn2Hi      = float32(0.693359375)               // same hi/lo split as exp
+	logLn2Lo      = float32(-2.12194440e-4)            //
+	logL0         = float32(7.0376836292e-2)
+	logL1         = float32(-1.1514610310e-1)
+	logL2         = float32(1.1676998740e-1)
+	logL3         = float32(-1.2420140846e-1)
+	logL4         = float32(1.4249322787e-1)
+	logL5         = float32(-1.6668057665e-1)
+	logL6         = float32(2.0000714765e-1)
+	logL7         = float32(-2.4999993993e-1)
+	logL8         = float32(3.3333331174e-1)
 )
 
 // expFullF32 is the scalar instantiation of the full-domain vexpFull pipeline —

@@ -42,6 +42,7 @@ func NewSWA(params []*tensor.Tensor) *SWA {
 // running average: avg ← avg + (w − avg)/(n+1), so avg is the arithmetic mean of all snapshots.
 func (s *SWA) Update() error {
 	denom := float64(s.n + 1)
+	//perfscan:ignore PS5001 SWA divide, infrequent memory-bound optimizer bookkeeping
 	for pi, p := range s.Params {
 		if p.Numel() != len(s.avg[pi]) {
 			return fmt.Errorf("nn: SWA param %d size changed: %d != %d", pi, p.Numel(), len(s.avg[pi]))
@@ -55,12 +56,14 @@ func (s *SWA) Update() error {
 			switch p.Dtype() {
 			case tensor.F64:
 				d := p.Storage().F64()
+				//perfscan:ignore PS5001 SWA fast-path streaming divide, memory-bound
 				for i := range avg {
 					avg[i] += (d[i] - avg[i]) / denom
 				}
 				continue
 			case tensor.F32:
 				d := p.Storage().F32()
+				//perfscan:ignore PS5001 SWA F32 fast-path divide, memory-bound rare update
 				for i := range avg {
 					avg[i] += (float64(d[i]) - avg[i]) / denom
 				}
@@ -68,6 +71,7 @@ func (s *SWA) Update() error {
 			}
 		}
 		idx := 0
+		//perfscan:ignore PS1002 readGen non-contiguous fallback; contiguous fast path exists above
 		readGen(p, func(w float64) {
 			avg[idx] += (w - avg[idx]) / denom
 			idx++
@@ -99,6 +103,7 @@ func NewEMA(params []*tensor.Tensor, decay float64) *EMA {
 	for i, p := range params {
 		avg := make([]float64, p.Numel())
 		idx := 0
+		//perfscan:ignore PS1002 NewEMA init closure, one-time construction
 		readGen(p, func(w float64) {
 			avg[idx] = w
 			idx++
@@ -135,6 +140,7 @@ func (e *EMA) Update() error {
 			}
 		}
 		idx := 0
+		//perfscan:ignore PS1002 EMA readGen fallback branch; fast path above
 		readGen(p, func(w float64) {
 			avg[idx] = float64(e.Decay*avg[idx]) + float64((1-e.Decay)*w)
 			idx++
@@ -154,6 +160,7 @@ func materialize(ref []*tensor.Tensor, avg [][]float64) []*tensor.Tensor {
 		t := tensor.New(p.Dtype(), p.Shape())
 		a := avg[pi]
 		idx := 0
+		//perfscan:ignore PS1002 fillGen in materialize, infrequent eval-time only
 		fillGen(t, func() float64 {
 			v := a[idx]
 			idx++

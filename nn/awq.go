@@ -78,6 +78,7 @@ func AWQuantize(w, x *tensor.Tensor, levels int, opts ...AWQOption) (*tensor.Ten
 	act := make([]float64, in)
 	for j := range in {
 		var s float64
+		//perfscan:ignore PS1001 offline AWQ calibration act-stat, one-time, O(in.samples) minor
 		for k := range samples {
 			s += math.Abs(x.AtF64(j, k))
 		}
@@ -103,11 +104,15 @@ func AWQuantize(w, x *tensor.Tensor, levels int, opts ...AWQOption) (*tensor.Ten
 		scale := make([]float64, in)
 		smin, smax := math.Inf(1), math.Inf(-1)
 		for j := range in {
+			//perfscan:ignore PS3082 offline calibration scale loop O(in) per alpha; Pow-bound
 			scale[j] = math.Max(math.Pow(act[j], alpha), 1e-4) // clamp (llm-awq)
+			//perfscan:ignore PS3082 offline calibration smin scan, tiny O(in)
 			smin = math.Min(smin, scale[j])
+			//perfscan:ignore PS3082 offline calibration smax scan, tiny O(in)
 			smax = math.Max(smax, scale[j])
 		}
 		norm := math.Sqrt(smax * smin)
+		//perfscan:ignore PS5001 feeds quantizer (reciprocal unsafe) + offline, O(in) tiny
 		for j := range in {
 			scale[j] /= norm
 		}
@@ -132,9 +137,11 @@ func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tens
 		// Each output row is self-contained (its own maxabs, quantizer grid and disjoint
 		// output slice), so a row-range fan-out is bit-identical to the serial loop.
 		parallelRows(out, in, func(rlo, rhi int) {
+			//perfscan:ignore PS3032 offline calib maxabs; already parallelRows+typed
 			for r := rlo; r < rhi; r++ {
 				var maxabs float64
 				for j := range in {
+					//perfscan:ignore PS3016,PS3082 offline calib maxabs loop, already typed fast path | same offline maxabs scan
 					maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
 				}
 				if maxabs == 0 {
@@ -153,6 +160,7 @@ func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tens
 			for r := rlo; r < rhi; r++ {
 				var maxabs float64
 				for j := range in {
+					//perfscan:ignore PS3082 F32 offline maxabs, already parallel+typed
 					maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
 				}
 				if maxabs == 0 {
@@ -169,6 +177,7 @@ func quantizeScaled(w [][]float64, scale []float64, out, in, levels int, dt tens
 		for r := range out { // exotic dtype: per-element dispatch
 			var maxabs float64
 			for j := range in {
+				//perfscan:ignore PS3082 exotic-dtype fallback maxabs, offline calibration
 				maxabs = math.Max(maxabs, math.Abs(w[r][j]*scale[j]))
 			}
 			if maxabs == 0 {
@@ -223,6 +232,7 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 				// under the compound-assignment form they move at 2 and 6, which is how the
 				// difference was found.
 				i := 0
+				//perfscan:ignore PS3066 reconErr already 8-wide jammed + typed; offline calibration
 				for ; i+7 < in; i += 8 {
 					d0, d1 := diff[i+0], diff[i+1]
 					d2, d3 := diff[i+2], diff[i+3]
@@ -251,6 +261,7 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 						acc[s] += di * xf[base+s]
 					}
 				}
+				//perfscan:ignore PS3010 acc-squared reduction already optimized; offline
 				for s := 0; s < samples; s++ {
 					ss += acc[s] * acc[s]
 				}
@@ -300,6 +311,7 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 						acc[s] += di * float64(xf[base+s])
 					}
 				}
+				//perfscan:ignore PS3010 F32 acc-squared reduction already optimized; offline
 				for s := 0; s < samples; s++ {
 					ss += acc[s] * acc[s]
 				}
@@ -313,6 +325,7 @@ func reconErrMat(w [][]float64, wq *tensor.Tensor, x *tensor.Tensor, out, in, sa
 			var v float64
 			//perfscan:ignore PS1005 intentional exotic-dtype fallback; F32/F64 take the typed path above
 			for i := range in {
+				//perfscan:ignore PS3016 exotic-dtype fallback dispatch, offline calibration
 				v += (w[r][i] - wq.AtF64(r, i)) * x.AtF64(i, s)
 			}
 			ss += v * v

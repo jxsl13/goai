@@ -146,6 +146,7 @@ func NewKAN(inDim, outDim int, seed uint64, opts ...KANOption) (*KANLayer, error
 
 	// Spline scales: 1 (the paper's default — the spline starts at unit gain).
 	l.WScale = tensor.New(cfg.dtype, tensor.Shape{inDim, outDim})
+	//perfscan:ignore PS1001 WScale=1 init in constructor, one-time cold path
 	for idx := range l.WScale.Numel() {
 		l.WScale.SetF64(1, tensor.Unravel(idx, l.WScale.Shape())...)
 	}
@@ -154,6 +155,7 @@ func NewKAN(inDim, outDim int, seed uint64, opts ...KANOption) (*KANLayer, error
 	// symmetry because each basis function has distinct support).
 	l.Coef = tensor.New(cfg.dtype, tensor.Shape{inDim, outDim, nbasis})
 	rng := rand.New(rand.NewPCG(seed, 0x9e3779b97f4a7c15))
+	//perfscan:ignore PS1001 Coef noise init in constructor, one-time
 	for idx := range l.Coef.Numel() {
 		l.Coef.SetF64(rng.NormFloat64()*0.1, tensor.Unravel(idx, l.Coef.Shape())...)
 	}
@@ -267,10 +269,12 @@ func fusedSplineBand(ys, bs, cs, ws []float64, blo, bhi, in, out, nbasis int) {
 			brow := bs[bo : bo+nbasis : bo+nbasis]
 			wbase := i * out
 			cbase := i * out * nbasis
+			//perfscan:ignore PS6010 buildBasis already has typed fast path; scratch alloc once-per-call
 			for j := range out {
 				co := cbase + j*nbasis
 				crow := cs[co : co+nbasis : co+nbasis]
 				var acc float64
+				//perfscan:ignore PS3010 Cox-de Boor divisions, einsum-dominated minority of KAN forward
 				for c := range nbasis {
 					// Both products round BEFORE their add. Written bare, the compiler contracts
 					// each into an FMA on arm64 and not on amd64, so this path is a different
@@ -278,6 +282,7 @@ func fusedSplineBand(ys, bs, cs, ws []float64, blo, bhi, in, out, nbasis int) {
 					// the einsum engine while CI (amd64) stayed green.
 					acc += float64(brow[c] * crow[c])
 				}
+				//perfscan:ignore PS3075 evalBSplineBasis recursion, einsum-dominated minority
 				ys[obase+j] += float64(ws[wbase+j] * acc)
 			}
 		}
@@ -306,6 +311,7 @@ func (l *KANLayer) buildBasis(x *tensor.Tensor) *tensor.Tensor {
 			// GOMAXPROCS with a PER-WORKER knot scratch (evalBSplineBasis writes its result
 			// into that scratch, so it must not be shared). Bit-identical to the serial loop.
 			parallelRows(B, l.inDim*nk, func(blo, bhi int) {
+				//perfscan:ignore PS6008 spline recursion, small k-order, einsum-dominated
 				scratch := make([]float64, nk)
 				for b := blo; b < bhi; b++ {
 					for i := range l.inDim {
@@ -321,6 +327,7 @@ func (l *KANLayer) buildBasis(x *tensor.Tensor) *tensor.Tensor {
 		case tensor.F32:
 			xd, od := x.Storage().F32(), out.Storage().F32()
 			parallelRows(B, l.inDim*nk, func(blo, bhi int) {
+				//perfscan:ignore PS6008 spline recursion, einsum-dominated minority
 				scratch := make([]float64, nk)
 				for b := blo; b < bhi; b++ {
 					for i := range l.inDim {

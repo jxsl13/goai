@@ -36,6 +36,7 @@ func NewWeightNorm(dtype tensor.Dtype, in, out int, seed uint64) *WeightNorm {
 	g := tensor.New(dtype, tensor.Shape{out})
 	for j := range out { // g_j = ‖V[:,j]‖ ⇒ initial w[:,j] = V[:,j]
 		var ss float64
+		//perfscan:ignore PS1005 constructor column-norm init, one-time
 		for i := range in {
 			val := v.AtF64(i, j)
 			ss += val * val
@@ -50,6 +51,7 @@ func NewWeightNorm(dtype tensor.Dtype, in, out int, seed uint64) *WeightNorm {
 // EffectiveWeight returns the reparameterized weight W = g ⊙ V/‖V‖_col through ctx
 // (differentiable in V and g; also handy for introspection with a plain context).
 func (w *WeightNorm) EffectiveWeight(ctx *backend.Context) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 OpDoRAWeight single dispatch, no Go loop
 	out, err := backend.Execute(ctx, backend.OpDoRAWeight, []*tensor.Tensor{w.V, w.G}, nil)
 	if err != nil {
 		return nil, err
@@ -66,11 +68,13 @@ func (w *WeightNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 OpMatMul dispatch, matmul-dominated forward
 	y, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{x, wEff}, nil)
 	if err != nil {
 		return nil, err
 	}
 	if w.B != nil {
+		//perfscan:ignore PS3038 OpAddBias single dispatch, no Go loop
 		yb, err := backend.Execute(ctx, backend.OpAddBias, []*tensor.Tensor{y[0], w.B}, nil)
 		if err != nil {
 			return nil, err

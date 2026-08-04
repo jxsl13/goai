@@ -172,6 +172,7 @@ func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func
 		if a, err = b.PostAttnNorm.Forward(ctx, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-of-8 alloc; matmul-dominated forward, no wallclock
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -188,6 +189,7 @@ func (m *Gemma2) forwardCapture(ctx *backend.Context, tokens []int, capture func
 		if ff, err = b.PostFFNNorm.Forward(ctx, ff); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc exec1; FFN-add dominated by matmul
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -267,47 +269,58 @@ func (m *Gemma2) cappedAttention(ctx *backend.Context, b *Gemma2Block, xb *tenso
 	}
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
+	//perfscan:ignore PS5001 integer index h/rep, not float; low-trip per-head loop
 	for h := range cfg.Heads {
 		kvHead := h / rep
+		//perfscan:ignore PS6017 resource-only 1-alloc; per-head slice, attention-dominated
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc; per-head slice, attention-dominated
 		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc; per-head slice, attention-dominated
 		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, v)
 		if err != nil {
 			return nil, err
 		}
 		// scores = Qh·Khᵀ  [seq,seq]
+		//perfscan:ignore PS6017 resource-only 1-alloc; transpose, attention-dominated
 		khT, err := exec1(ctx, backend.OpTranspose, nil, kh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc; matmul-dominated
 		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
+		//perfscan:ignore PS6017 resource-only 1-alloc; score-scale, attention-dominated
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores, before the mask
 		if cfg.AttnLogitCap > 0 {
+			//perfscan:ignore PS6016,PS6017 loop-invariant SoftCapAttrs micro-alloc; per-head, attention-dominated | resource-only 1-alloc; softcap, atten
 			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}
 		// + causal mask, then softmax over keys (last axis)
+		//perfscan:ignore PS6017 resource-only 1-alloc; mask-add, attention-dominated
 		if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc; softmax, attention-dominated
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 resource-only 1-alloc; matmul-dominated
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [seq,hd]
 		if err != nil {
 			return nil, err

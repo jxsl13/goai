@@ -96,8 +96,10 @@ func orpoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpSimPO, tensor.F32, simpoKernel)
 	std.add(backend.OpSimPO, tensor.F64, simpoKernel)
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpORPO, tensor.F32, orpoKernel)
 	std.add(backend.OpORPO, tensor.F64, orpoKernel)
 }

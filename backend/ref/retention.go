@@ -13,6 +13,8 @@ import (
 // the diagonal, 0 above). It replaces attention's softmax with the decay mask, so it has an exactly
 // equivalent O(1)-per-step recurrent form (Eq.6, see nn.RetentionRecurrent). Q,K,V are [L,d] (a
 // single head; the reference operates per head). Accumulation is f64 (§V10).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func retentionKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: retention wants (Q,K,V), got %d inputs", len(in))
@@ -54,9 +56,11 @@ func retentionKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 					for n := range l {
 						// P_nm = (Σ_i Q[n,i]·K[m,i]) · γ^(n−m) for m ≤ n
 						qrow := qs[n*dk : n*dk+dk]
+						//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for m := 0; m <= n; m++ {
 							krow := ks[m*dk : m*dk+dk]
 							var a float64
+							//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 							for i, qv := range qrow {
 								a += qv * krow[i]
 							}
@@ -65,10 +69,12 @@ func retentionKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 						for j := range obuf {
 							obuf[j] = 0
 						}
+						//perfscan:ignore PS1007,PS3049 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for m := 0; m <= n; m++ {
 							pm := p[m]
 							vrow := vs[m*dv : m*dv+dv]
 							for j, vv := range vrow {
+								//perfscan:ignore PS3017,PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 								obuf[j] += pm * vv
 							}
 						}
@@ -93,6 +99,7 @@ func retentionKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 		}
 		for j := range dv { // j over the value dim dv
 			var acc float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for m := 0; m <= n; m++ {
 				acc += p[m] * v.AtF64(m, j)
 			}

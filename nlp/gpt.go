@@ -78,6 +78,7 @@ func FromSafetensors(cfg GPTConfig, ts map[string]*tensor.Tensor) (*GPT, error) 
 			p + "ln2.gamma", p + "ln2.beta",
 			p + "ffn.w1", p + "ffn.b1", p + "ffn.w2", p + "ffn.b2",
 		}
+		//perfscan:ignore PS3035 GPT weight-name loader loop, one-time construction
 		got := make([]*tensor.Tensor, len(names))
 		for i, n := range names {
 			if got[i], err = get(n); err != nil {

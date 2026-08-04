@@ -79,6 +79,7 @@ func (s *SAM) Step(grads func() (GradFn, error)) error {
 	// snapshot the first gradient once (grads() may be expensive / non-idempotent to re-query)
 	gs := make([]*tensor.Tensor, len(s.Params))
 	var sumsq float64 // global L2 norm of the gradient over all parameters concatenated
+	//perfscan:ignore PS3032 closure called per-param-tensor not per-element; typed fastpaths present
 	for pi, p := range s.Params {
 		g := g1(p)
 		gs[pi] = g

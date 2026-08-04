@@ -66,6 +66,7 @@ func StableLMFromHF(ts map[string]*tensor.Tensor, cfg StableLMConfig) (*StableLM
 	}
 
 	m := &StableLM{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

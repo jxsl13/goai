@@ -72,6 +72,7 @@ func init() {
 		return c & 0x0F
 	}
 	for e := range 512 {
+		//perfscan:ignore PS3040 IQ3_S grid decode in init, one-time
 		for b := range 2 {
 			hi := unhex(iq3sGridHex[e*4+b*2])
 			lo := unhex(iq3sGridHex[e*4+b*2+1])

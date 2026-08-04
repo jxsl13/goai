@@ -49,6 +49,7 @@ func MixtralFromHF(ts map[string]*tensor.Tensor, cfg MixtralConfig) (*Mixtral, e
 	cfg.Layers = layers
 
 	m := &Mixtral{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -146,6 +147,7 @@ func mixtralMoE(ts map[string]*tensor.Tensor, p string, cfg MixtralConfig) (*nn.
 
 	moe := nn.NewSparseMoE(tensor.F64, cfg.Dim, ffn, experts, cfg.TopK, 0)
 	moe.Router.W = transpose2D(gate) // [E,dim] → [dim,E]
+	//perfscan:ignore PS3060 per-expert MoE loader loop; cold
 	for e := range experts {
 		guE := sub3D(gu, e)                                          // [2·ffn, dim]
 		moe.Experts[e].Wgate = transpose2D(sliceRows(guE, 0, ffn))   // [dim, ffn]

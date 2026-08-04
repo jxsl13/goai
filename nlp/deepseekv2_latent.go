@@ -71,9 +71,11 @@ func (m *DeepSeekV2) NewLatentCache() *DeepSeekV2LatentCache {
 		wkT: make([][]*tensor.Tensor, len(m.Blocks)),
 		wv:  make([][]*tensor.Tensor, len(m.Blocks)),
 	}
+	//perfscan:ignore PS3060 one-time weight-absorb at cache build, cold load path
 	for l, b := range m.Blocks {
 		c.wkT[l] = make([]*tensor.Tensor, cfg.Heads)
 		c.wv[l] = make([]*tensor.Tensor, cfg.Heads)
+		//perfscan:ignore PS3065 wkT transpose done once per model at cache build, not per step
 		for h := range cfg.Heads {
 			kBlock, err := b.WkvB.Slice(1, h*kvHead, h*kvHead+cfg.QKNope)
 			if err != nil { // WkvB geometry fixed at load; unreachable
@@ -141,6 +143,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		}
 
 		// Query path: q = q_b_proj(q_a_layernorm(q_a_proj(h))).
+		//perfscan:ignore PS6017 per-block WqA projection GEMM, single necessary matmul dispatch
 		cQ, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WqA)
 		if err != nil {
 			return nil, err
@@ -148,6 +151,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if cQ, err = b.QANorm.Forward(ctx, cQ); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-block WqB projection GEMM, single necessary matmul dispatch
 		q, err := exec1(ctx, backend.OpMatMul, nil, cQ, b.WqB) // [1, heads·qkHead]
 		if err != nil {
 			return nil, err
@@ -156,14 +160,17 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		// KV path: compressed = kv_a_proj_with_mqa(h) → [kv_latent | k_pe]. ONLY the
 		// normalized latent and the rotated shared key are cached — kv_b_proj is never
 		// applied to cached tokens.
+		//perfscan:ignore PS6017 per-block WkvA projection GEMM, single necessary matmul dispatch
 		compressed, err := exec1(ctx, backend.OpMatMul, nil, xb, b.WkvA)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 SliceAttrs by-value struct, alloc-free rebuild, no wall-clock | single per-block OpSlice (latent split), cheap
 		kvLatent, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.KVLoraRank}, compressed)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 value-struct attrs, alloc-free, resource-only | single per-block OpSlice (k_pe split), cheap movement
 		kPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.KVLoraRank, End: cfg.KVLoraRank + cfg.QKRope}, compressed)
 		if err != nil {
 			return nil, err
@@ -172,6 +179,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 single per-block OpRoPE on k_pe, cheap
 		kPeRot, err := exec1(ctx, backend.OpRoPE, rope, kPe) // [1, QKRope] at position pos
 		if err != nil {
 			return nil, err
@@ -183,10 +191,12 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 
 		// Transposed caches for the score matmuls, built ONCE per block per step (O(tokens),
 		// not per head).
+		//perfscan:ignore PS6017 transpose built once per block per comment, single cheap dispatch
 		ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll) // [KVLoraRank, tokens]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 transpose built once per block, single cheap dispatch
 		kpeT, err := exec1(ctx, backend.OpTranspose, nil, kpeAll) // [QKRope, tokens]
 		if err != nil {
 			return nil, err
@@ -194,18 +204,22 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 
 		heads := make([]*tensor.Tensor, cfg.Heads)
 		for h := range cfg.Heads {
+			//perfscan:ignore PS6017 per-head qh slice, cheap movement in loop flagged at L215
 			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6016,PS6017 loop-invariant value-struct attrs, alloc-free resource-only | per-head qNope slice, cheap movement (loop flagg
 			qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6016,PS6017 loop-invariant value-struct attrs, alloc-free | per-head qPe slice, cheap movement (loop flagged at L215)
 			qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 per-head OpRoPE on qPe, cheap (loop flagged at L215)
 			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
 			if err != nil {
 				return nil, err
@@ -218,31 +232,38 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 			}
 			// Content scores directly against the latent cache; rope scores against the
 			// shared rotary cache.
+			//perfscan:ignore PS6017 per-head scoreC GEMV, part of loop flagged at L215
 			scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [1, tokens]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 per-head scoreP GEMV, part of loop flagged at L215
 			scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [1, tokens]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 per-head OpAdd of score halves, cheap elementwise
 			scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 per-head OpMul by scalar scale, cheap elementwise
 			if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 				return nil, err
 			}
 			// Single query attends all cached positions → no causal mask.
+			//perfscan:ignore PS6017 per-head OpSoftmax over tokens, part of loop flagged at L215
 			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 			if err != nil {
 				return nil, err
 			}
 			// Attention in latent space, then absorb W_V into the output.
+			//perfscan:ignore PS6017 per-head ctxLat GEMV, part of loop flagged at L215
 			ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [1, KVLoraRank]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 per-head W_V-absorb GEMV, part of loop flagged at L215
 			oh, err := exec1(ctx, backend.OpMatMul, nil, ctxLat, cache.wv[l][h]) // [1, VHead]
 			if err != nil {
 				return nil, err
@@ -254,10 +275,12 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-block Wo output projection GEMM, single necessary matmul
 		a, err := exec1(ctx, backend.OpMatMul, nil, concat, b.Wo)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-block residual OpAdd, single cheap elementwise
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -276,6 +299,7 @@ func (m *DeepSeekV2) DecodeStepLatent(ctx *backend.Context, cache *DeepSeekV2Lat
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-block FFN residual OpAdd, single cheap elementwise
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -404,57 +428,70 @@ func (m *DeepSeekV2) PrefillLatent(ctx *backend.Context, cache *DeepSeekV2Latent
 
 		heads := make([]*tensor.Tensor, cfg.Heads)
 		for h := range cfg.Heads {
+			//perfscan:ignore PS6017 prefill per-head loop seq×seq GEMM matmul-dominated; per-head-attn false positive (#685)
 			qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6016,PS6017 loop-invariant value-struct attrs, alloc-free | prefill per-head qNope slice, matmul-dominated loop
 			qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6016,PS6017 loop-invariant value-struct attrs, alloc-free | prefill per-head qPe slice, matmul-dominated loop
 			qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head RoPE, matmul-dominated (seq×seq) loop
 			qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
 			if err != nil {
 				return nil, err
 			}
 
 			// Absorb W_K into the query: q_lat = q_nope · (W_K,h)ᵀ.
+			//perfscan:ignore PS6017 prefill per-head qLat GEMM, real matmul work
 			qLat, err := exec1(ctx, backend.OpMatMul, nil, qNope, cache.wkT[l][h]) // [seq, KVLoraRank]
 			if err != nil {
 				return nil, err
 			}
 			// Content scores against the latent cache; rope scores against the shared
 			// rotary cache — the same two skinny matmuls as DecodeStepLatent, batched.
+			//perfscan:ignore PS6017 prefill per-head scoreC seq×seq GEMM, matmul-dominated
 			scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [seq, seq]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head scoreP seq×seq GEMM, matmul-dominated
 			scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [seq, seq]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head score add, matmul-dominated loop
 			scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head scale mul, matmul-dominated loop
 			if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head mask add, matmul-dominated loop
 			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head softmax over seq, matmul-dominated
 			probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 			if err != nil {
 				return nil, err
 			}
 			// Attention in latent space, then absorb W_V into the output.
+			//perfscan:ignore PS6017 prefill per-head ctxLat seq×seq GEMM, matmul-dominated
 			ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [seq, KVLoraRank]
 			if err != nil {
 				return nil, err
 			}
+			//perfscan:ignore PS6017 prefill per-head oh GEMM, matmul-dominated
 			oh, err := exec1(ctx, backend.OpMatMul, nil, ctxLat, cache.wv[l][h]) // [seq, VHead]
 			if err != nil {
 				return nil, err

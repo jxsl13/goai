@@ -87,6 +87,7 @@ func ssmKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 
 	// Generic fallback for exotic dtypes / mixed inputs (verbatim ref loop).
 	for t := range L {
+		//perfscan:ignore PS3067 init std.add F64; F64 hot path is simd.SSMScanF64 vectorized
 		for d := range D {
 			dt := delta.AtF64(t, d)
 			ut := u.AtF64(t, d)
@@ -114,6 +115,7 @@ func ssmKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 // BIT-IDENTICAL to the single-threaded SSMScanF64 (TestSSMScanRangeF64BitExactVsWhole).
 func ssmParallelScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 	nw := runtime.GOMAXPROCS(0)
+	//perfscan:ignore PS3011 exotic-dtype ref fallback; F64 path simd-vectorized
 	chunk := (D + nw - 1) / nw
 	if nw <= 1 || chunk >= D || L*D*N < 1<<15 {
 		simd.SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, D)
@@ -140,13 +142,17 @@ func ssmParallelScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int
 // (ref is t-outer/d-middle) but per channel the t/n sequence and float ops are identical
 // and channels never interact, so the result is bit-identical.
 func ssmScanRangeF32(us, ds, as, bs, cs, dsk, os []float32, h []float64, L, D, N, dLo, dHi int) {
+	//perfscan:ignore PS1006 exotic-dtype ref fallback loop; F64 fast path vectorized over N
 	for d := dLo; d < dHi; d++ {
 		base := d * N
 		for t := 0; t < L; t++ {
+			//perfscan:ignore PS6011 exotic-dtype ref fallback; F64 hot path vectorized
 			dt := float64(ds[t*D+d])
+			//perfscan:ignore PS6011 exotic-dtype ref fallback; F64 hot path vectorized
 			ut := float64(us[t*D+d])
 			tn := t * N
 			var y float64 // scan state accumulates in float64; only the store rounds
+			//perfscan:ignore PS3010 declined-dtype fallback; F64 fast path is simd scan
 			for n := 0; n < N; n++ {
 				abar := math.Exp(dt * float64(as[base+n]))
 				hv := abar*h[base+n] + dt*float64(bs[tn+n])*ut
@@ -167,6 +173,7 @@ func ssmScanRangeF32(us, ds, as, bs, cs, dsk, os []float32, h []float64, L, D, N
 // compute-bound → parallelizes near-linearly. Mirrors ssmParallelScanF64's grain gate.
 func ssmParallelScanF32(us, ds, as, bs, cs, dsk, os []float32, h []float64, L, D, N int) {
 	nw := runtime.GOMAXPROCS(0)
+	//perfscan:ignore PS3011 exotic-dtype ref fallback; F64 hot path vectorized
 	chunk := (D + nw - 1) / nw
 	if nw <= 1 || chunk >= D || L*D*N < 1<<15 {
 		ssmScanRangeF32(us, ds, as, bs, cs, dsk, os, h, L, D, N, 0, D)

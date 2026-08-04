@@ -116,6 +116,7 @@ func DeepSeekV2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &DeepSeekV2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load weight transpose (DeepSeekV2FromGGUF); one-time cold
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -394,6 +395,7 @@ func deepseekV2KvB(tensors map[string]*tensor.Tensor, p string, cfg DeepSeekV2Co
 	fused := tensor.New(tensor.F64, tensor.Shape{cfg.Heads * kvHead, cfg.KVLoraRank})
 	dst := fused.Storage().F64()
 	rowLen := cfg.KVLoraRank
+	//perfscan:ignore PS3060 load-time per-head transpose; one-time cold
 	for h := range cfg.Heads {
 		// k rows: un-transpose the converter's per-head [KVLoraRank, QKNope] back to
 		// [QKNope, KVLoraRank] row blocks.
@@ -549,6 +551,7 @@ func DeepSeekV2ToGGUF(m *DeepSeekV2) (map[string]any, map[string]*tensor.Tensor)
 		"output.weight":      transpose2D(m.LmHead), // [dim,vocab] → [vocab,dim]
 	}
 	kvHead := c.QKNope + c.VHead
+	//perfscan:ignore PS3060 ToGGUF export weight transpose; one-time cold
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.InputNorm.Gamma)
@@ -563,6 +566,7 @@ func DeepSeekV2ToGGUF(m *DeepSeekV2) (map[string]any, map[string]*tensor.Tensor)
 		kvbTorch := transpose2D(b.WkvB) // [heads·(QKNope+VHead), KVLoraRank]
 		kParts := make([]*tensor.Tensor, c.Heads)
 		vParts := make([]*tensor.Tensor, c.Heads)
+		//perfscan:ignore PS3065 ToGGUF export kParts transpose; one-time cold
 		for h := range c.Heads {
 			kParts[h] = transpose2D(sliceRows(kvbTorch, h*kvHead, h*kvHead+c.QKNope)) // [KVLoraRank, QKNope]
 			vParts[h] = sliceRows(kvbTorch, h*kvHead+c.QKNope, (h+1)*kvHead)          // [VHead, KVLoraRank]
@@ -576,6 +580,7 @@ func DeepSeekV2ToGGUF(m *DeepSeekV2) (map[string]any, map[string]*tensor.Tensor)
 			gates := make([]*tensor.Tensor, len(b.MoE.Routed.Experts))
 			ups := make([]*tensor.Tensor, len(b.MoE.Routed.Experts))
 			downs := make([]*tensor.Tensor, len(b.MoE.Routed.Experts))
+			//perfscan:ignore PS3065 ToGGUF export gates transpose; one-time cold
 			for e, ex := range b.MoE.Routed.Experts {
 				gates[e] = transpose2D(ex.Wgate) // [dim,moe_ffn] → [moe_ffn,dim]
 				ups[e] = transpose2D(ex.Wup)

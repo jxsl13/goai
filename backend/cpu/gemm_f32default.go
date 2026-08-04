@@ -9,6 +9,7 @@ package cpu
 // and gemm_neon_arm64.go on arm64+GOEXPERIMENT=simd (ADR-0026) — both within
 // the ADR-0021 tolerance of ref, not bit-exact.
 func gemmF32(A, B, C []float32, m, k, n int) {
+	//perfscan:ignore PS3042 non-simd fallback build (not benched path); producer+narrow same band already cache-local
 	accP := getF64(m * n) // pooled zeroed f64 accumulation scratch (§V10, §T463)
 	acc := *accP
 	// The narrowing runs INSIDE the band, not after it. Each band already owns rows

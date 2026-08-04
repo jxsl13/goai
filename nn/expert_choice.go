@@ -37,9 +37,11 @@ func ExpertAffinity(logits [][]float64) [][]float64 {
 		// Hoist the destination row out of both loops (PS4006): s[t] is a separate
 		// allocation, so re-indexing it per element is a pointer load each time.
 		// Bit-identical — same values, same order, only the address computation moves.
+		//perfscan:ignore PS2008 resource-only per-row make; no speedup
 		dst := make([]float64, len(row))
 		s[t] = dst
 		var sum float64
+		//perfscan:ignore PS3010 softmax sum over e experts, low trip; non-bit-identical
 		for j, v := range row {
 			dst[j] = math.Exp(v - m)
 			sum += dst[j]
@@ -79,7 +81,9 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 		// scores[idx[a]][ex] — a row-pointer load plus an index — on every one of the
 		// O(n log n) comparisons, to read a value that depends only on the token (PS3005).
 		// Filling it once per expert is O(n) and leaves the comparator a single load.
+		//perfscan:ignore PS6008 per-worker key scratch, dispatch once/call, sanctioned
 		key := make([]float64, n)
+		//perfscan:ignore PS6008 per-worker heap scratch, sanctioned
 		heap := make([]int, 0, capacity) // size-`capacity` selection heap of token ids, reused per expert
 		// worse(a,b): token id a ranks AFTER b under the total order (key desc, then id asc).
 		worse := func(a, b int) bool {
@@ -106,6 +110,7 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 		}
 		for ex := elo; ex < ehi; ex++ {
 			for i := 0; i < n; i++ {
+				//perfscan:ignore PS3016 memory-bound column gather; ~2%, memory-bound hides bce removal
 				key[i] = scores[i][ex]
 			}
 			// Select the top-`capacity` token ids into a min-heap whose ROOT is the WORST kept,
@@ -131,13 +136,17 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 					siftDown(0)
 				}
 			}
+			//perfscan:ignore PS2008 resource-only per-expert make, no wallclock
 			sel := make([]int, len(heap))
 			copy(sel, heap)
+			//perfscan:ignore PS3002,PS6009 sel capacity-sized short slice, radix loses; tiny share | short capacity-sized sort per expert, routing small
 			sort.Slice(sel, func(a, b int) bool { return worse(sel[b], sel[a]) })
 			tokens[ex] = sel
+			//perfscan:ignore PS2008 resource-only per-expert make
 			gr := make([]float64, capacity)
 			gates[ex] = gr
 			for i, t := range tokens[ex] {
+				//perfscan:ignore PS1010 gather scores[t][ex] by arbitrary token, not interchangeable; capacity-sized
 				gr[i] = scores[t][ex]
 			}
 		}
@@ -153,6 +162,7 @@ func ExpertChoiceRoute(scores [][]float64, capacity int) (tokens [][]int, gates 
 func ExpertChoiceCombine(tokens [][]int, gates [][]float64, expertOut [][][]float64, nTokens, dim int) [][]float64 {
 	y := make([][]float64, nTokens)
 	for t := range y {
+		//perfscan:ignore PS2008,PS3064 resource-only per-row make | resource-only [][]->flat allocs
 		y[t] = make([]float64, dim)
 	}
 	for ex := range tokens {

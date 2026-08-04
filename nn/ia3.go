@@ -40,6 +40,7 @@ func NewIA3(d int, dtype tensor.Dtype) (*IA3, error) {
 
 // Forward rescales x[..., d] by the learned vector: y[..., j] = Scale[j]·x[..., j].
 func (a *IA3) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpIA3, []*tensor.Tensor{x, a.Scale}, nil)
 	if err != nil {
 		return nil, err

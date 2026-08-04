@@ -72,6 +72,7 @@ func StarCoder2FromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) 
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &StarCoder2{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 GGUF loader loop, one-time model load
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -248,6 +249,7 @@ func StarCoder2ToGGUF(m *StarCoder2) (map[string]any, map[string]*tensor.Tensor)
 		"output_norm.bias":   cloneF64(m.Norm.Beta),
 		"output.weight":      transpose2D(m.Out), // [dim,vocab] → [vocab,dim] (untied head)
 	}
+	//perfscan:ignore PS3060 GGUF export loop, one-time
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.InputNorm.Gamma)

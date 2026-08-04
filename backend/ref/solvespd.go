@@ -12,6 +12,8 @@ import (
 // forward-substitute L·Y = B, then back-substitute Lᵀ·X = Y. B (and X) is a vector
 // [n] or a matrix [n,k] of right-hand sides. All arithmetic is f64 (§V10); the SPD
 // and shape errors on A come from the shared Cholesky factorization.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: solvespd wants 2 inputs (A, B), got %d", len(in))
@@ -76,10 +78,12 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		for p := range i {
 			lip, yp := lat(i, p), y[p*k:p*k+k]
 			for c := range k {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				yi[c] -= lip * yp[c]
 			}
 		}
 		d := lat(i, i)
+		//perfscan:ignore PS5001 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for c := range k {
 			yi[c] /= d
 		}
@@ -90,10 +94,12 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		for p := i + 1; p < n; p++ {
 			lpi, xp := lat(p, i), x[p*k:p*k+k] // Lᵀ[i,p] = L[p,i]
 			for c := range k {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				xi[c] -= lpi * xp[c]
 			}
 		}
 		d := lat(i, i)
+		//perfscan:ignore PS5001 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for c := range k {
 			xi[c] /= d
 		}
@@ -113,6 +119,7 @@ func solveSPDKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpSolveSPD, tensor.F32, solveSPDKernel)
 	std.add(backend.OpSolveSPD, tensor.F64, solveSPDKernel)
 }

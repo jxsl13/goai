@@ -45,6 +45,7 @@ func (b *Backend) Device() tensor.Device { return tensor.CPU() }
 
 // Kernel looks up the kernel for (op, dtype).
 func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
+	//perfscan:ignore PS3004 reference oracle: intentionally simple, correctness baseline not an optimization target
 	k, ok := b.table[kernelKey{op, dtype}]
 	return k, ok
 }

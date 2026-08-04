@@ -71,8 +71,10 @@ func GumbelSoftmaxHard(ctx *backend.Context, logits, noise *tensor.Tensor, tau f
 	batch, c := ySoft.Shape()[0], ySoft.Shape()[1]
 	// y_hard = argmax one-hot (a non-differentiable constant).
 	yHard := tensor.New(ySoft.Dtype(), ySoft.Shape())
+	//perfscan:ignore PS1001 only batch stores (one per row), negligible
 	for b := range batch {
 		best, bv := 0, math.Inf(-1)
+		//perfscan:ignore PS1001,PS3068 argmax dominated by surrounding softmax/add/mul ops | niche ST-GS one-hot argmax, backend-op dominated
 		for j := range c {
 			if v := ySoft.AtF64(b, j); v > bv {
 				best, bv = j, v

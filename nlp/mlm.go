@@ -49,6 +49,7 @@ func MLMMaskExcluding(tokens []int, maskProb float64, maskID, vocabSize int, spe
 		}
 	}
 	for i, tok := range tokens {
+		//perfscan:ignore PS3007 tiny specialIDs set, RNG-dominated dataprep loop
 		if _, isSpecial := special[tok]; isSpecial {
 			continue // protected: no selection, no RNG draw
 		}

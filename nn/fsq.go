@@ -97,6 +97,7 @@ func (f *FSQ) Quantize(ctx *backend.Context, z *tensor.Tensor) (codes *tensor.Te
 	}
 	row := func(vals []float64) *tensor.Tensor { // [1,d] per-channel constant to broadcast
 		t := tensor.New(z.Dtype(), tensor.Shape{1, d})
+		//perfscan:ignore PS1005 [1,d] per-channel constant build, d=levels tiny
 		for i, v := range vals {
 			t.SetF64(v, 0, i)
 		}
@@ -130,6 +131,7 @@ func (f *FSQ) Quantize(ctx *backend.Context, z *tensor.Tensor) (codes *tensor.Te
 	indices = make([]int, batch)
 	for b := range batch {
 		flat, stride := 0, 1
+		//perfscan:ignore PS1001 index extract over batch×d small; elementwise ops dominate
 		for i := range d {
 			r := math.Round(bounded.AtF64(b, i))
 			rounded.SetF64(r, b, i)

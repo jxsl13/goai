@@ -159,7 +159,9 @@ func NewCoconut(cfg CoconutConfig, seed uint64, opts ...CoconutOption) (*Coconut
 		attn.Causal = true // decoder-only: thoughts may only look backwards
 		g.Blocks = append(g.Blocks, &Block{
 			LN1: ln(), LN2: ln(), Attn: attn,
+			//perfscan:ignore PS6016 model-construction block alloc, one-time init
 			W1: randn(s+4, cfg.Dim, 4*cfg.Dim), B1: tensor.New(tensor.F64, tensor.Shape{4 * cfg.Dim}),
+			//perfscan:ignore PS6016 model-construction block alloc, one-time init
 			W2: randn(s+5, 4*cfg.Dim, cfg.Dim), B2: tensor.New(tensor.F64, tensor.Shape{cfg.Dim}),
 		})
 	}
@@ -267,6 +269,7 @@ func (c *Coconut) latentPrefix(ctx *backend.Context, prompt []int, k int) (*tens
 				return nil, 0, err
 			}
 			// the continuous thought: the last row of the final hidden state
+			//perfscan:ignore PS6017 OpSlice dwarfed by full transformer forward per thought
 			if row, err = exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: pos - 1, End: pos}, h); err != nil {
 				return nil, 0, err
 			}
@@ -399,10 +402,12 @@ func (c *Coconut) Generate(ctx *backend.Context, prompt []int, k, maxNew int) ([
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpSlice last-row trivial vs hiddenFromEmbed forward
 		last, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: pos - 1, End: pos}, h)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 single LM-head matvec dispatch, not restructurable
 		logits, err := exec1(ctx, backend.OpMatMul, nil, last, c.GPT.Head)
 		if err != nil {
 			return nil, err
@@ -421,6 +426,7 @@ func (c *Coconut) Generate(ctx *backend.Context, prompt []int, k, maxNew int) ([
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpConcat tiny vs full re-forward it feeds
 		if x, err = exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, x, xt); err != nil {
 			return nil, err
 		}

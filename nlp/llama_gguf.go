@@ -130,6 +130,7 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &Llama{Config: cfg, TokEmb: cloneF64(tok)} // embedding: [vocab,dim], no transpose
+	//perfscan:ignore PS3060 GGUF model-load layer loop, one-time
 	for l := range layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -141,7 +142,9 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 		}
 		names := []string{"attn_norm.weight", "attn_q.weight", "attn_k.weight", "attn_v.weight",
 			"attn_output.weight", "ffn_norm.weight", "ffn_gate.weight", "ffn_up.weight", "ffn_down.weight"}
+		//perfscan:ignore PS3035 alloc in model-load loop, one-time
 		w := make([]*tensor.Tensor, len(names))
+		//perfscan:ignore PS3066 model-load name loop, one-time
 		for i, n := range names {
 			if w[i], err = g(n); err != nil {
 				return nil, err
@@ -225,6 +228,7 @@ func llamaArchFromGGUF(arch string, meta map[string]any, tensors map[string]*ten
 func LlamaToGGUF(m *Llama) (map[string]any, map[string]*tensor.Tensor) {
 	meta, ts := llamaArchToGGUF("llama", m)
 	c := m.Config
+	//perfscan:ignore PS5001 GGUF export serialize loop, one-time
 	for l := range c.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		if wq, ok := ts[p+"attn_q.weight"]; ok {
@@ -269,6 +273,7 @@ func llamaArchToGGUF(arch string, m *Llama) (map[string]any, map[string]*tensor.
 		"output_norm.weight": cloneF64(m.Norm.Gamma),
 		"output.weight":      transpose2D(m.Out), // [dim,vocab] → [vocab,dim]
 	}
+	//perfscan:ignore PS3060 GGUF export block serialize loop, one-time
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.AttnNorm.Gamma)
@@ -452,6 +457,8 @@ func swiGLUFromGGUF(gate, up, down *tensor.Tensor) *nn.SwiGLU {
 // transpose2D returns the [b,a] transpose of a [a,b] tensor (F64). Runs once per
 // weight matrix at model load — a direct typed index transpose (§base-perf) instead
 // of per-element AtF64/SetF64 dispatch keeps loading large models fast.
+//
+//perfscan:ignore PS6004 resource-only in load/serialize, one-time
 func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 	a, b := t.Shape()[0], t.Shape()[1]
 	out := tensor.New(tensor.F64, tensor.Shape{b, a})
@@ -479,6 +486,7 @@ func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 					jMax := min(jj+tile, b)
 					for i := ii; i < iMax; i++ {
 						row := i * b
+						//perfscan:ignore PS4004 model load/serialize path, one-time
 						for j := jj; j < jMax; j++ {
 							dst[j*a+i] = src[row+j]
 						}

@@ -27,6 +27,7 @@ func parallelBands(n, workPerItem int, body func(lo, hi int)) {
 		return
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 one-time chunk-size calc in fan-out helper, already work-sized
 	chunk := (n + nw - 1) / nw
 	for lo := 0; lo < n; lo += chunk {
 		hi := min(lo+chunk, n)

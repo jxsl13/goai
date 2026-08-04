@@ -165,6 +165,7 @@ func WriteFile(path string, f *File) error {
 	if err != nil {
 		return err
 	}
+	//perfscan:ignore PS3029 WriteFile error-path Close; one-time GGUF write
 	if err := Write(out, f); err != nil {
 		out.Close()
 		return err
@@ -233,6 +234,7 @@ var ggufIsLE = func() bool {
 	return *(*byte)(unsafe.Pointer(&x)) == 1
 }()
 
+//perfscan:ignore PS6004 resource-only class; one-time serialize write path
 func (wr *writer) f32Data(t *tensor.Tensor) {
 	if wr.err != nil {
 		return

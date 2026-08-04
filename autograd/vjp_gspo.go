@@ -49,10 +49,12 @@ func init() {
 			var d float64
 			switch {
 			case typedF64:
+				//perfscan:ignore PS3010 already typed F64 flat-slice fast path (the optimization itself)
 				for t := 0; t < l; t++ {
 					d += lpNewF64[off+t] - lpOldF64[off+t]
 				}
 			case typedF32:
+				//perfscan:ignore PS3010 already typed F32 flat-slice fast path
 				for t := 0; t < l; t++ {
 					d += float64(lpNewF32[off+t]) - float64(lpOldF32[off+t])
 				}
@@ -64,6 +66,7 @@ func init() {
 			s := math.Exp(d / float64(l))
 			a := adv.AtF64(i)
 			surr1 := s * a
+			//perfscan:ignore PS3077,PS3082 per-sequence scalar min/max (O(#seq)), not in token loop | per-sequence scalar clip, negligible
 			surr2 := math.Max(1-eps, math.Min(1+eps, s)) * a
 
 			var dsurr float64

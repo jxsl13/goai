@@ -28,6 +28,7 @@ func PackSequences(seqs [][]int, maxLen int) (blocks, docIDs [][]int) {
 		order[i] = i
 	}
 	// first-fit-DECREASING: place longer sequences first for tighter packing.
+	//perfscan:ignore PS3002,PS6009 SliceStable on doc-count slice, cold training data-prep | cold training data-prep sort, not hot path
 	sort.SliceStable(order, func(a, b int) bool { return len(seqs[order[a]]) > len(seqs[order[b]]) })
 
 	var rem []int // remaining capacity per block

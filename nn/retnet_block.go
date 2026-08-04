@@ -91,6 +91,7 @@ func (b *RetNetBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		// magnitude decay is carried entirely by the retention γ^(n−m) mask, so applying the full
 		// xPos ζ-scaling here would double-count the decay (research-lite CONFIRMED vs paper §2 +
 		// torchscale theta_shift). ref-only op; the GPU path falls back for it (§I4).
+		//perfscan:ignore PS3024 per-head RoPE dispatch; matmul-dominated false positive
 		q, err = b.exec(ctx, backend.OpRoPE, backend.RoPEAttrs{}, q)
 		if err != nil {
 			return nil, err
@@ -99,10 +100,12 @@ func (b *RetNetBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head RoPE dispatch; matmul-dominated false positive
 		k, err = b.exec(ctx, backend.OpRoPE, backend.RoPEAttrs{}, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 per-head AXPY dispatch; matmul-dominated false positive | loop-invariant attr struct literal; resource-only pe
 		ks, err := b.exec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: b.scale}, k, tensor.New(x.Dtype(), k.Shape()))
 		if err != nil {
 			return nil, err
@@ -111,10 +114,12 @@ func (b *RetNetBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head retention dispatch; kernel-dominated false positive
 		ret, err := b.exec(ctx, backend.OpRetention, backend.RetentionAttrs{Gamma: b.gammas[h]}, q, ks, v)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6016 per-head RMSNorm dispatch; matmul-dominated false positive | loop-invariant norm-attr literal; resource-only p
 		gn, err := b.exec(ctx, backend.OpRMSNorm, backend.NormAttrs{Eps: b.eps}, ret, b.normG)
 		if err != nil {
 			return nil, err
@@ -123,10 +128,12 @@ func (b *RetNetBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head SiLU dispatch; matmul-dominated false positive
 		gact, err := b.exec(ctx, backend.OpSiLU, nil, g)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head Mul dispatch; matmul-dominated false positive
 		gated, err := b.exec(ctx, backend.OpMul, nil, gact, gn)
 		if err != nil {
 			return nil, err
@@ -137,6 +144,7 @@ func (b *RetNetBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 		}
 		if out == nil {
 			out = oh
+			//perfscan:ignore PS3024 per-head Add dispatch; matmul-dominated false positive
 		} else if out, err = b.exec(ctx, backend.OpAdd, nil, out, oh); err != nil {
 			return nil, err
 		}

@@ -28,6 +28,7 @@ func init() {
 		gc := g.Contiguous()
 		gAx := g.Shape()[ax]
 		grads := make([]*tensor.Tensor, len(in))
+		//perfscan:ignore PS3044 false-positive: no reduction, grads[i] independent; few concat inputs
 		for i, t := range in {
 			off := offsets[i]
 			s := t.Shape()
@@ -62,6 +63,7 @@ func init() {
 				}
 			}
 			if !done { // generic per-element fallback (exotic dtype / layout)
+				//perfscan:ignore PS3044 declined-dtype fallback; F64/F32 bulk-copy fastpath above
 				for e := range t.Numel() {
 					coords := tensor.Unravel(e, s)
 					gco := append([]int(nil), coords...)

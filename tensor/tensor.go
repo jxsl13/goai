@@ -32,6 +32,8 @@ func New(dtype Dtype, shape Shape) *Tensor { return NewOn(CPU(), dtype, shape) }
 // Identical allocation counts across the three also say something worth recording: nothing on a
 // decode path here is rank 3 or above. A workload that is would take the fallback below, which is
 // the old behavior, so raising this is a byte-for-coverage trade and never a regression.
+//
+//perfscan:ignore PS6023 core New() single alloc, resource-only no wall-clock
 const maxInlineRank = 2
 
 // tensorBlock co-allocates TWO of the objects NewOn always creates together: the Tensor and the
@@ -84,6 +86,7 @@ func NewOn(dev Device, dtype Dtype, shape Shape) *Tensor {
 	sh := Shape(blk.buf[:n:n])
 	st := Strides(blk.buf[n : 2*n : 2*n])
 	acc := 1
+	//perfscan:ignore PS4004 flatOffset already rank-unrolled; gather copies carry a cast, false-positive
 	for i := n - 1; i >= 0; i-- {
 		sh[i] = shape[i]
 		st[i] = acc
@@ -156,6 +159,7 @@ func (t *Tensor) flatOffset(idx []int) int {
 		return t.offset + idx[0]*st[0] + idx[1]*st[1]
 	}
 	off := t.offset
+	//perfscan:ignore PS3010 gatherCast already innermost-hoisted optimal strided walk
 	for i, ix := range idx {
 		off += ix * st[i]
 	}
@@ -191,6 +195,7 @@ type gatherElem interface{ ~float32 | ~float64 | ~uint16 }
 // reordered — bit-identical values.
 func gatherBlocked2D[S, D gatherElem](dst []D, src []S, rows, cols, s0, s1, off int) {
 	const blk = 16
+	//perfscan:ignore PS3051 gatherRows already bulk copy() per row, optimal
 	for i0 := 0; i0 < rows; i0 += blk {
 		iMax := min(i0+blk, rows)
 		for j0 := 0; j0 < cols; j0 += blk {

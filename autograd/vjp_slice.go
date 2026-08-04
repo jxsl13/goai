@@ -59,6 +59,7 @@ func init() {
 		}
 		if !copied { // generic per-element fallback (exotic dtype / layout)
 			gShape := g.Shape()
+			//perfscan:ignore PS3044 declined-dtype generic fallback; F32/F64 bulk-copy fast path above is hot
 			for e := range g.Numel() {
 				c := tensor.Unravel(e, gShape)
 				xc := append([]int(nil), c...)

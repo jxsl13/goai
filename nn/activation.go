@@ -24,6 +24,7 @@ func Sigmoid() *Activation { return &Activation{op: backend.OpSigmoid} }
 
 // Forward applies the activation elementwise through ctx.
 func (a *Activation) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only per rule)
 	out, err := backend.Execute(ctx, a.op, []*tensor.Tensor{x}, nil)
 	if err != nil {
 		return nil, err

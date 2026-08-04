@@ -18,6 +18,8 @@ import (
 //
 // Geometry (vocab, context, dim, layers) is inferred from the tensor shapes;
 // heads must be supplied (GPT-2: 12 for 124M). Eps is GPT-2's 1e-5.
+//
+//perfscan:ignore PS6004 verification-gap not perf; load-time GPT2FromHF dual-path
 func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 	wte, wpe := ts["wte.weight"], ts["wpe.weight"]
 	if wte == nil || wpe == nil {
@@ -47,6 +49,7 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 		src, dst := wtec.Storage().F64(), head.Storage().F64()
 		for vv := 0; vv < vocab; vv++ {
 			row := vv * d
+			//perfscan:ignore PS4004 one-time load transpose, strided store no contiguous run
 			for j := 0; j < d; j++ {
 				dst[j*vocab+vv] = src[row+j]
 			}
@@ -55,6 +58,7 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 		src, dst := wtec.Storage().F32(), head.Storage().F32()
 		for vv := 0; vv < vocab; vv++ {
 			row := vv * d
+			//perfscan:ignore PS4004 one-time load transpose, strided store no contiguous run
 			for j := 0; j < d; j++ {
 				dst[j*vocab+vv] = src[row+j]
 			}
@@ -66,6 +70,7 @@ func GPT2FromHF(ts map[string]*tensor.Tensor, heads int) (*GPT, error) {
 		src, dst := wtec.Storage().U16(), head.Storage().U16()
 		for vv := 0; vv < vocab; vv++ {
 			row := vv * d
+			//perfscan:ignore PS4004 one-time F16/BF16 load transpose, strided no run
 			for j := 0; j < d; j++ {
 				dst[j*vocab+vv] = src[row+j]
 			}

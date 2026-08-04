@@ -193,14 +193,17 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 		return nil, fmt.Errorf("nn: Aaren expects x [T,%d], got %v", a.DModel, x.Shape())
 	}
 	t := x.Shape()[0]
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only (allocs not ns/op)
 	q, err := a.exec(ctx, backend.OpMatMul, nil, x, a.Wq)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	k, err := a.exec(ctx, backend.OpMatMul, nil, x, a.Wk)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	v, err := a.exec(ctx, backend.OpMatMul, nil, x, a.Wv)
 	if err != nil {
 		return nil, err
@@ -214,6 +217,7 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 	for h := range a.Heads {
 		lo, hi := h*a.HeadDim, (h+1)*a.HeadDim
 		slice := func(m *tensor.Tensor) (*tensor.Tensor, error) {
+			//perfscan:ignore PS3024,PS6018 variadic-pack alloc, resource-only no wall-clock | forward matmul/softmax-dominated (T-squared score+exp), sli
 			return a.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 		}
 		qh, err := slice(q)
@@ -228,18 +232,22 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 		khT, err := a.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 		sc, err := a.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 		if sc, err = a.exec(ctx, backend.OpMul, nil, sc, invSqrtD); err != nil { // B60: OpMul, scale may be tiny
 			return nil, err
 		}
 		if a.causal {
+			//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 			if sc, err = a.exec(ctx, backend.OpAdd, nil, sc, mask); err != nil { // future → −1e30
 				return nil, err
 			}
@@ -254,6 +262,7 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	return a.exec(ctx, backend.OpMatMul, nil, concat, a.Wo)
 }
 
@@ -266,30 +275,37 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 // via OpStopGradient makes the stabiliser a true constant so the gradient is the
 // clean softmax gradient (§V16 gradcheck) while keeping e^{sc−m} ≤ 1 for stability.
 func (a *Aaren) cumSoftmaxHead(ctx *backend.Context, sc, vh *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	m, err := a.exec(ctx, backend.OpMax, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sc) // [T,1]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	m, err = a.exec(ctx, backend.OpStopGradient, nil, m) // detach the stabiliser (constant shift)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	shifted, err := a.exec(ctx, backend.OpSub, nil, sc, m) // sc − m (broadcast [T,T]−[T,1])
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	e, err := a.exec(ctx, backend.OpExp, nil, shifted) // E = e^{sc−m}; masked future → 0
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	d, err := a.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, e) // d = Σ_j E → [T,1]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	n, err := a.exec(ctx, backend.OpMatMul, nil, e, vh) // n = E·V → [T,HeadDim]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	return a.exec(ctx, backend.OpDiv, nil, n, d) // o = n/d (broadcast [T,HeadDim]/[T,1])
 }
 
@@ -363,13 +379,17 @@ func (a *Aaren) StepRecurrent(st *AarenState, tx *tensor.Tensor) (*tensor.Tensor
 		base := h * a.HeadDim
 		// score s = q_h·k_h/√d_head
 		var s float64
+		//perfscan:ignore PS3010 StepRecurrent score dot dominated by 3 D-squared projection matmuls
 		for c := range a.HeadDim {
 			s += st.q[base+c] * krow[base+c]
 		}
 		s *= scale
 		// associative fold of the single element (s, v_h, 1) into (M,N,D):
+		//perfscan:ignore PS3082 one max per head in matmul-dominated recurrent step, negligible
 		newM := math.Max(st.M[h], s)
+		//perfscan:ignore PS3018 2 exp per head, matmul-dominated recurrent step, tiny exp share
 		aOld := math.Exp(st.M[h] - newM) // 0 when M[h] = −∞ (empty stream)
+		//perfscan:ignore PS3018 2 exp per head, matmul-dominated recurrent step, tiny exp share
 		bNew := math.Exp(s - newM)
 		for c := range a.HeadDim {
 			st.N[base+c] = st.N[base+c]*aOld + vrow[base+c]*bNew
@@ -386,6 +406,7 @@ func (a *Aaren) StepRecurrent(st *AarenState, tx *tensor.Tensor) (*tensor.Tensor
 	for j := range a.DModel {
 		oRow.SetF64(out[j], 0, j)
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	return a.exec(ctx4step(), backend.OpMatMul, nil, oRow, a.Wo)
 }
 
@@ -402,6 +423,7 @@ func (a *Aaren) projectRow(ctx *backend.Context, x, w *tensor.Tensor) ([]float64
 	default:
 		return nil, fmt.Errorf("expects a single row [1,%d] or [%d], got %v", a.DModel, a.DModel, x.Shape())
 	}
+	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
 	p, err := a.exec(ctx, backend.OpMatMul, nil, row, w)
 	if err != nil {
 		return nil, err

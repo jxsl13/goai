@@ -66,6 +66,7 @@ func (a *Adapter) Forward(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 single GELU op, matmul-dominated (two Linears)
 	act, err := a.exec(ctx, a.Act, down) // f(·)
 	if err != nil {
 		return nil, err
@@ -74,6 +75,7 @@ func (a *Adapter) Forward(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 single residual-add op, matmul-dominated adapter
 	return a.exec(ctx, backend.OpAdd, h, up) // residual
 }
 

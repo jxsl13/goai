@@ -59,10 +59,13 @@ func NewPiSSA(w *tensor.Tensor, r int) (*LoRALinear, error) {
 	a := tensor.New(dt, tensor.Shape{in, r})
 	b := tensor.New(dt, tensor.Shape{r, out})
 	for k := 0; k < r; k++ {
+		//perfscan:ignore PS3082 PiSSA SVD weight init, one-time model construction
 		root := math.Sqrt(math.Max(0, sig.AtF64(k)))
+		//perfscan:ignore PS1001 factor init from SVD, one-time construction cold path
 		for i := 0; i < in; i++ {
 			a.SetF64(uFac.AtF64(i, k)*root, i, k)
 		}
+		//perfscan:ignore PS1001 factor init, one-time PiSSA construction
 		for j := 0; j < out; j++ {
 			b.SetF64(root*vFac.AtF64(j, k), k, j)
 		}
@@ -71,8 +74,10 @@ func NewPiSSA(w *tensor.Tensor, r int) (*LoRALinear, error) {
 	// residual base W_res = W − A·B (frozen).
 	wres := tensor.New(dt, tensor.Shape{in, out})
 	for i := 0; i < in; i++ {
+		//perfscan:ignore PS1001 residual W-A·B init, one-time construction
 		for j := 0; j < out; j++ {
 			var ab float64
+			//perfscan:ignore PS1001 residual accumulate at init, one-time cold path
 			for k := 0; k < r; k++ {
 				ab += a.AtF64(i, k) * b.AtF64(k, j)
 			}
@@ -87,6 +92,7 @@ func transpose2D(t *tensor.Tensor) *tensor.Tensor {
 	m, n := t.Shape()[0], t.Shape()[1]
 	out := tensor.New(t.Dtype(), tensor.Shape{n, m})
 	for i := 0; i < m; i++ {
+		//perfscan:ignore PS1001 transpose2D used only at PiSSA init, one-time
 		for j := 0; j < n; j++ {
 			out.SetF64(t.AtF64(i, j), j, i)
 		}

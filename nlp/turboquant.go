@@ -28,23 +28,30 @@ func randomOrthogonal(d int, seed uint64) [][]float64 {
 	// rows of a Gaussian matrix, orthonormalized in place by modified Gram-Schmidt.
 	q := make([][]float64, d)
 	for i := range q {
+		//perfscan:ignore PS2008,PS3064 resource-only alloc; one-time matrix build | one-time orthogonal-matrix construction (build once from seed)
 		q[i] = make([]float64, d)
+		//perfscan:ignore PS4006 reference-only path; cache uses hadamard fwht
 		for j := range q[i] {
 			q[i][j] = rng.NormFloat64()
 		}
 	}
+	//perfscan:ignore PS3034 Gram-Schmidt one-time construction
 	for i := range d {
 		// subtract the projections of the already-orthonormal rows 0..i-1 from row i
 		for k := range i {
 			var dot float64
+			//perfscan:ignore PS3010,PS3066 GS inner loop, one-time build
 			for j := range d {
+				//perfscan:ignore PS3016 GS loop, one-time build
 				dot += q[k][j] * q[i][j]
 			}
 			for j := range d {
+				//perfscan:ignore PS3075 norm accum, one-time construction
 				q[i][j] -= dot * q[k][j]
 			}
 		}
 		var norm float64
+		//perfscan:ignore PS3010 norm accum, one-time construction
 		for j := range d {
 			norm += q[i][j] * q[i][j]
 		}
@@ -87,9 +94,11 @@ func (p *polarRotation) apply(x []float64) ([]float64, error) {
 	// FMA latency chain. Each out[i] still sums j ascending over identical
 	// operands → bit-identical (free-dim jam, not an inner-reduction split).
 	i := 0
+	//perfscan:ignore PS3066,PS3076 polarRotation.apply reference-only (unused by cache), already unrolled | reference-only apply, already 4-way u
 	for ; i+3 < p.d; i += 4 {
 		r0, r1, r2, r3 := p.q[i], p.q[i+1], p.q[i+2], p.q[i+3]
 		var a0, a1, a2, a3 float64
+		//perfscan:ignore PS3010 apply inner, reference-only path
 		for j := range p.d {
 			xv := x[j]
 			a0 += r0[j] * xv
@@ -102,6 +111,7 @@ func (p *polarRotation) apply(x []float64) ([]float64, error) {
 	for ; i < p.d; i++ {
 		var acc float64
 		row := p.q[i]
+		//perfscan:ignore PS3010 apply tail, reference-only path
 		for j := range p.d {
 			acc += row[j] * x[j]
 		}
@@ -116,9 +126,12 @@ func (p *polarRotation) applyInverse(y []float64) ([]float64, error) {
 		return nil, fmt.Errorf("nlp: polarRotation.applyInverse wants len %d, got %d", p.d, len(y))
 	}
 	out := make([]float64, p.d)
+	//perfscan:ignore PS6010 applyInverse reference-only path, resource-only
 	for j := range p.d {
 		var acc float64
+		//perfscan:ignore PS3010 applyInverse reference-only path
 		for i := range p.d {
+			//perfscan:ignore PS1010 applyInverse reference-only path (cache uses fwht)
 			acc += p.q[i][j] * y[i]
 		}
 		out[j] = acc
@@ -140,6 +153,7 @@ func polarCodebook(b, d int) ([]float64, error) {
 	g := lloydMaxGaussian(b)
 	sd := math.Sqrt(float64(d))
 	out := make([]float64, len(g))
+	//perfscan:ignore PS5001 one-time tiny codebook loop; output feeds quantizer, hoist unsafe
 	for i, c := range g {
 		out[i] = c / sd
 	}
@@ -155,6 +169,7 @@ func lloydMaxGaussian(b int) []float64 {
 	n := 1 << b
 	// init centroids at uniform quantiles of the Gaussian (a good starting partition)
 	c := make([]float64, n)
+	//perfscan:ignore PS4003 one-time codebook init, tiny n=2^b
 	for i := range c {
 		p := (float64(i) + 0.5) / float64(n)
 		c[i] = gaussianQuantile(p)
@@ -163,6 +178,7 @@ func lloydMaxGaussian(b int) []float64 {
 	cdf := func(x float64) float64 { return 0.5 * math.Erfc(-x/math.Sqrt2) }
 	for iter := 0; iter < 100; iter++ {
 		// boundaries: midpoints between consecutive centroids; outer boundaries ±∞.
+		//perfscan:ignore PS3035 Lloyd iteration, one-time codebook build
 		bnd := make([]float64, n+1)
 		bnd[0], bnd[n] = math.Inf(-1), math.Inf(1)
 		for i := 1; i < n; i++ {
@@ -231,6 +247,7 @@ func gaussianQuantile(p float64) float64 {
 // boundaries are the midpoints between consecutive centroids, so nearest-centroid is exact).
 func nearestCentroid(v float64, cb []float64) int {
 	best, bestD := 0, math.Abs(v-cb[0])
+	//perfscan:ignore PS3068 low trip-count (2^bits centroids), linear scan optimal
 	for i := 1; i < len(cb); i++ {
 		if dd := math.Abs(v - cb[i]); dd < bestD {
 			best, bestD = i, dd
@@ -262,6 +279,7 @@ func (p *polarRotation) polarQuantize(x []float64, b int) (idx []int, norm float
 		return nil, 0, err
 	}
 	idx = make([]int, p.d)
+	//perfscan:ignore PS3065 polarQuantize reference-only path (unused by cache)
 	for i, v := range ru {
 		idx[i] = nearestCentroid(v, cb)
 	}
@@ -481,6 +499,7 @@ func (c *TurboQuantKVCache) compress(x []float64) (tqRow, error) {
 	}
 	idx := make([]int, c.m)
 	r := make([]float64, c.m)
+	//perfscan:ignore PS3065 reconstruct O(m) add, fwht-dominated
 	for i, v := range ru {
 		idx[i] = nearestCentroid(v, c.cb)
 		r[i] = v - c.cb[idx[i]]

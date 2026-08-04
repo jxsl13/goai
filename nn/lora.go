@@ -49,19 +49,23 @@ func (l *LoRALinear) exec(ctx *backend.Context, op backend.Op, attrs backend.Att
 
 // Forward computes y = x·W + (alpha/r)·(x·A)·B.
 func (l *LoRALinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 x·W matmul dispatch, matmul-dominated forward, no Go loop
 	base, err := l.exec(ctx, backend.OpMatMul, nil, x, l.W)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 x·A matmul dispatch, matmul-dominated forward
 	xa, err := l.exec(ctx, backend.OpMatMul, nil, x, l.A)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 xa·B matmul dispatch, matmul-dominated forward
 	delta, err := l.exec(ctx, backend.OpMatMul, nil, xa, l.B)
 	if err != nil {
 		return nil, err
 	}
 	// y = base + (alpha/r)·delta  via axpy
+	//perfscan:ignore PS3024 AXPY dispatch, memory-bound tail of matmul forward
 	return l.exec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: l.Alpha / float64(l.R)}, delta, base)
 }
 

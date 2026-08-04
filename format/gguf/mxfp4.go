@@ -43,6 +43,7 @@ func e8m0ToF32Half(e byte) float32 {
 func quantizeMXFP4(x []float32) []byte {
 	nb := len(x) / blockElems
 	out := make([]byte, nb*mxfp4BlockSize)
+	//perfscan:ignore PS3034 quantizeMXFP4 = offline weight-encode path, cold
 	for b := range nb {
 		blk := x[b*blockElems : (b+1)*blockElems]
 		var amax float64
@@ -58,8 +59,10 @@ func quantizeMXFP4(x []float32) []byte {
 		d := e8m0ToF32Half(e)
 		o := out[b*mxfp4BlockSize:]
 		o[0] = e
+		//perfscan:ignore PS3067 offline quantize argmin loop, cold encode path
 		for i, v := range blk {
 			best, bestErr := 0, math.Inf(1)
+			//perfscan:ignore PS3068 offline quantize 16-way argmin inner, cold
 			for k, kv := range mxfp4KValues {
 				if err := math.Abs(float64(d*kv) - float64(v)); err < bestErr {
 					best, bestErr = k, err

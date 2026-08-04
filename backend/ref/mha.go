@@ -17,6 +17,8 @@ import (
 //	S = (Qₕ·Kₕᵀ)/√dk  (+ causal −∞ for j>i);  A = softmax_j(S);  Oₕ = A·Vₕ
 //
 // f64 accumulation (§V10). Output columns [h·dk:(h+1)dk] hold head h.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: mha wants (Q,K,V), got %d inputs", len(in))
@@ -100,14 +102,17 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 							}
 							qrow := qs[i*dm+qOff : i*dm+qOff+dk]
 							m := math.Inf(-1)
+							//perfscan:ignore PS3053,PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 							for j := jmin; j < jmax; j++ {
 								krow := ks[j*kdm+kvOff : j*kdm+kvOff+dk]
 								var s float64
+								//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 								for d, qv := range qrow {
 									s += qv * krow[d]
 								}
 								s *= scale
 								if slopes != nil {
+									//perfscan:ignore PS3014 reference oracle: intentionally simple, correctness baseline not an optimization target
 									s += slopes[h] * float64(j-(off+i)) // ALiBi bias
 								}
 								row[j] = s
@@ -116,6 +121,7 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 								}
 							}
 							var sum float64
+							//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 							for j := jmin; j < jmax; j++ {
 								row[j] = math.Exp(row[j] - m)
 								sum += row[j]
@@ -123,10 +129,12 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 							for d := range obuf {
 								obuf[d] = 0
 							}
+							//perfscan:ignore PS1007,PS3049 reference oracle: intentionally simple, correctness baseline not an optimization target
 							for j := jmin; j < jmax; j++ {
 								w := row[j] / sum
 								vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk]
 								for d, vv := range vrow {
+									//perfscan:ignore PS3017,PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 									obuf[d] += w * vv
 								}
 							}
@@ -162,6 +170,7 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 				}
 				s *= scale
 				if slopes != nil {
+					//perfscan:ignore PS3014 reference oracle: intentionally simple, correctness baseline not an optimization target
 					s += slopes[h] * float64(j-(off+i)) // ALiBi bias
 				}
 				row[j] = s
@@ -170,12 +179,14 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j := jmin; j < jmax; j++ {
 				row[j] = math.Exp(row[j] - m)
 				sum += row[j]
 			}
 			for d := range dk {
 				var o float64
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for j := jmin; j < jmax; j++ {
 					o += (row[j] / sum) * v.AtF64(j, kvOff+d)
 				}

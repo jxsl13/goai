@@ -148,6 +148,7 @@ func JambaFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*Jam
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &Jamba{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 GGUF loader layer loop, one-time model load
 	for l := range layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -311,6 +312,7 @@ func jambaMoEFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor, p 
 		return nil, err
 	}
 	moe := &JambaMoE{Router: transpose2D(router), TopK: topK} // [E,dim] → [dim,E]
+	//perfscan:ignore PS3060 expert-build loop in loader, one-time model load
 	for i := range e {
 		moe.Experts = append(moe.Experts, &nn.SwiGLU{
 			Wgate: transpose2D(sub3D(gate, i)), // [ffn,dim] → [dim,ffn]
@@ -395,6 +397,7 @@ func JambaToGGUF(m *Jamba) (map[string]any, map[string]*tensor.Tensor) {
 	if !equalsTransposed(m.Out, m.TokEmb) {
 		ts["output.weight"] = transpose2D(m.Out) // untied head, [dim,vocab] → [vocab,dim]
 	}
+	//perfscan:ignore PS3060 JambaToGGUF serializer loop, one-time save
 	for l, layer := range m.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(layer.InputNorm.Gamma)
@@ -415,6 +418,7 @@ func JambaToGGUF(m *Jamba) (map[string]any, map[string]*tensor.Tensor) {
 			gates := make([]*tensor.Tensor, len(layer.MoE.Experts))
 			ups := make([]*tensor.Tensor, len(layer.MoE.Experts))
 			downs := make([]*tensor.Tensor, len(layer.MoE.Experts))
+			//perfscan:ignore PS3065 serializer expert-transpose loop, one-time save
 			for e, ex := range layer.MoE.Experts {
 				gates[e] = transpose2D(ex.Wgate) // [dim,ffn] → [ffn,dim]
 				ups[e] = transpose2D(ex.Wup)

@@ -84,6 +84,7 @@ func (m *GPTNeoX) DecodeStep(ctx *backend.Context, cache *GPTNeoXCache, token, p
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 single OpMHA decode dispatch; irreducible core op | decode attention dispatch; matmul-dominated
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err

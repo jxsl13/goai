@@ -138,6 +138,7 @@ func BeamSearch(next NextLogits, start []int, width, maxNew, eos int, alpha floa
 		}
 	}
 
+	//perfscan:ignore PS3002,PS3055,PS6009,PS6022 sorts `done` bounded by beam width (small), not vocab-sized | partial-selection over ≤width finished beams; tr
 	sort.SliceStable(done, func(i, j int) bool { return done[i].Score > done[j].Score })
 	if len(done) > width {
 		done = done[:width]

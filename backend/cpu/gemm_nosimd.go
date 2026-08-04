@@ -42,6 +42,7 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 			a2 := A[(i+2)*k : (i+2)*k+k : (i+2)*k+k]
 			a3 := A[(i+3)*k : (i+3)*k+k : (i+3)*k+k]
 			v0, v1, v2, v3 := C[i+0], C[i+1], C[i+2], C[i+3]
+			//perfscan:ignore PS3010 nosimd fallback build; already ikj 4-accumulator blocked
 			for p, bv := range B[:k] {
 				v0 += a0[p] * bv
 				v1 += a1[p] * bv
@@ -53,6 +54,7 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		for ; i < hiRow; i++ {
 			ar := A[i*k : i*k+k : i*k+k]
 			v := C[i]
+			//perfscan:ignore PS3010 gemmF32Band nosimd fallback, already ikj-blocked
 			for p, bv := range B[:k] {
 				v += ar[p] * bv
 			}
@@ -61,6 +63,7 @@ func gemmF64Band(A, B, C []float64, loRow, hiRow, k, n int) {
 		return
 	}
 	i := loRow
+	//perfscan:ignore PS3066 nosimd fallback kernel inner axpy, already optimal shape
 	for ; i+3 < hiRow; i += 4 {
 		c0 := C[(i+0)*n : (i+1)*n]
 		c1 := C[(i+1)*n : (i+2)*n]
@@ -169,6 +172,7 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 			a2 := A[(i+2)*k : (i+2)*k+k : (i+2)*k+k]
 			a3 := A[(i+3)*k : (i+3)*k+k : (i+3)*k+k]
 			v0, v1, v2, v3 := acc[i+0], acc[i+1], acc[i+2], acc[i+3]
+			//perfscan:ignore PS3010 same nosimd ikj kernel (stale line)
 			for p, bv := range B[:k] {
 				bf := float64(bv)
 				v0 += float64(a0[p]) * bf
@@ -181,6 +185,7 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		for ; i < hiRow; i++ {
 			ar := A[i*k : i*k+k : i*k+k]
 			v := acc[i]
+			//perfscan:ignore PS3010 nosimd fallback ikj kernel, not production SIMD path
 			for p, bv := range B[:k] {
 				v += float64(ar[p]) * float64(bv)
 			}
@@ -189,6 +194,7 @@ func gemmF32Band(A, B []float32, acc []float64, loRow, hiRow, k, n int) {
 		return
 	}
 	i := loRow
+	//perfscan:ignore PS3066 nosimd fallback inner axpy, already optimal
 	for ; i+3 < hiRow; i += 4 {
 		c0 := acc[(i+0)*n : (i+1)*n]
 		c1 := acc[(i+1)*n : (i+2)*n]

@@ -180,6 +180,7 @@ func NewSAC(env ContinuousEnv, opts ...SACOption) *SAC {
 	low, high := env.ActionBounds()
 	scale, center := boundsScaleCenter(low, high)
 	var logScaleSum float64
+	//perfscan:ignore PS3010 NewSAC constructor log-sum over actionDim, one-time
 	for i := range low {
 		logScaleSum += math.Log((high[i] - low[i]) / 2)
 	}
@@ -225,6 +226,7 @@ func contConst(c float64) *tensor.Tensor {
 func (s *SAC) sampleNoise(n int) *tensor.Tensor {
 	t := tensor.New(tensor.F64, tensor.Shape{n, s.actDim})
 	for i := 0; i < n; i++ {
+		//perfscan:ignore PS1005 noise fill dominated by NormFloat64 RNG per element
 		for j := 0; j < s.actDim; j++ {
 			t.SetF64(s.rng.NormFloat64(), i, j)
 		}
@@ -385,6 +387,7 @@ func (s *SAC) sacCriticTargets(next *tensor.Tensor, rewards []float64, dones []b
 	}
 	y := tensor.New(tensor.F64, tensor.Shape{len(rewards), 1})
 	for i := range rewards {
+		//perfscan:ignore PS3082 batch-256 Bellman combine, dominated by twin-critic MLP forwards
 		minQ := math.Min(q1.AtF64(i, 0), q2.AtF64(i, 0)) // clipped double-Q
 		soft := minQ - s.Alpha*logp2.AtF64(i, 0)
 		v := rewards[i]
@@ -453,6 +456,7 @@ func (s *SAC) sacActorLoss(ctx *backend.Context, states, eps *tensor.Tensor) (*t
 	}
 	var sum float64
 	n := logp.Shape()[0]
+	//perfscan:ignore PS1001 batch logp mean reduction, dominated by MLP forwards
 	for i := 0; i < n; i++ {
 		sum += logp.AtF64(i, 0)
 	}

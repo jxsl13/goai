@@ -293,6 +293,7 @@ func parse(r io.Reader) (*parsed, error) {
 		if nd > 8 {
 			return nil, fmt.Errorf("gguf: tensor %q has %d dims", name, nd)
 		}
+		//perfscan:ignore PS3035 load-time header parse, nd<=8 tiny alloc
 		dims := make([]uint64, nd)
 		for d := range dims {
 			if dims[d], err = rd.u64(); err != nil {
@@ -730,6 +731,7 @@ func dequantQ4_0Into(dst []float32, raw []byte) {
 var f16Table [1 << 16]float32
 
 func init() {
+	//perfscan:ignore PS3065 one-time package-init f16 lookup table build
 	for i := range f16Table {
 		f16Table[i] = f16ToF32bits(uint16(i))
 	}

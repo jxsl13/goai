@@ -88,6 +88,7 @@ func addBiasBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.
 	case tensor.F32:
 		gs, dbs := gc.Storage().F32(), db.Storage().F32()
 		parallelWork(n, m, func(lo, hi int) {
+			//perfscan:ignore PS6008 f64 accum scratch per parallel chunk (not per-row); required §V10 numerics
 			acc := make([]float64, hi-lo) // f64 accumulation (§V10); round only the store
 			for i := range m {
 				row := gs[i*n+lo : i*n+hi]

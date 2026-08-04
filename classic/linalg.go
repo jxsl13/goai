@@ -16,11 +16,15 @@ func cholSolve(a [][]float64, b []float64) ([]float64, error) {
 	n := len(a)
 	l := make([][]float64, n)
 	for i := range l {
+		//perfscan:ignore PS2008,PS3064 resource-only; desc says expect no speedup; cold OLS fit | resource-only slab; clock flat; cold OLS fit
 		l[i] = make([]float64, n)
 	}
+	//perfscan:ignore PS3034 false-positive: Cholesky rows not independent; cold fit
 	for i := range n {
 		for j := 0; j <= i; j++ {
+			//perfscan:ignore PS3016 cold OLS Fit path, small feature-count n
 			sum := a[i][j]
+			//perfscan:ignore PS4006 cold OLS Fit path, small feature-count n
 			for k := range j {
 				sum -= l[i][k] * l[j][k]
 			}
@@ -30,6 +34,7 @@ func cholSolve(a [][]float64, b []float64) ([]float64, error) {
 				}
 				l[i][i] = math.Sqrt(sum)
 			} else {
+				//perfscan:ignore PS3016 cold OLS Fit path, small feature-count n
 				l[i][j] = sum / l[j][j]
 			}
 		}
@@ -48,6 +53,7 @@ func cholSolve(a [][]float64, b []float64) ([]float64, error) {
 	for i := n - 1; i >= 0; i-- {
 		s := z[i]
 		for k := i + 1; k < n; k++ {
+			//perfscan:ignore PS1010,PS3016 back-substitution, cold OLS Fit, small n
 			s -= l[k][i] * x[k]
 		}
 		x[i] = s / l[i][i]

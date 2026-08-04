@@ -19,6 +19,8 @@ import (
 //	dQ_ni = Σ_{m≤n} dA_nm·K_mi ;  dK_mi = Σ_{n≥m} dA_nm·Q_ni ;  dV_mj = Σ_{n≥m} P_nm·dO_nj
 //
 // f64 accumulation (§V10).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func retentionBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 4 {
 		return nil, fmt.Errorf("ref: retention-backward wants (Q,K,V,dO), got %d inputs", len(in))
@@ -101,18 +103,23 @@ func retentionBackwardCore[T refFloat](qs, ks, vs, gs []float64, dqs, dks, dvs [
 		qrow := qs[n*kd : n*kd+kd]
 		grow := gs[n*vd : n*vd+vd]
 		dqrow := dqs[n*kd : n*kd+kd]
+		//perfscan:ignore PS3053 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for m := 0; m <= n; m++ {
 			decay := pow[n-m]
 			krow := ks[m*kd : m*kd+kd]
 			var a float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for i, qv := range qrow {
+				//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 				a += qv * krow[i]
 			}
 			pnm := a * decay
 			vrow := vs[m*vd : m*vd+vd]
 			dvrow := dvs[m*vd : m*vd+vd]
 			var dp float64
+			//perfscan:ignore PS3010,PS3074 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for j, gnj := range grow { // value dim
+				//perfscan:ignore PS3025 reference oracle: intentionally simple, correctness baseline not an optimization target
 				dp += gnj * vrow[j]
 				dvrow[j] = T(float64(dvrow[j]) + pnm*gnj)
 			}

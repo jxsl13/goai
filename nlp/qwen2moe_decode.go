@@ -74,15 +74,18 @@ func (m *Qwen2MoE) DecodeStep(ctx *backend.Context, cache *Qwen2MoeCache, token,
 			return nil, err
 		}
 		// RoPE the single token at its absolute position, then append k,v to the cache
+		//perfscan:ignore PS6016,PS6017 loop-invariant RoPEAttrs box; ~9.5ns/layer, matmul-dominated decode | resource-only variadic pack; RoPE dispat
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 loop-invariant RoPEAttrs box; matmul-dominated decode | resource-only variadic pack; RoPE dispatch, no wall-cl
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query at the last position attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 loop-invariant AttnAttrs box; MHA-dominated decode | 3-arg MHA has no pooled sibling; resource-only
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err

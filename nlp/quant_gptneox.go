@@ -167,9 +167,11 @@ func (m *QuantGPTNeoX) Forward(ctx *backend.Context, tokens []int) (*tensor.Tens
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch, kernel-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch, kernel-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}
@@ -293,6 +295,7 @@ func (m *QuantGPTNeoX) DecodeStep(ctx *backend.Context, cache *GPTNeoXCache, tok
 		kNew, vNew := cache.bufs.appendKV(cache.K, cache.V, l, k, v)
 		cache.K[l], cache.V[l] = kNew, vNew
 		// single query attends to all cached keys → no causal mask
+		//perfscan:ignore PS6016,PS6017 MHA attrs-literal dispatch, kernel-dominated | MHA op dispatch, kernel dominates, no lever
 		a, err := exec1(ctx, backend.OpMHA, backend.AttnAttrs{Heads: cfg.Heads, KVHeads: kv, Causal: false}, q, kNew, vNew)
 		if err != nil {
 			return nil, err
@@ -309,9 +312,11 @@ func (m *QuantGPTNeoX) DecodeStep(ctx *backend.Context, cache *GPTNeoXCache, tok
 			return nil, err
 		}
 		// Sum both sublayer outputs onto the raw residual.
+		//perfscan:ignore PS6017 OpAdd residual dispatch, kernel-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpAdd residual dispatch, kernel-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, f); err != nil {
 			return nil, err
 		}

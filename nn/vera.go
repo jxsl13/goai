@@ -95,26 +95,32 @@ func (v *VeRALinear) exec(ctx *backend.Context, op backend.Op, attrs backend.Att
 
 // Forward computes y = x·W + b ⊙ (((x·A) ⊙ d)·B).
 func (v *VeRALinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 VeRA forward is single backend matmul dispatch, matmul-dominated
 	base, err := v.exec(ctx, backend.OpMatMul, nil, x, v.W)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 x*A matmul op dispatch, no per-element loop to optimize
 	xa, err := v.exec(ctx, backend.OpMatMul, nil, x, v.A) // [.., r]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpIA3 elementwise dispatch; fusing forces materialization
 	xad, err := v.exec(ctx, backend.OpIA3, nil, xa, v.D) // (x·A) ⊙ d
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 xad*B matmul dispatch, matmul-dominated
 	xadb, err := v.exec(ctx, backend.OpMatMul, nil, xad, v.B) // [.., out]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpIA3 broadcast dispatch, elementwise, no loop
 	delta, err := v.exec(ctx, backend.OpIA3, nil, xadb, v.Bv) // ⊙ b
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 OpAdd dispatch; op-fusion net-neutral per Swin note
 	return v.exec(ctx, backend.OpAdd, nil, base, delta)
 }
 

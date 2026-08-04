@@ -26,6 +26,7 @@ func XavierUniform(t *tensor.Tensor, fanIn, fanOut int, seed uint64) {
 func KaimingNormal(t *tensor.Tensor, fanIn int, seed uint64) {
 	std := math.Sqrt(2.0 / float64(fanIn))
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
+	//perfscan:ignore PS1002 KaimingNormal weight-init, one-time model setup (cold)
 	fillGen(t, func() float64 { return rng.NormFloat64() * std })
 }
 
@@ -61,6 +62,7 @@ func Zeros(t *tensor.Tensor) {
 			return
 		}
 	}
+	//perfscan:ignore PS1002 Zeros fillGen fallback, cold init path
 	fillGen(t, func() float64 { return 0 })
 }
 
@@ -71,6 +73,7 @@ func fillUniform(t *tensor.Tensor, lo, hi float64, seed uint64) {
 	// float64(src.Uint64()<<11>>11)/(1<<53) and rng wrapped this same PCG, so the uint64
 	// stream, the float, and every drawn value are unchanged, one draw per element.
 	pcg := rand.NewPCG(seed, 0x6b79a2c3d4e5f601)
+	//perfscan:ignore PS1002 fillUniform weight-init, cold one-time
 	fillGen(t, func() float64 {
 		return lo + (float64(pcg.Uint64()<<11>>11)/(1<<53))*(hi-lo)
 	})
@@ -235,9 +238,11 @@ func TruncNormal(t *tensor.Tensor, seed uint64, opts ...TruncNormalOption) error
 	// only ~1.09× — repeatably under the 1.1× bar — so the conversion was
 	// reverted per the measurement gate rather than shipped for a sub-noise win.
 	rng := rand.New(rand.NewPCG(seed, 0x6b79a2c3d4e5f601))
+	//perfscan:ignore PS1001 TruncNormal init, measured 1.09x and reverted; cold
 	for i := range t.Numel() {
 		u := lo + rng.Float64()*(hi-lo)
 		v := math.Erfinv(u)*cfg.std*math.Sqrt2 + cfg.mean
+		//perfscan:ignore PS3077,PS3082 TruncNormal Erfinv init, one-time cold path | TruncNormal init, one-time cold path
 		v = math.Min(math.Max(v, cfg.a), cfg.b)
 		t.SetF64(v, tensor.Unravel(i, t.Shape())...)
 	}
@@ -335,11 +340,13 @@ func Orthogonal(t *tensor.Tensor, seed uint64, opts ...OrthogonalOption) error {
 
 	// Sign-fix Q's columns by sign(diag(R)); 0 → +1 (see doc).
 	qm := make([]float64, m*n)
+	//perfscan:ignore PS1005 Orthogonal QR sign-fix, cold init
 	for j := range n {
 		s := 1.0
 		if r.AtF64(j, j) < 0 {
 			s = -1
 		}
+		//perfscan:ignore PS1005 Orthogonal QR write-back, cold init
 		for i := range m {
 			qm[i*n+j] = q.AtF64(i, j) * s * cfg.gain
 		}
@@ -356,6 +363,7 @@ func Orthogonal(t *tensor.Tensor, seed uint64, opts ...OrthogonalOption) error {
 		qm = t2
 	}
 	idx := 0
+	//perfscan:ignore PS1002 Orthogonal fillGen write-back, cold init
 	fillGen(t, func() float64 {
 		v := qm[idx]
 		idx++

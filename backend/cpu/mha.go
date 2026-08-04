@@ -68,6 +68,7 @@ func mhaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	switch {
 	case q.Dtype() == tensor.F64:
 		mhaFwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), out.Storage().F64(), geo)
+	//perfscan:ignore PS3070 one-time routing-gate constant reused fwd/bwd; not a loop
 	case f32NativeKernels && sq >= mhaGemmMinSeq:
 		// Perf builds: route the two per-head matmuls (QKᵀ, A·V) through the
 		// f32-native SIMD gemmF32 (ADR-0021/0026 tolerance, not ulps-exact).
@@ -269,6 +270,7 @@ func dot4[T float32 | float64](a []float64, b []T) float64 {
 		s2 += a[d+2] * float64(b[d+2])
 		s3 += a[d+3] * float64(b[d+3])
 	}
+	//perfscan:ignore PS3010 <4-element remainder tail of dot4
 	for ; d < len(a) && d < len(b); d++ {
 		s0 += a[d] * float64(b[d])
 	}
@@ -290,6 +292,7 @@ func dot4x4[T float32 | float64](a []float64, b0, b1, b2, b3 []T) (float64, floa
 	n := len(a)
 	n = min(n, len(b0), len(b1), min(len(b2), len(b3)))
 	d := 0
+	//perfscan:ignore PS3066 already register-jammed dot4x4 fastpath plus remainder
 	for ; d+3 < n; d += 4 {
 		a0, a1, a2, a3 := a[d], a[d+1], a[d+2], a[d+3]
 		p0 += a0 * float64(b0[d])
@@ -309,6 +312,7 @@ func dot4x4[T float32 | float64](a []float64, b0, b1, b2, b3 []T) (float64, floa
 		t2 += a2 * float64(b3[d+2])
 		t3 += a3 * float64(b3[d+3])
 	}
+	//perfscan:ignore PS3010 <4 remainder tail of dot4x4
 	for ; d < n; d++ {
 		av := a[d]
 		p0 += av * float64(b0[d])
@@ -329,6 +333,7 @@ func dot4x4[T float32 | float64](a []float64, b0, b1, b2, b3 []T) (float64, floa
 func scoreRowF32[T float32 | float64](row, qw []float64, k []T, g mhaGeo, h, i, jmin, jmax, kvOff, dk int) float64 {
 	m := math.Inf(-1)
 	j := jmin
+	//perfscan:ignore PS3066 already 4-key-jammed scoreRowF32 fastpath plus remainder
 	for ; j+3 < jmax; j += 4 {
 		b0 := j*g.kvDM + kvOff
 		b1, b2, b3 := b0+g.kvDM, b0+2*g.kvDM, b0+3*g.kvDM
@@ -374,6 +379,7 @@ func dot4T[T ~float32 | ~float64](a, b []T) float64 {
 		s2 += float64(a[d+2]) * float64(b[d+2])
 		s3 += float64(a[d+3]) * float64(b[d+3])
 	}
+	//perfscan:ignore PS3010 <4 remainder tail of dot4T
 	for ; d < len(a) && d < len(b); d++ {
 		s0 += float64(a[d]) * float64(b[d])
 	}
@@ -419,8 +425,11 @@ func (g mhaGeo) bounds(i int) (int, int) {
 func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 	_, isF32 := any(q).([]float32) // dot4 reassociation fits the f32 budget only
 	parallelWork(g.heads*g.sq, g.sk*g.dk, func(lo, hi int) {
+		//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 		row := make([]float64, g.sk)
+		//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 		acc := make([]float64, g.dk)
+		//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
 		qf := make([]float64, g.dk)
 		dk := g.dk
 		for t := lo; t < hi; t++ {
@@ -431,6 +440,7 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 			qBase := i*g.dm + qOff
 			qr := q[qBase : qBase+dk : qBase+dk]
 			m := math.Inf(-1)
+			//perfscan:ignore PS3054 deliberate f32/f64 parity-budget split; arms must differ
 			if isF32 {
 				// FOUR KEYS PER PASS OVER THE QUERY ROW, as the F64 arm below has always done.
 				// This arm could not: its reduction sits behind dot4, so the query row was
@@ -497,6 +507,7 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 					kBase := j*g.kvDM + kvOff
 					kr := k[kBase : kBase+dk : kBase+dk]
 					var s float64
+					//perfscan:ignore PS3010 <8 remainder of 8-key-jammed f64 score loop
 					for d, qv := range qr {
 						s += float64(qv) * float64(kr[d])
 					}
@@ -511,12 +522,14 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 				}
 			}
 			var sum float64
+			//perfscan:ignore PS3054 deliberate f32-vectorized/f64-scalar exp parity split
 			if isF32 {
 				// f32 rides the 5e-5 parity budget: vectorized exp+sum matches
 				// the vexp band softmax the gemm path already uses (§V9). F64
 				// stays on scalar math.Exp to keep its ulp budget.
 				sum = simd.ExpSumF64(row[jmin:jmax], row[jmin:jmax], m)
 			} else {
+				//perfscan:ignore PS3010 exp-dominated f64 sum; exact order for ulp budget
 				for j := jmin; j < jmax; j++ {
 					row[j] = math.Exp(row[j] - m)
 					sum += row[j]
@@ -530,6 +543,7 @@ func mhaFwd[T float32 | float64](q, k, v, out []T, g mhaGeo) {
 			// contribution as two separate roundings in ascending-j order —
 			// identical values, half the trips over ac.
 			j := jmin
+			//perfscan:ignore PS3066 already 2-way-unrolled PV fastpath plus remainder
 			for ; j+1 < jmax; j += 2 {
 				p0 := row[j] / sum
 				p1 := row[j+1] / sum
@@ -599,6 +613,7 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	case q.Dtype() == tensor.F64:
 		mhaBwd(qc.Storage().F64(), kc.Storage().F64(), vc.Storage().F64(), gc.Storage().F64(),
 			dQ.Storage().F64(), dK.Storage().F64(), dV.Storage().F64(), geo)
+	//perfscan:ignore PS3070 one-time routing-gate constant; not a loop
 	case f32NativeKernels && seq >= mhaGemmMinSeq:
 		// Perf builds: route the five per-head matmuls (S, dA, dQ, dV, dK)
 		// through the f32-native SIMD band kernel (ADR-0021/0026 tolerance).
@@ -692,6 +707,7 @@ func mhaBwdGemmF32(q, k, v, g, dQ, dK, dV []float32, geo mhaGeo) {
 			vo := dV[base : base+dk : base+dk]
 			for d := range dk {
 				var sk, sv float32
+				//perfscan:ignore PS3010 memory-bound partial reduction; small fraction of backward
 				for hb := kv * rep * bands; hb < (kv+1)*rep*bands; hb++ {
 					off := hb*seq*dk + j*dk + d
 					sk += pk[off]
@@ -749,6 +765,7 @@ func mhaBwdGemmBand(q, g, dQ, pack []float32, partK, partV []float32, geo mhaGeo
 		pr := sb[r*seq : (r+1)*seq : (r+1)*seq]
 		dar := da[r*seq : (r+1)*seq : (r+1)*seq]
 		var dot float64
+		//perfscan:ignore PS3010 small O(seq) rowdot; five band-gemms dominate
 		for j := jmin; j < jmax; j++ {
 			dot += float64(pr[j]) * float64(dar[j])
 		}
@@ -791,6 +808,7 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 	kvOff := (h / geo.rep) * dk
 	qOff := h * dk
 	a, dA, dqRow := sc.a, sc.dA, sc.dqRow
+	//perfscan:ignore PS3043,PS3046 false-positive: dS depends on i via recomputed a[j] | dV reduction over query rows; axis not hoistable
 	for i := range seq {
 		jmax := seq
 		if causal {
@@ -811,14 +829,17 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			kr := k[kBase : kBase+dk : kBase+dk]
 			var s float64
 			if isF32 {
+				//perfscan:ignore PS3073 dot4T only on non-perf/seq<16 f32 backward; gemm otherwise
 				s = dot4T(qr, kr)
 			} else {
+				//perfscan:ignore PS3010 f64 backward score kept sequential-dot for ulp parity
 				for d, qv := range qr {
 					s += float64(qv) * float64(kr[d])
 				}
 			}
 			s *= scale
 			if slopes != nil {
+				//perfscan:ignore PS3014 ALiBi relative-position bias; algorithmically required
 				s += slopes[h] * float64(j-i)
 			}
 			a[j] = s
@@ -827,6 +848,7 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 			}
 		}
 		var sum float64
+		//perfscan:ignore PS3010,PS3066 exp-dominated softmax sum; exact-order f64 | softmax passes data-dependent (max/exp/normalize); not fusable
 		for j := jmin; j < jmax; j++ {
 			a[j] = math.Exp(a[j] - m)
 			sum += a[j]
@@ -842,6 +864,7 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 		// addition, every dav still sums over the same ascending d into its own accumulator, and
 		// dot still accumulates in ascending j.
 		jj := jmin
+		//perfscan:ignore PS3076 already 4-key register-blocked (swept optimum); wider spills
 		for ; jj+3 < jmax; jj += 4 {
 			b0 := jj*kvDM + kvOff
 			b1, b2, b3 := b0+kvDM, b0+2*kvDM, b0+3*kvDM
@@ -867,11 +890,13 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 				s2 += gid * float64(v2[d])
 				s3 += gid * float64(v3[d])
 			}
+			//perfscan:ignore PS3010 4-element fixed combine of jammed partials; trivial
 			for o, sv := range [4]float64{s0, s1, s2, s3} {
 				dA[jj+o] = sv
 				dot += sv * a[jj+o]
 			}
 		}
+		//perfscan:ignore PS3053 <4 remainder of 4-key-jammed dav loop
 		for j := jj; j < jmax; j++ {
 			kvBase := j*kvDM + kvOff
 			vr := v[kvBase : kvBase+dk : kvBase+dk]
@@ -925,6 +950,7 @@ func mhaBwdHead[T float32 | float64](q, k, v, g, dQ []T, dkAcc, dvAcc []float64,
 				dk3[d] += d3 * qd
 			}
 		}
+		//perfscan:ignore PS1007,PS3049 <4 remainder; main loop already register-hoists dq | <4 remainder of 4-key-jammed dq loop
 		for j := jd; j < jmax; j++ {
 			dS := scale * a[j] * (dA[j] - dot)
 			kvBase := j*kvDM + kvOff
@@ -964,7 +990,9 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 		// f64 GQA: per-group tasks, rep heads accumulate sequentially — ref's order.
 		parallelWork(kvHeads, rep*seq*seq*dk, func(glo, ghi int) {
 			sc := &mhaBwdScratch{a: make([]float64, seq), dA: make([]float64, seq), dqRow: make([]float64, dk)}
+			//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs backward
 			dkAcc := make([]float64, seq*dk)
+			//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs backward
 			dvAcc := make([]float64, seq*dk)
 			for kv := glo; kv < ghi; kv++ {
 				kvOff := kv * dk
@@ -1021,6 +1049,7 @@ func mhaBwd[T float32 | float64](q, k, v, g, dQ, dK, dV []T, geo mhaGeo) {
 			}
 			for d := range ko {
 				sk, sv := k0[d], v0[d]
+				//perfscan:ignore PS3010 low-trip (rep) strided partial reduction; memory-bound
 				for hr := 1; hr < rep; hr++ {
 					off := (h0+hr)*seq*dk + j*dk + d
 					sk += pk[off]

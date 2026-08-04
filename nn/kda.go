@@ -24,6 +24,7 @@ func dot4(x, y []float64) float64 {
 		s3 += x[i+3] * y[i+3]
 	}
 	s := (s0 + s1) + (s2 + s3)
+	//perfscan:ignore PS3010 cold rank-validation loop over 5-tensor literal, once/call
 	for ; i < n; i++ {
 		s += x[i] * y[i]
 	}
@@ -71,9 +72,11 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 	qt := make([]float64, dk)   // L2-normalized rows (the DeltaNet convention,
 	kt := make([]float64, dk)   // mirrored from GatedDeltaNet)
 	ar := make([]float64, dk)   // per-step decay row a_t (hoisted for the interchanged decay)
+	//perfscan:ignore PS1001,PS3046 KimiDeltaAttention = host f64 analysis util, test-only, no prod caller | reference host f64 util, test-only, n
 	for t := range seq {
 		bt := beta.AtF64(t, 0)
 		var qn, kn float64
+		//perfscan:ignore PS1001 reference host f64 util, test-only, no prod caller
 		for c := range dk {
 			qv, kv := q.AtF64(t, c), k.AtF64(t, c)
 			qt[c], kt[c] = qv, kv
@@ -96,6 +99,7 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 		// once (same dk AtF64 as before), then interchange the decay to r-outer so the inner
 		// loop scales S's CONTIGUOUS row instead of striding S[r*dk+c] down a column (stride
 		// dk) per channel. Bit-exact: an element-wise scale, no reduction to reorder.
+		//perfscan:ignore PS1001 reference host f64 util, test-only, no prod caller
 		for c := range dk {
 			ar[c] = a.AtF64(t, c)
 		}
@@ -110,11 +114,13 @@ func KimiDeltaAttention(q, k, v, a, beta *tensor.Tensor) (*tensor.Tensor, error)
 		// dot4 calls still see exactly the state the separate loops would have handed them,
 		// because each row's scale precedes its own S·k and its own delta write precedes its
 		// own S·q, which is the order the split loops produced for that row too.
+		//perfscan:ignore PS1001,PS3044 reference host f64 util, test-only, no prod caller
 		for r := range dv {
 			Srow := S[r*dk : r*dk+dk]
 			for c := range dk {
 				Srow[c] *= ar[c]
 			}
+			//perfscan:ignore PS3073 reference host f64 util, test-only, no prod caller
 			skr := dot4(Srow, kt)
 			sk[r] = skr
 			delta := bt * (v.AtF64(t, r) - skr)

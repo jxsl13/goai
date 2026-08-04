@@ -48,8 +48,10 @@ func NewDoRA(w *tensor.Tensor, r int, alpha float64, seed uint64) (*DoRALinear, 
 	b := tensor.New(w.Dtype(), tensor.Shape{r, out})
 	Zeros(b)
 	m := tensor.New(w.Dtype(), tensor.Shape{out})
+	//perfscan:ignore PS1001 NewDoRA constructor; one-time column-norm init
 	for j := range out {
 		var ss float64
+		//perfscan:ignore PS1001 NewDoRA constructor; one-time column-norm init
 		for i := range in {
 			v := w.AtF64(i, j)
 			ss += v * v
@@ -69,18 +71,22 @@ func (d *DoRALinear) exec(ctx *backend.Context, op backend.Op, attrs backend.Att
 
 // Forward computes y = x · (m ⊙ (W + (alpha/r)·A·B) / ‖·‖_col).
 func (d *DoRALinear) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 resource-only variadic pack; DoRA Forward matmul-dominated
 	ab, err := d.exec(ctx, backend.OpMatMul, nil, d.A, d.B) // ΔW direction [in,out]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic pack; DoRA Forward matmul-dominated
 	v, err := d.exec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: d.Alpha / float64(d.R)}, ab, d.W) // (alpha/r)·AB + W
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic pack; DoRA Forward matmul-dominated
 	wPrime, err := d.exec(ctx, backend.OpDoRAWeight, nil, v, d.M) // m·V/‖V‖_col
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic pack; DoRA Forward matmul-dominated
 	return d.exec(ctx, backend.OpMatMul, nil, x, wPrime)
 }
 

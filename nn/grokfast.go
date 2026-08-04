@@ -98,6 +98,7 @@ func (g *Grokfast) Step(grad GradFn) error {
 				if !g.inited {
 					ema[k] = gv // seed μ with the first gradient
 				}
+				//perfscan:ignore PS3084 memory-bound EMA stream; optim-update FMA bench-negative
 				ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv // μ = α·μ + (1−α)·g
 				hf64[k] = gv + g.Lambda*ema[k]           // ĝ = g + λ·μ
 			}
@@ -108,6 +109,7 @@ func (g *Grokfast) Step(grad GradFn) error {
 					if !g.inited {
 						ema[k] = gv
 					}
+					//perfscan:ignore PS3084 f32 memory-bound EMA stream, no FMA win
 					ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv
 					hf32[k] = float32(gv + g.Lambda*ema[k])
 				}
@@ -118,6 +120,7 @@ func (g *Grokfast) Step(grad GradFn) error {
 					if !g.inited {
 						ema[k] = gv
 					}
+					//perfscan:ignore PS3084 generic AtF64 declined-dtype fallback branch
 					ema[k] = g.Alpha*ema[k] + (1-g.Alpha)*gv
 					ghat.SetF64(gv+g.Lambda*ema[k], idx...)
 				}

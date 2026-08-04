@@ -246,6 +246,7 @@ func rlRollout(env Env, actor, critic *nn.Sequential, rng *rand.Rand, steps int)
 		obs := env.Reset()
 		var epR float64
 		for {
+			//perfscan:ignore PS1003 actor forward sequentially-dependent, matmul-dominated; wrapper alloc negligible
 			logits, err := forward(backend.NewContext(), actor, [][]float64{obs})
 			if err != nil {
 				return nil, err
@@ -255,6 +256,7 @@ func rlRollout(env Env, actor, critic *nn.Sequential, rng *rand.Rand, steps int)
 				return nil, err
 			}
 			a := sampleAction(probs[0], 0, k, rng)
+			//perfscan:ignore PS1003 same site superseded by PS6015 batching lead; wrapper-drop marginal
 			v, err := forward(backend.NewContext(), critic, [][]float64{obs})
 			if err != nil {
 				return nil, err
@@ -301,6 +303,7 @@ func rlNormAdv(adv []float64) *tensor.Tensor {
 // rlVec builds a rank-1 tensor from a slice.
 func rlVec(x []float64) *tensor.Tensor {
 	t := tensor.New(tensor.F64, tensor.Shape{len(x)})
+	//perfscan:ignore PS1005 rlVec one-time per-update [N] setup fill; dominated by epoch matmul training
 	for i, v := range x {
 		t.SetF64(v, i)
 	}
@@ -311,6 +314,7 @@ func rlVec(x []float64) *tensor.Tensor {
 // scaled by valueCoef (OpMul so a zero coefficient cleanly freezes the critic, §B60).
 func rlValueFit(critic *nn.Sequential, opt nn.Optimizer, states [][]float64, returns []float64, valueCoef float64, epochs int) error {
 	retT := tensor.New(tensor.F64, tensor.Shape{len(returns), 1})
+	//perfscan:ignore PS1005 rlValueFit retT one-time [N,1] fill before multi-epoch matmul training
 	for i, r := range returns {
 		retT.SetF64(r, i, 0)
 	}

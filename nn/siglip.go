@@ -108,6 +108,7 @@ func SigLIPLoss(ctx *backend.Context, image, text *tensor.Tensor, head *SigLIPHe
 	}
 	labels := tensor.New(image.Dtype(), tensor.Shape{n, n}) // +1 diagonal, −1 off
 	for i := range n {
+		//perfscan:ignore PS1001 constant pm1 label fill, matmul-dominated loss
 		for j := range n {
 			v := -1.0
 			if i == j {

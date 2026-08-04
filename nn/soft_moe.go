@@ -55,20 +55,24 @@ func (m *SoftMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 	if x.Ndim() != 2 || x.Shape()[1] != m.Phi.Shape()[0] {
 		return nil, fmt.Errorf("nn: SoftMoE expects x [n,%d], got %v", m.Phi.Shape()[0], x.Shape())
 	}
+	//perfscan:ignore PS3024 variadic-slice alloc only; matmul-dominated forward, resource-only
 	l, err := m.exec(ctx, backend.OpMatMul, nil, x, m.Phi) // logits [n, e·p]
 	if err != nil {
 		return nil, err
 	}
 	// dispatch D = softmax over tokens = Softmax(Lᵀ) row-wise; Dᵀ = that, so X̃ = Softmax(Lᵀ)·X.
 	// Use the dispatched transpose (not the view) so the gradient flows back to L.
+	//perfscan:ignore PS3024,PS6018 resource-only variadic alloc; transpose in matmul/softmax forward | movement-fusion breaks autograd tape; matm
 	lt, err := m.exec(ctx, backend.OpTranspose, nil, l) // [e·p, n]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only alloc; softmax-dominated dispatch
 	dt, err := m.exec(ctx, backend.OpSoftmax, nil, lt) // softmax over last axis (tokens) = Dᵀ
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only alloc; matmul-dominated
 	xTilde, err := m.exec(ctx, backend.OpMatMul, nil, dt, x) // slot inputs [e·p, d]
 	if err != nil {
 		return nil, err
@@ -77,6 +81,7 @@ func (m *SoftMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 	p := m.SlotsPerExpert
 	var yTilde *tensor.Tensor
 	for e, expert := range m.Experts {
+		//perfscan:ignore PS3024 resource-only; per-expert loop dominated by SwiGLU forward
 		slots, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: e * p, End: (e + 1) * p}, xTilde)
 		if err != nil {
 			return nil, err
@@ -88,6 +93,7 @@ func (m *SoftMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 		if yTilde == nil {
 			yTilde = ye
 		} else {
+			//perfscan:ignore PS3024 resource-only; concat dwarfed by expert compute
 			yTilde, err = m.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, yTilde, ye)
 			if err != nil {
 				return nil, err
@@ -95,10 +101,12 @@ func (m *SoftMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tenso
 		}
 	}
 	// combine C = softmax over slots = Softmax(L) (last axis); Y = C·Ỹ.
+	//perfscan:ignore PS3024 resource-only alloc; softmax-dominated
 	c, err := m.exec(ctx, backend.OpSoftmax, nil, l)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 resource-only alloc; final matmul output
 	return m.exec(ctx, backend.OpMatMul, nil, c, yTilde) // [n, d]
 }
 

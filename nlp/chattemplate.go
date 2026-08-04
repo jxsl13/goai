@@ -169,6 +169,7 @@ func (t *ChatTemplate) SpecialTokens() []string {
 	case "zephyr":
 		markers = []string{"<|system|>", "<|user|>", "<|assistant|>", "</s>"}
 	}
+	//perfscan:ignore PS3002,PS6009 sort of few marker strings; low trip count | tiny fixed marker slice; negligible
 	sort.SliceStable(markers, func(i, j int) bool { return len(markers[i]) > len(markers[j]) })
 	return markers
 }

@@ -153,6 +153,7 @@ func (a *Adafactor) Step(grad GradFn) error {
 	beta2t := 1 - math.Pow(t, -0.8)
 	rho := math.Min(a.LR, 1/math.Sqrt(t))
 
+	//perfscan:ignore PS3044 per-param independent but memory-bound; scratch deliberately shared serial
 	for pi, p := range a.Params {
 		g := grad(p)
 		if g == nil {
@@ -193,34 +194,41 @@ func (a *Adafactor) Step(grad GradFn) error {
 						gv := gf64[base+j]
 						g2 := gv*gv + a.Eps1
 						rowsum[i] += g2
+						//perfscan:ignore PS3075 fused row+col second-moment reduction; memory-bound on g, colsum in cache
 						colsum[j] += g2
 					}
 				}
 			case gf32 != nil:
 				for i := range rows {
 					base := i * cols
+					//perfscan:ignore PS3044 colsum shared reduction across rows blocks map; memory-bound on g
 					for j := range cols {
 						gv := float64(gf32[base+j])
 						g2 := gv*gv + a.Eps1
 						rowsum[i] += g2
+						//perfscan:ignore PS3075 fused col-sum reduction, memory-bound streaming of g
 						colsum[j] += g2
 					}
 				}
 			default:
 				for i := range rows {
+					//perfscan:ignore PS3044 generic AtF64 declined-dtype fallback; fast paths gf64/gf32
 					for j := range cols {
 						gv := g.AtF64(i, j)
 						g2 := gv*gv + a.Eps1
 						rowsum[i] += g2
+						//perfscan:ignore PS3075 generic AtF64 fallback branch, memory-bound
 						colsum[j] += g2
 					}
 				}
 			}
 			R, C := a.r[pi], a.c[pi]
 			for i := range R {
+				//perfscan:ignore PS3084 rows-length EMA, negligible vs O(rows·cols) grad pass
 				R[i] = beta2t*R[i] + (1-beta2t)*rowsum[i]
 			}
 			for j := range C {
+				//perfscan:ignore PS3084 cols-length EMA, negligible share
 				C[j] = beta2t*C[j] + (1-beta2t)*colsum[j]
 			}
 			// U = g / sqrt(V-hat) with V-hat[i,j]=(R[i]/sumR)*C[j] inline (same per-row
@@ -252,6 +260,7 @@ func (a *Adafactor) Step(grad GradFn) error {
 				for i, rv := range R {
 					ri := rv * invSumR
 					base := i * nc
+					//perfscan:ignore PS1005 generic AtF64 fallback; contiguous gf64/gf32 fast paths exist
 					for j, cv := range C {
 						u[base+j] = g.AtF64(i, j) / math.Sqrt(ri*cv)
 					}
@@ -262,12 +271,14 @@ func (a *Adafactor) Step(grad GradFn) error {
 			switch {
 			case gf64 != nil:
 				for i, gv := range gf64 {
+					//perfscan:ignore PS3084 memory-bound streaming EMA (V read+write); FMA won't beat bandwidth
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
 					u[i] = gv / math.Sqrt(V[i])
 				}
 			case gf32 != nil:
 				for i := range gf32 {
 					gv := float64(gf32[i])
+					//perfscan:ignore PS3084 memory-bound streaming EMA, gf32 path
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
 					u[i] = gv / math.Sqrt(V[i])
 				}
@@ -275,6 +286,7 @@ func (a *Adafactor) Step(grad GradFn) error {
 				for i := range n {
 					idx := tensor.Unravel(i, p.Shape())
 					gv := g.AtF64(idx...)
+					//perfscan:ignore PS3084 generic Unravel/AtF64 declined-dtype fallback
 					V[i] = beta2t*V[i] + (1-beta2t)*(gv*gv+a.Eps1)
 					u[i] = gv / math.Sqrt(V[i])
 				}
@@ -283,6 +295,7 @@ func (a *Adafactor) Step(grad GradFn) error {
 		if a.Beta1 > 0 {
 			M := a.m[pi]
 			for i := range n {
+				//perfscan:ignore PS3084 momentum EMA (off by default), memory-bound streaming
 				M[i] = a.Beta1*M[i] + (1-a.Beta1)*u[i]
 				u[i] = M[i]
 			}
@@ -308,18 +321,23 @@ func (a *Adafactor) Step(grad GradFn) error {
 				sp += pv * pv
 			}
 		}
+		//perfscan:ignore PS3082 single scalar math.Max outside any loop
 		clip := math.Max(1, math.Sqrt(su/float64(n))/a.Clip)
+		//perfscan:ignore PS3082 single scalar math.Max, not in a loop
 		alpha := math.Max(a.Eps2, math.Sqrt(sp/float64(n))) * rho
 		switch {
 		case pf64 != nil:
+			//perfscan:ignore PS5001 memory-bound update pass; reciprocal-mul not bit-identical (PS5001 decline)
 			for i := range pf64 {
 				pf64[i] = pf64[i] - alpha*(u[i]/clip)
 			}
 		case pf32 != nil:
+			//perfscan:ignore PS5001 memory-bound gf32 update; invariant-divide hidden by bandwidth, non-exact
 			for i := range pf32 {
 				pf32[i] = float32(float64(pf32[i]) - alpha*(u[i]/clip))
 			}
 		default:
+			//perfscan:ignore PS5001 generic Unravel/SetF64 declined-dtype fallback
 			for i := range n {
 				idx := tensor.Unravel(i, p.Shape())
 				p.SetF64(p.AtF64(idx...)-alpha*(u[i]/clip), idx...)

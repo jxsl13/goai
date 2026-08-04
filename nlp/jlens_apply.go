@@ -58,9 +58,11 @@ func (jl *JLens) Apply(model LensReadoutModel, ctx *backend.Context, h *tensor.T
 	dst := out.Storage().F64()
 	for t := 0; t < n; t++ {
 		row := dst[t*jl.Dim : (t+1)*jl.Dim]
+		//perfscan:ignore PS3067 JLens.Apply interpretability probe, not hot inference
 		for a := 0; a < jl.Dim; a++ {
 			ja := jm[a*jl.Dim : (a+1)*jl.Dim]
 			var acc float64
+			//perfscan:ignore PS1005 lens transport AtF64, offline probe tiny vs forward, not hot
 			for b, w := range ja {
 				acc += w * h.AtF64(t, b)
 			}
@@ -125,6 +127,7 @@ func newJLensReadout(logits *tensor.Tensor, row int) *JLensReadout {
 	// (Score desc, Token asc) is already a TOTAL order — Token is unique per element —
 	// so stability adds nothing; unstable sort.Slice (pdqsort) gives the identical full-
 	// vocab ranking at a fraction of symMerge's cost.
+	//perfscan:ignore PS3002 already SliceStable to SortFunc; lens readout not hot path
 	slices.SortFunc(r.Ranked, func(a, b JLensToken) int {
 		if a.Score != b.Score {
 			if a.Score > b.Score {
@@ -236,6 +239,7 @@ func (jl *JLens) Slice(model LensReadoutModel, ctx *backend.Context, tokens []in
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3065 lens Slice per-position loop, offline diagnostic
 	for p := 0; p < seq; p++ {
 		sl.Output[p] = argmaxRow(final, p)
 	}
@@ -250,6 +254,7 @@ func (jl *JLens) Slice(model LensReadoutModel, ctx *backend.Context, tokens []in
 			}
 		}
 		row := JLensSliceRow{Layer: l, Top: make([]int, seq), Rank: make([]int, seq)}
+		//perfscan:ignore PS3065 lens Slice per-position loop, offline diagnostic
 		for p := 0; p < seq; p++ {
 			row.Top[p] = argmaxRow(logits, p)
 			row.Rank[p] = rankInRow(logits, p, sl.Output[p])
@@ -264,6 +269,7 @@ func (jl *JLens) Slice(model LensReadoutModel, ctx *backend.Context, tokens []in
 func argmaxRow(logits *tensor.Tensor, p int) int {
 	vocab := logits.Shape()[1]
 	best, bestV := 0, logits.AtF64(p, 0)
+	//perfscan:ignore PS1001,PS3068 argmaxRow AtF64 in lens diagnostic, not hot | argmaxRow lens diagnostic, not hot
 	for j := 1; j < vocab; j++ {
 		if v := logits.AtF64(p, j); v > bestV {
 			best, bestV = j, v

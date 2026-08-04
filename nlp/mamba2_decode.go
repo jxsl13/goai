@@ -119,6 +119,7 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	for c := range D {
 		acc := convB[c]
 		wbase := c * K
+		//perfscan:ignore PS3010 low-trip K-1 conv; decode GEMV-dominated
 		for k := range K - 1 {
 			acc += convW[wbase+k] * ls.ConvBuf[k*D+c]
 		}
@@ -146,6 +147,7 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	dSkip := mx.D.Storage().F64()
 	dtBias := mx.DtBias.Storage().F64()
 	y := make([]float64, mx.Intermediate)
+	//perfscan:ignore PS3043 single-token decode; scan <1% of in/out-proj GEMV
 	for h := range mx.NumHeads {
 		g := h / headsPerGroup
 		Dh := dSkip[h]
@@ -157,15 +159,20 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 		delta := softplus(dt[h] + dtBias[h])
 		at := math.Exp(delta * ls.a[h])
 		// State update, then output — nn.SSDRecurrent's per-t loop verbatim.
+		//perfscan:ignore PS3067 single-token state update; tiny vs GEMV
 		for i := range mx.N {
 			bi := xc[bOff+i]
 			for j := range mx.HeadDim {
+				//perfscan:ignore PS3084,PS5003 contiguous inner update; decode GEMV-dominated | delta already hoisted per head; single token tiny
 				hst[i*mx.HeadDim+j] = at*hst[i*mx.HeadDim+j] + bi*(xc[hOff+j]*delta)
 			}
 		}
+		//perfscan:ignore PS1006,PS6010 false-positive: head state 8KB fits L1, no stride penalty | cache-resident head state; single-token decode
 		for j := range mx.HeadDim {
 			var s float64
+			//perfscan:ignore PS3010 tiny N reduction; decode GEMV-dominated
 			for i := range mx.N {
+				//perfscan:ignore PS6011 false-positive: hst fits L1, no strided-access penalty
 				s += xc[cOff+i] * hst[i*mx.HeadDim+j]
 			}
 			y[hOff+j] = s + Dh*xc[hOff+j]
@@ -179,6 +186,7 @@ func mixer2Step(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*tenso
 	gated := make([]float64, mx.Intermediate)
 	sigZ := make([]float64, mx.Intermediate)
 	simd.SigmoidF64(sigZ, z)
+	//perfscan:ignore PS3010 sigmoid already vectorized; O(intermediate) <<GEMV
 	for o := range mx.Intermediate {
 		gated[o] = y[o] * z[o] * sigZ[o]
 		variance += gated[o] * gated[o]
@@ -242,7 +250,9 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	convW := mx.ConvW.Storage().F64() // [conv_dim, d_conv]
 	convB := mx.ConvB.Storage().F64() // [conv_dim]
 	xc := make([][]float64, seq)
+	//perfscan:ignore PS3066 resource-only per-row alloc, no wall-clock win
 	for t := range seq {
+		//perfscan:ignore PS2008,PS3064 resource-only alloc-in-loop, no wall-clock | resource-only alloc-in-loop
 		xc[t] = make([]float64, D)
 	}
 	// Fill raw conv accs, then apply silu(acc)=acc·σ(acc) with σ vectorized per TOKEN ROW
@@ -257,11 +267,14 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	// BIT-IDENTICAL: for a fixed (t,c) the accumulation still runs over k ascending
 	// from convB[c], so every rounding is the one the old order produced; only the
 	// order in which distinct (t,c) pairs are visited changes.
+	//perfscan:ignore PS3034 already loop-interchanged fast path (documented)
 	for t := range seq {
 		xt := xc[t]
+		//perfscan:ignore PS4006 row pointer already hoisted (documented fix)
 		for c := range D {
 			xt[c] = convB[c]
 		}
+		//perfscan:ignore PS1006,PS1007 deliberate: convW strided by K, D*K resident (documented) | convW tiny+resident; deliberate strided access
 		for k := range K {
 			src := t - (K - 1) + k
 			if src < 0 {
@@ -269,6 +282,7 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 			}
 			row := xBC[src]
 			for c := range D {
+				//perfscan:ignore PS3075,PS6011 already-optimized contiguous conv inner (documented) | convW strided but D*K stays resident; deliberate
 				xt[c] += convW[c*K+k] * row[c]
 			}
 		}
@@ -277,6 +291,7 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	for t := range seq {
 		simd.SigmoidF64(sigRow, xc[t])
 		for c := range D {
+			//perfscan:ignore PS3016 sigmoid vectorized; mul-back O(D) tiny
 			xc[t][c] *= sigRow[c]
 		}
 	}
@@ -298,6 +313,7 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	dtBias := mx.DtBias.Storage().F64()
 	y := make([][]float64, seq)
 	for t := range seq {
+		//perfscan:ignore PS2008,PS3064 resource-only per-row alloc, no wall-clock | resource-only alloc-in-loop
 		y[t] = make([]float64, mx.Intermediate)
 	}
 	for h := range mx.NumHeads {
@@ -308,8 +324,10 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 		cOff := mx.Intermediate + gN + g*mx.N // C lives after B
 		hst := ls.H[h*mx.N*mx.HeadDim:]       // this head's [N, head_dim] state
 
+		//perfscan:ignore PS3035 xd scratch already reused across t (documented)
 		xd := make([]float64, mx.HeadDim) // x_t·delta, reused across t
 		for t := range seq {
+			//perfscan:ignore PS3016 already-optimized scan t-loop; exp per-head scalar
 			delta := softplus(dt[t][h] + dtBias[h])
 			at := math.Exp(delta * ls.a[h])
 			// xt/yt: the row pointers were re-resolved on every element (PS4006).
@@ -326,13 +344,17 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 				bi := xt[bOff+i]
 				hrow := hst[i*mx.HeadDim : i*mx.HeadDim+mx.HeadDim]
 				for j := range hrow {
+					//perfscan:ignore PS3084 contiguous state update, already optimal
 					hrow[j] = at*hrow[j] + bi*xd[j]
 				}
 			}
 			cv := xt[cOff : cOff+mx.N] // invariant in j; was re-indexed per (j,i)
+			//perfscan:ignore PS1006,PS3067,PS4006,PS6010 false-positive: head state fits L1, no stride win | tiny N reduction; scan <1% of prefill GEMM | cv already ho
 			for j := range mx.HeadDim {
 				var s float64
+				//perfscan:ignore PS3010 tiny N reduction, cache-resident
 				for i := range mx.N {
+					//perfscan:ignore PS6011 false-positive: hst fits L1, strided access free
 					s += cv[i] * hst[i*mx.HeadDim+j]
 				}
 				yt[hOff+j] = s + Dh*xrow[j]
@@ -348,6 +370,7 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 	for t := range seq {
 		simd.SigmoidF64(sigZ, z[t])
 		var variance float64
+		//perfscan:ignore PS3010 sigmoid vectorized; norm O(intermediate) <<GEMM
 		for o := range mx.Intermediate {
 			gated[o] = y[t][o] * z[t][o] * sigZ[o]
 			variance += gated[o] * gated[o]

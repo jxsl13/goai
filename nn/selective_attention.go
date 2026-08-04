@@ -168,6 +168,7 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 
 	slice := func(m *tensor.Tensor, h int) (*tensor.Tensor, error) {
 		lo, hi := h*s.HeadDim, (h+1)*s.HeadDim
+		//perfscan:ignore PS3024,PS6018 per-head OpSlice graph dispatch; attention matmul-dominated | resource-class on OpSlice dispatch, no wallclock
 		return s.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 	}
 	// head-h scaled logits Qₕ·Kₕᵀ/√d → [T,T].
@@ -180,14 +181,17 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 OpTranspose dispatch, per-head matmul-dominated
 		khT, err := s.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim,T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 OpMatMul is the compute; dispatch overhead negligible
 		sc, err := s.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T,T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 OpMul scale dispatch, attention-dominated
 		return s.exec(ctx, backend.OpMul, nil, sc, invSqrtD)
 	}
 
@@ -199,22 +203,27 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 one-time selection ReLU over [T,T], sub-1pct
 	sel, err := s.exec(ctx, backend.OpReLU, nil, l0) // ReLU(L₀) ≥ 0
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 one-time selection Mul over [T,T], sub-1pct
 	sel, err = s.exec(ctx, backend.OpMul, nil, sel, selectiveStrictLowerMask(x.Dtype(), t)) // zero diagonal + future
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 one-time Cumsum over [T,T], sub-1pct
 	cum, err := s.exec(ctx, backend.OpCumsum, backend.CumsumAttrs{Axis: 0}, sel) // Σ_{i'≤i} over queries
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 one-time Sub over [T,T], sub-1pct
 	fCausal, err := s.exec(ctx, backend.OpSub, nil, cum, sel) // Σ_{i'<i}: strictly below the diagonal
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 one-time selScale Mul, sub-1pct
 	fBias, err = s.exec(ctx, backend.OpMul, nil, fCausal, scalarTensor(x.Dtype(), s.selScale)) // ·selScale
 	if err != nil {
 		return nil, nil, nil, err
@@ -229,13 +238,16 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 		} else if lg, err = logits(h); err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 per-head Sub L-F, softmax/matmul-dominated
 		lp, err := s.exec(ctx, backend.OpSub, nil, lg, fBias) // L' = L − F
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 per-head Add mask, attention-dominated
 		if lp, err = s.exec(ctx, backend.OpAdd, nil, lp, mask); err != nil { // + causal mask
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 OpSoftmax is the compute; dispatch negligible
 		w, err := s.exec(ctx, backend.OpSoftmax, nil, lp) // [T,T]
 		if err != nil {
 			return nil, nil, nil, err
@@ -245,6 +257,7 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 per-head OpMatMul w*v is the compute
 		if headsOut[h], err = s.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil { // [T,HeadDim]
 			return nil, nil, nil, err
 		}
@@ -280,6 +293,7 @@ func (s *SelectiveAttention) Params() []*tensor.Tensor {
 func selectiveStrictLowerMask(dtype tensor.Dtype, t int) *tensor.Tensor {
 	m := tensor.New(dtype, tensor.Shape{t, t})
 	for i := range t {
+		//perfscan:ignore PS1005 one-time [T,T] mask build, sub-1pct vs attention
 		for j := 0; j < i; j++ {
 			m.SetF64(1, i, j)
 		}

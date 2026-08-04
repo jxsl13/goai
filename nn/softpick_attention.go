@@ -167,6 +167,7 @@ func (s *SoftpickAttention) forward(ctx *backend.Context, x *tensor.Tensor, sink
 	for h := range s.Heads {
 		lo, hi := h*s.HeadDim, (h+1)*s.HeadDim
 		slice := func(m *tensor.Tensor) (*tensor.Tensor, error) {
+			//perfscan:ignore PS3024,PS6018 per-head slice dispatch, attention matmul-dominated | slice-closure alloc per head, resource-only trivial
 			return s.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
 		}
 		qh, err := slice(q)
@@ -181,18 +182,22 @@ func (s *SoftpickAttention) forward(ctx *backend.Context, x *tensor.Tensor, sink
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 per-head transpose, matmul-dominated attention
 		khT, err := s.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 this IS the dominant per-head QK matmul
 		sc, err := s.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 scalar OpMul, <1pct vs per-head matmul
 		if sc, err = s.exec(ctx, backend.OpMul, nil, sc, invSqrtD); err != nil {
 			return nil, err
 		}
 		if s.causal {
+			//perfscan:ignore PS3024 mask OpAdd, matmul-dominated
 			if sc, err = s.exec(ctx, backend.OpAdd, nil, sc, mask); err != nil {
 				return nil, err
 			}
@@ -201,6 +206,7 @@ func (s *SoftpickAttention) forward(ctx *backend.Context, x *tensor.Tensor, sink
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024 dominant per-head weight-value matmul
 		if heads[h], err = s.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil { // [T, HeadDim]
 			return nil, err
 		}
@@ -242,6 +248,7 @@ func softpickWeights(ctx *backend.Context, scores *tensor.Tensor, sinkLogit floa
 	t, nKeys := scores.Shape()[0], scores.Shape()[1]
 	sink := tensor.New(scores.Dtype(), tensor.Shape{t, 1}) // zero-filled = logit 0
 	if sinkLogit != 0 {
+		//perfscan:ignore PS1001 O(T) sink fill only when sinkLogit!=0, dwarfed by O(T2) softmax
 		for i := range t {
 			sink.SetF64(sinkLogit, i, 0)
 		}

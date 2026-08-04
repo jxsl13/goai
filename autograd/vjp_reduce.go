@@ -83,6 +83,8 @@ func reduceOutMap(xShape tensor.Shape, attrs backend.Attrs) (tensor.Shape, func(
 }
 
 // broadcastVJP builds sum/mean gradients: gin[idx] = g[map(idx)] · scale(count).
+//
+//perfscan:ignore PS6004 unverified-invariant check, explicitly not a perf finding
 func broadcastVJP(mean bool) VJP {
 	return func(_ *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		x := in[0]
@@ -147,6 +149,7 @@ func broadcastVJP(mean bool) VJP {
 		default:
 			mapIdx := func(c []int) int {
 				o := 0
+				//perfscan:ignore PS3010 exotic-dtype default branch below F64/F32 typed fast paths
 				for ax := 0; ax < nd; ax++ {
 					o += c[ax] * axStride[ax]
 				}
@@ -239,6 +242,7 @@ func extremumVJP() VJP {
 			})
 			return []*tensor.Tensor{gin}, nil
 		}
+		//perfscan:ignore PS3032 exotic-dtype generic fallback, F64 typed fast path exists above
 		for i := 0; i < n; i++ { // generic fallback (exotic dtype)
 			idx := tensor.Unravel(i, x.Shape())
 			of := mapIdx(idx)
@@ -352,10 +356,12 @@ func prodVJP() VJP {
 			})
 			return []*tensor.Tensor{gin}, nil
 		}
+		//perfscan:ignore PS3032,PS3044,PS3066 exotic-dtype generic fallback below F64/F32 fast paths | exotic-dtype generic fallback, deliberate ref
 		for i := 0; i < n; i++ { // generic fallback (exotic dtype)
 			idx := tensor.Unravel(i, x.Shape())
 			of := mapIdx(idx)
 			if v := x.AtF64(idx...); v == 0 {
+				//perfscan:ignore PS6007 counter in exotic-dtype fallback, resource-only
 				numZeros[of]++
 			} else {
 				prodNz[of] *= v

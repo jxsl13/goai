@@ -49,6 +49,7 @@ func LlamaFromHF(ts map[string]*tensor.Tensor, cfg LlamaConfig) (*Llama, error) 
 	}
 
 	m := &Llama{Config: cfg, TokEmb: cloneF64(tok)} // embedding [vocab,dim], no transpose
+	//perfscan:ignore PS3060 model-load weight transpose over layers, one-time
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {

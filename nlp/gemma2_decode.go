@@ -156,43 +156,53 @@ func (m *Gemma2) cappedDecodeAttention(ctx *backend.Context, b *Gemma2Block, xb 
 	scaleT.Storage().F64()[0] = cfg.queryScale()
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
+	//perfscan:ignore PS5001 h/rep integer div feeds slice index (unsafe to hoist); one div/head trivial
 	for h := range cfg.Heads {
 		kvHead := h / rep
+		//perfscan:ignore PS6017 exec1 OpSlice per head; decode attention matmul-dominated
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * hd, End: (h + 1) * hd}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpSlice per head; matmul-dominated decode
 		kh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, kNew)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpSlice per head; matmul-dominated decode
 		vh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: kvHead * hd, End: (kvHead + 1) * hd}, vNew)
 		if err != nil {
 			return nil, err
 		}
 		// scores = qh·khᵀ  [1,sk]
+		//perfscan:ignore PS6017 exec1 OpTranspose per head; op-dominated decode
 		khT, err := exec1(ctx, backend.OpTranspose, nil, kh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (scores) per head; matmul-dominated
 		scores, err := exec1(ctx, backend.OpMatMul, nil, qh, khT)
 		if err != nil {
 			return nil, err
 		}
 		// scores·scale (query_pre_attn_scalar^-0.5)
+		//perfscan:ignore PS6017 exec1 OpMul scale per head; op-dominated, negligible
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		// attention-logit soft-cap on the scaled scores (no mask for a single query)
 		if cfg.AttnLogitCap > 0 {
+			//perfscan:ignore PS6016,PS6017 SoftCapAttrs literal per head; resource-only, negligible | exec1 OpSoftCap per head; op-dominated decode
 			if scores, err = exec1(ctx, backend.OpSoftCap, backend.SoftCapAttrs{Cap: cfg.AttnLogitCap}, scores); err != nil {
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 exec1 OpSoftmax per head; op-dominated decode
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 exec1 OpMatMul (probs.v) per head; matmul-dominated
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, vh) // [1,hd]
 		if err != nil {
 			return nil, err

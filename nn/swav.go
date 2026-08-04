@@ -50,6 +50,7 @@ func SwAVLoss(ctx *backend.Context, scoresT, scoresS, codeT, codeS *tensor.Tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only alloc; top-level loss add once/batch, time flat
 	o, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{lt, ls}, nil)
 	if err != nil {
 		return nil, err

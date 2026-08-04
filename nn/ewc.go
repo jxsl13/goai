@@ -43,6 +43,7 @@ func EWCPenalty(ctx *backend.Context, params, refParams, fisher []*tensor.Tensor
 		return o[0], nil
 	}
 	var total *tensor.Tensor
+	//perfscan:ignore PS4011 per-param architectural fan-out; full-weight-tensor ops dominate dispatch, not a recurrenc
 	for i := range params {
 		if !params[i].Shape().Equal(refParams[i].Shape()) || !params[i].Shape().Equal(fisher[i].Shape()) {
 			return nil, fmt.Errorf("nn: EWCPenalty shape mismatch at %d: %v / %v / %v", i, params[i].Shape(), refParams[i].Shape(), fisher[i].Shape())
@@ -99,6 +100,7 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 	for i := range nP {
 		shape := gradSamples[0][i].Shape()
 		for s := range nS {
+			//perfscan:ignore PS3016 cold up-front shape-validation loop, runs once
 			if !gradSamples[s][i].Shape().Equal(shape) {
 				return nil, fmt.Errorf("nn: EWCFisher sample %d param %d shape %v != %v", s, i, gradSamples[s][i].Shape(), shape)
 			}
@@ -123,9 +125,11 @@ func EWCFisher(gradSamples [][]*tensor.Tensor) ([]*tensor.Tensor, error) {
 				}
 			}
 			if allFlat {
+				//perfscan:ignore PS1007,PS3044 one-time Fisher estimate at task optimum; memory-bound accumulation | map=flatF64 trivial vs fold; nothing to
 				for s := range nS {
 					gf := flatF64(gradSamples[s][i])
 					for e := range af {
+						//perfscan:ignore PS3075 one-time memory-bound Fisher sum-of-squares; bandwidth-limited
 						af[e] += gf[e] * gf[e]
 					}
 				}

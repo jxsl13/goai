@@ -245,12 +245,14 @@ func (c *schemaCompiler) visitObjectType(s map[string]any, hint string) (string,
 	body.WriteString(`"{" sp `)
 	switch {
 	case len(reqNames) > 0:
+		//perfscan:ignore PS2002 resource-only Builder.Grow; schema-to-grammar compile setup, not per-token
 		for i, n := range reqNames {
 			if i > 0 {
 				body.WriteString(` sp "," sp `)
 			}
 			body.WriteString(kv[n])
 		}
+		//perfscan:ignore PS2002 resource-only Builder.Grow; schema-compile setup path
 		for _, n := range optNames {
 			body.WriteString(` (sp "," sp `)
 			body.WriteString(kv[n])
@@ -259,9 +261,11 @@ func (c *schemaCompiler) visitObjectType(s map[string]any, hint string) (string,
 	default:
 		// all optional: alternate on which property appears first.
 		var alts []string
+		//perfscan:ignore PS2002 resource-only Builder.Grow; schema-compile setup path
 		for i, first := range optNames {
 			var alt strings.Builder
 			alt.WriteString(kv[first])
+			//perfscan:ignore PS2002 resource-only Builder.Grow; schema-compile setup path
 			for _, later := range optNames[i+1:] {
 				alt.WriteString(` (sp "," sp `)
 				alt.WriteString(kv[later])
@@ -306,6 +310,7 @@ func jsonLiteral(v any) (string, error) {
 	}
 	var sb strings.Builder
 	sb.WriteByte('"')
+	//perfscan:ignore PS2002 resource-only Builder.Grow; schema-compile setup path
 	for _, r := range string(enc) {
 		switch r {
 		case '"':

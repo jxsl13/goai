@@ -30,6 +30,7 @@ var std = &Backend{table: make(map[kernelKey]backend.Kernel)}
 func init() { backend.RegisterDefault(std) }
 
 func (b *Backend) add(op backend.Op, dtype tensor.Dtype, k backend.Kernel) {
+	//perfscan:ignore PS3004 kernel-table registration; one-time init, cold
 	b.table[kernelKey{op, dtype}] = k
 }
 
@@ -37,6 +38,7 @@ func (b *Backend) Name() backend.Name    { return backend.CPU }
 func (b *Backend) Device() tensor.Device { return tensor.CPU() }
 func (b *Backend) Synchronize() error    { return nil }
 func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
+	//perfscan:ignore PS3004 one map lookup per whole-op dispatch; negligible vs kernel
 	k, ok := b.table[kernelKey{op, dtype}]
 	return k, ok
 }
@@ -49,6 +51,8 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 // M-series cores (§T511 pool design, §V22 A/B) — the point where GOMAXPROCS-way splitting
 // starts to win. Not a user knob (internal, §C13-exempt); revisit via benchmarks (§V5) if the
 // pool dispatch cost changes.
+//
+//perfscan:ignore PS6023 tuned const declaration, not a loop
 const parThreshold = 1 << 15 // 32768
 
 // parWorkPerWorker is the minimum share of the total work a band must carry for its worker to be

@@ -54,10 +54,12 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 	}
 
 	l := make([]float64, n*n)
+	//perfscan:ignore PS3034 fan-out tried and measured slower (documented); column dependence
 	for j := range n {
 		lj := l[j*n : j*n+n]
 		d := at(j, j)
 		for k := range j {
+			//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 			d -= lj[k] * lj[k]
 		}
 		if d <= 0 {
@@ -72,6 +74,7 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		// BIT-IDENTICAL, because the jammed dimension is the FREE one: row i still accumulates
 		// over the same ascending k with the same operands into its own accumulator.
 		i := j + 1
+		//perfscan:ignore PS3066,PS5001 already-optimized factorization, loops are dependent stages not mergeable | reciprocal breaks bit-identity-wit
 		for ; i+3 < n; i += 4 {
 			l0 := l[(i+0)*n : (i+0)*n+j]
 			l1 := l[(i+1)*n : (i+1)*n+j]
@@ -80,9 +83,13 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 			s0, s1 := at(i+0, j), at(i+1, j)
 			s2, s3 := at(i+2, j), at(i+3, j)
 			for k, v := range lj[:j] {
+				//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 				s0 -= l0[k] * v
+				//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 				s1 -= l1[k] * v
+				//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 				s2 -= l2[k] * v
+				//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 				s3 -= l3[k] * v
 			}
 			l[(i+0)*n+j] = s0 / ljj
@@ -90,10 +97,12 @@ func choleskyKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 			l[(i+2)*n+j] = s2 / ljj
 			l[(i+3)*n+j] = s3 / ljj
 		}
+		//perfscan:ignore PS5001 reciprocal breaks bit-identity claim; tail loop low trip count
 		for ; i < n; i++ {
 			li := l[i*n : i*n+n]
 			s := at(i, j)
 			for k := range j {
+				//perfscan:ignore PS3025 FMA-portability correctness class, not a throughput win
 				s -= li[k] * lj[k]
 			}
 			li[j] = s / ljj

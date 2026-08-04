@@ -77,6 +77,7 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 					// accumulates the same values in the same ascending order.
 					prow := probs[base : base+n]
 					var sum float64
+					//perfscan:ignore PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for i := range n {
 						e := math.Exp(ls[base+i] - m)
 						prow[i] = e
@@ -123,19 +124,23 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 		}
 	}
 	if filled {
+		//perfscan:ignore PS1007 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for t := range tks {
 			base := t * n
 			for i := range n {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				P[i] += probs[base+i]
 			}
 			a := int(assign.AtF64(t))
 			if a < 0 || a >= n {
 				return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
 			}
+			//perfscan:ignore PS6007 reference oracle: intentionally simple, correctness baseline not an optimization target
 			f[a]++
 		}
 	} else {
 		// Generic fallback for exotic dtypes (verbatim original loop).
+		//perfscan:ignore PS1007 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for t := range tks {
 			m := math.Inf(-1)
 			for i := range n {
@@ -148,16 +153,19 @@ func moeBalanceKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 				sum += math.Exp(logits.AtF64(t, i) - m)
 			}
 			for i := range n {
+				//perfscan:ignore PS3075 reference oracle: intentionally simple, correctness baseline not an optimization target
 				P[i] += math.Exp(logits.AtF64(t, i)-m) / sum
 			}
 			a := int(assign.AtF64(t))
 			if a < 0 || a >= n {
 				return nil, fmt.Errorf("ref: moebalance assignment %d out of range [0,%d)", a, n)
 			}
+			//perfscan:ignore PS6007 reference oracle: intentionally simple, correctness baseline not an optimization target
 			f[a]++
 		}
 	}
 	var loss float64
+	//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for i := range n {
 		loss += (f[i] / float64(tks)) * (P[i] / float64(tks))
 	}
@@ -234,13 +242,16 @@ func moeCombineKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 			for t := range tks {
 				wbase := t * e
 				var denom float64
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for i := range e {
 					denom += ws[wbase+i]
 				}
 				base := t * d
+				//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for j := range d {
 					var acc float64
 					if denom > 0 {
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for i := range e {
 							acc += (ws[wbase+i] / denom) * ecs[i][base+j]
 						}
@@ -268,13 +279,16 @@ func moeCombineKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 			for t := range tks {
 				wbase := t * e
 				var denom float64
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for i := range e {
 					denom += float64(ws[wbase+i])
 				}
 				base := t * d
+				//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for j := range d {
 					var acc float64 // mixture accumulates in float64; only the store rounds
 					if denom > 0 {
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for i := range e {
 							acc += (float64(ws[wbase+i]) / denom) * float64(ecs[i][base+j])
 						}
@@ -295,6 +309,7 @@ func moeCombineKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 			for j := range d {
 				var acc float64
 				if denom > 0 {
+					//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for i := range e {
 						acc += (w.AtF64(t, i) / denom) * experts[i].AtF64(t, j)
 					}
@@ -307,6 +322,7 @@ func moeCombineKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpMoEBalance, tensor.F32, moeBalanceKernel)
 	std.add(backend.OpMoEBalance, tensor.F64, moeBalanceKernel)
 	std.add(backend.OpMoECombine, tensor.F32, moeCombineKernel)

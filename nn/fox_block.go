@@ -172,6 +172,7 @@ func (b *FoXBlock) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 	causal := qkCausalMask(x.Dtype(), t, t)
 	heads := make([]*tensor.Tensor, b.Heads)
 	for h := range b.Heads {
+		//perfscan:ignore PS6018 per-head attention loop, matmul-dominated movement ops
 		lfh, err := ex(backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h, End: h + 1}, logf) // [T,1]
 		if err != nil {
 			return nil, err

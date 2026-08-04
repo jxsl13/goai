@@ -198,6 +198,7 @@ func headArgmax(hidden []float32, w *tensor.Tensor) int {
 	for i := range dim {
 		hi, row := hidden[i], wd[i*vocab:(i+1)*vocab]
 		for v, wv := range row {
+			//perfscan:ignore PS3017,PS3075 BCE on scalar single-FMA accumulate; negligible (scalar-dot does not amortize) | same register-block jam as PS
 			acc[v] += hi * wv
 		}
 	}
@@ -221,6 +222,8 @@ func argmaxF32(x []float32) int {
 }
 
 // softmaxF64 converts one f32 logit row to a stable f64 probability distribution.
+//
+//perfscan:ignore PS3033 resource-only alloc; returned buffer outlives call (caller keeps)
 func softmaxF64(logits []float32) []float64 {
 	mx := math.Inf(-1)
 	for _, v := range logits {
@@ -230,6 +233,7 @@ func softmaxF64(logits []float32) []float64 {
 	}
 	var sum float64
 	p := make([]float64, len(logits))
+	//perfscan:ignore PS3010 sum fused with dominant per-element math.Exp; add-latency hidden behind exp
 	for i, v := range logits {
 		p[i] = math.Exp(float64(v) - mx)
 		sum += p[i]

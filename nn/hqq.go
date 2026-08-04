@@ -69,6 +69,7 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 	// to the serial loop. The per-group q allocation is hoisted to one reused per-worker buffer
 	// (round() fully overwrites it before any read), dropping ~ng allocations to ~workers.
 	parallelRows(ng, groupSize, func(glo, ghi int) {
+		//perfscan:ignore PS6008 one-time offline weight quantization, cold path
 		qbuf := make([]float64, groupSize)
 		for g := glo; g < ghi; g++ {
 			lo, hi := g*groupSize, min((g+1)*groupSize, n)
@@ -77,6 +78,7 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 			// fixed scale from the group range; zero-point maps min→0, max→maxLevel.
 			mn, mx := wg[0], wg[0]
 			for _, v := range wg {
+				//perfscan:ignore PS3082 minmax in one-time weight quantization loop, cold
 				mn, mx = math.Min(mn, v), math.Max(mx, v)
 			}
 			s := (mx - mn) / maxLevel
@@ -97,6 +99,7 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 			// bounds, so it falls through unchanged, which is what math.Min and math.Max also
 			// return when either operand is NaN.
 			round := func() {
+				//perfscan:ignore PS5001 divide in one-time quantization iteration, cold
 				for i, v := range wg {
 					r := math.Round(v/s + z)
 					if r <= 0 {
@@ -129,6 +132,7 @@ func HQQuantize(w []float64, bits, groupSize int, opts ...HQQOption) (codes []in
 				// weights that land inside it.
 				cutLow := math.Pow(1/beta, 1/(2-cfg.p)) * (1 - 1e-12)
 				var zsum float64
+				//perfscan:ignore PS4003 shrinkLp transcendental in offline quantization, cold
 				for i, v := range wg {
 					wHat := s * (q[i] - z)
 					d := v - wHat

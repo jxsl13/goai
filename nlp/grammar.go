@@ -269,14 +269,17 @@ func (g *GrammarGuide) internStacks(stacks []gStack) int {
 	}
 	keys := make([]string, len(stacks))
 	order := make([]int, len(stacks))
+	//perfscan:ignore PS3065 stackKey build in grammar-compile internStacks, one-time
 	for i, st := range stacks {
 		keys[i] = stackKey(st)
 		order[i] = i
 	}
+	//perfscan:ignore PS3002,PS6009 sort closure in grammar compilation, one-time build
 	sort.Slice(order, func(a, b int) bool { return keys[order[a]] < keys[order[b]] })
 	var sb strings.Builder
 	sorted := make([]gStack, len(stacks))
 	accept := false
+	//perfscan:ignore PS2002 resource-only loop in grammar compile, one-time
 	for i, o := range order {
 		sorted[i] = stacks[o]
 		sb.WriteString(keys[o])
@@ -312,6 +315,7 @@ func (g *GrammarGuide) checkLeftRecursion() error {
 	nullable := g.nullableRules()
 	// first[r] = rules reachable at the leftmost position of r, skipping nullable refs.
 	first := make([][]int, len(g.ruleAlts))
+	//perfscan:ignore PS3034 checkLeftRecursion grammar validation, one-time
 	for r, alts := range g.ruleAlts {
 		set := map[int]bool{}
 		for _, a := range alts {
@@ -361,6 +365,7 @@ func (g *GrammarGuide) nullableRules() []bool {
 	nullable := make([]bool, len(g.ruleAlts))
 	for changed := true; changed; {
 		changed = false
+		//perfscan:ignore PS3034,PS3067 nullableRules fixpoint, one-time grammar build
 		for r, alts := range g.ruleAlts {
 			if nullable[r] {
 				continue

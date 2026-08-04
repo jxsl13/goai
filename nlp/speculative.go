@@ -120,6 +120,8 @@ func (s SpecStats) AcceptanceRate() float64 {
 
 // rowAt copies row i of a [seq, vocab] logits tensor into a slice. On the
 // speculative verify/draft path (many rows per window) → typed access (§base-perf).
+//
+//perfscan:ignore PS3033,PS6004 rowAt already the typed flat-slice fast path | invariant-verify class, not a perf finding
 func rowAt(t *tensor.Tensor, i int) []float64 {
 	v := t.Shape()[1]
 	out := make([]float64, v)

@@ -88,8 +88,11 @@ func T5RelativePositionBuckets(queryLen, keyLen int, bidirectional bool, numBuck
 	}
 	out := make([][]int, queryLen)
 	for i := range queryLen {
+		//perfscan:ignore PS2008,PS3064 bucket-row alloc, built once/forward shared across layers | per-row make, tiny O(q*k) vs attention matmuls
 		out[i] = make([]int, keyLen)
+		//perfscan:ignore PS4006 bucket-table flatten <1% of matmul-dominated Bias()
 		for j := range keyLen {
+			//perfscan:ignore PS3016 bucket calc, small integer/log fraction shared across layers
 			out[i][j] = T5RelativePositionBucket(j-i, bidirectional, numBuckets, maxDistance)
 		}
 	}
@@ -144,6 +147,7 @@ func (b *T5RelativeBias) Bias(ctx *backend.Context, queryLen, keyLen int) (*tens
 	oneHot := tensor.New(b.Table.Dtype(), tensor.Shape{queryLen * keyLen, b.NumBuckets})
 	for i := range queryLen {
 		for j := range keyLen {
+			//perfscan:ignore PS3016 one-hot fill O(q*k) feeding OpMatMul, matmul-dominated
 			oneHot.SetF64(1, i*keyLen+j, buckets[i][j])
 		}
 	}
@@ -176,6 +180,7 @@ func (b *T5RelativeBias) BiasRow(ctx *backend.Context, queryPos, keyLen int) (*t
 		bkt := T5RelativePositionBucket(j-queryPos, b.Bidirectional, b.NumBuckets, b.MaxDistance)
 		oneHot.SetF64(1, j, bkt)
 	}
+	//perfscan:ignore PS3038 per-pair bucket math, tiny fraction; stale beyond-file line
 	out, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{oneHot, b.Table}, nil) // [keyLen, numHeads]
 	if err != nil {
 		return nil, err

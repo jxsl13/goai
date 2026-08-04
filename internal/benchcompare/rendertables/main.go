@@ -138,6 +138,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("| Python stack workload | numpy-cpu | torch-cpu | torch-mps |")
 	fmt.Println("|---|---|---|---|")
+	//perfscan:ignore PS3032 benchmark-report tooling, not runtime
 	for _, name := range sortedKeys(pyRows) {
 		st := pyRows[name]
 		fmt.Printf("| %s | %s | %s | %s |\n", name, cell(st, "numpy-cpu"), cell(st, "torch-cpu"), cell(st, "torch-mps"))

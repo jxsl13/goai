@@ -15,6 +15,8 @@ import (
 // singular values σ₁ ≥ … ≥ σₙ ≥ 0 (length n), V ∈ Rⁿˣⁿ orthonormal columns. One-sided
 // Jacobi works on A directly (never forms AᵀA) → high relative accuracy. Three outputs
 // [U, s, V]; f64 arithmetic (§V10), F32 factors in f64 and narrows on store.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: svd wants 1 input, got %d", len(in))
@@ -63,6 +65,7 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 			for j := i + 1; j < n; j++ {
 				var alpha, beta, gamma float64
 				ci, cj := acol[i*m:i*m+m], acol[j*m:j*m+m]
+				//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for k := range m {
 					alpha += ci[k] * ci[k]
 					beta += cj[k] * cj[k]
@@ -108,6 +111,7 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	for j := range n {
 		var nrm float64
 		cj := acol[j*m : j*m+m]
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for k := range m {
 			nrm += cj[k] * cj[k]
 		}
@@ -117,6 +121,7 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 	for i := range order {
 		order[i] = i
 	}
+	//perfscan:ignore PS3002,PS6009 reference oracle: intentionally simple, correctness baseline not an optimization target
 	sort.SliceStable(order, func(x, y int) bool { return sigma[order[x]] > sigma[order[y]] })
 
 	ut := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{m, n})
@@ -139,6 +144,7 @@ func svdKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*t
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpSVD, tensor.F32, svdKernel)
 	std.add(backend.OpSVD, tensor.F64, svdKernel)
 }

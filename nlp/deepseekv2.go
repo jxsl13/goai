@@ -174,6 +174,7 @@ func (m *DeepSeekV2) forwardWith(ctx *backend.Context, tokens []int, attnFn func
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 residual-add dispatch, matmul-dominated layer loop; alloc-only
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -191,6 +192,7 @@ func (m *DeepSeekV2) forwardWith(ctx *backend.Context, tokens []int, attnFn func
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 FFN residual-add dispatch; alloc-only, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -277,39 +279,48 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
+		//perfscan:ignore PS6017 per-head attn slice; matmul-dominated, alloc-only
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 SliceAttrs in per-head attn loop; alloc-only | per-head qNope slice; matmul-dominated, alloc-only
 		qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 SliceAttrs in per-head attn loop; alloc-only | per-head qPe slice; matmul-dominated, alloc-only
 		qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head RoPE dispatch; matmul-dominated, alloc-only
 		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head concat dispatch; matmul-dominated, alloc-only
 		queryH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [seq, qkHead]
 		if err != nil {
 			return nil, err
 		}
 
+		//perfscan:ignore PS6017 per-head kv slice; matmul-dominated, alloc-only
 		kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 SliceAttrs in per-head attn loop; alloc-only | per-head kNope slice; matmul-dominated, alloc-only
 		kNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 SliceAttrs in per-head attn loop; alloc-only | per-head value slice; matmul-dominated, alloc-only
 		valueH, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head key concat; matmul-dominated, alloc-only
 		keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [seq, qkHead]
 		if err != nil {
 			return nil, err
@@ -319,24 +330,30 @@ func (m *DeepSeekV2) mlaAttention(ctx *backend.Context, b *DeepSeekV2Block, xb *
 		}
 
 		// scores = queryH·keyHᵀ  [seq,seq]
+		//perfscan:ignore PS6017 per-head transpose; matmul-dominated, alloc-only
 		keyHT, err := exec1(ctx, backend.OpTranspose, nil, keyH)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head scores matmul dispatch; alloc-only
 		scores, err := exec1(ctx, backend.OpMatMul, nil, queryH, keyHT)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head scale mul; matmul-dominated, alloc-only
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head mask add; matmul-dominated, alloc-only
 		if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head softmax dispatch; matmul-dominated, alloc-only
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head output matmul; alloc-only
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, valueH) // [seq, VHead]
 		if err != nil {
 			return nil, err
@@ -407,12 +424,14 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 MoE dense expert mul dispatch; alloc-only
 		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
 		if y == nil {
 			y = term
+			//perfscan:ignore PS6017 MoE accumulate add; alloc-only
 		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
@@ -424,6 +443,7 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 shared-expert add; alloc-only
 		if y, err = exec1(ctx, backend.OpAdd, nil, y, sh); err != nil {
 			return nil, err
 		}

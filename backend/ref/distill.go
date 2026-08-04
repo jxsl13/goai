@@ -19,6 +19,8 @@ import (
 //
 // Both softmaxes use a stable max-shift; KL accumulates in f64 (§V10). The teacher
 // is a constant (frozen). T from attrs["temperature"] (default 1). Output scalar.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func distillKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: distill wants (studentLogits, teacherLogits), got %d inputs", len(in))
@@ -54,7 +56,9 @@ func distillKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 		// byte-identical to the serial loop (same per-row value, same left-fold, no reassociation).
 		contrib := make([]float64, b)
 		parallel.Rows(b, func(ilo, ihi int) {
+			//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 			p := make([]float64, c)
+			//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 			q := make([]float64, c)
 			for i := ilo; i < ihi; i++ {
 				softmaxRowFlat(p, ts[i*c:i*c+c], temp) // teacher soft targets
@@ -68,6 +72,7 @@ func distillKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 				contrib[i] = temp * temp * kl
 			}
 		})
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			total += contrib[i]
 		}
@@ -112,6 +117,8 @@ func softmaxRowFlat(out, zrow []float64, temp float64) {
 }
 
 // softmaxRow returns the stable softmax of row i of z scaled by 1/temp.
+//
+//perfscan:ignore PS3033 reference oracle: intentionally simple, correctness baseline not an optimization target
 func softmaxRow(z *tensor.Tensor, i, c int, temp float64) []float64 {
 	m := math.Inf(-1)
 	for j := range c {
@@ -121,6 +128,7 @@ func softmaxRow(z *tensor.Tensor, i, c int, temp float64) []float64 {
 	}
 	out := make([]float64, c)
 	var sum float64
+	//perfscan:ignore PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for j := range c {
 		e := math.Exp(z.AtF64(i, j)/temp - m)
 		out[j] = e

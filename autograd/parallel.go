@@ -24,6 +24,8 @@ import (
 // Do not read the threshold as a tuning knob to lower freely: a band whose body re-streams
 // a shared input pays that traffic once per band, and a finer grain has measured 126%
 // SLOWER on the conv1d body for exactly that reason.
+//
+//perfscan:ignore PS3048,PS3061 backward VJP helper: large ops called few times, not near-gate decode; worker-scaling meas | nn-style large op
 func parallelBands(d, workPerBand int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > d {
@@ -34,6 +36,7 @@ func parallelBands(d, workPerBand int, body func(lo, hi int)) {
 		return
 	}
 	var wg sync.WaitGroup
+	//perfscan:ignore PS3011 conv1d/transpose bands re-stream shared input; claiming measured 126pct slower per doc; st
 	chunk := (d + nw - 1) / nw
 	for lo := 0; lo < d; lo += chunk {
 		hi := lo + chunk

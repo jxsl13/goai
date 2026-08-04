@@ -81,6 +81,7 @@ func MixtralFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*M
 	cfg.Vocab = tok.Shape()[0]
 
 	m := &Mixtral{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load transpose (Mixtral FromGGUF); one-time cold
 	for l := range cfg.Layers {
 		p := fmt.Sprintf("blk.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -93,6 +94,7 @@ func MixtralFromGGUF(meta map[string]any, tensors map[string]*tensor.Tensor) (*M
 		names := []string{"attn_norm.weight", "attn_q.weight", "attn_k.weight", "attn_v.weight",
 			"attn_output.weight", "ffn_norm.weight",
 			"ffn_gate_inp.weight", "ffn_gate_exps.weight", "ffn_up_exps.weight", "ffn_down_exps.weight"}
+		//perfscan:ignore PS3035 resource-only per-loop alloc in load; time win nil
 		w := make([]*tensor.Tensor, len(names))
 		for i, n := range names {
 			if w[i], err = g(n); err != nil {
@@ -163,6 +165,7 @@ func mixtralMoEFromGGUF(cfg MixtralConfig, router, gate, up, down *tensor.Tensor
 	}
 	moe := nn.NewSparseMoE(tensor.F64, cfg.Dim, cfg.Hidden, cfg.Experts, cfg.TopK, 0)
 	moe.Router.W = transpose2D(router) // [E,dim] → [dim,E]
+	//perfscan:ignore PS3060 load-time MoE expert transpose; one-time cold
 	for e := range cfg.Experts {
 		moe.Experts[e].Wgate = transpose2D(sub3D(gate, e)) // [ffn,dim] → [dim,ffn]
 		moe.Experts[e].Wup = transpose2D(sub3D(up, e))
@@ -208,6 +211,7 @@ func MixtralToGGUF(m *Mixtral) (map[string]any, map[string]*tensor.Tensor) {
 		"output_norm.weight": cloneF64(m.Norm.Gamma),
 		"output.weight":      transpose2D(m.Out), // [dim,vocab] → [vocab,dim]
 	}
+	//perfscan:ignore PS3060 ToGGUF export transpose; one-time cold
 	for l, b := range m.Blocks {
 		p := fmt.Sprintf("blk.%d.", l)
 		ts[p+"attn_norm.weight"] = cloneF64(b.AttnNorm.Gamma)
@@ -221,6 +225,7 @@ func MixtralToGGUF(m *Mixtral) (map[string]any, map[string]*tensor.Tensor) {
 		gates := make([]*tensor.Tensor, len(b.MoE.Experts))
 		ups := make([]*tensor.Tensor, len(b.MoE.Experts))
 		downs := make([]*tensor.Tensor, len(b.MoE.Experts))
+		//perfscan:ignore PS3065 ToGGUF export gates transpose; one-time cold
 		for e, ex := range b.MoE.Experts {
 			gates[e] = transpose2D(ex.Wgate) // [dim,ffn] → [ffn,dim]
 			ups[e] = transpose2D(ex.Wup)

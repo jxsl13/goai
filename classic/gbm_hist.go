@@ -10,9 +10,13 @@ import (
 // histRadixCutoff is the column length above which the per-feature quantile sort switches
 // from sort.Float64s to the O(n) LSD radix (tree.go's proven transform). Below it the
 // comparison sort's lower constant wins.
+//
+//perfscan:ignore PS6023 tuning const; coverage-gap not a throughput change
 const histRadixCutoff = 512
 
 // gbmHistSetupParWork gates the one-time parallel per-feature binning in newHistBuilder (n·d work).
+//
+//perfscan:ignore PS6023 tuning const; coverage-gap not a throughput change
 const gbmHistSetupParWork = 1 << 17
 
 // radixSortF64 sorts col ascending with an 8-pass LSD radix on the order-preserving u64
@@ -34,6 +38,7 @@ func radixSortF64(col []float64, keys, tmp []uint64) {
 	}
 	src, dst := keys[:n], tmp[:n]
 	var count [256]int
+	//perfscan:ignore PS3078 one-time setup binning (newHistBuilder), radix micro-opt
 	for shift := uint(0); shift < 64; shift += 8 {
 		count = [256]int{}
 		for _, u := range src {
@@ -127,6 +132,7 @@ func newHistBuilder(x [][]float64, n, d, maxDepth, minLeaf, nbins int) *histBuil
 		}
 		for f := f0; f < f1; f++ {
 			for i := 0; i < n; i++ {
+				//perfscan:ignore PS3016 one-time setup binning column gather, already parallel-gated
 				col[i] = x[i][f]
 			}
 			if n >= histRadixCutoff {
@@ -193,6 +199,8 @@ func (b *histBuilder) lastContrib() []float64 { return b.contrib }
 
 // histBuildParWork gates the feature split in buildHist: fork only when the node's work —
 // samples times features — is large enough to pay for it. Small nodes deep in a tree run serial.
+//
+//perfscan:ignore PS6023 tuning const; coverage-gap not a throughput change
 const histBuildParWork = 1 << 17
 
 // histMinFeatPerWorker is the floor on a worker's share of the feature range. Every worker walks
@@ -202,6 +210,8 @@ const histBuildParWork = 1 << 17
 // BenchmarkGBMHist_hist_80k: 1 feature 212.7 ms, 2 features 216.8, 4 features 209.7, 8 features
 // 231.4. The floor matters at the TOP end — 8 leaves only two workers — and the 1-to-4 spread is
 // inside the run-to-run noise, so 4 is chosen for the margin it keeps on machines with more cores.
+//
+//perfscan:ignore PS6023 tuning const; coverage-gap not a throughput change
 const histMinFeatPerWorker = 4
 
 // buildHist clears buffer `buf` and accumulates the round target over idx into it.
@@ -221,6 +231,7 @@ func (b *histBuilder) buildHist(idx []int, buf int) {
 		b.buildHistBand(idx, buf, 0, d)
 		return
 	}
+	//perfscan:ignore PS3011 uniform per-feature cost; equal chunks already balanced
 	chunk := (d + nw - 1) / nw
 	var wg sync.WaitGroup
 	for f0 := 0; f0 < d; f0 += chunk {
@@ -290,6 +301,7 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 	m := len(idx)
 	h, nb := b.hist[buf], b.nbins
 	var total float64 // = Σ residual over idx = sum of feature-0's histogram bins
+	//perfscan:ignore PS3010 O(nbins) per-node partial sum, ~1/d of split loop, tiny share
 	for j := 0; j <= len(b.edges[0]); j++ {
 		total += h[j].sum
 	}
@@ -299,6 +311,7 @@ func (b *histBuilder) buildNode(idx []int, depth, buf int) *gbmNode {
 	}
 	bestGain := 0.0
 	bestFeat, bestBin, bestNL := -1, -1, 0
+	//perfscan:ignore PS3068 per-node split work d*nbins below fork threshold; buildHist carries parallel win
 	for f := 0; f < b.d; f++ {
 		base := f * nb
 		var leftSum float64

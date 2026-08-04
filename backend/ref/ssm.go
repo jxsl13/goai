@@ -82,17 +82,22 @@ func selectiveScanKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 			// over D. Per-worker hloc[N] reproduces the shared h[d*N:] evolution in the same
 			// t-order and arithmetic — byte-identical, disjoint output columns.
 			parallel.Rows(D, func(dlo, dhi int) {
+				//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 				hloc := make([]float64, N)
+				//perfscan:ignore PS1006 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for d := dlo; d < dhi; d++ {
 					base := d * N
 					for n := range N {
 						hloc[n] = 0
 					}
 					for t := range L {
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dt := ds[t*D+d]
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						ut := us[t*D+d]
 						tn := t * N
 						var y float64
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for n := range N {
 							abar := math.Exp(dt * as[base+n])
 							hv := abar*hloc[n] + dt*bs[tn+n]*ut
@@ -122,17 +127,22 @@ func selectiveScanKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 				dsk = dskip.Contiguous().Storage().F32()
 			}
 			parallel.Rows(D, func(dlo, dhi int) {
+				//perfscan:ignore PS6008 reference oracle: intentionally simple, correctness baseline not an optimization target
 				hloc := make([]float64, N)
+				//perfscan:ignore PS1006 reference oracle: intentionally simple, correctness baseline not an optimization target
 				for d := dlo; d < dhi; d++ {
 					base := d * N
 					for n := range N {
 						hloc[n] = 0
 					}
 					for t := range L {
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						dt := float64(ds[t*D+d])
+						//perfscan:ignore PS6011 reference oracle: intentionally simple, correctness baseline not an optimization target
 						ut := float64(us[t*D+d])
 						tn := t * N
 						var y float64 // scan state accumulates in float64; only the store rounds
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for n := range N {
 							abar := math.Exp(dt * float64(as[base+n]))
 							hv := abar*hloc[n] + dt*float64(bs[tn+n])*ut

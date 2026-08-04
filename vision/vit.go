@@ -148,9 +148,13 @@ func NewViT(channels, size, classes int, seed uint64, opts ...ViTOption) (*ViT, 
 	m.Pos = scaleInPlace(tensor.Randn(cfg.dtype, seed+2, tensor.Shape{n + 1, cfg.dim}), 0.02)
 	for i := range cfg.depth {
 		s := seed + 10 + uint64(i)*8
+		//perfscan:ignore PS6016 Shape literal in constructor depth loop; one-time init
 		wq := scaleInPlace(tensor.Randn(cfg.dtype, s, tensor.Shape{cfg.dim, cfg.dim}), 0.02)
+		//perfscan:ignore PS6016 Shape literal in constructor; one-time init
 		wk := scaleInPlace(tensor.Randn(cfg.dtype, s+1, tensor.Shape{cfg.dim, cfg.dim}), 0.02)
+		//perfscan:ignore PS6016 Shape literal in constructor; one-time init
 		wv := scaleInPlace(tensor.Randn(cfg.dtype, s+2, tensor.Shape{cfg.dim, cfg.dim}), 0.02)
+		//perfscan:ignore PS6016 Shape literal in constructor; one-time init
 		wo := scaleInPlace(tensor.Randn(cfg.dtype, s+3, tensor.Shape{cfg.dim, cfg.dim}), 0.02)
 		attn, err := nlp.NewMHA(cfg.heads, wq, wk, wv, wo)
 		if err != nil {
@@ -213,6 +217,7 @@ func (m *ViT) patchify(img *tensor.Tensor) (*tensor.Tensor, error) {
 	n := grid * grid
 	read := makeReader(img.Contiguous())
 	data := make([]float64, 0, n*m.channels*p*p)
+	//perfscan:ignore PS3032 patchify preprocessing, movement-bound, small share vs layers
 	for py := range grid {
 		for px := range grid {
 			for c := range m.channels {
@@ -267,11 +272,14 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	N := S - 1
 	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
 	patchRows := make([]*tensor.Tensor, B)
+	//perfscan:ignore PS4011 per-image slice loop bounded by batch; deliberate batching
 	for b := range B {
+		//perfscan:ignore PS6018 movement-fusion breaks autograd; movement-only
 		img, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 invariant ReshapeAttrs literal; resource-only
 		one, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
 		if err != nil {
 			return nil, err
@@ -290,6 +298,7 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	}
 	// Prepend the [class] token and add position embeddings per image → packed [B·(N+1), D].
 	seqs := make([]*tensor.Tensor, B)
+	//perfscan:ignore PS4011 per-image slice loop bounded by batch
 	for b := range B {
 		pb, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * N, End: (b + 1) * N}, emb)
 		if err != nil {

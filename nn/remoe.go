@@ -144,6 +144,7 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	//perfscan:ignore PS3024 OpReLU graph dispatch, full backend kernel
 	g, err := m.exec(ctx, backend.OpReLU, nil, logits) // gates [T,E], ≥ 0
 	if err != nil {
 		return nil, nil, nil, err
@@ -152,6 +153,7 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 
 	// controller bookkeeping (plain host reads — outside the autograd graph)
 	for t := range tks {
+		//perfscan:ignore PS1001 telemetry active-count over gate matrix, negligible vs expert matmuls
 		for i := range e {
 			if g.AtF64(t, i) > 0 {
 				m.activeSum++
@@ -164,6 +166,7 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 	// multiply the dense expert output [T,dim]; zero gates kill both the value
 	// and the gradient of that expert for that token.
 	for i := range e {
+		//perfscan:ignore PS3024 OpSlice per-expert graph dispatch
 		ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g)
 		if err != nil {
 			return nil, nil, nil, err
@@ -172,6 +175,7 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 		if err != nil {
 			return nil, nil, nil, err
 		}
+		//perfscan:ignore PS3024 OpMul per-expert graph dispatch
 		scaled, err := m.exec(ctx, backend.OpMul, nil, out, ge) // [T,dim]·[T,1] broadcast
 		if err != nil {
 			return nil, nil, nil, err
@@ -179,6 +183,7 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 		if y == nil {
 			y = scaled
 		} else {
+			//perfscan:ignore PS3024 OpAdd accumulate graph dispatch
 			y, err = m.exec(ctx, backend.OpAdd, nil, y, scaled)
 			if err != nil {
 				return nil, nil, nil, err
@@ -192,15 +197,18 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 	// learned one. A constant OpMul (not OpAXPY) is used deliberately: AXPY
 	// defaults Alpha == 0 to 1, which would leave λ = 0 UNSCALED; a plain
 	// multiply keeps λ = 0 meaning exactly zero pressure.
+	//perfscan:ignore PS3024 OpSum graph dispatch, full backend kernel
 	sum, err := m.exec(ctx, backend.OpSum, nil, g)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	scale := tensor.New(sum.Dtype(), sum.Shape())
 	coef := m.lambda / float64(tks)
+	//perfscan:ignore PS1001 constant fill of tiny reduced-sum tensor, ~1 element
 	for i := range scale.Numel() {
 		scale.SetF64(coef, tensor.Unravel(i, scale.Shape())...)
 	}
+	//perfscan:ignore PS3024 OpMul penalty graph dispatch
 	penalty, err = m.exec(ctx, backend.OpMul, nil, sum, scale)
 	if err != nil {
 		return nil, nil, nil, err

@@ -55,6 +55,7 @@ func MPTFromHF(ts map[string]*tensor.Tensor, cfg MPTConfig) (*MPT, error) {
 	}
 
 	m := &MPT{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 model-load weight transpose, one-time
 	for l := range layers {
 		p := fmt.Sprintf("transformer.blocks.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) { return get(p + name) }

@@ -196,9 +196,11 @@ func (r *stateReader) buf(name string, i int, want tensor.Shape, dst []float64) 
 	r.used[k] = true
 	if !t.Shape().Equal(want) {
 		r.fail(fmt.Errorf("key %q: shape mismatch, checkpoint has %v, parameter %d needs %v",
+			//perfscan:ignore PS3013 pointer-to-fmt in r.fail error path; cold
 			k, t.Shape(), i, want))
 		return
 	}
+	//perfscan:ignore PS1001 per-element AtF64 in checkpoint LoadState; one-time cold path
 	for j := range dst {
 		dst[j] = t.AtF64(tensor.Unravel(j, t.Shape())...)
 	}
@@ -247,6 +249,7 @@ func (s *SGD) LoadState(st map[string]*tensor.Tensor) error {
 	staged := make([][]float64, len(s.Params))
 	for i, p := range s.Params {
 		if s.vel != nil {
+			//perfscan:ignore PS2008,PS3064 alloc in SGD LoadState; checkpoint load one-time | staged rows in SGD LoadState; checkpoint one-time
 			staged[i] = make([]float64, p.Numel())
 			r.buf("vel", i, p.Shape(), staged[i])
 		}
@@ -285,7 +288,9 @@ func (a *Adam) LoadState(st map[string]*tensor.Tensor) error {
 	m := make([][]float64, len(a.Params))
 	v := make([][]float64, len(a.Params))
 	for i, p := range a.Params {
+		//perfscan:ignore PS2008,PS3064 alloc in Adam LoadState; checkpoint one-time | row make in Adam LoadState; checkpoint one-time
 		m[i] = make([]float64, p.Numel())
+		//perfscan:ignore PS2008,PS3064 alloc in Adam LoadState; checkpoint one-time | row make in Adam LoadState; checkpoint one-time
 		v[i] = make([]float64, p.Numel())
 		r.buf("m", i, p.Shape(), m[i])
 		r.buf("v", i, p.Shape(), v[i])
@@ -318,6 +323,7 @@ func (l *Lion) LoadState(st map[string]*tensor.Tensor) error {
 	r := newStateReader(st, len(l.Params))
 	m := make([][]float64, len(l.Params))
 	for i, p := range l.Params {
+		//perfscan:ignore PS2008,PS3064 alloc in Lion LoadState; checkpoint one-time | row make in Lion LoadState; checkpoint one-time
 		m[i] = make([]float64, p.Numel())
 		r.buf("m", i, p.Shape(), m[i])
 	}
@@ -348,6 +354,7 @@ func (mu *Muon) LoadState(st map[string]*tensor.Tensor) error {
 	r := newStateReader(st, len(mu.Params))
 	b := make([][]float64, len(mu.Params))
 	for i, p := range mu.Params {
+		//perfscan:ignore PS2008,PS3064 alloc in Muon LoadState; checkpoint one-time | row make in Muon LoadState; checkpoint one-time
 		b[i] = make([]float64, p.Numel())
 		r.buf("buf", i, p.Shape(), b[i])
 	}
@@ -398,15 +405,19 @@ func (a *Adafactor) LoadState(st map[string]*tensor.Tensor) error {
 	t, _ := r.scalar("t")
 	for i, p := range a.Params {
 		if p.Ndim() == 2 {
+			//perfscan:ignore PS2008,PS3064 alloc in Adafactor LoadState; checkpoint one-time | row make in Adafactor LoadState; checkpoint one-time
 			rr[i] = make([]float64, p.Shape()[0])
+			//perfscan:ignore PS2008,PS3064 alloc in Adafactor LoadState; checkpoint one-time | row make in Adafactor LoadState; checkpoint one-time
 			cc[i] = make([]float64, p.Shape()[1])
 			r.buf("r", i, tensor.Shape{p.Shape()[0]}, rr[i])
 			r.buf("c", i, tensor.Shape{p.Shape()[1]}, cc[i])
 		} else {
+			//perfscan:ignore PS2008,PS3064 alloc in Adafactor LoadState; checkpoint one-time | row make in Adafactor LoadState; checkpoint one-time
 			vv[i] = make([]float64, p.Numel())
 			r.buf("v", i, p.Shape(), vv[i])
 		}
 		if a.m != nil {
+			//perfscan:ignore PS2008,PS3064 alloc in Adafactor LoadState; checkpoint one-time | row make in Adafactor LoadState; checkpoint one-time
 			mm[i] = make([]float64, p.Numel())
 			r.buf("m", i, p.Shape(), mm[i])
 		}

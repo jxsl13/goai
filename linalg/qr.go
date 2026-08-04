@@ -26,6 +26,7 @@ func QR(a *tensor.Tensor) (q, r *tensor.Tensor, err error) {
 	// R = the top n×n upper triangle
 	rMat := make([]float64, n*n)
 	for i := range n {
+		//perfscan:ignore PS4004 O(n2) R-copy inside O(mn2) factorization, PS4004 own note: no wall-clock
 		for j := i; j < n; j++ {
 			rMat[i*n+j] = rm[i*n+j]
 		}
@@ -83,13 +84,17 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 	// equal bands need no balancing, and the buffer is allocated once per WORKER rather than once
 	// per column — inside the band, so the fan-out does not give back the hoist.
 	parallelCols(cols, m*n, func(lo, hi int) {
+		//perfscan:ignore PS6008 per-worker cvec scratch, once per Lstsq call, GOMAXPROCS-bounded sanctioned
 		cvec := make([]float64, m)
+		//perfscan:ignore PS1006 per-column b gather, c is parallel outer, O(m) small share, no interchange
 		for c := lo; c < hi; c++ {
+			//perfscan:ignore PS1005 typed bf fast path already present, AtF64 is exotic-dtype fallback
 			for i := range m {
 				switch {
 				case bf != nil && vec:
 					cvec[i] = bf[i]
 				case bf != nil:
+					//perfscan:ignore PS6011 strided column gather into per-column scratch, O(m) small share
 					cvec[i] = bf[i*cols+c]
 				case vec:
 					cvec[i] = b.AtF64(i)
@@ -100,11 +105,13 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 			// Qᵀb: apply H_0,…,H_{n−1} in forward order (each reflector is symmetric)
 			for k := range n {
 				s := 0.0
+				//perfscan:ignore PS4012 not quantized: beta is f64 reflector coeff; plain-dot covered by PS3010
 				for i := k; i < m; i++ {
 					s += vs[k][i] * cvec[i]
 				}
 				bt := betas[k] * s
 				for i := k; i < m; i++ {
+					//perfscan:ignore PS3075 memory-bound axpy (cvec streamed), bandwidth-bound; jam regresses
 					cvec[i] -= bt * vs[k][i]
 				}
 			}
@@ -112,6 +119,7 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 			for i := n - 1; i >= 0; i-- {
 				sum := cvec[i]
 				for j := i + 1; j < n; j++ {
+					//perfscan:ignore PS6011 back-sub recurrence, PS6011 own note: this Lstsq site measured -0.02% rejected
 					sum -= rm[i*n+j] * out[j*cols+c]
 				}
 				out[i*cols+c] = sum / rm[i*n+i]
@@ -130,14 +138,17 @@ func Lstsq(a, b *tensor.Tensor) (*tensor.Tensor, error) {
 func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []float64) {
 	vs = make([][]float64, n)
 	betas = make([]float64, n)
+	//perfscan:ignore PS1006,PS3059 column-norm reduction, strided column, no j-loop to interchange, O(mn) small | householder k-loop is sequentia
 	for k := range n {
 		// x = rm[k:m, k]; norm below (incl.) the diagonal
 		var norm float64
 		for i := k; i < m; i++ {
+			//perfscan:ignore PS6011 column-norm read strided, unavoidable, O(m)/reflector small share
 			x := rm[i*n+k]
 			norm += x * x
 		}
 		norm = math.Sqrt(norm)
+		//perfscan:ignore PS2008 reflector v alloc, PS2008 resource-only (no wall-clock per own note)
 		v := make([]float64, m)
 		vs[k] = v
 		if norm == 0 {
@@ -148,11 +159,14 @@ func householder(rm []float64, m, n int, t []float64) (vs [][]float64, betas []f
 		if rm[k*n+k] < 0 {
 			alpha = norm
 		}
+		//perfscan:ignore PS4004 false-positive: source rm[i*n+k] column-strided, no contiguous run, copy() inapplicable
 		for i := k; i < m; i++ {
+			//perfscan:ignore PS6011 strided column copy v[i]=rm[i*n+k], O(m)/reflector small share
 			v[i] = rm[i*n+k]
 		}
 		v[k] -= alpha
 		var vtv float64
+		//perfscan:ignore PS3010 reflector norm dot O(m)/reflector, small vs O(mn2) rank-1 core; tol-risk in stable QR
 		for i := k; i < m; i++ {
 			vtv += v[i] * v[i]
 		}
@@ -239,6 +253,7 @@ func shapeMN(a *tensor.Tensor) (m, n int, err error) {
 func toFlat(a *tensor.Tensor, m, n int) []float64 {
 	r := make([]float64, m*n)
 	for i := range m {
+		//perfscan:ignore PS1005 one-time O(mn) toFlat input flatten, small share vs O(mn2) factorization
 		for j := range n {
 			r[i*n+j] = a.AtF64(i, j)
 		}

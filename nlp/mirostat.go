@@ -111,6 +111,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 	}
 	probs := m.probsBuf[:n]                  // fully written by ExpSumF64 below, so a dirty reuse is defined
 	sum := simd.ExpSumF64(probs, logits, mx) // 4-wide AVX2 f64 softmax exp (see Sampler.Dist)
+	//perfscan:ignore PS5001 memory-bound normalize; reciprocal blocked by numerics note
 	for i := range probs {
 		probs[i] /= sum
 	}
@@ -140,6 +141,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 		argmax, maxp := 0, math.Inf(-1)
 		if m.Mu >= 0 { // μ<0 ⇒ surprise≥0>μ ⇒ nothing qualifies; just find the forced top token
 			thr := math.Exp2(-m.Mu) * (1 - 1.0/(1<<30))
+			//perfscan:ignore PS3068 already-optimized prob pre-filter loop
 			for i, p := range probs {
 				if p > maxp {
 					maxp, argmax = p, i
@@ -149,6 +151,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 				}
 			}
 		} else {
+			//perfscan:ignore PS3068 already-optimized argmax pre-filter loop
 			for i, p := range probs {
 				if p > maxp {
 					maxp, argmax = p, i
@@ -159,6 +162,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 			cand = m.sortedKeep(probs, n) // flat distribution: the full radix sort is the right tool
 		} else {
 			out := cand[:0] // exact refine on the pre-filtered few (in-place; ascending-id order kept)
+			//perfscan:ignore PS4003 exact refine over few survivors, low trip-count
 			for _, i := range cand {
 				if surpriseBits(probs[i]) <= m.Mu {
 					out = append(out, i)
@@ -168,6 +172,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 			if len(cand) == 0 {
 				cand = append(cand, argmax) // always keep the top token
 			}
+			//perfscan:ignore PS3002 sort closure over few candidates, low trip-count
 			slices.SortStableFunc(cand, func(a, b int) int {
 				switch {
 				case probs[a] > probs[b]:
@@ -183,6 +188,7 @@ func (m *Mirostat) Sample(logits []float64) int {
 
 	// sample X from the renormalized survivors (identical accumulation order to the sort path)
 	var ksum float64
+	//perfscan:ignore PS3010 sum over few candidates, low trip-count
 	for _, i := range cand {
 		ksum += probs[i]
 	}
@@ -217,6 +223,7 @@ func (m *Mirostat) sortedKeep(probs []float64, n int) []int {
 	}
 	sortIdxDescByProb(idx, probs)
 	keep := 1
+	//perfscan:ignore PS4003 sortedKeep fallback path, rarely taken
 	for keep < n && surpriseBits(probs[idx[keep]]) <= m.Mu {
 		keep++
 	}

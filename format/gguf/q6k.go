@@ -72,11 +72,13 @@ func dequantQ6_KInto(dst []float32, raw []byte) {
 func quantizeQ6_K(x []float32) []byte {
 	nb := len(x) / qkK
 	out := make([]byte, nb*q6kBlockSize)
+	//perfscan:ignore PS3043 quantizeQ6_K encoder, cold offline path
 	for b := range nb {
 		blk := x[b*qkK : (b+1)*qkK]
 		// per-sub-block desired scale, then the super-block scale d over those 16 scales
 		var scales [16]float32
 		var maxScale float32
+		//perfscan:ignore PS3067 quantize encoder loop, cold offline path
 		for j := range 16 {
 			var amax float32
 			for i := range 16 {
@@ -102,6 +104,7 @@ func quantizeQ6_K(x []float32) []byte {
 			s8 := min(int(roundHalfAway(scales[j]*id)), 127) // int8 sub-block scale
 			sc[j] = byte(int8(s8))
 			sub := d * float32(s8) // effective sub-block scale
+			//perfscan:ignore PS5001 quantize encoder inner loop, cold offline path
 			for i := range 16 {
 				qi := 32
 				if sub != 0 {
@@ -119,6 +122,7 @@ func quantizeQ6_K(x []float32) []byte {
 		// pack q back into ql/qh, inverting the dequant assembly
 		for grp := range 2 {
 			qlo, qho, yo := grp*64, grp*32, grp*128
+			//perfscan:ignore PS3030 encoder pack-loop bounds hoist; cold offline quantize
 			for l := range 32 {
 				q1, q2, q3, q4 := q[yo+l], q[yo+l+32], q[yo+l+64], q[yo+l+96]
 				ql[qlo+l] = q1&0xF | (q3&0xF)<<4

@@ -99,6 +99,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 				ui := us[i]
 				wrow := ws[i*out : i*out+out : i*out+out]
 				for j := range out {
+					//perfscan:ignore PS3075 norm-square accumulate in matvec, trivial reduction in fast path
 					tv[j] += wrow[j] * ui
 				}
 			}
@@ -111,6 +112,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 			var nu float64
 			for i := range in {
 				wrow := ws[i*out : i*out+out : i*out+out]
+				//perfscan:ignore PS3073 second matvec already contiguous fast path
 				acc := dot4(wrow, vs) // contiguous W row · v
 				tu[i] = acc
 				nu += acc * acc
@@ -123,6 +125,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 		}
 		return
 	}
+	//perfscan:ignore PS2004 per-iter scratch in exotic-dtype AtF64 fallback, resource-only
 	for range iters {
 		// v = normalize(Wᵀu): v[j] = Σ_i W[i,j]·u[i]
 		tv := make([]float64, out)
@@ -141,6 +144,7 @@ func (s *SpectralNorm) powerIterate(iters int) {
 			}
 		}
 		// u = normalize(Wv): u[i] = Σ_j W[i,j]·v[j]
+		//perfscan:ignore PS3035 scratch alloc in exotic-dtype fallback, resource-only
 		tu := make([]float64, in)
 		var nu float64
 		for i := range in {
@@ -164,8 +168,10 @@ func (s *SpectralNorm) powerIterate(iters int) {
 func (s *SpectralNorm) SigmaEst() float64 {
 	in, out := s.W.Shape()[0], s.W.Shape()[1]
 	var sig float64
+	//perfscan:ignore PS1001 SigmaEst is introspection-only, not forward/backward path
 	for i := range in {
 		var wv float64
+		//perfscan:ignore PS1001 SigmaEst introspection-only method, not hot path
 		for j := range out {
 			wv += s.W.AtF64(i, j) * s.v.AtF64(j, 0)
 		}
@@ -184,24 +190,29 @@ func (s *SpectralNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.
 	s.powerIterate(s.iters)
 
 	// σ = uᵀ·W·v as a [1,1] scalar, differentiable in W (u,v constant).
+	//perfscan:ignore PS3038 OpMatMul σ dispatch, real GEMM, fusion breaks autograd
 	wv, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{s.W, s.v}, nil) // [in,1]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 OpMatMul dispatch, real GEMM, autograd graph node
 	sig, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{s.u, wv[0]}, nil) // [1,1]
 	if err != nil {
 		return nil, err
 	}
 	// W_SN = W / σ  (broadcast [in,out] / [1,1]).
+	//perfscan:ignore PS3038 OpDiv W/σ dispatch, autograd graph node
 	wsn, err := backend.Execute(ctx, backend.OpDiv, []*tensor.Tensor{s.W, sig[0]}, nil)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 OpMatMul x·Wsn, the dominant GEMM itself
 	y, err := backend.Execute(ctx, backend.OpMatMul, []*tensor.Tensor{x, wsn[0]}, nil)
 	if err != nil {
 		return nil, err
 	}
 	if s.B != nil {
+		//perfscan:ignore PS3038 OpAddBias dispatch, autograd graph node
 		yb, err := backend.Execute(ctx, backend.OpAddBias, []*tensor.Tensor{y[0], s.B}, nil)
 		if err != nil {
 			return nil, err

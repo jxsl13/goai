@@ -66,6 +66,7 @@ func BarlowTwinsLoss(ctx *backend.Context, za, zb *tensor.Tensor, lambda float64
 	eye := tensor.New(za.Dtype(), tensor.Shape{d, d})
 	weight := tensor.New(za.Dtype(), tensor.Shape{d, d})
 	for i := range d {
+		//perfscan:ignore PS1001 constant eye/weight fill, matmul-dominated loss
 		for j := range d {
 			if i == j {
 				eye.SetF64(1, i, j)

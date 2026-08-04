@@ -51,6 +51,8 @@ type wkvScratch struct {
 
 // lin returns the linear-time workspace, allocated on first use so a worker that never runs this
 // arm does not pay for it.
+//
+//perfscan:ignore PS3058 per-call slice setup, not per-element
 func (s *wkvScratch) lin() (b, alpha, wkvs, qdiag, mpost []float64) {
 	if s.b == nil {
 		s.b = make([]float64, s.seq)
@@ -219,6 +221,8 @@ func getWKVScratch(seq int) *wkvScratch {
 }
 
 // cols returns the three gathered input columns, allocating on first use.
+//
+//perfscan:ignore PS3058 stale line; per-call Contiguous setup
 func (s *wkvScratch) cols() (kcol, vcol, gcol []float64) {
 	if s.kcol == nil {
 		s.kcol = make([]float64, s.seq)
@@ -402,6 +406,7 @@ func init() {
 				}
 				den := simd.ExpSumF64(p[:t+1], loga[:t+1], m)
 				var wkv float64
+				//perfscan:ignore PS3010 stale line; not in current tree
 				for i := 0; i <= t; i++ {
 					wkv += p[i] * v.AtF64(i, c)
 				}
@@ -417,6 +422,7 @@ func init() {
 					if i == t {
 						duc += gt * pi * (vi - wkv)
 					} else {
+						//perfscan:ignore PS3014 stale line; not in current tree
 						dwc -= float64(t-1-i) * gt * pi * (vi - wkv)
 					}
 				}

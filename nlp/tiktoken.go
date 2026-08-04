@@ -64,8 +64,10 @@ func (t *Tokenizer) ToTiktoken() []byte {
 	for id, b := range t.decoder {
 		es = append(es, entry{b, id})
 	}
+	//perfscan:ignore PS3002,PS6009 ToTiktoken serialization, cold save path | serialization sort, cold save path
 	sort.Slice(es, func(a, b int) bool { return es[a].id < es[b].id })
 	var buf bytes.Buffer
+	//perfscan:ignore PS2002 serialization alloc, cold save path
 	for _, e := range es {
 		buf.WriteString(base64.StdEncoding.EncodeToString([]byte(e.bytes)))
 		buf.WriteByte(' ')

@@ -66,10 +66,12 @@ func dequantQ2_KInto(dst []float32, raw []byte) {
 func quantizeQ2_K(x []float32) []byte {
 	nb := len(x) / qkK
 	out := make([]byte, nb*q2kBlockSize)
+	//perfscan:ignore PS3043 quantizeQ2_K encoder (offline weight quant), cold
 	for b := range nb {
 		blk := x[b*qkK : (b+1)*qkK]
 		var scales, mins [16]float32
 		var maxScale, maxMin float32
+		//perfscan:ignore PS3067 quantize encoder loop, cold offline path
 		for is := range 16 {
 			nblock, r := is/8, is%8
 			j, g := r/2, (r%2)*16
@@ -117,6 +119,7 @@ func quantizeQ2_K(x []float32) []byte {
 			j, g := r/2, (r%2)*16
 			dl := d * float32(sc4)
 			ml := dmin * float32(mn4)
+			//perfscan:ignore PS5001 quantize encoder inner loop, cold offline path
 			for l := range 16 {
 				q2 := 0
 				if dl != 0 {

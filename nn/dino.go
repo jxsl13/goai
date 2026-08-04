@@ -91,9 +91,11 @@ func DINOCenterUpdate(center, teacherLogits *tensor.Tensor, momentum float64) (*
 		cs := center.Storage().F64()
 		os := out.Storage().F64()
 		mean := make([]float64, k)
+		//perfscan:ignore PS1007 already-optimized flat fast path; once-per-batch EMA stat
 		for i := 0; i < b; i++ {
 			base := i * k
 			for j := 0; j < k; j++ {
+				//perfscan:ignore PS3075 contiguous mean sweep, once-per-batch tiny statistic
 				mean[j] += ts[base+j]
 			}
 		}
@@ -107,9 +109,11 @@ func DINOCenterUpdate(center, teacherLogits *tensor.Tensor, momentum float64) (*
 		cs := center.Storage().F32()
 		os := out.Storage().F32()
 		mean := make([]float64, k)
+		//perfscan:ignore PS1007 F32 fast-path branch, once-per-batch statistic
 		for i := 0; i < b; i++ {
 			base := i * k
 			for j := 0; j < k; j++ {
+				//perfscan:ignore PS3075 contiguous mean sweep, once-per-batch tiny statistic
 				mean[j] += float64(ts[base+j])
 			}
 		}

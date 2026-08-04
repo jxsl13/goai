@@ -41,8 +41,10 @@ func PlackettLuceLoss(ctx *backend.Context, rewards *tensor.Tensor) (*tensor.Ten
 	lastAxis := backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}
 	neg := math.Inf(-1)
 	var total *tensor.Tensor
+	//perfscan:ignore PS4011 small [batch,K] listwise loss, dominated by reward-model fwd/bwd
 	for rank := 0; rank < k-1; rank++ {
 		// suffix logsumexp: mask columns < rank to −∞ (so exp→0), logsumexp over the row.
+		//perfscan:ignore PS6016 resource-only tiny maskRow alloc-in-loop
 		maskRow := tensor.New(rewards.Dtype(), tensor.Shape{1, k})
 		for j := 0; j < rank; j++ {
 			maskRow.SetF64(neg, 0, j)
@@ -76,6 +78,7 @@ func PlackettLuceLoss(ctx *backend.Context, rewards *tensor.Tensor) (*tensor.Ten
 			return nil, err
 		}
 		// s[:,rank] via a one-hot column selector (avoids a slice op).
+		//perfscan:ignore PS6016 resource-only tiny oneHot alloc-in-loop
 		oneHot := tensor.New(rewards.Dtype(), tensor.Shape{1, k})
 		oneHot.SetF64(1, 0, rank)
 		sel, err := ex(backend.OpMul, nil, rewards, oneHot)
@@ -90,6 +93,7 @@ func PlackettLuceLoss(ctx *backend.Context, rewards *tensor.Tensor) (*tensor.Ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016 resource-only, tiny scalar-reduce alloc
 		s, err := ex(backend.OpSum, backend.ReduceAttrs{Axes: []int{0, 1}}, term) // scalar
 		if err != nil {
 			return nil, err

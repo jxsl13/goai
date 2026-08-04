@@ -20,6 +20,8 @@ import (
 //
 // ε from attrs["epsilon"] (default 0.2). logπ_old and Â are constants (rollout
 // time), so gradients flow only into logπθ (§R49). Accumulation in f64 (§V10).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ppoClipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: ppoclip wants (logpNew, logpOld, advantage), got %d inputs", len(in))
@@ -84,6 +86,7 @@ func ppoClipKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpPPOClip, tensor.F32, ppoClipKernel)
 	std.add(backend.OpPPOClip, tensor.F64, ppoClipKernel)
 }

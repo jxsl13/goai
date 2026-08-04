@@ -25,11 +25,15 @@ func eighKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*
 	}
 	n := a.Shape()[0]
 	ma := make([][]float64, n) // symmetric part (A+Aᵀ)/2 → robust to tiny asymmetry
+	//perfscan:ignore PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for i := range n {
+		//perfscan:ignore PS2008,PS3064 reference oracle: intentionally simple, correctness baseline not an optimization target
 		ma[i] = make([]float64, n)
 	}
 	for i := range n {
+		//perfscan:ignore PS1001,PS4006 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range n {
+			//perfscan:ignore PS3016 reference oracle: intentionally simple, correctness baseline not an optimization target
 			ma[i][j] = 0.5 * (a.AtF64(i, j) + a.AtF64(j, i))
 		}
 	}
@@ -37,10 +41,13 @@ func eighKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*
 
 	wt := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{n})
 	vt := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{n, n})
+	//perfscan:ignore PS1001 reference oracle: intentionally simple, correctness baseline not an optimization target
 	for k := range n {
 		src := n - 1 - k // ascending index k ← descending index n−1−k
 		wt.SetF64(vals[src], k)
+		//perfscan:ignore PS1001 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for r := range n {
+			//perfscan:ignore PS3016 reference oracle: intentionally simple, correctness baseline not an optimization target
 			vt.SetF64(vecs[src][r], r, k) // column k of V is the k-th (ascending) eigenvector
 		}
 	}
@@ -48,6 +55,7 @@ func eighKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpEigh, tensor.F32, eighKernel)
 	std.add(backend.OpEigh, tensor.F64, eighKernel)
 }

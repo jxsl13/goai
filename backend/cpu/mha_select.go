@@ -68,7 +68,9 @@ func mhaSelectKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		os := out.Storage().F32()
 		kdm := kvHeads * dk
 		parallelWork(heads*sq, sk*dk, func(lo, hi int) {
+			//perfscan:ignore PS6008 per-worker scratch (once per goroutine chunk); correct design
 			row := make([]float64, sk)
+			//perfscan:ignore PS6008 per-worker scratch (once per goroutine chunk); correct design
 			obuf := make([]float64, dk)
 			for idx := lo; idx < hi; idx++ {
 				h := idx / sq
@@ -92,7 +94,9 @@ func mhaSelectKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	kdm := kvHeads * dk
 
 	parallelWork(heads*sq, sk*dk, func(lo, hi int) {
+		//perfscan:ignore PS6008 per-worker scratch (once per goroutine chunk); correct design
 		row := make([]float64, sk)
+		//perfscan:ignore PS6008 per-worker scratch (once per goroutine chunk); correct design
 		obuf := make([]float64, dk)
 		for idx := lo; idx < hi; idx++ {
 			h := idx / sq
@@ -120,6 +124,7 @@ func mhaSelectScoreOne[T float32 | float64](sv float64, qa, qb, ks1, ks2 []T,
 	}
 	krow := ksrc[j*kdm+kvOff : j*kdm+kvOff+dk : j*kdm+kvOff+dk]
 	var s float64
+	//perfscan:ignore PS3010 rare masked-key fallback dot; jammed path handles common case
 	for d, qv := range qrow {
 		s += float64(qv) * float64(krow[d])
 	}
@@ -148,6 +153,7 @@ func mhaSelectRow[T float32 | float64](os, qs1, ks1, qs2, ks2, vs, sels []T,
 	qb := qs2[qBase : qBase+dk : qBase+dk]
 	m := math.Inf(-1)
 	j := 0
+	//perfscan:ignore PS3066,PS3076 already 4-key hand-jammed hot loop; at-ceiling | already 4-way hand-unrolled score loop; at-ceiling
 	for ; j+3 < sk; j += 4 {
 		v0, v1 := float64(srow[j]), float64(srow[j+1])
 		v2, v3 := float64(srow[j+2]), float64(srow[j+3])
@@ -188,6 +194,7 @@ func mhaSelectRow[T float32 | float64](os, qs1, ks1, qs2, ks2, vs, sels []T,
 		k2 := kk2[o2 : o2+dk : o2+dk]
 		k3 := kk3[o3 : o3+dk : o3+dk]
 		var a0, a1, a2, a3 float64
+		//perfscan:ignore PS3010 inner 4-accumulator score dot; already optimal
 		for d := 0; d < dk; d++ {
 			a0 += float64(q0[d]) * float64(k0[d])
 			a1 += float64(q1[d]) * float64(k1[d])
@@ -245,6 +252,7 @@ func mhaSelectRow[T float32 | float64](os, qs1, ks1, qs2, ks2, vs, sels []T,
 			w := row[j] / sum
 			vrow := vs[j*kdm+kvOff : j*kdm+kvOff+dk : j*kdm+kvOff+dk]
 			for d, vv := range vrow {
+				//perfscan:ignore PS3017 weighted-sum remainder tail, <4 iters low trip-count
 				obuf[d] += w * float64(vv)
 			}
 		}

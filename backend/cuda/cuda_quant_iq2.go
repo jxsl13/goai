@@ -74,6 +74,7 @@ func iq2xxsGrid() (unsafe.Pointer, error) {
 				for g := 0; g < 4; g++ {
 					idx := b*32 + pair*4 + g
 					base := b*256 + pair*32 + g*8
+					//perfscan:ignore PS5001 one-time IQ2 grid reconstruct (sync.Once)
 					for k := 0; k < 8; k++ {
 						grid[idx*8+k] = df[base+k] / db
 					}
@@ -193,6 +194,7 @@ func iq2xsGrid() (unsafe.Pointer, error) {
 			for l := 0; l < 32; l++ {
 				idx := b*32 + l
 				base := b*256 + l*8
+				//perfscan:ignore PS5001 one-time IQ2 grid reconstruct (sync.Once)
 				for k := 0; k < 8; k++ {
 					grid[idx*8+k] = df[base+k] / db
 				}

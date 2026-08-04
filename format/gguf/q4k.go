@@ -102,6 +102,7 @@ func quantizeQ4_K(x []float32) []byte {
 		blk := x[b*qkK : (b+1)*qkK]
 		var scales, mins [q4kSubs]float32
 		var maxScale, maxMin float32
+		//perfscan:ignore PS3067 offline quantizeQ4_K min/max loop, cold encode path
 		for j := range q4kSubs {
 			lo, hi := blk[j*32], blk[j*32]
 			for i := 1; i < 32; i++ {
@@ -195,9 +196,11 @@ func dotQ4_KRow(row []float32, raw []byte, k int) float64 {
 			d2, off2 := d*float32(sc2), dmin*float32(m2)
 			base := yo + pair*64
 			xlo, xhi := row[base:base+32], row[base+32:base+64]
+			//perfscan:ignore PS3010 fused Q4_K dot hot path; unroll/fusion levers bench-rejected #904
 			for l := range 32 {
 				acc += float64(xlo[l]) * float64(d1*float32(q[l]&0xF)-off1)
 			}
+			//perfscan:ignore PS3010 same fused Q4_K dot; SIMD/unroll/dp4a bench-rejected #904
 			for l := range 32 {
 				acc += float64(xhi[l]) * float64(d2*float32(q[l]>>4)-off2)
 			}

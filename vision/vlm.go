@@ -49,6 +49,7 @@ func (p *VLMProjector) Forward(ctx *backend.Context, feats *tensor.Tensor) (*ten
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 resource-only alloc; single GELU dispatch, kernel-dominated, time flat
 	g, err := backend.Execute(ctx, backend.OpGELU, []*tensor.Tensor{h}, nil)
 	if err != nil {
 		return nil, err

@@ -29,34 +29,42 @@ func SymmetricKL(ctx *backend.Context, l1, l2 *tensor.Tensor) (*tensor.Tensor, e
 	if l1.Ndim() < 1 || !l1.Shape().Equal(l2.Shape()) {
 		return nil, fmt.Errorf("nn: SymmetricKL needs equal-shaped rank≥1 logits, got %v and %v", l1.Shape(), l2.Shape())
 	}
+	//perfscan:ignore PS3024 softmax dispatch in autograd-composed loss; once/step, fusion breaks grad
 	p, err := rdropExec(ctx, backend.OpSoftmax, nil, l1)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 softmax dispatch, autograd-composed KL loss, fusion breaks gradient
 	q, err := rdropExec(ctx, backend.OpSoftmax, nil, l2)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 log dispatch, autograd-composed loss, once/step
 	lp, err := rdropExec(ctx, backend.OpLog, nil, p)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 log dispatch, autograd-composed loss, fusion breaks grad
 	lq, err := rdropExec(ctx, backend.OpLog, nil, q)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 sub dispatch, autograd-composed loss, once/step
 	dp, err := rdropExec(ctx, backend.OpSub, nil, p, q) // p − q
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 sub dispatch, autograd-composed loss, once/step
 	dl, err := rdropExec(ctx, backend.OpSub, nil, lp, lq) // log p − log q
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 mul dispatch, autograd-composed loss, once/step
 	prod, err := rdropExec(ctx, backend.OpMul, nil, dp, dl)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 sum dispatch, autograd-composed loss, once/step
 	total, err := rdropExec(ctx, backend.OpSum, nil, prod) // Σ over all elements
 	if err != nil {
 		return nil, err
@@ -64,6 +72,7 @@ func SymmetricKL(ctx *backend.Context, l1, l2 *tensor.Tensor) (*tensor.Tensor, e
 	d := l1.Shape()[l1.Ndim()-1]
 	rows := l1.Numel() / d
 	// ½·total / rows  =  mean over rows of the per-row symmetric KL
+	//perfscan:ignore PS3024 AXPY scale dispatch, autograd-composed loss, once/step
 	return rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 0.5 / float64(rows)}, total, tensor.New(l1.Dtype(), tensor.Shape{}))
 }
 
@@ -85,10 +94,12 @@ func RDropLoss(ctx *backend.Context, logits1, logits2, targets *tensor.Tensor, a
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 add dispatch in RDropLoss, once/step, tiny vs forward
 	ceSum, err := rdropExec(ctx, backend.OpAdd, nil, ce1, ce2)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 AXPY dispatch in RDropLoss, once/step
 	ceAvg, err := rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 0.5}, ceSum, tensor.New(logits1.Dtype(), tensor.Shape{}))
 	if err != nil {
 		return nil, err
@@ -103,5 +114,6 @@ func RDropLoss(ctx *backend.Context, logits1, logits2, targets *tensor.Tensor, a
 	if alpha == 0 {
 		return ceAvg, nil
 	}
+	//perfscan:ignore PS3024 final AXPY dispatch in RDropLoss, once/step
 	return rdropExec(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: alpha}, kl, ceAvg)
 }

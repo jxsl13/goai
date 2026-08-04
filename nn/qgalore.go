@@ -341,8 +341,10 @@ func quantizeAffine(x []float64, blockSize, bits int, stochastic bool, random fu
 			scale = 1e-5
 		}
 		zero := math.Round(-mn / scale)
+		//perfscan:ignore PS3077,PS3082 per-block scalar clamp, low trip vs per-element loop | per-block scalar min/max, negligible share
 		zero = math.Max(0, math.Min(float64(maxCode), zero))
 		scales[b], zeros[b] = scale, zero
+		//perfscan:ignore PS5001 divide feeds round/uint8 quantize; memory-bound, not bit-safe
 		for i := lo; i < hi; i++ {
 			y := x[i] / scale
 			var rounded float64
@@ -381,6 +383,7 @@ func packInt4(codes []uint8) []byte {
 	return packed
 }
 
+//perfscan:ignore PS3033 alloc-class unpackInt4 buffer; resource-only, marginal wallclock
 func unpackInt4(packed []byte, n int) []uint8 {
 	codes := make([]uint8, n)
 	for i := range n {
@@ -417,6 +420,7 @@ func (st *qgaloreState) setProjection(proj [][]float64, blockSize int, quant boo
 	st.projQ, st.projScales, st.projZeros = packInt4(codes), scales, zeros
 }
 
+//perfscan:ignore PS3033 alloc-class projection() reconstruct; resource-only allocs
 func (st *qgaloreState) projection(blockSize int) [][]float64 {
 	if st.proj != nil {
 		return st.proj
@@ -433,6 +437,7 @@ func (st *qgaloreState) projection(blockSize int) [][]float64 {
 
 func projectionCosine(a, b []float64) float64 {
 	var dot, aa, bb float64
+	//perfscan:ignore PS3010 3-accum cosine reassoc not bit-identical; refresh-only periodic
 	for i := range a {
 		dot += a[i] * b[i]
 		aa += a[i] * a[i]
@@ -583,6 +588,7 @@ func (g *QGaLore) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float6
 			st = &qgaloreState{mf: make([]float64, p.Numel()), vf: make([]float64, p.Numel())}
 			g.st[pi] = st
 		}
+		//perfscan:ignore PS5001 b1c divide on memory-bound Adam loop; PS5001 declines
 		for i := range p.Numel() {
 			idx := tensor.Unravel(i, p.Shape())
 			gv := gt.AtF64(idx...)
@@ -630,6 +636,7 @@ func (g *QGaLore) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float6
 		dequantizeBlockwise(st.vq, st.vs, bs, vf)
 	}
 	upd := make([]float64, len(red))
+	//perfscan:ignore PS5001 b1c divide memory-bound elementwise; speedup evaporates
 	for i := range red {
 		mf[i] = g.Beta1*mf[i] + (1-g.Beta1)*red[i]
 		vf[i] = g.Beta2*vf[i] + (1-g.Beta2)*red[i]*red[i]
@@ -643,6 +650,7 @@ func (g *QGaLore) stepParamCompute(pi int, p, gt *tensor.Tensor, b1c, b2c float6
 	next := make([]float64, 0, rows*cols)
 	for i := range rows {
 		for j := range cols {
+			//perfscan:ignore PS3016 row-hoist dominated by co-located AtF64/SetF64 dispatch
 			next = append(next, p.AtF64(i, j)-g.LR*g.Scale*n[i][j])
 		}
 	}

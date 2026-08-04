@@ -41,6 +41,7 @@ func (p *PromptTuning) Forward(ctx *backend.Context, embeds *tensor.Tensor) (*te
 	if embeds.Ndim() != 2 || embeds.Shape()[1] != p.dModel {
 		return nil, fmt.Errorf("nn: PromptTuning expects embeds [seq,%d], got %v", p.dModel, embeds.Shape())
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpConcat, []*tensor.Tensor{p.P, embeds}, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
 		return nil, err

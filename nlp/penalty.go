@@ -40,6 +40,7 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 	} else {
 		counts = counts[:n]
 	}
+	//perfscan:ignore PS3066 per-step sampling histogram flat slice, dwarfed by forward
 	for _, t := range generated {
 		if uint(t) < uint(n) {
 			counts[t]++
@@ -48,6 +49,7 @@ func ApplyPenalties(logits []float64, generated []int, repetition, frequency, pr
 	// Apply once per UNIQUE token by walking the history and zeroing each token as it is
 	// handled (a repeat then sees counts[t]==0 and skips) — this also restores counts to
 	// all-zero for the pool.
+	//perfscan:ignore PS5001 low-trip sign-aware divide feeding sampling/argmax
 	for _, t := range generated {
 		if uint(t) >= uint(n) || counts[t] == 0 {
 			continue

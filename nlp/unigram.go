@@ -136,6 +136,8 @@ type unigramTrie struct {
 
 // finalize converts the build-time edge map into the CSR child index and frees
 // the map. Node ids and id[] are unchanged, so token ids are bit-identical.
+//
+//perfscan:ignore PS3058 one-time trie build (finalize); resource-only, wall-clock flat
 func (t *unigramTrie) finalize() {
 	numNodes := len(t.id)
 	t.childOff = make([]int32, numNodes+1)
@@ -150,14 +152,17 @@ func (t *unigramTrie) finalize() {
 	t.childNode = make([]int32, ne)
 	cur := make([]int32, numNodes)
 	copy(cur, t.childOff[:numNodes])
+	//perfscan:ignore PS3044 one-time trie construction (finalize); cold
 	for key, node := range t.edge {
 		parent := int32(key >> 8)
 		pos := cur[parent]
 		t.childByte[pos] = byte(key)
 		t.childNode[pos] = node
+		//perfscan:ignore PS6007 one-time trie build fold (finalize); cold
 		cur[parent]++
 	}
 	// sort each node's (small) child run ascending by byte for early-exit lookup
+	//perfscan:ignore PS3059 one-time trie CSR sort/build (finalize); cold
 	for i := 0; i < numNodes; i++ {
 		lo, hi := t.childOff[i], t.childOff[i+1]
 		for a := lo + 1; a < hi; a++ {
@@ -196,6 +201,7 @@ func buildUnigramTrie(pieces []UnigramPiece) *unigramTrie {
 	t.id[0] = -1 // root
 	for pid, p := range pieces {
 		node := int32(0)
+		//perfscan:ignore PS3003 one-time buildUnigramTrie insertion; cold path
 		for i := 0; i < len(p.Piece); i++ {
 			key := uint64(node)<<8 | uint64(p.Piece[i])
 			child, ok := t.edge[key]

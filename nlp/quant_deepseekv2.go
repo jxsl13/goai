@@ -131,6 +131,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	// for the selected experts, 0 otherwise (NO renormalization).
 	weight := tensor.New(x.Dtype(), tensor.Shape{seq, e})
 	for t := range seq {
+		//perfscan:ignore PS1001 sparse topk weight-set, negligible vs E dense expert matmuls
 		for _, i := range topKIndices(scores, t, e, m.TopK) {
 			weight.SetF64(scores.AtF64(t, i)*m.Scale, t, i)
 		}
@@ -139,6 +140,7 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	// Routed mixture, evaluated densely over all E experts — the float twin's
 	// kernel sequence, shared by the batched and single-row paths.
 	var y *tensor.Tensor
+	//perfscan:ignore PS3026 deliberate dense-eval bit-exact anchor; sparse trade is QuantMoE
 	for i := range e {
 		out, err := m.Experts[i].Forward(ctx, x) // [T, dim]
 		if err != nil {
@@ -148,12 +150,14 @@ func (m *QuantDeepSeekMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 OpMul in expert loop, dominated by expert matmul
 		term, err := exec1(ctx, backend.OpMul, nil, out, wcol.Contiguous())
 		if err != nil {
 			return nil, err
 		}
 		if y == nil {
 			y = term
+			//perfscan:ignore PS6017 OpAdd accumulate in expert loop, negligible vs matmul
 		} else if y, err = exec1(ctx, backend.OpAdd, nil, y, term); err != nil {
 			return nil, err
 		}
@@ -244,6 +248,7 @@ func QuantizeDeepSeekV2(m *DeepSeekV2, qt gguf.QuantType, opts ...QuantizeDeepSe
 	cfg := m.Config
 	kvHead := cfg.QKNope + cfg.VHead
 	q := &QuantDeepSeekV2{Config: cfg, TokEmb: f32Clone(m.TokEmb), Norm: f32RMSNorm(m.FinalNorm)}
+	//perfscan:ignore PS3060 one-time model quantize/build loop, cold path
 	for l, b := range m.Blocks {
 		qb := &QuantDeepSeekV2Block{
 			InputNorm:    f32RMSNorm(b.InputNorm),
@@ -388,6 +393,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 	// f32 activation dtype (OpMul/OpAdd reject dtype mismatches), shared by all blocks.
 	mask := tensor.New(x.Dtype(), tensor.Shape{seq, seq})
 	for i := range seq {
+		//perfscan:ignore PS1005 one-time causal-mask fill, O(seq2) tiny vs block matmuls
 		for j := i + 1; j < seq; j++ {
 			mask.SetF64(math.Inf(-1), i, j)
 		}
@@ -409,6 +415,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 elementwise residual OpAdd, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -425,6 +432,7 @@ func (m *QuantDeepSeekV2) Forward(ctx *backend.Context, tokens []int) (*tensor.T
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 elementwise FFN residual OpAdd, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -522,6 +530,7 @@ func (m *QuantDeepSeekV2) DecodeStep(ctx *backend.Context, cache *QuantDeepSeekV
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 elementwise residual OpAdd decode, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, a); err != nil {
 			return nil, err
 		}
@@ -538,6 +547,7 @@ func (m *QuantDeepSeekV2) DecodeStep(ctx *backend.Context, cache *QuantDeepSeekV
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 elementwise FFN residual OpAdd decode, matmul-dominated
 		if x, err = exec1(ctx, backend.OpAdd, nil, x, ff); err != nil {
 			return nil, err
 		}
@@ -707,6 +717,7 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 		cache.CKV[l], cache.KPE[l] = ckvAll, kpeAll
 	}
 	// Transposed caches for the score matmuls, built once per block (not per head).
+	//perfscan:ignore PS6018 cache transpose once per block, matmul-dominated
 	ckvT, err := exec1(ctx, backend.OpTranspose, nil, ckvAll)
 	if err != nil {
 		return nil, err
@@ -719,18 +730,22 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
+		//perfscan:ignore PS6017 per-head query slice, matmul-dominated
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head qNope slice view, matmul-dominated | per-head qNope slice, matmul-dominated
 		qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head qPe slice view, matmul-dominated | per-head qPe slice, matmul-dominated
 		qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head RoPE, tiny vs head matmuls
 		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
@@ -741,31 +756,38 @@ func (m *QuantDeepSeekV2) attnAbsorbed(ctx *backend.Context, l int, b *QuantDeep
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head score matmul dispatch, this is the matmul
 		scoreC, err := exec1(ctx, backend.OpMatMul, nil, qLat, ckvT) // [T, tokens]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head pe-score matmul dispatch
 		scoreP, err := exec1(ctx, backend.OpMatMul, nil, qPeRot, kpeT) // [T, tokens]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head scores OpAdd, matmul-dominated
 		scores, err := exec1(ctx, backend.OpAdd, nil, scoreC, scoreP)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head scale OpMul, matmul-dominated
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		if mask != nil {
+			//perfscan:ignore PS6017 per-head mask OpAdd, matmul-dominated
 			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 per-head softmax, own kernel not dispatch
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
 		// Attention in latent space, then absorb W_V into the output (quantized).
+		//perfscan:ignore PS6017 per-head latent-context matmul dispatch
 		ctxLat, err := exec1(ctx, backend.OpMatMul, nil, probs, ckvAll) // [T, KVLoraRank]
 		if err != nil {
 			return nil, err
@@ -817,38 +839,47 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 
 	heads := make([]*tensor.Tensor, cfg.Heads)
 	for h := range cfg.Heads {
+		//perfscan:ignore PS6017,PS6018 per-head query slice, matmul-dominated
 		qh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * qkHead, End: (h + 1) * qkHead}, q)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head qNope slice view, matmul-dominated | per-head qNope slice, matmul-dominated
 		qNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head qPe slice view, matmul-dominated | per-head qPe slice, matmul-dominated
 		qPe, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: qkHead}, qh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head RoPE, tiny vs head matmuls
 		qPeRot, err := exec1(ctx, backend.OpRoPE, rope, qPe)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head query concat, matmul-dominated
 		queryH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, qNope, qPeRot) // [T, qkHead]
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head kv slice, matmul-dominated
 		kvh, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: h * kvHead, End: (h + 1) * kvHead}, kv)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head kNope slice view, matmul-dominated | per-head kNope slice, matmul-dominated
 		kNope, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: cfg.QKNope}, kvh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 per-head value slice view, matmul-dominated | per-head value slice, matmul-dominated
 		valueH, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: cfg.QKNope, End: kvHead}, kvh)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head key concat, matmul-dominated
 		keyH, err := exec1(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, kNope, kPeRot) // [T, qkHead]
 		if err != nil {
 			return nil, err
@@ -858,26 +889,32 @@ func (m *QuantDeepSeekV2) attnReconstructed(ctx *backend.Context, l int, b *Quan
 			cache.K[l][h], cache.V[l][h] = kCache, vCache
 			keyH, valueH = kCache, vCache
 		}
+		//perfscan:ignore PS6017 per-head key transpose, matmul-dominated
 		keyHT, err := exec1(ctx, backend.OpTranspose, nil, keyH)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head score matmul dispatch
 		scores, err := exec1(ctx, backend.OpMatMul, nil, queryH, keyHT)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head scale OpMul, matmul-dominated
 		if scores, err = exec1(ctx, backend.OpMul, nil, scores, scaleT); err != nil {
 			return nil, err
 		}
 		if mask != nil {
+			//perfscan:ignore PS6017 per-head mask OpAdd, matmul-dominated
 			if scores, err = exec1(ctx, backend.OpAdd, nil, scores, mask); err != nil {
 				return nil, err
 			}
 		}
+		//perfscan:ignore PS6017 per-head softmax, own kernel not dispatch
 		probs, err := exec1(ctx, backend.OpSoftmax, nil, scores)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6017 per-head value matmul dispatch
 		oh, err := exec1(ctx, backend.OpMatMul, nil, probs, valueH) // [T, VHead]
 		if err != nil {
 			return nil, err

@@ -27,6 +27,7 @@ func NewGradAccumulator(params []*tensor.Tensor) *GradAccumulator {
 
 // Add accumulates one microbatch's gradients (a nil gradient contributes zero).
 func (a *GradAccumulator) Add(grad GradFn) {
+	//perfscan:ignore PS3044 sums map lookup per param, few params, << O(Numel) accumulate
 	for _, p := range a.params {
 		g := grad(p)
 		if g == nil {
@@ -55,6 +56,7 @@ func (a *GradAccumulator) Add(grad GradFn) {
 			}
 		}
 		idx := 0
+		//perfscan:ignore PS1002 declined-dtype fallback; F64/F32 contiguous fast path above
 		readGen(g, func(v float64) {
 			s[idx] += v
 			idx++
@@ -96,6 +98,7 @@ func (a *GradAccumulator) GradFn() GradFn {
 			return out
 		}
 		idx := 0
+		//perfscan:ignore PS1002 declined-dtype fallback; F64/F32 fast path above
 		fillGen(out, func() float64 {
 			v := s[idx] * ik
 			idx++

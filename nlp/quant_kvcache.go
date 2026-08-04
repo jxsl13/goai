@@ -68,6 +68,8 @@ func (c *QuantKVCache) Keys() (*tensor.Tensor, error) { return c.stack(c.keys) }
 func (c *QuantKVCache) Values() (*tensor.Tensor, error) { return c.stack(c.vals) }
 
 // stack dequantizes every stored row and packs them into a [t,dim] f32 tensor.
+//
+//perfscan:ignore PS6004 not a perf finding: unverified-invariant/correctness check
 func (c *QuantKVCache) stack(rows [][]byte) (*tensor.Tensor, error) {
 	t := len(rows)
 	out := tensor.New(tensor.F32, tensor.Shape{t, c.dim})

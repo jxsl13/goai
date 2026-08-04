@@ -11,6 +11,8 @@ import (
 // Σ_{j≤i} x[..,j,..] along the axis, in ascending order (so the per-element
 // accumulation order is deterministic; f64 accumulation, §V10). Memory-bound → the
 // reference/cpu computes it; the GPU backends fall back (§I4 / ADR-0008).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func cumsumKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: cumsum wants 1 input, got %d", len(in))
@@ -71,6 +73,7 @@ func cumsumKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpCumsum, tensor.F32, cumsumKernel)
 	std.add(backend.OpCumsum, tensor.F64, cumsumKernel)
 }

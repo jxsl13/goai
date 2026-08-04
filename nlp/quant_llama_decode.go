@@ -72,9 +72,11 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if q, k, v, err = applyQwenAttnExtras(ctx, b, q, k, v, cfg.Heads, kv); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 attrs literal in decode, resource-only alloc | variadic exec sibling, resource-only 1-alloc
 		if q, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: cfg.Heads, PosOffset: pos}, q); err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS6016,PS6017 RoPEAttrs literal, resource-only alloc | variadic exec1 OpRoPE, resource-only 1-alloc
 		if k, err = exec1(ctx, backend.OpRoPE, backend.RoPEAttrs{Base: cfg.RopeBase, Heads: kv, PosOffset: pos}, k); err != nil {
 			return nil, err
 		}

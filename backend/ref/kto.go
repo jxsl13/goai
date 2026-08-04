@@ -23,6 +23,8 @@ import (
 // (the prospect-theory value with reference point z_ref). β=attrs["beta"] (0.1),
 // λ_D=attrs["lambda_d"], λ_U=attrs["lambda_u"] (default 1). Mean over batch,
 // f64 accumulation (§V10). Output scalar (§R59).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ktoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: kto wants (policyLogps, refLogps, labels), got %d inputs", len(in))
@@ -59,6 +61,7 @@ func ktoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	rls, ok1 := f64Data(rl)
 	labs, ok2 := f64Data(lab)
 	if ok0 && ok1 && ok2 {
+		//perfscan:ignore PS4003 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			r := beta * (pls[i] - rls[i])
 			if labs[i] != 0 { // desirable
@@ -69,6 +72,7 @@ func ktoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 		}
 	} else {
 		// Generic fallback for dtypes f64Data cannot expose (verbatim original loop).
+		//perfscan:ignore PS4003 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for i := range b {
 			r := beta * (pl.AtF64(i) - rl.AtF64(i))
 			if lab.AtF64(i) != 0 { // desirable
@@ -93,6 +97,7 @@ func logistic(x float64) float64 {
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpKTO, tensor.F32, ktoKernel)
 	std.add(backend.OpKTO, tensor.F64, ktoKernel)
 }

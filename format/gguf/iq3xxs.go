@@ -57,6 +57,7 @@ func init() {
 		return c & 0x0F
 	}
 	for e := range 256 {
+		//perfscan:ignore PS3040 IQ3_XXS grid decode in init, one-time
 		for b := range 2 { // two packed bytes per 4-element row
 			hi := unhex(iq3xxsGridHex[e*4+b*2])
 			lo := unhex(iq3xxsGridHex[e*4+b*2+1])

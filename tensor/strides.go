@@ -33,6 +33,7 @@ func Offset(base int, strides Strides, idx []int) int {
 		panic("tensor: index rank does not match strides rank")
 	}
 	off := base
+	//perfscan:ignore PS3010 Offset loop bounded by ndim (2-4), inherent index math
 	for i, ix := range idx {
 		off += ix * strides[i]
 	}
@@ -73,6 +74,7 @@ func cloneShapeStrides(shape Shape) (Shape, Strides) {
 	sh := Shape(buf[:n:n])
 	st := Strides(buf[n : 2*n : 2*n])
 	acc := 1
+	//perfscan:ignore PS4004 rank-sized loop; stride arith iterates anyway, copy-split no win
 	for i := n - 1; i >= 0; i-- {
 		sh[i] = shape[i]
 		st[i] = acc

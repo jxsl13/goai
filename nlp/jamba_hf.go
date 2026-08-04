@@ -70,6 +70,7 @@ func JambaFromHF(ts map[string]*tensor.Tensor, cfg JambaConfig) (*Jamba, error) 
 	cfg.Layers = layers
 
 	m := &Jamba{Config: cfg, TokEmb: cloneF64(tok)}
+	//perfscan:ignore PS3060 per-layer loader loop; cold
 	for l := range layers {
 		p := fmt.Sprintf("model.layers.%d.", l)
 		g := func(name string) (*tensor.Tensor, error) {
@@ -267,6 +268,7 @@ func jambaMoE(ts map[string]*tensor.Tensor, p string, router *tensor.Tensor, top
 	ffn := gu.Shape()[1] / 2 // [E, 2·ffn, dim]
 
 	moe := &JambaMoE{Router: transpose2D(router), TopK: topK} // [E,dim] → [dim,E]
+	//perfscan:ignore PS3060 per-expert MoE loader loop; cold
 	for e := range experts {
 		guE := sub3D(gu, e) // [2·ffn, dim]
 		moe.Experts = append(moe.Experts, &nn.SwiGLU{

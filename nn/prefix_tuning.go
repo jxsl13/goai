@@ -58,6 +58,7 @@ func (p *PrefixTuning) KV(ctx *backend.Context) (pk, pv *tensor.Tensor, err erro
 	if err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	a, err := p.exec(ctx, backend.OpTanh, nil, h)
 	if err != nil {
 		return nil, nil, err
@@ -66,9 +67,11 @@ func (p *PrefixTuning) KV(ctx *backend.Context) (pk, pv *tensor.Tensor, err erro
 	if err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	if pk, err = p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: p.dModel}, kv); err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	if pv, err = p.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: p.dModel, End: 2 * p.dModel}, kv); err != nil {
 		return nil, nil, err
 	}
@@ -85,9 +88,11 @@ func (p *PrefixTuning) Apply(ctx *backend.Context, k, v *tensor.Tensor) (kp, vp 
 	if err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	if kp, err = p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, pk, k); err != nil {
 		return nil, nil, err
 	}
+	//perfscan:ignore PS3024 resource-only variadic-alloc, no wall-clock win
 	if vp, err = p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 0}, pv, v); err != nil {
 		return nil, nil, err
 	}

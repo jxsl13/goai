@@ -49,6 +49,7 @@ func GSPOLoss(ctx *backend.Context, logpNew, logpOld, advantage *tensor.Tensor, 
 	for _, o := range opts {
 		o(&cfg)
 	}
+	//perfscan:ignore PS3038 resource-only, time flat (alloc-only)
 	out, err := backend.Execute(ctx, backend.OpGSPO,
 		[]*tensor.Tensor{logpNew, logpOld, advantage},
 		backend.GSPOAttrs{Epsilon: cfg.epsilon, Lengths: lengths})

@@ -12,6 +12,8 @@ import (
 
 // rmsNormKernel: y = x/√(mean(x²)+eps)·γ over the last axis — no mean
 // subtraction, no bias (Zhang & Sennrich 2019). Inputs (x[...,d], gamma[d]).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func rmsNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 2 {
 		return nil, fmt.Errorf("ref: rmsnorm wants (x, gamma), got %d", len(in))
@@ -72,6 +74,8 @@ func rmsNormKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 // default 1) is linear Position Interpolation (Chen et al. 2023, §R64): the
 // effective position is p/s. attr "yarn_scale" (s>1) selects YaRN NTK-by-parts
 // context extension (Peng et al. 2023, §R66) via backend.RoPEFreqs.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ropeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: rope wants 1 input, got %d", len(in))
@@ -180,6 +184,8 @@ func ropeKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 // g[seq,width], independent of the original q. Input (g); returns dq of the same shape.
 // It mirrors ropeKernel exactly (same heads/freqs/PosOffset/xPos), so training the RoPE
 // path matches the forward. dq[i]=g[i]·c+g[i+half]·s; dq[i+half]=−g[i]·s+g[i+half]·c.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func ropeBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 1 {
 		return nil, fmt.Errorf("ref: rope-backward wants 1 input, got %d", len(in))
@@ -285,6 +291,8 @@ func ropeBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 // s=Σₖ aₖxₖ per row: dx_j = r·(a_j − x_j·r²·s/d) ; dgamma_i = Σ_rows g_i·x_i·r. f64
 // accumulation (§V10). Moved out of the autograd VJP so the backward dispatches on the
 // active backend (GPU when training on Metal/Vulkan).
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func rmsNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: rmsnorm-backward wants (x, gamma, g), got %d", len(in))
@@ -329,6 +337,7 @@ func rmsNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs back
 						}
 						r := 1 / math.Sqrt(ms/float64(d)+eps)
 						var s float64
+						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 						for j, gj := range grow {
 							a[j] = gj * gms[j]
 							s += a[j] * xrow[j]
@@ -357,12 +366,14 @@ func rmsNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	// Generic fallback for exotic dtypes (verbatim original loop).
 	for row := range rows {
 		var ms float64
+		//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range d {
 			xr[j] = x.AtF64(tensor.Unravel(row*d+j, x.Shape())...)
 			ms += xr[j] * xr[j]
 		}
 		r := 1 / math.Sqrt(ms/float64(d)+eps)
 		var s float64
+		//perfscan:ignore PS3066 reference oracle: intentionally simple, correctness baseline not an optimization target
 		for j := range d {
 			gj := g.AtF64(tensor.Unravel(row*d+j, x.Shape())...)
 			a[j] = gj * gamma.AtF64(j)
@@ -379,6 +390,7 @@ func rmsNormBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs back
 
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
+		//perfscan:ignore PS3052 reference oracle: intentionally simple, correctness baseline not an optimization target
 		std.add(op, tensor.F32, k)
 		std.add(op, tensor.F64, k)
 	}

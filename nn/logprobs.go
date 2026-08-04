@@ -24,6 +24,7 @@ func TokenLogProbs(ctx *backend.Context, logits *tensor.Tensor, targets []int) (
 		return nil, fmt.Errorf("nn: TokenLogProbs targets len %d != seq %d", len(targets), seq)
 	}
 	onehot := tensor.New(logits.Dtype(), tensor.Shape{seq, vocab})
+	//perfscan:ignore PS1005 O(seq) sparse one-hot set « [seq,vocab] ops
 	for i, t := range targets {
 		if t < 0 || t >= vocab {
 			return nil, fmt.Errorf("nn: TokenLogProbs target[%d]=%d out of vocab %d", i, t, vocab)
@@ -78,6 +79,7 @@ func SequenceLogProbs(ctx *backend.Context, logits *tensor.Tensor, targets []int
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3038 SequenceLogProbs trivial wrapper, single OpSum, no loop
 	out, err := backend.Execute(ctx, backend.OpSum, []*tensor.Tensor{lp}, backend.ReduceAttrs{})
 	if err != nil {
 		return nil, err

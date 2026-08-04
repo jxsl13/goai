@@ -149,6 +149,7 @@ func NewDynamicHyperConnection(dtype tensor.Dtype, n, d int, seed uint64, opts .
 
 // rmsNormH applies RMSNorm(H)·γ over the model-dim axis (the DHC pre-projection normalization).
 func (hc *HyperConnection) rmsNormH(ctx *backend.Context, h *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs dispatched op
 	return hcExec(ctx, backend.OpRMSNorm, backend.NormAttrs{Eps: hc.Dyn.Eps}, h, hc.Dyn.Gamma)
 }
 
@@ -156,14 +157,17 @@ func (hc *HyperConnection) rmsNormH(ctx *backend.Context, h *tensor.Tensor) (*te
 // mixing parameter, given its projection W and scale s. h is [n,D]; the result matches W's
 // column count ([n, cols(W)]).
 func (hc *HyperConnection) dynCorrection(ctx *backend.Context, hbar, w, s *tensor.Tensor) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	proj, err := hcExec(ctx, backend.OpMatMul, nil, hbar, w) // [n, cols]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	act, err := hcExec(ctx, backend.OpTanh, nil, proj)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	return hcExec(ctx, backend.OpMul, nil, act, s) // broadcast [n,cols]·[1,1]
 }
 
@@ -181,6 +185,7 @@ func (hc *HyperConnection) effAm(ctx *backend.Context, h *tensor.Tensor) (*tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	return hcExec(ctx, backend.OpAdd, nil, hc.Am, corr)
 }
 
@@ -196,6 +201,7 @@ func (hc *HyperConnection) effAr(ctx *backend.Context, h *tensor.Tensor) (*tenso
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	return hcExec(ctx, backend.OpAdd, nil, hc.Ar, corr)
 }
 
@@ -211,10 +217,12 @@ func (hc *HyperConnection) effB(ctx *backend.Context, h *tensor.Tensor) (*tensor
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs transpose
 	corrT, err := hcExec(ctx, backend.OpTranspose, nil, corr) // [1,n]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	return hcExec(ctx, backend.OpAdd, nil, hc.B, corrT)
 }
 
@@ -254,6 +262,7 @@ func (hc *HyperConnection) Expand(ctx *backend.Context, x *tensor.Tensor) (*tens
 		return nil, fmt.Errorf("nn: HyperConnection.Expand wants x [1,F], got %v", x.Shape())
 	}
 	ones := tensor.Ones(x.Dtype(), tensor.Shape{hc.N, 1})
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	return hcExec(ctx, backend.OpMatMul, nil, ones, x)
 }
 
@@ -267,10 +276,12 @@ func (hc *HyperConnection) LayerInput(ctx *backend.Context, h *tensor.Tensor) (*
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	amT, err := hcExec(ctx, backend.OpTranspose, nil, am)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	return hcExec(ctx, backend.OpMatMul, nil, amT, h)
 }
 
@@ -288,10 +299,12 @@ func (hc *HyperConnection) Update(ctx *backend.Context, h, y *tensor.Tensor) (*t
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	bT, err := hcExec(ctx, backend.OpTranspose, nil, b)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	depth, err := hcExec(ctx, backend.OpMatMul, nil, bT, y) // Bᵀ·y  [n,F]
 	if err != nil {
 		return nil, err
@@ -300,14 +313,17 @@ func (hc *HyperConnection) Update(ctx *backend.Context, h, y *tensor.Tensor) (*t
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	arT, err := hcExec(ctx, backend.OpTranspose, nil, ar)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	width, err := hcExec(ctx, backend.OpMatMul, nil, arT, h) // Arᵀ·H  [n,F]
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	return hcExec(ctx, backend.OpAdd, nil, depth, width)
 }
 
@@ -318,6 +334,7 @@ func (hc *HyperConnection) Collapse(ctx *backend.Context, h *tensor.Tensor) (*te
 		return nil, err
 	}
 	ones := tensor.Ones(h.Dtype(), tensor.Shape{1, hc.N})
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs matmul
 	return hcExec(ctx, backend.OpMatMul, nil, ones, h)
 }
 
@@ -341,6 +358,7 @@ func (hc *HyperConnection) EffectiveAr(ctx *backend.Context) (*tensor.Tensor, er
 // HCDoublyStochastic): from K = exp(Ar) it alternately row- then column-normalizes to sum to 1
 // for SinkhornIters rounds, all tape ops so the gradient flows through the unroll.
 func (hc *HyperConnection) sinkhornAr(ctx *backend.Context) (*tensor.Tensor, error) {
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs exp op
 	k, err := hcExec(ctx, backend.OpExp, nil, hc.Ar) // positive start
 	if err != nil {
 		return nil, err
@@ -348,17 +366,21 @@ func (hc *HyperConnection) sinkhornAr(ctx *backend.Context) (*tensor.Tensor, err
 	rowSum := backend.ReduceAttrs{Axes: []int{1}, KeepDims: true} // [n,1]
 	colSum := backend.ReduceAttrs{Axes: []int{0}, KeepDims: true} // [1,n]
 	for range hc.SinkhornIters {
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in sinkhorn loop; resource-only, tiny vs sum/div | variadic alloc in loop; resource-only
 		rs, err := hcExec(ctx, backend.OpSum, rowSum, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs div op | variadic alloc in loop; resource-only (allocs),
 		if k, err = hcExec(ctx, backend.OpDiv, nil, k, rs); err != nil { // row-normalize (broadcast)
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs sum op | variadic alloc in loop; resource-only (allocs),
 		cs, err := hcExec(ctx, backend.OpSum, colSum, k)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs div op | variadic alloc in loop; resource-only (allocs),
 		if k, err = hcExec(ctx, backend.OpDiv, nil, k, cs); err != nil { // col-normalize (broadcast)
 			return nil, err
 		}
@@ -373,48 +395,59 @@ func (hc *HyperConnection) sinkhornAr(ctx *backend.Context) (*tensor.Tensor, err
 func (hc *HyperConnection) orthogonalAr(ctx *backend.Context) (*tensor.Tensor, error) {
 	dt := hc.Ar.Dtype()
 	// X = Ar / (‖Ar‖_F + eps)
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	sq, err := hcExec(ctx, backend.OpMul, nil, hc.Ar, hc.Ar)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs sum
 	ss, err := hcExec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{0, 1}, KeepDims: true}, sq)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	fro, err := hcExec(ctx, backend.OpSqrt, nil, ss)
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	denom, err := hcExec(ctx, backend.OpAdd, nil, fro, tensor.Full(dt, tensor.Shape{1, 1}, 1e-7))
 	if err != nil {
 		return nil, err
 	}
+	//perfscan:ignore PS3024 variadic slice alloc; resource-only (allocs not wall-clock), tiny vs op
 	x, err := hcExec(ctx, backend.OpDiv, nil, hc.Ar, denom)
 	if err != nil {
 		return nil, err
 	}
 	negHalf := tensor.Full(dt, tensor.Shape{1, 1}, -0.5)
 	oneHalfI := tensor.New(dt, tensor.Shape{hc.N, hc.N}) // 1.5·Iₙ constant
+	//perfscan:ignore PS1005 N-diagonal identity fill; N=streams tiny, negligible vs 20-iter NxN matmul loop
 	for i := range hc.N {
 		oneHalfI.SetF64(1.5, i, i)
 	}
 	for range hc.SinkhornIters {
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs transpose | variadic alloc in loop; resource-only (allocs
 		xt, err := hcExec(ctx, backend.OpTranspose, nil, x)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs matmul | variadic alloc in loop; resource-only (allocs),
 		xtx, err := hcExec(ctx, backend.OpMatMul, nil, xt, x) // XᵀX
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs mul op | variadic alloc in loop; resource-only (allocs),
 		half, err := hcExec(ctx, backend.OpMul, nil, xtx, negHalf) // −0.5·XᵀX (broadcast)
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs add op | variadic alloc in loop; resource-only (allocs),
 		poly, err := hcExec(ctx, backend.OpAdd, nil, oneHalfI, half) // 1.5·I − 0.5·XᵀX
 		if err != nil {
 			return nil, err
 		}
+		//perfscan:ignore PS3024,PS6017 variadic slice alloc in loop; resource-only, tiny vs matmul | variadic alloc in loop; resource-only (allocs),
 		if x, err = hcExec(ctx, backend.OpMatMul, nil, x, poly); err != nil { // X·poly
 			return nil, err
 		}

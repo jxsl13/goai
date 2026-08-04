@@ -24,6 +24,8 @@ import (
 // FAR tighter (ε default 3e-4): the length-normalized ratios concentrate near 1,
 // which is exactly what stabilizes long-sequence RL. With every length == 1 the
 // loss equals GRPO with β=0 EXACTLY (the collapse test). Accumulation in f64.
+//
+//perfscan:ignore PS6004 reference oracle: intentionally simple, correctness baseline not an optimization target
 func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) != 3 {
 		return nil, fmt.Errorf("ref: gspo wants (logpNew, logpOld, advantage), got %d inputs", len(in))
@@ -69,6 +71,7 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	if nok && ook {
 		for i, l := range pa.Lengths {
 			var d float64
+			//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
 			for t := 0; t < l; t++ {
 				d += nf[off+t] - of[off+t]
 			}
@@ -97,6 +100,7 @@ func gspoKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 }
 
 func init() {
+	//perfscan:ignore PS3062 reference oracle: intentionally simple, correctness baseline not an optimization target
 	std.add(backend.OpGSPO, tensor.F32, gspoKernel)
 	std.add(backend.OpGSPO, tensor.F64, gspoKernel)
 }
