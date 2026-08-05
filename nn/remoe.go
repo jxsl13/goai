@@ -151,42 +151,89 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 	}
 	tks, e := g.Shape()[0], g.Shape()[1]
 
-	// controller bookkeeping (plain host reads — outside the autograd graph)
+	// controller bookkeeping + per-expert active-token lists in one scan over the gate matrix.
+	perTok := make([][]int, e)
 	for t := range tks {
 		//perfscan:ignore PS1001 telemetry active-count over gate matrix, negligible vs expert matmuls
 		for i := range e {
 			if g.AtF64(t, i) > 0 {
 				m.activeSum++
+				perTok[i] = append(perTok[i], t)
 			}
 		}
 	}
 	m.tokenCount += tks
 
-	// y = Σ_e g[:,e]·Expert_e(x): slice each gate column [T,1] and broadcast-
-	// multiply the dense expert output [T,dim]; zero gates kill both the value
-	// and the gradient of that expert for that token.
-	for i := range e {
-		//perfscan:ignore PS3024 OpSlice per-expert graph dispatch
-		ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		out, err := m.Experts[i].Forward(ctx, x)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		//perfscan:ignore PS3024 OpMul per-expert graph dispatch
-		scaled, err := m.exec(ctx, backend.OpMul, nil, out, ge) // [T,dim]·[T,1] broadcast
-		if err != nil {
-			return nil, nil, nil, err
-		}
-		if y == nil {
-			y = scaled
-		} else {
-			//perfscan:ignore PS3024 OpAdd accumulate graph dispatch
-			y, err = m.exec(ctx, backend.OpAdd, nil, y, scaled)
+	// y = Σ_e g[:,e]·Expert_e(x). Inference (ctx.Recorder == nil): run each expert ONLY on its
+	// ReLU-active tokens (g>0) — gather (OpEmbed) → FFN → scale by the gate → scatter-add
+	// (OpEmbedBackward) — instead of the dense all-tokens path, whose g=0 tokens contribute exactly 0
+	// anyway. Bit-identical (token-wise experts, same gates, same expert order). Dense path kept for
+	// training (the g=0 multiply still carries the correct zero gradient).
+	if ctx.Recorder == nil {
+		dt := x.Dtype()
+		for i := range e {
+			n := len(perTok[i])
+			if n == 0 {
+				continue
+			}
+			idx := tensor.New(tensor.F64, tensor.Shape{n})
+			wcol := tensor.New(dt, tensor.Shape{n, 1})
+			idf := idx.Storage().F64()
+			for k := 0; k < n; k++ {
+				idf[k] = float64(perTok[i][k])
+				wcol.SetF64(g.AtF64(perTok[i][k], i), k, 0)
+			}
+			xi, err := m.exec(ctx, backend.OpEmbed, nil, x, idx)
 			if err != nil {
 				return nil, nil, nil, err
+			}
+			out, err := m.Experts[i].Forward(ctx, xi)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			weighted, err := m.exec(ctx, backend.OpMul, nil, out, wcol)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			scattered, err := m.exec(ctx, backend.OpEmbedBackward, nil, x, idx, weighted)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if y == nil {
+				y = scattered
+			} else if y, err = m.exec(ctx, backend.OpAdd, nil, y, scattered); err != nil {
+				return nil, nil, nil, err
+			}
+		}
+		if y == nil {
+			y = tensor.New(x.Dtype(), tensor.Shape{tks, x.Shape()[1]})
+		}
+	} else {
+		// y = Σ_e g[:,e]·Expert_e(x): slice each gate column [T,1] and broadcast-multiply the dense
+		// expert output [T,dim]; zero gates kill both the value and the gradient of that expert.
+		for i := range e {
+			//perfscan:ignore PS3024 OpSlice per-expert graph dispatch
+			ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			out, err := m.Experts[i].Forward(ctx, x)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 OpMul per-expert graph dispatch
+			scaled, err := m.exec(ctx, backend.OpMul, nil, out, ge) // [T,dim]·[T,1] broadcast
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			if y == nil {
+				y = scaled
+			} else {
+				//perfscan:ignore PS3024 OpAdd accumulate graph dispatch
+				y, err = m.exec(ctx, backend.OpAdd, nil, y, scaled)
+				if err != nil {
+					return nil, nil, nil, err
+				}
 			}
 		}
 	}
