@@ -612,6 +612,20 @@ func (rec *Recorder) QMatMulResidentQ4K(x *DeviceF32, w *ResidentBQ4K, o *Device
 	return nil
 }
 
+// QMatMulResidentAccQ4K records dst += x·dequant(w) (beta=1) — the residual-add-FUSED Q4_K decode
+// GEMV, the Q4_K twin of QMatMulResidentAcc. One launch instead of the GEMV(beta=0)→scratch + a
+// separate Binary add, saving the scratch HBM round-trip in the decode o/down-projection epilogue.
+// Bit-identical to QMatMulResidentQ4K-into-scratch + add; used for the decode/small-m GEMV regime.
+func (rec *Recorder) QMatMulResidentAccQ4K(x *DeviceF32, w *ResidentBQ4K, dst *DeviceF32, m int) error {
+	if x.ptr == nil || w.q == nil || dst.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ4K on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q4k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ4K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // q6kWMMAThreshold is the m at/above which QMatMulResidentQ6K routes prefill to the tensor-core WMMA
 // path. Q6_K's coalesced dequant (#880, ~57 GB/s) matches Q4_K's, and Q6_K's scalar MT decode is
 // HEAVIER (6-bit unpack) so WMMA overtakes it no later than Q4_K's benched floor of 48 — a
