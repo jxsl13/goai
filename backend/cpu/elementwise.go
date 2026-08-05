@@ -769,6 +769,90 @@ func softplusBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs 
 	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSoftplusBackward, in, attrs)
 }
 
+// maxSliceF64/minSliceF64 (and the F32 pair) are the elementwise Max/Min slice bodies for binOp.
+// They call math.Max/math.Min directly (a DIRECT call, not the reference binaryKernel's per-element
+// func-VALUE indirection) so the compiler emits the same IEEE-correct max/min the ref uses — NaN
+// absorbing, Max(+0,−0)=+0, Min(+0,−0)=−0 — bit-for-bit. The F32 bodies compute in float64 and round
+// only the store, exactly as the ref F32 path does. binOp fans them across cores; the ref fell through
+// single-threaded because the CPU backend registered no Maximum/Minimum kernel.
+func maxSliceF64(dst, a, b []float64) {
+	a, b = a[:len(dst)], b[:len(dst)]
+	for i := range dst {
+		dst[i] = math.Max(a[i], b[i])
+	}
+}
+func minSliceF64(dst, a, b []float64) {
+	a, b = a[:len(dst)], b[:len(dst)]
+	for i := range dst {
+		dst[i] = math.Min(a[i], b[i])
+	}
+}
+func maxSliceF32(dst, a, b []float32) {
+	a, b = a[:len(dst)], b[:len(dst)]
+	for i := range dst {
+		dst[i] = float32(math.Max(float64(a[i]), float64(b[i])))
+	}
+}
+func minSliceF32(dst, a, b []float32) {
+	a, b = a[:len(dst)], b[:len(dst)]
+	for i := range dst {
+		dst[i] = float32(math.Min(float64(a[i]), float64(b[i])))
+	}
+}
+
+// absKernelCPU / sqrtKernelCPU are the devirtualized+parallel CPU unary kernels for OpAbs/OpSqrt,
+// which had no CPU registration and fell to the single-threaded reference unaryKernel — where each
+// element pays a non-inlinable func-VALUE call whose payload (a bit-mask abs / a hardware sqrt) is far
+// cheaper than the call itself. Here the math is a direct inlined call, fanned across cores. Bit-exact
+// with the ref: F32 computes in float64 and rounds only the store (matching float32(f(float64(x)))).
+func absKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = math.Abs(d[i])
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(math.Abs(float64(d[i])))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: abs unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func sqrtKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	switch in[0].Dtype() {
+	case tensor.F64:
+		d, o := xc.Storage().F64(), out.Storage().F64()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = math.Sqrt(d[i])
+			}
+		})
+	case tensor.F32:
+		d, o := xc.Storage().F32(), out.Storage().F32()
+		parallel(len(o), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				o[i] = float32(math.Sqrt(float64(d[i])))
+			}
+		})
+	default:
+		return nil, fmt.Errorf("cpu: sqrt unsupported dtype %v", in[0].Dtype())
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
 		//perfscan:ignore PS3052 false-positive: std.add kernel-registration in init, op/k not staging buffer
@@ -779,6 +863,13 @@ func init() {
 	reg(backend.OpSub, binOp(simd.SubF64, simd.SubF32))
 	reg(backend.OpMul, binOp(simd.MulF64, simd.MulF32))
 	reg(backend.OpDiv, binOp(simd.DivF64, simd.DivF32))
+	// Elementwise Max/Min of two tensors and unary Abs/Sqrt: previously CPU-unregistered, so they
+	// fell to the single-threaded reference kernels (a per-element func-VALUE indirect call). These
+	// devirtualize the math and fan it across cores via binOp/parallel. Bit-exact with the ref.
+	reg(backend.OpMaximum, binOp(maxSliceF64, maxSliceF32))
+	reg(backend.OpMinimum, binOp(minSliceF64, minSliceF32))
+	reg(backend.OpAbs, absKernelCPU)
+	reg(backend.OpSqrt, sqrtKernelCPU)
 
 	reg(backend.OpStopGradient, stopGradKernelCPU)
 	reg(backend.OpNeg, negKernelCPU)
