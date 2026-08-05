@@ -760,3 +760,46 @@ followed by `return false`, structurally identical and semantically unrelated. A
 `[]float32` is the signal; asserting `*ast.Ident` is not. Tree-wide the tightened form
 adds exactly one finding (56 → 57) instead of fourteen.
 
+
+## PS7004 — a per-dispatch upload of an invariant table  *(scanner: static)*
+
+The **PS7xxx** range covers the cgo / foreign-call boundary. GoAI's decode is
+CUDA-graph-amortized, so the ~40 ns cgo crossing itself is under 0.1 % of any real
+path (measured, cgo-overhead sweep 2026-08-06) — the range does **not** chase the
+crossing. What it chases is the µs-scale *staging* that hides behind the boundary.
+
+The shape:
+
+```go
+inv := make([]float32, hd/2)
+for i := range inv {
+    inv[i] = float32(1.0 / math.Pow(base, float64(2*i)/float64(hd)))
+}
+invPtr := C.cu_upload_f32((*C.float)(&inv[0]), C.int(len(inv)))
+defer C.cu_free_f32(invPtr)               // ← cudaMalloc + H2D + cudaFree, EVERY call
+C.cu_rope_f32_dpos(d.ptr, invPtr, …)
+```
+
+`inv` is derived only from op **attrs/dims** (`base`, `hd`) — not from the tensor
+being operated on — so it is identical on every dispatch. Uploading it fresh and
+freeing it each call is a cudaMalloc + host→device copy + cudaFree of invariant data;
+a content-keyed resident cache uploads it **once**. Shipped: the partial-RoPE
+inv-freq table (**+8.1 %**, RoPEPartial/Dpos/Band routed through the `ropeInvCached`
+the full-RoPE path already used), and RoPEDpos found *by this rule* (+1.35 %, its
+kernel is heavier so the fixed saving is a smaller fraction).
+
+Detected by: an assignment `x := C.cu_upload_*(…&s[0]…)` whose handle `x` is released
+via `defer C.cu_free_*(x)` in the **same** function body, where the uploaded slice `s`
+is **not** tensor data. "Not tensor data" is the whole precision story: the naive
+upload+defer-free match fired on 30+ sites, almost all of them legitimate — an
+activation (`xc.Storage().F32()`), a slice parameter (`a []int8`), a page table built
+by `copy(bt, s.table)` or `sl[i] = s.n` over a `range seqs`. The rule taints anything
+holding per-call data — slice params (but **not** scalar/attrs params, which are the
+invariant key), tensor-storage accessors, `copy()` destinations, and index-fills
+reading a tainted range variable — and stays silent when the uploaded slice is
+tainted. Tree-wide that is the difference between 30+ findings and **one** (the real
+RoPEDpos site), with a clean set of silent fixtures pinning each false-positive shape.
+
+**CANDIDATE, not a win** — the AST cannot prove input-invariance. A stage that
+genuinely uploads per-call-varying bytes (the activation itself) is the intended shape
+and stays; the fix applies only where the uploaded data does not change with the input.
