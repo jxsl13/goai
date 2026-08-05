@@ -266,6 +266,28 @@ func vsigmoidF32(dst, src []float32) {
 	}
 }
 
+// vsoftplusGradF32 computes dx[i] = g[i]·σ(x[i]) (softplus'(x)=σ(x)) 8-wide via AVX2 — the amd64 twin
+// of vsoftplusGradF64, and the σ pipeline of vsigmoidF32 fused with the ·g multiply in one pass.
+func vsoftplusGradF32(dst, x, g []float32) {
+	if !vexpHasAVX {
+		for i, v := range x {
+			dst[i] = softplusGradF32(v, g[i])
+		}
+		return
+	}
+	n8 := len(x) &^ 7
+	for i := 0; i < n8; i += 8 {
+		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		z := expF32x8(vZero.Sub(xv.AsUint32x8().And(vAbs).AsFloat32x8())) // e^(−|x|)
+		num := vOne.Merge(z, xv.GreaterEqual(vZero))                      // x≥0 ? 1 : z
+		gv.Mul(num.Div(vOne.Add(z))).StoreSlice(dst[i:])                  // g·(num/(1+z)) = g·σ(x)
+	}
+	for i := n8; i < len(x); i++ {
+		dst[i] = softplusGradF32(x[i], g[i])
+	}
+}
+
 // The standalone exp/tanh/log vexp fast paths are NOT vectorized on amd64 yet (vexpNeon is false, so
 // elementwise.go keeps their scalar-f64 kernels bit-for-bit). These scalar instantiations exist only
 // so the driver type-checks — dead code at run time here, exactly as in vexp_default.go.

@@ -123,6 +123,15 @@ func vsigmoidF32(dst, src []float32) {
 	}
 }
 
+// vsoftplusGradF32 computes dx[i] = g[i]·σ(x[i]) (softplus'(x)=σ(x)): the NEON vsigmoidF32 into dst,
+// then the ·g multiply (a cheap streaming pass — the transcendental cost is in the sigmoid).
+func vsoftplusGradF32(dst, x, g []float32) {
+	vsigmoidF32(dst, x) // dst = σ(x)
+	for i := range dst {
+		dst[i] *= g[i]
+	}
+}
+
 // vexpFullQuadsNeonF32 is the 4-wide NEON full-domain exp kernel
 // (vexp_arm64.s, §T666): dst[i] = exp(src[i]) over the ENTIRE f32 domain —
 // the vexp Cephes reduction with split 2^n scaling plus the exact
