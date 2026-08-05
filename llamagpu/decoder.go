@@ -112,6 +112,14 @@ type quantAccRecorder interface {
 // the GEMV-into-scratch + Binary-add path.
 var errQuantAccUnsupported = errors.New("llamagpu: no fused quant residual-add for this weight format")
 
+// swiGLUHalvesRecorder is the optional column-fused gate|up SwiGLU extension: given a [rows, 2·hidden]
+// gate|up GEMV output, compute out[r,i] = silu(gu[r,i])·gu[r,hidden+i] in ONE op — the launch-count
+// twin of the residual fusion for the FFN. Implemented by the CUDA recorder; recordFFN uses it when a
+// block carries the fused wGU weight (built only when ops.fusedGateUp), else the two-GEMV path.
+type swiGLUHalvesRecorder interface {
+	SwiGLUHalves(gu, out buffer, rows, hidden int) error
+}
+
 type f32Linear struct {
 	w    buffer
 	k, n int
@@ -246,6 +254,10 @@ type backendOps struct {
 	// Metal command buffers are independent objects → true; the vulkan bridge keeps ONE
 	// global recording context → false (pre-encoding there would clobber the in-flight one).
 	asyncEncode bool
+	// fusedGateUp: the backend's recorder implements swiGLUHalvesRecorder, so a SwiGLU FFN's
+	// ffn_gate|ffn_up can be column-fused into ONE GEMV (into the gu buffer) + one SwiGLUHalves op,
+	// instead of two GEMVs + a Binary SwiGLU. Set by the CUDA SwiGLU constructors; nil elsewhere.
+	fusedGateUp bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -256,7 +268,11 @@ type block struct {
 	// wqkv is the fused QKV projection (§T613): one [in, D+2·kvDim] weight whose output row
 	// is [q | k | v]. Non-nil = Step/StepN run the fused chain (one matmul instead of three);
 	// nil = fall back to wq/wk/wv (quantized blocks whose projections mix quant types).
-	wqkv                linear
+	wqkv linear
+	// wGU is the column-fused ffn_gate|ffn_up projection: one [in, 2·hidden] weight whose output row
+	// is [gate | up]. Non-nil (built only when ops.fusedGateUp, i.e. CUDA SwiGLU) = recordFFN runs one
+	// GEMV into the gu buffer + one SwiGLUHalves; nil = the separate wG/wU two-GEMV SwiGLU path.
+	wGU                 linear
 	gAttn, gFFN, kC, vC buffer
 	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
 	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
@@ -329,6 +345,7 @@ type Decoder struct {
 	out                                                            linear
 	gFinal, bFinal, outBias, dinv                                  *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits          *bufSlot
+	gu                                                             *bufSlot       // fused gate|up GEMV output [·, 2·hidden] (nil unless ops.fusedGateUp)
 	moeGate, moeW, moeCol                                          *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
 	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv        *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
 	mbXin, mbZ, mbXc, mbDtLow, mbDelta, mbB, mbC, mbY              *bufSlot       // Mamba scratch (rows=1): in_x, gate branch, conv+SiLU out, Δ_low, Δ, B, C, scan out
@@ -917,6 +934,23 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 			d.recordDownProj(r, b, rows),                    // dx += (·)·Wdown
 		)
 	}
+	if b.wGU != nil {
+		// Column-fused ffn_gate|ffn_up: one GEMV into gu = [·, 2·hidden], then SwiGLU over its halves
+		// into gate — one launch instead of two GEMVs, bit-identical (each output column quantizes
+		// independently, so the fused weight equals the two separate ones concatenated).
+		e := b.wGU.record(r, in, d.gu.b, rows)
+		if sh, ok := r.(swiGLUHalvesRecorder); ok {
+			e = firstErr(e, sh.SwiGLUHalves(d.gu.b, d.gate.b, rows, d.hidden))
+		} else {
+			// Backend without the fused op: split the gu halves out (strided) and SwiGLU as usual.
+			e = firstErr(e,
+				r.Copy2D(d.gu.b, 0, 2*d.hidden, d.gate.b, 0, d.hidden, rows, d.hidden),
+				r.Copy2D(d.gu.b, d.hidden, 2*d.hidden, d.up.b, 0, d.hidden, rows, d.hidden),
+				r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
+			)
+		}
+		return firstErr(e, d.recordDownProj(r, b, rows)) // dx += swiglu·Wdown
+	}
 	return firstErr(
 		b.wG.record(r, in, d.gate.b, rows),
 		b.wU.record(r, in, d.up.b, rows),
@@ -969,6 +1003,9 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	d.ao = mk(make([]float32, c*d.d))
 	d.gate = mk(make([]float32, c*d.hidden))
 	d.up = mk(make([]float32, c*d.hidden))
+	if d.ops.fusedGateUp {
+		d.gu = mk(make([]float32, c*2*d.hidden)) // fused gate|up GEMV output for the SwiGLUHalves path
+	}
 	d.mo = mk(make([]float32, c*d.d))
 	d.logits = mk(make([]float32, c*d.v))
 	if d.moe {
@@ -1073,6 +1110,39 @@ func (d *Decoder) mkFused(mk func([]float32) *bufSlot, ops backendOps, errp *err
 			copy(row[:nq], fq[i*nq:(i+1)*nq])
 			copy(row[nq:nq+nk], fk[i*nk:(i+1)*nk])
 			copy(row[nq+nk:], fv[i*nv:(i+1)*nv])
+		}
+		if ops.quantizeF32 == nil {
+			return f32Linear{w: mk(w).b, k: in, n: nt}
+		}
+		t := tensor.New(tensor.F32, tensor.Shape{in, nt})
+		copy(t.Storage().F32(), w)
+		qw, qe := ops.quantizeF32(t)
+		if qe != nil {
+			if *errp == nil {
+				*errp = qe
+			}
+			return f32Linear{k: in, n: nt}
+		}
+		d.qweights = append(d.qweights, qw)
+		return quantLinear{w: qw}
+	}
+}
+
+// mkFused2 is mkFused for the fused gate|up weight: two [in,out] projections concatenated per input
+// row into one [in, ng+nu] matrix, then quantized whole (or f32) — identical per-column quantization
+// to the separate weights (each output column quantizes over its own K independently), so the fused
+// GEMV output is bit-identical to two separate GEMVs. Used only when ops.fusedGateUp (CUDA SwiGLU).
+func (d *Decoder) mkFused2(mk func([]float32) *bufSlot, ops backendOps, errp *error) func(wg, wu *tensor.Tensor) linear {
+	return func(wg, wu *tensor.Tensor) linear {
+		in := wg.Shape()[0]
+		ng, nu := wg.Shape()[1], wu.Shape()[1]
+		fg, fu := flat2D(wg), flat2D(wu)
+		nt := ng + nu
+		w := make([]float32, in*nt)
+		for i := range in {
+			row := w[i*nt : (i+1)*nt]
+			copy(row[:ng], fg[i*ng:(i+1)*ng])
+			copy(row[ng:], fu[i*nu:(i+1)*nu])
 		}
 		if ops.quantizeF32 == nil {
 			return f32Linear{w: mk(w).b, k: in, n: nt}
@@ -1210,13 +1280,23 @@ func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 		d.qkNorm = true
 		return mk(flat1D(n.Gamma)).b
 	}
+	// gateUp column-fuses ffn_gate|ffn_up into one wGU weight when the backend can SwiGLU-over-halves
+	// (CUDA), else keeps the separate wG/wU pair. Same quantization path as the QKV fusion (qOrF32).
+	fuseGU := d.mkFused2(mk, ops, &err)
+	gateUp := func(wg, wu *tensor.Tensor) (gu, g, u linear) {
+		if ops.fusedGateUp {
+			return fuseGU(wg, wu), nil, nil
+		}
+		return nil, lin(wg), lin(wu)
+	}
 	//perfscan:ignore PS3032 model-build weight-upload loop over blocks, one-time
 	for _, b := range m.Blocks {
+		wgu, wg, wu := gateUp(b.FFN.Wgate, b.FFN.Wup)
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: linS(b.Wo, resMult),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			qN: qkGain(b.QNorm), kN: qkGain(b.KNorm),
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: linS(b.FFN.Wdown, resMult),
+			wGU: wgu, wG: wg, wU: wu, wD: linS(b.FFN.Wdown, resMult),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)

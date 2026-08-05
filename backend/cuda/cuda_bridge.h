@@ -342,6 +342,7 @@ int cu_add_f32(void* dst, const void* src, int n);
 int cu_mul_f32(void* dst, const void* src, int n);
 // gate[i] = SiLU(gate[i])*up[i], fused (SwiGLU) in one pass.
 int cu_swiglu_f32(void* gate, const void* up, int n);
+int cu_swiglu_halves(void* out, const void* gu, int rows, int hidden);
 
 // cu_rmsnorm_f32 applies RMSNorm y = x/√(mean(x²)+eps)·gamma in-place over the
 // last axis (x is rows×cols row-major; gamma is a resident [cols] weight).

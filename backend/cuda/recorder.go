@@ -507,6 +507,20 @@ func (rec *Recorder) Binary(a, b, o *DeviceF32, op int) error {
 	return nil
 }
 
+// SwiGLUHalves records a fused SwiGLU over the two halves of a column-fused gate|up buffer:
+// out[r,i] = silu(gu[r,i]) · gu[r,hidden+i], where gu is [rows, 2·hidden] and out is packed
+// [rows, hidden]. Lets the caller fuse the ffn_gate|ffn_up projection into one GEMV (into gu) then
+// this one op — replacing two projection GEMVs plus a separate SwiGLU.
+func (rec *Recorder) SwiGLUHalves(gu, out *DeviceF32, rows, hidden int) error {
+	if gu.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: rec SwiGLUHalves on a freed handle")
+	}
+	if rc := C.cu_swiglu_halves(out.ptr, gu.ptr, C.int(rows), C.int(hidden)); rc != 0 {
+		return fmt.Errorf("cuda: rec SwiGLUHalves failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulResident records o[m, w.n] = x[m, w.k]·dequant(w) — the resident Q8 matmul
 // (beta=0, overwrite o). w's transposed int8 [n,k] + per-32-block f32 scales are
 // consumed by the warp-per-output GEMV kernel; the flat buffer shapes are ignored in
