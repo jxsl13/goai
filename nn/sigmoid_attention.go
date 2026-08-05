@@ -231,6 +231,8 @@ func (s *SigmoidAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 	if s.causal {
 		mask = qkCausalMask(x.Dtype(), t, t)
 	}
+	scaleVal := 1 / math.Sqrt(float64(s.HeadDim)) // fused-inference-path scalars (see below)
+	biasVal := bias.AtF64(0, 0)
 	heads := make([]*tensor.Tensor, s.Heads)
 	for h := range s.Heads {
 		lo, hi := h*s.HeadDim, (h+1)*s.HeadDim
@@ -259,6 +261,19 @@ func (s *SigmoidAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*ten
 		sc, err := s.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
 		if err != nil {
 			return nil, err
+		}
+		// Inference (Recorder==nil): fuse scale + causal mask + bias + sigmoid into ONE row-parallel
+		// pass over sc, instead of OpMul(scale)+OpAdd(mask)+OpAdd(bias)+OpSigmoid — four [T,T]
+		// materializations. w_ij = σ(scale·sc_ij + bias), and j>i collapses to 0 (σ of the −1e30
+		// causal mask), so the causal mask is never materialized. The dispatch chain is kept for
+		// training (each step VJP-backed). Same math → F64 bit-identical, F32 within f32 tol.
+		if ctx.Recorder == nil {
+			if w := sigmoidAttnWeightsFused(sc, scaleVal, s.causal, biasVal); w != nil {
+				if heads[h], err = s.exec(ctx, backend.OpMatMul, nil, w, vh); err != nil {
+					return nil, err
+				}
+				continue
+			}
 		}
 		//perfscan:ignore PS3024 per-head scale mul, matmul-dominated
 		if sc, err = s.exec(ctx, backend.OpMul, nil, sc, invSqrtD); err != nil { // B60: OpMul, scale may be tiny
@@ -320,4 +335,63 @@ func sigmoidWeights(ctx *backend.Context, scores, bias *tensor.Tensor) (*tensor.
 		return nil, err
 	}
 	return out[0], nil
+}
+
+// sigmoidAttnWeightsFused is the Recorder==nil fused form of the sigmoid-attention weight step: for a
+// contiguous F64/F32 score matrix sc[T,nk] it writes w_ij = σ(scale·sc_ij + bias) in one row-parallel
+// pass, with the strictly-upper triangle (j>i) set to 0 when causal (σ of the −1e30 mask). σ uses the
+// overflow-safe branch (matching the reference sigmoid); F32 computes in float64 and rounds the store.
+// Non-contiguous / exotic dtypes return nil so the dispatch path handles them.
+func sigmoidAttnWeightsFused(sc *tensor.Tensor, scale float64, causal bool, bias float64) *tensor.Tensor {
+	if sc.Ndim() != 2 || !sc.IsContiguous() || sc.Offset() != 0 {
+		return nil
+	}
+	sig := func(x float64) float64 {
+		if x >= 0 {
+			return 1 / (1 + math.Exp(-x))
+		}
+		z := math.Exp(x)
+		return z / (1 + z)
+	}
+	t, nk := sc.Shape()[0], sc.Shape()[1]
+	out := tensor.New(sc.Dtype(), sc.Shape())
+	switch sc.Dtype() {
+	case tensor.F64:
+		sd, w := sc.Storage().F64(), out.Storage().F64()
+		parallelRows(t, nk, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := nk
+				if causal {
+					lim = i + 1
+				}
+				for j := 0; j < lim; j++ {
+					w[base+j] = sig(scale*sd[base+j] + bias)
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	case tensor.F32:
+		sd, w := sc.Storage().F32(), out.Storage().F32()
+		parallelRows(t, nk, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := nk
+				if causal {
+					lim = i + 1
+				}
+				for j := 0; j < lim; j++ {
+					w[base+j] = float32(sig(scale*float64(sd[base+j]) + bias))
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	}
+	return nil
 }
