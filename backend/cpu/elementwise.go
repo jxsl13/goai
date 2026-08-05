@@ -853,6 +853,88 @@ func sqrtKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	return []*tensor.Tensor{out}, nil
 }
 
+// whereKernelCPU is the devirtualized+parallel select for OpWhere (cond?a:b). The reference kernel
+// is already devirtualized to typed slices but runs single-threaded; here the same-shape/same-dtype
+// F64/F32 fast paths fan the flat select across cores. Bit-exact: the select is a verbatim copy (no
+// narrowing), same order. Shape mismatches, Lo>Hi-style errors, and exotic/mixed dtypes delegate to
+// the reference kernel so its validation and any-dtype contract are preserved unchanged.
+func whereKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 3 {
+		cond, a, b := in[0], in[1], in[2]
+		if a.Dtype() == b.Dtype() && cond.Shape().Equal(a.Shape()) && b.Shape().Equal(a.Shape()) {
+			switch a.Dtype() {
+			case tensor.F64:
+				if cond.Dtype() == tensor.F64 {
+					cs, as, bs := cond.Contiguous().Storage().F64(), a.Contiguous().Storage().F64(), b.Contiguous().Storage().F64()
+					out := tensor.NewOn(ctx.Device(), tensor.F64, a.Shape())
+					os := out.Storage().F64()
+					parallel(len(os), func(lo, hi int) {
+						for i := lo; i < hi; i++ {
+							if cs[i] != 0 {
+								os[i] = as[i]
+							} else {
+								os[i] = bs[i]
+							}
+						}
+					})
+					return []*tensor.Tensor{out}, nil
+				}
+			case tensor.F32:
+				if cond.Dtype() == tensor.F32 {
+					cs, as, bs := cond.Contiguous().Storage().F32(), a.Contiguous().Storage().F32(), b.Contiguous().Storage().F32()
+					out := tensor.NewOn(ctx.Device(), tensor.F32, a.Shape())
+					os := out.Storage().F32()
+					parallel(len(os), func(lo, hi int) {
+						for i := lo; i < hi; i++ {
+							if cs[i] != 0 {
+								os[i] = as[i]
+							} else {
+								os[i] = bs[i]
+							}
+						}
+					})
+					return []*tensor.Tensor{out}, nil
+				}
+			}
+		}
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpWhere, in, attrs)
+}
+
+// clipKernelCPU is the devirtualized+parallel clamp for OpClip (Max(Lo,Min(x,Hi))). The reference
+// kernel is devirtualized but single-threaded; here the F64/F32 fast paths fan the clamp across cores.
+// Bit-exact: same math.Max/math.Min clamp, F32 clamps in float64 and rounds only the store — exactly
+// the ref. The Lo>Hi error and exotic dtypes delegate to the reference kernel.
+func clipKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	pa, _ := attrs.(backend.ClipAttrs)
+	if len(in) == 1 && pa.Lo <= pa.Hi {
+		x := in[0]
+		switch x.Dtype() {
+		case tensor.F64:
+			xs := x.Contiguous().Storage().F64()
+			out := tensor.NewOn(ctx.Device(), tensor.F64, x.Shape())
+			os := out.Storage().F64()
+			parallel(len(os), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					os[i] = math.Max(pa.Lo, math.Min(xs[i], pa.Hi))
+				}
+			})
+			return []*tensor.Tensor{out}, nil
+		case tensor.F32:
+			xs := x.Contiguous().Storage().F32()
+			out := tensor.NewOn(ctx.Device(), tensor.F32, x.Shape())
+			os := out.Storage().F32()
+			parallel(len(os), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					os[i] = float32(math.Max(pa.Lo, math.Min(float64(xs[i]), pa.Hi)))
+				}
+			})
+			return []*tensor.Tensor{out}, nil
+		}
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpClip, in, attrs)
+}
+
 func init() {
 	reg := func(op backend.Op, k backend.Kernel) {
 		//perfscan:ignore PS3052 false-positive: std.add kernel-registration in init, op/k not staging buffer
@@ -870,6 +952,9 @@ func init() {
 	reg(backend.OpMinimum, binOp(minSliceF64, minSliceF32))
 	reg(backend.OpAbs, absKernelCPU)
 	reg(backend.OpSqrt, sqrtKernelCPU)
+	// Select/clamp: devirtualized in ref but single-threaded and CPU-unregistered → parallelize.
+	reg(backend.OpWhere, whereKernelCPU)
+	reg(backend.OpClip, clipKernelCPU)
 
 	reg(backend.OpStopGradient, stopGradKernelCPU)
 	reg(backend.OpNeg, negKernelCPU)
