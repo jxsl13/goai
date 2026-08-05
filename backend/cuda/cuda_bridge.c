@@ -1192,18 +1192,21 @@ int cu_ssm_step(const void* u, const void* delta, const void* A, const void* B, 
     if (!gSsmStep && compile_kernel(
                       "extern \"C\" __global__ void ssm_step(const float* u, const float* delta, const float* A, const float* B, const float* C, const float* dskip, float* h, float* y, int D, int N){\n"
                       "  int d = blockIdx.x*blockDim.x + threadIdx.x; if(d>=D) return;\n"
-                      "  double dl=(double)delta[d], ud=(double)u[d], acc=0.0;\n"
+                      "  float dl=delta[d], ud=u[d], acc=0.0f;\n"
                       "  const float* ad = A + (size_t)d*N; float* hd = h + (size_t)d*N;\n"
                       "  for(int n=0;n<N;n++){\n"
-                      // FP32 expf for the decay (GA106 FP64 = 1/64 rate). The recurrence is
-                      // CONTRACTIVE (A<0, Δ>0 → dA=exp(neg)<1), so the ~1e-7 per-step error decays
-                      // rather than accumulates; state hv and the C·h sum stay double for stability.
-                      // Inside the SSM tolerance gate (1e-4 vs the f64 ref).
-                      "    double dA = (double)expf((float)(dl*(double)ad[n]));\n"
-                      "    double hv = dA*(double)hd[n] + dl*(double)B[n]*ud;\n"
-                      "    hd[n] = (float)hv; acc += (double)C[n]*hv;\n"
+                      // Fully FP32 per-element: GA106 FP64 = 1/64 the FP32 rate, and the state hd[n] is
+                      // already TRUNCATED to float32 on store every step ((float)hv below), so the old
+                      // double intra-step arithmetic bought no lasting precision — its extra bits were
+                      // discarded on the very next store. The only genuinely accumulating term, acc =
+                      // Σ C·h over N (≤128), is an FP32 sum of N products (~1e-6 rel at N=16); and the
+                      // recurrence is CONTRACTIVE (A<0, Δ>0 → dA=exp(neg)<1) so per-step FP32 error
+                      // decays rather than accumulates. Stays well inside the SSM 1e-4 parity gate.
+                      "    float dA = expf(dl*ad[n]);\n"
+                      "    float hv = dA*hd[n] + dl*B[n]*ud;\n"
+                      "    hd[n] = hv; acc += C[n]*hv;\n"
                       "  }\n"
-                      "  y[d] = (float)(acc + (double)dskip[d]*ud);\n"
+                      "  y[d] = acc + dskip[d]*ud;\n"
                       "}\n",
                       "ssm_step.cu", "ssm_step", &gSsmStep) != 0) { rc = -2; goto done; }
     {
