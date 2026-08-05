@@ -9,9 +9,24 @@ import "C"
 
 import (
 	"fmt"
+	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
 )
+
+// cachedRoPEInv converts the host inv-freq table to f32 and returns a resident device copy
+// via the process-wide content-keyed [ropeInvCached] cache — the SAME cache the full-RoPE
+// path uses. The partial-RoPE ops (RoPEPartial/RoPEPartialDpos/RoPEPartialBand) previously
+// did a cudaMalloc + H2D + cudaFree of this invariant table on EVERY dispatch; routing them
+// through the cache uploads once per distinct freq config (tables are tiny + few, never
+// evicted, freed at process exit). Bit-exact: identical freqs, uploaded once.
+func cachedRoPEInv(inv []float64) (unsafe.Pointer, error) {
+	inv32 := make([]float32, len(inv))
+	for i, v := range inv {
+		inv32[i] = float32(v)
+	}
+	return ropeInvCached(inv32)
+}
 
 // RoPEPartial applies PARTIAL rotary position embeddings in place to d[rows, heads*hd]:
 // only the first rotaryDim channels of each head are rotated (HF rotate_half within the
@@ -44,15 +59,10 @@ func (d *DeviceF32) RoPEPartial(attrs backend.RoPEAttrs, rotaryDim int) error {
 	}
 	// Frequencies over the rotary sub-dim (a full RoPE on a rotaryDim-wide head).
 	inv, posDiv := backend.RoPEFreqs(rotaryDim, attrs)
-	inv32 := make([]float32, len(inv))
-	for i, v := range inv {
-		inv32[i] = float32(v)
+	invPtr, err := cachedRoPEInv(inv)
+	if err != nil {
+		return err
 	}
-	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
-	if invPtr == nil {
-		return fmt.Errorf("cuda: RoPEPartial frequency upload failed")
-	}
-	defer C.cu_free_f32(invPtr)
 	if rc := C.cu_rope_partial(d.ptr, invPtr, C.int(d.rows), C.int(heads), C.int(hd), C.int(rotaryDim), C.int(attrs.PosOffset), C.double(posDiv)); rc != 0 {
 		return fmt.Errorf("cuda: rope_partial failed (code %d)", int(rc))
 	}
@@ -87,15 +97,10 @@ func (d *DeviceF32) RoPEPartialDpos(attrs backend.RoPEAttrs, rotaryDim int, pos 
 		return fmt.Errorf("cuda: RoPEPartialDpos rotaryDim %d must be even", rotaryDim)
 	}
 	inv, posDiv := backend.RoPEFreqs(rotaryDim, attrs)
-	inv32 := make([]float32, len(inv))
-	for i, v := range inv {
-		inv32[i] = float32(v)
+	invPtr, err := cachedRoPEInv(inv)
+	if err != nil {
+		return err
 	}
-	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
-	if invPtr == nil {
-		return fmt.Errorf("cuda: RoPEPartialDpos frequency upload failed")
-	}
-	defer C.cu_free_f32(invPtr)
 	if rc := C.cu_rope_partial_dpos(d.ptr, invPtr, C.int(d.rows), C.int(heads), C.int(hd), C.int(rotaryDim), pos.ptr, C.double(posDiv)); rc != 0 {
 		return fmt.Errorf("cuda: rope_partial_dpos failed (code %d)", int(rc))
 	}
@@ -122,15 +127,10 @@ func (d *DeviceF32) RoPEPartialBand(attrs backend.RoPEAttrs, rotaryDim, off, hea
 		return fmt.Errorf("cuda: RoPEPartialBand rotaryDim %d must be even, in (0,%d]", rotaryDim, hd)
 	}
 	inv, posDiv := backend.RoPEFreqs(rotaryDim, attrs)
-	inv32 := make([]float32, len(inv))
-	for i, v := range inv {
-		inv32[i] = float32(v)
+	invPtr, err := cachedRoPEInv(inv)
+	if err != nil {
+		return err
 	}
-	invPtr := C.cu_upload_f32((*C.float)(&inv32[0]), C.int(len(inv32)))
-	if invPtr == nil {
-		return fmt.Errorf("cuda: RoPEPartialBand frequency upload failed")
-	}
-	defer C.cu_free_f32(invPtr)
 	if rc := C.cu_rope_partial_band(d.ptr, invPtr, C.int(d.rows), C.int(d.cols), C.int(off), C.int(heads), C.int(hd), C.int(rotaryDim), C.int(attrs.PosOffset), C.double(posDiv)); rc != 0 {
 		return fmt.Errorf("cuda: rope_partial_band failed (code %d)", int(rc))
 	}
