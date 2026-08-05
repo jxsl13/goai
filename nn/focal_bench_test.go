@@ -40,3 +40,7 @@ func benchFocal(b *testing.B, batch, classes int) {
 
 func BenchmarkFocalLossDetection(b *testing.B) { benchFocal(b, 8192, 4) }
 func BenchmarkFocalLossClassify(b *testing.B)  { benchFocal(b, 1024, 100) }
+
+// BenchmarkFocalLossVocab exercises focal cross-entropy at vocab scale, where the old [batch,classes]
+// one-hot alloc + mul/sum passes dominate — the gather path eliminates them.
+func BenchmarkFocalLossVocab(b *testing.B) { benchFocal(b, 256, 32000) }
