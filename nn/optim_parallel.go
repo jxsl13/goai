@@ -73,6 +73,19 @@ func parCountNonzeroF64(u []float64) float64 {
 	})
 }
 
+// parSumF64x2 runs a fused parallel map-reduce over [0,n): chunk writes its per-index state — disjoint
+// index-i writes, so BIT-IDENTICAL to the serial loop — and returns two partial sums, whose totals are
+// reassociated across cores (tol ~1 ULP, like parSumSq) when n clears parStepMinElems, else a serial
+// single-chunk pass. Prodigy uses it to update m/v/s AND accumulate the d-estimate's ⟨g,x₀−x⟩ and ‖s‖₁
+// in ONE memory pass (splitting into parStep+two reductions would double the DRAM traffic on a
+// bandwidth-bound kernel). The per-index writes stay bit-exact; only the two summed scalars relax.
+func parSumF64x2(n int, chunk func(lo, hi int) (float64, float64)) (float64, float64) {
+	if n < parStepMinElems {
+		return chunk(0, n)
+	}
+	return parallel.SumF64x2(n, chunk)
+}
+
 // parSumSqF32 is parSumSqF64 for an f32 grad, accumulating in float64 exactly as the serial path does.
 func parSumSqF32(gf []float32) float64 {
 	if len(gf) < parStepMinElems {

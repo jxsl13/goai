@@ -118,3 +118,26 @@ func SumF64(n int, chunkSum func(lo, hi int) float64) float64 {
 	}
 	return s
 }
+
+// SumF64x2 is [SumF64] for a chunkSum that produces TWO partial sums per chunk — the fused
+// map-reduce an optimizer needs when a single memory pass both updates per-index state (a disjoint
+// write, bit-identical to serial) and accumulates two reductions over it. It splits [0,n) exactly as
+// [Rows] does, calls chunkSum once per chunk (concurrently, disjoint ranges), and combines each
+// partial in the SAME fixed chunk order, so both totals are deterministic REASSOCIATIONS of the
+// serial left-to-right sums (~1-ULP-per-level tolerance, as SumF64).
+func SumF64x2(n int, chunkSum func(lo, hi int) (float64, float64)) (float64, float64) {
+	parts := min(len(mailboxes)+1, n)
+	if parts <= 1 {
+		return chunkSum(0, n)
+	}
+	chunk := (n + parts - 1) / parts
+	p1 := make([]float64, parts) // chunk c (lo == c*chunk) writes p1[c]/p2[c]; unused slots stay 0
+	p2 := make([]float64, parts)
+	Rows(n, func(lo, hi int) { p1[lo/chunk], p2[lo/chunk] = chunkSum(lo, hi) })
+	var s1, s2 float64
+	for i := range p1 {
+		s1 += p1[i]
+		s2 += p2[i]
+	}
+	return s1, s2
+}
