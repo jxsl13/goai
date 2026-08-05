@@ -93,25 +93,32 @@ func (s *SGD) Step(grad GradFn) error {
 		// arithmetic in float64 exactly as the generic path computes it.
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					if vel != nil {
-						vel[i] = s.Momentum*vel[i] + gv
-						gv = vel[i]
+				// Per-element (vel[i],pf[i] each written once) ⇒ chunking is bit-identical; large
+				// DRAM-resident params fan across cores, small ones stay inline. See parStep.
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						if vel != nil {
+							vel[i] = s.Momentum*vel[i] + gv
+							gv = vel[i]
+						}
+						pf[i] -= s.LR * gv
 					}
-					pf[i] -= s.LR * gv
-				}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					if vel != nil {
-						vel[i] = s.Momentum*vel[i] + gv
-						gv = vel[i]
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						if vel != nil {
+							vel[i] = s.Momentum*vel[i] + gv
+							gv = vel[i]
+						}
+						pf[i] = float32(float64(pf[i]) - s.LR*gv)
 					}
-					pf[i] = float32(float64(pf[i]) - s.LR*gv)
-				}
+				})
 				continue
 			}
 		}
@@ -434,25 +441,32 @@ func (l *Lion) Step(grad GradFn) error {
 		// update arithmetic in float64 exactly as the generic path computes them.
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					c := l.Beta1*m[i] + (1-l.Beta1)*gv // interpolate (β1)
-					pv := pf[i]
-					pf[i] = pv - l.LR*(signf(c)+l.WeightDecay*pv) // sign step + decoupled wd
-					//perfscan:ignore PS3084 Lion moment update bandwidth-bound streaming; FMA numerics-only
-					m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv // momentum after (β2)
-				}
+				// Per-element (m[i],pf[i] each written once) ⇒ chunking is bit-identical; large
+				// DRAM-resident params fan across cores, small ones stay inline. See parStep.
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						c := l.Beta1*m[i] + (1-l.Beta1)*gv // interpolate (β1)
+						pv := pf[i]
+						pf[i] = pv - l.LR*(signf(c)+l.WeightDecay*pv) // sign step + decoupled wd
+						//perfscan:ignore PS3084 Lion moment update bandwidth-bound streaming; FMA numerics-only
+						m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv // momentum after (β2)
+					}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					c := l.Beta1*m[i] + (1-l.Beta1)*gv
-					pv := float64(pf[i])
-					pf[i] = float32(pv - l.LR*(signf(c)+l.WeightDecay*pv))
-					//perfscan:ignore PS3084 Lion F32 moment update bandwidth-bound streaming
-					m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv
-				}
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						c := l.Beta1*m[i] + (1-l.Beta1)*gv
+						pv := float64(pf[i])
+						pf[i] = float32(pv - l.LR*(signf(c)+l.WeightDecay*pv))
+						//perfscan:ignore PS3084 Lion F32 moment update bandwidth-bound streaming
+						m[i] = l.Beta2*m[i] + (1-l.Beta2)*gv
+					}
+				})
 				continue
 			}
 		}
