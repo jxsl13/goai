@@ -7,6 +7,63 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// trailingReduce reports whether the reduction described by pa over a rank-nd shape reduces exactly
+// the innermost CONTIGUOUS suffix of axes (e.g. axis 1 of [rows,cols], or axes {1,2} of [b,h,w]),
+// with the reduced run longer than one element. When it does, each output value is the reduction of
+// one contiguous segment xs[seg*segLen:(seg+1)*segLen] of the row-major input — so the per-op
+// devirtualised reduce-all closure can be applied per segment, in parallel, instead of the reference
+// kernel's per-element indirect combine. Returns the segment length, the (keepdims-aware) output
+// shape, and ok. Multi-axis, strided, keepdims, and non-suffix reductions leave ok=false.
+func trailingReduce(shape tensor.Shape, pa backend.ReduceAttrs) (segLen int, outShape tensor.Shape, ok bool) {
+	nd := len(shape)
+	if nd == 0 || len(pa.Axes) == 0 {
+		return 0, nil, false // rank-0 or reduce-all: the reduce-all fast path already handles it
+	}
+	reduced := make([]bool, nd)
+	for _, a := range pa.Axes {
+		if a < 0 {
+			a += nd
+		}
+		if a < 0 || a >= nd {
+			return 0, nil, false // out of range: let the reference kernel report the error
+		}
+		reduced[a] = true
+	}
+	first := -1
+	for ax := 0; ax < nd; ax++ {
+		if reduced[ax] {
+			first = ax
+			break
+		}
+	}
+	if first < 0 {
+		return 0, nil, false
+	}
+	for ax := first; ax < nd; ax++ { // the reduced axes must run unbroken to the end (a kept axis after breaks the suffix)
+		if !reduced[ax] {
+			return 0, nil, false
+		}
+	}
+	segLen = 1
+	for ax := first; ax < nd; ax++ {
+		segLen *= shape[ax]
+	}
+	if segLen <= 1 {
+		return 0, nil, false // nothing to accumulate; ref handles the degenerate case
+	}
+	for ax := 0; ax < nd; ax++ {
+		switch {
+		case reduced[ax] && pa.KeepDims:
+			outShape = append(outShape, 1)
+		case reduced[ax]:
+			// dropped
+		default:
+			outShape = append(outShape, shape[ax])
+		}
+	}
+	return segLen, outShape, true
+}
+
 // wrapReduceAll returns a CPU kernel that fast-paths the reduce-ALL-to-scalar case (attrs
 // nil or empty Axes) with a devirtualised, per-op INLINED loop over the contiguous storage.
 // The reference reduceKernel is correct but runs single-threaded through a per-element
@@ -19,9 +76,9 @@ func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float3
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) == 1 {
 			pa, _ := attrs.(backend.ReduceAttrs)
-			if attrs == nil || len(pa.Axes) == 0 {
-				x := in[0]
-				if dt := x.Dtype(); dt == tensor.F64 || dt == tensor.F32 {
+			x := in[0]
+			if dt := x.Dtype(); dt == tensor.F64 || dt == tensor.F32 {
+				if attrs == nil || len(pa.Axes) == 0 {
 					xc := x.Contiguous()
 					var acc float64
 					if dt == tensor.F64 {
@@ -38,6 +95,33 @@ func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float3
 					}
 					out := tensor.NewOn(ctx.Device(), dt, outShape)
 					out.SetF64(acc, make([]int, len(outShape))...)
+					return []*tensor.Tensor{out}, nil
+				}
+				// Trailing-contiguous axis reduction: each output is one contiguous segment, so the
+				// SAME devirtualised reduce-all closure (inlined Sum/Mean, 4-way-unrolled Max/Min)
+				// runs per segment in parallel — dropping the reference kernel's per-element indirect
+				// combine call (the latency-bound math.Max/math.Min chain in particular). Bit-identical:
+				// each segment sees xs[seg*segLen:(seg+1)*segLen] in the same ascending row-major order
+				// the reference odometer visits, and the closure's fold matches the ref per §T-reduce.
+				if segLen, outShape, ok := trailingReduce(x.Shape(), pa); ok {
+					xc := x.Contiguous()
+					out := tensor.NewOn(ctx.Device(), dt, outShape)
+					outNumel := outShape.Numel()
+					if dt == tensor.F64 {
+						xs, os := xc.Storage().F64(), out.Storage().F64()
+						parallelWork(outNumel, segLen, func(lo, hi int) {
+							for seg := lo; seg < hi; seg++ {
+								os[seg] = f64(xs[seg*segLen : (seg+1)*segLen])
+							}
+						})
+					} else {
+						xs, os := xc.Storage().F32(), out.Storage().F32()
+						parallelWork(outNumel, segLen, func(lo, hi int) {
+							for seg := lo; seg < hi; seg++ {
+								os[seg] = float32(f32(xs[seg*segLen : (seg+1)*segLen]))
+							}
+						})
+					}
 					return []*tensor.Tensor{out}, nil
 				}
 			}
