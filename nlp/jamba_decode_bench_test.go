@@ -151,3 +151,22 @@ func BenchmarkJambaDecode(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkJambaPrefill_512 times prefill at dims where the SSM selective-scan (the Mamba layers'
+// token mixer) is a meaningful fraction — the path parallelized across channels.
+func BenchmarkJambaPrefill_512(b *testing.B) {
+	m := benchJambaModel(1024, 2048, 128, 4, 64, 2048, 4, 2, 256, 16, 4)
+	tokens := make([]int, 512)
+	for i := range tokens {
+		tokens[i] = (i * 7) % 256
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx := backend.NewContext()
+		st := m.NewDecodeState()
+		if _, err := m.Prefill(ctx, st, tokens); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

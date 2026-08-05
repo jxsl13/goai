@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
@@ -296,7 +297,6 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	// each t in order; ls.H ends as the post-prompt hidden state.
 	uuA, ddA, bbA, ccA := rows2D(xc), rows2D(delta), rows2D(bMat), rows2D(cMat)
 	y := tensor.New(xc.Dtype(), tensor.Shape{T, D})
-	abar := make([]float64, N) // scratch for the vectorized exp(Δ·A) over the state dim
 	// Dskip is constant across the T prompt rows and a contiguous [D] vector, so
 	// read its storage ONCE instead of dispatching mb.Dskip.AtF64(d) T*D times
 	// (dskip[d] == AtF64(d) for contiguous F64 — zero extra allocation). y is a
@@ -319,34 +319,36 @@ func mixerPrefill(ctx *backend.Context, mb *nn.MambaBlock, ls *MambaLayerState, 
 	} else {
 		yF32 = y.Storage().F32()
 	}
-	for t := range T {
-		uu, dd, bb, cc := uuA[t], ddA[t], bbA[t], ccA[t]
-		yrow := t * D
-		for d := range D {
-			dt := dd[d]
-			ut := uu[d]
+	// Channels are independent diagonal SSMs — channel d's state ls.H[d*N:d*N+N] and output column
+	// y[t][d] are disjoint, only the t-recurrence within a channel is sequential. Interchange to
+	// d-outer/t-inner and fan the channel dim across cores: each chunk runs whole channels' t-scans
+	// in the SAME ascending-t order, so the result is bit-identical to the serial t-outer form
+	// (TestMambaPrefillStateParity gates it). This scan is the model's token mixer and was single-
+	// threaded on the host even under CUDA. abar scratch is per-goroutine (was shared → would race).
+	parallel.Rows(D, func(loD, hiD int) {
+		abar := make([]float64, N) // per-chunk scratch for exp(Δ·A) over the state dim
+		for d := loD; d < hiD; d++ {
 			base := d * N
-			// abar[n] = exp(Δ·A[n]); A = −exp(A_log) < 0 so the argument is ≤ 0. The exp
-			// is vectorized over the state dim (was ~25% of Mamba prefill as scalar
-			// math.Exp); the recurrence + reduction below run in the SAME order, and the
-			// decode path (mixerStep) calls ExpScaledF64 the same way on the same-length
-			// slice, so prefill stays bit-equal to decode (TestMambaPrefillStateParity).
-			simd.ExpScaledF64(abar, ls.a[base:base+N], dt)
-			var yv float64
-			for n := range N {
-				hv := abar[n]*ls.H[base+n] + dt*bb[n]*ut
-				ls.H[base+n] = hv
-				yv += cc[n] * hv
-			}
-			//perfscan:ignore PS3025 scalar dskip[d]*ut per-d add, not a vectorizable loop
-			yv += dskip[d] * ut
-			if yF64 != nil {
-				yF64[yrow+d] = yv
-			} else {
-				yF32[yrow+d] = float32(yv)
+			for t := range T {
+				dt := ddA[t][d]
+				ut := uuA[t][d]
+				bb, cc := bbA[t], ccA[t]
+				simd.ExpScaledF64(abar, ls.a[base:base+N], dt)
+				var yv float64
+				for n := range N {
+					hv := abar[n]*ls.H[base+n] + dt*bb[n]*ut
+					ls.H[base+n] = hv
+					yv += cc[n] * hv
+				}
+				yv += dskip[d] * ut
+				if yF64 != nil {
+					yF64[t*D+d] = yv
+				} else {
+					yF32[t*D+d] = float32(yv)
+				}
 			}
 		}
-	}
+	})
 
 	// Capture the conv-window tail: the last d_conv−1 PRE-conv rows of xin,
 	// oldest first. Pre-sequence slots (T < d_conv−1) keep the fresh state's

@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -279,26 +280,31 @@ func jambaMixerPrefill(ctx *backend.Context, jm *JambaMixer, ls *MambaLayerState
 	// for each t in order; ls.H ends as the post-prompt hidden state.
 	uuA, ddA, bbA, ccA := rows2D(xc), rows2D(delta), rows2D(bMat), rows2D(cMat)
 	y := tensor.New(xc.Dtype(), tensor.Shape{T, D})
-	for t := range T {
-		uu, dd, bb, cc := uuA[t], ddA[t], bbA[t], ccA[t]
-		//perfscan:ignore PS1001 prefill store O(T*D) dominated by inner O(T*D*N) exp loop
-		for d := range D {
-			dt := dd[d]
-			ut := uu[d]
+	// Channels are independent diagonal SSMs — channel d's state ls.H[d*N:d*N+N] and output column d
+	// are disjoint; only the t-recurrence within a channel is sequential. Interchange to d-outer/t-inner
+	// and fan the channel dim across cores — bit-identical to the serial t-outer form (same ascending-t
+	// scan per channel; TestJambaDecodeMatchesForward gates it). This scan is the SSM token mixer and was
+	// single-threaded on the host even under CUDA.
+	parallel.Rows(D, func(loD, hiD int) {
+		for d := loD; d < hiD; d++ {
 			base := d * N
-			var yv float64
-			for s := range N {
-				abar := math.Exp(dt * ls.a[base+s])
-				hv := abar*ls.H[base+s] + dt*bb[s]*ut
-				ls.H[base+s] = hv
-				//perfscan:ignore PS3025 cc[s]*hv accumulation intrinsic to sequential scan flagged at 282
-				yv += cc[s] * hv
+			dsk := mb.Dskip.AtF64(d) // invariant across t
+			for t := range T {
+				dt := ddA[t][d]
+				ut := uuA[t][d]
+				bb, cc := bbA[t], ccA[t]
+				var yv float64
+				for s := range N {
+					abar := math.Exp(dt * ls.a[base+s])
+					hv := abar*ls.H[base+s] + dt*bb[s]*ut
+					ls.H[base+s] = hv
+					yv += cc[s] * hv
+				}
+				yv += dsk * ut
+				y.SetF64(yv, t, d)
 			}
-			//perfscan:ignore PS3025 Dskip.AtF64 minor invariant hoist O(T*D), resource-only
-			yv += mb.Dskip.AtF64(d) * ut
-			y.SetF64(yv, t, d)
 		}
-	}
+	})
 
 	// Capture the conv-window tail: the last d_conv−1 PRE-conv rows of xin,
 	// oldest first; pre-sequence slots keep the fresh state's zeros.
