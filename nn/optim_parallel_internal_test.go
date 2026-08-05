@@ -32,6 +32,7 @@ func TestParStepParallelMatchesSerial(t *testing.T) {
 		{"MARS", func(p []*tensor.Tensor) Optimizer { return NewMARS(p, 1e-3) }},
 		{"ScheduleFree", func(p []*tensor.Tensor) Optimizer { return NewScheduleFreeAdamW(p, 1e-3) }},
 		{"AdEMAMix", func(p []*tensor.Tensor) Optimizer { return NewAdEMAMix(p, 1e-3) }},
+		{"Cautious", func(p []*tensor.Tensor) Optimizer { return NewCautiousAdamW(p, 1e-3) }},
 	}
 	for _, oc := range opts {
 		for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
@@ -354,4 +355,11 @@ func BenchmarkAdEMAMixStep_1M_parallel(b *testing.B) {
 }
 func BenchmarkAdEMAMixStep_1M_serial(b *testing.B) {
 	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewAdEMAMix(p, 1e-3) })
+}
+
+func BenchmarkCautiousStep_1M_parallel(b *testing.B) {
+	benchOptStep1M(b, 1<<8, func(p []*tensor.Tensor) Optimizer { return NewCautiousAdamW(p, 1e-3) })
+}
+func BenchmarkCautiousStep_1M_serial(b *testing.B) {
+	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewCautiousAdamW(p, 1e-3) })
 }

@@ -135,44 +135,52 @@ func (a *CautiousAdamW) Step(grad GradFn) error {
 		// into the apply step below. This drops the gg scratch (a full n-element
 		// write+read) and collapses 4 passes to 2. Bit-identical to
 		// buildStep + CautiousMask(u,gg) + apply.
-		kept := 0
-		buildStep := func(gv float64, i int) {
+		buildStep := func(gv float64, i int) { // pure per-index (m/v/u at i) → parStep bit-identical to serial
 			m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
 			v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
 			mh := m[i] * ic1
 			vh := v[i] * ic2
 			ui := a.LR * mh / (math.Sqrt(vh) + a.Eps)
-			if ui*gv > 0 {
-				kept++
-			} else {
+			if ui*gv <= 0 { // cautious mask: zero anti-descent coords (ui·g>0 keeps ⇒ ui!=0)
 				ui = 0
 			}
 			u[i] = ui
 		}
 		if gf := flatF64(g); gf != nil {
-			for i, gv := range gf {
-				buildStep(gv, i)
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					buildStep(gf[i], i)
+				}
+			})
 		} else if gf := flatF32(g); gf != nil {
-			for i := range gf {
-				buildStep(float64(gf[i]), i)
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					buildStep(float64(gf[i]), i)
+				}
+			})
 		} else {
 			for i := range n {
 				buildStep(g.AtF64(tensor.Unravel(i, g.Shape())...), i)
 			}
 		}
+		// kept = #coords that passed the cautious sign test = #{u[i]!=0} (exact integer count, so the
+		// scale — and thus the whole step — stays BIT-IDENTICAL serial-vs-parallel, unlike LAMB's norm).
+		kept := parCountNonzeroF64(u[:n])
 		//perfscan:ignore PS3082 false-positive: single math.Max per step, not per-element loop
-		scale := float64(n) / math.Max(float64(kept), 1e-3*float64(n)) // = CautiousMask's 1/mean(mask)
+		scale := float64(n) / math.Max(kept, 1e-3*float64(n)) // = CautiousMask's 1/mean(mask)
 		// Apply decoupled weight decay (outside the mask) then the masked+rescaled step.
 		if pf := flatF64(p); pf != nil {
-			for i := range pf {
-				pf[i] = pf[i]*decay - u[i]*scale
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = pf[i]*decay - u[i]*scale
+				}
+			})
 		} else if pf := flatF32(p); pf != nil {
-			for i := range pf {
-				pf[i] = float32(float64(pf[i])*decay - u[i]*scale)
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = float32(float64(pf[i])*decay - u[i]*scale)
+				}
+			})
 		} else {
 			for i := range n {
 				idx := tensor.Unravel(i, p.Shape())

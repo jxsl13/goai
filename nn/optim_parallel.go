@@ -48,6 +48,31 @@ func parSumSqF64(gf []float64) float64 {
 	})
 }
 
+// parCountNonzeroF64 returns the count of nonzero entries of u, fanned across cores (deterministic
+// integer partials that sum BIT-EXACTLY in float64 — counts are integers < 2^53, no reassociation
+// error). CautiousAdamW uses it for the kept-coordinate count: after the masked build, u[i]!=0 iff the
+// coord passed the cautious sign test (ui·g>0 ⇒ ui!=0; masked ⇒ ui=0), so this equals the serial count.
+func parCountNonzeroF64(u []float64) float64 {
+	if len(u) < parStepMinElems {
+		var k float64
+		for _, x := range u {
+			if x != 0 {
+				k++
+			}
+		}
+		return k
+	}
+	return parallel.SumF64(len(u), func(lo, hi int) float64 {
+		var k float64
+		for i := lo; i < hi; i++ {
+			if u[i] != 0 {
+				k++
+			}
+		}
+		return k
+	})
+}
+
 // parSumSqF32 is parSumSqF64 for an f32 grad, accumulating in float64 exactly as the serial path does.
 func parSumSqF32(gf []float32) float64 {
 	if len(gf) < parStepMinElems {
