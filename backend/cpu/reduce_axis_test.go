@@ -27,12 +27,12 @@ func TestReduceAxisCPUMatchesRefBitExact(t *testing.T) {
 		axes  []int
 	}
 	cases := []tc{
-		{tensor.Shape{64, 128}, []int{1}},     // trailing 2D
-		{tensor.Shape{64, 128}, []int{-1}},    // negative axis == trailing
-		{tensor.Shape{8, 16, 32}, []int{2}},   // trailing of 3D
-		{tensor.Shape{8, 16, 32}, []int{1, 2}}, // trailing suffix (multi-axis)
-		{tensor.Shape{7, 5}, []int{1}},        // ragged, count not multiple of 4
-		{tensor.Shape{64, 128}, []int{0}},     // NON-suffix → CPU falls back to ref (must still match)
+		{tensor.Shape{64, 128}, []int{1}},       // trailing 2D
+		{tensor.Shape{64, 128}, []int{-1}},      // negative axis == trailing
+		{tensor.Shape{8, 16, 32}, []int{2}},     // trailing of 3D
+		{tensor.Shape{8, 16, 32}, []int{1, 2}},  // trailing suffix (multi-axis)
+		{tensor.Shape{7, 5}, []int{1}},          // ragged, count not multiple of 4
+		{tensor.Shape{64, 128}, []int{0}},       // NON-suffix → CPU falls back to ref (must still match)
 		{tensor.Shape{5, 6, 7}, []int{0, 1, 2}}, // explicit all-axes
 	}
 	run := func(be backend.Backend, op backend.Op, x *tensor.Tensor, axes []int, keep bool) *tensor.Tensor {
@@ -79,8 +79,8 @@ func TestReduceAxisSpecialValues(t *testing.T) {
 	refBE := backend.Reference()
 	nan, pInf, nInf := math.NaN(), math.Inf(1), math.Inf(-1)
 	rows := [][]float64{
-		{1, -2, 3, nan, 5, 6, 7, 8, 9, 10},   // NaN mid-row
-		{0, math.Copysign(0, -1), pInf, nInf, 2, 3, 4, 5, 6, 7}, // +0,-0,±Inf
+		{1, -2, 3, nan, 5, 6, 7, 8, 9, 10},                           // NaN mid-row
+		{0, math.Copysign(0, -1), pInf, nInf, 2, 3, 4, 5, 6, 7},      // +0,-0,±Inf
 		{nInf, nInf, nInf, nInf, nInf, nInf, nInf, nInf, nInf, nInf}, // all -Inf
 		{-1, -2, -3, -4, -5, -6, -7, -8, -9, -10},
 	}
@@ -123,6 +123,12 @@ func benchAxisCPU(b *testing.B, op backend.Op, rows, cols int) {
 	}
 }
 
-func BenchmarkReduceAxisMaxF64_4096x4096_cpu(b *testing.B) { benchAxisCPU(b, backend.OpMax, 4096, 4096) }
-func BenchmarkReduceAxisMinF64_4096x4096_cpu(b *testing.B) { benchAxisCPU(b, backend.OpMin, 4096, 4096) }
-func BenchmarkReduceAxisSumF64_4096x4096_cpu(b *testing.B) { benchAxisCPU(b, backend.OpSum, 4096, 4096) }
+func BenchmarkReduceAxisMaxF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPU(b, backend.OpMax, 4096, 4096)
+}
+func BenchmarkReduceAxisMinF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPU(b, backend.OpMin, 4096, 4096)
+}
+func BenchmarkReduceAxisSumF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPU(b, backend.OpSum, 4096, 4096)
+}
