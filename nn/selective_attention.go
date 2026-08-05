@@ -238,19 +238,29 @@ func (s *SelectiveAttention) forward(ctx *backend.Context, x *tensor.Tensor) (ou
 		} else if lg, err = logits(h); err != nil {
 			return nil, nil, nil, err
 		}
-		//perfscan:ignore PS3024 per-head Sub L-F, softmax/matmul-dominated
-		lp, err := s.exec(ctx, backend.OpSub, nil, lg, fBias) // L' = L − F
-		if err != nil {
-			return nil, nil, nil, err
+		// Inference (Recorder==nil): fuse L−F, the additive causal mask, and the softmax into ONE
+		// row-parallel pass — w_ij = softmax_{j≤i}(lg_ij − fBias_ij), j>i = 0 — instead of OpSub+OpAdd
+		// (two [T,T] materializations) + OpSoftmax. The causal mask is folded into j≤i (its 0 on the
+		// lower triangle and −∞ above are exactly this). Dispatch path kept for training. Same
+		// arithmetic/order → F64 bit-identical, F32 f32-tol.
+		var w *tensor.Tensor
+		if ctx.Recorder == nil {
+			w = selectiveWeightsFused(lg, fBias)
 		}
-		//perfscan:ignore PS3024 per-head Add mask, attention-dominated
-		if lp, err = s.exec(ctx, backend.OpAdd, nil, lp, mask); err != nil { // + causal mask
-			return nil, nil, nil, err
-		}
-		//perfscan:ignore PS3024 OpSoftmax is the compute; dispatch negligible
-		w, err := s.exec(ctx, backend.OpSoftmax, nil, lp) // [T,T]
-		if err != nil {
-			return nil, nil, nil, err
+		if w == nil {
+			//perfscan:ignore PS3024 per-head Sub L-F, softmax/matmul-dominated
+			lp, err := s.exec(ctx, backend.OpSub, nil, lg, fBias) // L' = L − F
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-head Add mask, attention-dominated
+			if lp, err = s.exec(ctx, backend.OpAdd, nil, lp, mask); err != nil { // + causal mask
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 OpSoftmax is the compute; dispatch negligible
+			if w, err = s.exec(ctx, backend.OpSoftmax, nil, lp); err != nil { // [T,T]
+				return nil, nil, nil, err
+			}
 		}
 		weights[h] = w
 		vh, err := slice(v, h)
@@ -299,4 +309,86 @@ func selectiveStrictLowerMask(dtype tensor.Dtype, t int) *tensor.Tensor {
 		}
 	}
 	return m
+}
+
+// selectiveWeightsFused is the Recorder==nil fused form of the SelectiveAttention per-head weight step:
+// for contiguous same-dtype F64/F32 [T,T] logits lg and selection bias fBias it writes
+// w_ij = softmax_{j≤i}(lg_ij − fBias_ij) (j>i = 0) in one row-parallel pass. The additive causal mask
+// (0 on j≤i, −∞ above) is exactly the j≤i restriction. Same max/exp/sum order as OpSoftmax over the
+// masked row; F32 computes in float64. Non-contiguous / mismatched inputs return nil.
+func selectiveWeightsFused(lg, fBias *tensor.Tensor) *tensor.Tensor {
+	if lg.Ndim() != 2 || !lg.IsContiguous() || lg.Offset() != 0 || !fBias.IsContiguous() || fBias.Offset() != 0 {
+		return nil
+	}
+	if !lg.Shape().Equal(fBias.Shape()) || lg.Dtype() != fBias.Dtype() {
+		return nil
+	}
+	t, nk := lg.Shape()[0], lg.Shape()[1]
+	out := tensor.New(lg.Dtype(), lg.Shape())
+	switch lg.Dtype() {
+	case tensor.F64:
+		a, bb, w := lg.Storage().F64(), fBias.Storage().F64(), out.Storage().F64()
+		parallelRows(t, nk, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := i + 1
+				if lim > nk {
+					lim = nk
+				}
+				mx := math.Inf(-1)
+				for j := 0; j < lim; j++ {
+					if v := a[base+j] - bb[base+j]; v > mx {
+						mx = v
+					}
+				}
+				var sum float64
+				for j := 0; j < lim; j++ {
+					e := math.Exp(a[base+j] - bb[base+j] - mx)
+					w[base+j] = e
+					sum += e
+				}
+				inv := 1 / sum
+				for j := 0; j < lim; j++ {
+					w[base+j] *= inv
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	case tensor.F32:
+		a, bb, w := lg.Storage().F32(), fBias.Storage().F32(), out.Storage().F32()
+		parallelRows(t, nk, func(lo, hi int) {
+			es := make([]float64, nk) // per-chunk scratch (f64 exp before f32 narrowing)
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := i + 1
+				if lim > nk {
+					lim = nk
+				}
+				mx := math.Inf(-1)
+				for j := 0; j < lim; j++ {
+					if v := float64(a[base+j]) - float64(bb[base+j]); v > mx {
+						mx = v
+					}
+				}
+				var sum float64
+				for j := 0; j < lim; j++ {
+					e := math.Exp(float64(a[base+j]) - float64(bb[base+j]) - mx)
+					es[j] = e
+					sum += e
+				}
+				inv := 1 / sum
+				for j := 0; j < lim; j++ {
+					w[base+j] = float32(es[j] * inv)
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	}
+	return nil
 }
