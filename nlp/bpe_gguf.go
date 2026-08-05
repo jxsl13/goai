@@ -157,6 +157,19 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 	}
 	parts = append(parts, ggufPart{start: len(mapped), rank: math.MaxInt})
 
+	// Long pieces (unbounded digit/symbol/whitespace runs from the pre-tokenizer) make the O(n²)
+	// rescan+shift below quadratic; dispatch to the O(n log n) heap merge above the threshold (short
+	// pieces keep the low-overhead quadratic path). Mirrors Tokenizer.bpeMergeInto (bpe.go).
+	if len(parts)-1 > bpeHeapThreshold {
+		return t.bpeIntoHeap(mapped, out, parts), parts
+	}
+	return t.bpeIntoQuad(mapped, out, parts), parts
+}
+
+// bpeIntoQuad is the O(n²) rescan+shift merge for short pieces; parts must already be seeded with the
+// per-rune offsets + trailing sentinel. Split out of bpeInto so the heap path (bpeIntoHeap) can share
+// the pre-tokenization and so tests can force this path regardless of length.
+func (t *BPETokenizer) bpeIntoQuad(mapped string, out []int, parts []ggufPart) []int {
 	// Seed every adjacent-pair rank once, tracking the leftmost lowest. A strict <
 	// (first wins on ties) with minRank = MaxInt reproduces the old ascending scan
 	// exactly: an unmergeable pair (rank MaxInt) is never selected.
@@ -191,7 +204,102 @@ func (t *BPETokenizer) bpeInto(mapped string, out []int, parts []ggufPart) ([]in
 			out = append(out, t.unkID)
 		}
 	}
-	return out, parts
+	return out
+}
+
+// bpeIntoHeap is the O(n log n) merge for long pieces (mirrors Tokenizer.bpeMergeHeapInto): a min-heap
+// of pair ranks over a doubly-linked list of rune-tokens, each merge O(log n). parts holds the immutable
+// per-rune byte offsets (+ sentinel), so a merge is just splicing a node out of next[] — the surviving
+// node's span [parts[i].start, parts[next[i]].start) automatically covers the absorbed tokens, and the
+// id is resolved by the vocab lookup at emit. Same leftmost-lowest-rank selection ⇒ identical token ids
+// (TestBPEGGUFHeapMatchesQuad). Wins on the long digit/symbol/whitespace pieces the pre-tokenizer emits.
+func (t *BPETokenizer) bpeIntoHeap(mapped string, out []int, parts []ggufPart) []int {
+	m := len(parts) - 1 // rune-token count; parts[m] is the {len(mapped)} sentinel
+	prev := make([]int, m+1)
+	next := make([]int, m+1)
+	ver := make([]int, m)
+	for i := 0; i <= m; i++ {
+		prev[i], next[i] = i-1, i+1
+	}
+	pairRank := func(i int) int {
+		j := next[i]
+		if j >= m {
+			return math.MaxInt
+		}
+		k := next[j] // k may be m (sentinel) → parts[k].start = len(mapped)
+		if rk, ok := t.mergeRank[[2]string{mapped[parts[i].start:parts[j].start], mapped[parts[j].start:parts[k].start]}]; ok {
+			return rk
+		}
+		return math.MaxInt
+	}
+	h := make([]bpeHeapItem, 0, m)
+	push := func(it bpeHeapItem) {
+		h = append(h, it)
+		for c := len(h) - 1; c > 0; {
+			p := (c - 1) / 2
+			if h[p].rank < h[c].rank || (h[p].rank == h[c].rank && h[p].pos <= h[c].pos) {
+				break
+			}
+			h[p], h[c] = h[c], h[p]
+			c = p
+		}
+	}
+	pop := func() bpeHeapItem {
+		top := h[0]
+		h[0] = h[len(h)-1]
+		h = h[:len(h)-1]
+		for c := 0; ; {
+			l, r, sm := 2*c+1, 2*c+2, c
+			if l < len(h) && (h[l].rank < h[sm].rank || (h[l].rank == h[sm].rank && h[l].pos < h[sm].pos)) {
+				sm = l
+			}
+			if r < len(h) && (h[r].rank < h[sm].rank || (h[r].rank == h[sm].rank && h[r].pos < h[sm].pos)) {
+				sm = r
+			}
+			if sm == c {
+				break
+			}
+			h[c], h[sm] = h[sm], h[c]
+			c = sm
+		}
+		return top
+	}
+	for i := 0; i < m-1; i++ {
+		if r := pairRank(i); r != math.MaxInt {
+			push(bpeHeapItem{r, i, 0})
+		}
+	}
+	for len(h) > 0 {
+		p := pop()
+		if ver[p.pos] != p.ver {
+			continue
+		}
+		i, j := p.pos, next[p.pos]
+		if j >= m {
+			continue
+		}
+		nj := next[j]
+		next[i], prev[nj] = nj, i
+		ver[i]++
+		ver[j] = -1
+		if pi := prev[i]; pi >= 0 {
+			ver[pi]++
+			if r := pairRank(pi); r != math.MaxInt {
+				push(bpeHeapItem{r, pi, ver[pi]})
+			}
+		}
+		if r := pairRank(i); r != math.MaxInt {
+			push(bpeHeapItem{r, i, ver[i]})
+		}
+	}
+	for i := 0; i != m; i = next[i] {
+		if id, ok := t.vocab[mapped[parts[i].start:parts[next[i]].start]]; ok {
+			out = append(out, id)
+		} else if t.hasUnk {
+			out = append(out, t.unkID)
+		}
+	}
+	return out
 }
 
 // Encode turns text into token ids: GPT-2 pre-tokenization → byte→Unicode mapping →
