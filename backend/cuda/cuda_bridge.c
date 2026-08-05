@@ -3548,7 +3548,12 @@ int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
     // base kernel. Needs N%32==0 and 32*(sbs*144+4) ≤ device opt-in shared (else fall back to base).
     {
         int sbs = K >> 8;
-        long shBytes = (long)32 * ((long)sbs * 144 + 4);
+        int cstrideW = sbs * 36 + 1;                  // +1 word pad → odd stride → bank-conflict-free phase-2 reads
+        long shBytes = (long)32 * cstrideW * 4;
+        if (shBytes > (long)gMaxSmem) {               // padded tile exceeds opt-in shared (large K): drop the pad,
+            cstrideW = sbs * 36;                      // exact-fit 32*sbs*144 (8-way bank conflict, still beats the base kernel)
+            shBytes = (long)32 * sbs * 144;
+        }
         if ((N % 32) == 0 && shBytes <= (long)gMaxSmem) {
             if (!gDequantQ4KF16T && compile_kernel(
                 "__device__ __forceinline__ float f16f(unsigned short h){\n"
@@ -3561,10 +3566,9 @@ int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
                 "  else { *sc=(float)((q[j+4]&0xF)|((q[j-4]>>6)<<4)); *mn=(float)((q[j+4]>>4)|((q[j]>>6)<<4)); }\n"
                 "}\n"
                 "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
-                "extern \"C\" __global__ void dequant_q4k_f16_t(const unsigned char* q, unsigned short* B, int K, int N){\n"
+                "extern \"C\" __global__ void dequant_q4k_f16_t(const unsigned char* q, unsigned short* B, int K, int N, int cstrideW){\n"
                 "  extern __shared__ unsigned char sh[];\n"
-                "  int sbs = K >> 8;\n"
-                "  int cstrideW = sbs*36 + 1;\n"            // padded per-column words (144/4=36 + 1 pad → odd → bank-conflict-free)
+                "  int sbs = K >> 8;\n"                     // cstrideW = padded per-column words (36/col + optional +1 pad → odd → bank-conflict-free)
                 "  int n0 = blockIdx.x * 32;\n"
                 "  const unsigned* qbase = (const unsigned*)(q + (size_t)n0 * sbs * 144);\n"
                 "  int colW = sbs*36;\n"
@@ -3604,7 +3608,7 @@ int cu_dequant_q4k_to_f16(const void* dQ, void* dBf16, int K, int N) {
                 "dequant_q4k_f16_t.cu", "dequant_q4k_f16_t", &gDequantQ4KF16T) != 0) { rc = -2; goto donedq; }
             cuFuncSetAttribute(gDequantQ4KF16T, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, (int)shBytes);
             int threads = 512, bx = N / 32;
-            void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
+            void* args[5] = { (void*)&dQ, &dBf16, &K, &N, &cstrideW };
             rc = (cuLaunchKernel(gDequantQ4KF16T, bx, 1, 1, threads, 1, 1, (unsigned)shBytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
         } else {
             int threads = 256, bx = (N + threads - 1) / threads; if (bx < 1) bx = 1;
