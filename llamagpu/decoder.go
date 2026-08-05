@@ -1183,6 +1183,20 @@ func (d *Decoder) mkFused2(mk func([]float32) *bufSlot, ops backendOps, errp *er
 	}
 }
 
+// gateUpBuilder returns a helper that, per block, either column-fuses ffn_gate|ffn_up into one wGU
+// weight (when ops.fusedGateUp — the CUDA SwiGLU/GeGLU path) or builds the separate wG/wU pair. Lets
+// every SwiGLU/GeGLU builder opt into the fused FFN with one line, keeping non-CUDA backends identical.
+func (d *Decoder) gateUpBuilder(mk func([]float32) *bufSlot, ops backendOps, errp *error) func(wg, wu *tensor.Tensor) (gu, g, u linear) {
+	lin := d.mkLin(mk, ops, errp)
+	fuseGU := d.mkFused2(mk, ops, errp)
+	return func(wg, wu *tensor.Tensor) (gu, g, u linear) {
+		if ops.fusedGateUp {
+			return fuseGU(wg, wu), nil, nil
+		}
+		return nil, lin(wg), lin(wu)
+	}
+}
+
 // newDecoder uploads m's f32 weights via ops into device buffers and prepares a KV cache up to Ctx.
 func newDecoder(m *nlp.Llama, ops backendOps) (*Decoder, error) {
 	cfg := m.Config
@@ -1383,13 +1397,15 @@ func newStableLMDecoder(m *nlp.StableLM, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	//perfscan:ignore PS3032 newStableLMDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
+		wgu, wg, wu := gateUp(b.FFN.Wgate, b.FFN.Wup)
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
 			gFFN: mk(flat1D(b.PostAttnNorm.Gamma)).b, bFFN: mk(flat1D(b.PostAttnNorm.Beta)).b,
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			wGU: wgu, wG: wg, wU: wu, wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
@@ -1436,6 +1452,7 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	logitScale := float32(1)
 	if cfg.LogitScale != 0 && cfg.LogitScale != 1 {
 		logitScale = float32(cfg.LogitScale)
@@ -1443,11 +1460,12 @@ func newCohereDecoder(m *nlp.Cohere, ops backendOps) (*Decoder, error) {
 	linS := d.mkLinS(mk, ops, &err)
 	//perfscan:ignore PS3032 newCohereDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
+		wgu, wg, wu := gateUp(b.FFN.Wgate, b.FFN.Wup)
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.InputNorm.Gamma)).b, bAttn: mk(flat1D(b.InputNorm.Beta)).b,
 			// gFFN/bFFN unused: parallel one-norm reuses the attn norm (d.xn) for the FFN.
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			wGU: wgu, wG: wg, wU: wu, wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
@@ -2208,14 +2226,16 @@ func newOLMo2Decoder(m *nlp.OLMo2, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	//perfscan:ignore PS3032 newOLMo2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
+		wgu, wg, wu := gateUp(b.FFN.Wgate, b.FFN.Wup)
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			// post-norm: gAttn = post_attention_layernorm (on the attn output), gFFN = post_feedforward_layernorm.
 			gAttn: mk(flat1D(b.PostAttnNorm.Gamma)).b, gFFN: mk(flat1D(b.PostFFNNorm.Gamma)).b,
 			qN: mk(flat1D(b.QNorm.Gamma)).b, kN: mk(flat1D(b.KNorm.Gamma)).b, // full-width [qDim]/[kvDim]
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			wGU: wgu, wG: wg, wU: wu, wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)
