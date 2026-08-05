@@ -4430,18 +4430,33 @@ int cu_dequant_q6k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "    float d = f16f((unsigned short)(blk[208] | (blk[209]<<8)));\n"
         "    const signed char* scb = (const signed char*)(blk + 192);\n"
         "    size_t kb = (size_t)w*256;\n"
-        "    #pragma unroll 4\n"
-        "    for (int e = 0; e < 256; e++){\n"
-        "      int g = e >> 7, eg = e & 127, quad = eg >> 5, l = eg & 31;\n"
+        // Read-once (g,l)-major: the old e-major loop re-read each ql byte twice (its two nibbles feed
+        // quads {0,2}/{1,3}) and each qh byte FOUR times (its four 2-bit fields feed quads 0..3) — 512
+        // scattered 1-byte loads per super-block. Here each (g,l) loads ql[l], ql[l+32], qh[l] ONCE
+        // and decodes all four quads, cutting the scattered reads ~2.7x (192/super-block). One-thread-
+        // per-column blocks are 210 B (2-aligned only, so no uint32 pack like Q4_K's 144 B). Bit-
+        // identical: same (element,value) pairs — element g*128+quad*32+l, quads 0,2 use ql[l] low/high
+        // nibble, quads 1,3 use ql[l+32], hi2=(qh[l]>>2quad)&3, scale sc[(l>>4)+2quad].
+        "    #pragma unroll\n"
+        "    for (int g = 0; g < 2; g++){\n"
         "      const unsigned char* ql = blk + g*64;\n"
         "      const unsigned char* qh = blk + 128 + g*32;\n"
         "      const signed char* sc = scb + g*8;\n"
-        "      int qlByte = ql[l + (quad & 1)*32];\n"
-        "      int nib = (quad >= 2) ? (qlByte >> 4) : (qlByte & 0xF);\n"
-        "      int hi2 = (qh[l] >> (2*quad)) & 3;\n"
-        "      int q6 = nib | (hi2 << 4);\n"
-        "      float s = d * (float)sc[(l >> 4) + 2*quad];\n"
-        "      B[(kb + e)*N + n] = f2h(s * (float)(q6 - 32));\n"
+        "      #pragma unroll 8\n"
+        "      for (int l = 0; l < 32; l++){\n"
+        "        int qlb0 = ql[l], qlb1 = ql[l + 32], hb = qh[l], scoff = l >> 4;\n"
+        "        int q0 = (qlb0 & 0xF) | (((hb >> 0) & 3) << 4);\n"
+        "        int q1 = (qlb1 & 0xF) | (((hb >> 2) & 3) << 4);\n"
+        "        int q2 = (qlb0 >> 4)  | (((hb >> 4) & 3) << 4);\n"
+        "        int q3 = (qlb1 >> 4)  | (((hb >> 6) & 3) << 4);\n"
+        "        float s0 = d*(float)sc[scoff+0], s1 = d*(float)sc[scoff+2];\n"
+        "        float s2 = d*(float)sc[scoff+4], s3 = d*(float)sc[scoff+6];\n"
+        "        size_t e = kb + (size_t)g*128 + l;\n"
+        "        B[e*N + n]        = f2h(s0*(float)(q0-32));\n"
+        "        B[(e+32)*N + n]   = f2h(s1*(float)(q1-32));\n"
+        "        B[(e+64)*N + n]   = f2h(s2*(float)(q2-32));\n"
+        "        B[(e+96)*N + n]   = f2h(s3*(float)(q3-32));\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "}\n",
