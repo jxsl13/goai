@@ -63,11 +63,12 @@ func (d *DeviceF32) RoPEDpos(attrs backend.RoPEAttrs, pos *DevicePos) error {
 	for i := range inv {
 		inv[i] = float32(1.0 / math.Pow(base, float64(2*i)/float64(hd)))
 	}
-	invPtr := C.cu_upload_f32((*C.float)(&inv[0]), C.int(len(inv)))
-	if invPtr == nil {
-		return fmt.Errorf("cuda: RoPEDpos inv upload failed")
+	// Cache the invariant inv-freq table (content-keyed) instead of a cudaMalloc+H2D+cudaFree
+	// per eager call — the partial-RoPE win (#997), flagged here by perfscan PS7004.
+	invPtr, err := ropeInvCached(inv)
+	if err != nil {
+		return err
 	}
-	defer C.cu_free_f32(invPtr)
 	posDiv := attrs.PosScale
 	if posDiv == 0 {
 		posDiv = 1

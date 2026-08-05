@@ -338,6 +338,12 @@ var checks = []check{
 	{"PS5006", "nested-subrange-rescan", "an innermost loop recomputing a running reduction (acc *= / += arr[k]) over a [j..i] sub-range whose bounds are the two enclosing loop vars — an O(T\u00b3) triangular rescan replaceable by a prefix/suffix scan precomputed once per outer index (O(T\u00b2))", false},
 	{"PS5007", "f32-abs-via-f64", "a float32(math.Abs(float64(x))) round-trip on an f32 value — replace with a direct sign-bit clear math.Float32frombits(math.Float32bits(x) &^ (1<<31)); bit-identical |x|, no f64 conversion or call", false},
 	{"PS5008", "sincos-fusable", "a function calling BOTH math.Sin(x) and math.Cos(x) on the SAME argument expression — each does the full argument reduction of x independently; fuse to `sin, cos := math.Sincos(x)` (one reduction, both polynomials). Go's math.Sincos shares Sin/Cos's exact reduction+polynomials so it is bit-identical. Wins ONLY where trig DOMINATES the kernel (pure positional encoding, e.g. nn/sinusoidal.go +33% #587) — NOT where the trig is an amortized seq·half PRECOMPUTE feeding a larger matmul/attention: fusing MLA/self-extend RoPE (11 sites) was bit-exact but measured flat/within-noise because the seq²·heads score+value-mix dwarfs the trig (R-01KYRJ6RW1FJ0). Bench the ENCLOSING op, skip if trig <~10% of its work", false},
+
+	// PS7xxx — cgo / foreign-call boundary overhead. GoAI's decode is CUDA-graph-amortized so the
+	// ~40ns cgo crossing itself is <0.1% of a real path (see cgo-overhead research 2026-08-06); the
+	// value here is the µs-scale STAGING/dispatch waste that hides behind the boundary, and guarding
+	// against per-call crossings creeping into new hot loops. All operate on files with `import "C"`.
+	{"PS7004", "per-dispatch-invariant-upload", "a value uploaded to the device via C.cu_upload_* whose handle is released via `defer C.cu_free_*` in the SAME function body — a cudaMalloc + H2D copy + cudaFree paid on EVERY dispatch. When the uploaded bytes derive only from op attrs/dims (a frequency/mask/bias/scale table), not tensor values, they are INVARIANT across calls and should be uploaded once into a resident buffer keyed by those attrs. Shipped: partial-RoPE inv-freq table #997 (+8.1%, RoPEPartial/Dpos/Band routed through the content-keyed ropeInvCached the full-RoPE path already used). CANDIDATE — AST cannot prove the source is input-invariant, so the fix applies only where the uploaded data does not change with the tensor input; a genuinely per-call-varying stage (uploading the activation itself) is the intended shape and stays.", false},
 }
 
 // catToID indexes the registry for O(1) id lookup at report time.
@@ -2523,6 +2529,7 @@ func scanFunc(fset *token.FileSet, fn *ast.FuncDecl, wrappers, intKeyMaps map[st
 	out = append(out, partialFastPathFindings(fset, fn)...)
 	out = append(out, outputInvariantReloadFindings(fset, fn)...)
 	out = append(out, receiverScratchFindings(fset, fn)...)
+	out = append(out, cgoInvariantUploadFindings(fset, fn)...)
 	out = append(out, searchFeedsReductionFindings(fset, fn)...)
 	out = append(out, allocInParallelBodyFindings(fset, fn)...)
 	out = append(out, unconvertedDtypeArmFindings(fset, fn, ns)...)
@@ -7526,6 +7533,198 @@ func storedToIndexOf(body *ast.BlockStmt, acc, outVar string) bool {
 //
 // The fix is always the same: make it a parameter. Then the requirement lives in the
 // signature instead of a comment, and the next caller cannot miss it.
+// isCSelCall reports whether call is C.<fn>(...) with <fn>'s name containing sub (lowercased) —
+// the cgo boundary marker (only files with `import "C"` produce a C.<fn> selector).
+func isCSelCall(call *ast.CallExpr, sub string) bool {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	if id, ok := sel.X.(*ast.Ident); !ok || id.Name != "C" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(sel.Sel.Name), sub)
+}
+
+// tensorAccessors names the tensor-storage accessor methods whose result is per-call-varying
+// DATA (not an attrs-derived table) — an upload of one is legitimate, so PS7004 stays silent.
+var tensorAccessors = map[string]bool{
+	"Storage": true, "F32": true, "F64": true, "F16": true, "Data": true,
+	"Bytes": true, "Raw": true, "Ints": true, "I8": true, "I32": true,
+}
+
+// mentionsTensorAccessor reports whether e contains a selector call to a tensor-storage
+// accessor (e.g. xc.Storage().F32()) — the marker that a slice holds tensor data.
+func mentionsTensorAccessor(e ast.Expr) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if sel, ok := n.(*ast.SelectorExpr); ok && tensorAccessors[sel.Sel.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// mentionsTaintedIdent reports whether e references any ident currently in tainted.
+func mentionsTaintedIdent(e ast.Expr, tainted map[string]bool) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && tainted[id.Name] {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// uploadedSliceIdent digs through the upload's first arg — (*C.float)(&s[0]),
+// unsafe.Pointer(&s[0]), &s[0], s — to the base slice ident s.
+func uploadedSliceIdent(e ast.Expr) string {
+	switch x := ast.Unparen(e).(type) {
+	case *ast.CallExpr: // a conversion wrapper: (*C.float)(...) / unsafe.Pointer(...)
+		if len(x.Args) == 1 {
+			return uploadedSliceIdent(x.Args[0])
+		}
+	case *ast.UnaryExpr:
+		if x.Op == token.AND {
+			return uploadedSliceIdent(x.X)
+		}
+	case *ast.IndexExpr:
+		return identName(x.X)
+	case *ast.SliceExpr:
+		return identName(x.X)
+	case *ast.Ident:
+		return x.Name
+	}
+	return ""
+}
+
+// cgoInvariantUploadFindings (PS7004) flags the per-dispatch cgo staging pattern: a device
+// upload (C.cu_upload_*) whose handle is released via `defer C.cu_free_*` in the SAME function
+// body — a cudaMalloc + H2D copy + cudaFree paid on every call. When the uploaded bytes derive
+// only from op attrs/dims (a frequency/mask/bias/scale table), not tensor values, they are
+// invariant across dispatches and belong in a resident buffer keyed by those attrs (the
+// partial-RoPE inv-freq cache, #997, +8.1%). CANDIDATE: the AST cannot prove input-invariance,
+// so a stage that genuinely uploads per-call-varying data (the activation itself) is the
+// intended shape and should stay.
+func cgoInvariantUploadFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
+	if fn.Body == nil {
+		return nil
+	}
+	// Handles released via `defer C.<free>(handle)` in this body.
+	freed := map[string]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		d, ok := n.(*ast.DeferStmt)
+		if !ok {
+			return true
+		}
+		if isCSelCall(d.Call, "free") && len(d.Call.Args) >= 1 {
+			if nm := identName(d.Call.Args[0]); nm != "" && nm != "_" {
+				freed[nm] = true
+			}
+		}
+		return true
+	})
+	if len(freed) == 0 {
+		return nil
+	}
+	// "tainted" idents hold TENSOR DATA — a function parameter, or a local assigned from a
+	// tensor-storage accessor (.Storage()/.F32()/.Data()/…). Uploading those per call is
+	// CORRECT (the bytes vary with the input), so PS7004 must stay silent on them; only an
+	// upload of a make()/helper-built attrs table is the invariant-staging smell.
+	tainted := map[string]bool{}
+	if fn.Type != nil && fn.Type.Params != nil {
+		for _, p := range fn.Type.Params.List {
+			// Only SLICE params carry per-call bulk data. Scalar/struct params (rotaryDim int,
+			// attrs RoPEAttrs) are invariant CONFIG — the very thing an invariant table is keyed
+			// on — so tainting them would suppress the real finding.
+			if at, ok := p.Type.(*ast.ArrayType); !ok || at.Len != nil {
+				continue
+			}
+			for _, nm := range p.Names {
+				tainted[nm.Name] = true
+			}
+		}
+	}
+	// Pre-order walk taints anything holding per-call DATA: locals from tensor accessors, range
+	// variables over tainted collections, copy() / indexed-fill destinations pulling tainted data.
+	// A range header is visited before its body, so single-pass propagation suffices for the
+	// `for _, s := range seqs { sl[i] = s.n }` shape.
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.RangeStmt:
+			if b := uploadedSliceIdent(x.X); b != "" && tainted[b] {
+				if k := identName(x.Key); k != "" && k != "_" {
+					tainted[k] = true
+				}
+				if v := identName(x.Value); v != "" && v != "_" {
+					tainted[v] = true
+				}
+			}
+		case *ast.AssignStmt:
+			if len(x.Lhs) != len(x.Rhs) {
+				return true
+			}
+			for i, rhs := range x.Rhs {
+				if !mentionsTensorAccessor(rhs) && !mentionsTaintedIdent(rhs, tainted) {
+					continue
+				}
+				// Direct local (nm := dataExpr) OR an indexed fill (buf[i] = dataExpr) both
+				// mean the LHS buffer holds per-call data.
+				if nm := uploadedSliceIdent(x.Lhs[i]); nm != "" && nm != "_" {
+					tainted[nm] = true
+				}
+			}
+		case *ast.CallExpr:
+			// copy(dst, src) fills dst from elsewhere — not a pure attrs/scalar table.
+			if id, ok := x.Fun.(*ast.Ident); ok && id.Name == "copy" && len(x.Args) >= 1 {
+				if base := uploadedSliceIdent(x.Args[0]); base != "" {
+					tainted[base] = true
+				}
+			}
+		}
+		return true
+	})
+	var out []finding
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		as, ok := n.(*ast.AssignStmt)
+		if !ok || len(as.Lhs) != 1 || len(as.Rhs) != 1 {
+			return true
+		}
+		call, ok := ast.Unparen(as.Rhs[0]).(*ast.CallExpr)
+		if !ok || !isCSelCall(call, "upload") || len(call.Args) == 0 {
+			return true
+		}
+		lhs := identName(as.Lhs[0])
+		if lhs == "" || !freed[lhs] {
+			return true
+		}
+		// The uploaded slice must NOT be tensor data (else per-call variance is correct).
+		if src := uploadedSliceIdent(call.Args[0]); src == "" || tainted[src] {
+			return true
+		}
+		fnName := "C.?"
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok {
+			fnName = "C." + sel.Sel.Name
+		}
+		out = append(out, finding{
+			pos:      fset.Position(call.Pos()),
+			end:      fset.Position(call.End()),
+			category: "per-dispatch-invariant-upload",
+			msg: "a device upload (" + fnName + ") whose handle is freed via defer in the same call re-stages" +
+				" data to the GPU on every dispatch (cudaMalloc + H2D + cudaFree). If the source derives only from" +
+				" op attrs/dims (a freq/mask/bias/scale table), not tensor values, upload it ONCE into a resident" +
+				" buffer keyed by those attrs — the partial-RoPE inv-freq cache (#997) did exactly this for +8.1%." +
+				" Leave it if the staged bytes genuinely change with the tensor input every call.",
+		})
+		return true
+	})
+	return out
+}
+
 func receiverScratchFindings(fset *token.FileSet, fn *ast.FuncDecl) []finding {
 	if fn.Body == nil || fn.Recv == nil || len(fn.Recv.List) == 0 {
 		return nil
