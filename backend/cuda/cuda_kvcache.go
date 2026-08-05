@@ -144,6 +144,22 @@ func (c *KVCacheF16) AppendDpos(k, v *DeviceF32, pos *DevicePos) error {
 	return nil
 }
 
+// PrefillKV converts m already-RoPE'd f32 K/V rows ([m,wkv]) to f16 at rows 0..m-1 — the batched f16
+// prefill (f16 twin of KVCacheI8.PrefillKV); same round-to-nearest f16 conversion as AppendDpos.
+func (c *KVCacheF16) PrefillKV(k, v *DeviceF32, m int) error {
+	if k.cols != c.wkv || v.cols != c.wkv || k.rows != m || v.rows != m {
+		return fmt.Errorf("cuda: KVCacheF16 PrefillKV needs [%d,%d] k/v, got k%v v%v", m, c.wkv, k.shape(), v.shape())
+	}
+	n := C.long(m * c.wkv)
+	if rc := C.cu_cvt_f32_to_f16(c.dK, k.ptr, n); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 PrefillKV K failed (code %d)", int(rc))
+	}
+	if rc := C.cu_cvt_f32_to_f16(c.dV, v.ptr, n); rc != 0 {
+		return fmt.Errorf("cuda: KVCacheF16 PrefillKV V failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // ZeroCache zeros both buffers (f16 zero == all-zero bytes).
 func (c *KVCacheF16) ZeroCache() error {
 	if rc := C.cu_zero_u16(c.dK, C.int(c.maxSeq*c.wkv)); rc != 0 {

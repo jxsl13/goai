@@ -41,6 +41,7 @@ type GraphLlamaDecoder struct {
 
 	heads, kv, hd, dim, hidden, vocab, maxLen int
 	eps                                       float64
+	useF16KV                                  bool // opt-in: store the decode KV cache in f16 (llama.cpp default) — half the KV bytes
 }
 
 type graphLlamaLayer struct {
@@ -48,12 +49,26 @@ type graphLlamaLayer struct {
 	wqkv, wo    *cuda.ResidentBQ4K // wqkv = col-fused attn_q|attn_k|attn_v (one N=(heads+2·kv)·hd GEMV → RoPE/append over slices)
 	wgu, wd     *cuda.ResidentBQ4K // wgu = col-fused ffn_gate|ffn_up (one N=2·hidden GEMV → SwiGLU over halves)
 	cache       *cuda.KVCache
+	cacheF16    *cuda.KVCacheF16 // set instead of cache when useF16KV (f16 storage, flash-only attend)
 }
 
 // NewLlamaQ4KGraphCUDA builds a graph-captured Q4_K decode path for a Llama model. Every projection
 // K must be a multiple of 256 (Q4_K super-block); typical transformer dims satisfy it. maxLen caps
 // prompt+generation. GQA (KVHeads<Heads) is supported.
 func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) {
+	return newLlamaQ4KGraph(m, maxLen, false)
+}
+
+// NewLlamaQ4KGraphCUDAF16 is NewLlamaQ4KGraphCUDA with the decode KV cache stored in f16 (llama.cpp's
+// default) — half the K/V VRAM (⇒ ~2× the max context/batch that fits) and the flash decode kernel
+// reads half the bytes (bandwidth-bound at long context). Compute stays f32 (tiles h2f in shared);
+// only KV STORAGE rounds to f16 (~2^-11 rel), the incumbent tolerance. Best for long-context / large
+// models; short-context decode is weight-bandwidth-bound so it's ~neutral there.
+func NewLlamaQ4KGraphCUDAF16(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) {
+	return newLlamaQ4KGraph(m, maxLen, true)
+}
+
+func newLlamaQ4KGraph(m *nlp.Llama, maxLen int, useF16KV bool) (*GraphLlamaDecoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
@@ -82,7 +97,8 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 	gd := &GraphLlamaDecoder{
 		heads: cfg.Heads, kv: kv, hd: hd, dim: cfg.Dim, hidden: cfg.Hidden,
 		vocab: cfg.Vocab, maxLen: maxLen, eps: cfg.Eps,
-		scale: float32(1.0 / math.Sqrt(float64(hd))),
+		scale:    float32(1.0 / math.Sqrt(float64(hd))),
+		useF16KV: useF16KV,
 	}
 	// A failure part-way must not leak the device buffers already allocated.
 	ok := false
@@ -150,13 +166,22 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 		if l.gFFN, err = cuda.NewResidentVec(cast(blk.FFNNorm.Gamma)); err != nil {
 			return nil, err
 		}
-		if l.cache, err = cuda.NewKVCache(maxLen, wkv); err != nil {
-			return nil, err
+		if useF16KV {
+			if l.cacheF16, err = cuda.NewKVCacheF16(maxLen, wkv); err != nil {
+				return nil, err
+			}
+			if err = l.cacheF16.ZeroCache(); err != nil { // ZeroCache (unlike int8's omission) — clean pool state
+				return nil, err
+			}
+		} else {
+			if l.cache, err = cuda.NewKVCache(maxLen, wkv); err != nil {
+				return nil, err
+			}
+			if err = l.cache.ZeroCache(); err != nil {
+				return nil, err
+			}
+			l.cache.SetLen(maxLen)
 		}
-		if err = l.cache.ZeroCache(); err != nil {
-			return nil, err
-		}
-		l.cache.SetLen(maxLen)
 		for _, wp := range []struct {
 			dst **cuda.ResidentBQ4K
 			w   *tensor.Tensor
@@ -191,9 +216,15 @@ func NewLlamaQ4KGraphCUDA(m *nlp.Llama, maxLen int) (*GraphLlamaDecoder, error) 
 	if err = gd.forwardBody(); err != nil {
 		return nil, err
 	}
-	for _, l := range gd.layers {
-		if err = l.cache.ZeroCache(); err != nil {
-			return nil, err
+	for _, l := range gd.layers { // the warmup wrote garbage into the cache — re-zero before real use
+		var ze error
+		if gd.useF16KV {
+			ze = l.cacheF16.ZeroCache()
+		} else {
+			ze = l.cache.ZeroCache()
+		}
+		if ze != nil {
+			return nil, ze
 		}
 	}
 	ok = true
@@ -215,12 +246,21 @@ func (gd *GraphLlamaDecoder) forwardBody() error {
 		if err := gd.dk.RoPEDposInv(gd.kv, gd.inv, gd.pos, 0); err != nil {
 			return err
 		}
-		if err := l.cache.AppendDpos(gd.dk, gd.dv, gd.pos); err != nil {
-			return err
-		}
-		kF, vF := l.cache.FullView()
-		if err := cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da); err != nil {
-			return err
+		if gd.useF16KV {
+			if err := l.cacheF16.AppendDpos(gd.dk, gd.dv, gd.pos); err != nil {
+				return err
+			}
+			if err := cuda.GroupedQueryAttentionKVF16DposFlashInto(gd.dq, l.cacheF16, gd.heads, gd.kv, gd.pos, gd.da); err != nil {
+				return err
+			}
+		} else {
+			if err := l.cache.AppendDpos(gd.dk, gd.dv, gd.pos); err != nil {
+				return err
+			}
+			kF, vF := l.cache.FullView()
+			if err := cuda.GroupedQueryAttentionKVDposFlashInto(gd.dq, kF, vF, gd.heads, gd.kv, gd.pos, gd.da); err != nil {
+				return err
+			}
 		}
 		if err := l.wo.QMatMulAccInto(gd.da, gd.dx); err != nil {
 			return err
@@ -336,11 +376,17 @@ func (gd *GraphLlamaDecoder) prefillForward(tokens []int) ([]float32, error) {
 			return nil, err
 		}
 		// populate the decode KV cache with the prompt's RoPE'd K and un-rotated V (rows 0..M-1).
-		if err = gd.rec.Blit(dkM, 0, l.cache.K(), 0, m*wkv); err != nil {
-			return nil, err
-		}
-		if err = gd.rec.Blit(dvM, 0, l.cache.V(), 0, m*wkv); err != nil {
-			return nil, err
+		if gd.useF16KV {
+			if err = l.cacheF16.PrefillKV(dkM, dvM, m); err != nil { // convert the m prompt K/V rows to f16
+				return nil, err
+			}
+		} else {
+			if err = gd.rec.Blit(dkM, 0, l.cache.K(), 0, m*wkv); err != nil {
+				return nil, err
+			}
+			if err = gd.rec.Blit(dvM, 0, l.cache.V(), 0, m*wkv); err != nil {
+				return nil, err
+			}
 		}
 		if err = dxM.RMSNormInto(l.gFFN, float32(gd.eps), dh2M); err != nil {
 			return nil, err
@@ -608,6 +654,9 @@ func (gd *GraphLlamaDecoder) Release() {
 		}
 		if l.cache != nil {
 			l.cache.Free()
+		}
+		if l.cacheF16 != nil {
+			l.cacheF16.Free()
 		}
 		for _, w := range []*cuda.ResidentBQ4K{l.wqkv, l.wo, l.wgu, l.wd} {
 			if w != nil {
