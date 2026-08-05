@@ -98,3 +98,24 @@ func benchMamba2Prefill(b *testing.B, seq int) {
 
 func BenchmarkMamba2Prefill_256(b *testing.B) { benchMamba2Prefill(b, 256) }
 func BenchmarkMamba2Prefill_512(b *testing.B) { benchMamba2Prefill(b, 512) }
+
+// benchMamba2PrefillReal uses realistic Mamba-2 dims (heads=48, headDim=64, N=128, groups=8) where the
+// per-head SSD scan is a dominant fraction of prefill — the regime the small default bench understates.
+func benchMamba2PrefillReal(b *testing.B, seq int) {
+	m := benchMamba2Model(3072, 48, 64, 8, 128, 4, 2, 256)
+	tokens := make([]int, seq)
+	for i := range tokens {
+		tokens[i] = (i * 7) % 256
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		ctx := backend.NewContext()
+		st := m.NewDecodeState()
+		if _, err := m.Prefill(ctx, st, tokens); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMamba2PrefillReal_512(b *testing.B) { benchMamba2PrefillReal(b, 512) }

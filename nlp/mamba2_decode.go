@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
 )
@@ -316,51 +317,57 @@ func mixer2Prefill(mx *Mamba2Mixer, ls *Mamba2LayerState, u *tensor.Tensor) (*te
 		//perfscan:ignore PS2008,PS3064 resource-only per-row alloc, no wall-clock | resource-only alloc-in-loop
 		y[t] = make([]float64, mx.Intermediate)
 	}
-	for h := range mx.NumHeads {
-		g := h / headsPerGroup
-		Dh := dSkip[h]
-		hOff := h * mx.HeadDim
-		bOff := mx.Intermediate + g*mx.N      // B lives at [intermediate : intermediate+gN] of xc
-		cOff := mx.Intermediate + gN + g*mx.N // C lives after B
-		hst := ls.H[h*mx.N*mx.HeadDim:]       // this head's [N, head_dim] state
+	// Heads are independent (each head's SSD state ls.H and output columns y[t][hOff:] are
+	// disjoint, no cross-head reduction), so fan the scan across cores — bit-identical to the
+	// serial head-outer form. This is the model's whole token mixer and was single-threaded even
+	// under the CUDA backend (the SSD device kernels are one-timestep decode-only).
+	parallel.Rows(mx.NumHeads, func(loH, hiH int) {
+		for h := loH; h < hiH; h++ {
+			g := h / headsPerGroup
+			Dh := dSkip[h]
+			hOff := h * mx.HeadDim
+			bOff := mx.Intermediate + g*mx.N      // B lives at [intermediate : intermediate+gN] of xc
+			cOff := mx.Intermediate + gN + g*mx.N // C lives after B
+			hst := ls.H[h*mx.N*mx.HeadDim:]       // this head's [N, head_dim] state
 
-		//perfscan:ignore PS3035 xd scratch already reused across t (documented)
-		xd := make([]float64, mx.HeadDim) // x_t·delta, reused across t
-		for t := range seq {
-			//perfscan:ignore PS3016 already-optimized scan t-loop; exp per-head scalar
-			delta := softplus(dt[t][h] + dtBias[h])
-			at := math.Exp(delta * ls.a[h])
-			// xt/yt: the row pointers were re-resolved on every element (PS4006).
-			// xd[j]: xc[t][hOff+j]*delta does not depend on i, yet the old form
-			// recomputed it once per (i,j) — N times per j. Computing it once keeps the
-			// SAME product and the same rounding, so bi*xd[j] is bit-identical to
-			// bi*(xc[t][hOff+j]*delta).
-			xt, yt := xc[t], y[t]
-			xrow := xt[hOff : hOff+mx.HeadDim]
-			for j := range xd {
-				xd[j] = xrow[j] * delta
-			}
-			for i := range mx.N {
-				bi := xt[bOff+i]
-				hrow := hst[i*mx.HeadDim : i*mx.HeadDim+mx.HeadDim]
-				for j := range hrow {
-					//perfscan:ignore PS3084 contiguous state update, already optimal
-					hrow[j] = at*hrow[j] + bi*xd[j]
+			//perfscan:ignore PS3035 xd scratch already reused across t (documented)
+			xd := make([]float64, mx.HeadDim) // x_t·delta, reused across t
+			for t := range seq {
+				//perfscan:ignore PS3016 already-optimized scan t-loop; exp per-head scalar
+				delta := softplus(dt[t][h] + dtBias[h])
+				at := math.Exp(delta * ls.a[h])
+				// xt/yt: the row pointers were re-resolved on every element (PS4006).
+				// xd[j]: xc[t][hOff+j]*delta does not depend on i, yet the old form
+				// recomputed it once per (i,j) — N times per j. Computing it once keeps the
+				// SAME product and the same rounding, so bi*xd[j] is bit-identical to
+				// bi*(xc[t][hOff+j]*delta).
+				xt, yt := xc[t], y[t]
+				xrow := xt[hOff : hOff+mx.HeadDim]
+				for j := range xd {
+					xd[j] = xrow[j] * delta
 				}
-			}
-			cv := xt[cOff : cOff+mx.N] // invariant in j; was re-indexed per (j,i)
-			//perfscan:ignore PS1006,PS3067,PS4006,PS6010 false-positive: head state fits L1, no stride win | tiny N reduction; scan <1% of prefill GEMM | cv already ho
-			for j := range mx.HeadDim {
-				var s float64
-				//perfscan:ignore PS3010 tiny N reduction, cache-resident
 				for i := range mx.N {
-					//perfscan:ignore PS6011 false-positive: hst fits L1, strided access free
-					s += cv[i] * hst[i*mx.HeadDim+j]
+					bi := xt[bOff+i]
+					hrow := hst[i*mx.HeadDim : i*mx.HeadDim+mx.HeadDim]
+					for j := range hrow {
+						//perfscan:ignore PS3084 contiguous state update, already optimal
+						hrow[j] = at*hrow[j] + bi*xd[j]
+					}
 				}
-				yt[hOff+j] = s + Dh*xrow[j]
+				cv := xt[cOff : cOff+mx.N] // invariant in j; was re-indexed per (j,i)
+				//perfscan:ignore PS1006,PS3067,PS4006,PS6010 false-positive: head state fits L1, no stride win | tiny N reduction; scan <1% of prefill GEMM | cv already ho
+				for j := range mx.HeadDim {
+					var s float64
+					//perfscan:ignore PS3010 tiny N reduction, cache-resident
+					for i := range mx.N {
+						//perfscan:ignore PS6011 false-positive: hst fits L1, strided access free
+						s += cv[i] * hst[i*mx.HeadDim+j]
+					}
+					yt[hOff+j] = s + Dh*xrow[j]
+				}
 			}
 		}
-	}
+	})
 
 	// 5. Gated RMSNorm over the full intermediate width: norm(y · SiLU(z)).
 	// Same vectorized stable silu(z)=z·σ(z) as the step and full-forward gate (parity).
