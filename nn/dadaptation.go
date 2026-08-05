@@ -210,35 +210,52 @@ func (o *DAdaptAdam) Step(grad GradFn) error {
 			return fmt.Errorf("nn: DAdaptAdam grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		m, v, s := o.m[pi], o.v[pi], o.s[pi]
+		n := g.Numel()
 		// Typed fast paths (contiguous f64/f32 grads): flat loops with all arithmetic in
-		// float64 exactly as the generic path computes it. Phase 1 never touches p.
+		// float64 exactly as the generic path computes it. Phase 1 never touches p. The m/v/s
+		// writes are per-index (disjoint), so parSumF64x2 fans them across cores BIT-IDENTICALLY
+		// on DRAM-resident params while accumulating this param's numerator ⟨g,s/(√v+ε)⟩ and
+		// ‖s‖₁ partials in the same memory pass (both reassociated → tol, like Prodigy/LAMB).
 		if gf := flatF64(g); gf != nil {
-			//perfscan:ignore PS3010 numAcum reduction over streamed g/v/s, memory-bound optimizer moment
-			for i, gv := range gf {
-				numAcum += dlr * gv * s[i] / (math.Sqrt(v[i]) + o.Eps) // old s, old v
-				//perfscan:ignore PS3084 m two-product, bandwidth-bound streaming update (archsimd axpy regresses)
-				m[i] = o.Beta1*m[i] + (1-o.Beta1)*dlr*gv
-				//perfscan:ignore PS3084 v two-product, memory-bound streaming moment
-				v[i] = o.Beta2*v[i] + (1-o.Beta2)*gv*gv
-				//perfscan:ignore PS3084 s two-product, memory-bound streaming moment
-				s[i] = sqb2*s[i] + (1-sqb2)*dlr*gv
-				skl1 += math.Abs(s[i])
-			}
+			numP, sklP := parSumF64x2(n, func(lo, hi int) (float64, float64) {
+				var num, skl float64
+				//perfscan:ignore PS3010 numAcum reduction over streamed g/v/s, memory-bound optimizer moment
+				for i := lo; i < hi; i++ {
+					gv := gf[i]
+					num += dlr * gv * s[i] / (math.Sqrt(v[i]) + o.Eps) // old s, old v
+					//perfscan:ignore PS3084 m two-product, bandwidth-bound streaming update (archsimd axpy regresses)
+					m[i] = o.Beta1*m[i] + (1-o.Beta1)*dlr*gv
+					//perfscan:ignore PS3084 v two-product, memory-bound streaming moment
+					v[i] = o.Beta2*v[i] + (1-o.Beta2)*gv*gv
+					//perfscan:ignore PS3084 s two-product, memory-bound streaming moment
+					s[i] = sqb2*s[i] + (1-sqb2)*dlr*gv
+					skl += math.Abs(s[i])
+				}
+				return num, skl
+			})
+			numAcum += numP
+			skl1 += sklP
 			continue
 		}
 		if gf := flatF32(g); gf != nil {
-			//perfscan:ignore PS3010 f32 phase-1 reduction, memory-bound optimizer streaming
-			for i := range gf {
-				gv := float64(gf[i])
-				numAcum += dlr * gv * s[i] / (math.Sqrt(v[i]) + o.Eps)
-				//perfscan:ignore PS3084 two-product, memory-bound streaming moment
-				m[i] = o.Beta1*m[i] + (1-o.Beta1)*dlr*gv
-				//perfscan:ignore PS3084 two-product, memory-bound streaming moment
-				v[i] = o.Beta2*v[i] + (1-o.Beta2)*gv*gv
-				//perfscan:ignore PS3084 two-product, memory-bound streaming moment
-				s[i] = sqb2*s[i] + (1-sqb2)*dlr*gv
-				skl1 += math.Abs(s[i])
-			}
+			numP, sklP := parSumF64x2(n, func(lo, hi int) (float64, float64) {
+				var num, skl float64
+				//perfscan:ignore PS3010 f32 phase-1 reduction, memory-bound optimizer streaming
+				for i := lo; i < hi; i++ {
+					gv := float64(gf[i])
+					num += dlr * gv * s[i] / (math.Sqrt(v[i]) + o.Eps)
+					//perfscan:ignore PS3084 two-product, memory-bound streaming moment
+					m[i] = o.Beta1*m[i] + (1-o.Beta1)*dlr*gv
+					//perfscan:ignore PS3084 two-product, memory-bound streaming moment
+					v[i] = o.Beta2*v[i] + (1-o.Beta2)*gv*gv
+					//perfscan:ignore PS3084 two-product, memory-bound streaming moment
+					s[i] = sqb2*s[i] + (1-sqb2)*dlr*gv
+					skl += math.Abs(s[i])
+				}
+				return num, skl
+			})
+			numAcum += numP
+			skl1 += sklP
 			continue
 		}
 		// Generic fallback: any dtype/layout via the widening accessors.
@@ -275,16 +292,21 @@ func (o *DAdaptAdam) Step(grad GradFn) error {
 			continue
 		}
 		m, v := o.m[pi], o.v[pi]
+		// Pure per-index apply (each pf[i] from m[i]/v[i] only) → parStep, bit-identical to serial.
 		if pf := flatF64(p); pf != nil {
-			for i := range pf {
-				pf[i] = pf[i]*(1-wd) - m[i]/(math.Sqrt(v[i])+o.Eps)
-			}
+			parStep(len(pf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = pf[i]*(1-wd) - m[i]/(math.Sqrt(v[i])+o.Eps)
+				}
+			})
 			continue
 		}
 		if pf := flatF32(p); pf != nil {
-			for i := range pf {
-				pf[i] = float32(float64(pf[i])*(1-wd) - m[i]/(math.Sqrt(v[i])+o.Eps))
-			}
+			parStep(len(pf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = float32(float64(pf[i])*(1-wd) - m[i]/(math.Sqrt(v[i])+o.Eps))
+				}
+			})
 			continue
 		}
 		for i := range p.Numel() {

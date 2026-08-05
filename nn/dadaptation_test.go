@@ -383,12 +383,22 @@ type dOptimizer interface {
 }
 
 // testLRFreeFastPathParity is the shared §V22-style fast-path guard for the LR-free
-// optimizers: the typed contiguous f64/f32 fast paths must produce a BIT-IDENTICAL
-// trajectory (parameters and the d estimate) to the generic widening-accessor fallback,
+// optimizers: the typed contiguous f64/f32 fast paths must produce a trajectory
+// (parameters and the d estimate) that MATCHES the generic widening-accessor fallback,
 // which is forced via non-contiguous transposed views (mustTransposedView).
+//
+// Tolerance (not bit-exact): the typed paths of DAdaptAdam/Prodigy fan their d-estimate's
+// numerator and ‖s‖₁ denominator across cores via parSumF64x2, which REASSOCIATES those
+// reductions (~1 ULP, exactly like parSumSq in LAMB/ClipGradNorm), while the generic
+// fallback sums serially. The estimate d — and the parameters it scales — therefore agree
+// to a reassociation tolerance, not bit-for-bit; a real fast-path bug (wrong index/formula)
+// still diverges far beyond it. The per-index moment writes remain bit-exact and are pinned
+// separately by the single-step toggle tests in optim_parallel_internal_test.go.
 func testLRFreeFastPathParity(t *testing.T, mk func(ps []*tensor.Tensor) dOptimizer) {
 	t.Helper()
 	const steps = 6
+	// relTol compounds gently over the steps as d's tiny reassociation difference propagates.
+	close := func(a, b float64) bool { return math.Abs(a-b) <= 1e-9*math.Abs(a)+1e-12 }
 	pval := func(i int) float64 { return math.Sin(float64(i)*0.7) + 0.1 }
 	gval := func(i, s int) float64 { return math.Cos(float64(i)*0.3+float64(s)) * 0.05 }
 
@@ -428,15 +438,15 @@ func testLRFreeFastPathParity(t *testing.T, mk func(ps []*tensor.Tensor) dOptimi
 				if err := optSlow.Step(func(p *tensor.Tensor) *tensor.Tensor { return gSlow[p] }); err != nil {
 					t.Fatalf("slow step %d: %v", s, err)
 				}
-				if optFast.D() != optSlow.D() {
-					t.Fatalf("step %d: fast-path d %.17g != generic-path d %.17g", s, optFast.D(), optSlow.D())
+				if !close(optFast.D(), optSlow.D()) {
+					t.Fatalf("step %d: fast-path d %.17g != generic-path d %.17g (beyond reassoc tol)", s, optFast.D(), optSlow.D())
 				}
 				for pi, shape := range shapes {
 					for i := range shape.Numel() {
 						idx := tensor.Unravel(i, shape)
 						fv, sv := fast[pi].AtF64(idx...), slow[pi].AtF64(idx...)
-						if fv != sv {
-							t.Fatalf("step %d param %d idx %v: fast path %.17g != generic path %.17g", s, pi, idx, fv, sv)
+						if !close(fv, sv) {
+							t.Fatalf("step %d param %d idx %v: fast path %.17g != generic path %.17g (beyond reassoc tol)", s, pi, idx, fv, sv)
 						}
 					}
 				}
