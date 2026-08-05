@@ -4519,6 +4519,7 @@ doneq40dq:
 }
 
 static CUfunction gDequantQ6KF16 = NULL; // Q6_K weight -> contiguous f16 [K,N] (tensor-core prefill)
+static CUfunction gDequantQ6KF16T = NULL; // shared-tiled coalesced-read variant (32-column tile, 2B/word)
 
 // cu_dequant_q6k_to_f16: expand the ggml Q6_K weight (per-output-row, 210-byte super-blocks) into
 // a contiguous f16 [K,N] matrix for the tensor-core prefill GEMM (vs the scalar acc GEMV
@@ -4591,10 +4592,89 @@ int cu_dequant_q6k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "  }\n"
         "}\n",
         "dequant_q6k_f16.cu", "dequant_q6k_f16", &gDequantQ6KF16) != 0) { rc = -2; goto doneq6kdq; }
+    // COALESCED-READ variant (mirrors Q4_K #995/#999, Q5_K #1000): the base kernel is read-bound —
+    // thread=column reads its 210-byte super-blocks at global stride sbs*210 across a warp. Q6_K's
+    // 210-byte block is only 2-aligned (no uint32 word), so the tile loads/reads in 16-bit words:
+    // colW = sbs*105 shorts. A block owns 32 contiguous columns (one contiguous [32*sbs*210] region),
+    // phase 1 streams it into shared as coalesced short loads (padded +1 short/col), phase 2 = 32 warp
+    // lanes = 32 columns run the EXACT base decode from shared, writing 32 contiguous f16 per element.
+    // BIT-IDENTICAL. Gated N%32==0 and 32*(sbs*105+1)*2 ≤ device shared; the 210B block only fits for
+    // sbs≤15 (K≤3840) — larger K (incl. K=4096) safely falls back to the base kernel.
     {
-        int threads = 256, bx = (N + threads - 1) / threads; if (bx < 1) bx = 1;
-        void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
-        rc = (cuLaunchKernel(gDequantQ6KF16, bx, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        int sbs = K >> 8;
+        int cstrideW = sbs * 105 + 1;                 // shorts/col (210/2) + 1 pad short
+        long shBytes = (long)32 * cstrideW * 2;
+        if (shBytes > (long)gMaxSmem) {
+            cstrideW = sbs * 105;
+            shBytes = (long)32 * sbs * 210;
+        }
+        if ((N % 32) == 0 && shBytes <= (long)gMaxSmem) {
+            if (!gDequantQ6KF16T && compile_kernel(
+                "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                "  unsigned s = (h & 0x8000u) << 16;\n"
+                "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                "}\n"
+                "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+                "extern \"C\" __global__ void dequant_q6k_f16_t(const unsigned char* q, unsigned short* B, int K, int N, int cstrideW){\n"
+                "  extern __shared__ unsigned short shs[];\n"
+                "  int sbs = K >> 8;\n"
+                "  int n0 = blockIdx.x * 32;\n"
+                "  const unsigned short* qbase = (const unsigned short*)(q + (size_t)n0 * sbs * 210);\n"
+                "  int colW = sbs*105;\n"
+                "  long tileW = (long)32*colW;\n"
+                "  for (long i = threadIdx.x; i < tileW; i += blockDim.x){\n"
+                "    int c = (int)(i / colW); int within = (int)(i - (long)c*colW);\n"
+                "    shs[(size_t)c*cstrideW + within] = qbase[i];\n"
+                "  }\n"
+                "  __syncthreads();\n"
+                "  int lane = threadIdx.x & 31;\n"
+                "  int wp = threadIdx.x >> 5;\n"
+                "  int n = n0 + lane;\n"
+                "  const unsigned char* col = (const unsigned char*)(shs + (size_t)lane*cstrideW);\n"
+                "  for (int w = wp; w < sbs; w += (blockDim.x>>5)){\n"
+                "    const unsigned char* blk = col + (size_t)w*210;\n"
+                "    float d = f16f((unsigned short)(blk[208] | (blk[209]<<8)));\n"
+                "    const signed char* scb = (const signed char*)(blk + 192);\n"
+                "    size_t kb = (size_t)w*256;\n"
+                "    #pragma unroll\n"
+                "    for (int g = 0; g < 2; g++){\n"
+                "      const unsigned char* ql = blk + g*64;\n"
+                "      const unsigned char* qh = blk + 128 + g*32;\n"
+                "      const signed char* sc = scb + g*8;\n"
+                "      #pragma unroll\n"
+                "      for (int l = 0; l < 32; l += 2){\n"
+                "        unsigned lo = *(const unsigned short*)(ql + l), hi = *(const unsigned short*)(ql + l + 32), hw = *(const unsigned short*)(qh + l);\n"
+                "        #pragma unroll\n"
+                "        for (int e2 = 0; e2 < 2; e2++){\n"
+                "          int ll = l + e2, shft = e2*8;\n"
+                "          int qlb0=(lo>>shft)&0xFF, qlb1=(hi>>shft)&0xFF, hb=(hw>>shft)&0xFF, scoff=ll>>4;\n"
+                "          int q0=(qlb0&0xF)|(((hb>>0)&3)<<4);\n"
+                "          int q1=(qlb1&0xF)|(((hb>>2)&3)<<4);\n"
+                "          int q2=(qlb0>>4)|(((hb>>4)&3)<<4);\n"
+                "          int q3=(qlb1>>4)|(((hb>>6)&3)<<4);\n"
+                "          float s0=d*(float)sc[scoff+0], s1=d*(float)sc[scoff+2];\n"
+                "          float s2=d*(float)sc[scoff+4], s3=d*(float)sc[scoff+6];\n"
+                "          size_t e = kb + (size_t)g*128 + ll;\n"
+                "          B[e*N + n]      = f2h(s0*(float)(q0-32));\n"
+                "          B[(e+32)*N + n] = f2h(s1*(float)(q1-32));\n"
+                "          B[(e+64)*N + n] = f2h(s2*(float)(q2-32));\n"
+                "          B[(e+96)*N + n] = f2h(s3*(float)(q3-32));\n"
+                "        }\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "}\n",
+                "dequant_q6k_f16_t.cu", "dequant_q6k_f16_t", &gDequantQ6KF16T) != 0) { rc = -2; goto doneq6kdq; }
+            cuFuncSetAttribute(gDequantQ6KF16T, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, (int)shBytes);
+            int threads = 512, bx = N / 32;
+            void* args[5] = { (void*)&dQ, &dBf16, &K, &N, &cstrideW };
+            rc = (cuLaunchKernel(gDequantQ6KF16T, bx, 1, 1, threads, 1, 1, (unsigned)shBytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        } else {
+            int threads = 256, bx = (N + threads - 1) / threads; if (bx < 1) bx = 1;
+            void* args[4] = { (void*)&dQ, &dBf16, &K, &N };
+            rc = (cuLaunchKernel(gDequantQ6KF16, bx, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
     }
 doneq6kdq:
     pthread_mutex_unlock(&gLock);
