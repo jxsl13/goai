@@ -123,6 +123,17 @@ func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 		return fmt.Errorf("llamagpu: cuda QMatMulResident: unsupported resident weight %T", w)
 	}
 }
+
+// QMatMulResidentAcc fuses the residual add into the resident quant GEMV (dst += x·dequant(w), beta=1)
+// for the decode epilogue. Only Q8 is wired (the generic Decoder's dominant serving format); other
+// formats return errQuantAccUnsupported so recordAdd falls back to GEMV+Binary (no regression).
+func (c cRec) QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error {
+	if rw, ok := w.(*cuda.ResidentBQ8); ok {
+		return c.r.QMatMulResidentAcc(cb(x), rw, cb(dst), m)
+	}
+	return errQuantAccUnsupported
+}
+
 func (c cRec) Commit() error { return c.r.Commit() }
 func (c cRec) Wait() error   { return c.r.Wait() }
 func (c cRec) Finish() error { return c.r.Finish() }
