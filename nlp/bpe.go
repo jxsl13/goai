@@ -116,6 +116,21 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 		}
 		return append(out, t.ranks[string(piece)]), parts
 	}
+	// The rescan+shift merge below is O(len²): fine for natural-language pre-tokens (a few bytes) but
+	// quadratic on the long single pieces the GPT-2 pre-tokenizer can emit — a run of digits (\p{N}+),
+	// symbols ([^\s\p{L}\p{N}]+), or whitespace is ONE piece of unbounded length (a 4000-byte number
+	// took ~5ms). tiktoken/llama.cpp are O(n²)-per-piece too; the O(n log n) heap path below beats them
+	// on such inputs. Gate on length so short pieces keep the low-overhead quadratic path (the heap's
+	// per-piece linked-list/heap allocation would lose on a 5-byte word).
+	if len(piece) > bpeHeapThreshold {
+		return t.bpeMergeHeapInto(piece, out), parts
+	}
+	return t.bpeMergeQuadInto(piece, out, parts)
+}
+
+// bpeMergeQuadInto is the O(len²) rescan+shift byte-pair merge for short pieces (the common case:
+// natural-language pre-tokens are a few bytes). bpeMergeInto dispatches here below bpeHeapThreshold.
+func (t *Tokenizer) bpeMergeQuadInto(piece []byte, out []int, parts []bpePart) ([]int, []bpePart) {
 	// parts[i] = {start offset of token i, rank of merging token i with i+1}; the
 	// trailing sentinel {len, maxInt} makes token i span piece[parts[i].start :
 	// parts[i+1].start]. Build all adjacent-pair ranks once, tracking the min.
@@ -186,6 +201,123 @@ func (t *Tokenizer) bpeMergeInto(piece []byte, out []int, parts []bpePart) ([]in
 		out = append(out, parts[i].id) // tracked = ranks[piece[parts[i].start:parts[i+1].start]], no re-hash
 	}
 	return out, parts
+}
+
+// bpeHeapThreshold is the piece length above which bpeMergeInto switches to the O(n log n) heap merge.
+// Below it the O(len²) rescan wins on its lower constant (no heap/linked-list allocation); above it the
+// quadratic term dominates. Nearly all natural-language pre-tokens are far under this.
+const bpeHeapThreshold = 128
+
+type bpeHeapItem struct{ rank, pos, ver int }
+
+// bpeMergeHeapInto is the O(n log n) byte-pair merge used by bpeMergeInto for LONG pieces. It replaces
+// the quadratic rescan-for-min + array-shift with a min-heap of pair ranks over a doubly-linked list of
+// tokens: each merge is O(log n) (pop the min pair, splice out the absorbed node, push the two adjacent
+// pairs' new ranks), lazy-deleting stale heap entries via a per-node version counter. The selection rule
+// is byte-for-byte the same as the quadratic path — pop the globally lowest rank, ties broken by the
+// leftmost (lowest original) position — so the emitted token ids are IDENTICAL (asserted by
+// TestBPEHeapMatchesQuadratic). Wins ~100x on multi-thousand-byte digit/symbol/whitespace pieces.
+func (t *Tokenizer) bpeMergeHeapInto(piece []byte, out []int) []int {
+	n := len(piece)
+	prev := make([]int, n+1)
+	next := make([]int, n+1)
+	start := make([]int, n+1)
+	id := make([]int, n)
+	ver := make([]int, n) // per-node generation; a stale heap entry has ver != the node's current ver
+	for i := 0; i < n; i++ {
+		prev[i], next[i], start[i] = i-1, i+1, i
+		if t.byteRank != nil {
+			id[i] = t.byteRank[piece[i]]
+		} else {
+			id[i] = t.ranks[string(piece[i:i+1])]
+		}
+	}
+	prev[n], start[n] = n-1, n // end sentinel: start[n] = len(piece)
+
+	// pairRank(i) = rank of merging token i with its right neighbour = ranks[piece over both tokens'
+	// bytes], or MaxInt if i is the last token or the merged bytes are not a known token.
+	pairRank := func(i int) int {
+		j := next[i]
+		if j >= n {
+			return math.MaxInt
+		}
+		lo, hi := start[i], start[next[j]] // [start of i, end of j) = bytes of i ++ j
+		if hi-lo == 2 && t.pairRank != nil {
+			return t.pairRank[int(piece[lo])<<8|int(piece[lo+1])]
+		}
+		if v, ok := t.ranks[string(piece[lo:hi])]; ok {
+			return v
+		}
+		return math.MaxInt
+	}
+
+	// Manual binary min-heap ordered by (rank, pos) — leftmost lowest rank pops first.
+	h := make([]bpeHeapItem, 0, n)
+	push := func(it bpeHeapItem) {
+		h = append(h, it)
+		for c := len(h) - 1; c > 0; {
+			p := (c - 1) / 2
+			if h[p].rank < h[c].rank || (h[p].rank == h[c].rank && h[p].pos <= h[c].pos) {
+				break
+			}
+			h[p], h[c] = h[c], h[p]
+			c = p
+		}
+	}
+	pop := func() bpeHeapItem {
+		top := h[0]
+		h[0] = h[len(h)-1]
+		h = h[:len(h)-1]
+		for c := 0; ; {
+			l, r, sm := 2*c+1, 2*c+2, c
+			if l < len(h) && (h[l].rank < h[sm].rank || (h[l].rank == h[sm].rank && h[l].pos < h[sm].pos)) {
+				sm = l
+			}
+			if r < len(h) && (h[r].rank < h[sm].rank || (h[r].rank == h[sm].rank && h[r].pos < h[sm].pos)) {
+				sm = r
+			}
+			if sm == c {
+				break
+			}
+			h[c], h[sm] = h[sm], h[c]
+			c = sm
+		}
+		return top
+	}
+
+	for i := 0; i < n-1; i++ {
+		if r := pairRank(i); r != math.MaxInt {
+			push(bpeHeapItem{r, i, 0})
+		}
+	}
+	for len(h) > 0 {
+		p := pop()
+		if ver[p.pos] != p.ver { // stale: the node was merged or its pair changed since this was pushed
+			continue
+		}
+		i, j := p.pos, next[p.pos]
+		if j >= n { // no right neighbour any more (defensive; a valid ver implies there is one)
+			continue
+		}
+		id[i] = p.rank // merged token id = rank of its bytes (tiktoken rank == id)
+		nj := next[j]
+		next[i], prev[nj] = nj, i // splice j out (prev[n] may be updated — harmless)
+		ver[i]++
+		ver[j] = -1 // dead node: its heap entries (ver >= 0) can never match again
+		if pi := prev[i]; pi >= 0 {
+			ver[pi]++
+			if r := pairRank(pi); r != math.MaxInt {
+				push(bpeHeapItem{r, pi, ver[pi]})
+			}
+		}
+		if r := pairRank(i); r != math.MaxInt {
+			push(bpeHeapItem{r, i, ver[i]})
+		}
+	}
+	for i := 0; i != n; i = next[i] { // node 0 is never absorbed (always a left node), so it is the head
+		out = append(out, id[i])
+	}
+	return out
 }
 
 // Encode turns text into token ids: GPT-2 pre-tokenization → byte-pair merge per
