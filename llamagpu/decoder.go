@@ -267,7 +267,10 @@ type backendOps struct {
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
-type moeFFN struct{ wG, wU, wD linear }
+type moeFFN struct {
+	wG, wU, wD linear
+	wGU        linear // column-fused ffn_gate|ffn_up (built only when ops.fusedGateUp); nil ⇒ wG/wU path
+}
 
 type block struct {
 	wq, wk, wv, wo, wG, wU, wD linear
@@ -557,8 +560,22 @@ func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
 func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 	e := b.moeRouter.record(r, in, d.moeGate.b, rows) // [rows, nExperts] router logits
 	e = firstErr(e, r.MoEGate(d.moeGate.b, d.moeW.b, rows, d.nExperts, d.topK, boolToInt(d.moeRaw), d.routedScale))
+	sh, canFuse := r.(swiGLUHalvesRecorder)
 	for ex := range b.moeExperts {
 		xp := b.moeExperts[ex]
+		if xp.wGU != nil && canFuse {
+			// Column-fused expert gate|up: one gated GEMV into gu = [·, 2·hidden] then SwiGLU over its
+			// halves — halves the per-expert projection launches (the loop launches every expert, most
+			// gated-out but still launched). Gating zeros non-routed rows, so SwiGLUHalves(0)=0. Bit-exact.
+			e = firstErr(e,
+				xp.wGU.recordMoE(r, in, d.gu.b, rows, d.moeW.b, d.nExperts, ex),
+				sh.SwiGLUHalves(d.gu.b, d.gate.b, rows, d.hidden),
+				xp.wD.recordMoE(r, d.gate.b, d.mo.b, rows, d.moeW.b, d.nExperts, ex),
+				r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1),
+				r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),
+			)
+			continue
+		}
 		e = firstErr(e,
 			xp.wG.recordMoE(r, in, d.gate.b, rows, d.moeW.b, d.nExperts, ex),
 			xp.wU.recordMoE(r, in, d.up.b, rows, d.moeW.b, d.nExperts, ex),
@@ -1714,6 +1731,7 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	// MLA scratch + the QKRope frequency table.
 	c := d.maxLen
 	mlaInv := make([]float32, cfg.QKRope/2)
@@ -1742,7 +1760,8 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 		} else { // DeepSeekMoE: routed top-k experts + ungated shared expert(s)
 			experts := make([]moeFFN, len(b.MoE.Routed.Experts))
 			for i, ex := range b.MoE.Routed.Experts {
-				experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+				wgu, wg, wu := gateUp(ex.Wgate, ex.Wup)
+				experts[i] = moeFFN{wGU: wgu, wG: wg, wU: wu, wD: lin(ex.Wdown)}
 			}
 			gb.moeRouter, gb.moeExperts = d.f32Lin(mk)(b.MoE.Routed.Router.W), experts // router stays f32 (routing is selection-sensitive)
 			if len(b.MoE.Shared) > 0 {                                                 // realized as a single fused SwiGLU; ungated (moeSharedGate nil)
@@ -2430,6 +2449,7 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
 	qkGain := func(n *nn.RMSNorm) buffer { // optional per-head QK-norm (Qwen3-MoE); nil for Mixtral
 		if n == nil {
@@ -2442,7 +2462,8 @@ func newMixtralDecoder(m *nlp.Mixtral, ops backendOps) (*Decoder, error) {
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
-			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+			wgu, wg, wu := gateUp(ex.Wgate, ex.Wup)
+			experts[i] = moeFFN{wGU: wgu, wG: wg, wU: wu, wD: lin(ex.Wdown)}
 		}
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
@@ -2498,6 +2519,7 @@ func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
 	fusedBias := func(bq, bk, bv *tensor.Tensor) buffer {
 		if bq == nil && bk == nil && bv == nil {
@@ -2509,7 +2531,8 @@ func newQwen2MoEDecoder(m *nlp.Qwen2MoE, ops backendOps) (*Decoder, error) {
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
-			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+			wgu, wg, wu := gateUp(ex.Wgate, ex.Wup)
+			experts[i] = moeFFN{wGU: wgu, wG: wg, wU: wu, wD: lin(ex.Wdown)}
 		}
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), qkvBias: fusedBias(b.Bq, b.Bk, b.Bv), wo: lin(b.Wo),
@@ -2581,14 +2604,15 @@ func newGraniteMoEDecoder(m *nlp.GraniteMoE, ops backendOps) (*Decoder, error) {
 
 	var err error
 	mk := d.mkBuf(&err)
-	lin := d.mkLin(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	linS := d.mkLinS(mk, ops, &err) // ResidualMult / logit-scale fold — quantize-aware (Q8 under the hook)
 	fused := d.mkFused(mk, ops, &err)
 	//perfscan:ignore PS3032 newGraniteMoEDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
-			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: linS(ex.Wdown, resMult)}
+			wgu, wg, wu := gateUp(ex.Wgate, ex.Wup)
+			experts[i] = moeFFN{wGU: wgu, wG: wg, wU: wu, wD: linS(ex.Wdown, resMult)}
 		}
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: linS(b.Wo, resMult),
@@ -2648,12 +2672,14 @@ func newOLMoEDecoder(m *nlp.OLMoE, ops backendOps) (*Decoder, error) {
 	var err error
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
+	gateUp := d.gateUpBuilder(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
 	//perfscan:ignore PS3032 newOLMoEDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
 		experts := make([]moeFFN, len(b.MoE.Experts))
 		for i, ex := range b.MoE.Experts {
-			experts[i] = moeFFN{wG: lin(ex.Wgate), wU: lin(ex.Wup), wD: lin(ex.Wdown)}
+			wgu, wg, wu := gateUp(ex.Wgate, ex.Wup)
+			experts[i] = moeFFN{wGU: wgu, wG: wg, wU: wu, wD: lin(ex.Wdown)}
 		}
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
