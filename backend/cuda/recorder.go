@@ -208,6 +208,26 @@ func (rec *Recorder) MHA(q, k, v, o *DeviceF32, sq, sk, dm, heads, kvHeads, dk, 
 	if window > 0 && window < sk {
 		return fmt.Errorf("cuda: rec MHA sliding-window (window=%d < sk=%d) not supported", window, sk)
 	}
+	// Fused tensor-core flash-prefill fast path: causal-SQUARE prefill (sq==sk ⇒ the triple's
+	// offset sk-sq is 0, exactly the wmma kernel's built-in causal mask: query row i attends
+	// keys ≤ i), hd==64, seq a multiple of 16 within the shared-mem bound (wmmaMaxSeq). QKᵀ →
+	// warp-parallel scaled softmax → PV in ONE kernel with NO materialized HBM scores — 2.69-3.0×
+	// the cu_gqa_scores/softmax/gqa_out triple below (which writes the full [heads,sq,sk] scores
+	// to HBM via un-accelerated f32 batched GEMMs). This is the SAME kernel gqaCore already routes
+	// this exact shape to (cuda.go), so its f16-accum numerics vs the triple's f32 are already
+	// tol-validated (the incumbent llama.cpp/vLLM prefill-attention precision, PERF-INCUMBENT-
+	// TOLERANCE-001). Safe on the eager Recorder: this path fires only for square prefill, never
+	// decode (sq=1 fails sq==sk and sq%16==0), and prefill is not graph-captured, so the kernel's
+	// internal cudaMallocAsync f16 scratch is legal. Any miss (hd≠64, non-causal, sq≠sk, odd/
+	// oversized seq, GQA misconfig, or a kernel error) falls through to the triple.
+	if causal != 0 && dk == 64 && sq == sk && sq%16 == 0 && sq <= wmmaMaxSeq &&
+		kvHeads > 0 && heads%kvHeads == 0 {
+		if rc := C.cu_wmma_attn_gqa(unsafe.Pointer(&wmmaAttnGqaFatbin[0]), C.int(len(wmmaAttnGqaFatbin)),
+			q.ptr, k.ptr, v.ptr, o.ptr, C.int(sq), C.int(heads), C.int(kvHeads), C.int(dk), C.float(scale)); rc == 0 {
+			return nil
+		}
+		// non-zero rc: fall through to the always-correct triple below.
+	}
 	if err := rec.ensureScores(heads * sq * sk); err != nil {
 		return err
 	}
