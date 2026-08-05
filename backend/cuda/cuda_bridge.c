@@ -3059,57 +3059,81 @@ static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, v
                        "  int lane = threadIdx.x & 31;\n"
                        "  long total = (long)M*N;\n"
                        "  if (warp >= total) return;\n"
-                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
-                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f) out[warp]=0.0f; return; }\n"
+                       // ROW-BLOCK NR=2: each warp computes 2 same-row outputs (n0,n1=n0+1), loading the
+                       // activation av ONCE and running 2 weight streams — more in-flight DRAM requests per
+                       // warp (MLP) to push the BW-bound decode GEMV closer to peak. BIT-IDENTICAL: each
+                       // output's dot accumulates the same k-order; only the warp->output map changed.
+                       // Row-block only where warp-count limits BW (small N); large N already saturates
+                       // occupancy so NR=1 avoids the halved-warp regression. Host launch matches this.
+                       "  int stride = (N <= 4096) ? 2 : 1;\n"
+                       "  int npair = (N + stride - 1) / stride;\n"
+                       "  int m = (int)(warp / npair);\n"
+                       "  int pr = (int)(warp % npair);\n"
+                       "  int n0 = pr*stride, n1 = n0+1; bool has1 = (stride > 1) && (n1 < N);\n"
+                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f){ out[(size_t)m*N+n0]=0.0f; if(has1) out[(size_t)m*N+n1]=0.0f; } return; }\n"
                        "  const float* ar = a + (size_t)m*K;\n"
-                       "  const signed char* qr = q + (size_t)n*K;\n"
-                       "  const float* sr = scales + (size_t)n*nb;\n"
-                       "  float acc = 0.0f;\n"
-                       "  if ((K & 511) == 0){\n"          // int4 (16B/lane = 512 k/step): more memory requests in flight, same warp count
-                       "    const int4* qr4 = (const int4*)qr;\n"
+                       "  const signed char* qr0 = q + (size_t)n0*K;\n"
+                       "  const signed char* qr1 = q + (size_t)n1*K;\n"
+                       "  const float* sr0 = scales + (size_t)n0*nb;\n"
+                       "  const float* sr1 = scales + (size_t)n1*nb;\n"
+                       "  float acc0 = 0.0f, acc1 = 0.0f;\n"
+                       "  if ((K & 511) == 0){\n"
+                       "    const int4* qr40 = (const int4*)qr0;\n"
+                       "    const int4* qr41 = (const int4*)qr1;\n"
                        "    int steps = K >> 9;\n"
                        "    for (int w = 0; w < steps; w++){\n"
-                       "      int4 pk = qr4[w*32 + lane];\n"
+                       "      int4 pk0 = qr40[w*32 + lane];\n"
+                       "      int4 pk1; pk1.x=0;pk1.y=0;pk1.z=0;pk1.w=0; if (has1) pk1 = qr41[w*32 + lane];\n"
                        "      int kb = w*512 + lane*16;\n"
-                       "      float s = sr[w*16 + (lane >> 1)];\n"   // lane's 16 k lie in one per-32 block
-                       "      int P[4]; P[0]=pk.x; P[1]=pk.y; P[2]=pk.z; P[3]=pk.w;\n"
+                       "      float s0 = sr0[w*16 + (lane >> 1)];\n"
+                       "      float s1 = has1 ? sr1[w*16 + (lane >> 1)] : 0.0f;\n"
+                       "      int P0[4]; P0[0]=pk0.x; P0[1]=pk0.y; P0[2]=pk0.z; P0[3]=pk0.w;\n"
+                       "      int P1[4]; P1[0]=pk1.x; P1[1]=pk1.y; P1[2]=pk1.z; P1[3]=pk1.w;\n"
                        "      #pragma unroll\n"
                        "      for (int j = 0; j < 4; j++){\n"
                        "        float4 av = *(const float4*)(ar + kb + j*4);\n"
-                       "        int pj = P[j];\n"
-                       "        acc += s*(av.x*(float)(signed char)(pj&0xff) + av.y*(float)(signed char)((pj>>8)&0xff) + av.z*(float)(signed char)((pj>>16)&0xff) + av.w*(float)(signed char)((pj>>24)&0xff));\n"
+                       "        int p0 = P0[j], p1 = P1[j];\n"
+                       "        acc0 += s0*(av.x*(float)(signed char)(p0&0xff) + av.y*(float)(signed char)((p0>>8)&0xff) + av.z*(float)(signed char)((p0>>16)&0xff) + av.w*(float)(signed char)((p0>>24)&0xff));\n"
+                       "        acc1 += s1*(av.x*(float)(signed char)(p1&0xff) + av.y*(float)(signed char)((p1>>8)&0xff) + av.z*(float)(signed char)((p1>>16)&0xff) + av.w*(float)(signed char)((p1>>24)&0xff));\n"
                        "      }\n"
                        "    }\n"
                        "  } else if ((K & 127) == 0){\n"
-                       "    const int* qr32 = (const int*)qr;\n"
-                       "    int steps = K >> 7;\n"          // K/128 windows of 128 k
+                       "    const int* qr320 = (const int*)qr0;\n"
+                       "    const int* qr321 = (const int*)qr1;\n"
+                       "    int steps = K >> 7;\n"
                        "    for (int w = 0; w < steps; w++){\n"
-                       "      int packed = qr32[w*32 + lane];\n"      // 4 int8 for this lane
+                       "      int packed0 = qr320[w*32 + lane];\n"
+                       "      int packed1 = has1 ? qr321[w*32 + lane] : 0;\n"
                        "      int k = w*128 + lane*4;\n"
                        "      float4 av = *(const float4*)(ar + k);\n"
-                       "      float s = sr[w*4 + (lane >> 3)];\n"     // per-32 block scale
-                       "      float q0 = (float)(signed char)(packed & 0xff);\n"
-                       "      float q1 = (float)(signed char)((packed >> 8) & 0xff);\n"
-                       "      float q2 = (float)(signed char)((packed >> 16) & 0xff);\n"
-                       "      float q3 = (float)(signed char)((packed >> 24) & 0xff);\n"
-                       "      acc += s*(av.x*q0 + av.y*q1 + av.z*q2 + av.w*q3);\n"
+                       "      float s0 = sr0[w*4 + (lane >> 3)];\n"
+                       "      float s1 = has1 ? sr1[w*4 + (lane >> 3)] : 0.0f;\n"
+                       "      acc0 += s0*(av.x*(float)(signed char)(packed0&0xff) + av.y*(float)(signed char)((packed0>>8)&0xff) + av.z*(float)(signed char)((packed0>>16)&0xff) + av.w*(float)(signed char)((packed0>>24)&0xff));\n"
+                       "      acc1 += s1*(av.x*(float)(signed char)(packed1&0xff) + av.y*(float)(signed char)((packed1>>8)&0xff) + av.z*(float)(signed char)((packed1>>16)&0xff) + av.w*(float)(signed char)((packed1>>24)&0xff));\n"
                        "    }\n"
                        "  } else {\n"
                        "    for (int b = 0; b < nb; b++){\n"
                        "      int k = b*32 + lane;\n"
-                       "      if (k < K){ acc += sr[b]*ar[k]*(float)qr[k]; }\n"
+                       "      if (k < K){ float av = ar[k]; acc0 += sr0[b]*av*(float)qr0[k]; if(has1) acc1 += sr1[b]*av*(float)qr1[k]; }\n"
                        "    }\n"
                        "  }\n"
-                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc0 += __shfl_down_sync(0xffffffff, acc0, o); acc1 += __shfl_down_sync(0xffffffff, acc1, o); }\n"
                        "  if (lane == 0){\n"
-                       "    float r = acc;\n"
-                       "    if (gate){ float g = gate[warp]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r = g*sg*acc; }\n" // SwiGLU epilogue, arithmetic == the standalone swiglu kernel (token parity)
-                       "    out[warp] = beta*out[warp] + r;\n"                                        // beta=1 fuses the residual add
+                       "    size_t o0 = (size_t)m*N+n0, o1 = (size_t)m*N+n1;\n"
+                       "    float r0 = acc0;\n"
+                       "    if (gate){ float g = gate[o0]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r0 = g*sg*acc0; }\n"
+                       "    out[o0] = beta*out[o0] + r0;\n"
+                       "    if (has1){\n"
+                       "      float r1 = acc1;\n"
+                       "      if (gate){ float g = gate[o1]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r1 = g*sg*acc1; }\n"
+                       "      out[o1] = beta*out[o1] + r1;\n"
+                       "    }\n"
                        "  }\n"
                        "}\n",
                        "qmatmul_q8.cu", "qmatmul_q8", &gQgemv) != 0) { rc = -2; goto done; }
     {
-        long total = (long)M * N * 32; // one warp (32 threads) per output element
+        int rbStride = (N <= 4096) ? 2 : 1; // must match the kernel's stride formula
+        long total = (long)M * ((N + rbStride - 1) / rbStride) * 32; // row-block NR=2 for small N only
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
         void* args[12];
         args[0] = &dA; args[1] = &dQ; args[2] = &dScales; args[3] = &dOut;
