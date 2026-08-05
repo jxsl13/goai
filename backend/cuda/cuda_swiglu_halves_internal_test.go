@@ -125,3 +125,42 @@ func benchFFNGateUpDecode(b *testing.B, d, hidden int, fused bool) {
 // TinyLlama dims: d=2048, hidden=5632
 func BenchmarkFFNGateUpDecodeFused(b *testing.B)    { benchFFNGateUpDecode(b, 2048, 5632, true) }
 func BenchmarkFFNGateUpDecodeSeparate(b *testing.B) { benchFFNGateUpDecode(b, 2048, 5632, false) }
+
+// benchQ8GemvBW measures the ACHIEVED weight-read bandwidth of the resident-Q8 decode GEMV (m=1)
+// at a realistic projection size. Q8 weight bytes = k*n (int8) + k*n/32*4 (per-32-block f32 scale).
+// Decode is weight-bandwidth-bound, so this vs the RTX-3060 ~360 GB/s peak tells us whether the
+// GoAI-vs-llama.cpp decode gap is GEMV efficiency (BW << peak) or per-token overhead (BW ~ peak).
+func benchQ8GemvBW(b *testing.B, k, n int) {
+	if !Available() {
+		b.Skip("no gpu")
+	}
+	t := tensor.New(tensor.F32, tensor.Shape{k, n})
+	tf := t.Storage().F32()
+	for i := range tf {
+		tf[i] = float32(rand.NormFloat64() * 0.05)
+	}
+	w, err := NewResidentBQ8(t)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rec, _ := NewRecorder()
+	in, _ := NewDeviceF32(1, k)
+	out, _ := NewDeviceF32(1, n)
+	defer func() { w.Free(); rec.Free(); in.Free(); out.Free() }()
+	const opsPerBatch = 64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < opsPerBatch; j++ {
+			rec.QMatMulResident(in, w, out, 1)
+		}
+		rec.Wait()
+	}
+	b.StopTimer()
+	wbytes := float64(k*n) + float64(k*n/32)*4 // int8 weights + f32 block scales
+	secsPerOp := b.Elapsed().Seconds() / float64(b.N) / opsPerBatch
+	b.ReportMetric(wbytes/secsPerOp/1e9, "GB/s")
+}
+
+// ffn_down [5632,2048], gate/up-fused [2048,11264], attn qkv-fused [2048,~2560]
+func BenchmarkQ8GemvBW_down(b *testing.B) { benchQ8GemvBW(b, 5632, 2048) }
+func BenchmarkQ8GemvBW_gu(b *testing.B)   { benchQ8GemvBW(b, 2048, 11264) }
