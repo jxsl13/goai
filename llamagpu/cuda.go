@@ -128,8 +128,11 @@ func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 // for the decode epilogue. Only Q8 is wired (the generic Decoder's dominant serving format); other
 // formats return errQuantAccUnsupported so recordAdd falls back to GEMV+Binary (no regression).
 func (c cRec) QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error {
-	if rw, ok := w.(*cuda.ResidentBQ8); ok {
+	switch rw := w.(type) {
+	case *cuda.ResidentBQ8:
 		return c.r.QMatMulResidentAcc(cb(x), rw, cb(dst), m)
+	case *cuda.ResidentBQ4K:
+		return c.r.QMatMulResidentAccQ4K(cb(x), rw, cb(dst), m)
 	}
 	return errQuantAccUnsupported
 }
