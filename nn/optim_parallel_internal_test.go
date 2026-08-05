@@ -29,6 +29,7 @@ func TestParStepParallelMatchesSerial(t *testing.T) {
 		{"SGD-momentum", func(p []*tensor.Tensor) Optimizer { return NewSGD(p, 1e-2, 0.9) }},
 		{"Lion", func(p []*tensor.Tensor) Optimizer { return NewLion(p, 1e-4) }},
 		{"Sophia", func(p []*tensor.Tensor) Optimizer { return NewSophia(p, 1e-3) }},
+		{"MARS", func(p []*tensor.Tensor) Optimizer { return NewMARS(p, 1e-3) }},
 	}
 	for _, oc := range opts {
 		for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
@@ -293,3 +294,27 @@ func benchSophiaStep(b *testing.B, n, threshold int) {
 
 func BenchmarkSophiaStep_1M_parallel(b *testing.B) { benchSophiaStep(b, 1<<20, 1<<8) }
 func BenchmarkSophiaStep_1M_serial(b *testing.B)   { benchSophiaStep(b, 1<<20, 1<<40) }
+
+func benchMARSStep(b *testing.B, n, threshold int) {
+	orig := parStepMinElems
+	parStepMinElems = threshold
+	defer func() { parStepMinElems = orig }()
+	p := tensor.New(tensor.F32, tensor.Shape{n})
+	pf := p.Storage().F32()
+	for i := range pf {
+		pf[i] = float32(i%1000)/500 - 1
+	}
+	g := tensor.New(tensor.F32, tensor.Shape{n})
+	gf := g.Storage().F32()
+	for i := range gf {
+		gf[i] = float32(i%777) * 1e-4
+	}
+	opt := NewMARS([]*tensor.Tensor{p}, 1e-3)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g })
+	}
+}
+
+func BenchmarkMARSStep_1M_parallel(b *testing.B) { benchMARSStep(b, 1<<20, 1<<8) }
+func BenchmarkMARSStep_1M_serial(b *testing.B)   { benchMARSStep(b, 1<<20, 1<<40) }
