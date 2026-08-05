@@ -26,3 +26,44 @@ func parStep(n int, body func(lo, hi int)) {
 	}
 	body(0, n)
 }
+
+// parSumSqF64 returns Σ gf[i]² — fanned across cores (deterministic per-chunk partials) when gf is
+// large enough to pay, else a serial left-to-right sum. The parallel path REASSOCIATES the sum, so
+// it is not bit-identical to the serial one; callers must tolerate ~1 ULP (ClipGradNorm's global
+// norm is tolerance-checked, and numpy/torch reduce the same way).
+func parSumSqF64(gf []float64) float64 {
+	if len(gf) < parStepMinElems {
+		var s float64
+		for _, v := range gf {
+			s += v * v
+		}
+		return s
+	}
+	return parallel.SumF64(len(gf), func(lo, hi int) float64 {
+		var s float64
+		for i := lo; i < hi; i++ {
+			s += gf[i] * gf[i]
+		}
+		return s
+	})
+}
+
+// parSumSqF32 is parSumSqF64 for an f32 grad, accumulating in float64 exactly as the serial path does.
+func parSumSqF32(gf []float32) float64 {
+	if len(gf) < parStepMinElems {
+		var s float64
+		for _, gv := range gf {
+			v := float64(gv)
+			s += v * v
+		}
+		return s
+	}
+	return parallel.SumF64(len(gf), func(lo, hi int) float64 {
+		var s float64
+		for i := lo; i < hi; i++ {
+			v := float64(gf[i])
+			s += v * v
+		}
+		return s
+	})
+}

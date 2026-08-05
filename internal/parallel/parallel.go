@@ -97,3 +97,24 @@ func Rows(n int, body func(lo, hi int)) {
 	}
 	wg.Wait()
 }
+
+// SumF64 computes Σ chunkSum over a contiguous partition of [0,n): it splits the range exactly as
+// [Rows] does, calls chunkSum(lo,hi) once per chunk (concurrently, on disjoint ranges), and returns
+// the sum of the per-chunk partials in a FIXED chunk order. The partition and the final combine order
+// are both deterministic, so the result is reproducible run-to-run — but it is a REASSOCIATION of the
+// serial left-to-right sum, so callers must tolerate the ~1-ULP-per-level rounding difference (the
+// standard trade a parallel reduction makes; matches numpy/BLAS/torch reductions).
+func SumF64(n int, chunkSum func(lo, hi int) float64) float64 {
+	parts := min(len(mailboxes)+1, n)
+	if parts <= 1 {
+		return chunkSum(0, n)
+	}
+	chunk := (n + parts - 1) / parts
+	partials := make([]float64, parts) // chunk c (lo == c*chunk) writes partials[c]; unused slots stay 0
+	Rows(n, func(lo, hi int) { partials[lo/chunk] = chunkSum(lo, hi) })
+	var s float64
+	for _, p := range partials {
+		s += p
+	}
+	return s
+}

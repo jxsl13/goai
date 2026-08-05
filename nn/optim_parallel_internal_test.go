@@ -114,3 +114,72 @@ func BenchmarkSGDStepLargeSerial(b *testing.B)    { benchStepLargeThreshold(b, 1
 func BenchmarkSGDStepLargeParallel(b *testing.B)  { benchStepLargeThreshold(b, 1<<4, sgdCtor) }
 func BenchmarkLionStepLargeSerial(b *testing.B)   { benchStepLargeThreshold(b, 1<<40, lionCtor) }
 func BenchmarkLionStepLargeParallel(b *testing.B) { benchStepLargeThreshold(b, 1<<4, lionCtor) }
+
+// TestClipGradNormParallel exercises the large-grad parallel path of ClipGradNorm (sumsq via
+// parallel.SumF64 + parStep scaling): the reduction is a REASSOCIATION so it is not bit-identical to
+// serial, but it must be (a) DETERMINISTIC (fixed partition + fixed combine order ⇒ reproducible),
+// (b) within a tight tolerance of the serial norm, and (c) correctness-preserving (post-clip global
+// norm == maxNorm).
+func TestClipGradNormParallel(t *testing.T) {
+	const n = 1<<18 + 9999
+	orig := parStepMinElems
+	defer func() { parStepMinElems = orig }()
+	g := tensor.New(tensor.F64, tensor.Shape{n})
+	gd := g.Storage().F64()
+	for i := range gd {
+		gd[i] = math.Sin(float64(i)*0.001)*0.3 + 0.05 // global norm >> 1 ⇒ clipping triggers
+	}
+	p := tensor.New(tensor.F64, tensor.Shape{n})
+	gfn := func(*tensor.Tensor) *tensor.Tensor { return g }
+	run := func(threshold int) (float64, []float64) {
+		parStepMinElems = threshold
+		clip, norm := ClipGradNorm([]*tensor.Tensor{p}, gfn, 1.0)
+		out := clip(p).Storage().F64()
+		return norm, append([]float64(nil), out...)
+	}
+	nP1, oP1 := run(1 << 4)
+	nP2, oP2 := run(1 << 4)
+	if nP1 != nP2 {
+		t.Fatalf("parallel norm nondeterministic: %v vs %v", nP1, nP2)
+	}
+	for i := range oP1 {
+		if oP1[i] != oP2[i] {
+			t.Fatalf("parallel scaled grad nondeterministic at %d", i)
+		}
+	}
+	nS, _ := run(1 << 40)
+	if rel := math.Abs(nP1-nS) / nS; rel > 1e-12 {
+		t.Fatalf("parallel norm %.15g vs serial %.15g: rel %g > 1e-12", nP1, nS, rel)
+	}
+	// post-clip global norm must equal maxNorm (1.0) — correctness preserved
+	var sq float64
+	for _, v := range oP1 {
+		sq += v * v
+	}
+	if pc := math.Sqrt(sq); math.Abs(pc-1) > 1e-9 {
+		t.Fatalf("post-clip norm %v, want 1", pc)
+	}
+	t.Logf("ClipGradNorm parallel: deterministic, norm rel-diff %g vs serial, post-clip norm ok", math.Abs(nP1-nS)/nS)
+}
+
+func benchClipGradNorm(b *testing.B, threshold int) {
+	orig := parStepMinElems
+	parStepMinElems = threshold
+	defer func() { parStepMinElems = orig }()
+	const n = 8192 * 4096 // 33.5M
+	g := tensor.New(tensor.F64, tensor.Shape{n})
+	gd := g.Storage().F64()
+	for i := range gd {
+		gd[i] = float64(i%17)*1e-2 + 0.1 // norm >> maxNorm ⇒ scaling closure materializes
+	}
+	p := tensor.New(tensor.F64, tensor.Shape{n})
+	gfn := func(*tensor.Tensor) *tensor.Tensor { return g }
+	b.ResetTimer()
+	for b.Loop() {
+		clip, _ := ClipGradNorm([]*tensor.Tensor{p}, gfn, 1.0)
+		_ = clip(p)
+	}
+}
+
+func BenchmarkClipGradNormSerial(b *testing.B)   { benchClipGradNorm(b, 1<<40) }
+func BenchmarkClipGradNormParallel(b *testing.B) { benchClipGradNorm(b, 1<<4) }
