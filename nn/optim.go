@@ -224,29 +224,36 @@ func (a *Adam) Step(grad GradFn) error {
 		// update arithmetic in float64 exactly as the generic path computes them.
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					//perfscan:ignore PS3084 Adam moment update bandwidth-bound; sqrt/div dominates
-					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
-					//perfscan:ignore PS3084 Adam moment update bandwidth-bound; sqrt/div dominates
-					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					mh := m[i] * ic1
-					vh := v[i] * ic2
-					pf[i] = pf[i]*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps)
-				}
+				// Per-element (m[i],v[i],pf[i] each written once) ⇒ chunking is bit-identical; large
+				// DRAM-resident params fan across cores, small ones stay inline. See parStep.
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						//perfscan:ignore PS3084 Adam moment update bandwidth-bound; sqrt/div dominates
+						m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+						//perfscan:ignore PS3084 Adam moment update bandwidth-bound; sqrt/div dominates
+						v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+						mh := m[i] * ic1
+						vh := v[i] * ic2
+						pf[i] = pf[i]*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps)
+					}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					//perfscan:ignore PS3084 Adam F32 moment update bandwidth-bound; sqrt/div dominates
-					m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
-					//perfscan:ignore PS3084 Adam F32 moment update bandwidth-bound; sqrt/div dominates
-					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					mh := m[i] * ic1
-					vh := v[i] * ic2
-					pf[i] = float32(float64(pf[i])*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps))
-				}
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						//perfscan:ignore PS3084 Adam F32 moment update bandwidth-bound; sqrt/div dominates
+						m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+						//perfscan:ignore PS3084 Adam F32 moment update bandwidth-bound; sqrt/div dominates
+						v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+						mh := m[i] * ic1
+						vh := v[i] * ic2
+						pf[i] = float32(float64(pf[i])*decay - a.LR*mh/(math.Sqrt(vh)+a.Eps))
+					}
+				})
 				continue
 			}
 		}
