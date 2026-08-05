@@ -262,8 +262,9 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 		return ys, logits, nil
 	}
 
-	// top-k routing mask (constant: the discrete choice is non-differentiable)
+	// top-k routing mask (constant: the discrete choice is non-differentiable) + per-expert token lists.
 	mask := tensor.New(logits.Dtype(), tensor.Shape{tks, e})
+	perTok := make([][]int, e)
 	row := make([]float64, e)
 	for t := range tks {
 		//perfscan:ignore PS1001 TxE logit copy, <1pct vs dense expert FFN GEMMs
@@ -285,29 +286,81 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 		//perfscan:ignore PS1001 Txk mask scatter, negligible vs expert FFNs
 		for _, i := range selected {
 			mask.SetF64(1, t, i)
+			perTok[i] = append(perTok[i], t)
 		}
 	}
-	//perfscan:ignore PS3038 single vectorized OpMul dispatch, not a loop
-	masked, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{gates[0], mask}, nil)
+	// Differentiable token-sparse expert evaluation (training/prefill): run each expert only on its
+	// routed tokens instead of the dense all-E×all-tokens path + OpMoECombine, which recomputes each
+	// expert FFN GEMM on the (E−topK)/E of tokens it does not serve. The renormalized top-k combine
+	// weights rweights = (gates⊙mask)/rowsum are formed with dispatched (VJP-backed) ops, then per
+	// expert we gather its tokens (OpEmbed) and their weights, run the FFN, weight, and scatter-add
+	// (OpEmbedBackward). Every op is differentiable, so autograd yields the exact gradient of this
+	// forward — the same renormalized-top-k MoE OpMoECombine computes (within f64 tol on the renorm),
+	// so gradients reach x, the experts, and the router (through the gathered gate weights). Bit-exact
+	// values not required for training; gradcheck-validated.
+	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
+		o, e2 := backend.Execute(ctx, op, in, at)
+		if e2 != nil {
+			return nil, e2
+		}
+		return o[0], nil
+	}
+	masked, err := ex(backend.OpMul, nil, gates[0], mask) // [T,E], 0 for unselected
 	if err != nil {
 		return nil, nil, err
 	}
-
-	// dense expert evaluation + renormalized combine
-	combineIn := make([]*tensor.Tensor, 0, e+1)
-	combineIn = append(combineIn, masked[0])
+	denom, err := ex(backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, masked) // [T,1]
+	if err != nil {
+		return nil, nil, err
+	}
+	rweights, err := ex(backend.OpDiv, nil, masked, denom) // [T,E] renormalized over selected experts
+	if err != nil {
+		return nil, nil, err
+	}
 	for i := range e {
-		out, err := m.Experts[i].Forward(ctx, x)
+		n := len(perTok[i])
+		if n == 0 {
+			continue
+		}
+		idx := tensor.New(tensor.F64, tensor.Shape{n})
+		idf := idx.Storage().F64()
+		for k := 0; k < n; k++ {
+			idf[k] = float64(perTok[i][k])
+		}
+		xi, err := ex(backend.OpEmbed, nil, x, idx) // [n,dim] this expert's tokens
 		if err != nil {
 			return nil, nil, err
 		}
-		combineIn = append(combineIn, out)
+		outi, err := m.Experts[i].Forward(ctx, xi) // [n,dim]
+		if err != nil {
+			return nil, nil, err
+		}
+		wCol, err := ex(backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, rweights) // [T,1]
+		if err != nil {
+			return nil, nil, err
+		}
+		wI, err := ex(backend.OpEmbed, nil, wCol, idx) // [n,1] gathered renorm weights
+		if err != nil {
+			return nil, nil, err
+		}
+		weighted, err := ex(backend.OpMul, nil, outi, wI) // [n,dim]*[n,1]
+		if err != nil {
+			return nil, nil, err
+		}
+		scattered, err := ex(backend.OpEmbedBackward, nil, x, idx, weighted) // [T,dim] scatter
+		if err != nil {
+			return nil, nil, err
+		}
+		if y == nil {
+			y = scattered
+		} else if y, err = ex(backend.OpAdd, nil, y, scattered); err != nil {
+			return nil, nil, err
+		}
 	}
-	comb, err := backend.Execute(ctx, backend.OpMoECombine, combineIn, nil)
-	if err != nil {
-		return nil, nil, err
+	if y == nil {
+		y = tensor.New(x.Dtype(), tensor.Shape{tks, x.Shape()[1]})
 	}
-	return comb[0], logits, nil
+	return y, logits, nil
 }
 
 // ForwardDecode is the inference-only sparse counterpart of [SparseMoE.Forward]: it
