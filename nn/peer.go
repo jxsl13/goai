@@ -410,46 +410,52 @@ func (p *PEER) Forward(ctx *backend.Context, x *tensor.Tensor) (y *tensor.Tensor
 				}
 			}
 		} else {
-			// Recording path: keep the one-hot selection on the tape so the gathered
-			// score carries gradient back to K1/K2/Wq.
-			scoreCols := make([]*tensor.Tensor, p.topK)
-			for c := range p.topK {
-				oh1 := tensor.New(s1.Dtype(), s1.Shape())
-				oh2 := tensor.New(s2.Dtype(), s2.Shape())
-				//perfscan:ignore PS1001 per-element on [T,d] tape op, gather/matmul-dominated
-				for t := range tks {
-					//perfscan:ignore PS3016 elementwise broadcast Mul on autograd tape, gather-dominated
-					oh1.SetF64(1, t, sub1Idx[t][c])
-					//perfscan:ignore PS3016 elementwise broadcast Mul on autograd tape, gather-dominated
-					oh2.SetF64(1, t, sub2Idx[t][c])
-				}
-				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
-				sel1, err := p.exec(ctx, backend.OpMul, nil, s1, oh1)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
-				sel1, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel1)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
-				sel2, err := p.exec(ctx, backend.OpMul, nil, s2, oh2)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				//perfscan:ignore PS3024,PS6016 per-op dispatch count, tape-required op | resource-only class, no wall-clock
-				sel2, err = p.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sel2)
-				if err != nil {
-					return nil, nil, nil, err
-				}
-				//perfscan:ignore PS3024 per-op dispatch count, tape-required op
-				scoreCols[c], err = p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T,1]
-				if err != nil {
-					return nil, nil, nil, err
+			// Recording path: gather each slot's score s1[t,i_c]+s2[t,j_c] via a flat OpEmbed
+			// take-along — the on-tape twin of the inference gather above. Was topK one-hot
+			// [T,n] tensors reduced against s1/s2 (O(topK·T·n) work + 2·topK large [T,n] allocs,
+			// n≈√N is large: PEER §V16.4a); this reshapes s1/s2 to [T·n,1] and OpEmbed-gathers the
+			// flat take-along indices t·n+i_c into [T,topK] (O(topK·T), no [T,n] one-hots).
+			// Bit-identical (OpEmbed copies the exact score, exactly as the one-hot·mul·sum summed
+			// s·1{i=i_c}=s[i_c] for finite scores), and OpEmbed's VJP scatter-adds the gate gradient
+			// into s1[t,i_c] — precisely the one-hot backward — so K1/K2/Wq gradients are unchanged.
+			//perfscan:ignore PS6016 resource-only class, no wall-clock
+			flatLo := tensor.New(tensor.F64, tensor.Shape{tks * p.topK})
+			//perfscan:ignore PS6016 resource-only class, no wall-clock
+			flatHi := tensor.New(tensor.F64, tensor.Shape{tks * p.topK})
+			lf, hf := flatLo.Storage().F64(), flatHi.Storage().F64()
+			for t := range tks {
+				for c := range p.topK {
+					lf[t*p.topK+c] = float64(t*p.n + sub1Idx[t][c])
+					hf[t*p.topK+c] = float64(t*p.n + sub2Idx[t][c])
 				}
 			}
-			scores, err = p.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, scoreCols...) // [T,k]
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			s1Flat, err := p.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tks * p.n, 1}}, s1)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			s2Flat, err := p.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tks * p.n, 1}}, s2)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			sel1, err := p.exec(ctx, backend.OpEmbed, nil, s1Flat, flatLo) // [T·topK,1] = s1[t,i_c]
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			sel2, err := p.exec(ctx, backend.OpEmbed, nil, s2Flat, flatHi) // [T·topK,1] = s2[t,j_c]
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			selSum, err := p.exec(ctx, backend.OpAdd, nil, sel1, sel2) // [T·topK,1]
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 per-op dispatch count, tape-required op
+			scores, err = p.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tks, p.topK}}, selSum) // [T,k]
 			if err != nil {
 				return nil, nil, nil, err
 			}
