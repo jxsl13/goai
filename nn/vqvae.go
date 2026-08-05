@@ -57,7 +57,6 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 	}
 	// nearest-neighbor assignment k_i = argmin_j ‖ze_i − e_j‖² (non-differentiable).
 	indices = make([]int, batch)
-	sel := tensor.New(ze.Dtype(), tensor.Shape{batch, k}) // one-hot [batch,K] for a differentiable gather
 	// Nearest-codebook assignment argmin_j ‖ze_i−e_j‖². The old scan paid an AtF64 dispatch
 	// d× per (i,j) = batch·k·d dispatches; grab contiguous typed rows once and jam 4 codebook
 	// entries so their argmin distances accumulate on independent chains (mirrors AQLM #467).
@@ -68,38 +67,30 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 	switch ze.Dtype() {
 	case tensor.F64:
 		zs, cb := zc.Storage().F64(), cbc.Storage().F64()
-		ss := sel.Storage().F64()
 		// Each latent's argmin is independent (reads only its own row + the shared read-only
-		// codebook, writes only indices[i] and the disjoint one-hot row i of sel), so the batch
-		// fans out over GOMAXPROCS. Each worker keeps the 4-row codebook tiling within its own
-		// range; a row's argmin is identical regardless of tile boundary → bit-identical.
+		// codebook, writes only indices[i]), so the batch fans out over GOMAXPROCS. Each worker
+		// keeps the 4-row codebook tiling within its own range; a row's argmin is identical
+		// regardless of tile boundary → bit-identical.
 		parallelRows(batch, k*d, func(lo, hi int) {
 			i := lo
 			for ; i+4 <= hi; i += 4 { // tile 4 ze rows per codebook pass (4× less codebook traffic)
 				b0, b1, b2, b3 := vqNearest4F64(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
 				indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
-				ss[i*k+b0], ss[(i+1)*k+b1], ss[(i+2)*k+b2], ss[(i+3)*k+b3] = 1, 1, 1, 1
 			}
 			for ; i < hi; i++ { // remainder rows
-				best := vqNearestF64(zs[i*d:i*d+d], cb, k, d)
-				indices[i] = best
-				ss[i*k+best] = 1
+				indices[i] = vqNearestF64(zs[i*d:i*d+d], cb, k, d)
 			}
 		})
 	case tensor.F32:
 		zs, cb := zc.Storage().F32(), cbc.Storage().F32()
-		ss := sel.Storage().F32()
 		parallelRows(batch, k*d, func(lo, hi int) {
 			i := lo
 			for ; i+4 <= hi; i += 4 {
 				b0, b1, b2, b3 := vqNearest4F32(zs[i*d:i*d+d], zs[(i+1)*d:(i+1)*d+d], zs[(i+2)*d:(i+2)*d+d], zs[(i+3)*d:(i+3)*d+d], cb, k, d)
 				indices[i], indices[i+1], indices[i+2], indices[i+3] = b0, b1, b2, b3
-				ss[i*k+b0], ss[(i+1)*k+b1], ss[(i+2)*k+b2], ss[(i+3)*k+b3] = 1, 1, 1, 1
 			}
 			for ; i < hi; i++ {
-				best := vqNearestF32(zs[i*d:i*d+d], cb, k, d)
-				indices[i] = best
-				ss[i*k+best] = 1
+				indices[i] = vqNearestF32(zs[i*d:i*d+d], cb, k, d)
 			}
 		})
 	default:
@@ -116,8 +107,18 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 				}
 			}
 			indices[i] = best
-			sel.SetF64(1, i, best)
 		}
+	}
+	// Gather zq[i] = Codebook[indices[i]] via OpEmbed on F64 flat indices — the differentiable
+	// take-along that the one-hot·Codebook matmul was computing (its argmin one-hot selects exactly
+	// row indices[i]). Replaces an O(batch·K·D) matmul + O(batch·K) one-hot alloc with an O(batch·D)
+	// gather; OpEmbed's VJP scatter-adds grad into Codebook[indices[i]] — identical to the matmul's
+	// backward (selᵀ·grad), so the codebook-loss gradient is preserved. Bit-exact forward (one exact
+	// 1.0·row, the rest exact 0.0). Indices carry no gradient (argmin, detached).
+	idxF64 := tensor.New(tensor.F64, tensor.Shape{batch})
+	idf := idxF64.Storage().F64()
+	for i, ix := range indices {
+		idf[i] = float64(ix)
 	}
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, e := backend.Execute(ctx, op, in, at)
@@ -126,7 +127,7 @@ func (vq *VectorQuantizer) Quantize(ctx *backend.Context, ze *tensor.Tensor) (zq
 		}
 		return o[0], nil
 	}
-	zq, err := ex(backend.OpMatMul, nil, sel, vq.Codebook) // [batch,D] = gather, differentiable w.r.t. codebook
+	zq, err := ex(backend.OpEmbed, nil, vq.Codebook, idxF64) // [batch,D] = gather, differentiable w.r.t. codebook
 	if err != nil {
 		return nil, nil, nil, err
 	}
