@@ -3254,7 +3254,7 @@ static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, in
                        "  #pragma unroll 2\n"
                        "  for (int w = 0; w < sbs; w++){\n"
                        "    const unsigned char* blk = qr + (size_t)w*144;\n"
-                       "    unsigned int qw = *(const unsigned int*)(blk + 16 + lane*4);\n" // 4 qs bytes = 8 elems
+                       "    unsigned int qw = __ldcs((const unsigned int*)(blk + 16 + lane*4));\n" // 4 qs bytes = 8 elems; evict-first touch-once weight
                        "    float d = f16f(*(const unsigned short*)blk);\n"      // uniform across the warp (broadcast load)
                        "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
                        "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"      // branch-free: every lane decodes one of the 8 pairs
@@ -5774,9 +5774,9 @@ int cu_qmatmul_q6k(const void* dA, const void* dQ, void* dOut, int M, int K, int
                        "    int is = i >> 4;\n"                                        // i and i+1 share the sub-block
                        "    float s0 = d*(float)sc[is],   s2 = d*(float)sc[is+2];\n"
                        "    float s4 = d*(float)sc[is+4], s6 = d*(float)sc[is+6];\n"
-                       "    unsigned int b1 = *(const unsigned short*)(ql + i);\n"      // {ql[i], ql[i+1]} in one load
-                       "    unsigned int b2 = *(const unsigned short*)(ql + i + 32);\n"
-                       "    unsigned int hh = *(const unsigned short*)(qh + i);\n"
+                       "    unsigned int b1 = __ldcs((const unsigned short*)(ql + i));\n"      // {ql[i], ql[i+1]} in one load
+                       "    unsigned int b2 = __ldcs((const unsigned short*)(ql + i + 32));\n"
+                       "    unsigned int hh = __ldcs((const unsigned short*)(qh + i));\n"
                        "    float2 a1v = *(const float2*)(ay + i),      a2v = *(const float2*)(ay + i + 32);\n"
                        "    float2 a3v = *(const float2*)(ay + i + 64), a4v = *(const float2*)(ay + i + 96);\n"
                        "    #pragma unroll 2\n"
