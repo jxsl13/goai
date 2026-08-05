@@ -3,6 +3,7 @@ package nn
 import (
 	"math"
 
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -140,20 +141,51 @@ func (mp *MixedPrecision) UnscaleGrads(grad GradFn, scale float64, foundInf *boo
 		of := flatF32(out) // fresh F32 → contiguous
 		// Contiguous fast paths (§base-perf: no per-element Unravel/AtF64/SetF64).
 		if gf := flatF32(g); gf != nil {
-			for j, gv := range gf {
-				v := float64(gv) * inv
-				if math.IsInf(v, 0) || math.IsNaN(v) {
-					*foundInf = true
+			// Unscale of[j]=gv*inv is per-element (disjoint writes ⇒ bit-identical chunking); the
+			// inf/nan check is an OR reduction, counted per chunk (SumF64) and OR'd once after —
+			// exact regardless of order (no float reassociation). Large grads fan across cores.
+			if len(gf) < parStepMinElems {
+				for j, gv := range gf {
+					v := float64(gv) * inv
+					if math.IsInf(v, 0) || math.IsNaN(v) {
+						*foundInf = true
+					}
+					of[j] = float32(v)
 				}
-				of[j] = float32(v)
+			} else if parallel.SumF64(len(gf), func(lo, hi int) float64 {
+				var bad float64
+				for j := lo; j < hi; j++ {
+					v := float64(gf[j]) * inv
+					if math.IsInf(v, 0) || math.IsNaN(v) {
+						bad++
+					}
+					of[j] = float32(v)
+				}
+				return bad
+			}) > 0 {
+				*foundInf = true
 			}
 		} else if gf := flatF64(g); gf != nil {
-			for j, gv := range gf {
-				v := gv * inv
-				if math.IsInf(v, 0) || math.IsNaN(v) {
-					*foundInf = true
+			if len(gf) < parStepMinElems {
+				for j, gv := range gf {
+					v := gv * inv
+					if math.IsInf(v, 0) || math.IsNaN(v) {
+						*foundInf = true
+					}
+					of[j] = float32(v)
 				}
-				of[j] = float32(v)
+			} else if parallel.SumF64(len(gf), func(lo, hi int) float64 {
+				var bad float64
+				for j := lo; j < hi; j++ {
+					v := gf[j] * inv
+					if math.IsInf(v, 0) || math.IsNaN(v) {
+						bad++
+					}
+					of[j] = float32(v)
+				}
+				return bad
+			}) > 0 {
+				*foundInf = true
 			}
 		} else {
 			for j := range g.Numel() {
