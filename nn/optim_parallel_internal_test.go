@@ -434,3 +434,72 @@ func BenchmarkProdigyStep_1M_parallel(b *testing.B) {
 func BenchmarkProdigyStep_1M_serial(b *testing.B) {
 	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewProdigy(p) })
 }
+
+// TestDAdaptAdamParStepMatchesSerial mirrors the Prodigy toggle test: DAdaptAdam's typed Step fans the
+// moment writes and the global d-estimate reductions (numerator ⟨g,s/(√v+ε)⟩ and ‖s‖₁, via parSumF64x2)
+// across cores. The per-index m/v/s writes use the entry-time d and are pure disjoint writes, so within
+// ONE step they are BIT-EXACT serial-vs-parallel (proving the partition); the two summed scalars — and
+// thus d and the applied params — relax to a reassociation tol (~1 ULP, as in LAMB/ClipGradNorm).
+func TestDAdaptAdamParStepMatchesSerial(t *testing.T) {
+	const n = 1<<18 + 4321 // ragged tail; above parStepMinElems so the parallel path engages
+	orig := parStepMinElems
+	defer func() { parStepMinElems = orig }()
+	for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
+		init := make([]float64, n)
+		grad := make([]float64, n)
+		for i := range init {
+			init[i] = math.Sin(float64(i)*0.0017)*0.5 - 0.15
+			grad[i] = math.Cos(float64(i)*0.0011) * 4e-2
+		}
+		run := func(threshold int) (param, mm, vv, ss []float64) {
+			parStepMinElems = threshold
+			p := tensor.New(dt, tensor.Shape{n})
+			if dt == tensor.F64 {
+				copy(p.Storage().F64(), init)
+			} else {
+				pf := p.Storage().F32()
+				for i, x := range init {
+					pf[i] = float32(x)
+				}
+			}
+			g := tensor.New(tensor.F64, tensor.Shape{n})
+			copy(g.Storage().F64(), grad)
+			gc := g.Cast(dt)
+			opt := NewDAdaptAdam([]*tensor.Tensor{p})
+			if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return gc }); err != nil {
+				t.Fatal(err)
+			}
+			param = make([]float64, n)
+			if dt == tensor.F64 {
+				copy(param, p.Storage().F64())
+			} else {
+				for i, x := range p.Storage().F32() {
+					param[i] = float64(x)
+				}
+			}
+			mm = append([]float64(nil), opt.m[0]...)
+			vv = append([]float64(nil), opt.v[0]...)
+			ss = append([]float64(nil), opt.s[0]...)
+			return
+		}
+		sp, sm, sv, ssr := run(1 << 40)
+		pp, pm, pv, psr := run(1 << 4)
+		for i := 0; i < n; i++ {
+			if sm[i] != pm[i] || sv[i] != pv[i] || ssr[i] != psr[i] {
+				t.Fatalf("%v moment[%d]: m %v/%v v %v/%v s %v/%v (must be bit-exact within one step)",
+					dt, i, sm[i], pm[i], sv[i], pv[i], ssr[i], psr[i])
+			}
+			if d := math.Abs(sp[i] - pp[i]); d > 1e-9*math.Abs(sp[i])+1e-11 {
+				t.Fatalf("%v param[%d]: serial %v vs parallel %v (Δ %g > tol)", dt, i, sp[i], pp[i], d)
+			}
+		}
+		t.Logf("%v: DAdaptAdam parallel matches serial (m/v/s bit-exact within step, param within d-estimate ULP tol) over %d elems", dt, n)
+	}
+}
+
+func BenchmarkDAdaptAdamStep_1M_parallel(b *testing.B) {
+	benchOptStep1M(b, 1<<8, func(p []*tensor.Tensor) Optimizer { return NewDAdaptAdam(p) })
+}
+func BenchmarkDAdaptAdamStep_1M_serial(b *testing.B) {
+	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewDAdaptAdam(p) })
+}
