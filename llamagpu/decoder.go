@@ -42,6 +42,7 @@
 package llamagpu
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -99,6 +100,18 @@ type moeGatedRecorder interface {
 	QMatMulResidentMoE(x buffer, w qweight, o buffer, m int, moeGate buffer, gateStride, ex int) error
 }
 
+// quantAccRecorder is the optional residual-add-FUSED quant-GEMV extension: dst += x·dequant(w) in ONE
+// kernel (beta=1), instead of GEMV→scratch (beta=0) plus a separate Binary add. Implemented by the CUDA
+// recorder for the Q8 decode GEMV; quantLinear.recordAdd type-asserts it for m==1 and falls back to the
+// two-op shape when absent or for a format without a fused path (errQuantAccUnsupported).
+type quantAccRecorder interface {
+	QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error
+}
+
+// errQuantAccUnsupported signals a weight format with no fused residual-add GEMV — recordAdd then uses
+// the GEMV-into-scratch + Binary-add path.
+var errQuantAccUnsupported = errors.New("llamagpu: no fused quant residual-add for this weight format")
+
 type f32Linear struct {
 	w    buffer
 	k, n int
@@ -119,6 +132,17 @@ func (l quantLinear) record(r recorder, x, o buffer, m int) error {
 }
 
 func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error {
+	// Decode (m==1): the quant projection is a GEMV, so fuse the residual add into the kernel (beta=1) —
+	// ONE launch instead of GEMV(beta=0)→scratch + a separate Binary add, and no scratch HBM round-trip.
+	// Prefill (m>1) keeps the split: its GEMV routes to the weight-read-once MMQ/WMMA GEMM, which a
+	// beta=1 GEMV (streaming the weight M× per output) would undo. Bit-identical either way.
+	if m == 1 {
+		if acc, ok := r.(quantAccRecorder); ok {
+			if err := acc.QMatMulResidentAcc(x, l.w, dst, m); err != errQuantAccUnsupported {
+				return err
+			}
+		}
+	}
 	return firstErr(
 		r.QMatMulResident(x, l.w, scratch, m),
 		r.Binary(dst, scratch, dst, binaryAdd),

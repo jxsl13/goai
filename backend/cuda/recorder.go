@@ -537,6 +537,22 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	return nil
 }
 
+// QMatMulResidentAcc records dst += x·dequant(w) (beta=1) — the residual-add-FUSED Q8 GEMV. It folds
+// the transformer residual add into the projection kernel (the same beta=1 fusion the f32 path gets
+// via MatMulAcc and the graph decoder via QMatMulAccInto), eliminating the separate cu_add_f32 launch
+// and its scratch HBM round-trip in the decode o/down-projection epilogue. Bit-identical to
+// QMatMulResident-into-scratch followed by a Binary add. Intended for the GEMV (decode/small-m)
+// regime; the flat buffer shapes are ignored in favour of the explicit m/w.k/w.n (as QMatMulResident).
+func (rec *Recorder) QMatMulResidentAcc(x *DeviceF32, w *ResidentBQ8, dst *DeviceF32, m int) error {
+	if x.ptr == nil || w.q == nil || w.scales == nil || dst.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentAcc on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q8(x.ptr, w.q, w.scales, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentAcc failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // q4kWMMAThreshold is the m (row count) at/above which QMatMulResidentQ4K routes prefill to the
 // tensor-core WMMA path instead of the scalar M-tiled GEMV. Below it the fixed O(K·N) weight-dequant
 // pass (a full f16 [K,N] scratch round-trip — ~64 MB of extra traffic at 4096², dominating the runtime
