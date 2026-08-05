@@ -294,16 +294,11 @@ func ClipGradNorm(params []*tensor.Tensor, grad GradFn, maxNorm float64) (GradFn
 		// Typed fast paths (contiguous f32/f64): flat accumulation in float64,
 		// exactly the arithmetic of the generic widening path.
 		if gf := flatF64(g); gf != nil {
-			for _, v := range gf {
-				sumsq += v * v
-			}
+			sumsq += parSumSqF64(gf) // large grads reduce across cores (deterministic, tol-reassoc)
 			continue
 		}
 		if gf := flatF32(g); gf != nil {
-			for _, gv := range gf {
-				v := float64(gv)
-				sumsq += v * v
-			}
+			sumsq += parSumSqF32(gf)
 			continue
 		}
 		for i := range g.Numel() {
@@ -329,16 +324,21 @@ func ClipGradNorm(params []*tensor.Tensor, grad GradFn, maxNorm float64) (GradFn
 		// generic per-element loop without the Unravel/accessor overhead.
 		if gf := flatF64(g); gf != nil {
 			of := out.Storage().F64()
-			for i, v := range gf {
-				of[i] = v * scale
-			}
+			// element-wise (of[i] written once) ⇒ chunking is bit-identical; large grads fan out.
+			parStep(len(gf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					of[i] = gf[i] * scale
+				}
+			})
 			return out
 		}
 		if gf := flatF32(g); gf != nil {
 			of := out.Storage().F32()
-			for i, v := range gf {
-				of[i] = float32(float64(v) * scale)
-			}
+			parStep(len(gf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					of[i] = float32(float64(gf[i]) * scale)
+				}
+			})
 			return out
 		}
 		for i := range g.Numel() {
