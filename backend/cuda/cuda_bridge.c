@@ -47,6 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
+static int gNumSMs = 0;       // device SM count, cached in ensure_init (for grid SM-fill heuristics)
 static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxC = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxCapC = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxAlibiC = NULL, gAttnSoftmaxBias = NULL, gAttnSoftmaxBiasC = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL, gSwigluHalves = NULL, gGegluHalves = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
@@ -287,6 +288,8 @@ static int ensure_init(void) {
         if (cuDeviceGet(&dev, 0) != CUDA_SUCCESS) return -1;
         if (cuDevicePrimaryCtxRetain(&gCtx, dev) != CUDA_SUCCESS) return -1;
     }
+    cudaDeviceGetAttribute(&gNumSMs, cudaDevAttrMultiProcessorCount, 0);
+    if (gNumSMs < 1) gNumSMs = 28; // RTX-3060 GA106 fallback
     return 0;
 }
 
@@ -7716,12 +7719,23 @@ int cu_gqa_flash_dpos(const void* dQ, const void* dK, const void* dV, void* dOut
     int rc = -1;
     int group = qHeads / kvHeads;
     if (hd > 128 || group > 8) return -4; // register/warp budget (all local models fit)
-    int splitK = seqKV / 32; // ≥64 keys per chunk after tiling; capture-constant
+    int splitK = seqKV / 32; // baseline: ≥32 keys per chunk; capture-constant
     if (splitK < 1) splitK = 1;
     if (splitK > 32) splitK = 32;
     pthread_mutex_lock(&gLock);
     if (ensure_init() != 0) { rc = -1; goto done; }
     if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    // SM-fill heuristic: the grid is kvHeads*splitK blocks (batch-1 decode). At short/medium
+    // context the seqKV/32 baseline under-fills the SMs (seqKV=48,kvHeads=4 → 4 blocks on gNumSMs).
+    // Raise splitK toward gNumSMs/kvHeads while keeping ≥16 keys/chunk; only ever INCREASE it, so
+    // long context (already SM-filling) is unchanged. Deterministic in (seqKV,gNumSMs) → capture-constant.
+    {
+        int keysLimit = seqKV / 16; if (keysLimit < 1) keysLimit = 1;
+        int smTarget = (gNumSMs + kvHeads - 1) / kvHeads; if (smTarget < 1) smTarget = 1;
+        int smSplit = smTarget < keysLimit ? smTarget : keysLimit;
+        if (smSplit > splitK) splitK = smSplit;
+        if (splitK > 32) splitK = 32;
+    }
     if (!gGqaFlashPart && compile_kernel(
                               "extern \"C\" __global__ void gqa_flash_partial(const float* q, const float* k, const float* v, float* part,\n"
                               "    int seqKV, int qHeads, int kvHeads, int hd, float scale, const int* dOff, int splitK){\n"
