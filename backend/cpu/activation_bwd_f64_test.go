@@ -24,6 +24,9 @@ func TestActivationBackwardF64CPUMatchesRef(t *testing.T) {
 		x.SetF64(math.Sin(float64(i)*0.017)*12-3, i) // spans roughly [-15,9]
 		g.SetF64(math.Cos(float64(i)*0.011)*2, i)
 	}
+	// GELU backward is scalar → BIT-EXACT vs ref; SiLU backward vectorizes the sigmoid through the
+	// polynomial vsigmoidF64 (like the OpSiLU forward), so it rides the model f64 tolerance (~1e-13
+	// rel per TestVsiluF64Accuracy; the grad's extra arithmetic leaves headroom under 1e-11).
 	for _, op := range []backend.Op{backend.OpGELUBackward, backend.OpSiLUBackward} {
 		gr, err := backend.Execute(backend.NewContext().WithBackend(cpuBE), op, []*tensor.Tensor{x, g}, nil)
 		if err != nil {
@@ -33,10 +36,15 @@ func TestActivationBackwardF64CPUMatchesRef(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v ref: %v", op, err)
 		}
+		exact := op == backend.OpGELUBackward
 		for i := 0; i < n; i++ {
 			gv, rv := gr[0].AtF64(i), rr[0].AtF64(i)
-			if math.Float64bits(gv) != math.Float64bits(rv) {
-				t.Fatalf("%v i=%d x=%v: cpu %.17g != ref %.17g", op, i, x.AtF64(i), gv, rv)
+			if exact {
+				if math.Float64bits(gv) != math.Float64bits(rv) {
+					t.Fatalf("%v i=%d x=%v: cpu %.17g != ref %.17g (must be bit-exact)", op, i, x.AtF64(i), gv, rv)
+				}
+			} else if rel := math.Abs(gv-rv) / math.Max(1, math.Abs(rv)); rel > 1e-11 {
+				t.Fatalf("%v i=%d x=%v: cpu %.17g vs ref %.17g (rel %.3e > 1e-11)", op, i, x.AtF64(i), gv, rv, rel)
 			}
 		}
 	}
