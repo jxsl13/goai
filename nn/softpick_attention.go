@@ -238,6 +238,18 @@ func (s *SoftpickAttention) Params() []*tensor.Tensor {
 // recovers the ordinary softmax (rows sum to 1). OpConcat, OpSoftmax and OpSlice
 // are all VJP-backed, so the whole operation is differentiable.
 func softpickWeights(ctx *backend.Context, scores *tensor.Tensor, sinkLogit float64) (*tensor.Tensor, error) {
+	// Inference (ctx.Recorder == nil): compute softmax-off-by-one directly in one fused, row-parallel
+	// pass instead of OpConcat(sink col)+OpSoftmax([T,T+1])+OpSlice — the augmented softmax materializes
+	// two [T,T+1] tensors + a sliced [T,T] and runs the softmax over the padded axis (~2× the time and
+	// 3× the memory of a plain [T,T] softmax, measured). The fused pass writes one [T,T] output. The
+	// dispatch path is kept for training (its VJP has softmax's own form since the sink term is constant
+	// w.r.t. the scores). Same max/exp/sum structure as the augmented softmax → within the model's
+	// softmax f64 tolerance (the SIMD softmax it replaces is itself ~1-ulp).
+	if ctx.Recorder == nil {
+		if w := softpickWeightsFused(scores, sinkLogit); w != nil {
+			return w, nil
+		}
+	}
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, err := backend.Execute(ctx, op, in, at)
 		if err != nil {
@@ -262,4 +274,72 @@ func softpickWeights(ctx *backend.Context, scores *tensor.Tensor, sinkLogit floa
 		return nil, err
 	}
 	return ex(backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: 0, End: nKeys}, sm) // drop the sink column
+}
+
+// softpickWeightsFused is the Recorder==nil fused form of softpickWeights: for a contiguous F64/F32
+// [T,nKeys] score matrix it writes softmax_1(s)_ij = exp(s_ij-m_i)/(Σ_k exp(s_ik-m_i)+exp(sink-m_i))
+// with m_i = max(sink, rowmax(s_i)) — exactly the augmented softmax's value, in one row-parallel pass
+// (rows are independent, disjoint output rows). F32 accumulates in float64, rounding only the store, as
+// the reference softmax does. Non-contiguous / exotic dtypes return nil so the op path handles them.
+func softpickWeightsFused(scores *tensor.Tensor, sinkLogit float64) *tensor.Tensor {
+	if scores.Ndim() != 2 || !scores.IsContiguous() || scores.Offset() != 0 {
+		return nil
+	}
+	t, nk := scores.Shape()[0], scores.Shape()[1]
+	if nk == 0 {
+		return nil
+	}
+	out := tensor.New(scores.Dtype(), scores.Shape())
+	switch scores.Dtype() {
+	case tensor.F64:
+		s, w := scores.Storage().F64(), out.Storage().F64()
+		parallelRows(t, nk, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				m := sinkLogit
+				for j := 0; j < nk; j++ {
+					if s[base+j] > m {
+						m = s[base+j]
+					}
+				}
+				var sum float64
+				for j := 0; j < nk; j++ {
+					e := math.Exp(s[base+j] - m)
+					w[base+j] = e
+					sum += e
+				}
+				inv := 1.0 / (sum + math.Exp(sinkLogit-m))
+				for j := 0; j < nk; j++ {
+					w[base+j] *= inv
+				}
+			}
+		})
+		return out
+	case tensor.F32:
+		s, w := scores.Storage().F32(), out.Storage().F32()
+		parallelRows(t, nk, func(lo, hi int) {
+			es := make([]float64, nk) // per-chunk scratch: exp in f64, narrow on store (matches ref softmax)
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				m := sinkLogit
+				for j := 0; j < nk; j++ {
+					if float64(s[base+j]) > m {
+						m = float64(s[base+j])
+					}
+				}
+				var sum float64
+				for j := 0; j < nk; j++ {
+					e := math.Exp(float64(s[base+j]) - m)
+					es[j] = e
+					sum += e
+				}
+				inv := 1.0 / (sum + math.Exp(sinkLogit-m))
+				for j := 0; j < nk; j++ {
+					w[base+j] = float32(es[j] * inv)
+				}
+			}
+		})
+		return out
+	}
+	return nil
 }
