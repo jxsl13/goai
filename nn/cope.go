@@ -282,15 +282,33 @@ func (c *CoPEAttention) forward(ctx *backend.Context, x *tensor.Tensor) (out *te
 		if ctx.Recorder == nil {
 			floorP, floorPlus1P, biasLo, biasHi = copeGatherBias(p, z, c.MaxPos)
 		}
-		if biasLo == nil { // training path, or non-F64/non-contiguous: the differentiable one-hot einsum
-			var ohLo, ohHi *tensor.Tensor
-			floorP, floorPlus1P, ohLo, ohHi = copePosIndices(p, c.MaxPos)
-			//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
-			if biasLo, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohLo, z); err != nil {
+		if biasLo == nil { // training path (or non-F64/non-contiguous): differentiable FLAT gather
+			var flatLo, flatHi *tensor.Tensor
+			floorP, floorPlus1P, flatLo, flatHi = copePosFlatIndices(p, c.MaxPos)
+			tq, tk := p.Shape()[0], p.Shape()[1]
+			rows := c.MaxPos + 1
+			// biasLo[i,j]=z[i,⌊p⌋], biasHi[i,j]=z[i,⌈p⌉]: reshape z→[T·rows,1] and OpEmbed on the flat
+			// indices i·rows+idx — the same take-along the one-hot einsum computed (Σ_m 1·z = z[idx] for
+			// finite z, bit-identical). OpEmbed's VJP scatter-adds grad into z[i,idx], exactly the einsum
+			// backward, so the gradient to E (via z) is preserved; p's gradient still flows through the
+			// (floorP,floorPlus1P) interpolation weights. Two [T,T,rows] one-hots + two O(T²·rows) einsums
+			// → two O(T²) gathers.
+			zFlat, e := c.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tq * rows, 1}}, z)
+			if e != nil {
+				return nil, nil, e
+			}
+			bLo, e := c.exec(ctx, backend.OpEmbed, nil, zFlat, flatLo)
+			if e != nil {
+				return nil, nil, e
+			}
+			if biasLo, err = c.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tq, tk}}, bLo); err != nil {
 				return nil, nil, err
 			}
-			//perfscan:ignore PS3024 resource-only variadic-pack alloc; no wallclock (p=0.143)
-			if biasHi, err = c.exec(ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohHi, z); err != nil {
+			bHi, e := c.exec(ctx, backend.OpEmbed, nil, zFlat, flatHi)
+			if e != nil {
+				return nil, nil, e
+			}
+			if biasHi, err = c.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{tq, tk}}, bHi); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -393,23 +411,25 @@ func copeContextualPos(ctx *backend.Context, gmasked *tensor.Tensor) (*tensor.Te
 	return ex(backend.OpSub, nil, rowSumB, cum) // rowSum − cumsum = Σ_{k=j+1}^{i}
 }
 
-// copePosIndices derives, from the clamped position matrix p[T,T] ∈ [0,MaxPos], the
+// copePosFlatIndices derives, from the clamped position matrix p[T,T] ∈ [0,MaxPos], the
 // host-constant tensors for the linear interpolation of the position table: floorP
 // (⌊p⌋), floorPlus1P (⌊p⌋+1, so (floorPlus1P−p) is the low-row weight — exactly 1 at
-// integer p), and the two gather one-hots ohLo[T,T,MaxPos+1], ohHi selecting rows
-// ⌊p⌋ and min(⌊p⌋+1, MaxPos). Indices are non-differentiable (constants); the
+// integer p), and the two FLAT gather index vectors flatLo[T·T], flatHi selecting the
+// take-along positions i·(MaxPos+1)+⌊p⌋ and i·(MaxPos+1)+min(⌊p⌋+1,MaxPos) into a
+// row-major-flattened z[T,MaxPos+1]. Indices are non-differentiable (constants); the
 // gradient to p flows only through the (floorP, floorPlus1P) subtraction weights,
 // which is the correct a.e. gradient of the piecewise-linear interpolation.
-func copePosIndices(p *tensor.Tensor, maxPos int) (floorP, floorPlus1P, ohLo, ohHi *tensor.Tensor) {
+func copePosFlatIndices(p *tensor.Tensor, maxPos int) (floorP, floorPlus1P, flatLo, flatHi *tensor.Tensor) {
 	dt := p.Dtype()
 	tq, tk := p.Shape()[0], p.Shape()[1]
 	rows := maxPos + 1
 	floorP = tensor.New(dt, tensor.Shape{tq, tk})
 	floorPlus1P = tensor.New(dt, tensor.Shape{tq, tk})
-	ohLo = tensor.New(dt, tensor.Shape{tq, tk, rows})
-	ohHi = tensor.New(dt, tensor.Shape{tq, tk, rows})
+	flatLo = tensor.New(tensor.F64, tensor.Shape{tq * tk})
+	flatHi = tensor.New(tensor.F64, tensor.Shape{tq * tk})
+	flo, fhi := flatLo.Storage().F64(), flatHi.Storage().F64()
 	for i := range tq {
-		//perfscan:ignore PS1001 training-path index build feeding dominant one-hot einsum; small share
+		//perfscan:ignore PS1001 training-path index build feeding the gather; small share
 		for j := range tk {
 			pv := p.AtF64(i, j)
 			if pv < 0 {
@@ -429,11 +449,11 @@ func copePosIndices(p *tensor.Tensor, maxPos int) (floorP, floorPlus1P, ohLo, oh
 			if hiIdx > maxPos {
 				hiIdx = maxPos
 			}
-			ohLo.SetF64(1, i, j, loIdx)
-			ohHi.SetF64(1, i, j, hiIdx)
+			flo[i*tk+j] = float64(i*rows + loIdx)
+			fhi[i*tk+j] = float64(i*rows + hiIdx)
 		}
 	}
-	return floorP, floorPlus1P, ohLo, ohHi
+	return floorP, floorPlus1P, flatLo, flatHi
 }
 
 // copeGatherBias is the inference (ctx.Recorder == nil) fast path for the two
