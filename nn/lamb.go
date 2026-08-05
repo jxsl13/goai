@@ -112,34 +112,37 @@ func (l *LAMB) Step(grad GradFn) error {
 		pf32, gf32 := flatF32(p), flatF32(g)
 		switch {
 		case pf64 != nil && gf64 != nil:
-			for i, gv := range gf64 {
-				//perfscan:ignore PS3084 optimizer moment-update, bandwidth-bound streaming in typed fastpath
-				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
-				//perfscan:ignore PS3084 v-update streaming, memory-bound; SIMD Adam-class benched slower
-				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
-				mh := m[i] * ic1
-				vh := v[i] * ic2
-				theta := pf64[i]
-				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
-				u[i] = ui
-				wNorm2 += theta * theta
-				uNorm2 += ui * ui
-			}
+			// Pass 1 writes only per-index state (m[i]/v[i]/u[i]) → parStep is bit-identical to serial
+			// (like the Adam/SGD/Lion #923-925 parallelization); the Σθ²/Σu² reductions move to parSumSq.
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					gv := gf64[i]
+					//perfscan:ignore PS3084 optimizer moment-update, bandwidth-bound streaming in typed fastpath
+					m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
+					//perfscan:ignore PS3084 v-update streaming, memory-bound; SIMD Adam-class benched slower
+					v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
+					mh := m[i] * ic1
+					vh := v[i] * ic2
+					u[i] = mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*pf64[i]
+				}
+			})
+			wNorm2 = parSumSqF64(pf64) // Σθ² over the pre-update params; reassociated (tol ~1 ULP, cf. ClipGradNorm)
+			uNorm2 = parSumSqF64(u)
 		case pf32 != nil && gf32 != nil:
-			for i := range gf32 {
-				gv := float64(gf32[i])
-				//perfscan:ignore PS3084 F32 fastpath moment update, bandwidth-bound streaming
-				m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
-				//perfscan:ignore PS3084 F32 v-update, memory-bound; no compute-bound win
-				v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
-				mh := m[i] * ic1
-				vh := v[i] * ic2
-				theta := float64(pf32[i])
-				ui := mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*theta
-				u[i] = ui
-				wNorm2 += theta * theta
-				uNorm2 += ui * ui
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					gv := float64(gf32[i])
+					//perfscan:ignore PS3084 F32 fastpath moment update, bandwidth-bound streaming
+					m[i] = l.Beta1*m[i] + (1-l.Beta1)*gv
+					//perfscan:ignore PS3084 F32 v-update, memory-bound; no compute-bound win
+					v[i] = l.Beta2*v[i] + (1-l.Beta2)*gv*gv
+					mh := m[i] * ic1
+					vh := v[i] * ic2
+					u[i] = mh/(math.Sqrt(vh)+l.Eps) + l.WeightDecay*float64(pf32[i])
+				}
+			})
+			wNorm2 = parSumSqF32(pf32)
+			uNorm2 = parSumSqF64(u)
 		default:
 			// Generic fallback: any dtype/layout via the widening accessors.
 			for i := range n {
@@ -165,13 +168,17 @@ func (l *LAMB) Step(grad GradFn) error {
 		step := l.LR * trust
 		switch {
 		case pf64 != nil && gf64 != nil:
-			for i := range pf64 {
-				pf64[i] = pf64[i] - step*u[i]
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf64[i] = pf64[i] - step*u[i]
+				}
+			})
 		case pf32 != nil && gf32 != nil:
-			for i := range pf32 {
-				pf32[i] = float32(float64(pf32[i]) - step*u[i])
-			}
+			parStep(n, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf32[i] = float32(float64(pf32[i]) - step*u[i])
+				}
+			})
 		default:
 			for i := range n {
 				idx := tensor.Unravel(i, p.Shape())
