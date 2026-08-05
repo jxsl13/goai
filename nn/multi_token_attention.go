@@ -293,6 +293,16 @@ func (m *MultiTokenAttention) Forward(ctx *backend.Context, x *tensor.Tensor) (*
 // with Pad=0, Stride=1, so the output is [T,T] and the kernel's current-position
 // tap θ[CQ−1,⌊CK/2⌋] lands the map back on itself (the delta ⇒ identity property).
 func (m *MultiTokenAttention) keyQueryConv(ctx *backend.Context, l *tensor.Tensor, h, t int) (*tensor.Tensor, error) {
+	// Inference (ctx.Recorder == nil): compute the small (CQ×CK) causal key-query convolution over the
+	// [T,T] logit map directly, in one row-parallel pass, instead of pad → reshape → OpConv2D → reshape.
+	// OpConv2D im2cols a [T·T, CQ·CK] patch matrix (the layer's dominant memory), pointless for a tiny
+	// kernel. The direct form reads L and the kernel with bounds-checked window sums — same value the
+	// im2col+GEMM computes. The dispatch path is kept for training (OpConv2D is VJP-backed).
+	if ctx.Recorder == nil {
+		if w := m.keyQueryConvFused(l, h, t); w != nil {
+			return w, nil
+		}
+	}
 	leftPad, rightPad := m.CK/2, m.CK-1-m.CK/2 // ⌊ck/2⌋ and ⌈ck/2⌉−1
 	topPad := m.CQ - 1
 	padded, err := m.pad2D(ctx, l, topPad, 0, leftPad, rightPad)
@@ -323,6 +333,79 @@ func (m *MultiTokenAttention) keyQueryConv(ctx *backend.Context, l *tensor.Tenso
 	}
 	//perfscan:ignore PS3024 output OpReshape; Conv2D-dominated
 	return m.exec(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{t, t}}, conv)
+}
+
+// keyQueryConvFused is the Recorder==nil direct form of keyQueryConv: for a contiguous F64/F32 logit
+// map l[T,T] it writes the causal CQ×CK convolution (top pad CQ−1, left pad ⌊CK/2⌋) directly, one
+// output row per goroutine, with no im2col/GEMM. out[i,j] = Σ_{a<CQ,b<CK} kernel[h,a,b]·l[i+a−(CQ−1),
+// j+b−⌊CK/2⌋] (out-of-range taps contribute 0), exactly the padded OpConv2D. Non-contiguous / exotic
+// dtypes return nil so the OpConv2D path handles them.
+func (m *MultiTokenAttention) keyQueryConvFused(l *tensor.Tensor, h, t int) *tensor.Tensor {
+	if l.Ndim() != 2 || !l.IsContiguous() || l.Offset() != 0 {
+		return nil
+	}
+	cq, ck := m.CQ, m.CK
+	topPad, leftPad := cq-1, ck/2
+	out := tensor.New(l.Dtype(), tensor.Shape{t, t})
+	switch l.Dtype() {
+	case tensor.F64:
+		ld, od := l.Storage().F64(), out.Storage().F64()
+		kd := m.KQKernel.Contiguous().Storage().F64()
+		kb := h * cq * ck
+		parallelRows(t, t, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				orow := od[i*t : i*t+t]
+				for j := 0; j < t; j++ {
+					var sm float64
+					for a := 0; a < cq; a++ {
+						li := i + a - topPad
+						if li < 0 || li >= t {
+							continue
+						}
+						lrow := ld[li*t : li*t+t]
+						ka := kb + a*ck
+						for b := 0; b < ck; b++ {
+							lj := j + b - leftPad
+							if lj >= 0 && lj < t {
+								sm += kd[ka+b] * lrow[lj]
+							}
+						}
+					}
+					orow[j] = sm
+				}
+			}
+		})
+		return out
+	case tensor.F32:
+		ld, od := l.Storage().F32(), out.Storage().F32()
+		kd := m.KQKernel.Contiguous().Storage().F32()
+		kb := h * cq * ck
+		parallelRows(t, t, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				orow := od[i*t : i*t+t]
+				for j := 0; j < t; j++ {
+					var sm float64
+					for a := 0; a < cq; a++ {
+						li := i + a - topPad
+						if li < 0 || li >= t {
+							continue
+						}
+						lrow := ld[li*t : li*t+t]
+						ka := kb + a*ck
+						for b := 0; b < ck; b++ {
+							lj := j + b - leftPad
+							if lj >= 0 && lj < t {
+								sm += float64(kd[ka+b]) * float64(lrow[lj])
+							}
+						}
+					}
+					orow[j] = float32(sm)
+				}
+			}
+		})
+		return out
+	}
+	return nil
 }
 
 // headConv mixes the per-head logit maps with the dense HeadKernel [CH,CH] within
