@@ -22,6 +22,9 @@ type GroupNorm struct {
 	Beta   *tensor.Tensor // [C] per-channel shift, init 0
 	Groups int            // number of groups G (must divide C)
 	Eps    float64        // variance-floor ε (default 1e-5)
+	// ones/zeros [C/G] are the γ=1,β=0 for the fused OpLayerNorm normalize path (the group's
+	// stats == LayerNorm over its C/G channels); the per-channel affine is applied separately after.
+	ones, zeros *tensor.Tensor
 }
 
 // NewGroupNorm builds a GroupNorm over C channels split into groups (γ=1, β=0,
@@ -35,7 +38,12 @@ func NewGroupNorm(dtype tensor.Dtype, groups, c int) *GroupNorm {
 	for i := range c {
 		g.SetF64(1, i)
 	}
-	return &GroupNorm{Gamma: g, Beta: b, Groups: groups, Eps: 1e-5}
+	gs := c / groups
+	ones, zeros := tensor.New(dtype, tensor.Shape{gs}), tensor.New(dtype, tensor.Shape{gs})
+	for i := range gs {
+		ones.SetF64(1, i)
+	}
+	return &GroupNorm{Gamma: g, Beta: b, Groups: groups, Eps: 1e-5, ones: ones, zeros: zeros}
 }
 
 // Forward normalizes x [batch, C] per sample and per group, then applies the
@@ -59,38 +67,25 @@ func (gn *GroupNorm) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	reshape := func(t *tensor.Tensor, shape tensor.Shape) (*tensor.Tensor, error) {
 		return ex(backend.OpReshape, backend.ReshapeAttrs{Shape: shape}, t)
 	}
-	// [batch, C] → [batch, G, C/G]; normalize over the last axis (the group's channels).
-	xr, err := reshape(x, tensor.Shape{batch, gn.Groups, gs})
+	// Each group's normalize (mean/biased-var over its C/G channels, ε-inside-sqrt) IS LayerNorm over
+	// the last axis: reshape [batch,C] → [batch·G, C/G] (each row = one sample's group) and run the
+	// fused OpLayerNorm kernel with γ=1,β=0 — one dispatch + f64-accum row-parallel AVX2 pass, replacing
+	// the 7-op mean/sub/mul/mean/add/sqrt/div chain (~5 full passes + 6 intermediates). The per-channel
+	// affine is applied after. Matches the composed path within norm f64-accum tolerance (G=1 is exactly
+	// LayerNorm.Forward). Cache γ=1/β=0 [C/G] on the struct.
+	if gn.ones == nil || gn.ones.Shape()[0] != gs || gn.ones.Dtype() != x.Dtype() {
+		o := tensor.New(x.Dtype(), tensor.Shape{gs})
+		z := tensor.New(x.Dtype(), tensor.Shape{gs})
+		for i := range gs {
+			o.SetF64(1, i)
+		}
+		gn.ones, gn.zeros = o, z
+	}
+	xr, err := reshape(x, tensor.Shape{batch * gn.Groups, gs})
 	if err != nil {
 		return nil, err
 	}
-	mu, err := ex(backend.OpMean, backend.ReduceAttrs{Axes: []int{2}, KeepDims: true}, xr) // [batch,G,1]
-	if err != nil {
-		return nil, err
-	}
-	centered, err := ex(backend.OpSub, nil, xr, mu)
-	if err != nil {
-		return nil, err
-	}
-	sq, err := ex(backend.OpMul, nil, centered, centered)
-	if err != nil {
-		return nil, err
-	}
-	variance, err := ex(backend.OpMean, backend.ReduceAttrs{Axes: []int{2}, KeepDims: true}, sq) // biased var
-	if err != nil {
-		return nil, err
-	}
-	epsT := tensor.New(x.Dtype(), tensor.Shape{1, 1, 1})
-	epsT.SetF64(gn.Eps, 0, 0, 0)
-	varEps, err := ex(backend.OpAdd, nil, variance, epsT)
-	if err != nil {
-		return nil, err
-	}
-	std, err := ex(backend.OpSqrt, nil, varEps)
-	if err != nil {
-		return nil, err
-	}
-	normed, err := ex(backend.OpDiv, nil, centered, std) // [batch,G,C/G]
+	normed, err := ex(backend.OpLayerNorm, backend.NormAttrs{Eps: gn.Eps}, xr, gn.ones, gn.zeros)
 	if err != nil {
 		return nil, err
 	}
