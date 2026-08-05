@@ -278,6 +278,17 @@ func (s *StickBreakingAttention) Params() []*tensor.Tensor {
 // zeroes future keys, S is 0 in the strictly-upper triangle, keeping logA finite
 // there (no NaN) before the final mask sets those entries to exactly 0.
 func stickBreakingWeights(ctx *backend.Context, z, mask *tensor.Tensor) (*tensor.Tensor, error) {
+	// Inference (ctx.Recorder == nil): compute the causal stick-breaking weights directly in one
+	// row-parallel pass instead of the ~10-op log-space chain (softplus×2, mask-mul, rowsum, cumsum,
+	// sub, add, exp, mask-mul), each of which materializes a [T,T] tensor. Same math per row —
+	// A_ij = σ(z_ij)·Π_{j<k≤i}(1−σ(z_ik)), formed in log space with a reverse cumulative sum — so the
+	// value is the same up to the softplus/exp poly (F64 bit-identical, F32 f32-tol); the op chain is
+	// kept for training (each step VJP-backed).
+	if ctx.Recorder == nil {
+		if w := stickBreakingWeightsFused(z); w != nil {
+			return w, nil
+		}
+	}
 	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
 		o, err := backend.Execute(ctx, op, in, at)
 		if err != nil {
@@ -349,4 +360,82 @@ func sbCausalMask01(dtype tensor.Dtype, t int) *tensor.Tensor {
 		}
 	}
 	return m
+}
+
+// stickBreakingWeightsFused is the Recorder==nil fused form of stickBreakingWeights: for a contiguous
+// F64/F32 score matrix z[T,T] it writes the causal stick-breaking weights A in one row-parallel pass.
+// Per row i (keys j≤i): l_ik=−softplus(z_ik) (=log(1−σ(z_ik))), total=Σ_{k≤i} l_ik, and with the
+// inclusive prefix pincl_j=Σ_{k≤j} l_ik the reverse-cumsum sfx_ij=total−pincl_ij=Σ_{j<k≤i} l_ik; then
+// A_ij=exp(−softplus(−z_ij)+sfx_ij) and j>i is 0. Same masked sum order (left-to-right) as the op
+// chain's OpSum/OpCumsum; softplus is the stable branch, F32 computes in float64. Non-contiguous /
+// exotic dtypes return nil so the op path handles them.
+func stickBreakingWeightsFused(z *tensor.Tensor) *tensor.Tensor {
+	if z.Ndim() != 2 || !z.IsContiguous() || z.Offset() != 0 {
+		return nil
+	}
+	softplus := func(u float64) float64 {
+		if u >= 0 {
+			return u + math.Log1p(math.Exp(-u))
+		}
+		return math.Log1p(math.Exp(u))
+	}
+	t, nk := z.Shape()[0], z.Shape()[1]
+	out := tensor.New(z.Dtype(), z.Shape())
+	switch z.Dtype() {
+	case tensor.F64:
+		zd, w := z.Storage().F64(), out.Storage().F64()
+		parallelRows(t, nk, func(lo, hi int) {
+			lscr := make([]float64, nk)
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := i + 1
+				if lim > nk {
+					lim = nk
+				}
+				var total float64
+				for k := 0; k < lim; k++ {
+					lk := -softplus(zd[base+k])
+					lscr[k] = lk
+					total += lk
+				}
+				var pincl float64
+				for j := 0; j < lim; j++ {
+					pincl += lscr[j]
+					w[base+j] = math.Exp(-softplus(-zd[base+j]) + (total - pincl))
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	case tensor.F32:
+		zd, w := z.Storage().F32(), out.Storage().F32()
+		parallelRows(t, nk, func(lo, hi int) {
+			lscr := make([]float64, nk)
+			for i := lo; i < hi; i++ {
+				base := i * nk
+				lim := i + 1
+				if lim > nk {
+					lim = nk
+				}
+				var total float64
+				for k := 0; k < lim; k++ {
+					lk := -softplus(float64(zd[base+k]))
+					lscr[k] = lk
+					total += lk
+				}
+				var pincl float64
+				for j := 0; j < lim; j++ {
+					pincl += lscr[j]
+					w[base+j] = float32(math.Exp(-softplus(-float64(zd[base+j])) + (total - pincl)))
+				}
+				for j := lim; j < nk; j++ {
+					w[base+j] = 0
+				}
+			}
+		})
+		return out
+	}
+	return nil
 }
