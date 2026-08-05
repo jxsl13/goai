@@ -66,6 +66,16 @@ func mhaSelectKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		vs := v.Contiguous().Storage().F32()
 		sels := sel.Contiguous().Storage().F32()
 		os := out.Storage().F32()
+		// Perf build: route both score sources (Q1·K1ᵀ, Q2·K2ᵀ) and the P·V through the f32-native
+		// SIMD gemm + a select/mask vexp softmax, as unmasked MHA does — the scalar 8-jam path below
+		// never used it, leaving selective attention ~10× slower than it need be. Small/decode shapes
+		// keep the byte-exact scalar path. Rides the f32 5e-5 tolerance (ADR-0021); the parity test
+		// relaxes accordingly on F32NativeKernelsEnabled.
+		if f32NativeKernels && sq >= mhaGemmMinSeq {
+			geo := mhaGeo{sq: sq, sk: sk, dm: dm, dk: dk, kvDM: kvHeads * dk, heads: heads, rep: rep, scale: scale}
+			mhaSelectFwdGemmF32(qs1, ks1, qs2, ks2, vs, sels, os, geo)
+			return []*tensor.Tensor{out}, nil
+		}
 		kdm := kvHeads * dk
 		parallelWork(heads*sq, sk*dk, func(lo, hi int) {
 			//perfscan:ignore PS6008 per-worker scratch (once per goroutine chunk); correct design

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
-	_ "github.com/jxsl13/goai/backend/cpu"
+	cpucpu "github.com/jxsl13/goai/backend/cpu"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -56,6 +56,14 @@ func TestMHASelectF32CPUByteIdenticalToRef(t *testing.T) {
 		}
 		cs, rs := gc[0].Storage().F32(), gr[0].Storage().F32()
 		for i := range cs {
+			if cpucpu.F32NativeKernelsEnabled() {
+				// Perf build routes both score sources + P·V through the f32-native gemm + vexp
+				// softmax (mhaSelectFwdGemmF32): ADR-0021 5e-5 tolerant parity, not byte-exact vs ref.
+				if d := math.Abs(float64(cs[i] - rs[i])); d > 5e-5*math.Max(1, math.Abs(float64(rs[i]))) {
+					t.Fatalf("cfg=%+v idx=%d cpu=%v ref=%v (rel > 5e-5)", cfg, i, cs[i], rs[i])
+				}
+				continue
+			}
 			if math.Float32bits(cs[i]) != math.Float32bits(rs[i]) {
 				t.Fatalf("cfg=%+v idx=%d cpu=%v ref=%v", cfg, i, cs[i], rs[i])
 			}
