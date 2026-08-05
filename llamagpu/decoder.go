@@ -3020,7 +3020,16 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 // logits (row i = logits after tokens[..i]). This is the prompt-PREFILL fast path — one dispatch
 // round-trip for the whole prompt instead of one per token — and the target-verification step
 // speculative decoding needs. pos+k must be ≤ the model's Ctx.
-func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
+func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) { return d.stepN(tokens, pos, false) }
+
+// stepN is StepN with an optional last-row-only mode. When lastOnly, only the FINAL prompt row's
+// logits are projected by the LM head and downloaded — the transformer body still runs all k rows
+// (the KV cache needs every position), but the [k-1] earlier rows' logits are never read by a caller
+// that only samples the post-prompt token (Generate), so their lm_head GEMM and vocab-sized host
+// download are pure waste — large for high-vocab models (a 512-token prompt over a 128k vocab downloads
+// 256 MB just to discard all but the last row). It then returns a single [vocab] row. Full-k mode is
+// unchanged and keeps every row for speculative/verify callers (Medusa, prompt-lookup).
+func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error) {
 	k := len(tokens)
 	if k == 0 {
 		return nil, fmt.Errorf("llamagpu(%s): StepN needs ≥1 token", d.ops.name)
@@ -3032,6 +3041,17 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 		// Mamba/Mamba-2/RWKV/Jamba's recurrence is inherently sequential (each token's state update reads the
 		// previous token's), so there is no batched prefill — process the prompt token by token through
 		// Step, which carries the recurrent state and resets it at pos==0. Returns [k, vocab].
+		if lastOnly { // only the final token's logits are wanted; still step all tokens for the state
+			var last []float32
+			for i, tok := range tokens {
+				row, err := d.Step(tok, pos+i)
+				if err != nil {
+					return nil, err
+				}
+				last = row
+			}
+			return append([]float32(nil), last...), nil
+		}
 		out := make([]float32, k*d.v)
 		for i, tok := range tokens {
 			row, err := d.Step(tok, pos+i)
@@ -3107,16 +3127,28 @@ func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) {
 			return nil, e
 		}
 	}
+	rows := k
+	if lastOnly {
+		// Only the final row's logits are wanted: move its residual to row 0 (r.Blit copies d.d floats
+		// from d.dx[(k-1)·d] to d.dx[0]; a no-op when k==1) so the final norm + LM-head project ONE row
+		// instead of k, and the host download shrinks from k·vocab to vocab. Bit-identical: the discarded
+		// rows' logits were never read, and row 0's value is exactly what row k-1 would have produced.
+		if e := r.Blit(d.dx.b, (k-1)*d.d, d.dx.b, 0, d.d); e != nil {
+			r.Free()
+			return nil, e
+		}
+		rows = 1
+	}
 	if e := firstErr(
-		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, k),
-		d.recordLogits(r, k),
+		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, rows),
+		d.recordLogits(r, rows),
 		r.Finish(),
 	); e != nil {
 		r.Free()
 		return nil, e
 	}
 	r.Free()
-	out := make([]float32, k*d.v)
+	out := make([]float32, rows*d.v)
 	if err := d.logits.b.DownloadF32(out); err != nil {
 		return nil, err
 	}
@@ -3131,14 +3163,15 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 		return nil, fmt.Errorf("llamagpu(%s): Generate needs a non-empty prompt", d.ops.name)
 	}
 	out := append([]int(nil), prompt...)
-	// prefill the whole prompt in ONE recorded step (§T418) — one dispatch round-trip
-	// instead of one per prompt token.
-	all, err := d.StepN(prompt, 0)
+	// prefill the whole prompt in ONE recorded step (§T418) — one dispatch round-trip instead of one
+	// per prompt token. lastOnly: generation samples only the post-prompt row, so the LM head projects
+	// and downloads that single row (not all len(prompt) rows) — a large saving for high-vocab models.
+	all, err := d.stepN(prompt, 0, true)
 	if err != nil {
 		return nil, err
 	}
 	pos := len(prompt)
-	logits := all[(len(prompt)-1)*d.v:] // host logits after the full prompt (first token)
+	logits := all // last-row-only prefill returns exactly the post-prompt row's [vocab] logits
 	buf := make([]float64, d.v)
 	// On-device top-k sampling fast-path: for a penalty-free TopK sampler AND a device logits buffer that
 	// can TopK (CUDA), skip the whole-vocab host download + CPU sort each token — read the K highest
