@@ -43,15 +43,20 @@ func (a *GradAccumulator) Add(grad GradFn) {
 			switch g.Dtype() {
 			case tensor.F64:
 				d := g.Storage().F64()
-				for i := range s {
-					s[i] += d[i]
-				}
+				// per-element (s[i] written once) ⇒ chunking is bit-identical; large params fan out.
+				parStep(len(s), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						s[i] += d[i]
+					}
+				})
 				continue
 			case tensor.F32:
 				d := g.Storage().F32()
-				for i := range s {
-					s[i] += float64(d[i])
-				}
+				parStep(len(s), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						s[i] += float64(d[i])
+					}
+				})
 				continue
 			}
 		}
