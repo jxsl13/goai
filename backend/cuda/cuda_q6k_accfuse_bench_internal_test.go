@@ -70,3 +70,58 @@ func BenchmarkQ6KResidualAccUnfusedDown(b *testing.B) { benchQ6KResidualAcc(b, 1
 // o_proj decode dims (K=N=hidden 2048)
 func BenchmarkQ6KResidualAccFusedO(b *testing.B)   { benchQ6KResidualAcc(b, 2048, 2048, true) }
 func BenchmarkQ6KResidualAccUnfusedO(b *testing.B) { benchQ6KResidualAcc(b, 2048, 2048, false) }
+
+// benchQ5KResidualAcc is the Q5_K twin (Q5_K_M stores o_proj as Q5_K). Same scalar-GEMV+beta
+// epilogue as Q6_K, so it should show the same ~1.8µs/op launch+round-trip saving.
+func benchQ5KResidualAcc(b *testing.B, k, n int, fused bool) {
+	if !Available() {
+		b.Skip("no gpu")
+	}
+	raw := make([]byte, (k*n/256)*q5kBlockBytes)
+	rq, err := NewResidentBQ5KFromBlocks(raw, k, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	rec, err := NewRecorder()
+	if err != nil {
+		b.Fatal(err)
+	}
+	da, err := NewDeviceF32(1, k)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dst, err := NewDeviceF32(1, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	scratch, err := NewDeviceF32(1, n)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer func() { rq.Free(); rec.Free(); da.Free(); dst.Free(); scratch.Free() }()
+	const opsPerToken = 64
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < opsPerToken; j++ {
+			if fused {
+				if err := rec.QMatMulResidentAccQ5K(da, rq, dst, 1); err != nil {
+					b.Fatal(err)
+				}
+			} else {
+				if err := rec.QMatMulResidentQ5K(da, rq, scratch, 1); err != nil {
+					b.Fatal(err)
+				}
+				if err := rec.Binary(dst, scratch, dst, recBinaryAdd); err != nil {
+					b.Fatal(err)
+				}
+			}
+		}
+		if err := rec.Wait(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// o_proj decode dims (Q5_K_M's o_proj is Q5_K)
+func BenchmarkQ5KResidualAccFusedO(b *testing.B)   { benchQ5KResidualAcc(b, 2048, 2048, true) }
+func BenchmarkQ5KResidualAccUnfusedO(b *testing.B) { benchQ5KResidualAcc(b, 2048, 2048, false) }

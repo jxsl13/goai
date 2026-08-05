@@ -289,6 +289,7 @@ func TestCUDAQ6KRecorderAccParity(t *testing.T) {
 	// un-fused fallback: GEMV(beta=0) into scratch, then host residual add
 	scratch, _ := cuda.NewDeviceF32(1, N)
 	defer scratch.Free()
+	must(t, scratch.UploadF32(make([]float32, N))) // beta=0 GEMV overwrites, but 0*stale-Inf=NaN — zero first
 	must(t, rec.QMatMulResidentQ6K(da, rq, scratch, 1))
 	must(t, rec.Wait())
 	sc := make([]float32, N)
