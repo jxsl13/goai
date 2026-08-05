@@ -62,3 +62,21 @@ func BenchmarkReMoEPrefill_512x512_e8(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkReMoETrain_512x512_e8 exercises the RECORDING (training) path — the token-sparse
+// differentiable eval vs the former dense all-experts-on-all-tokens loop.
+func BenchmarkReMoETrain_512x512_e8(b *testing.B) {
+	m := nn.NewReMoE(tensor.F64, 512, 1024, 8, 2.0, 1)
+	rng := rand.New(rand.NewPCG(1, 2))
+	x := tensor.New(tensor.F64, tensor.Shape{512, 512})
+	for i := 0; i < x.Numel(); i++ {
+		x.SetF64(rng.NormFloat64()*0.1, tensor.Unravel(i, x.Shape())...)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, _, _, err := m.Forward(autograd.NewTape().Context(), x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
