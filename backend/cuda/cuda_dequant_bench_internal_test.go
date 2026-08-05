@@ -113,3 +113,5 @@ func BenchmarkDequantQ4K_5632x2048(b *testing.B)  { benchDequantQ4K(b, 5632, 204
 
 func BenchmarkDequantQ5K_2048x2048(b *testing.B) { benchDequantQ5K(b, 2048, 2048) }
 func BenchmarkDequantQ5K_5632x2048(b *testing.B) { benchDequantQ5K(b, 5632, 2048) }
+
+func BenchmarkDequantQ6K_2048x2048(b *testing.B) { benchDequantQ6K(b, 2048, 2048) }
