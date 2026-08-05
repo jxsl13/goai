@@ -776,6 +776,16 @@ func nucleusTopP(probs []float64, p float64) {
 		}
 		// nucleus larger than K candidates → exact full-sort fallback below
 	}
+	// The nucleus keep-set {i : probs[i] ≥ τ} is a pure threshold set: the descending
+	// sort's ONLY output consumed here is τ = the crossing token's probability (the sorted
+	// ORDER is never used — truncateNucleus rescans in index order). So find τ directly by
+	// weighted 3-way quickselect (O(n) average) instead of a full O(n·8) radix sort — same
+	// τ, so bit-exact for distinct probs (§T627 parity holds). Falls back to the sort if the
+	// partition fails to converge (adversarial pivots), keeping the worst case at O(n log n).
+	if thresh, ok := nucleusThreshold(idx, probs, p); ok {
+		truncateNucleus(probs, thresh)
+		return
+	}
 	sortIdxDescByProb(idx, probs)
 	var cum float64
 	for _, i := range idx {
@@ -785,6 +795,69 @@ func nucleusTopP(probs []float64, p float64) {
 			return
 		}
 	}
+}
+
+// nucleusThreshold returns τ, the crossing-token probability for top-p mass `p`: the value
+// with mass{probs > τ} < p ≤ mass{probs ≥ τ} — exactly the threshold a descending cumulative
+// scan would find. It partitions idx in place (median-of-3 3-way, mirroring quickselectIdxDesc)
+// and recurses into the > side (crossing above the pivot), stops at the pivot (crossing at the
+// pivot value), or recurses into the < side with the remaining mass — never sorting. Returns
+// ok=false if it fails to converge within the iteration cap, so the caller falls back to the
+// full sort (bounding the worst case). O(n) average, one float compare + add per element.
+func nucleusThreshold(idx []int, probs []float64, p float64) (float64, bool) {
+	if len(idx) == 0 {
+		return 0, false // empty → let the caller's (no-op) sort path handle it
+	}
+	lo, hi := 0, len(idx)-1
+	for iter := 0; iter < 64; iter++ {
+		if lo >= hi {
+			return probs[idx[lo]], true
+		}
+		mid := lo + (hi-lo)/2
+		if probs[idx[mid]] > probs[idx[lo]] {
+			idx[lo], idx[mid] = idx[mid], idx[lo]
+		}
+		if probs[idx[hi]] > probs[idx[lo]] {
+			idx[lo], idx[hi] = idx[hi], idx[lo]
+		}
+		if probs[idx[mid]] > probs[idx[hi]] {
+			idx[mid], idx[hi] = idx[hi], idx[mid]
+		}
+		pivot := probs[idx[mid]] // median of three
+		// 3-way partition: [lo..lt-1] > pivot, [lt..gt] == pivot, [gt+1..hi] < pivot.
+		lt, gt, i := lo, hi, lo
+		for i <= gt {
+			switch {
+			case probs[idx[i]] > pivot:
+				idx[lt], idx[i] = idx[i], idx[lt]
+				lt++
+				i++
+			case probs[idx[i]] < pivot:
+				idx[gt], idx[i] = idx[i], idx[gt]
+				gt--
+			default:
+				i++
+			}
+		}
+		var massG float64 // mass strictly above the pivot
+		for j := lo; j < lt; j++ {
+			massG += probs[idx[j]]
+		}
+		if massG >= p { // crossing token lies strictly above the pivot
+			hi = lt - 1
+			continue
+		}
+		var massE float64 // mass at the pivot value
+		for j := lt; j <= gt; j++ {
+			massE += probs[idx[j]]
+		}
+		if massG+massE >= p { // cumulative reaches p among the equal-to-pivot tokens → τ = pivot
+			return pivot, true
+		}
+		p -= massG + massE // pivot band fully kept; seek the remainder below
+		lo = gt + 1
+	}
+	return 0, false
 }
 
 // truncateNucleus zeroes every probability strictly below thresh (the crossing
