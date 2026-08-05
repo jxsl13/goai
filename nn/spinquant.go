@@ -191,6 +191,15 @@ func (s *SpinRotation) Apply(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	if x.Ndim() != 2 || x.Shape()[1] != s.dim {
 		return nil, fmt.Errorf("nn: SpinRotation.Apply wants x [rows,%d], got %v", s.dim, x.Shape())
 	}
+	// Hadamard variant on a non-recording context: x·R = inv·D∘fwht(x_row) via the O(rows·n log n)
+	// FWHT butterfly instead of the dense O(rows·n²) matmul against the materialized r (H symmetric ⇒
+	// x·H = fwht(x); R = inv·H·D). ~n/log n faster (≈20-40× at n=4096). The Hadamard rotation is
+	// training-free (no params — Params()==nil), so this loses no gradient; a recording context still
+	// takes the taped matmul so any upstream x-gradient flows (backward is also an FWHT, deferred).
+	// Same rotation ⇒ matches the matmul path within FWHT reassociation tol (incumbent-standard).
+	if s.w == nil && ctx.Recorder == nil {
+		return s.applyFWHT(x), nil
+	}
 	r, err := s.Matrix(ctx)
 	if err != nil {
 		return nil, err
@@ -202,6 +211,24 @@ func (s *SpinRotation) Apply(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 	return out[0], nil
 }
 
+// applyFWHT computes x·R for the Hadamard variant via the fast Walsh-Hadamard transform:
+// (x·R)[i][j] = inv·D[j]·fwht(x[i])[j]. Row-independent, so each row is one in-place butterfly.
+func (s *SpinRotation) applyFWHT(x *tensor.Tensor) *tensor.Tensor {
+	rows, n := x.Shape()[0], s.dim
+	out := tensor.New(s.dtype, x.Shape())
+	buf := make([]float64, n)
+	for i := 0; i < rows; i++ {
+		for j := 0; j < n; j++ {
+			buf[j] = x.AtF64(i, j)
+		}
+		fwhtInPlace(buf)
+		for j := 0; j < n; j++ {
+			out.SetF64(s.inv*s.signs[j]*buf[j], i, j)
+		}
+	}
+	return out
+}
+
 // FoldWeight returns Rᵀ·W, the rotation folded into a following linear's weight W [n, out] (the
 // repo's [in,out] layout, in = n). Composed with [SpinRotation.Apply] it reproduces the original
 // linear exactly: (x·R)·(Rᵀ·W) = x·W (§V16(1) computational invariance). Fold offline once so the
@@ -209,6 +236,14 @@ func (s *SpinRotation) Apply(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 func (s *SpinRotation) FoldWeight(ctx *backend.Context, w *tensor.Tensor) (*tensor.Tensor, error) {
 	if w.Ndim() != 2 || w.Shape()[0] != s.dim {
 		return nil, fmt.Errorf("nn: SpinRotation.FoldWeight wants W [%d,out], got %v", s.dim, w.Shape())
+	}
+	// Hadamard variant on a non-recording context: Rᵀ·W = inv·D·(H·W), a COLUMN-wise FWHT of W
+	// ((Rᵀ·W)[j][l] = inv·D[j]·fwht(W[:,l])[j], since Rᵀ = inv·D·H), replacing the transpose + dense
+	// O(n²·out) matmul with O(out·n log n) butterflies. This is an offline deploy-time fold (no
+	// gradient), so the FWHT path is taken whenever the rotation is a plain Hadamard; a recording
+	// context keeps the taped matmul. Matches the matmul path within FWHT reassociation tol.
+	if s.w == nil && ctx.Recorder == nil {
+		return s.foldWeightFWHT(w), nil
 	}
 	r, err := s.Matrix(ctx)
 	if err != nil {
@@ -223,6 +258,25 @@ func (s *SpinRotation) FoldWeight(ctx *backend.Context, w *tensor.Tensor) (*tens
 		return nil, err
 	}
 	return out[0], nil
+}
+
+// foldWeightFWHT computes Rᵀ·W for the Hadamard variant via a column-wise fast Walsh-Hadamard
+// transform: (Rᵀ·W)[j][l] = inv·D[j]·fwht(W[:,l])[j]. Columns are independent; each is gathered
+// (strided by `out`), transformed in place, and scattered back scaled by inv·signs.
+func (s *SpinRotation) foldWeightFWHT(w *tensor.Tensor) *tensor.Tensor {
+	n, out := s.dim, w.Shape()[1]
+	res := tensor.New(s.dtype, w.Shape())
+	buf := make([]float64, n)
+	for l := 0; l < out; l++ {
+		for k := 0; k < n; k++ {
+			buf[k] = w.AtF64(k, l)
+		}
+		fwhtInPlace(buf)
+		for j := 0; j < n; j++ {
+			res.SetF64(s.inv*s.signs[j]*buf[j], j, l)
+		}
+	}
+	return res
 }
 
 // QuantizeActivations is the SpinQuant deploy-time path: rotate x by R, symmetric per-tensor

@@ -347,3 +347,82 @@ func ExampleSpinRotation() {
 	// max-abs shrinks: true
 	// dequant shape: (1, 4)
 }
+
+// TestSpinQuantFWHTMatchesMatmul locks the Hadamard FWHT fast paths (Apply/FoldWeight on a
+// non-recording context) against the dense matmul path (recording context) — same rotation, so
+// they must agree within FWHT reassociation tolerance.
+func TestSpinQuantFWHTMatchesMatmul(t *testing.T) {
+	const dim, rows, out = 64, 12, 20
+	s, err := nn.NewHadamardRotation(tensor.F64, dim, nn.WithSpinSeed(5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rng := rand.New(rand.NewPCG(7, 8))
+	x := tensor.New(tensor.F64, tensor.Shape{rows, dim})
+	for i := range x.Numel() {
+		x.SetF64(rng.NormFloat64(), tensor.Unravel(i, x.Shape())...)
+	}
+	w := tensor.New(tensor.F64, tensor.Shape{dim, out})
+	for i := range w.Numel() {
+		w.SetF64(rng.NormFloat64(), tensor.Unravel(i, w.Shape())...)
+	}
+
+	// FWHT path (Recorder == nil) vs matmul path (recording context).
+	fwhtApply, err := s.Apply(backend.NewContext(), x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mmApply, err := s.Apply(autograd.NewTape().Context(), x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fwhtFold, err := s.FoldWeight(backend.NewContext(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mmFold, err := s.FoldWeight(autograd.NewTape().Context(), w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	maxAbs := func(a, b *tensor.Tensor) float64 {
+		var m float64
+		for i := range a.Numel() {
+			idx := tensor.Unravel(i, a.Shape())
+			if d := math.Abs(a.AtF64(idx...) - b.AtF64(idx...)); d > m {
+				m = d
+			}
+		}
+		return m
+	}
+	if d := maxAbs(fwhtApply, mmApply); d > 1e-12 {
+		t.Errorf("Apply FWHT vs matmul max|Δ| = %g, want ≤ 1e-12", d)
+	}
+	if d := maxAbs(fwhtFold, mmFold); d > 1e-12 {
+		t.Errorf("FoldWeight FWHT vs matmul max|Δ| = %g, want ≤ 1e-12", d)
+	}
+}
+
+func benchSpinApply(b *testing.B, dim int, fwht bool) {
+	s, _ := nn.NewHadamardRotation(tensor.F64, dim, nn.WithSpinSeed(1))
+	rng := rand.New(rand.NewPCG(1, 2))
+	x := tensor.New(tensor.F64, tensor.Shape{32, dim})
+	for i := range x.Numel() {
+		x.SetF64(rng.NormFloat64(), tensor.Unravel(i, x.Shape())...)
+	}
+	var ctx *backend.Context
+	if fwht {
+		ctx = backend.NewContext()
+	} else {
+		ctx = autograd.NewTape().Context() // recording ⇒ dense matmul path
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := s.Apply(ctx, x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSpinApplyFWHT_4096(b *testing.B)   { benchSpinApply(b, 4096, true) }
+func BenchmarkSpinApplyMatmul_4096(b *testing.B) { benchSpinApply(b, 4096, false) }
