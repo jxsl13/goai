@@ -666,3 +666,20 @@ func ExampleAaren() {
 	fmt.Printf("%v heads=%d params=%d step=%v\n", out.Shape(), a.Heads, len(a.Params()), o.Shape())
 	// Output: (3, 4) heads=2 params=4 step=(1, 4)
 }
+
+func BenchmarkAarenForward_512x512_h8(b *testing.B) {
+	a, err := nn.NewAaren(tensor.F64, 512, nn.WithAarenHeads(8), nn.WithAarenSeed(1))
+	if err != nil {
+		b.Fatal(err)
+	}
+	rng := rand.New(rand.NewPCG(1, 2))
+	x := randMat(rng, 512, 512)
+	ctx := backend.NewContext()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := a.Forward(ctx, x); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
