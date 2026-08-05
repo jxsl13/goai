@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
-	_ "github.com/jxsl13/goai/backend/cpu"
+	cpucpu "github.com/jxsl13/goai/backend/cpu"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -57,6 +57,15 @@ func TestMHASelectCPUByteIdenticalToRef(t *testing.T) {
 			}
 			for i := 0; i < gc[0].Numel(); i++ {
 				c := tensor.Unravel(i, gc[0].Shape())
+				if dt == tensor.F32 && cpucpu.F32NativeKernelsEnabled() {
+					// Perf build routes f32 selective attention through the gemm+vexp pipeline
+					// (5e-5 tolerant parity), not byte-exact vs the f64-accumulating ref.
+					if d := math.Abs(gc[0].AtF64(c...) - gr[0].AtF64(c...)); d > 5e-5*math.Max(1, math.Abs(gr[0].AtF64(c...))) {
+						t.Fatalf("dt=%v cfg=%+v idx=%d cpu=%v ref=%v (rel > 5e-5)",
+							dt, cfg, i, gc[0].AtF64(c...), gr[0].AtF64(c...))
+					}
+					continue
+				}
 				if math.Float64bits(gc[0].AtF64(c...)) != math.Float64bits(gr[0].AtF64(c...)) {
 					t.Fatalf("dt=%v cfg=%+v idx=%d cpu=%v ref=%v",
 						dt, cfg, i, gc[0].AtF64(c...), gr[0].AtF64(c...))
