@@ -125,8 +125,8 @@ func (c cRec) QMatMulResident(x buffer, w qweight, o buffer, m int) error {
 }
 
 // QMatMulResidentAcc fuses the residual add into the resident quant GEMV (dst += x·dequant(w), beta=1)
-// for the decode epilogue. Q8/Q4_K/Q6_K are wired (Q4_K_M stores attn_v/ffn_down as Q6_K); other
-// formats return errQuantAccUnsupported so recordAdd falls back to GEMV+Binary (no regression).
+// for the decode epilogue. Q8/Q4_K/Q6_K/Q5_K/Q2_K are wired (K-quant mixes spread projections
+// across these); other formats return errQuantAccUnsupported so recordAdd falls back to GEMV+Binary.
 func (c cRec) QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error {
 	switch rw := w.(type) {
 	case *cuda.ResidentBQ8:
@@ -135,6 +135,10 @@ func (c cRec) QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error {
 		return c.r.QMatMulResidentAccQ4K(cb(x), rw, cb(dst), m)
 	case *cuda.ResidentBQ6K:
 		return c.r.QMatMulResidentAccQ6K(cb(x), rw, cb(dst), m)
+	case *cuda.ResidentBQ5K:
+		return c.r.QMatMulResidentAccQ5K(cb(x), rw, cb(dst), m)
+	case *cuda.ResidentBQ2K:
+		return c.r.QMatMulResidentAccQ2K(cb(x), rw, cb(dst), m)
 	}
 	return errQuantAccUnsupported
 }

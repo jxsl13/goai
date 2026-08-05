@@ -640,6 +640,30 @@ func (rec *Recorder) QMatMulResidentAccQ6K(x *DeviceF32, w *ResidentBQ6K, dst *D
 	return nil
 }
 
+// QMatMulResidentAccQ5K fuses the decode-residual add into the Q5_K GEMV (beta=1); Q5_K_M models
+// store o_proj as Q5_K. m==1 only, so the scalar cu_qmatmul_q5k (beta*out+acc epilogue) is used.
+func (rec *Recorder) QMatMulResidentAccQ5K(x *DeviceF32, w *ResidentBQ5K, dst *DeviceF32, m int) error {
+	if x.ptr == nil || w.q == nil || dst.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ5K on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q5k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ5K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// QMatMulResidentAccQ2K fuses the decode-residual add into the Q2_K GEMV (beta=1). m==1 only, so
+// the scalar cu_qmatmul_q2k (beta*out+acc epilogue) is used.
+func (rec *Recorder) QMatMulResidentAccQ2K(x *DeviceF32, w *ResidentBQ2K, dst *DeviceF32, m int) error {
+	if x.ptr == nil || w.q == nil || dst.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ2K on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q2k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ2K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // q6kWMMAThreshold is the m at/above which QMatMulResidentQ6K routes prefill to the tensor-core WMMA
 // path. Q6_K's coalesced dequant (#880, ~57 GB/s) matches Q4_K's, and Q6_K's scalar MT decode is
 // HEAVIER (6-bit unpack) so WMMA overtakes it no later than Q4_K's benched floor of 48 — a

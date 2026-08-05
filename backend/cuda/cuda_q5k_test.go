@@ -250,3 +250,61 @@ func TestCUDAQ5KRecorderPrefillWMMAParity(t *testing.T) {
 		t.Fatalf("Q5_K recorder WMMA diverges: rel-RMS %.3e", rel)
 	}
 }
+
+// TestCUDAQ5KRecorderAccParity validates the fused Q5_K decode-residual epilogue
+// (QMatMulResidentAccQ5K, beta=1) is BIT-EXACT to the un-fused fallback (GEMV beta=0 into
+// scratch + residual add) — Q5_K_M stores o_proj as Q5_K, so recordAdd fuses it at m=1 decode.
+func TestCUDAQ5KRecorderAccParity(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	const K, N = 512, 64
+	rng := rand.New(rand.NewSource(78))
+	w := tensor.New(tensor.F64, tensor.Shape{K, N})
+	ws := w.Storage().F64()
+	for i := range ws {
+		ws[i] = rng.NormFloat64() * 0.1
+	}
+	qi, err := quantQ5K(w)
+	must(t, err)
+	rq := qi.(*cuda.ResidentBQ5K)
+	defer rq.Free()
+	rec, err := cuda.NewRecorder()
+	must(t, err)
+	defer rec.Free()
+	af := make([]float32, K)
+	for i := range af {
+		af[i] = float32(rng.NormFloat64()) * 0.2
+	}
+	da, _ := cuda.NewDeviceF32(1, K)
+	must(t, da.UploadF32(af))
+	defer da.Free()
+	resid := make([]float32, N)
+	for i := range resid {
+		resid[i] = float32(rng.NormFloat64())
+	}
+	scratch, _ := cuda.NewDeviceF32(1, N)
+	defer scratch.Free()
+	must(t, scratch.UploadF32(make([]float32, N))) // beta=0 GEMV overwrites, but 0*stale-Inf=NaN — zero first
+	must(t, rec.QMatMulResidentQ5K(da, rq, scratch, 1))
+	must(t, rec.Wait())
+	sc := make([]float32, N)
+	scratch.DownloadF32(sc)
+	want := make([]float32, N)
+	for i := range want {
+		want[i] = resid[i] + sc[i]
+	}
+	dst, _ := cuda.NewDeviceF32(1, N)
+	defer dst.Free()
+	must(t, dst.UploadF32(resid))
+	must(t, rec.QMatMulResidentAccQ5K(da, rq, dst, 1))
+	must(t, rec.Wait())
+	got := make([]float32, N)
+	dst.DownloadF32(got)
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("Q5_K fused acc not bit-exact at %d: fused %g vs fallback %g", i, got[i], want[i])
+		}
+	}
+	t.Logf("Q5_K fused decode-residual epilogue bit-exact vs fallback across N=%d", N)
+}
