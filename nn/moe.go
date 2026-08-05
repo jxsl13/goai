@@ -246,6 +246,22 @@ func (m *SparseMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gateLogi
 		return nil, nil, err
 	}
 
+	// Inference prefill (ctx.Recorder == nil): evaluate each expert ONLY on the tokens routed to it
+	// (token-sparse), instead of the dense all-tokens-through-every-expert path below. Every token
+	// hits topK of E experts, so dense wastes (E−topK)/E of each expert FFN's GEMM; the sparse path
+	// gathers each expert's tokens (OpEmbed), runs the FFN on that slab, weights by the renormalized
+	// top-k gate, and scatter-adds back (OpEmbedBackward) — the same value OpMoECombine forms from the
+	// dense masked gates. Numerically identical to Forward (token-wise experts; TopKGating's renormalized
+	// weights equal the masked-then-combine weights) — F64 bit-identical, F32 f32-tol. The dense path is
+	// kept for training (autograd) and stays below.
+	if ctx.Recorder == nil {
+		ys, serr := m.forwardSparsePrefill(ctx, x, logits)
+		if serr != nil {
+			return nil, nil, serr
+		}
+		return ys, logits, nil
+	}
+
 	// top-k routing mask (constant: the discrete choice is non-differentiable)
 	mask := tensor.New(logits.Dtype(), tensor.Shape{tks, e})
 	row := make([]float64, e)
@@ -366,6 +382,85 @@ func (m *SparseMoE) ForwardDecode(ctx *backend.Context, x *tensor.Tensor) (y, ga
 		}
 	}
 	return y, logits, nil
+}
+
+// forwardSparsePrefill is the Recorder==nil token-sparse counterpart of Forward: it evaluates each
+// expert only on its routed tokens (gather → FFN → weight → scatter-add), giving the same renormalized
+// top-k combine Forward's dense masked-gates + OpMoECombine produce, but without the (E−topK)/E of each
+// expert GEMM the dense path wastes. loadCount is accumulated exactly as Forward does (so the load-free
+// balancer's UpdateLoadBias sees the same counts). Bit-identical to Forward for F64.
+func (m *SparseMoE) forwardSparsePrefill(ctx *backend.Context, x, logits *tensor.Tensor) (*tensor.Tensor, error) {
+	tks, e := logits.Shape()[0], logits.Shape()[1]
+	dim := x.Shape()[1]
+	perTok := make([][]int, e)
+	perW := make([][]float64, e)
+	row := make([]float64, e)
+	for t := 0; t < tks; t++ {
+		for i := 0; i < e; i++ {
+			row[i] = logits.AtF64(t, i)
+		}
+		var sel []int
+		var wts []float64
+		if m.balancer != nil {
+			sel, wts = TopKGatingBiased(row, m.balancer.Bias, m.TopK)
+			for _, i := range sel {
+				m.loadCount[i]++
+			}
+		} else {
+			sel, wts = TopKGating(row, m.TopK)
+		}
+		for j, i := range sel {
+			perTok[i] = append(perTok[i], t)
+			perW[i] = append(perW[i], wts[j])
+		}
+	}
+	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
+		o, err := backend.Execute(ctx, op, in, at)
+		if err != nil {
+			return nil, err
+		}
+		return o[0], nil
+	}
+	dt := x.Dtype()
+	var y *tensor.Tensor
+	for i := 0; i < e; i++ {
+		n := len(perTok[i])
+		if n == 0 {
+			continue
+		}
+		idx := tensor.New(tensor.F64, tensor.Shape{n})
+		wcol := tensor.New(dt, tensor.Shape{n, 1})
+		idf := idx.Storage().F64()
+		for k := 0; k < n; k++ {
+			idf[k] = float64(perTok[i][k])
+			wcol.SetF64(perW[i][k], k, 0)
+		}
+		xi, err := ex(backend.OpEmbed, nil, x, idx) // [n, dim] gathered rows
+		if err != nil {
+			return nil, err
+		}
+		outi, err := m.Experts[i].Forward(ctx, xi) // [n, dim]
+		if err != nil {
+			return nil, err
+		}
+		weighted, err := ex(backend.OpMul, nil, outi, wcol) // [n,dim]*[n,1]
+		if err != nil {
+			return nil, err
+		}
+		scattered, err := ex(backend.OpEmbedBackward, nil, x, idx, weighted) // zeros[tks,dim] scatter
+		if err != nil {
+			return nil, err
+		}
+		if y == nil {
+			y = scattered
+		} else if y, err = ex(backend.OpAdd, nil, y, scattered); err != nil {
+			return nil, err
+		}
+	}
+	if y == nil {
+		y = tensor.New(dt, tensor.Shape{tks, dim}) // no tokens routed (degenerate): zeros
+	}
+	return y, nil
 }
 
 // UpdateLoadBias performs one gradient-free load-balancing step (§R242) and
