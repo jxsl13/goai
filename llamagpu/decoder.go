@@ -120,6 +120,12 @@ type swiGLUHalvesRecorder interface {
 	SwiGLUHalves(gu, out buffer, rows, hidden int) error
 }
 
+// geGLUHalvesRecorder is the GeGLU (Gemma) twin: out[r,i] = GELU(gu[r,i])·gu[r,hidden+i] over a
+// column-fused gate|up buffer, one op replacing two GEMVs + Unary GELU + Binary mul.
+type geGLUHalvesRecorder interface {
+	GeGLUHalves(gu, out buffer, rows, hidden int) error
+}
+
 type f32Linear struct {
 	w    buffer
 	k, n int
@@ -926,6 +932,22 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 	if d.ffnGEGLU {
 		// GeGLU (Gemma): down(GELU(gate)⊙up). Same 3-matrix gated shape as SwiGLU, but the gate
 		// activation is GELU and the elementwise product is a separate mul (no fused silu·b op).
+		if b.wGU != nil {
+			// Column-fused: one GEMV into gu = [·, 2·hidden], then GeGLU over its halves (GELU⊙up) into
+			// gate — one launch instead of two GEMVs + Unary GELU + Binary mul. Bit-identical.
+			e := b.wGU.record(r, in, d.gu.b, rows)
+			if gh, ok := r.(geGLUHalvesRecorder); ok {
+				e = firstErr(e, gh.GeGLUHalves(d.gu.b, d.gate.b, rows, d.hidden))
+			} else {
+				e = firstErr(e,
+					r.Copy2D(d.gu.b, 0, 2*d.hidden, d.gate.b, 0, d.hidden, rows, d.hidden),
+					r.Copy2D(d.gu.b, d.hidden, 2*d.hidden, d.up.b, 0, d.hidden, rows, d.hidden),
+					r.Unary(d.gate.b, d.gate.b, unaryGELU),
+					r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),
+				)
+			}
+			return firstErr(e, d.recordDownProj(r, b, rows))
+		}
 		return firstErr(
 			b.wG.record(r, in, d.gate.b, rows),              // gate = in·Wgate
 			b.wU.record(r, in, d.up.b, rows),                // up = in·Wup
@@ -1568,12 +1590,22 @@ func newGemmaDecoder(m *nlp.Gemma, ops backendOps) (*Decoder, error) {
 	mk := d.mkBuf(&err)
 	lin := d.mkLin(mk, ops, &err)
 	fused := d.mkFused(mk, ops, &err)
+	// Column-fuse ffn_gate|ffn_up into wGU when the backend can GeGLU-over-halves (CUDA), else keep
+	// the separate wG/wU pair. GeGLU (Gemma) uses the same wGU layout as SwiGLU; only the halves op differs.
+	fuseGU := d.mkFused2(mk, ops, &err)
+	gateUp := func(wg, wu *tensor.Tensor) (gu, g, u linear) {
+		if ops.fusedGateUp {
+			return fuseGU(wg, wu), nil, nil
+		}
+		return nil, lin(wg), lin(wu)
+	}
 	//perfscan:ignore PS3032 newGemmaDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
+		wgu, wg, wu := gateUp(b.FFN.Wgate, b.FFN.Wup)
 		gb := block{
 			wqkv: fused(b.Wq, b.Wk, b.Wv), wo: lin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
-			wG: lin(b.FFN.Wgate), wU: lin(b.FFN.Wup), wD: lin(b.FFN.Wdown),
+			wGU: wgu, wG: wg, wU: wu, wD: lin(b.FFN.Wdown),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
 		}
 		d.blocks = append(d.blocks, gb)

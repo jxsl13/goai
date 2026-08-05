@@ -521,6 +521,18 @@ func (rec *Recorder) SwiGLUHalves(gu, out *DeviceF32, rows, hidden int) error {
 	return nil
 }
 
+// GeGLUHalves is the GeGLU twin of SwiGLUHalves (Gemma): out[r,i] = GELU(gu[r,i]) · gu[r,hidden+i]
+// over a column-fused [rows, 2·hidden] gate|up buffer. GELU matches the Unary GELU kernel exactly.
+func (rec *Recorder) GeGLUHalves(gu, out *DeviceF32, rows, hidden int) error {
+	if gu.ptr == nil || out.ptr == nil {
+		return fmt.Errorf("cuda: rec GeGLUHalves on a freed handle")
+	}
+	if rc := C.cu_geglu_halves(out.ptr, gu.ptr, C.int(rows), C.int(hidden)); rc != 0 {
+		return fmt.Errorf("cuda: rec GeGLUHalves failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // QMatMulResident records o[m, w.n] = x[m, w.k]·dequant(w) — the resident Q8 matmul
 // (beta=0, overwrite o). w's transposed int8 [n,k] + per-32-block f32 scales are
 // consumed by the warp-per-output GEMV kernel; the flat buffer shapes are ignored in
