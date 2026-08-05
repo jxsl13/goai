@@ -61,6 +61,11 @@ type SpinRotation struct {
 	rt    *tensor.Tensor // Rᵀ (the inverse), for the Hadamard variant
 	w     *tensor.Tensor // trainable pre-image of the learnable rotation; nil for the Hadamard variant
 	dtype tensor.Dtype
+	// Hadamard variant only (w == nil): the Rademacher diagonal D and 1/√n scale, so the rotation
+	// R = (1/√n)·H·D can be applied as an O(n log n) FWHT (x·R = inv·D∘fwht(x_row)) instead of the
+	// dense O(n²) matmul against r — the same rotation the materialized r encodes.
+	signs []float64
+	inv   float64
 }
 
 // spinCfg holds the resolved options for a SpinRotation constructor.
@@ -121,7 +126,7 @@ func NewHadamardRotation(dtype tensor.Dtype, dim int, opts ...SpinOption) (*Spin
 			rt.SetF64(v, j, i) // Rᵀ
 		}
 	}
-	return &SpinRotation{dim: dim, r: r, rt: rt, dtype: dtype}, nil
+	return &SpinRotation{dim: dim, r: r, rt: rt, dtype: dtype, signs: signs, inv: inv}, nil
 }
 
 // NewLearnableRotation builds a trainable SpinQuant rotation for dim-dimensional activations:
@@ -233,6 +238,9 @@ func (s *SpinRotation) QuantizeActivations(x *tensor.Tensor, levels int) (*tenso
 	if x.Ndim() != 2 || x.Shape()[1] != s.dim {
 		return nil, fmt.Errorf("nn: SpinRotation.QuantizeActivations wants x [rows,%d], got %v", s.dim, x.Shape())
 	}
+	if s.w == nil {
+		return s.quantizeActivationsFWHT(x, levels) // O(rows·n log n) Hadamard fast path
+	}
 	ctx := backend.NewContext()
 	rot, err := s.Apply(ctx, x)
 	if err != nil {
@@ -271,6 +279,46 @@ func (s *SpinRotation) QuantizeActivations(x *tensor.Tensor, levels int) (*tenso
 		return nil, err
 	}
 	return out[0], nil
+}
+
+// quantizeActivationsFWHT is QuantizeActivations for the Hadamard variant: it applies the rotation
+// R = (1/√n)·H·D and its inverse Rᵀ = (1/√n)·D·H via the O(n log n) FWHT — rotate is inv·D∘fwht(row),
+// unrotate is inv·fwht(D∘row) (H symmetric ⇒ x·H = fwht(x)) — replacing the two dense O(rows·n²)
+// matmuls against the materialized r/rt with row-wise butterflies. Same rotation, so the result
+// matches the matmul path within FWHT reassociation tolerance (the incumbent-standard SpinQuant apply).
+func (s *SpinRotation) quantizeActivationsFWHT(x *tensor.Tensor, levels int) (*tensor.Tensor, error) {
+	rows, n := x.Shape()[0], s.dim
+	rot := tensor.New(s.dtype, x.Shape())
+	buf := make([]float64, n)
+	var absmax float64
+	for i := 0; i < rows; i++ { // rotate: rot[i][j] = inv·D[j]·fwht(x[i])[j]; track per-tensor absmax
+		for j := 0; j < n; j++ {
+			buf[j] = x.AtF64(i, j)
+		}
+		fwhtInPlace(buf)
+		for j := 0; j < n; j++ {
+			v := s.inv * s.signs[j] * buf[j]
+			rot.SetF64(v, i, j)
+			if a := math.Abs(v); a > absmax {
+				absmax = a
+			}
+		}
+	}
+	if absmax == 0 {
+		absmax = 1
+	}
+	q := UniformQuantizer(levels, -absmax, absmax)
+	out := tensor.New(s.dtype, x.Shape())
+	for i := 0; i < rows; i++ { // fake-quant the rotated row, then unrotate: out[i][k] = inv·fwht(D∘q(rot[i]))[k]
+		for j := 0; j < n; j++ {
+			buf[j] = q(rot.AtF64(i, j)) * s.signs[j]
+		}
+		fwhtInPlace(buf)
+		for k := 0; k < n; k++ {
+			out.SetF64(s.inv*buf[k], i, k)
+		}
+	}
+	return out, nil
 }
 
 // fwhtInPlace applies the unnormalized in-place Fast Walsh-Hadamard Transform (len(a) a power of
