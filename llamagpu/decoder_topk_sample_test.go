@@ -98,3 +98,40 @@ func benchDecoderGenerate(b *testing.B, vocab, maxNew int) {
 }
 
 func BenchmarkDecoderGenerate128k(b *testing.B) { benchDecoderGenerate(b, 128000, 64) }
+
+// benchDecoderPrefill isolates the prefill LM-head cost: a long prompt with maxNew=1 at a LARGE vocab,
+// where computing/downloading the logits of every prompt row (vs only the last) is the dominant waste.
+func benchDecoderPrefill(b *testing.B, vocab, promptLen int) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: vocab, Ctx: promptLen + 8, Dim: 256, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 5)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dec, err := llamagpu.NewLlamaQ8CUDA(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer dec.Release()
+	prompt := make([]int, promptLen)
+	for i := range prompt {
+		prompt[i] = (i*7 + 1) % vocab
+	}
+	mk := func() nlp.TokenSampler { return nlp.Greedy() }
+	if _, err := dec.Generate(prompt, 1, mk()); err != nil {
+		b.Fatal(err)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := dec.Generate(prompt, 1, mk()); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDecoderPrefill128k_512(b *testing.B) { benchDecoderPrefill(b, 128000, 512) }
