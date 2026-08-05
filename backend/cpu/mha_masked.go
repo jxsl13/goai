@@ -72,6 +72,17 @@ func mhaMaskedKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 		vs := v.Contiguous().Storage().F32()
 		ms := mask.Contiguous().Storage().F32()
 		os := out.Storage().F32()
+		// Perf build (f32NativeKernels): route the two per-head matmuls through the f32-native SIMD
+		// gemm + vexp softmax, exactly as unmasked MHA does — the scalar 8-jam path below never used it,
+		// leaving masked attention ~8x slower than unmasked on the perf build. Small-sq/decode shapes
+		// (< mhaGemmMinSeq) keep the scalar path (packing traffic dominates there). Rides the f32 5e-5
+		// tolerance (the masked-additive-bias softmax; ADR-0021), not byte-exact vs the f64-accumulating
+		// ref — TestMHAMaskedF32CPUByteIdenticalToRef relaxes accordingly when f32NativeKernels.
+		if f32NativeKernels && sq >= mhaGemmMinSeq {
+			geo := mhaGeo{sq: sq, sk: sk, dm: dm, dk: dk, kvDM: kvHeads * dk, heads: heads, rep: heads / kvHeads, scale: scale}
+			mhaMaskedFwdGemmF32(qs, ks, vs, ms, os, geo, perHeadMask)
+			return []*tensor.Tensor{out}, nil
+		}
 		kdm := kvHeads * dk
 		parallelWork(heads*sq, sk*dk, func(lo, hi int) {
 			//perfscan:ignore PS6008 per-worker scratch once per chunk; negligible vs compute
