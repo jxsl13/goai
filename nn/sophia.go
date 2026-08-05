@@ -167,25 +167,33 @@ func (s *Sophia) Step(grad GradFn) error {
 		// Unravel/AtF64/SetF64 dispatch).
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					//perfscan:ignore PS3084 memory-bound moment EMA optimizer stream
-					m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv // 1st-moment EMA
-					//perfscan:ignore PS3082 math.Max micro-opt on memory-bound optimizer loop, sub-1pct
-					ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
-					pf[i] = pf[i]*decay - s.LR*clampf(ratio, 1) // wd + clipped 2nd-order step
-				}
+				// Every index writes only m[i]/pf[i] and reads m/h/g/pf at i — no cross-element state,
+				// so parStep is bit-identical to serial (like Adam/SGD/Lion #923-925); h is read-only here
+				// (updated by the separate Hessian estimate). Large params fan across cores.
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						//perfscan:ignore PS3084 memory-bound moment EMA optimizer stream
+						m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv // 1st-moment EMA
+						//perfscan:ignore PS3082 math.Max micro-opt on memory-bound optimizer loop, sub-1pct
+						ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
+						pf[i] = pf[i]*decay - s.LR*clampf(ratio, 1) // wd + clipped 2nd-order step
+					}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					//perfscan:ignore PS3084 f32 arm; memory-bound optimizer stream
-					m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv
-					//perfscan:ignore PS3082 math.Max micro-opt, memory-bound optimizer loop
-					ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
-					pf[i] = float32(float64(pf[i])*decay - s.LR*clampf(ratio, 1))
-				}
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						//perfscan:ignore PS3084 f32 arm; memory-bound optimizer stream
+						m[i] = s.Beta1*m[i] + (1-s.Beta1)*gv
+						//perfscan:ignore PS3082 math.Max micro-opt, memory-bound optimizer loop
+						ratio := m[i] / math.Max(s.Gamma*h[i], s.Eps)
+						pf[i] = float32(float64(pf[i])*decay - s.LR*clampf(ratio, 1))
+					}
+				})
 				continue
 			}
 		}
