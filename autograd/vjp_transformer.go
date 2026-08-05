@@ -73,6 +73,19 @@ func init() {
 		return []*tensor.Tensor{out[0], nil}, nil // idx non-differentiable
 	})
 
+	// embed_backward: forward scatters g_fwd[i] into row idx[i] of a zero [n,d] table (the table
+	// input supplies only the output shape). It is OpEmbed's own backward, but registering its VJP
+	// lets it run in a FORWARD path (the MoD/MoR Combine scatter). Its gradient mirrors OpEmbed:
+	// only g_fwd (input 2) is differentiable, and its grad is the gather of the upstream grad at idx
+	// (OpEmbed(g, idx)); the table (shape-only) and idx are non-differentiable.
+	RegisterVJP(backend.OpEmbedBackward, func(ctx *backend.Context, in, _ []*tensor.Tensor, _ backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		out, err := backend.Execute(ctx, backend.OpEmbed, []*tensor.Tensor{g, in[1]}, nil)
+		if err != nil {
+			return nil, err
+		}
+		return []*tensor.Tensor{nil, nil, out[0]}, nil // table (shape-only) and idx non-differentiable
+	})
+
 	// LayerNorm VJP: dispatch OpLayerNormBackward on the tape's active backend (like mhaVJP),
 	// so the norm backward runs on the GPU when training on Metal/Vulkan and on the reference
 	// otherwise. The gradient — dx=(1/σ)(a−mean(a)−x̂·mean(a⊙x̂)), dγ=Σ_rows g⊙x̂, dβ=Σ_rows g

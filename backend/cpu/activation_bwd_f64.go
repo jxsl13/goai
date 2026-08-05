@@ -25,21 +25,6 @@ func geluGradF64(x, g float64) float64 {
 	return g * (phi + x*pdf)
 }
 
-// stableSigmoidF64 mirrors the reference's branchy overflow-safe sigmoid exactly.
-func stableSigmoidF64(x float64) float64 {
-	if x >= 0 {
-		return 1 / (1 + math.Exp(-x))
-	}
-	z := math.Exp(x)
-	return z / (1 + z)
-}
-
-// siluGradF64 = g·σ(x)(1+x(1−σ(x))) — the exact reference SiLU derivative.
-func siluGradF64(x, g float64) float64 {
-	s := stableSigmoidF64(x)
-	return g * s * (1 + x*(1-s))
-}
-
 func activationBackwardF64(ctx *backend.Context, op backend.Op, in []*tensor.Tensor, attrs backend.Attrs, grad func(x, g float64) float64) ([]*tensor.Tensor, error) {
 	if len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 && in[1].Shape().Equal(in[0].Shape()) {
 		xc, gc := in[0].Contiguous(), in[1].Contiguous()
@@ -59,8 +44,28 @@ func geluBackwardF64KernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs b
 	return activationBackwardF64(ctx, backend.OpGELUBackward, in, attrs, geluGradF64)
 }
 
+// siluBackwardF64KernelCPU computes dx = g·σ(x)(1+x(1−σ(x))) with the sigmoid VECTORIZED via
+// vsigmoidF64 (AVX2 expF64x4 on amd64) — the dominant transcendental — then a cheap scalar arithmetic
+// pass. This mirrors the OpSiLU F64 FORWARD kernel, which already routes through the same polynomial
+// vsiluF64 and "rides the model f64 tolerance"; the VJP therefore rides the same tolerance rather than
+// being bit-identical to the reference's scalar libm sigmoid (TestVsiluF64Accuracy-level). Each ds[i]
+// (and the sigmoid scratch s) is a disjoint per-chunk write, so it stays deterministic and parallel.
 func siluBackwardF64KernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
-	return activationBackwardF64(ctx, backend.OpSiLUBackward, in, attrs, siluGradF64)
+	if len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 && in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		xs, gs, ds := xc.Storage().F64(), gc.Storage().F64(), dx.Storage().F64()
+		s := make([]float64, len(ds)) // σ(x) scratch, written disjointly per chunk
+		parallel(len(ds), func(lo, hi int) {
+			vsigmoidF64(s[lo:hi], xs[lo:hi]) // vectorized σ(x)
+			for i := lo; i < hi; i++ {
+				si := s[i]
+				ds[i] = gs[i] * si * (1 + xs[i]*(1-si))
+			}
+		})
+		return []*tensor.Tensor{dx}, nil
+	}
+	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
 }
 
 func init() {

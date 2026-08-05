@@ -32,11 +32,10 @@ type MixtureOfDepths struct {
 	Capacity float64        // fraction of tokens processed per block, in (0,1]
 }
 
-// MoDSelection carries the one-hot selection built by Route so Combine can scatter
+// MoDSelection carries the token selection built by Route so Combine can scatter
 // the processed tokens back to their original positions.
 type MoDSelection struct {
-	S   *tensor.Tensor // [k, seq] one-hot rows: S[i, Idx[i]] = 1
-	Idx []int          // selected token positions, ascending
+	Idx []int // selected token positions, ascending
 	seq int
 }
 
@@ -90,16 +89,10 @@ func (m *MixtureOfDepths) Route(ctx *backend.Context, x *tensor.Tensor) (gathere
 	}
 	k := m.NumProcessed(seq)
 	idx := topKIndices(logits, k) // ascending token positions
-	S := tensor.New(x.Dtype(), tensor.Shape{k, seq})
-	//perfscan:ignore PS1005 k-entry one-hot fill, matmul-dominated Route, low trip
-	for i, p := range idx {
-		S.SetF64(1, i, p)
-	}
-	// The gathers gathered=S·x and weights=S·logits pick rows idx[i] — a disguised take-along.
-	// Replace the two O(k·seq·d)/O(k·seq) one-hot matmuls with OpEmbed on the F64 indices (O(k·d)/
-	// O(k)); OpEmbed's VJP scatter-adds grad into row idx[i] — exactly Sᵀ·grad, the matmul backward —
-	// so gradients to x and to logits (→Router) are unchanged. Bit-exact forward. S itself is kept:
-	// Combine still needs it for the Sᵀ scatter (its backward is the mirror gather, left as-is here).
+	// The gathers gathered=x[idx] and weights=logits[idx] are take-alongs — OpEmbed on the F64 indices
+	// (O(k·d)/O(k)) instead of a one-hot·matmul; OpEmbed's VJP scatter-adds grad into row idx[i], so
+	// gradients to x and to logits (→Router) are exactly the matmul backward. Bit-exact forward. Combine
+	// scatters back via OpEmbedBackward on the same indices, so no [k,seq] one-hot S is built at all.
 	idxF64 := tensor.New(tensor.F64, tensor.Shape{k})
 	idf := idxF64.Storage().F64()
 	for i, p := range idx {
@@ -114,7 +107,7 @@ func (m *MixtureOfDepths) Route(ctx *backend.Context, x *tensor.Tensor) (gathere
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return gathered, weights, &MoDSelection{S: S, Idx: idx, seq: seq}, nil
+	return gathered, weights, &MoDSelection{Idx: idx, seq: seq}, nil
 }
 
 // Combine scatters the block output `processed` [k,d] back to the full sequence:
@@ -138,11 +131,18 @@ func (m *MixtureOfDepths) Combine(ctx *backend.Context, x, processed, weights *t
 	if err != nil {
 		return nil, err
 	}
-	st, err := ex(backend.OpTranspose, nil, sel.S) // [seq,k]
-	if err != nil {
-		return nil, err
+	// Scatter the k weighted rows back to their [seq,d] positions: y = x + scatter(weighted → idx).
+	// This is Sᵀ·weighted without materializing the [seq,k] one-hot or the transpose — OpEmbedBackward
+	// scatter-adds row weighted[i] into position idx[i] (distinct positions ⇒ no collision), turning the
+	// old O(seq·k·d) matmul into O(k·d). x supplies only the output shape [seq,d] (its values are
+	// unused, its grad flows solely through the residual add below); its VJP is the mirror gather, so
+	// grads to processed and weights are unchanged. Bit-exact forward.
+	idxF64 := tensor.New(tensor.F64, tensor.Shape{len(sel.Idx)})
+	idf := idxF64.Storage().F64()
+	for i, p := range sel.Idx {
+		idf[i] = float64(p)
 	}
-	scattered, err := ex(backend.OpMatMul, nil, st, weighted) // [seq,d]
+	scattered, err := ex(backend.OpEmbedBackward, nil, x, idxF64, weighted) // [seq,d]
 	if err != nil {
 		return nil, err
 	}
