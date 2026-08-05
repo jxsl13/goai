@@ -1267,18 +1267,18 @@ int cu_ssd_step(const void* x, const void* delta, const void* A, const void* B, 
                       "extern \"C\" __global__ void ssd_step(const float* x, const float* delta, const float* A, const float* B, const float* C, const float* dskip, float* state, float* y, int H, int P, int G, int N){\n"
                       "  int idx = blockIdx.x*blockDim.x + threadIdx.x; int HP = H*P; if(idx>=HP) return;\n"
                       "  int h = idx / P; int g = h / (H / G);\n"
-                      "  double dl = (double)delta[h];\n"
-                      "  double a = (double)expf((float)(dl * (double)A[h]));\n"
-                      "  double xv = (double)x[idx];\n"
-                      "  double xin = dl * xv;\n"
+                      "  float dl = delta[h];\n"
+                      "  float a = expf(dl * A[h]);\n"
+                      "  float xv = x[idx];\n"
+                      "  float xin = dl * xv;\n"
                       "  const float* Bg = B + (size_t)g*N; const float* Cg = C + (size_t)g*N;\n"
                       "  float* st = state + (size_t)h*N*P + (idx % P);\n"  // state[h][i][j], stride P over i
-                      "  double acc = 0.0;\n"
+                      "  float acc = 0.0f;\n"
                       "  for(int i=0;i<N;i++){\n"
-                      "    double s = a*(double)st[(size_t)i*P] + (double)Bg[i]*xin;\n"
-                      "    st[(size_t)i*P] = (float)s; acc += (double)Cg[i]*s;\n"
+                      "    float s = a*st[(size_t)i*P] + Bg[i]*xin;\n"
+                      "    st[(size_t)i*P] = s; acc += Cg[i]*s;\n"
                       "  }\n"
-                      "  y[idx] = (float)(acc + (double)dskip[h]*xv);\n"
+                      "  y[idx] = acc + dskip[h]*xv;\n"
                       "}\n",
                       "ssd_step.cu", "ssd_step", &gSsdStep) != 0) { rc = -2; goto done; }
     {
@@ -1307,18 +1307,19 @@ int cu_wkv_step(const void* k, const void* v, const void* w, const void* u,
     if (!gWkvStep && compile_kernel(
                       "extern \"C\" __global__ void wkv_step(const float* k, const float* v, const float* w, const float* u, float* aa, float* bb, float* pp, float* out, int D){\n"
                       "  int c = blockIdx.x*blockDim.x + threadIdx.x; if(c>=D) return;\n"
-                      "  double kk=(double)k[c], vv=(double)v[c], wc=(double)w[c], uc=(double)u[c];\n"
-                      "  double a=(double)aa[c], b=(double)bb[c], p=(double)pp[c];\n"
-                      // FP32 expf for all four transcendentals (GA106 FP64 = 1/64 rate). The
-                      // max-tracked stabilization keeps every exp argument <= 0 (exp in (0,1]) and the
-                      // state decays (contractive), so the ~1e-7 per-exp error stays bounded; the
-                      // numerator/denominator ratio and the aa/bb accumulation stay in double. Inside
-                      // the WKV tolerance gate (1e-4 vs the f64 ref).
-                      "  double ww=uc+kk; double q=fmax(p,ww);\n"
-                      "  double e1=(double)expf((float)(p-q)), e2=(double)expf((float)(ww-q));\n"
-                      "  out[c]=(float)((e1*a+e2*vv)/(e1*b+e2));\n"
-                      "  q=fmax(p-wc,kk); e1=(double)expf((float)(p-wc-q)); e2=(double)expf((float)(kk-q));\n"
-                      "  aa[c]=(float)(e1*a+e2*vv); bb[c]=(float)(e1*b+e2); pp[c]=(float)q;\n"
+                      "  float kk=k[c], vv=v[c], wc=w[c], uc=u[c];\n"
+                      "  float a=aa[c], b=bb[c], p=pp[c];\n"
+                      // Fully FP32 (GA106 FP64 = 1/64 rate). The max-tracked stabilization keeps every
+                      // exp argument <= 0 (exp in (0,1]) and the state decays (contractive), so the
+                      // per-step FP32 error stays bounded rather than accumulating. The aa/bb/pp state
+                      // is truncated to float32 on store every step anyway, so the old double bought no
+                      // lasting precision; the numerator/denominator ratio is a single FP32 divide.
+                      // Inside the WKV tolerance gate (1e-4 vs the f64 ref).
+                      "  float ww=uc+kk; float q=fmaxf(p,ww);\n"
+                      "  float e1=expf(p-q), e2=expf(ww-q);\n"
+                      "  out[c]=(e1*a+e2*vv)/(e1*b+e2);\n"
+                      "  q=fmaxf(p-wc,kk); e1=expf(p-wc-q); e2=expf(kk-q);\n"
+                      "  aa[c]=e1*a+e2*vv; bb[c]=e1*b+e2; pp[c]=q;\n"
                       "}\n",
                       "wkv_step.cu", "wkv_step", &gWkvStep) != 0) { rc = -2; goto done; }
     {
