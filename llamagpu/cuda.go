@@ -482,14 +482,18 @@ func NewMixtralQ4KCUDA(m *nlp.Mixtral) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newMixtralDecoder(m, cudaQ4KOps())
+	o := cudaQ4KOps()
+	o.fusedGateUp = true // cRec implements SwiGLUHalves; MoE experts column-fuse gate|up
+	return newMixtralDecoder(m, o)
 }
 
 func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newMixtralDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true // cRec implements SwiGLUHalves; MoE experts column-fuse gate|up
+	return newMixtralDecoder(m, o)
 }
 
 // NewQwen3MoEQ8CUDA is NewMixtralQ8CUDA's Qwen3-MoE entry point (see the MoE Q8 note above) —
@@ -503,7 +507,9 @@ func NewQwen2MoEQ8CUDA(m *nlp.Qwen2MoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newQwen2MoEDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true
+	return newQwen2MoEDecoder(m, o)
 }
 
 // NewGraniteMoEQ8CUDA is the Q8 entry point for nlp.GraniteMoE (see the MoE Q8 note above): the
@@ -514,7 +520,9 @@ func NewGraniteMoEQ8CUDA(m *nlp.GraniteMoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newGraniteMoEDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true
+	return newGraniteMoEDecoder(m, o)
 }
 
 // NewOLMoEQ8CUDA is the Q8 entry point for nlp.OLMoE (see the MoE Q8 note above): the attention
@@ -524,7 +532,9 @@ func NewOLMoEQ8CUDA(m *nlp.OLMoE) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newOLMoEDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true
+	return newOLMoEDecoder(m, o)
 }
 
 // NewDeepSeekV2Q8CUDA quantizes the flagship MLA + DeepSeekMoE decoder — the last Q8 gap. The low-rank
@@ -535,7 +545,9 @@ func NewDeepSeekV2Q8CUDA(m *nlp.DeepSeekV2) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newDeepSeekV2Decoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true
+	return newDeepSeekV2Decoder(m, o)
 }
 
 // NewQwen2CUDA uploads a Qwen2 / Qwen2.5 model onto the batched Decoder core. Qwen2 shares
