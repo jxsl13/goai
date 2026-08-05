@@ -47,7 +47,7 @@ static cublasHandle_t gHandle = NULL;
 static float *gOne = NULL, *gZero = NULL; // device 1.0f/0.0f — cuBLAS DEVICE pointer mode (graph-capture-safe alpha/beta)
 static cudaStream_t gStream = NULL;
 static CUcontext gCtx = NULL; // runtime's primary context, retained for driver-API launches
-static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxC = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxCapC = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gAttnSoftmaxBiasC = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL, gSwigluHalves = NULL; // lazily nvrtc-compiled
+static CUfunction gGelu = NULL, gRelu2 = NULL, gRelu = NULL, gMoeGate = NULL, gRowAxpy = NULL, gSsmStep = NULL, gSsdStep = NULL, gConv1dStep = NULL, gWkvStep = NULL, gSilu = NULL, gSigmoid = NULL, gSoftplus = NULL, gAdd = NULL, gMul = NULL, gRms = NULL, gRmsC = NULL, gSoftmax = NULL, gSoftmaxCached = NULL, gRope = NULL, gRopePartial = NULL, gCausal = NULL, gCausalMH = NULL, gEmbed = NULL, gSwiglu = NULL, gAttnSoftmax = NULL, gAttnSoftmaxC = NULL, gAttnSoftmaxCap = NULL, gAttnSoftmaxCapC = NULL, gAttnSoftmaxAlibi = NULL, gAttnSoftmaxBias = NULL, gAttnSoftmaxBiasC = NULL, gQgemv = NULL, gQgemv4 = NULL, gQgemv4k = NULL, gQgemv4kMT = NULL, gQgemv4kMTS = NULL, gQgemv4kPre = NULL, gQgemv5k = NULL, gQgemv5kMT = NULL, gQgemv5kMTS = NULL, gQgemv6k = NULL, gQgemv6kMT = NULL, gQgemv6kMTS = NULL, gQgemv3k = NULL, gQgemv3kMT = NULL, gQgemv3kMTS = NULL, gQgemv2k = NULL, gQgemv2kMT = NULL, gQgemv40 = NULL, gQgemvI4nl = NULL, gQgemvI4xs = NULL, gQgemvI4xsMT = NULL, gQgemvI4xsMTS = NULL, gQgemvMxfp4 = NULL, gQgemvMxfp4MT = NULL, gQgemvI2xxs = NULL, gQgemvI2xxsMT = NULL, gQgemvI2xs = NULL, gQgemvI3xxs = NULL, gQgemvI3xxsMT = NULL, gQgemvI3s = NULL, gQgemvI3sMT = NULL, gQgemvI1s = NULL, gQgemvI1m = NULL, gI8Mma = NULL, gI8MmaT = NULL, gI8MmaRb = NULL, gI8MmaDb = NULL, gI8MmaWt = NULL, gI8MmaWp = NULL, gI8Mmq = NULL, gI8MmqR = NULL, gQrowsI8 = NULL, gLdmProbe = NULL, gLdmProbe2 = NULL, gI8MmaLm = NULL, gCvtF16 = NULL, gCvtFrom16 = NULL, gW8A16 = NULL, gW8A16T = NULL, gW8A16B = NULL, gW8A16D = NULL, gW8A16SK = NULL, gW8A16Fin = NULL, gW8A16P3 = NULL, gSwigluHalves = NULL, gGegluHalves = NULL; // lazily nvrtc-compiled
 static CUfunction gRopeDpos = NULL, gRopePartialDpos = NULL, gAttnSoftmaxDpos = NULL, gAppendDpos = NULL; // device-position (graph-capturable) twins
 static CUfunction gGqaFlashPart = NULL, gGqaFlashMerge = NULL; // flash decode: GQA K/V-shared split-K partials + merge
 static CUfunction gGqaFlashPartF16 = NULL, gAppendDposF16 = NULL; // f16 KV-cache twins (u16 storage, f32 compute)
@@ -1523,6 +1523,38 @@ int cu_swiglu_halves(void* out, const void* gu, int rows, int hidden) {
         args[2] = &rows;
         args[3] = &hidden;
         rc = (cuLaunchKernel(gSwigluHalves, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_geglu_halves: the GeGLU twin of cu_swiglu_halves (Gemma's down(GELU(gate)⊙up)). gu is
+// [rows, 2*hidden] = [gate|up]; out[r*hidden+i] = GELU(gu[r,i]) * gu[r,hidden+i], one op replacing
+// two GEMVs + Unary GELU + Binary mul. GELU matches gelu_f32 exactly: 0.5·v·(1+erf(v/√2)).
+int cu_geglu_halves(void* out, const void* gu, int rows, int hidden) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto done; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto done; }
+    if (!gGegluHalves && compile_kernel(
+                        "extern \"C\" __global__ void geglu_halves(float* out, const float* gu, int rows, int hidden){\n"
+                        "  int idx = blockIdx.x*blockDim.x + threadIdx.x;\n"
+                        "  int n = rows*hidden;\n"
+                        "  if (idx < n){ int r = idx/hidden, i = idx%hidden;\n"
+                        "    const float* row = gu + (size_t)r*2*hidden;\n"
+                        "    float v = row[i];\n"
+                        "    out[idx] = 0.5f*v*(1.0f+erff(v*0.7071067811865476f))*row[hidden + i]; }\n"
+                        "}\n",
+                        "geglu_halves.cu", "geglu_halves", &gGegluHalves) != 0) { rc = -2; goto done; }
+    {
+        int n = rows*hidden, threads = 256, blocks = (n + threads - 1) / threads;
+        void* args[4];
+        args[0] = &out;
+        args[1] = &gu;
+        args[2] = &rows;
+        args[3] = &hidden;
+        rc = (cuLaunchKernel(gGegluHalves, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 done:
     pthread_mutex_unlock(&gLock);

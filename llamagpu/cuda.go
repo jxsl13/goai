@@ -100,6 +100,12 @@ func (c cRec) SwiGLUHalves(gu, out buffer, rows, hidden int) error {
 	return c.r.SwiGLUHalves(cb(gu), cb(out), rows, hidden)
 }
 
+// GeGLUHalves fuses GeGLU over the halves of a column-fused gate|up buffer (Gemma): out[r,i] =
+// GELU(gu[r,i])·gu[r,hidden+i]. Satisfies the decoder's optional geGLUHalvesRecorder.
+func (c cRec) GeGLUHalves(gu, out buffer, rows, hidden int) error {
+	return c.r.GeGLUHalves(cb(gu), cb(out), rows, hidden)
+}
+
 // QMatMulResidentMoE routes a Q8 expert GEMV through the moeW-gated kernel (skips non-selected tokens'
 // weight-stream, bit-identical to dense+RowAxpy-w0). Non-Q8 quant → dense QMatMulResident (correct).
 func (c cRec) QMatMulResidentMoE(x buffer, w qweight, o buffer, m int, moeGate buffer, gateStride, ex int) error {
@@ -351,7 +357,9 @@ func NewGemmaQ8CUDA(m *nlp.Gemma) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newGemmaDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true // cRec implements GeGLUHalves; newGemmaDecoder column-fuses ffn_gate|ffn_up
+	return newGemmaDecoder(m, o)
 }
 
 // NewGraniteQ8CUDA is the Q8 entry point for IBM Granite (dense) — Granite maps to nlp.Llama (Llama core +
