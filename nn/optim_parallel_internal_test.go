@@ -183,3 +183,88 @@ func benchClipGradNorm(b *testing.B, threshold int) {
 
 func BenchmarkClipGradNormSerial(b *testing.B)   { benchClipGradNorm(b, 1<<40) }
 func BenchmarkClipGradNormParallel(b *testing.B) { benchClipGradNorm(b, 1<<4) }
+
+// TestLAMBParStepMatchesSerial checks LAMB's parallelized Step against its serial inline path via the
+// same threshold toggle. Unlike Adam/SGD/Lion, LAMB's per-param trust ratio divides two Σ-of-squares
+// (wNorm2/uNorm2) computed with parSumSq, which REASSOCIATES the reduction — so the final param is
+// tol-close (~ULP), not bit-identical; the moment state m/v (pure per-index parStep writes) IS bit-exact.
+func TestLAMBParStepMatchesSerial(t *testing.T) {
+	const n = 1<<18 + 4321 // ragged tail; above parStepMinElems so the parallel path engages
+	const steps = 3
+	orig := parStepMinElems
+	defer func() { parStepMinElems = orig }()
+	for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
+		init := make([]float64, n)
+		grad := make([]float64, n)
+		for i := range init {
+			init[i] = math.Sin(float64(i)*0.0011)*0.7 - 0.2
+			grad[i] = math.Cos(float64(i)*0.0009) * 2e-2
+		}
+		run := func(threshold int) (param, mom []float64) {
+			parStepMinElems = threshold
+			p := tensor.New(dt, tensor.Shape{n})
+			g := tensor.New(tensor.F64, tensor.Shape{n})
+			if dt == tensor.F64 {
+				copy(p.Storage().F64(), init)
+			} else {
+				pf := p.Storage().F32()
+				for i, x := range init {
+					pf[i] = float32(x)
+				}
+			}
+			copy(g.Storage().F64(), grad)
+			gc := g.Cast(dt)
+			opt := NewLAMB([]*tensor.Tensor{p}, 1e-3)
+			for s := 0; s < steps; s++ {
+				if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return gc }); err != nil {
+					t.Fatal(err)
+				}
+			}
+			param = make([]float64, n)
+			if dt == tensor.F64 {
+				copy(param, p.Storage().F64())
+			} else {
+				for i, x := range p.Storage().F32() {
+					param[i] = float64(x)
+				}
+			}
+			mom = append([]float64(nil), opt.m[0]...) // moment m — pure parStep writes, must be bit-exact
+			return
+		}
+		sp, sm := run(1 << 40)
+		pp, pm := run(1 << 4)
+		for i := 0; i < n; i++ {
+			if sm[i] != pm[i] {
+				t.Fatalf("%v m[%d]: serial %v != parallel %v (moment must be bit-exact)", dt, i, sm[i], pm[i])
+			}
+			if d := math.Abs(sp[i] - pp[i]); d > 1e-9*math.Abs(sp[i])+1e-11 {
+				t.Fatalf("%v param[%d]: serial %v vs parallel %v (Δ %g > tol)", dt, i, sp[i], pp[i], d)
+			}
+		}
+		t.Logf("%v: LAMB parallel matches serial (m bit-exact, param within trust-ratio ULP tol) over %d elems", dt, n)
+	}
+}
+
+func benchLAMBStep(b *testing.B, n, threshold int) {
+	orig := parStepMinElems
+	parStepMinElems = threshold
+	defer func() { parStepMinElems = orig }()
+	p := tensor.New(tensor.F32, tensor.Shape{n})
+	pf := p.Storage().F32()
+	for i := range pf {
+		pf[i] = float32(i%1000)/500 - 1
+	}
+	g := tensor.New(tensor.F32, tensor.Shape{n})
+	gf := g.Storage().F32()
+	for i := range gf {
+		gf[i] = float32(i%777) * 1e-4
+	}
+	opt := NewLAMB([]*tensor.Tensor{p}, 1e-3)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g })
+	}
+}
+
+func BenchmarkLAMBStep_1M_parallel(b *testing.B) { benchLAMBStep(b, 1<<20, 1<<8) }
+func BenchmarkLAMBStep_1M_serial(b *testing.B)   { benchLAMBStep(b, 1<<20, 1<<40) }
