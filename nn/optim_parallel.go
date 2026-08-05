@@ -73,6 +73,18 @@ func parCountNonzeroF64(u []float64) float64 {
 	})
 }
 
+// parStepRows fans a ROW-chunked body across cores when the TOTAL element count n (not the row count)
+// clears parStepMinElems — for 2D optimizer passes whose per-row work writes a disjoint output row, so
+// the matrix parallelizes on its element count exactly as the flat parStep does and stays BIT-IDENTICAL
+// to the serial loop. Below the threshold, or with a single row, it runs inline on the caller.
+func parStepRows(rows, n int, body func(lo, hi int)) {
+	if n >= parStepMinElems && rows > 1 {
+		parallel.Rows(rows, body)
+		return
+	}
+	body(0, rows)
+}
+
 // parSumF64x2 runs a fused parallel map-reduce over [0,n): chunk writes its per-index state — disjoint
 // index-i writes, so BIT-IDENTICAL to the serial loop — and returns two partial sums, whose totals are
 // reassociated across cores (tol ~1 ULP, like parSumSq) when n clears parStepMinElems, else a serial
