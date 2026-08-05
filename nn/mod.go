@@ -95,12 +95,22 @@ func (m *MixtureOfDepths) Route(ctx *backend.Context, x *tensor.Tensor) (gathere
 	for i, p := range idx {
 		S.SetF64(1, i, p)
 	}
-	if gathered, err = ex(backend.OpMatMul, nil, S, x); err != nil { // [k,d]
+	// The gathers gathered=S·x and weights=S·logits pick rows idx[i] — a disguised take-along.
+	// Replace the two O(k·seq·d)/O(k·seq) one-hot matmuls with OpEmbed on the F64 indices (O(k·d)/
+	// O(k)); OpEmbed's VJP scatter-adds grad into row idx[i] — exactly Sᵀ·grad, the matmul backward —
+	// so gradients to x and to logits (→Router) are unchanged. Bit-exact forward. S itself is kept:
+	// Combine still needs it for the Sᵀ scatter (its backward is the mirror gather, left as-is here).
+	idxF64 := tensor.New(tensor.F64, tensor.Shape{k})
+	idf := idxF64.Storage().F64()
+	for i, p := range idx {
+		idf[i] = float64(p)
+	}
+	if gathered, err = ex(backend.OpEmbed, nil, x, idxF64); err != nil { // [k,d] gathered token rows
 		return nil, nil, nil, err
 	}
 	// Eq. 1 multiplies the block output by the RAW router logit r_i (sigmoid is used
 	// only in the §3.5 auxiliary predictor loss, not on the residual path).
-	weights, err = ex(backend.OpMatMul, nil, S, logits) // [k,1] gathered router logits r_i
+	weights, err = ex(backend.OpEmbed, nil, logits, idxF64) // [k,1] gathered router logits r_i
 	if err != nil {
 		return nil, nil, nil, err
 	}
