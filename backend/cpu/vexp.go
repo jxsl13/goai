@@ -228,6 +228,10 @@ func sigmoidF32(x float32) float32 {
 	return num / (1 + z)
 }
 
+// softplusGradF32 is the scalar softplus VJP lane: softplus'(x) = σ(x), so dx = g·σ(x). Matches
+// the SIMD vsoftplusGradF32 body (same sigmoidF32) so a value yields the same gradient in body or tail.
+func softplusGradF32(x, g float32) float32 { return g * sigmoidF32(x) }
+
 // STANDALONE UNARIES on the same leaf (§T666, the §C26 pattern's 5th
 // application): the T660-T665 campaign vectorized every FUSED transcendental
 // (softmax/MHA/GELU±/crossentropy/SiLU±/sigmoid) but left the standalone

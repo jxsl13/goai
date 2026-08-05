@@ -758,6 +758,14 @@ func softplusBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs 
 		parallel(len(ds), func(lo, hi int) { vsoftplusGradF64(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
 		return []*tensor.Tensor{dx}, nil
 	}
+	if len(in) == 2 && in[0].Dtype() == tensor.F32 && in[1].Dtype() == tensor.F32 &&
+		in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F32, in[0].Shape())
+		xs, gs, ds := xc.Storage().F32(), gc.Storage().F32(), dx.Storage().F32()
+		parallel(len(ds), func(lo, hi int) { vsoftplusGradF32(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
+		return []*tensor.Tensor{dx}, nil
+	}
 	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSoftplusBackward, in, attrs)
 }
 
@@ -798,6 +806,10 @@ func init() {
 		// Llama/Qwen/Mistral layer. The plain build keeps the ref fallbacks.
 		std.add(backend.OpGELUBackward, tensor.F32, geluBackwardKernelCPU)
 		std.add(backend.OpSiLUBackward, tensor.F32, siluBackwardKernelCPU)
+		// Softplus VJP (dx = g·σ(x)) — the Mamba/Jamba Δ, Griffin/Hymba gate, and focal-loss
+		// backward; forward vsoftplusF32 + the silu/gelu backward F32 kernels above all shipped,
+		// this was the one sibling left on the serial ref fallback.
+		std.add(backend.OpSoftplusBackward, tensor.F32, softplusBackwardKernelCPU)
 	}
 }
 

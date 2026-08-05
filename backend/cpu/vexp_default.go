@@ -68,6 +68,12 @@ func vsigmoidF32(dst, src []float32) {
 	}
 }
 
+func vsoftplusGradF32(dst, x, g []float32) {
+	for i, v := range x {
+		dst[i] = softplusGradF32(v, g[i])
+	}
+}
+
 // vexpFullF32 / vtanhF32 / vlogF32 compute the standalone-unary scalar polys
 // (§T666) — they exist only so the arm64-perf fast paths type-check (dead code
 // at run time here: vexpNeon is false, so expKernelCPU / tanhKernelCPU /
