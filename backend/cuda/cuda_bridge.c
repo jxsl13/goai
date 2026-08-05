@@ -3085,8 +3085,8 @@ static int q8_gemv_launch(const void* dA, const void* dQ, const void* dScales, v
                        "    const int4* qr41 = (const int4*)qr1;\n"
                        "    int steps = K >> 9;\n"
                        "    for (int w = 0; w < steps; w++){\n"
-                       "      int4 pk0 = qr40[w*32 + lane];\n"
-                       "      int4 pk1; pk1.x=0;pk1.y=0;pk1.z=0;pk1.w=0; if (has1) pk1 = qr41[w*32 + lane];\n"
+                       "      int4 pk0 = __ldcs(&qr40[w*32 + lane]);\n"  // streaming (evict-first): weights are touch-once, keep L2 for the reused activation
+                       "      int4 pk1; pk1.x=0;pk1.y=0;pk1.z=0;pk1.w=0; if (has1) pk1 = __ldcs(&qr41[w*32 + lane]);\n"
                        "      int kb = w*512 + lane*16;\n"
                        "      float s0 = sr0[w*16 + (lane >> 1)];\n"
                        "      float s1 = has1 ? sr1[w*16 + (lane >> 1)] : 0.0f;\n"
