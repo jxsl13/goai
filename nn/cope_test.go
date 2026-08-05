@@ -318,9 +318,9 @@ func TestCoPEPositionCausality(t *testing.T) {
 	}
 }
 
-// §V16.3 INTERPOLATION: through the REAL forward path (Zₕ einsum with the one-hots
-// from copePosIndices), qᵢ·e[p] returns the exact table row for integer p and the
-// linear blend 0.7·E[2]+0.3·E[3] for p=2.3; clamping at MaxPos returns E[MaxPos].
+// §V16.3 INTERPOLATION: through the REAL forward path (the flat OpEmbed gather on the
+// indices from copePosFlatIndices), qᵢ·e[p] returns the exact table row for integer p and
+// the linear blend 0.7·E[2]+0.3·E[3] for p=2.3; clamping at MaxPos returns E[MaxPos].
 func TestCoPEInterpolation(t *testing.T) {
 	const maxPos, headDim = 4, 3
 	rows := maxPos + 1
@@ -343,11 +343,12 @@ func TestCoPEInterpolation(t *testing.T) {
 	interp := func(pv float64) float64 {
 		p := tensor.New(tensor.F64, tensor.Shape{1, 1})
 		p.SetF64(pv, 0, 0)
-		floorP, floorPlus1P, ohLo, ohHi := copePosIndices(p, maxPos)
+		floorP, floorPlus1P, flatLo, flatHi := copePosFlatIndices(p, maxPos)
 		wHi := copeExec(t, ctx, backend.OpSub, nil, p, floorP)
 		wLo := copeExec(t, ctx, backend.OpSub, nil, floorPlus1P, p)
-		biasLo := copeExec(t, ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohLo, z)
-		biasHi := copeExec(t, ctx, backend.OpEinsum, backend.EinsumAttrs{Spec: "ijm,im->ij"}, ohHi, z)
+		zFlat := copeExec(t, ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{rows, 1}}, z)
+		biasLo := copeExec(t, ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{1, 1}}, copeExec(t, ctx, backend.OpEmbed, nil, zFlat, flatLo))
+		biasHi := copeExec(t, ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{1, 1}}, copeExec(t, ctx, backend.OpEmbed, nil, zFlat, flatHi))
 		lo := copeExec(t, ctx, backend.OpMul, nil, wLo, biasLo)
 		hi := copeExec(t, ctx, backend.OpMul, nil, wHi, biasHi)
 		return copeExec(t, ctx, backend.OpAdd, nil, lo, hi).AtF64(0, 0)
