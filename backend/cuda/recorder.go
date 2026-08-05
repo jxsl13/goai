@@ -664,6 +664,18 @@ func (rec *Recorder) QMatMulResidentAccQ2K(x *DeviceF32, w *ResidentBQ2K, dst *D
 	return nil
 }
 
+// QMatMulResidentAccQ3K fuses the decode-residual add into the Q3_K GEMV (beta=1); Q3_K's weight
+// is a 3-plane layout (meta/qs/hmask). m==1 only, so the scalar cu_qmatmul_q3k (beta*out+acc) is used.
+func (rec *Recorder) QMatMulResidentAccQ3K(x *DeviceF32, w *ResidentBQ3K, dst *DeviceF32, m int) error {
+	if x.ptr == nil || w.meta == nil || dst.ptr == nil {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ3K on a freed handle")
+	}
+	if rc := C.cu_qmatmul_q3k(x.ptr, w.meta, w.qs, w.hm, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
+		return fmt.Errorf("cuda: rec QMatMulResidentAccQ3K failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // q6kWMMAThreshold is the m at/above which QMatMulResidentQ6K routes prefill to the tensor-core WMMA
 // path. Q6_K's coalesced dequant (#880, ~57 GB/s) matches Q4_K's, and Q6_K's scalar MT decode is
 // HEAVIER (6-bit unpack) so WMMA overtakes it no later than Q4_K's benched floor of 48 — a
