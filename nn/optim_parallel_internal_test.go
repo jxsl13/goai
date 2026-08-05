@@ -30,6 +30,8 @@ func TestParStepParallelMatchesSerial(t *testing.T) {
 		{"Lion", func(p []*tensor.Tensor) Optimizer { return NewLion(p, 1e-4) }},
 		{"Sophia", func(p []*tensor.Tensor) Optimizer { return NewSophia(p, 1e-3) }},
 		{"MARS", func(p []*tensor.Tensor) Optimizer { return NewMARS(p, 1e-3) }},
+		{"ScheduleFree", func(p []*tensor.Tensor) Optimizer { return NewScheduleFreeAdamW(p, 1e-3) }},
+		{"AdEMAMix", func(p []*tensor.Tensor) Optimizer { return NewAdEMAMix(p, 1e-3) }},
 	}
 	for _, oc := range opts {
 		for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32} {
@@ -318,3 +320,38 @@ func benchMARSStep(b *testing.B, n, threshold int) {
 
 func BenchmarkMARSStep_1M_parallel(b *testing.B) { benchMARSStep(b, 1<<20, 1<<8) }
 func BenchmarkMARSStep_1M_serial(b *testing.B)   { benchMARSStep(b, 1<<20, 1<<40) }
+
+func benchOptStep1M(b *testing.B, threshold int, newOpt func([]*tensor.Tensor) Optimizer) {
+	orig := parStepMinElems
+	parStepMinElems = threshold
+	defer func() { parStepMinElems = orig }()
+	const n = 1 << 20
+	p := tensor.New(tensor.F32, tensor.Shape{n})
+	pf := p.Storage().F32()
+	for i := range pf {
+		pf[i] = float32(i%1000)/500 - 1
+	}
+	g := tensor.New(tensor.F32, tensor.Shape{n})
+	gf := g.Storage().F32()
+	for i := range gf {
+		gf[i] = float32(i%777) * 1e-4
+	}
+	opt := newOpt([]*tensor.Tensor{p})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g })
+	}
+}
+
+func BenchmarkScheduleFreeStep_1M_parallel(b *testing.B) {
+	benchOptStep1M(b, 1<<8, func(p []*tensor.Tensor) Optimizer { return NewScheduleFreeAdamW(p, 1e-3) })
+}
+func BenchmarkScheduleFreeStep_1M_serial(b *testing.B) {
+	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewScheduleFreeAdamW(p, 1e-3) })
+}
+func BenchmarkAdEMAMixStep_1M_parallel(b *testing.B) {
+	benchOptStep1M(b, 1<<8, func(p []*tensor.Tensor) Optimizer { return NewAdEMAMix(p, 1e-3) })
+}
+func BenchmarkAdEMAMixStep_1M_serial(b *testing.B) {
+	benchOptStep1M(b, 1<<40, func(p []*tensor.Tensor) Optimizer { return NewAdEMAMix(p, 1e-3) })
+}

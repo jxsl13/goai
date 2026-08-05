@@ -114,37 +114,42 @@ func (a *AdEMAMix) Step(grad GradFn) error {
 		// update arithmetic in float64 exactly as the generic path computes them.
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, gv := range gf {
-					//perfscan:ignore PS3084 invariant (1-beta) subtract, ~6pct of sqrt-dominated body, ALU-free
-					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
-					//perfscan:ignore PS3084 invariant (1-beta3) subtract, negligible vs per-element sqrt/divide
-					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
-					//perfscan:ignore PS3084 invariant (1-beta2) subtract, negligible vs sqrt/divide
-					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					m1hat := m1[i] * ibc1
-					vhat := v[i] * ibc2
-					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
-					pv := pf[i]
-					pf[i] = pv - a.LR*(upd+a.WeightDecay*pv)
-				}
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						//perfscan:ignore PS3084 invariant (1-beta) subtract, ~6pct of sqrt-dominated body, ALU-free
+						m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
+						//perfscan:ignore PS3084 invariant (1-beta3) subtract, negligible vs per-element sqrt/divide
+						m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
+						//perfscan:ignore PS3084 invariant (1-beta2) subtract, negligible vs sqrt/divide
+						v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+						m1hat := m1[i] * ibc1
+						vhat := v[i] * ibc2
+						upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
+						pv := pf[i]
+						pf[i] = pv - a.LR*(upd+a.WeightDecay*pv)
+					}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					gv := float64(gf[i])
-					//perfscan:ignore PS3084 invariant subtract, F32 fast path, negligible vs sqrt
-					m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
-					//perfscan:ignore PS3084 invariant subtract, negligible vs sqrt/divide
-					m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
-					//perfscan:ignore PS3084 invariant subtract, negligible vs sqrt/divide
-					v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
-					m1hat := m1[i] * ibc1
-					vhat := v[i] * ibc2
-					upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
-					pv := float64(pf[i])
-					pf[i] = float32(pv - a.LR*(upd+a.WeightDecay*pv))
-				}
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						//perfscan:ignore PS3084 invariant subtract, F32 fast path, negligible vs sqrt
+						m1[i] = a.Beta1*m1[i] + (1-a.Beta1)*gv
+						//perfscan:ignore PS3084 invariant subtract, negligible vs sqrt/divide
+						m2[i] = a.Beta3*m2[i] + (1-a.Beta3)*gv
+						//perfscan:ignore PS3084 invariant subtract, negligible vs sqrt/divide
+						v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+						m1hat := m1[i] * ibc1
+						vhat := v[i] * ibc2
+						upd := (m1hat + a.Alpha*m2[i]) / (math.Sqrt(vhat) + a.Eps)
+						pv := float64(pf[i])
+						pf[i] = float32(pv - a.LR*(upd+a.WeightDecay*pv))
+					}
+				})
 				continue
 			}
 		}
