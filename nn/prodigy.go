@@ -281,40 +281,55 @@ func (o *Prodigy) Step(grad GradFn) error {
 			return fmt.Errorf("nn: Prodigy grad shape %v != param %v", g.Shape(), p.Shape())
 		}
 		m, v, s, x0 := o.m[pi], o.v[pi], o.s[pi], o.p0[pi]
-		dot := 0.0 // ⟨g, x₀−x⟩ for this param
+		dot := 0.0 // ⟨g, x₀−x⟩ for this param (generic fallback below; typed paths sum locally)
+		n := p.Numel()
 		// Typed fast paths (contiguous f64/f32 pairs): flat loops with all arithmetic in
-		// float64 exactly as the generic path computes it.
+		// float64 exactly as the generic path computes it. The m/v/s writes are per-index
+		// (disjoint), so parSumF64x2 fans them across cores BIT-IDENTICALLY on DRAM-resident
+		// params while accumulating this param's dot=⟨g,x₀−x⟩ and ‖s‖₁ partials in the same
+		// memory pass (both reassociated → tol, like the norms in LAMB/ClipGradNorm).
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				//perfscan:ignore PS3010 F64 typed fast-path loop; memory-bound Adam-style moment update at ceiling
-				for i, gv := range gf {
-					dot += gv * (x0[i] - pf[i])
-					//perfscan:ignore PS3084 moment update in typed fast path; memory-streaming, not compute-bound
-					m[i] = o.Beta1*m[i] + (1-o.Beta1)*o.d*gv
-					//perfscan:ignore PS3084 moment update in typed fast path; memory-bound optimizer axpy
-					v[i] = o.Beta2*v[i] + (1-o.Beta2)*o.d*o.d*gv*gv
-					//perfscan:ignore PS3084 moment update in typed fast path; memory-bound optimizer axpy
-					s[i] = o.Beta3*s[i] + sCoef*gv
-					dDenom += math.Abs(s[i])
-				}
-				deltaNum += (o.d / o.D0) * dlr * dot
+				dotP, den := parSumF64x2(n, func(lo, hi int) (float64, float64) {
+					var dot, den float64
+					//perfscan:ignore PS3010 F64 typed fast-path loop; memory-bound Adam-style moment update at ceiling
+					for i := lo; i < hi; i++ {
+						gv := gf[i]
+						dot += gv * (x0[i] - pf[i])
+						//perfscan:ignore PS3084 moment update in typed fast path; memory-streaming, not compute-bound
+						m[i] = o.Beta1*m[i] + (1-o.Beta1)*o.d*gv
+						//perfscan:ignore PS3084 moment update in typed fast path; memory-bound optimizer axpy
+						v[i] = o.Beta2*v[i] + (1-o.Beta2)*o.d*o.d*gv*gv
+						//perfscan:ignore PS3084 moment update in typed fast path; memory-bound optimizer axpy
+						s[i] = o.Beta3*s[i] + sCoef*gv
+						den += math.Abs(s[i])
+					}
+					return dot, den
+				})
+				deltaNum += (o.d / o.D0) * dlr * dotP
+				dDenom += den
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				//perfscan:ignore PS3010 F32 typed fast-path loop; memory-bound Adam-style moment update
-				for i := range gf {
-					gv := float64(gf[i])
-					dot += gv * (x0[i] - float64(pf[i]))
-					//perfscan:ignore PS3084 moment update in F32 fast path; memory-streaming, not compute-bound
-					m[i] = o.Beta1*m[i] + (1-o.Beta1)*o.d*gv
-					//perfscan:ignore PS3084 moment update in F32 fast path; memory-bound optimizer axpy
-					v[i] = o.Beta2*v[i] + (1-o.Beta2)*o.d*o.d*gv*gv
-					//perfscan:ignore PS3084 moment update in F32 fast path; memory-bound optimizer axpy
-					s[i] = o.Beta3*s[i] + sCoef*gv
-					dDenom += math.Abs(s[i])
-				}
-				deltaNum += (o.d / o.D0) * dlr * dot
+				dotP, den := parSumF64x2(n, func(lo, hi int) (float64, float64) {
+					var dot, den float64
+					//perfscan:ignore PS3010 F32 typed fast-path loop; memory-bound Adam-style moment update
+					for i := lo; i < hi; i++ {
+						gv := float64(gf[i])
+						dot += gv * (x0[i] - float64(pf[i]))
+						//perfscan:ignore PS3084 moment update in F32 fast path; memory-streaming, not compute-bound
+						m[i] = o.Beta1*m[i] + (1-o.Beta1)*o.d*gv
+						//perfscan:ignore PS3084 moment update in F32 fast path; memory-bound optimizer axpy
+						v[i] = o.Beta2*v[i] + (1-o.Beta2)*o.d*o.d*gv*gv
+						//perfscan:ignore PS3084 moment update in F32 fast path; memory-bound optimizer axpy
+						s[i] = o.Beta3*s[i] + sCoef*gv
+						den += math.Abs(s[i])
+					}
+					return dot, den
+				})
+				deltaNum += (o.d / o.D0) * dlr * dotP
+				dDenom += den
 				continue
 			}
 		}
@@ -362,16 +377,22 @@ func (o *Prodigy) Step(grad GradFn) error {
 			continue
 		}
 		m, v := o.m[pi], o.v[pi]
+		// Pure per-index apply (each pf[i] from m[i]/v[i] only, no cross-element term) → parStep
+		// fans it across cores BIT-IDENTICALLY to serial on DRAM-resident params.
 		if pf := flatF64(p); pf != nil {
-			for i := range pf {
-				pf[i] = pf[i]*(1-wd) - dlr*m[i]/(math.Sqrt(v[i])+d*o.Eps)
-			}
+			parStep(len(pf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = pf[i]*(1-wd) - dlr*m[i]/(math.Sqrt(v[i])+d*o.Eps)
+				}
+			})
 			continue
 		}
 		if pf := flatF32(p); pf != nil {
-			for i := range pf {
-				pf[i] = float32(float64(pf[i])*(1-wd) - dlr*m[i]/(math.Sqrt(v[i])+d*o.Eps))
-			}
+			parStep(len(pf), func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					pf[i] = float32(float64(pf[i])*(1-wd) - dlr*m[i]/(math.Sqrt(v[i])+d*o.Eps))
+				}
+			})
 			continue
 		}
 		for i := range p.Numel() {
