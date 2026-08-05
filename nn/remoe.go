@@ -209,32 +209,86 @@ func (m *ReMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (y, gates, penal
 			y = tensor.New(x.Dtype(), tensor.Shape{tks, x.Shape()[1]})
 		}
 	} else {
-		// y = Σ_e g[:,e]·Expert_e(x): slice each gate column [T,1] and broadcast-multiply the dense
-		// expert output [T,dim]; zero gates kill both the value and the gradient of that expert.
+		// Training (recording context): the SAME token-sparse eval, but DIFFERENTIABLE — gather each
+		// expert's routed-token rows of x (OpEmbed) AND its gate column at those tokens (OpSlice→OpEmbed,
+		// so the gate gradient flows back through the router), scale, and scatter-add (OpEmbedBackward)
+		// into the [T,dim] output. This is gradient-equivalent to the dense y=Σ_e g[:,e]·Expert_e(x):
+		// an inactive token has logit ≤ 0, so ReLU's derivative there is 0 and it contributes NO
+		// gradient in the dense path either — dropping it changes neither value nor gradient. Every op
+		// (OpEmbed/OpSlice/OpMul/OpEmbedBackward/OpAdd) carries a registered VJP, so autograd handles
+		// the whole layer with no ReMoE-specific backward. Skips the (E−active)/E wasted dense expert
+		// GEMMs. Validated by the ReMoE gradcheck + e2e training tests.
+		dt := x.Dtype()
 		for i := range e {
-			//perfscan:ignore PS3024 OpSlice per-expert graph dispatch
-			ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g)
+			n := len(perTok[i])
+			if n == 0 {
+				// Dead expert this batch (no routed tokens). Dense would run it on all T tokens with a
+				// zero gate, adding nothing to the value but leaving its params in the graph with a
+				// zero gradient. Reproduce that exactly (cheap — happens only for genuinely-dead
+				// experts) so the optimizer sees the same zero grad it would under the dense path,
+				// rather than nil (which would skip weight-decay/momentum on those params).
+				ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g) // [T,1]≡0
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				out, err := m.Experts[i].Forward(ctx, x)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				scaled, err := m.exec(ctx, backend.OpMul, nil, out, ge)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if y == nil {
+					y = scaled
+				} else if y, err = m.exec(ctx, backend.OpAdd, nil, y, scaled); err != nil {
+					return nil, nil, nil, err
+				}
+				continue
+			}
+			idx := tensor.New(tensor.F64, tensor.Shape{n})
+			idf2 := idx.Storage().F64()
+			for k := 0; k < n; k++ {
+				idf2[k] = float64(perTok[i][k])
+			}
+			xi, err := m.exec(ctx, backend.OpEmbed, nil, x, idx) // [n,dim] routed rows
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			out, err := m.Experts[i].Forward(ctx, x)
+			out, err := m.Experts[i].Forward(ctx, xi)
 			if err != nil {
 				return nil, nil, nil, err
 			}
-			//perfscan:ignore PS3024 OpMul per-expert graph dispatch
-			scaled, err := m.exec(ctx, backend.OpMul, nil, out, ge) // [T,dim]·[T,1] broadcast
+			//perfscan:ignore PS3024 OpSlice per-expert gate column, differentiable gate gather
+			ge, err := m.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: i, End: i + 1}, g) // [T,1]
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			wI, err := m.exec(ctx, backend.OpEmbed, nil, ge, idx) // [n,1] gate at routed tokens
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			//perfscan:ignore PS3024 OpMul per-expert gate scale
+			weighted, err := m.exec(ctx, backend.OpMul, nil, out, wI) // [n,dim]·[n,1] broadcast
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			scattered, err := m.exec(ctx, backend.OpEmbedBackward, nil, x, idx, weighted) // [T,dim]
 			if err != nil {
 				return nil, nil, nil, err
 			}
 			if y == nil {
-				y = scaled
+				y = scattered
 			} else {
 				//perfscan:ignore PS3024 OpAdd accumulate graph dispatch
-				y, err = m.exec(ctx, backend.OpAdd, nil, y, scaled)
+				y, err = m.exec(ctx, backend.OpAdd, nil, y, scattered)
 				if err != nil {
 					return nil, nil, nil, err
 				}
 			}
+		}
+		if y == nil {
+			y = tensor.New(dt, tensor.Shape{tks, x.Shape()[1]})
 		}
 	}
 
