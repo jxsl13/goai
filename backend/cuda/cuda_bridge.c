@@ -4319,15 +4319,25 @@ int cu_dequant_q2k_to_f16(const void* dQ, void* dBf16, int K, int N) {
         "    float d = f16f((unsigned short)(blk[80] | (blk[81]<<8)));\n"
         "    float dmin = f16f((unsigned short)(blk[82] | (blk[83]<<8)));\n"
         "    size_t kb = (size_t)w*256;\n"
-        "    #pragma unroll 4\n"
-        "    for (int e = 0; e < 256; e++){\n"
-        "      int nb = e >> 7, jj = (e & 127) >> 5, gsel = (e & 31) >> 4, half = (e & 15) >> 3, t = e & 7;\n"
-        "      int is = nb*8 + jj*2 + gsel, shift = 2*jj;\n"
-        "      int qsoff = 16 + nb*32 + gsel*16 + half*8 + t;\n"
-        "      unsigned sc = blk[is];\n"
-        "      float dl = d * (float)(sc & 0xF), ml = dmin * (float)(sc >> 4);\n"
-        "      float q2 = (float)((blk[qsoff] >> shift) & 3);\n"
-        "      B[(kb + e)*N + n] = f2h(dl*q2 - ml);\n"
+        // Read-once: the old e-major loop re-read each of the 16 scale bytes and each of the 64 quant
+        // bytes many times (every quant byte holds FOUR 2-bit fields → read 4x; scales read once per
+        // (jj,half,t)) — 512 scattered 1-byte loads per super-block. Preload the 16 scales into
+        // registers ONCE, then read each quant byte ONCE and decode its four jj fields → ~80 loads,
+        // ~6x fewer scattered reads. Bit-identical: element nb*128+jj*32+gsel*16+half*8+t, scale
+        // is=nb*8+jj*2+gsel, q2=(qbyte>>2jj)&3, value dl·q2 − ml.
+        "    float dlx[16], mlx[16];\n"
+        "    #pragma unroll\n"
+        "    for (int is = 0; is < 16; is++){ unsigned sc = blk[is]; dlx[is] = d*(float)(sc & 0xF); mlx[is] = dmin*(float)(sc >> 4); }\n"
+        "    #pragma unroll 8\n"
+        "    for (int bi = 0; bi < 64; bi++){\n"
+        "      int nb = bi >> 5, gsel = (bi >> 4) & 1, base = (bi >> 3 & 1)*8 + (bi & 7) + gsel*16 + nb*128;\n"
+        "      unsigned qb = blk[16 + bi];\n"
+        "      #pragma unroll\n"
+        "      for (int jj = 0; jj < 4; jj++){\n"
+        "        int is = nb*8 + jj*2 + gsel;\n"
+        "        float q2 = (float)((qb >> (2*jj)) & 3);\n"
+        "        B[(kb + base + jj*32)*N + n] = f2h(dlx[is]*q2 - mlx[is]);\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "}\n",
