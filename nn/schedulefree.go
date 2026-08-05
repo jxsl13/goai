@@ -185,36 +185,41 @@ func (s *ScheduleFree) Step(grad GradFn) error {
 		// p is write-only here (y_{t+1}); only g is read.
 		if pf := flatF64(p); pf != nil {
 			if gf := flatF64(g); gf != nil {
-				for i, graw := range gf {
-					yv := (1-s.Beta)*z[i] + s.Beta*x[i]
-					gv := graw + s.WeightDecay*yv
-					step := gv
-					if s.adam {
-						v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
-						step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						graw := gf[i]
+						yv := (1-s.Beta)*z[i] + s.Beta*x[i]
+						gv := graw + s.WeightDecay*yv
+						step := gv
+						if s.adam {
+							v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
+							step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+						}
+						z[i] -= lr * step
+						//perfscan:ignore PS3084 invariant (1-ck)/(1-beta) subtract, small fraction of body
+						x[i] = (1-ck)*x[i] + ck*z[i]
+						pf[i] = (1-s.Beta)*z[i] + s.Beta*x[i]
 					}
-					z[i] -= lr * step
-					//perfscan:ignore PS3084 invariant (1-ck)/(1-beta) subtract, small fraction of body
-					x[i] = (1-ck)*x[i] + ck*z[i]
-					pf[i] = (1-s.Beta)*z[i] + s.Beta*x[i]
-				}
+				})
 				continue
 			}
 		} else if pf := flatF32(p); pf != nil {
 			if gf := flatF32(g); gf != nil {
-				for i := range gf {
-					yv := (1-s.Beta)*z[i] + s.Beta*x[i]
-					gv := float64(gf[i]) + s.WeightDecay*yv
-					step := gv
-					if s.adam {
-						v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
-						step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+				parStep(len(gf), func(lo, hi int) {
+					for i := lo; i < hi; i++ {
+						yv := (1-s.Beta)*z[i] + s.Beta*x[i]
+						gv := float64(gf[i]) + s.WeightDecay*yv
+						step := gv
+						if s.adam {
+							v[i] = s.Beta2*v[i] + (1-s.Beta2)*gv*gv
+							step = gv / (math.Sqrt(v[i]/bc2) + s.Eps)
+						}
+						z[i] -= lr * step
+						//perfscan:ignore PS3084 invariant subtract, small fraction of body
+						x[i] = (1-ck)*x[i] + ck*z[i]
+						pf[i] = float32((1-s.Beta)*z[i] + s.Beta*x[i])
 					}
-					z[i] -= lr * step
-					//perfscan:ignore PS3084 invariant subtract, small fraction of body
-					x[i] = (1-ck)*x[i] + ck*z[i]
-					pf[i] = float32((1-s.Beta)*z[i] + s.Beta*x[i])
-				}
+				})
 				continue
 			}
 		}
