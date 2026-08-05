@@ -74,6 +74,41 @@ func matContiguousF32(t *tensor.Tensor) *tensor.Tensor {
 	return out
 }
 
+// matContiguousF64 is matContiguousF32 for F64 operands: a row-band-PARALLEL materialization of a
+// strided/transposed rank-2 view, so the F64 matmul no longer pays a single-threaded transpose gather
+// (the backward dX=dO·Wᵀ / dW=Xᵀ·dO shapes) in front of its parallel GEMM — the same Amdahl
+// serialization the F32 path already removed. Bit-for-bit identical to tensor.Contiguous: the gather
+// order is ascending r then c, dense/offset-0 tensors self-return, and non-rank-2 falls back.
+func matContiguousF64(t *tensor.Tensor) *tensor.Tensor {
+	if t.IsContiguous() && t.Offset() == 0 {
+		return t
+	}
+	sh := t.Shape()
+	if len(sh) != 2 {
+		return t.Contiguous()
+	}
+	rows, cols := sh[0], sh[1]
+	st := t.Strides()
+	s0, s1, off := st[0], st[1], t.Offset()
+	src := t.Storage().F64()
+	out := tensor.NewOn(t.Device(), tensor.F64, tensor.Shape{rows, cols})
+	dst := out.Storage().F64()
+	parallelWork(rows, cols, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			drow := dst[r*cols : r*cols+cols]
+			so := off + r*s0
+			if s1 == 1 {
+				copy(drow, src[so:so+cols])
+			} else {
+				for c := 0; c < cols; c++ {
+					drow[c] = src[so+c*s1]
+				}
+			}
+		}
+	})
+	return out
+}
+
 // matmulInlineWork gates the F64 matmul's serial fast path: below this m·k·n it runs on
 // the caller (see matmulKernel). Tuned above a training step's tiny layers (~1.3e5) and
 // well below the isolated-throughput matmuls that still need the pool.
@@ -101,7 +136,7 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 	if a.Dtype() == tensor.F32 {
 		ac, bc = matContiguousF32(a), matContiguousF32(b)
 	} else {
-		ac, bc = a.Contiguous(), b.Contiguous()
+		ac, bc = matContiguousF64(a), matContiguousF64(b)
 	}
 	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{m, n})
 
