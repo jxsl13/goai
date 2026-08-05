@@ -374,7 +374,9 @@ func NewCohereQ8CUDA(m *nlp.Cohere) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newCohereDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true // cRec implements SwiGLUHalves; builder column-fuses ffn_gate|ffn_up
+	return newCohereDecoder(m, o)
 }
 
 // NewNemotronQ8CUDA is NewNemotronCUDA with every projection (fused QKV, o_proj, the 2-layer relu²
@@ -394,7 +396,9 @@ func NewOLMo2Q8CUDA(m *nlp.OLMo2) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newOLMo2Decoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true // cRec implements SwiGLUHalves; builder column-fuses ffn_gate|ffn_up
+	return newOLMo2Decoder(m, o)
 }
 
 // NewFalconQ8CUDA is NewFalconCUDA with every projection (fused QKV, dense, the 2-layer GELU MLP's
@@ -414,7 +418,9 @@ func NewStableLMQ8CUDA(m *nlp.StableLM) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
 	}
-	return newStableLMDecoder(m, cudaQ8Ops())
+	o := cudaQ8Ops()
+	o.fusedGateUp = true // cRec implements SwiGLUHalves; builder column-fuses ffn_gate|ffn_up
+	return newStableLMDecoder(m, o)
 }
 
 // NewStarCoder2Q8CUDA is NewStarCoder2CUDA with every projection (fused QKV, o_proj, the 2-layer GELU
