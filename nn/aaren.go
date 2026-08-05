@@ -192,7 +192,6 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 	if x.Ndim() != 2 || x.Shape()[1] != a.DModel {
 		return nil, fmt.Errorf("nn: Aaren expects x [T,%d], got %v", a.DModel, x.Shape())
 	}
-	t := x.Shape()[0]
 	//perfscan:ignore PS3024 variadic-pack alloc, resource-only (allocs not ns/op)
 	q, err := a.exec(ctx, backend.OpMatMul, nil, x, a.Wq)
 	if err != nil {
@@ -208,105 +207,22 @@ func (a *Aaren) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor,
 	if err != nil {
 		return nil, err
 	}
-	invSqrtD := scalarTensor(x.Dtype(), 1/math.Sqrt(float64(a.HeadDim)))
-	var mask *tensor.Tensor
-	if a.causal {
-		mask = qkCausalMask(x.Dtype(), t, t)
-	}
-	heads := make([]*tensor.Tensor, a.Heads)
-	for h := range a.Heads {
-		lo, hi := h*a.HeadDim, (h+1)*a.HeadDim
-		slice := func(m *tensor.Tensor) (*tensor.Tensor, error) {
-			//perfscan:ignore PS3024,PS6018 variadic-pack alloc, resource-only no wall-clock | forward matmul/softmax-dominated (T-squared score+exp), sli
-			return a.exec(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 1, Start: lo, End: hi}, m)
-		}
-		qh, err := slice(q)
-		if err != nil {
-			return nil, err
-		}
-		kh, err := slice(k)
-		if err != nil {
-			return nil, err
-		}
-		vh, err := slice(v)
-		if err != nil {
-			return nil, err
-		}
-		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-		khT, err := a.exec(ctx, backend.OpTranspose, nil, kh) // [HeadDim, T]
-		if err != nil {
-			return nil, err
-		}
-		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-		sc, err := a.exec(ctx, backend.OpMatMul, nil, qh, khT) // [T, T]
-		if err != nil {
-			return nil, err
-		}
-		//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-		if sc, err = a.exec(ctx, backend.OpMul, nil, sc, invSqrtD); err != nil { // B60: OpMul, scale may be tiny
-			return nil, err
-		}
-		if a.causal {
-			//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-			if sc, err = a.exec(ctx, backend.OpAdd, nil, sc, mask); err != nil { // future → −1e30
-				return nil, err
-			}
-		}
-		oh, err := a.cumSoftmaxHead(ctx, sc, vh) // stabilised n/d → [T, HeadDim]
-		if err != nil {
-			return nil, err
-		}
-		heads[h] = oh
-	}
-	concat, err := a.exec(ctx, backend.OpConcat, backend.ConcatAttrs{Axis: 1}, heads...) // [T, DModel]
+	// Fused multi-head SDPA. The running-max-stabilised per-head (n=E·V, d=ΣE, o=n/d) cumulative
+	// softmax equals standard softmax attention exactly (softmax is shift-invariant in the max) for
+	// BOTH causal (cumulative) and bidirectional (full) attention, so
+	// route the whole Heads-way split / QKᵀ / scale / mask / softmax / ·V / concat through the single
+	// fused OpMHA kernel — the same op GatedAttention and Hymba use — instead of ~13 dispatched ops per
+	// head that each materialise [T,T] score/exp intermediates and run the softmax as generic
+	// OpExp/OpSum/OpDiv. OpMHA applies the 1/√HeadDim scale internally and concatenates the heads to
+	// [T, DModel]. Differentiable (registered VJP); it matches the manual chain within OpMHA's
+	// tolerance — the §V16 anchor (≡ softmax attention) and parallel↔recurrent duality tests gate this
+	// at 1e-10. The O(1)-memory StepRecurrent streaming path is unchanged.
+	attn, err := a.exec(ctx, backend.OpMHA, backend.AttnAttrs{Heads: a.Heads, Causal: a.causal}, q, k, v)
 	if err != nil {
 		return nil, err
 	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	return a.exec(ctx, backend.OpMatMul, nil, concat, a.Wo)
-}
-
-// cumSoftmaxHead computes one head's output as the running-max-stabilised
-// cumulative softmax of scores sc[T,T] against values vh[T,HeadDim]: the running
-// max m (per row, detached — a constant log-sum-exp shift), E = e^{sc−m}, the
-// denominator d = Σ_j E (row-sum), the numerator n = E·V, and o = n/d. This is the
-// (m, n, d) accumulation of the associative operator written with dispatched ops,
-// and equals softmax(sc)·V exactly (softmax is shift-invariant in m). Detaching m
-// via OpStopGradient makes the stabiliser a true constant so the gradient is the
-// clean softmax gradient (§V16 gradcheck) while keeping e^{sc−m} ≤ 1 for stability.
-func (a *Aaren) cumSoftmaxHead(ctx *backend.Context, sc, vh *tensor.Tensor) (*tensor.Tensor, error) {
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	m, err := a.exec(ctx, backend.OpMax, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, sc) // [T,1]
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	m, err = a.exec(ctx, backend.OpStopGradient, nil, m) // detach the stabiliser (constant shift)
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	shifted, err := a.exec(ctx, backend.OpSub, nil, sc, m) // sc − m (broadcast [T,T]−[T,1])
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	e, err := a.exec(ctx, backend.OpExp, nil, shifted) // E = e^{sc−m}; masked future → 0
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	d, err := a.exec(ctx, backend.OpSum, backend.ReduceAttrs{Axes: []int{1}, KeepDims: true}, e) // d = Σ_j E → [T,1]
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	n, err := a.exec(ctx, backend.OpMatMul, nil, e, vh) // n = E·V → [T,HeadDim]
-	if err != nil {
-		return nil, err
-	}
-	//perfscan:ignore PS3024 variadic-pack alloc, resource-only no wall-clock
-	return a.exec(ctx, backend.OpDiv, nil, n, d) // o = n/d (broadcast [T,HeadDim]/[T,1])
+	//perfscan:ignore PS3024 single OpMHA dispatch; attention/matmul dominates
+	return a.exec(ctx, backend.OpMatMul, nil, attn, a.Wo)
 }
 
 // AarenState is the O(1)-memory streaming state of ONE fixed query's causal
