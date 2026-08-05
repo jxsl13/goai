@@ -93,6 +93,13 @@ func (c cRec) Binary(a, b, o buffer, op int) error {
 	return c.r.Binary(cb(a), cb(b), cb(o), op)
 }
 
+// SwiGLUHalves fuses SwiGLU over the two halves of a column-fused gate|up buffer (§gate-up fusion):
+// out[r,i] = silu(gu[r,i])·gu[r,hidden+i]. Satisfies the decoder's optional swiGLUHalvesRecorder so
+// recordFFN can fuse ffn_gate|ffn_up into one GEMV + this op instead of two GEMVs + a Binary SwiGLU.
+func (c cRec) SwiGLUHalves(gu, out buffer, rows, hidden int) error {
+	return c.r.SwiGLUHalves(cb(gu), cb(out), rows, hidden)
+}
+
 // QMatMulResidentMoE routes a Q8 expert GEMV through the moeW-gated kernel (skips non-selected tokens'
 // weight-stream, bit-identical to dense+RowAxpy-w0). Non-Q8 quant → dense QMatMulResident (correct).
 func (c cRec) QMatMulResidentMoE(x buffer, w qweight, o buffer, m int, moeGate buffer, gateStride, ex int) error {
@@ -192,6 +199,7 @@ func NewLlamaQ8CUDA(m *nlp.Llama) (*Decoder, error) {
 	return newDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
+		fusedGateUp: true, // cRec implements SwiGLUHalves; newDecoder column-fuses ffn_gate|ffn_up
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := cuda.NewDeviceBufferF32(data)
 			if err != nil {
@@ -253,6 +261,7 @@ func NewLlamaQ4KCUDA(m *nlp.Llama) (*Decoder, error) {
 	return newDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
+		fusedGateUp: true, // cRec implements SwiGLUHalves; newDecoder column-fuses ffn_gate|ffn_up
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := cuda.NewDeviceBufferF32(data)
 			if err != nil {
