@@ -677,6 +677,14 @@ func (rec *Recorder) QMatMulResidentAccQ4K(x *DeviceF32, w *ResidentBQ4K, dst *D
 	if x.ptr == nil || w.q == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ4K on a freed handle")
 	}
+	// Small-batch residual-fused: mirror the plain QMatMulResidentQ4K m>=4 MT routing (the Acc path was
+	// stuck on the GEMV for all m). The MT reads column n's Q4_K block ONCE across the tile; it carries
+	// beta, so beta=1 is exactly the residual add. Bit-identical (TestCUDAQ4KMatMulMTParity).
+	if m >= 4 {
+		if rc := C.cu_qmatmul_q4k_mt(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc == 0 {
+			return nil
+		}
+	}
 	if rc := C.cu_qmatmul_q4k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ4K failed (code %d)", int(rc))
 	}
@@ -691,6 +699,12 @@ func (rec *Recorder) QMatMulResidentAccQ6K(x *DeviceF32, w *ResidentBQ6K, dst *D
 	if x.ptr == nil || w.q == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ6K on a freed handle")
 	}
+	// Small-batch residual-fused: mirror the plain m>=2 MT routing (Acc was GEMV-only). MT carries beta.
+	if m >= 2 {
+		if rc := C.cu_qmatmul_q6k_mt(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc == 0 {
+			return nil
+		}
+	}
 	if rc := C.cu_qmatmul_q6k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ6K failed (code %d)", int(rc))
 	}
@@ -702,6 +716,12 @@ func (rec *Recorder) QMatMulResidentAccQ6K(x *DeviceF32, w *ResidentBQ6K, dst *D
 func (rec *Recorder) QMatMulResidentAccQ5K(x *DeviceF32, w *ResidentBQ5K, dst *DeviceF32, m int) error {
 	if x.ptr == nil || w.q == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ5K on a freed handle")
+	}
+	// Small-batch residual-fused: mirror the plain m>=2 MT routing (Acc was GEMV-only). MT carries beta.
+	if m >= 2 {
+		if rc := C.cu_qmatmul_q5k_mt(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc == 0 {
+			return nil
+		}
 	}
 	if rc := C.cu_qmatmul_q5k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ5K failed (code %d)", int(rc))
@@ -715,6 +735,12 @@ func (rec *Recorder) QMatMulResidentAccQ2K(x *DeviceF32, w *ResidentBQ2K, dst *D
 	if x.ptr == nil || w.q == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ2K on a freed handle")
 	}
+	// Small-batch residual-fused: mirror the plain m>=2 MT routing (Acc was GEMV-only). MT carries beta.
+	if m >= 2 {
+		if rc := C.cu_qmatmul_q2k_mt(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc == 0 {
+			return nil
+		}
+	}
 	if rc := C.cu_qmatmul_q2k(x.ptr, w.q, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ2K failed (code %d)", int(rc))
 	}
@@ -726,6 +752,12 @@ func (rec *Recorder) QMatMulResidentAccQ2K(x *DeviceF32, w *ResidentBQ2K, dst *D
 func (rec *Recorder) QMatMulResidentAccQ3K(x *DeviceF32, w *ResidentBQ3K, dst *DeviceF32, m int) error {
 	if x.ptr == nil || w.meta == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ3K on a freed handle")
+	}
+	// Small-batch residual-fused: mirror the plain m>=2 MT routing (Acc was GEMV-only). MT carries beta.
+	if m >= 2 {
+		if rc := C.cu_qmatmul_q3k_mt(x.ptr, w.meta, w.qs, w.hm, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc == 0 {
+			return nil
+		}
 	}
 	if rc := C.cu_qmatmul_q3k(x.ptr, w.meta, w.qs, w.hm, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAccQ3K failed (code %d)", int(rc))
