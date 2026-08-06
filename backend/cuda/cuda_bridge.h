@@ -41,6 +41,7 @@ int cu_matmul_i8_mma_lm(const void* dA8, const void* dWt8, void* dC32, int M, in
 // cu_matmul_i8_mmq: true per-32-block MMQ (int8 A/W + per-block f32 scales -> f32 C). M%64,N%64,K%32==0.
 int cu_matmul_i8_mmq(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
 int cu_matmul_i8_mmq_lm(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
+int cu_matmul_i8_mmq_lm2(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
 // cu_matmul_i8_mmq_r: MMQ with per-ROW activation scale aSc[M] (hoisted from K-loop). M%64,N%64,K%32==0.
 int cu_matmul_i8_mmq_r(const void* dA8, const void* dWt8, const void* daSc, const void* dwSc, void* dCf, int M, int K, int N);
 // cu_quant_rows_i8: device per-row int8 quant of f32 activations (A8[M][K]+aSc[M]) for MMQ input.

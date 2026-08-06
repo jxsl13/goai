@@ -58,6 +58,31 @@ func TestI8MMQLMMatchesMMQ(t *testing.T) {
 	}
 }
 
+// TestI8MMQLM2MatchesMMQ: the 128x64-tile kernel must match the reference (m must be %128).
+func TestI8MMQLM2MatchesMMQ(t *testing.T) {
+	if !Available() {
+		t.Skip("no gpu")
+	}
+	m, k, n := 128, 256, 128
+	a8, w8, aSc, wSc := genMMQ(m, k, n)
+	ref := i8MMQ(a8, w8, aSc, wSc, m, k, n)
+	got := i8MMQLM2(a8, w8, aSc, wSc, m, k, n)
+	if ref == nil || got == nil {
+		t.Fatalf("nil (ref=%v got=%v)", ref == nil, got == nil)
+	}
+	var maxAbs float64
+	for i := range ref {
+		d := math.Abs(float64(ref[i] - got[i]))
+		if d > maxAbs {
+			maxAbs = d
+		}
+	}
+	t.Logf("i8mmq vs i8mmqlm2 (128x64) max abs diff: %.3e", maxAbs)
+	if maxAbs > 1e-3 {
+		t.Fatalf("128x64 kernel diverges: maxAbs=%.3e", maxAbs)
+	}
+}
+
 func benchI8MMQvsLM(b *testing.B, m, k, n int) {
 	if !Available() {
 		b.Skip("no gpu")
@@ -92,6 +117,19 @@ func benchI8MMQvsLM(b *testing.B, m, k, n int) {
 		b.StopTimer()
 		b.ReportMetric(tflops(b.Elapsed().Seconds()), "TOPS")
 	})
+	if m%128 == 0 {
+		b.Run("ldmatrix128", func(b *testing.B) {
+			i8mmqLm2ForBench(dA, dW, dAs, dWs, dC, m, k, n)
+			devSync()
+			b.ResetTimer()
+			for range b.N {
+				i8mmqLm2ForBench(dA, dW, dAs, dWs, dC, m, k, n)
+			}
+			devSync()
+			b.StopTimer()
+			b.ReportMetric(tflops(b.Elapsed().Seconds()), "TOPS")
+		})
+	}
 }
 
 func BenchmarkI8MMQvsLM_512x2048x2048(b *testing.B) { benchI8MMQvsLM(b, 512, 2048, 2048) }
