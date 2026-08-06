@@ -540,21 +540,30 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 				}
 				next = sampleTopKCandidates(sp, gi, gv)
 			} else { // pure top-p: resolve the nucleus over the top-C candidates using full-vocab stats
-				gi, gv, e := gd.logits.TopK(fastC)
-				if e != nil {
-					return nil, e
-				}
 				maxL, zexp, e2 := gd.logits.SoftmaxStatsN(gd.vocab, spP.Temperature)
 				if e2 != nil {
 					return nil, e2
 				}
-				cl := make([]float64, len(gv))
-				for i, v := range gv {
-					cl[i] = float64(v)
+				resolved := false
+				// Cheap overflow guard (stats only, no TopK): every prob ≤ the max's 1/Zexp, so the top-C mass
+				// ≤ C/Zexp. When that upper bound is below TopP the nucleus provably exceeds C candidates, so
+				// skip the O(n·C) device TopK and fall straight to the host path — this keeps flat/high-entropy
+				// distributions (huge Zexp) from paying a wasted TopK before the unavoidable full-vocab sort.
+				if float64(fastC)/zexp >= spP.TopP {
+					gi, gv, e := gd.logits.TopK(fastC)
+					if e != nil {
+						return nil, e
+					}
+					cl := make([]float64, len(gv))
+					for i, v := range gv {
+						cl[i] = float64(v)
+					}
+					if tok, ok := spP.SampleTopPFromCandidates(cl, gi, maxL, zexp); ok {
+						next = tok
+						resolved = true
+					}
 				}
-				if tok, ok := spP.SampleTopPFromCandidates(cl, gi, maxL, zexp); ok {
-					next = tok
-				} else { // nucleus exceeded the C candidates → fall back to the full-vocab host sample
+				if !resolved { // guard predicted overflow, or TopK confirmed it → full-vocab host sample
 					l, e3 := gd.logits.ToHost()
 					if e3 != nil {
 						return nil, e3

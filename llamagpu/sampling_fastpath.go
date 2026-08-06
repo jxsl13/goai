@@ -46,10 +46,11 @@ func fastTopKSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
 	return sp, k
 }
 
-// toppCandidateK is the device-TopK width used to resolve a pure-top-p nucleus on-device. It is the
-// cu_topk cap (256); a top-p nucleus that exceeds it overflows to the host fallback (rare for the
-// peaked confident-decode distributions where the fast path matters).
-const toppCandidateK = 256
+// toppCandidateK is the device-TopK width used to resolve a pure-top-p nucleus on-device. 64 covers a
+// realistic confident-decode nucleus (typically 10–40 tokens at top-p 0.9–0.95) while keeping the O(n·K)
+// cu_topk_f32 cheap — K=256 measured ~6× slower (3.1ms vs 0.5ms at 128k), erasing the win. A nucleus that
+// exceeds 64 overflows to the host fallback (cheaply predicted by the C/Zexp guard before the TopK runs).
+const toppCandidateK = 64
 
 // fastTopPSampler reports (sampler, C) when s is a penalty-free PURE top-p *nlp.Sampler — TopP∈(0,1)
 // with every OTHER truncation filter off (no TopK/MinP/Typical/Eta/Epsilon/TopNSigma, no penalties,

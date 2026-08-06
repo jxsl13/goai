@@ -3,6 +3,7 @@
 package llamagpu
 
 import (
+	"math/rand/v2"
 	"testing"
 
 	"github.com/jxsl13/goai/backend/cuda"
@@ -62,3 +63,96 @@ func TestGraphLlamaTopPSampleMatchesFallback(t *testing.T) {
 	}
 	t.Logf("on-device pure-top-p sampling == full-vocab fallback over %d tokens (TopP=0.92, temp=0.8)", len(fast))
 }
+
+// benchTopPStep isolates the PER-TOKEN sampling cost of pure-top-p decode at large vocab: the on-device
+// fast-path (TopK(256)+SoftmaxStatsN+SampleTopPFromCandidates, host fallback on overflow) vs the
+// full-vocab fallback (ToHost + host Sample). Peaked logits (small nucleus) resolve on-device; flat
+// logits overflow, so the fast path pays TopK+stats THEN falls back (the worst case).
+func benchTopPStep(b *testing.B, vocab int, peaked, fast bool) {
+	if !cuda.Available() {
+		b.Skip("cuda: no CUDA-capable device")
+	}
+	logits := make([]float32, vocab)
+	r := rand.New(rand.NewPCG(42, 42))
+	for i := range logits {
+		logits[i] = float32(r.NormFloat64()) * 0.05 // near-flat base
+	}
+	if peaked {
+		for k := 0; k < 30; k++ {
+			logits[r.IntN(vocab)] = float32(8 + 4*r.Float64()) // a small confident nucleus
+		}
+	}
+	d, _ := cuda.NewDeviceF32(1, vocab)
+	if err := d.UploadF32(logits); err != nil {
+		b.Fatal(err)
+	}
+	defer d.Free()
+	sp := nlp.NewSampler(1, nlp.WithTemperature(0.8), nlp.WithTopP(0.9))
+	buf := make([]float64, vocab)
+	doFallback := func() {
+		l, _ := d.ToHost()
+		for j, x := range l.Storage().F32() {
+			buf[j] = float64(x)
+		}
+		sp.Sample(buf)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if fast {
+			maxL, z, _ := d.SoftmaxStatsN(vocab, 0.8)
+			resolved := false
+			if float64(64)/z >= 0.9 { // overflow guard (mirrors the wiring)
+				gi, gv, _ := d.TopK(64)
+				cl := make([]float64, len(gv))
+				for j, v := range gv {
+					cl[j] = float64(v)
+				}
+				if _, ok := sp.SampleTopPFromCandidates(cl, gi, maxL, z); ok {
+					resolved = true
+				}
+			}
+			if !resolved {
+				doFallback()
+			}
+		} else {
+			doFallback()
+		}
+	}
+}
+
+func BenchmarkTopPStep_Peaked_Fast(b *testing.B)     { benchTopPStep(b, 128000, true, true) }
+func BenchmarkTopPStep_Peaked_Fallback(b *testing.B) { benchTopPStep(b, 128000, true, false) }
+func BenchmarkTopPStep_Flat_Fast(b *testing.B)       { benchTopPStep(b, 128000, false, true) }
+func BenchmarkTopPStep_Flat_Fallback(b *testing.B)   { benchTopPStep(b, 128000, false, false) }
+
+func benchTopPComponent(b *testing.B, which string) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	const vocab = 128000
+	logits := make([]float32, vocab)
+	r := rand.New(rand.NewPCG(42, 42))
+	for i := range logits {
+		logits[i] = float32(r.NormFloat64())
+	}
+	d, _ := cuda.NewDeviceF32(1, vocab)
+	d.UploadF32(logits)
+	defer d.Free()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		switch which {
+		case "topk256":
+			d.TopK(64)
+		case "topk40":
+			d.TopK(40)
+		case "stats":
+			d.SoftmaxStatsN(vocab, 0.8)
+		case "tohost":
+			d.ToHost()
+		}
+	}
+}
+func BenchmarkComp_TopK256(b *testing.B) { benchTopPComponent(b, "topk256") }
+func BenchmarkComp_TopK40(b *testing.B)  { benchTopPComponent(b, "topk40") }
+func BenchmarkComp_Stats(b *testing.B)   { benchTopPComponent(b, "stats") }
+func BenchmarkComp_ToHost(b *testing.B)  { benchTopPComponent(b, "tohost") }
