@@ -4871,39 +4871,53 @@ int cu_dequant_q3k_to_f16(const void* dMeta, const void* dQs, const void* dHm, v
         "  return __uint_as_float(__float_as_uint(v) | s);\n"
         "}\n"
         "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        // COALESCED: one COLUMN per thread (was one WARP per column, whose 32 lanes each wrote a
+        // DIFFERENT element of the SAME column n → B[(kbase+t)*N+n] N-strided, scattered ~29 GB/s).
+        // Here thread n decodes its whole column by running the SAME 32-lane decode as a serial
+        // vl=0..31 loop, so at each (vl,t) a warp of adjacent threads writes B[(kbase+t)*N+n..n+31]
+        // = 32 CONTIGUOUS f16 (coalesced), mirroring the shipped dequant_q6k_f16 thread-per-column
+        // base. BIT-IDENTICAL: same (element,value) pairs, the per-lane math is unchanged — only the
+        // lane index moved from threadIdx into the vl loop. (uint reads stay 4-aligned: n*sbs*{64,32}
+        // and qsrel/hmrel are multiples of 8.)
         "extern \"C\" __global__ void dequant_q3k_f16(const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, unsigned short* B, int K, int N){\n"
-        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
-        "  int lane = threadIdx.x & 31;\n"
-        "  if (warp >= (long)N) return;\n"
-        "  int n = (int)warp;\n"
+        "  int n = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (n >= N) return;\n"
         "  int sbs = K >> 8;\n"
-        "  int is = lane >> 1, half = lane & 1, l0 = half*8;\n"
-        "  int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
-        "  int shift = 2*jj, hbit = nb*4 + jj;\n"
-        "  int yi = nb*128 + jj*32 + g + l0;\n"
-        "  int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+        "  const unsigned char* cMeta = meta + (size_t)n*sbs*18;\n"
+        "  const unsigned char* cQs = qsb + (size_t)n*sbs*64;\n"
+        "  const unsigned char* cHm = hmb + (size_t)n*sbs*32;\n"
         "  for (int w = 0; w < sbs; w++){\n"
-        "    size_t sb = (size_t)(n*sbs + w);\n"
-        "    const unsigned char* mp = meta + sb*18;\n"
-        "    float dl = f16f((unsigned short)(mp[16] | (mp[17]<<8))) * (float)((int)mp[is] - 32);\n"
-        "    const unsigned char* qp = qsb + sb*64 + qsrel;\n"
-        "    const unsigned char* hp = hmb + sb*32 + hmrel;\n"
-        "    unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
-        "    unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
-        "    int kbase = w*256 + yi;\n"
+        "    const unsigned char* mp = cMeta + (size_t)w*18;\n"
+        "    float dsb = f16f((unsigned short)(mp[16] | (mp[17]<<8)));\n"
+        "    const unsigned char* qp0 = cQs + (size_t)w*64;\n"
+        "    const unsigned char* hp0 = cHm + (size_t)w*32;\n"
         "    #pragma unroll\n"
-        "    for (int t = 0; t < 8; t++){\n"
-        "      unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
-        "      unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
-        "      int lowb = (qb >> shift) & 3;\n"
-        "      int hset = (hb >> hbit) & 1;\n"
-        "      B[(size_t)(kbase+t)*N + n] = f2h(dl * (float)(lowb - (hset ? 0 : 4)));\n"
+        "    for (int vl = 0; vl < 32; vl++){\n"
+        "      int is = vl >> 1, half = vl & 1, l0 = half*8;\n"
+        "      int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+        "      int shift = 2*jj, hbit = nb*4 + jj;\n"
+        "      int yi = nb*128 + jj*32 + g + l0;\n"
+        "      int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+        "      float dl = dsb * (float)((int)mp[is] - 32);\n"
+        "      const unsigned char* qp = qp0 + qsrel;\n"
+        "      const unsigned char* hp = hp0 + hmrel;\n"
+        "      unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+        "      unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+        "      int kbase = w*256 + yi;\n"
+        "      #pragma unroll\n"
+        "      for (int t = 0; t < 8; t++){\n"
+        "        unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+        "        unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+        "        int lowb = (qb >> shift) & 3;\n"
+        "        int hset = (hb >> hbit) & 1;\n"
+        "        B[(size_t)(kbase+t)*N + n] = f2h(dl * (float)(lowb - (hset ? 0 : 4)));\n"
+        "      }\n"
         "    }\n"
         "  }\n"
         "}\n",
         "dequant_q3k_f16.cu", "dequant_q3k_f16", &gDequantQ3KF16) != 0) { rc = -2; goto doneq3kdq; }
     {
-        long total = (long)N * 32;
+        long total = (long)N;
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
         void* args[6] = { (void*)&dMeta, (void*)&dQs, (void*)&dHm, &dBf16, &K, &N };
         rc = (cuLaunchKernel(gDequantQ3KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
