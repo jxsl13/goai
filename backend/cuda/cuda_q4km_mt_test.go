@@ -204,3 +204,6 @@ func BenchmarkQ4KM64_5632x2048(b *testing.B) { benchQ4KM(b, 64, 5632, 2048) } //
 func BenchmarkQ4KM128_2048x5632(b *testing.B) { benchQ4KM(b, 128, 2048, 5632) } // gate/up, M=128
 func BenchmarkQ4KM128_5632x2048(b *testing.B) { benchQ4KM(b, 128, 5632, 2048) } // down, M=128
 func BenchmarkQ4KM128_2048x2048(b *testing.B) { benchQ4KM(b, 128, 2048, 2048) } // qkv, M=128
+
+func BenchmarkQ4KM1_5632x2048(b *testing.B) { benchQ4KM(b, 1, 5632, 2048) } // down decode GEMV
+func BenchmarkQ4KM1_2048x2048(b *testing.B) { benchQ4KM(b, 1, 2048, 2048) } // attn q/o decode GEMV
