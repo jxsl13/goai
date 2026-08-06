@@ -3342,19 +3342,56 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 	// logits on device and draw over them, bit-identical to the full-vocab sampler (see fastTopKSampler /
 	// sampleTopKCandidates). Any other sampler/backend takes the flexible host path.
 	sp, fastK := fastTopKSampler(s, d.v)
+	spP, fastC := fastTopPSampler(s, d.v) // pure-top-p device path (mutually exclusive with sp: needs top-k off)
 	dt, hasDev := d.logits.b.(deviceTopKer)
-	fast := sp != nil && hasDev
+	dtP, hasDevP := d.logits.b.(deviceTopPer)
+	fast := (sp != nil && hasDev) || (spP != nil && hasDevP)
 	for range maxNew {
 		if pos >= d.maxLen {
 			break
 		}
 		var next int
 		if fast && logits == nil { // decode step, logits resident on device (first d.v of the buffer)
-			gi, gv, e := dt.TopKN(d.v, fastK)
-			if e != nil {
-				return nil, e
+			if sp != nil { // top-k (± post-shrink top-p/min-p): draw over the K-candidate superset
+				gi, gv, e := dt.TopKN(d.v, fastK)
+				if e != nil {
+					return nil, e
+				}
+				next = sampleTopKCandidates(sp, gi, gv)
+			} else { // pure top-p: resolve the nucleus over the top-C candidates using full-vocab stats
+				maxL, zexp, e2 := dtP.SoftmaxStatsN(d.v, spP.Temperature)
+				if e2 != nil {
+					return nil, e2
+				}
+				resolved := false
+				// Cheap overflow guard (stats only): top-C mass ≤ C/Zexp; below TopP the nucleus can't fit,
+				// so skip the O(n·C) device TopK and fall straight to the host path (see the graph decoder).
+				if float64(fastC)/zexp >= spP.TopP {
+					gi, gv, e := dtP.TopKN(d.v, fastC)
+					if e != nil {
+						return nil, e
+					}
+					cl := make([]float64, len(gv))
+					for i, v := range gv {
+						cl[i] = float64(v)
+					}
+					if tok, ok := spP.SampleTopPFromCandidates(cl, gi, maxL, zexp); ok {
+						next = tok
+						resolved = true
+					}
+				}
+				if !resolved { // guard predicted overflow, or TopK confirmed it → full-vocab host sample
+					l, e3 := dtP.ToHost()
+					if e3 != nil {
+						return nil, e3
+					}
+					lf := l.Storage().F32()
+					for i := 0; i < d.v; i++ {
+						buf[i] = float64(lf[i])
+					}
+					next = s.SampleWithHistory(buf, out)
+				}
 			}
-			next = sampleTopKCandidates(sp, gi, gv)
 		} else { // first token (prefill host logits) or the full-vocab fallback
 			for i, x := range logits {
 				buf[i] = float64(x)
