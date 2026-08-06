@@ -74,6 +74,13 @@ func TestCPUCrossReferenceExact(t *testing.T) {
 				// not in F64, so only the F32 lane is cross-checked here.
 				continue
 			}
+			if op == backend.OpGELU && dtype == tensor.F64 && geluF64Tolerant {
+				// SIMD build only: F64 GELU runs the vectorized Cephes erf (vgeluF64,
+				// erfF64x4 on expF64x4), ~1 ulp, riding the model f64 tolerance — not
+				// bit-exact vs ref's scalar math.Erf (accuracy gated by TestVGeluF64Accuracy).
+				// The default build keeps math.Erf (vexpF64Fast=false), asserted exact below.
+				continue
+			}
 			gc := run(t, cpu, op, in)
 			gr := run(t, ref, op, in)
 			vexpVectorized := op == backend.OpGELU || op == backend.OpSigmoid || op == backend.OpSiLU ||

@@ -6,3 +6,6 @@ package cpu_test
 // → bit-exact vs ref (and silu/gelu backward fall back to ref itself). The
 // arm64 and amd64 SIMD perf builds have their own policy files (tolerant).
 const geluF32Tolerant = false
+
+// Default build: F64 GELU stays on scalar math.Erf, bit-exact vs ref.
+const geluF64Tolerant = false

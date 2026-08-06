@@ -9,3 +9,6 @@ package cpu_test
 // TestSiluF32Accuracy), not bit-exact. F64 and every other build stay
 // bit-exact.
 const geluF32Tolerant = true
+
+// arm64: F64 GELU stays on scalar math.Erf (vexpF64Fast=false; vgeluF64 SIMD is amd64-only).
+const geluF64Tolerant = false

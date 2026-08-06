@@ -10,3 +10,8 @@ package cpu_test
 // campaign for those is separate), and a bit-exact result trivially passes the
 // tolerant check, so this const is safe to share.
 const geluF32Tolerant = true
+
+// amd64 SIMD build: cpu OpGELU F64 forward runs the vectorized Cephes erf (vgeluF64,
+// erfF64x4 on expF64x4) — ~1 ulp, not bit-exact vs ref's scalar math.Erf. Matches
+// vexpF64Fast (true only here); every other build keeps scalar math.Erf (bit-exact).
+const geluF64Tolerant = true
