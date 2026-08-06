@@ -156,6 +156,58 @@ func i8MMQ(a8, wt8 []int8, aSc, wSc []float32, m, k, n int) []float32 {
 	return out
 }
 
+// i8MMQLM is i8MMQ using the ldmatrix-core kernel (cu_matmul_i8_mmq_lm) — same math, faster loads.
+func i8MMQLM(a8, wt8 []int8, aSc, wSc []float32, m, k, n int) []float32 {
+	dA := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&a8[0])), C.int(len(a8)))
+	dW := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&wt8[0])), C.int(len(wt8)))
+	dAs := C.cu_upload_f32((*C.float)(unsafe.Pointer(&aSc[0])), C.int(len(aSc)))
+	dWs := C.cu_upload_f32((*C.float)(unsafe.Pointer(&wSc[0])), C.int(len(wSc)))
+	dC := C.cu_alloc_f32(C.int(m * n))
+	defer C.cu_free_f32(dA)
+	defer C.cu_free_f32(dW)
+	defer C.cu_free_f32(dAs)
+	defer C.cu_free_f32(dWs)
+	defer C.cu_free_f32(dC)
+	if int(C.cu_matmul_i8_mmq_lm(dA, dW, dAs, dWs, dC, C.int(m), C.int(k), C.int(n))) != 0 {
+		return nil
+	}
+	out := make([]float32, m*n)
+	C.cu_download_f32(dC, (*C.float)(unsafe.Pointer(&out[0])), C.int(m*n))
+	return out
+}
+
+// i8mmqLmForBench / i8mmqForBench launch the raw kernel on pre-uploaded device pointers (no per-call
+// upload) — for the ldmatrix-vs-manual-load A/B benchmark.
+func i8mmqLmForBench(dA, dW, dAs, dWs, dC unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_matmul_i8_mmq_lm(dA, dW, dAs, dWs, dC, C.int(m), C.int(k), C.int(n)))
+}
+func i8mmqLm2ForBench(dA, dW, dAs, dWs, dC unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_matmul_i8_mmq_lm2(dA, dW, dAs, dWs, dC, C.int(m), C.int(k), C.int(n)))
+}
+
+// i8MMQLM2 is i8MMQ using the 128x64-tile ldmatrix kernel.
+func i8MMQLM2(a8, wt8 []int8, aSc, wSc []float32, m, k, n int) []float32 {
+	dA := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&a8[0])), C.int(len(a8)))
+	dW := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&wt8[0])), C.int(len(wt8)))
+	dAs := C.cu_upload_f32((*C.float)(unsafe.Pointer(&aSc[0])), C.int(len(aSc)))
+	dWs := C.cu_upload_f32((*C.float)(unsafe.Pointer(&wSc[0])), C.int(len(wSc)))
+	dC := C.cu_alloc_f32(C.int(m * n))
+	defer C.cu_free_f32(dA)
+	defer C.cu_free_f32(dW)
+	defer C.cu_free_f32(dAs)
+	defer C.cu_free_f32(dWs)
+	defer C.cu_free_f32(dC)
+	if int(C.cu_matmul_i8_mmq_lm2(dA, dW, dAs, dWs, dC, C.int(m), C.int(k), C.int(n))) != 0 {
+		return nil
+	}
+	out := make([]float32, m*n)
+	C.cu_download_f32(dC, (*C.float)(unsafe.Pointer(&out[0])), C.int(m*n))
+	return out
+}
+func i8mmqForBench(dA, dW, dAs, dWs, dC unsafe.Pointer, m, k, n int) int {
+	return int(C.cu_matmul_i8_mmq(dA, dW, dAs, dWs, dC, C.int(m), C.int(k), C.int(n)))
+}
+
 func f32uploadRaw(f []float32) unsafe.Pointer {
 	return unsafe.Pointer(C.cu_upload_f32((*C.float)(unsafe.Pointer(&f[0])), C.int(len(f))))
 }
