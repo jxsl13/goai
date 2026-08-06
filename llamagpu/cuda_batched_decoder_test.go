@@ -118,3 +118,74 @@ func TestBatchedDecoderF16Ragged(t *testing.T) {
 	}
 	t.Logf("BatchedDecoderF16 ragged parity OK via public API: %v", soloA)
 }
+
+// BenchmarkBatchedDecoderF16Throughput measures the aggregate serving throughput (tokens/sec across the
+// batch) of the PUBLIC API's real decode step — Decode, which includes the on-device greedy sampling
+// (BatchArgmax) and its per-step token round-trip, i.e. exactly what a serving loop runs. Aggregate
+// tok/s should scale ~linearly with batch size B on a bandwidth-bound decode (the weight reads amortize
+// across B tokens), confirming BatchedDecoderF16 delivers the ~30× headroom over batch-1 through the
+// production interface, not just the raw forward.
+func BenchmarkBatchedDecoderF16Throughput(b *testing.B) {
+	if !cuda.Available() {
+		b.Skip("no gpu")
+	}
+	f, err := gguf.ReadFile(b4ModelPath)
+	if err != nil {
+		b.Skipf("gguf: %v", err)
+	}
+	m, err := nlp.LlamaFromGGUF(f.Metadata, f.Tensors)
+	if err != nil {
+		b.Fatal(err)
+	}
+	for _, B := range []int{1, 8, 32} {
+		b.Run(b4BenchName(B), func(b *testing.B) {
+			dec, err := llamagpu.NewBatchedDecoderF16(m, B, 96+b.N)
+			if err != nil {
+				b.Skipf("decoder: %v", err)
+			}
+			defer dec.Close()
+			seqs := make([]*llamagpu.BatchedSeq, B)
+			for i := range seqs {
+				seqs[i] = dec.NewSequence()
+			}
+			defer func() {
+				for _, s := range seqs {
+					s.Release()
+				}
+			}()
+			toks := make([]int32, B)
+			// Seed 64 tokens of KV per sequence for realistic attention reads.
+			for pos := 0; pos < 64; pos++ {
+				for i := range toks {
+					toks[i] = int32((pos*131 + i*911 + 7) % m.Config.Vocab)
+				}
+				if _, err := dec.Decode(seqs, toks); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				for j := range toks {
+					toks[j] = int32((i*577 + j*911 + 3) % m.Config.Vocab)
+				}
+				if _, err := dec.Decode(seqs, toks); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(B)*float64(b.N)/b.Elapsed().Seconds(), "tok/s-agg")
+			b.ReportMetric(b.Elapsed().Seconds()*1e3/float64(b.N), "ms/step")
+		})
+	}
+}
+
+func b4BenchName(B int) string {
+	switch B {
+	case 1:
+		return "B1"
+	case 8:
+		return "B8"
+	default:
+		return "B32"
+	}
+}
