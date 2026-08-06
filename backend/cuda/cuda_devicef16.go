@@ -126,6 +126,31 @@ func (d *DeviceF16) RoPE(inv *DeviceF32, attrs backend.RoPEAttrs) error {
 	return nil
 }
 
+// RoPERagged applies rotary position embedding in place with a DIFFERENT absolute position per row —
+// row p is rotated for position positions[p]. This is the primitive continuous batching needs: in a
+// ragged decode batch each concurrent sequence sits at its own decode position (= its current KV
+// length), unlike the scalar-PosOffset RoPE which assumes every row is at the same position. attrs
+// supplies Heads and the RoPE base/scaling; its PosOffset is ignored (positions are absolute).
+func (d *DeviceF16) RoPERagged(inv *DeviceF32, positions []int32, attrs backend.RoPEAttrs) error {
+	heads := attrs.Heads
+	if heads <= 0 {
+		heads = 1
+	}
+	if len(positions) != d.rows {
+		return fmt.Errorf("cuda: DeviceF16.RoPERagged positions %d != rows %d", len(positions), d.rows)
+	}
+	hd := d.cols / heads
+	dPos := C.cu_upload_i32((*C.int)(&positions[0]), C.int(len(positions)))
+	if dPos == nil {
+		return fmt.Errorf("cuda: DeviceF16.RoPERagged position upload failed")
+	}
+	defer C.cu_free_f32(dPos)
+	if rc := RoPEF16DposArrRaw(d.ptr, inv.ptr, dPos, d.rows, heads, hd, attrs); rc != 0 {
+		return fmt.Errorf("cuda: DeviceF16.RoPERagged rc=%d", rc)
+	}
+	return nil
+}
+
 // SwiGLU applies gate = silu(gate)·up in place.
 func (d *DeviceF16) SwiGLU(up *DeviceF16) error {
 	if up.rows != d.rows || up.cols != d.cols {
