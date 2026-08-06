@@ -65,3 +65,42 @@ func TestVGeluF64Accuracy(t *testing.T) {
 		}
 	}
 }
+
+// vgeluGradF64 must match the exact reference dx = g·(Φ(x)+x·φ(x)) within the model f64
+// tolerance, and body must equal tail.
+func TestVGeluGradF64Accuracy(t *testing.T) {
+	ref := func(x, g float64) float64 {
+		phi := 0.5 * (1 + math.Erf(x/math.Sqrt2))
+		pdf := 0.3989422804014327 * math.Exp(-0.5*x*x)
+		return g * (phi + x*pdf)
+	}
+	n := 4099
+	xs := make([]float64, n)
+	gs := make([]float64, n)
+	for i := range xs {
+		xs[i] = -12 + 24*float64(i)/float64(n-1)
+		gs[i] = -2 + 4*float64((i*37)%n)/float64(n-1)
+	}
+	dst := make([]float64, n)
+	vgeluGradF64(dst, xs, gs)
+	var maxAbs float64
+	for i := range xs {
+		w := ref(xs[i], gs[i])
+		if d := math.Abs(dst[i] - w); d > maxAbs {
+			maxAbs = d
+		}
+		if math.Abs(dst[i]-w) > 1e-12*math.Max(1, math.Abs(w)) {
+			t.Fatalf("vgeluGradF64 x=%g g=%g: got %.17g want %.17g", xs[i], gs[i], dst[i], w)
+		}
+	}
+	t.Logf("vgeluGradF64 max abs err vs ref = %.3e", maxAbs)
+	for _, x := range []float64{-3.3, -1.4142135623730951, 0, 1.4142135623730951, 8.49, 9.5} {
+		one := make([]float64, 1)
+		vgeluGradF64(one, []float64{x}, []float64{1.7})
+		four := make([]float64, 4)
+		vgeluGradF64(four, []float64{x, x, x, x}, []float64{1.7, 1.7, 1.7, 1.7})
+		if one[0] != four[0] {
+			t.Errorf("grad body!=tail at x=%g: tail %.17g vs body %.17g", x, one[0], four[0])
+		}
+	}
+}

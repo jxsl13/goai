@@ -41,6 +41,16 @@ func activationBackwardF64(ctx *backend.Context, op backend.Op, in []*tensor.Ten
 }
 
 func geluBackwardF64KernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	// SIMD build: vectorize the erf (Φ) and exp (φ) transcendentals via vgeluGradF64
+	// (erfF64x4/expF64x4), like siluBackwardF64 does for its sigmoid — ~1 ulp, rides the
+	// model f64 tolerance. Default build keeps the scalar math.Erf/Exp path (bit-exact vs ref).
+	if vexpF64Fast && len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 && in[1].Shape().Equal(in[0].Shape()) {
+		xc, gc := in[0].Contiguous(), in[1].Contiguous()
+		dx := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
+		xs, gs, ds := xc.Storage().F64(), gc.Storage().F64(), dx.Storage().F64()
+		parallel(len(ds), func(lo, hi int) { vgeluGradF64(ds[lo:hi], xs[lo:hi], gs[lo:hi]) })
+		return []*tensor.Tensor{dx}, nil
+	}
 	return activationBackwardF64(ctx, backend.OpGELUBackward, in, attrs, geluGradF64)
 }
 
