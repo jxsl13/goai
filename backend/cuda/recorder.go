@@ -590,6 +590,20 @@ func (rec *Recorder) QMatMulResidentAcc(x *DeviceF32, w *ResidentBQ8, dst *Devic
 	if x.ptr == nil || w.q == nil || w.scales == nil || dst.ptr == nil {
 		return fmt.Errorf("cuda: rec QMatMulResidentAcc on a freed handle")
 	}
+	// SMALL-BATCH residual-fused (beta=1): same gap as QMatMulResident — for 2<=m<6 the GEMV re-streams
+	// the weight M×. Route DEEP/asymmetric shapes (the down/O projection where the residual add lives)
+	// to the weight-read-once MT (#1011), which supports beta=1 (out = beta·out + v). Bit-identical.
+	if m >= 2 {
+		mxKN, mnKN := w.k, w.n
+		if mnKN > mxKN {
+			mxKN, mnKN = mnKN, mxKN
+		}
+		if 2*mnKN < mxKN {
+			if rc := C.cu_qmatmul_q8_mt(x.ptr, w.q, w.scales, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(1)); rc == 0 {
+				return nil
+			}
+		}
+	}
 	if rc := C.cu_qmatmul_q8(x.ptr, w.q, w.scales, dst.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(1)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResidentAcc failed (code %d)", int(rc))
 	}
