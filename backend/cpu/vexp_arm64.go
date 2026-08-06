@@ -275,3 +275,12 @@ func vsoftplusGradF64(dst, x, g []float64) {
 		dst[i] = g[i] * (num / (1 + z))
 	}
 }
+
+// vgeluF64 exists only so geluKernelCPU type-checks off the amd64 SIMD build; vexpF64Fast is false
+// here, so it is dead at run time (the scalar exact math.Erf path runs).
+func vgeluF64(dst, src []float64) {
+	const s = math.Sqrt2
+	for i, v := range src {
+		dst[i] = 0.5 * v * (1 + math.Erf(v/s))
+	}
+}

@@ -873,3 +873,197 @@ func tanhF64poly(x float64) float64 {
 	t := (1 - z) / (1 + z)
 	return math.Float64frombits(math.Float64bits(t) | (math.Float64bits(x) & 0x8000000000000000))
 }
+
+// --- F64 GELU via a vectorized Cephes error function (§T, vgeluF64) ---
+//
+// GELU(x) = 0.5·x·(1 + erf(x/√2)). The F64 forward was the last transcendental
+// activation still on scalar math.Erf (SiLU/Sigmoid/Tanh/Softplus F64 are all
+// vectorized). erfF64x4 ports Cephes' double-precision erf/erfc: for |y|<1 a
+// rational polynomial erf = y·T(y²)/U(y²); for 1≤|y|<6 the complementary form
+// erfc(|y|) = e^(−y²)·P(|y|)/Q(|y|) (the e^(−y²) rides expF64x4), erf =
+// copysign(1−erfc, y); for |y|≥6 erf saturates to ±1 to full f64 (erfc(6)≈2e-17),
+// so the Cephes x≥8 R/S arm is unneeded here. ~1 ulp — well inside the model f64
+// tolerance the SiLU/Sigmoid/Tanh F64 kernels already ride; the CPU==Ref exact
+// test skips OpGELU/F64 only on this SIMD build (default build keeps math.Erf).
+const (
+	erfInvSqrt2 = 0.7071067811865476 // 1/√2 (multiply, not the ref's x/√2 divide — ≤1 ulp on y, immaterial at model tol)
+	// erf, |y|<1: y·polevl(y²,T,4)/p1evl(y²,U,5)  (U monic)
+	erfT0 = 9.60497373987051638749e0
+	erfT1 = 9.00260197203842689217e1
+	erfT2 = 2.23200534594684319226e3
+	erfT3 = 7.00332514112805075473e3
+	erfT4 = 5.55923013010394962768e4
+	erfU0 = 3.35617141647503099647e1
+	erfU1 = 5.21357949780152679795e2
+	erfU2 = 4.59432382970980127987e3
+	erfU3 = 2.26290000613890934246e4
+	erfU4 = 4.92673942608635921086e4
+	// erfc, 1≤|y|<8: e^(−y²)·polevl(|y|,P,8)/p1evl(|y|,Q,8)  (Q monic)
+	erfP0 = 2.46196981473530512524e-10
+	erfP1 = 5.64189564831068821977e-1
+	erfP2 = 7.46321056442269912687e0
+	erfP3 = 4.86371970985681366614e1
+	erfP4 = 1.96520832956077098242e2
+	erfP5 = 5.26445194995477358631e2
+	erfP6 = 9.34528527171957607540e2
+	erfP7 = 1.02755188689515710272e3
+	erfP8 = 5.57535335369399327526e2
+	erfQ0 = 1.32281951154744992508e1
+	erfQ1 = 8.67072140885989742329e1
+	erfQ2 = 3.54937778887819891062e2
+	erfQ3 = 9.75708501743205489753e2
+	erfQ4 = 1.82390916687909736289e3
+	erfQ5 = 2.24633760818710981792e3
+	erfQ6 = 1.65666309194161350182e3
+	erfQ7 = 5.57535340817727675546e2
+)
+
+var (
+	vErfInvSqrt2 = archsimd.BroadcastFloat64x4(erfInvSqrt2)
+	vErfSix      = archsimd.BroadcastFloat64x4(6.0)
+	vErfT0       = archsimd.BroadcastFloat64x4(erfT0)
+	vErfT1       = archsimd.BroadcastFloat64x4(erfT1)
+	vErfT2       = archsimd.BroadcastFloat64x4(erfT2)
+	vErfT3       = archsimd.BroadcastFloat64x4(erfT3)
+	vErfT4       = archsimd.BroadcastFloat64x4(erfT4)
+	vErfU0       = archsimd.BroadcastFloat64x4(erfU0)
+	vErfU1       = archsimd.BroadcastFloat64x4(erfU1)
+	vErfU2       = archsimd.BroadcastFloat64x4(erfU2)
+	vErfU3       = archsimd.BroadcastFloat64x4(erfU3)
+	vErfU4       = archsimd.BroadcastFloat64x4(erfU4)
+	vErfP0       = archsimd.BroadcastFloat64x4(erfP0)
+	vErfP1       = archsimd.BroadcastFloat64x4(erfP1)
+	vErfP2       = archsimd.BroadcastFloat64x4(erfP2)
+	vErfP3       = archsimd.BroadcastFloat64x4(erfP3)
+	vErfP4       = archsimd.BroadcastFloat64x4(erfP4)
+	vErfP5       = archsimd.BroadcastFloat64x4(erfP5)
+	vErfP6       = archsimd.BroadcastFloat64x4(erfP6)
+	vErfP7       = archsimd.BroadcastFloat64x4(erfP7)
+	vErfP8       = archsimd.BroadcastFloat64x4(erfP8)
+	vErfQ0       = archsimd.BroadcastFloat64x4(erfQ0)
+	vErfQ1       = archsimd.BroadcastFloat64x4(erfQ1)
+	vErfQ2       = archsimd.BroadcastFloat64x4(erfQ2)
+	vErfQ3       = archsimd.BroadcastFloat64x4(erfQ3)
+	vErfQ4       = archsimd.BroadcastFloat64x4(erfQ4)
+	vErfQ5       = archsimd.BroadcastFloat64x4(erfQ5)
+	vErfQ6       = archsimd.BroadcastFloat64x4(erfQ6)
+	vErfQ7       = archsimd.BroadcastFloat64x4(erfQ7)
+)
+
+// erfF64x4 returns erf(y) ~1 ulp per lane (Cephes erf/erfc; |y|≥6 saturates to ±1).
+func erfF64x4(y archsimd.Float64x4) archsimd.Float64x4 {
+	ay := y.AsUint64x4().And(vF64Abs).AsFloat64x4() // |y|
+	z := y.Mul(y)                                   // y²
+	// |y|<1 branch: erf = y·polevl(z,T,4)/p1evl(z,U,5)
+	numT := vErfT0
+	numT = numT.MulAdd(z, vErfT1)
+	numT = numT.MulAdd(z, vErfT2)
+	numT = numT.MulAdd(z, vErfT3)
+	numT = numT.MulAdd(z, vErfT4)
+	denU := z.Add(vErfU0)
+	denU = denU.MulAdd(z, vErfU1)
+	denU = denU.MulAdd(z, vErfU2)
+	denU = denU.MulAdd(z, vErfU3)
+	denU = denU.MulAdd(z, vErfU4)
+	erfS := y.Mul(numT).Div(denU)
+	// 1≤|y|<6 branch: erfc(|y|)=e^(−y²)·polevl(|y|,P,8)/p1evl(|y|,Q,8); erf=copysign(1−erfc,y)
+	e := expF64x4(vF64Zero.Sub(z)) // e^(−y²), arg ≤ 0
+	numP := vErfP0
+	numP = numP.MulAdd(ay, vErfP1)
+	numP = numP.MulAdd(ay, vErfP2)
+	numP = numP.MulAdd(ay, vErfP3)
+	numP = numP.MulAdd(ay, vErfP4)
+	numP = numP.MulAdd(ay, vErfP5)
+	numP = numP.MulAdd(ay, vErfP6)
+	numP = numP.MulAdd(ay, vErfP7)
+	numP = numP.MulAdd(ay, vErfP8)
+	denQ := ay.Add(vErfQ0)
+	denQ = denQ.MulAdd(ay, vErfQ1)
+	denQ = denQ.MulAdd(ay, vErfQ2)
+	denQ = denQ.MulAdd(ay, vErfQ3)
+	denQ = denQ.MulAdd(ay, vErfQ4)
+	denQ = denQ.MulAdd(ay, vErfQ5)
+	denQ = denQ.MulAdd(ay, vErfQ6)
+	denQ = denQ.MulAdd(ay, vErfQ7)
+	erfc := e.Mul(numP).Div(denQ)
+	sign := y.AsUint64x4().And(vF64Sign)
+	erfL := vF64One.Sub(erfc).AsUint64x4().And(vF64Abs).Or(sign).AsFloat64x4() // copysign(1−erfc, y)
+	erfBig := vF64One.AsUint64x4().And(vF64Abs).Or(sign).AsFloat64x4()         // copysign(1, y)
+	erf := erfS.Merge(erfL, ay.Less(vF64One))                                  // |y|<1 ? small : large
+	erf = erfBig.Merge(erf, ay.GreaterEqual(vErfSix))                          // |y|≥6 ? ±1 : prev
+	return erf
+}
+
+// erfF64poly is the scalar bit-twin of one erfF64x4 lane (expF64poly + math.FMA) —
+// the vgeluF64 tail, byte-identical to the 4-lane body regardless of length/alignment.
+func erfF64poly(y float64) float64 {
+	ay := math.Float64frombits(math.Float64bits(y) & 0x7fffffffffffffff)
+	z := y * y
+	numT := erfT0
+	numT = math.FMA(numT, z, erfT1)
+	numT = math.FMA(numT, z, erfT2)
+	numT = math.FMA(numT, z, erfT3)
+	numT = math.FMA(numT, z, erfT4)
+	denU := z + erfU0
+	denU = math.FMA(denU, z, erfU1)
+	denU = math.FMA(denU, z, erfU2)
+	denU = math.FMA(denU, z, erfU3)
+	denU = math.FMA(denU, z, erfU4)
+	erfS := y * numT / denU
+	e := expF64poly(0.0 - z)
+	numP := erfP0
+	numP = math.FMA(numP, ay, erfP1)
+	numP = math.FMA(numP, ay, erfP2)
+	numP = math.FMA(numP, ay, erfP3)
+	numP = math.FMA(numP, ay, erfP4)
+	numP = math.FMA(numP, ay, erfP5)
+	numP = math.FMA(numP, ay, erfP6)
+	numP = math.FMA(numP, ay, erfP7)
+	numP = math.FMA(numP, ay, erfP8)
+	denQ := ay + erfQ0
+	denQ = math.FMA(denQ, ay, erfQ1)
+	denQ = math.FMA(denQ, ay, erfQ2)
+	denQ = math.FMA(denQ, ay, erfQ3)
+	denQ = math.FMA(denQ, ay, erfQ4)
+	denQ = math.FMA(denQ, ay, erfQ5)
+	denQ = math.FMA(denQ, ay, erfQ6)
+	denQ = math.FMA(denQ, ay, erfQ7)
+	erfc := e * numP / denQ
+	sign := math.Float64bits(y) & 0x8000000000000000
+	erfL := math.Float64frombits((math.Float64bits(1.0-erfc) & 0x7fffffffffffffff) | sign)
+	erfBig := math.Float64frombits((math.Float64bits(1.0) & 0x7fffffffffffffff) | sign)
+	if ay < 1 {
+		return erfS
+	}
+	if ay >= 6 {
+		return erfBig
+	}
+	return erfL
+}
+
+// geluF64poly = GELU via the erfF64poly primitive, the exact scalar mirror of one
+// vgeluF64 lane: 0.5·x·(1 + erf(x·(1/√2))).
+func geluF64poly(x float64) float64 {
+	return 0.5 * x * (1 + erfF64poly(x*erfInvSqrt2))
+}
+
+// vgeluF64 computes dst[i] = GELU(src[i]) = 0.5·x·(1+erf(x/√2)) 4-wide via AVX2 —
+// the f64 twin of vgeluF32, on the Cephes erfF64x4 (expF64x4-based). 4-lane body +
+// scalar tail via geluF64poly (bit-identical to the body — see erfF64poly).
+func vgeluF64(dst, src []float64) {
+	if !vexpHasAVX {
+		for i, v := range src {
+			dst[i] = geluF64poly(v)
+		}
+		return
+	}
+	n4 := len(src) &^ 3
+	for i := 0; i < n4; i += 4 {
+		x := archsimd.LoadFloat64x4Slice(src[i:])
+		erf := erfF64x4(x.Mul(vErfInvSqrt2))
+		x.Mul(vF64Half).Mul(vF64One.Add(erf)).StoreSlice(dst[i:])
+	}
+	for i := n4; i < len(src); i++ {
+		dst[i] = geluF64poly(src[i])
+	}
+}
