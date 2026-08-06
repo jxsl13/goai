@@ -46,6 +46,51 @@ func fastTopKSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
 	return sp, k
 }
 
+// toppCandidateK is the device-TopK width used to resolve a pure-top-p nucleus on-device. It is the
+// cu_topk cap (256); a top-p nucleus that exceeds it overflows to the host fallback (rare for the
+// peaked confident-decode distributions where the fast path matters).
+const toppCandidateK = 256
+
+// fastTopPSampler reports (sampler, C) when s is a penalty-free PURE top-p *nlp.Sampler — TopP∈(0,1)
+// with every OTHER truncation filter off (no TopK/MinP/Typical/Eta/Epsilon/TopNSigma, no penalties,
+// no XTC) and Temperature>0 — so a device TopK(C) superset lets SampleTopPFromCandidates reconstruct
+// the exact full-vocab nucleus and draw, avoiding the whole-vocab logits D2H + host sort per token.
+// The nucleus is Z-dependent (unlike top-k), so the caller must also supply the full-vocab softmax
+// stats (maxLogit, Zexp); see SampleTopPFromCandidates. Returns (nil,0) for any richer sampler →
+// the flexible full-vocab host fallback. Disabled by GOAI_CUDA_TOPK_SAMPLE=0 (shared switch).
+func fastTopPSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
+	if os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0" {
+		return nil, 0
+	}
+	sp, ok := s.(*nlp.Sampler)
+	if !ok {
+		return nil, 0
+	}
+	// Pure top-p only: any other set-shrinking filter changes the kept set (and Typical/MinP have their
+	// own Z-dependence), and penalties rewrite arbitrary logits — none are handled by the top-p nucleus
+	// reconstruction, so require them all off. (Typical==1 is "off" per its field docs.)
+	if sp.Temperature <= 0 || sp.TopP <= 0 || sp.TopP >= 1 {
+		return nil, 0
+	}
+	if sp.TopK > 0 || sp.MinP != 0 || sp.Epsilon != 0 || sp.Eta != 0 || sp.TopNSigma > 0 {
+		return nil, 0
+	}
+	if sp.Typical != 0 && sp.Typical != 1 {
+		return nil, 0
+	}
+	if !(sp.RepeatPenalty == 0 || sp.RepeatPenalty == 1) || sp.FreqPenalty != 0 || sp.PresencePenalty != 0 || sp.DRYMultiplier != 0 {
+		return nil, 0
+	}
+	if sp.XTCProbability != 0 {
+		return nil, 0
+	}
+	c := toppCandidateK
+	if c > vocab {
+		c = vocab
+	}
+	return sp, c
+}
+
 // sampleTopKCandidates draws exactly as the full-vocab sampler would, but over just the K device top-k
 // candidates: it feeds them to sp.Sample in ASCENDING VOCAB-INDEX order so the multinomial's cumulative
 // scan visits the selected tokens in the same order (and consumes the same rng) as the full-vocab path,
