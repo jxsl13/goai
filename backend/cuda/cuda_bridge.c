@@ -108,9 +108,18 @@ static int compile_kernel(const char* src, const char* name, const char* entry, 
 // whole n-float logits vector). Powers on-device top-k SAMPLING: a penalty-free TopK=k sampler needs
 // only a SUPERSET of the top-k (K>k), so CPU temp/top-p/multinomial on these K candidates is exact.
 // Returns 0 on success. Ties at the K boundary are harmless to callers using k<K.
+// cu_topk_f32 returns the K highest (index, value) of dX[n], descending. TWO-PHASE MULTI-BLOCK: the old
+// single-block kernel used ONE SM doing K passes of find-global-max over all n (O(n·K) on 1/28 of the
+// GPU — TopK(256)@128k measured 3.1ms). Now B blocks each compute the top-K of their n/B slice (phase 1),
+// then a single block merges the B·K partials into the global top-K (phase 2). Correctness: a global
+// top-K element has ≤K−1 elements above it globally, hence ≤K−1 in its OWN slice, so it is in that
+// slice's top-K ⇒ global-top-K ⊆ ∪(per-block top-K), and phase 2 recovers it exactly. B = min(SMs, n/K)
+// keeps each slice ≥ K wide (so every block can supply K); B==1 is the plain single-block path.
+static CUfunction gTopKPartial = NULL, gTopKMerge = NULL;
 int cu_topk_f32(const void* dX, int n, int K, int* outIdx, float* outVal) {
     static float* gScratch = NULL; static int gScratchN = 0;
     static int* gOutIdx = NULL; static float* gOutVal = NULL; static int gOutK = 0;
+    static float* gPV = NULL; static int* gPI = NULL; static int gPCap = 0; // [B*K] phase-1 partials
     int rc = -1;
     if (K < 1 || K > 256 || n < 1 || K > n) return -1;
     pthread_mutex_lock(&gLock);
@@ -128,26 +137,60 @@ int cu_topk_f32(const void* dX, int n, int K, int* outIdx, float* outVal) {
         if (cudaMalloc((void**)&gOutVal, (size_t)K * sizeof(float)) != cudaSuccess) { gOutVal = NULL; gOutK = 0; goto donetk; }
         gOutK = K;
     }
-    if (!gTopK && compile_kernel(
-            "extern \"C\" __global__ void topk_f32(float* s, int n, int K, int* outIdx, float* outVal){\n"
+    // B = blocks for phase 1: fill the SMs but keep each slice ≥ K wide so a block can supply K candidates.
+    int B = gNumSMs > 0 ? gNumSMs : 28;
+    if (B > n / K) B = n / K;
+    if (B < 1) B = 1;
+    if (!gTopKPartial && compile_kernel(
+            "extern \"C\" __global__ void topk_partial(float* s, int n, int K, int B, float* pv, int* pi){\n"
             "  extern __shared__ char sh[];\n"
             "  float* sv = (float*)sh; int* si = (int*)(sv + blockDim.x);\n"
-            "  int t = threadIdx.x, nt = blockDim.x;\n"
+            "  int b = blockIdx.x, t = threadIdx.x, nt = blockDim.x;\n"
+            "  long chunk = ((long)n + B - 1) / B; long lo = (long)b*chunk, hi = lo + chunk; if (hi > n) hi = n;\n"
             "  for (int k = 0; k < K; k++){\n"
-            "    float bv = -1e30f; int bi = 0;\n"
-            "    for (int i = t; i < n; i += nt){ float v = s[i]; if (v > bv){ bv = v; bi = i; } }\n"
+            "    float bv = -1e30f; int bi = (int)lo;\n"
+            "    for (long i = lo + t; i < hi; i += nt){ float v = s[i]; if (v > bv){ bv = v; bi = (int)i; } }\n"
             "    sv[t] = bv; si[t] = bi; __syncthreads();\n"
             "    for (int d = nt/2; d > 0; d >>= 1){ if (t < d && sv[t+d] > sv[t]){ sv[t] = sv[t+d]; si[t] = si[t+d]; } __syncthreads(); }\n"
-            "    if (t == 0){ outIdx[k] = si[0]; outVal[k] = sv[0]; s[si[0]] = -1e30f; }\n"
+            "    if (t == 0){ pv[(long)b*K + k] = sv[0]; pi[(long)b*K + k] = si[0]; if (sv[0] > -1e30f) s[si[0]] = -1e30f; }\n"
             "    __syncthreads();\n"
             "  }\n"
-            "}\n", "topk.cu", "topk_f32", &gTopK) != 0) { goto donetk; }
+            "}\n", "topk_partial.cu", "topk_partial", &gTopKPartial) != 0) { goto donetk; }
+    if (!gTopKMerge && compile_kernel(
+            "extern \"C\" __global__ void topk_merge(float* pv, const int* pi, int M, int K, int* outIdx, float* outVal){\n"
+            "  extern __shared__ char sh[];\n"
+            "  float* sv = (float*)sh; int* sp = (int*)(sv + blockDim.x);\n"
+            "  int t = threadIdx.x, nt = blockDim.x;\n"
+            "  for (int k = 0; k < K; k++){\n"
+            "    float bv = -1e30f; int bp = 0;\n"
+            "    for (int i = t; i < M; i += nt){ float v = pv[i]; if (v > bv){ bv = v; bp = i; } }\n"
+            "    sv[t] = bv; sp[t] = bp; __syncthreads();\n"
+            "    for (int d = nt/2; d > 0; d >>= 1){ if (t < d && sv[t+d] > sv[t]){ sv[t] = sv[t+d]; sp[t] = sp[t+d]; } __syncthreads(); }\n"
+            "    if (t == 0){ outVal[k] = sv[0]; outIdx[k] = pi[sp[0]]; pv[sp[0]] = -1e30f; }\n"
+            "    __syncthreads();\n"
+            "  }\n"
+            "}\n", "topk_merge.cu", "topk_merge", &gTopKMerge) != 0) { goto donetk; }
     if (cudaMemcpyAsync(gScratch, dX, (size_t)n * sizeof(float), cudaMemcpyDeviceToDevice, gStream) != cudaSuccess) { goto donetk; }
     {
         int threads = 256;
         size_t shmem = (size_t)threads * (sizeof(float) + sizeof(int));
-        void* args[5] = { &gScratch, &n, &K, &gOutIdx, &gOutVal };
-        if (cuLaunchKernel(gTopK, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { goto donetk; }
+        if (B == 1) { // plain single block: phase 1 over the whole array writes the answer directly
+            void* a1[6] = { &gScratch, &n, &K, &B, &gOutVal, &gOutIdx }; // note: pv=gOutVal, pi=gOutIdx (b=0, offset 0)
+            if (cuLaunchKernel(gTopKPartial, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, a1, NULL) != CUDA_SUCCESS) { goto donetk; }
+        } else {
+            int M = B * K;
+            if (gPCap < M) {
+                if (gPV) cudaFree(gPV);
+                if (gPI) cudaFree(gPI);
+                if (cudaMalloc((void**)&gPV, (size_t)M * sizeof(float)) != cudaSuccess) { gPV = NULL; gPCap = 0; goto donetk; }
+                if (cudaMalloc((void**)&gPI, (size_t)M * sizeof(int)) != cudaSuccess) { gPI = NULL; gPCap = 0; goto donetk; }
+                gPCap = M;
+            }
+            void* a1[6] = { &gScratch, &n, &K, &B, &gPV, &gPI };
+            if (cuLaunchKernel(gTopKPartial, B, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, a1, NULL) != CUDA_SUCCESS) { goto donetk; }
+            void* a2[6] = { &gPV, &gPI, &M, &K, &gOutIdx, &gOutVal };
+            if (cuLaunchKernel(gTopKMerge, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, a2, NULL) != CUDA_SUCCESS) { goto donetk; }
+        }
         if (cudaMemcpyAsync(outIdx, gOutIdx, (size_t)K * sizeof(int), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donetk; }
         if (cudaMemcpyAsync(outVal, gOutVal, (size_t)K * sizeof(float), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donetk; }
         if (cudaStreamSynchronize(gStream) != cudaSuccess) { goto donetk; }
