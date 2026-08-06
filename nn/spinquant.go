@@ -293,10 +293,34 @@ func (s *SpinRotation) FoldWeight(ctx *backend.Context, w *tensor.Tensor) (*tens
 func (s *SpinRotation) foldWeightFWHT(w *tensor.Tensor) *tensor.Tensor {
 	n, out := s.dim, w.Shape()[1]
 	res := tensor.New(s.dtype, w.Shape())
+	wc := w
+	if !wc.IsContiguous() {
+		wc = wc.Contiguous()
+	}
+	// Columns are independent butterflies, so they fan across cores (per-goroutine scratch). On the
+	// contiguous-F64 fast path the column is gathered/scattered through typed storage (strided by `out`,
+	// but no per-element AtF64/SetF64 dispatch — ~2·out·n calls otherwise). Bit-identical to the serial form.
+	if wc.Dtype() == tensor.F64 && s.dtype == tensor.F64 {
+		ws, rs := wc.Storage().F64(), res.Storage().F64()
+		parallel.Rows(out, func(lo, hi int) {
+			buf := make([]float64, n)
+			for l := lo; l < hi; l++ {
+				for k := 0; k < n; k++ {
+					buf[k] = ws[k*out+l]
+				}
+				fwhtInPlace(buf)
+				for j := 0; j < n; j++ {
+					rs[j*out+l] = s.inv * s.signs[j] * buf[j]
+				}
+			}
+		})
+		return res
+	}
+	// General-dtype fallback (F32/mixed): the original serial form, unchanged.
 	buf := make([]float64, n)
 	for l := 0; l < out; l++ {
 		for k := 0; k < n; k++ {
-			buf[k] = w.AtF64(k, l)
+			buf[k] = wc.AtF64(k, l)
 		}
 		fwhtInPlace(buf)
 		for j := 0; j < n; j++ {
@@ -370,11 +394,66 @@ func (s *SpinRotation) QuantizeActivations(x *tensor.Tensor, levels int) (*tenso
 func (s *SpinRotation) quantizeActivationsFWHT(x *tensor.Tensor, levels int) (*tensor.Tensor, error) {
 	rows, n := x.Shape()[0], s.dim
 	rot := tensor.New(s.dtype, x.Shape())
+	out := tensor.New(s.dtype, x.Shape())
+	xc := x
+	if !xc.IsContiguous() {
+		xc = xc.Contiguous()
+	}
+	// Typed + parallel fast path (contiguous F64): both FWHT passes are row-independent, so they fan
+	// across cores (per-goroutine scratch). The per-tensor absmax is a MAX reduction — order-independent
+	// — so a per-row local max combined afterward is bit-identical to the serial running max. Rows are
+	// read/written through typed storage (no per-element AtF64/SetF64 dispatch — ~4·rows·n calls otherwise).
+	if xc.Dtype() == tensor.F64 && s.dtype == tensor.F64 {
+		xs, rs, os := xc.Storage().F64(), rot.Storage().F64(), out.Storage().F64()
+		rowMax := make([]float64, rows)
+		parallel.Rows(rows, func(lo, hi int) {
+			buf := make([]float64, n)
+			for i := lo; i < hi; i++ {
+				base := i * n
+				copy(buf, xs[base:base+n])
+				fwhtInPlace(buf)
+				var m float64
+				for j := 0; j < n; j++ {
+					v := s.inv * s.signs[j] * buf[j]
+					rs[base+j] = v
+					if a := math.Abs(v); a > m {
+						m = a
+					}
+				}
+				rowMax[i] = m
+			}
+		})
+		var absmax float64
+		for _, m := range rowMax {
+			if m > absmax {
+				absmax = m
+			}
+		}
+		if absmax == 0 {
+			absmax = 1
+		}
+		q := UniformQuantizer(levels, -absmax, absmax)
+		parallel.Rows(rows, func(lo, hi int) {
+			buf := make([]float64, n)
+			for i := lo; i < hi; i++ {
+				base := i * n
+				for j := 0; j < n; j++ {
+					buf[j] = q(rs[base+j]) * s.signs[j]
+				}
+				fwhtInPlace(buf)
+				for k := 0; k < n; k++ {
+					os[base+k] = s.inv * buf[k]
+				}
+			}
+		})
+		return out, nil
+	}
+	// General-dtype fallback (F32/mixed): the original serial form, unchanged.
 	buf := make([]float64, n)
 	var absmax float64
 	for i := 0; i < rows; i++ { // rotate: rot[i][j] = inv·D[j]·fwht(x[i])[j]; track per-tensor absmax
 		for j := 0; j < n; j++ {
-			buf[j] = x.AtF64(i, j)
+			buf[j] = xc.AtF64(i, j)
 		}
 		fwhtInPlace(buf)
 		for j := 0; j < n; j++ {
@@ -389,7 +468,6 @@ func (s *SpinRotation) quantizeActivationsFWHT(x *tensor.Tensor, levels int) (*t
 		absmax = 1
 	}
 	q := UniformQuantizer(levels, -absmax, absmax)
-	out := tensor.New(s.dtype, x.Shape())
 	for i := 0; i < rows; i++ { // fake-quant the rotated row, then unrotate: out[i][k] = inv·fwht(D∘q(rot[i]))[k]
 		for j := 0; j < n; j++ {
 			buf[j] = q(rot.AtF64(i, j)) * s.signs[j]
