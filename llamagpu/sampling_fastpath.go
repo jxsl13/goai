@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/jxsl13/goai/nlp"
+	"github.com/jxsl13/goai/tensor"
 )
 
 // deviceTopKer is implemented by a device logits buffer that can return its k highest (index, value)
@@ -15,6 +16,17 @@ type deviceTopKer interface {
 	// TopKN returns the k highest (index, value) pairs over the FIRST n elements (n = vocab; the decode
 	// logits occupy [0,n) of a buffer that may be over-allocated for prefill/batch).
 	TopKN(n, k int) ([]int32, []float32, error)
+}
+
+// deviceTopPer extends deviceTopKer with the full-vocab softmax stats and a whole-buffer download needed
+// to resolve a pure-top-p nucleus on-device (see fastTopPSampler / nlp.SampleTopPFromCandidates): the
+// nucleus is Z-dependent, so the candidates alone don't determine it — SoftmaxStatsN supplies (max, Zexp)
+// and ToHost is the overflow fallback. The CUDA logits buffer (cBuf, which embeds *cuda.DeviceF32)
+// satisfies it for free; other backends fall back to the full-vocab host path.
+type deviceTopPer interface {
+	TopKN(n, k int) ([]int32, []float32, error)
+	SoftmaxStatsN(n int, temperature float64) (maxLogit, zexp float64, err error)
+	ToHost() (*tensor.Tensor, error)
 }
 
 // fastTopKSampler reports (sampler, K) when s is a penalty-free *nlp.Sampler with TopK>0 whose selection
