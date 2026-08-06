@@ -3246,42 +3246,61 @@ static int q4k_gemv_launch(const void* dA, const void* dQ, void* dOut, int M, in
                        "extern \"C\" __global__ void qmatmul_q4k(const float* a, const unsigned char* q, float* out, int M, int K, int N, float beta, const float* gate, const float* moeGate, int gateStride){\n"
                        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
                        "  int lane = threadIdx.x & 31;\n"
-                       "  if (warp >= (long)M*N) return;\n"
-                       "  int m = (int)(warp / N), n = (int)(warp % N);\n"
-                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f) out[warp]=0.0f; return; }\n"
+                       // ROW-BLOCK NR=2 (mirrors the Q8 GEMV #991): each warp computes 2 same-row outputs
+                       // n0,n1 loading the activation ONCE and running 2 weight streams — more in-flight DRAM
+                       // requests per warp to push the small-N (down/attn) BW-bound decode GEMV toward peak.
+                       // BIT-IDENTICAL: same per-output k-accumulation; only the warp->output map changed.
+                       "  int stride = (N <= 4096) ? 2 : 1;\n"
+                       "  int npair = (N + stride - 1) / stride;\n"
+                       "  if (warp >= (long)M*npair) return;\n"
+                       "  int m = (int)(warp / npair), pr = (int)(warp % npair);\n"
+                       "  int n0 = pr*stride, n1 = n0+1; bool has1 = (stride > 1) && (n1 < N);\n"
+                       "  if (moeGate && moeGate[(size_t)m*gateStride] == 0.0f){ if (lane==0 && beta==0.0f){ out[(size_t)m*N+n0]=0.0f; if(has1) out[(size_t)m*N+n1]=0.0f; } return; }\n"
                        "  const float* ar = a + (size_t)m*K;\n"
                        "  int sbs = K >> 8;\n"
-                       "  const unsigned char* qr = q + (size_t)n*sbs*144;\n"
-                       "  float acc = 0.0f;\n"
-                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"      // lane's pair-chunk + byte offset
+                       "  const unsigned char* qr0 = q + (size_t)n0*sbs*144;\n"
+                       "  const unsigned char* qr1 = q + (size_t)n1*sbs*144;\n"
+                       "  float acc0 = 0.0f, acc1 = 0.0f;\n"
+                       "  int p = lane >> 3, i0 = (lane & 7) * 4;\n"
                        "  #pragma unroll 2\n"
                        "  for (int w = 0; w < sbs; w++){\n"
-                       "    const unsigned char* blk = qr + (size_t)w*144;\n"
-                       "    unsigned int qw = __ldcs((const unsigned int*)(blk + 16 + lane*4));\n" // 4 qs bytes = 8 elems; evict-first touch-once weight
-                       "    float d = f16f(*(const unsigned short*)blk);\n"      // uniform across the warp (broadcast load)
-                       "    float dmin = f16f(*(const unsigned short*)(blk+2));\n"
-                       "    float sc, mn; get_sm(lane & 7, blk+4, &sc, &mn);\n"      // branch-free: every lane decodes one of the 8 pairs
-                       "    float c1 = d*sc, c2 = dmin*mn;\n"
+                       "    const unsigned char* blk0 = qr0 + (size_t)w*144;\n"
+                       "    const unsigned char* blk1 = qr1 + (size_t)w*144;\n"
+                       "    unsigned int qw0 = __ldcs((const unsigned int*)(blk0 + 16 + lane*4));\n"
+                       "    unsigned int qw1 = has1 ? __ldcs((const unsigned int*)(blk1 + 16 + lane*4)) : 0u;\n"
+                       "    float d0 = f16f(*(const unsigned short*)blk0), dmin0 = f16f(*(const unsigned short*)(blk0+2));\n"
+                       "    float sc0, mn0; get_sm(lane & 7, blk0+4, &sc0, &mn0); float c10 = d0*sc0, c20 = dmin0*mn0;\n"
+                       "    float d1 = has1 ? f16f(*(const unsigned short*)blk1) : 0.0f, dmin1 = has1 ? f16f(*(const unsigned short*)(blk1+2)) : 0.0f;\n"
+                       "    float sc1, mn1; get_sm(lane & 7, blk1+4, &sc1, &mn1); float c11 = d1*sc1, c21 = dmin1*mn1;\n"
                        "    int kb = w*256 + p*64 + i0;\n"
-                       "    float4 al = *(const float4*)(ar + kb);\n"      // low-nibble elems
-                       "    float4 ah = *(const float4*)(ar + kb + 32);\n" // high-nibble elems (+32 in the pair)
-                       "    float sql = al.x*(float)(qw&0xFu) + al.y*(float)((qw>>8)&0xFu) + al.z*(float)((qw>>16)&0xFu) + al.w*(float)((qw>>24)&0xFu);\n"
-                       "    float sqh = ah.x*(float)((qw>>4)&0xFu) + ah.y*(float)((qw>>12)&0xFu) + ah.z*(float)((qw>>20)&0xFu) + ah.w*(float)((qw>>28)&0xFu);\n"
+                       "    float4 al = *(const float4*)(ar + kb);\n"
+                       "    float4 ah = *(const float4*)(ar + kb + 32);\n"
                        "    float sal = (al.x+al.y)+(al.z+al.w), sah = (ah.x+ah.y)+(ah.z+ah.w);\n"
-                       "    float dl = __shfl_sync(0xffffffff, c1, 2*p),   o1 = __shfl_sync(0xffffffff, c2, 2*p);\n"
-                       "    float dh = __shfl_sync(0xffffffff, c1, 2*p+1), o2 = __shfl_sync(0xffffffff, c2, 2*p+1);\n"
-                       "    acc += dl*sql - o1*sal + dh*sqh - o2*sah;\n"   // y=d*sc*q-dmin*m folded per SUB-BLOCK, not per element
+                       "    float sql0 = al.x*(float)(qw0&0xFu) + al.y*(float)((qw0>>8)&0xFu) + al.z*(float)((qw0>>16)&0xFu) + al.w*(float)((qw0>>24)&0xFu);\n"
+                       "    float sqh0 = ah.x*(float)((qw0>>4)&0xFu) + ah.y*(float)((qw0>>12)&0xFu) + ah.z*(float)((qw0>>20)&0xFu) + ah.w*(float)((qw0>>28)&0xFu);\n"
+                       "    float sql1 = al.x*(float)(qw1&0xFu) + al.y*(float)((qw1>>8)&0xFu) + al.z*(float)((qw1>>16)&0xFu) + al.w*(float)((qw1>>24)&0xFu);\n"
+                       "    float sqh1 = ah.x*(float)((qw1>>4)&0xFu) + ah.y*(float)((qw1>>12)&0xFu) + ah.z*(float)((qw1>>20)&0xFu) + ah.w*(float)((qw1>>28)&0xFu);\n"
+                       "    float dl0 = __shfl_sync(0xffffffff, c10, 2*p), o10 = __shfl_sync(0xffffffff, c20, 2*p);\n"
+                       "    float dh0 = __shfl_sync(0xffffffff, c10, 2*p+1), o20 = __shfl_sync(0xffffffff, c20, 2*p+1);\n"
+                       "    float dl1 = __shfl_sync(0xffffffff, c11, 2*p), o11 = __shfl_sync(0xffffffff, c21, 2*p);\n"
+                       "    float dh1 = __shfl_sync(0xffffffff, c11, 2*p+1), o21 = __shfl_sync(0xffffffff, c21, 2*p+1);\n"
+                       "    acc0 += dl0*sql0 - o10*sal + dh0*sqh0 - o20*sah;\n"
+                       "    acc1 += dl1*sql1 - o11*sal + dh1*sqh1 - o21*sah;\n"
                        "  }\n"
-                       "  for (int o = 16; o > 0; o >>= 1){ acc += __shfl_down_sync(0xffffffff, acc, o); }\n"
+                       "  for (int o = 16; o > 0; o >>= 1){ acc0 += __shfl_down_sync(0xffffffff, acc0, o); acc1 += __shfl_down_sync(0xffffffff, acc1, o); }\n"
                        "  if (lane == 0){\n"
-                       "    float r = acc;\n"
-                       "    if (gate){ float g = gate[warp]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r = g*sg*acc; }\n" // SwiGLU epilogue, arithmetic == the standalone swiglu kernel
-                       "    out[warp] = beta*out[warp] + r;\n"
+                       "    size_t o0 = (size_t)m*N+n0; float r0 = acc0;\n"
+                       "    if (gate){ float g = gate[o0]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r0 = g*sg*acc0; }\n"
+                       "    out[o0] = beta*out[o0] + r0;\n"
+                       "    if (has1){ size_t o1 = (size_t)m*N+n1; float r1 = acc1;\n"
+                       "      if (gate){ float g = gate[o1]; float sg = g>=0.0f ? 1.0f/(1.0f+expf(-g)) : expf(g)/(1.0f+expf(g)); r1 = g*sg*acc1; }\n"
+                       "      out[o1] = beta*out[o1] + r1; }\n"
                        "  }\n"
                        "}\n",
                        "qmatmul_q4k.cu", "qmatmul_q4k", &gQgemv4k) != 0) { rc = -2; goto done; }
     {
-        long total = (long)M * N * 32;
+        int rbStride = (N <= 4096) ? 2 : 1;                 // must match the in-kernel row-block stride
+        long total = (long)M * ((N + rbStride - 1) / rbStride) * 32;
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
         void* args[10];
         args[0] = &dA; args[1] = &dQ; args[2] = &dOut;
