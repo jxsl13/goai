@@ -24,9 +24,10 @@ func TestActivationBackwardF64CPUMatchesRef(t *testing.T) {
 		x.SetF64(math.Sin(float64(i)*0.017)*12-3, i) // spans roughly [-15,9]
 		g.SetF64(math.Cos(float64(i)*0.011)*2, i)
 	}
-	// GELU backward is scalar → BIT-EXACT vs ref; SiLU backward vectorizes the sigmoid through the
-	// polynomial vsigmoidF64 (like the OpSiLU forward), so it rides the model f64 tolerance (~1e-13
-	// rel per TestVsiluF64Accuracy; the grad's extra arithmetic leaves headroom under 1e-11).
+	// SiLU backward vectorizes the sigmoid through vsigmoidF64, so it rides the model f64 tolerance
+	// (~1e-13 rel per TestVsiluF64Accuracy; the grad's extra arithmetic leaves headroom under 1e-11).
+	// GELU backward is scalar math.Erf/Exp → BIT-EXACT vs ref on the default build; on the amd64 SIMD
+	// build (geluF64Tolerant) it runs vgeluGradF64 (erfF64x4/expF64x4) and rides the same tolerance.
 	for _, op := range []backend.Op{backend.OpGELUBackward, backend.OpSiLUBackward} {
 		gr, err := backend.Execute(backend.NewContext().WithBackend(cpuBE), op, []*tensor.Tensor{x, g}, nil)
 		if err != nil {
@@ -36,7 +37,7 @@ func TestActivationBackwardF64CPUMatchesRef(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%v ref: %v", op, err)
 		}
-		exact := op == backend.OpGELUBackward
+		exact := op == backend.OpGELUBackward && !geluF64Tolerant
 		for i := 0; i < n; i++ {
 			gv, rv := gr[0].AtF64(i), rr[0].AtF64(i)
 			if exact {

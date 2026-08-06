@@ -185,6 +185,17 @@ func TestCPUGeluBackwardCrossReference(t *testing.T) {
 			}
 			continue
 		}
+		if dtype == tensor.F64 && geluF64Tolerant {
+			// SIMD build: F64 gelu_backward runs vgeluGradF64 (erfF64x4/expF64x4), ~1 ulp,
+			// riding the model f64 tolerance — not bit-exact vs ref's scalar math.Erf/Exp.
+			c, r := gc[0].Storage().F64(), gr[0].Storage().F64()
+			for i := range c {
+				if math.Abs(c[i]-r[i]) > 1e-12*math.Max(1, math.Abs(r[i])) {
+					t.Fatalf("gelu_backward/F64 [%d]: cpu %v vs ref %v", i, c[i], r[i])
+				}
+			}
+			continue
+		}
 		assertEqualExact(t, gc[0], gr[0], "gelu_backward/"+dtype.String())
 	}
 }

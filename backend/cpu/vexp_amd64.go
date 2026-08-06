@@ -1067,3 +1067,42 @@ func vgeluF64(dst, src []float64) {
 		dst[i] = geluF64poly(src[i])
 	}
 }
+
+// --- F64 GELU backward via the vectorized erf/exp primitives (vgeluGradF64) ---
+
+var (
+	vGeluNegHalf    = archsimd.BroadcastFloat64x4(-0.5)
+	vGeluInvSqrt2Pi = archsimd.BroadcastFloat64x4(cpuInvSqrt2Pi) // 1/√(2π)
+)
+
+// geluGradF64poly is the scalar bit-twin of one vgeluGradF64 lane (erfF64poly + expF64poly,
+// the ~1-ulp vectorized primitives' scalar counterparts) — the remainder tail.
+func geluGradF64poly(x, g float64) float64 {
+	phi := 0.5 * (1 + erfF64poly(x*erfInvSqrt2))
+	pdf := cpuInvSqrt2Pi * expF64poly(-0.5*x*x)
+	return g * (phi + x*pdf)
+}
+
+// vgeluGradF64 computes dst[i] = g·(Φ(x) + x·φ(x)) 4-wide via AVX2 — the f64 twin of
+// vgeluGradF32, Φ=0.5(1+erf(x/√2)) on erfF64x4 and φ=(1/√2π)e^(−x²/2) on expF64x4 (one
+// exp feeds the pdf; underflow → exact 0 inside expF64x4). 4-lane body + scalar tail
+// via geluGradF64poly (bit-identical to the body). Rides the model f64 tolerance.
+func vgeluGradF64(dst, x, g []float64) {
+	if !vexpHasAVX {
+		for i := range x {
+			dst[i] = geluGradF64poly(x[i], g[i])
+		}
+		return
+	}
+	n4 := len(x) &^ 3
+	for i := 0; i < n4; i += 4 {
+		xv := archsimd.LoadFloat64x4Slice(x[i:])
+		gv := archsimd.LoadFloat64x4Slice(g[i:])
+		phi := vF64Half.Mul(vF64One.Add(erfF64x4(xv.Mul(vErfInvSqrt2))))   // Φ = 0.5(1+erf(x/√2))
+		pdf := expF64x4(vGeluNegHalf.Mul(xv).Mul(xv)).Mul(vGeluInvSqrt2Pi) // (1/√2π)e^(−x²/2)
+		gv.Mul(phi.Add(xv.Mul(pdf))).StoreSlice(dst[i:])                   // g·(Φ + x·pdf)
+	}
+	for i := n4; i < len(x); i++ {
+		dst[i] = geluGradF64poly(x[i], g[i])
+	}
+}

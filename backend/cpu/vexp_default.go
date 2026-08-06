@@ -185,3 +185,11 @@ func vgeluF64(dst, src []float64) {
 		dst[i] = 0.5 * v * (1 + math.Erf(v/s))
 	}
 }
+
+// vgeluGradF64 exists only so geluBackwardF64KernelCPU type-checks off the amd64 SIMD build;
+// vexpF64Fast is false here, so it is dead at run time (the scalar geluGradF64 exact path runs).
+func vgeluGradF64(dst, x, g []float64) {
+	for i := range x {
+		dst[i] = geluGradF64(x[i], g[i])
+	}
+}
