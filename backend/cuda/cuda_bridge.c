@@ -4857,6 +4857,7 @@ doneq5kdq:
 }
 
 static CUfunction gDequantQ3KF16 = NULL; // Q3_K weight -> contiguous f16 [K,N] (tensor-core prefill)
+static CUfunction gDequantQ3KF16T = NULL; // shared-tiled coalesced-READ variant (32-col tile, 3 split planes)
 
 // cu_dequant_q3k_to_f16: expand the REPACKED ggml Q3_K weight (meta[18B] = 16 pre-decoded 6-bit
 // scales + f16 d, qs[64B], hmask[32B] per super-block) into a contiguous f16 [K,N] matrix for the
@@ -4920,11 +4921,81 @@ int cu_dequant_q3k_to_f16(const void* dMeta, const void* dQs, const void* dHm, v
         "  }\n"
         "}\n",
         "dequant_q3k_f16.cu", "dequant_q3k_f16", &gDequantQ3KF16) != 0) { rc = -2; goto doneq3kdq; }
+    // COALESCED-READ variant (mirrors Q6_K #1001): the thread-per-column base is now read-bound —
+    // thread=column reads its own column's meta/qs/hm at global strides sbs*{18,64,32} across a warp
+    // (uncoalesced). A block owns 32 contiguous columns; each split plane's 32-column region is
+    // contiguous (col n at n*sbs*bytes), so phase 1 streams all THREE planes into shared as coalesced
+    // byte loads, phase 2 = 32 warp lanes = 32 columns run the EXACT base decode from shared, writing
+    // 32 contiguous f16 per element. BIT-IDENTICAL. Q3_K's 114 B/col (vs Q6_K's 210) fits shared up to
+    // K≈7040, so K=2048/4096/5632 all take the tiled path; N%32≠0 or bigger K falls back to the base.
     {
-        long total = (long)N;
-        int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
-        void* args[6] = { (void*)&dMeta, (void*)&dQs, (void*)&dHm, &dBf16, &K, &N };
-        rc = (cuLaunchKernel(gDequantQ3KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        int sbs = K >> 8;
+        long shBytes = (long)32 * sbs * 114; // per col: meta 18 + qs 64 + hm 32
+        if ((N % 32) == 0 && shBytes <= (long)gMaxSmem) {
+            if (!gDequantQ3KF16T && compile_kernel(
+                "__device__ __forceinline__ float f16f(unsigned short h){\n"
+                "  unsigned s = (h & 0x8000u) << 16;\n"
+                "  float v = __uint_as_float((h & 0x7fffu) << 13) * __uint_as_float(0x77800000u);\n"
+                "  return __uint_as_float(__float_as_uint(v) | s);\n"
+                "}\n"
+                "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+                "extern \"C\" __global__ void dequant_q3k_f16_t(const unsigned char* meta, const unsigned char* qsb, const unsigned char* hmb, unsigned short* B, int K, int N){\n"
+                "  extern __shared__ unsigned char sh[];\n"
+                "  int sbs = K >> 8;\n"
+                "  int n0 = blockIdx.x*32;\n"
+                "  long metaTile = (long)32*sbs*18, qsTile = (long)32*sbs*64, hmTile = (long)32*sbs*32;\n"
+                "  unsigned char* shMeta = sh;\n"
+                "  unsigned char* shQs = sh + metaTile;\n"
+                "  unsigned char* shHm = sh + metaTile + qsTile;\n"
+                "  for (long i = threadIdx.x; i < metaTile; i += blockDim.x) shMeta[i] = meta[(size_t)n0*sbs*18 + i];\n"
+                "  for (long i = threadIdx.x; i < qsTile;   i += blockDim.x) shQs[i]   = qsb [(size_t)n0*sbs*64 + i];\n"
+                "  for (long i = threadIdx.x; i < hmTile;   i += blockDim.x) shHm[i]   = hmb [(size_t)n0*sbs*32 + i];\n"
+                "  __syncthreads();\n"
+                "  int lane = threadIdx.x & 31, wp = threadIdx.x >> 5;\n"
+                "  int n = n0 + lane;\n"
+                "  const unsigned char* cMeta = shMeta + (size_t)lane*sbs*18;\n"
+                "  const unsigned char* cQs   = shQs   + (size_t)lane*sbs*64;\n"
+                "  const unsigned char* cHm   = shHm   + (size_t)lane*sbs*32;\n"
+                "  for (int w = wp; w < sbs; w += (blockDim.x>>5)){\n"
+                "    const unsigned char* mp = cMeta + (size_t)w*18;\n"
+                "    float dsb = f16f((unsigned short)(mp[16] | (mp[17]<<8)));\n"
+                "    const unsigned char* qp0 = cQs + (size_t)w*64;\n"
+                "    const unsigned char* hp0 = cHm + (size_t)w*32;\n"
+                "    #pragma unroll\n"
+                "    for (int vl = 0; vl < 32; vl++){\n"
+                "      int is = vl >> 1, half = vl & 1, l0 = half*8;\n"
+                "      int nb = is >> 3, jj = (is & 7) >> 1, gsel = is & 1, g = gsel*16;\n"
+                "      int shift = 2*jj, hbit = nb*4 + jj;\n"
+                "      int yi = nb*128 + jj*32 + g + l0;\n"
+                "      int qsrel = nb*32 + g + l0, hmrel = g + l0;\n"
+                "      float dl = dsb * (float)((int)mp[is] - 32);\n"
+                "      const unsigned char* qp = qp0 + qsrel;\n"
+                "      const unsigned char* hp = hp0 + hmrel;\n"
+                "      unsigned qw0 = *(const unsigned int*)qp, qw1 = *(const unsigned int*)(qp+4);\n"
+                "      unsigned hw0 = *(const unsigned int*)hp, hw1 = *(const unsigned int*)(hp+4);\n"
+                "      int kbase = w*256 + yi;\n"
+                "      #pragma unroll\n"
+                "      for (int t = 0; t < 8; t++){\n"
+                "        unsigned qb = (t<4) ? ((qw0>>(t*8))&0xFFu) : ((qw1>>((t-4)*8))&0xFFu);\n"
+                "        unsigned hb = (t<4) ? ((hw0>>(t*8))&0xFFu) : ((hw1>>((t-4)*8))&0xFFu);\n"
+                "        int lowb = (qb >> shift) & 3;\n"
+                "        int hset = (hb >> hbit) & 1;\n"
+                "        B[(size_t)(kbase+t)*N + n] = f2h(dl * (float)(lowb - (hset ? 0 : 4)));\n"
+                "      }\n"
+                "    }\n"
+                "  }\n"
+                "}\n",
+                "dequant_q3k_f16_t.cu", "dequant_q3k_f16_t", &gDequantQ3KF16T) != 0) { rc = -2; goto doneq3kdq; }
+            cuFuncSetAttribute(gDequantQ3KF16T, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, (int)shBytes);
+            int threads = 512, bx = N / 32;
+            void* args[6] = { (void*)&dMeta, (void*)&dQs, (void*)&dHm, &dBf16, &K, &N };
+            rc = (cuLaunchKernel(gDequantQ3KF16T, bx, 1, 1, threads, 1, 1, (unsigned)shBytes, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        } else {
+            long total = (long)N;
+            int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
+            void* args[6] = { (void*)&dMeta, (void*)&dQs, (void*)&dHm, &dBf16, &K, &N };
+            rc = (cuLaunchKernel(gDequantQ3KF16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+        }
     }
 doneq3kdq:
     pthread_mutex_unlock(&gLock);
