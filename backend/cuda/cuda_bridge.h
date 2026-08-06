@@ -133,6 +133,8 @@ int cu_copy2d(void* dst, int dstOff, int dstStride, const void* src, int srcOff,
 // cu_argmax_f32 returns argmax over x[n] (greedy token) — downloads only the index.
 int cu_topk_f32(const void* dX, int n, int K, int* outIdx, float* outVal);
 int cu_argmax_f32(const void* x, int n);
+// cu_softmax_stats_f32: full-vocab stable-softmax stats (max, Σexp((x-max)/T)) for on-device top-p nucleus.
+int cu_softmax_stats_f32(const void* x, int n, float invT, double* outMax, double* outZexp);
 int cu_argmax_batched_f16(const void* x16, int* hostOut, int rows, int cols); // per-row greedy argmax over f16 logits (serving sampling)
 // cu_upload_i8: upload n signed bytes (Q8 weights) to a fresh device buffer.
 void* cu_upload_i8(const signed char* src, int n);

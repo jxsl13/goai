@@ -30,6 +30,24 @@ func (d *DeviceF32) Argmax() int {
 	return int(C.cu_argmax_f32(d.ptr, C.int(d.rows*d.cols)))
 }
 
+// SoftmaxStatsN returns the full-vocab stable-softmax statistics over the FIRST n elements: maxLogit =
+// max_i x_i and Zexp = Σ_i exp((x_i − maxLogit)/T), computed on device (only two f64 scalars are
+// downloaded). These let the host reconstruct each token's TRUE probability exp((l−max)/T)/Zexp — needed
+// to resolve a pure-top-p nucleus over the device TopK candidates (whose own normalizer would be wrong).
+func (d *DeviceF32) SoftmaxStatsN(n int, temperature float64) (maxLogit, zexp float64, err error) {
+	if n < 1 || n > d.rows*d.cols {
+		return 0, 0, fmt.Errorf("cuda: SoftmaxStatsN n=%d out of range (1..%d)", n, d.rows*d.cols)
+	}
+	if temperature <= 0 {
+		return 0, 0, fmt.Errorf("cuda: SoftmaxStatsN temperature=%v must be > 0", temperature)
+	}
+	var m, z C.double
+	if rc := C.cu_softmax_stats_f32(d.ptr, C.int(n), C.float(1.0/temperature), &m, &z); rc != 0 {
+		return 0, 0, fmt.Errorf("cuda: SoftmaxStatsN failed (code %d)", int(rc))
+	}
+	return float64(m), float64(z), nil
+}
+
 // TopK returns the k highest (index, value) pairs of the whole buffer, computed on device, descending —
 // only k·8 bytes are downloaded (vs the whole logit vector), the on-device counterpart to Argmax for
 // top-k sampling. k must be in [1, min(256, n)].
