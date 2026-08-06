@@ -557,6 +557,23 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 			return nil
 		}
 	}
+	// SMALL-BATCH (2<=m<6): the int8-MMQ pads M to 64 (too costly here) and the GEMV re-streams the
+	// weight M×. Q8 was the one k-quant without a weight-read-once MT kernel — route to it
+	// (cu_qmatmul_q8_mt reads column n's int8 weight ONCE across the 8-row tile). Bit-identical per row.
+	// Gated to DEEP/asymmetric shapes (max>2·min) — the FFN up/gate/down projections, where the weight
+	// BW dominates so read-once wins (A/B: 2048×5632 1.14×, 5632×2048 1.09×). SQUARE attention shapes
+	// (2048²) have enough GEMV warp-parallelism to hide the M× reads, so they keep the GEMV (MT ~-2%).
+	if m >= 2 {
+		mxKN, mnKN := w.k, w.n
+		if mnKN > mxKN {
+			mxKN, mnKN = mnKN, mxKN
+		}
+		if 2*mnKN < mxKN {
+			if rc := C.cu_qmatmul_q8_mt(x.ptr, w.q, w.scales, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(0)); rc == 0 {
+				return nil
+			}
+		}
+	}
 	if rc := C.cu_qmatmul_q8(x.ptr, w.q, w.scales, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.int(w.nb), C.float(0)); rc != 0 {
 		return fmt.Errorf("cuda: rec QMatMulResident failed (code %d)", int(rc))
 	}
