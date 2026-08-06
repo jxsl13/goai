@@ -523,6 +523,8 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 	// bit-identical to the full-vocab sampler (K⊇top-k; candidates fed in vocab-index order so the draw
 	// order and rng match). sp==nil ⟹ the flexible CPU-sampler fallback (full ToHost).
 	sp, fastK := fastTopKSampler(s, gd.vocab)
+	spP, fastC := fastTopPSampler(s, gd.vocab) // pure-top-p device path (mutually exclusive with sp: it needs top-k off)
+	fast := sp != nil || spP != nil            // either device fast-path avoids the whole-vocab D2H + host sort per token
 	pos := len(prompt)
 	buf := make([]float64, gd.vocab)
 	for range maxNew {
@@ -530,12 +532,48 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 			break
 		}
 		var next int
-		if sp != nil && logits == nil { // decode step, logits resident — sample from the on-device top-k
-			gi, gv, e := gd.logits.TopK(fastK)
-			if e != nil {
-				return nil, e
+		if fast && logits == nil { // decode step, logits device-resident — sample on-device
+			if sp != nil { // top-k (± post-shrink top-p/min-p): draw over the K-candidate superset
+				gi, gv, e := gd.logits.TopK(fastK)
+				if e != nil {
+					return nil, e
+				}
+				next = sampleTopKCandidates(sp, gi, gv)
+			} else { // pure top-p: resolve the nucleus over the top-C candidates using full-vocab stats
+				maxL, zexp, e2 := gd.logits.SoftmaxStatsN(gd.vocab, spP.Temperature)
+				if e2 != nil {
+					return nil, e2
+				}
+				resolved := false
+				// Cheap overflow guard (stats only, no TopK): every prob ≤ the max's 1/Zexp, so the top-C mass
+				// ≤ C/Zexp. When that upper bound is below TopP the nucleus provably exceeds C candidates, so
+				// skip the O(n·C) device TopK and fall straight to the host path — this keeps flat/high-entropy
+				// distributions (huge Zexp) from paying a wasted TopK before the unavoidable full-vocab sort.
+				if float64(fastC)/zexp >= spP.TopP {
+					gi, gv, e := gd.logits.TopK(fastC)
+					if e != nil {
+						return nil, e
+					}
+					cl := make([]float64, len(gv))
+					for i, v := range gv {
+						cl[i] = float64(v)
+					}
+					if tok, ok := spP.SampleTopPFromCandidates(cl, gi, maxL, zexp); ok {
+						next = tok
+						resolved = true
+					}
+				}
+				if !resolved { // guard predicted overflow, or TopK confirmed it → full-vocab host sample
+					l, e3 := gd.logits.ToHost()
+					if e3 != nil {
+						return nil, e3
+					}
+					for i, x := range l.Storage().F32() {
+						buf[i] = float64(x)
+					}
+					next = s.SampleWithHistory(buf, out)
+				}
 			}
-			next = sampleTopKCandidates(sp, gi, gv)
 		} else { // first token (prefill host logits) or CPU-sampler fallback
 			for i, x := range logits {
 				buf[i] = float64(x)
@@ -543,7 +581,7 @@ func (gd *GraphLlamaDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampl
 			next = s.SampleWithHistory(buf, out)
 		}
 		out = append(out, next)
-		if sp != nil {
+		if fast {
 			if e := gd.stepGraphLaunch(next, pos); e != nil { // no host copy — next iter reads gd.logits
 				return nil, e
 			}

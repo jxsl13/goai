@@ -189,6 +189,53 @@ done:
     pthread_mutex_unlock(&gLock);
     return (rc == 0) ? host : -1;
 }
+static CUfunction gSoftmaxStats = NULL; // full-vocab (max, Σexp((x-max)/T)) for on-device pure-top-p nucleus
+// cu_softmax_stats_f32: one-block reduction over the vocab logits x[n] returning *outMax = max_i x_i and
+// *outZexp = Σ_i exp((x_i − max)/T) — the full-vocab stable-softmax statistics the on-device pure-top-p
+// nucleus draw needs (nlp.SampleTopPFromCandidates reconstructs each candidate's TRUE probability
+// exp((l−max)/T)/Zexp from these so the nucleus membership matches full-vocab). invT = 1/T. The sum is
+// accumulated in DOUBLE and returned as double to stay within ulps of the CPU f64 softmax; the tree
+// reduction order still differs from the CPU's sequential sum, so the resulting draw is top-p-correct
+// and matches the host path except in astronomically rare ulp-boundary coincidences (opt-out via the
+// GOAI_CUDA_TOPK_SAMPLE switch at the Go layer). exp uses the fast f32 __expf.
+int cu_softmax_stats_f32(const void* x, int n, float invT, double* outMax, double* outZexp) {
+    static double* dOut = NULL;
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { goto donesst; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { goto donesst; }
+    if (dOut == NULL && cudaMalloc((void**)&dOut, 2 * sizeof(double)) != cudaSuccess) { goto donesst; }
+    if (!gSoftmaxStats && compile_kernel(
+            "extern \"C\" __global__ void softmax_stats_f32(const float* x, int n, float invT, double* out){\n"
+            "  extern __shared__ double sh[];\n"                    // sum lanes (double); the max phase reuses the low half as float
+            "  int t = threadIdx.x, nt = blockDim.x;\n"
+            "  float bv = -1e30f;\n"
+            "  for (int i=t; i<n; i+=nt){ float v=x[i]; if(v>bv) bv=v; }\n"
+            "  float* fs = (float*)sh; fs[t]=bv; __syncthreads();\n"
+            "  for (int s=nt/2; s>0; s>>=1){ if(t<s && fs[t+s]>fs[t]) fs[t]=fs[t+s]; __syncthreads(); }\n"
+            "  float m = fs[0]; __syncthreads();\n"
+            "  double sum=0.0;\n"
+            "  for (int i=t; i<n; i+=nt){ sum += (double)__expf((x[i]-m)*invT); }\n"
+            "  sh[t]=sum; __syncthreads();\n"
+            "  for (int s=nt/2; s>0; s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  if(t==0){ out[0]=(double)m; out[1]=sh[0]; }\n"
+            "}\n", "softmax_stats.cu", "softmax_stats_f32", &gSoftmaxStats) != 0) { goto donesst; }
+    {
+        int threads = 256;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[4] = {&x, &n, &invT, &dOut};
+        if (cuLaunchKernel(gSoftmaxStats, 1, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) != CUDA_SUCCESS) { goto donesst; }
+        double host2[2];
+        if (cudaMemcpyAsync(host2, dOut, 2 * sizeof(double), cudaMemcpyDeviceToHost, gStream) != cudaSuccess) { goto donesst; }
+        if (cudaStreamSynchronize(gStream) != cudaSuccess) { goto donesst; }
+        *outMax = host2[0];
+        *outZexp = host2[1];
+        rc = 0;
+    }
+donesst:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
 static CUfunction gArgmaxBatchF16 = NULL; // per-row argmax over f16 logits (serving-loop sampling)
 // cu_argmax_batched_f16: greedy sample — argmax over each row of x16[rows,cols] (f16 logits),
 // writing the rows token indices to hostOut[rows]. One block per row, reduces over cols; reads u16
