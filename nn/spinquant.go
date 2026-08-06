@@ -6,6 +6,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/parallel"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -213,19 +214,45 @@ func (s *SpinRotation) Apply(ctx *backend.Context, x *tensor.Tensor) (*tensor.Te
 
 // applyFWHT computes x·R for the Hadamard variant via the fast Walsh-Hadamard transform:
 // (x·R)[i][j] = inv·D[j]·fwht(x[i])[j]. Row-independent, so each row is one in-place butterfly.
+// The rows are independent, so they fan across cores (each goroutine owns its own scratch buf,
+// and the same ascending-j butterfly runs per row ⇒ bit-identical to the serial form). When x is
+// contiguous F64 and the output is F64, the row is read/written through typed storage (no
+// per-element AtF64/SetF64 stride dispatch — the dominant cost at n=4096, ~2·rows·n calls).
 func (s *SpinRotation) applyFWHT(x *tensor.Tensor) *tensor.Tensor {
 	rows, n := x.Shape()[0], s.dim
 	out := tensor.New(s.dtype, x.Shape())
-	buf := make([]float64, n)
-	for i := 0; i < rows; i++ {
-		for j := 0; j < n; j++ {
-			buf[j] = x.AtF64(i, j)
-		}
-		fwhtInPlace(buf)
-		for j := 0; j < n; j++ {
-			out.SetF64(s.inv*s.signs[j]*buf[j], i, j)
-		}
+	xc := x
+	if !xc.IsContiguous() {
+		xc = xc.Contiguous()
 	}
+	if xc.Dtype() == tensor.F64 && s.dtype == tensor.F64 {
+		xs, os := xc.Storage().F64(), out.Storage().F64()
+		parallel.Rows(rows, func(lo, hi int) {
+			buf := make([]float64, n)
+			for i := lo; i < hi; i++ {
+				base := i * n
+				copy(buf, xs[base:base+n])
+				fwhtInPlace(buf)
+				for j := 0; j < n; j++ {
+					os[base+j] = s.inv * s.signs[j] * buf[j]
+				}
+			}
+		})
+		return out
+	}
+	// General-dtype fallback (F32 in/out or mixed): disjoint rows, so SetF64 stays race-free.
+	parallel.Rows(rows, func(lo, hi int) {
+		buf := make([]float64, n)
+		for i := lo; i < hi; i++ {
+			for j := 0; j < n; j++ {
+				buf[j] = xc.AtF64(i, j)
+			}
+			fwhtInPlace(buf)
+			for j := 0; j < n; j++ {
+				out.SetF64(s.inv*s.signs[j]*buf[j], i, j)
+			}
+		}
+	})
 	return out
 }
 
