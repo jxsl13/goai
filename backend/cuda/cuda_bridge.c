@@ -4502,20 +4502,24 @@ int cu_dequant_q40_to_f16(const void* dScale, const void* dNib, void* dBf16, int
         "  return __uint_as_float(__float_as_uint(v) | s);\n"
         "}\n"
         "__device__ __forceinline__ unsigned short f2h(float f){ unsigned short h; asm(\"cvt.rn.f16.f32 %0, %1;\":\"=h\"(h):\"f\"(f)); return h; }\n"
+        // COALESCED: one COLUMN per thread (was one WARP per column, whose lanes each wrote a
+        // DIFFERENT element of the SAME column n → B[..*N+n] N-strided scattered). Thread n decodes
+        // its whole column so a warp of adjacent threads writes B[(base+j)*N + n..n+31] = 32
+        // CONTIGUOUS f16 (coalesced), like the shipped dequant_q6k_f16 / Q3_K bases. BIT-IDENTICAL:
+        // same (element,value) pairs — the g=lane>>2 block-in-group and sub=lane&3 sub-word that 32
+        // lanes covered per pass are now a plain per-block + sub=0..3 loop. Launch N*32→N.
         "extern \"C\" __global__ void dequant_q40_f16(const unsigned char* sc, const unsigned char* nb, unsigned short* B, int K, int N){\n"
-        "  long warp = ((long)blockIdx.x*blockDim.x + threadIdx.x) >> 5;\n"
-        "  int lane = threadIdx.x & 31;\n"
-        "  if (warp >= (long)N) return;\n"
-        "  int n = (int)warp;\n"
+        "  int n = blockIdx.x*blockDim.x + threadIdx.x;\n"
+        "  if (n >= N) return;\n"
         "  int nblk = K >> 5;\n"
-        "  int g = lane >> 2, sub = lane & 3;\n"
-        "  for (int bb = 0; bb < nblk; bb += 8){\n"
-        "    int b = bb + g;\n"
-        "    if (b < nblk){\n"
-        "      const unsigned char* sp = sc + (size_t)(n*nblk + b)*2;\n"
-        "      float d = f16f((unsigned short)(sp[0] | (sp[1]<<8)));\n"
+        "  for (int b = 0; b < nblk; b++){\n"
+        "    const unsigned char* sp = sc + (size_t)(n*nblk + b)*2;\n"
+        "    float d = f16f((unsigned short)(sp[0] | (sp[1]<<8)));\n"
+        "    #pragma unroll\n"
+        "    for (int sub = 0; sub < 4; sub++){\n"
         "      unsigned qw = *(const unsigned int*)(nb + (size_t)(n*nblk + b)*16 + sub*4);\n"
         "      int base = b*32 + sub*4;\n"
+        "      #pragma unroll\n"
         "      for (int j = 0; j < 4; j++){\n"
         "        int ql = (int)((qw >> (j*8)) & 0xFu) - 8;\n"
         "        int qh = (int)((qw >> (j*8+4)) & 0xFu) - 8;\n"
@@ -4527,7 +4531,7 @@ int cu_dequant_q40_to_f16(const void* dScale, const void* dNib, void* dBf16, int
         "}\n",
         "dequant_q40_f16.cu", "dequant_q40_f16", &gDequantQ40F16) != 0) { rc = -2; goto doneq40dq; }
     {
-        long total = (long)N * 32;
+        long total = (long)N;
         int threads = 256, blocks = (int)((total + threads - 1) / threads); if (blocks < 1) blocks = 1;
         void* args[5] = { (void*)&dScale, (void*)&dNib, &dBf16, &K, &N };
         rc = (cuLaunchKernel(gDequantQ40F16, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
