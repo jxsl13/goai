@@ -146,11 +146,17 @@ func (l quantLinear) record(r recorder, x, o buffer, m int) error {
 }
 
 func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error {
-	// Decode (m==1): the quant projection is a GEMV, so fuse the residual add into the kernel (beta=1) —
-	// ONE launch instead of GEMV(beta=0)→scratch + a separate Binary add, and no scratch HBM round-trip.
-	// Prefill (m>1) keeps the split: its GEMV routes to the weight-read-once MMQ/WMMA GEMM, which a
-	// beta=1 GEMV (streaming the weight M× per output) would undo. Bit-identical either way.
-	if m == 1 {
+	// Decode / small batch (m<6): fuse the residual add into the quant kernel (beta=1) — ONE launch into
+	// dst instead of QMatMulResident(beta=0)→scratch + a separate Binary add, saving the add launch and
+	// the scratch HBM round-trip. The old code fused only m==1 because a beta=1 GEMV re-streams the weight
+	// M× per output (undoing the weight-read-once routing); that objection is void now that the Acc paths
+	// route small batches to the SAME weight-read-once MT kernel their plain twins use (Q8 #1011/#1012,
+	// K-quants #1013), so beta=1 does strictly less work than beta=0+add. Gate m<6: below it every quant
+	// uses the MT/GEMV for BOTH plain and Acc, so fused is guaranteed ≤ split. At m>=6 the plain path may
+	// switch to a faster kernel the Acc path lacks (Q8→int8-MMQ at m>=6, K-quants→WMMA at m>=48), so the
+	// split — which gets that faster kernel for the GEMM — is kept. Bit-identical either way (the Acc MT is
+	// bit-identical to plain MT, and beta=1 folds the add exactly; TestCUDAKQuantAccMTMatchesGEMV @m=4).
+	if m < 6 {
 		if acc, ok := r.(quantAccRecorder); ok {
 			if err := acc.QMatMulResidentAcc(x, l.w, dst, m); err != errQuantAccUnsupported {
 				return err
