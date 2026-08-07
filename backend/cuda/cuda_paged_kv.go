@@ -29,9 +29,11 @@ type PagedKVPool struct {
 	blockSize int
 	wkv       int
 	numBlocks int
-	free      []int32        // free physical block ids
-	kf16      unsafe.Pointer // lazy f16 (u16) shadow of k for the f16 decode path (nil until built)
-	vf16      unsafe.Pointer
+	free      []int32 // free physical block ids
+	refcount  []int32 // per-physical-block share count (lazy; nil == all singly-owned). A block is
+	// returned to `free` only when its refcount hits 0 — enables prefix sharing.
+	kf16 unsafe.Pointer // lazy f16 (u16) shadow of k for the f16 decode path (nil until built)
+	vf16 unsafe.Pointer
 	// int8-PRIMARY storage (NewPagedKVPoolI8): int8 K/V + per-(physical-token, kvHead) f32 scales, and
 	// NO f32 k/v backing (k==v==nil). ~6× less KV VRAM than the f32-primary + f16-shadow pool. I/O goes
 	// through AppendBatchedDevI8 / BatchedDecodeAttnViewGQAI8; the f32/f16 methods are unavailable.
@@ -105,16 +107,59 @@ func NewPagedKVPoolI8(numBlocks, blockSize, kvHeads, hd int) (*PagedKVPool, erro
 // FreeBlocks reports how many physical blocks are unallocated.
 func (p *PagedKVPool) FreeBlocks() int { return len(p.free) }
 
+// NumBlocks reports the pool's total physical block capacity.
+func (p *PagedKVPool) NumBlocks() int { return p.numBlocks }
+
 func (p *PagedKVPool) alloc() (int32, error) {
 	if len(p.free) == 0 {
 		return -1, fmt.Errorf("cuda: PagedKVPool out of blocks (%d total)", p.numBlocks)
 	}
 	b := p.free[len(p.free)-1]
 	p.free = p.free[:len(p.free)-1]
+	if p.refcount == nil {
+		p.refcount = make([]int32, p.numBlocks)
+	}
+	p.refcount[b] = 1
 	return b, nil
 }
 
-func (p *PagedKVPool) release(b int32) { p.free = append(p.free, b) }
+// release drops one reference to physical block b; the block returns to the free list only when its last
+// sharer releases it (a prefix block shared by N sequences survives until all N release).
+func (p *PagedKVPool) release(b int32) {
+	if p.refcount != nil && p.refcount[b] > 0 {
+		p.refcount[b]--
+		if p.refcount[b] > 0 {
+			return
+		}
+	}
+	p.free = append(p.free, b)
+}
+
+// NewSeqSharingPrefix creates a SeqKV that SHARES the first `sharedBlocks` physical KV blocks of `base`
+// (incrementing their refcounts) instead of allocating and recomputing a copy — the RadixAttention /
+// automatic-prefix-cache primitive: N requests with a common prefix point their block tables at the SAME
+// physical blocks, so the shared prefix's KV is stored (and prefilled) ONCE. The shared span covers whole
+// blocks only (sharedBlocks·blockSize tokens); the caller appends the divergent suffix as usual (fresh
+// blocks). The paged attention kernels read KV through the block table, so shared blocks need NO kernel
+// change — two sequences' block tables simply point at the same physical block.
+func (p *PagedKVPool) NewSeqSharingPrefix(base *SeqKV, sharedBlocks int) (*SeqKV, error) {
+	if base == nil || base.pool != p {
+		return nil, fmt.Errorf("cuda: NewSeqSharingPrefix base not from this pool")
+	}
+	if sharedBlocks < 0 || sharedBlocks > len(base.table) {
+		return nil, fmt.Errorf("cuda: NewSeqSharingPrefix sharedBlocks %d out of range [0,%d]", sharedBlocks, len(base.table))
+	}
+	if p.refcount == nil {
+		p.refcount = make([]int32, p.numBlocks)
+	}
+	s := &SeqKV{pool: p, table: make([]int32, sharedBlocks), n: sharedBlocks * p.blockSize}
+	for i := 0; i < sharedBlocks; i++ {
+		b := base.table[i]
+		s.table[i] = b
+		p.refcount[b]++
+	}
+	return s, nil
+}
 
 // Free releases the pool's device memory.
 func (p *PagedKVPool) Free() {
