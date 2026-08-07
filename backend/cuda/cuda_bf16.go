@@ -77,3 +77,36 @@ func MatMulGradWBf16(x, dY, dW *DeviceF32) error {
 	}
 	return nil
 }
+
+// MatMulGradXBf16 computes the linear-layer input gradient dX[M,K]f32 = dY·Wᵀ on bf16 tensor cores
+// (rounds dY and W to bf16, f32 accumulation) — the mixed-precision training input-gradient GEMM that
+// chains gradients back through multi-layer / attention paths.
+func MatMulGradXBf16(dY, w, dX *DeviceF32) error {
+	m, n := dY.rows, dY.cols
+	if w.cols != n {
+		return fmt.Errorf("cuda: MatMulGradXBf16 dY[%d,%d]·W[%d,%d] inner mismatch", dY.rows, dY.cols, w.rows, w.cols)
+	}
+	k := w.rows
+	if dX.rows != m || dX.cols != k {
+		return fmt.Errorf("cuda: MatMulGradXBf16 dX[%d,%d], want [%d,%d]", dX.rows, dX.cols, m, k)
+	}
+	ybf := unsafe.Pointer(C.cu_alloc_u16(C.int(m * n)))
+	wbf := unsafe.Pointer(C.cu_alloc_u16(C.int(k * n)))
+	if ybf == nil || wbf == nil {
+		if ybf != nil {
+			C.cu_free_f32(ybf)
+		}
+		if wbf != nil {
+			C.cu_free_f32(wbf)
+		}
+		return fmt.Errorf("cuda: MatMulGradXBf16 scratch alloc failed")
+	}
+	defer C.cu_free_f32(ybf)
+	defer C.cu_free_f32(wbf)
+	C.cu_cvt_f32_to_bf16(ybf, dY.ptr, C.long(m*n))
+	C.cu_cvt_f32_to_bf16(wbf, w.ptr, C.long(k*n))
+	if rc := C.cu_matmul_bf16_ddd_bt(ybf, wbf, dX.ptr, C.int(m), C.int(n), C.int(k)); rc != 0 {
+		return fmt.Errorf("cuda: MatMulGradXBf16 rc=%d", int(rc))
+	}
+	return nil
+}

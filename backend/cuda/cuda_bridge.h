@@ -315,6 +315,8 @@ int cu_cvt_f32_to_bf16(void* dst16, const void* src32, long n);
 int cu_matmul_bf16_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // cu_matmul_bf16_ddd_at: dC[K,N]f32 = dA[M,K]bf16ᵀ·dB[M,N]bf16 (bf16 weight-gradient GEMM).
 int cu_matmul_bf16_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// cu_matmul_bf16_ddd_bt: dC[M,N]f32 = dA[M,K]bf16·dB[N,K]bf16ᵀ (bf16 input-gradient GEMM dX = dY·Wᵀ).
+int cu_matmul_bf16_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC = dA·dB + dC (beta=1): fuses the residual add into the projection matmul.
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
