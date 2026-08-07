@@ -310,6 +310,11 @@ int cu_upload_into(void* dst, const float* src, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // cu_set_gemm_tf32: enable(1)/disable(0) TF32 tensor-core math for the shared cuBLAS handle (training GEMMs).
 int cu_set_gemm_tf32(int enable);
+// cu_cvt_f32_to_bf16: round n f32 -> bf16 (u16). cu_matmul_bf16_ddd: dC[M,N]f32 = dA·dB (bf16 tensor cores).
+int cu_cvt_f32_to_bf16(void* dst16, const void* src32, long n);
+int cu_matmul_bf16_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// cu_matmul_bf16_ddd_at: dC[K,N]f32 = dA[M,K]bf16ᵀ·dB[M,N]bf16 (bf16 weight-gradient GEMM).
+int cu_matmul_bf16_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC = dA·dB + dC (beta=1): fuses the residual add into the projection matmul.
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
