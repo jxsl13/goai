@@ -2330,6 +2330,43 @@ donecebwd:
     return rc;
 }
 
+static CUfunction gSoftmaxBwd = NULL;
+// cu_softmax_backward_f32: VJP of a row-wise softmax p = softmax(s). Given the probabilities p and the
+// upstream gradient dp, writes ds_j = p_j*(dp_j - Σ_k p_k*dp_k) per row (one block, reduction in double).
+// The Jacobian-vector product diag(p)-p pᵀ; the core of the attention (and any softmax) backward.
+int cu_softmax_backward_f32(const void* p, const void* dp, void* ds, int rows, int cols) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donesmbwd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donesmbwd; }
+    if (!gSoftmaxBwd && compile_kernel(
+            "extern \"C\" __global__ void softmax_backward_f32(const float* p, const float* dp, float* ds, int rows, int cols){\n"
+            "  int row = blockIdx.x; if (row>=rows) return;\n"
+            "  extern __shared__ double sh[];\n"
+            "  int t=threadIdx.x, nt=blockDim.x;\n"
+            "  const float* pr = p + (size_t)row*cols;\n"
+            "  const float* dpr = dp + (size_t)row*cols;\n"
+            "  float* dsr = ds + (size_t)row*cols;\n"
+            "  float local=0.0f;\n"
+            "  for (int j=t;j<cols;j+=nt){ local += pr[j]*dpr[j]; }\n"
+            "  sh[t]=(double)local; __syncthreads();\n"
+            "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  float dot = (float)sh[0];\n"
+            "  for (int j=t;j<cols;j+=nt){ dsr[j] = pr[j]*(dpr[j]-dot); }\n"
+            "}\n",
+            "softmax_backward_f32.cu", "softmax_backward_f32", &gSoftmaxBwd) != 0) { rc = -2; goto donesmbwd; }
+    {
+        int threads = 256, blocks = rows;
+        if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[5] = { (void*)&p, (void*)&dp, &ds, &rows, &cols };
+        rc = (cuLaunchKernel(gSoftmaxBwd, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donesmbwd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
 // scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
 // launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
