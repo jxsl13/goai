@@ -3,6 +3,8 @@ package nn
 import (
 	"fmt"
 	"math"
+
+	"github.com/jxsl13/goai/internal/fmath"
 	"math/rand/v2"
 
 	"github.com/jxsl13/goai/tensor"
@@ -334,7 +336,7 @@ func quantizeAffine(x []float64, blockSize, bits int, stochastic bool, random fu
 		lo, hi := b*blockSize, min((b+1)*blockSize, len(x))
 		mn, mx := x[lo], x[lo]
 		for i := lo + 1; i < hi; i++ {
-			mn, mx = math.Min(mn, x[i]), math.Max(mx, x[i])
+			mn, mx = fmath.Min(mn, x[i]), fmath.Max(mx, x[i])
 		}
 		scale := (mx - mn) / float64(maxCode)
 		if scale < 1e-5 { // official Q-GaLore quantizer clamp
@@ -357,7 +359,7 @@ func quantizeAffine(x []float64, blockSize, bits int, stochastic bool, random fu
 			} else {
 				rounded = math.Round(y)
 			}
-			q := math.Max(0, math.Min(float64(maxCode), rounded+zero))
+			q := fmath.Max(0, fmath.Min(float64(maxCode), rounded+zero))
 			codes[i] = uint8(q)
 		}
 	}
