@@ -34,21 +34,37 @@ func init() {
 			if mc.Dtype() == tensor.F64 && gc.Dtype() == tensor.F64 {
 				vs, ms, gs := vc.Storage().F64(), mc.Storage().F64(), gc.Storage().F64()
 				dvs, dms := dv.Storage().F64(), dm.Storage().F64()
+				// PS1006: both the per-column norm/sum reductions and the ∂V write walked DOWN columns
+				// (stride cols → one cache line touched per row). Restructure to ROW-MAJOR (i outer, j
+				// inner) with per-column accumulators so V/g/∂V stream contiguously. Bit-identical: each
+				// column's reduction still accumulates in i-ascending order, and the ∂V expression is
+				// unchanged element-for-element.
+				ssA := make([]float64, cols) // Σ_i V[i,j]²
+				sA := make([]float64, cols)  // Σ_i g[i,j]·V[i,j]
+				for i := 0; i < rows; i++ {
+					base := i * cols
+					for j := 0; j < cols; j++ {
+						x := vs[base+j]
+						ssA[j] += x * x
+						sA[j] += gs[base+j] * x
+					}
+				}
+				nA := make([]float64, cols)
 				for j := 0; j < cols; j++ {
-					var ss, s float64
-					for i := 0; i < rows; i++ {
-						x := vs[i*cols+j]
-						ss += x * x
-						s += gs[i*cols+j] * x
+					n := math.Sqrt(ssA[j])
+					nA[j] = n
+					if n != 0 {
+						dms[j] = sA[j] / n
 					}
-					n := math.Sqrt(ss)
-					if n == 0 {
-						continue
-					}
-					mj := ms[j]
-					dms[j] = s / n
-					for i := 0; i < rows; i++ {
-						dvs[i*cols+j] = mj / n * (gs[i*cols+j] - vs[i*cols+j]*s/(n*n))
+				}
+				for i := 0; i < rows; i++ {
+					base := i * cols
+					for j := 0; j < cols; j++ {
+						n := nA[j]
+						if n == 0 {
+							continue
+						}
+						dvs[base+j] = ms[j] / n * (gs[base+j] - vs[base+j]*sA[j]/(n*n))
 					}
 				}
 				return []*tensor.Tensor{dv, dm}, nil
@@ -57,21 +73,34 @@ func init() {
 			if mc.Dtype() == tensor.F32 && gc.Dtype() == tensor.F32 {
 				vs, ms, gs := vc.Storage().F32(), mc.Storage().F32(), gc.Storage().F32()
 				dvs, dms := dv.Storage().F32(), dm.Storage().F32()
+				// PS1006 row-major restructure (see the F64 path) — bit-identical: same i-ascending
+				// per-column reduction order and the same ∂V expression element-for-element.
+				ssA := make([]float64, cols)
+				sA := make([]float64, cols)
+				for i := 0; i < rows; i++ {
+					base := i * cols
+					for j := 0; j < cols; j++ {
+						x := float64(vs[base+j])
+						ssA[j] += x * x
+						sA[j] += float64(gs[base+j]) * x
+					}
+				}
+				nA := make([]float64, cols)
 				for j := 0; j < cols; j++ {
-					var ss, s float64
-					for i := 0; i < rows; i++ {
-						x := float64(vs[i*cols+j])
-						ss += x * x
-						s += float64(gs[i*cols+j]) * x
+					n := math.Sqrt(ssA[j])
+					nA[j] = n
+					if n != 0 {
+						dms[j] = float32(sA[j] / n)
 					}
-					n := math.Sqrt(ss)
-					if n == 0 {
-						continue
-					}
-					mj := float64(ms[j])
-					dms[j] = float32(s / n)
-					for i := 0; i < rows; i++ {
-						dvs[i*cols+j] = float32(mj / n * (float64(gs[i*cols+j]) - float64(vs[i*cols+j])*s/(n*n)))
+				}
+				for i := 0; i < rows; i++ {
+					base := i * cols
+					for j := 0; j < cols; j++ {
+						n := nA[j]
+						if n == 0 {
+							continue
+						}
+						dvs[base+j] = float32(float64(ms[j]) / n * (float64(gs[base+j]) - float64(vs[base+j])*sA[j]/(n*n)))
 					}
 				}
 				return []*tensor.Tensor{dv, dm}, nil
