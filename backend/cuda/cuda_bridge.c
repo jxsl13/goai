@@ -7029,6 +7029,75 @@ donecvt:
     return rc;
 }
 
+static CUfunction gCvtBf16 = NULL;
+// cu_cvt_f32_to_bf16: round n device f32 elements to bf16 (u16 = top 16 bits of f32, round-to-nearest-
+// even). No cuda_bf16.h needed — pure bit math. For feeding bf16 tensor-core GEMMs in mixed-precision
+// training (bf16 has f32's 8-bit exponent, so no scaling needed, unlike f16).
+int cu_cvt_f32_to_bf16(void* dst16, const void* src32, long n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donecvtbf; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donecvtbf; }
+    if (!gCvtBf16 && compile_kernel(
+            "extern \"C\" __global__ void cvt_f32_bf16(const float* src, unsigned short* dst, long n){\n"
+            "  long i = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i >= n) return;\n"
+            "  unsigned int u = __float_as_uint(src[i]);\n"
+            "  unsigned int r = 0x7fffu + ((u >> 16) & 1u);\n"
+            "  dst[i] = (unsigned short)((u + r) >> 16);\n"
+            "}\n",
+            "cvt_f32_bf16.cu", "cvt_f32_bf16", &gCvtBf16) != 0) { rc = -2; goto donecvtbf; }
+    {
+        int threads = 256; long blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[3] = { (void*)&src32, &dst16, &n };
+        rc = (cuLaunchKernel(gCvtBf16, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donecvtbf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_matmul_bf16_ddd: dC[M,N]f32 = dA[M,K]bf16 · dB[K,N]bf16 via cublasGemmEx on bf16 tensor cores with
+// f32 accumulation (~2× TF32 throughput on Ampere). Row-major mapping mirrors cu_matmul_f32_ddd.
+int cu_matmul_bf16_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float h1 = 1.0f, h0 = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donebf; }
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+    st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_N, N, M, K,
+                      &h1, dB, CUDA_R_16BF, N, dA, CUDA_R_16BF, K,
+                      &h0, dC, CUDA_R_32F, N,
+                      CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+    rc = (st == CUBLAS_STATUS_SUCCESS) ? 0 : -4;
+donebf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_matmul_bf16_ddd_at: dC[K,N]f32 = dA[M,K]bf16ᵀ · dB[M,N]bf16 — the bf16-tensor-core weight-gradient
+// GEMM (dW = Xᵀ·dY), mirroring cu_matmul_f32_ddd_at's transpose mapping.
+int cu_matmul_bf16_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float h1 = 1.0f, h0 = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donebfat; }
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+    st = cublasGemmEx(gHandle, CUBLAS_OP_N, CUBLAS_OP_T, N, K, M,
+                      &h1, dB, CUDA_R_16BF, N, dA, CUDA_R_16BF, K,
+                      &h0, dC, CUDA_R_32F, N,
+                      CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+    rc = (st == CUBLAS_STATUS_SUCCESS) ? 0 : -4;
+donebfat:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 void* cu_upload_f16(const float* src, long n) {
     void* d32 = NULL; void* d16 = NULL;
     pthread_mutex_lock(&gLock);
