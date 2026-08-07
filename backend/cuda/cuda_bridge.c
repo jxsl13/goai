@@ -3410,6 +3410,35 @@ done:
     return track(d);
 }
 
+static CUfunction gEmbedBwd = NULL;
+// cu_embed_backward_f32: VJP of the embedding row-gather out[i]=table[ids[i]]. Scatter-adds each output
+// row's gradient back to its source table row: dTable[ids[i]] += dOut[i]. Tokens sharing an id
+// accumulate, so it uses atomicAdd (caller zeroes dTable first). One thread per output element.
+int cu_embed_backward_f32(const void* dOut, const void* dIds, void* dTable, int seq, int d) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneembwd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneembwd; }
+    if (!gEmbedBwd && compile_kernel(
+            "extern \"C\" __global__ void embed_backward_f32(const float* dOut, const int* ids, float* dTable, int seq, int d){\n"
+            "  long idx = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (idx >= (long)seq*d) return;\n"
+            "  int i = (int)(idx / d), k = (int)(idx % d);\n"
+            "  atomicAdd(&dTable[(size_t)ids[i]*d + k], dOut[idx]);\n"
+            "}\n",
+            "embed_backward_f32.cu", "embed_backward_f32", &gEmbedBwd) != 0) { rc = -2; goto doneembwd; }
+    {
+        long total = (long)seq * d;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[5] = { (void*)&dOut, (void*)&dIds, &dTable, &seq, &d };
+        rc = (cuLaunchKernel(gEmbedBwd, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneembwd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_qmatmul_q8: out[M,N] = a[M,K] · dequant(W), where W is stored TRANSPOSED and
 // Q8_0-quantized — q[n,k] (int8, row-contiguous over K) with a per-32-block scale
 // scales[n, k/32], so W[k,n] ≈ scales[n,k/32] · q[n,k]. Reading int8 weights is 4×
