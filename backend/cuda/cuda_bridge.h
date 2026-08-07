@@ -363,6 +363,8 @@ int cu_geglu_halves(void* out, const void* gu, int rows, int hidden);
 // cu_rmsnorm_f32 applies RMSNorm y = x/√(mean(x²)+eps)·gamma in-place over the
 // last axis (x is rows×cols row-major; gamma is a resident [cols] weight).
 int cu_rmsnorm_f32(const void* in, void* out, const void* gamma, int rows, int cols, float eps);
+// cu_rmsnorm_backward_f32: VJP of RMSNorm — dx and dgamma (dgamma accumulated via atomicAdd; zero it first).
+int cu_rmsnorm_backward_f32(const void* x, const void* dy, const void* w, void* dx, void* dgamma, int rows, int cols, float eps);
 // cu_layernorm_f32: out = (x−mean)·inv·gamma + beta over the last axis (OpLayerNorm).
 int cu_layernorm_f32(const void* in, void* out, const void* gamma, const void* beta, int rows, int cols, float eps);
 // cu_addbias_f32: out[r,j] = x[r,j] + bias[j] (row-broadcast, OpAddBias).

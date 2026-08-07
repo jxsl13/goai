@@ -26,6 +26,27 @@ func MatMul(a, b, out *DeviceF32) error {
 	return nil
 }
 
+// RMSNormBackward computes the VJP of RMSNorm y = x·(1/√(mean(x²)+eps))·gamma over the last axis
+// (cols = norm dim, rows = batch). Given the output gradient dy it writes dx and dgamma, both
+// device-resident. dgamma is the sum over rows, so it is zeroed then atomically accumulated. x, dy, dx
+// are [rows,cols]; gamma and dgamma are length cols.
+func RMSNormBackward(dx, dgamma, x, dy, gamma *DeviceF32, eps float32) error {
+	rows, cols := x.rows, x.cols
+	if dy.rows != rows || dy.cols != cols || dx.rows != rows || dx.cols != cols {
+		return fmt.Errorf("cuda: RMSNormBackward x/dy/dx shape mismatch")
+	}
+	if gamma.rows*gamma.cols != cols || dgamma.rows*dgamma.cols != cols {
+		return fmt.Errorf("cuda: RMSNormBackward gamma/dgamma len != cols %d", cols)
+	}
+	if rc := C.cu_zero_f32(dgamma.ptr, C.int(cols)); rc != 0 {
+		return fmt.Errorf("cuda: RMSNormBackward zero dgamma rc=%d", int(rc))
+	}
+	if rc := C.cu_rmsnorm_backward_f32(x.ptr, dy.ptr, gamma.ptr, dx.ptr, dgamma.ptr, C.int(rows), C.int(cols), C.float(eps)); rc != 0 {
+		return fmt.Errorf("cuda: RMSNormBackward rc=%d", int(rc))
+	}
+	return nil
+}
+
 // SwiGLUBackward computes the VJP of o = SiLU(g)⊙u: given the output gradient dO, it writes
 // dg = dO⊙u⊙SiLU'(g) and du = dO⊙SiLU(g), all device-resident — the GPU SwiGLU backward for training a
 // transformer FFN. g and u are the forward inputs (the gate and up projections).

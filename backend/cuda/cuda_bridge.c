@@ -1793,6 +1793,54 @@ done:
     return rc;
 }
 
+static CUfunction gRmsBwd = NULL;
+// cu_rmsnorm_backward_f32: VJP of RMSNorm y = x·inv·w, inv = 1/√(mean(x²)+eps). Per row (one block):
+// a = Σ_i dy_i·w_i·x_i; dx_k = w_k·dy_k·inv − x_k·a·inv³/cols; dgamma_k += Σ_rows dy_k·x_k·inv. dgamma is
+// accumulated across rows via atomicAdd (caller zeroes it first). Reductions in double (matches forward).
+int cu_rmsnorm_backward_f32(const void* x, const void* dy, const void* w, void* dx, void* dgamma, int rows, int cols, float eps) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donermsbwd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donermsbwd; }
+    if (!gRmsBwd && compile_kernel(
+            "extern \"C\" __global__ void rmsnorm_backward_f32(const float* x, const float* dy, const float* w, float* dx, float* dgamma, int rows, int cols, float eps){\n"
+            "  int row = blockIdx.x; if (row>=rows) return;\n"
+            "  extern __shared__ double sh[];\n"
+            "  int t=threadIdx.x, nt=blockDim.x;\n"
+            "  const float* xr = x + (size_t)row*cols;\n"
+            "  const float* dyr = dy + (size_t)row*cols;\n"
+            "  float* dxr = dx + (size_t)row*cols;\n"
+            "  float lms=0.0f;\n"
+            "  for (int j=t;j<cols;j+=nt){ float v=xr[j]; lms+=v*v; }\n"
+            "  sh[t]=(double)lms; __syncthreads();\n"
+            "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  double ms = sh[0]/(double)cols;\n"
+            "  float inv = (float)(1.0/sqrt(ms+(double)eps));\n"
+            "  __syncthreads();\n"
+            "  float la=0.0f;\n"
+            "  for (int j=t;j<cols;j+=nt){ la += dyr[j]*w[j]*xr[j]; }\n"
+            "  sh[t]=(double)la; __syncthreads();\n"
+            "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  double a = sh[0];\n"
+            "  float coef = (float)(a * (double)inv*inv*inv / (double)cols);\n"
+            "  for (int j=t;j<cols;j+=nt){\n"
+            "    dxr[j] = w[j]*dyr[j]*inv - xr[j]*coef;\n"
+            "    atomicAdd(&dgamma[j], dyr[j]*xr[j]*inv);\n"
+            "  }\n"
+            "}\n",
+            "rmsnorm_backward_f32.cu", "rmsnorm_backward_f32", &gRmsBwd) != 0) { rc = -2; goto donermsbwd; }
+    {
+        int threads = 256, blocks = rows;
+        if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(double);
+        void* args[8] = { (void*)&x, (void*)&dy, (void*)&w, &dx, &dgamma, &rows, &cols, &eps };
+        rc = (cuLaunchKernel(gRmsBwd, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donermsbwd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // A1 fp16-activation elementwise twins: in/out are u16 (f16), gamma/inv stay f32 (resident).
 // h2f/f2h are PTX conversions; math runs in f32/f64 identically to the f32 kernels.
 #define A1_CVT_HELPERS \
