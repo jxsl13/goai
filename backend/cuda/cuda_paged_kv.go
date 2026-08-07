@@ -161,6 +161,28 @@ func (p *PagedKVPool) NewSeqSharingPrefix(base *SeqKV, sharedBlocks int) (*SeqKV
 	return s, nil
 }
 
+// NewSeqFromBlocks creates a SeqKV that shares the given physical blocks (increfing each) — the block-id
+// form of NewSeqSharingPrefix, for a PrefixBlockCache hit where the original owning sequence is gone but
+// the cache still holds the blocks alive. n = len(blockIds)·blockSize (whole shared blocks).
+func (p *PagedKVPool) NewSeqFromBlocks(blockIds []int32) *SeqKV {
+	if p.refcount == nil {
+		p.refcount = make([]int32, p.numBlocks)
+	}
+	s := &SeqKV{pool: p, table: append([]int32(nil), blockIds...), n: len(blockIds) * p.blockSize}
+	for _, b := range blockIds {
+		p.refcount[b]++
+	}
+	return s
+}
+
+// incref adds a reference to physical block b (used by PrefixBlockCache to pin cached prefix blocks).
+func (p *PagedKVPool) incref(b int32) {
+	if p.refcount == nil {
+		p.refcount = make([]int32, p.numBlocks)
+	}
+	p.refcount[b]++
+}
+
 // Free releases the pool's device memory.
 func (p *PagedKVPool) Free() {
 	if p.k != nil {
