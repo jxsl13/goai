@@ -1593,6 +1593,37 @@ done:
     return rc;
 }
 
+static CUfunction gSwigluBwd = NULL;
+// cu_swiglu_backward_f32: VJP of o = SiLU(g)*u. Given dO, writes dg = dO*u*SiLU'(g) and du = dO*SiLU(g),
+// where SiLU(g)=g*s, s=sigmoid(g), SiLU'(g)=s*(1+g*(1-s)). Same stable sigmoid as the forward. The GPU
+// SwiGLU backward for training a transformer FFN on device.
+int cu_swiglu_backward_f32(void* dg, void* du, const void* g, const void* u, const void* dO, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneswbwd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneswbwd; }
+    if (!gSwigluBwd && compile_kernel(
+            "extern \"C\" __global__ void swiglu_backward_f32(float* dg, float* du, const float* g, const float* u, const float* dO, int n){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n){ float v = g[i];\n"
+            "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
+            "    float dp = dO[i];\n"
+            "    du[i] = dp*(v*s);\n"
+            "    dg[i] = dp*u[i]*(s*(1.0f + v*(1.0f-s)));\n"
+            "  }\n"
+            "}\n",
+            "swiglu_backward_f32.cu", "swiglu_backward_f32", &gSwigluBwd) != 0) { rc = -2; goto doneswbwd; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[6] = { &dg, &du, (void*)&g, (void*)&u, (void*)&dO, &n };
+        rc = (cuLaunchKernel(gSwigluBwd, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneswbwd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_swiglu_halves: fused SwiGLU over the two halves of a column-fused gate|up buffer, writing a
 // packed [rows, hidden] output. gu is [rows, 2*hidden] (gate = cols [0,hidden), up = cols [hidden,2h)).
 // out[r*hidden + i] = silu(gu[r*2h + i]) * gu[r*2h + hidden + i]. Lets the generic Decoder fuse the
