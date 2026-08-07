@@ -7098,6 +7098,26 @@ donebfat:
     return rc;
 }
 
+// cu_matmul_bf16_ddd_bt: dC[M,N]f32 = dA[M,K]bf16 · dB[N,K]bf16ᵀ — the bf16-tensor-core input-gradient
+// GEMM (dX = dY·Wᵀ), mirroring cu_matmul_f32_ddd_bt.
+int cu_matmul_bf16_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    const float h1 = 1.0f, h0 = 0.0f;
+    cublasStatus_t st;
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donebfbt; }
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_HOST);
+    st = cublasGemmEx(gHandle, CUBLAS_OP_T, CUBLAS_OP_N, N, M, K,
+                      &h1, dB, CUDA_R_16BF, K, dA, CUDA_R_16BF, K,
+                      &h0, dC, CUDA_R_32F, N,
+                      CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT);
+    cublasSetPointerMode(gHandle, CUBLAS_POINTER_MODE_DEVICE);
+    rc = (st == CUBLAS_STATUS_SUCCESS) ? 0 : -4;
+donebfbt:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 void* cu_upload_f16(const float* src, long n) {
     void* d32 = NULL; void* d16 = NULL;
     pthread_mutex_lock(&gLock);
