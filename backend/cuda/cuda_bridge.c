@@ -2962,6 +2962,42 @@ done:
     return rc;
 }
 
+static CUfunction gAdamStepF32 = NULL;
+// cu_adam_step_f32: in-place AdamW update of an f32 parameter with f64 moment state, matching nn.Adam's
+// f32-param/f64-moment fast path bit-for-bit (moments and update arithmetic in double; p read/written
+// f32). p[i] = p[i]*decay - lr*mhat/(sqrt(vhat)+eps); m/v are the EMA moments; caller passes the
+// bias-correction reciprocals ic1=1/(1-b1^t), ic2=1/(1-b2^t) and decay=1-lr*wd (hoisted, exactly like
+// the CPU path). This is the GPU-resident optimizer step — moments stay on device across steps.
+int cu_adam_step_f32(void* p, const void* g, void* m, void* v, int n,
+                     double lr, double b1, double b2, double eps, double decay, double ic1, double ic2) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneadam; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneadam; }
+    if (!gAdamStepF32 && compile_kernel(
+            "extern \"C\" __global__ void adam_step_f32(float* p, const float* g, double* m, double* v, int n,\n"
+            "    double lr, double b1, double b2, double eps, double decay, double ic1, double ic2){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i >= n) return;\n"
+            "  double gv = (double)g[i];\n"
+            "  double mi = b1*m[i] + (1.0-b1)*gv;\n"
+            "  double vi = b2*v[i] + (1.0-b2)*gv*gv;\n"
+            "  m[i] = mi; v[i] = vi;\n"
+            "  double mh = mi*ic1, vh = vi*ic2;\n"
+            "  p[i] = (float)((double)p[i]*decay - lr*mh/(sqrt(vh)+eps));\n"
+            "}\n",
+            "adam_step_f32.cu", "adam_step_f32", &gAdamStepF32) != 0) { rc = -2; goto doneadam; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[12] = { &p, (void*)&g, &m, &v, &n, &lr, &b1, &b2, &eps, &decay, &ic1, &ic2 };
+        rc = (cuLaunchKernel(gAdamStepF32, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneadam:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_alloc_u16 allocates n u16 elements (f16 KV-cache storage, half of f32's bytes);
 // cu_zero_u16 zeroes them (f16 zero == all-zero bytes). Freed with cu_free_f32
 // (both are raw stream-ordered device allocations).
