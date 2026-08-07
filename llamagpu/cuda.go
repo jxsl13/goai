@@ -1445,6 +1445,15 @@ func cudaUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 		}
 		// fall through to Q8 on any error
 	}
+	if qt == 8 /* tQ8_0 */ && k%32 == 0 {
+		// Q8_0 stays NATIVE: the raw GGUF Q8_0 blocks (row-major [Out][In/32], f16 scale + 32 int8) repack
+		// DIRECTLY into ResidentBQ8 (q int8 + f32 scale) — no Q8_0→f32→Q8 round-trip. Cuts peak host RAM
+		// (a 7B Q8 that OOMs the f32 dequant path fits) and load work, at higher fidelity. Mirrors the
+		// k-quant FromBlocks paths above. Any error falls through to the always-correct f32 path.
+		if rw, err := cuda.NewResidentBQ8FromBlocks(weight, k, n); err == nil {
+			return rw, nil
+		}
+	}
 	f32, err := gguf.QuantTensor{Data: weight, GGType: qt, Shape: tensor.Shape{n, k}}.Dequantize()
 	if err != nil {
 		return nil, fmt.Errorf("llamagpu: CUDA dequant qt=%d [%d,%d]: %w", qt, n, k, err)

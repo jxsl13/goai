@@ -107,6 +107,77 @@ func NewResidentBQ8(b *tensor.Tensor) (*ResidentBQ8, error) {
 	return res, nil
 }
 
+// NewResidentBQ8FromBlocks builds a resident Q8 weight DIRECTLY from raw GGUF Q8_0 blocks — no f32
+// round-trip. A ggml Q8_0 [Out=N, In=K] weight is row-major 34-byte blocks (an f16 scale d then 32
+// int8), one per 32 elements along K — which is EXACTLY ResidentBQ8's per-output-row layout (q int8
+// [N*K] + scale f32 [N*nb]), so the repack is a byte copy plus an f16→f32 on the scales. This is the
+// Q8 twin of the k-quant NewResidentBQ*KFromBlocks paths (Q4_K/Q5_K/Q6_K/…): loading a Q8_0 GGUF this
+// way skips the wasteful Q8_0→f32→Q8 dequant+requant (llamagpu.cudaUploadQWeight's fall-through),
+// cutting peak host RAM (no [N,K] f32 materialization — a 7B Q8 that OOMs the f32 path fits) and the
+// load work, at HIGHER fidelity (it keeps the GGUF's own quants; the round-trip re-rounds them).
+// K must be a multiple of 32 (the Q8_0 block size), which real transformer dims satisfy.
+func NewResidentBQ8FromBlocks(raw []byte, k, n int) (*ResidentBQ8, error) {
+	if k%qBlock != 0 {
+		return nil, fmt.Errorf("cuda: NewResidentBQ8FromBlocks needs K%%32==0, got K=%d", k)
+	}
+	nb := k / qBlock
+	const blkBytes = 2 + qBlock // f16 scale + 32 int8 quants
+	if want := n * nb * blkBytes; len(raw) != want {
+		return nil, fmt.Errorf("cuda: NewResidentBQ8FromBlocks got %d bytes, want %d (N=%d K=%d)", len(raw), want, n, k)
+	}
+	q := make([]int8, n*k)
+	scales := make([]float32, n*nb)
+	for row := 0; row < n; row++ {
+		for blk := 0; blk < nb; blk++ {
+			off := (row*nb + blk) * blkBytes
+			scales[row*nb+blk] = halfToF32(uint16(raw[off]) | uint16(raw[off+1])<<8)
+			dst := q[row*k+blk*qBlock : row*k+blk*qBlock+qBlock]
+			src := raw[off+2 : off+2+qBlock]
+			for j := 0; j < qBlock; j++ {
+				dst[j] = int8(src[j])
+			}
+		}
+	}
+	dq := C.cu_upload_i8((*C.schar)(unsafe.Pointer(&q[0])), C.int(len(q)))
+	if dq == nil {
+		return nil, fmt.Errorf("cuda: Q8 weight upload failed")
+	}
+	ds := C.cu_upload_f32((*C.float)(&scales[0]), C.int(len(scales)))
+	if ds == nil {
+		C.cu_free_f32(dq)
+		return nil, fmt.Errorf("cuda: Q8 scales upload failed")
+	}
+	return &ResidentBQ8{q: dq, scales: ds, k: k, n: n, nb: nb}, nil
+}
+
+// halfToF32 converts an IEEE-754 half (f16) bit pattern to float32, handling subnormals/inf/nan — the
+// Q8_0 block scales are f16. Matches gguf's f16ToF32 for the normal values Q8_0 scales take.
+func halfToF32(h uint16) float32 {
+	sign := uint32(h&0x8000) << 16
+	exp := uint32(h>>10) & 0x1f
+	mant := uint32(h & 0x3ff)
+	var bits uint32
+	switch exp {
+	case 0:
+		if mant != 0 { // subnormal → normalize
+			e := uint32(127 - 15 + 1)
+			for mant&0x400 == 0 {
+				mant <<= 1
+				e--
+			}
+			mant &= 0x3ff
+			bits = sign | (e << 23) | (mant << 13)
+		} else {
+			bits = sign
+		}
+	case 0x1f:
+		bits = sign | 0x7f800000 | (mant << 13)
+	default:
+		bits = sign | ((exp + (127 - 15)) << 23) | (mant << 13)
+	}
+	return math.Float32frombits(bits)
+}
+
 // QMatMulDevice computes a·dequant(B) with the activation a resident and the
 // weight Q8-quantized+resident, leaving the [a.rows, N] result on the GPU.
 func (r *ResidentBQ8) QMatMulDevice(a *DeviceF32) (*DeviceF32, error) {
