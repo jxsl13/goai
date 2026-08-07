@@ -1470,6 +1470,7 @@ func NewQuantCUDA(m *nlp.QuantLlama) (*Decoder, error) {
 	return newQuantDecoder(m, backendOps{
 		name:        string(backend.CUDA),
 		asyncEncode: false,
+		fusedGateUp: true, // cRec implements SwiGLUHalves; newQuantDecoder column-fuses ffn_gate|ffn_up
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := cuda.NewDeviceBufferF32(data)
 			if err != nil {

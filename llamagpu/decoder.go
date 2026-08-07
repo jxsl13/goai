@@ -2956,13 +2956,35 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		d.qweights = append(d.qweights, w)
 		return quantLinear{w: w}
 	}
+	// Column-fused ffn_gate|ffn_up for quantized blocks (same trick as qfused: ggml resident weights are
+	// [Out,In] row-major, so fusing = appending the raw quant bytes of gate‖up out-rows). Only when the
+	// backend supports SwiGLUHalves (ops.fusedGateUp) and both share one quant type; else nil → the
+	// unfused two-GEMV wG/wU path. Mirrors newDecoder's wGU so the raw-quant decode matches its speed.
+	qfused2 := func(q1, q2 *nn.QuantLinear) linear {
+		if err != nil || !ops.fusedGateUp || q1.QT != q2.QT {
+			return nil
+		}
+		wb := make([]byte, 0, len(q1.Weight)+len(q2.Weight))
+		wb = append(append(wb, q1.Weight...), q2.Weight...)
+		w, e := ops.uploadQWeight(wb, uint32(q1.QT), q1.Out+q2.Out, q1.In)
+		if e != nil {
+			err = e
+			return nil
+		}
+		d.qweights = append(d.qweights, w)
+		return quantLinear{w: w}
+	}
 	//perfscan:ignore PS3032 newQuantDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
+		wgu := qfused2(b.FFN.Gate, b.FFN.Up)
 		gb := block{
 			wqkv: qfused(b.Wq, b.Wk, b.Wv), wo: qlin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
-			wG: qlin(b.FFN.Gate), wU: qlin(b.FFN.Up), wD: qlin(b.FFN.Down),
+			wGU: wgu, wD: qlin(b.FFN.Down),
 			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+		}
+		if wgu == nil { // no SwiGLUHalves backend or mixed types: keep the two-GEMV gate/up path
+			gb.wG, gb.wU = qlin(b.FFN.Gate), qlin(b.FFN.Up)
 		}
 		if gb.wqkv == nil { // mixed quant types: keep the unfused projections
 			gb.wq, gb.wk, gb.wv = qlin(b.Wq), qlin(b.Wk), qlin(b.Wv)
