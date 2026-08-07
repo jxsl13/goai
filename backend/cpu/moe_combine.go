@@ -50,6 +50,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 		ws := wc.Storage().F64()
 		os := out.Storage().F64()
 		parallelWork(tks, d*e, func(lo, hi int) {
+			wn := make([]float64, e) // normalized weights, hoisted out of the j-loop (bit-identical)
 			for t := lo; t < hi; t++ {
 				wbase := t * e
 				var denom float64
@@ -58,15 +59,25 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 					denom += ws[wbase+i]
 				}
 				base := t * d
-				for j := 0; j < d; j++ {
-					var acc float64
-					if denom > 0 {
+				if denom > 0 {
+					// ws[i]/denom is invariant across j; compute the e divisions once per token
+					// instead of d·e times inside the j-loop. The quotient is the same deterministic
+					// F64, so acc is byte-identical (same operands, same accumulation order).
+					for i := 0; i < e; i++ {
+						wn[i] = ws[wbase+i] / denom
+					}
+					for j := 0; j < d; j++ {
+						var acc float64
 						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
 						for i := 0; i < e; i++ {
-							acc += (ws[wbase+i] / denom) * ecs[i][base+j]
+							acc += wn[i] * ecs[i][base+j]
 						}
+						os[base+j] = acc
 					}
-					os[base+j] = acc
+				} else {
+					for j := 0; j < d; j++ {
+						os[base+j] = 0
+					}
 				}
 			}
 		})
@@ -87,6 +98,7 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 		ws := wc.Storage().F32()
 		os := out.Storage().F32()
 		parallelWork(tks, d*e, func(lo, hi int) {
+			wn := make([]float64, e) // normalized weights (f64), hoisted out of the j-loop (bit-identical)
 			for t := lo; t < hi; t++ {
 				wbase := t * e
 				var denom float64
@@ -95,15 +107,24 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 					denom += float64(ws[wbase+i])
 				}
 				base := t * d
-				for j := 0; j < d; j++ {
-					var acc float64
-					if denom > 0 {
+				if denom > 0 {
+					// float64(ws[i])/denom is invariant across j; compute e divisions once per token
+					// instead of d·e times. Same deterministic F64 quotient → acc byte-identical.
+					for i := 0; i < e; i++ {
+						wn[i] = float64(ws[wbase+i]) / denom
+					}
+					for j := 0; j < d; j++ {
+						var acc float64
 						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
 						for i := 0; i < e; i++ {
-							acc += (float64(ws[wbase+i]) / denom) * float64(ecs[i][base+j])
+							acc += wn[i] * float64(ecs[i][base+j])
 						}
+						os[base+j] = float32(acc)
 					}
-					os[base+j] = float32(acc)
+				} else {
+					for j := 0; j < d; j++ {
+						os[base+j] = 0
+					}
 				}
 			}
 		})
