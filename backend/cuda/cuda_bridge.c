@@ -1624,6 +1624,34 @@ doneswbwd:
     return rc;
 }
 
+static CUfunction gSwigluOut = NULL;
+// cu_swiglu_out_f32: out[i] = SiLU(gate[i]) * up[i], writing to a SEPARATE buffer (gate and up
+// preserved) — the training forward, which must keep gate/up for cu_swiglu_backward_f32. Same stable
+// sigmoid as cu_swiglu_f32 (which is in-place).
+int cu_swiglu_out_f32(void* out, const void* gate, const void* up, int n) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneswout; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneswout; }
+    if (!gSwigluOut && compile_kernel(
+            "extern \"C\" __global__ void swiglu_out_f32(float* out, const float* gate, const float* up, int n){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n){ float v = gate[i];\n"
+            "    float s = v>=0.0f ? 1.0f/(1.0f+expf(-v)) : expf(v)/(1.0f+expf(v));\n"
+            "    out[i] = v*s*up[i]; }\n"
+            "}\n",
+            "swiglu_out_f32.cu", "swiglu_out_f32", &gSwigluOut) != 0) { rc = -2; goto doneswout; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[4] = { &out, (void*)&gate, (void*)&up, &n };
+        rc = (cuLaunchKernel(gSwigluOut, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneswout:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_swiglu_halves: fused SwiGLU over the two halves of a column-fused gate|up buffer, writing a
 // packed [rows, hidden] output. gu is [rows, 2*hidden] (gate = cols [0,hidden), up = cols [hidden,2h)).
 // out[r*hidden + i] = silu(gu[r*2h + i]) * gu[r*2h + hidden + i]. Lets the generic Decoder fuse the

@@ -359,6 +359,8 @@ int cu_mul_f32(void* dst, const void* src, int n);
 int cu_swiglu_f32(void* gate, const void* up, int n);
 // cu_swiglu_backward_f32: VJP of o=SiLU(g)*u — dg=dO*u*SiLU'(g), du=dO*SiLU(g).
 int cu_swiglu_backward_f32(void* dg, void* du, const void* g, const void* u, const void* dO, int n);
+// cu_swiglu_out_f32: out[i]=SiLU(gate[i])*up[i] into a separate buffer (training forward; gate/up kept).
+int cu_swiglu_out_f32(void* out, const void* gate, const void* up, int n);
 int cu_swiglu_halves(void* out, const void* gu, int rows, int hidden);
 int cu_geglu_halves(void* out, const void* gu, int rows, int hidden);
 
