@@ -404,18 +404,27 @@ func (m *DeepSeekV2) moeFFN(ctx *backend.Context, moe *nn.DeepSeekMoE, x *tensor
 	scale := m.Config.routedScale()
 
 	// Per-token greedy top-k over the softmax scores; weight = raw score · RoutedScale for the
-	// selected experts, 0 otherwise (NO renormalization — DeepSeek-V2's gating).
+	// selected experts, 0 otherwise (NO renormalization — DeepSeek-V2's gating). selected[i] marks
+	// any expert chosen by at least one token, so the mixture loop can skip experts whose weight
+	// column is all-zero: their term is out⊙0 = 0 and adding it is a no-op (bit-identical; the sole
+	// effect is not materializing a −0.0). In decode (seq=1) this collapses E→topK expert FFN evals
+	// (DeepSeek-V2: 160→6), each a pair of weight-streaming GEMVs that dominate the MoE sublayer.
 	weight := tensor.New(tensor.F64, tensor.Shape{seq, e})
 	ws := weight.Storage().F64()
+	selected := make([]bool, e)
 	for t := range seq {
 		for _, i := range topKIndices(scores, t, e, topK) {
 			ws[t*e+i] = scores.AtF64(t, i) * scale
+			selected[i] = true
 		}
 	}
 
-	// Routed mixture: Σ_i weight[:,i] ⊙ Expert_i(x), evaluated densely over all E experts.
+	// Routed mixture: Σ_i weight[:,i] ⊙ Expert_i(x), over the experts selected by some token.
 	var y *tensor.Tensor
 	for i := range e {
+		if !selected[i] {
+			continue // weight[:,i] is all-zero for every token → term is 0, contributes nothing
+		}
 		out, err := moe.Routed.Experts[i].Forward(ctx, x) // [seq, dim]
 		if err != nil {
 			return nil, err

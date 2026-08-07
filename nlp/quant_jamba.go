@@ -186,17 +186,25 @@ func (m *QuantJambaMoE) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor
 	seq, e := scores.Shape()[0], scores.Shape()[1]
 
 	// Per-token greedy top-k; weight = raw softmax score for selected experts,
-	// 0 otherwise (no renormalization — Jamba's gating).
+	// 0 otherwise (no renormalization — Jamba's gating). selected[i] marks any expert chosen by
+	// at least one token, so the mixture loop skips experts whose weight column is all-zero: their
+	// term is out⊙0 = 0 and adds nothing (bit-identical). In decode (seq=1) this collapses E→TopK
+	// quantized-expert evals (Jamba: 16→2), each a pair of weight-byte-streaming GEMVs.
 	weight := tensor.New(x.Dtype(), tensor.Shape{seq, e})
+	selected := make([]bool, e)
 	for t := range seq {
 		//perfscan:ignore PS1001 sparse top-k weight fill (seq*TopK), dominated by E expert matmuls
 		for _, i := range topKIndices(scores, t, e, m.TopK) {
 			weight.SetF64(scores.AtF64(t, i), t, i)
+			selected[i] = true
 		}
 	}
 
 	var y *tensor.Tensor
 	for i := range e {
+		if !selected[i] {
+			continue // weight[:,i] all-zero for every token → term is 0, contributes nothing
+		}
 		out, err := m.Experts[i].Forward(ctx, x) // [seq, dim]
 		if err != nil {
 			return nil, err
