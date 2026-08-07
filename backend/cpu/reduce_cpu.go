@@ -64,6 +64,81 @@ func trailingReduce(shape tensor.Shape, pa backend.ReduceAttrs) (segLen int, out
 	return segLen, outShape, true
 }
 
+// leadingReduce reports whether the reduction reduces exactly a CONTIGUOUS PREFIX of axes that
+// leaves a non-empty kept suffix (e.g. axis 0 of [rows,cols] → [cols], or axes {0,1} of [a,b,c] →
+// [c]). When it does, the row-major input is a [numGroups, segStride] matrix and each output value
+// output[p] folds the strided column xs[p], xs[segStride+p], … — which the reference kernel walks
+// column-major (one cache line per element, the whole matrix re-streamed segStride times over). The
+// leading fast path instead accumulates row-major into a segStride-wide accumulator: one pass over
+// the input, contiguous reads, the accumulator cache-resident. Returns numGroups (the reduced
+// prefix product, >1), segStride (the kept suffix product), the keepdims-aware output shape, and ok.
+// The all-suffix case (reduced axes reach the last axis) is left to trailingReduce / reduce-all.
+func leadingReduce(shape tensor.Shape, pa backend.ReduceAttrs) (numGroups, segStride int, outShape tensor.Shape, ok bool) {
+	nd := len(shape)
+	if nd == 0 || len(pa.Axes) == 0 {
+		return 0, 0, nil, false
+	}
+	reduced := make([]bool, nd)
+	for _, a := range pa.Axes {
+		if a < 0 {
+			a += nd
+		}
+		if a < 0 || a >= nd {
+			return 0, 0, nil, false
+		}
+		reduced[a] = true
+	}
+	last := -1
+	for ax := nd - 1; ax >= 0; ax-- {
+		if reduced[ax] {
+			last = ax
+			break
+		}
+	}
+	// The reduced axes must be exactly the prefix [0,last]; a kept axis inside the prefix
+	// breaks contiguity, and last==nd-1 means the run reaches the end (trailing/reduce-all).
+	if last < 0 || last == nd-1 {
+		return 0, 0, nil, false
+	}
+	for ax := 0; ax <= last; ax++ {
+		if !reduced[ax] {
+			return 0, 0, nil, false
+		}
+	}
+	numGroups, segStride = 1, 1
+	for ax := 0; ax <= last; ax++ {
+		numGroups *= shape[ax]
+	}
+	for ax := last + 1; ax < nd; ax++ {
+		segStride *= shape[ax]
+	}
+	if numGroups <= 1 || segStride < 1 {
+		return 0, 0, nil, false
+	}
+	for ax := 0; ax < nd; ax++ {
+		switch {
+		case reduced[ax] && pa.KeepDims:
+			outShape = append(outShape, 1)
+		case reduced[ax]:
+			// dropped
+		default:
+			outShape = append(outShape, shape[ax])
+		}
+	}
+	return numGroups, segStride, outShape, true
+}
+
+// leadReducer carries the per-op element fold for the leading-axis path: init is the fold
+// identity, comb folds one element into the running accumulator (acc always f64, so the f32 input
+// promotes), and mean divides by the reduced count at the end. The fold order is ascending group
+// index per column — identical to the reference kernel — so Sum/Mean/Prod are bit-for-bit and
+// Max/Min match by associativity+commutativity of the IEEE min/max used on both sides.
+type leadReducer struct {
+	init float64
+	comb func(acc, x float64) float64
+	mean bool
+}
+
 // wrapReduceAll returns a CPU kernel that fast-paths the reduce-ALL-to-scalar case (attrs
 // nil or empty Axes) with a devirtualised, per-op INLINED loop over the contiguous storage.
 // The reference reduceKernel is correct but runs single-threaded through a per-element
@@ -72,7 +147,7 @@ func trailingReduce(shape tensor.Shape, pa backend.ReduceAttrs) (segLen int, out
 // f64/f32 is the passed loop closure, called ONCE per invocation, so its inner accumulation
 // inlines. Axis reductions, keepdims edge cases, and exotic dtypes fall back to the ref
 // kernel unchanged. Bit-identical: same ascending row-major order, same init/combine/finalize.
-func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float32) float64) backend.Kernel {
+func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float32) float64, lr leadReducer) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) == 1 {
 			pa, _ := attrs.(backend.ReduceAttrs)
@@ -124,6 +199,61 @@ func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float3
 					}
 					return []*tensor.Tensor{out}, nil
 				}
+				// Leading-contiguous (prefix) axis reduction: the input is a [numGroups, segStride]
+				// row-major matrix and each output column folds the strided values one per group. The
+				// reference walks it column-major (the whole matrix re-streamed segStride times); this
+				// folds row-major into a segStride-wide accumulator (one pass, contiguous reads, acc
+				// cache-resident). Parallel over disjoint output columns [plo,phi) — each column's fold
+				// is independent, ascending-group order preserved, so bit-identical to the reference.
+				if lr.comb != nil {
+					if numGroups, segStride, outShape, ok := leadingReduce(x.Shape(), pa); ok {
+						xc := x.Contiguous()
+						out := tensor.NewOn(ctx.Device(), dt, outShape)
+						comb, initV, mean := lr.comb, lr.init, lr.mean
+						invN := 1.0 / float64(numGroups)
+						if dt == tensor.F64 {
+							xs, os := xc.Storage().F64(), out.Storage().F64()
+							parallelWork(segStride, numGroups, func(plo, phi int) {
+								for p := plo; p < phi; p++ {
+									os[p] = initV
+								}
+								for g := 0; g < numGroups; g++ {
+									base := g * segStride
+									for p := plo; p < phi; p++ {
+										os[p] = comb(os[p], xs[base+p])
+									}
+								}
+								if mean {
+									for p := plo; p < phi; p++ {
+										os[p] *= invN
+									}
+								}
+							})
+						} else {
+							xs, os := xc.Storage().F32(), out.Storage().F32()
+							parallelWork(segStride, numGroups, func(plo, phi int) {
+								acc := make([]float64, phi-plo)
+								for i := range acc {
+									acc[i] = initV
+								}
+								for g := 0; g < numGroups; g++ {
+									base := g * segStride
+									for p := plo; p < phi; p++ {
+										acc[p-plo] = comb(acc[p-plo], float64(xs[base+p]))
+									}
+								}
+								for p := plo; p < phi; p++ {
+									v := acc[p-plo]
+									if mean {
+										v *= invN
+									}
+									os[p] = float32(v)
+								}
+							})
+						}
+						return []*tensor.Tensor{out}, nil
+					}
+				}
 			}
 		}
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), op, in, attrs)
@@ -131,12 +261,14 @@ func wrapReduceAll(op backend.Op, f64 func([]float64) float64, f32 func([]float3
 }
 
 func init() {
-	reg := func(op backend.Op, f64 func([]float64) float64, f32 func([]float32) float64) {
-		k := wrapReduceAll(op, f64, f32)
+	reg := func(op backend.Op, f64 func([]float64) float64, f32 func([]float32) float64, lr leadReducer) {
+		k := wrapReduceAll(op, f64, f32, lr)
 		//perfscan:ignore PS3052 false-positive: kernel registration init, one-time
 		std.add(op, tensor.F64, k)
 		std.add(op, tensor.F32, k)
 	}
+	add := func(a, x float64) float64 { return a + x }
+	mul := func(a, x float64) float64 { return a * x }
 	reg(backend.OpSum,
 		func(xs []float64) float64 {
 			var s float64
@@ -151,7 +283,8 @@ func init() {
 				s += float64(v)
 			}
 			return s
-		})
+		},
+		leadReducer{init: 0, comb: add})
 	reg(backend.OpMean,
 		func(xs []float64) float64 {
 			var s float64
@@ -166,7 +299,8 @@ func init() {
 				s += float64(v)
 			}
 			return s / float64(len(xs))
-		})
+		},
+		leadReducer{init: 0, comb: add, mean: true})
 	// Max/Min use a 4-way accumulator unroll to break the loop-carried dependency
 	// chain. math.Max/math.Min are NOT intrinsified on amd64 (hardware MAXSD/MINSD
 	// disagree on NaN/signed-zero), so each element is a real non-inlined CALL whose
@@ -209,7 +343,8 @@ func init() {
 				m = math.Max(m, float64(xs[i]))
 			}
 			return m
-		})
+		},
+		leadReducer{init: math.Inf(-1), comb: math.Max})
 	reg(backend.OpMin,
 		func(xs []float64) float64 {
 			m0, m1, m2, m3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
@@ -242,7 +377,8 @@ func init() {
 				m = math.Min(m, float64(xs[i]))
 			}
 			return m
-		})
+		},
+		leadReducer{init: math.Inf(1), comb: math.Min})
 	reg(backend.OpProd,
 		func(xs []float64) float64 {
 			p := 1.0
@@ -257,5 +393,6 @@ func init() {
 				p *= float64(v)
 			}
 			return p
-		})
+		},
+		leadReducer{init: 1, comb: mul})
 }

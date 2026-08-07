@@ -32,7 +32,10 @@ func TestReduceAxisCPUMatchesRefBitExact(t *testing.T) {
 		{tensor.Shape{8, 16, 32}, []int{2}},     // trailing of 3D
 		{tensor.Shape{8, 16, 32}, []int{1, 2}},  // trailing suffix (multi-axis)
 		{tensor.Shape{7, 5}, []int{1}},          // ragged, count not multiple of 4
-		{tensor.Shape{64, 128}, []int{0}},       // NON-suffix → CPU falls back to ref (must still match)
+		{tensor.Shape{64, 128}, []int{0}},       // LEADING axis of 2D (prefix fast path)
+		{tensor.Shape{16, 8, 32}, []int{0}},     // leading axis of 3D → segStride 256
+		{tensor.Shape{8, 16, 32}, []int{0, 1}},  // leading PREFIX (multi-axis) → segStride 32
+		{tensor.Shape{7, 5}, []int{0}},          // ragged leading, segStride 5 (not mult of 4)
 		{tensor.Shape{5, 6, 7}, []int{0, 1, 2}}, // explicit all-axes
 	}
 	run := func(be backend.Backend, op backend.Op, x *tensor.Tensor, axes []int, keep bool) *tensor.Tensor {
@@ -90,22 +93,52 @@ func TestReduceAxisSpecialValues(t *testing.T) {
 		copy(data[i*k:], r)
 	}
 	x := tensor.FromFloat64(tensor.Shape{len(rows), k}, data)
-	for _, op := range []backend.Op{backend.OpMax, backend.OpMin} {
-		gctx := backend.NewContext().WithBackend(cpuBE)
-		rctx := backend.NewContext().WithBackend(refBE)
-		attrs := backend.ReduceAttrs{Axes: []int{1}, KeepDims: false}
-		g, err := backend.Execute(gctx, op, []*tensor.Tensor{x}, attrs)
-		if err != nil {
-			t.Fatal(err)
-		}
-		r, _ := backend.Execute(rctx, op, []*tensor.Tensor{x}, attrs)
-		for i := 0; i < len(rows); i++ {
-			gv, rv := g[0].AtF64(i), r[0].AtF64(i)
-			if math.Float64bits(gv) != math.Float64bits(rv) {
-				t.Fatalf("%v row %d: cpu %v (bits %x) != ref %v (bits %x)", op, i, gv, math.Float64bits(gv), rv, math.Float64bits(rv))
+	// axis 1 = trailing fast path; axis 0 = leading (prefix) fast path — both must match the
+	// reference on the IEEE tie cases (NaN absorbing, math.Max(+0,-0)=+0, math.Min(+0,-0)=-0).
+	for _, axis := range []int{1, 0} {
+		for _, op := range []backend.Op{backend.OpMax, backend.OpMin} {
+			gctx := backend.NewContext().WithBackend(cpuBE)
+			rctx := backend.NewContext().WithBackend(refBE)
+			attrs := backend.ReduceAttrs{Axes: []int{axis}, KeepDims: false}
+			g, err := backend.Execute(gctx, op, []*tensor.Tensor{x}, attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, _ := backend.Execute(rctx, op, []*tensor.Tensor{x}, attrs)
+			for i := 0; i < g[0].Numel(); i++ {
+				gv, rv := g[0].AtF64(i), r[0].AtF64(i)
+				if math.Float64bits(gv) != math.Float64bits(rv) {
+					t.Fatalf("%v axis=%d out[%d]: cpu %v (bits %x) != ref %v (bits %x)", op, axis, i, gv, math.Float64bits(gv), rv, math.Float64bits(rv))
+				}
 			}
 		}
 	}
+}
+
+func benchAxisCPUAx(b *testing.B, op backend.Op, rows, cols, axis int) {
+	be, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(be)
+	x := bench.RandF64(tensor.Shape{rows, cols}, 3)
+	attrs := backend.ReduceAttrs{Axes: []int{axis}, KeepDims: false}
+	ins := []*tensor.Tensor{x}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, op, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// Leading (axis-0) reductions — the strided ref walk vs the new row-major accumulator path.
+func BenchmarkReduceAxis0SumF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUAx(b, backend.OpSum, 4096, 4096, 0)
+}
+func BenchmarkReduceAxis0MaxF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUAx(b, backend.OpMax, 4096, 4096, 0)
+}
+func BenchmarkReduceAxis0MeanF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUAx(b, backend.OpMean, 4096, 4096, 0)
 }
 
 func benchAxisCPU(b *testing.B, op backend.Op, rows, cols int) {
