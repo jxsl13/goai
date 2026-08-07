@@ -302,15 +302,37 @@ func (s *SpinRotation) foldWeightFWHT(w *tensor.Tensor) *tensor.Tensor {
 	// but no per-element AtF64/SetF64 dispatch — ~2·out·n calls otherwise). Bit-identical to the serial form.
 	if wc.Dtype() == tensor.F64 && s.dtype == tensor.F64 {
 		ws, rs := wc.Storage().F64(), res.Storage().F64()
+		// The column gather/scatter is strided by `out` (one cache line touched per element) and was
+		// ~86% of this op — a column of n elements costs n cache misses. TILE B columns at a time so the
+		// B contiguous row-elements ws[k*out+l0 : +B] come from ONE cache line and feed B butterflies:
+		// ~B× fewer cache-line fetches on both the gather and the scatter. Bit-identical — each column's
+		// buf, FWHT, and inv·signs[j]·buf[j] are unchanged; only the memory-access order is tiled.
+		const B = 8 // one 64-byte cache line = 8 f64
 		parallel.Rows(out, func(lo, hi int) {
-			buf := make([]float64, n)
-			for l := lo; l < hi; l++ {
-				for k := 0; k < n; k++ {
-					buf[k] = ws[k*out+l]
+			var bufs [B][]float64
+			for b := range bufs {
+				bufs[b] = make([]float64, n)
+			}
+			for l0 := lo; l0 < hi; l0 += B {
+				bw := B
+				if l0+bw > hi {
+					bw = hi - l0
 				}
-				fwhtInPlace(buf)
+				for k := 0; k < n; k++ {
+					rb := k*out + l0
+					for b := 0; b < bw; b++ {
+						bufs[b][k] = ws[rb+b]
+					}
+				}
+				for b := 0; b < bw; b++ {
+					fwhtInPlace(bufs[b])
+				}
 				for j := 0; j < n; j++ {
-					rs[j*out+l] = s.inv * s.signs[j] * buf[j]
+					rb := j*out + l0
+					sc := s.inv * s.signs[j]
+					for b := 0; b < bw; b++ {
+						rs[rb+b] = sc * bufs[b][j]
+					}
 				}
 			}
 		})
