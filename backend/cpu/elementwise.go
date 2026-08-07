@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/jxsl13/goai/internal/fmath"
+
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/internal/simd"
 	"github.com/jxsl13/goai/tensor"
@@ -779,33 +781,33 @@ func softplusBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs 
 }
 
 // maxSliceF64/minSliceF64 (and the F32 pair) are the elementwise Max/Min slice bodies for binOp.
-// They call math.Max/math.Min directly (a DIRECT call, not the reference binaryKernel's per-element
-// func-VALUE indirection) so the compiler emits the same IEEE-correct max/min the ref uses — NaN
-// absorbing, Max(+0,−0)=+0, Min(+0,−0)=−0 — bit-for-bit. The F32 bodies compute in float64 and round
-// only the store, exactly as the ref F32 path does. binOp fans them across cores; the ref fell through
-// single-threaded because the CPU backend registered no Maximum/Minimum kernel.
+// They use fmath.Max/fmath.Min — the FMAXD/FMIND instruction with a NaN-only math.Max/math.Min
+// fallback (PS3082) — which is bit-for-bit the same IEEE-correct max/min the ref uses (NaN absorbing,
+// Max(+0,−0)=+0, Min(+0,−0)=−0) but a leaf instruction instead of a framed CALL per element. The F32
+// bodies compute in float64 and round only the store, exactly as the ref F32 path does. binOp fans
+// them across cores; the ref fell through single-threaded (no registered Maximum/Minimum kernel).
 func maxSliceF64(dst, a, b []float64) {
 	a, b = a[:len(dst)], b[:len(dst)]
 	for i := range dst {
-		dst[i] = math.Max(a[i], b[i])
+		dst[i] = fmath.Max(a[i], b[i])
 	}
 }
 func minSliceF64(dst, a, b []float64) {
 	a, b = a[:len(dst)], b[:len(dst)]
 	for i := range dst {
-		dst[i] = math.Min(a[i], b[i])
+		dst[i] = fmath.Min(a[i], b[i])
 	}
 }
 func maxSliceF32(dst, a, b []float32) {
 	a, b = a[:len(dst)], b[:len(dst)]
 	for i := range dst {
-		dst[i] = float32(math.Max(float64(a[i]), float64(b[i])))
+		dst[i] = float32(fmath.Max(float64(a[i]), float64(b[i])))
 	}
 }
 func minSliceF32(dst, a, b []float32) {
 	a, b = a[:len(dst)], b[:len(dst)]
 	for i := range dst {
-		dst[i] = float32(math.Min(float64(a[i]), float64(b[i])))
+		dst[i] = float32(fmath.Min(float64(a[i]), float64(b[i])))
 	}
 }
 
@@ -925,7 +927,7 @@ func clipKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 			os := out.Storage().F64()
 			parallel(len(os), func(lo, hi int) {
 				for i := lo; i < hi; i++ {
-					os[i] = math.Max(pa.Lo, math.Min(xs[i], pa.Hi))
+					os[i] = fmath.Max(pa.Lo, fmath.Min(xs[i], pa.Hi))
 				}
 			})
 			return []*tensor.Tensor{out}, nil
@@ -935,7 +937,7 @@ func clipKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attr
 			os := out.Storage().F32()
 			parallel(len(os), func(lo, hi int) {
 				for i := lo; i < hi; i++ {
-					os[i] = float32(math.Max(pa.Lo, math.Min(float64(xs[i]), pa.Hi)))
+					os[i] = float32(fmath.Max(pa.Lo, fmath.Min(float64(xs[i]), pa.Hi)))
 				}
 			})
 			return []*tensor.Tensor{out}, nil
