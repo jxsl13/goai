@@ -39,6 +39,75 @@ func NgramLookup(seq []int, maxNgram, draftLen int) []int {
 	return nil
 }
 
+// SuffixLookup is a frequency-scored prompt-lookup drafter — the SuffixDecoding idea (Oliaro et al.,
+// NeurIPS'25, arXiv:2411.04975), restricted here to a single linear path. Like NgramLookup it copies a
+// continuation of seq's longest recurring suffix, but instead of an arbitrary (earliest) occurrence it
+// considers ALL earlier occurrences of that suffix and extends by MAJORITY VOTE: at each draft position
+// it keeps the most frequent next token across the still-agreeing occurrences, which accepts more tokens
+// per round than a single occurrence when the suffix recurs with a dominant-but-not-unique continuation
+// (agentic/code/RAG histories). Still deterministic and model-verified, so output is bit-identical to
+// greedy Generate — a wrong guess only costs speed. Returns nil when no suffix of length ≥1 recurs.
+func SuffixLookup(seq []int, maxNgram, draftLen int) []int {
+	n := len(seq)
+	for size := maxNgram; size >= 1; size-- {
+		if n < size+1 {
+			continue
+		}
+		suf := seq[n-size:]
+		// All strictly-earlier occurrences → the position just AFTER each matched suffix.
+		var occ []int
+		for start := 0; start+size <= n-1; start++ {
+			match := true
+			for j := 0; j < size; j++ {
+				if seq[start+j] != suf[j] {
+					match = false
+					break
+				}
+			}
+			if match {
+				occ = append(occ, start+size)
+			}
+		}
+		if len(occ) == 0 {
+			continue
+		}
+		// Greedily extend one token at a time by majority vote, dropping occurrences that diverge from
+		// the chosen token so the path stays self-consistent (as SuffixDecoding walks its suffix tree).
+		draft := make([]int, 0, draftLen)
+		for d := 0; d < draftLen && len(occ) > 0; d++ {
+			counts := make(map[int]int, len(occ))
+			best, bestC := -1, 0
+			for _, p := range occ {
+				if p+d >= n { // this occurrence ran out of continuation
+					continue
+				}
+				t := seq[p+d]
+				c := counts[t] + 1
+				counts[t] = c
+				if c > bestC || (c == bestC && t < best) {
+					best, bestC = t, c
+				}
+			}
+			if bestC == 0 {
+				break
+			}
+			draft = append(draft, best)
+			// keep only occurrences that agree with the chosen token at this position
+			kept := occ[:0]
+			for _, p := range occ {
+				if p+d < n && seq[p+d] == best {
+					kept = append(kept, p)
+				}
+			}
+			occ = kept
+		}
+		if len(draft) > 0 {
+			return draft
+		}
+	}
+	return nil
+}
+
 // PromptLookupDecode generates up to maxNew tokens after prompt with prompt-lookup
 // (n-gram) speculative decoding (Yang et al. 2023 "Inference with Reference", LLMA,
 // arXiv:2304.04487; Saxena's Prompt Lookup Decoding; §R89). It needs NO draft model:
@@ -54,6 +123,19 @@ func NgramLookup(seq []int, maxNgram, draftLen int) []int {
 // plain one-token step. maxNgram≤0 defaults to 3, draftLen≤0 to 10. Returns
 // prompt+generated, the accept stats, and any error.
 func PromptLookupDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int, s *Sampler) ([]int, SpecStats, error) {
+	return lookupDecode(model, prompt, maxNew, maxNgram, draftLen, s, NgramLookup)
+}
+
+// SuffixDecode is PromptLookupDecode with the frequency-scored SuffixLookup drafter (SuffixDecoding,
+// arXiv:2411.04975) instead of NgramLookup. Bit-identical output to greedy Generate (still model-verified);
+// it can accept more tokens per round when the recurring suffix has a dominant-but-not-unique continuation.
+func SuffixDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int, s *Sampler) ([]int, SpecStats, error) {
+	return lookupDecode(model, prompt, maxNew, maxNgram, draftLen, s, SuffixLookup)
+}
+
+// lookupDecode is the shared prompt-lookup speculative loop, parameterized by the drafter (NgramLookup or
+// SuffixLookup) so the two share one verified accept/reject path.
+func lookupDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int, s *Sampler, drafter func(seq []int, maxNgram, draftLen int) []int) ([]int, SpecStats, error) {
 	if maxNgram <= 0 {
 		maxNgram = 3
 	}
@@ -65,7 +147,7 @@ func PromptLookupDecode(model *GPT, prompt []int, maxNew, maxNgram, draftLen int
 	var stats SpecStats
 
 	for gen := 0; gen < maxNew && len(out) < model.Config.Ctx; {
-		toks := NgramLookup(out, maxNgram, draftLen)
+		toks := drafter(out, maxNgram, draftLen)
 		if room := model.Config.Ctx - len(out) - 1; len(toks) > room { // keep a slot for the bonus token
 			if room < 0 {
 				room = 0
