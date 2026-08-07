@@ -116,6 +116,7 @@ int cu_rope_f16(void* x, const void* inv, int seq, int heads, int hd, int posOff
 int cu_add_f16(void* dst, const void* src, int n); // A1 f16 residual add (dst += src, u16)
 int cu_rope_f16_dpos(void* x, const void* inv, int seq, int heads, int hd, const void* dPos, double posDiv); // f16 device-position RoPE (graph decode)
 int cu_rope_f16_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv); // f16 PER-SEQ-position RoPE (continuous batching)
+int cu_rope_f32_dpos_arr(void* x, const void* inv, int seq, int heads, int hd, const void* dPosArr, double posDiv); // f32 PER-SEQ-position RoPE (continuous batching)
 // cu_paged_decode_attn_gqa_f16: f16-KV twin of cu_paged_decode_attn_gqa (poolK16/V16 are u16, half the global bytes).
 int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const void* dPoolV16, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);
 // cu_paged_decode_attn_gqa_f16_qio: f16-KV + f16 Q-in/O-out — kills the A1 per-layer Q/O conversions.

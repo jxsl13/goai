@@ -79,6 +79,31 @@ func (d *DeviceF32) RoPEDpos(attrs backend.RoPEAttrs, pos *DevicePos) error {
 	return nil
 }
 
+// RoPERagged applies RoPE in place with a DIFFERENT absolute position per row — row p is rotated for
+// positions[p]. The f32 twin of DeviceF16.RoPERagged, for a quantized/f32 continuous-batch decode where
+// concurrent sequences sit at their own positions. inv is a resident [hd/2] freq table; attrs supplies
+// Heads and the RoPE base/scaling (its PosOffset is ignored — positions are absolute).
+func (d *DeviceF32) RoPERagged(inv *DeviceF32, positions []int32, attrs backend.RoPEAttrs) error {
+	heads := attrs.Heads
+	if heads <= 0 {
+		heads = 1
+	}
+	if len(positions) != d.rows {
+		return fmt.Errorf("cuda: DeviceF32.RoPERagged positions %d != rows %d", len(positions), d.rows)
+	}
+	hd := d.cols / heads
+	_, posDiv := backend.RoPEFreqs(hd, attrs)
+	dPos := C.cu_upload_i32((*C.int)(&positions[0]), C.int(len(positions)))
+	if dPos == nil {
+		return fmt.Errorf("cuda: DeviceF32.RoPERagged position upload failed")
+	}
+	defer C.cu_free_f32(dPos)
+	if rc := C.cu_rope_f32_dpos_arr(d.ptr, inv.ptr, C.int(d.rows), C.int(heads), C.int(hd), dPos, C.double(posDiv)); rc != 0 {
+		return fmt.Errorf("cuda: DeviceF32.RoPERagged rc=%d", int(rc))
+	}
+	return nil
+}
+
 // BuildRoPEInv precomputes and uploads the RoPE inverse-frequency table [hd/2]
 // for head dim hd and frequency base, ONCE (persistent). Pass it to RoPEDposInv so
 // the RoPE op does no per-call host upload — required for the op to be inside a
