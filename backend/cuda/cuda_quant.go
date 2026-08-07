@@ -32,8 +32,17 @@ type ResidentBQ8 struct {
 	q      unsafe.Pointer // device int8 [N*K], row n = quantized B[:,n]
 	scales unsafe.Pointer // device f32 [N*nb]
 	k, n   int
-	nb     int // blocks per output row = ceil(K/32)
+	nb     int           // blocks per output row = ceil(K/32)
+	bf16   *ResidentBF16 // optional resident f16 copy for the fast f16-cuBLAS PREFILL path (see Q8PrefillF16)
 }
+
+// Q8PrefillF16, when true at ResidentBQ8 construction, makes each Q8 weight ALSO keep a resident f16
+// copy so the weight-read-once PREFILL GEMM (QMatMulResident, m>=6) routes through the fast f16-cuBLAS
+// path (cu_matmul_f16w) instead of int8-MMQ. MEASURED (BenchmarkGemm_512x2048x*): GoAI's int8-MMQ runs
+// at only ~0.5-0.6× its own f16 GEMM on GA106 (13-16 vs 27-31 TFLOP/s), so f16-cuBLAS is ~1.7-2.4×
+// faster for prefill. Decode (the M=1 GEMV) still streams the 1-byte Q8 weight (bandwidth-optimal).
+// Opt-in because the f16 copy ~doubles weight VRAM (TinyLlama Q8 1.1GB + f16 2.2GB fits 12GB).
+var Q8PrefillF16 bool
 
 // NewResidentBQ8 quantizes a host f32 weight B[K,N] to Q8_0 and uploads it. The
 // quantization is symmetric per 32-block along K: scale = max|w|/127, q = round(w/scale).
@@ -87,7 +96,15 @@ func NewResidentBQ8(b *tensor.Tensor) (*ResidentBQ8, error) {
 		C.cu_free_f32(dq)
 		return nil, fmt.Errorf("cuda: Q8 scales upload failed")
 	}
-	return &ResidentBQ8{q: dq, scales: ds, k: k, n: n, nb: nb}, nil
+	res := &ResidentBQ8{q: dq, scales: ds, k: k, n: n, nb: nb}
+	if Q8PrefillF16 {
+		// Keep a resident f16 copy of the ORIGINAL f32 weight [K,N] for the fast prefill GEMM. Best-
+		// effort: on failure the prefill path just falls back to int8-MMQ.
+		if bf16, e := NewResidentBF16(bc); e == nil {
+			res.bf16 = bf16
+		}
+	}
+	return res, nil
 }
 
 // QMatMulDevice computes a·dequant(B) with the activation a resident and the
@@ -190,6 +207,10 @@ func (r *ResidentBQ8) Free() {
 	if r.scales != nil {
 		C.cu_free_f32(r.scales)
 		r.scales = nil
+	}
+	if r.bf16 != nil {
+		r.bf16.Free()
+		r.bf16 = nil
 	}
 }
 

@@ -552,6 +552,14 @@ func (rec *Recorder) QMatMulResident(x *DeviceF32, w *ResidentBQ8, o *DeviceF32,
 	// pad. m=6 wins at every tested shape (2048² 1.40×, 2048×5632 1.87×, 4096² 2.3×); m=4 only
 	// wins at large n (ties at 2048²), so 6 is the no-regression floor — this captures
 	// speculative-decode / small-batch (m=6-7), previously stuck on the slow GEMV.
+	// f16-cuBLAS prefill fast path: GoAI's int8-MMQ runs at only ~0.5-0.6× its own f16 GEMM on GA106
+	// (measured), so when a resident f16 weight copy exists (Q8PrefillF16) route the weight-read-once
+	// prefill GEMM through cu_matmul_f16w — ~1.7-2.4× the int8-MMQ. Falls back to MMQ on any error.
+	if m >= 6 && w.bf16 != nil {
+		if rc := C.cu_matmul_f16w(x.ptr, w.bf16.ptr, o.ptr, C.int(m), C.int(w.k), C.int(w.n), C.float(0)); rc == 0 {
+			return nil
+		}
+	}
 	if m >= 6 && w.n%64 == 0 && w.k%32 == 0 {
 		if err := rec.q8PrefillMMQ(x, w, o, m); err == nil {
 			return nil
