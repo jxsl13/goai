@@ -3424,6 +3424,43 @@ doneadam:
     return rc;
 }
 
+static CUfunction gAdamStepF32M = NULL;
+// cu_adam_step_f32m: AdamW step with f32 moments AND f32 arithmetic — the incumbent-precision fast path
+// (PyTorch/most frameworks keep Adam moments in f32, not f64). On consumer Ampere (GA106) f64 sqrt/div
+// run at ~1/64 rate, so the f64-moment kernel is compute-bound; this f32 kernel uses full-rate sqrtf and
+// halves optimizer-state memory (8 -> 4 bytes/param for m+v... i.e. f32 m + f32 v = 8 total vs f64's 16).
+// NOT bit-identical to nn.Adam's f64 path — an opt-in relaxation to the incumbent f32 precision.
+int cu_adam_step_f32m(void* p, const void* g, void* m, void* v, int n,
+                      double lr, double b1, double b2, double eps, double decay, double ic1, double ic2) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneadamm; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneadamm; }
+    if (!gAdamStepF32M && compile_kernel(
+            "extern \"C\" __global__ void adam_step_f32m(float* p, const float* g, float* m, float* v, int n,\n"
+            "    float lr, float b1, float b2, float eps, float decay, float ic1, float ic2){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i >= n) return;\n"
+            "  float gv = g[i];\n"
+            "  float mi = b1*m[i] + (1.0f-b1)*gv;\n"
+            "  float vi = b2*v[i] + (1.0f-b2)*gv*gv;\n"
+            "  m[i] = mi; v[i] = vi;\n"
+            "  float mh = mi*ic1, vh = vi*ic2;\n"
+            "  p[i] = p[i]*decay - lr*mh/(sqrtf(vh)+eps);\n"
+            "}\n",
+            "adam_step_f32m.cu", "adam_step_f32m", &gAdamStepF32M) != 0) { rc = -2; goto doneadamm; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        float lrf = (float)lr, b1f = (float)b1, b2f = (float)b2, epsf = (float)eps, decf = (float)decay, ic1f = (float)ic1, ic2f = (float)ic2;
+        void* args[12] = { &p, (void*)&g, &m, &v, &n, &lrf, &b1f, &b2f, &epsf, &decf, &ic1f, &ic2f };
+        rc = (cuLaunchKernel(gAdamStepF32M, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneadamm:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 static CUfunction gSubScaledF32 = NULL;
 // cu_sub_scaled_f32: out[i] = scale*(a[i]-b[i]) — the element-wise piece a GPU loss backward needs,
 // e.g. the MSE gradient dL/dY = (2/M)*(Y-T). out may alias a or b.
