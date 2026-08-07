@@ -3186,6 +3186,17 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 // speculative decoding needs. pos+k must be ≤ the model's Ctx.
 func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) { return d.stepN(tokens, pos, false) }
 
+// StepNLast is StepN but projects and downloads ONLY the final prompt row's logits (the LM head runs
+// over 1 row instead of k, and the host download shrinks from k·vocab to vocab). The transformer body
+// still runs all k rows to populate the KV cache, so the returned [vocab] row is bit-identical to the
+// last row of StepN. Use it for prefill whose only consumer is the post-prompt token (generation) or
+// which discards logits entirely (speculative/prompt-lookup KV-seeding) — the [k-1] earlier rows' LM
+// head + PCIe download are pure waste there (a 512-token prompt over a 128k vocab downloads 256 MB just
+// to discard all but the last row). StepN (full-k) is kept for verify callers that need every row.
+func (d *Decoder) StepNLast(tokens []int, pos int) ([]float32, error) {
+	return d.stepN(tokens, pos, true)
+}
+
 // stepN is StepN with an optional last-row-only mode. When lastOnly, only the FINAL prompt row's
 // logits are projected by the LM head and downloaded — the transformer body still runs all k rows
 // (the KV cache needs every position), but the [k-1] earlier rows' logits are never read by a caller

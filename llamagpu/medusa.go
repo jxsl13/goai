@@ -121,8 +121,8 @@ func MedusaGenerate(dec HiddenStepper, heads *nlp.MedusaHeads, prompt []int, max
 	}
 	out := append([]int(nil), prompt...)
 	pos := 0
-	if len(prompt) > 1 { // prefill all but the last token in one batched step
-		if _, err := dec.StepN(prompt[:len(prompt)-1], 0); err != nil {
+	if len(prompt) > 1 { // prefill all but the last token in one batched step (KV-seeding, logits discarded)
+		if _, err := dec.StepNLast(prompt[:len(prompt)-1], 0); err != nil {
 			return nil, stats, err
 		}
 		pos = len(prompt) - 1

@@ -174,6 +174,18 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 // attention against the growing cache, biases broadcast via the AddBias record op, and the k KV
 // rows are appended. Returns the [k,vocab] logits.
 func (d *GPTDecoder) StepN(tokens []int, pos int) ([]float32, error) {
+	return d.gptStepN(tokens, pos, false)
+}
+
+// StepNLast is StepN projecting only the FINAL prompt row's logits (LM head over 1 row, download of
+// vocab not k·vocab); the transformer body still runs all k rows so the KV cache and the returned
+// [vocab] row are bit-identical to StepN's last row. For generation/KV-seeding prefills that read at
+// most the last row — mirrors Decoder.StepNLast.
+func (d *GPTDecoder) StepNLast(tokens []int, pos int) ([]float32, error) {
+	return d.gptStepN(tokens, pos, true)
+}
+
+func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, error) {
 	k := len(tokens)
 	if k == 0 {
 		return nil, fmt.Errorf("llamagpu(%s): gpt StepN needs ≥1 token", d.ops.name)
@@ -225,16 +237,27 @@ func (d *GPTDecoder) StepN(tokens []int, pos int) ([]float32, error) {
 			return nil, e
 		}
 	}
+	rows := k
+	if lastOnly {
+		// Only the final row's logits are wanted: move its residual to row 0 so the final LN + LM head
+		// project ONE row and the download shrinks from k·vocab to vocab (bit-identical — row 0 then
+		// holds exactly what row k-1 would have produced; a no-op when k==1).
+		if e := r.Blit(d.dx.b, (k-1)*D, d.dx.b, 0, D); e != nil {
+			r.Free()
+			return nil, e
+		}
+		rows = 1
+	}
 	if e := firstErr(
-		r.LayerNorm(d.dx.b, d.lnfG.b, d.lnfB.b, d.xn.b, k, D, d.eps),
-		d.head.record(r, d.xn.b, d.logits.b, k),
+		r.LayerNorm(d.dx.b, d.lnfG.b, d.lnfB.b, d.xn.b, rows, D, d.eps),
+		d.head.record(r, d.xn.b, d.logits.b, rows),
 		r.Finish(),
 	); e != nil {
 		r.Free()
 		return nil, e
 	}
 	r.Free()
-	out := make([]float32, k*d.v)
+	out := make([]float32, rows*d.v)
 	if err := d.logits.b.DownloadF32(out); err != nil {
 		return nil, err
 	}
@@ -256,12 +279,13 @@ func (d *GPTDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]i
 		return nil, fmt.Errorf("llamagpu(%s): gpt Generate needs a non-empty prompt", d.ops.name)
 	}
 	out := append([]int(nil), prompt...)
-	all, err := d.StepN(prompt, 0)
+	// generation samples only the post-prompt row, so project just the last prompt row's logits
+	// (StepNLast) instead of the full [len(prompt), vocab] LM head + download.
+	logits, err := d.StepNLast(prompt, 0)
 	if err != nil {
 		return nil, err
 	}
 	pos := len(prompt)
-	logits := all[(len(prompt)-1)*d.v:]
 	buf := make([]float64, d.v)
 	for range maxNew {
 		if pos >= d.maxLen {
