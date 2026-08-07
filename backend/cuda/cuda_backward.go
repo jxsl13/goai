@@ -9,6 +9,36 @@ import "C"
 
 import "fmt"
 
+// MatMul computes out[M,N] = a[M,K]·b[K,N], all device-resident (the forward of a linear layer). It is
+// the exported f32 device GEMM the GPU training loop uses for the forward pass.
+func MatMul(a, b, out *DeviceF32) error {
+	m, k := a.rows, a.cols
+	if b.rows != k {
+		return fmt.Errorf("cuda: MatMul a[%d,%d]·b[%d,%d] inner mismatch", a.rows, a.cols, b.rows, b.cols)
+	}
+	n := b.cols
+	if out.rows != m || out.cols != n {
+		return fmt.Errorf("cuda: MatMul out[%d,%d], want [%d,%d]", out.rows, out.cols, m, n)
+	}
+	if rc := C.cu_matmul_f32_ddd(a.ptr, b.ptr, out.ptr, C.int(m), C.int(k), C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: MatMul rc=%d", int(rc))
+	}
+	return nil
+}
+
+// SubScaled computes out = scale*(a-b) element-wise (out may alias a or b). Used for loss gradients,
+// e.g. the MSE gradient dL/dY = (2/M)*(Y-T).
+func SubScaled(out, a, b *DeviceF32, scale float32) error {
+	n := a.rows * a.cols
+	if b.rows*b.cols != n || out.rows*out.cols != n {
+		return fmt.Errorf("cuda: SubScaled shape mismatch")
+	}
+	if rc := C.cu_sub_scaled_f32(out.ptr, a.ptr, b.ptr, C.int(n), C.float(scale)); rc != 0 {
+		return fmt.Errorf("cuda: SubScaled rc=%d", int(rc))
+	}
+	return nil
+}
+
 // MatMulGradW computes the linear-layer weight gradient dW[K,N] = xᵀ·dY, where x is the [M,K] layer
 // input and dY the [M,N] output gradient — all device-resident. This is the transpose-A GEMM the
 // backward of Y = x·W needs; combined with DeviceAdam it lets a linear layer train entirely on the GPU.

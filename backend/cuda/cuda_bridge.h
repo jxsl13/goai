@@ -129,6 +129,8 @@ void* cu_clone_f32(const void* src, int n);
 int cu_zero_f32(void* d, int n); // zero n floats on the stream
 // cu_adam_step_f32: in-place AdamW step of an f32 param with f64 moments (m,v), matching nn.Adam.
 int cu_adam_step_f32(void* p, const void* g, void* m, void* v, int n, double lr, double b1, double b2, double eps, double decay, double ic1, double ic2);
+// cu_sub_scaled_f32: out[i] = scale*(a[i]-b[i]) (e.g. MSE gradient (2/M)*(Y-T)).
+int cu_sub_scaled_f32(void* out, const void* a, const void* b, int n, float scale);
 // cu_blit: contiguous device→device copy of n floats, src[srcOff:]→dst[dstOff:].
 int cu_blit(void* dst, int dstOff, const void* src, int srcOff, int n);
 // cu_copy2d: copy a rows×rowFloats sub-matrix with independent src/dst row strides.
