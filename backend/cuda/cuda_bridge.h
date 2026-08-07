@@ -100,6 +100,8 @@ int cu_wmma_paged_decode(const void* fatbin, int fatlen, const void* dQ, const v
 // cu_paged_append_batched: device-side batched paged KV append. Scatter dK/dV [batch,wkv] into each
 // sequence's slot seqLens[b] (pre-append length) — the real serving append with no host round-trip.
 int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV, int batch, int wkv, int blockSize, int maxBlocks);
+// cu_paged_append_batched_i8: quantizing paged append (f32 K/V -> int8 pool + per-(token,kvHead) f32 scale).
+int cu_paged_append_batched_i8(void* dPoolK8, void* dPoolV8, void* dPoolKs, void* dPoolVs, const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV, int batch, int wkv, int kvHeads, int hd, int blockSize, int maxBlocks);
 
 // cu_wmma_paged_decode_flash: tiled FlashDecoding WMMA paged decode (O(tile) shared, any seqLen). hd==64, group<=8, blockSize<=16.
 int cu_wmma_paged_decode_flash(const void* fatbin, int fatlen, const void* dQ, const void* dPoolK, const void* dPoolV, const void* dBlockTables, const void* dSeqLens, void* dO, int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale);

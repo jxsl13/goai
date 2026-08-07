@@ -156,6 +156,147 @@ func TestPagedDecodeAttnI8MatchesRef(t *testing.T) {
 	}
 }
 
+// TestPagedAppendI8RoundTrip drives the FULL int8-primary serving path: append seqLen f32 K/V tokens per
+// sequence THROUGH the quantizing append kernel into an int8 pool, run the int8 paged attention, and
+// compare to a host f32 reference computed over the SAME per-(token,head) max/127 quantization the append
+// applies. Validates the append kernel + the attention read together.
+func TestPagedAppendI8RoundTrip(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	batch, seqLen := 2, 48
+	qHeads, kvHeads, hd, blockSize := 32, 4, 64, 16
+	group := qHeads / kvHeads
+	kvW := kvHeads * hd
+	scale := float32(1.0 / math.Sqrt(float64(hd)))
+	maxBlocks := (seqLen + blockSize - 1) / blockSize
+	nPhys := batch * maxBlocks * blockSize
+	rng := rand.New(rand.NewSource(11))
+	kv := make([][][]float32, batch)
+	vv := make([][][]float32, batch)
+	for s := 0; s < batch; s++ {
+		kv[s] = make([][]float32, seqLen)
+		vv[s] = make([][]float32, seqLen)
+		for tk := 0; tk < seqLen; tk++ {
+			kv[s][tk] = make([]float32, kvW)
+			vv[s][tk] = make([]float32, kvW)
+			for i := range kv[s][tk] {
+				kv[s][tk][i] = float32(rng.NormFloat64() * 0.5)
+				vv[s][tk][i] = float32(rng.NormFloat64() * 0.5)
+			}
+		}
+	}
+	k8 := cuda.UploadI8(make([]int8, nPhys*kvW))
+	v8 := cuda.UploadI8(make([]int8, nPhys*kvW))
+	dks, _ := cuda.NewDeviceF32(nPhys, kvHeads)
+	dvs, _ := cuda.NewDeviceF32(nPhys, kvHeads)
+	ksp, vsp := dks.DevPtr(), dvs.DevPtr()
+	bth := make([]int32, batch*maxBlocks)
+	for s := 0; s < batch; s++ {
+		for b := 0; b < maxBlocks; b++ {
+			bth[s*maxBlocks+b] = int32(s*maxBlocks + b)
+		}
+	}
+	bt := cuda.UploadI32(bth)
+	dk, _ := cuda.NewDeviceF32(batch, kvW)
+	dv, _ := cuda.NewDeviceF32(batch, kvW)
+	for tk := 0; tk < seqLen; tk++ {
+		row := make([]float32, batch*kvW)
+		rowv := make([]float32, batch*kvW)
+		for s := 0; s < batch; s++ {
+			copy(row[s*kvW:], kv[s][tk])
+			copy(rowv[s*kvW:], vv[s][tk])
+		}
+		dk.UploadF32(row)
+		dv.UploadF32(rowv)
+		slh := make([]int32, batch)
+		for s := range slh {
+			slh[s] = int32(tk)
+		}
+		sl := cuda.UploadI32(slh)
+		if err := cuda.PagedAppendBatchedI8(k8, v8, ksp, vsp, bt, sl, dk, dv, batch, kvW, kvHeads, hd, blockSize, maxBlocks); err != nil {
+			t.Fatalf("append tk=%d: %v", tk, err)
+		}
+		cuda.FreeDev(sl)
+	}
+	qh := make([]float32, batch*qHeads*hd)
+	for i := range qh {
+		qh[i] = float32(rng.NormFloat64() * 0.5)
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qh)
+	o, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	slh := make([]int32, batch)
+	for s := range slh {
+		slh[s] = int32(seqLen)
+	}
+	sl := cuda.UploadI32(slh)
+	if err := cuda.PagedDecodeAttnGQAI8(q, k8, v8, ksp, vsp, bt, sl, o, batch, qHeads, kvHeads, hd, blockSize, maxBlocks, scale); err != nil {
+		t.Fatalf("attn: %v", err)
+	}
+	got := make([]float32, batch*qHeads*hd)
+	o.DownloadF32(got)
+	dequant := func(row []float32, h int) []float64 {
+		var mx float64
+		for d := 0; d < hd; d++ {
+			mx = math.Max(mx, math.Abs(float64(row[h*hd+d])))
+		}
+		sc := mx / 127
+		if sc == 0 {
+			sc = 1
+		}
+		out := make([]float64, hd)
+		for d := 0; d < hd; d++ {
+			out[d] = math.Round(float64(row[h*hd+d])/sc) * sc
+		}
+		return out
+	}
+	var maxErr float64
+	for s := 0; s < batch; s++ {
+		for h := 0; h < qHeads; h++ {
+			kvh := h / group
+			scores := make([]float64, seqLen)
+			mmx := math.Inf(-1)
+			for k := 0; k < seqLen; k++ {
+				kd := dequant(kv[s][k], kvh)
+				var dot float64
+				for d := 0; d < hd; d++ {
+					dot += float64(qh[s*qHeads*hd+h*hd+d]) * kd[d]
+				}
+				scores[k] = dot * float64(scale)
+				mmx = math.Max(mmx, scores[k])
+			}
+			var sum float64
+			for k := 0; k < seqLen; k++ {
+				scores[k] = math.Exp(scores[k] - mmx)
+				sum += scores[k]
+			}
+			for d := 0; d < hd; d++ {
+				var acc float64
+				for k := 0; k < seqLen; k++ {
+					vd := dequant(vv[s][k], kvh)
+					acc += scores[k] * vd[d]
+				}
+				maxErr = math.Max(maxErr, math.Abs(acc/sum-float64(got[s*qHeads*hd+h*hd+d])))
+			}
+		}
+	}
+	q.Free()
+	o.Free()
+	dk.Free()
+	dv.Free()
+	dks.Free()
+	dvs.Free()
+	cuda.FreeDev(k8)
+	cuda.FreeDev(v8)
+	cuda.FreeDev(bt)
+	cuda.FreeDev(sl)
+	t.Logf("paged append-i8 + attn round-trip vs ref: maxErr=%.4g", maxErr)
+	if maxErr > 2e-3 {
+		t.Fatalf("round-trip maxErr %g too large", maxErr)
+	}
+}
+
 func benchPagedI8(b *testing.B, batch, seqLen int) {
 	if !cuda.Available() {
 		b.Skip("no gpu")
