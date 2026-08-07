@@ -9208,7 +9208,7 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
         "  int chunk = (total + splitK - 1) / splitK;\n"
         "  int begin = c * chunk, end = begin + chunk; if (end > total) end = total;\n"
         "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
-        "  int hp = hd + 1;\n"
+        "  int hp = hd + 4;\n"
         "  extern __shared__ float sh[];\n"
         "  float* shq = sh;\n"
         "  signed char* shk = (signed char*)(shq + group * hd);\n"
@@ -9238,7 +9238,11 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
         "        const signed char* kr = shk + lane * hp;\n"
         "        const float* qh = shq + w * hd;\n"
         "        float dot = 0.f;\n"
-        "        for (int d = 0; d < hd; d++) dot += qh[d] * (float)kr[d];\n"
+        "        if ((hp & 3) == 0) { const int* kr32 = (const int*)kr;\n"
+        "          #pragma unroll 4\n"
+        "          for (int d = 0; d < hd; d += 4){ int p = kr32[d>>2]; const float* qq = qh + d;\n"
+        "            dot += qq[0]*(float)(signed char)(p & 0xff) + qq[1]*(float)(signed char)((p>>8)&0xff) + qq[2]*(float)(signed char)((p>>16)&0xff) + qq[3]*(float)(signed char)((p>>24)&0xff); }\n"
+        "        } else { for (int d = 0; d < hd; d++) dot += qh[d] * (float)kr[d]; }\n"
         "        s = dot * shks[lane] * scale;\n"
         "      }\n"
         "      float bm = s;\n"
@@ -9295,7 +9299,7 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
     {
         int threads = 256;
         int blocks = kvHeads * splitK;
-        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 1) * sizeof(signed char) + 2u * 32u * sizeof(float);
+        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 4) * sizeof(signed char) + 2u * 32u * sizeof(float);
         void* args[13];
         args[0] = &dQ; args[1] = &dK8; args[2] = &dV8; args[3] = &dKs; args[4] = &dVs; args[5] = &sPart;
         args[6] = &seqKV; args[7] = &qHeads; args[8] = &kvHeads; args[9] = &hd;
