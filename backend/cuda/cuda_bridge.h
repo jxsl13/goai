@@ -382,6 +382,8 @@ int cu_cross_entropy_backward_f32(const void* logits, const void* targets, void*
 int cu_softmax_backward_f32(const void* p, const void* dp, void* ds, int rows, int cols);
 // cu_scale_f32: in-place x[i] *= scale.
 int cu_scale_f32(void* x, int n, float scale);
+// cu_causal_mask_f32: x[i,j] = -1e30 for j>i (causal attention mask before softmax).
+int cu_causal_mask_f32(void* x, int rows, int cols);
 
 // cu_causal_scale_f32 scales attention scores[qRows,kCols] by scale and applies
 // a causal mask (j > i + offset → −inf) in-place, ready for softmax.

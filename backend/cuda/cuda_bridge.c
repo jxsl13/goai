@@ -2420,6 +2420,35 @@ donescale:
     return rc;
 }
 
+static CUfunction gCausalMask = NULL;
+// cu_causal_mask_f32: sets x[i,j] = -1e30 for j > i on an [rows, cols] attention-score matrix (query i,
+// key j) so the subsequent softmax gives zero weight to future keys — the causal mask autoregressive LMs
+// need. In the backward, the masked probabilities are 0, so softmax-backward yields 0 there automatically.
+int cu_causal_mask_f32(void* x, int rows, int cols) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donecmask; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donecmask; }
+    if (!gCausalMask && compile_kernel(
+            "extern \"C\" __global__ void causal_mask_f32(float* x, int rows, int cols){\n"
+            "  long idx = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (idx >= (long)rows*cols) return;\n"
+            "  int i = (int)(idx / cols), j = (int)(idx % cols);\n"
+            "  if (j > i) x[idx] = -1e30f;\n"
+            "}\n",
+            "causal_mask_f32.cu", "causal_mask_f32", &gCausalMask) != 0) { rc = -2; goto donecmask; }
+    {
+        long total = (long)rows * cols;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[3] = { &x, &rows, &cols };
+        rc = (cuLaunchKernel(gCausalMask, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donecmask:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
 // scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
 // launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
