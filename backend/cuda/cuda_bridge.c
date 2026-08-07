@@ -2240,6 +2240,48 @@ done:
     return rc;
 }
 
+static CUfunction gCEBwd = NULL;
+// cu_cross_entropy_backward_f32: gradient of the mean softmax-cross-entropy loss w.r.t. logits. Per row
+// (one block, stable softmax): dlogits[j] = scale*(softmax(logits)[j] - [j==target]). Pass scale=1/rows
+// for the mean reduction (1 for sum). targets is a device int32 per row. This is the LM training loss VJP.
+int cu_cross_entropy_backward_f32(const void* logits, const void* targets, void* dlogits, int rows, int cols, float scale) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donecebwd; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donecebwd; }
+    if (!gCEBwd && compile_kernel(
+            "extern \"C\" __global__ void cross_entropy_backward_f32(const float* logits, const int* targets, float* dlogits, int rows, int cols, float scale){\n"
+            "  int row = blockIdx.x; if (row>=rows) return;\n"
+            "  extern __shared__ float sh[];\n"
+            "  int t=threadIdx.x, nt=blockDim.x;\n"
+            "  const float* lr = logits + (size_t)row*cols;\n"
+            "  float* dr = dlogits + (size_t)row*cols;\n"
+            "  float lmax=-3.4e38f;\n"
+            "  for (int j=t;j<cols;j+=nt){ float v=lr[j]; if(v>lmax) lmax=v; }\n"
+            "  sh[t]=lmax; __syncthreads();\n"
+            "  for (int s=nt/2;s>0;s>>=1){ if(t<s && sh[t+s]>sh[t]) sh[t]=sh[t+s]; __syncthreads(); }\n"
+            "  float rmax=sh[0]; __syncthreads();\n"
+            "  float lz=0.0f;\n"
+            "  for (int j=t;j<cols;j+=nt){ lz += expf(lr[j]-rmax); }\n"
+            "  sh[t]=lz; __syncthreads();\n"
+            "  for (int s=nt/2;s>0;s>>=1){ if(t<s) sh[t]+=sh[t+s]; __syncthreads(); }\n"
+            "  float Z=sh[0];\n"
+            "  int tgt=targets[row];\n"
+            "  for (int j=t;j<cols;j+=nt){ float p=expf(lr[j]-rmax)/Z; dr[j]=scale*(p - (j==tgt?1.0f:0.0f)); }\n"
+            "}\n",
+            "cross_entropy_backward_f32.cu", "cross_entropy_backward_f32", &gCEBwd) != 0) { rc = -2; goto donecebwd; }
+    {
+        int threads = 256, blocks = rows;
+        if (blocks < 1) blocks = 1;
+        size_t shmem = (size_t)threads * sizeof(float);
+        void* args[6] = { (void*)&logits, (void*)&targets, &dlogits, &rows, &cols, &scale };
+        rc = (cuLaunchKernel(gCEBwd, blocks, 1, 1, threads, 1, 1, shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donecebwd:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
 // scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
 // launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
