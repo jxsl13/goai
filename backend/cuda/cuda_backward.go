@@ -26,6 +26,22 @@ func MatMul(a, b, out *DeviceF32) error {
 	return nil
 }
 
+// SwiGLUBackward computes the VJP of o = SiLU(g)⊙u: given the output gradient dO, it writes
+// dg = dO⊙u⊙SiLU'(g) and du = dO⊙SiLU(g), all device-resident — the GPU SwiGLU backward for training a
+// transformer FFN. g and u are the forward inputs (the gate and up projections).
+func SwiGLUBackward(dg, du, g, u, dO *DeviceF32) error {
+	n := g.rows * g.cols
+	for _, x := range []*DeviceF32{dg, du, u, dO} {
+		if x.rows*x.cols != n {
+			return fmt.Errorf("cuda: SwiGLUBackward shape mismatch")
+		}
+	}
+	if rc := C.cu_swiglu_backward_f32(dg.ptr, du.ptr, g.ptr, u.ptr, dO.ptr, C.int(n)); rc != 0 {
+		return fmt.Errorf("cuda: SwiGLUBackward rc=%d", int(rc))
+	}
+	return nil
+}
+
 // SubScaled computes out = scale*(a-b) element-wise (out may alias a or b). Used for loss gradients,
 // e.g. the MSE gradient dL/dY = (2/M)*(Y-T).
 func SubScaled(out, a, b *DeviceF32, scale float32) error {
