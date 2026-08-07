@@ -308,6 +308,8 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
 int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// dC[K,N] = dA[M,K]ᵀ·dB[M,N], all resident (linear-layer weight gradient dW = Xᵀ·dY).
+int cu_matmul_f32_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N);
 
 // Multi-head attention (batched strided). Q/K/V are [seq, heads*hd]; scores is
 // [heads, seqQ, seqKV]. cu_mha_scores = batched Q·Kᵀ; cu_causal_scale_mh = per-head

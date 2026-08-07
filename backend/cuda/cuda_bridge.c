@@ -9344,3 +9344,25 @@ done:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
+
+// cu_matmul_f32_ddd_at: dC[K,N] = dA[M,K]ᵀ·dB[M,N] (contraction over M), all resident. This is the
+// weight-gradient of a linear layer Y=X·W: dW = Xᵀ·dY. Row-major buffers map to their col-major
+// transposes, so col-major Ĉ[N,K] = B̂[N,M]·Âᵀ[M,K] → cublasSgemm(OP_N,OP_T,N,K,M, dB,N, dA,K, dC,N).
+int cu_matmul_f32_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    cublasStatus_t st;
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneat; }
+    st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_T,
+                     N, K, M,
+                     gOne,
+                     (const float*)dB, N,
+                     (const float*)dA, K,
+                     gZero,
+                     (float*)dC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto doneat; }
+    rc = 0;
+doneat:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
