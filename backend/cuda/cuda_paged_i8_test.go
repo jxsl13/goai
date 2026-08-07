@@ -297,6 +297,149 @@ func TestPagedAppendI8RoundTrip(t *testing.T) {
 	}
 }
 
+// TestPagedPoolI8EndToEnd exercises the int8-PRIMARY pool through its real serving API: NewPagedKVPoolI8
+// (no f32 backing), a per-step Reserve1 -> UploadBatchView -> AppendBatchedDevI8 -> Advance loop that
+// quantizes L tokens/seq into the int8 pool, then a batched decode via BatchedDecodeAttnViewGQAI8. The
+// result is compared to a host f32 reference over the SAME max/127 quantization the append applies.
+func TestPagedPoolI8EndToEnd(t *testing.T) {
+	if !cuda.Available() {
+		t.Skip("no gpu")
+	}
+	batch, L := 3, 40
+	qHeads, kvHeads, hd, blockSize := 16, 4, 64, 16
+	group := qHeads / kvHeads
+	wkv := kvHeads * hd
+	numBlocks := batch * (L/blockSize + 2)
+	pool, err := cuda.NewPagedKVPoolI8(numBlocks, blockSize, kvHeads, hd)
+	if err != nil {
+		t.Fatalf("NewPagedKVPoolI8: %v", err)
+	}
+	defer pool.Free()
+	// int8 pool bytes vs an f16-shadow-over-f32 pool of the same capacity (structural capacity win).
+	i8Bytes := float64(numBlocks*blockSize) * (float64(wkv) + float64(kvHeads)*4)
+	f16Bytes := float64(numBlocks*blockSize) * float64(wkv) * 6
+	t.Logf("int8-primary pool KV bytes = %.0f vs f32+f16-shadow %.0f (%.2f× less)", i8Bytes, f16Bytes, f16Bytes/i8Bytes)
+
+	seqs := make([]*cuda.SeqKV, batch)
+	for i := range seqs {
+		seqs[i] = pool.NewSeqKV()
+	}
+	rng := rand.New(rand.NewSource(7))
+	K := make([][][]float32, batch)
+	V := make([][][]float32, batch)
+	for s := 0; s < batch; s++ {
+		K[s] = make([][]float32, L)
+		V[s] = make([][]float32, L)
+	}
+	dk, _ := cuda.NewDeviceF32(batch, wkv)
+	dv, _ := cuda.NewDeviceF32(batch, wkv)
+	for tk := 0; tk < L; tk++ {
+		row := make([]float32, batch*wkv)
+		rowv := make([]float32, batch*wkv)
+		for s := 0; s < batch; s++ {
+			k := make([]float32, wkv)
+			v := make([]float32, wkv)
+			for i := range k {
+				k[i] = float32(rng.NormFloat64() * 0.5)
+				v[i] = float32(rng.NormFloat64() * 0.5)
+			}
+			K[s][tk] = k
+			V[s][tk] = v
+			copy(row[s*wkv:], k)
+			copy(rowv[s*wkv:], v)
+			if err := seqs[s].Reserve1(); err != nil {
+				t.Fatalf("Reserve1 s=%d tk=%d: %v", s, tk, err)
+			}
+		}
+		dk.UploadF32(row)
+		dv.UploadF32(rowv)
+		view, err := pool.UploadBatchView(seqs)
+		if err != nil {
+			t.Fatalf("UploadBatchView tk=%d: %v", tk, err)
+		}
+		if err := pool.AppendBatchedDevI8(dk, dv, view); err != nil {
+			t.Fatalf("AppendBatchedDevI8 tk=%d: %v", tk, err)
+		}
+		view.Free()
+		for s := range seqs {
+			seqs[s].Advance(1)
+		}
+	}
+	dk.Free()
+	dv.Free()
+
+	view, err := pool.UploadBatchView(seqs)
+	if err != nil {
+		t.Fatalf("final UploadBatchView: %v", err)
+	}
+	qh := make([]float32, batch*qHeads*hd)
+	for i := range qh {
+		qh[i] = float32(rng.NormFloat64() * 0.5)
+	}
+	q, _ := cuda.NewDeviceF32(batch, qHeads*hd)
+	q.UploadF32(qh)
+	o, err := pool.BatchedDecodeAttnViewGQAI8(q, view, qHeads, kvHeads)
+	if err != nil {
+		t.Fatalf("BatchedDecodeAttnViewGQAI8: %v", err)
+	}
+	got := make([]float32, batch*qHeads*hd)
+	o.DownloadF32(got)
+	view.Free()
+	q.Free()
+	o.Free()
+
+	dequant := func(row []float32, h int) []float64 {
+		var mx float64
+		for d := 0; d < hd; d++ {
+			mx = math.Max(mx, math.Abs(float64(row[h*hd+d])))
+		}
+		sc := mx / 127
+		if sc == 0 {
+			sc = 1
+		}
+		out := make([]float64, hd)
+		for d := 0; d < hd; d++ {
+			out[d] = math.Round(float64(row[h*hd+d])/sc) * sc
+		}
+		return out
+	}
+	scale := 1.0 / math.Sqrt(float64(hd))
+	var maxErr float64
+	for s := 0; s < batch; s++ {
+		for h := 0; h < qHeads; h++ {
+			kvh := h / group
+			scores := make([]float64, L)
+			mmx := math.Inf(-1)
+			for k := 0; k < L; k++ {
+				kd := dequant(K[s][k], kvh)
+				var dot float64
+				for d := 0; d < hd; d++ {
+					dot += float64(qh[s*qHeads*hd+h*hd+d]) * kd[d]
+				}
+				scores[k] = dot * scale
+				mmx = math.Max(mmx, scores[k])
+			}
+			var sum float64
+			for k := 0; k < L; k++ {
+				scores[k] = math.Exp(scores[k] - mmx)
+				sum += scores[k]
+			}
+			for d := 0; d < hd; d++ {
+				var acc float64
+				for k := 0; k < L; k++ {
+					vd := dequant(V[s][k], kvh)
+					acc += scores[k] * vd[d]
+				}
+				maxErr = math.Max(maxErr, math.Abs(acc/sum-float64(got[s*qHeads*hd+h*hd+d])))
+			}
+		}
+	}
+	t.Logf("int8-primary pool e2e (append->decode) vs f32 ref: maxErr=%.4g", maxErr)
+	if maxErr > 2e-3 {
+		t.Fatalf("int8-primary pool e2e maxErr %g too large", maxErr)
+	}
+}
+
 func benchPagedI8(b *testing.B, batch, seqLen int) {
 	if !cuda.Available() {
 		b.Skip("no gpu")

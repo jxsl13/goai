@@ -32,6 +32,12 @@ type PagedKVPool struct {
 	free      []int32        // free physical block ids
 	kf16      unsafe.Pointer // lazy f16 (u16) shadow of k for the f16 decode path (nil until built)
 	vf16      unsafe.Pointer
+	// int8-PRIMARY storage (NewPagedKVPoolI8): int8 K/V + per-(physical-token, kvHead) f32 scales, and
+	// NO f32 k/v backing (k==v==nil). ~6× less KV VRAM than the f32-primary + f16-shadow pool. I/O goes
+	// through AppendBatchedDevI8 / BatchedDecodeAttnViewGQAI8; the f32/f16 methods are unavailable.
+	k8, v8  unsafe.Pointer // int8 [numBlocks*blockSize, wkv]
+	ks, vs  *DeviceF32     // per-(physical-token, kvHead) f32 scales [numBlocks*blockSize, kvHeads]
+	i8Heads int            // kvHeads for the int8 layout (hd = wkv/kvHeads); 0 unless int8-primary
 }
 
 // NewPagedKVPool allocates a pool of numBlocks × blockSize × wkv for K and V.
@@ -54,6 +60,46 @@ func NewPagedKVPool(numBlocks, blockSize, wkv int) (*PagedKVPool, error) {
 		free[i] = int32(i)
 	}
 	return &PagedKVPool{k: k, v: v, blockSize: blockSize, wkv: wkv, numBlocks: numBlocks, free: free}, nil
+}
+
+// NewPagedKVPoolI8 allocates an INT8-PRIMARY paged KV pool: int8 K/V storage (1 byte/elem) plus a
+// per-(physical-token, kvHead) f32 scale, and NO f32 K/V backing. That is ~6× less KV VRAM than the
+// f32-primary + f16-shadow pool (wkv bytes + kvHeads·4 vs wkv·6), so far more concurrent sequences /
+// longer context on a fixed budget — while the int8 attention read is already faster than f16. K/V
+// enter via AppendBatchedDevI8 (quantized on the device) and are read by BatchedDecodeAttnViewGQAI8;
+// the f32 Append/Gather and f16 decode paths are unavailable on this pool. hd must be 64 or 128.
+func NewPagedKVPoolI8(numBlocks, blockSize, kvHeads, hd int) (*PagedKVPool, error) {
+	if numBlocks <= 0 || blockSize <= 0 || kvHeads <= 0 || (hd != 64 && hd != 128) {
+		return nil, fmt.Errorf("cuda: NewPagedKVPoolI8 bad dims blocks=%d blockSize=%d kvHeads=%d hd=%d", numBlocks, blockSize, kvHeads, hd)
+	}
+	wkv := kvHeads * hd
+	rows := numBlocks * blockSize
+	k8 := C.cu_alloc_i8(C.int(rows * wkv))
+	v8 := C.cu_alloc_i8(C.int(rows * wkv))
+	if k8 == nil || v8 == nil {
+		freeIf(k8)
+		freeIf(v8)
+		return nil, fmt.Errorf("cuda: NewPagedKVPoolI8 int8 alloc failed")
+	}
+	ks, err := NewDeviceF32(rows, kvHeads)
+	if err != nil {
+		C.cu_free_f32(k8)
+		C.cu_free_f32(v8)
+		return nil, err
+	}
+	vs, err := NewDeviceF32(rows, kvHeads)
+	if err != nil {
+		C.cu_free_f32(k8)
+		C.cu_free_f32(v8)
+		ks.Free()
+		return nil, err
+	}
+	free := make([]int32, numBlocks)
+	for i := range free {
+		free[i] = int32(i)
+	}
+	return &PagedKVPool{blockSize: blockSize, wkv: wkv, numBlocks: numBlocks, free: free,
+		k8: k8, v8: v8, ks: ks, vs: vs, i8Heads: kvHeads}, nil
 }
 
 // FreeBlocks reports how many physical blocks are unallocated.
@@ -81,6 +127,16 @@ func (p *PagedKVPool) Free() {
 		C.cu_free_f32(p.kf16)
 		C.cu_free_f32(p.vf16)
 		p.kf16, p.vf16 = nil, nil
+	}
+	if p.k8 != nil {
+		C.cu_free_f32(p.k8)
+		C.cu_free_f32(p.v8)
+		p.k8, p.v8 = nil, nil
+	}
+	if p.ks != nil {
+		p.ks.Free()
+		p.vs.Free()
+		p.ks, p.vs = nil, nil
 	}
 }
 
