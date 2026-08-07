@@ -33,7 +33,8 @@ func PromptLookupGenerate(target Stepper, prompt []int, maxNew, maxNgram, draftL
 	// prefill all but the last prompt token; the last one leads the first window (§T419 convention).
 	pos := len(prompt) - 1
 	if pos > 0 {
-		if _, err := target.StepN(prompt[:pos], 0); err != nil {
+		// KV-seeding only — logits discarded, so project just the last row (StepNLast).
+		if _, err := target.StepNLast(prompt[:pos], 0); err != nil {
 			return nil, stats, err
 		}
 	}

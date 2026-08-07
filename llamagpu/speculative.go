@@ -12,6 +12,7 @@ import (
 type Stepper interface {
 	Step(token, pos int) ([]float32, error)
 	StepN(tokens []int, pos int) ([]float32, error)
+	StepNLast(tokens []int, pos int) ([]float32, error)
 	Vocab() int
 	Ctx() int
 }
@@ -42,10 +43,12 @@ func SpeculativeGenerate(target, draft Stepper, prompt []int, maxNew, lookahead 
 	// lead token (its KV lands when the window runs).
 	pos := len(prompt) - 1
 	if pos > 0 {
-		if _, err := target.StepN(prompt[:pos], 0); err != nil {
+		// KV-seeding only — the logits are discarded, so project just the last row (StepNLast), not
+		// the full [pos, vocab] LM head + download.
+		if _, err := target.StepNLast(prompt[:pos], 0); err != nil {
 			return nil, stats, err
 		}
-		if _, err := draft.StepN(prompt[:pos], 0); err != nil {
+		if _, err := draft.StepNLast(prompt[:pos], 0); err != nil {
 			return nil, stats, err
 		}
 	}
