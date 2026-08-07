@@ -382,6 +382,8 @@ int cu_cross_entropy_backward_f32(const void* logits, const void* targets, void*
 int cu_softmax_backward_f32(const void* p, const void* dp, void* ds, int rows, int cols);
 // cu_scale_f32: in-place x[i] *= scale.
 int cu_scale_f32(void* x, int n, float scale);
+// cu_causal_mask_f32: x[i,j] = -1e30 for j>i (causal attention mask before softmax).
+int cu_causal_mask_f32(void* x, int rows, int cols);
 // cu_copy_cols_f32: dst[i,dstOff+j]=src[i,srcOff+j], j<width — strided column-block copy (multi-head slices).
 int cu_copy_cols_f32(void* dst, const void* src, int rows, int dstCols, int srcCols, int dstOff, int srcOff, int width);
 
