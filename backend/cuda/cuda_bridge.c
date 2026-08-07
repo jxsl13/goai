@@ -429,6 +429,7 @@ static CUfunction gPagedDecodeGqaQio = NULL; // f32-KV GQA but f16 Q-in/O-out (k
 static CUfunction gPagedDecodeSkPart = NULL, gPagedDecodeSkMerge = NULL; // split-K (FlashDecoding) paged decode: parallelize the online-softmax scan
 static CUfunction gPagedDecodeGqaF16 = NULL; // f16-KV twin of gPagedDecodeGqa (half the global K/V bytes)
 static CUfunction gPagedDecodeGqaF16Qio = NULL; // f16-KV + f16 Q-in/O-out (kills the A1 per-layer Q/O converts)
+static CUfunction gPagedDecodeGqaI8 = NULL; // int8-KV twin (per-token-head scales; ½ f16 KV bytes, vectorized int32 dequant)
 static CUfunction gRmsF16 = NULL, gSwigluF16 = NULL, gRopeF16 = NULL; // A1 fp16-activation elementwise twins (u16 I/O, f32 math)
 static CUfunction gAddF16 = NULL; // A1 f16 residual add (dst += src, u16)
 static CUfunction gRopeDposF16 = NULL; // f16 device-position RoPE (graph-capturable decode)
@@ -975,6 +976,115 @@ int cu_paged_decode_attn_gqa_f16(const void* dQ, const void* dPoolK16, const voi
                              (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 donepgf:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_paged_decode_attn_gqa_i8: int8-KV twin of cu_paged_decode_attn_gqa_f16. poolK/poolV are signed char
+// (int8, ½ of f16's bytes) with per-(token,kvHead) f32 scales poolKs/poolVs (K[tok,d]≈poolK·poolKs[tok]).
+// The Q·K dot reads the int8 keys as int32 (4/load) with byte-extract dequant — hp=hd+4 keeps the shared
+// stride 4-aligned (still padded vs bank conflicts) — so it is compute-competitive; the ½-vs-f16 KV
+// bandwidth is the long-context/high-concurrency decode win.
+int cu_paged_decode_attn_gqa_i8(const void* dQ, const void* dPoolK8, const void* dPoolV8,
+                                const void* dPoolKs, const void* dPoolVs,
+                                const void* dBlockTables, const void* dSeqLens, void* dO,
+                                int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks,
+                                float scale) {
+    int rc = -1;
+    int group = qHeads / kvHeads;
+    if ((hd != 64 && hd != 128) || group > 8 || blockSize > 16) return -4;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donepgi8; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donepgi8; }
+    if (!gPagedDecodeGqaI8 && compile_kernel(
+        "extern \"C\" __global__ void paged_decode_gqa_i8(const float* Q, const signed char* poolK, const signed char* poolV,\n"
+        "    const float* poolKs, const float* poolVs, const int* blockTables, const int* seqLens, float* O,\n"
+        "    int batch, int qHeads, int kvHeads, int hd, int blockSize, int maxBlocks, float scale){\n"
+        "  int kvh = blockIdx.x, seq = blockIdx.y;\n"
+        "  int group = qHeads / kvHeads, WKV = kvHeads * hd, n = seqLens[seq];\n"
+        "  const int* bt = blockTables + (size_t)seq*maxBlocks;\n"
+        "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
+        "  int hp = hd + 4;\n"
+        "  extern __shared__ float sh[];\n"
+        "  float* shq = sh;\n"
+        "  signed char* shk = (signed char*)(shq + group*hd);\n"
+        "  signed char* shv = shk + 32*hp;\n"
+        "  float* shks = (float*)(shv + 32*hp);\n"
+        "  float* shvs = shks + 32;\n"
+        "  for (int i = t; i < group*hd; i += nt) shq[i] = Q[(size_t)seq*qHeads*hd + (size_t)kvh*group*hd + i];\n"
+        "  float NEGINF = __int_as_float(0xff800000);\n"
+        "  int rr = hd >> 5;\n"
+        "  float m = NEGINF, l = 0.f, a0 = 0.f, a1 = 0.f, a2 = 0.f, a3 = 0.f;\n"
+        "  for (int base = 0; base < n; base += 32){\n"
+        "    int nk = n - base; if (nk > 32) nk = 32;\n"
+        "    __syncthreads();\n"
+        "    for (int i = t*16; i < nk*hd; i += nt*16){\n"
+        "      int j = i / hd, d = i - j*hd;\n"
+        "      int tok = base + j;\n"
+        "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize);\n"
+        "      size_t src = phys*WKV + (size_t)kvh*hd + d;\n"
+        "      uint4 k16 = *(const uint4*)(poolK + src); uint4 v16 = *(const uint4*)(poolV + src);\n"
+        "      const signed char* kp = (const signed char*)&k16; const signed char* vp = (const signed char*)&v16;\n"
+        "      signed char* dk = shk + j*hp + d; signed char* dv = shv + j*hp + d;\n"
+        "      #pragma unroll\n"
+        "      for (int e = 0; e < 16; e++){ dk[e] = kp[e]; dv[e] = vp[e]; }\n"
+        "    }\n"
+        "    for (int j = t; j < nk; j += nt){\n"
+        "      int tok = base + j;\n"
+        "      size_t phys = (size_t)bt[tok / blockSize]*blockSize + (tok % blockSize);\n"
+        "      size_t sc = phys*kvHeads + kvh;\n"
+        "      shks[j] = poolKs[sc]; shvs[j] = poolVs[sc];\n"
+        "    }\n"
+        "    __syncthreads();\n"
+        "    if (w < group){\n"
+        "      float s = NEGINF;\n"
+        "      if (lane < nk){\n"
+        "        const signed char* kr = shk + lane*hp;\n"
+        "        const float* qh = shq + w*hd;\n"
+        "        float dot = 0.f;\n"
+        "        if ((hp & 3) == 0){ const int* kr32 = (const int*)kr;\n"
+        "          #pragma unroll 4\n"
+        "          for (int d = 0; d < hd; d += 4){ int p = kr32[d>>2]; const float* qq = qh + d;\n"
+        "            dot += qq[0]*(float)(signed char)(p & 0xff) + qq[1]*(float)(signed char)((p>>8)&0xff) + qq[2]*(float)(signed char)((p>>16)&0xff) + qq[3]*(float)(signed char)((p>>24)&0xff); }\n"
+        "        } else { for (int d = 0; d < hd; d++) dot += qh[d]*(float)kr[d]; }\n"
+        "        s = dot*shks[lane]*scale;\n"
+        "      }\n"
+        "      float bm = s;\n"
+        "      for (int o=16;o>0;o>>=1){ float z=__shfl_down_sync(0xffffffffu,bm,o); if(z>bm) bm=z; }\n"
+        "      bm = __shfl_sync(0xffffffffu,bm,0);\n"
+        "      float newm = m>bm?m:bm;\n"
+        "      float corr = __expf(m-newm);\n"
+        "      float p = (lane<nk)?__expf(s-newm):0.f;\n"
+        "      float bl = p;\n"
+        "      for (int o=16;o>0;o>>=1) bl += __shfl_down_sync(0xffffffffu,bl,o);\n"
+        "      bl = __shfl_sync(0xffffffffu,bl,0);\n"
+        "      l = l*corr + bl; m = newm;\n"
+        "      a0 *= corr; a1 *= corr; if (rr > 2){ a2 *= corr; a3 *= corr; }\n"
+        "      for (int j=0;j<nk;j++){\n"
+        "        float pj = __shfl_sync(0xffffffffu,p,j);\n"
+        "        float pjv = pj * shvs[j];\n"
+        "        const signed char* vr = shv + j*hp;\n"
+        "        a0 += pjv*(float)vr[lane]; a1 += pjv*(float)vr[lane+32]; if (rr > 2){ a2 += pjv*(float)vr[lane+64]; a3 += pjv*(float)vr[lane+96]; }\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "  if (w < group){\n"
+        "    int qh = kvh*group + w;\n"
+        "    float inv = (l>0.f)?1.f/l:0.f;\n"
+        "    float* o = O + (size_t)seq*qHeads*hd + (size_t)qh*hd;\n"
+        "    o[lane] = a0*inv; o[lane+32] = a1*inv; if (rr > 2){ o[lane+64] = a2*inv; o[lane+96] = a3*inv; }\n"
+        "  }\n"
+        "}\n",
+        "paged_decode_gqa_i8.cu", "paged_decode_gqa_i8", &gPagedDecodeGqaI8) != 0) { rc = -2; goto donepgi8; }
+    {
+        void* args[15] = { (void*)&dQ, (void*)&dPoolK8, (void*)&dPoolV8, (void*)&dPoolKs, (void*)&dPoolVs,
+                           (void*)&dBlockTables, (void*)&dSeqLens, &dO, &batch, &qHeads, &kvHeads, &hd,
+                           &blockSize, &maxBlocks, &scale };
+        size_t shmem = (size_t)group*hd*sizeof(float) + 2u*32u*(hd+4)*sizeof(signed char) + 2u*32u*sizeof(float);
+        rc = (cuLaunchKernel(gPagedDecodeGqaI8, (unsigned)kvHeads, (unsigned)batch, 1, 256, 1, 1,
+                             (unsigned)shmem, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donepgi8:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
@@ -9208,7 +9318,7 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
         "  int chunk = (total + splitK - 1) / splitK;\n"
         "  int begin = c * chunk, end = begin + chunk; if (end > total) end = total;\n"
         "  int t = threadIdx.x, nt = blockDim.x, lane = t & 31, w = t >> 5;\n"
-        "  int hp = hd + 1;\n"
+        "  int hp = hd + 4;\n"
         "  extern __shared__ float sh[];\n"
         "  float* shq = sh;\n"
         "  signed char* shk = (signed char*)(shq + group * hd);\n"
@@ -9238,7 +9348,11 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
         "        const signed char* kr = shk + lane * hp;\n"
         "        const float* qh = shq + w * hd;\n"
         "        float dot = 0.f;\n"
-        "        for (int d = 0; d < hd; d++) dot += qh[d] * (float)kr[d];\n"
+        "        if ((hp & 3) == 0) { const int* kr32 = (const int*)kr;\n"
+        "          #pragma unroll 4\n"
+        "          for (int d = 0; d < hd; d += 4){ int p = kr32[d>>2]; const float* qq = qh + d;\n"
+        "            dot += qq[0]*(float)(signed char)(p & 0xff) + qq[1]*(float)(signed char)((p>>8)&0xff) + qq[2]*(float)(signed char)((p>>16)&0xff) + qq[3]*(float)(signed char)((p>>24)&0xff); }\n"
+        "        } else { for (int d = 0; d < hd; d++) dot += qh[d] * (float)kr[d]; }\n"
         "        s = dot * shks[lane] * scale;\n"
         "      }\n"
         "      float bm = s;\n"
@@ -9295,7 +9409,7 @@ int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const
     {
         int threads = 256;
         int blocks = kvHeads * splitK;
-        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 1) * sizeof(signed char) + 2u * 32u * sizeof(float);
+        size_t shmem = (size_t)group * hd * sizeof(float) + 2u * 32u * (hd + 4) * sizeof(signed char) + 2u * 32u * sizeof(float);
         void* args[13];
         args[0] = &dQ; args[1] = &dK8; args[2] = &dV8; args[3] = &dKs; args[4] = &dVs; args[5] = &sPart;
         args[6] = &seqKV; args[7] = &qHeads; args[8] = &kvHeads; args[9] = &hd;
