@@ -302,6 +302,8 @@ int cu_gqa_flash_f16_dpos(const void* dQ, const void* dK16, const void* dV16, vo
 int cu_gqa_flash_i8_dpos(const void* dQ, const void* dK8, const void* dV8, const void* dKs, const void* dVs, void* dOut, int seqKV, int qHeads, int kvHeads, int hd, float scale, const void* dOff);
 // out[i,:] = table[ids[i],:] — input embedding row gather (table [vocab,d] resident).
 int cu_embed_f32(const void* dTable, const void* dIds, void* dOut, int seq, int d);
+// cu_embed_backward_f32: VJP of the embedding gather — dTable[ids[i]] += dOut[i] (atomic; zero dTable first).
+int cu_embed_backward_f32(const void* dOut, const void* dIds, void* dTable, int seq, int d);
 int cu_download_f32(const void* dsrc, float* dst, int n);
 // cu_upload_into: H2D copy n floats into an existing device buffer (pointer kept).
 int cu_upload_into(void* dst, const float* src, int n);
