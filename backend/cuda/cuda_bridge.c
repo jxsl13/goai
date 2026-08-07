@@ -2367,6 +2367,31 @@ donesmbwd:
     return rc;
 }
 
+static CUfunction gScaleF32 = NULL;
+// cu_scale_f32: in-place x[i] *= scale — the scalar multiply the attention backward needs (1/√d on the
+// scores and their gradients).
+int cu_scale_f32(void* x, int n, float scale) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donescale; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donescale; }
+    if (!gScaleF32 && compile_kernel(
+            "extern \"C\" __global__ void scale_f32(float* x, int n, float scale){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n) x[i] *= scale;\n"
+            "}\n",
+            "scale_f32.cu", "scale_f32", &gScaleF32) != 0) { rc = -2; goto donescale; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[3] = { &x, &n, &scale };
+        rc = (cuLaunchKernel(gScaleF32, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donescale:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
 // scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
 // launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
