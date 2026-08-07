@@ -437,6 +437,7 @@ static CUfunction gWmmaAttn = NULL; // nvcc-compiled fused prefill attention (sl
 static CUfunction gWmmaAttnGqa = NULL; // GQA/strided fused prefill attention (§ROADMAP A2)
 static CUfunction gWmmaPagedDecode = NULL; // tensor-core batched paged DECODE attention (breaks the 0.64 TFLOP/s latency-bound GEMV)
 static CUfunction gPagedAppendBatched = NULL; // device-side batched paged KV append (real serving: no host round-trip)
+static CUfunction gPagedAppendI8 = NULL; // batched paged append that QUANTIZES f32 K/V -> int8 + per-(token,kvHead) scale
 static CUfunction gWmmaPagedDecodeFlash = NULL; // tiled FlashDecoding WMMA paged decode (O(tile) shared, any seqLen)
 static int launch_cvt_f16(const void* src, void* dst, long n); // fwd decl (defined below)
 
@@ -764,6 +765,52 @@ int cu_paged_append_batched(void* dPoolK, void* dPoolV, const void* dBlockTables
                              0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
     }
 doneapp:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_paged_append_batched_i8: batched paged append that QUANTIZES one f32 K/V token per sequence into an
+// int8 pool with a per-(physical-token, kvHead) symmetric scale (max/127) — the int8-primary serving
+// append (½ f16 KV bytes, ¼ of f32). dK/dV are [batch, wkv] f32 (this step's fresh K/V). One block per
+// seq; each thread owns a kvHead (finds its |max|, writes the scale, quantizes its hd lane).
+int cu_paged_append_batched_i8(void* dPoolK8, void* dPoolV8, void* dPoolKs, void* dPoolVs,
+                               const void* dBlockTables, const void* dSeqLens, const void* dK, const void* dV,
+                               int batch, int wkv, int kvHeads, int hd, int blockSize, int maxBlocks) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneappi8; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto doneappi8; }
+    if (!gPagedAppendI8 && compile_kernel(
+        "extern \"C\" __global__ void paged_append_i8(signed char* poolK, signed char* poolV, float* poolKs, float* poolVs,\n"
+        "    const int* blockTables, const int* seqLens, const float* dK, const float* dV,\n"
+        "    int batch, int wkv, int kvHeads, int hd, int blockSize, int maxBlocks){\n"
+        "  int seq = blockIdx.x; if (seq >= batch) return;\n"
+        "  int len = seqLens[seq];\n"
+        "  size_t phys = (size_t)blockTables[(size_t)seq*maxBlocks + len/blockSize];\n"
+        "  size_t slot = phys*blockSize + (len % blockSize);\n"
+        "  size_t dst = slot * wkv; size_t src = (size_t)seq*wkv;\n"
+        "  for (int h = threadIdx.x; h < kvHeads; h += blockDim.x){\n"
+        "    float kmax = 0.f, vmax = 0.f;\n"
+        "    for (int d = 0; d < hd; d++){ kmax = fmaxf(kmax, fabsf(dK[src + h*hd + d])); vmax = fmaxf(vmax, fabsf(dV[src + h*hd + d])); }\n"
+        "    float ks = kmax/127.f; if (ks == 0.f) ks = 1.f;\n"
+        "    float vs = vmax/127.f; if (vs == 0.f) vs = 1.f;\n"
+        "    poolKs[slot*kvHeads + h] = ks; poolVs[slot*kvHeads + h] = vs;\n"
+        "    for (int d = 0; d < hd; d++){\n"
+        "      int qk = __float2int_rn(dK[src + h*hd + d] / ks); int qv = __float2int_rn(dV[src + h*hd + d] / vs);\n"
+        "      poolK[dst + h*hd + d] = (signed char)max(-127, min(127, qk));\n"
+        "      poolV[dst + h*hd + d] = (signed char)max(-127, min(127, qv));\n"
+        "    }\n"
+        "  }\n"
+        "}\n",
+        "paged_append_i8.cu", "paged_append_i8", &gPagedAppendI8) != 0) { rc = -2; goto doneappi8; }
+    {
+        void* args[14] = { &dPoolK8, &dPoolV8, &dPoolKs, &dPoolVs, (void*)&dBlockTables, (void*)&dSeqLens,
+                           (void*)&dK, (void*)&dV, &batch, &wkv, &kvHeads, &hd, &blockSize, &maxBlocks };
+        unsigned threads = kvHeads < 32 ? 32u : (unsigned)kvHeads;
+        rc = (cuLaunchKernel(gPagedAppendI8, (unsigned)batch, 1, 1, threads, 1, 1,
+                             0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+doneappi8:
     pthread_mutex_unlock(&gLock);
     return rc;
 }
