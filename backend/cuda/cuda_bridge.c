@@ -2392,6 +2392,35 @@ donescale:
     return rc;
 }
 
+static CUfunction gCopyCols = NULL;
+// cu_copy_cols_f32: dst[i, dstOff+j] = src[i, srcOff+j] for j in [0,width), i in [0,rows). A strided
+// column-block copy — gathers one head's hd columns out of a [rows, D] buffer (srcCols=D, srcOff=h*hd,
+// dstCols=hd, dstOff=0), or scatters them back (dst wide). The primitive multi-head attention needs.
+int cu_copy_cols_f32(void* dst, const void* src, int rows, int dstCols, int srcCols, int dstOff, int srcOff, int width) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donecpc; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donecpc; }
+    if (!gCopyCols && compile_kernel(
+            "extern \"C\" __global__ void copy_cols_f32(float* dst, const float* src, int rows, int dstCols, int srcCols, int dstOff, int srcOff, int width){\n"
+            "  long idx = (long)blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (idx >= (long)rows*width) return;\n"
+            "  int i = (int)(idx / width), j = (int)(idx % width);\n"
+            "  dst[(size_t)i*dstCols + dstOff + j] = src[(size_t)i*srcCols + srcOff + j];\n"
+            "}\n",
+            "copy_cols_f32.cu", "copy_cols_f32", &gCopyCols) != 0) { rc = -2; goto donecpc; }
+    {
+        long total = (long)rows * width;
+        int threads = 256, blocks = (int)((total + threads - 1) / threads);
+        if (blocks < 1) blocks = 1;
+        void* args[8] = { &dst, (void*)&src, &rows, &dstCols, &srcCols, &dstOff, &srcOff, &width };
+        rc = (cuLaunchKernel(gCopyCols, (unsigned)blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donecpc:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_attn_softmax: fused scale + causal-mask + stable softmax over attention
 // scores[heads·seqQ, seqKV] (one block per query row). Folds what were three
 // launches (cu_causal_scale_mh + cu_softmax_f32) into one on the attention hot
