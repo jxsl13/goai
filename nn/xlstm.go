@@ -389,15 +389,35 @@ func MLSTMRecurrent(q, k, v, ipre, fpre *tensor.Tensor, expForget bool) (*tensor
 		for i := range dk {
 			n[i] = fp*n[i] + ip*krow[i]
 		}
-		var nq float64 // n_tᵀ q_t
-		for i := range dk {
+		// nq = n_tᵀ q_t and each cq = (C_t q_t)[a] are serial single-accumulator dot reductions —
+		// latency-bound on the dependent add chain. Four independent partials break the chain
+		// (PS3010). This REASSOCIATES the float sum (≤1 ulp), which the parallel≡recurrent duality
+		// contract permits (TestMLSTMDuality gates at 1e-10, not bit-for-bit).
+		var nq0, nq1, nq2, nq3 float64 // n_tᵀ q_t
+		var i int
+		for ; i+4 <= dk; i += 4 {
+			nq0 += n[i] * qrow[i]
+			nq1 += n[i+1] * qrow[i+1]
+			nq2 += n[i+2] * qrow[i+2]
+			nq3 += n[i+3] * qrow[i+3]
+		}
+		nq := nq0 + nq1 + nq2 + nq3
+		for ; i < dk; i++ {
 			nq += n[i] * qrow[i]
 		}
 		denom := math.Max(math.Abs(nq), math.Exp(-mt))
 		for a := range dv {
-			var cq float64 // (C_t q_t)[a]
 			base := a * dk
-			for i := range dk {
+			var cq0, cq1, cq2, cq3 float64 // (C_t q_t)[a]
+			var i int
+			for ; i+4 <= dk; i += 4 {
+				cq0 += c[base+i] * qrow[i]
+				cq1 += c[base+i+1] * qrow[i+1]
+				cq2 += c[base+i+2] * qrow[i+2]
+				cq3 += c[base+i+3] * qrow[i+3]
+			}
+			cq := cq0 + cq1 + cq2 + cq3
+			for ; i < dk; i++ {
 				cq += c[base+i] * qrow[i]
 			}
 			out.SetF64(cq/denom, t, a)
