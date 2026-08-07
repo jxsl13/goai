@@ -308,6 +308,8 @@ int cu_download_f32(const void* dsrc, float* dst, int n);
 // cu_upload_into: H2D copy n floats into an existing device buffer (pointer kept).
 int cu_upload_into(void* dst, const float* src, int n);
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// cu_set_gemm_tf32: enable(1)/disable(0) TF32 tensor-core math for the shared cuBLAS handle (training GEMMs).
+int cu_set_gemm_tf32(int enable);
 // dC = dA·dB + dC (beta=1): fuses the residual add into the projection matmul.
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).

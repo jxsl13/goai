@@ -9441,6 +9441,21 @@ done:
 
 // cu_matmul_f32_ddd: dC = dA·dB, all resident, queued on the stream with NO sync —
 // a chain of these pipelines end to end; cu_download_f32 is the barrier.
+// cu_set_gemm_tf32: enable (1) or disable (0) TF32 tensor-core math for the shared cuBLAS handle. When
+// on, cublasSgemm runs the f32 GEMMs on Ampere+ tensor cores at ~2-4× throughput with TF32 (~10-bit
+// mantissa) — PyTorch's default for training on Ampere, in-policy for the incumbent training tolerance.
+// Opt-in and persistent until toggled; enable it around a GPU training loop (the f32 GEMMs it uses:
+// cu_matmul_f32_ddd / _at / _bt), leave it off for inference paths that need exact f32.
+int cu_set_gemm_tf32(int enable) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donetf32; }
+    rc = (cublasSetMathMode(gHandle, enable ? CUBLAS_TF32_TENSOR_OP_MATH : CUBLAS_DEFAULT_MATH) == CUBLAS_STATUS_SUCCESS) ? 0 : -4;
+donetf32:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, int N) {
     const float alpha = 1.0f, beta = 0.0f;
     cublasStatus_t st;
