@@ -372,6 +372,8 @@ int cu_addbias_f32(const void* x, const void* bias, void* out, int rows, int n);
 
 // cu_softmax_f32 applies stable softmax over the last axis in-place (rows×cols).
 int cu_softmax_f32(void* x, int rows, int cols);
+// cu_cross_entropy_backward_f32: dlogits = scale*(softmax(logits) - onehot(target)) per row (LM loss VJP).
+int cu_cross_entropy_backward_f32(const void* logits, const void* targets, void* dlogits, int rows, int cols, float scale);
 
 // cu_causal_scale_f32 scales attention scores[qRows,kCols] by scale and applies
 // a causal mask (j > i + offset → −inf) in-place, ready for softmax.
