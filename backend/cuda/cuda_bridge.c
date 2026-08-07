@@ -2998,6 +2998,31 @@ doneadam:
     return rc;
 }
 
+static CUfunction gSubScaledF32 = NULL;
+// cu_sub_scaled_f32: out[i] = scale*(a[i]-b[i]) — the element-wise piece a GPU loss backward needs,
+// e.g. the MSE gradient dL/dY = (2/M)*(Y-T). out may alias a or b.
+int cu_sub_scaled_f32(void* out, const void* a, const void* b, int n, float scale) {
+    int rc = -1;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto donesubsc; }
+    if (cuCtxSetCurrent(gCtx) != CUDA_SUCCESS) { rc = -8; goto donesubsc; }
+    if (!gSubScaledF32 && compile_kernel(
+            "extern \"C\" __global__ void sub_scaled_f32(float* out, const float* a, const float* b, int n, float scale){\n"
+            "  int i = blockIdx.x*blockDim.x + threadIdx.x;\n"
+            "  if (i < n) out[i] = scale*(a[i]-b[i]);\n"
+            "}\n",
+            "sub_scaled_f32.cu", "sub_scaled_f32", &gSubScaledF32) != 0) { rc = -2; goto donesubsc; }
+    {
+        int threads = 256, blocks = (n + threads - 1) / threads;
+        if (blocks < 1) blocks = 1;
+        void* args[5] = { &out, (void*)&a, (void*)&b, &n, &scale };
+        rc = (cuLaunchKernel(gSubScaledF32, blocks, 1, 1, threads, 1, 1, 0, (CUstream)gStream, args, NULL) == CUDA_SUCCESS) ? 0 : -3;
+    }
+donesubsc:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 // cu_alloc_u16 allocates n u16 elements (f16 KV-cache storage, half of f32's bytes);
 // cu_zero_u16 zeroes them (f16 zero == all-zero bytes). Freed with cu_free_f32
 // (both are raw stream-ordered device allocations).
@@ -9341,6 +9366,28 @@ int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K,
     rc = 0;
 
 done:
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
+// cu_matmul_f32_ddd_at: dC[K,N] = dA[M,K]ᵀ·dB[M,N] (contraction over M), all resident. This is the
+// weight-gradient of a linear layer Y=X·W: dW = Xᵀ·dY. Row-major buffers map to their col-major
+// transposes, so col-major Ĉ[N,K] = B̂[N,M]·Âᵀ[M,K] → cublasSgemm(OP_N,OP_T,N,K,M, dB,N, dA,K, dC,N).
+int cu_matmul_f32_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N) {
+    cublasStatus_t st;
+    int rc = -2;
+    pthread_mutex_lock(&gLock);
+    if (ensure_init() != 0) { rc = -1; goto doneat; }
+    st = cublasSgemm(gHandle, CUBLAS_OP_N, CUBLAS_OP_T,
+                     N, K, M,
+                     gOne,
+                     (const float*)dB, N,
+                     (const float*)dA, K,
+                     gZero,
+                     (float*)dC, N);
+    if (st != CUBLAS_STATUS_SUCCESS) { rc = -4; goto doneat; }
+    rc = 0;
+doneat:
     pthread_mutex_unlock(&gLock);
     return rc;
 }

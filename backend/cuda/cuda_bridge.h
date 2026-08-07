@@ -129,6 +129,8 @@ void* cu_clone_f32(const void* src, int n);
 int cu_zero_f32(void* d, int n); // zero n floats on the stream
 // cu_adam_step_f32: in-place AdamW step of an f32 param with f64 moments (m,v), matching nn.Adam.
 int cu_adam_step_f32(void* p, const void* g, void* m, void* v, int n, double lr, double b1, double b2, double eps, double decay, double ic1, double ic2);
+// cu_sub_scaled_f32: out[i] = scale*(a[i]-b[i]) (e.g. MSE gradient (2/M)*(Y-T)).
+int cu_sub_scaled_f32(void* out, const void* a, const void* b, int n, float scale);
 // cu_blit: contiguous device→device copy of n floats, src[srcOff:]→dst[dstOff:].
 int cu_blit(void* dst, int dstOff, const void* src, int srcOff, int n);
 // cu_copy2d: copy a rows×rowFloats sub-matrix with independent src/dst row strides.
@@ -308,6 +310,8 @@ int cu_matmul_f32_ddd(const void* dA, const void* dB, void* dC, int M, int K, in
 int cu_matmul_f32_ddd_acc(const void* dA, const void* dB, void* dC, int M, int K, int N);
 // dC[M,N] = dA[M,K]·dB[N,K]ᵀ, all resident (attention QKᵀ).
 int cu_matmul_f32_ddd_bt(const void* dA, const void* dB, void* dC, int M, int K, int N);
+// dC[K,N] = dA[M,K]ᵀ·dB[M,N], all resident (linear-layer weight gradient dW = Xᵀ·dY).
+int cu_matmul_f32_ddd_at(const void* dA, const void* dB, void* dC, int M, int K, int N);
 
 // Multi-head attention (batched strided). Q/K/V are [seq, heads*hd]; scores is
 // [heads, seqQ, seqKV]. cu_mha_scores = batched Q·Kᵀ; cu_causal_scale_mh = per-head
