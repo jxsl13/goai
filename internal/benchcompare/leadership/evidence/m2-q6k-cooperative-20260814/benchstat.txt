@@ -1,0 +1,13 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+                                  | scalar sec/op | cooperative sec/op | vs base
+MetalQ6KDecodeLeaf/K2048N256-12       577.0u +/- 2%      214.4u +/- 7%  -62.85% (p=0.000 n=10)
+MetalQ6KDecodeLeaf/K2048N2048-12     1459.7u +/- 1%      253.5u +/- 5%  -82.64% (p=0.000 n=10)
+MetalQ6KDecodeLeaf/K5632N2048-12     3546.3u +/- 1%      300.9u +/- 5%  -91.52% (p=0.000 n=10)
+MetalQ6KDecodeLeaf/K2048N32000-12    3187.4u +/- 3%      727.7u +/- 2%  -77.17% (p=0.000 n=10)
+geomean                               1.757m              330.3u        -81.20%
+
+All rows retain 8 B/op and 1 alloc/op on both paths. Statistics were generated
+with golang.org/x/perf/cmd/benchstat v0.0.0-20260709024250-82a0b07e230d.

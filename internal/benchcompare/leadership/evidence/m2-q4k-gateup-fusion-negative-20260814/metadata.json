@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "date": "2026-08-14",
+  "hardware": "Apple M2 Pro, 19-core GPU, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "workspace_base_revision": "a2f27462723b7a1b1dbba37328f4281ef9aa703c",
+  "workspace_revision": "bare-workspace-uncommitted",
+  "experimental_binary_sha256": "064242f302f31e86e0f1eca53225b85b2596d6f42df7f3c2341e37b1171fc09c",
+  "experimental_source_sha256": {
+    "backend/metal/q4k_bench_test.go": "4749f0a97006fa90dc3d9d8a8e588d00458767b40daabee7697975a0ededd4e7"
+  },
+  "protocol": {
+    "shape": "M1 K2048 N5632 plus N5632",
+    "samples_per_mode": 10,
+    "iterations_per_sample": 500,
+    "warmups_per_process": 20,
+    "mode_order": "paired and alternating",
+    "prebuilt_same_binary": true,
+    "command_buffers_per_iteration": 1,
+    "full_model_skipped": "operation leaf promotion gate failed"
+  }
+}

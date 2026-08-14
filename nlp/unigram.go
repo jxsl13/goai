@@ -237,6 +237,17 @@ type unigramScratch struct {
 
 var unigramScratchPool = sync.Pool{New: func() any { return new(unigramScratch) }}
 
+// Encode tokenizes text into vocabulary ids with the Unigram Viterbi search,
+// picking the segmentation that maximizes the summed piece log-probabilities and
+// falling back to the unk token for spans no piece covers.
+//
+// This is the UNTRUSTED path. Registered control/user-defined markers are excluded
+// from the Viterbi candidate set, so a span that spells one out is segmented into
+// ordinary pieces (or unk) instead of collapsing to the marker's id. That guard
+// matters because GGUF keeps control tokens INSIDE the main vocabulary, where a
+// bare longest-match would otherwise mint one straight from user text and let it
+// forge conversation structure. Use EncodeSpecial only on trusted template text,
+// and encode message bodies with this method.
 func (u *Unigram) Encode(text string) []int {
 	s := u.preprocess(text)
 	// Rune-boundary byte offsets: off[k] is the byte index of rune k, off[n] == len(s).

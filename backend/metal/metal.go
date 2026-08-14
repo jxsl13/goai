@@ -1386,6 +1386,30 @@ func setMatMulNoCopy(on bool) bool {
 // pre-§T622 single last-shape cache (recompile per prefill length). Benchmark/A-B knob.
 func SetAttnCacheCap(cap int) int { return int(C.mtl_attn_cache_cap_set(C.int(cap))) }
 
+// SetQ4KCooperative selects the simdgroup-cooperative resident Q4_K matvec
+// (true, default) or the historical one-thread-per-output kernel (false), and
+// returns the previous setting. It is a same-process forced-off measurement
+// hook; devices that cannot compile the cooperative pipeline keep the scalar
+// fallback regardless of this setting.
+func SetQ4KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ6KCooperative selects the SIMD-group-cooperative resident Q6_K M=1
+// matvec (true, default) or its historical scalar-K control (false), returning
+// the previous setting. M>1 and unsupported devices always retain scalar.
+func SetQ6KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q6k_cooperative_set(C.int(v)) == 1
+}
+
 // mhaBackwardF32 is the GPU SDPA backward (§T86): (Q,K,V,dO) → (dQ,dK,dV). It
 // serves the same subset as the forward (heads, GQA, causal, sliding window §T128,
 // attn-scale) and falls back to the reference (§I4) for ALiBi/dk>128/degenerate

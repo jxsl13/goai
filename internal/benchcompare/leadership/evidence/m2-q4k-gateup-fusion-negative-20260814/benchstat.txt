@@ -1,0 +1,6 @@
+                                │ separate.txt │ fused.txt │
+                                │    sec/op    │ sec/op vs base                    │
+MetalQ4KGateUpFusion/variant-12      247.0u      251.1u ~ (p=0.218 n=10)
+
+Throughput medians: 49.12 GiB/s separate, 48.32 GiB/s fused.
+Both paths: 8 B/op, 1 alloc/op.

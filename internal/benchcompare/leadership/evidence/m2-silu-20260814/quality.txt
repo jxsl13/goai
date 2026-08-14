@@ -1,0 +1,15 @@
+=== RUN   TestSiLUIntoMatchesExecute
+=== RUN   TestSiLUIntoMatchesExecute/f64
+=== RUN   TestSiLUIntoMatchesExecute/f32
+--- PASS: TestSiLUIntoMatchesExecute (0.00s)
+    --- PASS: TestSiLUIntoMatchesExecute/f64 (0.00s)
+    --- PASS: TestSiLUIntoMatchesExecute/f32 (0.00s)
+=== RUN   TestVsiluF64Arm64Accuracy
+    vsilu_f64_arm64_test.go:27: ARM64 NEON F64 SiLU max relative error 3.048e-16 over 262145 values
+--- PASS: TestVsiluF64Arm64Accuracy (0.01s)
+=== RUN   TestVsiluF64Arm64VectorTailBitIdentity
+--- PASS: TestVsiluF64Arm64VectorTailBitIdentity (0.01s)
+=== RUN   TestVsiluF64Arm64Edges
+--- PASS: TestVsiluF64Arm64Edges (0.00s)
+PASS
+ok  	github.com/jxsl13/goai/backend/cpu	0.271s

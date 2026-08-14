@@ -556,19 +556,25 @@ func sigmoidKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs
 	}
 	return []*tensor.Tensor{out}, nil
 }
-func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
-	xc := in[0].Contiguous()
-	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
-	switch in[0].Dtype() {
+
+// siluApplyCPU is the one arithmetic body shared by allocating Execute and
+// caller-owned ExecuteInto. Keeping destination selection outside this function
+// makes output reuse a pure lifetime optimization: both APIs traverse identical
+// typed slices and dispatch to the exact same scalar/SIMD implementation.
+func siluApplyCPU(xc, out *tensor.Tensor) error {
+	if out.Numel() == 0 {
+		return nil
+	}
+	switch xc.Dtype() {
 	case tensor.F64:
 		d, o := xc.Storage().F64(), out.Storage().F64()
-		if vexpF64Fast {
-			// amd64 SIMD build: 4-wide f64-native SiLU on the AVX2 expF64x4 primitive
-			// (§T667) — the SwiGLU FFN gate was scalar f64 math.Exp here (~40% of
+		if vsiluF64Fast {
+			// SIMD perf build: f64-native SiLU on the architecture exp primitive
+			// (4-wide AVX2 / 2-wide NEON) — the SwiGLU FFN gate was scalar math.Exp (~40% of
 			// Llama f64 prefill). Not under the CPU==Ref exact invariant (that test
 			// skips OpSiLU/F64); rides the model f64 tolerance. Non-SIMD build below
 			// keeps the scalar path bit-for-bit.
-			parallel(len(o), func(lo, hi int) { vsiluF64(o[lo:hi], d[lo:hi]) })
+			parallelSiLUF64(o, d)
 			break
 		}
 		parallel(len(o), func(lo, hi int) {
@@ -585,7 +591,7 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 			// §T665) — the SwiGLU FFN activation on every Llama/Qwen/Mistral layer
 			// was scalar f64 math.Exp here. Compile-time const: the plain (no-simd)
 			// build keeps the f64 path below bit-for-bit; rides the ADR-0021 tolerance.
-			parallel(len(o), func(lo, hi int) { vsiluF32(o[lo:hi], d[lo:hi]) })
+			parallelSiLUF32(o, d)
 			break
 		}
 		parallel(len(o), func(lo, hi int) {
@@ -595,9 +601,34 @@ func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 			}
 		})
 	default:
-		return nil, fmt.Errorf("cpu: silu unsupported dtype %v", in[0].Dtype())
+		return fmt.Errorf("cpu: silu unsupported dtype %v", xc.Dtype())
+	}
+	return nil
+}
+
+func siluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) != 1 || in[0] == nil {
+		return nil, fmt.Errorf("cpu: silu expects one non-nil input")
+	}
+	xc := in[0].Contiguous()
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), in[0].Shape())
+	if err := siluApplyCPU(xc, out); err != nil {
+		return nil, err
 	}
 	return []*tensor.Tensor{out}, nil
+}
+
+func siluIntoKernelCPU(ctx *backend.Context, in, out []*tensor.Tensor, _ backend.Attrs) error {
+	if len(in) != 1 || in[0] == nil {
+		return fmt.Errorf("cpu: silu expects one non-nil input")
+	}
+	if len(out) != 1 {
+		return fmt.Errorf("cpu: silu expects one output, got %d", len(out))
+	}
+	if err := backend.ValidateOutput(ctx, out[0], in[0].Dtype(), in[0].Shape()); err != nil {
+		return fmt.Errorf("cpu: silu: %w", err)
+	}
+	return siluApplyCPU(in[0].Contiguous(), out[0])
 }
 
 // softplusKernelCPU is the F64 CPU softplus (Mamba/Jamba Δ). softplus was scalar
@@ -614,7 +645,7 @@ func softplusKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attr
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
 	d, o := xc.Storage().F64(), out.Storage().F64()
-	if vexpF64Fast {
+	if vsoftplusF64Fast {
 		parallel(len(o), func(lo, hi int) { vsoftplusF64(o[lo:hi], d[lo:hi]) })
 		return []*tensor.Tensor{out}, nil
 	}
@@ -649,7 +680,7 @@ func softCapKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	xc := in[0].Contiguous()
 	out := tensor.NewOn(ctx.Device(), tensor.F64, in[0].Shape())
 	d, o := xc.Storage().F64(), out.Storage().F64()
-	if vexpF64Fast {
+	if vsoftcapF64Fast {
 		parallel(len(o), func(lo, hi int) { vsoftcapF64(o[lo:hi], d[lo:hi], pa.Cap) })
 		return []*tensor.Tensor{out}, nil
 	}
@@ -702,6 +733,8 @@ func init() {
 	reg(backend.OpGELU, geluKernelCPU)
 	reg(backend.OpSigmoid, sigmoidKernelCPU)
 	reg(backend.OpSiLU, siluKernelCPU)
+	std.addInto(backend.OpSiLU, tensor.F32, siluIntoKernelCPU)
+	std.addInto(backend.OpSiLU, tensor.F64, siluIntoKernelCPU)
 
 	// F64-only: softplus (Mamba/Jamba Δ) rides the amd64 vsoftplusF64 SIMD kernel;
 	// F32 stays on the ref fallback. The non-SIMD build runs the scalar formula.

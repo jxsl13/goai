@@ -1,0 +1,32 @@
+# Ten fresh-process pairs. The first call includes runtime Metal source/library
+# and both Q6_K pipeline compilations; the second call reuses compiled pipelines.
+pair 01 cooperative first 5.522959 ms second 1.634917 ms
+pair 01 scalar first 7.510625 ms second 4.733833 ms
+pair 02 scalar first 6.426750 ms second 3.494250 ms
+pair 02 cooperative first 2.628042 ms second 0.690834 ms
+pair 03 cooperative first 3.556000 ms second 1.374875 ms
+pair 03 scalar first 13.031625 ms second 7.913833 ms
+pair 04 scalar first 6.017208 ms second 3.859208 ms
+pair 04 cooperative first 6.463875 ms second 0.980083 ms
+pair 05 cooperative first 4.202333 ms second 0.425125 ms
+pair 05 scalar first 12.112833 ms second 6.322250 ms
+pair 06 scalar first 7.029042 ms second 4.072875 ms
+pair 06 cooperative first 3.383042 ms second 0.725792 ms
+pair 07 cooperative first 2.459583 ms second 1.693958 ms
+pair 07 scalar first 11.308500 ms second 6.611667 ms
+pair 08 scalar first 8.612833 ms second 4.701375 ms
+pair 08 cooperative first 4.303375 ms second 1.292792 ms
+pair 09 cooperative first 5.327709 ms second 1.397958 ms
+pair 09 scalar first 8.116166 ms second 3.881125 ms
+pair 10 scalar first 8.341209 ms second 4.776833 ms
+pair 10 cooperative first 4.433334 ms second 0.382375 ms
+
+median first cooperative 4.252854 ms
+median first scalar 8.228688 ms
+median first-call speedup 1.935x
+median second cooperative 1.136438 ms
+median second scalar 4.717604 ms
+median second-call speedup 4.151x
+
+# These data establish the local fresh-process behavior for this binary and
+# shape. They are not an external cold-start leadership claim.

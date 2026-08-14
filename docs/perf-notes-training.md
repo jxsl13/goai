@@ -138,16 +138,18 @@ note had missed. Treat a floor claim as scoped to the path it measured; re-sweep
 the adjacent classes (construction, quantization, weight-averaging, the
 mixed-precision glue here) explicitly.
 
-**`internal/perfscan` supersedes this awk (T920).** The scan above is now a real
-`go/ast` tool: `make perfscan` (or `go run ./internal/perfscan ./...`). It parses
-source rather than text, so comments and strings don't false-match and
-build-tagged cgo backends are still scanned; it scopes the fast-path check per
-function (a `flatF64`/`flatF32` presence silences the finding) and reports the
-three patterns above — per-element dispatch, allocation-in-loop, and the
-single-row batch wrap of §T917. It is **advisory**: a static check sees the shape
-of a hot loop, never its temperature, so every hit still needs an A/B measurement
-(§C3) and a bit-identity proof (§V22) before it ships. `-strict` makes it exit
-non-zero for optional CI gating.
+**External `perfscan` supersedes this awk (T920/T984).** The scan above is now
+maintained at `github.com/jxsl13/perfscan/perfscan` and invoked through
+`make perfscan`. `make perfscan-install` pins the reviewed release and uses
+`GOPROXY=direct`; GoAI-specific identifiers live in the root `perfscan.yaml`.
+It analyzes the active Go build through `go/analysis`, so comments and strings
+do not false-match; inactive cgo/CUDA/Vulkan build-tag variants need a separate
+invocation with the corresponding build environment. It reports a substantially
+broader, upstream-maintained family of performance candidates. A static check
+sees the shape of a hot loop, never its temperature, so every hit still needs an
+A/B measurement (§C3) and a bit-identity proof (§V22) before it ships. GoAI's CI
+uses `-exit-zero` to keep findings advisory while configuration, package-loading,
+and analyzer failures remain fatal; omit it for a ratcheted findings gate.
 
 ## See also
 

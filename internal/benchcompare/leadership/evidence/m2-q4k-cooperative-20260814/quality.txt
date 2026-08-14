@@ -1,0 +1,14 @@
+TestMetalQMatMulQ4KCrossReference passed for K=256,512,1024,2048,4096 against
+the f64 GGUF reference within the existing K-scaled tolerance. The largest
+relative error observed in the final validation run was 1.33e-06 (tolerance at
+K=2048: 4.53e-05).
+
+TestMetalQMatMulQ4KCooperativeMatchesScalar passed for M=1,K=2048,N=7. The odd
+N exercises the final partial four-row threadgroup; maximum relative difference
+in the final run was 1.026e-06. The earlier M=3 version was vacuous because M>1
+correctly selects the scalar prefill fallback; the corrected test now exercises
+the cooperative production branch.
+
+TestMetalQMatMulQ4KValidation passed. M>1 retains the historical scalar path;
+the production default selects the cooperative kernel only for resident M=1
+decode matvecs on devices where its pipeline compiles successfully.

@@ -1,0 +1,20 @@
+TestMetalQMatMulQ6KCooperativeMatchesScalar passed for M=1,K=2048,N=7. The odd
+N exercises the final partial four-row threadgroup. Maximum relative difference
+in the measured validation run was 3.846e-07, below the explicit 2e-05 bound.
+
+TestMetalQMatMulQ6KCrossReference passed against the f64 GGUF implementation for
+decode and prefill cases from K=256 through K=4096, including the production
+M=1,K=2048 and M=1,K=4096 paths. The tolerance is
+1e-6*sqrt(K)*max(1,abs(reference))+1e-4 and exists only for F32 accumulation
+versus the F64 truth.
+
+TestMetalQMatMulQ6KValidation passed. The production selector enables the
+cooperative kernel only for resident M=1 decode on a device whose compiled
+pipeline reports SIMD width 32 and at least 64 threads per threadgroup. M>1,
+unsupported devices, and a forced-off control retain the historical scalar
+kernel.
+
+TestMetalQMatMulQ4KCooperativeMatchesScalar was also corrected to exercise
+M=1 rather than the scalar-only M>1 fallback. Its final maximum relative
+difference was 1.026e-06. This closes a previously vacuous cooperative-path
+test without changing the measured Q4_K implementation.

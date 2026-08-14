@@ -39,6 +39,11 @@ func (s *Storage) Release() {
 	s.n = 0
 }
 
+// IsReleased reports whether Release has invalidated this storage. It is
+// distinct from Len()==0: an allocated tensor with a zero-sized dimension has
+// live typed storage of length zero and remains valid.
+func (s *Storage) IsReleased() bool { return s == nil || s.data == nil }
+
 // Len returns the number of elements.
 func (s *Storage) Len() int { return s.n }
 

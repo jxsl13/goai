@@ -18,14 +18,11 @@ var debugFallback = os.Getenv("GOAI_LOG_FALLBACK") != ""
 // mix (§V22/§T410: standalone op timing misleads; this measures what actually runs). Off by default.
 var debugTimeOps = os.Getenv("GOAI_TIME_OPS") != ""
 
-// Execute is the single dispatch choke-point (ADR-0003). It resolves the kernel
-// for op at the inputs' dtype on ctx.Backend, falling back to the reference
-// backend when the active one lacks it (§I4), runs the forward pass, and — if a
-// Recorder is attached — hands the op to autograd for taping (§T13).
-//
-// All ops route through here, so it is the one place fallback, interception, and
-// (later) profiling live. Inputs are assumed homogeneous in dtype.
-func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tensor.Tensor, error) {
+// prepareExecution applies the validation and backend selection shared by
+// Execute and ExecuteInto. Keeping one resolver is important: an allocation-free
+// path that silently bypassed per-op routing or the CPU-before-reference fallback
+// would be fast but semantically different from ordinary eager execution.
+func prepareExecution(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) (*Context, Kernel, tensor.Dtype, error) {
 	if ctx == nil {
 		ctx = NewContext()
 	}
@@ -39,7 +36,7 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 	// call free.
 	if attrs != nil {
 		if err := checkAttrs(op, attrs); err != nil {
-			return nil, err
+			return nil, nil, tensor.Invalid, err
 		}
 	}
 
@@ -83,11 +80,11 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 		if fb == nil {
 			ref := Reference()
 			if ref == nil {
-				return nil, fmt.Errorf("backend %q: no kernel for %v/%v and no reference backend",
+				return nil, nil, dtype, fmt.Errorf("backend %q: no kernel for %v/%v and no reference backend",
 					ctx.Backend.Name(), op, dtype)
 			}
 			if _, rok := ref.Kernel(op, dtype); !rok {
-				return nil, fmt.Errorf("no kernel for %v/%v (active %q, reference %q)",
+				return nil, nil, dtype, fmt.Errorf("no kernel for %v/%v (active %q, reference %q)",
 					op, dtype, ctx.Backend.Name(), ref.Name())
 			}
 			fb = ref
@@ -101,6 +98,21 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 		}
 		k, _ = fb.Kernel(op, dtype)
 		ctx = ctx.WithBackend(fb)
+	}
+	return ctx, k, dtype, nil
+}
+
+// Execute is the single dispatch choke-point (ADR-0003). It resolves the kernel
+// for op at the inputs' dtype on ctx.Backend, falling back to the reference
+// backend when the active one lacks it (§I4), runs the forward pass, and — if a
+// Recorder is attached — hands the op to autograd for taping (§T13).
+//
+// All ops route through here, so it is the one place fallback, interception, and
+// (later) profiling live. Inputs are assumed homogeneous in dtype.
+func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tensor.Tensor, error) {
+	ctx, k, _, err := prepareExecution(ctx, op, inputs, attrs)
+	if err != nil {
+		return nil, err
 	}
 
 	var opStart time.Time
@@ -131,4 +143,140 @@ func Execute(ctx *Context, op Op, inputs []*tensor.Tensor, attrs Attrs) ([]*tens
 		ctx.Recorder.Record(op, inputs, out, attrs)
 	}
 	return out, nil
+}
+
+// validateOutputBase checks the ownership properties common to every
+// caller-owned output before an IntoKernel can mutate it. Operation-specific
+// dtype and shape checks are performed by ValidateOutput inside the selected
+// IntoKernel, where the expected result contract is known.
+func validateOutputBase(ctx *Context, out *tensor.Tensor, index int) error {
+	if out == nil {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d is nil", index)
+		}
+		return fmt.Errorf("backend: output is nil")
+	}
+	if out.Storage() == nil {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d has no storage", index)
+		}
+		return fmt.Errorf("backend: output has no storage")
+	}
+	if out.Storage().IsReleased() {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d storage is released", index)
+		}
+		return fmt.Errorf("backend: output storage is released")
+	}
+	if out.Device() == nil {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d has no device", index)
+		}
+		return fmt.Errorf("backend: output has no device")
+	}
+	if out.Offset() != 0 || !out.IsContiguous() {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d must be a contiguous base tensor", index)
+		}
+		return fmt.Errorf("backend: output must be a contiguous base tensor")
+	}
+	if out.Storage().Len() != out.Numel() {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d storage length %d does not match tensor size %d (released or non-base storage)",
+				index, out.Storage().Len(), out.Numel())
+		}
+		return fmt.Errorf("backend: output storage length %d does not match tensor size %d (released or non-base storage)",
+			out.Storage().Len(), out.Numel())
+	}
+	if ctx == nil || ctx.Device() == nil {
+		return fmt.Errorf("backend: selected execution context has no device")
+	}
+	if got, want := out.Device().Kind(), ctx.Device().Kind(); got != want {
+		if index >= 0 {
+			return fmt.Errorf("backend: output %d device %v does not match execution device %v", index, got, want)
+		}
+		return fmt.Errorf("backend: output device %v does not match execution device %v", got, want)
+	}
+	return nil
+}
+
+// ValidateOutput checks one operation-specific caller-owned output. IntoKernel
+// implementations call it before taking a writable typed slice. ExecuteInto has
+// already checked ownership and aliasing, but repeating the cheap base checks
+// here keeps direct third-party IntoKernel implementations defensive.
+func ValidateOutput(ctx *Context, out *tensor.Tensor, dtype tensor.Dtype, shape tensor.Shape) error {
+	if err := validateOutputBase(ctx, out, -1); err != nil {
+		return err
+	}
+	if got := out.Dtype(); got != dtype {
+		return fmt.Errorf("backend: output dtype %v does not match result dtype %v", got, dtype)
+	}
+	if !out.Shape().Equal(shape) {
+		return fmt.Errorf("backend: output shape %v does not match result shape %v", out.Shape(), shape)
+	}
+	return nil
+}
+
+// ExecuteInto runs op into caller-owned outputs without allocating result
+// storage. Dispatch, routing, fallback, attrs validation, and diagnostics are
+// identical to Execute; the backend selected by those rules must additionally
+// implement IntoBackend for op/dtype or ErrIntoUnsupported is returned.
+//
+// ExecuteInto is inference-only. Recorder contexts are rejected because a tape
+// may retain an output beyond the caller's next reuse, and input/output or
+// output/output storage aliases are rejected until individual kernels prove
+// their in-place semantics. Outputs must be live contiguous base tensors on the
+// selected execution device. An IntoKernel performs the final count, dtype, and
+// shape checks before it writes.
+func ExecuteInto(ctx *Context, op Op, inputs, outputs []*tensor.Tensor, attrs Attrs) error {
+	if ctx != nil && ctx.Recorder != nil {
+		return fmt.Errorf("backend: ExecuteInto does not support recorder contexts")
+	}
+	ctx, _, dtype, err := prepareExecution(ctx, op, inputs, attrs)
+	if err != nil {
+		return err
+	}
+	if len(outputs) == 0 {
+		return fmt.Errorf("backend: ExecuteInto requires at least one output")
+	}
+	for i, out := range outputs {
+		if err := validateOutputBase(ctx, out, i); err != nil {
+			return err
+		}
+		for j := 0; j < i; j++ {
+			if outputs[j].Storage() == out.Storage() {
+				return fmt.Errorf("backend: outputs %d and %d alias the same storage", j, i)
+			}
+		}
+		for j, in := range inputs {
+			if in != nil && in.Storage() != nil && in.Storage() == out.Storage() {
+				return fmt.Errorf("backend: output %d aliases input %d storage", i, j)
+			}
+		}
+	}
+
+	ib, ok := ctx.Backend.(IntoBackend)
+	if !ok {
+		return fmt.Errorf("%w: backend %q has no into capability", ErrIntoUnsupported, ctx.Backend.Name())
+	}
+	k, ok := ib.KernelInto(op, dtype)
+	if !ok {
+		return fmt.Errorf("%w: backend %q has no into kernel for %v/%v",
+			ErrIntoUnsupported, ctx.Backend.Name(), op, dtype)
+	}
+
+	var opStart time.Time
+	if debugTimeOps {
+		opStart = time.Now()
+	}
+	err = k(ctx, inputs, outputs, attrs)
+	if debugTimeOps {
+		shp := ""
+		if len(inputs) > 0 {
+			shp = inputs[0].Shape().String()
+		}
+		fmt.Fprintf(os.Stderr, "OPTIME %v %s %s %.3f\n", op, ctx.Backend.Name(), shp,
+			float64(time.Since(opStart).Microseconds())/1000)
+	}
+	return err
 }

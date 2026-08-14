@@ -23,6 +23,60 @@ go test ./backend/ref -bench .   # a single package
 Inputs come from `internal/bench` with explicit seeds, so numbers are
 reproducible across runs and machines.
 
+## M2-first leadership protocol (§V42, T987)
+
+The historical log below contains experiments with several sampling protocols.
+New cross-library leadership claims use the stricter, machine-readable
+[`internal/benchcompare/leadership/m2.json`](../internal/benchcompare/leadership/m2.json)
+gate. Every cell names hardware and OS, model/shape, dtype/quantization,
+batch/context, warm/cold state, workspace/transfers, semantic quality, immutable
+GoAI and incumbent revisions, and exact reproduction/evidence paths. Publication
+requires at least ten alternating samples per prebuilt implementation and the
+pinned `benchstat`; incomplete measurements remain `provisional` or `open`.
+
+The first new cell compares the caller-owned-output F64 SiLU paths at
+`[256,1408]` on this M2 Pro. Two complete ten-sample sessions are retained:
+
+| implementation | median | 95% interval | allocation result |
+|---|---:|---:|---:|
+| GoAI `backend.ExecuteInto`, Go 1.26.6, 12 workers | 137.0 µs | ±9% | 0 allocs/op |
+| PyTorch `aten.silu.out`, v2.12.1, 8 intra-op threads | 208.4 µs | ±17% | output preallocated |
+
+GoAI is **1.520× faster** (`p=0.000`, `n=20`). The result is still
+`provisional`, because this local checkout uses a bare Git repository and the
+new source therefore lacks an immutable commit. The
+[evidence bundle](../internal/benchcompare/leadership/evidence/m2-silu-20260814/README.md)
+records production-source and prebuilt-binary SHA-256 values, raw samples,
+both session metadata files, quality gates, and the combined `benchstat` output.
+It deliberately retains the second session's simultaneous slowdown in both
+engines instead of selecting only the quieter first run.
+
+Reproduce or validate:
+
+```sh
+go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d
+go run ./internal/benchcompare/leadership collect-silu \
+  -root . -out /tmp/goai-silu-evidence -samples 10 -seconds 1 \
+  -go-procs 12 -torch-threads 8 -python .venv/bin/python \
+  -benchstat "$(go env GOPATH)/bin/benchstat"
+go run ./internal/benchcompare/leadership check
+```
+
+T988 pinned llama.cpp at commit `48d22e295` (llama-bench build 10360) and MLX
+at commit `7a1d4f5c` (v0.32.0), then selected serial-K Q4_K decode matvec as the
+highest-leverage native-Metal leaf. T989's SIMD-group implementation is
+1.690–4.185× faster across five M=1 shapes and raises TinyLlama decode from 7.0
+to 9.9 tok/s median. T993 applies the same measured pattern to Q6_K: it is
+2.692–11.788× faster across four M=1 shapes (`p=0.000`, `n=10` each) and, with
+Q4_K held cooperative, raises decode from 9.75 to 16.35 tok/s median (1.677×).
+Both kernels are M=1- and capability-gated; prefill keeps scalar fallbacks. The
+[Q4_K bundle](../internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md)
+and [Q6_K bundle](../internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md)
+retain raw pairs, cold-start data, quality cross-references, and exact pins. The
+llama.cpp and MLX matrix rows remain provisional because cross-engine runs are
+not interleaved, MLX uses a different 4-bit encoding, and this bare workspace
+cannot provide an immutable GoAI revision.
+
 ## Full comparison matrix — every variant vs the industry (§T606)
 
 > **In plain terms:** the tables below put every GoAI backend variant next to
@@ -817,6 +871,71 @@ GOEXPERIMENT=simd VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./inter
 -r 3`; MLX `.venv/bin/python testdata/bench_mlx.py` (after the one-time convert). MLX quant scheme
 differs from Q4_K (its own affine 4-bit), so weights are not byte-identical -- a
 precision-matched engine comparison, not a same-weights one.
+
+**2026-08-14 native-Metal update (T988/T989/T993).** The one-thread-per-output
+diagnosis above is historical for Q4_K and Q6_K M=1. New SIMD-group kernels
+split K across lanes, compute two output rows per SIMD group, and finish with a
+subgroup reduction. Ten paired, alternating forced-off samples on exact
+TinyLlama shapes produce these warm medians:
+
+| Q4_K M=1 K×N | scalar | cooperative | speedup |
+|---|---:|---:|---:|
+| 2048×2048 | 546.2 µs | 250.8 µs | 2.177× |
+| 2048×2560 | 546.1 µs | 256.0 µs | 2.134× |
+| 2048×5632 | 553.4 µs | 288.4 µs | 1.919× |
+| 5632×2048 | 1,189.2 µs | 284.2 µs | 4.185× |
+| 2048×32000 | 970.9 µs | 574.6 µs | 1.690× |
+
+| Q6_K M=1 K×N | scalar | cooperative | speedup |
+|---|---:|---:|---:|
+| 2048×256 | 577.0 µs | 214.4 µs | 2.692× |
+| 2048×2048 | 1,459.7 µs | 253.5 µs | 5.759× |
+| 5632×2048 | 3,546.3 µs | 300.9 µs | 11.788× |
+| 2048×32000 | 3,187.4 µs | 727.7 µs | 4.380× |
+
+All deltas have `p=0.000`, `n=10`; allocations are unchanged. Q4_K moves
+full-model TinyLlama decode from 7.0 to 9.9 tok/s median. Holding Q4_K
+cooperative and changing only Q6_K moves 9.75 to 16.35 tok/s (**1.677×**), for
+a directional cumulative 2.336× gain. Production dispatch remains limited to
+M=1, so prefill does not inherit unmeasured kernels. Fresh-process measurements
+are retained separately from the warm claims.
+
+The external gap remains large under current pinned tools: llama.cpp commit
+`48d22e295` is 119.9 tok/s median on the identical GGUF (`pp1,tg32,r10`), while
+MLX 0.32.0 reports 138.1 tok/s best-of-3 on its non-identical affine 4-bit
+conversion. Current gaps are approximately 7.33× and 8.45× respectively. Q4_K
+and Q6_K were confirmed levers, not the whole gap. T994 then measured the exact
+model mix (77.06% Q4_K, 22.89% Q6_K, 0% Q2_K/Q3_K/Q5_K) and a 57.437583 ms
+median summed GPU duration per command buffer against normally 0.24–0.65 ms of
+CPU encoding. Short-context decode is therefore GPU-kernel-bound; absent quant
+formats and CPU submission are not the next lever.
+
+Two successor searches were rejected before changing production. Explicit
+fixed-loop unrolling plus an aligned-N tail-free clone was 1.44% slower in
+geomean time over ten paired samples, with no significant row. A same-binary
+1/2/4/8-SIMD-group threadgroup-width screen topped out at a sub-threshold 1.055x
+observation and regressed other shapes. Exact production kernels were restored.
+The next projection hypothesis also failed at the correct boundary: two Q4_K
+gate/up matvecs already recorded into one command buffer took 247.0 us median,
+versus 251.1 us for one concatenated matvec plus two band extractions
+(`p=0.218`, `n=10`). Summing two standalone synchronous leaf times had falsely
+predicted a win. Fusion claims must compare complete seams with exactly one
+command buffer per sample; useful gate/up fusion now requires a kernel that
+reuses input and emits SwiGLU directly. Evidence and reproduction:
+[`Q4_K`](../internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md),
+[`Q6_K`](../internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md),
+[`post-Q6 profile`](../internal/benchcompare/leadership/evidence/m2-post-q6-profile-20260814/README.md),
+[`unroll rejection`](../internal/benchcompare/leadership/evidence/m2-kquant-unroll-negative-20260814/README.md),
+[`threadgroup-width rejection`](../internal/benchcompare/leadership/evidence/m2-kquant-threadgroup-geometry-negative-20260814/README.md),
+[`gate/up fusion rejection`](../internal/benchcompare/leadership/evidence/m2-q4k-gateup-fusion-negative-20260814/README.md),
+and [`rows-per-SIMD rejection`](../internal/benchcompare/leadership/evidence/m2-q4k-rows-per-simd-negative-20260814/README.md).
+
+The follow-up compile-time rows-per-SIMD sweep also rejected launch/work
+geometry as the next lever. One 200-iteration screen showed isolated 1.128x and
+1.143x signals, but ten alternating 500-iteration samples reduced them to
+approximately 1.010x and 0.993x (`p=0.971` for both). The production two-row
+kernel was restored exactly; no shape selector or model experiment survived
+the leaf gate. Short GPU screens are discovery evidence, not promotion evidence.
 
 Honest read of the gaps (as of 2026-07-14):
 

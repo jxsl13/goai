@@ -3,8 +3,9 @@
 > **In plain terms:** this page answers one question — *how fast is GoAI
 > compared to the software people actually use today?* Every table pits GoAI
 > against an industry-standard incumbent (llama.cpp, vLLM, PyTorch, NumPy,
-> scikit-learn) on the **same machine, same data, same model weights**, and
-> reports wins and losses with equal prominence. Numbers are point-in-time
+> scikit-learn) on the **same machine and explicitly matched semantics**. The
+> same data and model weights are used where possible; every deviation is
+> labeled beside the result. Wins and losses receive equal prominence. Numbers are point-in-time
 > measurements on the named hardware and date; the authoritative, running log —
 > with full methodology, variance and history — is
 > [`docs/benchmarking.md`](docs/benchmarking.md).
@@ -33,6 +34,40 @@ Two machines appear below:
 
 ---
 
+## M2-first leadership claim matrix (T987)
+
+The machine-readable [M2 matrix](internal/benchcompare/leadership/m2.json) is
+the claim gate for new comparisons. A row may say `published` only when its
+hardware, OS, model/shape, dtype/quantization, batch/context, warm/cold state,
+workspace/transfers, and quality contract are explicit; both implementations
+are pinned; and at least ten prebuilt samples are collected in alternating
+order and analyzed with the pinned `benchstat`. Historical rows below remain
+useful evidence, but do not become leadership claims merely by appearing in a
+table.
+
+| Status | Cell | Current evidence | Why it is not stronger |
+|---|---|---|---|
+| provisional | M2 CPU F64 SiLU, caller-owned output | GoAI 137.0 µs ±9% vs PyTorch 208.4 µs ±17%; **GoAI 1.520×**, `p=0.000`, `n=20` | this checkout is backed by a bare Git repository; source and binary hashes exist, but the new GoAI source has no immutable commit |
+| provisional | TinyLlama-1.1B Q4_K_M decode vs pinned llama.cpp Metal | GoAI median 16.35 vs llama.cpp median 119.9 tok/s (`tg32`) | ten samples exist, but the engines were not interleaved and the bare GoAI workspace has no immutable revision |
+| provisional | TinyLlama-1.1B 4-bit-class decode vs pinned MLX | GoAI median 16.35 vs MLX 138.1 tok/s | MLX is best-of-3 and uses different quantization and prompt length, so this is directional, not a same-weight claim |
+| provisional | M2 Q4_K fused dequant+matvec, cooperative vs forced-off scalar | **1.690–4.185× faster** over five exact M=1 shapes; geomean time −56.34%, `p=0.000`, `n=10` each | remediation A/B rather than an external leadership claim; bare workspace revision remains mutable |
+| provisional | M2 Q6_K fused dequant+matvec, cooperative vs forced-off scalar | **2.692–11.788× faster** over four exact M=1 shapes; geomean time −81.20%, `p=0.000`, `n=10` each | remediation A/B rather than an external leadership claim; bare workspace revision remains mutable |
+
+The [raw SiLU evidence](internal/benchcompare/leadership/evidence/m2-silu-20260814/README.md)
+keeps both complete ten-sample sessions, including a noisier second session;
+no post-hoc quiet-run selection was made. The [Q4_K evidence](internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md)
+and [Q6_K evidence](internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md)
+retain every sample, forced-off controls, cold-start boundaries, quality gates,
+source/binary pins, and the selection limits.
+Validate or render the canonical matrix with:
+
+```sh
+go run ./internal/benchcompare/leadership check
+go run ./internal/benchcompare/leadership render
+```
+
+---
+
 ## Scoreboard at a glance
 
 | Category | Benchmark | GoAI | Best incumbent | Verdict |
@@ -47,7 +82,7 @@ Two machines appear below:
 | CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
-| Apple-GPU LLM decode (production) | TinyLlama-1.1B, 4-bit class, M2 | 9.9 tok/s (Q4_K_M) | llama.cpp 197 (Q4_K_M), MLX 231 (4-bit) | ≈20–23× behind BOTH Apple engines (§2) |
+| Apple-GPU LLM decode (production) | TinyLlama-1.1B, 4-bit class, M2 | 16.35 tok/s median (Q4_K_M; both-scalar baseline 7.0) | llama.cpp 119.9 median (same GGUF), MLX 138.1 best-of-3 (different 4-bit) | cooperative Q4_K + Q6_K give a directional **2.336×** cumulative gain; incumbents remain ≈7.3–8.5× ahead (§2) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
 | Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 2.4–40× behind (ViT per-image loop → T908) |
 
@@ -272,6 +307,32 @@ is production-grade Q4_K Metal kernels + attention fusion — a large effort and
 core competency of both incumbents. Harnesses:
 `internal/benchcompare/prod_decode_external_test.go` (GoAI, gated on
 TINYLLAMA_GGUF), `llama-bench` (llama.cpp), `testdata/bench_mlx.py` (MLX).
+
+**Current M2 kernel update (T988/T989/T993, 2026-08-14).** The first two
+diagnosed production bottlenecks are implemented rather than merely named.
+Native Metal Q4_K and Q6_K M=1 kernels split K across SIMD-group lanes, process
+two output rows per SIMD group, and reduce with `simd_sum`; M>1 and unsupported
+devices retain scalar fallbacks. Ten alternating forced-off pairs show:
+
+| path | Q4_K leaf result | TinyLlama decode |
+|---|---:|---:|
+| historical scalar-K | 546–1,189 µs across five exact shapes | 7.0 tok/s median |
+| SIMD-group cooperative | **251–575 µs (1.690–4.185×)** | **9.9 tok/s median (1.414×)** |
+
+| path | Q6_K leaf result | TinyLlama decode with Q4_K held cooperative |
+|---|---:|---:|
+| historical scalar-K | 577–3,546 µs across four exact shapes | 9.75 tok/s median |
+| SIMD-group cooperative | **214–728 µs (2.692–11.788×)** | **16.35 tok/s median (1.677×)** |
+
+All leaf rows have `p=0.000`, `n=10`, and match forced-off scalar plus f64 GGUF
+references, including odd-N tails. The two changes lift the earlier both-scalar
+7.0 tok/s median to 16.35 tok/s, a directional cumulative 2.336× gain. Same-host
+current baselines remain much faster: pinned llama.cpp build 10360 is 119.9
+tok/s median on the identical GGUF; pinned MLX 0.32.0 is 138.1 tok/s best-of-3
+on its different affine 4-bit model. This is high leverage, not leadership.
+Full raw, cold-start, hash, rejection, and selection-boundary evidence is in the
+[Q4_K bundle](internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md)
+and [Q6_K bundle](internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md).
 
 What the batched recorder architecture is worth *within* GoAI on this machine is
 measured precisely:
@@ -528,7 +589,7 @@ honestly documented deficit with a root cause is a deliverable):
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
-| Apple decode vs llama.cpp AND MLX | ≈3.1× toy → **≈20–23× at 1.1B, 4-bit class** (T887) | one-thread-per-output Q4_K dequant (§T416); trails BOTH mature Apple-Metal engines (llama.cpp 197, MLX 231 vs GoAI 9.9 tok/s) so it is kernel maturity, not one incumbent | production-grade Q4_K Metal kernels + attention fusion |
+| Apple decode vs llama.cpp and MLX | current pinned gap **≈7.3× same-GGUF llama.cpp / ≈8.5× directional MLX** after a 2.336× cumulative GoAI gain | Q4_K/Q6_K are 99.95% of encoded model bytes and the 57.44 ms warm command-buffer median is GPU-kernel-bound; explicit unroll/tail cloning, threadgroup width, rows-per-SIMD, and concatenate-plus-extract gate/up fusion all failed their leaf gates | obtain shader-level counters or build a genuinely fused Q4_K→SwiGLU kernel; do not retune launch geometry, add absent K-quants, or attack CPU submission |
 
 ## Not yet measured — booked benchmark tasks
 
@@ -551,8 +612,10 @@ non-negotiables (§V22, §C3):
 
 1. **Same machine, same data, same weights** — incumbents run on the exact
    hardware and inputs GoAI runs on; identical GGUF files where applicable.
-2. **Warm-up excluded, repeats reported** — medians of repeated runs;
-   variance shown where it is material (error bars in the tables above).
+2. **Warm-up excluded, repeats reported** — a publishable matrix cell requires
+   at least ten prebuilt samples per implementation, collected in alternating
+   order and analyzed with the pinned `benchstat`. Older three-run/best-of-three
+   rows are explicitly provisional rather than silently grandfathered in.
 3. **Real workloads over micro-ops** — end-to-end forwards, decode loops and
    fits; isolated kernel wins that do not move the real workload are
    recorded as non-levers.
@@ -567,6 +630,8 @@ non-negotiables (§V22, §C3):
 
 | Table | Command(s) |
 |---|---|
+| M2 leadership matrix | `go run ./internal/benchcompare/leadership check`; render with `go run ./internal/benchcompare/leadership render` |
+| M2 caller-owned F64 SiLU vs PyTorch | `go run ./internal/benchcompare/leadership collect-silu -root . -out /tmp/goai-silu-evidence -samples 10 -seconds 1 -go-procs 12 -torch-threads 8 -python .venv/bin/python -benchstat "$(go env GOPATH)/bin/benchstat"` |
 | Python bench venv (incumbents) | `python3 -m venv .venv && .venv/bin/pip install -r testdata/requirements-bench.txt` (versions pinned per §V13) |
 | Comparison matrix + Python side (M2) | `make bench-compare bench-python`, render with `go run ./internal/benchcompare/rendertables` |
 | CPU f32 campaign | `GOEXPERIMENT=simd make bench-compare` |

@@ -114,6 +114,17 @@ func TestTensorOnPooledDeviceRelease(t *testing.T) {
 	}
 }
 
+func TestStorageIsReleasedDistinguishesEmptyStorage(t *testing.T) {
+	empty := New(F64, Shape{0})
+	if empty.Storage().IsReleased() {
+		t.Fatal("live zero-length storage reported released")
+	}
+	empty.Storage().Release()
+	if !empty.Storage().IsReleased() {
+		t.Fatal("released zero-length storage reported live")
+	}
+}
+
 func TestViewsInheritDevice(t *testing.T) {
 	dev := NewCPUDevice(NewPool())
 	x := NewOn(dev, F64, Shape{2, 3})

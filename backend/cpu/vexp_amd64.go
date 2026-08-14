@@ -14,9 +14,11 @@ import (
 // FFN activation). vexpNeon stays false so only the standalone exp/tanh/log kernels keep their scalar
 // paths on amd64 (that campaign is separate); their v* funcs below are scalar (dead here).
 const (
-	vexpNeon    = false
-	vexpF32Fast = true
-	vexpF64Fast = true // amd64 SIMD build: vsiluF64 (F64 SwiGLU FFN activation, §T667)
+	vexpNeon         = false
+	vexpF32Fast      = true
+	vsiluF64Fast     = true // F64 SwiGLU FFN activation
+	vsoftplusF64Fast = true // F64 Mamba/Jamba delta activation
+	vsoftcapF64Fast  = true // F64 Gemma-2 logits
 )
 
 var vexpHasAVX = archsimd.X86.AVX() && archsimd.X86.FMA()
@@ -378,7 +380,7 @@ func vlogF32(dst, src []float32) {
 // was scalar `x/(1+math.Exp(-x))` — and end-to-end Llama F64 prefill profiles as
 // ~40% math.Exp inside siluKernelCPU (the SwiGLU gate over the large hidden dim).
 // vsiluF64 vectorizes it 4-wide on an accurate AVX2 f64 exp (expF64x4), gated by
-// vexpF64Fast (compile-time; the non-SIMD build keeps the scalar path). F64 SiLU
+// vsiluF64Fast (compile-time; the non-SIMD build keeps the scalar path). F64 SiLU
 // is NOT under the CPU==Ref bit-exact invariant — TestCPUCrossReferenceExact
 // SKIPS OpSiLU/F64 (cpu uses x/(1+e⁻ˣ), ref uses x·σ(x), already ulp-split), so a
 // ~1-ulp vectorized exp is admissible and rides the model f64 tolerance (the

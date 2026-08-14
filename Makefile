@@ -2,10 +2,12 @@
 GO       ?= go
 PKGS     ?= ./...
 CGO_OFF   = CGO_ENABLED=0
+PERFSCAN_VERSION ?= v0.89.0
+PERFSCAN ?= $(shell $(GO) env GOPATH)/bin/perfscan
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
 	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
-	perfscan perfscan-check gofmt-check preflight preflight-full install-hooks
+	perfscan-install perfscan perfscan-check gofmt-check preflight preflight-full install-hooks
 
 all: build vet apicheck test
 
@@ -217,27 +219,32 @@ spec-verify:
 	$(CGO_OFF) $(GO) run ./internal/docgraph spec verify
 	$(GO) run ./internal/mdlint ./...
 
-## perfscan: staticcheck-style finder for the hot-loop anti-patterns this repo
-## repeatedly optimizes away (T919). REPO-AGNOSTIC engine — the language/stdlib
-## checks run on any module; the four domain checks (per-element access/alloc,
-## PS1001/PS1002/PS2001/PS4002) read GoAI's own vocabulary from
-## internal/perfscan/perfscan.json (-config), so nothing GoAI-specific is baked in.
-## Each check has a stable PS-prefixed 4-digit ID (`make perfscan ARGS=-list`).
-## Advisory (candidates need an A/B + bit-identity proof, §C3/§V22); -strict exits
-## non-zero. -fix applies the safe mechanical fixes; -json emits findings+fixes for
-## an editor. e.g. make perfscan ARGS='-strict ./nn/...' or ARGS='-fix ./...'.
-perfscan:
-	$(CGO_OFF) $(GO) run ./internal/perfscan -config internal/perfscan/perfscan.json $(ARGS)
+## perfscan-install: install the pinned external perfscan release directly from
+## GitHub. GOPROXY=direct is intentional (§C29): the public GoAI module stays free
+## of tool dependencies and the slow Go module proxy is never consulted.
+perfscan-install:
+	GOPROXY=direct GOBIN="$(dir $(PERFSCAN))" $(GO) install github.com/jxsl13/perfscan/perfscan@$(PERFSCAN_VERSION)
 
-## perfscan-check: the perfscan detector test suite (positive + negative fixtures).
+## perfscan: run the external staticcheck-style performance linter with GoAI's
+## project vocabulary. Findings are optimization candidates: benchmark + prove
+## correctness before shipping (§C3/§V22). Examples:
+##   make perfscan ARGS='-checks PS2* ./...'
+##   make perfscan ARGS='-level 1 -diff ./...'
+perfscan:
+	@if [ ! -x "$(PERFSCAN)" ]; then $(MAKE) --no-print-directory perfscan-install; fi
+	$(CGO_OFF) "$(PERFSCAN)" -config perfscan.yaml $(ARGS)
+
+## perfscan-check: external-tool integration gate. Existing findings stay advisory;
+## config/load/analyzer failures stay fatal even with -exit-zero.
 perfscan-check:
-	$(CGO_OFF) $(GO) test ./internal/perfscan/
+	@$(MAKE) --no-print-directory perfscan ARGS='-exit-zero ./...'
 
 ## preflight: the local PRE-PUSH gate — every HARD CI check runnable without a
 ## C/CUDA/Vulkan toolchain, fail-fast (§V23). Mirrors ci.yml: gofmt (the cgo+race
 ## lane), go vet ./... (all lanes' §V23 soundness backstop, compiles every _test.go),
-## the -short test suite INCLUDING the always-run meta-tests speccheck / perfscan /
-## docgraph render-sync (pure-go lane + §V41), and the go-mod-tidy drift gate. The
+## the external perfscan integration gate, the -short test suite INCLUDING the
+## always-run meta-tests speccheck / docgraph render-sync (pure-go lane + §V41),
+## and the go-mod-tidy drift gate. The
 ## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
 ## every package EXCEPT internal/mdlint — the one gate CI still holds out of always-run
 ## as known-red debt (mdlint reddens on unrelated worker markdown). apicheck is now
@@ -259,6 +266,8 @@ preflight:
 	@$(CGO_OFF) $(GO) vet ./...
 	@echo "→ go mod tidy drift gate"
 	@$(CGO_OFF) $(GO) mod tidy && git diff --exit-code -- go.mod go.sum || { echo "go.mod/go.sum drift — commit the tidy result"; exit 1; }
+	@echo "→ external perfscan $(PERFSCAN_VERSION) (direct VCS, advisory findings)"
+	@$(MAKE) --no-print-directory perfscan-check
 	@echo "→ CGO_ENABLED=0 go test -short  (buildable pure-go packages incl. apicheck; only mdlint held out)"
 	@$(CGO_OFF) $(GO) test -short -count=1 $$($(CGO_OFF) $(GO) list -e -f '{{if or .GoFiles .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'internal/(mdlint)$$')
 	@echo "✓ preflight OK — cgo/metal/cuda/vulkan/simd lanes run in CI (or: make preflight-full)"

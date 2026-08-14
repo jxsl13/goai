@@ -6,12 +6,27 @@
 // numeric truth (§V9).
 package backend
 
-import "github.com/jxsl13/goai/tensor"
+import (
+	"errors"
+
+	"github.com/jxsl13/goai/tensor"
+)
 
 // Kernel executes one primitive op: it reads inputs, allocates and writes its
 // outputs (on ctx's device), and returns them. A Kernel is pure with respect to
 // autograd — it records nothing; interception happens in Execute (ADR-0003).
 type Kernel func(ctx *Context, inputs []*tensor.Tensor, attrs Attrs) ([]*tensor.Tensor, error)
+
+// IntoKernel executes one primitive op into caller-owned output tensors. It is
+// the allocation-free counterpart of Kernel for inference hot paths: the
+// implementation must validate every operation-specific output property before
+// writing and must not retain the output slice after it returns.
+type IntoKernel func(ctx *Context, inputs, outputs []*tensor.Tensor, attrs Attrs) error
+
+// ErrIntoUnsupported is returned by ExecuteInto when the backend selected by
+// the normal routing/fallback rules has no caller-owned-output implementation
+// for the requested op and dtype.
+var ErrIntoUnsupported = errors.New("backend: caller-owned output unsupported")
 
 // Backend is a named compute implementation for one device.
 //
@@ -30,6 +45,15 @@ type Backend interface {
 	Kernel(op Op, dtype tensor.Dtype) (k Kernel, ok bool)
 	// Synchronize blocks until all previously submitted work has completed.
 	Synchronize() error
+}
+
+// IntoBackend is the optional caller-owned-output capability implemented by
+// backends that can execute selected kernels without allocating result storage.
+// Keeping it separate from Backend preserves source compatibility for existing
+// and third-party backends; ExecuteInto reports ErrIntoUnsupported when the
+// backend selected by ordinary dispatch does not implement the capability.
+type IntoBackend interface {
+	KernelInto(op Op, dtype tensor.Dtype) (k IntoKernel, ok bool)
 }
 
 // Recorder is autograd's interception hook (§T13). When set on a Context, it is

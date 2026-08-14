@@ -29,8 +29,15 @@ func magicStringExempt(rel string) bool {
 	// internal/docgraph validates SPEC VOCABULARY, not backends: §R's conf
 	// levels are literally "high|med|low|ref" (FORMAT.md) — its "ref" is a
 	// research-confidence value, not a backend reference (§V40 tooling).
+	//
+	// leadership/collect.go emits the §V38 evidence JSON, where "cpu" is the HOST
+	// hardware-descriptor field name (the machine's CPU model string), not a
+	// backend selector. The key is already recorded in published evidence
+	// metadata, so it is a frozen schema field: renaming it would desync the
+	// collector from the evidence it has already written (§T987).
 	return rel == "backend/names.go" || strings.HasPrefix(rel, "tensor/") ||
-		strings.HasPrefix(rel, "internal/docgraph/")
+		strings.HasPrefix(rel, "internal/docgraph/") ||
+		rel == "internal/benchcompare/leadership/collect.go"
 }
 
 // TestNoMagicBackendNameStrings guards §C15/§V21: backends are referred to by the

@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "date": "2026-08-14",
+  "hardware": "Apple M2 Pro, 19-core GPU, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "workspace_base_revision": "a2f27462723b7a1b1dbba37328f4281ef9aa703c",
+  "workspace_revision": "bare-workspace-uncommitted",
+  "experimental_binary_sha256": "27314be5e366a9d46ecc4742ea792ae5dcc851ff647593c0e6b04392febf0ea1",
+  "experimental_source_sha256": {
+    "backend/metal/metal_bridge.m": "a4afd93ee094b2c72d718ca2b076417c3336efdfbbea95d43fecda885dd85b16",
+    "backend/metal/metal_bridge.h": "9824837ad92891a836b0240876347c0f9ae05b2ce95fa79bea8899fc9193434e",
+    "backend/metal/metal.go": "27faf8c595e60dab780220c388cc67bf747f471fd3c0b5efbd4fcc95b8ee95c9",
+    "backend/metal/qmatmul_test.go": "a30f3ff0515b9e054186b03f2989aef4fd16d86e1a95c713bf55fb716e82c2ef",
+    "backend/metal/q4k_bench_test.go": "7f8cdc7ee1d971ef2d8daa3d8b034f0eac2fa0fc546648fa694ca434e0ca2dd3",
+    "backend/metal/q6k_bench_test.go": "ce4b8c08aec1a95a45bfe802dec5a8519247f3a3ce30e657007ecf0c6f1560fd"
+  },
+  "protocol": {
+    "iterations_per_shape_and_geometry": 200,
+    "samples_per_shape_and_geometry": 1,
+    "warmups_per_subbenchmark": 20,
+    "same_binary": true,
+    "simdgroups": [1, 2, 4, 8],
+    "control_simdgroups": 2,
+    "full_model_skipped": "no leaf approached the 1.10x promotion gate"
+  }
+}

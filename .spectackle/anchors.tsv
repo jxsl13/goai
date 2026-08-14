@@ -1,0 +1,17 @@
+# rule	node	file	span	chash	rhash
+PERF-TOOL-004	go:backend.ExecuteInto	backend/execute.go	231-282	667bb57eb9dd4c4c	7ff89f2b8e26956f
+PERF-TOOL-004	go:cpu.siluIntoKernelCPU	backend/cpu/elementwise.go	621-632	8fd5f4a343233b51	7ff89f2b8e26956f
+PERF-EXECUTE-INTO-VALIDATION-001	go:backend.ExecuteInto	backend/execute.go	231-282	667bb57eb9dd4c4c	851b9c530baad87b
+PERF-EXECUTE-INTO-VALIDATION-001	go:backend.validateOutputBase	backend/execute.go	152-201	096f9ed9fa09b3f4	851b9c530baad87b
+PERF-EXECUTE-INTO-VALIDATION-001	go:backend.ValidateOutput	backend/execute.go	207-218	29469ab2a3d0ca75	851b9c530baad87b
+PERF-M2-Q4K-COOPERATIVE-001	go:metal.QMatMulQ4_K	backend/metal/metal.go	319-349	c2c08c103c30102d	5866551807ff9977
+PERF-M2-Q4K-COOPERATIVE-001	c:mtl_recorder_qmatmul	backend/metal/metal_bridge.h	226-226	7b4c6ecd284465a7	5866551807ff9977
+PERF-M2-Q6K-COOPERATIVE-001	go:metal.QMatMulQ6_K	backend/metal/metal.go	356-386	8b206be781064e69	a02d8129a6874dfd
+PERF-M2-Q6K-COOPERATIVE-001	c:mtl_qmatmul_q6k	backend/metal/metal_bridge.h	143-143	91011c8642902246	a02d8129a6874dfd
+PERF-M2-Q6K-COOPERATIVE-001	c:mtl_recorder_qmatmul	backend/metal/metal_bridge.h	226-226	7b4c6ecd284465a7	a02d8129a6874dfd
+PERF-M2-KQUANT-SUCCESSOR-001	backend/metal/metal_bridge.m	-	0-0	-	25d9de81bb2d0258
+PERF-M2-KQUANT-SUCCESSOR-001	backend/metal/qmatmul_test.go	-	0-0	-	25d9de81bb2d0258
+PERF-M2-KQUANT-SUCCESSOR-001	internal/benchcompare/leadership	-	0-0	-	25d9de81bb2d0258
+PERF-FUSION-BOUNDARY-001	backend/metal/q4k_bench_test.go	-	0-0	-	98612dac6569cd0e
+PERF-FUSION-BOUNDARY-001	internal/benchcompare/leadership	-	0-0	-	98612dac6569cd0e
+PERF-FUSION-BOUNDARY-001	docs/benchmarking.md	-	0-0	-	98612dac6569cd0e

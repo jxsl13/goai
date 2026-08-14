@@ -1666,7 +1666,9 @@ static int ensure_qmatmul_q3k(void);
 static int ensure_qmatmul_q4k(void);
 static int ensure_qmatmul_q5k(void);
 static int ensure_qmatmul_q6k(void);
-static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ3K, gQMatMulQ4K, gQMatMulQ5K, gQMatMulQ6K;
+static int q4k_cooperative_enabled(void);
+static int q6k_cooperative_enabled(void);
+static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ3K, gQMatMulQ4K, gQMatMulQ4KCooperative, gQMatMulQ5K, gQMatMulQ6K, gQMatMulQ6KCooperative;
 
 // Device-resident quantized weights: upload a weight blob into a retained MTLBuffer once and
 // reuse it across many matmuls (§T153). ARC bridging keeps the buffer alive past the call.
@@ -2104,14 +2106,15 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     if (ensure_init() != 0) return -1;
     if (wbuf == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
+    int cooperative = 0;
     switch (qtype) {
         case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; pipe = gQMatMulQ4_0; break;
         case 8:  if (ensure_qmatmul_q8()  != 0) return -6; pipe = gQMatMulQ8;  break;
         case 10: if (ensure_qmatmul_q2k() != 0) return -6; pipe = gQMatMulQ2K; break;
         case 11: if (ensure_qmatmul_q3k() != 0) return -6; pipe = gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; pipe = gQMatMulQ4K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; pipe = gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; pipe = gQMatMulQ6K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     OP_BEGIN;
@@ -2133,10 +2136,14 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
         [enc setBuffer:wb offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
         [enc setBuffer:pb offset:0 atIndex:3];
-        int total = M * N;
-        NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
-        if ((NSUInteger)total < tg) tg = (NSUInteger)total;
-        [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        if (cooperative) {
+            [enc dispatchThreadgroups:MTLSizeMake((N + 3)/4, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        } else {
+            int total = M * N;
+            NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+            if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+            [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        }
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];
@@ -2155,14 +2162,15 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
+    int cooperative = 0;
     switch (qtype) {
         case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; pipe = gQMatMulQ4_0; break;
         case 8:  if (ensure_qmatmul_q8()  != 0) return -6; pipe = gQMatMulQ8;  break;
         case 10: if (ensure_qmatmul_q2k() != 0) return -6; pipe = gQMatMulQ2K; break;
         case 11: if (ensure_qmatmul_q3k() != 0) return -6; pipe = gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; pipe = gQMatMulQ4K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; pipe = gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; pipe = gQMatMulQ6K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -2178,10 +2186,14 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     [enc setBuffer:wb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
     [enc setBuffer:pb offset:0 atIndex:3];
-    int total = M * N;
-    NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
-    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
-    [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+    if (cooperative) {
+        [enc dispatchThreadgroups:MTLSizeMake((N + 3)/4, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+    } else {
+        int total = M * N;
+        NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+        if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+        [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+    }
     [enc endEncoding];
     return 0;
 }
@@ -2193,7 +2205,9 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
 // for each of 4 pairs, the low nibbles of 32 qs bytes give sub-block is+0, the high nibbles is+1.
 static NSString* const kQMatMulQ4KSource =
     @"#include <metal_stdlib>\n"
+     "#include <metal_simdgroup>\n"
      "using namespace metal;\n"
+     "struct block_q4_K { half d; half dmin; uchar scales[12]; uchar qs[128]; };\n"
      "kernel void qmatmul_q4k(device const float* X [[buffer(0)]],\n"
      "                        device const uchar* W [[buffer(1)]],\n"
      "                        device float* O [[buffer(2)]],\n"
@@ -2222,9 +2236,55 @@ static NSString* const kQMatMulQ4KSource =
      "    }\n"
      "  }\n"
      "  O[mi*N+ni]=acc;\n"
+     "}\n"
+     "kernel void qmatmul_q4k_cooperative(device const float* X [[buffer(0)]],\n"
+     "                                    device const uchar* W [[buffer(1)]],\n"
+     "                                    device float* O [[buffer(2)]],\n"
+     "                                    constant int* P [[buffer(3)]],\n"
+     "                                    uint3 group [[threadgroup_position_in_grid]],\n"
+     "                                    ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     "  constexpr short rowsPerSimd=2, simdgroupsPerThreadgroup=2;\n"
+     "  constexpr ushort mask1=0x3f3f, mask2=0x0f0f, mask3=0xc0c0;\n"
+     "  int M=P[0], K=P[1], N=P[2], mi=(int)group.y, nb=K/256;\n"
+     "  int firstRow=((int)group.x*simdgroupsPerThreadgroup+(int)simdgroup)*rowsPerSimd;\n"
+     "  if(mi>=M || firstRow>=N) return; int rowBytes=nb*144;\n"
+     "  short ix=lane/8, it=lane%8, iq=it/4, ir=it%4;\n"
+     "  device const block_q4_K* weights=(device const block_q4_K*)(W+firstRow*rowBytes);\n"
+     "  device const float* y=X+mi*K; device const float* y4=y+ix*256+64*iq+8*ir;\n"
+     "  float yl[16], yh[16], sums[rowsPerSimd]={0.0f,0.0f}; ushort sc16[4];\n"
+     "  thread const uchar* sc8=(thread const uchar*)sc16;\n"
+     "  for(int ib=ix;ib<nb;ib+=4){ float4 sumy=float4(0.0f);\n"
+     "    for(short i=0;i<8;i++){ yl[i]=y4[i]; sumy[0]+=yl[i]; yl[i+8]=y4[i+32]; sumy[1]+=yl[i+8];\n"
+     "      yh[i]=y4[i+128]; sumy[2]+=yh[i]; yh[i+8]=y4[i+160]; sumy[3]+=yh[i+8]; }\n"
+     "    device const ushort* sc=(device const ushort*)weights[ib].scales+iq;\n"
+     "    device const ushort* q1=(device const ushort*)weights[ib].qs+16*iq+4*ir;\n"
+     "    device const half* dh=&weights[ib].d;\n"
+     "    for(short row=0;row<rowsPerSimd&&firstRow+row<N;row++){\n"
+     "      sc16[0]=sc[0]&mask1; sc16[1]=sc[2]&mask1;\n"
+     "      sc16[2]=((sc[4]>>0)&mask2)|((sc[0]&mask3)>>2);\n"
+     "      sc16[3]=((sc[4]>>4)&mask2)|((sc[2]&mask3)>>2);\n"
+     "      device const ushort* q2=q1+32; float4 acc1=float4(0.0f), acc2=float4(0.0f);\n"
+     "      for(short i=0;i<4;i++){\n"
+     "        acc1[0]+=yl[2*i+0]*(q1[i]&0x000f); acc1[1]+=yl[2*i+1]*(q1[i]&0x0f00);\n"
+     "        acc1[2]+=yl[2*i+8]*(q1[i]&0x00f0); acc1[3]+=yl[2*i+9]*(q1[i]&0xf000);\n"
+     "        acc2[0]+=yh[2*i+0]*(q2[i]&0x000f); acc2[1]+=yh[2*i+1]*(q2[i]&0x0f00);\n"
+     "        acc2[2]+=yh[2*i+8]*(q2[i]&0x00f0); acc2[3]+=yh[2*i+9]*(q2[i]&0xf000); }\n"
+     "      sums[row]+=dh[0]*((acc1[0]+acc1[1]/256.0f)*sc8[0]+(acc1[2]+acc1[3]/256.0f)*sc8[1]/16.0f+\n"
+     "        (acc2[0]+acc2[1]/256.0f)*sc8[4]+(acc2[2]+acc2[3]/256.0f)*sc8[5]/16.0f)-\n"
+     "        dh[1]*(sumy[0]*sc8[2]+sumy[1]*sc8[3]+sumy[2]*sc8[6]+sumy[3]*sc8[7]);\n"
+     "      q1+=rowBytes/2; sc+=rowBytes/2; dh+=rowBytes/2;\n"
+     "    }\n"
+     "    y4+=4*256;\n"
+     "  }\n"
+     "  for(short row=0;row<rowsPerSimd&&firstRow+row<N;row++){ float total=simd_sum(sums[row]);\n"
+     "    if(lane==0) O[mi*N+firstRow+row]=total; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gQMatMulQ4K = nil;
+static id<MTLComputePipelineState> gQMatMulQ4KCooperative = nil;
+static int gQMatMulQ4KUseCooperative = 1;
+static int gQMatMulQ4KCooperativeSupported = 0;
 
 static int ensure_qmatmul_q4k(void) {
     if (gQMatMulQ4K != nil) return 0;
@@ -2234,7 +2294,24 @@ static int ensure_qmatmul_q4k(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"qmatmul_q4k"];
     if (fn == nil) return -6;
     gQMatMulQ4K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    id<MTLFunction> coop = [lib newFunctionWithName:@"qmatmul_q4k_cooperative"];
+    if (coop != nil) {
+        gQMatMulQ4KCooperative = [gDevice newComputePipelineStateWithFunction:coop error:&err];
+        gQMatMulQ4KCooperativeSupported = gQMatMulQ4KCooperative != nil &&
+            gQMatMulQ4KCooperative.threadExecutionWidth == 32 &&
+            gQMatMulQ4KCooperative.maxTotalThreadsPerThreadgroup >= 64;
+    }
     return gQMatMulQ4K != nil ? 0 : -6;
+}
+
+int mtl_q4k_cooperative_set(int on) {
+    int prev = gQMatMulQ4KUseCooperative;
+    gQMatMulQ4KUseCooperative = on ? 1 : 0;
+    return prev;
+}
+
+static int q4k_cooperative_enabled(void) {
+    return gQMatMulQ4KUseCooperative && gQMatMulQ4KCooperativeSupported;
 }
 
 int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int K, int N) {
@@ -2254,18 +2331,24 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
+        const int cooperative = M == 1 && q4k_cooperative_enabled();
+        id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gQMatMulQ4K];
+        [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
         [enc setBuffer:wb offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
         [enc setBuffer:pb offset:0 atIndex:3];
-        int total = M * N;
-        NSUInteger tg = gQMatMulQ4K.maxTotalThreadsPerThreadgroup;
-        if ((NSUInteger)total < tg) tg = (NSUInteger)total;
-        [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        if (cooperative) {
+            [enc dispatchThreadgroups:MTLSizeMake((N + 3)/4, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        } else {
+            int total = M * N;
+            NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+            if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+            [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        }
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];
@@ -2283,7 +2366,9 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
 // dequantize_row_q6_K exactly (two 128-groups, four quants per l with scale indices +0/2/4/6).
 static NSString* const kQMatMulQ6KSource =
     @"#include <metal_stdlib>\n"
+     "#include <metal_simdgroup>\n"
      "using namespace metal;\n"
+     "struct block_q6_K { uchar ql[128]; uchar qh[64]; char scales[16]; half d; };\n"
      "kernel void qmatmul_q6k(device const float* X [[buffer(0)]],\n"
      "                        device const uchar* W [[buffer(1)]],\n"
      "                        device float* O [[buffer(2)]],\n"
@@ -2317,9 +2402,50 @@ static NSString* const kQMatMulQ6KSource =
      "    }\n"
      "  }\n"
      "  O[mi*N+ni]=acc;\n"
+     "}\n"
+     "kernel void qmatmul_q6k_cooperative(device const float* X [[buffer(0)]],\n"
+     "                                    device const uchar* W [[buffer(1)]],\n"
+     "                                    device float* O [[buffer(2)]],\n"
+     "                                    constant int* P [[buffer(3)]],\n"
+     "                                    uint3 group [[threadgroup_position_in_grid]],\n"
+     "                                    ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     "  constexpr short rowsPerSimd=2, simdgroupsPerThreadgroup=2;\n"
+     "  constexpr uchar mask1=0x03, mask2=0x0c, mask3=0x30, mask4=0xc0;\n"
+     "  int M=P[0], K=P[1], N=P[2], mi=(int)group.y, nb=K/256;\n"
+     "  int firstRow=((int)group.x*simdgroupsPerThreadgroup+(int)simdgroup)*rowsPerSimd;\n"
+     "  if(mi>=M || firstRow>=N) return; int rowBytes=nb*210;\n"
+     "  short tid=lane/2, ix=lane%2, ip=tid/8, il=tid%8, l0=4*il;\n"
+     "  short scaleOffset=8*ip+l0/16, yOffset=128*ip+l0;\n"
+     "  short qLowOffset=64*ip+l0, qHighOffset=32*ip+l0;\n"
+     "  device const block_q6_K* weights=(device const block_q6_K*)(W+firstRow*rowBytes);\n"
+     "  device const float* input=X+mi*K; float sums[rowsPerSimd]={0.0f,0.0f};\n"
+     "  for(int ib=ix;ib<nb;ib+=2){\n"
+     "    device const uchar* q1=weights[ib].ql+qLowOffset; device const uchar* q2=q1+32;\n"
+     "    device const uchar* qh=weights[ib].qh+qHighOffset;\n"
+     "    device const char* sc=weights[ib].scales+scaleOffset; device const half* dh=&weights[ib].d;\n"
+     "    device const float* y=input+ib*256+yOffset; float yl[16];\n"
+     "    for(short l=0;l<4;l++){ yl[4*l+0]=y[l]; yl[4*l+1]=y[l+32];\n"
+     "      yl[4*l+2]=y[l+64]; yl[4*l+3]=y[l+96]; }\n"
+     "    for(short row=0;row<rowsPerSimd&&firstRow+row<N;row++){ float4 partial=float4(0.0f);\n"
+     "      for(short l=0;l<4;l++){\n"
+     "        partial[0]+=yl[4*l+0]*((int)((q1[l]&0x0f)|((qh[l]&mask1)<<4))-32);\n"
+     "        partial[1]+=yl[4*l+1]*((int)((q2[l]&0x0f)|((qh[l]&mask2)<<2))-32);\n"
+     "        partial[2]+=yl[4*l+2]*((int)((q1[l]>>4)|((qh[l]&mask3)<<0))-32);\n"
+     "        partial[3]+=yl[4*l+3]*((int)((q2[l]>>4)|((qh[l]&mask4)>>2))-32); }\n"
+     "      sums[row]+=float(dh[0])*(partial[0]*float(sc[0])+partial[1]*float(sc[2])+\n"
+     "        partial[2]*float(sc[4])+partial[3]*float(sc[6]));\n"
+     "      q1+=rowBytes; q2+=rowBytes; qh+=rowBytes; sc+=rowBytes; dh+=rowBytes/2;\n"
+     "    }\n"
+     "  }\n"
+     "  for(short row=0;row<rowsPerSimd&&firstRow+row<N;row++){ float total=simd_sum(sums[row]);\n"
+     "    if(lane==0) O[mi*N+firstRow+row]=total; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gQMatMulQ6K = nil;
+static id<MTLComputePipelineState> gQMatMulQ6KCooperative = nil;
+static int gQMatMulQ6KUseCooperative = 1;
+static int gQMatMulQ6KCooperativeSupported = 0;
 
 static int ensure_qmatmul_q6k(void) {
     if (gQMatMulQ6K != nil) return 0;
@@ -2329,7 +2455,24 @@ static int ensure_qmatmul_q6k(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"qmatmul_q6k"];
     if (fn == nil) return -6;
     gQMatMulQ6K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    id<MTLFunction> coop = [lib newFunctionWithName:@"qmatmul_q6k_cooperative"];
+    if (coop != nil) {
+        gQMatMulQ6KCooperative = [gDevice newComputePipelineStateWithFunction:coop error:&err];
+        gQMatMulQ6KCooperativeSupported = gQMatMulQ6KCooperative != nil &&
+            gQMatMulQ6KCooperative.threadExecutionWidth == 32 &&
+            gQMatMulQ6KCooperative.maxTotalThreadsPerThreadgroup >= 64;
+    }
     return gQMatMulQ6K != nil ? 0 : -6;
+}
+
+int mtl_q6k_cooperative_set(int on) {
+    int prev = gQMatMulQ6KUseCooperative;
+    gQMatMulQ6KUseCooperative = on ? 1 : 0;
+    return prev;
+}
+
+static int q6k_cooperative_enabled(void) {
+    return gQMatMulQ6KUseCooperative && gQMatMulQ6KCooperativeSupported;
 }
 
 int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int K, int N) {
@@ -2349,18 +2492,24 @@ int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
+        const int cooperative = M == 1 && q6k_cooperative_enabled();
+        id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gQMatMulQ6K];
+        [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
         [enc setBuffer:wb offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
         [enc setBuffer:pb offset:0 atIndex:3];
-        int total = M * N;
-        NSUInteger tg = gQMatMulQ6K.maxTotalThreadsPerThreadgroup;
-        if ((NSUInteger)total < tg) tg = (NSUInteger)total;
-        [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        if (cooperative) {
+            [enc dispatchThreadgroups:MTLSizeMake((N + 3)/4, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
+        } else {
+            int total = M * N;
+            NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+            if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+            [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+        }
         [enc endEncoding];
         [cmd commit];
         [cmd waitUntilCompleted];

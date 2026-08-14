@@ -1,0 +1,48 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/simdgroups1-12 200 221841 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/cooperative-12 200 213860 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/simdgroups4-12 200 217428 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/simdgroups8-12 200 213910 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/simdgroups1-12 200 189912 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/cooperative-12 200 157372 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/simdgroups4-12 200 159984 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/simdgroups8-12 200 156585 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/simdgroups1-12 200 176563 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/cooperative-12 200 171281 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/simdgroups4-12 200 170331 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/simdgroups8-12 200 176991 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/simdgroups1-12 200 167717 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/cooperative-12 200 166451 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/simdgroups4-12 200 165022 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/simdgroups8-12 200 169431 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/simdgroups1-12 200 197788 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/cooperative-12 200 196389 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/simdgroups4-12 200 198849 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/simdgroups8-12 200 199163 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/simdgroups1-12 200 235815 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/cooperative-12 200 248692 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/simdgroups4-12 200 253935 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/simdgroups8-12 200 261144 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/simdgroups1-12 200 359865 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/cooperative-12 200 374495 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/simdgroups4-12 200 356399 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/simdgroups8-12 200 374946 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/simdgroups1-12 200 174924 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/cooperative-12 200 149188 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/simdgroups4-12 200 144064 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/simdgroups8-12 200 149155 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N2048/simdgroups1-12 200 161987 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N2048/cooperative-12 200 156114 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N2048/simdgroups4-12 200 157695 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N2048/simdgroups8-12 200 162524 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/simdgroups1-12 200 181231 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/cooperative-12 200 181221 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/simdgroups4-12 200 187579 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/simdgroups8-12 200 186776 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N32000/simdgroups1-12 200 440680 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N32000/cooperative-12 200 445446 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N32000/simdgroups4-12 200 453573 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N32000/simdgroups8-12 200 441685 ns/op 8 B/op 1 allocs/op

@@ -134,3 +134,16 @@ func TestImpactAlwaysRunCustomAndMissing(t *testing.T) {
 		t.Errorf("custom always-run: got %q, want %q (meta added, ghost skipped)", got, "example.com/m/a example.com/m/meta")
 	}
 }
+
+// TestDefaultAlwaysRunExcludesExternalPerfscan pins T984's execution boundary:
+// perfscan is an external CLI with its own CI job, not a Go package cichange may
+// pass to `go test`. Reintroducing the deleted package name would make every
+// selective test run fail before the external scanner even starts.
+func TestDefaultAlwaysRunExcludesExternalPerfscan(t *testing.T) {
+	_, _, _, _, alwaysRun := defaultRules()
+	for _, pkg := range alwaysRun {
+		if pkg == "internal/perfscan" {
+			t.Fatal("internal/perfscan must stay out of alwaysRun; external perfscan has a dedicated CI job")
+		}
+	}
+}

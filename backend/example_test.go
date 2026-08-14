@@ -41,6 +41,41 @@ func ExampleAvailable() {
 	// Output: cpu present: true
 }
 
+// ExecuteInto lets an inference loop own and reuse result storage. The selected
+// backend must expose an IntoKernel for the operation; CPU SiLU supports both
+// F32 and F64. Recorder/autograd contexts and storage aliases are rejected.
+func ExampleExecuteInto() {
+	ctx := backend.NewContext()
+	x := tensor.FromFloat64(tensor.Shape{3}, []float64{-1, 0, 1})
+	out := tensor.New(tensor.F64, x.Shape())
+	inputs := []*tensor.Tensor{x}
+	outputs := []*tensor.Tensor{out}
+
+	if err := backend.ExecuteInto(ctx, backend.OpSiLU, inputs, outputs, nil); err != nil {
+		panic(err)
+	}
+	fmt.Printf("%.3f\n", out.AtF64(2))
+	// Output: 0.731
+}
+
+// IntoBackend is optional: callers can probe whether the backend selected by a
+// context exposes any caller-owned-output kernels.
+func ExampleIntoBackend() {
+	_, ok := backend.NewContext().Backend.(backend.IntoBackend)
+	fmt.Println(ok)
+	// Output: true
+}
+
+// IntoKernel capability is keyed by the same operation and dtype pair as a
+// regular Kernel. ExecuteInto performs this lookup after normal routing.
+func ExampleIntoKernel() {
+	ib := backend.NewContext().Backend.(backend.IntoBackend)
+	k, ok := ib.KernelInto(backend.OpSiLU, tensor.F64)
+	var _ backend.IntoKernel = k
+	fmt.Println(k != nil, ok)
+	// Output: true true
+}
+
 // Reduction controls whether a batch of per-row losses is averaged, summed,
 // or returned intact. Mean and sum therefore produce one scalar; none keeps
 // one value per input row so callers can apply their own weighting or mask.

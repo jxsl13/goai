@@ -1,0 +1,263 @@
+{
+  "schema": 1,
+  "protocol": {
+    "minimum_samples": 10,
+    "interleaved": true,
+    "prebuilt": true,
+    "statistics": "golang.org/x/perf/cmd/benchstat v0.0.0-20260709024250-82a0b07e230d; median, 95% confidence interval, and p-value"
+  },
+  "cells": [
+    {
+      "id": "m2-cpu-silu-f64-into",
+      "status": "provisional",
+      "hardware": "Apple M2 Pro, 12 logical CPUs, 32 GiB",
+      "os": "macOS 26.5.1, darwin/arm64",
+      "accelerator": "CPU, Apple arm64 NEON",
+      "workload": "caller-owned-output SiLU: GoAI backend.ExecuteInto(OpSiLU) vs PyTorch aten.silu.out",
+      "shape": "contiguous [256,1408], 360448 elements",
+      "dtype_quantization": "F64, unquantized",
+      "batch_context": "256 rows x hidden 1408; context N/A",
+      "state": "warm; implementation warm-up excluded",
+      "workspace_transfers": "input and output preallocated and CPU-resident; no transfers; one input read plus one output write",
+      "quality": "GoAI matches ExecuteInto/Execute bitwise and NEON vector/tail bitwise; math.Exp sweep max relative error 3.048e-16; PyTorch companion max relative error 2.219e-16",
+      "metric": "ns/op, lower is better; allocations are secondary",
+      "goai": {
+        "name": "GoAI",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "Go 1.26.6, GOEXPERIMENT=simd, CGO_ENABLED=0",
+        "threads": 12,
+        "source_hash": "5e50d23f51f14329d0b151bf8d2b1e9a64738d57a5f94fd896cc34136d652b3a"
+      },
+      "incumbent": {
+        "name": "PyTorch",
+        "revision": "v2.12.1",
+        "runtime": "Python 3.14.7",
+        "threads": 8
+      },
+      "goai_result": "137.0 us/op +/-9%; median 137040 ns/op; 0 allocs/op",
+      "incumbent_result": "208.4 us/op +/-17%; median 208354 ns/op",
+      "verdict": "GoAI 1.520x faster; PyTorch +52.04% sec/op (p=0.000, n=20)",
+      "samples": 20,
+      "interleaved": true,
+      "prebuilt": true,
+      "statistics": "benchstat median and 95% confidence interval over two complete 10-sample sessions; p=0.000; n=20 per implementation",
+      "reproduce": [
+        "go install golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d",
+        "go run ./internal/benchcompare/leadership collect-silu -root . -out /tmp/goai-silu-evidence -samples 10 -seconds 1 -go-procs 12 -torch-threads 8 -python .venv/bin/python -benchstat $(go env GOPATH)/bin/benchstat"
+      ],
+      "evidence": [
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/README.md",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/session-a-metadata.json",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/session-b-metadata.json",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/pytorch-thread-sweep.txt",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/summary.json",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/benchstat.txt",
+        "internal/benchcompare/leadership/evidence/m2-silu-20260814/quality.txt"
+      ],
+      "blockers": [
+        "the local repository is bare, so this new GoAI source has no immutable commit/release; source and binary SHA-256 are recorded, but V42 forbids a published claim until the source revision is immutable"
+      ]
+    },
+    {
+      "id": "m2-metal-tinyllama-q4km-decode-vs-llamacpp",
+      "status": "provisional",
+      "hardware": "Apple M2 Pro, 32 GiB",
+      "os": "macOS, darwin/arm64",
+      "accelerator": "native Metal",
+      "workload": "TinyLlama-1.1B single-stream decode on the identical Q4_K_M GGUF",
+      "shape": "vocab 32000, dim 2048, 22 layers, GQA 32:4",
+      "dtype_quantization": "Q4_K_M weights",
+      "batch_context": "batch 1, one warm token then tg32; llama-bench pp1,tg32",
+      "state": "warm decode; model load excluded",
+      "workspace_transfers": "weights and KV cache device-resident; timed step includes command completion",
+      "quality": "same GGUF in both engines; GoAI quantized decode is F32-exact against gguf-py",
+      "metric": "decode tok/s, higher is better",
+      "goai": {
+        "name": "GoAI Metal",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "Go 1.26.6, llamagpu.NewQuant, cooperative Q4_K and Q6_K M=1",
+        "threads": 0
+      },
+      "incumbent": {
+        "name": "llama.cpp Metal",
+        "revision": "48d22e295e2b86b47366c16390794f3e05ba970a",
+        "runtime": "llama-bench build 10360, Metal",
+        "threads": 8
+      },
+      "goai_result": "median 16.35 tok/s over 10 process-level samples",
+      "incumbent_result": "median 119.9 tok/s over 10 llama-bench repetitions",
+      "verdict": "llama.cpp 7.33x faster; cooperative Q4_K and Q6_K close a material part, but not most, of the native-Metal gap",
+      "samples": 10,
+      "interleaved": false,
+      "prebuilt": true,
+      "statistics": "10 samples per engine; not interleaved across engines, so the row remains provisional",
+      "reproduce": [
+        "GOEXPERIMENT=simd go test -tags vulkan -c -o /tmp/goai-prod-q6k.test ./internal/benchcompare",
+        "GOAI_Q4K_COOPERATIVE=true GOAI_Q6K_COOPERATIVE=true GOAI_PROD_DECODE_TOKENS=32 GOAI_PROD_PREFILL_TOKENS=1 GOAI_PROD_REPS=1 TINYLLAMA_GGUF=$PWD/models/tinyllama-1.1b-q4km.gguf /tmp/goai-prod-q6k.test -test.run=^TestProdDecodeGGUF$ -test.count=1 -test.v",
+        "llama-bench -m models/tinyllama-1.1b-q4km.gguf -p 1 -n 32 -r 10 -o json"
+      ],
+      "evidence": [
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/end-to-end.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/metadata.json",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/end-to-end.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/metadata.json"
+      ],
+      "blockers": [
+        "GoAI and llama.cpp samples were not interleaved with each other, and the bare local workspace cannot supply an immutable GoAI source revision"
+      ]
+    },
+    {
+      "id": "m2-metal-tinyllama-4bit-decode-vs-mlx",
+      "status": "provisional",
+      "hardware": "Apple M2 Pro, 32 GiB",
+      "os": "macOS, darwin/arm64",
+      "accelerator": "native Metal",
+      "workload": "TinyLlama-1.1B single-stream 4-bit-class decode",
+      "shape": "vocab 32000, dim 2048, 22 layers, GQA 32:4",
+      "dtype_quantization": "GoAI Q4_K_M vs MLX affine 4-bit",
+      "batch_context": "batch 1, tg64; GoAI pp64 vs MLX pp56 prompt",
+      "state": "warm decode; model conversion and load excluded",
+      "workspace_transfers": "weights and KV cache device-resident; timed generation includes framework completion",
+      "quality": "same base model but different 4-bit encodings and prompt lengths; GoAI side is F32-exact against gguf-py",
+      "metric": "decode tok/s, higher is better",
+      "goai": {
+        "name": "GoAI Metal",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "Go 1.26.6, llamagpu.NewQuant, cooperative Q4_K and Q6_K M=1",
+        "threads": 0
+      },
+      "incumbent": {
+        "name": "MLX-LM",
+        "revision": "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247",
+        "runtime": "Python 3.14.7, MLX 0.32.0, MLX-LM 0.31.3",
+        "threads": 0
+      },
+      "goai_result": "median 16.35 tok/s over 10 process-level tg32 samples",
+      "incumbent_result": "138.1 tok/s, best of 3 tg64 samples after warm-up",
+      "verdict": "MLX 8.45x faster in the directional 4-bit class comparison; not a same-weight claim",
+      "samples": 3,
+      "interleaved": false,
+      "prebuilt": true,
+      "statistics": "historical best-of-3 result; no publishable confidence interval",
+      "reproduce": [
+        "TINYLLAMA_GGUF=$PWD/models/tinyllama-1.1b-q4km.gguf GOEXPERIMENT=simd go test ./internal/benchcompare -run TestProdDecodeGGUF -v",
+        ".venv/bin/python testdata/bench_mlx.py"
+      ],
+      "evidence": [
+        "BENCHMARKS.md section 2",
+        "docs/benchmarking.md T887 production-scale head-to-head"
+      ],
+      "blockers": [
+        "only 3 non-interleaved runs exist and the quantization plus prompt lengths differ; this row is a directional engine comparison, not a publishable same-semantics leadership claim"
+      ]
+    },
+    {
+      "id": "m2-metal-q4k-cooperative-vs-scalar",
+      "status": "provisional",
+      "hardware": "Apple M2 Pro, 32 GiB",
+      "os": "macOS 26.5.1, darwin/arm64",
+      "accelerator": "native Metal, Apple GPU family 8",
+      "workload": "GoAI simdgroup-cooperative Q4_K fused dequantization plus matvec versus the forced-off historical scalar-K kernel",
+      "shape": "KxN grid: 2048x2048, 2048x2560, 2048x5632, 5632x2048, 2048x32000",
+      "dtype_quantization": "GGUF Q4_K, identical synthetic packed weights and F32 input/output",
+      "batch_context": "M=1 decode",
+      "state": "warm primary cell; separate fresh-process cold evidence retained without a leadership claim",
+      "workspace_transfers": "weights/input/output device-resident; timed boundary includes recorder creation, parameter encoding, command submission, and completion; upload and compilation excluded",
+      "quality": "cooperative matches scalar including odd-N tail; both cross-reference the f64 GGUF implementation over K=256..4096; final maximum relative error 1.33e-06 within existing tolerance",
+      "metric": "ns/op, lower is better; allocations secondary",
+      "goai": {
+        "name": "GoAI Metal cooperative Q4_K",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "Go 1.26.6, native Metal simdgroup reduction",
+        "threads": 0
+      },
+      "incumbent": {
+        "name": "GoAI Metal historical scalar Q4_K",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "same binary, forced-off control",
+        "threads": 0
+      },
+      "goai_result": "250.8, 256.0, 288.4, 284.2, and 574.6 us/op medians across the shape grid",
+      "incumbent_result": "546.2, 546.1, 553.4, 1189.2, and 970.9 us/op medians across the same grid",
+      "verdict": "cooperative is 1.690x to 4.185x faster in every measured M=1 cell; geomean time -56.34% (p=0.000, n=10 each)",
+      "samples": 10,
+      "interleaved": true,
+      "prebuilt": true,
+      "statistics": "benchstat median and 95% confidence interval; paired alternating order, 10 samples per mode and shape, 500 iterations per sample",
+      "reproduce": [
+        "go test -c -o /tmp/goai-metal-q4k.test ./backend/metal",
+        "/tmp/goai-metal-q4k.test -test.run=^$ -test.bench=^BenchmarkMetalQ4KDecodeLeaf/K2048N5632/cooperative$ -test.benchtime=500x -test.count=1 -test.benchmem",
+        "/tmp/goai-metal-q4k.test -test.run=^$ -test.bench=^BenchmarkMetalQ4KDecodeLeaf/K2048N5632/scalar$ -test.benchtime=500x -test.count=1 -test.benchmem",
+        "$(go env GOPATH)/bin/benchstat internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/q4k-scalar.txt internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/q4k-cooperative.txt"
+      ],
+      "evidence": [
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/README.md",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/q4k-scalar.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/q4k-cooperative.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/benchstat.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/cold-start.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/final-guard-confirmation.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/quality.txt",
+        "internal/benchcompare/leadership/evidence/m2-q4k-cooperative-20260814/metadata.json"
+      ],
+      "blockers": [
+        "this is a same-binary remediation A/B, not an external leadership claim; the bare workspace also lacks an immutable GoAI revision"
+      ]
+    },
+    {
+      "id": "m2-metal-q6k-cooperative-vs-scalar",
+      "status": "provisional",
+      "hardware": "Apple M2 Pro, 19-core GPU, 32 GiB",
+      "os": "macOS 26.5.1, darwin/arm64",
+      "accelerator": "native Metal, Apple GPU family 8",
+      "workload": "GoAI simdgroup-cooperative Q6_K fused dequantization plus matvec versus the forced-off historical scalar-K kernel",
+      "shape": "KxN grid: 2048x256, 2048x2048, 5632x2048, 2048x32000",
+      "dtype_quantization": "GGUF Q6_K, identical synthetic packed weights and F32 input/output",
+      "batch_context": "M=1 decode",
+      "state": "warm primary cell; separate fresh-process cold evidence retained",
+      "workspace_transfers": "weights/input/output device-resident; timed boundary includes recorder creation, parameter encoding, command submission, and completion; upload and compilation excluded",
+      "quality": "cooperative matches the forced-off scalar kernel including an odd-N tail with max relative difference 3.846e-07; decode and prefill cross-reference the f64 GGUF implementation through K=4096",
+      "metric": "ns/op, lower is better; allocations secondary",
+      "goai": {
+        "name": "GoAI Metal cooperative Q6_K",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "Go 1.26.6, native Metal simdgroup reduction",
+        "threads": 0
+      },
+      "incumbent": {
+        "name": "GoAI Metal historical scalar Q6_K",
+        "revision": "bare-workspace-uncommitted",
+        "runtime": "same binary, forced-off control",
+        "threads": 0
+      },
+      "goai_result": "214.4, 253.5, 300.9, and 727.7 us/op medians across the shape grid",
+      "incumbent_result": "577.0, 1459.7, 3546.3, and 3187.4 us/op medians across the same grid",
+      "verdict": "cooperative is 2.692x to 11.788x faster in every measured M=1 cell; geomean time -81.20% (p=0.000, n=10 each)",
+      "samples": 10,
+      "interleaved": true,
+      "prebuilt": true,
+      "statistics": "benchstat median and 95% confidence interval; paired alternating order, 10 samples per mode and shape, 500 iterations per sample",
+      "reproduce": [
+        "go test -c -o /tmp/goai-metal-q6k.test ./backend/metal",
+        "/tmp/goai-metal-q6k.test -test.run=^$ -test.bench=^BenchmarkMetalQ6KDecodeLeaf/K5632N2048/cooperative$ -test.benchtime=500x -test.count=1 -test.benchmem",
+        "/tmp/goai-metal-q6k.test -test.run=^$ -test.bench=^BenchmarkMetalQ6KDecodeLeaf/K5632N2048/scalar$ -test.benchtime=500x -test.count=1 -test.benchmem",
+        "$(go env GOPATH)/bin/benchstat internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/q6k-scalar.txt internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/q6k-cooperative.txt"
+      ],
+      "evidence": [
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/README.md",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/q6k-scalar.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/q6k-cooperative.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/benchstat.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/cold-start.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/end-to-end.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/quality.txt",
+        "internal/benchcompare/leadership/evidence/m2-q6k-cooperative-20260814/metadata.json"
+      ],
+      "blockers": [
+        "this is a same-binary remediation A/B, not an external leadership claim; the bare workspace also lacks an immutable GoAI revision"
+      ]
+    }
+  ]
+}

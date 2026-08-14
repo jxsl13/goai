@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "date": "2026-08-14",
+  "hardware": "Apple M2 Pro, 19-core GPU, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "workspace_base_revision": "a2f27462723b7a1b1dbba37328f4281ef9aa703c",
+  "workspace_revision": "bare-workspace-uncommitted",
+  "source_sha256": {
+    "backend/metal/metal_bridge.m": "304ca71609aba20c302950f24f71f27b1684886ac9de377ddfc86ce12a1640a1",
+    "backend/metal/metal_bridge.h": "5d7c702a04dc2612e016494a6d5e61c7fcf3da8c1c9d15055ec6a41a9be1e381",
+    "backend/metal/metal.go": "5630d5c9ef61af75ceff965096544bca7ecdac37d6305ed807ef1a581db9cea3",
+    "backend/metal/q6k_bench_test.go": "684f965a90065683d6f22d2f8d26d619aced14a229d8752e893a4aa161731d8d",
+    "backend/metal/qmatmul_test.go": "19200289ec139e09412f66baeab55aaba20e8fdc137d9a22b7702df120338ce0",
+    "internal/benchcompare/prod_decode_external_test.go": "424ace582b075ed3d75310d9b54433449457b32cfbeadff7c366b13170479c35"
+  },
+  "binary_sha256": {
+    "measured_warm_leaf_test": "4d13c70b58acbe544fc7bd6e3fd0e3a0734d62b5cf39c00d5a5cc59e4b53b435",
+    "measured_cold_leaf_test": "6ff0b9a26378f2830d398e53dc5b2cfc1c1641b1e6b256b8b5f42f872f5b8edf",
+    "measured_end_to_end_test": "e5ec2aec8a73e0e6f801a95e7e729cd41f161976d5162e41821f8afe7338f409"
+  },
+  "model": {
+    "path": "models/tinyllama-1.1b-q4km.gguf",
+    "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+    "bytes": 668788096,
+    "parameters": 1100048384
+  },
+  "pins": {
+    "benchstat": "golang.org/x/perf/cmd/benchstat@v0.0.0-20260709024250-82a0b07e230d",
+    "llama_cpp": "48d22e295e2b86b47366c16390794f3e05ba970a",
+    "llama_bench_build": 10360,
+    "mlx": "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247",
+    "mlx_version": "0.32.0",
+    "mlx_lm_version": "0.31.3"
+  },
+  "protocol": {
+    "leaf_samples_per_mode_and_shape": 10,
+    "leaf_iterations_per_sample": 500,
+    "leaf_warmups_per_process": 20,
+    "mode_order": "paired and alternating",
+    "prebuilt": true,
+    "end_to_end_samples_per_mode": 10,
+    "decode_tokens_per_sample": 32,
+    "cold_samples_per_mode": 10
+  }
+}

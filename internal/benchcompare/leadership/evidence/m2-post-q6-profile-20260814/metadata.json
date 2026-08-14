@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "date": "2026-08-14",
+  "hardware": "Apple M2 Pro, 19-core GPU, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "xctrace": "16.0 (17F113)",
+  "workspace_base_revision": "a2f27462723b7a1b1dbba37328f4281ef9aa703c",
+  "workspace_revision": "bare-workspace-uncommitted",
+  "source_sha256": {
+    "backend/metal/metal_bridge.m": "304ca71609aba20c302950f24f71f27b1684886ac9de377ddfc86ce12a1640a1",
+    "backend/metal/metal_bridge.h": "5d7c702a04dc2612e016494a6d5e61c7fcf3da8c1c9d15055ec6a41a9be1e381",
+    "backend/metal/metal.go": "5630d5c9ef61af75ceff965096544bca7ecdac37d6305ed807ef1a581db9cea3",
+    "internal/benchcompare/prod_decode_external_test.go": "424ace582b075ed3d75310d9b54433449457b32cfbeadff7c366b13170479c35"
+  },
+  "binary_sha256": "e5ec2aec8a73e0e6f801a95e7e729cd41f161976d5162e41821f8afe7338f409",
+  "trace_tree_manifest_sha256": "de11c12f8dcdb51277cccd9783248dbe1fbbdb2779c95ea817e52bc52d594628",
+  "trace_tree_manifest_command": "find TRACE -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256",
+  "trace_disk_kib": 106904,
+  "model": {
+    "path": "models/tinyllama-1.1b-q4km.gguf",
+    "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+    "bytes": 668788096,
+    "parameters": 1100048384
+  },
+  "pins": {
+    "llama_cpp": "48d22e295e2b86b47366c16390794f3e05ba970a",
+    "llama_bench_build": 10360,
+    "mlx": "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247",
+    "mlx_version": "0.32.0",
+    "mlx_lm_version": "0.31.3"
+  },
+  "protocol": {
+    "cooperative_q4k": true,
+    "cooperative_q6k": true,
+    "prefill_tokens": 1,
+    "decode_tokens": 32,
+    "repetitions": 1,
+    "xctrace_time_limit_seconds": 12,
+    "shader_timeline": false,
+    "gpu_counters": false
+  }
+}

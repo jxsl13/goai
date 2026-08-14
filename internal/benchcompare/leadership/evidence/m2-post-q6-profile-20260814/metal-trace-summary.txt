@@ -1,0 +1,43 @@
+capture: Metal System Trace
+xctrace: 16.0 (17F113)
+host: Apple M2 Pro, 19-core GPU, 32 GiB
+os: macOS 26.5.1 (25F80), darwin/arm64
+go: go1.26.6 darwin/arm64
+binary_sha256: e5ec2aec8a73e0e6f801a95e7e729cd41f161976d5162e41821f8afe7338f409
+model_sha256: 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0
+model_bytes: 668788096
+
+environment:
+  GOAI_Q4K_COOPERATIVE=true
+  GOAI_Q6K_COOPERATIVE=true
+  GOAI_PROD_DECODE_TOKENS=32
+  GOAI_PROD_PREFILL_TOKENS=1
+  GOAI_PROD_REPS=1
+
+xctrace time limit: 12 s
+
+harness result: 17.2 tok/s
+load plus pass: 7.33 s
+command buffers in launched process: 35
+exported GPU interval rows in launched process: 1679
+median summed GPU duration per command buffer: 57.437583 ms
+warm command-buffer lifetime: approximately 55-63 ms
+CPU encoder time: normally 0.24-0.65 ms; isolated 1.49 ms observation
+
+representative warm command buffer 0xc7528948e:
+  GPU commands: 45
+  compute intervals: 23
+  blit intervals: 22
+  usual blit duration: approximately 0.002 ms
+  largest observed representative blit: 0.174 ms
+
+limitations:
+- shader timeline was disabled/unavailable, and no GPU counters were collected
+- adjacent operation encoders are grouped into compute intervals in this export
+- interval durations therefore cannot be attributed to a single shader
+- this is one diagnostic run, not an external benchmark comparison
+
+conclusion:
+The short-context decode path is GPU-kernel-bound, not CPU encode/submit-bound.
+The next experiment should stay inside the incident Q4_K/Q6_K kernels and use
+the current cooperative path as a forced same-binary control.

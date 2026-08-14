@@ -1,0 +1,11 @@
+                                         │ baseline.txt │ candidate.txt │
+                                         │    sec/op    │ sec/op vs base                    │
+MetalQ4KDecodeLeaf/K2048N2560/variant-12     158.5u      160.4u ~ (p=0.912 n=10)
+MetalQ4KDecodeLeaf/K2048N5632/variant-12     168.3u      168.9u ~ (p=0.529 n=10)
+MetalQ4KDecodeLeaf/K5632N2048/variant-12     172.0u      173.0u ~ (p=0.684 n=10)
+MetalQ6KDecodeLeaf/K2048N256/variant-12      136.0u      139.4u ~ (p=0.853 n=10)
+MetalQ6KDecodeLeaf/K5632N2048/variant-12     180.8u      185.5u ~ (p=0.529 n=10)
+geomean                                     162.4u      164.7u +1.44%
+
+All rows: baseline and candidate both 8 B/op and 1 alloc/op.
+Mann-Whitney U test; medians shown with ten samples per mode and shape.

@@ -1,0 +1,38 @@
+# PyTorch v2.12.1 aten.silu.out configuration preflight
+# Apple M2 Pro, F64 [256,1408], one-second samples; lower is better.
+# This selects the incumbent thread count and is not part of the comparison n.
+
+threads=4 rep=1 303836 ns/op
+threads=4 rep=2 302413 ns/op
+threads=4 rep=3 299810 ns/op
+threads=4 rep=4 301419 ns/op
+threads=4 rep=5 302882 ns/op
+threads=4 median=302413 ns/op
+
+threads=6 rep=1 223509 ns/op
+threads=6 rep=2 225003 ns/op
+threads=6 rep=3 227383 ns/op
+threads=6 rep=4 261792 ns/op
+threads=6 rep=5 227084 ns/op
+threads=6 median=227084 ns/op
+
+threads=8 rep=1 205719 ns/op
+threads=8 rep=2 215667 ns/op
+threads=8 rep=3 292836 ns/op
+threads=8 rep=4 204380 ns/op
+threads=8 rep=5 201568 ns/op
+threads=8 median=205719 ns/op
+
+threads=10 rep=1 258348 ns/op
+threads=10 rep=2 258479 ns/op
+threads=10 rep=3 251870 ns/op
+threads=10 rep=4 260220 ns/op
+threads=10 rep=5 273423 ns/op
+threads=10 median=258479 ns/op
+
+threads=12 rep=1 240101 ns/op
+threads=12 rep=2 239240 ns/op
+threads=12 rep=3 244103 ns/op
+threads=12 rep=4 240049 ns/op
+threads=12 rep=5 239609 ns/op
+threads=12 median=240049 ns/op

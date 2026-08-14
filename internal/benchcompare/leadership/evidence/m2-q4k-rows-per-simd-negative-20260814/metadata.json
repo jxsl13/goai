@@ -1,0 +1,27 @@
+{
+  "date": "2026-08-14",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "toolchain": {
+    "go": "go1.26.6",
+    "xcode": "26.6 (17F113)",
+    "clang": "Apple clang 21.0.0 (clang-2100.1.1.101)",
+    "spectackle": "v0.9.3"
+  },
+  "experiment": {
+    "control_rows_per_simd": 2,
+    "candidate_rows_per_simd": [1, 4, 8],
+    "simdgroups_per_threadgroup": 2,
+    "screen_iterations": 200,
+    "paired_samples": 10,
+    "paired_iterations": 500,
+    "leaf_gate": 1.10,
+    "model_gate": 1.05
+  },
+  "experimental_source_sha256": {
+    "backend/metal/metal_bridge.m": "20ffb2d57ae9ecb0ecf1c3714f71a7676ef30b25c41afd86d73a9b00281d85ec",
+    "backend/metal/metal_bridge.h": "16fe90e9ebab9c051444085b0fbbc12159b19789277ffa6a1bb7a24fcb5ccfff",
+    "backend/metal/metal.go": "a39f70c595f60be0905fadb8263f39c94969cae840fcfed15d28dac214f412e4",
+    "backend/metal/q4k_bench_test.go": "e0855f1dd2078ce950cb61cd73acdee1c02800af620d79c827404d31dbd54cc5"
+  }
+}

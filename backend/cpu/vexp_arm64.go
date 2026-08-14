@@ -8,9 +8,11 @@ import "math"
 // (mhaSoftmaxBandF32 gates on vexpF32Fast; the GELU/SiLU/… activation kernels
 // gate on vexpNeon; driver + numerics in vexp.go). Both are true here.
 const (
-	vexpNeon    = true
-	vexpF32Fast = true
-	vexpF64Fast = false // F64 vector SiLU is amd64-only for now (§T667); arm64 keeps the scalar exact path
+	vexpNeon         = true
+	vexpF32Fast      = true
+	vsiluF64Fast     = true // two-lane NEON F64 SwiGLU activation (§T985)
+	vsoftplusF64Fast = false
+	vsoftcapF64Fast  = false
 )
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
@@ -183,16 +185,64 @@ func vlogF32(dst, src []float32) {
 	}
 }
 
-// vsiluF64 exists only so siluKernelCPU type-checks on arm64; vexpF64Fast is
-// false here (the F64 vector SiLU is amd64-only for now), so it is dead code.
+// vsiluPairsNeonF64 evaluates two float64 lanes per pair with the same
+// range-reduced FMA polynomial as expF64poly.
+//
+//go:noescape
+func vsiluPairsNeonF64(dst, src *float64, pairs int)
+
+// expF64poly is the scalar twin of the NEON exp lane. Keeping the operation
+// sequence identical makes the vector body and the odd tail bit-for-bit equal.
+func expF64poly(x float64) float64 {
+	if x < -708.0 {
+		x = -708.0
+	}
+	kf := math.RoundToEven(x * 1.4426950408889634)
+	r := math.FMA(kf, -6.93147180369123816490e-01, x)
+	r = math.FMA(kf, -1.90821492927058770002e-10, r)
+	p := 1.6059043836821613e-10
+	p = math.FMA(p, r, 2.08767569878681e-09)
+	p = math.FMA(p, r, 2.505210838544172e-08)
+	p = math.FMA(p, r, 2.755731922398589e-07)
+	p = math.FMA(p, r, 2.7557319223985893e-06)
+	p = math.FMA(p, r, 2.48015873015873e-05)
+	p = math.FMA(p, r, 1.984126984126984e-04)
+	p = math.FMA(p, r, 1.388888888888889e-03)
+	p = math.FMA(p, r, 8.333333333333333e-03)
+	p = math.FMA(p, r, 4.166666666666666e-02)
+	p = math.FMA(p, r, 1.6666666666666666e-01)
+	p = math.FMA(p, r, 0.5)
+	p = math.FMA(p, r, 1.0)
+	p = math.FMA(p, r, 1.0)
+	scale := math.Float64frombits(uint64(int64(kf)+1023) << 52)
+	return p * scale
+}
+
+func siluF64poly(x float64) float64 {
+	a := math.Abs(x)
+	z := 0.0
+	if a <= 708.0 {
+		z = expF64poly(-a)
+	}
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return x * num / (1 + z)
+}
+
 func vsiluF64(dst, src []float64) {
-	for i, v := range src {
-		dst[i] = v / (1 + math.Exp(-v))
+	n2 := len(src) &^ 1
+	if n2 > 0 {
+		vsiluPairsNeonF64(&dst[0], &src[0], n2>>1)
+	}
+	for i := n2; i < len(src); i++ {
+		dst[i] = siluF64poly(src[i])
 	}
 }
 
-// vsoftplusF64 exists only so softplusKernelCPU type-checks on arm64; vexpF64Fast
-// is false here (amd64-only for now), so it is dead code.
+// vsoftplusF64 exists only so softplusKernelCPU type-checks on arm64;
+// vsoftplusF64Fast is false here, so it is dead code.
 func vsoftplusF64(dst, src []float64) {
 	for i, v := range src {
 		if v > 0 {
@@ -203,8 +253,8 @@ func vsoftplusF64(dst, src []float64) {
 	}
 }
 
-// vsoftcapF64 exists only so softCapKernelCPU type-checks on arm64; vexpF64Fast is
-// false here (amd64-only for now), so it is dead code.
+// vsoftcapF64 exists only so softCapKernelCPU type-checks on arm64;
+// vsoftcapF64Fast is false here, so it is dead code.
 func vsoftcapF64(dst, src []float64, cap float64) {
 	for i, v := range src {
 		dst[i] = cap * math.Tanh(v/cap)

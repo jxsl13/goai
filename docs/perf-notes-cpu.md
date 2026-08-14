@@ -1,4 +1,4 @@
-# backend/cpu perf notes (last-percentile sweep, 2026-07)
+# backend/cpu perf notes (last-percentile sweep, 2026-07/08)
 
 Techniques researched and applied during the §V22-measured optimization pass of
 `backend/cpu/`, with the A/B numbers observed on the darwin/arm64 (M-series,
@@ -119,7 +119,82 @@ twin was built, measured **flat**, and reverted — sigmoid's cost is the
 `math.Exp` + divide, not the dispatch. Devirtualization pays only when the
 callee is cheap relative to an indirect call.
 
-## 7. Misc measured wins
+## 7. Two-lane F64 SiLU on Apple M2
+
+The ARM64 performance build already used Neon (Arm's 128-bit Advanced SIMD
+instruction set) for the float32 activation family, but float64 (F64) SiLU —
+the gate in every SwiGLU feed-forward block — still called scalar `math.Exp`.
+The existing AMD64 (x86-64) polynomial was ported as a two-lane Neon leaf: Cody-Waite
+range reduction, a degree-13 fused-multiply-add (FMA) chain and exponent-bit
+reconstruction. Two vectors are interleaved so their dependent FMA chains can
+overlap. An operation-specific capability switch enables only SiLU on ARM64;
+F64 softplus and soft-cap stay on their unchanged scalar paths.
+
+On an Apple M2 Pro with Go 1.26.5, `CGO_ENABLED=0`, `GOMAXPROCS=12` and the
+256×1408 F64 kernel, six alternating runs of prebuilt default and
+`GOEXPERIMENT=simd` binaries measured median **901,435 → 395,869 ns/op =
+2.28×**. Both paths allocate 9 times per operation; the approximately 2.884 MB
+is the output tensor and is unchanged. The 262,145-value accuracy sweep measured
+maximum relative error `3.048e-16`, and a separate dense sweep proved every
+vector lane bit-identical to the scalar tail. Signed zero, infinities and
+not-a-number (NaN) values are pinned explicitly. `go tool objdump` confirms
+`FRINTN`, two-lane `VFMLA`,
+`FCVTZS`, `VSHL`, `VBSL` and `FDIV`, with no scalar math call in the vector leaf.
+
+The L1 leaf also clears the external incumbent: with input and output already
+allocated and one thread, GoAI measured median **555,144 ns/op** versus
+**1.06 ms** for PyTorch 2.12.1 `aten.silu.out` on the same F64 shape, a **1.91×
+GoAI lead**. The whole allocating operation is not yet the winner: a stable
+six-run GoAI median was **225,231 ns/op** at 12 threads, while PyTorch's best
+local setting was **196.35 µs** at 8 threads (PyTorch leads 1.15×). That gap was
+localized below this arithmetic leaf: deterministic output-buffer reuse and the
+Go tensor allocation lifecycle were the next L0 target, rather than another
+transcendental rewrite.
+
+### Caller-owned output reuse closes the L0 gap
+
+`backend.ExecuteInto` now accepts caller-owned output tensors while preserving
+the exact backend-selection, optimized-CPU fallback and reference-fallback
+semantics of `backend.Execute`. The selected backend opts in through the small
+`IntoBackend` capability; unsupported operations fail explicitly instead of
+silently allocating. The first capability covers CPU SiLU F32 and F64. Its
+allocating and caller-owned paths share the same arithmetic body, so output bits
+cannot drift between the APIs.
+
+The boundary rejects recorder contexts, released storage, input/output or
+output/output aliases, offsets, non-contiguous layout, and mismatched output
+count, device, dtype, shape or storage length before arithmetic. This is a
+deliberately narrow ownership contract, not a global tensor pool. It follows
+the same broad preallocation model as PyTorch's documented
+[`out=` contract](https://docs.pytorch.org/docs/stable/notes/out.html), while
+keeping backend support explicit.
+
+Allocation profiling exposed two smaller reusable costs after output storage was
+removed: a captured per-dispatch closure and an escaping completion barrier in
+the worker pool. SiLU dispatch now uses typed pool tasks whose pointers remain
+garbage-collector roots, and completed barriers are reused only after all
+workers have left the task. The race suite found and closed the narrow
+`Wait`-returns-before-final-worker-exit window. Both generalizable patterns were
+reported upstream to perfscan as
+[#554](https://github.com/jxsl13/perfscan/issues/554) and
+[#556](https://github.com/jxsl13/perfscan/issues/556).
+
+On the same Apple M2 Pro, shape and F64 SIMD build, six alternating benchmark
+pairs from one prebuilt test binary measured:
+
+| API | Median ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| `backend.Execute` | 226,358 | approximately 2,884,370 | 7 |
+| `backend.ExecuteInto` | 133,497 | 0 | 0 |
+
+Caller-owned output is therefore **1.70× faster** than the allocating GoAI
+operation. A fresh PyTorch 2.12.1 sweep measured its best
+`torch.ops.aten.silu.out` result at **189,042 ns/op** with 8 threads, so the
+GoAI operation is now **1.42× faster** while remaining allocation-free. The
+next bottom-up step is profile-driven `IntoBackend` coverage for another
+allocation-dominated primitive, not speculative breadth.
+
+## 8. Misc measured wins
 
 - `pool2dMax`: compare natively in `T` instead of converting every tap to f64
   (f32→f64 is exact and monotonic → same winner, same stored bits; NaN

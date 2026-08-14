@@ -1,0 +1,139 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5579	193134 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4835	213992 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5437	193073 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5475	233755 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4924	207078 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5574	209631 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5229	188592 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5611	198328 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	3471	291898 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4022	205166 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4369	204225 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4960	209698 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4692	203128 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	3482	286575 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4381	203937 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	4913	202618 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	5054	243295 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	3313	373886 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	2362	479208 ns/op
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+# pytorch=2.12.1 threads=8 max_relative_error=2.219e-16
+BenchmarkSiLUF64Into-12	2521	451579 ns/op

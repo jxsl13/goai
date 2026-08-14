@@ -1,0 +1,27 @@
+# Ten process-level pairs; odd pairs ran cooperative then scalar, even pairs
+# reversed the order. Each sample used 32 sequential decode tokens and one timed
+# repetition after model load plus a correctness/warm step.
+pair 01 cooperative 9.9 tok/s
+pair 01 scalar 7.0 tok/s
+pair 02 scalar 7.1 tok/s
+pair 02 cooperative 10.0 tok/s
+pair 03 cooperative 10.0 tok/s
+pair 03 scalar 7.1 tok/s
+pair 04 scalar 7.0 tok/s
+pair 04 cooperative 10.0 tok/s
+pair 05 cooperative 9.9 tok/s
+pair 05 scalar 7.0 tok/s
+pair 06 scalar 7.0 tok/s
+pair 06 cooperative 9.8 tok/s
+pair 07 cooperative 9.6 tok/s
+pair 07 scalar 6.8 tok/s
+pair 08 scalar 6.9 tok/s
+pair 08 cooperative 9.8 tok/s
+pair 09 cooperative 9.8 tok/s
+pair 09 scalar 6.9 tok/s
+pair 10 scalar 6.9 tok/s
+pair 10 cooperative 13.9 tok/s
+
+median cooperative 9.9 tok/s
+median scalar 7.0 tok/s
+median speedup 1.414x

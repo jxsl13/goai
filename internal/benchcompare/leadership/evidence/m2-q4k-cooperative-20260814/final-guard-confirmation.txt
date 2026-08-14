@@ -1,0 +1,30 @@
+# Final-source confirmation after adding the cached SIMD width/threadgroup
+# capability guard. Ten paired, alternating K2048,N5632 samples, 500 calls each.
+pair 01 cooperative 436962 ns/op
+pair 01 scalar 555039 ns/op
+pair 02 scalar 545228 ns/op
+pair 02 cooperative 284673 ns/op
+pair 03 cooperative 295115 ns/op
+pair 03 scalar 597200 ns/op
+pair 04 scalar 550130 ns/op
+pair 04 cooperative 317370 ns/op
+pair 05 cooperative 456628 ns/op
+pair 05 scalar 560532 ns/op
+pair 06 scalar 544142 ns/op
+pair 06 cooperative 302227 ns/op
+pair 07 cooperative 436370 ns/op
+pair 07 scalar 560584 ns/op
+pair 08 scalar 563596 ns/op
+pair 08 cooperative 283602 ns/op
+pair 09 cooperative 285205 ns/op
+pair 09 scalar 552033 ns/op
+pair 10 scalar 551694 ns/op
+pair 10 cooperative 286366 ns/op
+
+median cooperative 298671 ns/op
+median scalar 553536 ns/op
+median speedup 1.853x
+
+# One final-source full-model confirmation pair:
+cooperative 10.1 tok/s
+scalar 7.0 tok/s

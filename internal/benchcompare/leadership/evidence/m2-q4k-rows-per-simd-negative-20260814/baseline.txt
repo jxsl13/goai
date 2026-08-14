@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkQ4KRows/K2048N2560-12 500 185556 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 155270 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 160435 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 163058 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 161492 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 161418 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 157954 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 162427 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 162298 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2560-12 500 159653 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 199999 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 149358 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 143157 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 151256 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 165823 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 162445 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 158574 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 159236 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 159888 ns/op 8 B/op 1 allocs/op
+BenchmarkQ4KRows/K2048N2048-12 500 164759 ns/op 8 B/op 1 allocs/op

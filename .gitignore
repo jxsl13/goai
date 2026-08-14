@@ -48,3 +48,13 @@ models/*
 .venv-cuda
 models/*.gguf
 /perfscan
+
+# Local architecture-research publications and manuals. These may include
+# licensed/paid copies and must never enter Git; only citations belong in docs.
+/.research-sources/
+
+# Spectackle local tool state. The spec/config/journal/anchors ARE tracked so the
+# spec-driven workflow is reproducible; the content cache (~75M) and the one-shot
+# migration backup are machine-local and must stay out.
+/.spectackle/cache/
+/.spectackle/migrate-backup-v0/

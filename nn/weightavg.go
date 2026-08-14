@@ -2,6 +2,7 @@ package nn
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/jxsl13/goai/tensor"
 )
@@ -118,25 +119,36 @@ func (e *EMA) Update() error {
 		avg := e.avg[pi]
 		// Contiguous fast path: raw slice loop, no per-element closure — the same
 		// decay update, so bit-identical to the general readGen path.
+		//
+		// The update is spelled with math.FMA, not a bare Decay*avg + (1-Decay)*w.
+		// That expression has TWO products and hardware can fuse only one, so the
+		// choice is the compiler's — and it chose differently per loop: this path
+		// fused Decay*avg[i] while the per-element reference fused (1-Decay)*w,
+		// putting them 1 ULP apart on f32 (visible in the arm64 listing as FMULD +
+		// FMADDD with swapped operands). math.FMA names the fused product instead of
+		// leaving it to contraction, so every path rounds identically — the §C3
+		// dual-path bit-identity contract — while still lowering to a single FMADDD.
+		// Forbidding fusion outright (float64(...) around each product) also agrees,
+		// but measured 6.8% slower. Do not rewrite this as the plain expression.
 		if p.IsContiguous() && p.Offset() == 0 {
 			switch p.Dtype() {
 			case tensor.F64:
 				d := p.Storage().F64()
 				for i := range avg {
-					avg[i] = e.Decay*avg[i] + (1-e.Decay)*d[i]
+					avg[i] = math.FMA(e.Decay, avg[i], (1-e.Decay)*d[i])
 				}
 				continue
 			case tensor.F32:
 				d := p.Storage().F32()
 				for i := range avg {
-					avg[i] = e.Decay*avg[i] + (1-e.Decay)*float64(d[i])
+					avg[i] = math.FMA(e.Decay, avg[i], (1-e.Decay)*float64(d[i]))
 				}
 				continue
 			}
 		}
 		idx := 0
 		readGen(p, func(w float64) {
-			avg[idx] = e.Decay*avg[idx] + (1-e.Decay)*w
+			avg[idx] = math.FMA(e.Decay, avg[idx], (1-e.Decay)*w)
 			idx++
 		})
 	}

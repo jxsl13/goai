@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "cell": "m2-cpu-silu-f64-into",
+  "captured_at": "2026-08-14T18:47:56Z",
+  "host": {
+    "arch": "arm64",
+    "cpu": "Apple M2 Pro",
+    "memory_bytes": "34359738368",
+    "os": "darwin",
+    "os_version": "26.5.1"
+  },
+  "protocol": {
+    "interleaved": true,
+    "prebuilt_go": true,
+    "samples": 10,
+    "seconds_per_sample": 1,
+    "statistics": "benchstat median and 95% confidence interval"
+  },
+  "goai": {
+    "binary_sha256": "38c3ada797ff07f4d165e758e6e202643f0bc9b4893934ca971ec9b562c91bb4",
+    "gomaxprocs": 12,
+    "revision": "bare-workspace-uncommitted",
+    "runtime": "go version go1.26.6 darwin/arm64",
+    "source_sha256": "5e50d23f51f14329d0b151bf8d2b1e9a64738d57a5f94fd896cc34136d652b3a"
+  },
+  "incumbent": {
+    "name": "PyTorch",
+    "revision": "v2.12.1",
+    "runtime": "3.14.7\n2.12.1",
+    "threads": 8
+  },
+  "commands": {
+    "compile": "GOEXPERIMENT=simd CGO_ENABLED=0 go test -c -o /var/folders/6k/z04sgy1902b9szlylgx8nj6m0000gn/T/goai-leadership-silu-3205912668/cpu.test ./backend/cpu",
+    "goai": "/var/folders/6k/z04sgy1902b9szlylgx8nj6m0000gn/T/goai-leadership-silu-3205912668/cpu.test -test.run=^$ -test.bench=^BenchmarkSiLUF64Into$ -test.benchtime=1.000s -test.count=1 -test.benchmem",
+    "incumbent": "/Users/john/Desktop/goai/.venv/bin/python /Users/john/Desktop/goai/internal/benchcompare/leadership/silu_out.py --seconds 1.000 --threads 8 --name BenchmarkSiLUF64Into-12",
+    "statistics": "/Users/john/go/bin/benchstat GoAI=goai.txt PyTorch=pytorch.txt"
+  }
+}

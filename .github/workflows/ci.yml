@@ -78,6 +78,31 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # §C29 / T984 — the single performance linter lives in the independent
+  # github.com/jxsl13/perfscan repository. Install the pinned release directly
+  # from GitHub (no Go proxy, no tool dependency in GoAI's go.mod) and run its
+  # analyzers over every non-documentation source change. Findings remain
+  # advisory until their hotness and correctness are benchmark-proven; loader,
+  # configuration, and analyzer failures still fail this job.
+  perfscan:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: external perfscan / direct VCS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: perfscan
+      - name: install pinned perfscan directly from GitHub and analyze GoAI
+        env:
+          GOPROXY: direct
+        run: make perfscan-check
+
   # §V4/§V7/§V23 — the portable promise: the whole library builds, vets (which
   # compiles _test.go files, §B45) and tests WITHOUT a C toolchain, on all
   # three OSes. This is the gate every local iteration runs; now enforced on push.

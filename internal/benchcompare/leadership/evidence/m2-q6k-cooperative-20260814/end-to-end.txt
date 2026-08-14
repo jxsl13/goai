@@ -1,0 +1,32 @@
+# Ten process-level pairs. Odd pairs ran cooperative then scalar; even pairs
+# reversed the order. Q4_K remained cooperative in both modes, isolating the
+# incremental Q6_K effect. Each sample used 32 sequential decode tokens and one
+# timed repetition after model load plus a correctness/warm step.
+pair 01 cooperative 15.2 tok/s
+pair 01 scalar 9.9 tok/s
+pair 02 scalar 9.8 tok/s
+pair 02 cooperative 16.7 tok/s
+pair 03 cooperative 16.4 tok/s
+pair 03 scalar 9.0 tok/s
+pair 04 scalar 10.0 tok/s
+pair 04 cooperative 16.1 tok/s
+pair 05 cooperative 16.1 tok/s
+pair 05 scalar 9.9 tok/s
+pair 06 scalar 10.3 tok/s
+pair 06 cooperative 16.4 tok/s
+pair 07 cooperative 17.2 tok/s
+pair 07 scalar 9.4 tok/s
+pair 08 scalar 9.7 tok/s
+pair 08 cooperative 16.3 tok/s
+pair 09 cooperative 16.3 tok/s
+pair 09 scalar 9.6 tok/s
+pair 10 scalar 9.5 tok/s
+pair 10 cooperative 16.6 tok/s
+
+median cooperative Q6_K 16.35 tok/s
+median scalar Q6_K 9.75 tok/s
+incremental median speedup 1.677x
+
+# The earlier both-scalar baseline was 7.0 tok/s. Q4_K plus Q6_K cooperative
+# decode therefore yields a directional cumulative 2.336x improvement. This is
+# a cross-milestone comparison, not the isolated same-binary Q6_K A/B above.

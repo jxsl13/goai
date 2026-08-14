@@ -1,0 +1,30 @@
+# Fresh-process probe. The first call includes runtime Metal source/library and
+# both Q4_K pipeline compilations; the second call uses the compiled pipeline.
+pair 01 cooperative first 2.830250 ms second 0.587167 ms
+pair 01 scalar first 3.591166 ms second 1.397166 ms
+pair 02 scalar first 3.837125 ms second 0.963708 ms
+pair 02 cooperative first 6.597292 ms second 0.292292 ms
+pair 03 cooperative first 4.858333 ms second 0.386500 ms
+pair 03 scalar first 5.247292 ms second 1.169584 ms
+pair 04 scalar first 3.649042 ms second 0.721042 ms
+pair 04 cooperative first 5.444541 ms second 1.421792 ms
+pair 05 cooperative first 5.072083 ms second 0.316375 ms
+pair 05 scalar first 4.065292 ms second 1.359875 ms
+pair 06 scalar first 4.436666 ms second 1.118458 ms
+pair 06 cooperative first 6.135333 ms second 0.311500 ms
+pair 07 cooperative first 5.319750 ms second 0.303125 ms
+pair 07 scalar first 4.438542 ms second 2.096750 ms
+pair 08 scalar first 3.580792 ms second 0.697417 ms
+pair 08 cooperative first 4.099500 ms second 0.336458 ms
+pair 09 cooperative first 4.225333 ms second 1.996292 ms
+pair 09 scalar first 4.682041 ms second 0.754625 ms
+pair 10 scalar first 4.723750 ms second 0.657416 ms
+pair 10 cooperative first 5.275875 ms second 0.306792 ms
+
+median first cooperative 5.173979 ms
+median first scalar 4.250979 ms
+median second cooperative 0.326417 ms
+median second scalar 1.041083 ms
+
+# Cold first-call variance overlaps heavily and is compilation dominated. This
+# evidence supports no cold leadership claim; it records the startup tradeoff.

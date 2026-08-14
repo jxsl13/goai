@@ -61,3 +61,5 @@
 | BM57 | 2026-07-22 | nn UniformSoup/averageModels parallel-across-tensors (5 models × 32 tensors, 12 cores) | darwin/arm64 | self | ns | 1386319 | 443666 | 3.12× | T979,V22 |
 | BM58 | 2026-07-22 | nn TIESMerge parallel-across-tensors (3 models × 32 tensors, 12 cores, compute-bound sort) | darwin/arm64 | self | us | 135134 | 17565 | 7.69× | T980,V22 |
 | BM59 | 2026-07-22 | nn EWCFisher parallel-across-params (8 samples × 32 tensors, 12 cores, sum-g-squared compute-mixed) | darwin/arm64 | self | us | 2920.8 | 463.0 | 6.31× | T981,V22 |
+| BM60 | 2026-08-14 | M2 Metal resident Q4_K M=1 K2048N5632 cooperative SIMD-group reduction | Apple M2 Pro 19-core GPU, macOS 26.5.1, Go 1.26.6 | self | median ns/op, lower is better, n=10 paired alternating | 553423.5 | 288448 | 1.92× | T989,V42 |
+| BM61 | 2026-08-14 | M2 Metal resident Q6_K M=1 K5632N2048 cooperative SIMD-group reduction | Apple M2 Pro 19-core GPU, macOS 26.5.1, Go 1.26.6 | self | median ns/op, lower is better, n=10 paired alternating | 3546337 | 300851 | 11.79× | T993,V42 |

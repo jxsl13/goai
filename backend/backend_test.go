@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 
@@ -13,9 +14,21 @@ func idKernel(_ *Context, in []*tensor.Tensor, _ Attrs) ([]*tensor.Tensor, error
 	return in, nil
 }
 
+func idIntoKernel(ctx *Context, in, out []*tensor.Tensor, _ Attrs) error {
+	if len(in) != 1 || len(out) != 1 {
+		return fmt.Errorf("identity into: want one input and output")
+	}
+	if err := ValidateOutput(ctx, out[0], in[0].Dtype(), in[0].Shape()); err != nil {
+		return err
+	}
+	copy(out[0].Storage().F64(), in[0].Storage().F64())
+	return nil
+}
+
 type mockBackend struct {
-	name  Name
-	table map[kernelKeyT]Kernel
+	name      Name
+	table     map[kernelKeyT]Kernel
+	intoTable map[kernelKeyT]IntoKernel
 }
 
 type kernelKeyT struct {
@@ -30,14 +43,32 @@ func (m *mockBackend) Kernel(op Op, dt tensor.Dtype) (Kernel, bool) {
 	k, ok := m.table[kernelKeyT{op, dt}]
 	return k, ok
 }
+func (m *mockBackend) KernelInto(op Op, dt tensor.Dtype) (IntoKernel, bool) {
+	k, ok := m.intoTable[kernelKeyT{op, dt}]
+	return k, ok
+}
 
 var (
-	refMock = &mockBackend{name: "refmock", table: map[kernelKeyT]Kernel{
-		{OpNeg, tensor.F64}: idKernel, // only the reference serves OpNeg
-	}}
-	activeMock = &mockBackend{name: "active", table: map[kernelKeyT]Kernel{
-		{OpAdd, tensor.F64}: idKernel, // active serves OpAdd
-	}}
+	refMock = &mockBackend{
+		name: "refmock",
+		table: map[kernelKeyT]Kernel{
+			{OpNeg, tensor.F64}: idKernel, // only the reference serves OpNeg
+			{OpQR, tensor.F64}:  idKernel, // reference-only fallback for ExecuteInto tests
+		},
+		intoTable: map[kernelKeyT]IntoKernel{
+			{OpNeg, tensor.F64}: idIntoKernel,
+			{OpQR, tensor.F64}:  idIntoKernel,
+		},
+	}
+	activeMock = &mockBackend{
+		name: "active",
+		table: map[kernelKeyT]Kernel{
+			{OpAdd, tensor.F64}: idKernel, // active serves OpAdd
+		},
+		intoTable: map[kernelKeyT]IntoKernel{
+			{OpAdd, tensor.F64}: idIntoKernel,
+		},
+	}
 )
 
 func init() {

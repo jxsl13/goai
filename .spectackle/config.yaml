@@ -1,0 +1,18 @@
+schema: v1
+langs:  # languages the indexer parses (see internal/langspec for the registry)
+  - go
+ignore:  # glob prune patterns, repo-relative slash paths, on top of the built-in skip list
+  - .git/**
+  - bin/**
+ignore_regex: []  # RE2 prune patterns, repo-relative slash paths (none by default)
+budget_default: 2000  # default token budget for context-pack commands
+compact:
+  journal_max: 300  # journal events since last compact before check/the swarm hint flags it due
+  done_max: 8  # done-but-unarchived items before check flags it due
+swarm:
+  lease_ttl: 600  # seconds a scope lease lives without refresh
+  agent_ttl: 900  # seconds without heartbeat before an agent counts as gone
+feedback:
+  max_rounds: 3  # reopen/gate-fail rounds before an item escalates to blocked
+  grill: ""  # optional shell command producing grill feedback on reopen (none by default)
+worktrees_dir: ""  # override for .spectackle/wt (abs or root-relative); empty = default location

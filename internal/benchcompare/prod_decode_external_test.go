@@ -5,9 +5,11 @@ package benchcompare
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/jxsl13/goai/backend/metal"
 	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/llamagpu"
 	"github.com/jxsl13/goai/nlp"
@@ -39,13 +41,44 @@ func TestProdDecodeGGUF(t *testing.T) {
 	t.Logf("loaded: vocab=%d dim=%d hidden=%d heads=%d kv=%d layers=%d ctx=%d",
 		c.Vocab, c.Dim, c.Hidden, c.Heads, c.KVHeads, c.Layers, c.Ctx)
 
+	q4kMode := "auto"
+	if value := os.Getenv("GOAI_Q4K_COOPERATIVE"); value != "" {
+		on, err := strconv.ParseBool(value)
+		if err != nil {
+			t.Fatalf("GOAI_Q4K_COOPERATIVE: %v", err)
+		}
+		previous := metal.SetQ4KCooperative(on)
+		defer metal.SetQ4KCooperative(previous)
+		if on {
+			q4kMode = "cooperative"
+		} else {
+			q4kMode = "scalar"
+		}
+	}
+	q6kMode := "auto"
+	if value := os.Getenv("GOAI_Q6K_COOPERATIVE"); value != "" {
+		on, err := strconv.ParseBool(value)
+		if err != nil {
+			t.Fatalf("GOAI_Q6K_COOPERATIVE: %v", err)
+		}
+		previous := metal.SetQ6KCooperative(on)
+		defer metal.SetQ6KCooperative(previous)
+		if on {
+			q6kMode = "cooperative"
+		} else {
+			q6kMode = "scalar"
+		}
+	}
+
 	dec, err := llamagpu.NewQuant(qm)
 	if err != nil {
 		t.Fatalf("llamagpu.NewQuant: %v", err)
 	}
 	defer dec.Release()
 
-	const nGen, nProm, reps = 64, 64, 3
+	nGen := benchEnvInt(t, "GOAI_PROD_DECODE_TOKENS", 64)
+	nProm := benchEnvInt(t, "GOAI_PROD_PREFILL_TOKENS", 64)
+	reps := benchEnvInt(t, "GOAI_PROD_REPS", 3)
 
 	// Sanity: the first decode step must return finite logits of the right width.
 	logits, err := dec.Step(1, 0)
@@ -89,7 +122,21 @@ func TestProdDecodeGGUF(t *testing.T) {
 		}
 	}
 
-	fmt.Printf("GOAI_PROD metal: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
+	fmt.Printf("GOAI_PROD metal q4k=%s q6k=%s: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
+		q4kMode, q6kMode,
 		nGen, float64(nGen)/bestTg.Seconds(),
 		nProm, float64(nProm)/bestPp.Seconds())
+}
+
+func benchEnvInt(t *testing.T, name string, fallback int) int {
+	t.Helper()
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil || n <= 0 {
+		t.Fatalf("%s must be a positive integer, got %q", name, value)
+	}
+	return n
 }

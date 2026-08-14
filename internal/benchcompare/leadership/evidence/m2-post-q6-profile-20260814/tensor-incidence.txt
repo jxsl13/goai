@@ -1,0 +1,21 @@
+model: models/tinyllama-1.1b-q4km.gguf
+sha256: 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0
+bytes: 668788096
+parameters: 1100048384
+
+type  tensors     elements  encoded_bytes  encoded_share
+Q4_K      135    913833984      514031616          77.06%
+Q6_K       21    186122240      152678400          22.89%
+F32        45        92160         368640           0.06%
+
+Q2_K tensors: 0
+Q3_K tensors: 0
+Q5_K tensors: 0
+
+Q6_K placement:
+- output.weight
+- blk.{0,1,4,7,8,9,12,15,18,20}.ffn_down.weight
+- blk.{0,1,4,7,8,9,12,15,18,20}.attn_v.weight
+
+Interpretation: Q4_K and Q6_K account for effectively all encoded model bytes.
+Specializing an absent K-quant format cannot improve this model-scale baseline.

@@ -1,0 +1,54 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 162813 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 165649 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 171790 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 147236 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 200616 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 173323 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 176637 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 181360 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 137344 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 191690 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 158563 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 172062 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 177671 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 141477 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 189806 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 165194 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 173992 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 174347 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 144516 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 179778 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 160922 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 171440 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 164306 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 144208 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 191431 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 167592 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 181879 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 178936 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 147123 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 190644 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 159850 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 166343 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 168969 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 136283 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 176767 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 158489 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 163028 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 174139 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 135954 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 171755 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 152214 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 163409 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 166162 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 132099 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 181270 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/variant-12 500 156491 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/variant-12 500 162166 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/variant-12 500 164670 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K2048N256/variant-12 500 130989 ns/op 8 B/op 1 allocs/op
+BenchmarkMetalQ6KDecodeLeaf/K5632N2048/variant-12 500 175474 ns/op 8 B/op 1 allocs/op

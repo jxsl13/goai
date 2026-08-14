@@ -1,0 +1,139 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8906	    135058 ns/op	42701.29 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8601	    133513 ns/op	43195.60 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    9211	    133326 ns/op	43256.27 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8124	    136179 ns/op	42349.85 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    9267	    135791 ns/op	42471.00 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7844	    136504 ns/op	42248.99 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    9327	    148522 ns/op	38830.52 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7874	    139863 ns/op	41234.49 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7395	    149236 ns/op	38644.67 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8012	    136733 ns/op	42178.22 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8694	    136711 ns/op	42185.05 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8071	    136876 ns/op	42134.28 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8560	    137110 ns/op	42062.38 MB/s	       2 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7378	    150738 ns/op	38259.43 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8792	    136969 ns/op	42105.56 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8332	    151802 ns/op	37991.32 MB/s	       0 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7257	    141013 ns/op	40898.16 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    8049	    200106 ns/op	28820.56 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    7992	    199380 ns/op	28925.48 MB/s	       1 B/op	       0 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkSiLUF64Into-12    	    4417	    234953 ns/op	24546.03 MB/s	       1 B/op	       0 allocs/op
+PASS

@@ -219,7 +219,10 @@ func slowEMAUpdate(e *EMA) error {
 		}
 		for i := range p.Numel() {
 			w := p.AtF64(tensor.Unravel(i, p.Shape())...)
-			e.avg[pi][i] = e.Decay*e.avg[pi][i] + (1-e.Decay)*w
+			// math.FMA, matching EMA.Update — see the FMA-contraction note there. A
+			// bare a*b+c*d here would let the compiler fuse whichever product it likes,
+			// so this reference would drift from the very code it guards.
+			e.avg[pi][i] = math.FMA(e.Decay, e.avg[pi][i], (1-e.Decay)*w)
 		}
 	}
 	return nil

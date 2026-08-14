@@ -1,0 +1,32 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/cooperative-12 200 217606 ns/op 10917.36 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/rows1-12 200 216463 ns/op 10975.01 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/rows4-12 200 234671 ns/op 10123.45 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2048/rows8-12 200 190382 ns/op 12478.47 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/cooperative-12 200 175364 ns/op 16922.27 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/rows1-12 200 155505 ns/op 19083.32 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/rows4-12 200 159802 ns/op 18570.12 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N2560/rows8-12 200 163550 ns/op 18144.59 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/cooperative-12 200 166622 ns/op 39123.17 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/rows1-12 200 176781 ns/op 36874.95 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/rows4-12 200 172623 ns/op 37763.14 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N5632/rows8-12 200 174260 ns/op 37408.33 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/cooperative-12 200 170474 ns/op 38239.08 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/rows1-12 200 184821 ns/op 35270.75 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/rows4-12 200 179130 ns/op 36391.32 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K5632N2048/rows8-12 200 180468 ns/op 36121.57 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/cooperative-12 200 210313 ns/op 60545.09 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/rows1-12 200 218511 ns/op 58273.61 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/rows4-12 200 204843 ns/op 62162.04 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N11008/rows8-12 200 216354 ns/op 58854.78 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/cooperative-12 200 246268 ns/op 76940.92 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/rows1-12 200 255632 ns/op 74122.59 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/rows4-12 200 243642 ns/op 77770.34 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N16384/rows8-12 200 262104 ns/op 72292.24 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/cooperative-12 200 362402 ns/op 102096.96 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/rows1-12 200 379136 ns/op 97590.91 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/rows4-12 200 362914 ns/op 101953.01 MB/s 8 B/op 1 allocs/op
+BenchmarkMetalQ4KDecodeLeaf/K2048N32000/rows8-12 200 364820 ns/op 101420.52 MB/s 8 B/op 1 allocs/op

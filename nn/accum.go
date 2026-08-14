@@ -71,7 +71,6 @@ func (a *GradAccumulator) Steps() int { return a.steps }
 // equals the full-batch mean gradient. Returns nil grads before any Add.
 func (a *GradAccumulator) GradFn() GradFn {
 	k := float64(a.steps)
-	ik := 1 / k // average by multiplying the invariant reciprocal, not dividing per element
 	return func(p *tensor.Tensor) *tensor.Tensor {
 		s, ok := a.sums[p]
 		if !ok || a.steps == 0 {
@@ -81,23 +80,28 @@ func (a *GradAccumulator) GradFn() GradFn {
 		// out is freshly allocated (contiguous, offset 0), so write its raw slice
 		// directly rather than through fillGen's per-element closure — the same
 		// sum÷Steps average with the identical float32 rounding, so bit-identical.
+		//
+		// Divide per element; do NOT hoist ik := 1/k and multiply. 1/k is exact only
+		// when steps is a power of two, so x*(1/k) rounds twice and drifts up to 1 ULP
+		// from x/k (steps=3 reproduces it). The loop is memory-bound, so the divide is
+		// free here — see TestGradFnBitIdenticalToSlowPath, which caught exactly this.
 		switch out.Dtype() {
 		case tensor.F64:
 			d := out.Storage().F64()
 			for i := range s {
-				d[i] = s[i] * ik
+				d[i] = s[i] / k
 			}
 			return out
 		case tensor.F32:
 			d := out.Storage().F32()
 			for i := range s {
-				d[i] = float32(s[i] * ik)
+				d[i] = float32(s[i] / k)
 			}
 			return out
 		}
 		idx := 0
 		fillGen(out, func() float64 {
-			v := s[idx] * ik
+			v := s[idx] / k
 			idx++
 			return v
 		})

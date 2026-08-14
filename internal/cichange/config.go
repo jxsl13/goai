@@ -53,12 +53,9 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//   - internal/speccheck (§V36 SPEC-integrity: id-uniqueness, §T-membership) is
 	//     GREEN today — SPEC.md is clean — so it is enabled and now gates every push
 	//     (§T886/§T893).
-	//   - internal/perfscan (T920 per-element hot-loop finder) is GREEN — its detector
-	//     tests + TestScanWholeModule (parses every first-party .go, asserts the scan
-	//     completes and still finds candidates) pass on the committed tree — so it is
-	//     enabled. It gates the TOOL, not the codebase: the scan stays ADVISORY (no
-	//     candidate-count assertion), so a legitimately cold per-element loop never
-	//     reddens CI, but a detector that panics/regresses on real source does.
+	//   - perfscan is external as of T984. cichange only schedules Go packages, so
+	//     it must NOT list the removed internal/perfscan package. The dedicated CI
+	//     perfscan job runs the pinned external CLI for every non-empty code change.
 	//   - internal/apicheck (§V19 doc/example gate) is now GREEN — the per-package
 	//     documentation pass added the missing godocs/Examples and justified-allowlisted
 	//     the internal transformer blocks/caches — so it is enabled and gates every push
@@ -69,7 +66,7 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	//   - internal/docgraph (§V39 dangling refs + §V41 render-sync: spec/ is the
 	//     source, SPEC.md a generated view) is GREEN and hermetic — enabled so a
 	//     hand-edited rendered view goes red on the next non-empty selection.
-	alwaysRun = []string{"internal/speccheck", "internal/perfscan", "internal/docgraph", "internal/apicheck"}
+	alwaysRun = []string{"internal/speccheck", "internal/docgraph", "internal/apicheck"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

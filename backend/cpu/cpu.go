@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
@@ -22,10 +23,14 @@ type kernelKey struct {
 
 // Backend is the optimized CPU backend. Synchronous, so Synchronize is a no-op.
 type Backend struct {
-	table map[kernelKey]backend.Kernel
+	table     map[kernelKey]backend.Kernel
+	intoTable map[kernelKey]backend.IntoKernel
 }
 
-var std = &Backend{table: make(map[kernelKey]backend.Kernel)}
+var std = &Backend{
+	table:     make(map[kernelKey]backend.Kernel),
+	intoTable: make(map[kernelKey]backend.IntoKernel),
+}
 
 func init() { backend.RegisterDefault(std) }
 
@@ -33,11 +38,19 @@ func (b *Backend) add(op backend.Op, dtype tensor.Dtype, k backend.Kernel) {
 	b.table[kernelKey{op, dtype}] = k
 }
 
+func (b *Backend) addInto(op backend.Op, dtype tensor.Dtype, k backend.IntoKernel) {
+	b.intoTable[kernelKey{op, dtype}] = k
+}
+
 func (b *Backend) Name() backend.Name    { return backend.CPU }
 func (b *Backend) Device() tensor.Device { return tensor.CPU() }
 func (b *Backend) Synchronize() error    { return nil }
 func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
 	k, ok := b.table[kernelKey{op, dtype}]
+	return k, ok
+}
+func (b *Backend) KernelInto(op backend.Op, dtype tensor.Dtype) (backend.IntoKernel, bool) {
+	k, ok := b.intoTable[kernelKey{op, dtype}]
 	return k, ok
 }
 
@@ -64,11 +77,42 @@ type poolBarrier struct {
 	wg      sync.WaitGroup
 }
 
-// poolTask is one chunk handed to the persistent workers (§T511).
+type poolTaskKind uint8
+
+const (
+	poolTaskCallback poolTaskKind = iota
+	poolTaskSiLUF64
+	poolTaskSiLUF32
+)
+
+// poolTask is one chunk handed to the persistent workers (§T511). The typed
+// SiLU variants carry raw backing-array pointers so the hot Into path does not
+// allocate a captured slice closure per dispatch. unsafe.Pointer remains a GC
+// root; parallelTask is synchronous and keeps the source slices alive until all
+// tasks complete.
 type poolTask struct {
-	body   func(lo, hi int)
+	body func(lo, hi int)
+	kind poolTaskKind
+	dst  unsafe.Pointer
+	src  unsafe.Pointer
+
 	lo, hi int
 	b      *poolBarrier
+}
+
+func (t poolTask) execute() {
+	switch t.kind {
+	case poolTaskSiLUF64:
+		dst := unsafe.Slice((*float64)(t.dst), t.hi)
+		src := unsafe.Slice((*float64)(t.src), t.hi)
+		vsiluF64(dst[t.lo:t.hi], src[t.lo:t.hi])
+	case poolTaskSiLUF32:
+		dst := unsafe.Slice((*float32)(t.dst), t.hi)
+		src := unsafe.Slice((*float32)(t.src), t.hi)
+		vsiluF32(dst[t.lo:t.hi], src[t.lo:t.hi])
+	default:
+		t.body(t.lo, t.hi)
+	}
 }
 
 // The worker pool (§T511 persistence + §V22 latency redesign). Structure:
@@ -114,8 +158,9 @@ type poolTask struct {
 // Constants are not user knobs (internal, §C13-exempt); recalibrate via §V22
 // benchmarks if the pool design changes.
 var (
-	poolChs  []chan poolTask
-	poolPark []chan struct{}
+	poolChs          []chan poolTask
+	poolPark         []chan struct{}
+	poolBarrierCache = sync.Pool{New: func() any { return new(poolBarrier) }}
 )
 
 const (
@@ -232,21 +277,22 @@ func poolWorker(w int) {
 			// tasks delivered this way, which sparse mode does not need.)
 			t = <-ch
 		}
-		t.body(t.lo, t.hi)
+		t.execute()
 		t.b.wg.Done()
 		t.b.pending.Add(-1) // last: pending==0 ⇒ body+Done complete
 	}
 }
 
-// parallelWork splits [0,n) into chunks across the persistent worker pool and
-// runs body on each — the caller works the first chunk itself — or runs body
-// once inline when the estimated total work (n × workPerItem) is small.
-// body must be safe on disjoint sub-ranges.
-func parallelWork(n, workPerItem int, body func(lo, hi int)) {
+// parallelTask splits [0,n) across the persistent worker pool and runs a task
+// template on each disjoint chunk. Callback-based callers set task.body; typed
+// hot paths set kind plus payload pointers and therefore avoid a captured
+// closure. The caller always executes the first chunk itself.
+func parallelTask(n, workPerItem int, task poolTask) {
 	workers := runtime.GOMAXPROCS(0)
 	total := n * workPerItem
 	if workers <= 1 || total < parThreshold {
-		body(0, n)
+		task.lo, task.hi = 0, n
+		task.execute()
 		return
 	}
 	// Classify the regime (see poolDenseGapNs) and publish it for the workers.
@@ -268,17 +314,22 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 		workers = max(workers*2/3, 2)
 	}
 	chunk := (n + workers - 1) / workers
-	var b poolBarrier
+	b := poolBarrierCache.Get().(*poolBarrier)
+	if b.pending.Load() != 0 {
+		panic("cpu: reused live pool barrier")
+	}
 	first := min(chunk, n)
 	w := 0
 	for lo := first; lo < n; lo += chunk {
 		hi := min(lo+chunk, n)
 		b.pending.Add(1)
 		b.wg.Add(1)
+		t := task
+		t.lo, t.hi, t.b = lo, hi, b
 		var sent bool
 		if w < len(poolChs) {
 			select {
-			case poolChs[w] <- poolTask{body: body, lo: lo, hi: hi, b: &b}:
+			case poolChs[w] <- t:
 				sent = true
 				select { // wake the worker if it parked; a hot one ignores this
 				case poolPark[w] <- struct{}{}:
@@ -289,12 +340,14 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 			w++
 		}
 		if !sent {
-			body(lo, hi)
+			t.execute()
 			b.wg.Done()
 			b.pending.Add(-1)
 		}
 	}
-	body(0, first)
+	callerTask := task
+	callerTask.lo, callerTask.hi = 0, first
+	callerTask.execute()
 	// Spin-wait for the workers (§V22): a decode-sized chunk finishes within a
 	// few µs of the caller's own, and parking in wg.Wait for that tail costs an
 	// M-stop/restart per barrier. While waiting, HELP: drain unclaimed tasks
@@ -313,7 +366,7 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 				for _, ch := range poolChs {
 					select {
 					case t := <-ch:
-						t.body(t.lo, t.hi)
+						t.execute()
 						t.b.wg.Done()
 						t.b.pending.Add(-1)
 					default:
@@ -330,7 +383,7 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 		for _, ch := range poolChs {
 			select {
 			case t := <-ch:
-				t.body(t.lo, t.hi)
+				t.execute()
 				t.b.wg.Done()
 				t.b.pending.Add(-1)
 			default:
@@ -338,8 +391,50 @@ func parallelWork(n, workPerItem int, body func(lo, hi int)) {
 		}
 		b.wg.Wait() // one park, amortized by the chunk length
 	}
+	// Done happens immediately before pending-- in every completion path. Wait
+	// may therefore return in the tiny interval between those two operations;
+	// do not publish the barrier for reuse until the stronger pending==0 signal
+	// proves both operations completed.
+	for b.pending.Load() != 0 {
+	}
 	poolLastBarrierEnd.Store(time.Now().UnixNano())
+	poolBarrierCache.Put(b)
+}
+
+// parallelWork is the callback-compatible entry point used by general kernels.
+// body must be safe on disjoint sub-ranges.
+func parallelWork(n, workPerItem int, body func(lo, hi int)) {
+	parallelTask(n, workPerItem, poolTask{body: body, kind: poolTaskCallback})
 }
 
 // parallel splits [0,n) with unit work per item (elementwise use).
 func parallel(n int, body func(lo, hi int)) { parallelWork(n, 1, body) }
+
+// parallelSiLUF64/parallelSiLUF32 are allocation-free typed dispatches for the
+// SIMD SiLU kernels. The pool tasks retain unsafe.Pointer roots to both backing
+// arrays, and KeepAlive documents the synchronous lifetime boundary explicitly.
+func parallelSiLUF64(dst, src []float64) {
+	if len(dst) != len(src) {
+		panic("cpu: parallel SiLU f64 length mismatch")
+	}
+	parallelTask(len(dst), 1, poolTask{
+		kind: poolTaskSiLUF64,
+		dst:  unsafe.Pointer(unsafe.SliceData(dst)),
+		src:  unsafe.Pointer(unsafe.SliceData(src)),
+	})
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+}
+
+func parallelSiLUF32(dst, src []float32) {
+	if len(dst) != len(src) {
+		panic("cpu: parallel SiLU f32 length mismatch")
+	}
+	parallelTask(len(dst), 1, poolTask{
+		kind: poolTaskSiLUF32,
+		dst:  unsafe.Pointer(unsafe.SliceData(dst)),
+		src:  unsafe.Pointer(unsafe.SliceData(src)),
+	})
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(src)
+}
