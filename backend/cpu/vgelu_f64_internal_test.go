@@ -1,4 +1,8 @@
-//go:build goexperiment.simd
+// erfF64poly, geluF64poly and geluGradF64poly live in vexp_amd64.go, so this file
+// must carry the amd64 constraint too. Without it the SIMD lane on arm64 compiled
+// this test against functions that do not exist there and the WHOLE backend/cpu test
+// binary failed to build — silently, because the simd lane is soft in CI.
+//go:build amd64 && goexperiment.simd
 
 package cpu
 
