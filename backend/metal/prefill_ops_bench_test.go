@@ -13,17 +13,26 @@ import (
 // It exists because the prefill budget did not add up twice running, and both times the error was
 // an assumed component rather than a measured one.
 //
-// The full measured budget per layer at a 64-token prompt (K=2048-class shapes):
+// The full measured budget per layer at a 64-token prompt, using the projection sequence the
+// decoder ACTUALLY issues rather than the fused shapes first assumed:
 //
-//	expansion            0.990 ms
-//	GEMM                 1.700 ms
-//	attention            0.159 ms
-//	RMSNorm x2           0.013 ms
-//	RoPE                 0.010 ms
-//	SwiGLU               0.009 ms
-//	residual add x2      0.008 ms
-//	logits (amortized)   0.015 ms
-//	TOTAL                2.905 ms   against 3.79 ms measured -> 23% unaccounted
+//	GEMM (real sequence)  1.916 ms
+//	expansion             0.990 ms
+//	attention             0.159 ms
+//	RMSNorm/RoPE/SwiGLU/residual/logits  0.055 ms
+//	TOTAL                 3.120 ms   against 3.79 ms measured -> 18% unaccounted
+//
+// The real sequence matters: 12 of 22 layers run qkv fused, the other 10 run q,k,v separately
+// because attn_v is Q6_K there and qfused refuses mixed types, and gate/up are separate on every
+// layer. Measured at M=64: qkv 212.2us, q 169.7, k|v 120.6 each, o 170.7, gate 420.5 each,
+// gate|up fused 686.3, down 601.4 — weighted 1916us/layer against the 1671us the fused-shape
+// assumption gave, so that assumption understated the GEMM by 245us/layer.
+//
+// Two things worth carrying from those numbers. A k|v projection (N=256) costs 120.6us to do
+// 67 MFLOP — 557 GFLOP/s, launch- and occupancy-bound rather than arithmetic-bound. And gate/up
+// separate costs +155us/layer over fused, which is exactly what the gate|up fusion would have
+// saved in GEMM; it still lost end to end, so the expansion-scratch penalty of fusing exceeds
+// 155us/layer. The two measurements are consistent, which is a check on both.
 //
 // Every operation in the layer is now measured individually, so the remainder is NOT a missing op
 // in the sense of an unmeasured KIND. Two explanations were tested and BOTH disproven:
