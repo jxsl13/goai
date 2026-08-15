@@ -14,47 +14,36 @@ import (
 	"github.com/jxsl13/goai/nlp"
 )
 
-// TestLongContextDecodeGap records the largest open performance gap in this repo, because the
-// headline tg64 figure hides it completely.
+// TestLongContextDecodeGap records how decode throughput degrades with context, and corrects a
+// like-for-unlike comparison I published that overstated the gap by ~4x.
 //
-// Short-context decode is ~0.97x of llama.cpp and looks nearly settled. Long-context decode is not.
-// Measured live on an M2 Pro, TinyLlama-1.1B Q4_K_M, 32 tokens generated after a prefill:
+// THE ERROR: I timed dec.Generate(prompt, 32) and called the result decode throughput. Generate
+// PREFILLS the whole prompt first, so a 1536-token prompt costs ~808ms of prefill amortised over 32
+// generated tokens — ~25ms/token of prefill counted as decode. llama.cpp's figure, derived from
+// `llama-bench -pg N,32`, has prefill SUBTRACTED. Prefill-inclusive against prefill-exclusive.
 //
-//	ctx     goai      llama.cpp   ratio
-//	   8   153.75        158.39   0.97x
-//	 512    64.16       ~161.6    0.40x
-//	1024    41.35       ~161      0.26x
-//	1536    29.94       ~161      0.19x
+// Measured correctly — prefill once, then time only the per-token steps (M2 Pro, TinyLlama-1.1B
+// Q4_K_M, live in one session):
 //
-// llama.cpp's figures are derived from `llama-bench -pg N,32` in the same session: pp512+tg32 runs
-// 544 tokens at 1267.70 t/s (0.4291 s) of which prefill is 512/2215.99 = 0.2311 s, leaving 32 tokens
-// in 0.1980 s. Its decode is essentially FLAT in context — 161 t/s at ctx=512 against tg128's
-// 158.39 — which is what the arithmetic predicts, since a 1.1B model's KV traffic at ctx=1536
-// (~69 MB/token) is small next to its ~599 MB of weights.
+//	ctx    decode-only   Generate(incl. prefill)   llama.cpp   ratio
+//	   8      157.5             149.3                158.4     0.99x
+//	 512      146.0              62.2               ~161.6     0.90x
+//	1536      117.6              28.2               ~161       0.73x
 //
-// Ours collapses instead, and not because of the KV traffic: at ctx=1536 a token takes ~33.4 ms
-// where the weights account for ~3.3 ms and the KV read for ~0.4 ms.
+// The middle column is what the earlier version of this test reported as "decode". The arithmetic
+// closes exactly: 808ms prefill + 32 x 8.66ms = 1085ms -> 29.5 tok/s, which is what it printed.
 //
-// Two measurements narrow it down:
+// WHAT IS ACTUALLY TRUE. Per-step GPU-busy time grows 5.44 -> 6.62 -> 8.24 ms across those contexts
+// (96-97% of wall, so this is GPU work, not host overhead). llama.cpp is flat at ~161 t/s. So the
+// real problem is that our forward pass degrades ~1.5x with context where theirs does not — a 0.73x
+// gap at ctx=1536, not 0.19x.
 //
-//  1. TestDecodeLeaveOneOut's synthetic chain, built from the same ops and shapes, runs 7585.9us at
-//     ctx=1536 — 131.8 tok/s. The real decoder manages 29.94. So the real path is 4.4x slower than
-//     a faithful model of itself, and the missing time is NOT in the ops the chain contains.
-//  2. Tracing dispatch sizes for one decode step shows every op class identical between ctx=8 and
-//     ctx=1536 except attention, whose element count goes 0.86M -> 138.5M. So the context-dependent
-//     cost is entirely attention, as expected — but the call counts are ~2x what a 22-layer model
-//     should issue (44 mha, 90 rmsnorm, 262 qmatmul for one step), which is unexplained and is the
-//     first thing to chase.
+// Sizing what is left: the extra 2.8ms/token at ctx=1536 is attention over the KV cache, which reads
+// ~69 MB/token — about 0.38ms at this machine's ~180 GB/s. So attention is ~7x off its bandwidth
+// floor. That is a real and correctly-scoped target, and split-K's 1.07x is a first bite at it.
 //
-// Split-K attention (TestSplitKDecodeLongContext) buys 1.07x here. That is real but small against a
-// 5.4x gap, which confirms the problem is not the attention kernel's efficiency.
-//
-// The cause is therefore still UNKNOWN. Ruled out so far: attention kernel efficiency, KV bandwidth,
-// the ops contained in the modelled chain, and (now) any doubling of issued work.
-//
-// This test is a REGRESSION ANCHOR, not a benchmark: it records the ratios so the gap cannot be
-// forgotten behind the flattering short-context number, and fails only if long-context decode gets
-// materially worse than recorded.
+// This test asserts DECODE-ONLY throughput, and deliberately also reports the Generate figure beside
+// it, so the two can never again be confused for one another.
 func TestLongContextDecodeGap(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("no metal")
@@ -75,26 +64,40 @@ func TestLongContextDecodeGap(t *testing.T) {
 
 	for _, c := range []struct {
 		plen  int
-		floor float64 // recorded tok/s, minus generous headroom
-	}{{8, 100}, {512, 40}, {1536, 18}} {
+		floor float64 // recorded decode-only tok/s, with headroom
+	}{{8, 110}, {512, 100}, {1536, 80}} {
 		p := make([]int, c.plen)
 		for i := range p {
 			p[i] = 1 + i%2000
 		}
-		dec.StepNLast(p, 0)
-		best := 0.0
-		for range 2 {
+		if _, e := dec.StepNLast(p, 0); e != nil {
+			t.Fatal(e)
+		}
+		for i := 0; i < 3; i++ { // prime encode-overlap
+			dec.Step(5, c.plen+i)
+		}
+		const n = 12
+		var wall, gpu float64
+		for i := 0; i < n; i++ {
 			st := time.Now()
-			if _, e := dec.Generate(p, 32, nlp.Greedy()); e != nil {
+			if _, e := dec.Step(5, c.plen+3+i); e != nil {
 				t.Fatal(e)
 			}
-			if v := 32 / time.Since(st).Seconds(); v > best {
-				best = v
-			}
+			wall += time.Since(st).Seconds() * 1e3
+			gpu += metal.LastGPUSeconds() * 1e3
 		}
-		fmt.Printf("LONGCTX ctx=%5d  %7.2f tok/s\n", c.plen, best)
-		if best < c.floor {
-			t.Errorf("ctx=%d decode %.2f tok/s below recorded floor %.0f", c.plen, best, c.floor)
+		wall /= n
+		gpu /= n
+		tps := 1000 / wall
+		st := time.Now()
+		if _, e := dec.Generate(p, 32, nlp.Greedy()); e != nil {
+			t.Fatal(e)
+		}
+		gen := 32 / time.Since(st).Seconds()
+		fmt.Printf("LONGCTX ctx=%5d decode-only %6.1f tok/s (gpuBusy %.2fms, %.0f%%)  Generate-incl-prefill %6.1f tok/s\n",
+			c.plen, tps, gpu, 100*gpu/wall, gen)
+		if tps < c.floor {
+			t.Errorf("ctx=%d decode-only %.1f tok/s below recorded floor %.0f", c.plen, tps, c.floor)
 		}
 	}
 }
