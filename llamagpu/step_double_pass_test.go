@@ -13,34 +13,35 @@ import (
 	"github.com/jxsl13/goai/nlp"
 )
 
-// TestStepIssuesOneForwardPass pins down the lead left open by TestLongContextDecodeGap: a single
-// Decoder.Step was observed issuing TWO complete forward passes.
+// TestStepIssuesOneForwardPass is the correctness anchor for single-token decode, and the record of
+// a WRONG conclusion I published about it.
 //
-// Method — count attention dispatches, since there is exactly one per layer per pass, and TinyLlama
-// has 22 layers. Logging every mtl_recorder_mha call for a 512-token prefill followed by one Step:
+// Counting mtl_recorder_mha calls (one per layer per pass, 22 layers) for a 512-token prefill plus
+// one Step showed:
 //
 //	prefill only          22 x (sq=512 sk=512)
-//	prefill + one Step    22 x (sq=512 sk=512)  +  22 x (sq=1 sk=513)  +  22 x (sq=1 sk=514)
+//	prefill + one Step    22 x (sq=512 sk=512) + 22 x (sq=1 sk=513) + 22 x (sq=1 sk=514)
 //
-// The prefill accounts for exactly 22. One Step then adds 44 — two full stacks, at two CONSECUTIVE
-// cache positions (513 then 514), so it is two decode steps rather than a repeated one. The earlier
-// aggregate trace agrees: 44 mha, 90 rmsnorm and 262 qmatmul for what should be one step.
+// I read the 44 as two forward passes per token and reported a 2x redundancy. That was wrong.
 //
-// This is the concrete half of the long-context decode gap (0.19x of llama.cpp at ctx=1536). It does
-// not explain all of it — the real path is 4.4x slower than the leave-one-out synthetic chain, and a
-// doubled pass accounts for 2x of that — but it is the part that is now measured rather than
-// suspected, and it also inflates SHORT-context decode, where the cost is simply less visible.
+// mtl_recorder_mha is the RECORDING entry point, not execution. The second group is stepInto's
+// encode-overlap (SPEC T614): after committing pos it pre-ENCODES pos+1 into d.pending while the GPU
+// is busy, and the next Step consumes that buffer instead of encoding fresh. Two buffers are
+// recorded; exactly one is committed per Step. In steady state each Step encodes one and executes
+// one, which is the point of the optimisation — it hides encode latency behind GPU execution.
 //
-// IMPORTANT — what this test does and does not do. It checks that stepwise decode agrees with the
-// batched reference, and it PASSES. The doubled pass is correctness-NEUTRAL: the extra KV row
-// written at pos+1 is overwritten by the next Step, so no output ever differs. That is exactly why
-// no existing test caught this, and it means this test does NOT detect the redundancy either —
-// only the dispatch counting above does, and that needs bridge instrumentation which is
-// deliberately not shipped.
+// So there is no doubled GPU work, the 0.97x short-context decode figure was never inflated, and the
+// long-context gap (0.19x of llama.cpp at ctx=1536) remains UNEXPLAINED — the 4.4x discrepancy
+// against the leave-one-out synthetic chain still has no identified cause.
 //
-// It is kept as the correctness anchor for the fix: whoever removes the second pass must keep this
-// green, since the obvious way to remove it (stop advancing the cache) is also the way to break
-// position handling.
+// The methodological error is worth keeping: instrumenting a recorder counts what is ENQUEUED, and
+// any code that speculatively records work will double that count without doing double work.
+// Dispatch counts from a record-mode API are not execution counts. Measuring GPU time, or counting
+// at commit, would not have made this mistake.
+//
+// What this test does: it checks stepwise decode against the batched reference and passes. It never
+// detected anything about pass counts and was not able to — it is kept purely as the correctness
+// anchor for the position/KV-append handling that encode-overlap depends on.
 func TestStepIssuesOneForwardPass(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("no metal")

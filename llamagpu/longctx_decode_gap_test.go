@@ -49,6 +49,9 @@ import (
 // Split-K attention (TestSplitKDecodeLongContext) buys 1.07x here. That is real but small against a
 // 5.4x gap, which confirms the problem is not the attention kernel's efficiency.
 //
+// The cause is therefore still UNKNOWN. Ruled out so far: attention kernel efficiency, KV bandwidth,
+// the ops contained in the modelled chain, and (now) any doubling of issued work.
+//
 // This test is a REGRESSION ANCHOR, not a benchmark: it records the ratios so the gap cannot be
 // forgotten behind the flattering short-context number, and fails only if long-context decode gets
 // materially worse than recorded.
