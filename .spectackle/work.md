@@ -1274,3 +1274,28 @@ WHAT THAT MEANS, and it is the useful conclusion of this whole diagnostic arc: t
 THIS ALSO EXPLAINS THE BLOCK-SIZE ORDERING from the previous record. Achieved bandwidth rose 14.3 -> 51.0 GB/s from Q2_K to Q8_0 because denser formats need more instructions per weight while reading fewer bytes; if the bound were bytes the ordering would be reversed. Instruction issue per weight predicts exactly the observed order.
 
 STATUS OF THE ARC: host (12 percent), submit batching (optimal), attention (2 percent), weight traffic (not the bound), weight-load width (<=1.34x) and unpack arithmetic (<=1.08x) have each been measured and eliminated. The residual is per-weight instruction issue, and the remedy is a structural rewrite rather than a lever.
+
+## R-01M01Q8V37FQ7SYA5HBJRQMPT4 Correction: my probes bounded components WITHIN the loop shape, not vectorization — and kernel style, not density, sets throughput
+kind: research
+state: draft
+created: 2026-08-15
+
+CORRECTION TO MY OWN INFERENCE, plus the evidence that scopes the next build. Nothing shipped.
+
+WHAT I NEARLY CONCLUDED WRONGLY. The previous record bounded weight loads at 1.34x and unpack arithmetic at 1.08x and said roughly two thirds of the kernel is neither. It is easy to read that as "vectorization is bounded at 1.45x too". It is not. Both probes held the LOOP SHAPE FIXED — same 8 iterations per superblock, same index arithmetic, same one-weight-per-iteration body — and varied only what happened inside it. They bound components WITHIN the current shape. Vectorization changes the shape: it cuts iteration count, index computation and instruction issue together, which is precisely the two thirds neither probe touched. The candidate remains UNBOUNDED by anything measured so far.
+
+DIRECT EVIDENCE THAT KERNEL STYLE, NOT FORMAT DENSITY, SETS THE THROUGHPUT. Five formats on one architecture, GPU time from Metal's timestamps:
+  fmt    kernel style                 GB/s   bits/weight
+  Q2_K   hand-written, byte-wise      14.3          2.62
+  Q4_K   inherited, ushort/float4     33.8          4.50
+  Q5_K   hand-written, byte-wise      25.8          5.50
+  Q6_K   inherited, ushort/float4     45.4          6.56
+  Q8_0   inherited                    51.0          8.50
+The three kernels I wrote in this campaign index the weight blob byte by byte; the Q4_K/Q6_K kernels inherited from the stranded work use block-struct ushort reads with float4 accumulators, adapted from llama.cpp. Q6_K carries MORE bits per weight than Q5_K (6.56 against 5.50) and is 1.76x faster. Density predicts the opposite; kernel style predicts what is observed.
+
+SO THERE ARE TWO SEPARATE GAPS, and conflating them has muddied the last few records:
+  1. My three hand-written kernels (Q2_K, Q3_K, Q5_K) against the inherited style — evidenced at roughly 1.3x to 1.8x, and directly actionable by rewriting them in the inherited idiom.
+  2. The inherited kernels themselves against llama.cpp's aggregate 114.8 GB/s — the residual 6.1x on the flagship path, since TinyLlama Q4_K_M exercises only Q4_K and Q6_K, both already in the good style.
+Gap 1 does NOT move the llama.cpp comparison at all. It is worth doing on its own merits, for models quantized to Q2_K/Q3_K/Q5_K, and it is cheap because the target idiom already exists in-tree to copy.
+
+NEXT BUILD, scoped: rewrite Q5_K's cooperative kernel in the inherited ushort/float4 idiom, since it is the worst offender with a same-family template beside it (Q4_K differs only by the qh plane). Prediction, from the table: 25.8 GB/s toward the 33.8-45.4 band. That prediction is falsifiable, which is the point — if a style rewrite does not move it, the style hypothesis is wrong and gap 2 needs a different explanation.
