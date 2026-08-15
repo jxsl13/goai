@@ -99,18 +99,24 @@ func Sinkhorn(cost *tensor.Tensor, r, c []float64, eps float64, iters int) (*ten
 				}
 			}
 		})
-		// v = c ⊘ (Kᵀ u): each v[j] independent (sum over i in ascending order from +0, unchanged).
+		// v = c ⊘ (Kᵀ u): each v[j] folds i in ascending order from +0. The naive nest walked k
+		// COLUMN-major (k[i][j] inner over i strides a full row per step, thrashing cache once k
+		// exceeds L2). Interchange to row-outer: read each contiguous row k[i] once and scatter
+		// u[i]·k[i][j] into a ktu accumulator over this worker's j-range. Bit-identical — each v[j]
+		// still sums i ascending from +0 into its own accumulator; disjoint j-range writes, no
+		// cross-worker reduction (§V-sinkhorn ascending-i order holds).
 		parallelRows(n, m, func(lo, hi int) {
-			//perfscan:ignore PS6010 v-update cache issue is column access; see :102 interchange
-			for j := lo; j < hi; j++ {
-				var ktu float64
-				//perfscan:ignore PS3010 same v-update nest as :102; subsumed by interchange
-				for i := range m {
-					//perfscan:ignore PS3016 same column walk; PS1010 interchange covers it
-					ktu += k[i][j] * u[i]
+			ktu := make([]float64, hi-lo)
+			for i := range m {
+				ui := u[i]
+				ki := k[i]
+				for j := lo; j < hi; j++ {
+					ktu[j-lo] += ki[j] * ui
 				}
-				if ktu > 0 {
-					v[j] = c[j] / ktu
+			}
+			for j := lo; j < hi; j++ {
+				if ktu[j-lo] > 0 {
+					v[j] = c[j] / ktu[j-lo]
 				}
 			}
 		})

@@ -145,6 +145,49 @@ func TestMetalQMatMulQ4KCrossReference(t *testing.T) {
 	}
 }
 
+func TestMetalQMatMulQ6KCooperativeMatchesScalar(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal device unavailable")
+	}
+	const m, k, n = 1, 2048, 7 // odd N exercises the cooperative tail row
+	x := tensor.New(tensor.F32, tensor.Shape{m, k})
+	for i, value := range qmRand(m*k, 41) {
+		x.Storage().F32()[i] = float32(value)
+	}
+	w := tensor.FromFloat64(tensor.Shape{n, k}, qmRand(n*k, 42))
+	wq, err := gguf.Quantize(w, gguf.Q6_K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := metal.SetQ6KCooperative(false)
+	defer metal.SetQ6KCooperative(previous)
+	scalar, err := metal.QMatMulQ6_K(x, wq, n, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metal.SetQ6KCooperative(true)
+	cooperative, err := metal.QMatMulQ6_K(x, wq, n, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var maxRel float64
+	for i, want := range scalar.Storage().F32() {
+		got := cooperative.Storage().F32()[i]
+		denominator := math.Abs(float64(want))
+		if denominator < 1 {
+			denominator = 1
+		}
+		rel := math.Abs(float64(got-want)) / denominator
+		if rel > maxRel {
+			maxRel = rel
+		}
+		if rel > 2e-5 {
+			t.Fatalf("element %d cooperative=%g scalar=%g relative=%g", i, got, want, rel)
+		}
+	}
+	t.Logf("Q6_K cooperative vs scalar max relative difference %.3e", maxRel)
+}
+
 // §V7-adjacent: input validation rejects a bad K / weight length rather than reading OOB.
 func TestMetalQMatMulQ4KValidation(t *testing.T) {
 	if !metal.Available() {
@@ -160,6 +203,49 @@ func TestMetalQMatMulQ4KValidation(t *testing.T) {
 	}
 }
 
+func TestMetalQMatMulQ4KCooperativeMatchesScalar(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal device unavailable")
+	}
+	const m, k, n = 1, 2048, 7 // odd N exercises the cooperative tail row
+	x := tensor.New(tensor.F32, tensor.Shape{m, k})
+	for i, value := range qmRand(m*k, 31) {
+		x.Storage().F32()[i] = float32(value)
+	}
+	w := tensor.FromFloat64(tensor.Shape{n, k}, qmRand(n*k, 32))
+	wq, err := gguf.Quantize(w, gguf.Q4_K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := metal.SetQ4KCooperative(false)
+	defer metal.SetQ4KCooperative(previous)
+	scalar, err := metal.QMatMulQ4_K(x, wq, n, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metal.SetQ4KCooperative(true)
+	cooperative, err := metal.QMatMulQ4_K(x, wq, n, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var maxRel float64
+	for i, want := range scalar.Storage().F32() {
+		got := cooperative.Storage().F32()[i]
+		denominator := math.Abs(float64(want))
+		if denominator < 1 {
+			denominator = 1
+		}
+		rel := math.Abs(float64(got-want)) / denominator
+		if rel > maxRel {
+			maxRel = rel
+		}
+		if rel > 2e-5 {
+			t.Fatalf("element %d cooperative=%g scalar=%g relative=%g", i, got, want, rel)
+		}
+	}
+	t.Logf("Q4_K cooperative vs scalar max relative difference %.3e", maxRel)
+}
+
 // §V3/§V11 (§T140): the Metal Q6_K quantized matmul equals the reference gguf.QMatMul (the f64
 // CPU truth) within crossTol — the GPU kernel dequantizes the same 210-byte super-blocks
 // in-kernel (symmetric, signed int8 sub-scale, 6-bit quant from ql+qh); only the accumulation
@@ -170,6 +256,7 @@ func TestMetalQMatMulQ6KCrossReference(t *testing.T) {
 	}
 	cases := []struct{ m, k, n int }{
 		{1, 256, 8}, {4, 256, 5}, {8, 512, 12}, {2, 512, 7}, {16, 256, 3},
+		{1, 2048, 7}, {1, 4096, 3},
 	}
 	for _, c := range cases {
 		xf := tensor.New(tensor.F32, tensor.Shape{c.m, c.k})

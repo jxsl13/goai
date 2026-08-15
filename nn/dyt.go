@@ -130,7 +130,13 @@ func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backe
 			row := ts[base : base+d : base+d]
 			for c, tv := range row {
 				//perfscan:ignore PS3025,PS5003 stale line: file is 79 lines, no host compute loop | stale line: file is 79 lines, no such code
-				row[c] = tv*gs[c] + bs[c] // γ·t + β, matches OpMul(t,γ) then OpAdd(·,β)
+				// The explicit conversion is LOAD-BEARING, not a no-op cast: written as
+				// `tv*gs[c] + bs[c]` the compiler contracts the pair into a single FMA, so the
+				// product is never rounded to float64 — one rounding where OpMul-then-OpAdd
+				// does two. That silently broke the bit-identity this path advertises (1 ulp,
+				// caught by TestDyTFusedBitExact). Rounding the product explicitly blocks the
+				// contraction and restores the two-op sequence exactly.
+				row[c] = float64(tv*gs[c]) + bs[c] // γ·t + β, matches OpMul(t,γ) then OpAdd(·,β)
 			}
 		}
 	case tensor.F32:
@@ -140,7 +146,7 @@ func (l *DyT) forwardFused(ctx *backend.Context, x *tensor.Tensor, ex func(backe
 			row := ts[base : base+d : base+d]
 			for c, tv := range row {
 				//perfscan:ignore PS3025,PS5003 stale line: file is 79 lines, no such code
-				row[c] = tv*gs[c] + bs[c]
+				row[c] = float32(tv*gs[c]) + bs[c] // same FMA-blocking round as the F64 branch
 			}
 		}
 	}
