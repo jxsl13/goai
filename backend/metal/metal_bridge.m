@@ -2490,6 +2490,15 @@ static int ensure_q4k_mm(void) {
 // removed most of the ratio. The tiling was never the main cost, and neither were the matrix units.
 //
 // It still loses to dq+gemm by ~2.75x, so it stays off. What remains here is the staging itself:
+//
+// Attempted and REVERTED: reading the A tile straight from device memory instead of staging it in
+// sX, to free 16 KB of threadgroup memory and one barrier per K-chunk. The staging is not
+// redundant — it ZERO-PADS partial M tiles. Loading A directly needs the row index clamped to stay
+// in bounds, and a clamp silently misattributes rows: at M=9 the second simdgroup reads rows 1..8
+// but stores to output rows 8..15, so row 8 receives row 1's result. TestQ4KMatrixUnitMatchesCooperative
+// caught it at exactly that shape (max relative 1.374e+01). A dual path — direct load when
+// mi0+BM<=M, staged otherwise — would work, but the whole change is worth at most ~1.5x, which
+// only reaches parity with dq+gemm.
 // every weight is written to threadgroup memory and read back, with two barriers per K-chunk,
 // where dq+gemm writes once to device memory and hands the multiply to a tuned MPS kernel.
 static int gQ4KMMEnabled = 0;
