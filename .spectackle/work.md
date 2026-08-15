@@ -2174,3 +2174,54 @@ The dequantization, and it is now bandwidth-bound rather than wasteful: 44 MB wr
 Expanding to f16 instead halves the traffic to 22 MB — roughly 130us instead of 260 — and MPS f16 GEMM is typically faster than f32 on this hardware, so the gain compounds. Q4_K carries ~4 significant bits per weight and the scales are already f16 in the block header, so f16 expansion loses nothing the format holds; that claim needs the same on/off token-identity check this round used before it is believed.
 
 Order for next: (1) f16 expansion + f16 GEMM, (2) verify token identity and re-measure, (3) if the gap persists, profile whether the residual is the GEMM's own efficiency or the expansion.
+
+## R-01M023RDTKFZ89AFWB5V54DAPC f16 GEMM is only ~1.07x, and weight expansion alone is 63% of llama.cpp's per-layer budget — the expansion approach tops out ~2.4x short, so the quantized-GEMM conclusion was too strong
+kind: research
+state: draft
+created: 2026-08-15
+
+Measured the f16 expansion idea before building it. It is worth about 1.27x, and the budget it exposes shows the whole expansion APPROACH has a ceiling ~2.4x short of llama.cpp. Recording that ceiling is the useful result.
+
+## What was measured
+
+MPS f16 GEMM against f32, same shapes:
+
+| M | f32 | f16 | ratio |
+|---|---|---|---|
+| 32 | 264.0us (2796 GFLOP/s) | 236.0us (3128) | 1.12x |
+| 64 | 449.3us (3286) | 317.0us (4657) | 1.42x |
+| 128 | 741.8us (3981) | 723.5us (4081) | 1.03x |
+| 256 | 1268.3us (4656) | 1189.9us (4963) | 1.07x |
+
+Mostly ~1.07x, with one favourable point at M=64. So the f16 path's value is almost entirely halving the expansion write, not speeding the multiply.
+
+## The budget that matters
+
+  GoAI pp64 585.8 tok/s -> 109.3 ms for 64 tokens -> 4.97 ms/layer
+  llama.cpp  1778.75    ->  36.0 ms              -> 1.64 ms/layer
+
+  weight expansion alone: 4 projections x 260us = 1.04 ms/layer
+                        = 63% of llama.cpp's ENTIRE per-layer time
+
+Even a perfect f16 expansion (half the write, plus the small GEMM gain) saves ~1.05 ms/layer and lands at pp64 ~743 tok/s — still 2.4x behind.
+
+**The expansion approach cannot beat an implementation that never expands.** llama.cpp keeps weights quantized and runs a quantized GEMM on the matrix units; its per-layer budget has no expansion term at all. Everything gained this round and last (102 -> 345 -> 586 tok/s) came from making expansion cheap, and that line of attack tops out around 743.
+
+## Where that leaves the matrix-unit kernel
+
+Closing the rest requires the thing that failed earlier: a quantized GEMM that dequantizes inside the kernel efficiently enough. My attempt reached 585 GFLOP/s and I concluded from a 240:1 scalar-to-matrix instruction ratio that the approach was closed. That conclusion was too strong. llama.cpp demonstrably does exactly this and is ~3x faster than GoAI's current best, so the ratio is not a property of the problem but of my kernel — most likely the dequantization arithmetic itself (bit-twiddling per element) rather than the tiling, since the tiling redesign already gave 9.3x without closing the gap.
+
+The correction matters: "the matrix-unit approach is closed" should have been "my matrix-unit kernel spends too much on dequantization", which is a different and falsifiable claim.
+
+## Not built
+
+The f16 path is real but modest (1.27x, ceiling 743 tok/s) and needs device-side f32<->f16 conversion kernels plus an accuracy validation. My first accuracy harness was unsound — it packed f16 pairs into float32 slices, where denormal bit patterns passing through a float32 register can be flushed — so it produced a >100% error that says nothing about MPS. A real check needs a conversion KERNEL, not host bit-packing.
+
+Reverted the unused MatMulF16 rather than leave unvalidated code in the tree.
+
+## Standing
+
+  decode  : tg64 0.914x — parity
+  prefill : pp64 0.329x — 3.0x behind, was 5.2x at the start of this line of work
+
+Next, in order of expected value: (1) profile the dequantization arithmetic inside a matrix-unit kernel to find where the 240:1 goes, since llama.cpp proves it can be much lower; (2) f16 expansion as the incremental 1.27x if (1) stalls.
