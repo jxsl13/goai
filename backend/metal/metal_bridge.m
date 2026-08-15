@@ -4314,6 +4314,75 @@ static NSString* const kMHADecodeSource =
      "  }\n"
      "  if (lane==0) { for (int d=0; d<dk; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
      "}\n"
+     "// Split-K (flash-decoding) attention for sq==1, dk==64.\n"
+     "//\n"
+     "// The per-head kernel dispatches heads threadgroups of 32 threads — ~1024 threads for the whole\n"
+     "// GPU — so decode attention runs at a few percent occupancy and cannot hide its own memory\n"
+     "// latency. Here each (head, key-chunk) pair gets its own threadgroup, multiplying parallelism by\n"
+     "// the chunk count, and a second pass merges the per-chunk online-softmax partials.\n"
+     "//\n"
+     "// Pass 1 writes, per (head, chunk): m, l, then dk accumulators. The merge is the same (m,l,acc)\n"
+     "// combination the single-pass kernel does across lanes, just across chunks instead.\n"
+     "kernel void mha_dec_splitk_p1(device const float* Q [[buffer(0)]],\n"
+     "                              device const float* K [[buffer(1)]],\n"
+     "                              device const float* V [[buffer(2)]],\n"
+     "                              device float* PART [[buffer(3)]],\n"
+     "                              constant int* P [[buffer(4)]],\n"
+     "                              constant float* FP [[buffer(5)]],\n"
+     "                              uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                              uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64;\n"
+     "  int sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  float q[DK]; for (int d=0; d<DK; d++) q[d]=Q[h*DK+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[DK];\n"
+     "  for (int d=0; d<DK; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+(int)lane; j<j1; j+=32){\n"
+     "    float sdot=0.0f; for (int d=0; d<DK; d++) sdot+=q[d]*K[j*dkv+kvOff+d]; sdot*=scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<DK; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint off=16; off>0; off>>=1){\n"
+     "    float mo=simd_shuffle_down(m,off), lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<DK; d++){ float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    PART[base]=m; PART[base+1]=l;\n"
+     "    for (int d=0; d<DK; d++) PART[base+2+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
+     "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
+     "                              device float* O [[buffer(1)]],\n"
+     "                              constant int* P [[buffer(2)]],\n"
+     "                              uint tg [[threadgroup_position_in_grid]],\n"
+     "                              uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64;\n"
+     "  int heads=P[3], nchunk=P[7];\n"
+     "  int h=(int)tg;\n"
+     "  if (h>=heads) return;\n"
+     "  float m=-INFINITY, l=0.0f, acc[DK];\n"
+     "  for (int d=0; d<DK; d++) acc[d]=0.0f;\n"
+     "  for (int c=0; c<nchunk; c++){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    float mc=PART[base], lc=PART[base+1];\n"
+     "    float M=max(m,mc);\n"
+     "    if (M==-INFINITY) continue;\n"
+     "    float c1=exp(m-M), c2=exp(mc-M);\n"
+     "    for (int d=0; d<DK; d++) acc[d]=c1*acc[d]+c2*PART[base+2+d];\n"
+     "    l=c1*l+c2*lc; m=M;\n"
+     "  }\n"
+     "  if (lane==0){ for (int d=0; d<DK; d++) O[h*DK+d]=acc[d]/l; }\n"
+     "}\n"
      "kernel void mha_decode64_f32(device const float* Q [[buffer(0)]],\n"
      "                           device const float* K [[buffer(1)]],\n"
      "                           device const float* V [[buffer(2)]],\n"
@@ -4391,6 +4460,11 @@ static id<MTLComputePipelineState> gMHADecode = nil;
 // array bounds, so dk<=64 callers get an identical result.
 static id<MTLComputePipelineState> gMHADecode64 = nil;
 static id<MTLComputePipelineState> gMHADecode128 = nil;
+static id<MTLComputePipelineState> gSplitKP1 = nil;
+static id<MTLComputePipelineState> gSplitKP2 = nil;
+static id<MTLBuffer> gSplitKPart = nil; static size_t gSplitKPartLen = 0;
+static int gSplitKEnabled = 1;
+void mtl_set_splitk_decode(int on) { gSplitKEnabled = on ? 1 : 0; }
 static int ensure_mha_decode(void) {
     if (gMHADecode != nil) return 0;
     NSError* err = nil;
@@ -4404,6 +4478,12 @@ static int ensure_mha_decode(void) {
     if (fn64 != nil) gMHADecode64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
     id<MTLFunction> fn128 = [lib newFunctionWithName:@"mha_decode128_f32"];
     if (fn128 != nil) gMHADecode128 = [gDevice newComputePipelineStateWithFunction:fn128 error:&err];
+    id<MTLFunction> sp1 = [lib newFunctionWithName:@"mha_dec_splitk_p1"];
+    id<MTLFunction> sp2 = [lib newFunctionWithName:@"mha_dec_splitk_p2"];
+    if (sp1 != nil) gSplitKP1 = [gDevice newComputePipelineStateWithFunction:sp1 error:&err];
+    if (sp2 != nil) gSplitKP2 = [gDevice newComputePipelineStateWithFunction:sp2 error:&err];
+    if (gSplitKP1 == nil || gSplitKP2 == nil)
+        fprintf(stderr, "metal: split-k decode attention unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
     return 0;
 }
 
@@ -4481,6 +4561,44 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     if (gFlashMMEnabled && window == 0 && dk == 64 && sq >= 32 && sq == sk && qElemOff == 0 &&
         mtl_recorder_flash_mm(rec, qh, kh, vh, oh, sq, sk, dm, heads, kvHeads, causal, scale) == 0) {
         return 0;
+    }
+    // Split-K decode attention: the single-pass kernel launches only `heads` threadgroups of 32
+    // threads, so a decode step runs attention at a few percent occupancy. Splitting the key range
+    // multiplies parallelism by the chunk count; pass 2 merges the per-chunk (m,l,acc) partials.
+    if (gSplitKEnabled && gSplitKP1 != nil && gSplitKP2 != nil && window == 0 && sq == 1 &&
+        dk == 64 && causal != 0 && kvHeads > 0 && heads % kvHeads == 0 && sk >= 128) {
+        if (ensure_mha_decode() != 0) return -5;
+        int nchunk = (sk + 127) / 128;
+        if (nchunk > 16) nchunk = 16;
+        if (nchunk < 2) nchunk = 2;
+        size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
+        if (gSplitKPart == nil || gSplitKPartLen < need) {
+            gSplitKPart = [gDevice newBufferWithLength:need options:MTLResourceStorageModePrivate];
+            gSplitKPartLen = (gSplitKPart != nil) ? need : 0;
+        }
+        if (gSplitKPart != nil) {
+            id<MTLCommandBuffer> scmd = (__bridge id<MTLCommandBuffer>)rec;
+            int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
+            float SFP[1] = {scale};
+            id<MTLComputeCommandEncoder> e1 = [scmd computeCommandEncoder];
+            [e1 setComputePipelineState:gSplitKP1];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+            [e1 setBuffer:gSplitKPart offset:0 atIndex:3];
+            [e1 setBytes:SP length:sizeof(SP) atIndex:4];
+            [e1 setBytes:SFP length:sizeof(SFP) atIndex:5];
+            [e1 dispatchThreadgroups:MTLSizeMake(heads,nchunk,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e1 endEncoding];
+            id<MTLComputeCommandEncoder> e2 = [scmd computeCommandEncoder];
+            [e2 setComputePipelineState:gSplitKP2];
+            [e2 setBuffer:gSplitKPart offset:0 atIndex:0];
+            [e2 setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:1];
+            [e2 setBytes:SP length:sizeof(SP) atIndex:2];
+            [e2 dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e2 endEncoding];
+            return 0;
+        }
     }
     if (window == 0 && dk <= 128 && (causal != 0 || sq == 1)) {
         if (ensure_mha_decode() != 0) return -5;

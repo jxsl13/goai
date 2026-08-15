@@ -236,6 +236,7 @@ void mtl_set_q4k_dq_gemm_f16_max_m(int m);
 // Persistent expanded-weight cache. max_gb <= 0 disables (default). Holds each Q4_K weight's f16
 // expansion so prefill stops paying for it every pass, at the cost of ~3x the model file in memory.
 void mtl_set_f16_min_n(int n);
+void mtl_set_splitk_decode(int on);
 void mtl_set_weight_cache(double max_gb);
 void mtl_weight_cache_stats(int* hits, int* misses, double* bytes);
 void mtl_set_q4k_mm(int on);

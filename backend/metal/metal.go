@@ -2337,6 +2337,17 @@ func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m))
 // row-group and so costs per row at prefill batch sizes.
 func SetF16MinN(n int) { C.mtl_set_f16_min_n(C.int(n)) }
 
+// SetSplitKDecode toggles split-K (flash-decoding) attention for sq==1, dk==64. The single-pass
+// kernel launches only `heads` threadgroups of 32 threads, running decode attention at a few percent
+// occupancy; splitting the key range multiplies parallelism by the chunk count. On by default.
+func SetSplitKDecode(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_decode(v)
+}
+
 // SetWeightCacheGB enables the persistent expanded-weight cache with a budget in gigabytes, or
 // disables it with 0 (the default).
 //
