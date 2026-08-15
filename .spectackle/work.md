@@ -1543,3 +1543,55 @@ This was only discovered because the mutation probe is now routine after the ear
 retention_f32 (`acc[128]` with `j<dv`) has the same defect and is not fixed - RetNet is a lower-traffic path and it deserves its own measurement plus a reachability probe before touching it, on the evidence that one of these three kernels turned out to have no coverage at all.
 
 Also still unexplained from the decode profile: after the attention fix the 22-layer decode is 20.4 ms/token while measured matmul (~4ms) + small kernels (~0.5ms) + attention (~0.3ms) account for about 5ms. Roughly 15 ms/token is still unattributed and is the next thing to chase.
+
+## R-01M01YJPAJF3WADMKEXGXFE89E Decode elementwise ops ran over the whole context buffer for one row - 2.83x (48.7 to 138.0 tok/s); measured components not summing to the whole meant an assumed parameter was wrong
+kind: research
+state: draft
+created: 2026-08-15
+
+The decode path spent ~65% of its GPU time on elementwise ops running over the WHOLE context-sized buffer for a single decoded row. Bounding them to the rows actually in play: 48.7 -> 138.0 tok/s, 2.83x, bit-identical output.
+
+## The defect
+
+Decoder buffers are allocated for ctx rows so one Decoder serves both prefill and decode. Every recorded op takes a row count - RMSNorm, RoPE, MHA, AddBias - EXCEPT Binary, which derived its length from the buffer.
+
+For one decoded row each residual add therefore touched ctx*dim = 1024*2048 = 2,097,152 elements, and each SwiGLU ctx*hidden = 5,767,168. A 22-layer decode issues ~46.8 adds and ~23.4 SwiGLUs per token: ~233M elements, roughly 2.8 GB of traffic per token, against ~520 MB of actual weight reads. The elementwise ops moved 5x the memory traffic of the entire quantized model.
+
+## How it was found - the reusable part
+
+Three measurements, each eliminating a hypothesis:
+
+1. GPU-vs-wall split via command-buffer GPUStartTime/GPUEndTime: 17.48 of 20.26 ms/token was GPU-busy, 1 command buffer per token. NOT host overhead.
+2. Realistic matmul workload - 154 projections over 520 MB of DISTINCT resident weights (defeating the cache reuse the roofline test enjoys): 4.10 ms at 132.8 GB/s. So the matmuls were as estimated.
+3. Serializing those matmuls through a shared output buffer: 4.12 ms vs 4.18 ms independent. NOT the dependency chain.
+
+That left ~13 ms of GPU work in kernels I had measured at ~0.5 ms in isolation. The contradiction resolved only by logging the ACTUAL element counts the recorder was called with:
+
+  Binary calls/token=70.1  n=2097152 x46.8  n=5767168 x23.4
+
+Every previous estimate multiplied a measured per-op cost by a call count, using the shape the op was ASSUMED to run at. That estimate was wrong by three orders of magnitude, and no amount of refining the per-op microbenchmarks would ever have found it - the microbenchmark used the assumed shape too.
+
+**The lesson: when measured components do not sum to the measured whole, the error is more likely in an assumed PARAMETER than in the per-component timings. Instrument the actual arguments before re-measuring the pieces.** Three rounds of this investigation refined per-op costs that were individually accurate and collectively meaningless.
+
+## Fix
+
+Recorder.BinaryN bounds the op to the first n elements. The C side already accepted n; only the Go wrapper hardcoded o.n. Reached through an OPTIONAL binaryNRecorder capability, the same shape as the existing quantAccRecorder, so recorders without it keep the unbounded call and stay correct. linear.recordAdd gains the residual width; all seven call sites write into dx, whose row width is d.d.
+
+## Result
+
+Interleaved A/B, 3 alternations, non-overlapping:
+
+  unbounded    48.7 / 48.8 / 48.6 tok/s
+  all-bounded 138.3 / 137.8 / 137.8 tok/s   = 2.83x
+
+Residual adds alone: 62.6 tok/s. SwiGLU is the larger half of the traffic (135M of the 233M elements).
+
+Correctness: generated token stream BIT-IDENTICAL over 64 tokens from an 8-token prompt, exercising prefill (rows>1) and decode (rows=1). Bounding only skips buffer-tail elements no consumer reads.
+
+## Position
+
+TinyLlama-shape decode now ~138 tok/s against llama.cpp's 172 on the real model - the gap narrows from 7.14x to about 1.25x. Combined with the session's other decode work, and with the Q4_K matmul already at 93% of the M2 Pro memory roofline, the remaining distance is small enough that the next step should be a fresh GPU-vs-wall split and element-count log on the NEW profile rather than any assumption carried over from this one.
+
+## Not done
+
+Unary has the identical unbounded shape and is not fixed - it does not appear in a Llama decode (the profile shows zero Unary calls), so it needs a workload that reaches it (GELU/ReLU2 FFNs, Mamba, RWKV) before it can be measured. Same for the remaining Binary sites in the Mamba/RWKV paths. retention_f32 still carries the runtime-loop-bound defect from the earlier audit.
