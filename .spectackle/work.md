@@ -994,3 +994,22 @@ SECOND CONFIRMATION OF THE SAME PRINCIPLE. R-01M01DD2A5ER9 rejected a Metal M-bl
 WHAT THE COOPERATIVE QUANT KERNELS DID DIFFERENTLY, and why they won where these lost: they INCREASED thread count. One thread per output row became one simdgroup or workgroup per output row — 32x or 64x MORE threads, not fewer. The 14 successful kernels and the 2 rejected ones separate cleanly on that axis, not on how much redundant work they removed.
 
 STILL UNTESTED: a split-K GEMV that keeps thread count high by giving each output column several workgroups and combining them, which needs atomics or a second pass. It is the only shape not refuted, and the two failures above are reason to bound it by probe before building it.
+
+## R-01M01MCSPZF73A3GMXHSAW6R5T The 149us submit floor is a benchmark artifact: production batches a whole decode step per submit
+kind: research
+state: draft
+created: 2026-08-15
+
+QUESTION CLOSED, and it corrects the recommendation in the previous record. That one measured a ~149us per-submit floor and concluded "the actionable item is batching, not the kernel". Production ALREADY batches. The floor is a benchmark artifact, not an inference cost.
+
+WHAT PRODUCTION DOES. llamagpu/decoder.go creates one recorder at line 3010 and finishes at 3342, with the whole per-layer loop (`for _, b := range d.blocks`) inside that scope — every layer's ops record into the same command buffer. Vulkan's Recorder.Commit() is a NO-OP (`return nil`) and Wait() calls Finish(), so the actual submits are the Wait partway through and the final Finish: roughly TWO submits per decode step, each carrying all the layer ops recorded up to it. gpt.go (127->159, 211->254) and t5_decoder.go follow the same one-recorder-per-step shape.
+
+SO THE FLOOR IS AMORTIZED IN PRODUCTION. Two submits per token at ~149us is ~0.3ms. Against the 16.35 tok/s (61ms/token) the Metal Q4_K+Q6_K work reached, that is about 0.49 percent of a decode step. Even at a pessimistic 5 tok/s it stays around 0.15 percent. There is no batching problem to fix.
+
+WHAT REMAINS TRUE FROM THE PREVIOUS RECORD: every benchmark in this series creates a recorder, records ONE op, finishes and frees per iteration, so all of them paid the floor on BOTH sides of their A/B. The comparisons are valid (common-mode) but the ratios are DILUTED, and the reported GPU speedups are LOWER BOUNDS on kernel improvement — Metal Q4_K cooperative reads 3.41x as measured and 7.85x with the floor removed from both sides.
+
+WHAT WAS WRONG: the inference that a large per-submit cost implies a batching opportunity. It does only if the caller submits per op, and this caller does not. The benchmark harness submits per op because that is how you isolate one kernel; production does not because that would be absurd. I read a property of the measuring instrument as a property of the system.
+
+NET EFFECT ON THE CAMPAIGN: the kernel work was the right target after all. The 14 cooperative kernels operate on the part of the decode step that is NOT submit overhead — roughly 99.5 percent of it — and their true improvement is larger than reported, not smaller.
+
+STANDING CHECK worth keeping: before treating a fixed per-call cost as an optimization target, find the production call site and count how many real operations it amortizes that cost across. The harness's call pattern is chosen for isolation and is not evidence about the system.
