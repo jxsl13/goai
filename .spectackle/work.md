@@ -2274,3 +2274,50 @@ All three arms are pinned explicitly now. QMatMulResident routes by flags, so an
 
   decode  : tg64 0.914x — parity
   prefill : pp64 0.329x — 3.0x behind
+
+## R-01M024DQCHEXH8PT2TATEE04H0 f16 prompt-processing chain: 1.08-1.39x, produces NaN from f16 range overflow, and the accuracy harness reported zero error because NaN comparisons are false
+kind: research
+state: draft
+created: 2026-08-15
+
+Built the f16 prompt-processing chain, measured it, and reverted it. The gain is smaller than estimated and it overflows f16 range — which my accuracy harness reported as ZERO error because of how NaN compares.
+
+## What was built and measured
+
+Full chain: convert A to half, expand Q4_K straight to half, f16 MPS GEMM, convert the result back. Against the f32 chain, K=2048 N=5632:
+
+| M | f32 chain | f16 chain | ratio |
+|---|---|---|---|
+| 32 | 531.0us | 446.6us | 1.19x |
+| 64 | 731.8us | 524.9us | 1.39x |
+| 128 | 1014.6us | 910.9us | 1.11x |
+| 256 | 1550.6us | 1442.2us | 1.08x |
+
+1.08-1.39x, against the 1.66x predicted from component times. The prediction added dequant 130 + GEMM 317 = 447us and ignored the two conversion passes and the extra encoders, which is most of the shortfall.
+
+## The failure, and the harness bug that hid it
+
+The f16 chain produces NaN. Reference output values reach -5.68e6; f16's maximum finite value is 65504. The result overflows to infinity and the conversion back yields NaN.
+
+The accuracy check reported maxRel = 0.00e+00 at EVERY M. The loop was the usual form:
+
+  d := abs(got - ref); if rr := d/den; rr > maxRel { maxRel = rr }
+
+With got = NaN, d is NaN, and `NaN > maxRel` is FALSE. A max-tracking comparison silently ignores NaN, so a completely broken result reports perfect agreement.
+
+**Any max/min-tracking accuracy loop needs an explicit NaN check.** This is the second unsound f16 harness in two rounds — the first packed f16 pairs into float32 slices where denormals can be flushed. Both produced confident numbers that meant nothing.
+
+What exposed it was the mutation probe: perturbing the dequantized weight by 5% changed nothing, which is impossible for a live path. The probe said "not reached", the ensure-probe said "reached", and only dumping the actual values resolved the contradiction. Two probes disagreeing was the signal that neither answer was the real one.
+
+## Judgement
+
+Reverted. 1.08-1.39x does not justify a path that needs range analysis per model to be safe: the overflow is data-dependent, so it could pass every synthetic test and fail on a real activation distribution. The value here is the measurement, not the code.
+
+Worth noting the overflow may be specific to this test's random-byte weights, which produce far larger products than a trained model would. A version that keeps the ACCUMULATION and OUTPUT in f32 while storing only the weight in f16 would avoid it entirely — MPS requires matching operand types, so that needs a different multiply than MPSMatrixMultiplication.
+
+## Standing, unchanged
+
+  decode  : tg64 0.914x — parity
+  prefill : pp64 0.329x — 3.0x behind
+
+Both remaining roads are now measured end to end: expansion tops out around 743 tok/s pp64 (2.4x short), and the matrix-unit kernel needs its threadgroup staging removed to go further. Neither is a small change, and the f16 shortcut between them is closed.
