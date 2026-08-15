@@ -513,6 +513,9 @@ type qgalorePending struct {
 	rows, cols int
 }
 
+// Step applies one QGaLore update. Parameters with a nil gradient are skipped; matrix parameters
+// take the projected low-rank path with quantized optimizer state, and non-matrix parameters fall
+// back to plain Adam.
 func (g *QGaLore) Step(grad GradFn) error {
 	g.t++
 	b1c := 1 - math.Pow(g.Beta1, float64(g.t))
