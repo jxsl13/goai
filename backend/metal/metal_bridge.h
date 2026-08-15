@@ -218,6 +218,7 @@ double mtl_last_gpu_seconds(void);
 void mtl_set_q4k_mm(int on);
 int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt);
 void mtl_set_q4k_dq_gemm(int on);
+void mtl_set_flash_mm(int on);
 int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh, int sq, int sk, int dm, int heads, int kvHeads, int causal, float scale);
 void mtl_recorder_free(void* rec);
 void* mtl_devbuf_upload(const void* data, int nbytes);

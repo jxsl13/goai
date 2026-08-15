@@ -13,14 +13,18 @@ import (
 //
 // Against that kernel, per call:
 //
-//	seq= 64  decode  166.4us  flashMM   70.7us  2.35x   474 GFLOP/s ( 7.0% peak)
-//	seq=128  decode  522.3us  flashMM  222.1us  2.35x   604 GFLOP/s ( 8.9%)
-//	seq=256  decode 1903.2us  flashMM  566.7us  3.36x   947 GFLOP/s (13.9%)
-//	seq=512  decode 7271.6us  flashMM 1831.6us  3.97x  1172 GFLOP/s (17.2%)
+//	seq= 64  decode  166.4us  flashMM  122.7us  1.36x   273 GFLOP/s ( 4.0% peak)
+//	seq=128  decode  522.3us  flashMM  138.5us  3.77x   969 GFLOP/s (14.2%)
+//	seq=256  decode 1903.2us  flashMM  389.3us  4.89x  1379 GFLOP/s (20.3%)
+//	seq=512  decode 7271.6us  flashMM 1179.5us  6.16x  1821 GFLOP/s (26.8%)
 //
-// End to end on TinyLlama prompt processing: n=64 777 -> 805, n=256 1314 -> 1495,
-// n=1024 929 -> 1599 tok/s. The gain tracks attention's share of prefill, which the
+// End to end on TinyLlama prompt processing: n=64 777 -> ~804, n=256 1314 -> ~1582,
+// n=1024 929 -> ~1796 tok/s. The gain tracks attention's share of prefill, which the
 // prompt-length sweep measured at 5% / 21% / 58%.
+//
+// BQ is 64 (8 simdgroups). Against BQ=32 it is neutral at n=64 and better at length —
+// interleaved: n=256 1545/1514 -> 1587/1577, n=1024 1602/1633 -> 1799/1793. sO aliases the K/V
+// staging buffer because 2*BK*DK == BQ*DK exactly and O is only written after the last tile.
 //
 // The first version used ONE simdgroup per 8 query rows and was 0.84-1.01x — no faster than the
 // scalar kernel — because it staged 4096 floats and ran a 64-iteration softmax on 8 of 32 lanes to
@@ -61,13 +65,18 @@ func TestFlashMMMatchesReference(t *testing.T) {
 		v, _ := NewDeviceBufferF32(vh)
 		o1, _ := NewDeviceBufferF32(make([]float32, seq*dm))
 		o2, _ := NewDeviceBufferF32(make([]float32, seq*dm))
+		// MHA now ROUTES to flash_mm for these shapes, so the reference arm must switch it off —
+		// otherwise this compares the kernel against itself and reports 0.000e+00, which is exactly
+		// what it did the moment the gate was wired.
 		r, err := NewRecorder()
 		if err != nil {
 			t.Fatal(err)
 		}
+		SetFlashMM(false)
 		if e := r.MHA(q, k, v, o1, seq, seq, dm, heads, kvh, dk, 1, 0, 0.125); e != nil {
 			t.Fatal(e)
 		}
+		SetFlashMM(true)
 		if e := r.FlashMM(q, k, v, o2, seq, seq, dm, heads, kvh, 1, 0.125); e != nil {
 			t.Skipf("FlashMM: %v", e)
 		}

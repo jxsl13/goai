@@ -2363,6 +2363,16 @@ func (r *Recorder) FlashMM(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads,
 	return nil
 }
 
+// SetFlashMM toggles the matrix-unit prefill attention path. Test seam: MHA routes to it, so a
+// parity test must switch it off to obtain the reference kernel's result for the same inputs.
+func SetFlashMM(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_flash_mm(v)
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

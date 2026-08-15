@@ -2415,13 +2415,16 @@ static NSString* const kFlashMMSource =
      "                         ushort lane [[thread_index_in_simdgroup]]) {\n"
      "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], causal=P[6];\n"
      "  float scale=FP[0];\n"
-     "  const int DK=64, BK=32, BQ=32;\n"
+     "  const int DK=64, BK=32, BQ=64;   // 8 simdgroups; one K/V tile serves 64 query rows\n"
      "  int h=(int)tg.x, qb=(int)tg.y*BQ;\n"
      "  if (h>=heads || qb>=sq) return;\n"
      "  int rep=heads/kvHeads, dkv=kvHeads*DK, qOff=h*DK, kvOff=(h/rep)*DK;\n"
      "  int q0=qb+(int)sg*8;\n"
      "\n"
-     "  threadgroup float sK[BK*DK], sV[BK*DK], sS[BQ*BK], sM[BQ], sL[BQ], sC[BQ];\n"
+     "  // sKV holds K then V during the loop and is REUSED as the output tile at the end:\n"
+     "  // 2*BK*DK == BQ*DK exactly, and O is only written after the last K/V tile is consumed.\n"
+     "  threadgroup float sKV[2*BK*DK], sS[BQ*BK], sM[BQ], sL[BQ], sC[BQ];\n"
+     "  threadgroup float* sK = sKV; threadgroup float* sV = sKV + BK*DK;\n"
      "  simdgroup_float8x8 qm[8], om[8];\n"
      "  for (short d=0; d<8; d++){\n"
      "    int qr = (q0 < sq) ? q0 : 0;\n"
@@ -2435,7 +2438,7 @@ static NSString* const kFlashMMSource =
      "  if (jmax > sk) jmax = sk;\n"
      "  for (int j0=0; j0<jmax; j0+=BK){\n"
      "    // stage K/V once for all BQ query rows — 128 threads instead of 32\n"
-     "    for (int e=(int)tid; e<BK*DK; e+=128){\n"
+     "    for (int e=(int)tid; e<BK*DK; e+=256){\n"
      "      int t=e/DK, d=e%DK, j=j0+t;\n"
      "      sK[e] = (j<sk) ? K[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
      "      sV[e] = (j<sk) ? V[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
@@ -2471,7 +2474,7 @@ static NSString* const kFlashMMSource =
      "    }\n"
      "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "    // O = diag(corr)*O + P*V, the diagonal built from this simdgroup's 8 rows\n"
-     "    threadgroup float sD[4*64];\n"
+     "    threadgroup float sD[8*64];\n"
      "    for (int e=(int)lane; e<64; e+=32) sD[sg*64+e] = 0.0f;\n"
      "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
      "    if (lane<8) sD[sg*64 + lane*8 + lane] = sC[sg*8+lane];\n"
@@ -2491,10 +2494,10 @@ static NSString* const kFlashMMSource =
      "    }\n"
      "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  }\n"
-     "  threadgroup float sO[BQ*DK];\n"
+     "  threadgroup float* sO = sKV;\n"
      "  for (short d=0; d<8; d++) simdgroup_store(om[d], sO + (ulong)sg*8*DK + d*8, DK);\n"
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
-     "  for (int e=(int)tid; e<BQ*DK; e+=128){\n"
+     "  for (int e=(int)tid; e<BQ*DK; e+=256){\n"
      "    int r=e/DK, d=e%DK;\n"
      "    if (qb+r < sq){\n"
      "      float ll = sL[r];\n"
@@ -2504,6 +2507,8 @@ static NSString* const kFlashMMSource =
      "}\n";
 
 static id<MTLComputePipelineState> gFlashMM = nil;
+static int gFlashMMEnabled = 1;
+void mtl_set_flash_mm(int on) { gFlashMMEnabled = on ? 1 : 0; }
 static int ensure_flash_mm(void) {
     if (gFlashMM != nil) return 0;
     NSError* err = nil;
@@ -2532,7 +2537,7 @@ int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh,
     [enc setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:3];
     [enc setBytes:P length:sizeof(P) atIndex:4];
     [enc setBytes:FP length:sizeof(FP) atIndex:5];
-    [enc dispatchThreadgroups:MTLSizeMake(heads, (sq+31)/32, 1) threadsPerThreadgroup:MTLSizeMake(128,1,1)];
+    [enc dispatchThreadgroups:MTLSizeMake(heads, (sq+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
     [enc endEncoding];
     return 0;
 }
@@ -3968,7 +3973,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     // assumes query i aligns with key i; a decode step (sq=1 against an sk-long cache) has the
     // offset sk-sq and must keep the decode kernel. dk==64 is what the kernel implements.
     // Measured against the decode kernel: seq=64 2.35x, 128 2.35x, 256 3.36x, 512 3.97x.
-    if (window == 0 && dk == 64 && sq >= 32 && sq == sk && qElemOff == 0 &&
+    if (gFlashMMEnabled && window == 0 && dk == 64 && sq >= 32 && sq == sk && qElemOff == 0 &&
         mtl_recorder_flash_mm(rec, qh, kh, vh, oh, sq, sk, dm, heads, kvHeads, causal, scale) == 0) {
         return 0;
     }
