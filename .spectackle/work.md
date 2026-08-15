@@ -910,3 +910,28 @@ CONSEQUENCE FOR THE OPEN CANDIDATE. Threadgroup tiling is still the only shape w
 WHAT THE NUMBERS ALSO SAY ABOUT THE KERNEL. Neither lever dominates: 29 percent of time is dequant ALU, and the memory side yields only 40 percent even when made free. Nothing is saturated - not bandwidth (86 GB/s measured against roughly 200 available), not compute, not dequant. That signature is latency-bound execution with enough parallelism to partly hide it, which is consistent with the register-blocked kernel collapsing the moment thread count dropped 8x. It also means the kernel is closer to reasonable than the earlier record implied.
 
 METHOD, worth carrying: to bound a lever, disable it in place while holding grid shape, thread count and instruction count fixed, and read only the time. Probe A holds memory constant and removes ALU; probe B holds ALU constant and removes memory cost. Two one-line edits bounded an optimization space that a full implementation had failed to bound.
+
+## R-01M01EX9BCE6SVV6A3ZF90WF3K Three K-quant types (Q2_K/Q3_K/Q5_K) still scalar at M=1 while Q4_K/Q6_K run cooperative; Q5_K is next
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED OPPORTUNITY, benchmark shipped on perf/m2-metal-kquant-cooperative (backend/metal/kquant_gap_bench_test.go). No production code changed.
+
+THE STRUCTURAL POINT: the simdgroup-cooperative M=1 kernels cover Q4_K and Q6_K only. Q2_K, Q3_K and Q5_K still dispatch the scalar one-thread-per-output-row kernel. At M=1 that kernel gives work to only N threads and each walks all of K, which is precisely the occupancy shape the cooperative work was built to fix. The shape is a property of the dispatch, not of the quant format, so it applies to all five types.
+
+MEASURED at K2048,N2048, 300x count=3, medians with the warmup sample dropped. Block sizes differ (84/110/144/176/210 bytes per 256 weights), so the weight-byte rate is the comparable figure:
+  Q3_K  scalar only        962 MB/s
+  Q2_K  scalar only       1182 MB/s
+  Q5_K  scalar only       1896 MB/s
+  Q4_K  COOPERATIVE       7649 MB/s
+  Q6_K  COOPERATIVE      12754 MB/s
+Q4_K's own scalar kernel runs about 3010 MB/s at this shape (2.36 MB in 783942 ns, from the interleaved re-verification of PR 1061). So the three uncovered types sit at or below scalar-class throughput while the two covered types run several times higher.
+
+WHAT THIS DOES AND DOES NOT ESTABLISH. It is NOT a like-for-like efficiency claim across formats: Q2_K and Q3_K unpack more bits per byte than Q4_K, so part of the spread is inherent. The defensible reading is narrower and sufficient - the three uncovered types are at scalar-class throughput, and scalar-to-cooperative on this exact code path is a MEASURED 3.41x median (2.43x on the most conservative reading, best scalar against worst cooperative, non-overlapping distributions).
+
+WHY THIS CANDIDATE IS DIFFERENT FROM THE ONE THAT FAILED. R-01M01DD2A5ER9 rejected an M-blocked mat-mat kernel because its hypothesis - that weight traffic bound the kernel - was wrong, and the roofline in R-01M01DJ74WF738NXP1A03K10MR later bounded that whole lever at 1.67x. Here the hypothesis is not a hypothesis: the same transform has already been applied twice on the same dispatch path and measured 3.41x (Q4_K) and 2.69-11.79x (Q6_K). The remaining work is porting a proven kernel to three more block layouts, not testing an idea.
+
+BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is least confounded by unpack complexity, and Q5_K_M is among the most widely used GGUF quantizations in circulation. Its 5-bit format splits each weight across a 4-bit qs nibble and a qh high-bit plane, which is the one real structural difference from the Q4_K kernel it would be adapted from. Q3_K and Q2_K follow; both carry more complex scale/min packing and should be judged on their own A/B rather than on Q5_K's result.
+
+REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.

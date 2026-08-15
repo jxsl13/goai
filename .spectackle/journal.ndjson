@@ -334,3 +334,4 @@
 {"t":"2026-08-15T00:25:32Z","eid":"8aae11aa4ba34d1a","ag":"ag-6b43","ev":"create","id":"R-01M01CYGEBETMARNK7BDJ7P8S3","k":"research","ti":"M2 Metal prefill quant matmul re-reads the weight per row: 87x at M=256, 0.31 TFLOP/s effective"}
 {"t":"2026-08-15T00:33:29Z","eid":"c4ecab5f1d6a4468","ag":"ag-6348","ev":"create","id":"R-01M01DD2A5ER9V02174WE7XXKT","k":"research","ti":"REJECTED M2 Metal Q4_K M-blocked mat-mat: 2.2-6.3x slower, occupancy beats traffic; corrects the 87x framing"}
 {"t":"2026-08-15T00:36:18Z","eid":"62bc88ce41739546","ag":"ag-5557","ev":"create","id":"R-01M01DJ74WF738NXP1A03K10MR","k":"research","ti":"M2 Q4_K prefill roofline: dequant ALU worth at most 1.41x, perfect weight reuse at most 1.67x"}
+{"t":"2026-08-15T00:59:49Z","eid":"9b0d8c4b787b9963","ag":"ag-1ba9","ev":"create","id":"R-01M01EX9BCE6SVV6A3ZF90WF3K","k":"research","ti":"Three K-quant types (Q2_K/Q3_K/Q5_K) still scalar at M=1 while Q4_K/Q6_K run cooperative; Q5_K is next"}
