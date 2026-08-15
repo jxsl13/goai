@@ -935,3 +935,35 @@ WHY THIS CANDIDATE IS DIFFERENT FROM THE ONE THAT FAILED. R-01M01DD2A5ER9 reject
 BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is least confounded by unpack complexity, and Q5_K_M is among the most widely used GGUF quantizations in circulation. Its 5-bit format splits each weight across a 4-bit qs nibble and a qh high-bit plane, which is the one real structural difference from the Q4_K kernel it would be adapted from. Q3_K and Q2_K follow; both carry more complex scale/min packing and should be judged on their own A/B rather than on Q5_K's result.
 
 REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.
+
+## R-01M01KBSTZFY5THEBS6DGFMYF9 GPU quant decode M=1 campaign closed: 14 cooperative kernels, 7 formats, 2 backends, 1.80x-6.01x
+kind: research
+state: draft
+created: 2026-08-15
+
+CAMPAIGN CLOSED. Every quantized matmul format on both GPU backends now has a cooperative M=1 kernel. 14 kernels, 7 formats, 2 backends, each with parity across five shapes, targeted mutation probes and an interleaved warmup-trimmed A/B.
+
+  format   Metal            Vulkan
+  Q2_K     2.21x            2.19x
+  Q3_K     6.01x            2.54x
+  Q4_K     3.41x            2.17x
+  Q5_K     2.66x            3.04x
+  Q6_K     2.69-11.79x      2.20x
+  Q4_0     2.48x            1.80x
+  Q8_0     3.02x            1.88x
+
+THE DEFECT was structural and identical on both backends: the scalar kernels dispatch ONE THREAD PER OUTPUT ELEMENT, so at M=1 only N threads have work and each walks all of K. The Vulkan Q4_K shader stated it in its own header ("One invocation per output (mi,ni)") long before anyone measured what it cost. Filed as ONE-THREAD-PER-OUTPUT-IS-AN-M1-OCCUPANCY-DEFECT-001.
+
+THE FIX is one simdgroup (Metal, 32 lanes) or workgroup (Vulkan, 64 invocations) per output row, splitting that row's K and reducing with simd_sum or a shared-memory tree. The split must follow the FORMAT'S SCALE GROUPS rather than cut across them; where it does, per-element arithmetic stays byte-for-byte identical to the scalar kernel and only the summation order changes.
+
+THREE SPLIT SHAPES COVERED IT ALL. (1) 8 groups of 32 (Q4_K, Q5_K): Metal 8 elements per lane, Vulkan 4 per invocation. (2) 16 groups of 16 (Q2_K, Q3_K): Metal 2 lanes per group, Vulkan 4 invocations per group. (3) Q6_K needed none — its scalar body is already 2x32 iterations each producing 4 outputs, so 64 invocations is exactly one iteration each. The 32-weight legacy formats (Q4_0, Q8_0) could not subdivide a block at all and SPAN blocks instead: element I%32 of every block with parity I/32.
+
+PREDICTIVE RESULT, and it held across all 14: THE GAIN SHRINKS AS DEQUANT GETS CHEAPER. Q3_K and Q2_K do the most bit-unpacking per byte and gained most on Metal; Q8_0 and Q4_0 are nearly free to dequantize (one int8 multiply, one nibble plus an offset) and gained least on both backends. Simple formats are therefore worth doing LAST, not first — the opposite of the intuition that simpler kernels are easier wins.
+
+TOLERANCE DIFFERS BY BACKEND AND THAT MATTERED. Metal used a flat 2e-5 relative bar, inherited from the existing Q4_K/Q6_K parity tests. Copying that bar to Vulkan FAILED at k=2048,n=64 (2.640e-05) — not a kernel defect but cancellation: those shapes produce a small result from large cancelling partial sums, where reassociation is amplified. The right bar is the Vulkan package's own crossTol(k) = 2.5e-6*sqrt(k), which scales with K exactly as f32 accumulation error does.
+
+WHAT THE MUTATION PROBES CAUGHT, because this is the transferable part. A Metal Q8_0 parity test PASSED with max difference 0.000e+00 across all five shapes — the signature of comparing scalar against scalar. Perturbing the kernel by 50 percent left it GREEN: QMatMulQ8_0 reaches a standalone entry point and only the RESIDENT dispatch had been wired. An exactly-zero difference looked like the best possible result and was the worst. Every later kernel probed both dispatch paths from the start. Derived shaders got probes aimed specifically at what distinguishes them from the sibling they were derived from (Q5_K's qh plane, Q2_K's packed scale/min nibbles, Q4_0's x[i]/x[i+16] interleave, Q3_K's rewritten single-scale selection), because everything inherited is already correct and only the difference can be wrong.
+
+REJECTED ALONG THE WAY, both recorded: an M-blocked mat-mat kernel for prefill (2.2-6.3x SLOWER — it traded 8x fewer weight reads for 8x fewer threads, and the kernel is occupancy-bound not bandwidth-bound), and the prefill lever generally, bounded by roofline probes at 1.41x for dequant ALU and 1.67x for perfect weight reuse.
+
+NEXT: the same defect shape should be checked on CUDA, which is the parallel worker's lane and was not touched here.
