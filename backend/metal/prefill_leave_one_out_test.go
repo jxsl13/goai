@@ -4,6 +4,7 @@ package metal
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
@@ -72,20 +73,41 @@ import (
 // So the actionable part of the prefill deficit is the ~4.7% GPU share, i.e. out-executing MPS on a
 // GEMM already at 67% of peak. There is no cheap host-side win here.
 //
+// AT M=64, where prefill is weakest (pp64 0.87x of llama.cpp), the same chain closes the question:
+//
+//	chain M=64        39.32 ms   (matmul 38.12 ms = 97.0%, attention 0.70 ms = 1.8%)
+//	real decoder      39.34 ms GPU-busy of a 41.41 ms pass (95.0% busy)
+//
+// The chain and the real path agree to 0.05%, so there is no unmodelled work at M=64 either — pp64
+// is its GEMM and nothing else. As efficiency:
+//
+//	M= 64   124 GFLOP / 38.12 ms = 3253 GFLOP/s = 48% of peak
+//	M=512   992 GFLOP / 219.22 ms = 4525 GFLOP/s = 67% of peak
+//	llama.cpp pp64, 35.9 ms for the same FLOPs, implies ~51%
+//
+// So pp64 is thin-GEMM inefficiency, which BOTH implementations pay — 48% against 51% — and the
+// remaining gap there is ~6% of the GEMM rather than anything structural. It is already on the f16
+// path, which is 1.28x faster than f32 at this M because the GEMM is bandwidth-bound, so the
+// obvious lever is already pulled.
+//
 // Reported, not asserted on absolute timings; the assertion is only that matmul dominates.
 func TestPrefillLeaveOneOut(t *testing.T) {
 	if !Available() {
 		t.Skip("no metal")
 	}
 	const (
-		layers = 22
-		dim    = 2048
-		hidden = 5632
-		heads  = 32
-		kvh    = 4
-		dk     = 64
-		M      = 512
+		layers   = 22
+		dim      = 2048
+		hidden   = 5632
+		heads    = 32
+		kvh      = 4
+		dk       = 64
+		Mdefault = 512
 	)
+	M := Mdefault
+	if v := os.Getenv("GOAI_PLOO_M"); v != "" {
+		fmt.Sscanf(v, "%d", &M)
+	}
 	kvDim := kvh * dk
 	up := func(k, n int) *ResidentQWeight {
 		raw := make([]byte, n*(k/256)*144)
