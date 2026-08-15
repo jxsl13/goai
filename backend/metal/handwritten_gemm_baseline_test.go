@@ -11,9 +11,21 @@ package metal
 // threadgroup, 8 simdgroups, K walked in 16-wide chunks staged through threadgroup memory, f16 in
 // and f32 accumulate. Arms alternated:
 //
-//	M=  64  hand-written 1806.1 GFLOP/s (26.6%)   MPS f16 4621.0 (68.0%)   0.39x
-//	M= 512  hand-written 2444.9 GFLOP/s (36.0%)   MPS f16 5064.5 (74.5%)   0.48x
-//	M=1024  hand-written 2518.9 GFLOP/s (37.0%)   MPS f16 5168.0 (76.0%)   0.49x
+//	M=  64  hand-written 2014.3 GFLOP/s (29.6%)   MPS f16 4629.4 (68.1%)   0.44x
+//	M= 512  hand-written 2598.1 GFLOP/s (38.2%)   MPS f16 5062.3 (74.4%)   0.51x
+//	M=1024  hand-written 2608.4 GFLOP/s (38.4%)   MPS f16 5164.8 (76.0%)   0.51x
+//
+// Tile sweep, all at M=512, showing what this GPU rewards:
+//
+//	BM=64  BN=32  (4 acc/simdgroup)   2598.1 GFLOP/s   <- shipped shape
+//	BM=64  BN=64  (8 acc/simdgroup)   2444.9
+//	BM=128 BN=32  (8 acc, 2 A-frags)  1738.7
+//	BM=64  BN=32, 4x4 register block  1166.8
+//
+// The ordering is monotone in the WRONG direction for textbook GEMM advice: every step that raises
+// arithmetic density per simdgroup loses. Narrowing to 4 accumulators and doubling the threadgroup
+// count is what helped (+12% at M=64), and the 4x4 register block — the standard fix for the
+// load:compute ratio — is the worst of the four at 0.63x of the shape it replaced.
 //
 // A straightforward tiled simdgroup GEMM reaches less than HALF of MPS. Closing that needs roughly
 // 2.1x on top of this baseline — double-buffered K stages so loads overlap the matrix ops, wider

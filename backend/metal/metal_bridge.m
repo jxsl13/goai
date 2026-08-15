@@ -2056,13 +2056,13 @@ static NSString* const kSGGemmSource =
      "                        uint2 tg [[threadgroup_position_in_grid]],\n"
      "                        ushort tid [[thread_index_in_threadgroup]],\n"
      "                        ushort sg [[simdgroup_index_in_threadgroup]]) {\n"
-     "  const int BM=64, BN=64, BK=16;\n"
+     "  const int BM=64, BN=32, BK=16;\n"
      "  int M=P[0], K=P[1], N=P[2];\n"
      "  int n0=(int)tg.x*BN, m0=(int)tg.y*BM;\n"
      "  threadgroup half sA[BM*BK];\n"
      "  threadgroup half sB[BK*BN];\n"
-     "  simdgroup_float8x8 acc[8];\n"
-     "  for (short j=0;j<8;j++) acc[j]=make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  simdgroup_float8x8 acc[4];\n"
+     "  for (short j=0;j<4;j++) acc[j]=make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
      "  for (int k0=0; k0<K; k0+=BK){\n"
      "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "    for (int idx=(int)tid; idx<BM*BK; idx+=256){\n"
@@ -2077,7 +2077,7 @@ static NSString* const kSGGemmSource =
      "    for (int kk=0; kk<BK; kk+=8){\n"
      "      simdgroup_half8x8 a;\n"
      "      simdgroup_load(a, sA + (int)sg*8*BK + kk, BK);\n"
-     "      for (short j=0;j<8;j++){\n"
+     "      for (short j=0;j<4;j++){\n"
      "        simdgroup_half8x8 b;\n"
      "        simdgroup_load(b, sB + kk*BN + j*8, BN);\n"
      "        simdgroup_multiply_accumulate(acc[j], a, b, acc[j]);\n"
@@ -2085,7 +2085,7 @@ static NSString* const kSGGemmSource =
      "    }\n"
      "  }\n"
      "  threadgroup float sC[BM*BN];\n"
-     "  for (short j=0;j<8;j++) simdgroup_store(acc[j], sC + (int)sg*8*BN + j*8, BN);\n"
+     "  for (short j=0;j<4;j++) simdgroup_store(acc[j], sC + (int)sg*8*BN + j*8, BN);\n"
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  for (int idx=(int)tid; idx<BM*BN; idx+=256){\n"
      "    int m=idx/BN, n=idx%BN;\n"
@@ -2124,7 +2124,7 @@ double mtl_probe_sg_gemm(int M, int K, int N, int reps) {
                 [e setBuffer:b offset:0 atIndex:1];
                 [e setBuffer:c offset:0 atIndex:2];
                 [e setBytes:P length:sizeof(P) atIndex:3];
-                [e dispatchThreadgroups:MTLSizeMake((N+63)/64, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+                [e dispatchThreadgroups:MTLSizeMake((N+31)/32, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
                 [e endEncoding];
             }
             [cmd commit];
