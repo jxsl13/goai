@@ -129,6 +129,14 @@ int mtl_qmatmul_q4_0(const float* X, const unsigned char* W, float* O, int M, in
 // thread per output. K must be a multiple of 256. Returns 0 on success, nonzero on failure.
 int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// Selects the simdgroup-cooperative Q4_K kernel (on, default) or the historical
+// one-thread-per-output kernel (off) for same-process forced-off A/B measurement.
+// Returns the previous setting. Unsupported devices transparently retain scalar.
+int mtl_q2k_cooperative_set(int on);
+int mtl_q3k_cooperative_set(int on);
+int mtl_q4k_cooperative_set(int on);
+int mtl_q5k_cooperative_set(int on);
+
 // mtl_qmatmul_q6k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q6_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 210 bytes, §R99) — the higher-precision
 // tensors of Q4_K_M models (attn_v/ffn_down/output), dequantized IN-KERNEL: SYMMETRIC
@@ -136,6 +144,11 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
 // ql (low/high nibble) + qh (2 high bits). One thread per output. K must be a multiple of 256.
 // Returns 0 on success, nonzero on failure.
 int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
+// Selects the SIMD-group-cooperative Q6_K M=1 kernel (on, default) or the
+// historical scalar-K kernel (off) for same-process forced-off measurement.
+// Returns the previous setting. Unsupported devices transparently retain scalar.
+int mtl_q6k_cooperative_set(int on);
 
 // mtl_qmatmul_q5k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q5_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 176 bytes, §R102) — the Q5_K_M weight

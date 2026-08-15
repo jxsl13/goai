@@ -97,13 +97,31 @@ func TestCPUMHABitIdenticalToRef(t *testing.T) {
 					t.Fatalf("seq=%d heads=%d dk=%d mode=%+v: numel %d != %d",
 						c.seq, c.heads, c.dk, mode, got[0].Numel(), want[0].Numel())
 				}
+				// Bit-exact for F64 and on the default build; the f32-native SIMD
+				// lane is compared within its own ADR budget (see f32NativeTolerant).
+				tolerant := f32NativeTolerant(f32)
+				var maxRel float64
 				for i := range want[0].Numel() {
 					co := tensor.Unravel(i, want[0].Shape())
 					g, w := got[0].AtF64(co...), want[0].AtF64(co...)
+					if tolerant {
+						if !parityCloseF32(g, w) {
+							t.Fatalf("seq=%d heads=%d dk=%d f32=%v mode=%+v elem %d: cpu %v vs ref %v exceeds the f32-native budget",
+								c.seq, c.heads, c.dk, f32, mode, i, g, w)
+						}
+						if r := parityRelErr(g, w); r > maxRel {
+							maxRel = r
+						}
+						continue
+					}
 					if math.Float64bits(g) != math.Float64bits(w) {
 						t.Fatalf("seq=%d heads=%d dk=%d f32=%v mode=%+v elem %d: cpu %v != ref %v",
 							c.seq, c.heads, c.dk, f32, mode, i, g, w)
 					}
+				}
+				if tolerant {
+					t.Logf("seq=%d heads=%d dk=%d mode=%+v: f32-native max rel err %.2e",
+						c.seq, c.heads, c.dk, mode, maxRel)
 				}
 			}
 		}
