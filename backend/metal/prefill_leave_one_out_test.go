@@ -40,8 +40,23 @@ import (
 //	pp1024  goai 1959.4  llama.cpp 2145.26 +/- 0.68   0.91x
 //
 // So the 8% deficit at pp512 splits into ~4.7% GPU (241.86 vs llama.cpp's implied 231.0 ms) and
-// ~3.3% host (the 8.28 ms outside GPU execution). Both small, both attributed. The host share is
-// the only part that is our own scheduling rather than kernel throughput.
+// ~3.3% host (the 8.28 ms outside GPU execution).
+//
+// The host share is NOT ours to reclaim, which took measuring to establish. Its per-token slope
+// (~11.8us/token, fitted from 8.28 ms at n=512 and 14.33 ms at n=1024) looked like a host-side
+// dequantize loop, and the prefill path does call gatherEmbed once per token. Measured on the real
+// model:
+//
+//	embedding table dtype  f32 (not quantized — no per-token dequantization happens)
+//	gather 512 tokens      0.66 ms   (1.29us/token)
+//	upload 4.2 MB block    0.12 ms
+//
+// 0.78 ms of 8.28. Encoding ~154 dispatches at ~0.6us is another ~0.1 ms, and the logits download is
+// 128 KB. The remaining ~7.4 ms is the interval between commit and GPUStartTime — submission and
+// driver scheduling, which the GPU timestamps do not span and which no change on our side removes.
+//
+// So the actionable part of the prefill deficit is the ~4.7% GPU share, i.e. out-executing MPS on a
+// GEMM already at 67% of peak. There is no cheap host-side win here.
 //
 // Reported, not asserted on absolute timings; the assertion is only that matmul dominates.
 func TestPrefillLeaveOneOut(t *testing.T) {
