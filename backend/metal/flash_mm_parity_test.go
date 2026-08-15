@@ -15,12 +15,17 @@ import (
 //
 //	seq= 64  decode  166.4us  flashMM  122.7us  1.36x   273 GFLOP/s ( 4.0% peak)
 //	seq=128  decode  522.3us  flashMM  138.5us  3.77x   969 GFLOP/s (14.2%)
-//	seq=256  decode 1903.2us  flashMM  389.3us  4.89x  1379 GFLOP/s (20.3%)
-//	seq=512  decode 7271.6us  flashMM  997.0us  7.29x  2154 GFLOP/s (31.7%)
+//	seq=256  decode 1903.2us  flashMM  200.7us  9.48x  2675 GFLOP/s (39.3%)
+//	seq=512  decode 7271.6us  flashMM  568.5us 12.79x  3778 GFLOP/s (55.6%)
 //
 // End to end on TinyLlama prompt processing: n=64 777 -> ~804, n=256 1314 -> ~1582,
 // n=1024 929 -> ~1796 tok/s. The gain tracks attention's share of prefill, which the
 // prompt-length sweep measured at 5% / 21% / 58%.
+//
+// The softmax uses FOUR threads per row, reducing with simd_shuffle_xor: 1003.8/1008.5 ->
+// 569.8/567.1us at seq=512, 1.77x, and 31.5% -> 55.4% of FLOP peak — comparable to MPS GEMM's 66%.
+// One thread per row left 192 of 256 threads idle with each survivor walking all 32 columns twice.
+// The four threads of a row are tid 4r..4r+3, always inside one simdgroup, so they run in lockstep.
 //
 // The K/V staging is vectorized with float4 (DK=64 is a multiple of 4): 1175.8/1208.8 ->
 // 991.7/1002.4us at seq=512, ~1.19x. Note what did NOT work — staging K/V as half. Mixed-precision
