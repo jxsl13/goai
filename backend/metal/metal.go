@@ -2371,6 +2371,15 @@ func SetSplitKHalfDK(on bool) {
 	C.mtl_set_splitk_half(v)
 }
 
+// SetSplitKQuadDK selects the split-K pass-1 variant whose lane QUADS each own a quarter of dk.
+func SetSplitKQuadDK(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_quad(v)
+}
+
 // ProbeSplitKHalfOccupancy reports maxTotalThreadsPerThreadgroup for the half-dk pass-1 variant.
 func ProbeSplitKHalfOccupancy() int {
 	var out [8]C.int

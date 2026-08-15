@@ -4433,6 +4433,60 @@ static NSString* const kMHADecodeSource =
      "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
      "  }\n"
      "}\n"
+     "// Split-K pass 1, dk split across LANE QUADS — the default. Lanes 4i..4i+3 own 16 dims each of\n"
+     "// key i, so 8 keys are in flight and each key's 64 floats are covered by four adjacent lanes.\n"
+     "//\n"
+     "// This was a prediction from the pair variant's post-mortem: that win was mostly coalescing\n"
+     "// rather than the register relief it was designed for, so fewer and wider read streams should\n"
+     "// help again. It does — 1.17x/1.05x/1.18x over the pair variant at sk=512/1024/2048 — which is\n"
+     "// the first time in this campaign a mechanism predicted the NEXT step correctly rather than\n"
+     "// being reconstructed after the fact.\n"
+     "//\n"
+     "// End to end it is only ~1.0-1.5%% at long context, inside the noise floor, because attention is\n"
+     "// a much smaller share of a token after the pair variant's 2.9x. Kept because the kernel gain is\n"
+     "// reproducible and the accuracy is unchanged, not on an end-to-end claim.\n"
+     "kernel void mha_dec_splitk_p1q(device const float* Q [[buffer(0)]],\n"
+     "                               device const float* K [[buffer(1)]],\n"
+     "                               device const float* V [[buffer(2)]],\n"
+     "                               device float* PART [[buffer(3)]],\n"
+     "                               constant int* P [[buffer(4)]],\n"
+     "                               constant float* FP [[buffer(5)]],\n"
+     "                               uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                               uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64, H=16;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  int slot=(int)(lane>>2), qrt=(int)(lane&3), off=qrt*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=8){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*K[j*dkv+kvOff+off+d];\n"
+     "    sp += simd_shuffle_xor(sp, 1);\n"
+     "    sp += simd_shuffle_xor(sp, 2);\n"
+     "    float sdot=sp*scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+off+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint w=4; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<4){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
      "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
      "                              device float* O [[buffer(1)]],\n"
      "                              constant int* P [[buffer(2)]],\n"
@@ -4534,6 +4588,9 @@ static id<MTLComputePipelineState> gMHADecode64 = nil;
 static id<MTLComputePipelineState> gMHADecode128 = nil;
 static id<MTLComputePipelineState> gSplitKP1 = nil;
 static id<MTLComputePipelineState> gSplitKP1H = nil;
+static id<MTLComputePipelineState> gSplitKP1Q = nil;
+static int gSplitKQuad = 1;  // quad supersedes the pair variant: 1.05-1.18x on the kernel
+void mtl_set_splitk_quad(int on) { gSplitKQuad = on ? 1 : 0; }
 static int gSplitKHalf = 1;  // measured 2.9x on the kernel, 1.31x on long-context decode
 void mtl_set_splitk_half(int on) { gSplitKHalf = on ? 1 : 0; }
 static id<MTLComputePipelineState> gSplitKP2 = nil;
@@ -4560,6 +4617,8 @@ static int ensure_mha_decode(void) {
     id<MTLFunction> sp1 = [lib newFunctionWithName:@"mha_dec_splitk_p1"];
     id<MTLFunction> sp2 = [lib newFunctionWithName:@"mha_dec_splitk_p2"];
     if (sp1 != nil) gSplitKP1 = [gDevice newComputePipelineStateWithFunction:sp1 error:&err];
+    id<MTLFunction> sp1q = [lib newFunctionWithName:@"mha_dec_splitk_p1q"];
+    if (sp1q != nil) gSplitKP1Q = [gDevice newComputePipelineStateWithFunction:sp1q error:&err];
     id<MTLFunction> sp1h = [lib newFunctionWithName:@"mha_dec_splitk_p1h"];
     if (sp1h != nil) gSplitKP1H = [gDevice newComputePipelineStateWithFunction:sp1h error:&err];
     else fprintf(stderr, "metal: mha_dec_splitk_p1h unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
@@ -4666,7 +4725,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
             int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
             float SFP[1] = {scale};
             id<MTLComputeCommandEncoder> e1 = [scmd computeCommandEncoder];
-            [e1 setComputePipelineState:(gSplitKHalf && gSplitKP1H != nil) ? gSplitKP1H : gSplitKP1];
+            [e1 setComputePipelineState:(gSplitKQuad && gSplitKP1Q != nil) ? gSplitKP1Q : ((gSplitKHalf && gSplitKP1H != nil) ? gSplitKP1H : gSplitKP1)];
             [e1 setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
             [e1 setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
             [e1 setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];

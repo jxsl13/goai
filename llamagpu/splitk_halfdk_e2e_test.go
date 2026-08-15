@@ -38,6 +38,14 @@ package llamagpu_test
 // Comparing our fresh number against its throttled one briefly showed 1.13x "beating" llama.cpp.
 // Only same-window measurement of both sides means anything here.
 //
+// FOLLOW-UP: the coalescing post-mortem above predicted that splitting dk further would help again,
+// and it does. A QUAD variant (lanes 4i..4i+3, 16 dims each, 8 keys in flight) measures 1.17x/1.05x/
+// 1.18x over this pair variant at sk=512/1024/2048 and is now the default. End to end it is only
+// ~1.0-1.5% at long context — inside the noise floor — because attention is a much smaller share of
+// a token once the 2.9x above is in. metal.SetSplitKQuadDK(false) falls back to the pair variant,
+// and the numbers in this file were measured against the pre-pair kernel, so they still describe
+// what this change bought.
+//
 // The argmax token is identical in both arms at every context length.
 import (
 	"fmt"
