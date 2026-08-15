@@ -2024,3 +2024,56 @@ So a parity test can fail for the reason that its COMPARAND is a refactoring of 
   prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind, compute-bound at 11% of FLOP peak
 
 The prefill headroom is still there and still reachable only through the matrix units. This round established that the mechanism works and produces exact results; the next needs the tiling that actually feeds it.
+
+## R-01M022X2PSEVSTDAWV34A87K59 Matrix-unit tile redesign: 9.3x but still 0.77x of the scalar path — 240 scalar dequantization instructions per matrix instruction rules out the approach, not just the tile
+kind: research
+state: draft
+created: 2026-08-15
+
+Redesigned the matrix-unit tile as the previous record specified. It gained 9.3x and still loses to the scalar path — and the measurement that explains why also rules out the whole approach, not just this tile.
+
+## Result
+
+8x8 tile on 32 threads -> 32x32 tile on 128 threads (4 simdgroups), so one dequantized weight tile feeds 32 query rows instead of 8.
+
+  63 -> 585 GFLOP/s on the kernel, 9.3x
+
+Still slower than the cooperative path at every batch size:
+
+| M | cooperative | matrix unit | ratio |
+|---|---|---|---|
+| 8 | 246.0us | 1560.4us | 0.16x |
+| 32 | 978.1us | 1761.2us | 0.56x |
+| 64 | 1953.8us | 2845.6us | 0.69x |
+| 256 | 7809.2us | 10092.0us | 0.77x |
+
+The ratio rises with M and asymptotes below 1.
+
+## Why, and why it is not a tuning problem
+
+Per 64-wide K chunk a threadgroup dequantizes 2048 weight values at roughly 15 integer/float operations each — about 30720 scalar operations — to feed 128 simdgroup MAC instructions.
+
+**240 scalar instructions per matrix instruction.**
+
+The matrix units are idle behind the dequantization. No tile shape repairs a 240:1 ratio: raising BM improves FLOP-per-dequantization only linearly (BM=32 gives 64, BM=128 gives 256) while threadgroup memory caps BM long before the ratio inverts. This is the fact that generalizes beyond the kernel: on 4-bit weights the multiply is not the work — the unpacking is.
+
+And the cooperative path does the SAME dequantization while reaching 757 GFLOP/s, precisely because it never stages: dequantize in registers, multiply immediately. Adding threadgroup staging plus two barriers per chunk to an already dequantization-bound kernel cannot win, whatever the tile.
+
+## What this rules in
+
+Not a better tile — removing dequantization from the inner loop. Dequantize a layer's weight to f16 ONCE per prefill (~24 MB -> ~48 MB transient per layer) and hand the batch to an optimized f16 GEMM. The dequantization is then paid once per PROMPT rather than once per query tile, and the GEMM runs on hardware paths that are already near peak.
+
+That also matches the shape of llama.cpp's advantage: pp64 1778 tok/s is far above anything a per-tile-dequantizing kernel reaches, and MPS f16 GEMM is already available in this codebase for the f32 path.
+
+Cost note: the transient f16 buffer is per LAYER, not per model — 22 layers are processed in sequence, so peak extra memory is one layer's dequantized weight, not the whole 636 MB model.
+
+## Process
+
+Correctness held across the redesign: bit-exact (0.000e+00) against the scalar reference on all six shapes including partial tiles in both dimensions, with a mutation probe confirming the redesigned kernel is the one under test.
+
+ensure_q4k_mm now PRINTS the MSL build error rather than returning -10 into an && chain. Last round that silently hid a kernel that never compiled, and every measurement taken before the probe was of the fallback path. The fix is cheap and permanent.
+
+## Standing, unchanged
+
+  decode  : tg64 175.0 vs llama.cpp 190.4 = 0.919x — parity
+  prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind
