@@ -2867,3 +2867,45 @@ The difference is 1.66 ms/layer of work llama.cpp does not do at all: expansion 
   prefill : pp64 0.336x — compute-bound, and the gap is entirely in work that is not the multiply
 
 That distinction matters for what "leading" can mean: decode has no headroom left on this hardware for either implementation, while prefill has 3x and it is all overhead.
+
+## R-01M02833YDFKWTAK0CQSA81JDB The dequant+GEMM threshold was derived at one shape and applied to all: the cooperative kernel wins at N=256, so the gate now checks output width too
+kind: research
+state: draft
+created: 2026-08-15
+
+The dequant+GEMM crossover threshold was derived at ONE shape and applied to all of them. Checking that found the cooperative kernel wins on narrow projections.
+
+## Measurement
+
+M=64, K=2048, sweeping the output width:
+
+| N | cooperative | dequant+GEMM | |
+|---|---|---|---|
+| 256 | 130.9us | 170.0us | COOPERATIVE WINS 1.30x |
+| 512 | 194.6us | 165.9us | |
+| 1024 | 358.3us | 199.0us | |
+| 2048 | 714.2us | 260.2us | |
+| 5632 | 1954.5us | 737.5us | |
+
+The crossover in N sits between 256 and 512. A narrow projection gives the cooperative kernel little weight to re-read while the dense GEMM stays launch-bound — the same launch/occupancy effect the dispatch-size sweep and the k|v cost (120.6us for 67 MFLOP, 557 GFLOP/s) both showed.
+
+Added N >= 512 to the gate, which puts k and v (N = kvHeads*headDim = 256) back on the cooperative kernel.
+
+## Honest scope
+
+End to end this is WITHIN NOISE on TinyLlama: 752.9/765.4/755.7 against 762.5/758.6/764.4 tok/s, overlapping. Only 2 of ~6 projections per layer are narrow, on 10 of 22 layers, so the leaf 1.30x is about 0.9% of prefill.
+
+It is kept because the gate was wrong by CONSTRUCTION rather than because it pays on this model. Every grouped-query model has k/v at kvHeads*headDim, and a model with many narrow projections — MoE experts especially — would be hit much harder by routing them all through an expansion that costs more than the weight itself.
+
+One generated token of 34 differs, from the same f32 reassociation already accepted across this path (the cooperative kernel factors the min term out; dequant+GEMM keeps the per-element form). It also makes prefill CONSISTENT with decode, which has always used the cooperative kernel for these weights.
+
+## The pattern this belongs to
+
+A threshold measured at one operating point and applied across a range is the same error as measuring in the wrong regime — it is that error committed once and then inherited by every later decision. It has now appeared as: cache-resident vs DRAM roofline, decode-shape vs prefill-shape op costs, isolated-op vs dependency chain, contiguous vs strided chunk outputs, and now one-shape vs all-shape crossover.
+
+The general defence is cheap and was not applied here until now: when a threshold is derived, sweep the OTHER dimensions it will be applied across before writing it down.
+
+## Standing
+
+  decode  : tg64 ~1.017x — parity at the memory roofline
+  prefill : pp64 0.336x — GEMM 1.916, expansion 0.990, attention 0.159, rest 0.055, unaccounted 0.67 ms/layer
