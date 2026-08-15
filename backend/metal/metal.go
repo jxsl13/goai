@@ -2317,6 +2317,21 @@ func (r *Recorder) Wait() error {
 // from the device timestamps — free of host submit/wake jitter.
 func LastGPUSeconds() float64 { return float64(C.mtl_last_gpu_seconds()) }
 
+// SetQ4KDequantGemmF16 toggles the f16 short-prompt weight path (Q4_K only), which expands the
+// weight to half instead of float and runs an f16 GEMM. On by default. It halves the weight bytes,
+// which helps only while the GEMM is bandwidth-bound, so it is additionally gated on M.
+func SetQ4KDequantGemmF16(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_dq_gemm_f16(v)
+}
+
+// SetQ4KDequantGemmF16MaxM sets the largest M that takes the f16 path. Above it the GEMM is
+// compute-bound and f16 measures ~3% slower, so widening this is a pessimization, not a tuning knob.
+func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m)) }
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.

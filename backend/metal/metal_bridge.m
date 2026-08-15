@@ -2677,6 +2677,150 @@ static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
 
 // mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
 // [K][N] buffer.
+// ---- f16 prefill weight path (small-M only) --------------------------------
+// TestGEMMF16OnlyWinsWhenBandwidthBound measured an f16 MPS GEMM at 1.28x of f32 at M=64 and 0.97x
+// from M=256 up: halving the weight bytes only helps while the GEMM is throttled on the weight read,
+// and this GPU's matrix units give f16 no arithmetic advantage once it is compute-bound. So this
+// path exists for short prompts only and is gated on M.
+static NSString* const kQ4KF16Source =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Same traversal and staging as dequant_q4k_t (see there for the transpose rationale), writing\n"
+     "// half instead of float: 23 MB instead of 46 MB for a K=2048 N=5632 weight, halving both this\n"
+     "// kernel's write and the GEMM's subsequent read.\n"
+     "kernel void dequant_q4k_t_h(device const uchar* W [[buffer(0)]],\n"
+     "                            device half* Out [[buffer(1)]],\n"
+     "                            constant int* P [[buffer(2)]],\n"
+     "                            uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                            ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*144;\n"
+     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
+     "  int k0=sb*256 + pr*64 + hf*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*144;\n"
+     "    ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "    ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "    float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "    int sbase=base+4, qbase=base+16;\n"
+     "    int is=pr*2+hf, sc, mn;\n"
+     "    if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "    int qb=qbase+pr*32;\n"
+     "    for (int l=0;l<32;l++){\n"
+     "      uchar qbyte=W[qb+l];\n"
+     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      sT[(int)t*32+l] = dl*(float)nib - ml;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int l=0;l<32;l++) sT[(int)t*32+l]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int l=0;l<32;l++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+l)*N + nn] = (half)sT[(int)t*32+l];\n"
+     "  }\n"
+     "}\n"
+     "kernel void cvt_f32_to_h(device const float* In [[buffer(0)]],\n"
+     "                         device half* Out [[buffer(1)]],\n"
+     "                         constant int* P [[buffer(2)]],\n"
+     "                         uint i [[thread_position_in_grid]]) {\n"
+     "  if ((int)i < P[0]) Out[i] = (half)In[i];\n"
+     "}\n"
+     "kernel void cvt_h_to_f32(device const half* In [[buffer(0)]],\n"
+     "                         device float* Out [[buffer(1)]],\n"
+     "                         constant int* P [[buffer(2)]],\n"
+     "                         uint i [[thread_position_in_grid]]) {\n"
+     "  if ((int)i < P[0]) Out[i] = (float)In[i];\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gDequantQ4KH = nil;
+static id<MTLComputePipelineState> gCvtF32ToH = nil;
+static id<MTLComputePipelineState> gCvtHToF32 = nil;
+static int ensure_q4k_f16(void) {
+    if (gDequantQ4KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQ4KF16Source options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: q4k f16 path build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> f1 = [lib newFunctionWithName:@"dequant_q4k_t_h"];
+    id<MTLFunction> f2 = [lib newFunctionWithName:@"cvt_f32_to_h"];
+    id<MTLFunction> f3 = [lib newFunctionWithName:@"cvt_h_to_f32"];
+    if (f1 == nil || f2 == nil || f3 == nil) return -11;
+    gDequantQ4KH = [gDevice newComputePipelineStateWithFunction:f1 error:&err];
+    gCvtF32ToH   = [gDevice newComputePipelineStateWithFunction:f2 error:&err];
+    gCvtHToF32   = [gDevice newComputePipelineStateWithFunction:f3 error:&err];
+    return (gDequantQ4KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) ? 0 : -12;
+}
+
+// Three separate scratch buffers: the weight, the converted activations and the f16 result. They are
+// live simultaneously, so they cannot share one allocation.
+static id<MTLBuffer> gF16W = nil;  static size_t gF16WLen = 0;
+static id<MTLBuffer> gF16X = nil;  static size_t gF16XLen = 0;
+static id<MTLBuffer> gF16O = nil;  static size_t gF16OLen = 0;
+static id<MTLBuffer> f16_scratch(__strong id<MTLBuffer>* slot, size_t* len, size_t bytes) {
+    if (*slot != nil && *len >= bytes) return *slot;
+    *slot = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    *len = (*slot != nil) ? bytes : 0;
+    return *slot;
+}
+
+static void encode_cvt(id<MTLCommandBuffer> cmd, id<MTLComputePipelineState> pipe,
+                       id<MTLBuffer> in, id<MTLBuffer> out, int n) {
+    int P[1] = {n};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:pipe];
+    [enc setBuffer:in offset:0 atIndex:0];
+    [enc setBuffer:out offset:0 atIndex:1];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+    if (tg > 256) tg = 256;
+    [enc dispatchThreads:MTLSizeMake((NSUInteger)n, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+    [enc endEncoding];
+}
+
+// mtl_recorder_matmul_f16 encodes C = A*B with all three matrices f16. MPSMatrixMultiplication
+// requires a single data type across the operands, so the activations are converted in and the
+// result converted out by the caller.
+static int recorder_matmul_f16(id<MTLCommandBuffer> cmd, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf,
+                               id<MTLBuffer> cBuf, int M, int K, int N) {
+    size_t es = sizeof(uint16_t);
+    MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:MPSDataTypeFloat16];
+    MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:MPSDataTypeFloat16];
+    MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:MPSDataTypeFloat16];
+    MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+    MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
+    MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+    MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+        initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+        resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+    [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+    return 0;
+}
+
+static int gDQGemmF16Enabled = 1;
+// 64, not 128, and chosen end-to-end rather than from the leaf benchmark. The leaf shows 1.39x at
+// M=64, 1.22x at M=32 and still 1.09x at M=128 — but that 1.09x does not survive into whole-model
+// prefill: n=128 measured 1.023x then 0.999x, and n=96 measured 1.003x then 0.985x. Only n=64 wins
+// repeatably (1.180x, 1.175x). Widening this to chase the leaf number buys nothing and risks a
+// regression on prompts that are already fine.
+static int gDQGemmF16MaxM = 64;
+void mtl_set_q4k_dq_gemm_f16(int on) { gDQGemmF16Enabled = on ? 1 : 0; }
+void mtl_set_q4k_dq_gemm_f16_max_m(int m) { gDQGemmF16MaxM = m; }
+
+// q4k_dq_gemm_f16_eligible: Q4_K only (Q6_K keeps the f32 expansion), and only while the GEMM is
+// bandwidth-bound. Above gDQGemmF16MaxM the f32 path is faster, so this must NOT widen.
+static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
+    if (!gDQGemmF16Enabled) return 0;
+    if (qt != 12) return 0;
+    if (M < 24 || M > gDQGemmF16MaxM) return 0;
+    if (N < 512 || K % 256 != 0) return 0;
+    return ensure_q4k_f16() == 0;
+}
+
 int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt) {
     if (rec == NULL || wbuf == NULL || oh == NULL) return -2;
     if (ensure_dequant_q4k() != 0) return -6;
@@ -2850,6 +2994,29 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
+    // Short-prompt path: same expand-then-GEMM shape but in f16, which halves both the expansion's
+    // write and the GEMM's weight read. Gated to small M — above gDQGemmF16MaxM the GEMM is
+    // compute-bound and f16 is ~3% SLOWER (see TestGEMMF16OnlyWinsWhenBandwidthBound).
+    if (q4k_dq_gemm_f16_eligible(M, K, N, qtype)) {
+        id<MTLBuffer> wS = f16_scratch(&gF16W, &gF16WLen, (size_t)K*(size_t)N*sizeof(uint16_t));
+        id<MTLBuffer> xS = f16_scratch(&gF16X, &gF16XLen, (size_t)M*(size_t)K*sizeof(uint16_t));
+        id<MTLBuffer> oS = f16_scratch(&gF16O, &gF16OLen, (size_t)M*(size_t)N*sizeof(uint16_t));
+        if (wS != nil && xS != nil && oS != nil) {
+            int Pd[2] = {K, N};
+            id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
+            [de setComputePipelineState:gDequantQ4KH];
+            [de setBuffer:wb offset:0 atIndex:0];
+            [de setBuffer:wS offset:0 atIndex:1];
+            [de setBytes:Pd length:sizeof(Pd) atIndex:2];
+            [de dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [de endEncoding];
+            encode_cvt(cmd, gCvtF32ToH, xb, xS, M*K);
+            recorder_matmul_f16(cmd, xS, wS, oS, M, K, N);
+            encode_cvt(cmd, gCvtHToF32, oS, ob, M*N);
+            return 0;
+        }
+        // fall through to the f32 path if scratch could not be allocated
+    }
     // Prompt-processing path: expand the weight once into scratch, then a dense GEMM.
     if (q4k_dq_gemm_eligible(M, K, N, qtype)) {
         size_t need = (size_t)K * (size_t)N * sizeof(float);
