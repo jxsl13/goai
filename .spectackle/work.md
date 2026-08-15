@@ -2459,3 +2459,48 @@ A shell string comparison of captured multi-line output reported DIVERGED when t
   prefill : pp64 598.3 vs 1778.75 = 0.336x
 
 Still open: ~1.4 ms/layer of GPU work unattributed after this fix. Per-kernel element counts are all small and total dispatches are ~333 for the whole prefill, so it is neither a bloated op nor dispatch overhead. The next measurement should time the individual encoders inside one prefill command buffer rather than infer from component rates — the inference has now been wrong twice.
+
+## R-01M025MS9ZEVRVCJ3BBNHZSWQ0 Prefill budget closes to 85%: attention is 84% of non-matmul GPU work at 3.1% of peak — small now, structurally wrong for long prompts because causal routes to the decode kernel
+kind: research
+state: draft
+created: 2026-08-15
+
+The prefill budget now closes to 85%, and the last unexplained component turned out to be attention — small today, structurally wrong for long prompts.
+
+## Closing the budget
+
+Every per-op figure the budget used had been measured at DECODE shape (rows=1). Prefill runs at rows=64. Re-measured there, per layer:
+
+  2 x RMSNorm           12.6 us
+  SwiGLU 64x5632         9.1 us
+  2 x residual add       8.4 us
+  attention sq=64 sk=64 159.3 us
+  total                 189 us
+
+  expansion 0.99 + GEMM 1.70 + non-matmul 0.54 = 3.23 ms/layer
+  measured 3.79 ms/layer -> 15% unaccounted, down from 34%
+
+That is the third time this session the fix was "measure the component in the regime it actually runs in" rather than anything cleverer. The pattern is now unmistakable: cache-vs-DRAM for the roofline, hidden-vs-serial for encode, decode-shape-vs-prefill-shape here.
+
+## The finding
+
+Attention is 84% of the non-matmul GPU work and runs at 211 GFLOP/s — 3.1% of the 6.8 TFLOP/s peak. Every other non-matmul op together is 30 us/layer.
+
+It is NOT today's bottleneck: 159 us is ~4% of a 3.79 ms layer at a 64-token prompt. It is a latent one. Attention is O(sq*sk) and the measured points already trace the curve — sk=64 159us, sk=128 354us. At a 512-token prompt it would dominate the layer outright, and long prompts are exactly the case prompt processing exists for.
+
+## Cause is structural
+
+mtl_recorder_mha routes causal!=0 to the DECODE kernel. That kernel streams keys per query row: correct and near-optimal for sq=1, wrong for sq=512, where keys should be tiled through threadgroup memory and reused across query rows.
+
+This is the SAME distinction that separated the cooperative matmul from expand-then-GEMM: a kernel shaped for one row applied to many rows re-reads what it should reuse. Prefill attention has the identical defect and it has not been touched because no measurement had ever looked at attention at sq>1.
+
+Worth noting how it stayed hidden: the flash and two-pass attention kernels were both optimized earlier this session (4.6-6.4x from the runtime-loop-bound fix), but neither is what prefill uses — the causal route bypasses them.
+
+## Standing
+
+  decode  : tg64 174.84 vs llama.cpp 171.95 = 1.017x — parity
+  prefill : pp64 598.3 vs 1778.75 = 0.336x
+
+Remaining prefill gap by component, per layer: expansion 0.99 ms (removable only by a quantized GEMM), GEMM 1.70 ms (at 3311 GFLOP/s effective, near MPS's limit), attention 0.16 ms (structurally wrong but small at short prompts), 0.56 ms unattributed.
+
+llama.cpp's entire layer is 1.64 ms. Its advantage remains that it has no expansion term, which is the same conclusion as three rounds ago — but the budget is now measured rather than assumed, so the next attempt can be scoped against real numbers.
