@@ -2313,6 +2313,10 @@ func (r *Recorder) Wait() error {
 	return nil
 }
 
+// LastGPUSeconds returns the GPU-side duration of the most recently waited command buffer,
+// from the device timestamps — free of host submit/wake jitter.
+func LastGPUSeconds() float64 { return float64(C.mtl_last_gpu_seconds()) }
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

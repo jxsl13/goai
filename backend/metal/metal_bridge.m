@@ -2107,10 +2107,14 @@ int mtl_recorder_commit(void* rec) {
 }
 
 // mtl_recorder_wait blocks until a mtl_recorder_commit'ed buffer completes.
+static double gLastGPUSeconds = 0.0;
+double mtl_last_gpu_seconds(void) { return gLastGPUSeconds; }
+
 int mtl_recorder_wait(void* rec) {
     if (rec == NULL) return -2;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     [cmd waitUntilCompleted];
+    gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
     return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
 }
 
