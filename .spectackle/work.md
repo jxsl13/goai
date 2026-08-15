@@ -853,3 +853,34 @@ THE FIX SHAPE, from the same source already used for the M=1 kernel: llama.cpp k
 WHY THIS OUTRANKS THE REMAINING BACKLOG. Three consecutive detector-derived candidates measured out at zero or near-zero on this machine (crossentropy math.Log inapplicable, FA /l norm 4.1 percent on one dtype, Attrs boxing 0.8 percent allocs and no time). This one is 87x of redundant work at a realistic prefill batch, found by asking what the hardware is not being used for rather than by triaging detector output. Prompt processing is half the serving story and it is the untouched half.
 
 NEXT STEP IS AN IMPLEMENTATION TASK, not more analysis: a tiled Q4_K mat-mat kernel behind the same capability gate, forced-off control, bit-identity against the scalar kernel, and the interleaved A/B with an unaffected control. Q6_K follows the same shape once Q4_K lands.
+
+## R-01M01DD2A5ER9V02174WE7XXKT REJECTED M2 Metal Q4_K M-blocked mat-mat: 2.2-6.3x slower, occupancy beats traffic; corrects the 87x framing
+kind: research
+state: draft
+created: 2026-08-15
+
+REJECTED BY MEASUREMENT, and it corrects an overstatement in R-01M01CYGEBETM. Candidate code removed; backend/metal is byte-identical to the branch state before the experiment.
+
+WHAT WAS BUILT: qmatmul_q4k_mrows, an M-blocked variant of the resident Q4_K kernel. The scalar kernel gives one thread per output element, so the M threads sharing an output column each re-walk and re-dequantize the same weight row. The candidate gave one thread a column for a block of MT=8 rows, dequantizing each weight once into 8 accumulators - cutting weight traffic 8x. Full plumbing: pipeline, capability flag, SetQ4KMRows forced-off control, dispatch selection for M>1.
+
+CORRECTNESS WAS ESTABLISHED FIRST AND IT HELD. Bit-identical to the scalar kernel across M in {2,7,8,9,17,64}, covering partial blocks (7), exact blocks (8), remainders (9,17) and many blocks (64) - the accumulation order per output element is unchanged, so this was bit-identity by construction and it verified. Non-vacuity proven by mutation: scaling the accumulate by 1.0001 turned the test red in 256 of 256 elements, and reverting returned it green, so the kernel genuinely engaged rather than the test comparing scalar against scalar.
+
+THE PERFORMANCE RESULT, interleaved same-binary A/B via SetQ4KMRows, K2048,N5632, 100x count=2, medians:
+     M   mrows ns   scalar ns   mrows/scalar
+     2    2775442      438952          6.32x SLOWER
+     4    3452463      703100          4.91x
+     8    5157598      935674          5.51x
+    16    5224976     1469328          3.56x
+    32    9728132     2808948          3.46x
+    64   13104634     5181642          2.53x
+   128   22101794     9971549          2.22x
+   256   41855208    19339916          2.16x
+Slower at EVERY M, by 2.2x to 6.3x. The hypothesis is refuted, not merely unconfirmed.
+
+WHY: the candidate traded 8x fewer weight reads for 8x fewer threads. At M=256 the scalar kernel launches M*N = 1441792 threads; mrows launches N*ceil(M/8) = 180224. The GPU was not weight-bandwidth-bound - it was occupancy-bound - so removing parallelism cost far more than removing traffic bought. Per-thread register pressure from 8 accumulators and the K-strided X reads (stride 2048 floats between accumulators) compound it.
+
+THE CORRECTION TO R-01M01CYGEBETM, which matters more than the failed candidate. That record framed the M-sweep as "87x of redundant work" and implied large headroom. The arithmetic there was misread: at M=256 the kernel performs 256x MORE arithmetic than at M=1 (2.95 G MACs against 11.5 M), while time grew only 87x. Efficiency per MAC therefore IMPROVES with M - the scalar kernel amortizes its launch and latency better as the batch grows, which is the opposite of the deterioration the record suggested. The weight re-reading is real, but it is not the binding constraint, and this experiment is the proof.
+
+WHAT REMAINS OPEN, honestly narrowed: the only surviving signal is 0.31 TFLOP/s effective at M=256 against a GPU with several TFLOP/s of f32. That is a compute-efficiency gap, not the traffic gap the earlier record described. The untested approach is threadgroup-memory tiling: a threadgroup cooperatively dequantizes a weight tile into shared memory and MANY threads covering many M rows reuse it, so weight reads drop WITHOUT dropping thread count. That is the one shape this experiment did not test and the only one whose failure mode is not already demonstrated. It is materially harder than the register-blocking tried here.
+
+METHOD NOTE: the correctness work was completed before the benchmark and cost nothing when the candidate was rejected - bit-identity, block-boundary shapes and the mutation probe all held. What failed was the performance hypothesis alone. Building the forced-off control first is what made the A/B a same-binary comparison and the refutation unambiguous.
