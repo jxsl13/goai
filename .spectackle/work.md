@@ -2225,3 +2225,52 @@ Reverted the unused MatMulF16 rather than leave unvalidated code in the tree.
   prefill : pp64 0.329x — 3.0x behind, was 5.2x at the start of this line of work
 
 Next, in order of expected value: (1) profile the dequantization arithmetic inside a matrix-unit kernel to find where the 240:1 goes, since llama.cpp proves it can be much lower; (2) f16 expansion as the incremental 1.27x if (1) stalls.
+
+## R-01M02431SFE9VS94RN2V14AM0P Hoisting per-sub-block constants gave 2.35x and the matrix-unit kernel now beats the scalar path — retracting the '240:1 rules out the approach' conclusion
+kind: research
+state: draft
+created: 2026-08-15
+
+Profiled where the dequantization instructions went, as the previous record specified. Most of the 240:1 ratio was redundant work, not inherent cost — which retracts the conclusion I drew from it.
+
+## The finding
+
+The matrix-unit kernel's staging loop recomputed, for EVERY weight: the base address, d, dmin, and the 6-bit scale/min unpack. About 15 operations per element, of which 12 are identical across the 32 elements sharing a Q4_K sub-block.
+
+Giving each thread one (n, 16-element run) pair and computing those constants once:
+
+  585 -> 1377 GFLOP/s, 2.35x
+
+16 divides 32, so a run never straddles a sub-block boundary and hf is constant within it — which is what makes the hoist legal.
+
+## Honest ranking, K=2048 N=5632
+
+| M | cooperative | matrix unit | dequant+GEMM |
+|---|---|---|---|
+| 32 | 979.7us | 719.5us | 526.3us |
+| 64 | 1955.1us | 1198.1us | 743.0us |
+| 128 | 3905.5us | 2214.2us | 1017.4us |
+| 256 | 7807.8us | 4288.4us | 1558.5us |
+
+The matrix-unit kernel now BEATS the scalar cooperative path by 1.36x-1.82x. It still loses to dequantize-once + dense GEMM by ~2.75x, so it stays disabled.
+
+## The retraction
+
+I previously concluded that a 240:1 scalar-to-matrix instruction ratio "rules out the approach, not just the tile". That was wrong, and wrong in an identifiable way: I measured the ratio and treated it as a property of dequantizing-inside-a-kernel, when most of it was redundant per-element scale work that any careful implementation would hoist. The claim should have been "my kernel's dequantization is doing 4x more work than necessary", which is falsifiable and turned out to be true.
+
+The chain is worth recording as a whole: tile redesign 9.3x (real, diagnosis fine), then "approach closed" (wrong), then hoisting 2.35x (real, and only attempted because llama.cpp's existence contradicted the closure claim). The external evidence — a competitor doing the thing I had declared impossible — was what forced the re-examination. Without it the wrong conclusion would have stood.
+
+## Why dq+gemm still wins
+
+What remains in the matrix-unit kernel is the staging: every weight written to threadgroup memory and read back, with two barriers per K-chunk. dq+gemm writes once to device memory and hands the multiply to a tuned MPS kernel that has no dequantization in its inner loop at all.
+
+That gap is not obviously closable by more tuning of my kernel, and the expansion approach has its own measured ceiling (~743 tok/s pp64, 2.4x short of llama.cpp). Both roads are now mapped with numbers.
+
+## Measurement discipline
+
+All three arms are pinned explicitly now. QMatMulResident routes by flags, so an unpinned arm measures whichever path the flags select — precisely how the crossover benchmark came to compare dq+gemm against itself last round.
+
+## Standing
+
+  decode  : tg64 0.914x — parity
+  prefill : pp64 0.329x — 3.0x behind
