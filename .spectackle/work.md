@@ -1318,3 +1318,47 @@ A PORTABILITY WORKAROUND WAS ACCIDENTALLY THE OPTIMIZATION. The uint-array decla
 CONSEQUENCE FOR THE CROSS-BACKEND TABLE. Earlier records compared Metal and Vulkan achieved bandwidths per format as if the kernels differed only in dispatch geometry. They also differed in load granularity, which is now known to be worth up to 1.72x on Metal. Any future comparison of the two backends' per-format throughput should account for that.
 
 NOT REVERTED: the Metal Q2_K and Q5_K vectorizations, which are measured, bit-identical and mutation-probed. Only the Vulkan attempt is withdrawn, and it cost one shader edit to learn that the backend was already doing it.
+
+## R-01M01R8RE3ESN9DAP364R8MFJS Q2_K Metal vectorization confirmed end-to-end at 1.22x - and the cross-session table that nearly claimed it wrongly
+kind: research
+state: draft
+created: 2026-08-15
+
+## The invalid comparison, first
+
+After vectorizing the Q2_K and Q5_K cooperative kernels' byte loads to `uint`, I compared end-to-end decode throughput against a table measured in an EARLIER session:
+
+| fmt | before | after | delta | vectorized? |
+|---|---:|---:|---:|---|
+| Q2_K | 92.69 | 114.31 | 1.233x | yes (1.72x leaf) |
+| Q3_K | 59.84 | 67.69 | 1.131x | no |
+| Q4_0 | 90.61 | 105.15 | 1.160x | no |
+| Q4_K | 108.53 | 123.02 | 1.134x | no |
+| Q5_K | 71.81 | 91.16 | 1.269x | yes (1.19x leaf) |
+| Q6_K | 73.52 | 82.94 | 1.128x | no |
+| Q8_0 | 78.14 | 97.68 | 1.250x | no |
+
+The two vectorized formats top the table, which reads like confirmation. It is not. EVERY format improved, including the five whose kernels were untouched, and Q8_0 (+25%, untouched) moved as much as Q2_K (+23%, vectorized). The machine was in a different state between the two sessions; the change-attributable signal is not separable from that drift. Reporting only the two vectorized rows would have looked like clean confirmation of a real effect.
+
+This is FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001 one level up: there the confound was warm-versus-cold within a run, here it is session-versus-session across runs. The control that catches both is identical - the untouched arms. Five formats served as an accidental control group and reported 1.13-1.25x of pure drift.
+
+## The valid measurement
+
+Reconstructed the byte-wise Q2_K kernel from the vectorized source, then alternated the two variants in ONE session: three full alternations, three samples each after a discarded warmup, 32 generated tokens per sample on a 6-layer 2048-dim Q2_K model.
+
+| variant | run 1 | run 2 | run 3 |
+|---|---|---|---|
+| byte-wise | 106.05 101.49 102.62 | 101.24 101.68 102.89 | 104.21 102.19 102.89 |
+| vectorized | 129.78 124.74 124.97 | 125.20 124.34 124.21 | 126.00 124.65 124.85 |
+
+min(vectorized) = 124.21 > max(byte-wise) = 106.05 - the distributions do not overlap across nine samples each. Ratio of medians: 1.22x.
+
+## Reading it
+
+1.72x at the leaf becomes 1.22x on the decode. That dilution is expected and is itself a check on the number: the quantized matmul is most but not all of a decode step, so an end-to-end gain EQUAL to the leaf gain would have indicated a measurement error, not a better result.
+
+The drift-contaminated table happened to land on 1.233x, within noise of the true 1.22x. That coincidence is worth naming: a broken method can return the right answer. Stopping at the table would have recorded a correct number for a reason that does not hold, and carried the method to the next change, where it would not be so lucky.
+
+## Scope limit
+
+No effect on the llama.cpp head-to-head. TinyLlama Q4_K_M contains no Q2_K tensors, so this gain is invisible there. It is a real win for Q2_K-quantized models and nothing more.
