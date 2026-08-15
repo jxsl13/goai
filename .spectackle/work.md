@@ -3040,3 +3040,50 @@ Kept behind its parity test, unwired, so that starts from a validated kernel rat
 
   decode  : tg64 ~1.017x — parity at the memory roofline
   prefill : 0.43x at n=64, 0.61x at n=256, 0.43x at n=1024
+
+## R-01M0296RRRF6EV4GZKAKXR7WJE Flash attention on the matrix units: 3.97x on the kernel, 1.72x on a 1024-token prompt — four simdgroups instead of one, and the scalar-prologue rule holds twice
+kind: research
+state: draft
+created: 2026-08-15
+
+The flash-attention kernel works. Four simdgroups instead of one turned it from 0.84-1.01x into 3.97x, and prompt processing at 1024 tokens improves 1.72x.
+
+## Result
+
+  seq= 64  decode  166.4us  flashMM   70.7us  2.35x   474 GFLOP/s ( 7.0% peak)
+  seq=128  decode  522.3us  flashMM  222.1us  2.35x   604 GFLOP/s ( 8.9%)
+  seq=256  decode 1903.2us  flashMM  566.7us  3.36x   947 GFLOP/s (13.9%)
+  seq=512  decode 7271.6us  flashMM 1831.6us  3.97x  1172 GFLOP/s (17.2%)
+
+End to end, interleaved:
+
+  n=  64   777.4 / 777.7  ->   806.7 /  803.0   1.04x
+  n= 256  1314.7 /1313.5  ->  1476.2 / 1513.3   1.14x
+  n=1024   931.3 / 927.1  ->  1604.8 / 1592.5   1.72x
+
+The gain tracks attention's measured share of prefill — 5% / 21% / 58% — which is a check that the improvement is where the model said it would be. Against llama.cpp's flat pp1024 of 2141, GoAI goes 0.43x -> 0.75x at that length.
+
+## What actually changed
+
+Only the threadgroup shape. One simdgroup per 8 query rows staged 4096 floats and ran a 64-iteration softmax on 8 of 32 lanes to feed 64 matrix MACs — a 64:1 scalar-to-matrix ratio. Four simdgroups over 32 query rows share one K/V tile and parallelize the softmax across the group.
+
+Same arithmetic, same matrix instructions, 3.9x faster. The matrix units were never the bottleneck; the scalar prologue was.
+
+That is the second time this exact shape has appeared. On the quantized matmul it was dequantization (240:1), fixed by hoisting per-sub-block constants and enlarging the tile: 585 -> 1377 GFLOP/s. Here it is staging plus softmax (64:1), fixed by widening the threadgroup. The durable statement is not about dequantization or about softmax:
+
+**Moving work onto the matrix units accomplishes nothing while a scalar prologue dominates the instruction budget. Measure the scalar-to-matrix instruction ratio BEFORE assuming the matrix units are the lever.**
+
+## Gate
+
+causal, sq == sk, dk == 64, no window. The sq == sk condition is load-bearing: this kernel's causal mask assumes query i aligns with key i, while a decode step (sq=1 against an sk-long cache) carries the offset sk-sq. Decode keeps the old kernel, which is correct for it and is at parity anyway.
+
+## Accuracy
+
+5.8e-05 against the previous kernel, not bit-exact — the online softmax rescales partial sums in a different order. That is the same order as the two PRE-EXISTING attention kernels agree with each other (5.7e-05), so it is inside the spread the codebase already carried. On greedy decoding it flips near-ties: 2 of 26 tokens differ after a 32-token prompt. Stated rather than buried, because it is a real behaviour change even though it is not a correctness regression.
+
+## Standing
+
+  decode  : tg64 1.056x vs llama.cpp — parity, both at the memory roofline
+  prefill : n=64 0.45x, n=256 0.70x, n=1024 0.75x — was 0.43 / 0.61 / 0.43
+
+The remaining prefill deficit is now concentrated at SHORT prompts, where fixed expansion dominates and attention barely matters — the opposite end from where this session's work has been. Expansion is 0.99 ms/layer against a 3.79 ms layer at n=64, and amortizes away as prompts lengthen.
