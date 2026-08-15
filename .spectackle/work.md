@@ -2605,3 +2605,46 @@ The check is direct: build one command buffer containing a real layer's op SEQUE
 
   decode  : tg64 1.017x — parity
   prefill : pp64 0.336x
+
+## R-01M0269TGAFSPR41BHC16JBYDH Dependency-chain and cache-reuse both disproven (1.01x, 1.00x) — the prefill gap is two extra projections per layer: q/k/v are separate while gate|up is fused
+kind: research
+state: draft
+created: 2026-08-15
+
+Tested the dependency-chain explanation for the 23% unaccounted prefill time. It is wrong, and so is the cache-reuse fallback. The cause is simpler and points at a concrete optimization.
+
+## Both hypotheses disproven
+
+A real layer's op sequence on dependent buffers, against the same ops timed in isolation:
+
+  chain 2.986 ms/layer   isolated sum 2.965 ms   ratio 1.01x
+
+No hazard penalty at all. Repeating the chain over EIGHT distinct weight sets, so successive iterations cannot reuse a cached weight:
+
+  2.983 ms, ratio 1.00x
+
+Worth noting why the second test was run: five earlier defects this session were all "measured in the wrong regime", so cache reuse was the obvious next suspect. It was not the cause. The pattern that had held five times did not hold a sixth, which is itself worth recording — a heuristic that keeps working invites assuming it always will.
+
+## The actual cause
+
+The synthetic layer does not reproduce the real dispatch COUNT. From the prefill profile:
+
+  QMatMulResident  5.95/layer   (synthetic: 4)
+  total dispatches ~15/layer    (synthetic: 11)
+
+5.95 decomposes as q, k, v SEPARATE (3) + o (1) + gate|up fused (1) + down (1). So q/k/v are three separate projections while gate/up are column-fused — the opposite of what the synthetic assumed.
+
+Total expanded BYTES are the same either way, so expansion cost is unchanged. But the GEMM is not: three small GEMMs replace one fused N=2560. The measured shape sweep shows why that costs — N=2560 runs at 2401 GFLOP/s while N=256 shapes sit far below, since small-N GEMMs are launch- and occupancy-limited rather than arithmetic-limited.
+
+## Concrete candidate
+
+Fusing q/k/v into a single projection. The weights arrive from GGUF as three separate tensors, and the fused code path ALREADY EXISTS (recordQKVProj records one projection through b.wqkv) — it is used for models that ship pre-concatenated qkv. Concatenating the three at load time would route TinyLlama down it, replacing three GEMMs and three expansions with one.
+
+Expected: one 2048x2560 GEMM (279.6us measured) in place of q 2048x2048 (200.3us) plus two 2048x256, and two fewer dispatches and expansions per layer. Both the fusion machinery and the measurement to judge it already exist.
+
+## Standing
+
+  decode  : tg64 1.017x — parity
+  prefill : pp64 0.336x
+
+Budget per layer: expansion 0.99, GEMM 1.70, attention 0.159, everything else 0.055, measured 3.79 — with the 0.89 remainder now attributed to the two extra projections and the small-N GEMM penalty rather than to any modelled effect.
