@@ -2403,13 +2403,28 @@ static id<MTLBuffer> dq_scratch(size_t bytes) {
     return gDQScratch;
 }
 
-// q4k_dq_gemm_eligible: above this batch size, expanding the weight once and running a dense GEMM
-// beats re-deriving it per query row. Measured crossover on an M2 Pro is M~18 (M=16 0.90x,
-// M=24 1.34x, M=32 1.81x, M=64 2.56x, M=256 5.37x); 24 keeps a margin.
+// q4k_dq_gemm_eligible: expanding the weight once and running a dense GEMM beats re-deriving it per
+// query row above a batch size AND above an output width. Both thresholds are measured.
+//
+// Batch: crossover at M~18 on an M2 Pro (M=16 0.90x, M=24 1.34x, M=32 1.81x, M=64 2.56x,
+// M=256 5.37x); 24 keeps a margin.
+//
+// Width: that batch crossover was measured at ONE shape, K=2048 N=5632, and applying it to every
+// shape was wrong. A narrow projection has a tiny weight for the cooperative kernel to re-read
+// while the dense GEMM stays launch-bound, so the balance inverts. At M=64, K=2048:
+//
+//   N= 256  coop 130.9us  dq+gemm 170.0us  -> COOPERATIVE WINS
+//   N= 512  coop 194.6us  dq+gemm 165.9us
+//   N=1024  coop 358.3us  dq+gemm 199.0us
+//   N=2048  coop 714.2us  dq+gemm 260.2us
+//   N=5632  coop 1954.5us dq+gemm 737.5us
+//
+// This matters for GQA models generally, not just this one: k and v project to kvHeads*headDim,
+// which is 256 here and small in every grouped-query model.
 static int gDQGemmEnabled = 1;
 void mtl_set_q4k_dq_gemm(int on) { gDQGemmEnabled = on ? 1 : 0; }
-static int q4k_dq_gemm_eligible(int M, int K, int qt) {
-    return gDQGemmEnabled && (qt == 12 || qt == 14) && M >= 24 && K % 256 == 0 && ensure_dequant_q4k() == 0;
+static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
+    return gDQGemmEnabled && (qt == 12 || qt == 14) && M >= 24 && N >= 512 && K % 256 == 0 && ensure_dequant_q4k() == 0;
 }
 
 // mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
@@ -2588,7 +2603,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
     // Prompt-processing path: expand the weight once into scratch, then a dense GEMM.
-    if (q4k_dq_gemm_eligible(M, K, qtype)) {
+    if (q4k_dq_gemm_eligible(M, K, N, qtype)) {
         size_t need = (size_t)K * (size_t)N * sizeof(float);
         id<MTLBuffer> scratch = dq_scratch(need);
         if (scratch != nil) {
