@@ -352,7 +352,22 @@ func (kc *kernelCache) column(i int) []float64 {
 	// col[t] — so banding it is race-free and bit-identical: each entry performs exactly the
 	// arithmetic it did before, and only which goroutine performs it moves. This is where the
 	// RBF fit spends its time: kernelCache.column was 40.6% of a serial profile, of which
-	// math.archExp alone is 11.4%, and the whole fit scaled at 1.02x on twelve cores.
+	// math.archExp alone is 11.4%.
+	//
+	// The "scaled at 1.02x on twelve cores" this comment used to carry does not reproduce.
+	// Measured on the 4000x20 scorecard fit: GOMAXPROCS=1 gives 7.49/7.28 ms against 5.69/5.66
+	// with all cores — 1.3x, not 1.02x. Parallelising the column is worth keeping.
+	//
+	// Where the remaining gap to libsvm is NOT: the solver. Instrumenting the loop shows this fit
+	// converges in 78 SMO steps with 3980 of 4000 variables at a bound, so the O(n) scans cost
+	// ~312k index visits in total and shrinking — the obvious next libsvm technique — would
+	// optimise something that is already negligible. The work is ~156 kernel columns, i.e. ~624k
+	// kernel evaluations, each 20 dimensions plus a math.Exp.
+	//
+	// So the gap is per-core kernel throughput: scikit-learn's SINGLE-THREADED libsvm fits in
+	// 3.51 ms against our 7.3 ms serial and 5.66 ms on twelve cores. Same algorithm, same step
+	// count, ~2.1x per-core. The likeliest cause is the kernel inner loop and math.Exp against C's
+	// vectorised libm, which is a Go-runtime limit rather than an algorithmic one.
 	parallelBands(kc.n, len(xi), func(lo, hi int) {
 		for t := lo; t < hi; t++ {
 			col[t] = kc.m.kernel(xi, kc.x[t])
