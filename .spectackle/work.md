@@ -1186,3 +1186,30 @@ WHAT THE NUMBER MEANS. Over 667 MB of weights re-read per token, GoAI's GPU time
 WHERE THAT LEAVES THE CAMPAIGN. The 14 cooperative kernels tripled this model's decode and are real. The remaining 6.1x is inside GPU kernel execution — split roughly 42/58 between quant matmul and the other GPU ops by the earlier apportionment, both of which are now confirmed to be GPU-side rather than host-side.
 
 METHOD NOTE WORTH KEEPING: when a budget built from micro-benchmarks fails to close, prefer a direct observation of the aggregate over a third refinement of the budget. Metal exposes GPUStartTime/GPUEndTime per command buffer and it took one instrumented function to settle what two rounds of arithmetic could not.
+
+## R-01M01PVFACFE4RDHB9D5GBE062 Attention is 2 percent at decode lengths: 35.81 ms/token is KV-independent, 18.6 GB/s of weight traffic
+kind: research
+state: draft
+created: 2026-08-15
+
+ATTRIBUTED BY OBSERVATION, and it eliminates attention. Instrumentation reverted; nothing shipped.
+
+METHOD. Attention cost grows with KV length while every other per-token op is KV-independent, so sweeping the prompt length and reading Metal's own GPUStartTime/GPUEndTime separates them in situ — no micro-benchmark extrapolation.
+
+MEASURED, TinyLlama-1.1B Q4_K_M, 16 generated tokens per point:
+  prompt   4  ->  35.75 ms GPU per generated token
+  prompt  64  ->  36.62
+  prompt 128  ->  38.39
+  prompt 256  ->  40.65
+  prompt 448  ->  43.38
+Linear fit: GPU ms/token = 35.81 + 0.01747 * KV_len, i.e. 17.47 us per KV position.
+
+ATTENTION IS 2 PERCENT AT DECODE LENGTHS. At the KV~38 of the main benchmark, attention costs 0.66 ms against 35.81 ms of KV-independent work. Even at KV=448 it is 7.83 ms against 35.81, i.e. 18 percent.
+
+THIS CORRECTS THE PREVIOUS RECORD'S LEADING CANDIDATE. That budget, built from the incremental (t16-t1)/15 micro-benchmark, put MHA at 116,651 ns per call and 16 percent of a token, and named attention the next target if the unaccounted time spread proportionally. It does not: the in-situ slope says attention is 2 percent. The micro-benchmark measured MHA at a fixed seq of 64 and, being a marginal-cost method, largely captured launch cost rather than the work a decode step actually issues. Third instance in this campaign of a micro-benchmark budget pointing at the wrong term.
+
+WHAT IS LEFT, stated precisely. 35.81 ms/token of KV-INDEPENDENT GPU work, over 667 MB of weights re-read per token, is 18.6 GB/s. llama.cpp's ENTIRE token is 5.81 ms, i.e. 114.8 GB/s. GoAI's KV-independent GPU work alone is 6.2x llama.cpp's whole token, and it is dominated by moving weights.
+
+WHAT THIS DOES NOT SEPARATE: the 35.81 ms contains the quant matmuls AND the other KV-independent ops (RMSNorm, RoPE, residual adds, the SwiGLU activation), all of which are per-token constants. The sweep cannot split those from each other. What it does establish is that neither attention, nor KV growth, nor host overhead, nor submit batching explains the gap — every one of those has now been measured and ruled out.
+
+NEXT: split the 35.81 ms between quant matmul and the other KV-independent ops by observation. The cooperative on/off toggle changes ONLY the quant matmuls, so measuring GPU time (not wall time) with it on and off attributes their share in situ, without the assumed-k arithmetic that made the earlier apportionment a range.
