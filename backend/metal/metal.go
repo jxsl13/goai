@@ -2330,6 +2330,10 @@ func SetQ4KDequantGemmF16(on bool) {
 
 // SetQ4KDequantGemmF16MaxM sets the largest M that takes the f16 path. Above it the GEMM is
 // compute-bound and f16 measures ~3% slower, so widening this is a pessimization, not a tuning knob.
+//
+// NOTE: this only takes effect when the weight cache is DISABLED. With the cache on (the default)
+// the cap is 512, chosen end-to-end — see the measured sweep in metal_bridge.m. A probe that varies
+// this setter while the cache is enabled measures nothing and will look like insensitivity.
 func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m)) }
 
 // SetF16MinN sets the smallest output width N that takes the f16 expand-then-GEMM path. Narrow
