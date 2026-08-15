@@ -1789,3 +1789,44 @@ The Q4_K parity tests cover N=8 and caught it immediately, so it is a hazard rat
 GoAI is 1.41x behind llama.cpp (143.17 vs 201.61 tok/s on the real TinyLlama Q4_K_M). Decode is matmul-bound and the matmuls run at roughly 100-147 GB/s depending on dispatch size, against a 186 GB/s streaming roofline.
 
 The remaining lever is genuinely split-K: partition the K dimension across threadgroups so a small-N matmul gets more parallelism WITHOUT shrinking the per-threadgroup row count, then reduce the partials. That is a real kernel redesign (needs either atomics or a second pass) and should not be started until the measurement noise floor is under control, because its expected effect is the same order as the current run-to-run spread.
+
+## R-01M020R0S1FB2TC5KS28WEH7Y1 Precise GPU-timestamp instrument built (cv 1-2%): split-K repriced from ~1.46x to 9% end-to-end, and the greedy host round-trip killed as a candidate
+kind: research
+state: draft
+created: 2026-08-15
+
+Built the precise instrument the previous record demanded, then used it to REPRICE the remaining work. Two candidate optimizations were killed on measurement, and the biggest one turned out to be worth far less than assumed.
+
+## The instrument
+
+Wall-clock timing gave 100.5 / 107.2 / 117.2 GB/s for the SAME workload — 17% spread, and a non-monotonic dispatch-size curve that implied an effect where there was none. Timing the command buffer by its own GPU timestamps (GPUEndTime-GPUStartTime) removes host submit and wake jitter. With a warmup and 40 samples: cv 1.1-3.0% within a run, warmed runs agreeing to ~0.2%.
+
+The corrected curve is monotonic, and decode-sized dispatches are less bad than wall clock claimed (124.0 vs the 100.5 previously reported):
+
+  N=2048 124.0 | 2560 132.5 | 4096 144.7 | 8192 156.1 | 11264 162.7 | 16384 169.7 GB/s
+
+## Repricing split-K
+
+Against the decoder's REAL shapes — qkv N=2560, o N=2048, gate|up N=11264, down N=2048/K=5632 — a PERFECT small-dispatch fix takes matmul from 3.81 to 3.21 ms/token: 6.99 -> 6.39 ms, 143 -> 157 tok/s, gap 1.41x -> 1.29x.
+
+Nine percent, for a kernel redesign needing atomics or a second reduction pass. Still positive, but no longer the obvious priority, and now a measured trade rather than a guess. Worth noting the earlier wall-clock number would have promised ~1.46x on the worst shape and badly oversold it.
+
+## The arithmetic that reframes everything
+
+GoAI 6.99 ms/token, of which matmul is ~3.81 ms — so ~3.18 ms is overhead. llama.cpp's ENTIRE decode is 4.96 ms/token. GoAI's matmuls are not the problem; its overhead is nearly as large as llama.cpp's whole step.
+
+So the target is the 3.18 ms, not the 0.60 ms available in matmul bandwidth.
+
+## Two overhead candidates killed
+
+1. **Host logits round-trip.** Greedy sampling was falling to the host path — fastTopKSampler rejects TopK<=0 and Greedy sets TopK 0 — so every token downloaded the full [32000] logits row to run an argmax the device could do. Greedy IS top-1, and routing it through the device top-k is exact (sampleTopKCandidates walks candidates in ascending vocab-index order and takes the first maximum, exactly as the full-vocab host argmax does). Verified: BIT-IDENTICAL token stream on the real TinyLlama GGUF.
+
+   Result: 138.25 / 137.85 / 137.75 (host) vs 138.10 / 137.49 / 137.30 (device), interleaved. No win — marginally slower. The device top-k kernel costs about what the 128 KB download it replaces costs. Reverted; shipping it would have been an unjustified change on a speculative benefit.
+
+2. **Host encode** was killed last round for the same class of reason (real 5x leaf win, fully overlapped with GPU execution).
+
+## What is left unexplained
+
+Sampling 0.09 ms, encode overlapped, logits round-trip neutral. That still leaves roughly 2 ms/token of non-GPU time unaccounted. The remaining hypothesis is command-buffer submit-to-start and completion latency: one buffer per token with a strict wait means the GPU idles between tokens, and nothing measured so far covers that interval. Measuring it needs the gap between one buffer's GPUEndTime and the next's GPUStartTime — now directly available through the timestamps this record adds, and that is the next measurement.
+
+If that interval is ~2 ms it is the single largest item in the decode and dwarfs split-K; if it is small, then the 4.97 ms GPU-busy figure and the 3.81 ms matmul estimate disagree and the matmul estimate must be rebuilt from logged dispatch shapes rather than the bandwidth model.
