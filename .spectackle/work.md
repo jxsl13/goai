@@ -2504,3 +2504,48 @@ Worth noting how it stayed hidden: the flash and two-pass attention kernels were
 Remaining prefill gap by component, per layer: expansion 0.99 ms (removable only by a quantized GEMM), GEMM 1.70 ms (at 3311 GFLOP/s effective, near MPS's limit), attention 0.16 ms (structurally wrong but small at short prompts), 0.56 ms unattributed.
 
 llama.cpp's entire layer is 1.64 ms. Its advantage remains that it has no expansion term, which is the same conclusion as three rounds ago — but the budget is now measured rather than assumed, so the next attempt can be scoped against real numbers.
+
+## R-01M025TQDFF969T3S98R79T1W9 Neither attention kernel suits prefill: flash is 0.72-0.97x of the decode kernel and both run at 3-4% of peak — the reroute is unavailable, a real flash kernel is needed
+kind: research
+state: draft
+created: 2026-08-15
+
+Tested the obvious fix for prefill attention — reroute causal sq>1 from the decode kernel to the flash kernel — and it is not available. Both kernels are equally poor.
+
+## Measurement
+
+M2 Pro, heads=32 kvHeads=4 dk=64:
+
+| seq | decode kernel | flash | ratio |
+|---|---|---|---|
+| 64 | 164.3us (204 GFLOP/s, 3.0% peak) | 228.0us | 0.72x |
+| 128 | 521.4us (257 GFLOP/s, 3.8% peak) | 535.5us | 0.97x |
+| 256 | 1902.3us (282 GFLOP/s, 4.2% peak) | 1987.5us | 0.96x |
+
+They agree to 5.7e-05, so both are correct. The flash kernel — the TILED one, and the one this branch already sped up 4.7-5.4x with the runtime-loop-bound fix — is no faster here. Both sit at 3-4% of the 6.8 TFLOP/s peak.
+
+## Reading it correctly
+
+Both are quadratic, and attention must be. The scaling (x3.2 then x3.6 per doubling of seq) is not the defect. The CONSTANT is: 3-4% of peak where the matmul path reaches 48%.
+
+Share of prefill by prompt length: ~4% at seq=64, 10% at seq=256 (41.9 ms of ~427 ms), and rising. That is why it stayed invisible — every measurement this session used a 64-token prompt, where attention is a rounding error, and the deficit only became legible once the rest of the budget was closed.
+
+## Why the reroute fails
+
+The flash kernel tiles K/V through threadgroup memory, which is the right structure. That it is still no faster suggests its tiling is not effective at these shapes — plausibly FTILE and the threadgroup geometry are tuned for a different regime, since the earlier 4.7-5.4x fix addressed its dequantization-style per-element cost, not its tiling.
+
+Either way the conclusion is the same: closing this needs a genuine flash-attention kernel — Q tile resident, K/V streamed in tiles, online softmax — not a routing change. Both current kernels re-read K/V per query row in the shape that matters.
+
+## State of the prefill programme
+
+Every component is now measured, and the remaining work is two scoped projects rather than a series of adjustments:
+
+  expansion  0.99 ms/layer  — removable only by a quantized GEMM (matrix-unit kernel is at 1377 GFLOP/s after hoisting, still 2.75x behind expand-then-GEMM)
+  GEMM       1.70 ms/layer  — 3311 GFLOP/s effective, near MPS's limit, no headroom
+  attention  0.16 ms/layer at seq=64 — 3-4% of peak, grows with prompt length
+  unattributed 0.56 ms/layer
+
+  decode  : tg64 1.017x — parity with llama.cpp
+  prefill : pp64 0.336x — from 0.057x when this line began
+
+llama.cpp's whole layer is 1.64 ms and has no expansion term. That remains the structural difference, and the two projects that would close it are now specified against measured baselines rather than guessed at.
