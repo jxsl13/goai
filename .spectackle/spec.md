@@ -469,3 +469,8 @@ Rationale: At M=1 a one-thread-per-output dispatch leaves only N threads with wo
 WHEN a GPU optimization proposes to eliminate redundant work by giving each thread more of it, the loop SHALL compare thread counts before and after and bound the lever by probe first, because two such attempts were measured 3.9 percent and 2.2-6.3x SLOWER while every winning kernel INCREASED thread count.
 
 Rationale: Vulkan M=1 GEMV removed 15/16 of the tiled kernel's discarded arithmetic and lost 3.9 percent: 32768 threads became 2048, and the wasted threads were supplying the occupancy that hid memory latency. Metal M-blocked mat-mat removed 8x of weight traffic and lost 2.2-6.3x for the same reason. By contrast the 14 cooperative quant kernels that won all raised thread count 32x or 64x per output row. The two classes separate on thread count, not on how much redundant work was removed.
+
+## HARNESS-CALL-PATTERN-IS-NOT-EVIDENCE-ABOUT-THE-SYSTEM-001
+WHEN a fixed per-call cost measured in a benchmark is proposed as an optimization target, the loop SHALL find the production call site and count how many real operations amortize that cost before acting, because a harness submits per op for ISOLATION while production batched a whole decode step and paid the same 149us across roughly 0.5 percent of a token.
+
+Rationale: A ~149us per-submit floor was measured and read as a batching opportunity. llamagpu/decoder.go records one recorder per decode step with the entire per-layer loop inside it, Vulkan's Commit() is a no-op and Wait() is Finish(), so production pays that cost about twice per token — 0.3ms against a 61ms step. The floor was a property of the measuring instrument, not of the system.
