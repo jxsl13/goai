@@ -2092,6 +2092,25 @@ func (r *Recorder) Copy2D(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceB
 
 // Binary records O = a (op) b over n elements into the command buffer over device buffers
 // (op 0=add, 1=sub, 2=mul, 3=div, 4=max, 5=min).
+// BinaryN is Binary bounded to the FIRST n elements. Decoder buffers are allocated for the whole
+// context, so an unbounded elementwise op over one decoded row touches ctx x width elements instead
+// of width — at ctx=1024 that is a factor of 1024 in memory traffic, and it dominated decode
+// (§ the 22-layer profile: 46.8 adds/token over 2,097,152 elements each). Every other recorded op
+// already takes a row count; this gives Binary the same.
+func (r *Recorder) BinaryN(a, b, o *DeviceBuffer, op, n int) error {
+	if n < 0 || n > a.n || n > b.n || n > o.n {
+		return fmt.Errorf("metal: Recorder binaryN n=%d out of range (a=%d b=%d o=%d)", n, a.n, b.n, o.n)
+	}
+	if n == 0 {
+		return nil
+	}
+	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(n), C.int(op))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder binaryN failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) Binary(a, b, o *DeviceBuffer, op int) error {
 	if a.n != o.n || b.n != o.n {
 		return fmt.Errorf("metal: Recorder binary size %d/%d != %d", a.n, b.n, o.n)
