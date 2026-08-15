@@ -1875,3 +1875,54 @@ That is now the largest measured gap in the library, and it is a far better targ
   session : 24.11 -> ~178 tok/s decode on the real model, 7.4x
 
 Next: characterize the M>1 quantized matmul path. Establish whether it reads weights once per batch or once per token, then decide between a blocked/tiled M>1 kernel and routing prefill through the existing MPS/GEMM path.
+
+## R-01M021SRV6FQZR7E28DHRNSATW Prompt processing 3.4x: the cooperative quant kernels were gated on M==1 although they always indexed rows from group.y — and the M>1 fallback was slower per row than not batching
+kind: research
+state: draft
+created: 2026-08-15
+
+Prompt processing was 17.4x behind llama.cpp. A one-condition change took it to 5.2x. The cooperative quant kernels were gated on M == 1 for no reason the kernels required.
+
+## Diagnosis
+
+Time vs batch size on Q4_K (K=2048, N=5632), GPU timestamps:
+
+| M | us/op | us/row | vs M=1 | weight GB/s |
+|---|---|---|---|---|
+| 1 | 35.2 | 35.2 | 1.00x | 184.5 |
+| 2 | 267.9 | 133.9 | 7.62x | 24.2 |
+| 8 | 764.8 | 95.6 | 21.75x | 8.5 |
+| 64 | 4832.1 | 75.5 | 137.43x | 1.3 |
+
+M=1 runs at 184.5 GB/s, essentially the streaming roofline. M=2 costs 7.6x M=1 for 2x the work, and the per-ROW cost gets WORSE, not better, as the batch grows. A batched path that fails to amortize would be flat per row; this one is worse per row than not batching at all.
+
+Confirmed directly — batched dispatch versus looping the M=1 kernel over the same rows:
+
+  M=2  267.9us vs 69.9us   batched 3.83x SLOWER
+  M=8  764.2us vs 280.7us  batched 2.72x SLOWER
+  M=64 4829us  vs 2261us   batched 2.14x SLOWER
+
+The batched path lost to simply calling the decode kernel M times.
+
+## The fix
+
+The cooperative kernels take their row index from group.y (mi) and the dispatch already passes M as the grid's y extent, so they were ALWAYS capable of M>1. The gate `cooperative = M == 1` was artificial. Relaxed to M <= 512, verified for all seven formats by checking each kernel indexes mi:
+
+  M=4  508.2 -> 124.6us  4.08x
+  M=16 1295.9 -> 490.4us 2.64x
+  M=64 4829.4 -> 1953.9us 2.47x
+  M=512 37585 -> 15601us  2.41x
+
+End to end on the real model: pp64 102 -> 343.5 tok/s (3.4x); tg64 unchanged at ~174.
+
+Correctness: generated tokens IDENTICAL over 64 tokens from a 32-token prompt, both for Q4_K alone and with all formats relaxed. Prefill logits differ by 7.4e-6 relative (f32 reassociation, different accumulation order), inside the 2e-5 parity tolerance, and it moves no argmax.
+
+## What this is NOT
+
+This does not make prefill batched. The cooperative kernel re-streams the weight for every row — it is the DECODE shape applied M times. That is why the gain plateaus at ~2.4x rather than growing with M: at M=64 the kernel still moves 64x the weight bytes a batched kernel would.
+
+llama.cpp does pp64 at 1778 tok/s against GoAI's 343.5, so 5.2x remains. Closing it needs a genuinely blocked M>1 kernel: tile the batch so each weight super-block is read once into threadgroup memory and reused across all rows in the tile. That is the real prompt-processing kernel and it does not exist yet.
+
+## Lesson
+
+The gate had been there long enough to look intentional, and the surrounding code (coopRows, the M==1 comments) reinforced it. What exposed it was not reading the code but measuring a shape nobody benchmarked: every prior measurement this session was M=1, because decode is M=1. The 17.4x prefill deficit was invisible until tg64 and pp64 were separated — and it had been sitting behind a metric that structurally could not show it.
