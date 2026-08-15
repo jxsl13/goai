@@ -1740,3 +1740,52 @@ Session progress on the same harness and the same real model is nonetheless real
 From the phase split: decode is matmul-bound, matmuls ~82% of GPU time and ~65% of wall, and the realistic matmul sequence runs at ~117-133 GB/s against a measured 186 GB/s single-weight streaming roofline. Closing that bandwidth gap is worth roughly the whole remaining factor. It is a dispatch-efficiency problem at realistic weight sizes (108 GB/s at a 2.2 MB weight vs 191 GB/s at 18 MB), not an algorithmic one.
 
 QKV fusion is already implemented, so the obvious "fewer, bigger dispatches" lever is spent. The open question is why a 2-6 MB resident weight streams at ~60-70% of the rate a 144 MB one does, and whether that is fixable from the kernel side (occupancy, ramp) or is a fixed per-dispatch cost that only batching across layers could amortize.
+
+## R-01M020BCTDFRS9FZD22V2GTSBV Small-dispatch matmul deficit isolated (100.5 vs 146.7 GB/s) — but halving rowsPerSimd does not fix it, and the measurement noise floor exceeds the effect
+kind: research
+state: draft
+created: 2026-08-15
+
+Isolated the small-dispatch bandwidth deficit properly, then tried the obvious fix and it failed. Recording both.
+
+## The deficit, measured without the cache confound
+
+Earlier roofline sweeps varied N on a SINGLE weight, so small N was cache-resident and unreadable. This sweep holds total bytes constant (~420 MB) and allocates enough DISTINCT weights at each N that none can be cached:
+
+| N | weights | threadgroups/dispatch | GB/s |
+|---|---|---|---|
+| 2048 | 186 x 2.2MB | 512 | 100.5 |
+| 4096 | 93 x 4.5MB | 1024 | 120.9 |
+| 8192 | 46 x 9.0MB | 2048 | 146.7 |
+| 16384 | 23 x 18MB | 4096 | 136.3 |
+| 65536 | 5 x 72MB | 16384 | 128.8 |
+
+Small dispatches lose about 1.46x against the N=8192 peak. The decoder's o and down projections are both N=2048, i.e. in the worst regime; qkv is 2560 and gate/up 11264.
+
+Note the curve is NOT monotonic in parallelism — it peaks at N=8192 and DECLINES at 16384 and 65536. That already argues against "more threadgroups is better" as the explanation, and it is the reason the obvious fix was worth testing rather than assuming.
+
+## The fix that did not work
+
+Hypothesis: at N=2048 the dispatch is too small to fill the GPU, so halving rowsPerSimd (2 -> 1) doubles the threadgroup count and should recover the gap.
+
+Interleaved A/B, 2 alternations:
+
+  N=2048   rows=2: 107.2 / 117.2   rows=1:  96.8 / 122.5
+  N=8192   rows=2: 144.2 / 150.5   rows=1: 135.5 / 141.9
+  N=65536  rows=2: 128.0 / 124.4   rows=1: 148.0 / 152.1
+
+At the target case the two configurations OVERLAP — no reliable win. rows=1 helps only at N>=65536, where the decoder never operates, and hurts at N=8192. Reverted.
+
+Run-to-run spread at a fixed configuration is ~10% (107.2 vs 117.2), which is larger than any effect being sought; a conclusive version of this sweep needs far more repetitions than the 8-iteration minimum used here. That is itself a finding: this measurement is not yet precise enough to drive a kernel decision, and the next attempt should establish the noise floor before interpreting differences.
+
+## A maintenance hazard found on the way
+
+rowsPerSimd is duplicated by the dispatch grid in THREE places: coopRows at the two resident sites, and a HARDCODED (N+3)/4 at the standalone site. Changing the kernel constant with only the first two updated under-dispatches and leaves tail rows unwritten — observed as garbage in rows 4..7 of an N=8 case.
+
+The Q4_K parity tests cover N=8 and caught it immediately, so it is a hazard rather than a live defect. Documented in the kernel; a shared constant would be better but is a wider refactor across all seven quant formats.
+
+## Where this leaves the gap
+
+GoAI is 1.41x behind llama.cpp (143.17 vs 201.61 tok/s on the real TinyLlama Q4_K_M). Decode is matmul-bound and the matmuls run at roughly 100-147 GB/s depending on dispatch size, against a 186 GB/s streaming roofline.
+
+The remaining lever is genuinely split-K: partition the K dimension across threadgroups so a small-N matmul gets more parallelism WITHOUT shrinking the per-threadgroup row count, then reduce the partials. That is a real kernel redesign (needs either atomics or a second pass) and should not be started until the measurement noise floor is under control, because its expected effect is the same order as the current run-to-run spread.
