@@ -2137,6 +2137,41 @@ double mtl_probe_sg_gemm(int M, int K, int N, int reps) {
     }
 }
 
+// mtl_check_sg_gemm runs the hand-written GEMM on caller-supplied f32 data (converted to f16 on the
+// way in) and returns the f32 result, so its correctness can be checked against a reference. The
+// timing probe uses uninitialised private buffers and would happily report a fast wrong kernel.
+int mtl_check_sg_gemm(const float* A, const float* B, float* C, int M, int K, int N) {
+    if (ensure_init() != 0) return -1;
+    if (mtl_probe_sg_gemm(8, 8, 8, 1) < 0) return -2;   // forces pipeline build
+    @autoreleasepool {
+        uint16_t* ah = (uint16_t*)malloc((size_t)M*K*2);
+        uint16_t* bh = (uint16_t*)malloc((size_t)K*N*2);
+        if (ah == NULL || bh == NULL) { free(ah); free(bh); return -3; }
+        for (int i = 0; i < M*K; i++) { __fp16 v = (__fp16)A[i]; memcpy(&ah[i], &v, 2); }
+        for (int i = 0; i < K*N; i++) { __fp16 v = (__fp16)B[i]; memcpy(&bh[i], &v, 2); }
+        id<MTLBuffer> a = [gDevice newBufferWithBytes:ah length:(size_t)M*K*2 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> b = [gDevice newBufferWithBytes:bh length:(size_t)K*N*2 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> c = [gDevice newBufferWithLength:(size_t)M*N*4 options:MTLResourceStorageModeShared];
+        free(ah); free(bh);
+        if (a == nil || b == nil || c == nil) return -4;
+        int P[3] = {M, K, N};
+        id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+        id<MTLComputeCommandEncoder> e = [cmd computeCommandEncoder];
+        [e setComputePipelineState:gSGGemm];
+        [e setBuffer:a offset:0 atIndex:0];
+        [e setBuffer:b offset:0 atIndex:1];
+        [e setBuffer:c offset:0 atIndex:2];
+        [e setBytes:P length:sizeof(P) atIndex:3];
+        [e dispatchThreadgroups:MTLSizeMake((N+31)/32, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+        [e endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -5;
+        memcpy(C, [c contents], (size_t)M*N*4);
+        return 0;
+    }
+}
+
 // mtl_probe_read_bw times a pure streaming read over `bytes` of device memory with the same
 // threadgroup shape the cooperative quantized matmul uses, and returns the best GPU seconds. It does
 // no dequantization, so comparing it against the real kernel separates "we are at the memory

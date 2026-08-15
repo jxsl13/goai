@@ -225,6 +225,7 @@ double mtl_probe_read_bw(double bytes, int reps);
 
 // Hand-written tiled simdgroup GEMM, for pricing a replacement of MPS.
 double mtl_probe_sg_gemm(int M, int K, int N, int reps);
+int mtl_check_sg_gemm(const float* A, const float* B, float* C, int M, int K, int N);
 
 // MPS GEMM timed with rotating weight buffers so none stays cache-resident.
 double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf);

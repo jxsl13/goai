@@ -2447,6 +2447,17 @@ func ProbeSplitKOccupancy() (p1, p2 int) {
 	return int(out[3]), int(out[4])
 }
 
+// CheckSGGemm runs the hand-written GEMM on real data so its result can be verified.
+func CheckSGGemm(a, b []float32, m, k, n int) ([]float32, error) {
+	c := make([]float32, m*n)
+	rc := C.mtl_check_sg_gemm((*C.float)(&a[0]), (*C.float)(&b[0]), (*C.float)(&c[0]),
+		C.int(m), C.int(k), C.int(n))
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: sg_gemm check failed (%d)", int(rc))
+	}
+	return c, nil
+}
+
 // ProbeSGGemm times the hand-written tiled simdgroup GEMM. It exists to price replacing MPS, not
 // to be used in the model path.
 func ProbeSGGemm(m, k, n, reps int) float64 {
