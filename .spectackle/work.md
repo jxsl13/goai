@@ -2362,3 +2362,46 @@ pp64 is 3.0x behind llama.cpp and every incremental lever measured this session 
 
   decode  : tg64 0.914x — parity, bandwidth-bound at 92% of the memory roofline
   prefill : pp64 0.329x — 3.0x behind, from 0.057x when this line of work began
+
+## R-01M024SWT9EJBRZSJJWJ5GCS16 Prefill budget does not add up: ~1.5-2.3 ms/layer unaccounted, larger than the expansion cost — and the GPU-time instrument does not cover the prefill submission path
+kind: research
+state: draft
+created: 2026-08-15
+
+Checked whether the prefill budget adds up before doing more kernel work. It does not, and the shortfall is LARGER than the expansion cost the last several rounds went into optimizing.
+
+## The accounting
+
+Per layer at M=64, from measured component rates:
+
+  expansion  0.99 ms   (4 projections, 178 GB/s measured)
+  GEMM       1.72 ms   (5.64 GFLOP at the measured 3286 GFLOP/s)
+  sum        2.71 ms
+
+  measured   4.16 ms/layer (91.5 ms for 64 tokens, best of 5)
+  UNACCOUNTED ~1.45 ms/layer
+
+At the slower 585.8 tok/s figure from the head-to-head the shortfall is 2.26 ms/layer. Either way it is comparable to or larger than the expansion.
+
+## Why this matters for the strategy
+
+llama.cpp does the same 5.64 GFLOP/layer in 1.64 ms = 3.45 TFLOP/s — essentially the SAME rate as MPS f32 GEMM (3286 GFLOP/s). Its advantage is not a faster multiply. It is that its per-layer time is almost exactly its GEMM time: no expansion, and no unaccounted remainder.
+
+So GoAI's prefill gap decomposes as roughly: expansion 0.99 ms (removable only by a quantized GEMM) plus an unattributed 1.45-2.26 ms (unknown). The last several rounds treated the expansion as the whole remaining problem. It is at most half.
+
+## What the profile does NOT show
+
+Per-kernel element counts across a full 64-token prefill are all small — QMatMulResident 25.3 Melem, BinaryN 13.7, RMSNorm 5.8, RoPEPair 2.0, Copy2D 2.0, Blit 0.3, MHAAt 0.09. No oversized operation of the kind that explained the decode case. Total dispatch count is ~333 for all 22 layers, so per-dispatch overhead at the measured ~2 us marginal is ~0.7 ms for the WHOLE prefill, not per layer.
+
+So the remainder is not a bloated op and not dispatch count. The candidates left are the GEMM running slower at the ACTUAL projection shapes than at the K=2048 N=5632 shape I measured it on, attention at sq=64, or host-side time between submissions.
+
+## Blocked on instrumentation
+
+LastGPUSeconds returned 0.00 for prefill: it reads the last buffer waited through mtl_recorder_wait, and the prefill path evidently does not submit through it. Attribution needs that instrument extended to whatever path StepNLast uses. That is the next concrete step, and it is small.
+
+Recording this rather than guessing, because the same shortcut — estimating a component rather than measuring it in situ — is what made the elementwise-over-the-whole-context bug invisible for several rounds, and what made the expansion look like the whole story here.
+
+## Standing
+
+  decode  : tg64 0.914x — parity
+  prefill : pp64 0.329x — 3.0x behind; roughly half the remaining gap is now known to be something other than weight expansion
