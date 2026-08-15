@@ -2361,6 +2361,25 @@ func SetSplitKChunks(n int) { C.mtl_set_splitk_chunks(C.int(n)) }
 // threadgroups — the mechanism that makes split-K win — at the cost of more partials to merge.
 func SetSplitKPerChunk(n int) { C.mtl_set_splitk_perchunk(C.int(n)) }
 
+// SetSplitKHalfDK selects the split-K pass-1 variant whose lane pairs each own half of dk, halving
+// per-thread register arrays at the cost of twice the loop iterations and one extra shuffle per key.
+func SetSplitKHalfDK(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_half(v)
+}
+
+// ProbeSplitKHalfOccupancy reports maxTotalThreadsPerThreadgroup for the half-dk pass-1 variant.
+func ProbeSplitKHalfOccupancy() int {
+	var out [8]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1
+	}
+	return int(out[5])
+}
+
 // SetWeightCacheGB sets the persistent expanded-weight cache budget in gigabytes, or disables it
 // with 0. It now DEFAULTS to an eighth of physical RAM capped at 4 GB rather than to off.
 //

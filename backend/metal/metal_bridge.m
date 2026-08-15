@@ -4377,6 +4377,62 @@ static NSString* const kMHADecodeSource =
      "    for (int d=0; d<DK; d++) PART[base+2+d]=acc[d];\n"
      "  }\n"
      "}\n"
+     "// Split-K pass 1, dk split across LANE PAIRS.\n"
+     "//\n"
+     "// The variant above holds q[64] and acc[64] per thread — 128 registers of arrays — which caps its\n"
+     "// pipeline at 384 threads/threadgroup and limits how many simdgroups a core can host. Attention is\n"
+     "// latency-bound (8-14%% of bandwidth, ~1%% of FLOP peak), so occupancy is the lever that is left.\n"
+     "//\n"
+     "// Here lanes 2i and 2i+1 cooperate on key i: lane 2i owns dims 0..31, lane 2i+1 owns dims 32..63.\n"
+     "// Per-thread arrays halve to q[32]+acc[32]. Sixteen keys are in flight per iteration instead of\n"
+     "// 32, so the loop runs twice as many iterations, and each key costs one extra simd_shuffle_xor to\n"
+     "// complete its dot product across the pair.\n"
+     "//\n"
+     "// Both lanes of a pair see the SAME s after that reduction, so m and l evolve identically on both\n"
+     "// and the online-softmax state stays consistent. The final merge therefore runs over lanes of\n"
+     "// matching parity — widths 2,4,8,16 rather than 1,2,4,8,16 — leaving lane 0 holding the merged\n"
+     "// low half and lane 1 the high half.\n"
+     "kernel void mha_dec_splitk_p1h(device const float* Q [[buffer(0)]],\n"
+     "                               device const float* K [[buffer(1)]],\n"
+     "                               device const float* V [[buffer(2)]],\n"
+     "                               device float* PART [[buffer(3)]],\n"
+     "                               constant int* P [[buffer(4)]],\n"
+     "                               constant float* FP [[buffer(5)]],\n"
+     "                               uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                               uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64, H=32;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  int slot=(int)(lane>>1), hlf=(int)(lane&1), off=hlf*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=16){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*K[j*dkv+kvOff+off+d];\n"
+     "    sp += simd_shuffle_xor(sp, 1);\n"
+     "    float sdot=sp*scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+off+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint w=2; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<2){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
      "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
      "                              device float* O [[buffer(1)]],\n"
      "                              constant int* P [[buffer(2)]],\n"
@@ -4477,6 +4533,9 @@ static id<MTLComputePipelineState> gMHADecode = nil;
 static id<MTLComputePipelineState> gMHADecode64 = nil;
 static id<MTLComputePipelineState> gMHADecode128 = nil;
 static id<MTLComputePipelineState> gSplitKP1 = nil;
+static id<MTLComputePipelineState> gSplitKP1H = nil;
+static int gSplitKHalf = 1;  // measured 2.9x on the kernel, 1.31x on long-context decode
+void mtl_set_splitk_half(int on) { gSplitKHalf = on ? 1 : 0; }
 static id<MTLComputePipelineState> gSplitKP2 = nil;
 static id<MTLBuffer> gSplitKPart = nil; static size_t gSplitKPartLen = 0;
 static int gSplitKEnabled = 1;
@@ -4489,7 +4548,7 @@ static int ensure_mha_decode(void) {
     if (gMHADecode != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kMHADecodeSource options:nil error:&err];
-    if (lib == nil) return -10;
+    if (lib == nil) { fprintf(stderr, "metal: mha_decode library build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
     id<MTLFunction> fn = [lib newFunctionWithName:@"mha_decode_f32"];
     if (fn == nil) return -11;
     gMHADecode = [gDevice newComputePipelineStateWithFunction:fn error:&err];
@@ -4501,6 +4560,9 @@ static int ensure_mha_decode(void) {
     id<MTLFunction> sp1 = [lib newFunctionWithName:@"mha_dec_splitk_p1"];
     id<MTLFunction> sp2 = [lib newFunctionWithName:@"mha_dec_splitk_p2"];
     if (sp1 != nil) gSplitKP1 = [gDevice newComputePipelineStateWithFunction:sp1 error:&err];
+    id<MTLFunction> sp1h = [lib newFunctionWithName:@"mha_dec_splitk_p1h"];
+    if (sp1h != nil) gSplitKP1H = [gDevice newComputePipelineStateWithFunction:sp1h error:&err];
+    else fprintf(stderr, "metal: mha_dec_splitk_p1h unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
     if (sp2 != nil) gSplitKP2 = [gDevice newComputePipelineStateWithFunction:sp2 error:&err];
     if (gSplitKP1 == nil || gSplitKP2 == nil)
         fprintf(stderr, "metal: split-k decode attention unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
@@ -4521,6 +4583,7 @@ int mtl_probe_pipeline_occupancy(int* out) {
     out[2] = gMHADecode128? (int)gMHADecode128.maxTotalThreadsPerThreadgroup: -1;
     out[3] = gSplitKP1 ? (int)gSplitKP1.maxTotalThreadsPerThreadgroup : -1;
     out[4] = gSplitKP2 ? (int)gSplitKP2.maxTotalThreadsPerThreadgroup : -1;
+    out[5] = gSplitKP1H ? (int)gSplitKP1H.maxTotalThreadsPerThreadgroup : -1;
     return 0;
 }
 
@@ -4603,7 +4666,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
             int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
             float SFP[1] = {scale};
             id<MTLComputeCommandEncoder> e1 = [scmd computeCommandEncoder];
-            [e1 setComputePipelineState:gSplitKP1];
+            [e1 setComputePipelineState:(gSplitKHalf && gSplitKP1H != nil) ? gSplitKP1H : gSplitKP1];
             [e1 setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
             [e1 setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
             [e1 setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
