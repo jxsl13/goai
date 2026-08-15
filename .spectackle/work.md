@@ -2778,3 +2778,54 @@ Two things that made this recoverable: the noise-floor guard existed, and llama.
   prefill : pp64 0.336x
 
 The L2-fit rule from the previous record still describes the isolated behaviour correctly; it just cannot be exploited through a shared output buffer. Exploiting it would need the GEMM to write contiguously and a separate gather, which costs more than it saves.
+
+## R-01M027KQN8E1KSXKH16CEAD4CQ Full-suite verification of the branch: two committed scratch probes removed, 28 packages green, both failures pre-existing and understood
+kind: research
+state: draft
+created: 2026-08-15
+
+Ran the full pure-Go suite over every package rather than the ones being worked on, which had not been done comprehensively on this branch. It found committed debris and confirmed the branch's real state.
+
+## Debris removed
+
+Two scratch probes were committed by accident: backend/metal/zz_shapes_internal_test.go (a GEMM shape sweep) and llamagpu/zz_pp2_test.go (a prefill wall-vs-GPU split). Neither asserts anything — zz_shapes has zero t.Error/t.Fatal calls and zz_pp2 only prints a timing line. Both questions they were written to answer are settled, and the answers live in doc comments and research records; what remained in the tree was the scaffolding.
+
+The repo's own zzz_*_internal_test.go files are a different, established convention (26 of them across backend/metal and backend/vulkan) and were left alone.
+
+## Branch state, verified
+
+103 commits, 68 files. Full pure-Go suite: 28 packages green, two failures, both understood:
+
+  internal/apicheck — CUDA-only doc debt (7 symbols), documented in PR #1072 and deliberately not silenced
+  nn — the pre-existing Muon F32 panic; this branch touches ZERO files in nn (empty diff against main) and the fix is PR #1071, open and mergeable
+
+So nothing on this branch is broken by this branch.
+
+## Session ledger
+
+Landed and validated:
+
+  decode attention          5.9-8.7x   runtime loop bound spilled per-thread arrays
+  flash + two-pass attention 4.6-6.4x  same defect, plus the parity test that had never covered it
+  decode elementwise        2.83x      ops ran over the whole ctx buffer for one row
+  M>1 cooperative gate      3.4x pp    kernels always handled M>1; the gate was artificial
+  Q6_K prompt path          1.10x pp   Q4_K_M is mixed; ffn_down is Q6_K on 10 of 22 layers
+  dequant+GEMM prefill      1.84x pp   expand once, dense GEMM above a measured crossover
+  cichange CI runner        —          the selective runner tested one package and exited 0
+
+Attempted, measured, reverted:
+
+  N_DST=4 quant kernel          loss on the down-projection shape
+  f16 expansion chain           1.08-1.39x, and NaN from f16 range overflow
+  matrix-unit quant kernel      correct and bit-exact, 0.77x of dq+gemm even after a 9.3x tile
+                                redesign and a 2.35x hoist — kept, disabled, documented
+  gate|up fusion                slower: doubles the expansion scratch
+  chunked expansion             0.77x: the isolated 1.13x used contiguous per-chunk outputs
+  A-staging removal             broke partial-M tiles; the parity test caught it
+
+## Standing
+
+  decode  : tg64 ~1.017x vs llama.cpp — parity, bandwidth-bound at 92% of the memory roofline
+  prefill : pp64 0.336x — from 0.057x when the prefill work began
+
+Every remaining prefill lever is measured and bounded; what is left are two scoped projects (a quantized GEMM that avoids expansion, and a real flash-attention kernel), not further increments. Four consecutive reverts on micro-optimizations is itself the signal that the incremental phase is over.
