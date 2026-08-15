@@ -56,6 +56,41 @@ func TestRunPropagatesFailure(t *testing.T) {
 	}
 }
 
+// The SAME propagation guarantee, invoked the way CI actually invokes it — with the
+// leading "--" separator. TestRunPropagatesFailure above passes the go-test args bare,
+// which is why it stayed green through the entire outage this test exists to prevent.
+//
+// flag.Parse stops at the first positional (base), so it never consumes the separator;
+// it reached Run as a literal argument and was forwarded into the command line. And
+// `go test -- -count=1 <pkgs>` does not test <pkgs>: everything after -- goes to the
+// test binary, the package list is swallowed, go test falls back to the package in the
+// working directory, and it EXITS 0. Every "run tests for the affected packages" step
+// therefore tested one package and reported success no matter what was broken — which
+// is how nn sat red on main across many green PRs (Muon F32 panic, MARS fast-path
+// drift, DyT FMA contraction, and the apicheck doc gaps).
+//
+// The failure mode is silence, so assert on both halves: a real nonzero exit, and the
+// separator absent from the emitted command line.
+func TestRunPropagatesFailureWithCIArgSeparator(t *testing.T) {
+	head := map[string]string{
+		"c/c.go":      "package c\n\nvar X = 1\n",
+		"c/c_test.go": "package c\n\nimport \"testing\"\n\nfunc TestBoom(t *testing.T) { t.Fatal(\"boom\") }\n",
+	}
+	dir, base, headRev := scratchRepo(t, modBase, head)
+	var buf bytes.Buffer
+	code := Run(defaultConfig(dir), dir, base, headRev, []string{"--", "-count=1"}, &buf)
+	out := buf.String()
+	if code == 0 {
+		t.Fatalf("a failing test must yield a nonzero exit even when the go-test args carry CI's leading %q separator; got 0, output:\n%s", "--", out)
+	}
+	if !strings.Contains(out, "boom") {
+		t.Error("go test failure output must be streamed, not swallowed")
+	}
+	if strings.Contains(out, "go test -- ") {
+		t.Errorf("the %q separator must be stripped before it reaches the go test command line, or the package list is silently ignored\n---\n%s", "--", out)
+	}
+}
+
 // §V16 tier-1 (§T587): docs-only → explicit "no tests to run", exit 0; and the
 // pre-execution report is byte-identical across runs (deterministic ordering).
 func TestRunNoneAndDeterminism(t *testing.T) {
