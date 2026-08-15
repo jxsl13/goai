@@ -461,6 +461,6 @@ WHEN a profile is taken alongside a benchmark, the agent SHALL pass -run =^$ and
 WHEN a profile attributes cost to individual accumulation lines inside one streaming loop, the agent SHALL treat the whole pass as the cost, not the lines; caching two of three accumulators in a memory-bound SVD sweep made it 30 to 50 percent SLOWER because the second pass doubled the traffic.
 
 ## SUPPRESSION-IS-EVIDENCE-READ-IT-BEFORE-TASKING-001
-WHEN a detector finding is promoted into a task or ADR, the loop SHALL reads the target line for an existing perfscan:ignore and weighs that justification before writing the item; this check has pre-empted 2 of 2 such items.
+WHEN a detector finding is promoted into a task or ADR, the loop SHALL read the target line for an existing perfscan:ignore and weigh that justification before writing the item; this check has pre-empted 2 of 2 such items.
 
 Rationale: T-01KYKSAF75FQGSFSQM9Z2RAJXQ named crossentropy math.Log, suppressed as one-per-row with the c-wide exp already vexp'd, and the code confirms 256 logs against 1048576 exps at 256x4096. ADR-01KYJYY74VE27BSEH9VGZSNFMK named the FA /l norm, suppressed as O(seq.dk) against an O(seq2.dk) body, and measurement gave 4.1 percent on one dtype of one kernel. Both were written from detector output without reading the site.
