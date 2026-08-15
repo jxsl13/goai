@@ -1246,3 +1246,31 @@ THE CHAIN IS NOW COMPLETE for the 7.14x gap to llama.cpp on TinyLlama-1.1B:
     quant matmul kernels
 
 CANDIDATE FOR THE FIRST TIME WORTH NAMING: wide loads. GoAI's kernels index the weight blob as individual uchar/byte reads; the achieved-bandwidth ordering says the cost scales with how many such accesses each weight needs. Staging a block through uint4/float4 reads and unpacking in registers is the standard remedy and is what the ordering predicts would help. It remains UNPROBED, and four candidates in this campaign have died on probe, so it should be bounded before it is built — but unlike those four it is the residual of an elimination rather than a guess.
+
+## R-01M01Q5T70FEDTY330ERTFN7GC Wide loads bounded at 1.34x: the quant kernels are per-weight issue-bound and need vectorizing, not tuning
+kind: research
+state: draft
+created: 2026-08-15
+
+PROBED AND BOUNDED. The wide-loads candidate is worth at most 1.34x, so it cannot close a 6.1x gap. Instrumentation reverted; nothing shipped.
+
+THE PROBE. Complement of the earlier ALU probe: hold grid shape, thread count, loop structure and arithmetic fixed and replace ONLY the weight load with a synthetic value, so every instruction except the memory access remains. Run on Q2_K, the format the previous record identified as worst (14.3 GB/s achieved).
+
+A FIRST ATTEMPT WAS INCONCLUSIVE AND IS RECORDED because the failure mode recurs. Driving the standalone gap benchmark — one op per submit — gave 0.91x with overlapping ranges. At ~258 us per measurement with a ~149 us submit floor, only ~110 us is kernel and the probe's effect was swamped. Re-running through the incremental (t16-t1)/15 harness, which cancels the floor, gave a clean signal. A probe on a kernel must be measured with the floor removed or it measures the floor.
+
+MEASURED, Q2_K cooperative, K2048 N2048, floor removed:
+  with real weight loads   41,106 ns/op
+  loads replaced by const  30,681 ns/op
+  ceiling 1.34x — weight loads are at most 25 percent of kernel time.
+
+COMPONENT CEILINGS NOW BOTH KNOWN:
+  remove ALL weight loads     1.34x   (loads <= 25 percent)
+  remove ALL unpack ALU       1.08x   (arithmetic <= 7 percent)
+  both, optimistically        1.45x
+Roughly two thirds of the kernel is NEITHER reading weights NOR unpacking them. What remains per element is the activation load, the fused multiply-add, the loop, and the per-row simd_sum — i.e. instruction issue for a body that processes ONE weight at a time.
+
+WHAT THAT MEANS, and it is the useful conclusion of this whole diagnostic arc: the gap is not a missing optimization in these kernels, it is their shape. Each lane handles one weight per iteration with about two loads and a few ALU ops; llama.cpp's Metal kernels process 4-16 weights per instruction through vector types. No tuning of the current body — wider weight loads included — reaches beyond about 1.45x, so closing 6.1x requires a kernel that is vectorized per weight, not an improved scalar one.
+
+THIS ALSO EXPLAINS THE BLOCK-SIZE ORDERING from the previous record. Achieved bandwidth rose 14.3 -> 51.0 GB/s from Q2_K to Q8_0 because denser formats need more instructions per weight while reading fewer bytes; if the bound were bytes the ordering would be reversed. Instruction issue per weight predicts exactly the observed order.
+
+STATUS OF THE ARC: host (12 percent), submit batching (optimal), attention (2 percent), weight traffic (not the bound), weight-load width (<=1.34x) and unpack arithmetic (<=1.08x) have each been measured and eliminated. The residual is per-weight instruction issue, and the remedy is a structural rewrite rather than a lever.
