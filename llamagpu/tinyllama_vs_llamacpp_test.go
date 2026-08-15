@@ -92,12 +92,14 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 		got, llamaCpp, src, got/llamaCpp, tps)
 
 	// Prompt processing, separately — tg64 does not show it. llama-bench pp64 measures 1778.75
-	// tok/s on this host. GoAI was 102 tok/s (17.4x behind) until the cooperative kernels were
-	// allowed to serve M>1; they index the row from group.y and were gated on M==1 for no reason
-	// the kernel required. That lifted prefill to ~343 tok/s (3.4x). Still 5.2x behind, because
-	// the cooperative kernel re-streams the weight per row: it is the DECODE shape applied M
-	// times, not a batched kernel that reads each weight once for the whole batch. Closing the
-	// rest needs a genuinely blocked M>1 kernel.
+	// tok/s on this host. GoAI was 102 tok/s until the cooperative kernels were allowed to serve
+	// M>1 (they index the row from group.y and were gated on M==1 for no reason the kernel
+	// required), which gave ~345. Expanding the Q4_K weight ONCE into a dense f32 [K][N] buffer and
+	// running a dense MPS GEMM above a measured batch-size crossover then took it to ~590-660.
+	//
+	// The remaining ~3x is the dequantization itself: it writes 44 MB per projection at 178 GB/s,
+	// close to this machine's memory roofline, so it cannot get much cheaper in f32. Expanding to
+	// f16 instead would halve that traffic and is the next lever.
 	long := make([]int, 64)
 	for i := range long {
 		long[i] = 1 + i%2000

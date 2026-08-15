@@ -2343,6 +2343,16 @@ func (r *Recorder) DequantQ4K(w *ResidentQWeight, o *DeviceBuffer) error {
 	return nil
 }
 
+// SetQ4KDequantGemm toggles the prompt-processing path (expand the Q4_K weight once, then a dense
+// GEMM) used above the measured batch-size crossover.
+func SetQ4KDequantGemm(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_dq_gemm(v)
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

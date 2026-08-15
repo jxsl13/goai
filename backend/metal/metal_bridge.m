@@ -2277,34 +2277,49 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 static NSString* const kDequantQ4KSource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
-     "// Dequantize a resident Q4_K weight [N][K] into a dense f32 buffer laid out [K][N], which is the\n"
-     "// operand order MPS GEMM wants for C[M,N] = A[M,K] * B[K,N]. One thread per 32-element sub-block.\n"
+     "// Dequantize a resident Q4_K weight [N][K] into a dense f32 [K][N] buffer — the operand order MPS\n"
+     "// GEMM wants for C[M,N] = A[M,K] * B[K,N].\n"
+     "//\n"
+     "// The transpose is staged through threadgroup memory. Writing Out[(k0+l)*N+n] directly from the\n"
+     "// thread that owns sub-block (n, s) strides by N between consecutive stores and does not coalesce:\n"
+     "// that form measured 57 GB/s, about a third of what this machine sustains. Here each of 32 threads\n"
+     "// dequantizes one row's 32-element sub-block into sT[n_local][k_local], and after a barrier the\n"
+     "// same 32 threads walk k and write 32 CONSECUTIVE n per step.\n"
      "kernel void dequant_q4k_t(device const uchar* W [[buffer(0)]],\n"
      "                          device float* Out [[buffer(1)]],\n"
      "                          constant int* P [[buffer(2)]],\n"
-     "                          uint gid [[thread_position_in_grid]]) {\n"
+     "                          uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                          ushort t [[thread_index_in_threadgroup]]) {\n"
      "  int K=P[0], N=P[1];\n"
-     "  int subPerRow=K/32;\n"
-     "  int total=N*subPerRow;\n"
-     "  if ((int)gid>=total) return;\n"
-     "  int n=(int)gid/subPerRow, s=(int)gid%subPerRow;\n"
-     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
      "  int rowBytes=(K/256)*144;\n"
-     "  int base=n*rowBytes + sb*144;\n"
-     "  ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
-     "  ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
-     "  float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
-     "  int sbase=base+4, qbase=base+16;\n"
-     "  int is=pr*2+hf, sc, mn;\n"
-     "  if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
-     "  else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
-     "  float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
      "  int k0=sb*256 + pr*64 + hf*32;\n"
-     "  int qb=qbase+pr*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*144;\n"
+     "    ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "    ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "    float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "    int sbase=base+4, qbase=base+16;\n"
+     "    int is=pr*2+hf, sc, mn;\n"
+     "    if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "    int qb=qbase+pr*32;\n"
+     "    for (int l=0;l<32;l++){\n"
+     "      uchar qbyte=W[qb+l];\n"
+     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      sT[(int)t*32+l] = dl*(float)nib - ml;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int l=0;l<32;l++) sT[(int)t*32+l]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  for (int l=0;l<32;l++){\n"
-     "    uchar qbyte=W[qb+l];\n"
-     "    int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
-     "    Out[(k0+l)*N + n] = dl*(float)nib - ml;\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+l)*N + nn] = sT[(int)t*32+l];\n"
      "  }\n"
      "}\n";
 
@@ -2318,6 +2333,28 @@ static int ensure_dequant_q4k(void) {
     if (fn == nil) return -11;
     gDequantQ4K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
     return gDequantQ4K != nil ? 0 : -12;
+}
+
+// Scratch for the dequantized weight, grown on demand and reused. One buffer is enough: compute
+// encoders in a command buffer execute in submission order, so dequant(A) -> gemm(A) -> dequant(B)
+// -> gemm(B) never races. It is sized by the largest projection the model uses (for TinyLlama the
+// column-fused gate|up at K=2048 N=11264, ~92 MB) and every layer reuses it.
+static id<MTLBuffer> gDQScratch = nil;
+static size_t gDQScratchLen = 0;
+static id<MTLBuffer> dq_scratch(size_t bytes) {
+    if (gDQScratch != nil && gDQScratchLen >= bytes) return gDQScratch;
+    gDQScratch = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    gDQScratchLen = (gDQScratch != nil) ? bytes : 0;
+    return gDQScratch;
+}
+
+// q4k_dq_gemm_eligible: above this batch size, expanding the weight once and running a dense GEMM
+// beats re-deriving it per query row. Measured crossover on an M2 Pro is M~18 (M=16 0.90x,
+// M=24 1.34x, M=32 1.81x, M=64 2.56x, M=256 5.37x); 24 keeps a margin.
+static int gDQGemmEnabled = 1;
+void mtl_set_q4k_dq_gemm(int on) { gDQGemmEnabled = on ? 1 : 0; }
+static int q4k_dq_gemm_eligible(int M, int K, int qt) {
+    return gDQGemmEnabled && qt == 12 && M >= 24 && K % 256 == 0 && ensure_dequant_q4k() == 0;
 }
 
 // mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
@@ -2334,10 +2371,7 @@ int mtl_recorder_dequant_q4k(void* rec, void* wbuf, void* oh, int K, int N) {
     [enc setBuffer:wb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
     [enc setBytes:P length:sizeof(P) atIndex:2];
-    int total=N*(K/32);
-    NSUInteger tg = gDequantQ4K.maxTotalThreadsPerThreadgroup;
-    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
-    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
     [enc endEncoding];
     return 0;
 }
@@ -2488,8 +2522,19 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
-    // Matrix-unit path for a deep enough batch (prompt processing). One 8x8 output tile per
-    // simdgroup; the 8x256 weight tile is dequantized once and reused across the tile's rows.
+    // Prompt-processing path: expand the weight once into scratch, then a dense GEMM.
+    if (q4k_dq_gemm_eligible(M, K, qtype)) {
+        size_t need = (size_t)K * (size_t)N * sizeof(float);
+        id<MTLBuffer> scratch = dq_scratch(need);
+        if (scratch != nil) {
+            if (mtl_recorder_dequant_q4k(rec, wbuf, (__bridge void*)scratch, K, N) == 0 &&
+                mtl_recorder_matmul(rec, xh, (__bridge void*)scratch, oh, M, K, N, 0) == 0) {
+                return 0;
+            }
+        }
+        // fall through to the quant kernel if either step could not be recorded
+    }
+    // Matrix-unit prototype (disabled by default; see the note on gQ4KMMEnabled).
     if (q4k_mm_eligible(M, K, qtype)) {
         id<MTLComputeCommandEncoder> me = [cmd computeCommandEncoder];
         [me setComputePipelineState:gQ4KMM];
