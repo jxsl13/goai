@@ -3138,3 +3138,49 @@ Both times the tell was the same — a suspiciously perfect number. 0.000e+00 ag
   prefill : 0.45x at n=64, 0.74x at n=256, 0.84x at n=1024
 
 The deficit is now concentrated at SHORT prompts, where fixed weight expansion dominates (0.99 of 3.79 ms/layer at n=64) and attention is negligible — the opposite end from where the last several rounds were spent, and the remaining lever there is the quantized GEMM that avoids expansion entirely.
+
+## R-01M029RXMRFV6A1AVT43BMW0AH Standing measured across all prompt lengths in one session: decode 0.97x, prefill 0.46x at n=64 rising to 0.84x at n=1024 — the deficit has a shape, not a value
+kind: research
+state: draft
+created: 2026-08-15
+
+Measured GoAI against llama.cpp across every prompt length in one session, which had never been done coherently. It establishes the standing and shows the deficit has a shape, not a value.
+
+## Standing
+
+M2 Pro, TinyLlama-1.1B Q4_K_M, both sides measured in the same session:
+
+           GoAI   llama.cpp   ratio
+  pp64    807.5     1767.4    0.46
+  pp256  1586.4     2122.5    0.75
+  pp512  1749.2     2195.1    0.80
+  pp1024 1789.8     2120.5    0.84
+  tg64    171.0      177.2    0.97
+
+llama.cpp is essentially FLAT across prompt lengths. GoAI climbs. The two curves have different shapes, which a single number cannot express and which is exactly what a single number hid.
+
+## What the shape means
+
+Decode is at parity, and both implementations are bandwidth-bound at ~92% of the memory roofline, so that is the hardware ceiling rather than a stopping point.
+
+Prefill's remaining deficit is concentrated at SHORT prompts. At n=64 the fixed weight expansion is 0.99 of a 3.79 ms layer, 26%, and attention is 5%. At n=1024 expansion has amortized to ~4% while attention — after the flash kernel — is ~18%. The dominant term inverts across the range, which is why every attempt to characterize "the prefill gap" as one thing kept producing measurements that did not reproduce.
+
+## The methodological result
+
+Reporting a single number from the length llama-bench happens to default to was wrong in both directions: too pessimistic about the implementation at length, and blind to which term dominated. The harness inherited the incumbent's operating point, and every downstream decision inherited it too — attention was deprioritized twice on a figure that was correct at n=64 and irrelevant at n=1024.
+
+The harness now reports pp64, pp256 and pp1024.
+
+## Session arc
+
+  decode      24.11 -> 171.0 tok/s     7.1x
+  pp64          102 ->  807.5 tok/s    7.9x
+  pp1024          — ->  1789.8 tok/s
+
+against llama.cpp: decode 0.14x -> 0.97x, pp64 0.057x -> 0.46x, pp1024 0.43x -> 0.84x.
+
+## What remains
+
+Short-prompt prefill, where expansion dominates and the only lever is a quantized GEMM that avoids expansion entirely — measured hard, with the matrix-unit attempt at 1377 GFLOP/s still 2.75x behind expand-then-GEMM.
+
+Long-prompt prefill, where attention is back to being the largest single term at ~18% and the flash kernel sits at 26.8% of FLOP peak against MPS GEMM's 66%. The scalar-prologue ratio is 8:1 and further widening is blocked by threadgroup memory, so the next step there is reducing staging bytes (f16 K/V tiles) rather than more simdgroups.
