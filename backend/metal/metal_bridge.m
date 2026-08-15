@@ -2735,8 +2735,19 @@ static NSString* const kQMatMulQ5KSource =
      "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
      "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
      "    int qb=qsB+pr*32; int xk=mi*K + sb*256 + pr*64 + hf*32;\n"
-     "    for (short l=lbase; l<lbase+8; l++){ uchar qbyte=W[qb+l]; int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
-     "      int hb=(W[qhB+l]&um)?16:0; acc += X[xk+l]*(dl*(float)(nib+hb) - ml); }\n"
+     // Vectorized: this lane owns 8 CONSECUTIVE l, so its 8 qs bytes and 8 qh bytes are
+     // each two aligned uints (block stride 176, qs at +48, qh at +16, pr*32 and
+     // lbase=(lane%4)*8 are all multiples of 4). Two uint loads replace eight byte
+     // loads on each plane; the extracted values and their accumulation order are
+     // unchanged, so results stay bit-identical to the byte-wise form.
+     "    device const uint* qs4=(device const uint*)(W+qb+lbase);\n"
+     "    device const uint* qh4=(device const uint*)(W+qhB+lbase);\n"
+     "    uint qw0=qs4[0], qw1=qs4[1], hw0=qh4[0], hw1=qh4[1];\n"
+     "    for (short t=0; t<8; t++){\n"
+     "      uint qword=(t<4)?qw0:qw1; uint hword=(t<4)?hw0:hw1; short sh=8*(t&3);\n"
+     "      uchar qbyte=(uchar)((qword>>sh)&0xFFu); uchar hbyte=(uchar)((hword>>sh)&0xFFu);\n"
+     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      int hb=(hbyte&um)?16:0; acc += X[xk+lbase+t]*(dl*(float)(nib+hb) - ml); }\n"
      "  }\n"
      "  float total=simd_sum(acc);\n"
      "  if (lane==0) O[mi*N+ni]=total;\n"
