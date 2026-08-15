@@ -368,6 +368,17 @@ func (kc *kernelCache) column(i int) []float64 {
 	// 3.51 ms against our 7.3 ms serial and 5.66 ms on twelve cores. Same algorithm, same step
 	// count, ~2.1x per-core. The likeliest cause is the kernel inner loop and math.Exp against C's
 	// vectorised libm, which is a Go-runtime limit rather than an algorithmic one.
+	//
+	// ATTEMPTED AND REVERTED: a fast exp for the x<=0 domain (range reduction plus a degree-6
+	// series, ~1.6e-7 relative error, verified against math.Exp). The reasoning looked safe —
+	// kernel values live in [0,1] and the SMO stopping tolerance is 1e-3, so 1e-7 is four orders
+	// below what the solver tests. Measured, the fit went from 5.79 ms to 9452 ms: 1600x SLOWER,
+	// which is the solver running to maxIter instead of converging in 78 steps.
+	//
+	// So the kernel accuracy budget is NOT the stopping tolerance. Second-order working-set
+	// selection compares objective decreases computed from K entries, and inconsistencies far below
+	// tol are enough to keep picking pairs that do not make progress. math.Exp's accuracy is load-
+	// bearing here, and swapping in an approximation is not a free speed/precision trade.
 	parallelBands(kc.n, len(xi), func(lo, hi int) {
 		for t := lo; t < hi; t++ {
 			col[t] = kc.m.kernel(xi, kc.x[t])
