@@ -2692,3 +2692,52 @@ That is a specific instance of a general trap this session has hit repeatedly: a
   prefill : pp64 0.336x
 
 The two extra-projection sources are now identified precisely. Fusing gate|up is measured and rejected. Fusing qkv on the 10 mixed-type layers would require expanding Q4_K and Q6_K into one buffer — the concatenation trick does not apply across quant types — which is a materially bigger change than qfused's byte append, and on this evidence would likely lose for the same scratch-size reason.
+
+## R-01M026QJNSEE8TW9FRW8ETYSZQ Expansion scratch should be chunked to the largest tile that fits L2 (~22 MB): 1.13x measured, and it retroactively predicts the gate|up fusion loss
+kind: research
+state: draft
+created: 2026-08-15
+
+The gate|up fusion lost because it doubled the expansion scratch. Testing that directly gives a principled rule and a bounded next optimization.
+
+## Measurement
+
+Expand-then-GEMM for K=2048, N=5632, M=64, with the expansion split along N so the scratch is reused per chunk:
+
+| chunks | scratch | total |
+|---|---|---|
+| 1 | 44.0 MB | 1.281 ms |
+| 2 | 22.0 MB | 1.135 ms |
+| 4 | 11.0 MB | 1.420 ms |
+| 8 | 5.5 MB | 1.637 ms |
+| 16 | 2.8 MB | 3.246 ms |
+
+## What it means
+
+Cache residency alone is NOT the explanation, which is what I expected going in. At 2.8 MB the expanded tile is certainly resident and it is 2.5x SLOWER, because N=352 GEMMs are launch- and occupancy-limited — the same small-N penalty the earlier dispatch-size sweep measured (N=2048 124 GB/s vs N=16384 170 GB/s).
+
+The optimum is the LARGEST chunk that still fits L2. An M2 Pro has ~24 MB shared L2, and 22 MB wins while 44 MB does not. That is a rule with a machine constant in it, not a universal.
+
+  chunk so the expanded tile is <= ~20 MB, and no smaller
+
+## Applying it to the real projections
+
+  qkv     K=2048 N= 2560  20.0 MB  -> 1 chunk (already fits)
+  o       K=2048 N= 2048  16.0 MB  -> 1 chunk (already fits)
+  gate|up K=2048 N=11264  88.0 MB  -> 4 chunks of N=2816
+  down    K=5632 N= 2048  44.0 MB  -> 2 chunks of N=1024
+
+Only two of the four projections would chunk at all. Taking the measured 1.13x on those two, and their share of the per-layer expansion+GEMM (gate|up and down are ~1.9 ms of the 2.69), the expected end-to-end effect is roughly 1.08x on prefill — real but modest.
+
+This also retroactively explains the fusion result exactly: fusing gate|up made ONE 88 MB expansion where unfused made two 44 MB ones. Both exceed L2, but the fused one exceeds it by more, and the better GEMM shape did not compensate. The rule predicts that outcome, which is a check on the rule rather than a coincidence.
+
+## Implementation cost
+
+Chunking needs the GEMM to write a column range of C. MPSMatrixDescriptor takes rowBytes, so an MPSMatrix over the full C with rowBytes=N*4 and offset=n0*4 is a valid view of columns [n0, n0+CN) — the plumbing is an offset parameter on the matmul entry point, not a new kernel.
+
+Not built this round. It is a bounded change with a measured 1.08x expectation, and it should be judged against the same end-to-end harness rather than the component number, since component numbers have predicted wins this session that the system did not deliver — the gate|up fusion being the most recent.
+
+## Standing
+
+  decode  : tg64 1.017x — parity
+  prefill : pp64 0.336x
