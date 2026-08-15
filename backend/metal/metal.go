@@ -2361,6 +2361,13 @@ func WeightCacheStats() (hits, misses int, bytes float64) {
 	return int(h), int(m), float64(b)
 }
 
+// ProbeReadBandwidth times a pure streaming read over the given number of bytes using the same
+// threadgroup shape as the cooperative quantized matmul, and returns the best GPU seconds. Compared
+// against the real kernel it separates a memory ceiling from a dequant-ALU limit.
+func ProbeReadBandwidth(bytes float64, reps int) float64 {
+	return float64(C.mtl_probe_read_bw(C.double(bytes), C.int(reps)))
+}
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.

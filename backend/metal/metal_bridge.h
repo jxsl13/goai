@@ -220,6 +220,9 @@ double mtl_last_gpu_seconds(void);
 // per-GEMM GPU seconds over its own private buffers. <0 on failure.
 double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
 
+// Pure streaming read over `bytes`, same threadgroup shape as the cooperative quantized matmul.
+double mtl_probe_read_bw(double bytes, int reps);
+
 // f16 short-prompt weight path (Q4_K only). On by default, gated to M <= max_m.
 void mtl_set_q4k_dq_gemm_f16(int on);
 void mtl_set_q4k_dq_gemm_f16_max_m(int m);

@@ -1983,6 +1983,68 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     return 0;
 }
 
+// mtl_probe_read_bw times a pure streaming read over `bytes` of device memory with the same
+// threadgroup shape the cooperative quantized matmul uses, and returns the best GPU seconds. It does
+// no dequantization, so comparing it against the real kernel separates "we are at the memory
+// ceiling" from "we are limited by the dequant ALU". Returns <0 on failure.
+static NSString* const kReadBWSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void read_bw(device const uint4* W [[buffer(0)]],\n"
+     "                    device uint* O [[buffer(1)]],\n"
+     "                    constant int* P [[buffer(2)]],\n"
+     "                    uint tg [[threadgroup_position_in_grid]],\n"
+     "                    ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int n4=P[0], per=P[1];\n"
+     "  uint4 acc=uint4(0);\n"
+     "  int base=(int)tg*per;\n"
+     "  for (int i=(int)t; i<per; i+=64){ int j=base+i; if (j<n4) acc^=W[j]; }\n"
+     "  if ((acc.x|acc.y|acc.z|acc.w)==0xFFFFFFFFu) O[tg]=1;\n"
+     "}\n";
+static id<MTLComputePipelineState> gReadBW = nil;
+double mtl_probe_read_bw(double bytes, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        if (gReadBW == nil) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [gDevice newLibraryWithSource:kReadBWSource options:nil error:&err];
+            if (lib == nil) { fprintf(stderr, "metal: read_bw build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -2.0; }
+            id<MTLFunction> fn = [lib newFunctionWithName:@"read_bw"];
+            if (fn == nil) return -3.0;
+            gReadBW = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+            if (gReadBW == nil) return -4.0;
+        }
+        size_t nb = (size_t)bytes;
+        id<MTLBuffer> wBuf = [gDevice newBufferWithLength:nb options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> oBuf = [gDevice newBufferWithLength:65536 options:MTLResourceStorageModePrivate];
+        if (wBuf == nil || oBuf == nil) return -5.0;
+        int n4 = (int)(nb / 16);
+        int groups = 1408;                 // same threadgroup count the N=5632 coop dispatch uses
+        int per = (n4 + groups - 1) / groups;
+        int P[2] = {n4, per};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            for (int i = 0; i < reps; i++) {
+                id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+                [enc setComputePipelineState:gReadBW];
+                [enc setBuffer:wBuf offset:0 atIndex:0];
+                [enc setBuffer:oBuf offset:0 atIndex:1];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
+                [enc dispatchThreadgroups:MTLSizeMake(groups,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+                [enc endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -6.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 // mtl_probe_gemm_dtype times an MPS GEMM [M,K]x[K,N] in f16 or f32 and returns the best
 // per-GEMM GPU seconds. Self-contained (allocates its own private buffers, contents irrelevant to
 // timing) so the f16 question can be answered before any of the f16 dequant/convert plumbing is
