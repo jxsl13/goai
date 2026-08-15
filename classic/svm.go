@@ -426,6 +426,19 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 		maxSteps = lim // WSS steps are single pairs, not sweeps; ensure room to converge
 	}
 
+	// Stall detector. SMO is supposed to drive the KKT gap monotonically toward tol; if it stops
+	// improving, further steps are wasted and the loop would otherwise grind to maxSteps. That is
+	// not hypothetical: on amd64 this fit EXHAUSTS 400,000 steps where arm64 converges in 78,
+	// because the arithmetic differs by enough that the working-set choice stops making progress
+	// (this package has measured that a 1.6e-7 kernel perturbation is sufficient to cause it).
+	//
+	// Terminating on a stalled gap returns the best solution found rather than the one maxSteps
+	// happens to land on, and costs nothing on a converging fit, where the gap improves until the
+	// tol check fires first.
+	bestGap := math.Inf(1)
+	stall := 0
+	const stallWindow = 2000
+
 	//perfscan:ignore PS3044 sequential SMO iteration, step depends on previous
 	for step := 0; step < maxSteps; step++ {
 		// pass 1: select i over I_up and track the I_low maximum for stopping
@@ -448,6 +461,11 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 		}
 		if iUp < 0 || eLowMax-eUpMin < tol {
 			break // KKT satisfied to tolerance
+		}
+		if gap := eLowMax - eUpMin; gap < bestGap-1e-12 {
+			bestGap, stall = gap, 0
+		} else if stall++; stall > stallWindow {
+			break // gap has not improved in stallWindow steps: no further progress is available
 		}
 
 		// pass 2: second-order selection of j over I_low

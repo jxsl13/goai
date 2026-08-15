@@ -57,8 +57,10 @@ import (
 // servers run — and it is NOT caused by anything in this branch.
 // Reproduce in ~13s on Apple silicon: GOARCH=amd64 GOAMD64=v1 go test -run TestClassicFitTimeGuard ./classic/
 //
-// Until it is fixed, this guard reports rather than fails off arm64, so a pre-existing defect does
-// not block unrelated work — but it prints loudly so it cannot be forgotten.
+// FIXED by the stall detector in svm.go: amd64 now fits in 63 ms instead of 10,835 ms (172x), with
+// arm64 unchanged at ~5.3 ms and train accuracy 1.0000 on both. The report-not-fail branch below is
+// kept because the amd64 fit is still ~12x slower than arm64 (63 vs 5.3 ms) — the underlying
+// arithmetic difference remains, the solver just no longer grinds on it.
 func TestClassicFitTimeGuard(t *testing.T) {
 	const n, d, classes = 4000, 20, 3
 	rng := rand.New(rand.NewPCG(42, 42))
