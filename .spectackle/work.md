@@ -802,6 +802,7 @@ choice: Keep 512 - preserve the exact trees the frozen digest pins
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
 ## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
 ## R-01M01DYT2FF5JB3JTDWRST33AP Classic scorecard refreshed vs sklearn 1.9.0: DecisionTree now 5.4x AHEAD; SVC_rbf the one loss; slab cache rejected
+## R-01M01E5JSFFD8VZC2VNAC7WPYB CORRECTION: the n=1000 serial-vs-parallel claim was a warmup artifact; grain 1<<14 also rejected
 kind: research
 state: draft
 created: 2026-08-15
@@ -876,3 +877,24 @@ WHY IT FAILED, and the number that kills the premise: the baseline allocates onl
 STANDING LESSON, consistent with A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001: read the alloc COUNT and BYTES before reading an allocator profile share as an opportunity. B/op and allocs/op were already in the benchmark output and would have refuted the premise before any code was written.
 
 WHAT REMAINS FOR SVC, unmeasured: the kernel evaluates ||a-b||^2 directly per pair with a scalar math.Exp. libsvm precomputes ||x||^2 and uses ||a-b||^2 = ||a||^2 + ||b||^2 - 2a.b, which turns a column into one GEMV plus a batched exp - fewer flops per dim and a vectorizable exp. That is NOT bit-identical (different rounding), so it is a PROC-007 question and would need the SVC golden parity re-established. Given math.archExp is 10.3 percent and the whole column path 20.5 percent of the serial profile, the ceiling on that lever is well under the 1.61x needed to reach sklearn; it should be bounded by a probe before anyone builds it.
+CORRECTION to R-01M01DYT2FF5J and to PR 1066. One claim in that record is WRONG and is withdrawn here; a follow-up optimization it suggested is also rejected. No code changed in either investigation; classic/ is byte-identical to main.
+
+THE WITHDRAWN CLAIM. R-01M01DYT2FF5J stated: "At n=1000 it does NOT [pay off]: serial is 1.59x FASTER there (1.33 ms against 2.12 ms), so classicBandGrain is mis-calibrated for small n. That is a real, separable finding." It is not a finding. The 2.12 ms was the FIRST sample of a benchmark run and the 1.33 ms was a warm sample of a different run, so the comparison was cold-against-warm.
+
+REMEASURED, interleaved, n=1000 only, -benchtime=100x -count=5, three alternations, medians taken with the first sample of each run discarded as warmup:
+  parallel  1348686 ns
+  serial    1359648 ns
+Serial is 0.8 percent SLOWER, i.e. the two are identical within noise. There is no small-n penalty and classicBandGrain is not mis-calibrated at n=1000.
+
+HOW THE ERROR HAPPENED, because the mechanism is reusable: Go benchmarks report every -count sample, and the first is consistently high here (1.55-1.75 ms against a 1.30-1.36 ms warm level, so 20-35 percent). Reading a median across all samples of one variant while comparing against a specific sample of another silently mixes warm and cold. Every other measurement in this session took medians over interleaved runs, which is what made them survive; this one did not.
+
+THE REJECTED FOLLOW-UP. A clean grain sweep at n=4000 suggested 1<<14 beat the current 1<<13 by 2.6 percent (5127983 against 5263524 ns, tight non-overlapping triples). It does not survive interleaving. Interleaved, -benchtime=80x -count=4, three alternations:
+  1<<13 median 6148526 ns   range 5278754-7077743
+  1<<14 median 6065477 ns   range 5051126-7944670
+1.4 percent apart with ranges spanning roughly 57 percent and overlapping almost entirely. Rejected. The sweep and the interleaved run also disagree on absolute level (5.2 against 6.1 ms for the same code), so the host drifted between them - which is exactly the condition interleaving exists to defeat and a plain sweep cannot.
+
+WHAT SURVIVES from R-01M01DYT2FF5J: the refreshed scorecard against sklearn 1.9.0 (DecisionTree 5.39x, RandomForest100 12.31x/4.23x, GradientBoosting100 16.14x, GaussianNB 2.21x, SVC_rbf 1.61x BEHIND, KNN_fit artifact), the correction that GoAI now leads DecisionTree rather than trailing it, the serial profile split, and the rejected slab cache with the allocs/op reasoning that refuted it. Those were all interleaved or single-shot facts, not cold-warm comparisons.
+
+STANDING RULE CANDIDATE, stated but not yet filed as a rule because one instance is thin evidence: discard the first sample of every Go benchmark run before comparing, or compare only medians of interleaved runs of both variants. A -count=N series is N samples of which the first is not comparable to the rest.
+
+NET FOR SVC: no change is justified. classicBandGrain stays at 1<<13, the fan-out stays, and the 1.61x deficit to libsvm is untouched. The only bounded lever remains the libsvm norm-expansion kernel, whose ceiling is capped by archExp at 10.3 percent and the whole column path at 20.5 percent of the serial profile - well under the 1.61x needed - so it should be probe-bounded before it is built.
