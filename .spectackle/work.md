@@ -967,3 +967,30 @@ WHAT THE MUTATION PROBES CAUGHT, because this is the transferable part. A Metal 
 REJECTED ALONG THE WAY, both recorded: an M-blocked mat-mat kernel for prefill (2.2-6.3x SLOWER — it traded 8x fewer weight reads for 8x fewer threads, and the kernel is occupancy-bound not bandwidth-bound), and the prefill lever generally, bounded by roofline probes at 1.41x for dequant ALU and 1.67x for perfect weight reuse.
 
 NEXT: the same defect shape should be checked on CUDA, which is the parallel worker's lane and was not touched here.
+
+## R-01M01M2PETFG2SCMJVBCK9SNG7 REJECTED Vulkan M=1 GEMV: 3.9 percent slower — the wasted tile threads were buying occupancy
+kind: research
+state: draft
+created: 2026-08-15
+
+REJECTED BY MEASUREMENT, and it corrects R-01M01... the f32 GEMM class-audit finding from the previous iteration. Candidate code removed; backend/vulkan is byte-identical apart from the probe benchmark, which stays.
+
+WHAT WAS BUILT: matmul_gemv.comp, an M=1 specialization of the tiled f32 GEMM. matmul.comp computes a 16x16 output tile with a 16x16 workgroup, so at M=1 only the ty==0 row has real data and 15/16 of the arithmetic is discarded. The specialization gave each thread one output column walking K, with coalesced b[k*N+col] reads, plus full plumbing: vk_recorder_gemv with its own ceil(N/256) dispatch, SetGEMV control, embedded SPIR-V.
+
+CORRECTNESS WAS PERFECT AND IS NOT THE POINT. Bit-identical to the tiled kernel — 0.000e+00 across all five shapes — because both accumulate in ascending k with the same additions in the same order. That exact-zero is the signature that was VACUOUS on Metal Q8_0, so it was probed rather than trusted: perturbing the accumulate turns the test red at 9.981e-04 and transposing the B index at 2.230e+01, so the kernel genuinely ran and the bit-identity is real.
+
+MEASURED, interleaved A/B via SetGEMV, six alternations, -benchtime=200x -count=2, K2048,N2048:
+  gemv  median 1088170 ns   range  823489-1517943
+  tiled median 1047505 ns   range  893321-1093654
+The specialization is 3.9 percent SLOWER, with heavily overlapping distributions. Eliminating 15/16 of the arithmetic bought nothing.
+
+WHY, and this is the correction. The previous record called the M=1 case "tile-waste-bound" and read 15.3 GB/s against ~200 GB/s as headroom. Wrong diagnosis. Thread counts at M=1, K=N=2048:
+  tiled: ceil(N/16) x ceil(M/16) = 128 workgroups x 256 = 32768 threads
+  gemv : ceil(N/256)             =   8 workgroups x 256 =  2048 threads
+The specialization has SIXTEEN TIMES FEWER threads in flight. The tiled kernel's "wasted" 15/16 of threads are exactly what supplies the occupancy that hides memory latency; removing the waste removes the latency hiding with it. Neither kernel saturates bandwidth because both are latency-bound, not bandwidth-bound.
+
+SECOND CONFIRMATION OF THE SAME PRINCIPLE. R-01M01DD2A5ER9 rejected a Metal M-blocked mat-mat kernel for the identical reason: it traded 8x fewer weight reads for 8x fewer threads and came out 2.2-6.3x slower. Two independent attempts, two backends, same failure mode — on these GPUs, at these shapes, REDUNDANT WORK IS CHEAPER THAN LOST PARALLELISM. That is the opposite of the intuition that drove both attempts, and it is now the prior for any future "eliminate the wasted work" proposal here.
+
+WHAT THE COOPERATIVE QUANT KERNELS DID DIFFERENTLY, and why they won where these lost: they INCREASED thread count. One thread per output row became one simdgroup or workgroup per output row — 32x or 64x MORE threads, not fewer. The 14 successful kernels and the 2 rejected ones separate cleanly on that axis, not on how much redundant work they removed.
+
+STILL UNTESTED: a split-K GEMV that keeps thread count high by giving each output column several workgroups and combining them, which needs atomics or a second pass. It is the only shape not refuted, and the two failures above are reason to bound it by probe before building it.
