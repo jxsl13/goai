@@ -2405,3 +2405,57 @@ Recording this rather than guessing, because the same shortcut — estimating a 
 
   decode  : tg64 0.914x — parity
   prefill : pp64 0.329x — 3.0x behind; roughly half the remaining gap is now known to be something other than weight expansion
+
+## R-01M025E3E8ETVANGJ2TXK7AD5Y Q4_K_M is a MIXED file: ffn_down is Q6_K on 10 of 22 layers and fell off the prefill fast path — routing it gives 1.10x, and an exact weight-level test settles what the matmul-level one cannot
+kind: research
+state: draft
+created: 2026-08-15
+
+The prefill budget not adding up led to a mixed-format blind spot: Q4_K_M is not all Q4_K, and the largest projection in half the layers was falling off the fast path.
+
+## The chain
+
+The previous record flagged ~1.45 ms/layer unaccounted. Extending the GPU-time capture to mtl_recorder_finish — prefill submits through THAT, not commit+wait, which is why LastGPUSeconds read 0.00 — gave the split:
+
+  n= 64: wall 91.57 ms  gpuBusy 89.40 ms  gpu 97.6%  host 2.18 ms  4.06 ms/layer
+  n=128: wall 141.88 ms gpuBusy 138.84 ms gpu 97.9%  host 3.04 ms  6.31 ms/layer
+
+So it is GPU work, not host. And it scaled with M, which rules out fixed overhead.
+
+Next candidate was my GEMM rate, measured at ONE shape (K=2048 N=5632). Re-measured at the four real projection shapes: 1.70 ms/layer at M=64 against the 1.72 estimated. The estimate was right; the GEMM is not the problem.
+
+That left "some projections are not on the fast path". Reading the tensor types out of the GGUF:
+
+  type 0  (F32)  x45   norms
+  type 12 (Q4_K) x135
+  type 14 (Q6_K) x21   = attn_v x10, ffn_down x10, output.weight
+
+ffn_down is the largest projection in a layer, and it is Q6_K on 10 of 22 layers. The prompt-processing path was gated on qt==12.
+
+## Fix and result
+
+dequant_q6k_t, same staged-tile transpose as the Q4_K variant.
+
+  pp64  698.1 / 699.9  ->  766.9 / 770.6 tok/s   1.10x, interleaved
+  tokens identical over 32 generated from a 32-token prompt
+
+## Correctness, and choosing a test that can settle it
+
+The matmul-level parity test shows 1.5e-4 (K=256) to 9.5e-4 (K=2048) against the SCALAR kernel — and that is the same order whether the reference is the scalar or the cooperative kernel, so it is accumulation order (MPS versus a sequential dot product), not the regrouping I first suspected.
+
+But a test with that noise floor cannot distinguish a wrong dequant from reassociation. TestQ6KDequantExact compares the expanded WEIGHTS against a CPU decode of the ggml block layout: 0.000e+00, exact. The matmul test then guards wiring and shapes at 1.5e-3, and the exact test guards the arithmetic.
+
+The general point: when a parity test's noise floor exceeds the error a bug would produce, add a test at a level where the answer is exact. Do not loosen the threshold and call it passing.
+
+## Two harness traps hit
+
+A pseudo-random byte fill puts the Q6_K block scale (a half at offset 208) into the NaN/Inf exponent range for some blocks. BOTH paths then produce NaN, and the comparison reports agreement — the same NaN-comparison hazard that made the f16 harness report zero error last round. Second occurrence in two rounds; the tests now write a valid scale explicitly.
+
+A shell string comparison of captured multi-line output reported DIVERGED when the token streams were in fact identical. Comparing parsed integers said 0 of 32 differing. Structured comparison, not string equality.
+
+## Standing
+
+  decode  : tg64 174.84 vs llama.cpp 171.95 = 1.017x  (inside its ~19% run-to-run spread; parity)
+  prefill : pp64 598.3 vs 1778.75 = 0.336x
+
+Still open: ~1.4 ms/layer of GPU work unattributed after this fix. Per-kernel element counts are all small and total dispatches are ~333 for the whole prefill, so it is neither a bloated op nor dispatch overhead. The next measurement should time the individual encoders inside one prefill command buffer rather than infer from component rates — the inference has now been wrong twice.
