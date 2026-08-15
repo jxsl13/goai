@@ -884,3 +884,29 @@ THE CORRECTION TO R-01M01CYGEBETM, which matters more than the failed candidate.
 WHAT REMAINS OPEN, honestly narrowed: the only surviving signal is 0.31 TFLOP/s effective at M=256 against a GPU with several TFLOP/s of f32. That is a compute-efficiency gap, not the traffic gap the earlier record described. The untested approach is threadgroup-memory tiling: a threadgroup cooperatively dequantizes a weight tile into shared memory and MANY threads covering many M rows reuse it, so weight reads drop WITHOUT dropping thread count. That is the one shape this experiment did not test and the only one whose failure mode is not already demonstrated. It is materially harder than the register-blocking tried here.
 
 METHOD NOTE: the correctness work was completed before the benchmark and cost nothing when the candidate was rejected - bit-identity, block-boundary shapes and the mutation probe all held. What failed was the performance hypothesis alone. Building the forced-off control first is what made the A/B a same-binary comparison and the refutation unambiguous.
+
+## R-01M01DJ74WF738NXP1A03K10MR M2 Q4_K prefill roofline: dequant ALU worth at most 1.41x, perfect weight reuse at most 1.67x
+kind: research
+state: draft
+created: 2026-08-15
+
+CEILING ESTABLISHED BY TWO CHEAP PROBES, after one expensive kernel failure. Both probes reverted; backend/metal is byte-identical to the branch. This closes the M2 prefill-quant-matmul arc with a bound rather than another candidate.
+
+WHY PROBE BEFORE BUILDING: R-01M01DD2A5ER9 rejected an M-blocked kernel that was correct, bit-identical and 2.2-6.3x SLOWER, because it traded threads for traffic and the kernel turned out to be occupancy-sensitive. That cost a full implementation to learn one bit of information. These two probes cost one line each and bound BOTH remaining levers.
+
+PROBE A - dequantization ALU. Keep every weight-byte load, the grid shape and the thread count; drop only the nibble select and scale reconstruction (acc += X*(float)qbyte instead of X*(dl*nib - ml)). This isolates the unpacking arithmetic.
+PROBE B - weight traffic. Keep the ALU, the grid and the thread count; set rowOff=0 so every thread reads the SAME weight row. Identical instruction and load COUNT, but the whole working set is 1152 bytes and stays L1-resident, i.e. perfect weight reuse. Outputs are wrong by construction; only the timing is read.
+
+MEASURED, K2048,N5632, 100x count=2, medians:
+     M   baseline   A no-dequant      B perfect-reuse
+     8     935674   734084  1.27x     707478  1.32x
+    64    5181642  3600288  1.44x    3134630  1.65x
+   256   19339916 13724966  1.41x   11570676  1.67x
+
+READING. Removing ALL dequantization arithmetic buys 1.41x at M=256. Giving the kernel PERFECT weight-cache behavior buys 1.67x. Those are ceilings, not estimates: no real kernel can beat free ALU or free memory. Any weight-sharing scheme - threadgroup-memory tiling included - targets the second lever and therefore cannot exceed 1.67x, and it must pay tiling overhead, barriers and the occupancy risk that already killed the register-blocked attempt.
+
+CONSEQUENCE FOR THE OPEN CANDIDATE. Threadgroup tiling is still the only shape whose failure mode is not already demonstrated, but its prize is now known to be at most 1.67x and realistically well under that. It is no longer justified by "prefill is 87x redundant" - that framing was wrong and has been corrected in R-01M01DD2A5ER9. Whether a hard shared-memory kernel is worth at most 1.67x on the prefill half of serving is a scoping decision, not a technical unknown.
+
+WHAT THE NUMBERS ALSO SAY ABOUT THE KERNEL. Neither lever dominates: 29 percent of time is dequant ALU, and the memory side yields only 40 percent even when made free. Nothing is saturated - not bandwidth (86 GB/s measured against roughly 200 available), not compute, not dequant. That signature is latency-bound execution with enough parallelism to partly hide it, which is consistent with the register-blocked kernel collapsing the moment thread count dropped 8x. It also means the kernel is closer to reasonable than the earlier record implied.
+
+METHOD, worth carrying: to bound a lever, disable it in place while holding grid shape, thread count and instruction count fixed, and read only the time. Probe A holds memory constant and removes ALU; probe B holds ALU constant and removes memory cost. Two one-line edits bounded an optimization space that a full implementation had failed to bound.
