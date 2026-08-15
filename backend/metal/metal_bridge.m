@@ -3204,9 +3204,34 @@ static NSString* const kMHASource =
      "  float sum=0.0f; float acc[128]; for(int d=0;d<dk;d++) acc[d]=0.0f;\n"
      "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<dk;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; float e=exp(s-m); sum+=e; for(int d=0;d<dk;d++) acc[d]+=e*V[j*dkv+kvOff+d]; }\n"
      "  for(int d=0;d<dk;d++) O[i*dm+qOff+d]=acc[d]/sum;\n"
+     "}\n"
+     "kernel void mha64_f32(device const float* Q [[buffer(0)]],\n"
+     "                    device const float* K [[buffer(1)]],\n"
+     "                    device const float* V [[buffer(2)]],\n"
+     "                    device float* O [[buffer(3)]],\n"
+     "                    constant int* P [[buffer(4)]],\n"
+     "                    constant float* FP [[buffer(5)]],\n"
+     "                    uint gid [[thread_position_in_grid]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6], window=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int total=heads*sq;\n"
+     "  if ((int)gid>=total) return;\n"
+     "  int h=gid/sq, i=gid%sq;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk, off=sk-sq;\n"
+     "  int jmax = causal ? (off+i+1) : sk;\n"
+     "  int jmin = (window>0 && off+i-window+1>0) ? (off+i-window+1) : 0;\n"
+     "  float m=-INFINITY;\n"
+     "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<64;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; if(s>m) m=s; }\n"
+     "  float sum=0.0f; float acc[64]; for(int d=0;d<64;d++) acc[d]=0.0f;\n"
+     "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<64;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; float e=exp(s-m); sum+=e; for(int d=0;d<64;d++) acc[d]+=e*V[j*dkv+kvOff+d]; }\n"
+     "  for(int d=0;d<64;d++) O[i*dm+qOff+d]=acc[d]/sum;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gMHA = nil;
+// dk==64 specialization of the two-pass kernel, same reason as mha_decode64_f32: a runtime
+// trip count makes acc[] dynamically indexed, so it spills out of registers.
+static id<MTLComputePipelineState> gMHA64 = nil;
 
 static int ensure_mha(void) {
     if (gMHA != nil) return 0;
@@ -3216,7 +3241,10 @@ static int ensure_mha(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"mha_f32"];
     if (fn == nil) return -11;
     gMHA = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gMHA != nil ? 0 : -12;
+    if (gMHA == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"mha64_f32"];
+    if (fn64 != nil) gMHA64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    return 0;
 }
 
 int mtl_mha_f32(const float* Q, const float* K, const float* V, float* O,
@@ -3243,7 +3271,7 @@ int mtl_mha_f32(const float* Q, const float* K, const float* V, float* O,
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gMHA];
+        [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:kb offset:0 atIndex:1];
         [enc setBuffer:vb offset:0 atIndex:2];
@@ -3499,7 +3527,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
     if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:gMHA];
+    [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
     [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
@@ -3563,9 +3591,47 @@ static NSString* const kFlashAttnSource =
      "    }\n"
      "  }\n"
      "  if (active) for(int d=0;d<dk;d++) O[i*dm+qOff+d]=acc[d]/l;\n"
+     "}\n"
+     "kernel void flashattn64_f32(device const float* Q [[buffer(0)]],\n"
+     "                          device const float* K [[buffer(1)]],\n"
+     "                          device const float* V [[buffer(2)]],\n"
+     "                          device float* O [[buffer(3)]],\n"
+     "                          constant int* P [[buffer(4)]],\n"
+     "                          constant float* FP [[buffer(5)]],\n"
+     "                          uint3 tgpos [[threadgroup_position_in_grid]],\n"
+     "                          uint3 tid3 [[thread_position_in_threadgroup]],\n"
+     "                          uint3 ntg3 [[threads_per_threadgroup]]) {\n"
+     "  int seq=P[0], dm=P[1], heads=P[2], dk=P[3], causal=P[4], kvHeads=P[5];\n"
+     "  float scale=FP[0];\n"
+     "  uint tid=tid3.x, ntg=ntg3.x;\n"
+     "  int h=(int)tgpos.y; int i=(int)(tgpos.x*ntg + tid);\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk, qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  bool active = i < seq;\n"
+     "  int jmax = (active ? (causal ? (i+1) : seq) : 0);\n"
+     "  threadgroup float sK[FTILE*128]; threadgroup float sV[FTILE*128];\n"
+     "  float q[64]; if (active) for(int d=0;d<64;d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[64]; for(int d=0;d<64;d++) acc[d]=0.0f;\n"
+     "  int blockMaxJ = causal ? min(seq, (int)(tgpos.x*ntg + ntg)) : seq;\n"
+     "  for (int t0=0; t0<blockMaxJ; t0+=FTILE){\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int e=(int)tid; e<FTILE*dk; e+=(int)ntg){ int t=e/dk, d=e%dk; int j=t0+t;\n"
+     "      float kv0=0.0f, vv0=0.0f; if (j<seq){ kv0=K[j*dkv+kvOff+d]; vv0=V[j*dkv+kvOff+d]; }\n"
+     "      sK[e]=kv0; sV[e]=vv0; }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    int thi = min(FTILE, jmax-t0);\n"
+     "    for (int t=0;t<thi;t++){ int j=t0+t; if(j>=jmax) break;\n"
+     "      float s=0.0f; for(int d=0;d<64;d++) s+=q[d]*sK[t*dk+d]; s*=scale;\n"
+     "      float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "      l=corr*l+p; for(int d=0;d<64;d++) acc[d]=corr*acc[d]+p*sV[t*dk+d]; m=mNew;\n"
+     "    }\n"
+     "  }\n"
+     "  if (active) for(int d=0;d<64;d++) O[i*dm+qOff+d]=acc[d]/l;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gFlashAttn = nil;
+// dk==64 specialization, same defect as mha_decode64_f32: a runtime trip count makes the
+// per-thread q[]/acc[] arrays dynamically indexed, so they spill out of registers.
+static id<MTLComputePipelineState> gFlashAttn64 = nil;
 
 static int ensure_flashattn(void) {
     if (gFlashAttn != nil) return 0;
@@ -3575,7 +3641,10 @@ static int ensure_flashattn(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"flashattn_f32"];
     if (fn == nil) return -11;
     gFlashAttn = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gFlashAttn != nil ? 0 : -12;
+    if (gFlashAttn == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"flashattn64_f32"];
+    if (fn64 != nil) gFlashAttn64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    return 0;
 }
 
 int mtl_flashattn_f32(const float* Q, const float* K, const float* V, float* O,
@@ -3599,7 +3668,7 @@ int mtl_flashattn_f32(const float* Q, const float* K, const float* V, float* O,
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gFlashAttn];
+        [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:kb offset:0 atIndex:1];
         [enc setBuffer:vb offset:0 atIndex:2];
@@ -3639,7 +3708,7 @@ int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
     if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:gFlashAttn];
+    [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
