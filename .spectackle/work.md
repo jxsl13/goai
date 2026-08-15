@@ -2123,3 +2123,54 @@ Routing prefill through this needs a scratch-buffer strategy (44 MB per projecti
   prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind; this is the first mechanism measured to close a real part of it
 
 Order of remaining work: (1) coalesce the dequantization transpose, (2) re-measure the crossover, (3) wire prefill through it above the threshold with a reusable scratch buffer, (4) re-run the pp64 head-to-head.
+
+## R-01M023GH4YFVJVYK66CNVQZS4K Prefill wired through dequant+GEMM: coalescing the transpose gave 3.1x on the expansion, crossover fell to M~18, pp64 gap 5.2x -> 3.0x
+kind: research
+state: draft
+created: 2026-08-15
+
+Steps 1-4 of the recorded plan executed. Prompt processing is 1.7-1.8x faster end to end and the llama.cpp gap narrows from 5.2x to 3.0x.
+
+## 1. Coalescing the transpose
+
+Writing Out[(k0+l)*N+n] from the thread owning sub-block (n,s) strides by N between consecutive stores. Staging the tile through threadgroup memory so 32 threads write 32 CONSECUTIVE n per step:
+
+  814.0 -> 259.6us for 44 MB, 57 -> 178 GB/s, 3.1x
+
+178 GB/s is close to this machine's ~200 GB/s roofline, so the store side is now essentially done.
+
+The refactor is numerically neutral, and that was checked rather than assumed: the parity figures against the quant kernel are unchanged to three digits (8.09e-05 at M=64, 2.86e-04 at M=256). A transpose that changed results would have shown here.
+
+## 2. Re-measured crossover
+
+| M | cooperative | dequant+GEMM | ratio |
+|---|---|---|---|
+| 8 | 305.6us | 553.5us | 0.55x |
+| 16 | 490.5us | 542.2us | 0.90x |
+| 24 | 734.4us | 548.0us | 1.34x |
+| 32 | 978.4us | 540.5us | 1.81x |
+| 64 | 1954.1us | 762.7us | 2.56x |
+| 256 | 7809.4us | 1453.9us | 5.37x |
+
+Crossover moved from M~48 to M~18. Note the fused path is nearly FLAT from M=8 to M=48 (553 -> 602us) because the fixed dequantization dominates there and the GEMM is almost free by comparison; the quant kernel meanwhile scales linearly in M. That shape is why the crossover is sharp.
+
+## 3. Wiring
+
+Routed at M>=24, a margin over the measured crossover. The dequantized weight goes into one lazily-grown scratch buffer reused by every projection and every layer — safe because compute encoders in a command buffer execute in submission order, so dequant(A)->gemm(A)->dequant(B)->gemm(B) cannot race. Peak extra memory is one projection's expansion (~92 MB for the column-fused gate|up), not the model.
+
+## 4. End to end
+
+  pp64  359.6 -> 662.7 tok/s isolated (1.84x); 585.8 in the head-to-head run
+  tg64  unchanged — decode is M=1 and never reaches the threshold
+
+Against llama.cpp pp64 1778.75: 0.194x -> 0.329x. Prompt-processing gap 5.2x -> 3.0x.
+
+Correctness: generated token streams IDENTICAL with the path on and off, over 32 generated tokens from a 32-token prompt so prefill runs at M=32 and takes the new route.
+
+## What the remaining 3x is
+
+The dequantization, and it is now bandwidth-bound rather than wasteful: 44 MB written per projection at 178 GB/s against a ~200 GB/s ceiling. It cannot get materially cheaper in f32.
+
+Expanding to f16 instead halves the traffic to 22 MB — roughly 130us instead of 260 — and MPS f16 GEMM is typically faster than f32 on this hardware, so the gain compounds. Q4_K carries ~4 significant bits per weight and the scales are already f16 in the block header, so f16 expansion loses nothing the format holds; that claim needs the same on/off token-identity check this round used before it is believed.
+
+Order for next: (1) f16 expansion + f16 GEMM, (2) verify token identity and re-measure, (3) if the gap persists, profile whether the residual is the GEMM's own efficiency or the expansion.
