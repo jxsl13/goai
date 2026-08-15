@@ -235,6 +235,7 @@ int vk_recorder_mha(void* rec, const uint32_t* spv, int spvLen, void* qh, void* 
                     int qElemOff);
 int vk_recorder_qmatmul(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh,
                         int M, int K, int N, int wBytes);
+int vk_recorder_qmatmul_coop(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh, int M, int K, int N, int wBytes);
 int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
                            int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale,
                            int qElemOff);

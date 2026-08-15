@@ -486,6 +486,48 @@ func (Backend) QMatMul(x *tensor.Tensor, weight []byte, quantType uint32, n, k i
 }
 
 // residentSpirv returns the compiled shader for a quant type's resident matmul (nil if none).
+// residentCoopSpirv returns the cooperative M=1 shader for a quant type, or nil when
+// that type has none or its gate is off. It is consulted ONLY at m==1.
+//
+// This exists because Recorder.QMatMulResident is the path the DECODER takes, and it
+// is not the path QMatMulQ4_K takes. Wiring the cooperative shaders into the latter
+// alone left them correct, fast and UNREACHABLE from production: an end-to-end decode
+// A/B measured 1.000x-1.015x because both sides ran the scalar shader. Seven leaf A/Bs
+// had not caught it, because they all drive the standalone entry point.
+func residentCoopSpirv(qt uint32) []byte {
+	switch qt {
+	case qtQ4_0:
+		if q4_0CoopEnabled {
+			return qmatmulQ4_0CoopSpirv
+		}
+	case qtQ8_0:
+		if q8CoopEnabled {
+			return qmatmulQ8CoopSpirv
+		}
+	case qtQ2_K:
+		if q2kCoopEnabled {
+			return qmatmulQ2KCoopSpirv
+		}
+	case qtQ3_K:
+		if q3kCoopEnabled {
+			return qmatmulQ3KCoopSpirv
+		}
+	case qtQ4_K:
+		if q4kCoopEnabled {
+			return qmatmulQ4KCoopSpirv
+		}
+	case qtQ5_K:
+		if q5kCoopEnabled {
+			return qmatmulQ5KCoopSpirv
+		}
+	case qtQ6_K:
+		if q6kCoopEnabled {
+			return qmatmulQ6KCoopSpirv
+		}
+	}
+	return nil
+}
+
 func residentSpirv(qt uint32) []byte {
 	switch qt {
 	case qtQ4_0:
@@ -1742,16 +1784,31 @@ func (r *Recorder) QMatMulResident(x *DeviceBuffer, w *ResidentQWeight, o *Devic
 		return fmt.Errorf("vulkan: Recorder qmatmul: resident weight is nil/closed")
 	}
 	spv := residentSpirv(w.qt)
+	coop := false
+	if m == 1 {
+		if c := residentCoopSpirv(w.qt); len(c) > 0 {
+			spv, coop = c, true
+		}
+	}
 	if len(spv) == 0 {
 		return fmt.Errorf("vulkan: Recorder qmatmul: no resident shader for quant type %d", w.qt)
 	}
 	if x.n < m*w.k || o.n < m*w.n {
 		return fmt.Errorf("vulkan: Recorder qmatmul shape mismatch: x=%d (want %d) o=%d (want %d)", x.n, m*w.k, o.n, m*w.n)
 	}
-	rc := C.vk_recorder_qmatmul(r.handle,
-		(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
-		x.handle, w.handle, o.handle,
-		C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	var rc C.int
+	if coop {
+		// One workgroup per output row instead of one invocation per output element.
+		rc = C.vk_recorder_qmatmul_coop(r.handle,
+			(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
+			x.handle, w.handle, o.handle,
+			C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	} else {
+		rc = C.vk_recorder_qmatmul(r.handle,
+			(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
+			x.handle, w.handle, o.handle,
+			C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	}
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder qmatmul failed (%d)", int(rc))
 	}
