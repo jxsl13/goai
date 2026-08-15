@@ -19,6 +19,12 @@ import (
 // enough for slower CI hardware and a loaded machine. This is NOT a claim about the tiktoken margin:
 // verifying that needs the companion internal/benchcompare/tokenizer_compare.py with tiktoken
 // installed. It only catches the case where the Go side falls off a cliff.
+//
+// The assertion is mutation-verified: raising the encode floor to an unreachable 500 MB/s makes this
+// test fail, so the check fires rather than merely existing. The token count is printed as a second
+// signal — 237,208 is the value that matched tiktoken bit-for-bit in T882, so a change in it means
+// the tokenizer's OUTPUT moved and not just its speed. A throughput guard that ignored correctness
+// would pass a tokenizer that got fast by being wrong.
 func TestBPEThroughputGuard(t *testing.T) {
 	tk, err := nlp.LoadGPT2("testdata/gpt2_ranks.txt")
 	if err != nil {
@@ -27,6 +33,7 @@ func TestBPEThroughputGuard(t *testing.T) {
 	text := t882Corpus()
 	mb := float64(len(text)) / 1e6
 
+	const encodeFloor = 15.0
 	best := 0.0
 	var toks []int
 	for i := 0; i < 3; i++ {
@@ -36,10 +43,10 @@ func TestBPEThroughputGuard(t *testing.T) {
 			best = r
 		}
 	}
-	fmt.Printf("BPEGUARD encode %.1f MB/s (floor 15)  tokens=%d\n", best, len(toks))
-	if best < 15 {
-		t.Errorf("BPE encode %.1f MB/s is below the 15 MB/s floor — an order-of-magnitude "+
-			"regression, not machine noise", best)
+	fmt.Printf("BPEGUARD encode %.1f MB/s (floor %.0f)  tokens=%d\n", best, encodeFloor, len(toks))
+	if best < encodeFloor {
+		t.Errorf("BPE encode %.1f MB/s is below the %.0f MB/s floor — an order-of-magnitude "+
+			"regression, not machine noise", best, encodeFloor)
 	}
 
 	bestD := 0.0
