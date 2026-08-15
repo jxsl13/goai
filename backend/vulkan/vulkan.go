@@ -236,6 +236,36 @@ var qmatmulQ2KCoopSpirv []byte
 // q2kCoopEnabled gates the cooperative Q2_K path at M==1; see SetQ2KCooperative.
 var q2kCoopEnabled = true
 
+// qmatmulQ8CoopSpirv and qmatmulQ4_0CoopSpirv are the cooperative M=1 shaders for the
+// 32-weight block formats. Their split spans blocks rather than subdividing one — 64
+// invocations cannot subdivide a 32-weight block — see the shader headers.
+//
+//go:embed shaders/qmatmul_q8_coop.spv
+var qmatmulQ8CoopSpirv []byte
+
+//go:embed shaders/qmatmul_q4_0_coop.spv
+var qmatmulQ4_0CoopSpirv []byte
+
+// q8CoopEnabled and q4_0CoopEnabled gate those paths at M==1.
+var q8CoopEnabled = true
+var q4_0CoopEnabled = true
+
+// SetQ8_0Cooperative selects the cooperative M=1 Q8_0 shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ8_0Cooperative(on bool) bool {
+	prev := q8CoopEnabled
+	q8CoopEnabled = on
+	return prev
+}
+
+// SetQ4_0Cooperative selects the cooperative M=1 Q4_0 shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ4_0Cooperative(on bool) bool {
+	prev := q4_0CoopEnabled
+	q4_0CoopEnabled = on
+	return prev
+}
+
 // SetQ2KCooperative selects the cooperative M=1 Q2_K shader and returns the previous
 // setting. Results match the scalar shader within crossTol(k).
 func SetQ2KCooperative(on bool) bool {
@@ -619,6 +649,19 @@ func QMatMulQ8_0(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q8CoopEnabled && len(qmatmulQ8CoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ8CoopSpirv[0])), C.int(len(qmatmulQ8CoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ8_0 failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q8_0(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ8Spirv[0])), C.int(len(qmatmulQ8Spirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -667,6 +710,19 @@ func QMatMulQ4_0(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q4_0CoopEnabled && len(qmatmulQ4_0CoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4_0CoopSpirv[0])), C.int(len(qmatmulQ4_0CoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ4_0 failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q4_0(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4_0Spirv[0])), C.int(len(qmatmulQ4_0Spirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
