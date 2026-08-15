@@ -83,7 +83,13 @@ func TestDequantGemmCrossover(t *testing.T) {
 			}
 			return best
 		}
+		// QMatMulResident now ROUTES through dequant+GEMM above the wired threshold, so the
+		// baseline arm must switch it off explicitly — otherwise this compares the path against
+		// itself. It did exactly that once the wiring landed (ratio 1.00x, maxRel 0.00e+00), which
+		// is what the crossover assertion below caught.
+		SetQ4KDequantGemm(false)
 		coop := meas(func(r *Recorder) { r.QMatMulResident(a, rq, cq, M) })
+		SetQ4KDequantGemm(true)
 		fused := meas(func(r *Recorder) {
 			r.DequantQ4K(rq, wf)
 			r.MatMul(a, wf, c, M, K, N)
@@ -92,6 +98,7 @@ func TestDequantGemmCrossover(t *testing.T) {
 		// The two paths must agree. They differ only by f32 reassociation: the cooperative kernel
 		// factors the min term out as d*sc*sum(x*q) - dmin*m*sum(x), while dequant-then-GEMM keeps
 		// the per-element form x*(d*sc*q - dmin*m).
+		SetQ4KDequantGemm(false) // the reference arm must be the quant kernel itself
 		r, _ := NewRecorder()
 		r.DequantQ4K(rq, wf)
 		r.MatMul(a, wf, c, M, K, N)
@@ -99,6 +106,7 @@ func TestDequantGemmCrossover(t *testing.T) {
 		r.Commit()
 		r.Wait()
 		r.Free()
+		SetQ4KDequantGemm(true)
 		g := make([]float32, M*N)
 		w := make([]float32, M*N)
 		if err := c.DownloadF32(g); err != nil {
