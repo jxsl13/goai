@@ -42,6 +42,20 @@ import (
 // So the 8% deficit at pp512 splits into ~4.7% GPU (241.86 vs llama.cpp's implied 231.0 ms) and
 // ~3.3% host (the 8.28 ms outside GPU execution).
 //
+// CORRECTION: "host share" is the wrong name for this quantity, and "~7.4 ms of fixed submission
+// latency" below is wrong. LastGPUSeconds reports only the LAST command buffer, so wall minus that
+// absorbs any EARLIER command buffers' GPU time as well. Measured across sizes it scales with n
+// rather than being fixed — 2.07 / 3.01 / 4.55 / 8.28 / 14.33 ms at n=64/128/256/512/1024, i.e.
+// ~1.4 ms fixed + ~12.6us/token — which submission latency would not do, and which the eliminated
+// host work (gather at 1.29us/token, upload at 0.12 ms) cannot account for either.
+//
+// At n=64 the split is 39.34 ms "GPU" against 2.07 ms remainder (95.0% busy), so pp64's deficit is
+// GPU-side: llama.cpp's n=64 pass is ~35.9 ms against our ~41.4. Attributing it needs per-command-
+// buffer accounting rather than LastGPUSeconds.
+//
+// The paragraph below is kept because its component eliminations (gather, upload, encode, download)
+// remain valid; only the "fixed submission latency" conclusion drawn from them does not.
+//
 // The host share is NOT ours to reclaim, which took measuring to establish. Its per-token slope
 // (~11.8us/token, fitted from 8.28 ms at n=512 and 14.33 ms at n=1024) looked like a host-side
 // dequantize loop, and the prefill path does call gatherEmbed once per token. Measured on the real
