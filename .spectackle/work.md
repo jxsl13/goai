@@ -1974,3 +1974,53 @@ This is a genuine new kernel rather than a tweak, and it is the first place in t
 
   decode  : parity with llama.cpp (0.888x, inside its 19% run-to-run spread), bandwidth-bound at 92% of the memory roofline — essentially finished
   prefill : 5.2x behind, compute-bound at 11% of FLOP peak — roughly 9x of headroom, addressable only via the matrix units
+
+## R-01M022K6X1ENYBCN7YVGXRV53M First matrix-unit quant kernel: bit-exact but 12.5x too slow — BM=8 gives no dequant amortization, and a capability gate turned a compile failure into a silent fallback
+kind: research
+state: draft
+created: 2026-08-15
+
+Built the first matrix-unit kernel in this codebase. It is correct and 12.5x too slow. Shipped disabled, with the diagnosis of exactly which design decision is wrong.
+
+## Result
+
+qmatmul_q4k_mm dequantizes an 8x256 weight tile into threadgroup memory and consumes it with simdgroup_multiply_accumulate.
+
+Correctness: BIT-EXACT (0.000e+00 relative) against the scalar reference across six shapes, including partial tiles in both dimensions (M=9 N=13, M=33 N=40). Non-vacuity confirmed by mutation — perturbing the dequantized value turns the test red.
+
+Performance:
+
+| M | cooperative | matrix unit | ratio | GFLOP/s |
+|---|---|---|---|---|
+| 8 | 247.3us | 3094.3us | 0.08x | 60 |
+| 64 | 1954.3us | 23541.2us | 0.08x | 63 |
+| 256 | 7809.3us | 93808.7us | 0.08x | 63 |
+
+0.9% of the 6.8 TFLOP/s peak, against the cooperative path's 11.1%.
+
+## The design error
+
+BM=8 query rows per threadgroup. The dequantized weight tile is therefore rebuilt once per QUERY TILE: at M=64 each weight is dequantized 8 times — exactly the amortization the cooperative kernel already achieves by looping rows — while ADDING X staging, two threadgroup barriers per super-block, and only 32 threads to do all of it.
+
+The arithmetic is stark: 2048 dequantizations plus 4096 staged floats to feed 32 matrix MACs. The matrix units idle behind the staging. Using them bought nothing because the kernel never reaches them in any quantity.
+
+What a working version needs: 128-256 threads per threadgroup rather than 32, and a much larger BM so ONE dequantized weight tile feeds MANY query sub-tiles. That is the whole point of a matrix-unit GEMM and this tiling does not do it. It is a redesign, not a bug fix.
+
+Retained behind SetQ4KMatrixUnit with the parity test, so the redesign starts from a validated kernel rather than a blank file.
+
+## Two probe findings that inspection would not have caught
+
+**The kernel silently did not compile.** simdgroup_multiply_accumulate takes FOUR arguments (dst = a*b + c), not three. ensure_q4k_mm returned -10 from inside an `&&` chain and the dispatch fell back to the cooperative path with no error surfaced anywhere. The parity test PASSED at that point, with all-zero differences, because it was comparing the cooperative kernel against itself. Only a mutation probe — zero the kernel's output, expect red — exposed it, and only an fprintf inside ensure_ produced the compiler diagnostic.
+
+Generalization: a capability gate written as `feature_available() && ensure_thing() == 0` converts a COMPILE FAILURE into a silent fallback. Any such gate needs either a probe that asserts the path is taken, or a loud failure when the resource it guards cannot be built.
+
+**The first parity comparison used the wrong reference.** Against the COOPERATIVE kernel the new kernel showed 1.5e-4 to 1.2e-3 relative — which reads as a correctness bug. It is not. The cooperative kernel factors the min term out as d*sc*sum(x*q) - dmin*m*sum(x); this kernel and the scalar reference both compute x*(d*sc*q - dmin*m). Those are algebraically equal and round differently. Against the scalar reference the agreement is exact.
+
+So a parity test can fail for the reason that its COMPARAND is a refactoring of the formula rather than the formula. Choose the reference whose arithmetic form matches.
+
+## Standing, unchanged
+
+  decode  : tg64 175.0 vs llama.cpp 190.4 = 0.919x — parity, bandwidth-bound at 92% of the memory roofline
+  prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind, compute-bound at 11% of FLOP peak
+
+The prefill headroom is still there and still reachable only through the matrix units. This round established that the mechanism works and produces exact results; the next needs the tiling that actually feeds it.
