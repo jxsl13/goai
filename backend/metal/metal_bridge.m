@@ -2905,8 +2905,15 @@ static NSString* const kQMatMulQ2KSource =
      "    uchar sc=W[scB+is];\n"
      "    float dl=d*(float)(sc&0xF), ml=dmin*(float)(sc>>4);\n"
      "    int q0=qsB+nb*32; int xk=mi*K + sb*256 + nb*128 + j*32 + grp*16;\n"
-     "    for (short l=lbase; l<lbase+8; l++){ int q2=(W[q0+gOff+l]>>shift)&3;\n"
-     "      acc += X[xk+l]*(dl*(float)q2 - ml); }\n"
+     // Vectorized: 8 consecutive l means 8 consecutive qs bytes, and Q2_K's 84-byte
+     // block stride IS 4-aligned (qs at +16, nb*32, gOff and lbase all multiples of 4),
+     // so two uint loads replace eight byte loads. Values and order unchanged.
+     "    device const uint* q4=(device const uint*)(W+q0+gOff+lbase);\n"
+     "    uint w0=q4[0], w1=q4[1];\n"
+     "    for (short t=0; t<8; t++){\n"
+     "      uint word=(t<4)?w0:w1; short sh8=8*(t&3);\n"
+     "      uchar qb=(uchar)((word>>sh8)&0xFFu); int q2=(qb>>shift)&3;\n"
+     "      acc += X[xk+lbase+t]*(dl*(float)q2 - ml); }\n"
      "  }\n"
      "  float total=simd_sum(acc);\n"
      "  if (lane==0) O[mi*N+ni]=total;\n"
@@ -3083,6 +3090,10 @@ static NSString* const kQMatMulQ3KSource =
      "    int scv=(int)((av>>(8*(is&3)))&0xFFu);\n"
      "    float dl=dAll*(float)(scv-32);\n"
      "    int qb=qsB+nb*32; int xk=mi*K + sb*256 + nb*128 + j*32 + grp*16;\n"
+     // Q3_K is NOT vectorized: its 110-byte block stride is 2-aligned but not
+     // 4-aligned, so only a ushort widening is legal, and that measured 1.05x —
+     // indistinguishable from noise — while changing the FP contraction enough that
+     // parity values moved. Not worth a numerics change, so the byte-wise form stays.
      "    for (short l=lbase; l<lbase+8; l++){ int q3=(W[qb+gOff+l]>>shift)&3;\n"
      "      int h=(W[hmB+gOff+l]&mbit)?0:4; acc += X[xk+l]*dl*(float)(q3-h); }\n"
      "  }\n"
