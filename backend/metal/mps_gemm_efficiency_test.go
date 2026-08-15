@@ -30,6 +30,26 @@ package metal
 //    0.87x) for 2-4% at the stronger ones. The optimal format depends on M, not on the weight, which
 //    is state this layer does not have.
 //
+// MEASURED FOLLOW-UP on point 2. Caching BOTH formats and letting each M regime pick its optimum
+// does work, but only with a budget the default does not grant. Interleaved against the shipped
+// f16-only cache, two runs averaged:
+//
+//	          shipped (1.94 GB)   dual @8 GB (5.75 GB)
+//	pp64          1541.3               1541.2      —
+//	pp256         1962.7               2030.1      +3.4%
+//	pp512         1986.5               2041.9      +2.8%
+//	pp1024        1942.5               2091.1      +7.7%
+//
+// pp1024 gains most because M>512 previously fell off the f16 path to an UNCACHED f32 expansion,
+// paying it every pass. But at the default 4 GB budget the same code REGRESSES (pp256 1806 vs
+// 1962): the two caches together need ~5.8 GB, so f32 entries consume budget the f16 entries then
+// cannot get, and weights that miss fall back to per-pass expansion. A default that is worse than
+// what it replaces is not shippable, and making it safe needs reservation logic — deciding a
+// per-format budget split before either fills — which is more machinery than 3-8% justifies here.
+//
+// So the 2-4% f32 advantage is reachable, at ~3x the cache memory, and is left unimplemented
+// deliberately rather than for want of trying.
+//
 // The narrow k/v shape at 51.9% is the least efficient by far, but k and v are only ~2.4% of a
 // layer's FLOPs, so fusing them into one N=512 GEMM would be worth ~0.5% of prefill — measured
 // before building it, and not worth building.
