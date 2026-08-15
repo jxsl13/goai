@@ -3147,6 +3147,55 @@ static int q4k_mm_eligible(int M, int K, int qt) {
 }
 
 
+// mtl_probe_encoder_cost times `n` trivial dispatches, either each in its own compute encoder or
+// packed `per` to an encoder with a buffer memory barrier between them. The kernel touches one
+// element, so what is measured is the per-dispatch and per-ENCODER overhead rather than any work.
+// A Llama decode step issues a few hundred dispatches, so the difference between these two shapes is
+// a direct read of how much of a token is encoder switching. Returns best GPU seconds, <0 on error.
+double mtl_probe_encoder_cost(int n, int per, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (ensure_q4k_f16() != 0) return -2.0;   // reuse cvt_f32_to_h as the trivial kernel
+    if (n < 1) n = 1;
+    if (per < 1) per = 1;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        id<MTLBuffer> a = [gDevice newBufferWithLength:4096 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> b = [gDevice newBufferWithLength:4096 options:MTLResourceStorageModePrivate];
+        if (a == nil || b == nil) return -3.0;
+        int P[1] = {64};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -4.0;
+            for (int r = 0; r < reps; r++) {
+                id<MTLComputeCommandEncoder> enc = nil;
+                for (int i = 0; i < n; i++) {
+                    if (i % per == 0) {
+                        if (enc != nil) [enc endEncoding];
+                        enc = [cmd computeCommandEncoder];
+                        [enc setComputePipelineState:gCvtF32ToH];
+                        [enc setBuffer:a offset:0 atIndex:0];
+                        [enc setBuffer:b offset:0 atIndex:1];
+                        [enc setBytes:P length:sizeof(P) atIndex:2];
+                    } else {
+                        // ordering within one encoder is explicit; between encoders Metal's hazard
+                        // tracking does it, which is part of what an encoder switch costs.
+                        [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    }
+                    [enc dispatchThreads:MTLSizeMake(64,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+                }
+                if (enc != nil) [enc endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -5.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;

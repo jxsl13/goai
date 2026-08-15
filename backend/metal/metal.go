@@ -2368,6 +2368,13 @@ func ProbeReadBandwidth(bytes float64, reps int) float64 {
 	return float64(C.mtl_probe_read_bw(C.double(bytes), C.int(reps)))
 }
 
+// ProbeEncoderCost times n trivial dispatches packed per-to-an-encoder, isolating per-dispatch from
+// per-encoder overhead. A decode step issues a few hundred dispatches, so the gap between per=1 and
+// per=n says how much of a token is spent switching encoders rather than computing.
+func ProbeEncoderCost(n, per, reps int) float64 {
+	return float64(C.mtl_probe_encoder_cost(C.int(n), C.int(per), C.int(reps)))
+}
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.
