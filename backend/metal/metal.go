@@ -2336,7 +2336,7 @@ func (r *Recorder) DequantQ4K(w *ResidentQWeight, o *DeviceBuffer) error {
 	if o.n < w.k*w.n {
 		return fmt.Errorf("metal: DequantQ4K: output %d < %d", o.n, w.k*w.n)
 	}
-	rc := C.mtl_recorder_dequant_q4k(r.handle, w.handle, o.handle, C.int(w.k), C.int(w.n))
+	rc := C.mtl_recorder_dequant_qk(r.handle, w.handle, o.handle, C.int(w.k), C.int(w.n), C.int(w.qt))
 	if rc != 0 {
 		return fmt.Errorf("metal: DequantQ4K failed (%d)", int(rc))
 	}

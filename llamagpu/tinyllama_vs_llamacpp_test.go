@@ -97,9 +97,13 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	// required), which gave ~345. Expanding the Q4_K weight ONCE into a dense f32 [K][N] buffer and
 	// running a dense MPS GEMM above a measured batch-size crossover then took it to ~590-660.
 	//
-	// The remaining ~3x is the dequantization itself: it writes 44 MB per projection at 178 GB/s,
-	// close to this machine's memory roofline, so it cannot get much cheaper in f32. Expanding to
-	// f16 instead would halve that traffic and is the next lever.
+	// Q4_K_M is a MIXED file — 135 Q4_K tensors but 21 Q6_K, and those 21 include ffn_down on 10 of
+	// the 22 layers, the largest projection in a layer. Routing Q6_K through the same expand-then-
+	// GEMM path took pp64 from ~699 to ~768 tok/s.
+	//
+	// What remains is NOT all expansion: measured GPU time is 4.06 ms/layer against 2.69 ms of
+	// expansion + GEMM, and prefill is 97.6% GPU-bound, so ~1.4 ms/layer is other GPU work still
+	// unattributed.
 	long := make([]int, 64)
 	for i := range long {
 		long[i] = 1 + i%2000

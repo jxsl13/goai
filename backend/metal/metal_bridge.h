@@ -216,7 +216,7 @@ int mtl_recorder_commit(void* rec);
 int mtl_recorder_wait(void* rec);
 double mtl_last_gpu_seconds(void);
 void mtl_set_q4k_mm(int on);
-int mtl_recorder_dequant_q4k(void* rec, void* wbuf, void* oh, int K, int N);
+int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt);
 void mtl_set_q4k_dq_gemm(int on);
 void mtl_recorder_free(void* rec);
 void* mtl_devbuf_upload(const void* data, int nbytes);

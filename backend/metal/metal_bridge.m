@@ -2089,11 +2089,16 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     return 0;
 }
 
+static double gLastGPUSeconds = 0.0;
+
 int mtl_recorder_finish(void* rec) {
     if (rec == NULL) return -2;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     [cmd commit];
     [cmd waitUntilCompleted];
+    // Same GPU-time capture as mtl_recorder_wait. Prefill submits through THIS entry point, not
+    // commit+wait, so without this LastGPUSeconds silently reports 0 for every prefill.
+    gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
     return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
 }
 
@@ -2107,7 +2112,6 @@ int mtl_recorder_commit(void* rec) {
 }
 
 // mtl_recorder_wait blocks until a mtl_recorder_commit'ed buffer completes.
-static double gLastGPUSeconds = 0.0;
 double mtl_last_gpu_seconds(void) { return gLastGPUSeconds; }
 
 int mtl_recorder_wait(void* rec) {
@@ -2321,9 +2325,57 @@ static NSString* const kDequantQ4KSource =
      "    int nn=n0+(int)t;\n"
      "    if (nn<N) Out[(k0+l)*N + nn] = sT[(int)t*32+l];\n"
      "  }\n"
+     "}\n"
+     "// Dequantize a resident Q6_K weight [N][K] into a dense f32 [K][N] buffer, same role as\n"
+     "// dequant_q4k_t. TinyLlama Q4_K_M is a MIXED file: 135 tensors are Q4_K but 21 are Q6_K, and those\n"
+     "// 21 include ffn_down on 10 of the 22 layers — the largest projection in the layer. Without this\n"
+     "// they fall back to the cooperative kernel at prefill batch sizes, which is ~2.4x slower than\n"
+     "// expand-then-GEMM at that shape.\n"
+     "//\n"
+     "// Q6_K block = 210 bytes per 256 weights: ql[128] low nibbles, qh[64] upper 2 bits, scales[16]\n"
+     "// int8 (one per 16 weights), then d. Element k splits as chunk=k/128, g=(k%128)/32, l=k%32:\n"
+     "// group g takes its low/high nibble from ql[(g&1)*32+l] and its high bits from qh[l] shifted by\n"
+     "// 2g, scaled by scales[l/16 + 2g].\n"
+     "kernel void dequant_q6k_t(device const uchar* W [[buffer(0)]],\n"
+     "                          device float* Out [[buffer(1)]],\n"
+     "                          constant int* P [[buffer(2)]],\n"
+     "                          uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                          ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*210;\n"
+     "  int sb=s>>3, sub=s&7;\n"
+     "  int k0=sb*256 + sub*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*210;\n"
+     "    ushort dr=(ushort)W[base+208] | ((ushort)W[base+209]<<8);\n"
+     "    float d=float(as_type<half>(dr));\n"
+     "    device const char* sc=(device const char*)(W+base+192);\n"
+     "    for (int i=0;i<32;i++){\n"
+     "      int k=sub*32+i;\n"
+     "      int chunk=k>>7, r=k&127, g=r>>5, l=r&31;\n"
+     "      uchar qlb=W[base + chunk*64 + (g&1)*32 + l];\n"
+     "      uchar qhb=W[base + 128 + chunk*32 + l];\n"
+     "      int nib=(g<2)?(qlb&0xF):(qlb>>4);\n"
+     "      int hi=(qhb>>(g*2))&3;\n"
+     "      int q=(nib|(hi<<4))-32;\n"
+     "      sT[(int)t*32+i] = d*(float)sc[chunk*8 + (l>>4) + g*2]*(float)q;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int i=0;i<32;i++) sT[(int)t*32+i]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int i=0;i<32;i++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+i)*N + nn] = sT[(int)t*32+i];\n"
+     "  }\n"
      "}\n";
 
+
 static id<MTLComputePipelineState> gDequantQ4K = nil;
+static id<MTLComputePipelineState> gDequantQ6K = nil;
 static int ensure_dequant_q4k(void) {
     if (gDequantQ4K != nil) return 0;
     NSError* err = nil;
@@ -2332,7 +2384,10 @@ static int ensure_dequant_q4k(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"dequant_q4k_t"];
     if (fn == nil) return -11;
     gDequantQ4K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gDequantQ4K != nil ? 0 : -12;
+    if (gDequantQ4K == nil) return -12;
+    id<MTLFunction> fn6 = [lib newFunctionWithName:@"dequant_q6k_t"];
+    if (fn6 != nil) gDequantQ6K = [gDevice newComputePipelineStateWithFunction:fn6 error:&err];
+    return gDequantQ6K != nil ? 0 : -13;
 }
 
 // Scratch for the dequantized weight, grown on demand and reused. One buffer is enough: compute
@@ -2354,12 +2409,12 @@ static id<MTLBuffer> dq_scratch(size_t bytes) {
 static int gDQGemmEnabled = 1;
 void mtl_set_q4k_dq_gemm(int on) { gDQGemmEnabled = on ? 1 : 0; }
 static int q4k_dq_gemm_eligible(int M, int K, int qt) {
-    return gDQGemmEnabled && qt == 12 && M >= 24 && K % 256 == 0 && ensure_dequant_q4k() == 0;
+    return gDQGemmEnabled && (qt == 12 || qt == 14) && M >= 24 && K % 256 == 0 && ensure_dequant_q4k() == 0;
 }
 
 // mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
 // [K][N] buffer.
-int mtl_recorder_dequant_q4k(void* rec, void* wbuf, void* oh, int K, int N) {
+int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt) {
     if (rec == NULL || wbuf == NULL || oh == NULL) return -2;
     if (ensure_dequant_q4k() != 0) return -6;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -2367,7 +2422,7 @@ int mtl_recorder_dequant_q4k(void* rec, void* wbuf, void* oh, int K, int N) {
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {K, N};
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:gDequantQ4K];
+    [enc setComputePipelineState:(qt == 14) ? gDequantQ6K : gDequantQ4K];
     [enc setBuffer:wb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
     [enc setBytes:P length:sizeof(P) atIndex:2];
@@ -2537,7 +2592,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         size_t need = (size_t)K * (size_t)N * sizeof(float);
         id<MTLBuffer> scratch = dq_scratch(need);
         if (scratch != nil) {
-            if (mtl_recorder_dequant_q4k(rec, wbuf, (__bridge void*)scratch, K, N) == 0 &&
+            if (mtl_recorder_dequant_qk(rec, wbuf, (__bridge void*)scratch, K, N, qtype) == 0 &&
                 mtl_recorder_matmul(rec, xh, (__bridge void*)scratch, oh, M, K, N, 0) == 0) {
                 return 0;
             }
