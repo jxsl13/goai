@@ -2375,6 +2375,17 @@ func ProbeEncoderCost(n, per, reps int) float64 {
 	return float64(C.mtl_probe_encoder_cost(C.int(n), C.int(per), C.int(reps)))
 }
 
+// ProbeDecodeAttnOccupancy reports maxTotalThreadsPerThreadgroup for the generic, dk=64 and dk=128
+// decode attention pipelines. The value is dictated by register pressure, so it distinguishes "this
+// kernel is latency-bound because it cannot fit enough simdgroups per core" from other causes.
+func ProbeDecodeAttnOccupancy() (generic, dk64, dk128 int) {
+	var out [3]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1, -1, -1
+	}
+	return int(out[0]), int(out[1]), int(out[2])
+}
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.

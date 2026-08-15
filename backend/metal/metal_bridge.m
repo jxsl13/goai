@@ -144,13 +144,21 @@ static NSString* const kRMSNormSource =
      "  int rows=P[0], dim=P[1];\n"
      "  if ((int)row >= rows) return;\n"
      "  int base=(int)row*dim;\n"
-     "  threadgroup float red[256];\n"
+     "  threadgroup float red[32];\n"
      "  float part=0.0f;\n"
      "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ float v=X[base+j]; part+=v*v; }\n"
-     "  red[lane]=part;\n"
+     "  // The tree reduction this replaces ran a threadgroup_barrier on EVERY level — eight of them\n"
+     "  // for a 256-thread group. At decode (one row, 2048 wide) that barrier latency was the whole\n"
+     "  // kernel: 14.96us to move 8 KB, ~0.5 GB/s. simd_sum reduces inside a simdgroup with no\n"
+     "  // barrier at all, leaving ONE barrier to publish the per-simdgroup partials; every thread\n"
+     "  // then sums those few values itself, which is cheaper than a second barrier to broadcast.\n"
+     "  part = simd_sum(part);\n"
+     "  uint nsg = (tgsize + 31u) / 32u;\n"
+     "  if ((lane & 31u) == 0u) red[lane >> 5] = part;\n"
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
-     "  for (uint s=tgsize/2; s>0; s>>=1){ if(lane<s) red[lane]+=red[lane+s]; threadgroup_barrier(mem_flags::mem_threadgroup); }\n"
-     "  float inv=rsqrt(red[0]/float(dim)+E[0]);\n"
+     "  float tot = 0.0f;\n"
+     "  for (uint i = 0u; i < nsg; i++) tot += red[i];\n"
+     "  float inv=rsqrt(tot/float(dim)+E[0]);\n"
      "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ O[base+j]=X[base+j]*inv*G[j]; }\n"
      "}\n";
 
@@ -4396,6 +4404,21 @@ static int ensure_mha_decode(void) {
     if (fn64 != nil) gMHADecode64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
     id<MTLFunction> fn128 = [lib newFunctionWithName:@"mha_decode128_f32"];
     if (fn128 != nil) gMHADecode128 = [gDevice newComputePipelineStateWithFunction:fn128 error:&err];
+    return 0;
+}
+
+// mtl_probe_pipeline_occupancy reports maxTotalThreadsPerThreadgroup for the decode attention
+// pipelines. That number is set by register pressure: a kernel holding large per-thread arrays gets
+// a low ceiling, which caps how many simdgroups a core can host and therefore how much memory
+// latency can be hidden. 1024 means the compiler found room; a few hundred means it did not.
+// Writes into out[0..2] = {generic, dk64, dk128}. Returns 0 on success.
+int mtl_probe_pipeline_occupancy(int* out) {
+    if (ensure_init() != 0) return -1;
+    if (ensure_mha_decode() != 0) return -2;
+    if (out == NULL) return -3;
+    out[0] = gMHADecode   ? (int)gMHADecode.maxTotalThreadsPerThreadgroup   : -1;
+    out[1] = gMHADecode64 ? (int)gMHADecode64.maxTotalThreadsPerThreadgroup : -1;
+    out[2] = gMHADecode128? (int)gMHADecode128.maxTotalThreadsPerThreadgroup: -1;
     return 0;
 }
 
