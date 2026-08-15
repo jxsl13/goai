@@ -3425,3 +3425,52 @@ a state the real workload never reaches.
 - Dual-format cache: ~3% at pp256/512 for ~6 GB plus budget-reservation logic. Weaker than it
   looked, since the cap removal captured its pp1024 share for free.
 - Decode: at parity; every mechanism measured and excluded bar an inner-loop redesign.
+
+## R-01M02SX1PQE4NT0JSPR20QMJKV Classical ML vs scikit-learn 1.9.0 — GoAI wins 4 of 6, DecisionTree flipped
+kind: research
+state: draft
+created: 2026-08-15
+
+# Classical ML vs scikit-learn 1.9.0 — re-measured, both sides in one session
+
+The Metal inference path is exhausted for cheap wins (prefill 0.87-0.96x of llama.cpp, decode at
+parity), so this checks the level where goai was recorded as LEADING, since those comparisons rot
+when the incumbent updates.
+
+Environment: sklearn 1.9.0, numpy 2.5.2, python 3.14.7, M2 Pro. Dataset 4000x20, best-of-5 fit,
+identical data written by classic/perfcompare_test.go and read by testdata/bench_sklearn.py.
+
+| method | GoAI (ms) | sklearn n_jobs=1 | sklearn n_jobs=-1 | verdict |
+|---|---|---|---|---|
+| DecisionTree | 4.60 | 14.47 | - | GoAI 3.15x |
+| RandomForest100 | 27.69 | 283.75 | 97.51 | GoAI 3.52x vs parallel |
+| GradientBoosting100 | 77.95 | 1279.75 | - | GoAI 16.4x |
+| GaussianNB | 0.32 | 0.68 | - | GoAI 2.13x |
+| SVC_rbf | 5.63 | 3.51 | - | sklearn 1.60x |
+| KNN_fit | 4.27 | 0.29 | 0.28 | sklearn 15x |
+
+GoAI wins 4 of 6, including RandomForest against sklearn using ALL cores.
+
+## Changes against the previously recorded state
+
+The prior record (T881/B103) had sklearn winning DecisionTree by 1.3x and RBF-SVC by 2.0x. Now:
+
+- DecisionTree has FLIPPED to a 3.15x GoAI win. Not investigated here — it could be a goai
+  improvement landed since, or a sklearn regression, and the honest position is that the old
+  number no longer reproduces rather than that either explanation is established.
+- SVC_rbf remains a loss but narrowed from 2.0x to 1.60x.
+- GradientBoosting widened from 9.2x to 16.4x.
+
+## Caveats that keep this honest
+
+- KNN_fit is a fit-only artifact, as previously recorded: goai eagerly builds the ball tree where
+  sklearn defers the work to query time. It is not a 15x deficit in any user-visible sense, and
+  comparing fit alone flatters sklearn here.
+- These are FIT times only. Predict/score throughput is not covered by this harness.
+- Single dataset shape (4000x20). The ordering may not hold at other n/d.
+
+## Why this matters for the bottom-up mandate
+
+At the classical-ML level goai leads on 4 of 6 methods against a current scikit-learn, which is the
+condition the mandate sets for opening new areas. At the LLM-inference level it does not lead yet
+(0.87-0.96x prefill, ~parity decode), and every remaining lever there has been priced and declined.
