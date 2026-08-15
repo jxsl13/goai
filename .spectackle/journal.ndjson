@@ -344,3 +344,4 @@
 {"t":"2026-08-15T02:47:37Z","eid":"a632b50de3e0d227","ag":"ag-f933","ev":"create","id":"R-01M01N2NFAEJAVQ3JVP12JJN1C","k":"research","ti":"End-to-end: Metal 2.38x/2.63x, Vulkan 1.39x — and seven Vulkan shaders were unreachable from the decoder"}
 {"t":"2026-08-15T02:54:40Z","eid":"fb955e3bb1e86307","ag":"ag-e7a0","ev":"create","id":"R-01M01NFK23EM09B17X2TMHB4FB","k":"research","ti":"Q2_K and Q3_K move ~40-50 percent of Q4_K's weight bytes per second — unpacking-bound, probe before building"}
 {"t":"2026-08-15T02:56:29Z","eid":"d51f085eb043dab5","ag":"ag-179b","ev":"create","id":"R-01M01NJX03EV6AH33FCDGTZQYB","k":"research","ti":"REFUTED: Q2_K/Q3_K are not unpacking-bound — removing all unpack ALU is worth at most 1.08x"}
+{"t":"2026-08-15T03:03:39Z","eid":"c8c880a5608c4b49","ag":"ag-b88d","ev":"create","id":"R-01M01P013VEVWSP463ZWJMH7AA","k":"research","ti":"The 7.1x llama.cpp gap profiled: 8 percent of peak bandwidth vs 57 percent, with batching already optimal"}

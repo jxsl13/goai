@@ -1084,3 +1084,25 @@ WHAT THE DIFFERENCE PROBABLY IS, stated as unverified: load ISSUE count rather t
 NET: no actionable lever here. Q2_K and Q3_K already gained 1.913x and 3.876x end to end from the cooperative work, and the residual gap to Q4_K is inherent to what those formats require a reader to do.
 
 METHOD NOTE. The first attempt at this probe ran the two variants as SEPARATE blocks rather than interleaved and produced 1.14x with a 703005 outlier — unusable, and in the direction that would have justified building something. Re-running it interleaved with warmup trimming gave 1.08x with overlap. The discipline that produced the usable number is the same one filed as FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001, and I violated it before following it.
+
+## R-01M01P013VEVWSP463ZWJMH7AA The 7.1x llama.cpp gap profiled: 8 percent of peak bandwidth vs 57 percent, with batching already optimal
+kind: research
+state: draft
+created: 2026-08-15
+
+PROFILED. The 7.14x gap to llama.cpp is entirely kernel bandwidth efficiency. Submit batching, host CPU and dispatch count are all ruled out by measurement. Instrumentation reverted; nothing shipped.
+
+THE NUMBERS, TinyLlama-1.1B Q4_K_M (636.18 MiB = 667.1 MB of weights re-read per token) on this M2 Pro:
+  llama.cpp 48d22e295   172.19 tok/s    5.81 ms/token   114.9 GB/s   57.4 percent of the 200 GB/s peak
+  GoAI                   24.11 tok/s   41.48 ms/token    16.1 GB/s    8.0 percent of peak
+The ratio of achieved bandwidths is 7.13x and the ratio of token rates is 7.14x. The gap IS the bandwidth; there is nothing else to explain.
+
+RULED OUT — HOST CPU. A Go CPU profile over the decode captures 3.28s of samples across 10.37s wall, i.e. 0.32 cores busy, and 53.96 percent of that is runtime.cgocall with 39.33 percent unknown (driver). The host is idle waiting on the GPU, not computing.
+
+RULED OUT — SUBMIT OVERHEAD, and this contradicted my own prior. A ~149us per-submit floor was measured earlier in this campaign, and 41.48 ms/token divided by roughly 154 quant matmuls gives 269 us each, which is suspiciously close to that floor plus a kernel. Counting the actual submit primitives settles it: for 16 generated tokens the decoder issues Commit=16, Wait=16, Finish=1 — EXACTLY ONE COMMAND BUFFER PER TOKEN, carrying all 22 layers. Batching is already optimal and cannot be the lever.
+
+WHAT THAT LEAVES. GoAI's Metal kernels move 16.1 GB/s where llama.cpp's move 114.9 GB/s on the same weights on the same device, inside an equally well-batched command buffer. The cooperative work in this campaign moved this model from 7.00 to 24.11 tok/s (3.44x) and did so by fixing occupancy; what remains is a different axis — how efficiently each thread reads memory once it has work.
+
+CANDIDATE, EXPLICITLY UNPROBED. The kernels I wrote for Q2_K/Q3_K/Q5_K index the weight as individual bytes (W[qb+l] on a uchar pointer), while the inherited Q4_K/Q6_K kernels use block-struct access with ushort reads. Q4_K_M exercises the inherited pair, so the byte-wise kernels are NOT what this measurement indicts — the vectorized ones are already at 16 GB/s. Whether wider loads (uint4/float4 staging) close the remaining gap is unknown and must be bounded by probe before anything is built. Four candidate levers in this campaign have already died that way, and the two that survived were bounded first.
+
+STANDING: this is the first measurement in the campaign that compares GoAI to an incumbent rather than to itself, and it is the one that should set priority. A 7x deficit on the flagship decode path outranks any remaining single-digit-percent lever.
