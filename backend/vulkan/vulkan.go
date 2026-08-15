@@ -228,6 +228,22 @@ var qmatmulQ3KCoopSpirv []byte
 // q3kCoopEnabled gates the cooperative Q3_K path at M==1; see SetQ3KCooperative.
 var q3kCoopEnabled = true
 
+// qmatmulQ2KCoopSpirv is the cooperative M=1 Q2_K shader (shaders/qmatmul_q2k_coop.comp).
+//
+//go:embed shaders/qmatmul_q2k_coop.spv
+var qmatmulQ2KCoopSpirv []byte
+
+// q2kCoopEnabled gates the cooperative Q2_K path at M==1; see SetQ2KCooperative.
+var q2kCoopEnabled = true
+
+// SetQ2KCooperative selects the cooperative M=1 Q2_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ2KCooperative(on bool) bool {
+	prev := q2kCoopEnabled
+	q2kCoopEnabled = on
+	return prev
+}
+
 // SetQ3KCooperative selects the cooperative M=1 Q3_K shader and returns the previous
 // setting. Results match the scalar shader within crossTol(k).
 func SetQ3KCooperative(on bool) bool {
@@ -876,6 +892,19 @@ func QMatMulQ2_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q2kCoopEnabled && len(qmatmulQ2KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ2KCoopSpirv[0])), C.int(len(qmatmulQ2KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ2_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q2k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ2KSpirv[0])), C.int(len(qmatmulQ2KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
