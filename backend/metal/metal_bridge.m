@@ -3313,9 +3313,84 @@ static NSString* const kMHADecodeSource =
      "    l=c1*l+c2*lo; m=M;\n"
      "  }\n"
      "  if (lane==0) { for (int d=0; d<dk; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
+     "}\n"
+     "kernel void mha_decode64_f32(device const float* Q [[buffer(0)]],\n"
+     "                           device const float* K [[buffer(1)]],\n"
+     "                           device const float* V [[buffer(2)]],\n"
+     "                           device float* O [[buffer(3)]],\n"
+     "                           constant int* P [[buffer(4)]],\n"
+     "                           constant float* FP [[buffer(5)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, i=(int)tg.y;\n"
+     "  if (h >= heads || i >= sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  int jmax = causal ? (sk - sq + i + 1) : sk;\n"
+     "  float q[64]; for (int d=0; d<64; d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[64]; for (int d=0; d<64; d++) acc[d]=0.0f;\n"
+     "  for (int j=(int)lane; j<jmax; j+=32) {\n"
+     "    float s=0.0f; for (int d=0; d<64; d++) s+=q[d]*K[j*dkv+kvOff+d]; s*=scale;\n"
+     "    float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "    l=corr*l+p; for (int d=0; d<64; d++) acc[d]=corr*acc[d]+p*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  // simdgroup merge of the (m, l, acc) online-softmax partials (tree over 32 lanes).\n"
+     "  for (uint off=16; off>0; off>>=1) {\n"
+     "    float mo=simd_shuffle_down(m,off); float lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    // guard the both-empty case: (-inf)-(-inf) = NaN would poison the merge (sk<32 lanes).\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<64; d++) { float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0) { for (int d=0; d<64; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
+     "}\n"
+     "kernel void mha_decode128_f32(device const float* Q [[buffer(0)]],\n"
+     "                           device const float* K [[buffer(1)]],\n"
+     "                           device const float* V [[buffer(2)]],\n"
+     "                           device float* O [[buffer(3)]],\n"
+     "                           constant int* P [[buffer(4)]],\n"
+     "                           constant float* FP [[buffer(5)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, i=(int)tg.y;\n"
+     "  if (h >= heads || i >= sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  int jmax = causal ? (sk - sq + i + 1) : sk;\n"
+     "  float q[128]; for (int d=0; d<128; d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[128]; for (int d=0; d<128; d++) acc[d]=0.0f;\n"
+     "  for (int j=(int)lane; j<jmax; j+=32) {\n"
+     "    float s=0.0f; for (int d=0; d<128; d++) s+=q[d]*K[j*dkv+kvOff+d]; s*=scale;\n"
+     "    float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "    l=corr*l+p; for (int d=0; d<128; d++) acc[d]=corr*acc[d]+p*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  // simdgroup merge of the (m, l, acc) online-softmax partials (tree over 32 lanes).\n"
+     "  for (uint off=16; off>0; off>>=1) {\n"
+     "    float mo=simd_shuffle_down(m,off); float lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    // guard the both-empty case: (-inf)-(-inf) = NaN would poison the merge (sk<32 lanes).\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<128; d++) { float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0) { for (int d=0; d<128; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gMHADecode = nil;
+// dk<=64 specialization. The generic kernel declares q[128] and acc[128] whatever dk actually is,
+// which is 1 KB of per-thread arrays — far past the register file, so both arrays spill and every
+// acc[d] touch in the hot loop AND in the 5-level simdgroup merge becomes a memory access. The
+// merge shuffles all dk accumulators at every level and so costs the same at sk=8 as at sk=1024,
+// which is exactly the sk-independent floor measured on the decode path. Halving the arrays halves
+// the spill. Same arithmetic, same order — the two kernels are textually identical apart from the
+// array bounds, so dk<=64 callers get an identical result.
+static id<MTLComputePipelineState> gMHADecode64 = nil;
+static id<MTLComputePipelineState> gMHADecode128 = nil;
 static int ensure_mha_decode(void) {
     if (gMHADecode != nil) return 0;
     NSError* err = nil;
@@ -3324,7 +3399,12 @@ static int ensure_mha_decode(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"mha_decode_f32"];
     if (fn == nil) return -11;
     gMHADecode = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gMHADecode != nil ? 0 : -12;
+    if (gMHADecode == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"mha_decode64_f32"];
+    if (fn64 != nil) gMHADecode64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    id<MTLFunction> fn128 = [lib newFunctionWithName:@"mha_decode128_f32"];
+    if (fn128 != nil) gMHADecode128 = [gDevice newComputePipelineStateWithFunction:fn128 error:&err];
+    return 0;
 }
 
 // mtl_mha_decode_host (§T432): the cooperative decode/prefill attention (§T428/431 kernel) over
@@ -3392,7 +3472,10 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         id<MTLBuffer> dfpb = [gDevice newBufferWithBytes:DFP length:sizeof(DFP) options:MTLResourceStorageModeShared];
         if (dpb == nil || dfpb == nil) return -2;
         id<MTLComputeCommandEncoder> denc = [dcmd computeCommandEncoder];
-        [denc setComputePipelineState:gMHADecode];
+        id<MTLComputePipelineState> dpipe = gMHADecode;
+        if (dk == 64 && gMHADecode64 != nil) dpipe = gMHADecode64;
+        else if (dk == 128 && gMHADecode128 != nil) dpipe = gMHADecode128;
+        [denc setComputePipelineState:dpipe];
         // qElemOff: float-element offset into Q (the fused-QKV sub-row view, §T613).
         [denc setBuffer:dqb offset:(NSUInteger)qElemOff*4 atIndex:0];
         [denc setBuffer:dkb offset:0 atIndex:1];
