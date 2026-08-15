@@ -2321,3 +2321,44 @@ Worth noting the overflow may be specific to this test's random-byte weights, wh
   prefill : pp64 0.329x — 3.0x behind
 
 Both remaining roads are now measured end to end: expansion tops out around 743 tok/s pp64 (2.4x short), and the matrix-unit kernel needs its threadgroup staging removed to go further. Neither is a small change, and the f16 shortcut between them is closed.
+
+## R-01M024MQKEE249NDV49JH678EH Reverted the A-staging removal — the staging zero-pads partial M tiles and a clamp misattributes rows; both prefill roads are now measured to their limits
+kind: research
+state: draft
+created: 2026-08-15
+
+Attempted the staging removal the previous record specified. It broke partial-M correctness, the parity test caught it, and the expected payoff would only have reached parity with the path already in production. Reverted.
+
+## What was attempted
+
+Read the A tile straight from device memory instead of staging it in sX — freeing 16 KB of threadgroup memory and one barrier per K-chunk — and raise BM from 32 to 64 so the weight tile serves twice as many query rows.
+
+## Why it does not work as stated
+
+The sX staging is not redundant: it ZERO-PADS partial M tiles. Loading A directly requires clamping the row index to stay in bounds, and a clamp silently misattributes rows. At M=9 the second simdgroup reads rows 1..8 while storing to output rows 8..15, so output row 8 receives row 1's result.
+
+TestQ4KMatrixUnitMatchesCooperative caught it at exactly that shape: max relative 1.374e+01 at M=9 K=256 N=13, while every full-tile shape stayed at 0.000e+00.
+
+That test was built with partial tiles in BOTH dimensions specifically because this class of bug is invisible to inspection. The clamp reads as a bounds fix, and it is one — it just answers a different question than the one that matters. Without the M=9 case the change would have looked correct and shipped.
+
+## Why it was not fixed
+
+A dual path (direct load when mi0+BM<=M, staged otherwise) would work. But the whole change is worth at most ~1.5x on a kernel currently ~2.75x behind dq+gemm, so the best case is parity with the path already in production. Not worth the added branch and the second correctness surface.
+
+## Where both roads now stand, measured
+
+Production (dq+gemm), M=64: 743us total = expansion 260us + GEMM 449us.
+  - expansion writes 44 MB at 178 GB/s, against a ~200 GB/s roofline
+  - GEMM runs at 3286 GFLOP/s, 48% of the 6.8 TFLOP/s peak
+  Both halves are near their respective limits. There is no significant headroom left in this path.
+
+Matrix-unit kernel, M=64: 1198us at 1232 GFLOP/s (18% of peak). Reads only the 6.5 MB quantized weight, so its ceiling is far higher — but the remaining cost is threadgroup staging, and removing the part that is safe to remove (sW) is not possible: the matrix units need their operands in memory.
+
+f16 shortcut: closed (1.08-1.39x, and f16 range overflow producing NaN).
+
+## Honest assessment of the remaining gap
+
+pp64 is 3.0x behind llama.cpp and every incremental lever measured this session is now spent or bounded below what would close it. Closing it means matching a hand-tuned quantized GEMM — the same kernel class llama.cpp ships — rather than any further adjustment to what exists here. That is a substantial engineering effort, not a tuning pass, and it should be scoped as such rather than approached in increments.
+
+  decode  : tg64 0.914x — parity, bandwidth-bound at 92% of the memory roofline
+  prefill : pp64 0.329x — 3.0x behind, from 0.057x when this line of work began
