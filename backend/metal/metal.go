@@ -2332,6 +2332,11 @@ func SetQ4KDequantGemmF16(on bool) {
 // compute-bound and f16 measures ~3% slower, so widening this is a pessimization, not a tuning knob.
 func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m)) }
 
+// SetF16MinN sets the smallest output width N that takes the f16 expand-then-GEMM path. Narrow
+// projections otherwise fall to the cooperative quantized kernel, which re-reads the weight per
+// row-group and so costs per row at prefill batch sizes.
+func SetF16MinN(n int) { C.mtl_set_f16_min_n(C.int(n)) }
+
 // SetWeightCacheGB enables the persistent expanded-weight cache with a budget in gigabytes, or
 // disables it with 0 (the default).
 //

@@ -2893,6 +2893,8 @@ static int recorder_matmul_f16(id<MTLCommandBuffer> cmd, id<MTLBuffer> aBuf, id<
     return 0;
 }
 
+static int gF16MinN = 128;
+void mtl_set_f16_min_n(int n) { gF16MinN = n < 1 ? 1 : n; }
 static int gDQGemmF16Enabled = 1;
 // 64, not 128, and chosen end-to-end rather than from the leaf benchmark. The leaf shows 1.39x at
 // M=64, 1.22x at M=32 and still 1.09x at M=128 — but that 1.09x does not survive into whole-model
@@ -2923,7 +2925,12 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     // 1.026x at 768, 0.980x at 1024 and 1.000x at 1536 — all inside this machine's ~4% noise floor,
     // so 512 is where a win stops being demonstrable rather than where harm begins.
     if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 512)) return 0;
-    if (N < 512 || K % 256 != 0) return 0;
+    // The narrow projections (k/v at N=256) are worth pulling onto this path only once the batch is
+    // deep enough. Below that the cooperative kernel is still better for them, and forcing them
+    // through expand-then-GEMM measured 0.982x/0.990x at n=64 against 1.040x-1.045x at n=256 and
+    // n=512 — a consistent sign flip across four readings, not noise.
+    int minN = (M >= 128) ? gF16MinN : 512;
+    if (N < minN || K % 256 != 0) return 0;
     return ensure_q4k_f16() == 0;
 }
 
