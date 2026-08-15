@@ -2438,10 +2438,19 @@ static NSString* const kFlashMMSource =
      "  if (jmax > sk) jmax = sk;\n"
      "  for (int j0=0; j0<jmax; j0+=BK){\n"
      "    // stage K/V once for all BQ query rows — 128 threads instead of 32\n"
-     "    for (int e=(int)tid; e<BK*DK; e+=256){\n"
-     "      int t=e/DK, d=e%DK, j=j0+t;\n"
-     "      sK[e] = (j<sk) ? K[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
-     "      sV[e] = (j<sk) ? V[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
+     "    // Vectorized staging: DK=64 is a multiple of 4, so one float4 move replaces four\n"
+     "    // scalar ones. The staging is INSTRUCTION-bound, not byte-bound — halving the\n"
+     "    // element size would not have helped, since the store count is what dominates.\n"
+     "    for (int e4=(int)tid; e4<BK*DK/4; e4+=256){\n"
+     "      int t=e4/(DK/4), d4=e4%(DK/4), j=j0+t;\n"
+     "      float4 kv = 0.0f, vv = 0.0f;\n"
+     "      if (j<sk){\n"
+     "        device const float4* kp=(device const float4*)(K + (ulong)j*dkv + kvOff);\n"
+     "        device const float4* vp=(device const float4*)(V + (ulong)j*dkv + kvOff);\n"
+     "        kv = kp[d4]; vv = vp[d4];\n"
+     "      }\n"
+     "      ((threadgroup float4*)sK)[e4] = kv;\n"
+     "      ((threadgroup float4*)sV)[e4] = vv;\n"
      "    }\n"
      "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "    for (short b=0; b<BK/8; b++){\n"
@@ -2540,6 +2549,30 @@ int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh,
     [enc dispatchThreadgroups:MTLSizeMake(heads, (sq+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
     [enc endEncoding];
     return 0;
+}
+
+
+// Feasibility probe: does this device's MSL accept half-input MMA into a float accumulator?
+static NSString* const kMixedProbeSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void mixed_probe(device const half* A [[buffer(0)]],\n"
+     "                        device const half* B [[buffer(1)]],\n"
+     "                        device float* C [[buffer(2)]]) {\n"
+     "  simdgroup_half8x8 a, b;\n"
+     "  simdgroup_float8x8 acc = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  simdgroup_load(a, A, 8);\n"
+     "  simdgroup_load(b, B, 8);\n"
+     "  simdgroup_multiply_accumulate(acc, a, b, acc);\n"
+     "  simdgroup_store(acc, C, 8);\n"
+     "}\n";
+
+int mtl_probe_mixed_mma(void) {
+    if (ensure_init() != 0) return -1;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kMixedProbeSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "mixed MMA unsupported: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    return [lib newFunctionWithName:@"mixed_probe"] != nil ? 0 : -11;
 }
 
 // Scratch for the dequantized weight, grown on demand and reused. One buffer is enough: compute

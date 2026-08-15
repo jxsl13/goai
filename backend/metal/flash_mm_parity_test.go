@@ -16,11 +16,20 @@ import (
 //	seq= 64  decode  166.4us  flashMM  122.7us  1.36x   273 GFLOP/s ( 4.0% peak)
 //	seq=128  decode  522.3us  flashMM  138.5us  3.77x   969 GFLOP/s (14.2%)
 //	seq=256  decode 1903.2us  flashMM  389.3us  4.89x  1379 GFLOP/s (20.3%)
-//	seq=512  decode 7271.6us  flashMM 1179.5us  6.16x  1821 GFLOP/s (26.8%)
+//	seq=512  decode 7271.6us  flashMM  997.0us  7.29x  2154 GFLOP/s (31.7%)
 //
 // End to end on TinyLlama prompt processing: n=64 777 -> ~804, n=256 1314 -> ~1582,
 // n=1024 929 -> ~1796 tok/s. The gain tracks attention's share of prefill, which the
 // prompt-length sweep measured at 5% / 21% / 58%.
+//
+// The K/V staging is vectorized with float4 (DK=64 is a multiple of 4): 1175.8/1208.8 ->
+// 991.7/1002.4us at seq=512, ~1.19x. Note what did NOT work — staging K/V as half. Mixed-precision
+// MMA is supported on this device (probed), but halving the ELEMENT SIZE leaves the STORE COUNT
+// unchanged, and the staging is instruction-bound. Only the float4 move reduces instructions.
+//
+// End to end that 1.19x is ~1.02x at pp1024 (1768.5/1790.0 -> 1815.9/1829.7) and nil at pp256,
+// because attention is down to ~18% of prefill after the earlier 6x. Kept as strictly less work
+// with identical accuracy; the share grows again at longer prompts.
 //
 // BQ is 64 (8 simdgroups). Against BQ=32 it is neutral at n=64 and better at length —
 // interleaved: n=256 1545/1514 -> 1587/1577, n=1024 1602/1633 -> 1799/1793. sO aliases the K/V

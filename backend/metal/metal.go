@@ -2373,6 +2373,9 @@ func SetFlashMM(on bool) {
 	C.mtl_set_flash_mm(v)
 }
 
+// ProbeMixedMMA reports whether this device compiles half-input MMA into a float accumulator.
+func ProbeMixedMMA() int { return int(C.mtl_probe_mixed_mma()) }
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)
