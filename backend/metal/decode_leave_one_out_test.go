@@ -4,6 +4,7 @@ package metal
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
@@ -52,13 +53,13 @@ func TestDecodeLeaveOneOut(t *testing.T) {
 		t.Skip("no metal")
 	}
 	const (
-		layers = 22
-		dim    = 2048
-		hidden = 5632
-		heads  = 32
-		kvh    = 4
-		dk     = 64
-		ctx    = 512
+		layers     = 22
+		dim        = 2048
+		hidden     = 5632
+		heads      = 32
+		kvh        = 4
+		dk         = 64
+		ctxDefault = 512
 	)
 	kvDim := kvh * dk
 
@@ -90,6 +91,10 @@ func TestDecodeLeaveOneOut(t *testing.T) {
 	x, xn, q, kk, vv, att, ob := nb(dim), nb(dim), nb(dim), nb(kvDim), nb(kvDim), nb(dim), nb(dim)
 	g, u := nb(hidden), nb(hidden)
 	gam := nb(dim)
+	ctx := ctxDefault
+	if v := os.Getenv("GOAI_LOO_CTX"); v != "" {
+		fmt.Sscanf(v, "%d", &ctx)
+	}
 	kc, vc := nb(ctx*kvDim), nb(ctx*kvDim)
 	defer func() {
 		for _, b := range []*DeviceBuffer{x, xn, q, kk, vv, att, ob, g, u, gam, kc, vc} {
