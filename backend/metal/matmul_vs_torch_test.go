@@ -22,6 +22,18 @@ package metal
 // GFLOP/s, 11-18x slower, because backend/cpu's Accelerate cblas_sgemm path is gated on
 // goexperiment.simd (not on a -tags simd build tag, which silently does nothing here).
 //
+// That gate is DELIBERATE and should not be "fixed". backend/cpu has three tiers:
+//
+//	default build          plain Go        ~91-126 GFLOP/s   BIT-EXACT
+//	goexperiment.simd      NEON kernel     ~795 (documented)  f32-native, ADR-0021 tolerance
+//	  + cgo                Accelerate AMX  ~973-2134 measured f32-native, ADR-0021 tolerance
+//
+// The fast tiers accumulate f32-native (vendor SGEMM convention), so they are covered by a
+// tolerance contract rather than bit-exactness, and gemm_accel_darwin.go states plainly that the
+// default build "never sees this file and stays bit-exact". The 11-18x is the price of that
+// guarantee, not an oversight — relaxing the constraint would silently change the numerics every
+// default build currently promises.
+//
 // Caveat on what this compares: goai dispatches MPSMatrixMultiplication directly, while torch-mps
 // goes through MPSGraph and its own kernels. So this is not "our GEMM beats Apple's" — it is that
 // the direct MPS path beats torch's MPS path at these shapes, which is the comparison a user
