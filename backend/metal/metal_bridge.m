@@ -2413,23 +2413,33 @@ static NSString* const kQ4KMMSource =
      "      int m=idx>>6, kl=idx&63;\n"
      "      sX[idx] = (mi0+m<M) ? X[(mi0+m)*K + k0 + kl] : 0.0f;\n"
      "    }\n"
-     "    for (int idx=(int)tid; idx<64*32; idx+=128){\n"
-     "      int kl=idx>>5, n=idx&31;\n"
-     "      float v=0.0f;\n"
+     "    // Hoist the per-sub-block constants. The previous form recomputed base, d, dmin and the\n"
+     "    // 6-bit scale/min unpack for EVERY element — about 15 operations per weight, of which 12\n"
+     "    // were identical across the 32 elements sharing a sub-block. Each thread now owns one\n"
+     "    // (n, 16-element run) pair, computes those constants once, and pays only the nibble\n"
+     "    // extraction per element. 16 divides 32, so a run never straddles a sub-block boundary\n"
+     "    // and hf is constant within it.\n"
+     "    {\n"
+     "      int n=(int)tid&31, kbase=((int)tid>>5)*16;\n"
      "      if (ni0+n<N){\n"
      "        int base=(ni0+n)*rowBytes + sb*144;\n"
      "        ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
      "        ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
      "        float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
      "        int sbase=base+4, qbase=base+16;\n"
-     "        int hf=kl>>5, l=kl&31, is=pr*2+hf, sc, mn;\n"
+     "        int hf=kbase>>5, is=pr*2+hf, sc, mn;\n"
      "        if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
      "        else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
-     "        uchar qbyte=W[qbase+pr*32+l];\n"
-     "        int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
-     "        v = d*(float)sc*(float)nib - dmin*(float)mn;\n"
+     "        float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "        int qb=qbase+pr*32;\n"
+     "        for (int l=0;l<16;l++){\n"
+     "          int kl=kbase+l; uchar qbyte=W[qb+(kl&31)];\n"
+     "          int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "          sW[kl*32+n] = dl*(float)nib - ml;\n"
+     "        }\n"
+     "      } else {\n"
+     "        for (int l=0;l<16;l++) sW[(kbase+l)*32+n]=0.0f;\n"
      "      }\n"
-     "      sW[idx]=v;\n"
      "    }\n"
      "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "    for (int kk=0; kk<64; kk+=8){\n"
@@ -2465,32 +2475,23 @@ static int ensure_q4k_mm(void) {
 
 // q4k_mm_eligible: the matrix-unit path pays off only once the batch is deep enough to amortize
 // dequantizing a whole 8x256 weight tile. Below that the cooperative kernel wins.
-// DISABLED by default. The kernel is CORRECT (bit-exact against the scalar reference) but still
-// slower than the scalar cooperative path, and the reason is now measured rather than guessed.
+// DISABLED by default — not because the approach fails, but because dequantize-once + dense GEMM
+// is better still. Keeping the honest ranking, K=2048 N=5632:
 //
-// Redesigning the tile from 8x8/32-thread to 32x32/128-thread lifted it 9.3x, 63 -> 585 GFLOP/s,
-// but that is still only 8.6% of the 6.8 TFLOP/s peak against the cooperative path's 11.1%:
+//   M= 32  coop  979.7us  matrixUnit  719.5us  dq+gemm  526.3us
+//   M= 64  coop 1955.1us  matrixUnit 1198.1us  dq+gemm  743.0us
+//   M=256  coop 7807.8us  matrixUnit 4288.4us  dq+gemm 1558.5us
 //
-//   M=  8  coop  246.0us  mm 1560.4us  0.16x
-//   M= 64  coop 1953.8us  mm 2845.6us  0.69x
-//   M=256  coop 7809.2us  mm 10092.0us 0.77x
+// This kernel now BEATS the scalar cooperative path (1.36x-1.82x) after hoisting the per-sub-block
+// constants out of the staging loop: 585 -> 1377 GFLOP/s, 2.35x. The earlier reading — that a
+// 240:1 scalar-to-matrix instruction ratio closed the approach — was too strong. Twelve of those
+// ~15 operations per weight were the base address, d, dmin and the 6-bit scale/min unpack, all
+// identical across the 32 elements of a sub-block; computing them once per (n, 16-element run)
+// removed most of the ratio. The tiling was never the main cost, and neither were the matrix units.
 //
-// The instruction balance explains it. Per 64-wide K chunk a threadgroup dequantizes 2048 weight
-// values at roughly 15 integer/float ops each = ~30720 scalar operations, to feed 128 simdgroup
-// MAC instructions. That is 240 scalar instructions per matrix instruction: the matrix units are
-// idle behind the dequantization, and no tile shape fixes a 240:1 ratio. Raising BM only improves
-// it linearly (BM=32 gives 64 FLOP per dequantization, BM=128 gives 256) while threadgroup memory
-// caps BM well before the ratio inverts.
-//
-// The cooperative path does the SAME dequantization work and reaches 757 GFLOP/s precisely because
-// it never stages: it dequantizes in registers and multiplies immediately. Adding threadgroup
-// staging and two barriers to an already dequantization-bound kernel cannot win.
-//
-// The promising direction is therefore NOT a better tile but removing the dequantization from the
-// inner loop entirely: dequantize a layer's weight to f16 ONCE per prefill (~24 MB -> ~48 MB
-// transient) and hand the batch to an optimized f16 GEMM. The dequantization is then paid once per
-// prompt instead of once per query tile, which is exactly what llama.cpp's pp64 advantage looks
-// like. Retained behind SetQ4KMatrixUnit with its parity test as a validated reference point.
+// It still loses to dq+gemm by ~2.75x, so it stays off. What remains here is the staging itself:
+// every weight is written to threadgroup memory and read back, with two barriers per K-chunk,
+// where dq+gemm writes once to device memory and hands the multiply to a tuned MPS kernel.
 static int gQ4KMMEnabled = 0;
 void mtl_set_q4k_mm(int on) { gQ4KMMEnabled = on ? 1 : 0; }
 
