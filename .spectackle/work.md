@@ -2951,3 +2951,47 @@ The cheap general defence: a constant introduced as a safety margin is a claim a
   decode  : tg64 ~1.017x — parity at the memory roofline
   prefill : pp64 0.336x at n=64; 1313 tok/s at n=256, so the short-prompt figure understates the
             path — expansion is per-projection and amortizes over longer prompts
+
+## R-01M028JT46F4NRM1MN1HMWB2HR Prompt-length sweep inverts the prefill priority: attention is 58% of a 1024-token prefill at 4% of peak, and n=64 was the one length that hid it
+kind: research
+state: draft
+created: 2026-08-15
+
+Swept the prompt length. It inverts the priority I had recorded twice, and it does so because every prefill measurement this session used the one length where the answer is misleading.
+
+## The sweep
+
+  n      GoAI    llama.cpp   ratio
+    64   ~760      1773      0.43
+   256   1312      2142      0.61
+  1024    929      2141      0.43
+
+llama.cpp is flat: pp64 1773, pp256 2142, pp512 2202, pp1024 2141. GoAI PEAKS at n=256 and then falls. A flat curve against a falling one is the signature of an O(n^2) term with a bad constant.
+
+## Attention is that term
+
+  seq   attention x22 layers   prefill total   share   GFLOP/s
+    64        4.4 ms                ~84 ms       5%      167
+   256       41.9 ms               ~195 ms      21%      282
+   512      160.1 ms               ~427 ms      37%      295
+  1024      ~640 ms               ~1102 ms      58%        —
+
+~4% of peak throughput, and dominant long before a prompt would be called long.
+
+## Why this was missed twice
+
+I recorded attention as "not today's bottleneck, ~4% of a layer" and deprioritized it on that basis — twice. That figure was correct AT n=64, and n=64 is the length every measurement happened to use, because it is what llama-bench's default pp64 reports and the harness was built around matching it.
+
+So the blind spot was inherited from the comparison harness: matching the incumbent's default benchmark made every subsequent measurement share its operating point. The general form — a benchmark's default parameters silently become the design's assumptions — is a new instance of the wrong-regime family, but a subtler one: nothing was measured incorrectly, the same correct number was simply reused outside the range where it characterized the system.
+
+## Reprioritized
+
+Attention at 3-7x gives pp1024 of 1516-1851 tok/s, i.e. 0.71-0.86x of llama.cpp against 0.43x today. The quantized-GEMM project removes expansion — 0.99 of 3.79 ms/layer at n=64, about 1.35x on the matmul path — and expansion amortizes away as the prompt lengthens, so it is worth strictly less at exactly the lengths that matter.
+
+The attention work is also better specified than before: TestPrefillAttentionRouting already establishes that neither existing kernel is suitable (flash is 0.72-0.97x of the decode kernel, both at 3-4% of peak) and that rerouting is not available. What is needed is a genuine flash-attention kernel — Q tile resident, K/V streamed in tiles through threadgroup memory, online softmax — and it is now the single highest-value item in the prefill programme rather than a deferred nice-to-have.
+
+## Standing
+
+  decode  : tg64 ~1.017x — parity at the memory roofline
+  prefill : 0.43x at n=64, 0.61x at n=256, 0.43x at n=1024 — best in the middle, and the falloff
+            at both ends has different causes (fixed expansion at short, attention at long)
