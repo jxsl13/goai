@@ -17,15 +17,20 @@ package metal
 //
 // Tile sweep, all at M=512, showing what this GPU rewards:
 //
-//	BM=64  BN=32  (4 acc/simdgroup)   2598.1 GFLOP/s   <- shipped shape
+//	BM=64  BN=32  (4 acc/simdgroup)   2598.1 GFLOP/s   <- shipped shape, the optimum
 //	BM=64  BN=64  (8 acc/simdgroup)   2444.9
+//	BM=64  BN=16  (2 acc/simdgroup)   2235.1
 //	BM=128 BN=32  (8 acc, 2 A-frags)  1738.7
 //	BM=64  BN=32, 4x4 register block  1166.8
 //
-// The ordering is monotone in the WRONG direction for textbook GEMM advice: every step that raises
-// arithmetic density per simdgroup loses. Narrowing to 4 accumulators and doubling the threadgroup
-// count is what helped (+12% at M=64), and the 4x4 register block — the standard fix for the
-// load:compute ratio — is the worst of the four at 0.63x of the shape it replaced.
+// Textbook GEMM advice points the wrong way here: every step that raises arithmetic density per
+// simdgroup loses, and the 4x4 register block — the standard fix for the load:compute ratio — is the
+// worst shape tried, at 0.63x of the one it replaced.
+//
+// But the parallelism direction is NOT monotone either. BN=16 halves the accumulators again and
+// loses 14% against BN=32, because an A-load plus two B-loads then amortise over only two matrix
+// ops. BN=32 (4 accumulators, 8 simdgroups, twice the threadgroups of the 64-wide shape) is a real
+// optimum with measured neighbours on both sides, not a local guess.
 //
 // A straightforward tiled simdgroup GEMM reaches less than HALF of MPS. Closing that needs roughly
 // 2.1x on top of this baseline — double-buffered K stages so loads overlap the matrix ops, wider
