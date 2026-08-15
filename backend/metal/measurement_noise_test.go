@@ -117,6 +117,16 @@ func TestMeasurementNoiseFloor(t *testing.T) {
 		sd += (x - mean) * (x - mean)
 	}
 	if cv := 100 * math.Sqrt(sd/float64(len(gpu))) / mean; cv > 12 {
+		// A DIAGNOSTIC, not a correctness failure. This measures the MACHINE, not the code: it is
+		// telling you that a kernel A/B run right now would be unreliable. Under -short (what CI and
+		// make preflight-metal use) that must not redden the lane — it failed roughly one run in
+		// three on a thermally loaded machine while every other test passed, which makes a gate
+		// useless. Full runs still fail so the warning is not lost.
+		if testing.Short() {
+			t.Logf("GPU-timestamp cv %.1f%% — machine too noisy for a kernel A/B right now "+
+				"(not failing under -short: this measures the host, not the code)", cv)
+			return
+		}
 		t.Errorf("GPU-timestamp cv %.1f%% — too noisy to judge a kernel A/B on this machine right now", cv)
 	}
 }
