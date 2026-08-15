@@ -13,9 +13,14 @@ package metal
 //	 512         2515.1             988.3      1330.1
 //	1024         4955.5            3101.2      2171.4
 //
-// goai is AHEAD of torch-mps at all three sizes (1.25x, 2.54x, 1.60x) and ahead of torch-cpu at 512
-// and 1024 (1.89x, 2.28x). It trails torch-cpu at 256, where the matrices are small enough that
-// Accelerate's threaded CPU path beats a GPU dispatch.
+// goai is AHEAD of torch-mps at all three sizes (1.25x, 2.54x, 1.60x).
+//
+// The torch-cpu column is NOT goai's CPU story — comparing our Metal path against torch's CPU path
+// answers no useful question. goai's own CPU backend, measured at the same shapes, gives 973.3 /
+// 1823.2 / 2133.9 GFLOP/s against torch-cpu's 1022.4 / 1330.1 / 2171.4: 0.95x, 1.37x, 0.98x, i.e.
+// parity. But ONLY with GOEXPERIMENT=simd — without it the same backend measures 91 / 111 / 126
+// GFLOP/s, 11-18x slower, because backend/cpu's Accelerate cblas_sgemm path is gated on
+// goexperiment.simd (not on a -tags simd build tag, which silently does nothing here).
 //
 // Caveat on what this compares: goai dispatches MPSMatrixMultiplication directly, while torch-mps
 // goes through MPSGraph and its own kernels. So this is not "our GEMM beats Apple's" — it is that
