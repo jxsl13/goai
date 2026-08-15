@@ -1634,3 +1634,44 @@ Kept anyway - strictly less work, 23 fewer driver allocations per dispatch path,
 ## Next
 
 The ~2.2 ms is SERIAL host time and, by elimination, is not encode. Candidates in order: logits download (32000 floats/token), the greedy argmax, command-buffer submission and completion latency (1 buffer/token, so ~2.2 ms of scheduling would be enormous - worth measuring before assuming), and Go-side per-step bookkeeping. Instrument the Generate loop phases directly rather than inferring, which is the lesson already paid for once this session.
+
+## R-01M01ZCXKJFZ68MFV7HS1STABC Decode is now matmul-bound: Step is 94% of wall, sampling 1.4%; the remaining structural gap is small-projection matmul bandwidth (132.8 vs 186 GB/s)
+kind: research
+state: draft
+created: 2026-08-15
+
+Instrumented the Generate loop phases directly, as the previous record said to do rather than infer. The ~2.2 ms of wall-minus-GPU is NOT sampling and NOT the host loop. It is inside the step itself.
+
+## Measurement
+
+22-layer TinyLlama-shape Q4_K, 64 tokens, timers inside Generate:
+
+  d.Step (encode + submit + GPU + logits download)   5.95 ms/token   94%
+  host sampling incl. f32->f64 convert over 32000     0.09 ms/token    1.4%
+  Generate total                                      6.32 ms/token   (158 tok/s)
+
+Against GPU-busy of 4.97 ms/token, so roughly 1 ms sits inside Step but outside GPU execution: submission and completion latency plus the 128 KB logits download.
+
+## Two hypotheses killed
+
+1. **Sampling.** A greedy argmax over 32000 logits plus the float32->float64 conversion costs 0.09 ms/token, 1.4% of wall. It was a plausible suspect (32000 elements per token, strictly serial, on the critical path) and it is irrelevant.
+
+2. **Device top-k.** I predicted Generate was paying for dt.TopKN on the fast sampling path, because a probe loop calling d.Step directly measured 5.43 ms against Generate's 6.32 and TopKN was the obvious difference. Wrong: the probe printed fastPath=false. nlp.Greedy() does not satisfy fastTopKSampler, so Generate takes the same host-download path as the probe. The gap was run-to-run variance, not a missing kernel. Worth recording because the reasoning was sound and the conclusion was still wrong — the instrument, not the argument, settled it.
+
+## Where the time is now
+
+  wall ~6.3-7.2 ms/token (run to run) | GPU-busy 4.97 | matmuls 4.10 of that
+
+So: matmuls are ~82% of GPU time and ~65% of wall. Everything else — all elementwise, all norms, all attention, all sampling, all host work — is the remaining third, and no single item in it exceeds ~1 ms.
+
+The decode is now essentially matmul-bound, which is the correct end state for a weight-streaming decode.
+
+## The one remaining structural gap
+
+The realistic matmul sequence runs at 132.8 GB/s (154 projections, 520 MB of distinct weights) against a single-weight roofline of 186 GB/s. Closing that fully would take 4.10 ms to ~2.9 ms, i.e. roughly 6.3 -> 5.1 ms/token, about 195 tok/s.
+
+The deficit is concentrated in the SMALL projections: the roofline sweep shows 108 GB/s at a 2.2 MB weight rising to 191 GB/s at 18 MB. Per layer, q and o are 2.2 MB each while gate/up/down are 6.2 MB each, so the two small ones are disproportionately inefficient. This is a launch/ramp effect at small dispatch sizes, not an algorithmic one, and the plausible lever is batching the small projections into fewer dispatches (q and o are independent of each other only across sublayers, but k and v are genuinely fusable with q as a single QKV projection — worth checking whether that fusion already exists on this path).
+
+## Position
+
+~154-158 tok/s on a TinyLlama-shaped Q4_K decode against llama.cpp's 172 on the real model. Same shape, random weights, same machine — but NOT the same binary or the same measurement harness, so this is an indicative comparison and not a head-to-head. A real head-to-head on the actual TinyLlama GGUF is the honest next validation, and it should be run before any claim about relative standing.
