@@ -1362,3 +1362,47 @@ The drift-contaminated table happened to land on 1.233x, within noise of the tru
 ## Scope limit
 
 No effect on the llama.cpp head-to-head. TinyLlama Q4_K_M contains no Q2_K tensors, so this gain is invisible there. It is a real win for Q2_K-quantized models and nothing more.
+
+## R-01M01RYSXSE34RF2ZAKM6ZPM8A FMA contraction is a per-site decision, not a source-text property - it broke two bit-identity contracts in nn, plus a dtype assumed by a typed fast path
+kind: research
+state: draft
+created: 2026-08-15
+
+Three failures in nn, all pre-existing on main, all one cause: a perf fast path that stopped matching the reference path it advertises. Two of the three are FMA contraction, which is now a repeat class rather than an incident.
+
+## Why only one was visible
+
+`go test ./nn/` on main reported exactly one failure - the Muon panic - because a panic aborts the whole test binary. MARS and DyT were red the entire time and invisible behind it. A panic in a package suite hides every later failure in that package; the count of red tests on main was understated by 2x until the panic was fixed. Worth generalizing: after fixing any panicking test, re-run the full package before assuming the package is now green.
+
+## 1. Muon: dtype assumed, not checked
+
+`stepParam` called `Storage().F64()` unconditionally. It replaced `AtF64`/`SetF64`, which handle every dtype transparently, so the substitution silently narrowed the supported dtype set from all to one - and `Storage().F64()` PANICS rather than degrading. Muon was simply unusable on F32 parameters.
+
+The general shape: replacing a dtype-agnostic accessor with a typed one is a perf move that carries a correctness precondition the accessor did not have. The precondition must be checked, not assumed, and the fallback must exist.
+
+## 2 and 3. FMA contraction breaks bit-identity contracts
+
+MARS: fast and generic paths disagreed by 1 ulp from step 2. Instrumenting intermediates isolated it - `c` and `v` agreed, `m` did not. `Beta1*m[i] + (1-Beta1)*c[i]` is contracted into a single FMA inside parStep's closure but NOT in the plain generic loop. Identical source text, different fusion decision, therefore different rounding.
+
+DyT: the fused inference path computes `tv*gs[c] + bs[c]`, contracted to one FMA - one rounding, where the OpMul-then-OpAdd path it claims to reproduce does two.
+
+The lesson: **on arm64 the Go compiler may contract `a*b+c` into an FMA, and whether it does is a per-expression-site decision, not a property of the source text.** Two textually identical expressions in different function contexts can round differently. Any code claiming bit-identity across two paths must therefore make rounding explicit, not rely on the expressions matching:
+
+- `math.FMA(a, b, c)` - one rounding, architecturally defined, an intrinsic on arm64 so no cost. Use when you want the fused result.
+- `float64(a*b) + c` - two roundings, contraction blocked. Use when reproducing a two-op sequence. The conversion is load-bearing and should be commented as such, or someone will delete it as a no-op cast.
+
+MARS took the first (14 sites), DyT the second (it must match a two-op dispatch chain).
+
+## Note on inlining
+
+Muon's shared momentum fold is a helper inlined at all three dtype sites. Inlining happens before the fusion decision, so inlined copies are separate sites again and could in principle diverge - a shared helper does NOT by itself guarantee identical rounding across call sites. It is safe here only because Muon's per-dtype goldens are compared independently, not against each other.
+
+## Verification
+
+Every fix probed for non-vacuity by reverting it and confirming red. The Muon F32 paths were confirmed reached (panic probe) and load-bearing (mutation).
+
+One probe result is worth recording because it looks like a test weakness and is not: a UNIFORM multiplicative perturbation of the gradient leaves TestMuonStepIsBitIdentical green at ANY magnitude, including 1e-4. `newtonSchulz5` normalizes its input, so Muon is genuinely scale-invariant in the gradient - scaling every element by k leaves the update identical. Only a NON-UNIFORM change (even-index-only 1e-6, or an index shift) turns it red. Both do. Reporting the uniform green as an unguarded path would have been wrong.
+
+## Perf
+
+Interleaved A/B, MARSStep_1M_serial and DyTForward_F64: no measurable regression. new <= old in all three pairs, but both variants drift downward across the run, so the paired deltas sit within that drift. Not a speedup claim.
