@@ -3373,3 +3373,55 @@ behind (0.73x, measured when our attention kernel was 2.9x slower) to somewhere 
 Both sides, one window, unchanged control arm, min of repeated runs. llama.cpp's tg128 alone
 measured 158.39, 195.59, 175.58, 167.08 and 161.56 across this session on an idle machine. Any
 ratio built from two different windows is noise.
+
+## R-01M02Q6QFNFQVST39Z736K5K9P Standing after the f16 M-cap removal — pp1024 0.96x, and an eighth measurement trap
+kind: research
+state: draft
+created: 2026-08-15
+
+# Standing after the f16 M-cap removal — same-window, supersedes R-01M02K1DP9FBM
+
+Both sides measured back-to-back, TinyLlama-1.1B Q4_K_M, M2 Pro, goai defaults.
+
+| shape | goai | llama.cpp | ratio |
+|---|---|---|---|
+| pp64 | 1549.1 | 1783.12 +/- 7.96 | 0.87x |
+| pp256 | 1901.4 | 2140.61 +/- 0.74 | 0.89x |
+| pp512 | 1989.1 | 2218.20 +/- 1.15 | 0.90x |
+| pp1024 | 2054.0 | 2141.97 +/- 3.28 | 0.96x |
+| decode ctx=8 | 170.0 | 167.08 +/- 13.94 | 1.02x |
+
+pp1024 moved 0.91x -> 0.96x and is now the strongest prefill shape; it was the weakest a
+turn ago. Short prefill (pp64 0.87x) is now clearly the weakest point.
+
+## The last change, and why it was available
+
+Removing the f16 path M cap when the weight cache is on: +4.4% pp1024, +3.5% pp1536, no
+extra memory. Above M=512 the choice was never "f16 GEMM vs f32 GEMM" (f32 wins ~3%) but
+"cached f16 vs uncached f32" — removing a per-pass expansion beats a 3% GEMM edge.
+
+It was available because an earlier sweep set that cap from a measurement that could not see
+the effect: the sweep ran short prompts first, so the cache was already populated when the
+long ones ran, and the uncached case never occurred. A cache-size reading of 0.00 GB on a
+long-prompt-only workload is what exposed it.
+
+## Measurement traps this campaign has hit, all distinct
+
+1. Cross-window comparison (thermal drift up to 2x on unchanged code).
+2. GPU-only vs wall-clock time compared as if equivalent.
+3. Prefill-inclusive vs prefill-exclusive throughput.
+4. Cache-resident microbenchmarks reporting ~2x hardware peak.
+5. Recorder dispatch counts read as execution counts.
+6. A parameter sweep whose knob never reached the code (twice).
+7. Isolated per-op timing, biased in a direction that depends on the op.
+8. A sweep whose early iterations populate the state its later iterations measure.
+
+The last is the newest and least obvious: the benchmark was correct, repeatable, and measured
+a state the real workload never reaches.
+
+## Remaining, all priced
+
+- Hand-written GEMM: must clear ~78% of peak (MPS is at 71-78% on the FLOP-carrying shapes).
+- Dual-format cache: ~3% at pp256/512 for ~6 GB plus budget-reservation logic. Weaker than it
+  looked, since the cap removal captured its pp1024 share for free.
+- Decode: at parity; every mechanism measured and excluded bar an inner-loop redesign.
