@@ -313,6 +313,11 @@ func newKernelCache(m *SVC, x [][]float64, n int) *kernelCache {
 			kc.diag[i] = m.kernel(x[i], x[i])
 		}
 	})
+	// Raising this to 256 MB (libsvm's default is 200) was measured and changes nothing: 5.84/5.92
+	// against 5.86/5.68 ms on the 4000x20 scorecard fit. At n=4000 the 64 MB budget already holds
+	// 2097 of 4000 columns, and the fit touches fewer distinct columns than that, so the cache
+	// never evicts and its size is not a lever.
+	//
 	// Bound the cache to ~64 MB of columns (each column is 8n bytes). This
 	// comfortably holds every column a well-separated fit touches while
 	// capping worst-case memory; a miss merely recomputes, never wrong.
