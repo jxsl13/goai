@@ -3184,3 +3184,41 @@ against llama.cpp: decode 0.14x -> 0.97x, pp64 0.057x -> 0.46x, pp1024 0.43x -> 
 Short-prompt prefill, where expansion dominates and the only lever is a quantized GEMM that avoids expansion entirely — measured hard, with the matrix-unit attempt at 1377 GFLOP/s still 2.75x behind expand-then-GEMM.
 
 Long-prompt prefill, where attention is back to being the largest single term at ~18% and the flash kernel sits at 26.8% of FLOP peak against MPS GEMM's 66%. The scalar-prologue ratio is 8:1 and further widening is blocked by threadgroup memory, so the next step there is reducing staging bytes (f16 K/V tiles) rather than more simdgroups.
+
+## R-01M02A7SJWFXRRZGK74QPYQPB6 Vectorized flash-attention staging 1.19x — and the planned f16 step would not have worked, because the scalar-prologue rule is about instructions, not bytes
+kind: research
+state: draft
+created: 2026-08-15
+
+Vectorized the flash kernel's K/V staging, and in doing so caught myself misapplying the rule the kernel was built on.
+
+## The misapplication
+
+The recorded next step was "reduce staging BYTES via f16 K/V tiles". I probed the device and mixed-precision MMA (half inputs, float accumulator) IS supported — rc=0, checked through the runtime compiler since the offline Metal toolchain is unavailable here.
+
+But halving the element size leaves the STORE COUNT unchanged, and the staging is instruction-bound. The scalar-prologue rule this kernel was built on is about INSTRUCTIONS, and I had written the follow-up in terms of bytes. The f16 work would have been a substantial change with real accuracy risk and close to no gain.
+
+What actually reduces instructions is a float4 move — DK=64 is a multiple of 4, so one vector store replaces four scalar ones:
+
+  seq=512  1175.8 / 1208.8  ->  991.7 / 1002.4 us   ~1.19x
+           26.9% / 26.1%     ->  31.8% / 31.5% of FLOP peak
+
+## Honest end-to-end
+
+  pp256   1543.8 / 1574.0  ->  1532.5 / 1581.3   nil, overlapping
+  pp1024  1768.5 / 1790.0  ->  1815.9 / 1829.7   ~1.02x
+
+The 1.19x dilutes because attention is down to ~18% of prefill after the earlier 6x. Kept because it is strictly fewer instructions at identical accuracy (parity unchanged at 5.8e-05) and because attention's share grows again at longer prompts — not because 2% is a result worth claiming.
+
+## A process failure worth recording
+
+I committed while the metal suite was showing FAIL, without reading it. Re-running showed the suite green across three consecutive runs; the failure was TestMeasurementNoiseFloor tripping at cv above its 12% threshold, immediately after several benchmark loops had heated the machine — the same thermal effect the guard exists to catch, and which it caught correctly.
+
+So the commit is sound, but the process was not: "tests failed" was visible in the same output as "pushed" and I did not stop to check which test or why. The guard being a known-flaky-under-load signal is exactly why it should be read rather than assumed.
+
+## Standing
+
+  decode  : tg64 ~0.97x — parity, both at the memory roofline
+  prefill : pp64 0.46x, pp256 0.75x, pp512 0.80x, pp1024 0.84x
+
+Flash attention now runs at ~32% of FLOP peak against MPS GEMM's 66%. The scalar-to-matrix ratio is the remaining lever there, and the next reduction is not more simdgroups (threadgroup memory is the binding constraint) but fewer instructions in the softmax, which still uses 64 of 256 threads.
