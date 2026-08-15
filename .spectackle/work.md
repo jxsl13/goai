@@ -1106,3 +1106,29 @@ WHAT THAT LEAVES. GoAI's Metal kernels move 16.1 GB/s where llama.cpp's move 114
 CANDIDATE, EXPLICITLY UNPROBED. The kernels I wrote for Q2_K/Q3_K/Q5_K index the weight as individual bytes (W[qb+l] on a uchar pointer), while the inherited Q4_K/Q6_K kernels use block-struct access with ushort reads. Q4_K_M exercises the inherited pair, so the byte-wise kernels are NOT what this measurement indicts — the vectorized ones are already at 16 GB/s. Whether wider loads (uint4/float4 staging) close the remaining gap is unknown and must be bounded by probe before anything is built. Four candidate levers in this campaign have already died that way, and the two that survived were bounded first.
 
 STANDING: this is the first measurement in the campaign that compares GoAI to an incumbent rather than to itself, and it is the one that should set priority. A 7x deficit on the flagship decode path outranks any remaining single-digit-percent lever.
+
+## R-01M01P4XT7EZN9VGWZZ8JQGQ3V Apportioned: non-matmul decode work alone is 2.2x-5.3x llama.cpp's entire token
+kind: research
+state: draft
+created: 2026-08-15
+
+APPORTIONED, and it moves the priority off quant matmul. Measured on TinyLlama-1.1B Q4_K_M, Metal, by toggling the cooperative kernels — which change ONLY the quant matmuls — so the delta bounds their share.
+
+  scalar        9.44 tok/s   105.92 ms/token
+  cooperative  24.83 tok/s    40.28 ms/token
+  the kernels removed 65.64 ms of 105.92, i.e. 62 percent of a token
+  llama.cpp                    5.81 ms/token
+
+THE SPLIT IS SENSITIVE TO ONE UNMEASURED QUANTITY and is reported as a range rather than a point. With total_off = T_matmul + T_other and total_on = T_matmul/k + T_other, the kernel speedup k at THESE shapes is not measured here. k > 2.63 is forced by the observed 2.630x end-to-end ratio — below that T_other goes negative:
+     k     matmul now   everything else   vs llama.cpp's WHOLE token
+  3.41       27.2 ms         13.0 ms                2.2x
+  5.00       16.4 ms         23.9 ms                4.1x
+  7.85        9.6 ms         30.7 ms                5.3x
+
+THE ROBUST CONCLUSION, true across that whole range: the NON-MATMUL work alone — attention, norms, RoPE, residuals, sampling, host glue — costs between 13 and 31 ms per token, which is 2.2x to 5.3x llama.cpp's ENTIRE 5.81 ms token. Even with infinitely fast quant matmuls GoAI would land somewhere between 33 and 77 tok/s against llama.cpp's 172.
+
+SO QUANT MATMUL CANNOT CLOSE THE GAP ALONE. That is the opposite of where this campaign has spent its effort, and it is worth stating plainly: the 14 cooperative kernels were a real 3.44x on this model and are not the remaining bottleneck. The previous record read the 7.14x deficit as achieved bandwidth on the weights and implied the kernels were the target; this apportionment shows at most half of it lives there.
+
+WHAT SHOULD BE MEASURED NEXT, in order. First pin k by benchmarking the cooperative Q4_K and Q6_K leaves at TinyLlama's exact shapes (K2048 with N2048 and N5632) without the submit floor, which converts the range above into a point. Then profile the non-matmul path — most of it is attention, RMSNorm, RoPE and residual adds, each of which is a separate dispatch in a command buffer that already batches optimally at one submit per token.
+
+NOT PROPOSED: any specific optimization. Four candidate levers in this campaign died on probe and two survived because they were bounded first.
