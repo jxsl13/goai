@@ -2356,6 +2356,12 @@ static NSString* const kQMatMulQ4KSource =
      "                                    uint3 group [[threadgroup_position_in_grid]],\n"
      "                                    ushort lane [[thread_index_in_simdgroup]],\n"
      "                                    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     // rowsPerSimd is duplicated by the DISPATCH GRID in three places: coopRows at the two
+     // resident sites and a hardcoded (N+3)/4 at the standalone site below. Changing it here
+     // without changing all three silently under-dispatches and leaves the tail rows unwritten
+     // — measured: rowsPerSimd 2->1 with only the resident sites updated produced garbage in
+     // rows 4..7 of an N=8 case. The Q4_K parity tests DO catch it (they cover N=8), so this is
+     // a maintenance hazard rather than a live defect; keep them in sync.
      "  constexpr short rowsPerSimd=2, simdgroupsPerThreadgroup=2;\n"
      "  constexpr ushort mask1=0x3f3f, mask2=0x0f0f, mask3=0xc0c0;\n"
      "  int M=P[0], K=P[1], N=P[2], mi=(int)group.y, nb=K/256;\n"
