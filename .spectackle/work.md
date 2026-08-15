@@ -1926,3 +1926,51 @@ llama.cpp does pp64 at 1778 tok/s against GoAI's 343.5, so 5.2x remains. Closing
 ## Lesson
 
 The gate had been there long enough to look intentional, and the surrounding code (coopRows, the M==1 comments) reinforced it. What exposed it was not reading the code but measuring a shape nobody benchmarked: every prior measurement this session was M=1, because decode is M=1. The 17.4x prefill deficit was invisible until tg64 and pp64 were separated — and it had been sitting behind a metric that structurally could not show it.
+
+## R-01M021YMW9FE58W4X81GSPZPD6 The batched quant matmul is COMPUTE-bound at 11% of FLOP peak, not bandwidth-bound — the proposed weight-tiling kernel would have optimized the wrong resource; the fix is simdgroup_matrix
+kind: research
+state: draft
+created: 2026-08-15
+
+Measured the batched quant matmul's limiting resource BEFORE building the tiled kernel the previous record proposed — and the proposal was wrong. The path is compute-bound, not bandwidth-bound, so blocking the weight reads would have optimized a resource that is not the constraint.
+
+## The measurement
+
+Q4_K, K=2048, N=5632, GPU timestamps, after the M>1 gate fix:
+
+| M | us | implied weight GB/s (if re-streamed per row) | GFLOP/s | % of 6.8 TFLOP/s |
+|---|---|---|---|---|
+| 1 | 35.2 | 184.3 | 655 | 9.6% |
+| 4 | 124.6 | 208.3 | 741 | 10.9% |
+| 16 | 490.4 | 211.7 | 753 | 11.1% |
+| 64 | 1953.9 | 212.5 | 756 | 11.1% |
+| 512 | 15600.9 | 212.9 | 757 | 11.1% |
+
+Two things follow.
+
+**The weight is not actually re-streamed M times.** The implied per-row weight bandwidth reaches 212 GB/s, which EXCEEDS the M2 Pro's ~200 GB/s memory ceiling. That is only possible if the repeated reads are being served from cache. The weight for one projection is 6.49 MB and fits comfortably; each threadgroup walks it once per query row and the cache absorbs the repeats.
+
+**Throughput is flat at 11.1% of FLOP peak** from M=4 to M=512. A bandwidth-bound kernel would show falling GFLOP/s as M grows and the working set spills; a compute-bound one is flat. It is flat to three digits across a 128x range of M.
+
+## Why the planned kernel was the wrong build
+
+The previous record proposed tiling the batch so each weight super-block is read once into threadgroup memory and reused across rows. That optimizes weight traffic — which the numbers above show is already cache-served and not the limit. Building it would have cost a substantial kernel rewrite, carried real correctness risk, and delivered close to nothing.
+
+Also worth noting: my first instinct on inspecting the kernel was that the y (activation) traffic would explode under tiling — total y reads scale as N*M*K*rowsPerSimd/coopRows, which at N=5632, M=64 already exceeds the weight traffic. That concern was real but secondary; the FLOP measurement settles the question outright.
+
+## What actually limits it
+
+At 757 GFLOP/s against ~6.8 TFLOP/s the kernel uses about a ninth of the machine's arithmetic. The work per output element is dominated by dequantization: unpacking 4-bit nibbles with shifts and masks, then scalar FMAs, one lane at a time. Every multiply is a scalar f32 op issued from the general ALU.
+
+llama.cpp reaches pp64 = 1778 tok/s against GoAI's 343.5 — 5.2x — and the mechanism is Apple's matrix units. metal_bridge.m contains ZERO uses of simdgroup_matrix or simdgroup_multiply_accumulate; every kernel in the file is scalar/SIMD-lane arithmetic. For M=1 that is correct (decode is bandwidth-bound at 92% of the memory roofline, and matrix units cannot help a matrix-vector product). For M>1 it leaves roughly 9x on the table.
+
+## The actual next build
+
+A batched quant matmul using simdgroup_matrix: dequantize a weight tile into threadgroup memory in 8x8 blocks, load it and the activation tile as simdgroup_float8x8, and accumulate with simdgroup_multiply_accumulate. The dequantization cost is then amortized across the tile instead of repeated per output element, and the multiply-accumulate moves off the scalar ALU.
+
+This is a genuine new kernel rather than a tweak, and it is the first place in this codebase where the matrix units would be used at all. Scope it to Q4_K first — it is the format TinyLlama Q4_K_M leans on and the one with existing parity coverage at M>1 — and gate it on M above some threshold so decode keeps the cooperative path unchanged.
+
+## Standing
+
+  decode  : parity with llama.cpp (0.888x, inside its 19% run-to-run spread), bandwidth-bound at 92% of the memory roofline — essentially finished
+  prefill : 5.2x behind, compute-bound at 11% of FLOP peak — roughly 9x of headroom, addressable only via the matrix units
