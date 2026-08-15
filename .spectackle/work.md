@@ -3222,3 +3222,94 @@ So the commit is sound, but the process was not: "tests failed" was visible in t
   prefill : pp64 0.46x, pp256 0.75x, pp512 0.80x, pp1024 0.84x
 
 Flash attention now runs at ~32% of FLOP peak against MPS GEMM's 66%. The scalar-to-matrix ratio is the remaining lever there, and the next reduction is not more simdgroups (threadgroup memory is the binding constraint) but fewer instructions in the softmax, which still uses 64 of 256 threads.
+
+## R-01M02J74QSFGJR7B5TTATVEA8M Metal decode/prefill roofline campaign — measured, closed, and open
+kind: research
+state: draft
+created: 2026-08-15
+
+# Metal decode/prefill roofline campaign — what is measured, what is closed
+
+## Standing (as-shipped defaults, M2 Pro, TinyLlama-1.1B Q4_K_M, llama.cpp measured live)
+
+| shape | goai | llama.cpp | ratio |
+|---|---|---|---|
+| pp64 | 1537.6 | 1777.5 | 0.87x |
+| pp256 | 1977.6 | 2146 | 0.92x |
+| pp512 | 2045.7 | ~2145 | 0.95x |
+| pp1024 | 1943.9 | ~2145 | 0.91x |
+| decode ctx=8 | 157.5 | 158.4 | 0.99x |
+| decode ctx=512 | 146.0 | ~161.6 | 0.90x |
+| decode ctx=1536 | 117.6 | ~161 | 0.73x |
+
+## What was won, and why
+
+Both wins were structural redundancies in what gets ISSUED, not inefficiency in how fast
+code runs:
+
+1. Per-pass weight expansion. Prefill re-expanded every quantized weight on every forward
+   pass: 37.03 ms/pass, over half of a short-prompt token. Identified by fitting prefill as
+   fixed + marginal*n and finding the cooperative (non-expanding) arm has fixed = EXACTLY
+   0.00 ms. Caching the expansions took fixed to 9.15 ms; adding Q6_K (16.9% of weights but
+   16.5 of the remaining 22.9 ms, because its dequant runs 3.6x slower per element) took it
+   the rest of the way. pp64 0.54x -> 0.87x.
+2. Attention parallelism at decode. The single-pass kernel launched `heads` threadgroups of
+   32 threads, ~1024 threads for the whole GPU. Split-K gives each (head, key-chunk) its own
+   threadgroup: 1.65x on the kernel at sk=2048, 1.07x on long-context decode.
+
+## What is CLOSED, with the measurement that closed it
+
+- Decode weight matmuls: at ~178 GB/s against a ~180 GB/s ceiling. Nothing to win.
+- Direct quantized matmul (no expansion): loses to expand-then-GEMM at every M, 0.77x at
+  M=16 widening to 0.36x at M=256. A taller M tile confirmed the redundant-dequant theory
+  (1.22x at large M) but was insufficient and cost 0.71x at small M.
+- Shared compute encoder: ~0.155 us/encoder switch, ~0.9% of a token, under the noise floor.
+  Two Metal assertion classes surfaced before it was abandoned.
+- GQA-cooperative attention: 0.53-0.75x. The 8x "redundant" K/V reads were cache hits; the
+  design traded 8x parallelism for traffic that cost nothing.
+- Split-K chunk size: the shipped 128 keys/chunk is optimal; halving twice costs 5-9%.
+- f16 KV cache (for SPEED): attention is at 8-14% of bandwidth and ~1% of FLOP peak, so
+  halving bytes saves at most 4-7% of attention, ~0.2% end-to-end. Still worth doing for
+  CAPACITY.
+- rmsnorm fusion: 1.62 us per call in the real sequence, ~1% of a token.
+
+## What remains open
+
+Decode attention is LATENCY-bound. Bandwidth, compute, parallelism-via-more-threadgroups and
+byte-halving are each excluded by measurement. Register pressure is confirmed real (split-K
+pass 1 caps at 384 threads/threadgroup, from acc[64]+q[64] per thread). The only remaining
+lever is restructuring the per-key inner loop — with the hazard that the 1024-thread variants
+of this kernel family reach that number by SPILLING, and spilling measured 5.9-8.7x slower.
+Occupancy is a proxy this code has been observed to invert.
+
+pp1024 sitting slightly below pp512 is unexplained and is NOT the f16 M cap (tested).
+
+## Method findings that changed conclusions
+
+These cost real time and each invalidated a result I had already acted on or published:
+
+1. Isolated per-op timings are biased, not just noisy. Timing an op as N identical dispatches
+   serialises them on write-after-write hazards. It OVERSTATED rmsnorm 8x (14.96 vs 1.62 us)
+   and UNDERSTATED attention (1488 vs 1919 us). Direction depends on whether the op overlaps
+   its neighbours, so averaging harder cannot fix it. Only leave-one-out differential timing
+   sizes an optimisation.
+2. A recorder counts what is ENQUEUED. mtl_recorder_* dispatch counts read 2x because
+   stepInto pre-encodes pos+1 for encode-overlap while committing only pos. I published a
+   false "Step runs two forward passes" claim from this.
+3. Prefill-inclusive vs prefill-exclusive. Timing Generate(prompt, 32) and calling it decode
+   charges ~25 ms/token of prefill to decode at ctx=1536. Reported a 0.19x gap that is really
+   0.73x.
+4. Microbenchmarks that fit in cache. A 6.5 MB read reports 369 GB/s, ~2x hardware peak.
+   Sweep the size until the rate stops rising.
+5. Thermal drift of 2x on unchanged code. Only min-of-repeated-runs with an unchanged control
+   arm measured alongside is meaningful.
+6. A sweep reporting "no effect" twice meant the parameter was not reaching the code (split-K
+   chunk cap already below the computed nchunk; f16 M cap inert while the cache is on). The
+   tell is identical numbers rather than a noisy trend.
+
+## Working rule
+
+Probe the premise before implementing. Three rejected designs (shared encoder, GQA staging,
+f16 KV) would each have been substantial work justified by a plausible mechanism that a single
+measurement contradicts. Both designs that paid had the measurement FIRST, identifying a
+specific redundancy.
