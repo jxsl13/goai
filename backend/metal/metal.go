@@ -1399,6 +1399,23 @@ func SetQ4KCooperative(on bool) bool {
 	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
 }
 
+// SetQ2KCooperative selects the SIMD-group-cooperative resident Q2_K M=1 matvec and
+// returns the previous setting. Q2_K shares Q3_K's 16-scale-group layout, so the 32
+// lanes of a SIMD group pair up two-per-group and each lane stays inside one scale.
+// Devices without a 32-lane SIMD width keep the scalar path, and this hook forces it
+// off for the A/B control.
+//
+// Results match the scalar kernel within the 2e-5 relative bar the sibling
+// cooperative kernels use: the per-element arithmetic is identical, only the
+// summation order differs.
+func SetQ2KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q2k_cooperative_set(C.int(v)) == 1
+}
+
 // SetQ3KCooperative selects the SIMD-group-cooperative resident Q3_K M=1 matvec and
 // returns the previous setting. Q3_K splits a 256-superblock into 16 scale groups of
 // 16 elements, so the 32 lanes of a SIMD group pair up two-per-group and each lane

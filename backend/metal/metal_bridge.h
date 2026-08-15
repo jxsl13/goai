@@ -132,6 +132,7 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
 // Selects the simdgroup-cooperative Q4_K kernel (on, default) or the historical
 // one-thread-per-output kernel (off) for same-process forced-off A/B measurement.
 // Returns the previous setting. Unsupported devices transparently retain scalar.
+int mtl_q2k_cooperative_set(int on);
 int mtl_q3k_cooperative_set(int on);
 int mtl_q4k_cooperative_set(int on);
 int mtl_q5k_cooperative_set(int on);
