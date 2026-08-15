@@ -19,10 +19,24 @@ import (
 // They agree to 5.7e-05, so both are correct; the flash kernel is simply not faster here despite
 // being the tiled one, and both sit at 3-4% of the 6.8 TFLOP/s peak.
 //
-// Both are quadratic, as attention must be (x3.2 then x3.6 per doubling). What matters is the
-// CONSTANT: at seq=256 attention is 41.9 ms of a ~427 ms prefill (10%), and the share grows with
-// prompt length. At short prompts it is ~4% and invisible, which is why it went unmeasured until
-// the prefill budget was closed.
+// Both are quadratic, as attention must be. What matters is the CONSTANT, and measured across the
+// prompt lengths prefill actually runs at it is the dominant term long before anyone would call a
+// prompt long:
+//
+//	seq   attention x22 layers   prefill total   share    attention GFLOP/s
+//	  64        4.4 ms                ~84 ms       5%          167
+//	 256       41.9 ms               ~195 ms      21%          282
+//	 512      160.1 ms               ~427 ms      37%          295
+//	1024      ~640 ms               ~1102 ms      58%            —
+//
+// That is why GoAI's prompt throughput PEAKS at n=256 (1312 tok/s) and then falls to 929 at
+// n=1024, while llama.cpp stays flat: pp64 1773, pp256 2142, pp512 2202, pp1024 2141. A flat curve
+// against a falling one is the signature of an attention kernel that is O(n^2) with a bad constant.
+//
+// This reprioritizes the remaining prefill work. Attention at 3-7x would give pp1024 of
+// 1516-1851 tok/s, i.e. 0.71-0.86x of llama.cpp, from 0.43x today. The quantized-GEMM project
+// removes expansion — 0.99 of 3.79 ms/layer at n=64, ~1.35x on the matmul path — and expansion
+// amortizes away at long prompts anyway, so it is worth strictly less.
 //
 // Closing this needs a genuine flash-attention kernel — Q tile resident, K/V streamed in tiles
 // through threadgroup memory, online softmax — not a routing change. Both current kernels

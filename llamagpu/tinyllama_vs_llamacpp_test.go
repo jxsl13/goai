@@ -101,9 +101,17 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	// the 22 layers, the largest projection in a layer. Routing Q6_K through the same expand-then-
 	// GEMM path took pp64 from ~699 to ~768 tok/s.
 	//
-	// What remains is NOT all expansion: measured GPU time is 4.06 ms/layer against 2.69 ms of
-	// expansion + GEMM, and prefill is 97.6% GPU-bound, so ~1.4 ms/layer is other GPU work still
-	// unattributed.
+	// pp64 is the WORST prompt length to judge this path at, which is worth knowing before reading
+	// the ratio above. Measured across lengths:
+	//
+	//	n      GoAI    llama.cpp   ratio
+	//	  64   ~760      1773      0.43
+	//	 256   1312      2142      0.61
+	//	1024    929      2141      0.43
+	//
+	// GoAI peaks at n=256 and then falls while llama.cpp stays flat, because attention is O(n^2)
+	// with a poor constant (282-295 GFLOP/s, ~4% of peak) and grows from 5% of prefill at n=64 to
+	// 58% at n=1024. See TestPrefillAttentionRouting.
 	long := make([]int, 64)
 	for i := range long {
 		long[i] = 1 + i%2000
