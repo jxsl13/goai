@@ -1013,3 +1013,27 @@ WHAT WAS WRONG: the inference that a large per-submit cost implies a batching op
 NET EFFECT ON THE CAMPAIGN: the kernel work was the right target after all. The 14 cooperative kernels operate on the part of the decode step that is NOT submit overhead — roughly 99.5 percent of it — and their true improvement is larger than reported, not smaller.
 
 STANDING CHECK worth keeping: before treating a fixed per-call cost as an optimization target, find the production call site and count how many real operations it amortizes that cost across. The harness's call pattern is chosen for isolation and is not evidence about the system.
+
+## R-01M01N2NFAEJAVQ3JVP12JJN1C End-to-end: Metal 2.38x/2.63x, Vulkan 1.39x — and seven Vulkan shaders were unreachable from the decoder
+kind: research
+state: draft
+created: 2026-08-15
+
+END-TO-END VALIDATION OF THE WHOLE CAMPAIGN, and it found the campaign's worst defect.
+
+MEASURED, real Generate loop, TinyLlama-shaped projections (Dim 2048, Hidden 5632, 6 layers, 32 tokens), cooperative toggled through the exported setters, three alternations, medians:
+  METAL   Q4_K   52.75 -> 125.61 tok/s = 2.381x   (off 52.7-52.9, on 124.8-128.2)
+          Q8_0   36.72 ->  96.69 tok/s = 2.633x   (off 36.7-37.2, on 96.0-97.4)
+  VULKAN  Q4_K   50.95 ->  71.00 tok/s = 1.393x   (off 50.7-55.4, on 69.7-72.1)
+          Q8_0   47.51 ->  65.78 tok/s = 1.385x   (off 46.8-48.8, on 64.4-65.8)
+No overlap in any of the four.
+
+THE DEFECT THIS FOUND. All seven VULKAN cooperative shaders were unreachable from the decoder. Cooperative selection had been wired into the standalone QMatMul entry points — which the parity tests and leaf benchmarks drive — but NOT into Recorder.QMatMulResident, which is what llamagpu calls. residentSpirv always returned the scalar shader. The first end-to-end A/B read 1.000x and 1.015x: both arms ran identical code, the same signature as a vacuous parity test. Seven leaf A/Bs, seven parity tests and twenty mutation probes had all passed.
+
+METAL WAS VERIFIED, NOT ASSUMED. Its resident and recorder entry points share one switch(qtype) block, so wiring cooperative once covered both; Vulkan's two paths have different code and only one was wired. Reading the source suggested Metal was fine; the 2.381x/2.633x measurement proves it.
+
+MODEL SHAPE DECIDES WHETHER A LEAF WIN SURVIVES TO THE TOP. The same test at a 124M-class config (Dim 768, Hidden 2048) reads about 1.04x even with everything wired, because those matmuls are too small for the kernel to dominate a token. A null result at small shapes is not evidence the kernel is worthless.
+
+THE END-TO-END NUMBER IS SMALLER THAN THE LEAF NUMBER AND THAT IS CORRECT. Metal Q4_K measured 3.41x on the isolated leaf and 2.381x end to end; Vulkan Q4_K 2.17x and 1.393x. A decode step also does LayerNorm, RoPE, attention, residuals and host work the kernels do not touch. The end-to-end figure is the one worth quoting.
+
+STANDING LESSON: a leaf benchmark proves a kernel is faster; only an end-to-end measurement through the PRODUCTION entry point proves the system calls it. Every correctness and performance gate in this campaign passed while the Vulkan feature was dead code. An attempt to file this as an EARS rule was rejected by the spec server's slot validation four times; recorded here instead so it is not lost.
