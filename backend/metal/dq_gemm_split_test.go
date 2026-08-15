@@ -37,6 +37,24 @@ import (
 // neutral at M=1024 where the path is already near the FLOP ceiling. Recorded here so the next
 // attempt targets the right half.
 //
+// ATTEMPTED AND REVERTED: caching the f32 expansion as well, so that M>64 could use the faster f32
+// GEMM instead of the f16 one (which is ~3% slower once compute-bound) with the expansion cached in
+// both cases. The reasoning was sound and the memory arithmetic was not: f16 (1.92 GB) plus f32
+// (3.88 GB) is 5.8 GB against a 4 GB budget, so the two caches evict each other. Misses rose 130 ->
+// 171 and the weights that no longer fit went back to per-pass expansion:
+//
+//	          f16 cache only     both caches
+//	pp64        1523.1             1518.3
+//	pp256       1920.0             1761.1   (-8%)
+//	pp512       1899.9             1862.0
+//	pp1024      1830.8             1897.3   (+3.6%)
+//
+// Only pp1024 improved, because M>512 never used the f16 path and so had been expanding every pass.
+// Reverted: one regime gaining 3.6% does not pay for another losing 8%. Making it work needs a
+// budget near 6 GB — about 9x the model file — which is too aggressive for a default, or a single
+// cache whose format is chosen per weight by the M it is usually called with, which is state this
+// layer does not have.
+//
 // Reported, not asserted on absolute timings; machine-dependent.
 func TestDQGemmCostSplit(t *testing.T) {
 	if !Available() {
