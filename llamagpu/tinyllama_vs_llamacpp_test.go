@@ -91,37 +91,39 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	t.Logf("TinyLlama-1.1B Q4_K_M tg64 (decode only), Metal: GoAI %.2f tok/s vs llama.cpp %.2f tok/s (%s) = %.3fx  (samples %v)",
 		got, llamaCpp, src, got/llamaCpp, tps)
 
-	// Prompt processing, separately — tg64 does not show it. llama-bench pp64 measures 1778.75
-	// tok/s on this host. GoAI was 102 tok/s until the cooperative kernels were allowed to serve
-	// M>1 (they index the row from group.y and were gated on M==1 for no reason the kernel
-	// required), which gave ~345. Expanding the Q4_K weight ONCE into a dense f32 [K][N] buffer and
-	// running a dense MPS GEMM above a measured batch-size crossover then took it to ~590-660.
+	// Prompt processing, at SEVERAL lengths. pp64 alone is misleading: GoAI's deficit is
+	// concentrated at short prompts, where fixed weight expansion dominates, and shrinks as the
+	// prompt grows and attention (now on the matrix-unit flash kernel) amortizes. Measuring only
+	// the length llama-bench defaults to hid that for most of this work.
 	//
-	// Q4_K_M is a MIXED file — 135 Q4_K tensors but 21 Q6_K, and those 21 include ffn_down on 10 of
-	// the 22 layers, the largest projection in a layer. Routing Q6_K through the same expand-then-
-	// GEMM path took pp64 from ~699 to ~768 tok/s.
+	// Both sides measured in one session, M2 Pro:
 	//
-	// pp64 is the WORST prompt length to judge this path at, which is worth knowing before reading
-	// the ratio above. Measured across lengths:
-	//
-	//	n      GoAI    llama.cpp   ratio
-	//	  64   ~760      1773      0.43
-	//	 256   1312      2142      0.61
-	//	1024    929      2141      0.43
-	//
-	// GoAI peaks at n=256 and then falls while llama.cpp stays flat, because attention is O(n^2)
-	// with a poor constant (282-295 GFLOP/s, ~4% of peak) and grows from 5% of prefill at n=64 to
-	// 58% at n=1024. See TestPrefillAttentionRouting.
-	long := make([]int, 64)
-	for i := range long {
-		long[i] = 1 + i%2000
+	//	         GoAI   llama.cpp   ratio
+	//	pp64    807.5     1767.4    0.46
+	//	pp256  1586.4     2122.5    0.75
+	//	pp512  1749.2     2195.1    0.80
+	//	pp1024 1789.8     2120.5    0.84
+	//	tg64    171.0      177.2    0.97
+	for _, n := range []int{64, 256, 1024} {
+		long := make([]int, n)
+		for i := range long {
+			long[i] = 1 + i%2000
+		}
+		if _, err := dec.StepNLast(long, 0); err != nil {
+			t.Fatal(err)
+		}
+		best := 0.0
+		for range 3 {
+			pstart := time.Now()
+			if _, err := dec.StepNLast(long, 0); err != nil {
+				t.Fatal(err)
+			}
+			if v := float64(n) / time.Since(pstart).Seconds(); v > best {
+				best = v
+			}
+		}
+		t.Logf("TinyLlama-1.1B Q4_K_M pp%d (prompt processing): GoAI %.1f tok/s", n, best)
 	}
-	pstart := time.Now()
-	if _, err := dec.StepNLast(long, 0); err != nil {
-		t.Fatal(err)
-	}
-	pp := float64(len(long)) / time.Since(pstart).Seconds()
-	t.Logf("TinyLlama-1.1B Q4_K_M pp64 (prompt processing): GoAI %.1f tok/s vs llama.cpp 1778.75 tok/s = %.3fx", pp, pp/1778.75)
 }
 
 // llamaCppTG64 returns llama.cpp's tg64 throughput on the SAME file, measured live when llama-bench
