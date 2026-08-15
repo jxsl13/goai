@@ -2549,3 +2549,59 @@ Every component is now measured, and the remaining work is two scoped projects r
   prefill : pp64 0.336x — from 0.057x when this line began
 
 llama.cpp's whole layer is 1.64 ms and has no expansion term. That remains the structural difference, and the two projects that would close it are now specified against measured baselines rather than guessed at.
+
+## R-01M0262NX9E3SB6ED6YVK97AVT CORRECTION: prefill budget closes to 77%, not 85% — my non-matmul total double-counted an attention probe; every op is now measured and 23% remains, most likely dependency-chain serialization
+kind: research
+state: draft
+created: 2026-08-15
+
+Correcting my own previous record, and completing the prefill budget.
+
+## The error
+
+R-01M025MS9ZEVR reported non-matmul work as 0.54 ms/layer and the budget closing to 85%. That figure summed BOTH attention probes — including sk=128, which is not part of a 64-token layer. The real non-matmul total is 0.19 ms/layer, and the budget closes to 77%, not 85%.
+
+The mistake was in the test itself: a running total accumulated inside a loop that measured two different sk values, and I read the printed subtotal without checking what it had added.
+
+## The complete budget
+
+Measured the remaining ops — RoPE 10.07us, Copy2D and Blit both immeasurably small, logits 329.6us once per prefill (0.015 ms/layer amortized):
+
+| component | ms/layer |
+|---|---|
+| expansion | 0.990 |
+| GEMM | 1.700 |
+| attention | 0.159 |
+| RMSNorm x2 | 0.013 |
+| RoPE | 0.010 |
+| SwiGLU | 0.009 |
+| residual add x2 | 0.008 |
+| logits (amortized) | 0.015 |
+| TOTAL | 2.905 |
+
+Measured 3.79 ms/layer -> 0.89 ms, 23%, unaccounted.
+
+Every operation in the layer is now measured individually. The remainder is NOT a missing operation, which is what the last two rounds of searching assumed.
+
+## The likely cause, and why it is familiar
+
+Every figure above comes from repeating ONE op back-to-back on the same buffers. The GPU overlaps those iterations. A real layer is a dependency chain — norm feeds projection feeds attention feeds projection — with genuine data hazards between successive ops. A single-op microbenchmark structurally cannot show that serialization cost.
+
+If that is right, it is the FIFTH instance this session of one error class: measuring in a regime the real workload does not run in.
+
+  1. cache-resident weight vs DRAM streaming (roofline)
+  2. hidden-behind-GPU vs serial (host encode)
+  3. decode shape rows=1 vs prefill shape rows=64 (these ops)
+  4. a path compared against itself (crossover benchmark, after wiring)
+  5. isolated repeated op vs dependency chain (this)
+
+The recurring shape is that a microbenchmark answers the question it was built to answer and not the one being asked, and the discrepancy only shows when a total is compared against the sum of its parts. That comparison has now caught four separate defects this session — the elementwise-over-whole-context bug, the Q6_K fast-path miss, the attention blind spot, and this.
+
+## Testing the hypothesis
+
+The check is direct: build one command buffer containing a real layer's op SEQUENCE on properly dependent buffers, and compare its GPU time against the sum of the same ops measured in isolation. If the chain is ~23% slower, that closes the budget and the conclusion is that per-op microbenchmarks systematically under-report by roughly that margin here.
+
+## Standing, unchanged
+
+  decode  : tg64 1.017x — parity
+  prefill : pp64 0.336x
