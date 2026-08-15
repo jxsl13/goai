@@ -8,21 +8,31 @@ import (
 	"testing"
 )
 
-// flash_mm_f32 computes prefill attention on the SIMD matrix units. It is CORRECT — this test
-// holds it against the kernel prefill actually uses — but NOT yet faster, so nothing routes to it:
+// flash_mm_f32 computes prefill attention on the SIMD matrix units, and IS the path prefill takes
+// for causal sq==sk with dk=64. This test holds it against the kernel it replaced.
 //
-//	seq= 64  decode 200.5us  flashMM  221.6us  0.90x   151 GFLOP/s (2.2% peak)
-//	seq=128  decode 520.2us  flashMM  615.9us  0.84x   218 GFLOP/s (3.2% peak)
-//	seq=256  decode 1905us   flashMM 2020.9us  0.94x   266 GFLOP/s (3.9% peak)
-//	seq=512  decode 7268us   flashMM 7191.2us  1.01x   299 GFLOP/s (4.4% peak)
+// Against that kernel, per call:
 //
-// The matrix units are idle behind staging, exactly as in the first matrix-unit quantized matmul —
-// and notably NOT because of dequantization, which attention has none of. Per K-tile a threadgroup
-// stages 4096 floats (128 per thread) and runs a 64-iteration softmax on 8 of its 32 lanes, to feed
-// 64 matrix MACs: a 64:1 ratio.
+//	seq= 64  decode  166.4us  flashMM   70.7us  2.35x   474 GFLOP/s ( 7.0% peak)
+//	seq=128  decode  522.3us  flashMM  222.1us  2.35x   604 GFLOP/s ( 8.9%)
+//	seq=256  decode 1903.2us  flashMM  566.7us  3.36x   947 GFLOP/s (13.9%)
+//	seq=512  decode 7271.6us  flashMM 1831.6us  3.97x  1172 GFLOP/s (17.2%)
 //
-// The fix is the one that worked on the quantized kernel: more simdgroups per threadgroup, so one
-// K/V tile serves 32 query rows instead of 8 and the softmax parallelizes across the group.
+// End to end on TinyLlama prompt processing: n=64 777 -> 805, n=256 1314 -> 1495,
+// n=1024 929 -> 1599 tok/s. The gain tracks attention's share of prefill, which the
+// prompt-length sweep measured at 5% / 21% / 58%.
+//
+// The first version used ONE simdgroup per 8 query rows and was 0.84-1.01x — no faster than the
+// scalar kernel — because it staged 4096 floats and ran a 64-iteration softmax on 8 of 32 lanes to
+// feed 64 matrix MACs. Four simdgroups over 32 query rows share one K/V tile and parallelize the
+// softmax, which is what made the matrix units productive. That is the same fix that took the
+// quantized matrix-unit kernel from 585 to 1377 GFLOP/s: the matrix units do nothing while a
+// scalar prologue dominates, whatever that prologue is.
+//
+// ACCURACY: agreement is 5.8e-05, not bit-exact — the online softmax rescales partial sums in a
+// different order. That is the same order as the two pre-existing attention kernels agree with each
+// other (5.7e-05), so it is within the spread the codebase already had. On greedy decoding it can
+// flip a near-tie: 2 of 26 generated tokens differ after a 32-token prompt.
 //
 // The seq values matter. seq<=32 fits ONE K tile and exercises no cross-tile rescale; the first
 // version passed there at 4.5e-05 and was wrong at 1.8e-02 for seq=64, because the per-row softmax
