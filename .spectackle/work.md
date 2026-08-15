@@ -1062,3 +1062,25 @@ WHY NO FIX IS PROPOSED HERE. The obvious mechanism — each qs byte is fetched o
 WHAT A PROBE WOULD LOOK LIKE, by analogy to the roofline pair that bounded the prefill lever at 1.41x and 1.67x: hold grid shape, thread count and instruction count fixed and disable one lever at a time. Replace the qs/hmask extraction with a constant while keeping every load, to bound the ALU share; and point every invocation at superblock 0 while keeping the arithmetic, to bound the traffic share. Two one-line edits, and they bound the space before any kernel is written.
 
 STANDING VALUE EITHER WAY: even unimproved, Q2_K and Q3_K already gained 1.913x and 3.876x end to end from the cooperative work. This is about whether a second, smaller lever exists on top, not about a defect.
+
+## R-01M01NJX03EV6AH33FCDGTZQYB REFUTED: Q2_K/Q3_K are not unpacking-bound — removing all unpack ALU is worth at most 1.08x
+kind: research
+state: draft
+created: 2026-08-15
+
+CANDIDATE KILLED BY PROBE, cost two one-line edits. Closes the question the previous record opened. Tree restored; nothing shipped.
+
+THE HYPOTHESIS. Normalized end-to-end results showed Q2_K and Q3_K moving 0.50x and 0.42x the weight bytes per second that Q4_K does, despite SMALLER blocks, while every other format sat between 0.81x and 1.36x. The proposed explanation was the unpacking: those two do the most bit manipulation per weight — Q3_K reads a separate hmask plane on top of its 2-bit qs field, Q2_K extracts four 2-bit fields per qs byte under four shifts.
+
+THE PROBE held grid shape, thread count and LOAD COUNT fixed and removed only the unpacking arithmetic: the shift-and-mask on qs and the hmask bit test became plain byte reads, so every memory access still happens and only the ALU work disappears. Interleaved A/B, six alternations, -benchtime=300x -count=2, first sample of each run discarded:
+  baseline (full unpack) median 342538 ns   range 332121-616673
+  no-unpack-ALU          median 317383 ns   range 285583-338452
+  ceiling 1.08x, distributions OVERLAPPING.
+
+REFUTED. Removing ALL of Q3_K's unpacking arithmetic is worth at most 8 percent and cannot be distinguished from noise. The unpacking is not the bottleneck, so no kernel targeting it can be either. Q2_K shares the structure and is not probed separately on that basis.
+
+WHAT THE DIFFERENCE PROBABLY IS, stated as unverified: load ISSUE count rather than bytes or arithmetic. Q3_K touches two byte planes per element while Q4_K reads one byte per two elements, so Q3_K issues roughly four times the loads per weight. That is a property of the format, not of the kernel, and there is no version of the kernel that reads fewer bytes than the format stores.
+
+NET: no actionable lever here. Q2_K and Q3_K already gained 1.913x and 3.876x end to end from the cooperative work, and the residual gap to Q4_K is inherent to what those formats require a reader to do.
+
+METHOD NOTE. The first attempt at this probe ran the two variants as SEPARATE blocks rather than interleaved and produced 1.14x with a 703005 outlier — unusable, and in the direction that would have justified building something. Re-running it interleaved with warmup trimming gave 1.08x with overlap. The discipline that produced the usable number is the same one filed as FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001, and I violated it before following it.
