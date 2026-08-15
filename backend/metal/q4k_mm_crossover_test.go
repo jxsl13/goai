@@ -30,13 +30,32 @@ import (
 //     61% of the total, and a TinyLlama forward pass runs 154 such matmuls. That is why short
 //     prefill (pp64 ~0.46x of llama.cpp) is so much weaker than long prefill (pp1024 ~0.92x).
 //  2. mmunit reads ~6.5 MB of quantized weight where dqgemm writes and re-reads ~46 MB of f32 —
-//     7x less traffic — and still loses. So it is not bandwidth-bound; it is the dequant-in-inner-
-//     loop instruction cost (~240 scalar instructions per matrix instruction), the same
-//     scalar-prologue rule that governed the attention kernels.
+//     7x less traffic — and still loses, so it is not bandwidth-bound.
 //
-// Neither arm implements the third design: dequantize each K-tile ONCE into threadgroup memory,
-// then run simdgroup matrix ops against that tile. That pays dequant once per tile instead of once
-// per row (fixing 2) without materializing [K][N] in device memory (fixing 1).
+// WHY it loses, measured rather than assumed. qmatmul_q4k_mm already stages each dequantized weight
+// tile in threadgroup memory and consumes it with simdgroup matrix ops, so "dequantize once per
+// tile instead of once per row" is not the missing idea — it is what the kernel does. What it does
+// NOT do is share that tile across M: the weight tile is rebuilt once per M-TILE, so its dequant
+// work scales with ceil(M/BM) where dqgemm's is O(1) in M. That is exactly the shape of the table
+// above, the gap widening from 0.77x to 0.36x as M grows.
+//
+// Tested directly by doubling the M tile to 64 rows (8 simdgroups, sO aliased onto sX to stay
+// inside 32 KB), which halves the number of rebuilds. Bit-exact at every shape, and the prediction
+// held at large M — but only there:
+//
+//	M= 16  BM=32  640.6us   BM=64  874.2us   0.73x (worse)
+//	M= 32  BM=32  727.5us   BM=64 1019.8us   0.71x (worse)
+//	M=128  BM=32 2222.8us   BM=64 1840.1us   1.21x (better)
+//	M=256  BM=32 4295.3us   BM=64 3517.6us   1.22x (better)
+//
+// Confirmed but insufficient: 1.22x against a 2.75x deficit. A taller tile also wastes work on
+// partial tiles (at M=16, 48 of 64 rows are padding), which is why it costs more than it saves
+// below M~64. Reverted to BM=32; the kernel stays disabled.
+//
+// The remaining lever is not this kernel. dqgemm's ~450us fixed term moves ~52 MB (46 MB of f32
+// out, 6.5 MB of quant in) which is ~65% of this machine's sustained bandwidth — close enough to
+// the ceiling that expanding to f16 instead of f32, halving the write, is the honest next
+// candidate for short-prompt prefill.
 //
 // Reported, not asserted on absolute timings; the assertion is only the qualitative ordering.
 func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
