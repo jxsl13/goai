@@ -2909,3 +2909,45 @@ The general defence is cheap and was not applied here until now: when a threshol
 
   decode  : tg64 ~1.017x — parity at the memory roofline
   prefill : pp64 0.336x — GEMM 1.916, expansion 0.990, attention 0.159, rest 0.055, unaccounted 0.67 ms/layer
+
+## R-01M028CC99FY29MXTKQYJ752K4 An arbitrary M<=512 cap I added earlier cost a 2.5x cliff past it — found by sweeping the dimension the threshold is applied across, 1.17x end to end on long prompts
+kind: research
+state: draft
+created: 2026-08-15
+
+Applied the rule the previous record wrote down — sweep the dimensions a threshold will be applied across — to the thresholds I had introduced. It found a 2.5x cliff I had put there myself.
+
+## The bug
+
+When relaxing the original M==1 cooperative gate I wrote `M >= 1 && M <= 512`. The cap was a safety margin, never measured. But the cooperative kernels serve ANY M: each takes its row index from group.y and the dispatch passes M as the grid's y extent.
+
+Past the cap a projection falls to the non-cooperative kernel, whose per-row cost is ~2.5x worse. K=2048 N=256:
+
+  with cap      M=512  714.0us (1.4us/row)   M=640 2225.6us (3.5us/row)   M=1024 3461.8us
+  cap removed   M=512  713.7us (1.4us/row)   M=640  893.6us (1.4us/row)   M=1024 1426.5us
+
+Per-row cost is now FLAT across M, which is the correct shape and the giveaway that the cap was the problem rather than anything about large batches.
+
+End to end, with n=256 as a control that must not move:
+
+  n= 256  1313.5 / 1312.9  ->  1312.3 / 1312.6   unchanged
+  n= 640   959.7 /  960.7  ->  1128.4 / 1125.3   1.17x
+  n=1024   814.8 /  816.2  ->   930.9 /  928.5   1.14x
+
+It only bites where dequant+GEMM is ineligible — narrow projections, k and v at kvHeads*headDim — but that is every grouped-query model, and prompts over 512 tokens are ordinary rather than exotic.
+
+## What the sweep also showed
+
+The M>=24 crossover was re-checked at K=5632 (the down projection) as well as K=2048. It holds approximately but sits closer to M=32 than 24: at M=24 the cooperative kernel wins slightly at both K values (0.93x and 0.79x), at M=32 dequant+GEMM wins (1.22x, 1.02x). Left at 24 — the difference is small and the current value errs toward the path that is much better at larger M, but the threshold is now known to be soft rather than measured-exact.
+
+## The meta-point
+
+Three consecutive rounds have found defects in thresholds and gates I wrote earlier in this same session: the M==1 gate that was never a capability limit, the crossover derived at one shape and applied to all, and now a cap invented as a safety margin. None were subtle once measured; all were invisible to inspection because each looked like ordinary defensive coding.
+
+The cheap general defence: a constant introduced as a safety margin is a claim about behaviour outside the measured range, and should be measured or removed rather than left as a guess. "Safe" bounds that were never probed are where this session's bugs concentrated.
+
+## Standing
+
+  decode  : tg64 ~1.017x — parity at the memory roofline
+  prefill : pp64 0.336x at n=64; 1313 tok/s at n=256, so the short-prompt figure understates the
+            path — expansion is per-projection and amortizes over longer prompts
