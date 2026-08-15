@@ -801,6 +801,7 @@ choice: Keep 512 - preserve the exact trees the frozen digest pins
 
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
 ## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
+## R-01M01DYT2FF5JB3JTDWRST33AP Classic scorecard refreshed vs sklearn 1.9.0: DecisionTree now 5.4x AHEAD; SVC_rbf the one loss; slab cache rejected
 kind: research
 state: draft
 created: 2026-08-15
@@ -852,3 +853,26 @@ SCALING ARGUMENT, why a bigger model does not rescue it: boxes scale as layers x
 RECOMMENDATION: do not run the 72-site sweep as a performance task. Three options, in preference order. (1) Re-scope the task to a resource/GC-pressure cleanup, ship it only if allocation count per decode step is a metric worth defending in its own right, and label it as such rather than as a speedup. (2) Apply it only where a decode path is already allocation-bound by measurement - none identified so far. (3) Close it. Against any of these stands the churn: 72 edits across roughly 30 files, with the task itself warning that a parallel worker is active in the mamba2 and quantized-mamba2 files, is real merge surface bought for 0.8 percent of allocations and no measured time.
 
 METHOD NOTE: the per-model A/B the task mandated is what produced this answer. Had the sweep been applied first and measured "as a batch" afterwards, the alloc delta would have looked like a 72-site success while the time delta stayed inside noise, and the batch framing would have made the null result much harder to read.
+REFRESHED SCORECARD, and it corrects the recorded standing. Measured on this M2 Pro against sklearn 1.9.0 / numpy 2.5.1 / python 3.14.7, on the IDENTICAL 4000x20 data classic/perfcompare_test.go writes, best-of-5 fit on the sklearn side:
+
+  method                GoAI ms   sklearn n_jobs=1   sklearn n_jobs=-1   verdict
+  DecisionTree             2.58              13.90                   -   GoAI 5.39x FASTER
+  RandomForest100         22.09             271.98               93.46   GoAI 12.31x / 4.23x FASTER
+  GradientBoosting100     76.57            1235.97                   -   GoAI 16.14x FASTER
+  GaussianNB               0.29               0.64                   -   GoAI 2.21x FASTER
+  SVC_rbf                  5.45               3.38                   -   GoAI 1.61x SLOWER
+  KNN_fit                  3.93               0.28                0.26   GoAI slower, fit-only artifact
+
+CORRECTION TO THE STANDING RECORD: the previously recorded split had sklearn winning DecisionTree by 1.3x. It does not - GoAI now wins DecisionTree 5.39x. Whatever closed that gap has landed since the earlier comparison. RBF-SVC also narrowed, from a recorded 2.0x to 1.61x. The only genuine remaining loss in this scorecard is SVC_rbf; KNN_fit stays the documented artifact of eagerly building the ball tree at fit time.
+
+WHERE THE SVC TIME GOES, profiled at n=4000 (the comparison shape). The parallel profile is uninformative - 87 percent pthread_cond wait/signal plus 9 percent usleep, at 1.29 cores average - because parallelBands fans out fresh goroutines per kernel column and the workers burn CPU on sync while the main thread does the work. Wall clock still favors parallel (5.22 ms against 7.01 ms serial), so the fan-out earns its keep at this size even while burning cores. At n=1000 it does NOT: serial is 1.59x FASTER there (1.33 ms against 2.12 ms), so classicBandGrain is mis-calibrated for small n. That is a real, separable finding.
+
+The SERIAL profile shows the true work split: runtime.madvise 30.8 percent, GC-driven pthread_cond_signal 28.2 percent, math.archExp 10.3 percent, kernelCache.column 20.5 percent cumulative, smo 23.1 percent cumulative.
+
+REJECTED CANDIDATE - slab-backed kernel cache. Reading roughly 59 percent of the serial profile as allocator and GC, I replaced the per-miss make([]float64, n) with one slab carved into cap slots, eviction returning a slot instead of garbage. Correct (full classic suite green; reusing a dirty slot is safe because the fill writes all n entries before any read) and 10.3 percent SLOWER: 5.76 ms against 5.23 ms, with B/op rising 1.62 MB to 67.4 MB.
+
+WHY IT FAILED, and the number that kills the premise: the baseline allocates only about 1.62 MB and 1040 allocs per fit. At 8n = 32 KB per column that is roughly 50 distinct columns computed per fit - not the thousands the allocation-churn reading assumed. The cache (cap 2000 columns at n=4000) therefore NEVER FILLS and NEVER EVICTS, so there was no eviction garbage to recycle, and pre-reserving the full 64 MB budget cost more than the incremental allocation it replaced. The madvise share comes from the benchmark's repeated fits (60 iterations x 1.62 MB), not from within one fit.
+
+STANDING LESSON, consistent with A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001: read the alloc COUNT and BYTES before reading an allocator profile share as an opportunity. B/op and allocs/op were already in the benchmark output and would have refuted the premise before any code was written.
+
+WHAT REMAINS FOR SVC, unmeasured: the kernel evaluates ||a-b||^2 directly per pair with a scalar math.Exp. libsvm precomputes ||x||^2 and uses ||a-b||^2 = ||a||^2 + ||b||^2 - 2a.b, which turns a column into one GEMV plus a batched exp - fewer flops per dim and a vectorizable exp. That is NOT bit-identical (different rounding), so it is a PROC-007 question and would need the SVC golden parity re-established. Given math.archExp is 10.3 percent and the whole column path 20.5 percent of the serial profile, the ceiling on that lever is well under the 1.61x needed to reach sklearn; it should be bounded by a probe before anyone builds it.
