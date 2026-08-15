@@ -223,6 +223,9 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
 // Pure streaming read over `bytes`, same threadgroup shape as the cooperative quantized matmul.
 double mtl_probe_read_bw(double bytes, int reps);
 
+// MPS GEMM timed with rotating weight buffers so none stays cache-resident.
+double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf);
+
 // Per-dispatch vs per-encoder overhead: n trivial dispatches packed `per` to a compute encoder.
 double mtl_probe_encoder_cost(int n, int per, int reps);
 

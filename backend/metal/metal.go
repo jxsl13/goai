@@ -2447,6 +2447,17 @@ func ProbeSplitKOccupancy() (p1, p2 int) {
 	return int(out[3]), int(out[4])
 }
 
+// ProbeGEMMDtypeCold times an MPS GEMM over nbuf rotating weight buffers, so no weight stays
+// cache-resident — the regime a real forward pass runs in. Use it, not ProbeGEMMDtype, whenever the
+// comparison depends on how many bytes a format reads.
+func ProbeGEMMDtypeCold(m, k, n int, f16 bool, nbuf int) float64 {
+	var h C.int
+	if f16 {
+		h = 1
+	}
+	return float64(C.mtl_probe_gemm_cold(C.int(m), C.int(k), C.int(n), h, C.int(nbuf)))
+}
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.

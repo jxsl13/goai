@@ -1992,6 +1992,53 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     return 0;
 }
 
+// mtl_probe_gemm_cold times an MPS GEMM with ROTATING weight buffers, so no weight stays
+// cache-resident between iterations — the regime a real forward pass runs in, where 154 distinct
+// weights stream past. The single-buffer probe above is warm and reports substantially higher
+// rates; comparing dtypes there can invert the answer, since the format that reads fewer bytes only
+// shows its advantage once the reads actually reach memory.
+double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf) {
+    if (ensure_init() != 0) return -1.0;
+    if (nbuf < 2) nbuf = 2;
+    if (nbuf > 16) nbuf = 16;
+    @autoreleasepool {
+        size_t es = f16 ? sizeof(uint16_t) : sizeof(float);
+        MPSDataType dt = f16 ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
+        id<MTLBuffer> aBuf = [gDevice newBufferWithLength:(size_t)M*K*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> cBuf = [gDevice newBufferWithLength:(size_t)M*N*es options:MTLResourceStorageModePrivate];
+        NSMutableArray* ws = [NSMutableArray array];
+        for (int i = 0; i < nbuf; i++) {
+            id<MTLBuffer> b = [gDevice newBufferWithLength:(size_t)K*N*es options:MTLResourceStorageModePrivate];
+            if (b == nil) return -2.0;
+            [ws addObject:b];
+        }
+        if (aBuf == nil || cBuf == nil) return -2.0;
+        MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:dt];
+        MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+        MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+            initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+            resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+        double best = 1e18;
+        for (int t = 0; t < 7; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -3.0;
+            for (int i = 0; i < nbuf; i++) {
+                MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:ws[i] descriptor:bDesc];
+                [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -4.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)nbuf;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 // mtl_probe_read_bw times a pure streaming read over `bytes` of device memory with the same
 // threadgroup shape the cooperative quantized matmul uses, and returns the best GPU seconds. It does
 // no dequantization, so comparing it against the real kernel separates "we are at the memory
