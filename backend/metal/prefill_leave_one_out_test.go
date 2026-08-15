@@ -101,6 +101,11 @@ import (
 // So a fused QKV is worth ~8.9% at M=64 and ~2.8% at M=512, and the real decoder is not getting it
 // on this path — the unfused chain models it, the fused one does not.
 //
+// CORRECTION: those two figures are wrong as a measure of the opportunity. The real decoder already
+// fuses 12 of the 22 layers (TestQKVFusionCoverage), so neither chain models it and the comparison
+// overstates the prize. TestQKVFusionValue prices it directly at ~2.4% end-to-end at pp64 and ~0.4%
+// at pp512, and concludes it is not worth the plumbing.
+//
 // Why it matters most at small M: k and v are 2048x256 projections, and a per-shape sweep puts that
 // shape at 7.4% of peak at M=64 (against gate/up's 67.3%). They are 2.3% of a layer's FLOPs but
 // ~15% of its matmul TIME. Widening N from 256 to 2560 by fusing is exactly the fix for a shape
