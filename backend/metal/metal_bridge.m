@@ -5,6 +5,7 @@
 // size-classed pool (§T336, Apple Silicon UMA makes them host-visible;
 // newBufferWithBytesNoCopy zero-copy is a later opt).
 #import <Foundation/Foundation.h>
+#include <sys/sysctl.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
@@ -2767,8 +2768,21 @@ static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
 // serve the wrong expansion.
 static NSMutableDictionary* gWCache = nil;   // NSValue(ptr) -> @[src, expanded]
 static size_t gWCacheBytes = 0;
-static size_t gWCacheMax = 0;                // 0 = disabled
+static size_t gWCacheMax = (size_t)-1;        // (size_t)-1 = not yet initialised; 0 = disabled
 static int gWCacheHits = 0, gWCacheMisses = 0;
+
+// Default budget: an eighth of physical RAM, capped at 4 GB. The cache holds each quantized weight's
+// f16 expansion — ~3x the model file — and removes the expansion that is otherwise redone every
+// prefill pass (37 ms/pass for TinyLlama, over half of a short-prompt token). Weights past the
+// budget silently fall back to per-pass expansion, so a model too large for the budget is slower
+// rather than broken, and an eighth of RAM cannot displace the model itself.
+static double default_cache_bytes(void) {
+    uint64_t mem = 0; size_t len = sizeof(mem);
+    if (sysctlbyname("hw.memsize", &mem, &len, NULL, 0) != 0 || mem == 0) return 0.0;
+    double budget = (double)mem / 8.0;
+    if (budget > 4e9) budget = 4e9;
+    return budget;
+}
 
 void mtl_set_weight_cache(double max_gb) {
     gWCacheMax = (max_gb <= 0.0) ? 0 : (size_t)(max_gb * 1e9);
@@ -2785,6 +2799,7 @@ void mtl_weight_cache_stats(int* hits, int* misses, double* bytes) {
 // registers one and sets *needsFill so the caller encodes the dequantization exactly once.
 static id<MTLBuffer> wcache_lookup(id<MTLBuffer> src, size_t bytes, int* needsFill) {
     *needsFill = 0;
+    if (gWCacheMax == (size_t)-1) gWCacheMax = (size_t)default_cache_bytes();
     if (gWCacheMax == 0) return nil;
     if (gWCache == nil) gWCache = [NSMutableDictionary dictionary];
     NSValue* key = [NSValue valueWithPointer:(__bridge const void*)src];
@@ -2982,6 +2997,7 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     // Q6_K joins only when the cache is on. Q6_K is 16.9% of TinyLlama's weights but 16.5 of the
     // 22.9 ms of remaining fixed cost — its dequant runs ~3.6x slower per element than Q4_K's — so
     // what pays is removing the per-pass expansion, not making it f16.
+    if (gWCacheMax == (size_t)-1) gWCacheMax = (size_t)default_cache_bytes();
     if (qt != 12 && !(qt == 14 && gWCacheMax > 0)) return 0;
     // The M cap exists because f16 only pays for itself while the GEMM is bandwidth-bound. With the
     // expansion cache on, the trade changes completely: the expansion is gone in this path and paid

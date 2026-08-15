@@ -2357,8 +2357,8 @@ func SetSplitKChunks(n int) { C.mtl_set_splitk_chunks(C.int(n)) }
 // threadgroups — the mechanism that makes split-K win — at the cost of more partials to merge.
 func SetSplitKPerChunk(n int) { C.mtl_set_splitk_perchunk(C.int(n)) }
 
-// SetWeightCacheGB enables the persistent expanded-weight cache with a budget in gigabytes, or
-// disables it with 0 (the default).
+// SetWeightCacheGB sets the persistent expanded-weight cache budget in gigabytes, or disables it
+// with 0. It now DEFAULTS to an eighth of physical RAM capped at 4 GB rather than to off.
 //
 // Expanding a quantized weight for a dense GEMM is the ENTIRE fixed cost of a prefill pass — 37.03
 // ms/pass for TinyLlama-1.1B Q4_K_M, against 0.00 ms for the cooperative path that does not expand —
