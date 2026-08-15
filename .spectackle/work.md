@@ -800,6 +800,7 @@ option: Lower only for classification, where the risk is smallest, and keep 512 
 choice: Keep 512 - preserve the exact trees the frozen digest pins
 
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
+## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
 kind: research
 state: draft
 created: 2026-08-15
@@ -828,3 +829,26 @@ A THIRD OPTION THE ADR DOES NOT CONSIDER, and its limit. The ADR states "There i
 RECOMMENDATION: (a) reject the class, or at most (c) case-by-case. The measurement removes the reason to take a blanket numerics loosening: the single site the ADR called highest-leverage returns 4.1 percent on one dtype of one kernel, and the remaining 77 findings were already characterized as index bookkeeping or one-shot paths. Option (b) buys a written boundary rule and a tolerance-test migration across the class for that. If any site is ever taken, this one under (c) is the candidate, and it needs the full-tree cross-path equality sweep the ADR describes, because a half-ulp shift applied to one decode path and not another is exactly what those tests exist to catch.
 
 NOT DONE, deliberately: no code shipped, no test loosened. attn_extra.go is byte-identical to origin/main.
+MEASURED. The approved task T-01KYJNDTK2E8A9BK9SGAZ4VKYS asks to hoist per-layer backend.RoPEAttrs/AttnAttrs boxing across the remaining decode models, measuring "per model or as a batch, with a same-session A/B and bit-identity verification before shipping". Done for one model. The transform works exactly as described and is a RESOURCE finding, not a time lever. Nothing shipped; nlp/cla.go is byte-identical to main.
+
+SCOPE OF THE CLASS, established by AST scan rather than grep: 72 backend.RoPEAttrs/AttnAttrs composite literals sit inside a for/range body across the non-test nlp files. nlp/cohere_decode.go is already hoisted (qRoPE/kRoPE/attn built before the layer loop) and is the pattern the task refers to.
+
+THE ALLOCATION IS REAL, confirmed before measuring anything: go build -gcflags=-m reports "backend.AttnAttrs{...} escapes to heap" at every site inspected, including nlp/cla.go:228 and :362. So each in-loop literal is one heap box per layer per token, not a stack temporary.
+
+TARGET AND ENTRY PROOF: nlp/cla.go DecodeStep, exercised by BenchmarkCLADecode500RowBuf (Layers 4, Share 2, Heads 4, Dim 256, 500 decode steps). Entry was proven by a temporary panic at the MHA call before any timing was read.
+
+MEASURED, interleaved A/B by file-copy toggle, three A-B alternations, -benchtime=20x -count=2, six samples per variant. A = baseline, B = hoisted:
+  allocs/op  188045 -> 186546   saved 1499  (0.80 percent), fully deterministic across all six samples
+  B/op       128019206 -> 127923311  saved 95895 bytes (0.075 percent), 1499 x 64 B, exactly as predicted
+  ns/op      433009360 -> 434632503  B/A 1.0037, i.e. no improvement; A's own spread is 1.85 percent
+CLA correctness tests green on the hoisted tree.
+
+THE ALLOCATION SAVING IS EXACT AND THE TIME SAVING IS ZERO. 1499 is 3 x 500 decode steps, matching the boxes removed from the decode path, and it repeats identically in every sample - so the transform does precisely what the task claims. It simply does not show up in wall clock: a 64-byte allocation costs on the order of tens of nanoseconds and the site is, as its own in-tree suppression says, "OpMHA dispatch, attention-kernel-dominated".
+
+THIS IS THE CASE A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001 DESCRIBES: a resource finding until a paired benchmark shows otherwise. The paired benchmark is now run and it shows otherwise did not happen. The prior instance in that rule removed 90 percent of the AQLM encoder allocations and moved time not at all; this is the same shape at much smaller scale.
+
+SCALING ARGUMENT, why a bigger model does not rescue it: boxes scale as layers x tokens, while the compute they sit beside scales as layers x dim squared. The share therefore FALLS on a realistic model, not rises. The 4-layer, dim-256 config measured here is close to the most favorable case in the tree.
+
+RECOMMENDATION: do not run the 72-site sweep as a performance task. Three options, in preference order. (1) Re-scope the task to a resource/GC-pressure cleanup, ship it only if allocation count per decode step is a metric worth defending in its own right, and label it as such rather than as a speedup. (2) Apply it only where a decode path is already allocation-bound by measurement - none identified so far. (3) Close it. Against any of these stands the churn: 72 edits across roughly 30 files, with the task itself warning that a parallel worker is active in the mamba2 and quantized-mamba2 files, is real merge surface bought for 0.8 percent of allocations and no measured time.
+
+METHOD NOTE: the per-model A/B the task mandated is what produced this answer. Had the sweep been applied first and measured "as a batch" afterwards, the alloc delta would have looked like a 72-site success while the time delta stayed inside noise, and the batch framing would have made the null result much harder to read.
