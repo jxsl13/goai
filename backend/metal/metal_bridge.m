@@ -2778,6 +2778,42 @@ static NSString* const kQ4KF16Source =
      "    if (nn<N) Out[(k0+l)*N + nn] = (half)sT[(int)t*32+l];\n"
      "  }\n"
      "}\n"
+     "kernel void dequant_q6k_t_h(device const uchar* W [[buffer(0)]],\n"
+     "                            device half* Out [[buffer(1)]],\n"
+     "                            constant int* P [[buffer(2)]],\n"
+     "                            uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                            ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*210;\n"
+     "  int sb=s>>3, sub=s&7;\n"
+     "  int k0=sb*256 + sub*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*210;\n"
+     "    ushort dr=(ushort)W[base+208] | ((ushort)W[base+209]<<8);\n"
+     "    float d=float(as_type<half>(dr));\n"
+     "    device const char* sc=(device const char*)(W+base+192);\n"
+     "    for (int i=0;i<32;i++){\n"
+     "      int k=sub*32+i;\n"
+     "      int chunk=k>>7, r=k&127, g=r>>5, l=r&31;\n"
+     "      uchar qlb=W[base + chunk*64 + (g&1)*32 + l];\n"
+     "      uchar qhb=W[base + 128 + chunk*32 + l];\n"
+     "      int nib=(g<2)?(qlb&0xF):(qlb>>4);\n"
+     "      int hi=(qhb>>(g*2))&3;\n"
+     "      int q=(nib|(hi<<4))-32;\n"
+     "      sT[(int)t*32+i] = d*(float)sc[chunk*8 + (l>>4) + g*2]*(float)q;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int i=0;i<32;i++) sT[(int)t*32+i]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int i=0;i<32;i++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+i)*N + nn] = (half)sT[(int)t*32+i];\n"
+     "  }\n"
+     "}\n"
      "kernel void cvt_f32_to_h(device const float* In [[buffer(0)]],\n"
      "                         device half* Out [[buffer(1)]],\n"
      "                         constant int* P [[buffer(2)]],\n"
@@ -2792,21 +2828,24 @@ static NSString* const kQ4KF16Source =
      "}\n";
 
 static id<MTLComputePipelineState> gDequantQ4KH = nil;
+static id<MTLComputePipelineState> gDequantQ6KH = nil;
 static id<MTLComputePipelineState> gCvtF32ToH = nil;
 static id<MTLComputePipelineState> gCvtHToF32 = nil;
 static int ensure_q4k_f16(void) {
-    if (gDequantQ4KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) return 0;
+    if (gDequantQ4KH != nil && gDequantQ6KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQ4KF16Source options:nil error:&err];
     if (lib == nil) { fprintf(stderr, "metal: q4k f16 path build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
     id<MTLFunction> f1 = [lib newFunctionWithName:@"dequant_q4k_t_h"];
+    id<MTLFunction> f4 = [lib newFunctionWithName:@"dequant_q6k_t_h"];
     id<MTLFunction> f2 = [lib newFunctionWithName:@"cvt_f32_to_h"];
     id<MTLFunction> f3 = [lib newFunctionWithName:@"cvt_h_to_f32"];
-    if (f1 == nil || f2 == nil || f3 == nil) return -11;
+    if (f1 == nil || f2 == nil || f3 == nil || f4 == nil) return -11;
     gDequantQ4KH = [gDevice newComputePipelineStateWithFunction:f1 error:&err];
+    gDequantQ6KH = [gDevice newComputePipelineStateWithFunction:f4 error:&err];
     gCvtF32ToH   = [gDevice newComputePipelineStateWithFunction:f2 error:&err];
     gCvtHToF32   = [gDevice newComputePipelineStateWithFunction:f3 error:&err];
-    return (gDequantQ4KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) ? 0 : -12;
+    return (gDequantQ4KH != nil && gDequantQ6KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) ? 0 : -12;
 }
 
 // Three separate scratch buffers: the weight, the converted activations and the f16 result. They are
@@ -2868,7 +2907,10 @@ void mtl_set_q4k_dq_gemm_f16_max_m(int m) { gDQGemmF16MaxM = m; }
 // bandwidth-bound. Above gDQGemmF16MaxM the f32 path is faster, so this must NOT widen.
 static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     if (!gDQGemmF16Enabled) return 0;
-    if (qt != 12) return 0;
+    // Q6_K joins only when the cache is on. Q6_K is 16.9% of TinyLlama's weights but 16.5 of the
+    // 22.9 ms of remaining fixed cost — its dequant runs ~3.6x slower per element than Q4_K's — so
+    // what pays is removing the per-pass expansion, not making it f16.
+    if (qt != 12 && !(qt == 14 && gWCacheMax > 0)) return 0;
     // The M cap exists because f16 only pays for itself while the GEMM is bandwidth-bound. With the
     // expansion cache on, the trade changes completely: the expansion is gone in this path and paid
     // every pass in the f32 one, so the ~3% the f16 GEMM costs at large M is worth taking to save
@@ -2877,8 +2919,9 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     // Two different caps, both measured end-to-end. Without the cache f16 must also pay for itself
     // against the f32 GEMM, which it only does while bandwidth-bound (M<=64). With the cache the
     // expansion is gone here and paid every pass by the f32 path, so f16 stays ahead much further —
-    // but not forever: measured 1.258x at n=64, 1.106x at 256, 1.037x at 384, 1.022x at 512, then
-    // 0.962x at 768 and 0.983x at 1024, where the f16 GEMM's ~3% outgrows the expansion it saves.
+    // but not forever. With Q6_K cached as well: 1.574x at n=64, 1.141x at 256, 1.100x at 512, then
+    // 1.026x at 768, 0.980x at 1024 and 1.000x at 1536 — all inside this machine's ~4% noise floor,
+    // so 512 is where a win stops being demonstrable rather than where harm begins.
     if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 512)) return 0;
     if (N < 512 || K % 256 != 0) return 0;
     return ensure_q4k_f16() == 0;
@@ -3071,7 +3114,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
             if (needsFill) {
                 int Pd[2] = {K, N};
                 id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
-                [de setComputePipelineState:gDequantQ4KH];
+                [de setComputePipelineState:(qtype == 14) ? gDequantQ6KH : gDequantQ4KH];
                 [de setBuffer:wb offset:0 atIndex:0];
                 [de setBuffer:wS offset:0 atIndex:1];
                 [de setBytes:Pd length:sizeof(Pd) atIndex:2];

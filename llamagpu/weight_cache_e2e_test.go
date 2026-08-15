@@ -15,27 +15,36 @@ package llamagpu_test
 // was 97% of wall at every length, so it is GPU work, not host time. At n=64 it is ~54% of the pass.
 // llama.cpp's equivalent fixed term is ~6.6 ms, which is the entire short-prompt gap.
 //
-// The expansion is redone every pass over weights that never change, so it is cached. Interleaved
-// arms, two runs:
+// The expansion is redone every pass over weights that never change, so it is cached. Q4_K alone got
+// fixed cost from 39.96 to 22.91 ms; adding Q6_K takes it to 9.15 ms, close to llama.cpp's ~6.6.
 //
-//	n=  64   959.8 -> 1233.7  1.285x   |   953.1 -> 1224.5  1.285x
-//	n= 256  1613.3 -> 1784.8  1.106x   |  1627.7 -> 1751.6  1.076x
-//	n= 512  1842.9 -> 1887.3  1.024x   |  1834.3 -> 1806.4  0.985x
-//	n=1024  1897.5 -> 1927.3  1.016x   |  1919.3 -> 1951.5  1.017x
+// Q6_K matters far more than its share suggests: it is 16.9% of TinyLlama's weights but was 16.5 of
+// those 22.9 ms, because its dequantization runs ~3.6x slower per element than Q4_K's (89 vs 24 us
+// per million elements). Forcing Q6_K off the expansion path measured that directly — fixed cost
+// fell 22.91 -> 6.40 ms while marginal rose 0.4833 -> 0.8383.
 //
-// Only n=64 and n=256 are real. n=512 straddles 1.0, and at n=1024 the cache is INERT (hits=0,
-// misses=0 — M is past the cap) so both arms run identical code and the 1.016x/1.017x is a direct
-// reading of this machine's noise floor. An earlier sweep made that explicit: with both arms
-// identical at n=768 the ratio still came out 0.962x, i.e. ~4% noise, which is why the 384/512
-// readings are not claimed. The cap is kept at 512 because four readings there average +1.4% with
-// no evidence of harm, not because a win was demonstrated.
+// Interleaved arms, three runs:
+//
+//	n=  64   959.4 -> 1509.8  1.574x  |  949.9 -> 1529.4  1.610x  |  942.3 -> 1479.6  1.570x
+//	n= 256  1634.3 -> 1863.9  1.141x  | 1591.0 -> 1887.7  1.186x  | 1596.8 -> 1871.6  1.172x
+//	n= 512  1767.7 -> 1943.8  1.100x  | 1793.0 -> 1932.7  1.078x  | 1802.4 -> 1929.2  1.070x
+//	n=1024  1950.6 -> 1882.6  0.965x  | 1929.9 -> 1925.8  0.998x  | 1931.4 -> 1931.7  1.000x
+//
+// n=1024 is the control, not a result: the cache is INERT there (hits=0, misses=0 — M is past the
+// cap), so both arms run identical code and the spread reads this machine's noise directly. It has
+// been as bad as 0.962x between two identical arms, which is why nothing inside ~4% is claimed
+// anywhere in this file. The 512 cap was re-probed after Q6_K joined and 768/1024/1536 came out
+// 1.026x/0.980x/1.000x — all inside that band, so 512 is where a win stops being demonstrable
+// rather than where harm begins.
 //
 // The argmax token is identical in both arms at every length. Hit/miss counts are asserted rather
 // than printed only: 100 distinct weights fill on the first pass and hit thereafter, which is also
 // the reachability check — a cache that silently never fired would show hits=0 and an unchanged time.
 //
-// COST: ~1.69 GB to hold 100 Q4_K weights in f16, about 2.7x the 636 MB model file. That is why the
-// cache is OFF by default; this test enables it explicitly.
+// COST: ~1.92 GB to hold 110 Q4_K and Q6_K weights in f16, about 3x the 636 MB model file. That is
+// why the cache is OFF by default; this test enables it explicitly. Note how cheap Q6_K was to add:
+// +0.23 GB removed 13.8 ms of the fixed cost, because the win is not paying for the expansion each
+// pass rather than making the expansion smaller.
 import (
 	"fmt"
 	"os"
