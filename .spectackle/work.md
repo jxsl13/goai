@@ -1406,3 +1406,46 @@ One probe result is worth recording because it looks like a test weakness and is
 ## Perf
 
 Interleaved A/B, MARSStep_1M_serial and DyTForward_F64: no measurable regression. new <= old in all three pairs, but both variants drift downward across the run, so the paired deltas sit within that drift. Not a speedup claim.
+
+## R-01M01SQHGFFGTBB2W42QBW82ZB CI has not been running the selected packages' tests - a stray -- swallowed the package list and go test exited 0
+kind: research
+state: draft
+created: 2026-08-15
+
+The repo's selective CI runner has been reporting success without running the tests it selected. Every "run tests for the affected packages" step - pure-go, race, coverage, cgo, vulkan - tested one package and exited 0 regardless of what was broken.
+
+## Mechanism
+
+CI invokes `cichange -run $BASE HEAD -- -short -count=1 -timeout 10m`. Go's `flag.Parse` stops at the first POSITIONAL argument (`base`), so it never consumes the `--` as a flag terminator. `flag.Args()[2:]` therefore hands `["--", "-short", ...]` to Run, which forwards it into the command line: `go test -- -short -count=1 <18 packages>`.
+
+`go test -- ...` does not test those packages. Everything after `--` is passed to the test binary, the package list is SILENTLY DISCARDED, go test falls back to the package in the working directory, and it EXITS 0.
+
+Reduced: `go test -- -short -count=1 ./nn/ ./tensor/ ./classic/` prints `ok github.com/jxsl13/goai` and nothing else.
+
+## Evidence
+
+Commit cd41bf8d (PR #897) merged with 15/15 checks green while leaving `./nn/` panicking on every run. On that exact range:
+- `cichange -impact` lists 20 packages including nn - the SELECTOR was correct
+- `cichange -run` prints `ok github.com/jxsl13/goai`, exit 0 - the RUNNER discarded the answer
+
+So the impact analysis, which is the sophisticated part and the part that gets attention, was never the problem. A one-token argument-passing bug downstream of it nullified the entire apparatus.
+
+## Consequence
+
+main is red today: `go test -short ./...` on origin/main fails in nn (a panic, which then hides two further failures behind it - a panic aborts the package binary) and in internal/apicheck. CI reported green throughout.
+
+## Fix and guard
+
+Strip a leading `--` in Run. The guard is TestRunPropagatesFailure duplicated with CI's ACTUAL argument vector; the original passes the go-test args bare, which is exactly why it stayed green through the whole outage. Reverting the strip reproduces the outage on demand (exit 0 on a deliberately failing test).
+
+## Transferable lessons
+
+1. A test harness needs a test that exercises the harness AS INVOKED. The existing suite covered Run's behavior thoroughly but always with hand-written arguments, never with the argument vector the CI YAML actually passes. The gap between "the function works" and "the function works the way it is called" is where this lived, undetected, across many PRs.
+
+2. Green CI is evidence about the CI, not about the code, until something independently confirms the tests ran. A selective runner should be assumed broken until it is observed FAILING on a known-bad input. Worth adding as a standing check: periodically feed the runner a deliberately failing package and confirm it goes red.
+
+3. Silent argument swallowing is the dangerous class. `go test` with a bogus package list would have errored loudly; `go test --` succeeds while doing almost nothing. Prefer failure modes that error over ones that no-op.
+
+4. A panic in a package test binary hides every later failure in that package. After fixing any panicking test, re-run the whole package before believing it is green - fixing the nn panic exposed two more pre-existing failures behind it.
+
+Filed as PR #1072; the nn failures it uncovered are PR #1071.
