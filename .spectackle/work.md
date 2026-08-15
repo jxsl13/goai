@@ -1497,3 +1497,49 @@ Routing is gated on dk==64 / dk==128 EXACTLY, not dk<=64. The first cut used <=6
 The same pattern - a runtime bound over a per-thread array - is worth auditing across the other Metal kernels. It is invisible to inspection (the code looks clean and dimension-agnostic) and costs an order of magnitude.
 
 Also worth noting for future profiling: instrumenting a wrapper is not instrumenting the path. flashattn was counted and read as "attention costs nothing"; the real call went around it.
+
+## R-01M01XARXSEXTRFTS5X60Y65CF The runtime-loop-bound defect is a class: two more Metal attention kernels fixed for 4.6-6.4x, plus a kernel that was live and completely unguarded
+kind: research
+state: draft
+created: 2026-08-15
+
+The runtime-loop-bound defect found in mha_decode_f32 is a CLASS, not an instance. Auditing every Metal kernel that declares a per-thread array found three more; two are fixed here for 4.6-6.4x, one is left.
+
+## The audit
+
+Signature: a per-thread array declared at a fixed maximum, walked with a loop bound taken from a kernel ARGUMENT. Grepping for `float <name>[N]` in metal_bridge.m returns four kernels:
+
+- mha_decode_f32 - fixed previously (5.9-8.7x)
+- flashattn_f32 - acc[128], q[128], five `d<dk` loops. This is the kernel behind backend.OpMHA.
+- mha_f32 - acc[128], five `d<dk` loops. The Recorder's non-causal sq>1 and windowed path.
+- retention_f32 - acc[128] walked with `j<dv`. NOT yet addressed.
+
+Note what the audit also established: mtl_recorder_mha routes causal!=0 to the decode kernel, so PREFILL was already covered by the earlier fix. mha_f32 only serves non-causal sq>1 and window>0.
+
+## Results
+
+dk==64 specializations, 3 alternations each, near-zero variance:
+
+| kernel | shape | before | after | |
+|---|---|---|---|---|
+| flashattn_f32 | seq=128 | 2612us | 481us | 5.4x |
+| flashattn_f32 | seq=384 | 8061us | 1716us | 4.7x |
+| mha_f32 | seq=128 | 3937us | 620us | 6.4x |
+| mha_f32 | seq=384 | 17803us | 3887us | 4.6x |
+| mha_f32 | window seq=512 | 25727us | 5553us | 4.6x |
+
+## Two findings that matter more than the numbers
+
+**1. The public op API cannot see kernel wins.** backend.Execute(OpMHA) uploads Q,K,V and downloads O per call - about 1.2 MB at seq=384. Transfer dominates so completely that the A/B there came out bimodal and UNCORRELATED with the variant: 987 / 636 / 650 / 975 / 987 / 968 us with variants alternating. Measured through that API the 5.4x flash win reads as "no effect".
+
+This is the same regime error as timing a cache-resident weight and concluding a decode kernel is instruction-bound, and it is now the second time it has appeared. The general rule: before trusting a benchmark, ask which resource it is actually exercising. A harness that includes host transfer cannot measure a kernel; a harness whose working set fits in cache cannot measure a streaming kernel.
+
+**2. mha_f32 at dk=64 was live in production and completely unguarded.** Zeroing the entire output of the new dk==64 specialization left `go test -run 'MHA|Attn|Bert'` GREEN. A stderr probe confirmed the specialized pipeline built and took 1620 of 1620 dispatches. So the kernel ran, produced garbage, and no test noticed.
+
+This was only discovered because the mutation probe is now routine after the earlier size-hypothesis episode. Without it the correct reading and the useless reading are indistinguishable. TestMHATwoPassMatchesReference now covers it against a float64 reference over exactly the shapes that reach the kernel, plus dk=32/48 to hold the exact-equality gate. Zeroing the output and dropping one of 64 dims both turn it red. A 1e-4 uniform score scale is ABSORBED and that is correct, not a gap: after softmax a uniform score scale moves outputs ~1e-5, below the 2e-5 f32-vs-f64 tolerance.
+
+## Left open
+
+retention_f32 (`acc[128]` with `j<dv`) has the same defect and is not fixed - RetNet is a lower-traffic path and it deserves its own measurement plus a reachability probe before touching it, on the evidence that one of these three kernels turned out to have no coverage at all.
+
+Also still unexplained from the decode profile: after the attention fix the 22-layer decode is 20.4 ms/token while measured matmul (~4ms) + small kernels (~0.5ms) + attention (~0.3ms) account for about 5ms. Roughly 15 ms/token is still unattributed and is the next thing to chase.
