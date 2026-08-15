@@ -1037,3 +1037,28 @@ MODEL SHAPE DECIDES WHETHER A LEAF WIN SURVIVES TO THE TOP. The same test at a 1
 THE END-TO-END NUMBER IS SMALLER THAN THE LEAF NUMBER AND THAT IS CORRECT. Metal Q4_K measured 3.41x on the isolated leaf and 2.381x end to end; Vulkan Q4_K 2.17x and 1.393x. A decode step also does LayerNorm, RoPE, attention, residuals and host work the kernels do not touch. The end-to-end figure is the one worth quoting.
 
 STANDING LESSON: a leaf benchmark proves a kernel is faster; only an end-to-end measurement through the PRODUCTION entry point proves the system calls it. Every correctness and performance gate in this campaign passed while the Vulkan feature was dead code. An attempt to file this as an EARS rule was rejected by the spec server's slot validation four times; recorded here instead so it is not lost.
+
+## R-01M01NFK23EM09B17X2TMHB4FB Q2_K and Q3_K move ~40-50 percent of Q4_K's weight bytes per second — unpacking-bound, probe before building
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED OBSERVATION, NOT A PROPOSAL. Normalizing the seven end-to-end Metal results by weight bytes shows two formats far off the pace, and names the next candidate without committing to a mechanism.
+
+Metal cooperative, end to end, weight-bytes moved per second relative to Q4_K:
+  fmt    tok/s   B/256w   relative
+  Q8_0   78.14      272      1.36
+  Q4_K  108.53      144      1.00
+  Q6_K   73.52      210      0.99
+  Q4_0   90.61      144      0.83
+  Q5_K   71.81      176      0.81
+  Q2_K   92.69       84      0.50
+  Q3_K   59.84      110      0.42
+
+Q2_K and Q3_K move roughly 40-50 percent of Q4_K's weight bytes per second DESPITE HAVING SMALLER BLOCKS. Every other format sits between 0.81 and 1.36, which is the spread bandwidth alone would explain. Those two are bound by something else — most plausibly the unpacking, since they are the two formats with the most bit manipulation per weight: Q3_K reads a separate hmask plane in addition to its 2-bit qs field, and Q2_K extracts four 2-bit fields from each qs byte under four different shifts.
+
+WHY NO FIX IS PROPOSED HERE. The obvious mechanism — each qs byte is fetched once per shift, so four invocations touch the same byte — probably describes an L1 hit rather than a memory fetch, and the obvious remedy (one invocation handling all four shifts) would CUT invocation count fourfold. That runs straight into REDUNDANT-GPU-WORK-IS-CHEAPER-THAN-LOST-PARALLELISM-001, which was earned by two failures on exactly that trade: the Metal M-blocked mat-mat (2.2-6.3x slower) and the Vulkan M=1 GEMV (3.9 percent slower). Every unbounded "obvious fix" attempted in this campaign has failed; the ones that worked were bounded by probe first.
+
+WHAT A PROBE WOULD LOOK LIKE, by analogy to the roofline pair that bounded the prefill lever at 1.41x and 1.67x: hold grid shape, thread count and instruction count fixed and disable one lever at a time. Replace the qs/hmask extraction with a constant while keeping every load, to bound the ALU share; and point every invocation at superblock 0 while keeping the arithmetic, to bound the traffic share. Two one-line edits, and they bound the space before any kernel is written.
+
+STANDING VALUE EITHER WAY: even unimproved, Q2_K and Q3_K already gained 1.913x and 3.876x end to end from the cooperative work. This is about whether a second, smaller lever exists on top, not about a defect.
