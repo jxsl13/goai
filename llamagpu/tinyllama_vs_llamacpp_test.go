@@ -91,9 +91,13 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	t.Logf("TinyLlama-1.1B Q4_K_M tg64 (decode only), Metal: GoAI %.2f tok/s vs llama.cpp %.2f tok/s (%s) = %.3fx  (samples %v)",
 		got, llamaCpp, src, got/llamaCpp, tps)
 
-	// Prompt processing, separately. This is GoAI's real deficiency and tg64 does not show it:
-	// llama-bench pp64 measures 1778.75 tok/s (0.56 ms/prompt token) where GoAI's prefill costs
-	// ~15.5 ms/prompt token — roughly 28x. The M>1 path does not reach the cooperative M=1 kernels.
+	// Prompt processing, separately — tg64 does not show it. llama-bench pp64 measures 1778.75
+	// tok/s on this host. GoAI was 102 tok/s (17.4x behind) until the cooperative kernels were
+	// allowed to serve M>1; they index the row from group.y and were gated on M==1 for no reason
+	// the kernel required. That lifted prefill to ~343 tok/s (3.4x). Still 5.2x behind, because
+	// the cooperative kernel re-streams the weight per row: it is the DECODE shape applied M
+	// times, not a batched kernel that reads each weight once for the whole batch. Closing the
+	// rest needs a genuinely blocked M>1 kernel.
 	long := make([]int, 64)
 	for i := range long {
 		long[i] = 1 + i%2000

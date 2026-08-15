@@ -1608,7 +1608,7 @@ int mtl_qmatmul_q8_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q8_0_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q8_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -1751,7 +1751,7 @@ int mtl_qmatmul_q4_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q4_0_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q4_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -2223,13 +2223,13 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M >= 1 && M <= 512 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M >= 1 && M <= 512 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     OP_BEGIN;
@@ -2282,13 +2282,13 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M >= 1 && M <= 512 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M >= 1 && M <= 512 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M >= 1 && M <= 512 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -2459,7 +2459,7 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = M == 1 && q4k_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q4k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2620,7 +2620,7 @@ int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = M == 1 && q6k_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q6k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2795,7 +2795,7 @@ int mtl_qmatmul_q5k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q5k_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q5k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -2958,7 +2958,7 @@ int mtl_qmatmul_q2k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q2k_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q2k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -3140,7 +3140,7 @@ int mtl_qmatmul_q3k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q3k_cooperative_enabled();
+        const int cooperative = M >= 1 && M <= 512 && q3k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
