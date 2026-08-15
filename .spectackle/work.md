@@ -820,3 +820,36 @@ option: Keep 512 - preserve the exact trees the frozen digest pins
 option: Lower to 32 and re-freeze the digest - accept different but equally valid trees for 17.3 percent
 option: Lower only for classification, where the risk is smallest, and keep 512 for regression
 choice: Keep 512 - preserve the exact trees the frozen digest pins
+
+## R-01M01CYGEBETMARNK7BDJ7P8S3 M2 Metal prefill quant matmul re-reads the weight per row: 87x at M=256, 0.31 TFLOP/s effective
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED, and it is the largest gap found on this device so far. Benchmark shipped on the perf/m2-metal-kquant-cooperative branch (backend/metal/q4k_msweep_bench_test.go); no production code changed.
+
+WHERE IT COMES FROM. The M2 Metal cooperative K-quant kernels (T989/T993, 1.69-11.79x) are selected by `cooperative = M == 1 && enabled` in metal_bridge.m. That gate is correct for what it covers - at M=1 only N threads have work and each walks all of K, which is the occupancy problem the cooperative kernel solves. But it means every M>1 dispatch, which is ALL prefill and batched decode, runs the scalar kernel. Nothing had measured that path.
+
+THE MEASUREMENT ISOLATES THE QUESTION BY CONSTRUCTION: weight bytes do not depend on M, so ns/op alone distinguishes a kernel that reads each weight once and reuses it across M rows from one that re-walks the weight per row. K2048,N5632 (TinyLlama SwiGLU gate/up), 100x count=2:
+     M     ns/op   vs M=1   useful GB/s   actual traffic GB/s
+     1    221428     1.0x          29.3                  29.3
+     2    439192     2.0x          14.8                  29.5
+     4    682965     3.1x           9.5                  38.0
+     8    937278     4.2x           6.9                  55.4
+    16   1468692     6.6x           4.4                  70.7
+    32   2727207    12.3x           2.4                  76.1
+    64   5032750    22.7x           1.3                  82.5
+   128   9799232    44.3x           0.7                  84.7
+   256  19318708    87.2x           0.3                  86.0
+
+LINEAR IN M from M=8 onward, about 1.9x per doubling, while the weight is 6.49 MB at every M. So each of the M rows re-reads and re-dequantizes the whole weight matrix. Useful weight throughput falls 29.3 -> 0.3 GB/s across the sweep.
+
+THE KERNEL IS NOT BADLY WRITTEN - actual traffic saturates near 86 GB/s, a respectable fraction of this machine's bandwidth. It is the WRONG SHAPE: a matvec used as a matmul, moving M times the data the problem requires. That distinction matters for the fix, which is a different kernel, not a tuning pass on this one.
+
+HEADROOM, stated as the measured floor rather than a predicted speedup: at M=256 the dispatch is 5.91 GFLOP in 19.32 ms = 0.31 TFLOP/s effective, on a GPU with several TFLOP/s of f32. Reading the weight once would make the weight traffic 6.49 MB instead of 1.66 GB. The realistic target is a compute-bound kernel; the exact multiple is NOT claimed here because no tiled kernel has been built or measured yet, and this repo's own history is full of predicted speedups that did not survive an interleaved A/B.
+
+THE FIX SHAPE, from the same source already used for the M=1 kernel: llama.cpp keeps separate mat-vec and mat-mat quant kernels for exactly this reason. Stage a dequantized weight block once into threadgroup memory, reuse it across the M rows of the tile, accumulate per row. The existing cooperative work established the capability gate, the forced-off control and the paired-alternating measurement protocol, so all three carry over.
+
+WHY THIS OUTRANKS THE REMAINING BACKLOG. Three consecutive detector-derived candidates measured out at zero or near-zero on this machine (crossentropy math.Log inapplicable, FA /l norm 4.1 percent on one dtype, Attrs boxing 0.8 percent allocs and no time). This one is 87x of redundant work at a realistic prefill batch, found by asking what the hardware is not being used for rather than by triaging detector output. Prompt processing is half the serving story and it is the untouched half.
+
+NEXT STEP IS AN IMPLEMENTATION TASK, not more analysis: a tiled Q4_K mat-mat kernel behind the same capability gate, forced-off control, bit-identity against the scalar kernel, and the interleaved A/B with an unaffected control. Q6_K follows the same shape once Q4_K lands.
