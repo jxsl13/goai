@@ -26,6 +26,7 @@ package metal
 // what prefill achieves, this one is the ceiling for its best shape.
 //
 // Reported, not asserted; rates are this machine's.
+import (
 	"fmt"
 	"testing"
 )
