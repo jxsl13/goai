@@ -2274,6 +2274,109 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 // (mtl_qweight_upload). Marries the §T156 resident qweights with the ADR-0019 batched decode so a
 // quantized model's decode step can run as ONE command buffer. Same qtype codes as
 // mtl_qmatmul_resident. No commit.
+static NSString* const kQ4KMMSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Batched Q4_K matmul on the SIMD matrix units. The cooperative kernel is bandwidth-optimal at\n"
+     "// M=1 but compute-bound at ~11% of FLOP peak for M>1: it dequantizes each weight once PER QUERY\n"
+     "// ROW and multiplies scalar-wise. Here a threadgroup dequantizes an 8-output-row x 256-K weight\n"
+     "// tile ONCE into threadgroup memory and consumes it with simdgroup_multiply_accumulate, so the\n"
+     "// dequantization amortizes over the 8 query rows of the tile and the multiply-accumulate leaves\n"
+     "// the scalar ALU.\n"
+     "kernel void qmatmul_q4k_mm(device const float* X [[buffer(0)]],\n"
+     "                           device const uchar* W [[buffer(1)]],\n"
+     "                           device float* O [[buffer(2)]],\n"
+     "                           constant int* P [[buffer(3)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           ushort lane [[thread_index_in_simdgroup]]) {\n"
+     "  int M=P[0], K=P[1], N=P[2];\n"
+     "  int ni0=(int)tg.x*8, mi0=(int)tg.y*8;\n"
+     "  if (ni0>=N || mi0>=M) return;\n"
+     "  int nsb=K/256, rowBytes=nsb*144;\n"
+     "  threadgroup float sW[256*8];   // [k][n], k-major so a simdgroup_load gives an 8k x 8n tile\n"
+     "  threadgroup float sX[8*256];   // [m][k], zero-padded on partial tiles\n"
+     "  simdgroup_float8x8 acc;\n"
+     "  acc = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  for (int sb=0; sb<nsb; sb++){\n"
+     "    // stage X: 8 query rows x 256 k, zero where the tile runs past M\n"
+     "    for (int idx=(int)lane; idx<8*256; idx+=32){\n"
+     "      int m=idx>>8, k=idx&255;\n"
+     "      sX[idx] = (mi0+m<M) ? X[(mi0+m)*K + sb*256 + k] : 0.0f;\n"
+     "    }\n"
+     "    // stage W: dequantize 8 output rows x 256 k, zero where the tile runs past N\n"
+     "    for (int idx=(int)lane; idx<256*8; idx+=32){\n"
+     "      int k=idx>>3, n=idx&7;\n"
+     "      float v=0.0f;\n"
+     "      if (ni0+n<N){\n"
+     "        int base=(ni0+n)*rowBytes + sb*144;\n"
+     "        ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "        ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "        float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "        int sbase=base+4, qbase=base+16;\n"
+     "        int pr=k>>6, hf=(k>>5)&1, l=k&31, is=pr*2+hf, sc, mn;\n"
+     "        if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "        else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "        uchar qbyte=W[qbase+pr*32+l];\n"
+     "        int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "        v = d*(float)sc*(float)nib - dmin*(float)mn;\n"
+     "      }\n"
+     "      sW[idx]=v;\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int kk=0; kk<256; kk+=8){\n"
+     "      simdgroup_float8x8 a, b;\n"
+     "      simdgroup_load(a, sX+kk, 256);\n"
+     "      simdgroup_load(b, sW+kk*8, 8);\n"
+     "      simdgroup_multiply_accumulate(acc, a, b, acc);\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  }\n"
+     "  // store, guarding the partial tile\n"
+     "  threadgroup float sO[8*8];\n"
+     "  simdgroup_store(acc, sO, 8);\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int idx=(int)lane; idx<64; idx+=32){\n"
+     "    int m=idx>>3, n=idx&7;\n"
+     "    if (mi0+m<M && ni0+n<N) O[(mi0+m)*N + ni0+n] = sO[idx];\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gQ4KMM = nil;
+static int ensure_q4k_mm(void) {
+    if (gQ4KMM != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQ4KMMSource options:nil error:&err];
+    if (lib == nil) return -10;
+    id<MTLFunction> fn = [lib newFunctionWithName:@"qmatmul_q4k_mm"];
+    if (fn == nil) return -11;
+    gQ4KMM = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gQ4KMM != nil ? 0 : -12;
+}
+
+// q4k_mm_eligible: the matrix-unit path pays off only once the batch is deep enough to amortize
+// dequantizing a whole 8x256 weight tile. Below that the cooperative kernel wins.
+// DISABLED by default: the kernel is CORRECT (bit-exact against the scalar reference) but the tile
+// shape is wrong and it measures 12.5x SLOWER than the cooperative path — 63 GFLOP/s, 0.9% of the
+// 6.8 TFLOP/s peak, versus the cooperative path's 757 GFLOP/s at 11.1%.
+//
+// Why: BM=8 query rows per threadgroup means the 8x256 dequantized weight tile is rebuilt once per
+// QUERY TILE, so at M=64 each weight is still dequantized 8 times — exactly the amortization the
+// cooperative kernel already gets — while adding X staging, two threadgroup barriers per
+// super-block, and only 32 threads to do all of it. The matrix units then sit idle behind that
+// staging: 2048 dequantizations and 4096 staged floats to feed 32 MACs.
+//
+// The fix is a tile redesign, not a bug fix: many more threads per threadgroup (128-256 rather than
+// 32) and a much larger BM so one dequantized weight tile feeds many query sub-tiles. Retained
+// behind this flag with its parity test so that redesign starts from a validated kernel.
+static int gQ4KMMEnabled = 0;
+void mtl_set_q4k_mm(int on) { gQ4KMMEnabled = on ? 1 : 0; }
+
+static int q4k_mm_eligible(int M, int K, int qt) {
+    if (!gQ4KMMEnabled) return 0;
+    return qt == 12 && M >= 8 && K % 256 == 0 && ensure_q4k_mm() == 0;
+}
+
+
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
@@ -2296,6 +2399,19 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
+    // Matrix-unit path for a deep enough batch (prompt processing). One 8x8 output tile per
+    // simdgroup; the 8x256 weight tile is dequantized once and reused across the tile's rows.
+    if (q4k_mm_eligible(M, K, qtype)) {
+        id<MTLComputeCommandEncoder> me = [cmd computeCommandEncoder];
+        [me setComputePipelineState:gQ4KMM];
+        [me setBuffer:xb offset:0 atIndex:0];
+        [me setBuffer:wb offset:0 atIndex:1];
+        [me setBuffer:ob offset:0 atIndex:2];
+        [me setBytes:P length:sizeof(P) atIndex:3];
+        [me dispatchThreadgroups:MTLSizeMake((N + 7)/8, (M + 7)/8, 1) threadsPerThreadgroup:MTLSizeMake(32, 1, 1)];
+        [me endEncoding];
+        return 0;
+    }
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:pipe];
     [enc setBuffer:xb offset:0 atIndex:0];
@@ -3169,6 +3285,7 @@ int mtl_qmatmul_q3k(const float* X, const unsigned char* W, float* O, int M, int
 // two passes (max, then sum+weighted-accumulate) for a numerically stable softmax
 // that mirrors the reference kernel. dk is bounded at 128 so the per-thread output
 // accumulator is a fixed-size register array.
+
 static NSString* const kMHASource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"

@@ -2317,6 +2317,16 @@ func (r *Recorder) Wait() error {
 // from the device timestamps — free of host submit/wake jitter.
 func LastGPUSeconds() float64 { return float64(C.mtl_last_gpu_seconds()) }
 
+// SetQ4KMatrixUnit toggles the matrix-unit Q4_K path (M>=8). Test seam: it lets a parity test
+// obtain the cooperative kernel's result for the same inputs.
+func SetQ4KMatrixUnit(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_mm(v)
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)
