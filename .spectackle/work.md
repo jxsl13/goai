@@ -2077,3 +2077,49 @@ ensure_q4k_mm now PRINTS the MSL build error rather than returning -10 into an &
 
   decode  : tg64 175.0 vs llama.cpp 190.4 = 0.919x — parity
   prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind
+
+## R-01M0235NX0ED08G20HT3CEHNGZ Dequantize-once + dense MPS GEMM beats the quant kernel above M=48, 3.86x at M=256 — the mechanism that closes prefill, with the transpose store as the quantified next fix
+kind: research
+state: draft
+created: 2026-08-15
+
+The direction the matrix-unit work ruled in is confirmed: taking dequantization OUT of the inner loop beats the quant kernel at prefill batch sizes, 3.86x at M=256.
+
+## Result
+
+dequant_q4k_t expands a resident Q4_K weight once into a dense f32 [K][N] buffer; a dense MPS GEMM then runs the batch. K=2048, N=5632, GPU timestamps:
+
+| M | cooperative | dequant+GEMM | ratio |
+|---|---|---|---|
+| 8 | 246.6us | 1122.7us | 0.22x |
+| 32 | 978.7us | 1127.8us | 0.87x |
+| 64 | 1954.4us | 1360.2us | 1.44x |
+| 128 | 3907.3us | 1622.2us | 2.41x |
+| 256 | 7809.4us | 2138.9us | 3.65x |
+
+Crossover near M=48.
+
+## Why it works where the matrix-unit kernel did not
+
+Both approaches use the same hardware. The difference is what the inner loop contains.
+
+MPS GEMM reaches 3207 GFLOP/s at M=64 and 4486 at M=256 — 47% and 66% of the 6.8 TFLOP/s peak — against the quant kernel's 757 GFLOP/s (11%) and the hand-written matrix-unit kernel's 585 (8.6%). A dense GEMM has no dequantization in its inner loop at all, so its instruction budget is arithmetic. The fixed cost of expanding the weight is then paid ONCE per matmul instead of once per query tile, and above the crossover the GEMM's 4-6x better efficiency more than covers it.
+
+This also explains the earlier failure precisely rather than by analogy: the matrix-unit kernel was not slow because of tile shape (the redesign proved that, 9.3x and still losing) but because dequantization in an inner loop is a 240:1 instruction ratio no tiling can invert. Moving it out is the only structural fix, and moving it out means the multiply can be an off-the-shelf GEMM.
+
+## Quantified weakness
+
+The dequantization is the slow half: 814us to write 44 MB is 57 GB/s, roughly a third of what this machine sustains elsewhere. The cause is the transposing store Out[(k0+l)*N+n], which strides by N and does not coalesce — the source layout is [N][K] and MPS wants [K][N]. A staged-tile transpose through threadgroup memory should reach ~180 GB/s, cutting about 560us from every row of the table and moving the crossover below M=32.
+
+That is worth doing before wiring, because it changes which prompt lengths benefit.
+
+## Deliberately not wired
+
+Routing prefill through this needs a scratch-buffer strategy (44 MB per projection, transient, reusable across layers since they run in sequence) and a crossover threshold. That is its own unit with its own end-to-end validation, and wiring it now on top of an un-tuned dequantization would set the threshold from a number about to change.
+
+## Standing
+
+  decode  : tg64 175.0 vs llama.cpp 190.4 = 0.919x — parity, bandwidth-bound at 92% of the memory roofline
+  prefill : pp64 345.0 vs 1778.75 = 0.194x — 5.2x behind; this is the first mechanism measured to close a real part of it
+
+Order of remaining work: (1) coalesce the dequantization transpose, (2) re-measure the crossover, (3) wire prefill through it above the threshold with a reusable scratch buffer, (4) re-run the pp64 head-to-head.
