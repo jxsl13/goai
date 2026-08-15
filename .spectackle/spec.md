@@ -464,3 +464,8 @@ WHEN a profile attributes cost to individual accumulation lines inside one strea
 WHEN a GPU quantized-matmul kernel dispatches one thread per output element, the loop SHALL treat M=1 as an occupancy defect and give one simdgroup or workgroup per output row, splitting K so every lane stays inside one scale group; measured 1.80x to 6.01x across 14 kernels on two backends.
 
 Rationale: At M=1 a one-thread-per-output dispatch leaves only N threads with work, each walking all of K. Fixed for all 7 quant formats on Metal (Q3_K 6.01x, Q4_K 3.41x, Q8_0 3.02x, Q6_K 2.69-11.79x, Q5_K 2.66x, Q4_0 2.48x, Q2_K 2.21x) and all 7 on Vulkan (Q5_K 3.04x, Q3_K 2.54x, Q6_K 2.20x, Q2_K 2.19x, Q4_K 2.17x, Q8_0 1.88x, Q4_0 1.80x). The gain shrinks as dequant gets cheaper, so simple formats are worth doing last.
+
+## REDUNDANT-GPU-WORK-IS-CHEAPER-THAN-LOST-PARALLELISM-001
+WHEN a GPU optimization proposes to eliminate redundant work by giving each thread more of it, the loop SHALL compare thread counts before and after and bound the lever by probe first, because two such attempts were measured 3.9 percent and 2.2-6.3x SLOWER while every winning kernel INCREASED thread count.
+
+Rationale: Vulkan M=1 GEMV removed 15/16 of the tiled kernel's discarded arithmetic and lost 3.9 percent: 32768 threads became 2048, and the wasted threads were supplying the occupancy that hid memory latency. Metal M-blocked mat-mat removed 8x of weight traffic and lost 2.2-6.3x for the same reason. By contrast the 14 cooperative quant kernels that won all raised thread count 32x or 64x per output row. The two classes separate on thread count, not on how much redundant work was removed.
