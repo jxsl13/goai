@@ -346,3 +346,4 @@
 {"t":"2026-08-15T02:56:29Z","eid":"d51f085eb043dab5","ag":"ag-179b","ev":"create","id":"R-01M01NJX03EV6AH33FCDGTZQYB","k":"research","ti":"REFUTED: Q2_K/Q3_K are not unpacking-bound — removing all unpack ALU is worth at most 1.08x"}
 {"t":"2026-08-15T03:03:39Z","eid":"c8c880a5608c4b49","ag":"ag-b88d","ev":"create","id":"R-01M01P013VEVWSP463ZWJMH7AA","k":"research","ti":"The 7.1x llama.cpp gap profiled: 8 percent of peak bandwidth vs 57 percent, with batching already optimal"}
 {"t":"2026-08-15T03:06:19Z","eid":"a4bc8a431b2510a2","ag":"ag-d1ac","ev":"create","id":"R-01M01P4XT7EZN9VGWZZ8JQGQ3V","k":"research","ti":"Apportioned: non-matmul decode work alone is 2.2x-5.3x llama.cpp's entire token"}
+{"t":"2026-08-15T03:13:21Z","eid":"f5d9fd706ebcd1f2","ag":"ag-7a70","ev":"create","id":"R-01M01PHS9AFYJVSYQP10VBN0BW","k":"research","ti":"Non-matmul profile: 59 percent of a token is outside the recorded GPU ops; attention is the largest measured term"}

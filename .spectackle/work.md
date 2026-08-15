@@ -1132,3 +1132,35 @@ SO QUANT MATMUL CANNOT CLOSE THE GAP ALONE. That is the opposite of where this c
 WHAT SHOULD BE MEASURED NEXT, in order. First pin k by benchmarking the cooperative Q4_K and Q6_K leaves at TinyLlama's exact shapes (K2048 with N2048 and N5632) without the submit floor, which converts the range above into a point. Then profile the non-matmul path — most of it is attention, RMSNorm, RoPE and residual adds, each of which is a separate dispatch in a command buffer that already batches optimally at one submit per token.
 
 NOT PROPOSED: any specific optimization. Four candidate levers in this campaign died on probe and two survived because they were bounded first.
+
+## R-01M01PHS9AFYJVSYQP10VBN0BW Non-matmul profile: 59 percent of a token is outside the recorded GPU ops; attention is the largest measured term
+kind: research
+state: draft
+created: 2026-08-15
+
+PARTIAL PROFILE, reported with its remainder because the remainder is the finding. Instrumentation reverted; nothing shipped.
+
+MEASURED OP COUNTS per generated token on TinyLlama-1.1B (22 layers), by instrumenting every Recorder entry point during an 8-token generate:
+  QMatMulResident 163.8   Binary 82.5   RMSNorm 56.2   Blit 52.1
+  MHA 27.5 + MHAAt 27.5   RoPE 25 + RoPEAt 25 + RoPEPair 15   Copy2D 4.5
+My earlier hand-estimates were wrong on nearly every line — Binary was assumed 44 and is 82.5, the attention entry points total 55 rather than 22, and RoPE totals 65 rather than 44. Counting beat estimating, again.
+
+MEASURED PER-OP COST, floor-free, at TinyLlama shapes, by the (t16-t1)/15 method that cancels the ~149us per-submit floor:
+  QMatMulResident  46,460 ns    MHA 116,651 ns   RMSNorm 17,766 ns
+  RoPE             11,006 ns    Binary 7,049 ns  Blit     3,248 ns
+
+BUDGET over an 8-token generation (~322 ms of wall time at the measured 24.83 tok/s):
+  QMatMulResident  60.9 ms  19 percent
+  MHA              51.3 ms  16 percent
+  RMSNorm           8.0 ms   2 percent
+  RoPE              5.7 ms   2 percent
+  Binary            4.7 ms   1 percent
+  Blit              1.4 ms   0 percent
+  accounted       131.9 ms  41 percent
+  UNACCOUNTED     190.3 ms  59 percent
+
+FIVE-NINTHS OF THE TOKEN IS NOT IN THE RECORDED GPU OPS. That is the result. Candidates, none tested: the incremental method may understate heterogeneous workloads (it measures the marginal cost of a SECOND identical op, which can be cheaper than the first when caches are warm); MHA cost grows with KV length while the probe fixed seq at 64; and there is host-side and synchronisation work between the per-token Commit and Wait that a GPU-op budget cannot see by construction.
+
+WHAT THIS DOES ESTABLISH. Among the ops that ARE measured, attention is the largest non-matmul term at 16 percent and 116,651 ns per call — 2.5x the cost of a quant matmul at the same shapes, on 55 calls per token. If the unaccounted 59 percent turns out to be spread proportionally, attention is the next target; if it is concentrated in host/sync work, none of the GPU kernels are.
+
+NEXT STEP, and it should come before any optimization: a Metal System Trace or GPU counter capture to attribute the 190 ms directly, rather than another arithmetic budget built from micro-benchmarks. Two successive budgets in this campaign have now failed to close — the range-based apportionment and this one — and both failed because they inferred rather than observed.
