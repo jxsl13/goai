@@ -51,7 +51,12 @@ func TestVulkanCooperativeEndToEnd(t *testing.T) {
 		qt   gguf.QuantType
 		set  func(bool) bool
 	}{
+		{"Q2_K", gguf.Q2_K, vulkan.SetQ2KCooperative},
+		{"Q3_K", gguf.Q3_K, vulkan.SetQ3KCooperative},
+		{"Q4_0", gguf.Q4_0, vulkan.SetQ4_0Cooperative},
 		{"Q4_K", gguf.Q4_K, vulkan.SetQ4KCooperative},
+		{"Q5_K", gguf.Q5_K, vulkan.SetQ5KCooperative},
+		{"Q6_K", gguf.Q6_K, vulkan.SetQ6KCooperative},
 		{"Q8_0", gguf.Q8_0, vulkan.SetQ8_0Cooperative},
 	} {
 		qm, err := nlp.QuantizeLlama(m, q.qt)
@@ -83,8 +88,14 @@ func TestVulkanCooperativeEndToEnd(t *testing.T) {
 		dec.Release()
 		qm.Close()
 		medOff, medOn := coopMedian(off), coopMedian(on)
-		t.Logf("%s end-to-end: scalar %.2f tok/s -> cooperative %.2f tok/s = %.3fx  (off %v on %v)",
-			q.name, medOff, medOn, medOn/medOff, off, on)
+		ratio := medOn / medOff
+		t.Logf("%s end-to-end: scalar %.2f tok/s -> cooperative %.2f tok/s = %.3fx", q.name, medOff, medOn, ratio)
+		// A ratio at 1.000 is the signature of both arms running the same code — the
+		// defect that left seven Vulkan shaders unreachable while every leaf gate
+		// passed. Treat it as unreachable rather than as "no gain".
+		if ratio < 1.02 {
+			t.Errorf("%s: %.3fx — cooperative shader appears UNREACHABLE from the decoder (off %v on %v)", q.name, ratio, off, on)
+		}
 	}
 }
 
