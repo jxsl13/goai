@@ -3474,3 +3474,52 @@ The prior record (T881/B103) had sklearn winning DecisionTree by 1.3x and RBF-SV
 At the classical-ML level goai leads on 4 of 6 methods against a current scikit-learn, which is the
 condition the mandate sets for opening new areas. At the LLM-inference level it does not lead yet
 (0.87-0.96x prefill, ~parity decode), and every remaining lever there has been priced and declined.
+
+## R-01M02VVDDVF568GY6GFR5R19GZ Cross-level standing vs incumbents — three of four levels lead, all re-measured
+kind: research
+state: draft
+created: 2026-08-15
+
+# Cross-level standing vs incumbents — all measured same-session, 2026-08-15
+
+Every figure below has both sides measured back-to-back on the same M2 Pro with versions pinned.
+This supersedes the recorded scorecard, which was stale at three of four levels.
+
+| level | incumbent | goai | ratio |
+|---|---|---|---|
+| matmul 512 | torch-mps 2.13.0 | 2515 GFLOP/s | 2.54x AHEAD |
+| matmul 1024 | torch-mps | 4956 GFLOP/s | 1.60x AHEAD |
+| matmul 256 | torch-cpu (Accelerate) | 655 GFLOP/s | 0.64x behind |
+| BPE encode | tiktoken 0.13.0 | 46.8 MB/s | 2.33x AHEAD |
+| BPE decode | tiktoken 0.13.0 | 995 MB/s | 2.68x AHEAD |
+| DecisionTree | sklearn 1.9.0 | 4.60 ms | 3.15x AHEAD |
+| RandomForest100 | sklearn (all cores) | 27.7 ms | 3.52x AHEAD |
+| GradientBoosting100 | sklearn 1.9.0 | 78.0 ms | 16.4x AHEAD |
+| GaussianNB | sklearn 1.9.0 | 0.32 ms | 2.13x AHEAD |
+| SVC_rbf | sklearn 1.9.0 (libsvm) | 5.63 ms | 0.62x behind |
+| KNN_fit | sklearn 1.9.0 | 4.27 ms | fit-only artifact |
+| prefill pp64..pp1024 | llama.cpp | 1549..2054 tok/s | 0.87x-0.96x behind |
+| decode short ctx | llama.cpp | 170 tok/s | ~1.02x, parity |
+
+## Where goai leads, and where it does not
+
+Leads: tensor matmul on GPU, BPE tokenisation, four of six classical learners. Behind: LLM
+inference on Metal (prefill), SVC_rbf, and small-matrix CPU matmul.
+
+## The two remaining gaps, both traced to a cause
+
+- **SVC_rbf**: NOT the solver (converges in 78 SMO steps, so libsvm's shrinking would optimise
+  something negligible), NOT kernel arithmetic (distance identity measured slower at d=20), NOT
+  cache size (already holds more columns than the fit touches). It is ~2.1x per-core kernel
+  throughput against C's vectorised libm. An approximate exp made it 1600x SLOWER by breaking SMO
+  convergence — kernel accuracy is load-bearing.
+- **LLM prefill**: 91% matmul at 67-78% of FLOP peak, where MPS itself tops out. A hand-written
+  GEMM reaches 0.51x of MPS after tile tuning in both directions. Dual-format weight cache is worth
+  ~2.5% for 3x memory; QKV fusion ~2.4% for offset plumbing across two record paths.
+
+## Guards added so these do not rot again
+
+Correctness suites do not see performance cliffs: a 1.6e-7 kernel change left every classic test
+passing while the SVC fit went 5.8ms -> 9452ms. Both leading levels now carry mutation-verified
+order-of-magnitude tripwires (TestClassicFitTimeGuard, TestBPEThroughputGuard), and the LLM path
+carries decode-only floors.
