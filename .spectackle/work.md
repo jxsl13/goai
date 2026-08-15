@@ -1702,3 +1702,41 @@ So there is roughly 1.4 ms/token of GPU headroom, worth about 6.3 -> 4.9 ms/toke
 ## Honest standing
 
 ~154-158 tok/s on a TinyLlama-SHAPED Q4_K decode with random weights, against llama.cpp's 172 on the real TinyLlama Q4_K_M. Same machine and same shape, but a different binary, different weights and a different harness. That is indicative, NOT a head-to-head, and no claim of parity or superiority should be made from it. The honest validation is the existing llamagpu/tinyllama_vs_llamacpp_test.go harness on the real GGUF, re-run end to end; that is the next thing to do before any further optimization.
+
+## R-01M01ZZMYFFEKVTJJPQ3EGVM2J Real head-to-head: GoAI 143.17 vs llama.cpp 201.61 tok/s = 0.71x — the hardcoded 172.19 baseline had rotted and the synthetic shaped model was 8-10% optimistic
+kind: research
+state: draft
+created: 2026-08-15
+
+The real head-to-head, run as the previous record said it must be before further optimization. It corrects the standing claim in two directions at once.
+
+## Numbers
+
+llama-bench and GoAI on the SAME TinyLlama-1.1B Q4_K_M file (636 MiB, 1.10 B params), M2 Pro, Metal:
+
+  cold, separate runs:  GoAI 143.17  llama.cpp 201.61 +/- 3.25  = 0.710x
+  hot, single run:      GoAI 112.84  llama.cpp 155.09           = 0.728x
+
+Absolute values differ by 20% between the two runs from thermal drift; the ratios agree to 2.5%. The ratio is the quantity that survives, which is why both sides must be measured in the same session.
+
+## Correction 1: the incumbent moved
+
+The harness hardcoded llama.cpp at 172.19 tok/s, recorded for build 48d22e295. Today, same host, same file, same command: 201.61. Every ratio computed against that constant flattered GoAI by ~17%.
+
+This is the exact failure the classical-ML scorecard hit before (T881/B103: an unrecorded sklearn version turned a "beats every method" claim into an honest split). The lesson had been written down and the harness still rotted, because recording a version stamp does not stop a constant from aging — only re-measuring does. The fix is structural: llamaCppTG64 now RUNS llama-bench when it is on PATH and parses the tg64 row, using the recorded constant only as a named fallback so a reader can always tell a live comparison from a stale one.
+
+## Correction 2: the synthetic model was optimistic
+
+All the optimization work this session was measured on a TinyLlama-SHAPED model with random weights: 154-158 tok/s. The real model measures 143.17. Same architecture, same quantization, ~8-10% apart — close enough to have guided the work correctly, far enough that quoting it as "the TinyLlama number" would have been wrong.
+
+## Standing, honestly
+
+GoAI is 1.41x BEHIND llama.cpp on this workload, not the ~1.1x that the stale constant plus the synthetic model together implied.
+
+Session progress on the same harness and the same real model is nonetheless real: 24.11 -> 143.17 tok/s, 5.94x. Against the then-current llama.cpp the gap was 7.14x; against today's it is 1.41x.
+
+## What the remaining 1.41x is
+
+From the phase split: decode is matmul-bound, matmuls ~82% of GPU time and ~65% of wall, and the realistic matmul sequence runs at ~117-133 GB/s against a measured 186 GB/s single-weight streaming roofline. Closing that bandwidth gap is worth roughly the whole remaining factor. It is a dispatch-efficiency problem at realistic weight sizes (108 GB/s at a 2.2 MB weight vs 191 GB/s at 18 MB), not an algorithmic one.
+
+QKV fusion is already implemented, so the obvious "fewer, bigger dispatches" lever is spent. The open question is why a 2-6 MB resident weight streams at ~60-70% of the rate a 144 MB one does, and whether that is fixable from the kernel side (occupancy, ramp) or is a fixed per-dispatch cost that only batching across layers could amortize.
