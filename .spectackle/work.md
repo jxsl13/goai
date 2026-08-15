@@ -820,3 +820,8 @@ option: Keep 512 - preserve the exact trees the frozen digest pins
 option: Lower to 32 and re-freeze the digest - accept different but equally valid trees for 17.3 percent
 option: Lower only for classification, where the risk is smallest, and keep 512 for regression
 choice: Keep 512 - preserve the exact trees the frozen digest pins
+
+## R-01M01BXPQFFC488XMES2F14ZSF probe
+kind: research
+state: draft
+created: 2026-08-15
