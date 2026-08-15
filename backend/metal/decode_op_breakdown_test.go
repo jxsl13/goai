@@ -21,8 +21,16 @@ import (
 //	silu hidden       22/tok    1.73us each     38.1 us/token
 //	SUM                                        2291.3 us/token
 //
-// That sums to the ~2.5 ms budget, which is the check that the pieces are real. Attention is 65% of
-// it and rmsnorm 29%.
+// CORRECTION (see TestIsolatedOpCostIsNotAdditive): these per-op numbers are INFLATED, by ~8x for
+// rmsnorm and probably similarly for the others. Timing an op as N identical dispatches into one
+// command buffer serialises them on write-after-write hazards, so each pays a pipeline drain it
+// never pays in a real chain. Measured against the realistic sequence, rmsnorm adds 1.62us to a
+// qmatmul, not the 14.96us below.
+//
+// The sum landing on the ~2.5 ms budget was therefore coincidence rather than corroboration. What
+// still holds is the ORDERING — attention above rmsnorm above elementwise — which is what this test
+// is now good for. Every absolute figure and every share-of-token claim below is unreliable and must
+// not be used to size an optimisation; measure the sequence with and without the op instead.
 //
 // GETTING THE SHAPES WRONG: the first run of this test reported 3858 us/token — MORE than the whole
 // budget — because the buffers were sized ctx*hidden and Unary takes no length argument, so "silu
