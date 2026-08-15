@@ -13,6 +13,9 @@ const (
 	vexpNeon    = false
 	vexpF32Fast = false
 	vexpF64Fast = false // no F64 vector SiLU off the amd64 SIMD build; scalar path stays exact
+	// vsiluF64Fast gates ONLY the F64 SiLU lane (see vexp_amd64.go); false here, so
+	// the scalar exact path runs, exactly as before.
+	vsiluF64Fast = false
 )
 
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i].

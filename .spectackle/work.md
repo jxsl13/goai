@@ -821,6 +821,120 @@ option: Lower to 32 and re-freeze the digest - accept different but equally vali
 option: Lower only for classification, where the risk is smallest, and keep 512 for regression
 choice: Keep 512 - preserve the exact trees the frozen digest pins
 
+## R-01M01CYGEBETMARNK7BDJ7P8S3 M2 Metal prefill quant matmul re-reads the weight per row: 87x at M=256, 0.31 TFLOP/s effective
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED, and it is the largest gap found on this device so far. Benchmark shipped on the perf/m2-metal-kquant-cooperative branch (backend/metal/q4k_msweep_bench_test.go); no production code changed.
+
+WHERE IT COMES FROM. The M2 Metal cooperative K-quant kernels (T989/T993, 1.69-11.79x) are selected by `cooperative = M == 1 && enabled` in metal_bridge.m. That gate is correct for what it covers - at M=1 only N threads have work and each walks all of K, which is the occupancy problem the cooperative kernel solves. But it means every M>1 dispatch, which is ALL prefill and batched decode, runs the scalar kernel. Nothing had measured that path.
+
+THE MEASUREMENT ISOLATES THE QUESTION BY CONSTRUCTION: weight bytes do not depend on M, so ns/op alone distinguishes a kernel that reads each weight once and reuses it across M rows from one that re-walks the weight per row. K2048,N5632 (TinyLlama SwiGLU gate/up), 100x count=2:
+     M     ns/op   vs M=1   useful GB/s   actual traffic GB/s
+     1    221428     1.0x          29.3                  29.3
+     2    439192     2.0x          14.8                  29.5
+     4    682965     3.1x           9.5                  38.0
+     8    937278     4.2x           6.9                  55.4
+    16   1468692     6.6x           4.4                  70.7
+    32   2727207    12.3x           2.4                  76.1
+    64   5032750    22.7x           1.3                  82.5
+   128   9799232    44.3x           0.7                  84.7
+   256  19318708    87.2x           0.3                  86.0
+
+LINEAR IN M from M=8 onward, about 1.9x per doubling, while the weight is 6.49 MB at every M. So each of the M rows re-reads and re-dequantizes the whole weight matrix. Useful weight throughput falls 29.3 -> 0.3 GB/s across the sweep.
+
+THE KERNEL IS NOT BADLY WRITTEN - actual traffic saturates near 86 GB/s, a respectable fraction of this machine's bandwidth. It is the WRONG SHAPE: a matvec used as a matmul, moving M times the data the problem requires. That distinction matters for the fix, which is a different kernel, not a tuning pass on this one.
+
+HEADROOM, stated as the measured floor rather than a predicted speedup: at M=256 the dispatch is 5.91 GFLOP in 19.32 ms = 0.31 TFLOP/s effective, on a GPU with several TFLOP/s of f32. Reading the weight once would make the weight traffic 6.49 MB instead of 1.66 GB. The realistic target is a compute-bound kernel; the exact multiple is NOT claimed here because no tiled kernel has been built or measured yet, and this repo's own history is full of predicted speedups that did not survive an interleaved A/B.
+
+THE FIX SHAPE, from the same source already used for the M=1 kernel: llama.cpp keeps separate mat-vec and mat-mat quant kernels for exactly this reason. Stage a dequantized weight block once into threadgroup memory, reuse it across the M rows of the tile, accumulate per row. The existing cooperative work established the capability gate, the forced-off control and the paired-alternating measurement protocol, so all three carry over.
+
+WHY THIS OUTRANKS THE REMAINING BACKLOG. Three consecutive detector-derived candidates measured out at zero or near-zero on this machine (crossentropy math.Log inapplicable, FA /l norm 4.1 percent on one dtype, Attrs boxing 0.8 percent allocs and no time). This one is 87x of redundant work at a realistic prefill batch, found by asking what the hardware is not being used for rather than by triaging detector output. Prompt processing is half the serving story and it is the untouched half.
+
+NEXT STEP IS AN IMPLEMENTATION TASK, not more analysis: a tiled Q4_K mat-mat kernel behind the same capability gate, forced-off control, bit-identity against the scalar kernel, and the interleaved A/B with an unaffected control. Q6_K follows the same shape once Q4_K lands.
+
+## R-01M01DD2A5ER9V02174WE7XXKT REJECTED M2 Metal Q4_K M-blocked mat-mat: 2.2-6.3x slower, occupancy beats traffic; corrects the 87x framing
+kind: research
+state: draft
+created: 2026-08-15
+
+REJECTED BY MEASUREMENT, and it corrects an overstatement in R-01M01CYGEBETM. Candidate code removed; backend/metal is byte-identical to the branch state before the experiment.
+
+WHAT WAS BUILT: qmatmul_q4k_mrows, an M-blocked variant of the resident Q4_K kernel. The scalar kernel gives one thread per output element, so the M threads sharing an output column each re-walk and re-dequantize the same weight row. The candidate gave one thread a column for a block of MT=8 rows, dequantizing each weight once into 8 accumulators - cutting weight traffic 8x. Full plumbing: pipeline, capability flag, SetQ4KMRows forced-off control, dispatch selection for M>1.
+
+CORRECTNESS WAS ESTABLISHED FIRST AND IT HELD. Bit-identical to the scalar kernel across M in {2,7,8,9,17,64}, covering partial blocks (7), exact blocks (8), remainders (9,17) and many blocks (64) - the accumulation order per output element is unchanged, so this was bit-identity by construction and it verified. Non-vacuity proven by mutation: scaling the accumulate by 1.0001 turned the test red in 256 of 256 elements, and reverting returned it green, so the kernel genuinely engaged rather than the test comparing scalar against scalar.
+
+THE PERFORMANCE RESULT, interleaved same-binary A/B via SetQ4KMRows, K2048,N5632, 100x count=2, medians:
+     M   mrows ns   scalar ns   mrows/scalar
+     2    2775442      438952          6.32x SLOWER
+     4    3452463      703100          4.91x
+     8    5157598      935674          5.51x
+    16    5224976     1469328          3.56x
+    32    9728132     2808948          3.46x
+    64   13104634     5181642          2.53x
+   128   22101794     9971549          2.22x
+   256   41855208    19339916          2.16x
+Slower at EVERY M, by 2.2x to 6.3x. The hypothesis is refuted, not merely unconfirmed.
+
+WHY: the candidate traded 8x fewer weight reads for 8x fewer threads. At M=256 the scalar kernel launches M*N = 1441792 threads; mrows launches N*ceil(M/8) = 180224. The GPU was not weight-bandwidth-bound - it was occupancy-bound - so removing parallelism cost far more than removing traffic bought. Per-thread register pressure from 8 accumulators and the K-strided X reads (stride 2048 floats between accumulators) compound it.
+
+THE CORRECTION TO R-01M01CYGEBETM, which matters more than the failed candidate. That record framed the M-sweep as "87x of redundant work" and implied large headroom. The arithmetic there was misread: at M=256 the kernel performs 256x MORE arithmetic than at M=1 (2.95 G MACs against 11.5 M), while time grew only 87x. Efficiency per MAC therefore IMPROVES with M - the scalar kernel amortizes its launch and latency better as the batch grows, which is the opposite of the deterioration the record suggested. The weight re-reading is real, but it is not the binding constraint, and this experiment is the proof.
+
+WHAT REMAINS OPEN, honestly narrowed: the only surviving signal is 0.31 TFLOP/s effective at M=256 against a GPU with several TFLOP/s of f32. That is a compute-efficiency gap, not the traffic gap the earlier record described. The untested approach is threadgroup-memory tiling: a threadgroup cooperatively dequantizes a weight tile into shared memory and MANY threads covering many M rows reuse it, so weight reads drop WITHOUT dropping thread count. That is the one shape this experiment did not test and the only one whose failure mode is not already demonstrated. It is materially harder than the register-blocking tried here.
+
+METHOD NOTE: the correctness work was completed before the benchmark and cost nothing when the candidate was rejected - bit-identity, block-boundary shapes and the mutation probe all held. What failed was the performance hypothesis alone. Building the forced-off control first is what made the A/B a same-binary comparison and the refutation unambiguous.
+
+## R-01M01DJ74WF738NXP1A03K10MR M2 Q4_K prefill roofline: dequant ALU worth at most 1.41x, perfect weight reuse at most 1.67x
+kind: research
+state: draft
+created: 2026-08-15
+
+CEILING ESTABLISHED BY TWO CHEAP PROBES, after one expensive kernel failure. Both probes reverted; backend/metal is byte-identical to the branch. This closes the M2 prefill-quant-matmul arc with a bound rather than another candidate.
+
+WHY PROBE BEFORE BUILDING: R-01M01DD2A5ER9 rejected an M-blocked kernel that was correct, bit-identical and 2.2-6.3x SLOWER, because it traded threads for traffic and the kernel turned out to be occupancy-sensitive. That cost a full implementation to learn one bit of information. These two probes cost one line each and bound BOTH remaining levers.
+
+PROBE A - dequantization ALU. Keep every weight-byte load, the grid shape and the thread count; drop only the nibble select and scale reconstruction (acc += X*(float)qbyte instead of X*(dl*nib - ml)). This isolates the unpacking arithmetic.
+PROBE B - weight traffic. Keep the ALU, the grid and the thread count; set rowOff=0 so every thread reads the SAME weight row. Identical instruction and load COUNT, but the whole working set is 1152 bytes and stays L1-resident, i.e. perfect weight reuse. Outputs are wrong by construction; only the timing is read.
+
+MEASURED, K2048,N5632, 100x count=2, medians:
+     M   baseline   A no-dequant      B perfect-reuse
+     8     935674   734084  1.27x     707478  1.32x
+    64    5181642  3600288  1.44x    3134630  1.65x
+   256   19339916 13724966  1.41x   11570676  1.67x
+
+READING. Removing ALL dequantization arithmetic buys 1.41x at M=256. Giving the kernel PERFECT weight-cache behavior buys 1.67x. Those are ceilings, not estimates: no real kernel can beat free ALU or free memory. Any weight-sharing scheme - threadgroup-memory tiling included - targets the second lever and therefore cannot exceed 1.67x, and it must pay tiling overhead, barriers and the occupancy risk that already killed the register-blocked attempt.
+
+CONSEQUENCE FOR THE OPEN CANDIDATE. Threadgroup tiling is still the only shape whose failure mode is not already demonstrated, but its prize is now known to be at most 1.67x and realistically well under that. It is no longer justified by "prefill is 87x redundant" - that framing was wrong and has been corrected in R-01M01DD2A5ER9. Whether a hard shared-memory kernel is worth at most 1.67x on the prefill half of serving is a scoping decision, not a technical unknown.
+
+WHAT THE NUMBERS ALSO SAY ABOUT THE KERNEL. Neither lever dominates: 29 percent of time is dequant ALU, and the memory side yields only 40 percent even when made free. Nothing is saturated - not bandwidth (86 GB/s measured against roughly 200 available), not compute, not dequant. That signature is latency-bound execution with enough parallelism to partly hide it, which is consistent with the register-blocked kernel collapsing the moment thread count dropped 8x. It also means the kernel is closer to reasonable than the earlier record implied.
+
+METHOD, worth carrying: to bound a lever, disable it in place while holding grid shape, thread count and instruction count fixed, and read only the time. Probe A holds memory constant and removes ALU; probe B holds ALU constant and removes memory cost. Two one-line edits bounded an optimization space that a full implementation had failed to bound.
+
+## R-01M01EX9BCE6SVV6A3ZF90WF3K Three K-quant types (Q2_K/Q3_K/Q5_K) still scalar at M=1 while Q4_K/Q6_K run cooperative; Q5_K is next
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED OPPORTUNITY, benchmark shipped on perf/m2-metal-kquant-cooperative (backend/metal/kquant_gap_bench_test.go). No production code changed.
+
+THE STRUCTURAL POINT: the simdgroup-cooperative M=1 kernels cover Q4_K and Q6_K only. Q2_K, Q3_K and Q5_K still dispatch the scalar one-thread-per-output-row kernel. At M=1 that kernel gives work to only N threads and each walks all of K, which is precisely the occupancy shape the cooperative work was built to fix. The shape is a property of the dispatch, not of the quant format, so it applies to all five types.
+
+MEASURED at K2048,N2048, 300x count=3, medians with the warmup sample dropped. Block sizes differ (84/110/144/176/210 bytes per 256 weights), so the weight-byte rate is the comparable figure:
+  Q3_K  scalar only        962 MB/s
+  Q2_K  scalar only       1182 MB/s
+  Q5_K  scalar only       1896 MB/s
+  Q4_K  COOPERATIVE       7649 MB/s
+  Q6_K  COOPERATIVE      12754 MB/s
+Q4_K's own scalar kernel runs about 3010 MB/s at this shape (2.36 MB in 783942 ns, from the interleaved re-verification of PR 1061). So the three uncovered types sit at or below scalar-class throughput while the two covered types run several times higher.
+
+WHAT THIS DOES AND DOES NOT ESTABLISH. It is NOT a like-for-like efficiency claim across formats: Q2_K and Q3_K unpack more bits per byte than Q4_K, so part of the spread is inherent. The defensible reading is narrower and sufficient - the three uncovered types are at scalar-class throughput, and scalar-to-cooperative on this exact code path is a MEASURED 3.41x median (2.43x on the most conservative reading, best scalar against worst cooperative, non-overlapping distributions).
+
+WHY THIS CANDIDATE IS DIFFERENT FROM THE ONE THAT FAILED. R-01M01DD2A5ER9 rejected an M-blocked mat-mat kernel because its hypothesis - that weight traffic bound the kernel - was wrong, and the roofline in R-01M01DJ74WF738NXP1A03K10MR later bounded that whole lever at 1.67x. Here the hypothesis is not a hypothesis: the same transform has already been applied twice on the same dispatch path and measured 3.41x (Q4_K) and 2.69-11.79x (Q6_K). The remaining work is porting a proven kernel to three more block layouts, not testing an idea.
+
+BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is least confounded by unpack complexity, and Q5_K_M is among the most widely used GGUF quantizations in circulation. Its 5-bit format splits each weight across a 4-bit qs nibble and a qh high-bit plane, which is the one real structural difference from the Q4_K kernel it would be adapted from. Q3_K and Q2_K follow; both carry more complex scale/min packing and should be judged on their own A/B rather than on Q5_K's result.
+
+REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.
 ## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
 kind: research
 state: draft
