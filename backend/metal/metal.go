@@ -1399,6 +1399,23 @@ func SetQ4KCooperative(on bool) bool {
 	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
 }
 
+// SetQ5KCooperative selects the SIMD-group-cooperative resident Q5_K M=1 matvec
+// and returns the previous setting. At M=1 the scalar kernel gives work to only N
+// threads, each walking all of K; the cooperative kernel gives one output row to a
+// SIMD group whose 32 lanes split that row's K. Devices without a 32-lane SIMD width
+// keep the scalar path, and this hook forces it off for the A/B control.
+//
+// Results match the scalar kernel within the 2e-5 relative bar the Q4_K and Q6_K
+// cooperative kernels use — the per-element arithmetic is identical, only the
+// summation order differs (per-lane partials reduced by simd_sum).
+func SetQ5KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q5k_cooperative_set(C.int(v)) == 1
+}
+
 // SetQ6KCooperative selects the SIMD-group-cooperative resident Q6_K M=1
 // matvec (true, default) or its historical scalar-K control (false), returning
 // the previous setting. M>1 and unsupported devices always retain scalar.

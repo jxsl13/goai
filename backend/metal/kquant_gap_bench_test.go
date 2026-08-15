@@ -34,7 +34,8 @@ func syntheticKQuant(n, k, blockBytes, scaleHdr int) []byte {
 // type at one shape. Q4_K and Q6_K have simdgroup-cooperative kernels; Q2_K, Q3_K
 // and Q5_K have only the scalar one-thread-per-output-row kernel, which is the
 // same occupancy shape the cooperative work was built to fix. This measures
-// whether that gap is worth closing for the remaining three.
+// whether that gap is worth closing for the remaining three. Q5_K is cooperative as
+// of the kernel added alongside this file; Q2_K and Q3_K remain scalar-only.
 func BenchmarkMetalKQuantM1Gap(b *testing.B) {
 	if !metal.Available() {
 		b.Skip("metal device unavailable")
@@ -49,7 +50,7 @@ func BenchmarkMetalKQuantM1Gap(b *testing.B) {
 		{"Q2K", uint32(gguf.Q2_K), 84, 4},
 		{"Q3K", uint32(gguf.Q3_K), 110, 2},
 		{"Q4K_cooperative", uint32(gguf.Q4_K), 144, 4},
-		{"Q5K", uint32(gguf.Q5_K), 176, 4},
+		{"Q5K_cooperative", uint32(gguf.Q5_K), 176, 4},
 		{"Q6K_cooperative", uint32(gguf.Q6_K), 210, 2},
 	} {
 		b.Run(fmt.Sprintf("%s", tc.name), func(b *testing.B) {

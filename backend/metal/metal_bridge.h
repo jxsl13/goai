@@ -133,6 +133,7 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
 // one-thread-per-output kernel (off) for same-process forced-off A/B measurement.
 // Returns the previous setting. Unsupported devices transparently retain scalar.
 int mtl_q4k_cooperative_set(int on);
+int mtl_q5k_cooperative_set(int on);
 
 // mtl_qmatmul_q6k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q6_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 210 bytes, §R99) — the higher-precision
