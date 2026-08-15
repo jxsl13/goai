@@ -3087,3 +3087,54 @@ causal, sq == sk, dk == 64, no window. The sq == sk condition is load-bearing: t
   prefill : n=64 0.45x, n=256 0.70x, n=1024 0.75x — was 0.43 / 0.61 / 0.43
 
 The remaining prefill deficit is now concentrated at SHORT prompts, where fixed expansion dominates and attention barely matters — the opposite end from where this session's work has been. Expansion is 0.99 ms/layer against a 3.79 ms layer at n=64, and amortizes away as prompts lengthen.
+
+## R-01M029HX27FT1STQZCT5HSSQ31 Flash attention at 64 query rows: 6.16x on the kernel, pp1024 now 0.84x of llama.cpp — and the scalar-prologue ratio predicts all three configurations
+kind: research
+state: draft
+created: 2026-08-15
+
+Widened the flash kernel from 32 to 64 query rows. 6.16x on the kernel at seq=512, and prompt processing at 1024 tokens is now 0.84x of llama.cpp — from 0.43x two rounds ago.
+
+## Result
+
+Per call, against the kernel it replaces:
+
+  seq= 64  decode  166.4us  flashMM  122.7us  1.36x   273 GFLOP/s ( 4.0% peak)
+  seq=128  decode  522.3us  flashMM  138.5us  3.77x   969 GFLOP/s (14.2%)
+  seq=256  decode 1903.2us  flashMM  389.3us  4.89x  1379 GFLOP/s (20.3%)
+  seq=512  decode 7271.6us  flashMM 1179.5us  6.16x  1821 GFLOP/s (26.8%)
+
+BQ=64 against BQ=32, interleaved end to end:
+
+  n=  64   791.3 / 802.2  ->   808.5 /  800.4   neutral
+  n= 256  1545.1 /1513.7  ->  1587.3 / 1577.4   1.03x
+  n=1024  1602.2 /1633.3  ->  1799.0 / 1793.0   1.11x
+
+Cumulative for the attention work: pp n=64 777 -> ~804, n=256 1314 -> ~1582, n=1024 929 -> ~1796 tok/s. Against llama.cpp's flat pp that is 0.45 / 0.74 / 0.84x, from 0.43 / 0.61 / 0.43.
+
+## The scalar-prologue rule, third confirmation
+
+The progression is entirely about the ratio of scalar work to matrix work, never about the matrix instructions themselves:
+
+  1 simdgroup,  8 query rows   64:1   0.84-1.01x   299 GFLOP/s
+  4 simdgroups, 32 query rows  16:1   3.97x       1172 GFLOP/s
+  8 simdgroups, 64 query rows   8:1   6.16x       1821 GFLOP/s
+
+Same arithmetic, same matrix instructions, 6x apart. Each step only widened the group so the staging and softmax amortize over more rows.
+
+Notably BQ=64 is SLOWER than BQ=32 at seq=64 in isolation (122.7 vs 70.7us) yet neutral end to end, because attention is 5% of a 64-token prefill. Choosing the configuration that wins where the term actually matters, rather than the one that wins the microbenchmark, is the same discipline that the prompt-length sweep forced earlier.
+
+## A test that went vacuous, again
+
+Wiring the gate last round made MHA route to flash_mm, so the parity test began comparing the kernel against ITSELF and reported 0.000e+00 — which I nearly read as "now bit-exact". SetFlashMM gives the reference arm a way to switch it off; the real agreement is 5.8e-05.
+
+This is the SECOND time in this branch that routing a new path through an existing entry point silently converted its control arm into a self-comparison; the first was the dequant+GEMM crossover benchmark. The pattern is specific enough to state as a rule: when a new implementation is routed through an existing API, every test that used that API as a control needs an explicit opt-out added in the same commit.
+
+Both times the tell was the same — a suspiciously perfect number. 0.000e+00 agreement between two different algorithms is not a result, it is a symptom.
+
+## Standing
+
+  decode  : tg64 1.056x — parity, both at the memory roofline
+  prefill : 0.45x at n=64, 0.74x at n=256, 0.84x at n=1024
+
+The deficit is now concentrated at SHORT prompts, where fixed weight expansion dominates (0.99 of 3.79 ms/layer at n=64) and attention is negligible — the opposite end from where the last several rounds were spent, and the remaining lever there is the quantized GEMM that avoids expansion entirely.
