@@ -212,6 +212,22 @@ var qmatmulQ6KCoopSpirv []byte
 // q6kCoopEnabled gates the cooperative Q6_K path at M==1; see SetQ6KCooperative.
 var q6kCoopEnabled = true
 
+// qmatmulQ5KCoopSpirv is the cooperative M=1 Q5_K shader (shaders/qmatmul_q5k_coop.comp).
+//
+//go:embed shaders/qmatmul_q5k_coop.spv
+var qmatmulQ5KCoopSpirv []byte
+
+// q5kCoopEnabled gates the cooperative Q5_K path at M==1; see SetQ5KCooperative.
+var q5kCoopEnabled = true
+
+// SetQ5KCooperative selects the cooperative M=1 Q5_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ5KCooperative(on bool) bool {
+	prev := q5kCoopEnabled
+	q5kCoopEnabled = on
+	return prev
+}
+
 // SetQ6KCooperative selects the cooperative M=1 Q6_K shader and returns the previous
 // setting. Results match the scalar shader within crossTol(k): the per-element
 // arithmetic is identical, only the summation order differs.
@@ -784,6 +800,19 @@ func QMatMulQ5_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q5kCoopEnabled && len(qmatmulQ5KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ5KCoopSpirv[0])), C.int(len(qmatmulQ5KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ5_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q5k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ5KSpirv[0])), C.int(len(qmatmulQ5KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
