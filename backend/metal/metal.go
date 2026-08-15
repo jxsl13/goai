@@ -2327,6 +2327,22 @@ func SetQ4KMatrixUnit(on bool) {
 	C.mtl_set_q4k_mm(v)
 }
 
+// DequantQ4K records the dequantization of a resident Q4_K weight into a dense f32 [K][N] buffer,
+// the operand order MPS GEMM consumes.
+func (r *Recorder) DequantQ4K(w *ResidentQWeight, o *DeviceBuffer) error {
+	if w == nil || w.handle == nil {
+		return fmt.Errorf("metal: DequantQ4K: resident weight is nil/closed")
+	}
+	if o.n < w.k*w.n {
+		return fmt.Errorf("metal: DequantQ4K: output %d < %d", o.n, w.k*w.n)
+	}
+	rc := C.mtl_recorder_dequant_q4k(r.handle, w.handle, o.handle, C.int(w.k), C.int(w.n))
+	if rc != 0 {
+		return fmt.Errorf("metal: DequantQ4K failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

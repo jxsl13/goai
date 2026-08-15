@@ -2274,6 +2274,74 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 // (mtl_qweight_upload). Marries the §T156 resident qweights with the ADR-0019 batched decode so a
 // quantized model's decode step can run as ONE command buffer. Same qtype codes as
 // mtl_qmatmul_resident. No commit.
+static NSString* const kDequantQ4KSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Dequantize a resident Q4_K weight [N][K] into a dense f32 buffer laid out [K][N], which is the\n"
+     "// operand order MPS GEMM wants for C[M,N] = A[M,K] * B[K,N]. One thread per 32-element sub-block.\n"
+     "kernel void dequant_q4k_t(device const uchar* W [[buffer(0)]],\n"
+     "                          device float* Out [[buffer(1)]],\n"
+     "                          constant int* P [[buffer(2)]],\n"
+     "                          uint gid [[thread_position_in_grid]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int subPerRow=K/32;\n"
+     "  int total=N*subPerRow;\n"
+     "  if ((int)gid>=total) return;\n"
+     "  int n=(int)gid/subPerRow, s=(int)gid%subPerRow;\n"
+     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
+     "  int rowBytes=(K/256)*144;\n"
+     "  int base=n*rowBytes + sb*144;\n"
+     "  ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "  ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "  float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "  int sbase=base+4, qbase=base+16;\n"
+     "  int is=pr*2+hf, sc, mn;\n"
+     "  if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "  else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "  float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "  int k0=sb*256 + pr*64 + hf*32;\n"
+     "  int qb=qbase+pr*32;\n"
+     "  for (int l=0;l<32;l++){\n"
+     "    uchar qbyte=W[qb+l];\n"
+     "    int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "    Out[(k0+l)*N + n] = dl*(float)nib - ml;\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gDequantQ4K = nil;
+static int ensure_dequant_q4k(void) {
+    if (gDequantQ4K != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kDequantQ4KSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: dequant_q4k_t build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> fn = [lib newFunctionWithName:@"dequant_q4k_t"];
+    if (fn == nil) return -11;
+    gDequantQ4K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gDequantQ4K != nil ? 0 : -12;
+}
+
+// mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
+// [K][N] buffer.
+int mtl_recorder_dequant_q4k(void* rec, void* wbuf, void* oh, int K, int N) {
+    if (rec == NULL || wbuf == NULL || oh == NULL) return -2;
+    if (ensure_dequant_q4k() != 0) return -6;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf;
+    id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
+    int P[2] = {K, N};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:gDequantQ4K];
+    [enc setBuffer:wb offset:0 atIndex:0];
+    [enc setBuffer:ob offset:0 atIndex:1];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    int total=N*(K/32);
+    NSUInteger tg = gDequantQ4K.maxTotalThreadsPerThreadgroup;
+    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 static NSString* const kQ4KMMSource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
