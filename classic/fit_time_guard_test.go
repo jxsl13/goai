@@ -38,10 +38,23 @@ import (
 // converge and running to maxIter, exactly what an approximate exp produced when it was tried
 // deliberately (see the note in svm.go).
 //
-// The likely mechanism is FMA: Go contracts a*b+c on arm64 and not on amd64 at GOAMD64=v1, so the
-// RBF kernel's `s += d*d` rounds differently, and second-order working-set selection has already
-// been shown to have no slack at 1e-7. It is a real cross-platform defect — the SVM is effectively
-// unusable on the architecture most servers run — and it is NOT caused by anything in this branch.
+// CONFIRMED as a convergence failure, not slow arithmetic. Instrumenting the solver:
+//
+//	arm64   SMO converged, steps=78
+//	amd64   SMO EXHAUSTED maxSteps=400000
+//
+// Two candidate mechanisms were tested and BOTH eliminated. FMA: forcing an explicit rounding in the
+// RBF kernel (`p := d*d; s += p`) on arm64 changes nothing (5.27 vs 5.33 ms), so kernel-level
+// contraction is not it. Emulation cost: math.Exp runs at 199.8 Mexp/s native against 96.9 under
+// Rosetta — 2x, nowhere near 2200x — and every other learner in the same run is only 2-4x slower.
+//
+// What remains is that something in the arithmetic differs by architecture at a scale SMO cannot
+// absorb, most plausibly math.Exp's own implementation. This branch established that a 1.6e-7
+// kernel perturbation is enough to stop convergence (see the note in svm.go), so a last-bit
+// difference in exp between architectures is a sufficient cause.
+//
+// It is a real cross-platform defect — the SVM is effectively unusable on the architecture most
+// servers run — and it is NOT caused by anything in this branch.
 // Reproduce in ~13s on Apple silicon: GOARCH=amd64 GOAMD64=v1 go test -run TestClassicFitTimeGuard ./classic/
 //
 // Until it is fixed, this guard reports rather than fails off arm64, so a pre-existing defect does
