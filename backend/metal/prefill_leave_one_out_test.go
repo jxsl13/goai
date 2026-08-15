@@ -24,17 +24,24 @@ import (
 //     machine's f32 peak. Attention, which dominated DECODE at 31.5%, is 5.6% here — the two
 //     regimes have almost nothing in common and optimising one says little about the other.
 //
-//  2. THE CHAIN IS AT PARITY. 2129 tok/s against llama.cpp's pp512 of 2143.92 measured in the same
-//     session. Our real prefill is 1899.9. So the kernels are NOT the gap: something in the real
-//     decoder costs ~12% that this chain does not model. Candidates it deliberately omits are RoPE,
-//     the KV cache writes, the LM head, and the 21 Q6_K tensors of a real Q4_K_M file (this chain is
-//     uniformly Q4_K).
+//  2. THE CHAIN MODELS THE REAL PATH ALMOST EXACTLY. Chain GPU time 240.54 ms against the real
+//     decoder's measured GPU-busy of 241.86 ms for the same n=512 prefill — 0.5% apart. There is no
+//     unmodelled decoder work: prefill IS these kernels.
 //
-// That reframes the remaining prefill work. Tuning the GEMM further chases 67% -> higher against
-// Apple's MPS, while the 12% is our own code and is not yet attributed. Same shape as the decode
-// investigation, where the synthetic chain was 4.4x faster than the real path and the difference
-// turned out to be measurement error rather than real work — so the first step is to confirm the
-// 12% is real before optimising it.
+//     I first read this as a ~12% gap, from two stacked artifacts: comparing the chain's GPU-ONLY
+//     time against the real path's WALL time, and pairing numbers taken in different thermal
+//     windows (our pp512 reads 1899.9 warm and 2046.8 cool). Both are this session's recurring
+//     errors, and the second is why the 0.89x recorded earlier was pessimistic.
+//
+// Corrected, both sides measured in one window:
+//
+//	real prefill n=512   wall 250.14 ms = GPU 241.86 ms + 8.28 ms host (96.7% busy)
+//	pp512   goai 2046.8  llama.cpp 2216.63 +/- 3.25   0.92x
+//	pp1024  goai 1959.4  llama.cpp 2145.26 +/- 0.68   0.91x
+//
+// So the 8% deficit at pp512 splits into ~4.7% GPU (241.86 vs llama.cpp's implied 231.0 ms) and
+// ~3.3% host (the 8.28 ms outside GPU execution). Both small, both attributed. The host share is
+// the only part that is our own scheduling rather than kernel throughput.
 //
 // Reported, not asserted on absolute timings; the assertion is only that matmul dominates.
 func TestPrefillLeaveOneOut(t *testing.T) {
