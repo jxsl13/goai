@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,5 +141,38 @@ func TestRunFunctionListingOnlyWhenFiltered(t *testing.T) {
 	if !strings.Contains(filtered.String(), "test functions in selected packages") ||
 		!strings.Contains(filtered.String(), "example.com/m/a: TestAdd") {
 		t.Error("-run filter → function listing expected")
+	}
+}
+
+// TestBuildablePkgsDropsConstraintExcluded covers the failure that turned every pure-go CI lane red
+// while `go test ./...` stayed green locally.
+//
+// The two forms disagree: the wildcard silently skips a package whose build constraints exclude all
+// its files, while naming that package EXPLICITLY is a hard "build constraints exclude all Go files"
+// error. The selective runner names packages explicitly, so a cgo-only package (internal/gpudecode)
+// failed the pure-go lanes with a failure no local check could see — `go test ./...` cannot reproduce
+// it by construction.
+//
+// The filter must also run `go list` in the module under test rather than the process's working
+// directory; getting that wrong made every package look unbuildable and silently emptied the run.
+func TestBuildablePkgsDropsConstraintExcluded(t *testing.T) {
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Dir(filepath.Dir(dir)) // .../internal/cichange -> module root
+	const self = "github.com/jxsl13/goai/internal/cichange"
+	got := buildablePkgs(root, []string{self})
+	if len(got) != 1 || got[0] != self {
+		t.Fatalf("a buildable package must survive the filter: got %v", got)
+	}
+	// A package that exists but has no files under this build config must be dropped, not passed
+	// through to `go test` where it would be a setup failure.
+	const nofiles = "github.com/jxsl13/goai/internal/cichange/testdata/nonexistent"
+	got = buildablePkgs(root, []string{self, nofiles})
+	for _, p := range got {
+		if p == nofiles {
+			t.Errorf("unbuildable package %q survived the filter; `go test` would fail on it", p)
+		}
 	}
 }
