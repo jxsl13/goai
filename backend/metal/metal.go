@@ -2348,6 +2348,15 @@ func SetSplitKDecode(on bool) {
 	C.mtl_set_splitk_decode(v)
 }
 
+// SetSplitKChunks caps how many key-chunks split-K attention divides the context into. More chunks
+// means more threadgroups (the mechanism that makes split-K win) but more per-chunk partials to
+// merge in the second pass.
+func SetSplitKChunks(n int) { C.mtl_set_splitk_chunks(C.int(n)) }
+
+// SetSplitKPerChunk sets how many keys each split-K chunk covers. Fewer keys per chunk means more
+// threadgroups — the mechanism that makes split-K win — at the cost of more partials to merge.
+func SetSplitKPerChunk(n int) { C.mtl_set_splitk_perchunk(C.int(n)) }
+
 // SetWeightCacheGB enables the persistent expanded-weight cache with a budget in gigabytes, or
 // disables it with 0 (the default).
 //

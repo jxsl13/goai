@@ -4464,6 +4464,10 @@ static id<MTLComputePipelineState> gSplitKP1 = nil;
 static id<MTLComputePipelineState> gSplitKP2 = nil;
 static id<MTLBuffer> gSplitKPart = nil; static size_t gSplitKPartLen = 0;
 static int gSplitKEnabled = 1;
+static int gSplitKMaxChunks = 16;
+static int gSplitKPerChunk = 128;  // keys per chunk; smaller = more threadgroups
+void mtl_set_splitk_chunks(int n) { gSplitKMaxChunks = (n < 2) ? 2 : (n > 512 ? 512 : n); }
+void mtl_set_splitk_perchunk(int n) { gSplitKPerChunk = (n < 16) ? 16 : n; }
 void mtl_set_splitk_decode(int on) { gSplitKEnabled = on ? 1 : 0; }
 static int ensure_mha_decode(void) {
     if (gMHADecode != nil) return 0;
@@ -4568,8 +4572,8 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     if (gSplitKEnabled && gSplitKP1 != nil && gSplitKP2 != nil && window == 0 && sq == 1 &&
         dk == 64 && causal != 0 && kvHeads > 0 && heads % kvHeads == 0 && sk >= 128) {
         if (ensure_mha_decode() != 0) return -5;
-        int nchunk = (sk + 127) / 128;
-        if (nchunk > 16) nchunk = 16;
+        int nchunk = (sk + gSplitKPerChunk - 1) / gSplitKPerChunk;
+        if (nchunk > gSplitKMaxChunks) nchunk = gSplitKMaxChunks;
         if (nchunk < 2) nchunk = 2;
         size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
         if (gSplitKPart == nil || gSplitKPartLen < need) {
