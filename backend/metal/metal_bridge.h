@@ -223,6 +223,11 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
 // f16 short-prompt weight path (Q4_K only). On by default, gated to M <= max_m.
 void mtl_set_q4k_dq_gemm_f16(int on);
 void mtl_set_q4k_dq_gemm_f16_max_m(int m);
+
+// Persistent expanded-weight cache. max_gb <= 0 disables (default). Holds each Q4_K weight's f16
+// expansion so prefill stops paying for it every pass, at the cost of ~3x the model file in memory.
+void mtl_set_weight_cache(double max_gb);
+void mtl_weight_cache_stats(int* hits, int* misses, double* bytes);
 void mtl_set_q4k_mm(int on);
 int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt);
 void mtl_set_q4k_dq_gemm(int on);

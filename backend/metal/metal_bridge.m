@@ -2677,6 +2677,59 @@ static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
 
 // mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
 // [K][N] buffer.
+// ---- persistent expanded-weight cache --------------------------------------
+// The expansion is the ENTIRE fixed cost of a prefill pass, and it is redone every pass over
+// weights that never change. Fitting whole-model prefill at n=64..512 (TinyLlama-1.1B Q4_K_M):
+//
+//   expand-then-GEMM   fixed 37.03 ms/pass   marginal 0.4691 ms/token
+//   cooperative        fixed  0.00 ms/pass   marginal 2.7109 ms/token
+//
+// The cooperative arm's fixed term is exactly zero, which is what identifies the 37 ms as the
+// expansion and nothing else. At n=64 that is 54-60% of the pass.
+//
+// Caching the expanded weight removes it entirely, at the cost of holding the model a second time
+// in f16: ~1.94 GB for TinyLlama's 636 MB of Q4_K, about 3x the file. That is a real trade, so this
+// is OFF by default and enabled explicitly.
+//
+// Lifetime: the dictionary retains BOTH the source quantized buffer and its expansion. Retaining
+// the source matters for correctness, not just tidiness — the key is the source buffer's pointer,
+// and if it could be deallocated the address might be reused by a different weight and silently
+// serve the wrong expansion.
+static NSMutableDictionary* gWCache = nil;   // NSValue(ptr) -> @[src, expanded]
+static size_t gWCacheBytes = 0;
+static size_t gWCacheMax = 0;                // 0 = disabled
+static int gWCacheHits = 0, gWCacheMisses = 0;
+
+void mtl_set_weight_cache(double max_gb) {
+    gWCacheMax = (max_gb <= 0.0) ? 0 : (size_t)(max_gb * 1e9);
+    if (gWCacheMax == 0) { gWCache = nil; gWCacheBytes = 0; }
+    gWCacheHits = 0; gWCacheMisses = 0;
+}
+void mtl_weight_cache_stats(int* hits, int* misses, double* bytes) {
+    if (hits) *hits = gWCacheHits;
+    if (misses) *misses = gWCacheMisses;
+    if (bytes) *bytes = (double)gWCacheBytes;
+}
+
+// wcache_lookup returns the cached f16 expansion for src, or nil. On a miss it allocates and
+// registers one and sets *needsFill so the caller encodes the dequantization exactly once.
+static id<MTLBuffer> wcache_lookup(id<MTLBuffer> src, size_t bytes, int* needsFill) {
+    *needsFill = 0;
+    if (gWCacheMax == 0) return nil;
+    if (gWCache == nil) gWCache = [NSMutableDictionary dictionary];
+    NSValue* key = [NSValue valueWithPointer:(__bridge const void*)src];
+    NSArray* hit = [gWCache objectForKey:key];
+    if (hit != nil) { gWCacheHits++; return (id<MTLBuffer>)hit[1]; }
+    if (gWCacheBytes + bytes > gWCacheMax) return nil;   // over budget: fall back to scratch
+    id<MTLBuffer> buf = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    if (buf == nil) return nil;
+    [gWCache setObject:@[src, buf] forKey:key];
+    gWCacheBytes += bytes;
+    gWCacheMisses++;
+    *needsFill = 1;
+    return buf;
+}
+
 // ---- f16 prefill weight path (small-M only) --------------------------------
 // TestGEMMF16OnlyWinsWhenBandwidthBound measured an f16 MPS GEMM at 1.28x of f32 at M=64 and 0.97x
 // from M=256 up: halving the weight bytes only helps while the GEMM is throttled on the weight read,
@@ -2816,7 +2869,17 @@ void mtl_set_q4k_dq_gemm_f16_max_m(int m) { gDQGemmF16MaxM = m; }
 static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     if (!gDQGemmF16Enabled) return 0;
     if (qt != 12) return 0;
-    if (M < 24 || M > gDQGemmF16MaxM) return 0;
+    // The M cap exists because f16 only pays for itself while the GEMM is bandwidth-bound. With the
+    // expansion cache on, the trade changes completely: the expansion is gone in this path and paid
+    // every pass in the f32 one, so the ~3% the f16 GEMM costs at large M is worth taking to save
+    // 37 ms/pass. Cap applies only when the cache is off.
+    if (M < 24) return 0;
+    // Two different caps, both measured end-to-end. Without the cache f16 must also pay for itself
+    // against the f32 GEMM, which it only does while bandwidth-bound (M<=64). With the cache the
+    // expansion is gone here and paid every pass by the f32 path, so f16 stays ahead much further —
+    // but not forever: measured 1.258x at n=64, 1.106x at 256, 1.037x at 384, 1.022x at 512, then
+    // 0.962x at 768 and 0.983x at 1024, where the f16 GEMM's ~3% outgrows the expansion it saves.
+    if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 512)) return 0;
     if (N < 512 || K % 256 != 0) return 0;
     return ensure_q4k_f16() == 0;
 }
@@ -2998,18 +3061,23 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     // write and the GEMM's weight read. Gated to small M — above gDQGemmF16MaxM the GEMM is
     // compute-bound and f16 is ~3% SLOWER (see TestGEMMF16OnlyWinsWhenBandwidthBound).
     if (q4k_dq_gemm_f16_eligible(M, K, N, qtype)) {
-        id<MTLBuffer> wS = f16_scratch(&gF16W, &gF16WLen, (size_t)K*(size_t)N*sizeof(uint16_t));
+        size_t wBytes = (size_t)K*(size_t)N*sizeof(uint16_t);
+        int needsFill = 1;
+        id<MTLBuffer> wS = wcache_lookup(wb, wBytes, &needsFill);
+        if (wS == nil) { wS = f16_scratch(&gF16W, &gF16WLen, wBytes); needsFill = 1; }
         id<MTLBuffer> xS = f16_scratch(&gF16X, &gF16XLen, (size_t)M*(size_t)K*sizeof(uint16_t));
         id<MTLBuffer> oS = f16_scratch(&gF16O, &gF16OLen, (size_t)M*(size_t)N*sizeof(uint16_t));
         if (wS != nil && xS != nil && oS != nil) {
-            int Pd[2] = {K, N};
-            id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
-            [de setComputePipelineState:gDequantQ4KH];
-            [de setBuffer:wb offset:0 atIndex:0];
-            [de setBuffer:wS offset:0 atIndex:1];
-            [de setBytes:Pd length:sizeof(Pd) atIndex:2];
-            [de dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-            [de endEncoding];
+            if (needsFill) {
+                int Pd[2] = {K, N};
+                id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
+                [de setComputePipelineState:gDequantQ4KH];
+                [de setBuffer:wb offset:0 atIndex:0];
+                [de setBuffer:wS offset:0 atIndex:1];
+                [de setBytes:Pd length:sizeof(Pd) atIndex:2];
+                [de dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+                [de endEncoding];
+            }
             encode_cvt(cmd, gCvtF32ToH, xb, xS, M*K);
             recorder_matmul_f16(cmd, xS, wS, oS, M, K, N);
             encode_cvt(cmd, gCvtHToF32, oS, ob, M*N);

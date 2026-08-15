@@ -2332,6 +2332,30 @@ func SetQ4KDequantGemmF16(on bool) {
 // compute-bound and f16 measures ~3% slower, so widening this is a pessimization, not a tuning knob.
 func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m)) }
 
+// SetWeightCacheGB enables the persistent expanded-weight cache with a budget in gigabytes, or
+// disables it with 0 (the default).
+//
+// Expanding a quantized weight for a dense GEMM is the ENTIRE fixed cost of a prefill pass — 37.03
+// ms/pass for TinyLlama-1.1B Q4_K_M, against 0.00 ms for the cooperative path that does not expand —
+// and it is redone every pass over weights that never change. Caching removes it, which matters most
+// for short prompts where it is over half the pass.
+//
+// The cost is memory: the expansion is held in f16, roughly 3x the size of the quantized file (~1.94
+// GB for TinyLlama's 636 MB). Weights past the budget silently fall back to per-pass expansion, so a
+// too-small budget is slow rather than wrong. Enabling it also lifts the f16 path's M cap, since
+// without a per-pass expansion the f16 GEMM's ~3% at large M is worth taking.
+func SetWeightCacheGB(gb float64) { C.mtl_set_weight_cache(C.double(gb)) }
+
+// WeightCacheStats reports cache hits, misses and resident bytes since the last SetWeightCacheGB.
+// A miss count equal to the number of distinct weights and hits thereafter is the expected pattern;
+// misses that keep climbing mean the budget is too small.
+func WeightCacheStats() (hits, misses int, bytes float64) {
+	var h, m C.int
+	var b C.double
+	C.mtl_weight_cache_stats(&h, &m, &b)
+	return int(h), int(m), float64(b)
+}
+
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
 // seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
 // any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.
