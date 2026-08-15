@@ -1595,3 +1595,42 @@ TinyLlama-shape decode now ~138 tok/s against llama.cpp's 172 on the real model 
 ## Not done
 
 Unary has the identical unbounded shape and is not fixed - it does not appear in a Llama decode (the profile shows zero Unary calls), so it needs a workload that reaches it (GELU/ReLU2 FFNs, Mamba, RWKV) before it can be measured. Same for the remaining Binary sites in the Mamba/RWKV paths. retention_f32 still carries the runtime-loop-bound defect from the earlier audit.
+
+## R-01M01Z6AC8F42BT1ZPEH18K497 Decode is now host-bound (GPU 69% of wall); a real 5x host-encode win changed nothing because encode overlaps GPU - optimize only what is on the serial critical path
+kind: research
+state: draft
+created: 2026-08-15
+
+A fresh profile taken AFTER the elementwise fix, deliberately carrying no assumptions from the previous one. The decode is now host-bound, not GPU-bound, and the obvious host optimization turned out not to matter.
+
+## New profile
+
+  wall 7.17 ms/token | GPU-busy 4.97 ms/token | GPU 69.3% of wall | 1 command buffer/token | 139.5 tok/s
+
+GPU share fell from 86.3% to 69.3%. Element counts per token are all small again: QMatMulResident 0.49 Melem, BinaryN 0.25, RMSNorm 0.11, RoPEPair 0.07, MHAAt 0.05, Blit 0.01, Copy2D 0.01.
+
+Measured matmuls are 4.10 ms of the 4.97 ms GPU time, so the GPU side is now ~82% matmul and close to structurally optimal. The remaining GPU headroom is the gap between the realistic matmul sequence (132.8 GB/s over 520 MB of distinct weights) and the single-weight roofline (186 GB/s) - about 1.2 ms if fully closed.
+
+The larger target is the ~2.2 ms/token of wall-minus-GPU.
+
+## What was tried
+
+Per-dispatch HOST encode cost measured at 2.89 us. Cause: every recorded op allocated a fresh MTLBuffer via newBufferWithBytes purely to carry a few ints. That is a driver allocation on the encode path, ~330x per token. Metal's setBytes inlines constants under 4 KB into the command buffer and allocates nothing.
+
+Converted 25 sites, removed 23 allocations. Host encode cost 2.79-3.86 -> 0.59-0.72 us/dispatch, about 5x, three alternations.
+
+## And why it did not help
+
+End-to-end: 138.2 / 142.1 / 139.8 vs 139.4 / 143.1 / 138.5 tok/s. Within noise.
+
+Encoding OVERLAPS GPU execution (the T614 encode-overlap split: the host encodes the next buffer while the current one runs). At GPU 4.97 ms/token against ~0.95 ms of encode, the entire encode phase is hidden. Removing 80% of a hidden cost changes nothing.
+
+This is a third instance of the same family of error, and the most instructive one because the leaf measurement was completely valid: 5x is real, reproducible, and irrelevant. The earlier two were measuring the wrong RESOURCE (cache vs DRAM) and the wrong PATH (host-transfer-bound op API). This one measures the right thing on the critical path's ingredients but not on the critical PATH - the work is off it.
+
+**Rule: before optimizing a cost, establish that it is on the serial critical path. A leaf speedup on overlapped work is unfalsifiable at the leaf and worthless at the system.** The cheap check is the one already in hand: wall minus GPU-busy tells you how much serial host time exists at all, and encode is only part of it.
+
+Kept anyway - strictly less work, 23 fewer driver allocations per dispatch path, and it stops being hidden as GPU time shrinks. Explicitly NOT presented as a throughput win.
+
+## Next
+
+The ~2.2 ms is SERIAL host time and, by elimination, is not encode. Candidates in order: logits download (32000 floats/token), the greedy argmax, command-buffer submission and completion latency (1 buffer/token, so ~2.2 ms of scheduling would be enormous - worth measuring before assuming), and Go-side per-step bookkeeping. Instrument the Generate loop phases directly rather than inferring, which is the lesson already paid for once this session.
