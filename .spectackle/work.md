@@ -1299,3 +1299,22 @@ SO THERE ARE TWO SEPARATE GAPS, and conflating them has muddied the last few rec
 Gap 1 does NOT move the llama.cpp comparison at all. It is worth doing on its own merits, for models quantized to Q2_K/Q3_K/Q5_K, and it is cheap because the target idiom already exists in-tree to copy.
 
 NEXT BUILD, scoped: rewrite Q5_K's cooperative kernel in the inherited ushort/float4 idiom, since it is the worst offender with a same-family template beside it (Q4_K differs only by the qh plane). Prediction, from the table: 25.8 GB/s toward the 33.8-45.4 band. That prediction is falsifiable, which is the point — if a style rewrite does not move it, the style hypothesis is wrong and gap 2 needs a different explanation.
+
+## R-01M01QVK03E76BQ2P6DR7FCW42 Vulkan word-hoist is a no-op: its portability uint-array workaround already gave it Metal's 1.72x load pattern
+kind: research
+state: draft
+created: 2026-08-15
+
+NEGATIVE, and the reason is structural rather than a failed idea. Vulkan change reverted; the Metal changes from the previous two commits stand.
+
+THE TRANSFER THAT DID NOT TRANSFER. Widening weight loads gave Metal's hand-written kernels 1.72x (Q2_K) and 1.19x (Q5_K). The same logical change on the Vulkan Q2_K shader — hoisting the shared uint word out of four getByte calls — measured 1.053x with heavily overlapping ranges over six interleaved alternations. Nothing.
+
+WHY, and it is the useful part. The Metal kernels index the weight blob as `device const uchar*`, so each element really was a separate byte load. The VULKAN shaders cannot do that: this backend deliberately avoids the 8/16-bit storage extension for portability, so the weight buffer is declared `uint w[]` and every access goes through
+    uint getByte(int off) { return (w[off >> 2] >> ((off & 3) * 8)) & 0xFFu; }
+Four consecutive getByte calls therefore index the SAME w[] element, and the compiler already collapses them. The Vulkan shaders have been word-loading all along; there was nothing to hoist.
+
+A PORTABILITY WORKAROUND WAS ACCIDENTALLY THE OPTIMIZATION. The uint-array declaration exists because 8-bit storage is an optional Vulkan feature, not because anyone was tuning loads — and it delivered, for free, the exact access pattern Metal had to be rewritten to get. Worth remembering when the two backends' relative numbers disagree: they are not always running comparable code even when the algorithm matches.
+
+CONSEQUENCE FOR THE CROSS-BACKEND TABLE. Earlier records compared Metal and Vulkan achieved bandwidths per format as if the kernels differed only in dispatch geometry. They also differed in load granularity, which is now known to be worth up to 1.72x on Metal. Any future comparison of the two backends' per-format throughput should account for that.
+
+NOT REVERTED: the Metal Q2_K and Q5_K vectorizations, which are measured, bit-identical and mutation-probed. Only the Vulkan attempt is withdrawn, and it cost one shader edit to learn that the backend was already doing it.
