@@ -825,3 +825,33 @@ choice: Keep 512 - preserve the exact trees the frozen digest pins
 kind: research
 state: draft
 created: 2026-08-15
+
+## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
+kind: research
+state: draft
+created: 2026-08-15
+
+MEASURED, decision support for ADR-01KYJYY74VE27BSEH9VGZSNFMK (PS5001 reciprocal-multiply). Not shipped; tree restored to baseline. The ADR asks for accept/reject/case-by-case and deliberately left its flagship site unmeasured. The size of the prize is now known, and it is small.
+
+THE ADR'S PREMISE IS SUPERSEDED IN-TREE. The ADR names backend/cpu/attn_extra.go as "THE SURVIVING TRUE POSITIVE, and it is hot ... plausibly the highest leverage of any remaining candidate". That exact site (now attn_extra.go:328, or[d] = T(acc[d] / l) in flashAttnTyped) already carries a suppression: "//perfscan:ignore PS5001 FA /l norm O(seq.dk), negligible vs O(seq2.dk) body". The asymptotic argument is correct and the measurement confirms it: the normalization is O(seq.dk) against an O(seq2.dk) body, so its share falls as 1/seq.
+
+MEASURED, on M2 Pro, interleaved A/B by file-copy toggle, three A-B alternations, -benchtime=200x -count=3, medians of 9 samples per variant. A = divide (baseline), B = hoisted invL := 1/l then multiply.
+  FlashAttnFwdF64_512x8h  7423305 -> 7134071 ns  1.041x  distributions do NOT overlap
+  FlashAttnFwdF32_512x8h  7456895 -> 7478539 ns  0.997x  overlapping, no effect
+  control RetentionFwdF64  916176 ->  905424 ns  1.012x
+  control RetentionBwdF64 3475020 -> 3474163 ns  1.000x
+  control RetentionBwdF32 3914316 -> 3905049 ns  1.002x
+
+So the flagship site yields 4.1 percent on the f64 FlashAttention forward and nothing measurable on f32, against control drift of 0.0 to 1.2 percent. The f64 gain is real (clean separation, no overlap between the A and B ranges) but it is one dtype of one kernel, not the 1.2-1.5x the ADR anticipated translating into end-to-end leverage.
+
+ENTRY PROVEN BEFORE ANY NUMBER WAS READ, per the twice-earned method lesson: a temporary panic at the divide line fired under BenchmarkFlashAttnFwdF32_512x8h. The prior broadcast round measured unchanged code because a fast path shadowed the target; that failure mode was checked for here, not assumed away.
+
+WHY F32 SHOWS NOTHING while f64 shows 4.1 percent: both arms compute the divide in float64 (acc and l are float64, T is only the store type), so the arithmetic is identical. The f32 forward spends proportionally more time in the unroll-and-jam QK body, so the same absolute saving is a smaller share. This also means the win does not scale with the f32 paths that dominate quantized inference.
+
+THE ADR'S BLOCKING PRECONDITION IS NOW CLEAR. It made recommendation (b) conditional on "ONLY after the two red nn tests are resolved". TestGradFnBitIdenticalToSlowPath and TestEMAUpdateBitIdenticalToSlowPath both PASS on main at 18589e1b. Root causes, independently re-derived: GradFn hoisted ik := 1/k and multiplied while its reference divided (a PS5001 site in miniature); EMA had two products where hardware fuses only one, and the fast loop and its reference fused opposite products. Both are resolved on main. The precondition no longer blocks a decision.
+
+A THIRD OPTION THE ADR DOES NOT CONSIDER, and its limit. The ADR states "There is NO bit-identical variant ... Rejecting bit-identity is the entire cost of the class". For a bare x/c that is true. But where the expression is a multiply-add rather than a divide, math.FMA names the fused product instead of leaving contraction to the compiler, which pins one rounding for every path at no cost: measured on nn EMA.Update, 645.8us with math.FMA versus 646.4us baseline, where forbidding fusion via float64-rounded products cost 6.8 percent (690us). That does not rescue PS5001's divides, but it means "bit-identity or speed" is not the general dichotomy - it is specific to division by a loop-invariant.
+
+RECOMMENDATION: (a) reject the class, or at most (c) case-by-case. The measurement removes the reason to take a blanket numerics loosening: the single site the ADR called highest-leverage returns 4.1 percent on one dtype of one kernel, and the remaining 77 findings were already characterized as index bookkeeping or one-shot paths. Option (b) buys a written boundary rule and a tolerance-test migration across the class for that. If any site is ever taken, this one under (c) is the candidate, and it needs the full-tree cross-path equality sweep the ADR describes, because a half-ulp shift applied to one decode path and not another is exactly what those tests exist to catch.
+
+NOT DONE, deliberately: no code shipped, no test loosened. attn_extra.go is byte-identical to origin/main.
