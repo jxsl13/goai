@@ -1449,3 +1449,51 @@ Strip a leading `--` in Run. The guard is TestRunPropagatesFailure duplicated wi
 4. A panic in a package test binary hides every later failure in that package. After fixing any panicking test, re-run the whole package before believing it is green - fixing the nn panic exposed two more pre-existing failures behind it.
 
 Filed as PR #1072; the nn failures it uncovered are PR #1071.
+
+## R-01M01W1ZW4EG8S7YTJ4Y4X0W2M Decode attention had a ~99us sk-independent floor - a runtime loop bound spilled per-thread arrays to memory; constant trip count gives 5.9-8.7x
+kind: research
+state: draft
+created: 2026-08-15
+
+Decode attention on Metal carried an sk-INDEPENDENT floor of ~99us (dk=64) and ~239us (dk=128). A single query row against EIGHT keys cost 99us, which no amount of attention work explains. Fixed: 5.9-8.7x on the kernel, 1.11x end-to-end at short context and growing with context.
+
+## How it was found
+
+Per-kernel dispatch profiling of a 22-layer TinyLlama-shaped Q4_K decode (22.83 ms/token, 43.8 tok/s) gave 306 dispatches/token: QMatMulResident 117.9, Binary 70.1, RMSNorm 47.8, Blit 45.4, RoPEPair 23.4, Copy2D 2.1.
+
+Attention was ABSENT. MHAAt calls C.mtl_recorder_mha directly and does not route through the flashattn wrapper that was instrumented, so the profile silently omitted it. Instrumenting MHAAt added 23.4 dispatches/token - one per layer.
+
+Two candidate explanations were measured and KILLED first:
+- per-dispatch overhead: marginal cost of one recorded dispatch is 1.73-2.15us, so 188 non-matmul dispatches cost ~0.4ms, not the missing ~18ms.
+- the non-matmul kernels themselves: at decode shapes RMSNorm(rows=1,d=2048) is 4.74us, Binary 1.8-2.35us, Unary 2.54us, Blit 1.41us. All of them together are ~0.5ms/token.
+
+Then MHA at decode shape: 99.36us at sk=8, 119.72 at sk=36, 164.48 at 128, 423.71 at 512, 763.90 at 1024. Slope only ~0.65us/key, INTERCEPT ~94us. A fixed cost that large, per layer, is the defect.
+
+## Cause
+
+mha_decode_f32 declares per-thread `float q[128]` and `float acc[128]` and walks them with `for (int d=0; d<dk; d++)` where dk is a KERNEL ARGUMENT. A runtime trip count means the arrays are dynamically indexed, so they cannot be held in registers and spill to memory. Every acc[d] touch in the key-streaming loop AND in the 5-level simdgroup merge becomes a memory access. The merge walks all dk accumulators at every one of its 5 levels regardless of sk - which is exactly the sk-independent term.
+
+## The hypothesis that looked identical and was wrong
+
+First attempt: assume the problem is array SIZE (1 KB of per-thread arrays) and specialize dk<=64 to q[64]/acc[64]. Interleaved A/B, 3 alternations: 99.52 / 100.10 / 99.43 vs 99.07 / 99.48 / 99.44. Not a 1% difference.
+
+That null result was only trustworthy because the specialization was verified REACHED: mutating the dk<=64 kernel to write zeros turns the attention tests red. Without that probe the correct reading ("size is not the problem") is indistinguishable from "my new kernel is never called" - the same reachability trap as the Vulkan cooperative shaders.
+
+Size was never the issue; DYNAMIC INDEXING was. Compiling the trip count as a constant (d<64) lets the compiler unroll and keep both arrays in registers.
+
+## Result
+
+Interleaved A/B, 3 alternations, non-overlapping distributions:
+
+dk=64:  sk=8   99.8 -> 11.5us (8.7x) | sk=36 120.4 -> 14.4 (8.4x) | sk=128 164.6 -> 22.6 (7.3x) | sk=512 423.6 -> 68.4 (6.2x) | sk=1024 766.5 -> 129.6 (5.9x)
+dk=128: sk=36 238.6 -> 64.9us (3.7x) | sk=512 891.0 -> 277.2 (3.2x)
+
+End-to-end, 22-layer TinyLlama-shaped Q4_K decode: 44.3 -> 49.1 tok/s (1.11x), three alternations, non-overlapping. Only 1.11x because the measurement ran at a SHORT context (sk~36) where attention is 2.6ms of 22.6ms. The win scales with sk: at sk=1024 attention per token drops from 22*766us = 16.9ms to 22*130us = 2.9ms.
+
+Routing is gated on dk==64 / dk==128 EXACTLY, not dk<=64. The first cut used <=64 with a hardcoded 64 trip count, which silently computed 64 dims for dk=32 callers and turned TestRecorderDecodeAttn red - caught, then gated exactly.
+
+## Follow-on
+
+The same pattern - a runtime bound over a per-thread array - is worth auditing across the other Metal kernels. It is invisible to inspection (the code looks clean and dimension-agnostic) and costs an order of magnitude.
+
+Also worth noting for future profiling: instrumenting a wrapper is not instrumenting the path. flashattn was counted and read as "attention costs nothing"; the real call went around it.
