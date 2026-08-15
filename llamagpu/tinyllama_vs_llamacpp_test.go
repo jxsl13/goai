@@ -67,12 +67,17 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	}
 	defer dec.Release()
 
-	prompt := []int{1, 15043, 29892, 590, 1024, 338}
 	const genN = 64
+	// DECODE ONLY, to match what llama-bench -p 0 -n 64 reports. tg64 is token GENERATION; it does
+	// not include prompt processing. Timing dec.Generate instead charges GoAI for a prefill the
+	// incumbent is not charged for — on this model that prefill is ~93 ms, which dragged an
+	// otherwise-at-parity decode down to an apparent 0.71x.
 	sample := func() float64 {
 		start := time.Now()
-		if _, err := dec.Generate(prompt, genN, nlp.Greedy()); err != nil {
-			t.Fatal(err)
+		for i := range genN {
+			if _, err := dec.Step(7, 10+i); err != nil {
+				t.Fatal(err)
+			}
 		}
 		return float64(genN) / time.Since(start).Seconds()
 	}
@@ -83,8 +88,22 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 	}
 	got := coopMedianMetal(tps)
 	llamaCpp, src := llamaCppTG64(t, path)
-	t.Logf("TinyLlama-1.1B Q4_K_M, 64 tokens, Metal: GoAI %.2f tok/s vs llama.cpp %.2f tok/s (%s) = %.3fx  (samples %v)",
+	t.Logf("TinyLlama-1.1B Q4_K_M tg64 (decode only), Metal: GoAI %.2f tok/s vs llama.cpp %.2f tok/s (%s) = %.3fx  (samples %v)",
 		got, llamaCpp, src, got/llamaCpp, tps)
+
+	// Prompt processing, separately. This is GoAI's real deficiency and tg64 does not show it:
+	// llama-bench pp64 measures 1778.75 tok/s (0.56 ms/prompt token) where GoAI's prefill costs
+	// ~15.5 ms/prompt token — roughly 28x. The M>1 path does not reach the cooperative M=1 kernels.
+	long := make([]int, 64)
+	for i := range long {
+		long[i] = 1 + i%2000
+	}
+	pstart := time.Now()
+	if _, err := dec.StepNLast(long, 0); err != nil {
+		t.Fatal(err)
+	}
+	pp := float64(len(long)) / time.Since(pstart).Seconds()
+	t.Logf("TinyLlama-1.1B Q4_K_M pp64 (prompt processing): GoAI %.1f tok/s vs llama.cpp 1778.75 tok/s = %.3fx", pp, pp/1778.75)
 }
 
 // llamaCppTG64 returns llama.cpp's tg64 throughput on the SAME file, measured live when llama-bench
