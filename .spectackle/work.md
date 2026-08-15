@@ -1675,3 +1675,30 @@ The deficit is concentrated in the SMALL projections: the roofline sweep shows 1
 ## Position
 
 ~154-158 tok/s on a TinyLlama-shaped Q4_K decode against llama.cpp's 172 on the real model. Same shape, random weights, same machine — but NOT the same binary or the same measurement harness, so this is an indicative comparison and not a head-to-head. A real head-to-head on the actual TinyLlama GGUF is the honest next validation, and it should be run before any claim about relative standing.
+
+## R-01M01ZEHCKEDVSNM13HEKZR9WD Correction: QKV fusion already exists, so it is not an available lever; and the 4.10 ms matmul figure was built from assumed rather than logged dispatch shapes
+kind: research
+state: draft
+created: 2026-08-15
+
+Correction to R-01M01ZCXKJFZ6's closing suggestion, and a caveat on the 4.10 ms matmul figure.
+
+## QKV fusion already exists
+
+recordQKVProj records ONE projection through b.wqkv into a fused [·, qDim+2*kvDim] buffer; RoPEPair and MHAAt then address bands of it by offset (the §T613 fused-QKV view). So "fuse q/k/v to reduce small dispatches" is not available as a lever — it is already done. The profile's ~5.4 QMatMulResident per layer is consistent with qkv + o + gate/up + down rather than seven separate projections.
+
+## Caveat on the 4.10 ms matmul measurement
+
+That number came from TestZZLayerSeq, which built 22 layers x SEVEN separate projections at the shapes I assumed a Llama layer has. The real decoder issues fewer, larger dispatches. Total weight BYTES are identical either way — the same weights, packed differently — so ~4.1 ms remains approximately right as a bytes/bandwidth estimate. But the per-dispatch efficiency is not the same, and since small dispatches are exactly where the bandwidth deficit lives (108 GB/s at 2.2 MB vs 191 GB/s at 18 MB), the real mix is likely somewhat BETTER than the synthetic one.
+
+This is the same error as the elementwise episode: a benchmark built from assumed shapes rather than logged ones. It did not mislead the conclusion this time (the number is close, and it was cross-checked against GPU-busy time), but the estimate should be rebuilt from the logged dispatch shapes before anyone optimizes against it.
+
+## Where the headroom actually is
+
+Total decode weight traffic is ~580 MB/token (543 MB of layers + ~37 MB output head). GPU-busy is 4.97 ms/token, i.e. ~117 GB/s effective including all non-matmul GPU work. At the measured 186 GB/s streaming roofline, 580 MB would be 3.1 ms; adding the measured non-matmul GPU work (~0.5 ms) gives ~3.6 ms against the current 4.97 ms.
+
+So there is roughly 1.4 ms/token of GPU headroom, worth about 6.3 -> 4.9 ms/token, or ~205 tok/s. It is a bandwidth-efficiency problem at realistic dispatch sizes, not an algorithmic one, and it is the last structural item in the decode.
+
+## Honest standing
+
+~154-158 tok/s on a TinyLlama-SHAPED Q4_K decode with random weights, against llama.cpp's 172 on the real TinyLlama Q4_K_M. Same machine and same shape, but a different binary, different weights and a different harness. That is indicative, NOT a head-to-head, and no claim of parity or superiority should be made from it. The honest validation is the existing llamagpu/tinyllama_vs_llamacpp_test.go harness on the real GGUF, re-run end to end; that is the next thing to do before any further optimization.
