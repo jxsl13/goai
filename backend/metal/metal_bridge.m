@@ -4503,6 +4503,8 @@ int mtl_probe_pipeline_occupancy(int* out) {
     out[0] = gMHADecode   ? (int)gMHADecode.maxTotalThreadsPerThreadgroup   : -1;
     out[1] = gMHADecode64 ? (int)gMHADecode64.maxTotalThreadsPerThreadgroup : -1;
     out[2] = gMHADecode128? (int)gMHADecode128.maxTotalThreadsPerThreadgroup: -1;
+    out[3] = gSplitKP1 ? (int)gSplitKP1.maxTotalThreadsPerThreadgroup : -1;
+    out[4] = gSplitKP2 ? (int)gSplitKP2.maxTotalThreadsPerThreadgroup : -1;
     return 0;
 }
 

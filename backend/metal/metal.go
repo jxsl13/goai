@@ -2399,11 +2399,20 @@ func ProbeEncoderCost(n, per, reps int) float64 {
 // decode attention pipelines. The value is dictated by register pressure, so it distinguishes "this
 // kernel is latency-bound because it cannot fit enough simdgroups per core" from other causes.
 func ProbeDecodeAttnOccupancy() (generic, dk64, dk128 int) {
-	var out [3]C.int
+	var out [8]C.int
 	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
 		return -1, -1, -1
 	}
 	return int(out[0]), int(out[1]), int(out[2])
+}
+
+// ProbeSplitKOccupancy reports maxTotalThreadsPerThreadgroup for the two split-K attention passes.
+func ProbeSplitKOccupancy() (p1, p2 int) {
+	var out [8]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1, -1
+	}
+	return int(out[3]), int(out[4])
 }
 
 // ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
