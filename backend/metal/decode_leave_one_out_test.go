@@ -163,9 +163,12 @@ func TestDecodeLeaveOneOut(t *testing.T) {
 		share[s] = 100 * (full - w) / full
 		fmt.Printf("LOO without %-12s %8.1fus   contribution %7.1fus (%4.1f%%)\n", s, w, full-w, share[s])
 	}
-	if share["matmul"] < 30 || share["attention"] < 10 {
-		t.Errorf("decode profile changed shape: matmul %.1f%%, attention %.1f%% — the optimisation "+
-			"targets recorded in this file were chosen from the old shape and need revisiting",
-			share["matmul"], share["attention"])
+	// The shares recorded above predate the dk-split attention kernels (pair then quad, 2.9x and
+	// 1.05-1.18x). Attention has since fallen from 31.5% to ~10% of the chain and matmul risen to
+	// ~86%, which is the optimisation working rather than the profile breaking. The guard now only
+	// asserts that matmul still dominates — the claim the rest of this file rests on.
+	if share["matmul"] < 50 {
+		t.Errorf("decode profile changed shape: matmul %.1f%%, attention %.1f%% — the conclusions "+
+			"recorded in this file assume a matmul-dominated decode", share["matmul"], share["attention"])
 	}
 }

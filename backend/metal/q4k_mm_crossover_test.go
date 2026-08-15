@@ -99,7 +99,9 @@ func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
 			}
 			res[arm] = best
 		}
-		if res["mmunit"] < res["dqgemm"] {
+		// 5% margin: the two paths land within a fraction of a percent of each other at some M on a
+		// thermally noisy machine, and a 0.26% inversion is not the crossover this guards against.
+		if res["mmunit"] < 0.95*res["dqgemm"] {
 			t.Errorf("M=%d: mmunit (%.1fus) beat dqgemm (%.1fus) — the negative result above no "+
 				"longer holds; re-evaluate whether qmatmul_q4k_mm should be enabled",
 				M, res["mmunit"]*1e6, res["dqgemm"]*1e6)
