@@ -2039,6 +2039,104 @@ double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf) {
     }
 }
 
+// A straightforward tiled simdgroup GEMM, written to PRICE the "hand-write a GEMM to beat MPS"
+// question rather than to ship. 64x64 output tile per threadgroup, 8 simdgroups of 32 threads, K
+// walked in 16-wide chunks staged through threadgroup memory. f16 in, f32 accumulate.
+//
+// This is the textbook shape — if it lands far below MPS the direction is closed cheaply; if it
+// lands close, tuning it further is worth a real attempt.
+static NSString* const kSGGemmSource =
+    @"#include <metal_stdlib>\n"
+     "#include <metal_simdgroup_matrix>\n"
+     "using namespace metal;\n"
+     "kernel void sg_gemm_f16(device const half* A [[buffer(0)]],\n"
+     "                        device const half* B [[buffer(1)]],\n"
+     "                        device float* C [[buffer(2)]],\n"
+     "                        constant int* P [[buffer(3)]],\n"
+     "                        uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                        ushort tid [[thread_index_in_threadgroup]],\n"
+     "                        ushort sg [[simdgroup_index_in_threadgroup]]) {\n"
+     "  const int BM=64, BN=64, BK=16;\n"
+     "  int M=P[0], K=P[1], N=P[2];\n"
+     "  int n0=(int)tg.x*BN, m0=(int)tg.y*BM;\n"
+     "  threadgroup half sA[BM*BK];\n"
+     "  threadgroup half sB[BK*BN];\n"
+     "  simdgroup_float8x8 acc[8];\n"
+     "  for (short j=0;j<8;j++) acc[j]=make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  for (int k0=0; k0<K; k0+=BK){\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int idx=(int)tid; idx<BM*BK; idx+=256){\n"
+     "      int m=idx/BK, kk=idx%BK;\n"
+     "      sA[idx] = (m0+m<M && k0+kk<K) ? A[(m0+m)*K + k0+kk] : (half)0.0h;\n"
+     "    }\n"
+     "    for (int idx=(int)tid; idx<BK*BN; idx+=256){\n"
+     "      int kk=idx/BN, n=idx%BN;\n"
+     "      sB[idx] = (k0+kk<K && n0+n<N) ? B[(k0+kk)*N + n0+n] : (half)0.0h;\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int kk=0; kk<BK; kk+=8){\n"
+     "      simdgroup_half8x8 a;\n"
+     "      simdgroup_load(a, sA + (int)sg*8*BK + kk, BK);\n"
+     "      for (short j=0;j<8;j++){\n"
+     "        simdgroup_half8x8 b;\n"
+     "        simdgroup_load(b, sB + kk*BN + j*8, BN);\n"
+     "        simdgroup_multiply_accumulate(acc[j], a, b, acc[j]);\n"
+     "      }\n"
+     "    }\n"
+     "  }\n"
+     "  threadgroup float sC[BM*BN];\n"
+     "  for (short j=0;j<8;j++) simdgroup_store(acc[j], sC + (int)sg*8*BN + j*8, BN);\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int idx=(int)tid; idx<BM*BN; idx+=256){\n"
+     "    int m=idx/BN, n=idx%BN;\n"
+     "    if (m0+m<M && n0+n<N) C[(m0+m)*N + n0+n] = sC[idx];\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gSGGemm = nil;
+
+// mtl_probe_sg_gemm times the hand-written GEMM at [M,K]x[K,N] and returns best GPU seconds.
+double mtl_probe_sg_gemm(int M, int K, int N, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (gSGGemm == nil) {
+        NSError* err = nil;
+        id<MTLLibrary> lib = [gDevice newLibraryWithSource:kSGGemmSource options:nil error:&err];
+        if (lib == nil) { fprintf(stderr, "metal: sg_gemm build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -2.0; }
+        id<MTLFunction> fn = [lib newFunctionWithName:@"sg_gemm_f16"];
+        if (fn == nil) return -3.0;
+        gSGGemm = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+        if (gSGGemm == nil) return -4.0;
+    }
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        id<MTLBuffer> a = [gDevice newBufferWithLength:(size_t)M*K*2 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> b = [gDevice newBufferWithLength:(size_t)K*N*2 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> c = [gDevice newBufferWithLength:(size_t)M*N*4 options:MTLResourceStorageModePrivate];
+        if (a == nil || b == nil || c == nil) return -5.0;
+        int P[3] = {M, K, N};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            for (int i = 0; i < reps; i++) {
+                id<MTLComputeCommandEncoder> e = [cmd computeCommandEncoder];
+                [e setComputePipelineState:gSGGemm];
+                [e setBuffer:a offset:0 atIndex:0];
+                [e setBuffer:b offset:0 atIndex:1];
+                [e setBuffer:c offset:0 atIndex:2];
+                [e setBytes:P length:sizeof(P) atIndex:3];
+                [e dispatchThreadgroups:MTLSizeMake((N+63)/64, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+                [e endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -6.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 // mtl_probe_read_bw times a pure streaming read over `bytes` of device memory with the same
 // threadgroup shape the cooperative quantized matmul uses, and returns the best GPU seconds. It does
 // no dequantization, so comparing it against the real kernel separates "we are at the memory

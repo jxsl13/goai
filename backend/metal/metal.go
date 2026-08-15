@@ -2447,6 +2447,12 @@ func ProbeSplitKOccupancy() (p1, p2 int) {
 	return int(out[3]), int(out[4])
 }
 
+// ProbeSGGemm times the hand-written tiled simdgroup GEMM. It exists to price replacing MPS, not
+// to be used in the model path.
+func ProbeSGGemm(m, k, n, reps int) float64 {
+	return float64(C.mtl_probe_sg_gemm(C.int(m), C.int(k), C.int(n), C.int(reps)))
+}
+
 // ProbeGEMMDtypeCold times an MPS GEMM over nbuf rotating weight buffers, so no weight stays
 // cache-resident — the regime a real forward pass runs in. Use it, not ProbeGEMMDtype, whenever the
 // comparison depends on how many bytes a format reads.

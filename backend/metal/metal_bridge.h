@@ -223,6 +223,9 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
 // Pure streaming read over `bytes`, same threadgroup shape as the cooperative quantized matmul.
 double mtl_probe_read_bw(double bytes, int reps);
 
+// Hand-written tiled simdgroup GEMM, for pricing a replacement of MPS.
+double mtl_probe_sg_gemm(int M, int K, int N, int reps);
+
 // MPS GEMM timed with rotating weight buffers so none stays cache-resident.
 double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf);
 
