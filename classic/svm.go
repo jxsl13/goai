@@ -335,6 +335,14 @@ func (kc *kernelCache) column(i int) []float64 {
 	}
 	col := make([]float64, kc.n)
 	xi := kc.x[i]
+	// ATTEMPTED AND REVERTED: the distance identity ‖a-b‖² = ‖a‖² + ‖b‖² - 2a·b, with ‖xᵢ‖²
+	// precomputed once per sample. It replaces the difference form's 3 operations per dimension
+	// (sub, mul, add) with a dot product's 2, and removes the subtract that feeds the multiply.
+	// Measured interleaved on the 4000x20 scorecard fit: 5.95 vs 5.80 ms and 5.52 vs 5.44 — slower
+	// in both runs. At d=20 the difference loop is already tight, and the identity adds two norm
+	// loads plus a clamp for the cancellation case (‖·‖² can come out negative) per pair, which
+	// costs more than the saved operation. The textbook rewrite pays at large d, not here.
+	//
 	// A kernel column is n INDEPENDENT evaluations — entry t reads xi and x[t] and writes only
 	// col[t] — so banding it is race-free and bit-identical: each entry performs exactly the
 	// arithmetic it did before, and only which goroutine performs it moves. This is where the
