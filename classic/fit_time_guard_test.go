@@ -20,6 +20,13 @@ import (
 // benchmark and is not meant to be one: it is an order-of-magnitude tripwire that survives slower CI
 // hardware and a loaded machine, while a 1600x regression fails it by two orders.
 //
+// Build tier does not affect these numbers. backend/cpu has three matmul tiers (plain Go, NEON, and
+// Accelerate, the latter two behind goexperiment.simd, worth 11-18x on raw matmul), so the obvious
+// question is whether the classical scorecard is measured on the slow one. It is not affected:
+// SVC_rbf reads 5.84/4.88 ms on a default build against 6.76/5.53 with GOEXPERIMENT=simd — if
+// anything slightly slower, and certainly not faster. These learners do not route through
+// backend/cpu's gemm, so the sklearn comparison holds for any build configuration.
+//
 // Verified by mutation rather than assumed: injecting a 1e-7 rounding error into the RBF kernel
 // (math.Round(exp(x)*1e7)/1e7) makes the SVC fit take 10.997s and this test fails with the ceiling
 // message; removing it, the suite passes in 0.4s. A guard that has never been observed failing on
