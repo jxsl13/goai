@@ -167,6 +167,9 @@ int vk_qmatmul_q4_0(const uint32_t* spv, int spvLen,
 int vk_qmatmul_q4k(const uint32_t* spv, int spvLen,
                    const float* X, const unsigned char* W, float* O,
                    int M, int K, int N, int wBytes);
+int vk_qmatmul_coop(const uint32_t* spv, int spvLen,
+                    const float* X, const unsigned char* W, float* O,
+                    int M, int K, int N, int wBytes);
 
 // vk_qmatmul_q6k is the Q6_K analogue (§T141): same generic {M,K,N} byte-buffer dispatch, only
 // the SPIR-V module differs (the Q6_K in-kernel dequant, §R99). K must be a multiple of 256.

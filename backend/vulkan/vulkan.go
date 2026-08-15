@@ -192,6 +192,28 @@ var qmatmulQ4_0Spirv []byte
 //go:embed shaders/qmatmul_q4k.spv
 var qmatmulQ4KSpirv []byte
 
+// qmatmulQ4KCoopSpirv is the cooperative M=1 Q4_K shader (shaders/qmatmul_q4k_coop.comp).
+// One workgroup per output element, its 64 invocations splitting that output's K and
+// reducing in shared memory — the Vulkan twin of the Metal simdgroup-cooperative kernel.
+//
+//go:embed shaders/qmatmul_q4k_coop.spv
+var qmatmulQ4KCoopSpirv []byte
+
+// q4kCoopEnabled gates the cooperative Q4_K path. It applies only at M==1, where the
+// scalar shader leaves all but N invocations idle. Exposed through SetQ4KCooperative
+// for the A/B control.
+var q4kCoopEnabled = true
+
+// SetQ4KCooperative selects the cooperative M=1 Q4_K shader and returns the previous
+// setting. Results match the scalar shader within the tolerance its cross-reference
+// test uses: the per-element arithmetic is identical, only the summation order differs
+// (per-invocation partials reduced in shared memory).
+func SetQ4KCooperative(on bool) bool {
+	prev := q4kCoopEnabled
+	q4kCoopEnabled = on
+	return prev
+}
+
 // qmatmulQ6KSpirv is the compiled Q6_K quantized-matmul shader (shaders/qmatmul_q6k.comp →
 // qmatmul_q6k.spv via `make vulkan-spv`), embedded like the others (§T141).
 //
@@ -627,13 +649,24 @@ func QMatMulQ4_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
-	rc := C.vk_qmatmul_q4k(
-		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KSpirv[0])), C.int(len(qmatmulQ4KSpirv)),
-		(*C.float)(&xc.Storage().F32()[0]),
-		(*C.uchar)(unsafe.Pointer(&padded[0])),
-		(*C.float)(&out.Storage().F32()[0]),
-		C.int(m), C.int(k), C.int(n), C.int(len(padded)),
-	)
+	var rc C.int
+	if m == 1 && q4kCoopEnabled && len(qmatmulQ4KCoopSpirv) > 0 {
+		rc = C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KCoopSpirv[0])), C.int(len(qmatmulQ4KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+	} else {
+		rc = C.vk_qmatmul_q4k(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KSpirv[0])), C.int(len(qmatmulQ4KSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+	}
 	if rc != 0 {
 		return nil, fmt.Errorf("vulkan: QMatMulQ4_K failed (code %d)", int(rc))
 	}

@@ -1422,6 +1422,24 @@ int vk_qmatmul_q4k(const uint32_t* spv, int spvLen,
     return vk_qmatmul_bytes(spv, spvLen, X, W, O, M, K, N, wBytes);
 }
 
+// Cooperative form: ONE WORKGROUP per output element rather than one invocation, so
+// the shader's 64 invocations can split that output's K and reduce in shared memory.
+// The scalar form dispatches ceil(M*N/64) workgroups; this dispatches M*N.
+int vk_qmatmul_coop(const uint32_t* spv, int spvLen,
+                    const float* X, const unsigned char* W, float* O,
+                    int M, int K, int N, int wBytes) {
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * sizeof(float),
+        (VkDeviceSize)wBytes,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { (void*)X, (void*)W, O };
+    int up[3] = {1, 1, 0}, down[3] = {0, 0, 1};
+    QMatPC pc = { M, K, N };
+    return vk_dispatch(spv, spvLen, 3, lens, data, up, down, &pc, sizeof(pc),
+                       (uint32_t)(M * N), 1u, 1u);
+}
+
 int vk_qmatmul_q6k(const uint32_t* spv, int spvLen,
                    const float* X, const unsigned char* W, float* O,
                    int M, int K, int N, int wBytes) {
