@@ -2741,3 +2741,40 @@ Not built this round. It is a bounded change with a measured 1.08x expectation, 
 
   decode  : tg64 1.017x — parity
   prefill : pp64 0.336x
+
+## R-01M027CXQ6EC99G4P3MSQAJQCR Chunked expansion implemented and REVERTED at 0.77x — the isolated 1.13x used contiguous per-chunk outputs, which the real strided-output version cannot have
+kind: research
+state: draft
+created: 2026-08-15
+
+Implemented the chunked expansion the previous record specified. It is a 0.77x REGRESSION end to end, and the isolated 1.13x that motivated it did not transfer for an identifiable reason.
+
+## Result
+
+Interleaved, on a machine verified quiet by the noise-floor guard:
+
+  HEAD    723.1 / 714.8 / 733.9 tok/s
+  chunked 560.0 / 536.7 / 559.3 tok/s     0.77x
+
+Non-overlapping. Reverted.
+
+## Why the isolated measurement did not transfer
+
+The synthetic test that produced 1.13x gave every chunk its own CONTIGUOUS output buffer. The real implementation cannot: chunk n0 must write columns [n0, n0+cnt) of the shared C, which means an MPSMatrix with rowBytes = N*4 — a STRIDED output. Strided writes cost more than the cache-residency of the expanded tile saves.
+
+So the validation test omitted the one cost the real version is forced to pay. That is the same error class as the gate|up fusion (component measured without the context that dominates it), and it is now the second consecutive optimization where an isolated number predicted a win the system did not deliver. The lesson is sharper than "measure end to end": the isolated test must model the CONSTRAINTS the real implementation cannot avoid, not just its arithmetic.
+
+## A measurement-integrity incident worth recording
+
+Midway through, a sequential HEAD-then-mine comparison read 751 vs 360 — an apparent 2x regression that sent me looking for a bug in the kernel diff, which is minimal and could not explain it. Then llama.cpp itself measured 108.79 tok/s against the 172-201 recorded earlier, and TestMeasurementNoiseFloor failed at cv 17.94% against its 12% threshold.
+
+The machine had thermally degraded after a long session of continuous benchmarking. The guard built earlier this session for exactly this case caught it, and the correct reading was "no A/B is trustworthy right now" rather than anything about the code. After 90 seconds idle the guard passed again and the interleaved re-measurement gave the clean 0.77x above.
+
+Two things that made this recoverable: the noise-floor guard existed, and llama.cpp was being measured LIVE rather than compared against a recorded constant — a stale constant would have shown GoAI collapsing to 0.55x of it and hidden the fact that the whole machine had slowed.
+
+## Standing, unchanged
+
+  decode  : tg64 ~1.017x — parity
+  prefill : pp64 0.336x
+
+The L2-fit rule from the previous record still describes the isolated behaviour correctly; it just cannot be exploited through a shared output buffer. Exploiting it would need the GEMM to write contiguously and a separate gather, which costs more than it saves.
