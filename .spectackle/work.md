@@ -2995,3 +2995,48 @@ The attention work is also better specified than before: TestPrefillAttentionRou
   decode  : tg64 ~1.017x — parity at the memory roofline
   prefill : 0.43x at n=64, 0.61x at n=256, 0.43x at n=1024 — best in the middle, and the falloff
             at both ends has different causes (fixed expansion at short, attention at long)
+
+## R-01M028WNRHEYP9CSNCTVX418EE Matrix-unit flash attention: correct, 0.84-1.01x — the scalar-prologue ceiling is not about dequantization, and a tile-boundary bug passed at seq<=32
+kind: research
+state: draft
+created: 2026-08-15
+
+Built the flash-attention kernel the prompt-length sweep identified as the highest-value item. It is correct and not yet faster, and the reason generalizes a conclusion from the quantized work further than expected.
+
+## Result
+
+flash_mm_f32: S = Q*K^T and O += P*V via simdgroup_multiply_accumulate, K/V tiled through threadgroup memory, online softmax between them.
+
+Correct — 4.5e-05 to 5.8e-05 against the kernel prefill currently uses, at seq 8/32/64/129. Not faster:
+
+  seq= 64  decode  200.5us  flashMM  221.6us  0.90x  151 GFLOP/s (2.2% peak)
+  seq=128  decode  520.2us  flashMM  615.9us  0.84x  218 GFLOP/s (3.2%)
+  seq=256  decode 1905.2us  flashMM 2020.9us  0.94x  266 GFLOP/s (3.9%)
+  seq=512  decode 7268.0us  flashMM 7191.2us  1.01x  299 GFLOP/s (4.4%)
+
+## The generalization
+
+I expected attention to succeed where the quantized matmul failed, because attention has NO dequantization and the 240:1 scalar-to-matrix ratio was attributed to dequantization arithmetic. That attribution was too narrow.
+
+Per K-tile this threadgroup stages 4096 floats (128 per thread) and runs a 64-iteration softmax on 8 of its 32 lanes, to feed 64 matrix MACs. A 64:1 ratio with no dequantization anywhere.
+
+The real statement is not about dequantization: **putting work on the matrix units does nothing while a scalar prologue dominates the instruction budget, whatever that prologue is.** Dequantization was one instance; tile staging plus a serial softmax is another. Both times the fix was not "use the matrix units" but "give the scalar part more rows to amortize over".
+
+## The bug worth keeping
+
+The first version was correct at seq<=32 and wrong at 1.8e-02 for seq=64. The per-row softmax correction was broadcast from lane 0, applying one row's rescale to all eight.
+
+seq<=32 fits ONE K tile and exercises no cross-tile rescale at all. A parity test that stopped at 32 — a natural choice, since it is the tile width — would have passed on a kernel that is wrong for every real prompt. The test covers 8/32/64/129 specifically to straddle that boundary.
+
+General form: when a kernel has an internal tiling constant, the test must cross it. The boundary is invisible from the outside and is exactly where the accumulate-across-tiles logic lives.
+
+## Next
+
+More simdgroups per threadgroup, so one K/V tile serves 32 query rows instead of 8 and the softmax parallelizes across the group. That is the change that took the quantized kernel from 585 to 1377 GFLOP/s, and the arithmetic here is the same: the 64:1 ratio falls to 16:1 at four simdgroups.
+
+Kept behind its parity test, unwired, so that starts from a validated kernel rather than a blank file.
+
+## Standing
+
+  decode  : tg64 ~1.017x — parity at the memory roofline
+  prefill : 0.43x at n=64, 0.61x at n=256, 0.43x at n=1024
