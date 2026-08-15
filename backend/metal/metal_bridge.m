@@ -296,17 +296,14 @@ int mtl_recorder_rope2(void* rec, void* qh, void* invh,
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     int P[9] = {seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float F[1] = {posDiv};
-    id<MTLBuffer> fb = [gDevice newBufferWithBytes:F length:sizeof(F) options:MTLResourceStorageModeShared];
-    if (pb == nil || fb == nil) return -2;
     int total = seq * (headsQ + headsK) * half;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRoPE2];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
-    [enc setBuffer:pb offset:0 atIndex:2];
-    [enc setBuffer:fb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    [enc setBytes:F length:sizeof(F) atIndex:3];
     NSUInteger tg = gRoPE2.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -340,8 +337,8 @@ int mtl_rope_f32(const float* Q, const float* inv, float* O,
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:ib offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
-        [enc setBuffer:fb offset:0 atIndex:4];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
+        [enc setBytes:F length:sizeof(F) atIndex:4];
         NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
         [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
@@ -411,7 +408,7 @@ int mtl_softmax_f32(const float* X, float* O, int rows, int dim) {
         id<MTLBuffer> ob = pool_buf(len);
         int P[2] = {rows, dim};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -483,8 +480,7 @@ int mtl_crossentropy_f32(const float* Z, const float* T, float* L, int b, int c)
         id<MTLBuffer> tb = [gDevice newBufferWithBytes:T length:(size_t)b*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> lb = [gDevice newBufferWithLength:(size_t)b*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {b, c};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (zb == nil || tb == nil || lb == nil || pb == nil) return -2;
+        if (zb == nil || tb == nil || lb == nil) return -2;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
@@ -492,7 +488,7 @@ int mtl_crossentropy_f32(const float* Z, const float* T, float* L, int b, int c)
         [enc setBuffer:zb offset:0 atIndex:0];
         [enc setBuffer:tb offset:0 atIndex:1];
         [enc setBuffer:lb offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
         [enc dispatchThreadgroups:MTLSizeMake(b,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
         [enc endEncoding];
         [cmd commit];
@@ -542,8 +538,7 @@ int mtl_embed_f32(const float* Table, const float* Idx, float* O, int n, int m, 
         id<MTLBuffer> ib = [gDevice newBufferWithBytes:Idx length:(size_t)m*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> ob = [gDevice newBufferWithLength:(size_t)m*d*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {m, d};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (tb == nil || ib == nil || ob == nil || pb == nil) return -2;
+        if (tb == nil || ib == nil || ob == nil) return -2;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
@@ -551,7 +546,7 @@ int mtl_embed_f32(const float* Table, const float* Idx, float* O, int n, int m, 
         [enc setBuffer:tb offset:0 atIndex:0];
         [enc setBuffer:ib offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
         int total = m*d;
         NSUInteger tg = gEmbed.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -969,7 +964,7 @@ int mtl_unary_f32(const float* X, float* O, int n, int op) {
         id<MTLBuffer> ob = pool_buf(len);
         int P[2] = {n, op};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -1828,8 +1823,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
         id<MTLBuffer> xb = [gDevice newBufferWithLength:n*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> ob = [gDevice newBufferWithLength:n*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {n, 4}; // op 4 = ReLU (trivial)
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
         if (oneBuffer) {
             id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
             for (int i = 0; i < iters; ++i) {
@@ -1837,7 +1831,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
                 [enc setComputePipelineState:gUnary];
                 [enc setBuffer:xb offset:0 atIndex:0];
                 [enc setBuffer:ob offset:0 atIndex:1];
-                [enc setBuffer:pb offset:0 atIndex:2];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
                 [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(n,1,1)];
                 [enc endEncoding];
             }
@@ -1850,7 +1844,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
                 [enc setComputePipelineState:gUnary];
                 [enc setBuffer:xb offset:0 atIndex:0];
                 [enc setBuffer:ob offset:0 atIndex:1];
-                [enc setBuffer:pb offset:0 atIndex:2];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
                 [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(n,1,1)];
                 [enc endEncoding];
                 [cmd commit];
@@ -1884,13 +1878,11 @@ int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gUnary];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
-    [enc setBuffer:pb offset:0 atIndex:2];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
     NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -1949,14 +1941,15 @@ int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) 
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gBinary];
     [enc setBuffer:ab offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    // setBytes inlines small constants into the command buffer. newBufferWithBytes allocated a
+    // fresh MTLBuffer per dispatch just to carry two ints — a driver allocation on the HOST
+    // encode path, paid ~330x per decoded token.
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     NSUInteger tg = gBinary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -2001,17 +1994,14 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
     id<MTLBuffer> gb = (__bridge id<MTLBuffer>)gh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float E[1] = {eps};
-    id<MTLBuffer> eb = [gDevice newBufferWithBytes:E length:sizeof(E) options:MTLResourceStorageModeShared];
-    if (pb == nil || eb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRMSNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
-    [enc setBuffer:eb offset:0 atIndex:4];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
+    [enc setBytes:E length:sizeof(E) atIndex:4];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     [enc endEncoding];
     return 0;
@@ -2029,18 +2019,15 @@ int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, in
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float E[1] = {eps};
-    id<MTLBuffer> eb = [gDevice newBufferWithBytes:E length:sizeof(E) options:MTLResourceStorageModeShared];
-    if (pb == nil || eb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gLayerNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
     [enc setBuffer:bb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:eb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:E length:sizeof(E) atIndex:5];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     [enc endEncoding];
     return 0;
@@ -2057,14 +2044,12 @@ int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int 
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, n};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gAddBias];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     int total = rows * n;
     NSUInteger tg = gAddBias.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -2086,10 +2071,7 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, width, heads, hd, half, posOffset};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float F[1] = {posDiv};
-    id<MTLBuffer> fb = [gDevice newBufferWithBytes:F length:sizeof(F) options:MTLResourceStorageModeShared];
-    if (pb == nil || fb == nil) return -2;
     int total = seq * heads * half;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRoPE];
@@ -2098,8 +2080,8 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     [enc setBuffer:qb offset:(NSUInteger)elemOff*4 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
     [enc setBuffer:ob offset:(NSUInteger)elemOff*4 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
-    [enc setBuffer:fb offset:0 atIndex:4];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
+    [enc setBytes:F length:sizeof(F) atIndex:4];
     NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -2165,7 +2147,6 @@ int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int
 
         int total = M*N;
         int P[2] = {total, 4}; // op 4 = ReLU
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2177,7 +2158,7 @@ int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int
         [enc setComputePipelineState:gUnary];
         [enc setBuffer:cBuf offset:0 atIndex:0];
         [enc setBuffer:cBuf offset:0 atIndex:1];
-        [enc setBuffer:pb offset:0 atIndex:2];
+        [enc setBytes:P length:sizeof(P) atIndex:2];
         NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
         [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -2256,7 +2237,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
         id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
         int P[3] = {M, K, N};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2311,14 +2292,12 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:pipe];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:wb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     if (cooperative) {
         [enc dispatchThreadgroups:MTLSizeMake((N + coopRows - 1)/coopRows, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
     } else {
@@ -3496,9 +3475,6 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         id<MTLBuffer> dob = (__bridge id<MTLBuffer>)oh;
         int DP[7] = {sq, sk, dm, heads, kvHeads, dk, causal};
         float DFP[1] = {scale};
-        id<MTLBuffer> dpb = [gDevice newBufferWithBytes:DP length:sizeof(DP) options:MTLResourceStorageModeShared];
-        id<MTLBuffer> dfpb = [gDevice newBufferWithBytes:DFP length:sizeof(DFP) options:MTLResourceStorageModeShared];
-        if (dpb == nil || dfpb == nil) return -2;
         id<MTLComputeCommandEncoder> denc = [dcmd computeCommandEncoder];
         id<MTLComputePipelineState> dpipe = gMHADecode;
         if (dk == 64 && gMHADecode64 != nil) dpipe = gMHADecode64;
@@ -3509,8 +3485,8 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         [denc setBuffer:dkb offset:0 atIndex:1];
         [denc setBuffer:dvb offset:0 atIndex:2];
         [denc setBuffer:dob offset:0 atIndex:3];
-        [denc setBuffer:dpb offset:0 atIndex:4];
-        [denc setBuffer:dfpb offset:0 atIndex:5];
+        [denc setBytes:DP length:sizeof(DP) atIndex:4];
+        [denc setBytes:DFP length:sizeof(DFP) atIndex:5];
         [denc dispatchThreadgroups:MTLSizeMake(heads,sq,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
         [denc endEncoding];
         return 0;
@@ -3523,17 +3499,14 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[8] = {sq, sk, dm, heads, kvHeads, dk, causal, window};
     float FP[1] = {scale};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
-    if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
     [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:fpb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
     int total = heads * sq;
     NSUInteger tg = 64; // §T337: acc[128] register array — large threadgroups collapse occupancy
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -3704,17 +3677,14 @@ int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, dm, heads, dk, causal, kvHeads};
     float FP[1] = {scale};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
-    if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:fpb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
     NSUInteger ftg = 64;
     NSUInteger gx = ((NSUInteger)seq + ftg - 1) / ftg;
     [enc dispatchThreadgroups:MTLSizeMake(gx, (NSUInteger)heads, 1) threadsPerThreadgroup:MTLSizeMake(ftg, 1, 1)];
@@ -3796,7 +3766,6 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
         if (qb == nil || kb == nil || vb == nil || ob == nil || sb == nil) return -2;
 
         int P[3] = {seq, seq, causal};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
 
         // strided descriptors: a head is a dk-column window of the full [seq,·] row.
         MPSMatrixDescriptor* qDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)dm*sizeof(float) dataType:MPSDataTypeFloat32];
@@ -3822,7 +3791,7 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
             id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
             [enc setComputePipelineState:gSoftmaxCausal];
             [enc setBuffer:sb offset:0 atIndex:0];
-            [enc setBuffer:pb offset:0 atIndex:1];
+            [enc setBytes:P length:sizeof(P) atIndex:1];
             [enc dispatchThreadgroups:MTLSizeMake(seq, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [enc endEncoding];
             // O_h = S · V_h
@@ -4063,7 +4032,6 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
         if (!qb||!kb||!vb||!dob||!dqb||!dkb||!dvb||!sb||!dpb) return -2;
 
         int P3[3] = {seq, seq, causal};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P3 length:sizeof(P3) options:MTLResourceStorageModeShared];
 
         MPSMatrixDescriptor* hDesc  = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)dm*sizeof(float) dataType:MPSDataTypeFloat32];    // [seq,dk] window of [seq,dm]
         MPSMatrixDescriptor* kvDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)kvDim*sizeof(float) dataType:MPSDataTypeFloat32]; // [seq,dk] window of [seq,kvDim]
@@ -4098,7 +4066,7 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
             [mmQK encodeToCommandBuffer:cmd leftMatrix:mQ rightMatrix:mK resultMatrix:mS];
             id<MTLComputeCommandEncoder> e1 = [cmd computeCommandEncoder];
             [e1 setComputePipelineState:gSoftmaxCausal];
-            [e1 setBuffer:sb offset:0 atIndex:0]; [e1 setBuffer:pb offset:0 atIndex:1];
+            [e1 setBuffer:sb offset:0 atIndex:0]; [e1 setBytes:P3 length:sizeof(P3) atIndex:1];
             [e1 dispatchThreadgroups:MTLSizeMake(seq,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
             [e1 endEncoding];
             // dV += Pᵀ·dO (accumulate per kv head) ; dP = dO·Vᵀ
@@ -4107,7 +4075,7 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
             // dS = P ⊙ (dP − rowsum(P⊙dP))  (in place on dpb)
             id<MTLComputeCommandEncoder> e2 = [cmd computeCommandEncoder];
             [e2 setComputePipelineState:gSoftmaxJacobian];
-            [e2 setBuffer:sb offset:0 atIndex:0]; [e2 setBuffer:dpb offset:0 atIndex:1]; [e2 setBuffer:pb offset:0 atIndex:2];
+            [e2 setBuffer:sb offset:0 atIndex:0]; [e2 setBuffer:dpb offset:0 atIndex:1]; [e2 setBytes:P3 length:sizeof(P3) atIndex:2];
             [e2 dispatchThreadgroups:MTLSizeMake(seq,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
             [e2 endEncoding];
             // dQ = scale·dS·K (per query head) ; dK += scale·dSᵀ·Q (accumulate per kv head)
