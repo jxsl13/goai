@@ -155,6 +155,13 @@ func TestRunFunctionListingOnlyWhenFiltered(t *testing.T) {
 //
 // The filter must also run `go list` in the module under test rather than the process's working
 // directory; getting that wrong made every package look unbuildable and silently emptied the run.
+//
+// This unit test is the ONLY guard for the class. An attempt to add a Makefile gate that checked the
+// selection for unbuildable packages was reverted: once execGoTest filters them, a selection
+// CONTAINING one is correct rather than a fault, so the gate failed preflight for a handled
+// condition. preflight itself is immune by construction — it uses the filtered
+// `go list -f '{{if or .GoFiles .TestGoFiles}}'` form — which is exactly why no local gate could see
+// the CI failure, and why the protection has to live here at the filter rather than upstream of it.
 func TestBuildablePkgsDropsConstraintExcluded(t *testing.T) {
 	dir, err := os.Getwd()
 	if err != nil {
