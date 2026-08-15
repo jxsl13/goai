@@ -1983,6 +1983,46 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     return 0;
 }
 
+// mtl_probe_gemm_dtype times an MPS GEMM [M,K]x[K,N] in f16 or f32 and returns the best
+// per-GEMM GPU seconds. Self-contained (allocates its own private buffers, contents irrelevant to
+// timing) so the f16 question can be answered before any of the f16 dequant/convert plumbing is
+// built. Returns <0 on failure.
+double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        size_t es = f16 ? sizeof(uint16_t) : sizeof(float);
+        MPSDataType dt = f16 ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
+        id<MTLBuffer> aBuf = [gDevice newBufferWithLength:(size_t)M*K*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> bBuf = [gDevice newBufferWithLength:(size_t)K*N*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> cBuf = [gDevice newBufferWithLength:(size_t)M*N*es options:MTLResourceStorageModePrivate];
+        if (aBuf == nil || bBuf == nil || cBuf == nil) return -2.0;
+        MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:dt];
+        MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+        MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
+        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+        MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+            initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+            resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -3.0;
+            for (int i = 0; i < reps; i++) {
+                [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -4.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 // mtl_recorder_rmsnorm encodes O = rmsnorm(X)·gamma over device buffers xh (rows×dim),
 // gh (dim gamma weights), oh (rows×dim) into the recorder's command buffer. Cooperative
 // kernel: one 256-thread threadgroup per row (§T345). No commit.

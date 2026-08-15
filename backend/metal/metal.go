@@ -2317,6 +2317,17 @@ func (r *Recorder) Wait() error {
 // from the device timestamps — free of host submit/wake jitter.
 func LastGPUSeconds() float64 { return float64(C.mtl_last_gpu_seconds()) }
 
+// ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
+// seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
+// any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.
+func ProbeGEMMDtype(m, k, n int, f16 bool, reps int) float64 {
+	var h C.int
+	if f16 {
+		h = 1
+	}
+	return float64(C.mtl_probe_gemm_dtype(C.int(m), C.int(k), C.int(n), h, C.int(reps)))
+}
+
 // SetQ4KMatrixUnit toggles the matrix-unit Q4_K path (M>=8). Test seam: it lets a parity test
 // obtain the cooperative kernel's result for the same inputs.
 func SetQ4KMatrixUnit(on bool) {

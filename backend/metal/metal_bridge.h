@@ -215,6 +215,10 @@ int mtl_recorder_finish(void* rec);
 int mtl_recorder_commit(void* rec);
 int mtl_recorder_wait(void* rec);
 double mtl_last_gpu_seconds(void);
+
+// mtl_probe_gemm_dtype times an MPS GEMM [M,K]x[K,N] in f16 (f16!=0) or f32 and returns the best
+// per-GEMM GPU seconds over its own private buffers. <0 on failure.
+double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
 void mtl_set_q4k_mm(int on);
 int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt);
 void mtl_set_q4k_dq_gemm(int on);
