@@ -22,7 +22,12 @@ package metal
 //    ~78% to be worth anything, against Apple's own tuned kernel. That is the bar, and it is high —
 //    worth knowing before starting rather than after.
 //
-// 2. f32 beats f16 at EVERY shape by 2-4%, and we currently run f16 at M<=512 because that is what
+// 2. RETRACTED — see TestMPSEfficiencyCurveVsM, which probes f16 first and gets the OPPOSITE
+//    ordering at the same shape (f16 73.3% / f32 67.3% at M=512, against 76.8/74.4 here). The gap
+//    is within this machine's drift and depends on probe order, so neither ordering is established
+//    and the dual-format cache case that rested on it is weaker than presented below.
+//
+//    (original text) f32 beats f16 at EVERY shape by 2-4%, and we currently run f16 at M<=512 because that is what
 //    the weight cache holds. That 2-4% is the price of the cache being f16, which halves its memory.
 //    Caching f32 instead was tried and reverted (see TestDQGemmCostSplit): f16 1.92 GB + f32 3.88 GB
 //    exceeds the 4 GB budget and the two evict each other. An f32-ONLY cache fits, but f16 wins by
