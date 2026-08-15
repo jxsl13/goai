@@ -2353,6 +2353,16 @@ func SetQ4KDequantGemm(on bool) {
 	C.mtl_set_q4k_dq_gemm(v)
 }
 
+// FlashMM records matrix-unit prefill attention (dk=64). Experimental; see flash_mm_f32.
+func (r *Recorder) FlashMM(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, causal int, scale float32) error {
+	rc := C.mtl_recorder_flash_mm(r.handle, q.handle, k.handle, v.handle, o.handle,
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(causal), C.float(scale))
+	if rc != 0 {
+		return fmt.Errorf("metal: FlashMM failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) Free() {
 	if r.handle != nil {
 		C.mtl_recorder_free(r.handle)

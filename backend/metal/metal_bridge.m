@@ -2390,6 +2390,156 @@ static int ensure_dequant_q4k(void) {
     return gDequantQ6K != nil ? 0 : -13;
 }
 
+static NSString* const kFlashMMSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// FlashAttention on the SIMD matrix units, for PREFILL (sq>1). dk==64 only.\n"
+     "//\n"
+     "// The existing causal path routes to mha_decode_f32, which streams keys per QUERY ROW: right for\n"
+     "// sq=1, wrong here. Measured, it runs at 282-295 GFLOP/s (~4% of peak) and becomes 58% of a\n"
+     "// 1024-token prefill. This computes S = Q*K^T and O += P*V with simdgroup_multiply_accumulate, so\n"
+     "// the K/V tile in threadgroup memory is reused across all 8 query rows of the tile.\n"
+     "//\n"
+     "// One threadgroup = one simdgroup = 8 query rows of one head. K/V are walked in tiles of 32.\n"
+     "// Online softmax runs in threads over the score tile staged in threadgroup memory, which is the\n"
+     "// standard arrangement: the matrix units produce S, scalar code rescales, the matrix units consume P.\n"
+     "kernel void flash_mm_f32(device const float* Q [[buffer(0)]],\n"
+     "                         device const float* K [[buffer(1)]],\n"
+     "                         device const float* V [[buffer(2)]],\n"
+     "                         device float* O [[buffer(3)]],\n"
+     "                         constant int* P [[buffer(4)]],\n"
+     "                         constant float* FP [[buffer(5)]],\n"
+     "                         uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                         ushort lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  const int DK=64, BK=32;\n"
+     "  int h=(int)tg.x, q0=(int)tg.y*8;\n"
+     "  if (h>=heads || q0>=sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK, qOff=h*DK, kvOff=(h/rep)*DK;\n"
+     "\n"
+     "  threadgroup float sK[BK*DK], sV[BK*DK], sS[8*BK];\n"
+     "  simdgroup_float8x8 qm[8], om[8];\n"
+     "  for (short d=0; d<8; d++){\n"
+     "    // Q rows q0..q0+7, dim slice d — rows past sq read row 0 and are masked at the store.\n"
+     "    simdgroup_load(qm[d], Q + (ulong)q0*dm + qOff + d*8, dm);\n"
+     "    om[d] = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  }\n"
+     "  float m_i = -INFINITY, l_i = 0.0f;\n"
+     "\n"
+     "  int jmax = causal ? (q0 + 8) : sk;      // causal: no key beyond the tile's last query row\n"
+     "  if (jmax > sk) jmax = sk;\n"
+     "  for (int j0=0; j0<jmax; j0+=BK){\n"
+     "    for (int e=(int)lane; e<BK*DK; e+=32){\n"
+     "      int t=e/DK, d=e%DK, j=j0+t;\n"
+     "      sK[e] = (j<sk) ? K[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
+     "      sV[e] = (j<sk) ? V[(ulong)j*dkv + kvOff + d] : 0.0f;\n"
+     "    }\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    // S[8 x BK] = Q[8 x 64] * K^T\n"
+     "    for (short b=0; b<BK/8; b++){\n"
+     "      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "      for (short d=0; d<8; d++){\n"
+     "        simdgroup_float8x8 kt;\n"
+     "        simdgroup_load(kt, sK + (ulong)b*8*DK + d*8, DK, ulong2(0,0), true);\n"
+     "        simdgroup_multiply_accumulate(s, qm[d], kt, s);\n"
+     "      }\n"
+     "      simdgroup_store(s, sS + b*8, BK);\n"
+     "    }\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    // online softmax, one row per lane (8 rows, lanes 0..7)\n"
+     "    float corr = 1.0f;\n"
+     "    if (lane < 8){\n"
+     "      int i = q0 + (int)lane;\n"
+     "      float mx = m_i;\n"
+     "      for (int t=0; t<BK; t++){\n"
+     "        int j=j0+t;\n"
+     "        float v = (j<sk && (!causal || j<=i)) ? sS[lane*BK+t]*scale : -INFINITY;\n"
+     "        sS[lane*BK+t] = v;\n"
+     "        if (v>mx) mx = v;\n"
+     "      }\n"
+     "      float c = (mx==-INFINITY) ? 1.0f : exp(m_i-mx);\n"
+     "      float ls = 0.0f;\n"
+     "      for (int t=0; t<BK; t++){\n"
+     "        float p = (sS[lane*BK+t]==-INFINITY) ? 0.0f : exp(sS[lane*BK+t]-mx);\n"
+     "        sS[lane*BK+t]=p; ls += p;\n"
+     "      }\n"
+     "      m_i = mx; l_i = l_i*c + ls; corr = c;\n"
+     "    }\n"
+     "    // corr is PER ROW and lives in lanes 0..7; broadcasting it from lane 0 here would\n"
+     "    // give every row lane 0's rescale, which is correct only while there is a single\n"
+     "    // K tile (seq<=BK) and silently wrong beyond it.\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    // O = O*corr + P*V   (corr is per-row; applied via a diagonal multiply)\n"
+     "    threadgroup float sD[8*8];\n"
+     "    for (int e=(int)lane; e<64; e+=32) sD[e] = 0.0f;\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    if (lane<8) sD[lane*8+lane] = corr;\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    simdgroup_float8x8 dm8; simdgroup_load(dm8, sD, 8);\n"
+     "    for (short d=0; d<8; d++){\n"
+     "      simdgroup_float8x8 scaled = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "      simdgroup_multiply_accumulate(scaled, dm8, om[d], scaled);\n"
+     "      om[d] = scaled;\n"
+     "    }\n"
+     "    for (short b=0; b<BK/8; b++){\n"
+     "      simdgroup_float8x8 pm; simdgroup_load(pm, sS + b*8, BK);\n"
+     "      for (short d=0; d<8; d++){\n"
+     "        simdgroup_float8x8 vm; simdgroup_load(vm, sV + (ulong)b*8*DK + d*8, DK);\n"
+     "        simdgroup_multiply_accumulate(om[d], pm, vm, om[d]);\n"
+     "      }\n"
+     "    }\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  }\n"
+     "  // store O/l, masking rows past sq\n"
+     "  threadgroup float sO[8*DK];\n"
+     "  for (short d=0; d<8; d++) simdgroup_store(om[d], sO + d*8, DK);\n"
+     "  simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  float linv = simd_broadcast(l_i, 0);\n"
+     "  for (int e=(int)lane; e<8*DK; e+=32){\n"
+     "    int r=e/DK, d=e%DK;\n"
+     "    if (q0+r < sq){\n"
+     "      float ll = simd_broadcast(l_i, (ushort)r);\n"
+     "      O[(ulong)(q0+r)*dm + qOff + d] = (ll>0.0f) ? sO[e]/ll : 0.0f;\n"
+     "    }\n"
+     "  }\n"
+     "  (void)linv;\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gFlashMM = nil;
+static int ensure_flash_mm(void) {
+    if (gFlashMM != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kFlashMMSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: flash_mm_f32 build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> fn = [lib newFunctionWithName:@"flash_mm_f32"];
+    if (fn == nil) return -11;
+    gFlashMM = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gFlashMM != nil ? 0 : -12;
+}
+
+
+// mtl_recorder_flash_mm records the matrix-unit prefill attention. dk must be 64.
+int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh,
+                          int sq, int sk, int dm, int heads, int kvHeads, int causal, float scale) {
+    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL) return -2;
+    if (ensure_flash_mm() != 0) return -6;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    int P[7] = {sq, sk, dm, heads, kvHeads, 64, causal};
+    float FP[1] = {scale};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:gFlashMM];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qh offset:0 atIndex:0];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+    [enc setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
+    [enc dispatchThreadgroups:MTLSizeMake(heads, (sq+7)/8, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 // Scratch for the dequantized weight, grown on demand and reused. One buffer is enough: compute
 // encoders in a command buffer execute in submission order, so dequant(A) -> gemm(A) -> dequant(B)
 // -> gemm(B) never races. It is sized by the largest projection the model uses (for TinyLlama the
