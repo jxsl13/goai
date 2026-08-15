@@ -11,9 +11,25 @@ import (
 // (rows=64) rather than the decode shapes (rows=1) every earlier per-op figure was taken at.
 //
 // It exists because the prefill budget did not add up twice running, and both times the error was
-// an assumed component rather than a measured one. With these numbers it closes:
+// an assumed component rather than a measured one.
 //
-//	expansion 0.99 + GEMM 1.70 + non-matmul 0.54 = 3.23 ms/layer, measured 3.79 (85%)
+// The full measured budget per layer at a 64-token prompt (K=2048-class shapes):
+//
+//	expansion            0.990 ms
+//	GEMM                 1.700 ms
+//	attention            0.159 ms
+//	RMSNorm x2           0.013 ms
+//	RoPE                 0.010 ms
+//	SwiGLU               0.009 ms
+//	residual add x2      0.008 ms
+//	logits (amortized)   0.015 ms
+//	TOTAL                2.905 ms   against 3.79 ms measured -> 23% unaccounted
+//
+// Every operation in the layer is now measured individually, so the remainder is NOT a missing op.
+// The most likely explanation is the measurement shape itself: each figure above comes from
+// repeating ONE op back-to-back on the same buffers, which the GPU can overlap, whereas a real
+// layer is a dependency chain with genuine data hazards between successive ops. A microbenchmark
+// of a single op cannot show that serialization cost.
 //
 // The distribution is lopsided. Per layer: 2 RMSNorm 12.6us, SwiGLU 9.1us, 2 residual adds 8.4us,
 // attention 159.3us — attention is 84% of the non-matmul GPU work, and it runs at 211 GFLOP/s,
