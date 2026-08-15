@@ -1830,3 +1830,48 @@ So the target is the 3.18 ms, not the 0.60 ms available in matmul bandwidth.
 Sampling 0.09 ms, encode overlapped, logits round-trip neutral. That still leaves roughly 2 ms/token of non-GPU time unaccounted. The remaining hypothesis is command-buffer submit-to-start and completion latency: one buffer per token with a strict wait means the GPU idles between tokens, and nothing measured so far covers that interval. Measuring it needs the gap between one buffer's GPUEndTime and the next's GPUStartTime — now directly available through the timestamps this record adds, and that is the next measurement.
 
 If that interval is ~2 ms it is the single largest item in the decode and dwarfs split-K; if it is small, then the 4.97 ms GPU-busy figure and the 3.81 ms matmul estimate disagree and the matmul estimate must be rebuilt from logged dispatch shapes rather than the bandwidth model.
+
+## R-01M02154F2EY5TTQBXKFQSQFN3 Decode is at PARITY with llama.cpp (0.885x, inside its own 19% spread) — the 1.41x was prefill charged to GoAI but not the incumbent; the real gap is prompt processing at 17.4x
+kind: research
+state: draft
+created: 2026-08-15
+
+The decode is at parity with llama.cpp. The 1.41x deficit reported last round was a measurement error: GoAI was being timed with prefill included, against a metric that excludes it. The real deficiency is prompt processing, 17.4x behind, and tg64 never showed it.
+
+## Resolving the fork
+
+The previous record posed a fork: either the ~2 ms/token of non-GPU time is command-buffer submit latency, or the matmul estimate is wrong. Measured both:
+
+  GPU idle BETWEEN command buffers: 0.19-0.59 ms/token (not 2 ms — hypothesis rejected)
+  synchronous device->host readback: 2.1 us for 125 KB (unified memory; not a factor)
+
+Neither. The accounting then closed exactly on a bare Step loop — wall 5.811, busy 5.352, idle 0.406, OTHER 0.053 ms/token — while Generate over the same 64 tokens showed other = 1.449 ms/token. Same GPU busy, same idle. The residual was entirely OUTSIDE the timed loop, i.e. the prefill call before it: ~93 ms for a 6-token prompt, amortized across 64 generated tokens.
+
+## The comparison was not like-for-like
+
+llama-bench -p 0 -n 64 reports tg64, which is token GENERATION only. Timing dec.Generate charges GoAI for prompt processing that the incumbent is not charged for.
+
+Corrected, both phases measured live against the same file:
+
+  tg64 (decode)  GoAI 170.78  llama.cpp 192.88   = 0.885x
+  pp64 (prompt)  GoAI 102.0   llama.cpp 1778.75  = 0.057x
+
+## Decode is at parity
+
+llama.cpp's own tg64 on this host, six runs: 170.02, 172.40, 173.08, 177.80, 187.35, 201.61 — a 19% spread, per-run stddev 5-9%. GoAI decode-only: 177.9, 178.2, 179.5 — 0.9% spread.
+
+GoAI sits inside llama.cpp's distribution and is markedly more consistent. The 201.61 figure that anchored the last two records was the FIRST and coldest run; using a single cold sample of the incumbent as the baseline overstated the gap. This is the third form of the same error this session — after cache-vs-DRAM regime and hidden-vs-serial cost — and the general shape is now clear: **check that the two things being compared are the same quantity, measured the same way, under the same conditions.**
+
+## The real gap
+
+Prompt processing: 9.8 ms per prompt token against llama.cpp's 0.56, i.e. 17.4x. Prefill runs with M>1, which does not reach the cooperative M=1 kernels the decode work this session was spent on. Worse, prefill has a property decode does not: with a batch of tokens the weights are read ONCE for the whole batch, so it should be compute-bound rather than bandwidth-bound. GoAI is evidently not exploiting that — a 17x deficit is the signature of re-streaming weights per token rather than blocking over the batch.
+
+That is now the largest measured gap in the library, and it is a far better target than split-K (repriced last round at 9% of decode). It also matters more in practice: long prompts are the common case for RAG, code and summarization, and a 17x prefill penalty dominates time-to-first-token.
+
+## Corrected standing
+
+  decode  : parity with llama.cpp (0.885x, inside its 19% run-to-run spread)
+  prefill : 17.4x behind
+  session : 24.11 -> ~178 tok/s decode on the real model, 7.4x
+
+Next: characterize the M>1 quantized matmul path. Establish whether it reads weights once per batch or once per token, then decide between a blocked/tiled M>1 kernel and routing prefill through the existing MPS/GEMM path.
