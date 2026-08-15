@@ -3313,3 +3313,63 @@ Probe the premise before implementing. Three rejected designs (shared encoder, G
 f16 KV) would each have been substantial work justified by a plausible mechanism that a single
 measurement contradicts. Both designs that paid had the measurement FIRST, identifying a
 specific redundancy.
+
+## R-01M02K1DP9FBMAH7VYJY5XKWQP Standing vs llama.cpp — same-window, supersedes earlier session figures
+kind: research
+state: draft
+created: 2026-08-15
+
+# Standing vs llama.cpp — same-window measurement, 2026-08-15 late session
+
+Both sides measured back-to-back in one thermal window. This supersedes every earlier standing
+in this session; several of those paired our number from one window against llama.cpp from
+another, which this machine's drift makes meaningless.
+
+## Prefill (goai defaults, weight cache on)
+
+| shape | goai | llama.cpp | ratio |
+|---|---|---|---|
+| pp64 | 1523.1 | 1755.43 +/- 19.59 | 0.87x |
+| pp256 | 1920.0 | 2089.04 +/- 24.64 | 0.92x |
+| pp512 | 1899.9 | 2143.92 +/- 6.62 | 0.89x |
+| pp1024 | 1830.8 | 2066.61 +/- 6.49 | 0.89x |
+
+Prefill is the weaker side, 0.87-0.92x. Note pp512 measured 2045.7 in a cooler window earlier;
+the 0.95x I quoted from that reading was our cool number against their warm one and is withdrawn.
+
+## Decode
+
+Short context, both measured directly:
+
+| | goai | llama.cpp tg128 | ratio |
+|---|---|---|---|
+| ctx=8 | 170.0 | 167.08 +/- 13.94 | 1.02x |
+
+Parity within noise. This is the one decode comparison that does not depend on a derivation.
+
+Long context — llama.cpp has no direct decode-after-prefill benchmark, so it is derived from
+ minus prefill measured in the same run:
+
+| ctx | goai | llama.cpp (derived) | ratio |
+|---|---|---|---|
+| 512 | 161.1 | 143.8 | 1.12x |
+| 1536 | 150.2 | 140.3 | 1.07x |
+
+DO NOT TREAT THESE AS ESTABLISHED. The same derivation gave 189.9 and 161.0 forty minutes
+earlier — a 1.3x spread on llama.cpp's side alone — and pp512+tg32 carries +/- 44.57. The
+derived figures are the difference of two large noisy numbers, so their error is much larger
+than either input's. What can be said is that long-context decode has moved from clearly
+behind (0.73x, measured when our attention kernel was 2.9x slower) to somewhere around parity.
+
+## What moved this session
+
+- Prefill: 0.46x/0.75x/0.80x/0.84x -> 0.87x/0.92x/0.89x/0.89x. From removing the per-pass
+  weight expansion (37.03 ms/pass -> 9.15 ms) and defaulting the cache on.
+- Decode long context: 0.73x -> ~parity. From split-K attention plus splitting dk across lane
+  pairs (2.9x on the kernel) and then quads (a further 1.05-1.18x).
+
+## Measurement rule this session kept proving
+
+Both sides, one window, unchanged control arm, min of repeated runs. llama.cpp's tg128 alone
+measured 158.39, 195.59, 175.58, 167.08 and 161.56 across this session on an idle machine. Any
+ratio built from two different windows is noise.
