@@ -3004,13 +3004,24 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     // every pass in the f32 one, so the ~3% the f16 GEMM costs at large M is worth taking to save
     // 37 ms/pass. Cap applies only when the cache is off.
     if (M < 24) return 0;
-    // Two different caps, both measured end-to-end. Without the cache f16 must also pay for itself
-    // against the f32 GEMM, which it only does while bandwidth-bound (M<=64). With the cache the
-    // expansion is gone here and paid every pass by the f32 path, so f16 stays ahead much further —
-    // but not forever. With Q6_K cached as well: 1.574x at n=64, 1.141x at 256, 1.100x at 512, then
-    // 1.026x at 768, 0.980x at 1024 and 1.000x at 1536 — all inside this machine's ~4% noise floor,
-    // so 512 is where a win stops being demonstrable rather than where harm begins.
-    if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 512)) return 0;
+    // Without the cache, f16 must beat the f32 GEMM on its own and only does so while bandwidth-
+    // bound (M<=64). WITH the cache there is no upper cap at all, which took two attempts to get
+    // right.
+    //
+    // An earlier sweep put the cache-mode cap at 512, reading 1.026x/0.980x/1.000x at n=768/1024/
+    // 1536 as "inside the noise floor". That sweep ran short prompts first, so the cache was already
+    // populated when the long ones ran. Measured on a long-prompt-only workload the cap is much
+    // worse than neutral, because it means the f16 path is never taken and THE CACHE NEVER FILLS —
+    // every pass re-expands to f32 uncached:
+    //
+    //	          cap=512 (cache 0.00 GB)   uncapped (cache 1.94 GB)
+    //	pp1024      1950.6 / 1870.9           1967.5 / 2021.6   +4.4%
+    //	pp1536      1935.1 / 1937.7           2003.5 / 2005.1   +3.5%
+    //
+    // So above 512 the choice is not "f16 GEMM vs f32 GEMM" (where f32 wins by ~3%) but "cached f16
+    // vs uncached f32", and removing a per-pass expansion beats a 3% GEMM edge. Costs no extra
+    // memory: those weights are already in the cache for the M<=512 path.
+    if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 1u<<20)) return 0;
     // The narrow projections (k/v at N=256) are worth pulling onto this path only once the batch is
     // deep enough. Below that the cooperative kernel is still better for them, and forcing them
     // through expand-then-GEMM measured 0.982x/0.990x at n=64 against 1.040x-1.045x at n=256 and
