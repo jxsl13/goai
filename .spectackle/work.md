@@ -1164,3 +1164,25 @@ FIVE-NINTHS OF THE TOKEN IS NOT IN THE RECORDED GPU OPS. That is the result. Can
 WHAT THIS DOES ESTABLISH. Among the ops that ARE measured, attention is the largest non-matmul term at 16 percent and 116,651 ns per call — 2.5x the cost of a quant matmul at the same shapes, on 55 calls per token. If the unaccounted 59 percent turns out to be spread proportionally, attention is the next target; if it is concentrated in host/sync work, none of the GPU kernels are.
 
 NEXT STEP, and it should come before any optimization: a Metal System Trace or GPU counter capture to attribute the 190 ms directly, rather than another arithmetic budget built from micro-benchmarks. Two successive budgets in this campaign have now failed to close — the range-based apportionment and this one — and both failed because they inferred rather than observed.
+
+## R-01M01PPTSTEGFSRG6RTEH4VZHG Observed: 87.6 percent of a decode token is GPU execution — host overhead caps at 12 percent of the gap
+kind: research
+state: draft
+created: 2026-08-15
+
+OBSERVED, not inferred. Two previous budgets in this campaign failed to close because they summed micro-benchmarks; this reads Metal's own per-command-buffer GPUStartTime/GPUEndTime, so it measures what the GPU actually did. Instrumentation reverted; nothing shipped.
+
+MEASURED, TinyLlama-1.1B Q4_K_M, 32 generated tokens:
+  wall                        40.47 ms/token   (24.71 tok/s)
+  GPU execution               35.47 ms/token   87.6 percent of wall, across 32 command buffers
+  host + synchronisation       5.00 ms/token   12.4 percent
+
+THE HOST IS NOT THE PROBLEM. 5.00 ms/token is real and worth having, but eliminating ALL of it caps GoAI at 28.2 tok/s against llama.cpp's 172.1. At most 12 percent of the 7.14x gap is host-side; 88 percent is GPU kernel time.
+
+THAT RESOLVES THE OPEN QUESTION FROM THE PREVIOUS RECORD, and against my own leading candidate. The op budget accounted for only 41 percent of a token and I listed host/sync work as one explanation for the missing 59 percent. It is not: the GPU is busy 87.6 percent of the time. The budget was wrong because the incremental (t16-t1)/15 method UNDERSTATES in-situ cost — it measures the marginal cost of a SECOND identical op against warm caches, while a real token issues heterogeneous ops each touching weights that were not just read. The method is sound for A/B ratios, where the bias cancels, and unsound for absolute budgets, where it does not.
+
+WHAT THE NUMBER MEANS. Over 667 MB of weights re-read per token, GoAI's GPU time corresponds to 18.8 GB/s; llama.cpp's entire token corresponds to 114.8 GB/s. GoAI's GPU work ALONE is 6.1x llama.cpp's whole token.
+
+WHERE THAT LEAVES THE CAMPAIGN. The 14 cooperative kernels tripled this model's decode and are real. The remaining 6.1x is inside GPU kernel execution — split roughly 42/58 between quant matmul and the other GPU ops by the earlier apportionment, both of which are now confirmed to be GPU-side rather than host-side.
+
+METHOD NOTE WORTH KEEPING: when a budget built from micro-benchmarks fails to close, prefer a direct observation of the aggregate over a third refinement of the budget. Metal exposes GPUStartTime/GPUEndTime per command buffer and it took one instrumented function to settle what two rounds of arithmetic could not.
