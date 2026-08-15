@@ -90,6 +90,28 @@ import (
 // path, which is 1.28x faster than f32 at this M because the GEMM is bandwidth-bound, so the
 // obvious lever is already pulled.
 //
+// MEASURED OPPORTUNITY: this chain issues q, k and v as THREE matmuls. The decoder has fused-QKV
+// machinery (SPEC T613, one [dim, dim+2*kvDim] weight), so the faithful model should be one matmul —
+// yet the three-matmul chain is what matches the real decoder's GPU time (39.32 vs 39.34 ms at
+// M=64; 240.38 vs 241.86 at M=512). Rebuilding the chain with a single fused N=2560 matmul gives:
+//
+//	M= 64   fused chain 36.13 ms   vs unfused 39.32   vs real decoder 39.34
+//	M=512   fused chain 235.17 ms  vs unfused 240.38  vs real decoder 241.86
+//
+// So a fused QKV is worth ~8.9% at M=64 and ~2.8% at M=512, and the real decoder is not getting it
+// on this path — the unfused chain models it, the fused one does not.
+//
+// Why it matters most at small M: k and v are 2048x256 projections, and a per-shape sweep puts that
+// shape at 7.4% of peak at M=64 (against gate/up's 67.3%). They are 2.3% of a layer's FLOPs but
+// ~15% of its matmul TIME. Widening N from 256 to 2560 by fusing is exactly the fix for a shape
+// that narrow.
+//
+// NOT confirmed in the code, and that is the next step rather than a conclusion: llamagpu builds
+// wqkv via fused(b.Wq, b.Wk, b.Wv) in the dense constructors, but whether the QUANTIZED path
+// reaches that (concatenating Q4_K blocks is not the same operation as concatenating f32 rows) was
+// not established here. The timing evidence says it does not; the code should be read before
+// anything is built on that.
+//
 // Reported, not asserted on absolute timings; the assertion is only that matmul dominates.
 func TestPrefillLeaveOneOut(t *testing.T) {
 	if !Available() {
