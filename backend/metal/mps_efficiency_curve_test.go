@@ -27,9 +27,14 @@ package metal
 // gap is within this machine's drift and neither ordering is established. Anything resting on that
 // 2-4% — including the case for a dual-format weight cache — is weaker than it was presented.
 //
-// The M=128 f16 dip (42.9%, below both M=96 and M=192) reproduces within this run but has the same
-// problem: it is a single ordering. It would need interleaved arms with a control before being
-// treated as an MPS tiling artifact worth routing around.
+// The M=128 f16 dip (42.9%, below both M=96 and M=192) turned out to be probe order, not tiling:
+// TestGEMMDtypeInterleaved alternates the arms and reads 68.9% there, in line with its neighbours.
+// Recording it as a candidate rather than a finding was the right call.
+//
+// That test also settles the f16-vs-f32 question this one could not: f16 wins by 1.30x at M=64,
+// 1.02x at M=128, and loses by 1.025x at M=512. The absolute levels here are depressed by the same
+// sequential-probe effect, so use this test for the SHAPE of the curve and that one for dtype
+// comparisons.
 //
 // Reported, not asserted; peaks and rates are this machine's.
 import (
