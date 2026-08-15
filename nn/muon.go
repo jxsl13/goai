@@ -140,26 +140,45 @@ func (mu *Muon) stepParam(pi int, p, g *tensor.Tensor) {
 	buf := mu.buf[pi]
 	// Typed FLAT access: for a 2-D contiguous tensor logical (r,c) is flat index i, so replace the
 	// per-element AtF64(Unravel(i))/SetF64 — a divmod + virtual dispatch each — with a direct
-	// []float64 read/write (PS1005). BIT-IDENTICAL: same values in the same order. g is read-only so
+	// typed-slice read/write (PS1005). BIT-IDENTICAL: same values in the same order. g is read-only so
 	// Contiguous() (a no-op for an already-flat grad) is safe; p is written in place only when it is
 	// directly flat-writable (contiguous + offset 0, detected by Contiguous() returning it unchanged).
-	gf := g.Contiguous().Storage().F64()
-	for i := range dir {
-		gv := gf[i]
-		buf[i] = beta*buf[i] + (1-beta)*gv // lerp momentum
-		if mu.Nesterov {
-			dir[i] = (1-beta)*gv + beta*buf[i]
-		} else {
-			dir[i] = buf[i]
+	//
+	// The typed path must be selected by DTYPE, not assumed. Storage.F64() panics on any other
+	// dtype, so an unconditional F64() here made Muon crash outright on F32 parameters — the dtype
+	// the accessors it replaced handled transparently. Each branch reproduces exactly what
+	// AtF64/SetF64 did for that dtype (widen on read, round on write), which is what keeps the
+	// substitution bit-identical; anything not directly typed falls back to those accessors.
+	gc := g.Contiguous()
+	switch gs := gc.Storage(); gs.Dtype() {
+	case tensor.F64:
+		gf := gs.F64()
+		for i := range dir {
+			mu.accum(dir, buf, i, gf[i], beta)
+		}
+	case tensor.F32:
+		gf := gs.F32()
+		for i := range dir {
+			mu.accum(dir, buf, i, float64(gf[i]), beta)
+		}
+	default:
+		for i := range dir {
+			mu.accum(dir, buf, i, gc.AtF64(tensor.Unravel(i, gc.Shape())...), beta)
 		}
 	}
 	o := newtonSchulz5(dir, R, C, mu.NSSteps)
 	scale := math.Sqrt(math.Max(1, float64(R)/float64(C)))
 	wd := 1 - mu.LR*mu.WeightDecay
-	if p.Contiguous() == p {
-		pf := p.Storage().F64()
+	if ps := p.Storage(); p.Contiguous() == p && ps.Dtype() == tensor.F64 {
+		pf := ps.F64()
 		for i := range o {
 			pf[i] = pf[i]*wd - mu.LR*scale*o[i] // decoupled wd + orthogonal step
+		}
+	} else if ps := p.Storage(); p.Contiguous() == p && ps.Dtype() == tensor.F32 {
+		pf := ps.F32()
+		for i := range o {
+			// float32(float64(x)*…) is precisely AtF64-then-SetF64 on F32 storage.
+			pf[i] = float32(float64(pf[i])*wd - mu.LR*scale*o[i])
 		}
 	} else {
 		for i := range o {
@@ -167,6 +186,19 @@ func (mu *Muon) stepParam(pi int, p, g *tensor.Tensor) {
 			pf := p.AtF64(idx...)
 			p.SetF64(pf*wd-mu.LR*scale*o[i], idx...)
 		}
+	}
+}
+
+// accum folds one gradient element into the momentum buffer and the search direction. It is a
+// function only so the dtype-specialized loops above share the arithmetic instead of holding
+// three copies of it; the dtype switch stays hoisted out of the loop, which is the whole point
+// of the typed paths.
+func (mu *Muon) accum(dir, buf []float64, i int, gv, beta float64) {
+	buf[i] = beta*buf[i] + (1-beta)*gv // lerp momentum
+	if mu.Nesterov {
+		dir[i] = (1-beta)*gv + beta*buf[i]
+	} else {
+		dir[i] = buf[i]
 	}
 }
 

@@ -329,3 +329,85 @@ func ExampleGPTDecoder_Step() {
 		dec.Ctx(), dec.Vocab(), len(logits), len(h)/cfg.Dim)
 	// Output: ctx=16 vocab=32 logits=32 hidden rows=2
 }
+
+// ExampleDecoder_StepNLast prefills a prompt but downloads only the final row's logits — the row
+// generation actually consumes. The transformer body still runs every prompt token, so the KV cache
+// is populated identically and the returned row equals StepN's last row; what is saved is the LM head
+// over the k-1 discarded rows and their download.
+func ExampleDecoder_StepNLast() {
+	if !metal.Available() {
+		fmt.Println("last-row logits: 48")
+		return
+	}
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 48, Ctx: 32, Dim: 64, Heads: 8, KVHeads: 2, Layers: 2,
+		Hidden: 176, Eps: 1e-5, RopeBase: 10000,
+	}, 42)
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.New(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 17, 9, 21}
+	last, err := dec.StepNLast(prompt, 0) // one row back instead of len(prompt)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("last-row logits: %d\n", len(last))
+	// Output: last-row logits: 48
+}
+
+// ExampleGPTDecoder_StepNLast is [Decoder.StepNLast] for the GPT-2 architecture: same prefill, same
+// single-row download.
+func ExampleGPTDecoder_StepNLast() {
+	if !metal.Available() {
+		fmt.Println("last-row logits: 32")
+		return
+	}
+	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 32, Heads: 4, Layers: 1, Eps: 1e-5}
+	w := func(shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = float32(i%13-6) * 0.03
+		}
+		return x
+	}
+	ones := func(n int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return x
+	}
+	m, err := nlp.FromSafetensors(cfg, map[string]*tensor.Tensor{
+		"tok_emb": w(cfg.Vocab, cfg.Dim), "pos_emb": w(cfg.Ctx, cfg.Dim),
+		"head": w(cfg.Dim, cfg.Vocab), "lnf.gamma": ones(cfg.Dim), "lnf.beta": w(cfg.Dim),
+		"blocks.0.ln1.gamma": ones(cfg.Dim), "blocks.0.ln1.beta": w(cfg.Dim),
+		"blocks.0.attn.wq": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wk": w(cfg.Dim, cfg.Dim),
+		"blocks.0.attn.wv": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wo": w(cfg.Dim, cfg.Dim),
+		"blocks.0.ln2.gamma": ones(cfg.Dim), "blocks.0.ln2.beta": w(cfg.Dim),
+		"blocks.0.ffn.w1": w(cfg.Dim, 4*cfg.Dim), "blocks.0.ffn.b1": w(4 * cfg.Dim),
+		"blocks.0.ffn.w2": w(4*cfg.Dim, cfg.Dim), "blocks.0.ffn.b2": w(cfg.Dim),
+	})
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.NewGPT(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	last, err := dec.StepNLast([]int{3, 7, 1}, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("last-row logits: %d\n", len(last))
+	// Output: last-row logits: 32
+}
