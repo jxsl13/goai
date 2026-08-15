@@ -821,11 +821,6 @@ option: Lower to 32 and re-freeze the digest - accept different but equally vali
 option: Lower only for classification, where the risk is smallest, and keep 512 for regression
 choice: Keep 512 - preserve the exact trees the frozen digest pins
 
-## R-01M01BXPQFFC488XMES2F14ZSF probe
-kind: research
-state: draft
-created: 2026-08-15
-
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
 kind: research
 state: draft
