@@ -2829,3 +2829,41 @@ Attempted, measured, reverted:
   prefill : pp64 0.336x — from 0.057x when the prefill work began
 
 Every remaining prefill lever is measured and bounded; what is left are two scoped projects (a quantized GEMM that avoids expansion, and a real flash-attention kernel), not further increments. Four consecutive reverts on micro-optimizations is itself the signal that the incremental phase is over.
+
+## R-01M027TY3PF68TS8ZQ0H6YQ24G The real projection sequence costs 245us/layer more than the fused-shape assumption — and GoAI's GEMM term alone already equals llama.cpp's entire layer
+kind: research
+state: draft
+created: 2026-08-15
+
+Measured the projection sequence the decoder actually issues instead of assuming fused shapes. It closes a quarter of the unaccounted time and reframes what the prefill gap is.
+
+## The correction
+
+The budget's GEMM term assumed four FUSED projections per layer. The decoder issues five or seven: 12 of 22 layers run qkv fused, the other 10 run q, k, v separately because attn_v is Q6_K there and qfused refuses mixed types, and gate/up are separate on EVERY layer.
+
+Measured at M=64: qkv 212.2us, q 169.7, k|v 120.6 each, o 170.7, gate 420.5 each, gate|up fused 686.3, down 601.4.
+
+  assumed (all fused)  1671 us/layer
+  weighted real        1916 us/layer     understated by 245 us
+
+Revised: GEMM 1.916 + expansion 0.990 + attention 0.159 + rest 0.055 = 3.12 ms against 3.79 measured. 18% unaccounted, down from 23%.
+
+## Two numbers worth carrying
+
+A k|v projection (N=256) costs 120.6us to do 67 MFLOP — 557 GFLOP/s. Launch- and occupancy-bound, not arithmetic-bound. Small projections cost out of all proportion to their work, which is the same effect the dispatch-size sweep found and is why splitting qkv on 10 layers hurts more than the FLOP count suggests.
+
+gate/up separate costs +155us/layer over fused. That is EXACTLY what the gate|up fusion would have saved in GEMM — and it still lost end to end. So the expansion-scratch penalty of fusing exceeds 155us/layer. Two independent measurements agreeing is a check on both, and it explains a result that had been recorded as merely puzzling.
+
+## What the gap actually is
+
+GoAI's GEMM term alone (1.70-1.92 ms/layer) is already about llama.cpp's ENTIRE layer (1.64 ms). MPS runs the multiply at 3311 GFLOP/s effective; llama.cpp's whole layer averages 3446 GFLOP/s. The multiply is not the difference.
+
+The difference is 1.66 ms/layer of work llama.cpp does not do at all: expansion 0.99 plus the remaining unaccounted 0.67. A quantized GEMM removes the first. The second is still unattributed after ruling out dependency-chain serialization (1.01x), weight cache reuse (1.00x), every individual op measured, and now the projection-sequence understatement.
+
+## Position
+
+  decode  : tg64 ~1.017x — parity, and both implementations are bandwidth-bound at ~92% of the
+            memory roofline, so parity here is the hardware ceiling rather than a stopping short
+  prefill : pp64 0.336x — compute-bound, and the gap is entirely in work that is not the multiply
+
+That distinction matters for what "leading" can mean: decode has no headroom left on this hardware for either implementation, while prefill has 3x and it is all overhead.
