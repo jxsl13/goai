@@ -20,6 +20,18 @@ package metal
 // register blocking per simdgroup, async threadgroup copies, and tile sizes tuned per shape — and
 // then it still has to clear MPS rather than merely reach it.
 //
+// TWO STANDARD LEVERS TRIED, BOTH FAILED TO CLOSE IT:
+//
+//  1. K-chunk size. BK=16/32/64 measured 1850.8 / 1855.0 / 1904.0 GFLOP/s — a 3% spread, so the
+//     barrier count per K element is not the constraint. (Absolute figures below those in the table
+//     because making BK settable forced a fixed 16 KB threadgroup allocation.)
+//  2. Register blocking, the textbook fix for the load:compute ratio. Giving each simdgroup a 32x32
+//     patch turns 8 matrix ops from 16 fragment loads into 16 from 8 — and measured 1166.8 GFLOP/s
+//     against the baseline's 1850.8, i.e. 0.63x. It halves simdgroups per threadgroup from 8 to 4,
+//     and 16 accumulators plus 8 fragments per lane is enough register pressure to lose more to
+//     occupancy than the better ratio wins. The same inversion the attention kernels showed, where
+//     the variants that "improve" occupancy do it by spilling.
+//
 // So "beat MPS" is not a near-term option, and that is now measured rather than assumed. The kernel
 // is kept, unused by the model path and reachable only through ProbeSGGemm, because a future attempt
 // should start from a known 0.39-0.49x baseline instead of from scratch.
