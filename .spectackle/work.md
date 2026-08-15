@@ -2648,3 +2648,47 @@ Expected: one 2048x2560 GEMM (279.6us measured) in place of q 2048x2048 (200.3us
   prefill : pp64 0.336x
 
 Budget per layer: expansion 0.99, GEMM 1.70, attention 0.159, everything else 0.055, measured 3.79 — with the 0.89 remainder now attributed to the two extra projections and the small-N GEMM penalty rather than to any modelled effect.
+
+## R-01M026KP5BE6FSMP8K5BWG056R gate|up fusion implemented for Metal and REVERTED: consistently slower on prefill because it doubles the expansion scratch, despite standalone GEMM numbers predicting a win
+kind: research
+state: draft
+created: 2026-08-15
+
+Traced the extra projections to their exact cause, implemented the fix, measured it, and reverted it. The fusion does not pay on this backend.
+
+## Where the 5.95 projections/layer come from
+
+qfused bails on MIXED quant types:
+
+  if q1.QT != q2.QT || q2.QT != q3.QT { return nil }   // -> unfused three-matmul chain
+
+TinyLlama Q4_K_M has attn_v in Q6_K on 10 of 22 layers while attn_q/attn_k are Q4_K, so those 10 layers keep three separate projections. And qfused2 (gate|up) requires ops.fusedGateUp, which was CUDA-only.
+
+The dispatch count settles it exactly:
+
+  12 fused qkv + 10x3 unfused + 22 o + 44 gate/up + 22 down + 1 logits = 131   (measured 131)
+  with gate|up fused it would be 109
+
+So my earlier inference — "q, k, v are separate" — was half right: they are separate on 10 layers, and gate/up are separate on ALL of them.
+
+## What was built
+
+swiglu_halves for Metal (out[r,i] = silu(gu[r,i]) * gu[r,hidden+i]) plus the recorder method, enabling ops.fusedGateUp and routing the FFN through the single N=2*hidden projection.
+
+## Why it was reverted
+
+  unfused  pp 724.5 / 720.9   fused  pp 701.1 / 716.1
+  unfused  tg 109.0 / 109.0   fused  tg 110.7 / 111.0
+
+Prefill — the target — is consistently SLOWER fused. Decode is marginally faster, within noise. One generated token also differs, which is expected but not free: the fused N=11264 GEMM and two N=5632 GEMMs sum in different orders, and that can flip a greedy argmax on a near-tie.
+
+The likely reason it loses: the expansion scratch. Fused needs one 92 MB expanded weight where unfused needs 46 MB twice. Same total bytes, but double the peak working set, and at these sizes that costs more than the GEMM shape gains. The standalone GEMM numbers that predicted a 231us/layer win (667us fused vs 2x449us) do not include the expansion, and expansion is now the dominant term in that path.
+
+That is a specific instance of a general trap this session has hit repeatedly: a component measurement predicts a win that the system does not deliver, because the component was measured without the context that dominates it.
+
+## Standing, unchanged
+
+  decode  : tg64 1.017x — parity
+  prefill : pp64 0.336x
+
+The two extra-projection sources are now identified precisely. Fusing gate|up is measured and rejected. Fusing qkv on the 10 mixed-type layers would require expanding Q4_K and Q6_K into one buffer — the concatenation trick does not apply across quant types — which is a materially bigger change than qfused's byte append, and on this evidence would likely lose for the same scratch-size reason.
