@@ -3623,3 +3623,30 @@ THE DEV-BOX / RUNNER SPLIT. Timing assertions calibrated on this M2 do not merel
 NOT ADDRESSED, deliberately: nlp TestDiffusionLMGrammarE2E trains a model end to end and 1-ulp differences compound into different generated text on amd64. It is already -short-skipped so CI never runs it; freezing an arch-specific expectation for a trained model is a separate decision.
 
 VERIFICATION. main is green on every lane for the first time with CI actually running tests. The per-arch goldens are mutation-verified on BOTH arches: swapping the k and k+1 accumulation order in vjp_qr.go - same math, different summation order, exactly what these guards exist to catch - turns 4 of 5 QR cases red on each, the 5th being the shape where the jammed loop never runs.
+
+## R-01M05FYDNDE43VZF2FPEZFC2QG SVC RBF fit is Amdahl-capped at 1.35x, not kernel-bound: 74% serial; pool and specialization both measured flat
+kind: research
+state: draft
+created: 2026-08-16
+
+CORRECTION plus a decisive ceiling. The analysis standing in classic/svm.go concluded the solver was negligible and the remaining gap to libsvm was per-core kernel throughput. Both halves are wrong, and the error was assuming the kernel column count rather than counting it.
+
+MEASURED by instrumenting the fit (4000x20 scorecard shape):
+                        recorded        actual
+  kernel columns        ~156            44      (the cache hits far more than assumed)
+  kernel evaluations    ~624k           176k
+  scan index visits     ~312k           632k
+The O(n) working-set scans OUTNUMBER kernel evaluations 3.6 to 1. They were dismissed as negligible on the bad numbers, and shrinking was rejected on that basis.
+
+THE CEILING, and it is the actionable part. Only the kernel column is parallelised; both working-set scans and the gradient update are serial. Measured this session, best-of-3 at each setting: GOMAXPROCS=1 6.82 ms, 2 cores 5.38 ms, 4 cores 5.56 ms, 12 cores 5.19 ms. That 1.31x puts the parallelised fraction at 26.1%, so a 73.9% serial remainder caps this design at 1.35x with INFINITE cores. It is already at its ceiling — adding cores or cheapening the fan-out cannot move it.
+
+TWO OPTIMISATIONS MEASURED AND REJECTED, both predicted by that ceiling:
+  - persistent worker pool (internal/parallel.Rows) instead of per-column goroutine spawning: 1.01x at n=4000, 1.04x at n=1000
+  - RBF specialised per column, hoisting the per-pair cfg.kernel switch out of 176k calls: 0.99x / 1.02x
+Both interleaved in one binary, arms alternating, first sample of each burst discarded, medians compared.
+
+A METHOD WARNING worth keeping. The pool attempt was motivated by a CPU profile reading 45% pthread_cond_wait and 40% pthread_cond_signal, which looked like fan-out overhead dominating. It was idle workers parked on the barrier. A profile of a partly-serial parallel program shows the WAITING, and the waiting is not where the time goes; the Amdahl fit from a core sweep is the honest measurement and it disagreed with the profile.
+
+WHERE THE WIN IS. The serial 74%: parallelise the two working-set scans (argmin/max reduction; tie-breaking must reproduce the serial <= exactly to stay bit-identical) and the gradient update (embarrassingly parallel, one write per index). Independently, scikit-learn's libsvm is SINGLE-THREADED at 3.54 ms against our 6.82 ms serial, so ~1.9x per-core remains on top. Either alone is insufficient to take the 1.72x deficit.
+
+SCORECARD, in-session, sklearn 1.9.0 / numpy 2.5.2, 4000x20, best-of-5 fit. GoAI leads GradientBoosting100 16.5x (79.16 vs 1309.97 ms), RandomForest100 14.3x (20.05 vs 287.55, and 4.9x against sklearn n_jobs=-1 at 97.70), DecisionTree 6.3x (2.35 vs 14.81), GaussianNB 2.0x (0.35 vs 0.71). SVC_rbf is the one genuine loss at 6.08 vs 3.54 ms. KNN_fit 4.17 vs 0.30 ms remains a fit-only artifact: GoAI eager-builds the ball tree where sklearn defers it to predict.
