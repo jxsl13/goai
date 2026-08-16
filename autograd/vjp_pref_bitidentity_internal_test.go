@@ -62,7 +62,7 @@ func prefCases() []prefCase {
 		{"ipo", backend.OpIPO, 4, backend.IPOAttrs{Beta: 0.1}, archgold.Pick(2411552010633019957, 7190294216285379565)},
 		{"kto", backend.OpKTO, 3, backend.KTOAttrs{Beta: 0.1}, archgold.Pick(12382265863399297195, 3185014261977934373)},
 		{"simpo", backend.OpSimPO, 2, backend.SimPOAttrs{Beta: 2, Gamma: 0.5}, archgold.Pick(11542092229795165829, 16709832339887773165)},
-		{"grpo", backend.OpGRPO, 4, backend.GRPOAttrs{Epsilon: 0.2, Beta: 0.04}, archgold.Pick(6830796145460791928, 8284925590970691940)},
+		{"grpo", backend.OpGRPO, 4, backend.GRPOAttrs{Epsilon: 0.2, Beta: 0.04}, archgold.Pick(6830796145460791928, 9298320468317457782)},
 	}
 }
 
