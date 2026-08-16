@@ -50,22 +50,6 @@ Benchmark harness already exists at internal/benchcompare/vision_train_test.go.
 
 Migrated from cavekit SPEC.md T908.
 
-## T-01KYJNDTK2E8A9BK9SGAZ4VKYS Hoist per-layer Attrs boxing across the remaining decode models
-kind: task
-state: approved
-created: 2026-07-27
-targets: nlp
-
-Class-audit sweep in nlp. A per-layer decode closure builds a backend.RoPEAttrs or backend.AttnAttrs struct literal and boxes it into the Attrs interface inside the loop, although the fields are layer-invariant.
-
-Apply the same mechanical, provably bit-identical hoist already done for one model to the remaining decode models: cohere, falcon, gemma, gemma2, cla, blt and their siblings. Find the sites by searching nlp/*decode*.go for a dispatch call passing a backend.RoPEAttrs or backend.AttnAttrs literal.
-
-Measure per model or as a batch, with a same-session A/B and bit-identity verification before shipping.
-
-Coordination: re-check for a scope collision per file before editing, as a parallel worker is active in the mamba2 and quantized-mamba2 files.
-
-Migrated from cavekit SPEC.md T956.
-
 ## ADR-01KYJNF428F8Q9RQTABB1ZSVPC What is the agent commit and push authority on this repo?
 kind: adr
 state: submitted
