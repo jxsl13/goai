@@ -487,3 +487,8 @@ Rationale: Two false results in one session. (1) A 1.59x small-n win was a cold 
 WHEN a guard compares two code paths selected by toggles, the loop SHALL assert the arms DIFFER at the shape where the recorded gap is widest, since an interception upstream of both toggles makes it a path against itself; TestQ4KMatrixUnitHasNoCrossover read 1.00x where its table records 0.36x.
 
 Rationale: The f16 short-prompt path is checked first in the resident dispatch and, with the weight cache on, its M cap becomes 1<<20, so it served BOTH arms. The test failed only on thermal noise while reporting a crossover conclusion about a comparison that never ran. A majority-of-shapes vacuity rule did NOT catch it: one shape cleared 2 percent on noise alone, so anchor to the widest shape.
+
+## FP-GOLDENS-ARE-PER-ARCH-001
+WHEN a test freezes a golden digest of floating-point output, the loop SHALL key that golden on runtime.GOARCH via internal/archgold and never build the fixture from math.Sin, math.Cos or any transcendental.
+
+Rationale: Two independent causes make one constant unportable: math.Sin/Cos differ by 1 ulp across GOARCH (41 of 2048 swept values; math.Cos(84) ends e523 on arm64, e522 on amd64), and arm64 fuses a*b+c where amd64 v1 does not. With exact dyadic fixtures the only shape still matching was the one where the unrolled loop never ran, proving contraction is a second cause.
