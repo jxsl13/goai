@@ -90,6 +90,9 @@ func (m mRec) Unary(x, o buffer, op int) error { return m.r.Unary(mb(x), mb(o), 
 func (m mRec) Binary(a, b, o buffer, op int) error {
 	return m.r.Binary(mb(a), mb(b), mb(o), op)
 }
+func (m mRec) BinaryN(a, b, o buffer, op, n int) error {
+	return m.r.BinaryN(mb(a), mb(b), mb(o), op, n)
+}
 func (m mRec) QMatMulResident(x buffer, w qweight, o buffer, mm int) error {
 	return m.r.QMatMulResident(mb(x), w.(*metal.ResidentQWeight), mb(o), mm)
 }

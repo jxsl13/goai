@@ -5,6 +5,7 @@
 // size-classed pool (§T336, Apple Silicon UMA makes them host-visible;
 // newBufferWithBytesNoCopy zero-copy is a later opt).
 #import <Foundation/Foundation.h>
+#include <sys/sysctl.h>
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
@@ -144,13 +145,21 @@ static NSString* const kRMSNormSource =
      "  int rows=P[0], dim=P[1];\n"
      "  if ((int)row >= rows) return;\n"
      "  int base=(int)row*dim;\n"
-     "  threadgroup float red[256];\n"
+     "  threadgroup float red[32];\n"
      "  float part=0.0f;\n"
      "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ float v=X[base+j]; part+=v*v; }\n"
-     "  red[lane]=part;\n"
+     "  // The tree reduction this replaces ran a threadgroup_barrier on EVERY level — eight of them\n"
+     "  // for a 256-thread group. At decode (one row, 2048 wide) that barrier latency was the whole\n"
+     "  // kernel: 14.96us to move 8 KB, ~0.5 GB/s. simd_sum reduces inside a simdgroup with no\n"
+     "  // barrier at all, leaving ONE barrier to publish the per-simdgroup partials; every thread\n"
+     "  // then sums those few values itself, which is cheaper than a second barrier to broadcast.\n"
+     "  part = simd_sum(part);\n"
+     "  uint nsg = (tgsize + 31u) / 32u;\n"
+     "  if ((lane & 31u) == 0u) red[lane >> 5] = part;\n"
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
-     "  for (uint s=tgsize/2; s>0; s>>=1){ if(lane<s) red[lane]+=red[lane+s]; threadgroup_barrier(mem_flags::mem_threadgroup); }\n"
-     "  float inv=rsqrt(red[0]/float(dim)+E[0]);\n"
+     "  float tot = 0.0f;\n"
+     "  for (uint i = 0u; i < nsg; i++) tot += red[i];\n"
+     "  float inv=rsqrt(tot/float(dim)+E[0]);\n"
      "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ O[base+j]=X[base+j]*inv*G[j]; }\n"
      "}\n";
 
@@ -296,17 +305,14 @@ int mtl_recorder_rope2(void* rec, void* qh, void* invh,
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     int P[9] = {seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float F[1] = {posDiv};
-    id<MTLBuffer> fb = [gDevice newBufferWithBytes:F length:sizeof(F) options:MTLResourceStorageModeShared];
-    if (pb == nil || fb == nil) return -2;
     int total = seq * (headsQ + headsK) * half;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRoPE2];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
-    [enc setBuffer:pb offset:0 atIndex:2];
-    [enc setBuffer:fb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    [enc setBytes:F length:sizeof(F) atIndex:3];
     NSUInteger tg = gRoPE2.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -340,8 +346,8 @@ int mtl_rope_f32(const float* Q, const float* inv, float* O,
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:ib offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
-        [enc setBuffer:fb offset:0 atIndex:4];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
+        [enc setBytes:F length:sizeof(F) atIndex:4];
         NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
         [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
@@ -411,7 +417,7 @@ int mtl_softmax_f32(const float* X, float* O, int rows, int dim) {
         id<MTLBuffer> ob = pool_buf(len);
         int P[2] = {rows, dim};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -483,8 +489,7 @@ int mtl_crossentropy_f32(const float* Z, const float* T, float* L, int b, int c)
         id<MTLBuffer> tb = [gDevice newBufferWithBytes:T length:(size_t)b*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> lb = [gDevice newBufferWithLength:(size_t)b*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {b, c};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (zb == nil || tb == nil || lb == nil || pb == nil) return -2;
+        if (zb == nil || tb == nil || lb == nil) return -2;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
@@ -492,7 +497,7 @@ int mtl_crossentropy_f32(const float* Z, const float* T, float* L, int b, int c)
         [enc setBuffer:zb offset:0 atIndex:0];
         [enc setBuffer:tb offset:0 atIndex:1];
         [enc setBuffer:lb offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
         [enc dispatchThreadgroups:MTLSizeMake(b,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
         [enc endEncoding];
         [cmd commit];
@@ -542,8 +547,7 @@ int mtl_embed_f32(const float* Table, const float* Idx, float* O, int n, int m, 
         id<MTLBuffer> ib = [gDevice newBufferWithBytes:Idx length:(size_t)m*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> ob = [gDevice newBufferWithLength:(size_t)m*d*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {m, d};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (tb == nil || ib == nil || ob == nil || pb == nil) return -2;
+        if (tb == nil || ib == nil || ob == nil) return -2;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
@@ -551,7 +555,7 @@ int mtl_embed_f32(const float* Table, const float* Idx, float* O, int n, int m, 
         [enc setBuffer:tb offset:0 atIndex:0];
         [enc setBuffer:ib offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
-        [enc setBuffer:pb offset:0 atIndex:3];
+        [enc setBytes:P length:sizeof(P) atIndex:3];
         int total = m*d;
         NSUInteger tg = gEmbed.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -969,7 +973,7 @@ int mtl_unary_f32(const float* X, float* O, int n, int op) {
         id<MTLBuffer> ob = pool_buf(len);
         int P[2] = {n, op};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -1828,8 +1832,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
         id<MTLBuffer> xb = [gDevice newBufferWithLength:n*sizeof(float) options:MTLResourceStorageModeShared];
         id<MTLBuffer> ob = [gDevice newBufferWithLength:n*sizeof(float) options:MTLResourceStorageModeShared];
         int P[2] = {n, 4}; // op 4 = ReLU (trivial)
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
         if (oneBuffer) {
             id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
             for (int i = 0; i < iters; ++i) {
@@ -1837,7 +1840,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
                 [enc setComputePipelineState:gUnary];
                 [enc setBuffer:xb offset:0 atIndex:0];
                 [enc setBuffer:ob offset:0 atIndex:1];
-                [enc setBuffer:pb offset:0 atIndex:2];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
                 [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(n,1,1)];
                 [enc endEncoding];
             }
@@ -1850,7 +1853,7 @@ int mtl_batch_dispatch_bench(int iters, int oneBuffer) {
                 [enc setComputePipelineState:gUnary];
                 [enc setBuffer:xb offset:0 atIndex:0];
                 [enc setBuffer:ob offset:0 atIndex:1];
-                [enc setBuffer:pb offset:0 atIndex:2];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
                 [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(n,1,1)];
                 [enc endEncoding];
                 [cmd commit];
@@ -1884,13 +1887,11 @@ int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gUnary];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
-    [enc setBuffer:pb offset:0 atIndex:2];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
     NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -1949,14 +1950,15 @@ int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) 
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gBinary];
     [enc setBuffer:ab offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    // setBytes inlines small constants into the command buffer. newBufferWithBytes allocated a
+    // fresh MTLBuffer per dispatch just to carry two ints — a driver allocation on the HOST
+    // encode path, paid ~330x per decoded token.
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     NSUInteger tg = gBinary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -1990,6 +1992,288 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     return 0;
 }
 
+// mtl_probe_gemm_cold times an MPS GEMM with ROTATING weight buffers, so no weight stays
+// cache-resident between iterations — the regime a real forward pass runs in, where 154 distinct
+// weights stream past. The single-buffer probe above is warm and reports substantially higher
+// rates; comparing dtypes there can invert the answer, since the format that reads fewer bytes only
+// shows its advantage once the reads actually reach memory.
+double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf) {
+    if (ensure_init() != 0) return -1.0;
+    if (nbuf < 2) nbuf = 2;
+    if (nbuf > 16) nbuf = 16;
+    @autoreleasepool {
+        size_t es = f16 ? sizeof(uint16_t) : sizeof(float);
+        MPSDataType dt = f16 ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
+        id<MTLBuffer> aBuf = [gDevice newBufferWithLength:(size_t)M*K*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> cBuf = [gDevice newBufferWithLength:(size_t)M*N*es options:MTLResourceStorageModePrivate];
+        NSMutableArray* ws = [NSMutableArray array];
+        for (int i = 0; i < nbuf; i++) {
+            id<MTLBuffer> b = [gDevice newBufferWithLength:(size_t)K*N*es options:MTLResourceStorageModePrivate];
+            if (b == nil) return -2.0;
+            [ws addObject:b];
+        }
+        if (aBuf == nil || cBuf == nil) return -2.0;
+        MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:dt];
+        MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+        MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+            initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+            resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+        double best = 1e18;
+        for (int t = 0; t < 7; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -3.0;
+            for (int i = 0; i < nbuf; i++) {
+                MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:ws[i] descriptor:bDesc];
+                [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -4.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)nbuf;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
+// A straightforward tiled simdgroup GEMM, written to PRICE the "hand-write a GEMM to beat MPS"
+// question rather than to ship. 64x64 output tile per threadgroup, 8 simdgroups of 32 threads, K
+// walked in 16-wide chunks staged through threadgroup memory. f16 in, f32 accumulate.
+//
+// This is the textbook shape — if it lands far below MPS the direction is closed cheaply; if it
+// lands close, tuning it further is worth a real attempt.
+static NSString* const kSGGemmSource =
+    @"#include <metal_stdlib>\n"
+     "#include <metal_simdgroup_matrix>\n"
+     "using namespace metal;\n"
+     "kernel void sg_gemm_f16(device const half* A [[buffer(0)]],\n"
+     "                        device const half* B [[buffer(1)]],\n"
+     "                        device float* C [[buffer(2)]],\n"
+     "                        constant int* P [[buffer(3)]],\n"
+     "                        uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                        ushort tid [[thread_index_in_threadgroup]],\n"
+     "                        ushort sg [[simdgroup_index_in_threadgroup]]) {\n"
+     "  const int BM=64, BN=32, BK=16;\n"
+     "  int M=P[0], K=P[1], N=P[2];\n"
+     "  int n0=(int)tg.x*BN, m0=(int)tg.y*BM;\n"
+     "  threadgroup half sA[BM*BK];\n"
+     "  threadgroup half sB[BK*BN];\n"
+     "  simdgroup_float8x8 acc[4];\n"
+     "  for (short j=0;j<4;j++) acc[j]=make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  for (int k0=0; k0<K; k0+=BK){\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int idx=(int)tid; idx<BM*BK; idx+=256){\n"
+     "      int m=idx/BK, kk=idx%BK;\n"
+     "      sA[idx] = (m0+m<M && k0+kk<K) ? A[(m0+m)*K + k0+kk] : (half)0.0h;\n"
+     "    }\n"
+     "    for (int idx=(int)tid; idx<BK*BN; idx+=256){\n"
+     "      int kk=idx/BN, n=idx%BN;\n"
+     "      sB[idx] = (k0+kk<K && n0+n<N) ? B[(k0+kk)*N + n0+n] : (half)0.0h;\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int kk=0; kk<BK; kk+=8){\n"
+     "      simdgroup_half8x8 a;\n"
+     "      simdgroup_load(a, sA + (int)sg*8*BK + kk, BK);\n"
+     "      for (short j=0;j<4;j++){\n"
+     "        simdgroup_half8x8 b;\n"
+     "        simdgroup_load(b, sB + kk*BN + j*8, BN);\n"
+     "        simdgroup_multiply_accumulate(acc[j], a, b, acc[j]);\n"
+     "      }\n"
+     "    }\n"
+     "  }\n"
+     "  threadgroup float sC[BM*BN];\n"
+     "  for (short j=0;j<4;j++) simdgroup_store(acc[j], sC + (int)sg*8*BN + j*8, BN);\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int idx=(int)tid; idx<BM*BN; idx+=256){\n"
+     "    int m=idx/BN, n=idx%BN;\n"
+     "    if (m0+m<M && n0+n<N) C[(m0+m)*N + n0+n] = sC[idx];\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gSGGemm = nil;
+
+// mtl_probe_sg_gemm times the hand-written GEMM at [M,K]x[K,N] and returns best GPU seconds.
+double mtl_probe_sg_gemm(int M, int K, int N, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (gSGGemm == nil) {
+        NSError* err = nil;
+        id<MTLLibrary> lib = [gDevice newLibraryWithSource:kSGGemmSource options:nil error:&err];
+        if (lib == nil) { fprintf(stderr, "metal: sg_gemm build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -2.0; }
+        id<MTLFunction> fn = [lib newFunctionWithName:@"sg_gemm_f16"];
+        if (fn == nil) return -3.0;
+        gSGGemm = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+        if (gSGGemm == nil) return -4.0;
+    }
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        id<MTLBuffer> a = [gDevice newBufferWithLength:(size_t)M*K*2 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> b = [gDevice newBufferWithLength:(size_t)K*N*2 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> c = [gDevice newBufferWithLength:(size_t)M*N*4 options:MTLResourceStorageModePrivate];
+        if (a == nil || b == nil || c == nil) return -5.0;
+        int P[3] = {M, K, N};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            for (int i = 0; i < reps; i++) {
+                id<MTLComputeCommandEncoder> e = [cmd computeCommandEncoder];
+                [e setComputePipelineState:gSGGemm];
+                [e setBuffer:a offset:0 atIndex:0];
+                [e setBuffer:b offset:0 atIndex:1];
+                [e setBuffer:c offset:0 atIndex:2];
+                [e setBytes:P length:sizeof(P) atIndex:3];
+                [e dispatchThreadgroups:MTLSizeMake((N+31)/32, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+                [e endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -6.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
+// mtl_check_sg_gemm runs the hand-written GEMM on caller-supplied f32 data (converted to f16 on the
+// way in) and returns the f32 result, so its correctness can be checked against a reference. The
+// timing probe uses uninitialised private buffers and would happily report a fast wrong kernel.
+int mtl_check_sg_gemm(const float* A, const float* B, float* C, int M, int K, int N) {
+    if (ensure_init() != 0) return -1;
+    if (mtl_probe_sg_gemm(8, 8, 8, 1) < 0) return -2;   // forces pipeline build
+    @autoreleasepool {
+        uint16_t* ah = (uint16_t*)malloc((size_t)M*K*2);
+        uint16_t* bh = (uint16_t*)malloc((size_t)K*N*2);
+        if (ah == NULL || bh == NULL) { free(ah); free(bh); return -3; }
+        for (int i = 0; i < M*K; i++) { __fp16 v = (__fp16)A[i]; memcpy(&ah[i], &v, 2); }
+        for (int i = 0; i < K*N; i++) { __fp16 v = (__fp16)B[i]; memcpy(&bh[i], &v, 2); }
+        id<MTLBuffer> a = [gDevice newBufferWithBytes:ah length:(size_t)M*K*2 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> b = [gDevice newBufferWithBytes:bh length:(size_t)K*N*2 options:MTLResourceStorageModeShared];
+        id<MTLBuffer> c = [gDevice newBufferWithLength:(size_t)M*N*4 options:MTLResourceStorageModeShared];
+        free(ah); free(bh);
+        if (a == nil || b == nil || c == nil) return -4;
+        int P[3] = {M, K, N};
+        id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+        id<MTLComputeCommandEncoder> e = [cmd computeCommandEncoder];
+        [e setComputePipelineState:gSGGemm];
+        [e setBuffer:a offset:0 atIndex:0];
+        [e setBuffer:b offset:0 atIndex:1];
+        [e setBuffer:c offset:0 atIndex:2];
+        [e setBytes:P length:sizeof(P) atIndex:3];
+        [e dispatchThreadgroups:MTLSizeMake((N+31)/32, (M+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+        [e endEncoding];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -5;
+        memcpy(C, [c contents], (size_t)M*N*4);
+        return 0;
+    }
+}
+
+// mtl_probe_read_bw times a pure streaming read over `bytes` of device memory with the same
+// threadgroup shape the cooperative quantized matmul uses, and returns the best GPU seconds. It does
+// no dequantization, so comparing it against the real kernel separates "we are at the memory
+// ceiling" from "we are limited by the dequant ALU". Returns <0 on failure.
+static NSString* const kReadBWSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void read_bw(device const uint4* W [[buffer(0)]],\n"
+     "                    device uint* O [[buffer(1)]],\n"
+     "                    constant int* P [[buffer(2)]],\n"
+     "                    uint tg [[threadgroup_position_in_grid]],\n"
+     "                    ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int n4=P[0], per=P[1];\n"
+     "  uint4 acc=uint4(0);\n"
+     "  int base=(int)tg*per;\n"
+     "  for (int i=(int)t; i<per; i+=64){ int j=base+i; if (j<n4) acc^=W[j]; }\n"
+     "  if ((acc.x|acc.y|acc.z|acc.w)==0xFFFFFFFFu) O[tg]=1;\n"
+     "}\n";
+static id<MTLComputePipelineState> gReadBW = nil;
+double mtl_probe_read_bw(double bytes, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        if (gReadBW == nil) {
+            NSError* err = nil;
+            id<MTLLibrary> lib = [gDevice newLibraryWithSource:kReadBWSource options:nil error:&err];
+            if (lib == nil) { fprintf(stderr, "metal: read_bw build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -2.0; }
+            id<MTLFunction> fn = [lib newFunctionWithName:@"read_bw"];
+            if (fn == nil) return -3.0;
+            gReadBW = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+            if (gReadBW == nil) return -4.0;
+        }
+        size_t nb = (size_t)bytes;
+        id<MTLBuffer> wBuf = [gDevice newBufferWithLength:nb options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> oBuf = [gDevice newBufferWithLength:65536 options:MTLResourceStorageModePrivate];
+        if (wBuf == nil || oBuf == nil) return -5.0;
+        int n4 = (int)(nb / 16);
+        int groups = 1408;                 // same threadgroup count the N=5632 coop dispatch uses
+        int per = (n4 + groups - 1) / groups;
+        int P[2] = {n4, per};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            for (int i = 0; i < reps; i++) {
+                id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+                [enc setComputePipelineState:gReadBW];
+                [enc setBuffer:wBuf offset:0 atIndex:0];
+                [enc setBuffer:oBuf offset:0 atIndex:1];
+                [enc setBytes:P length:sizeof(P) atIndex:2];
+                [enc dispatchThreadgroups:MTLSizeMake(groups,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+                [enc endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -6.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
+// mtl_probe_gemm_dtype times an MPS GEMM [M,K]x[K,N] in f16 or f32 and returns the best
+// per-GEMM GPU seconds. Self-contained (allocates its own private buffers, contents irrelevant to
+// timing) so the f16 question can be answered before any of the f16 dequant/convert plumbing is
+// built. Returns <0 on failure.
+double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        size_t es = f16 ? sizeof(uint16_t) : sizeof(float);
+        MPSDataType dt = f16 ? MPSDataTypeFloat16 : MPSDataTypeFloat32;
+        id<MTLBuffer> aBuf = [gDevice newBufferWithLength:(size_t)M*K*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> bBuf = [gDevice newBufferWithLength:(size_t)K*N*es options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> cBuf = [gDevice newBufferWithLength:(size_t)M*N*es options:MTLResourceStorageModePrivate];
+        if (aBuf == nil || bBuf == nil || cBuf == nil) return -2.0;
+        MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:dt];
+        MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:dt];
+        MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+        MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
+        MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+        MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+            initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+            resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -3.0;
+            for (int i = 0; i < reps; i++) {
+                [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -4.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 // mtl_recorder_rmsnorm encodes O = rmsnorm(X)·gamma over device buffers xh (rows×dim),
 // gh (dim gamma weights), oh (rows×dim) into the recorder's command buffer. Cooperative
 // kernel: one 256-thread threadgroup per row (§T345). No commit.
@@ -2001,17 +2285,14 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
     id<MTLBuffer> gb = (__bridge id<MTLBuffer>)gh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float E[1] = {eps};
-    id<MTLBuffer> eb = [gDevice newBufferWithBytes:E length:sizeof(E) options:MTLResourceStorageModeShared];
-    if (pb == nil || eb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRMSNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
-    [enc setBuffer:eb offset:0 atIndex:4];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
+    [enc setBytes:E length:sizeof(E) atIndex:4];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     [enc endEncoding];
     return 0;
@@ -2029,18 +2310,15 @@ int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, in
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float E[1] = {eps};
-    id<MTLBuffer> eb = [gDevice newBufferWithBytes:E length:sizeof(E) options:MTLResourceStorageModeShared];
-    if (pb == nil || eb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gLayerNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
     [enc setBuffer:bb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:eb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:E length:sizeof(E) atIndex:5];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
     [enc endEncoding];
     return 0;
@@ -2057,14 +2335,12 @@ int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int 
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, n};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gAddBias];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     int total = rows * n;
     NSUInteger tg = gAddBias.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -2086,10 +2362,7 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, width, heads, hd, half, posOffset};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
     float F[1] = {posDiv};
-    id<MTLBuffer> fb = [gDevice newBufferWithBytes:F length:sizeof(F) options:MTLResourceStorageModeShared];
-    if (pb == nil || fb == nil) return -2;
     int total = seq * heads * half;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:gRoPE];
@@ -2098,8 +2371,8 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     [enc setBuffer:qb offset:(NSUInteger)elemOff*4 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
     [enc setBuffer:ob offset:(NSUInteger)elemOff*4 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
-    [enc setBuffer:fb offset:0 atIndex:4];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
+    [enc setBytes:F length:sizeof(F) atIndex:4];
     NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -2107,11 +2380,16 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     return 0;
 }
 
+static double gLastGPUSeconds = 0.0;
+
 int mtl_recorder_finish(void* rec) {
     if (rec == NULL) return -2;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     [cmd commit];
     [cmd waitUntilCompleted];
+    // Same GPU-time capture as mtl_recorder_wait. Prefill submits through THIS entry point, not
+    // commit+wait, so without this LastGPUSeconds silently reports 0 for every prefill.
+    gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
     return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
 }
 
@@ -2125,10 +2403,13 @@ int mtl_recorder_commit(void* rec) {
 }
 
 // mtl_recorder_wait blocks until a mtl_recorder_commit'ed buffer completes.
+double mtl_last_gpu_seconds(void) { return gLastGPUSeconds; }
+
 int mtl_recorder_wait(void* rec) {
     if (rec == NULL) return -2;
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     [cmd waitUntilCompleted];
+    gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
     return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
 }
 
@@ -2165,7 +2446,6 @@ int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int
 
         int total = M*N;
         int P[2] = {total, 4}; // op 4 = ReLU
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2177,7 +2457,7 @@ int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int
         [enc setComputePipelineState:gUnary];
         [enc setBuffer:cBuf offset:0 atIndex:0];
         [enc setBuffer:cBuf offset:0 atIndex:1];
-        [enc setBuffer:pb offset:0 atIndex:2];
+        [enc setBytes:P length:sizeof(P) atIndex:2];
         NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
         [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
@@ -2256,7 +2536,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
         id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
         int P[3] = {M, K, N};
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
-        if (xb == nil || ob == nil || pb == nil) return -2;
+        if (xb == nil || ob == nil) return -2;
 
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -2289,6 +2569,848 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 // (mtl_qweight_upload). Marries the §T156 resident qweights with the ADR-0019 batched decode so a
 // quantized model's decode step can run as ONE command buffer. Same qtype codes as
 // mtl_qmatmul_resident. No commit.
+static NSString* const kDequantQ4KSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Dequantize a resident Q4_K weight [N][K] into a dense f32 [K][N] buffer — the operand order MPS\n"
+     "// GEMM wants for C[M,N] = A[M,K] * B[K,N].\n"
+     "//\n"
+     "// The transpose is staged through threadgroup memory. Writing Out[(k0+l)*N+n] directly from the\n"
+     "// thread that owns sub-block (n, s) strides by N between consecutive stores and does not coalesce:\n"
+     "// that form measured 57 GB/s, about a third of what this machine sustains. Here each of 32 threads\n"
+     "// dequantizes one row's 32-element sub-block into sT[n_local][k_local], and after a barrier the\n"
+     "// same 32 threads walk k and write 32 CONSECUTIVE n per step.\n"
+     "kernel void dequant_q4k_t(device const uchar* W [[buffer(0)]],\n"
+     "                          device float* Out [[buffer(1)]],\n"
+     "                          constant int* P [[buffer(2)]],\n"
+     "                          uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                          ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*144;\n"
+     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
+     "  int k0=sb*256 + pr*64 + hf*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*144;\n"
+     "    ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "    ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "    float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "    int sbase=base+4, qbase=base+16;\n"
+     "    int is=pr*2+hf, sc, mn;\n"
+     "    if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "    int qb=qbase+pr*32;\n"
+     "    for (int l=0;l<32;l++){\n"
+     "      uchar qbyte=W[qb+l];\n"
+     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      sT[(int)t*32+l] = dl*(float)nib - ml;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int l=0;l<32;l++) sT[(int)t*32+l]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int l=0;l<32;l++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+l)*N + nn] = sT[(int)t*32+l];\n"
+     "  }\n"
+     "}\n"
+     "// Dequantize a resident Q6_K weight [N][K] into a dense f32 [K][N] buffer, same role as\n"
+     "// dequant_q4k_t. TinyLlama Q4_K_M is a MIXED file: 135 tensors are Q4_K but 21 are Q6_K, and those\n"
+     "// 21 include ffn_down on 10 of the 22 layers — the largest projection in the layer. Without this\n"
+     "// they fall back to the cooperative kernel at prefill batch sizes, which is ~2.4x slower than\n"
+     "// expand-then-GEMM at that shape.\n"
+     "//\n"
+     "// Q6_K block = 210 bytes per 256 weights: ql[128] low nibbles, qh[64] upper 2 bits, scales[16]\n"
+     "// int8 (one per 16 weights), then d. Element k splits as chunk=k/128, g=(k%128)/32, l=k%32:\n"
+     "// group g takes its low/high nibble from ql[(g&1)*32+l] and its high bits from qh[l] shifted by\n"
+     "// 2g, scaled by scales[l/16 + 2g].\n"
+     "kernel void dequant_q6k_t(device const uchar* W [[buffer(0)]],\n"
+     "                          device float* Out [[buffer(1)]],\n"
+     "                          constant int* P [[buffer(2)]],\n"
+     "                          uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                          ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*210;\n"
+     "  int sb=s>>3, sub=s&7;\n"
+     "  int k0=sb*256 + sub*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*210;\n"
+     "    ushort dr=(ushort)W[base+208] | ((ushort)W[base+209]<<8);\n"
+     "    float d=float(as_type<half>(dr));\n"
+     "    device const char* sc=(device const char*)(W+base+192);\n"
+     "    for (int i=0;i<32;i++){\n"
+     "      int k=sub*32+i;\n"
+     "      int chunk=k>>7, r=k&127, g=r>>5, l=r&31;\n"
+     "      uchar qlb=W[base + chunk*64 + (g&1)*32 + l];\n"
+     "      uchar qhb=W[base + 128 + chunk*32 + l];\n"
+     "      int nib=(g<2)?(qlb&0xF):(qlb>>4);\n"
+     "      int hi=(qhb>>(g*2))&3;\n"
+     "      int q=(nib|(hi<<4))-32;\n"
+     "      sT[(int)t*32+i] = d*(float)sc[chunk*8 + (l>>4) + g*2]*(float)q;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int i=0;i<32;i++) sT[(int)t*32+i]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int i=0;i<32;i++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+i)*N + nn] = sT[(int)t*32+i];\n"
+     "  }\n"
+     "}\n";
+
+
+static id<MTLComputePipelineState> gDequantQ4K = nil;
+static id<MTLComputePipelineState> gDequantQ6K = nil;
+static int ensure_dequant_q4k(void) {
+    if (gDequantQ4K != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kDequantQ4KSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: dequant_q4k_t build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> fn = [lib newFunctionWithName:@"dequant_q4k_t"];
+    if (fn == nil) return -11;
+    gDequantQ4K = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    if (gDequantQ4K == nil) return -12;
+    id<MTLFunction> fn6 = [lib newFunctionWithName:@"dequant_q6k_t"];
+    if (fn6 != nil) gDequantQ6K = [gDevice newComputePipelineStateWithFunction:fn6 error:&err];
+    return gDequantQ6K != nil ? 0 : -13;
+}
+
+static NSString* const kFlashMMSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// FlashAttention on the SIMD matrix units, for PREFILL (sq>1). dk==64 only.\n"
+     "//\n"
+     "// The existing causal path routes to mha_decode_f32, which streams keys per QUERY ROW: right for\n"
+     "// sq=1, wrong here. Measured, it runs at 282-295 GFLOP/s (~4% of peak) and becomes 58% of a\n"
+     "// 1024-token prefill. This computes S = Q*K^T and O += P*V with simdgroup_multiply_accumulate, so\n"
+     "// the K/V tile in threadgroup memory is reused across all 8 query rows of the tile.\n"
+     "//\n"
+     "// One threadgroup = one simdgroup = 8 query rows of one head. K/V are walked in tiles of 32.\n"
+     "// Online softmax runs in threads over the score tile staged in threadgroup memory, which is the\n"
+     "// standard arrangement: the matrix units produce S, scalar code rescales, the matrix units consume P.\n"
+     "kernel void flash_mm_f32(device const float* Q [[buffer(0)]],\n"
+     "                         device const float* K [[buffer(1)]],\n"
+     "                         device const float* V [[buffer(2)]],\n"
+     "                         device float* O [[buffer(3)]],\n"
+     "                         constant int* P [[buffer(4)]],\n"
+     "                         constant float* FP [[buffer(5)]],\n"
+     "                         uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                         ushort tid [[thread_index_in_threadgroup]],\n"
+     "                         ushort sg [[simdgroup_index_in_threadgroup]],\n"
+     "                         ushort lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  const int DK=64, BK=32, BQ=64;   // 8 simdgroups; one K/V tile serves 64 query rows\n"
+     "  int h=(int)tg.x, qb=(int)tg.y*BQ;\n"
+     "  if (h>=heads || qb>=sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK, qOff=h*DK, kvOff=(h/rep)*DK;\n"
+     "  int q0=qb+(int)sg*8;\n"
+     "\n"
+     "  // sKV holds K then V during the loop and is REUSED as the output tile at the end:\n"
+     "  // 2*BK*DK == BQ*DK exactly, and O is only written after the last K/V tile is consumed.\n"
+     "  threadgroup float sKV[2*BK*DK], sS[BQ*BK], sM[BQ], sL[BQ], sC[BQ];\n"
+     "  threadgroup float* sK = sKV; threadgroup float* sV = sKV + BK*DK;\n"
+     "  simdgroup_float8x8 qm[8], om[8];\n"
+     "  for (short d=0; d<8; d++){\n"
+     "    int qr = (q0 < sq) ? q0 : 0;\n"
+     "    simdgroup_load(qm[d], Q + (ulong)qr*dm + qOff + d*8, dm);\n"
+     "    om[d] = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  }\n"
+     "  if (tid < BQ){ sM[tid] = -INFINITY; sL[tid] = 0.0f; }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "\n"
+     "  int jmax = causal ? (qb + BQ) : sk;\n"
+     "  if (jmax > sk) jmax = sk;\n"
+     "  for (int j0=0; j0<jmax; j0+=BK){\n"
+     "    // stage K/V once for all BQ query rows — 128 threads instead of 32\n"
+     "    // Vectorized staging: DK=64 is a multiple of 4, so one float4 move replaces four\n"
+     "    // scalar ones. The staging is INSTRUCTION-bound, not byte-bound — halving the\n"
+     "    // element size would not have helped, since the store count is what dominates.\n"
+     "    for (int e4=(int)tid; e4<BK*DK/4; e4+=256){\n"
+     "      int t=e4/(DK/4), d4=e4%(DK/4), j=j0+t;\n"
+     "      float4 kv = 0.0f, vv = 0.0f;\n"
+     "      if (j<sk){\n"
+     "        device const float4* kp=(device const float4*)(K + (ulong)j*dkv + kvOff);\n"
+     "        device const float4* vp=(device const float4*)(V + (ulong)j*dkv + kvOff);\n"
+     "        kv = kp[d4]; vv = vp[d4];\n"
+     "      }\n"
+     "      ((threadgroup float4*)sK)[e4] = kv;\n"
+     "      ((threadgroup float4*)sV)[e4] = vv;\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (short b=0; b<BK/8; b++){\n"
+     "      simdgroup_float8x8 s = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "      for (short d=0; d<8; d++){\n"
+     "        simdgroup_float8x8 kt;\n"
+     "        simdgroup_load(kt, sK + (ulong)b*8*DK + d*8, DK, ulong2(0,0), true);\n"
+     "        simdgroup_multiply_accumulate(s, qm[d], kt, s);\n"
+     "      }\n"
+     "      simdgroup_store(s, sS + (ulong)sg*8*BK + b*8, BK);\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    // online softmax, FOUR threads per row: each covers 8 of the BK columns and the four\n"
+     "    // reduce with simd_shuffle_xor. One thread per row left 192 of 256 threads idle and\n"
+     "    // each survivor walking all 32 columns twice; this is 4x fewer iterations at full\n"
+     "    // occupancy. The four threads of a row are tid 4r..4r+3, always inside one simdgroup\n"
+     "    // (32 lanes = 8 rows), so they run in lockstep and the shuffles are well defined.\n"
+     "    {\n"
+     "      int r=(int)tid>>2, c0=((int)tid&3)*(BK/4);\n"
+     "      int i = qb + r;\n"
+     "      float mOld = sM[r];            // read by all four BEFORE any of them writes\n"
+     "      float mxl = -INFINITY;\n"
+     "      for (int t=c0; t<c0+BK/4; t++){\n"
+     "        int j=j0+t;\n"
+     "        float v = (j<sk && i<sq && (!causal || j<=i)) ? sS[r*BK+t]*scale : -INFINITY;\n"
+     "        sS[r*BK+t] = v;\n"
+     "        if (v>mxl) mxl = v;\n"
+     "      }\n"
+     "      mxl = max(mxl, simd_shuffle_xor(mxl, 1));\n"
+     "      mxl = max(mxl, simd_shuffle_xor(mxl, 2));\n"
+     "      float mx = max(mOld, mxl);\n"
+     "      float ls = 0.0f;\n"
+     "      for (int t=c0; t<c0+BK/4; t++){\n"
+     "        float p = (sS[r*BK+t]==-INFINITY) ? 0.0f : exp(sS[r*BK+t]-mx);\n"
+     "        sS[r*BK+t]=p; ls += p;\n"
+     "      }\n"
+     "      ls += simd_shuffle_xor(ls, 1);\n"
+     "      ls += simd_shuffle_xor(ls, 2);\n"
+     "      if (((int)tid&3)==0){\n"
+     "        float c = (mx==-INFINITY) ? 1.0f : exp(mOld-mx);\n"
+     "        sM[r]=mx; sL[r]=sL[r]*c+ls; sC[r]=c;\n"
+     "      }\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    // O = diag(corr)*O + P*V, the diagonal built from this simdgroup's 8 rows\n"
+     "    threadgroup float sD[8*64];\n"
+     "    for (int e=(int)lane; e<64; e+=32) sD[sg*64+e] = 0.0f;\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    if (lane<8) sD[sg*64 + lane*8 + lane] = sC[sg*8+lane];\n"
+     "    simdgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    simdgroup_float8x8 dmx; simdgroup_load(dmx, sD + sg*64, 8);\n"
+     "    for (short d=0; d<8; d++){\n"
+     "      simdgroup_float8x8 sc2 = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "      simdgroup_multiply_accumulate(sc2, dmx, om[d], sc2);\n"
+     "      om[d] = sc2;\n"
+     "    }\n"
+     "    for (short b=0; b<BK/8; b++){\n"
+     "      simdgroup_float8x8 pm; simdgroup_load(pm, sS + (ulong)sg*8*BK + b*8, BK);\n"
+     "      for (short d=0; d<8; d++){\n"
+     "        simdgroup_float8x8 vm; simdgroup_load(vm, sV + (ulong)b*8*DK + d*8, DK);\n"
+     "        simdgroup_multiply_accumulate(om[d], pm, vm, om[d]);\n"
+     "      }\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  }\n"
+     "  threadgroup float* sO = sKV;\n"
+     "  for (short d=0; d<8; d++) simdgroup_store(om[d], sO + (ulong)sg*8*DK + d*8, DK);\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int e=(int)tid; e<BQ*DK; e+=256){\n"
+     "    int r=e/DK, d=e%DK;\n"
+     "    if (qb+r < sq){\n"
+     "      float ll = sL[r];\n"
+     "      O[(ulong)(qb+r)*dm + qOff + d] = (ll>0.0f) ? sO[e]/ll : 0.0f;\n"
+     "    }\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gFlashMM = nil;
+static int gFlashMMEnabled = 1;
+void mtl_set_flash_mm(int on) { gFlashMMEnabled = on ? 1 : 0; }
+static int ensure_flash_mm(void) {
+    if (gFlashMM != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kFlashMMSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: flash_mm_f32 build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> fn = [lib newFunctionWithName:@"flash_mm_f32"];
+    if (fn == nil) return -11;
+    gFlashMM = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gFlashMM != nil ? 0 : -12;
+}
+
+
+// mtl_recorder_flash_mm records the matrix-unit prefill attention. dk must be 64.
+int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh,
+                          int sq, int sk, int dm, int heads, int kvHeads, int causal, float scale) {
+    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL) return -2;
+    if (ensure_flash_mm() != 0) return -6;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    int P[7] = {sq, sk, dm, heads, kvHeads, 64, causal};
+    float FP[1] = {scale};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:gFlashMM];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qh offset:0 atIndex:0];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+    [enc setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
+    [enc dispatchThreadgroups:MTLSizeMake(heads, (sq+63)/64, 1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+
+// Feasibility probe: does this device's MSL accept half-input MMA into a float accumulator?
+static NSString* const kMixedProbeSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void mixed_probe(device const half* A [[buffer(0)]],\n"
+     "                        device const half* B [[buffer(1)]],\n"
+     "                        device float* C [[buffer(2)]]) {\n"
+     "  simdgroup_half8x8 a, b;\n"
+     "  simdgroup_float8x8 acc = make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  simdgroup_load(a, A, 8);\n"
+     "  simdgroup_load(b, B, 8);\n"
+     "  simdgroup_multiply_accumulate(acc, a, b, acc);\n"
+     "  simdgroup_store(acc, C, 8);\n"
+     "}\n";
+
+int mtl_probe_mixed_mma(void) {
+    if (ensure_init() != 0) return -1;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kMixedProbeSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "mixed MMA unsupported: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    return [lib newFunctionWithName:@"mixed_probe"] != nil ? 0 : -11;
+}
+
+// Scratch for the dequantized weight, grown on demand and reused. One buffer is enough: compute
+// encoders in a command buffer execute in submission order, so dequant(A) -> gemm(A) -> dequant(B)
+// -> gemm(B) never races. It is sized by the largest projection the model uses (for TinyLlama the
+// column-fused gate|up at K=2048 N=11264, ~92 MB) and every layer reuses it.
+static id<MTLBuffer> gDQScratch = nil;
+static size_t gDQScratchLen = 0;
+static id<MTLBuffer> dq_scratch(size_t bytes) {
+    if (gDQScratch != nil && gDQScratchLen >= bytes) return gDQScratch;
+    gDQScratch = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    gDQScratchLen = (gDQScratch != nil) ? bytes : 0;
+    return gDQScratch;
+}
+
+// The cooperative kernels serve ANY M: each takes its row index from group.y and the dispatch
+// passes M as the grid's y extent. An earlier M<=512 cap here was arbitrary and cost a cliff —
+// past it a projection fell to the non-cooperative kernel, whose per-row cost is ~2.5x worse:
+//
+//   K=2048 N=256   M=512  714.0us (1.4us/row)   M=640 2225.6us (3.5us/row)  M=1024 3461.8us
+//   cap removed            M=512  713.7us (1.4)  M=640  893.6us (1.4)        M=1024 1426.5us
+//
+// End to end on prompts past the cap: 959.7 -> 1128.4 tok/s at n=640, 814.8 -> 930.9 at n=1024,
+// with n=256 unchanged as the control.
+//
+// q4k_dq_gemm_eligible: expanding the weight once and running a dense GEMM beats re-deriving it per
+// query row above a batch size AND above an output width. Both thresholds are measured.
+//
+// Batch: crossover at M~18 on an M2 Pro (M=16 0.90x, M=24 1.34x, M=32 1.81x, M=64 2.56x,
+// M=256 5.37x); 24 keeps a margin.
+//
+// Width: that batch crossover was measured at ONE shape, K=2048 N=5632, and applying it to every
+// shape was wrong. A narrow projection has a tiny weight for the cooperative kernel to re-read
+// while the dense GEMM stays launch-bound, so the balance inverts. At M=64, K=2048:
+//
+//   N= 256  coop 130.9us  dq+gemm 170.0us  -> COOPERATIVE WINS
+//   N= 512  coop 194.6us  dq+gemm 165.9us
+//   N=1024  coop 358.3us  dq+gemm 199.0us
+//   N=2048  coop 714.2us  dq+gemm 260.2us
+//   N=5632  coop 1954.5us dq+gemm 737.5us
+//
+// This matters for GQA models generally, not just this one: k and v project to kvHeads*headDim,
+// which is 256 here and small in every grouped-query model.
+static int gDQGemmEnabled = 1;
+void mtl_set_q4k_dq_gemm(int on) { gDQGemmEnabled = on ? 1 : 0; }
+static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
+    return gDQGemmEnabled && (qt == 12 || qt == 14) && M >= 24 && N >= 512 && K % 256 == 0 && ensure_dequant_q4k() == 0;
+}
+
+// mtl_recorder_dequant_q4k records the dequantization of a resident Q4_K weight into a dense f32
+// [K][N] buffer.
+// ---- persistent expanded-weight cache --------------------------------------
+// The expansion is the ENTIRE fixed cost of a prefill pass, and it is redone every pass over
+// weights that never change. Fitting whole-model prefill at n=64..512 (TinyLlama-1.1B Q4_K_M):
+//
+//   expand-then-GEMM   fixed 37.03 ms/pass   marginal 0.4691 ms/token
+//   cooperative        fixed  0.00 ms/pass   marginal 2.7109 ms/token
+//
+// The cooperative arm's fixed term is exactly zero, which is what identifies the 37 ms as the
+// expansion and nothing else. At n=64 that is 54-60% of the pass.
+//
+// Caching the expanded weight removes it entirely, at the cost of holding the model a second time
+// in f16: ~1.94 GB for TinyLlama's 636 MB of Q4_K, about 3x the file. That is a real trade, so this
+// is OFF by default and enabled explicitly.
+//
+// Lifetime: the dictionary retains BOTH the source quantized buffer and its expansion. Retaining
+// the source matters for correctness, not just tidiness — the key is the source buffer's pointer,
+// and if it could be deallocated the address might be reused by a different weight and silently
+// serve the wrong expansion.
+static NSMutableDictionary* gWCache = nil;   // NSValue(ptr) -> @[src, expanded]
+static size_t gWCacheBytes = 0;
+static size_t gWCacheMax = (size_t)-1;        // (size_t)-1 = not yet initialised; 0 = disabled
+static int gWCacheHits = 0, gWCacheMisses = 0;
+
+// Default budget: an eighth of physical RAM, capped at 4 GB. The cache holds each quantized weight's
+// f16 expansion — ~3x the model file — and removes the expansion that is otherwise redone every
+// prefill pass (37 ms/pass for TinyLlama, over half of a short-prompt token). Weights past the
+// budget silently fall back to per-pass expansion, so a model too large for the budget is slower
+// rather than broken, and an eighth of RAM cannot displace the model itself.
+static double default_cache_bytes(void) {
+    uint64_t mem = 0; size_t len = sizeof(mem);
+    if (sysctlbyname("hw.memsize", &mem, &len, NULL, 0) != 0 || mem == 0) return 0.0;
+    double budget = (double)mem / 8.0;
+    if (budget > 4e9) budget = 4e9;
+    return budget;
+}
+
+void mtl_set_weight_cache(double max_gb) {
+    gWCacheMax = (max_gb <= 0.0) ? 0 : (size_t)(max_gb * 1e9);
+    if (gWCacheMax == 0) { gWCache = nil; gWCacheBytes = 0; }
+    gWCacheHits = 0; gWCacheMisses = 0;
+}
+void mtl_weight_cache_stats(int* hits, int* misses, double* bytes) {
+    if (hits) *hits = gWCacheHits;
+    if (misses) *misses = gWCacheMisses;
+    if (bytes) *bytes = (double)gWCacheBytes;
+}
+
+// wcache_lookup returns the cached f16 expansion for src, or nil. On a miss it allocates and
+// registers one and sets *needsFill so the caller encodes the dequantization exactly once.
+static id<MTLBuffer> wcache_lookup(id<MTLBuffer> src, size_t bytes, int* needsFill) {
+    *needsFill = 0;
+    if (gWCacheMax == (size_t)-1) gWCacheMax = (size_t)default_cache_bytes();
+    if (gWCacheMax == 0) return nil;
+    if (gWCache == nil) gWCache = [NSMutableDictionary dictionary];
+    NSValue* key = [NSValue valueWithPointer:(__bridge const void*)src];
+    NSArray* hit = [gWCache objectForKey:key];
+    if (hit != nil) { gWCacheHits++; return (id<MTLBuffer>)hit[1]; }
+    if (gWCacheBytes + bytes > gWCacheMax) return nil;   // over budget: fall back to scratch
+    id<MTLBuffer> buf = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    if (buf == nil) return nil;
+    [gWCache setObject:@[src, buf] forKey:key];
+    gWCacheBytes += bytes;
+    gWCacheMisses++;
+    *needsFill = 1;
+    return buf;
+}
+
+// ---- f16 prefill weight path (small-M only) --------------------------------
+// TestGEMMF16OnlyWinsWhenBandwidthBound measured an f16 MPS GEMM at 1.28x of f32 at M=64 and 0.97x
+// from M=256 up: halving the weight bytes only helps while the GEMM is throttled on the weight read,
+// and this GPU's matrix units give f16 no arithmetic advantage once it is compute-bound. So this
+// path exists for short prompts only and is gated on M.
+static NSString* const kQ4KF16Source =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Same traversal and staging as dequant_q4k_t (see there for the transpose rationale), writing\n"
+     "// half instead of float: 23 MB instead of 46 MB for a K=2048 N=5632 weight, halving both this\n"
+     "// kernel's write and the GEMM's subsequent read.\n"
+     "kernel void dequant_q4k_t_h(device const uchar* W [[buffer(0)]],\n"
+     "                            device half* Out [[buffer(1)]],\n"
+     "                            constant int* P [[buffer(2)]],\n"
+     "                            uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                            ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*144;\n"
+     "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
+     "  int k0=sb*256 + pr*64 + hf*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*144;\n"
+     "    ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "    ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "    float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "    int sbase=base+4, qbase=base+16;\n"
+     "    int is=pr*2+hf, sc, mn;\n"
+     "    if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "    int qb=qbase+pr*32;\n"
+     "    for (int l=0;l<32;l++){\n"
+     "      uchar qbyte=W[qb+l];\n"
+     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      sT[(int)t*32+l] = dl*(float)nib - ml;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int l=0;l<32;l++) sT[(int)t*32+l]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int l=0;l<32;l++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+l)*N + nn] = (half)sT[(int)t*32+l];\n"
+     "  }\n"
+     "}\n"
+     "kernel void dequant_q6k_t_h(device const uchar* W [[buffer(0)]],\n"
+     "                            device half* Out [[buffer(1)]],\n"
+     "                            constant int* P [[buffer(2)]],\n"
+     "                            uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                            ushort t [[thread_index_in_threadgroup]]) {\n"
+     "  int K=P[0], N=P[1];\n"
+     "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
+     "  int rowBytes=(K/256)*210;\n"
+     "  int sb=s>>3, sub=s&7;\n"
+     "  int k0=sb*256 + sub*32;\n"
+     "  threadgroup float sT[32*32];\n"
+     "  int n=n0+(int)t;\n"
+     "  if (n<N){\n"
+     "    int base=n*rowBytes + sb*210;\n"
+     "    ushort dr=(ushort)W[base+208] | ((ushort)W[base+209]<<8);\n"
+     "    float d=float(as_type<half>(dr));\n"
+     "    device const char* sc=(device const char*)(W+base+192);\n"
+     "    for (int i=0;i<32;i++){\n"
+     "      int k=sub*32+i;\n"
+     "      int chunk=k>>7, r=k&127, g=r>>5, l=r&31;\n"
+     "      uchar qlb=W[base + chunk*64 + (g&1)*32 + l];\n"
+     "      uchar qhb=W[base + 128 + chunk*32 + l];\n"
+     "      int nib=(g<2)?(qlb&0xF):(qlb>>4);\n"
+     "      int hi=(qhb>>(g*2))&3;\n"
+     "      int q=(nib|(hi<<4))-32;\n"
+     "      sT[(int)t*32+i] = d*(float)sc[chunk*8 + (l>>4) + g*2]*(float)q;\n"
+     "    }\n"
+     "  } else {\n"
+     "    for (int i=0;i<32;i++) sT[(int)t*32+i]=0.0f;\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int i=0;i<32;i++){\n"
+     "    int nn=n0+(int)t;\n"
+     "    if (nn<N) Out[(k0+i)*N + nn] = (half)sT[(int)t*32+i];\n"
+     "  }\n"
+     "}\n"
+     "kernel void cvt_f32_to_h(device const float* In [[buffer(0)]],\n"
+     "                         device half* Out [[buffer(1)]],\n"
+     "                         constant int* P [[buffer(2)]],\n"
+     "                         uint i [[thread_position_in_grid]]) {\n"
+     "  if ((int)i < P[0]) Out[i] = (half)In[i];\n"
+     "}\n"
+     "kernel void cvt_h_to_f32(device const half* In [[buffer(0)]],\n"
+     "                         device float* Out [[buffer(1)]],\n"
+     "                         constant int* P [[buffer(2)]],\n"
+     "                         uint i [[thread_position_in_grid]]) {\n"
+     "  if ((int)i < P[0]) Out[i] = (float)In[i];\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gDequantQ4KH = nil;
+static id<MTLComputePipelineState> gDequantQ6KH = nil;
+static id<MTLComputePipelineState> gCvtF32ToH = nil;
+static id<MTLComputePipelineState> gCvtHToF32 = nil;
+static int ensure_q4k_f16(void) {
+    if (gDequantQ4KH != nil && gDequantQ6KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQ4KF16Source options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: q4k f16 path build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> f1 = [lib newFunctionWithName:@"dequant_q4k_t_h"];
+    id<MTLFunction> f4 = [lib newFunctionWithName:@"dequant_q6k_t_h"];
+    id<MTLFunction> f2 = [lib newFunctionWithName:@"cvt_f32_to_h"];
+    id<MTLFunction> f3 = [lib newFunctionWithName:@"cvt_h_to_f32"];
+    if (f1 == nil || f2 == nil || f3 == nil || f4 == nil) return -11;
+    gDequantQ4KH = [gDevice newComputePipelineStateWithFunction:f1 error:&err];
+    gDequantQ6KH = [gDevice newComputePipelineStateWithFunction:f4 error:&err];
+    gCvtF32ToH   = [gDevice newComputePipelineStateWithFunction:f2 error:&err];
+    gCvtHToF32   = [gDevice newComputePipelineStateWithFunction:f3 error:&err];
+    return (gDequantQ4KH != nil && gDequantQ6KH != nil && gCvtF32ToH != nil && gCvtHToF32 != nil) ? 0 : -12;
+}
+
+// Three separate scratch buffers: the weight, the converted activations and the f16 result. They are
+// live simultaneously, so they cannot share one allocation.
+static id<MTLBuffer> gF16W = nil;  static size_t gF16WLen = 0;
+static id<MTLBuffer> gF16X = nil;  static size_t gF16XLen = 0;
+static id<MTLBuffer> gF16O = nil;  static size_t gF16OLen = 0;
+static id<MTLBuffer> f16_scratch(__strong id<MTLBuffer>* slot, size_t* len, size_t bytes) {
+    if (*slot != nil && *len >= bytes) return *slot;
+    *slot = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
+    *len = (*slot != nil) ? bytes : 0;
+    return *slot;
+}
+
+static void encode_cvt(id<MTLCommandBuffer> cmd, id<MTLComputePipelineState> pipe,
+                       id<MTLBuffer> in, id<MTLBuffer> out, int n) {
+    int P[1] = {n};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:pipe];
+    [enc setBuffer:in offset:0 atIndex:0];
+    [enc setBuffer:out offset:0 atIndex:1];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    NSUInteger tg = pipe.maxTotalThreadsPerThreadgroup;
+    if (tg > 256) tg = 256;
+    [enc dispatchThreads:MTLSizeMake((NSUInteger)n, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
+    [enc endEncoding];
+}
+
+// mtl_recorder_matmul_f16 encodes C = A*B with all three matrices f16. MPSMatrixMultiplication
+// requires a single data type across the operands, so the activations are converted in and the
+// result converted out by the caller.
+static int recorder_matmul_f16(id<MTLCommandBuffer> cmd, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf,
+                               id<MTLBuffer> cBuf, int M, int K, int N) {
+    size_t es = sizeof(uint16_t);
+    MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:MPSDataTypeFloat16];
+    MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:MPSDataTypeFloat16];
+    MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*es dataType:MPSDataTypeFloat16];
+    MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+    MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf descriptor:bDesc];
+    MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+    MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+        initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+        resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+    [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+    return 0;
+}
+
+static int gF16MinN = 128;
+void mtl_set_f16_min_n(int n) { gF16MinN = n < 1 ? 1 : n; }
+static int gDQGemmF16Enabled = 1;
+// 64, not 128, and chosen end-to-end rather than from the leaf benchmark. The leaf shows 1.39x at
+// M=64, 1.22x at M=32 and still 1.09x at M=128 — but that 1.09x does not survive into whole-model
+// prefill: n=128 measured 1.023x then 0.999x, and n=96 measured 1.003x then 0.985x. Only n=64 wins
+// repeatably (1.180x, 1.175x). Widening this to chase the leaf number buys nothing and risks a
+// regression on prompts that are already fine.
+static int gDQGemmF16MaxM = 64;
+void mtl_set_q4k_dq_gemm_f16(int on) { gDQGemmF16Enabled = on ? 1 : 0; }
+void mtl_set_q4k_dq_gemm_f16_max_m(int m) { gDQGemmF16MaxM = m; }
+
+// q4k_dq_gemm_f16_eligible: Q4_K only (Q6_K keeps the f32 expansion), and only while the GEMM is
+// bandwidth-bound. Above gDQGemmF16MaxM the f32 path is faster, so this must NOT widen.
+static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
+    if (!gDQGemmF16Enabled) return 0;
+    // Q6_K joins only when the cache is on. Q6_K is 16.9% of TinyLlama's weights but 16.5 of the
+    // 22.9 ms of remaining fixed cost — its dequant runs ~3.6x slower per element than Q4_K's — so
+    // what pays is removing the per-pass expansion, not making it f16.
+    if (gWCacheMax == (size_t)-1) gWCacheMax = (size_t)default_cache_bytes();
+    if (qt != 12 && !(qt == 14 && gWCacheMax > 0)) return 0;
+    // The M cap exists because f16 only pays for itself while the GEMM is bandwidth-bound. With the
+    // expansion cache on, the trade changes completely: the expansion is gone in this path and paid
+    // every pass in the f32 one, so the ~3% the f16 GEMM costs at large M is worth taking to save
+    // 37 ms/pass. Cap applies only when the cache is off.
+    if (M < 24) return 0;
+    // Without the cache, f16 must beat the f32 GEMM on its own and only does so while bandwidth-
+    // bound (M<=64). WITH the cache there is no upper cap at all, which took two attempts to get
+    // right.
+    //
+    // An earlier sweep put the cache-mode cap at 512, reading 1.026x/0.980x/1.000x at n=768/1024/
+    // 1536 as "inside the noise floor". That sweep ran short prompts first, so the cache was already
+    // populated when the long ones ran. Measured on a long-prompt-only workload the cap is much
+    // worse than neutral, because it means the f16 path is never taken and THE CACHE NEVER FILLS —
+    // every pass re-expands to f32 uncached:
+    //
+    //	          cap=512 (cache 0.00 GB)   uncapped (cache 1.94 GB)
+    //	pp1024      1950.6 / 1870.9           1967.5 / 2021.6   +4.4%
+    //	pp1536      1935.1 / 1937.7           2003.5 / 2005.1   +3.5%
+    //
+    // So above 512 the choice is not "f16 GEMM vs f32 GEMM" (where f32 wins by ~3%) but "cached f16
+    // vs uncached f32", and removing a per-pass expansion beats a 3% GEMM edge. Costs no extra
+    // memory: those weights are already in the cache for the M<=512 path.
+    if (M > (gWCacheMax == 0 ? gDQGemmF16MaxM : 1u<<20)) return 0;
+    // The narrow projections (k/v at N=256) are worth pulling onto this path only once the batch is
+    // deep enough. Below that the cooperative kernel is still better for them, and forcing them
+    // through expand-then-GEMM measured 0.982x/0.990x at n=64 against 1.040x-1.045x at n=256 and
+    // n=512 — a consistent sign flip across four readings, not noise.
+    int minN = (M >= 128) ? gF16MinN : 512;
+    if (N < minN || K % 256 != 0) return 0;
+    return ensure_q4k_f16() == 0;
+}
+
+int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt) {
+    if (rec == NULL || wbuf == NULL || oh == NULL) return -2;
+    if (ensure_dequant_q4k() != 0) return -6;
+    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf;
+    id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
+    int P[2] = {K, N};
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    [enc setComputePipelineState:(qt == 14) ? gDequantQ6K : gDequantQ4K];
+    [enc setBuffer:wb offset:0 atIndex:0];
+    [enc setBuffer:ob offset:0 atIndex:1];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    [enc dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+static NSString* const kQ4KMMSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "// Batched Q4_K matmul on the SIMD matrix units.\n"
+     "//\n"
+     "// Tiling is the whole point. A 32x32 output tile per threadgroup with 128 threads (4 simdgroups):\n"
+     "// the dequantized weight tile is staged ONCE and consumed by all 32 query rows, so each\n"
+     "// dequantization feeds 32*2*64 = 4096 FLOP of matrix work. The first version of this kernel used an\n"
+     "// 8-row tile and measured 12.5x SLOWER than the scalar cooperative path, because rebuilding the\n"
+     "// weight tile per 8 query rows gave no more amortization than the cooperative kernel already had,\n"
+     "// while adding staging and barriers on top.\n"
+     "//\n"
+     "// K is walked in 64-wide chunks. 64 divides the 256-element Q4_K super-block, so a chunk lies\n"
+     "// entirely within one 64-element quarter (constant pr) and covers exactly its two 32-element\n"
+     "// sub-blocks (hf=0 then hf=1), making the scale/min lookup uniform across the chunk.\n"
+     "kernel void qmatmul_q4k_mm(device const float* X [[buffer(0)]],\n"
+     "                           device const uchar* W [[buffer(1)]],\n"
+     "                           device float* O [[buffer(2)]],\n"
+     "                           constant int* P [[buffer(3)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           ushort tid [[thread_index_in_threadgroup]],\n"
+     "                           ushort sg [[simdgroup_index_in_threadgroup]]) {\n"
+     "  int M=P[0], K=P[1], N=P[2];\n"
+     "  int ni0=(int)tg.x*32, mi0=(int)tg.y*32;\n"
+     "  if (ni0>=N || mi0>=M) return;\n"
+     "  int rowBytes=(K/256)*144;\n"
+     "  threadgroup float sW[64*32];\n"
+     "  threadgroup float sX[32*64];\n"
+     "  threadgroup float sO[32*32];\n"
+     "  simdgroup_float8x8 acc[4];\n"
+     "  for (short j=0;j<4;j++) acc[j]=make_filled_simdgroup_matrix<float,8,8>(0.0f);\n"
+     "  for (int k0=0; k0<K; k0+=64){\n"
+     "    int sb=k0>>8, pr=(k0>>6)&3;\n"
+     "    for (int idx=(int)tid; idx<32*64; idx+=128){\n"
+     "      int m=idx>>6, kl=idx&63;\n"
+     "      sX[idx] = (mi0+m<M) ? X[(mi0+m)*K + k0 + kl] : 0.0f;\n"
+     "    }\n"
+     "    // Hoist the per-sub-block constants. The previous form recomputed base, d, dmin and the\n"
+     "    // 6-bit scale/min unpack for EVERY element — about 15 operations per weight, of which 12\n"
+     "    // were identical across the 32 elements sharing a sub-block. Each thread now owns one\n"
+     "    // (n, 16-element run) pair, computes those constants once, and pays only the nibble\n"
+     "    // extraction per element. 16 divides 32, so a run never straddles a sub-block boundary\n"
+     "    // and hf is constant within it.\n"
+     "    {\n"
+     "      int n=(int)tid&31, kbase=((int)tid>>5)*16;\n"
+     "      if (ni0+n<N){\n"
+     "        int base=(ni0+n)*rowBytes + sb*144;\n"
+     "        ushort dr=(ushort)W[base] | ((ushort)W[base+1]<<8);\n"
+     "        ushort dmr=(ushort)W[base+2] | ((ushort)W[base+3]<<8);\n"
+     "        float d=float(as_type<half>(dr)), dmin=float(as_type<half>(dmr));\n"
+     "        int sbase=base+4, qbase=base+16;\n"
+     "        int hf=kbase>>5, is=pr*2+hf, sc, mn;\n"
+     "        if (is<4){ sc=W[sbase+is]&63; mn=W[sbase+is+4]&63; }\n"
+     "        else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
+     "        float dl=d*(float)sc, ml=dmin*(float)mn;\n"
+     "        int qb=qbase+pr*32;\n"
+     "        for (int l=0;l<16;l++){\n"
+     "          int kl=kbase+l; uchar qbyte=W[qb+(kl&31)];\n"
+     "          int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "          sW[kl*32+n] = dl*(float)nib - ml;\n"
+     "        }\n"
+     "      } else {\n"
+     "        for (int l=0;l<16;l++) sW[(kbase+l)*32+n]=0.0f;\n"
+     "      }\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int kk=0; kk<64; kk+=8){\n"
+     "      simdgroup_float8x8 a;\n"
+     "      simdgroup_load(a, sX + (int)sg*8*64 + kk, 64);\n"
+     "      for (short j=0;j<4;j++){\n"
+     "        simdgroup_float8x8 b;\n"
+     "        simdgroup_load(b, sW + kk*32 + j*8, 32);\n"
+     "        simdgroup_multiply_accumulate(acc[j], a, b, acc[j]);\n"
+     "      }\n"
+     "    }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  }\n"
+     "  for (short j=0;j<4;j++) simdgroup_store(acc[j], sO + (int)sg*8*32 + j*8, 32);\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  for (int idx=(int)tid; idx<32*32; idx+=128){\n"
+     "    int m=idx>>5, n=idx&31;\n"
+     "    if (mi0+m<M && ni0+n<N) O[(mi0+m)*N + ni0+n] = sO[idx];\n"
+     "  }\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gQ4KMM = nil;
+static int ensure_q4k_mm(void) {
+    if (gQ4KMM != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQ4KMMSource options:nil error:&err];
+    if (lib == nil) { fprintf(stderr, "metal: qmatmul_q4k_mm failed to build: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
+    id<MTLFunction> fn = [lib newFunctionWithName:@"qmatmul_q4k_mm"];
+    if (fn == nil) return -11;
+    gQ4KMM = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gQ4KMM != nil ? 0 : -12;
+}
+
+// q4k_mm_eligible: the matrix-unit path pays off only once the batch is deep enough to amortize
+// dequantizing a whole 8x256 weight tile. Below that the cooperative kernel wins.
+// DISABLED by default — not because the approach fails, but because dequantize-once + dense GEMM
+// is better still. Keeping the honest ranking, K=2048 N=5632:
+//
+//   M= 32  coop  979.7us  matrixUnit  719.5us  dq+gemm  526.3us
+//   M= 64  coop 1955.1us  matrixUnit 1198.1us  dq+gemm  743.0us
+//   M=256  coop 7807.8us  matrixUnit 4288.4us  dq+gemm 1558.5us
+//
+// This kernel now BEATS the scalar cooperative path (1.36x-1.82x) after hoisting the per-sub-block
+// constants out of the staging loop: 585 -> 1377 GFLOP/s, 2.35x. The earlier reading — that a
+// 240:1 scalar-to-matrix instruction ratio closed the approach — was too strong. Twelve of those
+// ~15 operations per weight were the base address, d, dmin and the 6-bit scale/min unpack, all
+// identical across the 32 elements of a sub-block; computing them once per (n, 16-element run)
+// removed most of the ratio. The tiling was never the main cost, and neither were the matrix units.
+//
+// It still loses to dq+gemm by ~2.75x, so it stays off. What remains here is the staging itself:
+//
+// Attempted and REVERTED: reading the A tile straight from device memory instead of staging it in
+// sX, to free 16 KB of threadgroup memory and one barrier per K-chunk. The staging is not
+// redundant — it ZERO-PADS partial M tiles. Loading A directly needs the row index clamped to stay
+// in bounds, and a clamp silently misattributes rows: at M=9 the second simdgroup reads rows 1..8
+// but stores to output rows 8..15, so row 8 receives row 1's result. TestQ4KMatrixUnitMatchesCooperative
+// caught it at exactly that shape (max relative 1.374e+01). A dual path — direct load when
+// mi0+BM<=M, staged otherwise — would work, but the whole change is worth at most ~1.5x, which
+// only reaches parity with dq+gemm.
+// every weight is written to threadgroup memory and read back, with two barriers per K-chunk,
+// where dq+gemm writes once to device memory and hands the multiply to a tuned MPS kernel.
+static int gQ4KMMEnabled = 0;
+void mtl_set_q4k_mm(int on) { gQ4KMMEnabled = on ? 1 : 0; }
+
+static int q4k_mm_eligible(int M, int K, int qt) {
+    if (!gQ4KMMEnabled) return 0;
+    return qt == 12 && M >= 8 && K % 256 == 0 && ensure_q4k_mm() == 0;
+}
+
+
+// mtl_probe_encoder_cost times `n` trivial dispatches, either each in its own compute encoder or
+// packed `per` to an encoder with a buffer memory barrier between them. The kernel touches one
+// element, so what is measured is the per-dispatch and per-ENCODER overhead rather than any work.
+// A Llama decode step issues a few hundred dispatches, so the difference between these two shapes is
+// a direct read of how much of a token is encoder switching. Returns best GPU seconds, <0 on error.
+double mtl_probe_encoder_cost(int n, int per, int reps) {
+    if (ensure_init() != 0) return -1.0;
+    if (ensure_q4k_f16() != 0) return -2.0;   // reuse cvt_f32_to_h as the trivial kernel
+    if (n < 1) n = 1;
+    if (per < 1) per = 1;
+    if (reps < 1) reps = 1;
+    @autoreleasepool {
+        id<MTLBuffer> a = [gDevice newBufferWithLength:4096 options:MTLResourceStorageModePrivate];
+        id<MTLBuffer> b = [gDevice newBufferWithLength:4096 options:MTLResourceStorageModePrivate];
+        if (a == nil || b == nil) return -3.0;
+        int P[1] = {64};
+        double best = 1e18;
+        for (int t = 0; t < 9; t++) {
+            id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+            if (cmd == nil) return -4.0;
+            for (int r = 0; r < reps; r++) {
+                id<MTLComputeCommandEncoder> enc = nil;
+                for (int i = 0; i < n; i++) {
+                    if (i % per == 0) {
+                        if (enc != nil) [enc endEncoding];
+                        enc = [cmd computeCommandEncoder];
+                        [enc setComputePipelineState:gCvtF32ToH];
+                        [enc setBuffer:a offset:0 atIndex:0];
+                        [enc setBuffer:b offset:0 atIndex:1];
+                        [enc setBytes:P length:sizeof(P) atIndex:2];
+                    } else {
+                        // ordering within one encoder is explicit; between encoders Metal's hazard
+                        // tracking does it, which is part of what an encoder switch costs.
+                        [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+                    }
+                    [enc dispatchThreads:MTLSizeMake(64,1,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+                }
+                if (enc != nil) [enc endEncoding];
+            }
+            [cmd commit];
+            [cmd waitUntilCompleted];
+            if (cmd.status != MTLCommandBufferStatusCompleted) return -5.0;
+            double d = (double)(cmd.GPUEndTime - cmd.GPUStartTime) / (double)reps;
+            if (d < best) best = d;
+        }
+        return best;
+    }
+}
+
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
@@ -2311,14 +3433,64 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[3] = {M, K, N};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    if (pb == nil) return -2;
+    // Short-prompt path: same expand-then-GEMM shape but in f16, which halves both the expansion's
+    // write and the GEMM's weight read. Gated to small M — above gDQGemmF16MaxM the GEMM is
+    // compute-bound and f16 is ~3% SLOWER (see TestGEMMF16OnlyWinsWhenBandwidthBound).
+    if (q4k_dq_gemm_f16_eligible(M, K, N, qtype)) {
+        size_t wBytes = (size_t)K*(size_t)N*sizeof(uint16_t);
+        int needsFill = 1;
+        id<MTLBuffer> wS = wcache_lookup(wb, wBytes, &needsFill);
+        if (wS == nil) { wS = f16_scratch(&gF16W, &gF16WLen, wBytes); needsFill = 1; }
+        id<MTLBuffer> xS = f16_scratch(&gF16X, &gF16XLen, (size_t)M*(size_t)K*sizeof(uint16_t));
+        id<MTLBuffer> oS = f16_scratch(&gF16O, &gF16OLen, (size_t)M*(size_t)N*sizeof(uint16_t));
+        if (wS != nil && xS != nil && oS != nil) {
+            if (needsFill) {
+                int Pd[2] = {K, N};
+                id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
+                [de setComputePipelineState:(qtype == 14) ? gDequantQ6KH : gDequantQ4KH];
+                [de setBuffer:wb offset:0 atIndex:0];
+                [de setBuffer:wS offset:0 atIndex:1];
+                [de setBytes:Pd length:sizeof(Pd) atIndex:2];
+                [de dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+                [de endEncoding];
+            }
+            encode_cvt(cmd, gCvtF32ToH, xb, xS, M*K);
+            recorder_matmul_f16(cmd, xS, wS, oS, M, K, N);
+            encode_cvt(cmd, gCvtHToF32, oS, ob, M*N);
+            return 0;
+        }
+        // fall through to the f32 path if scratch could not be allocated
+    }
+    // Prompt-processing path: expand the weight once into scratch, then a dense GEMM.
+    if (q4k_dq_gemm_eligible(M, K, N, qtype)) {
+        size_t need = (size_t)K * (size_t)N * sizeof(float);
+        id<MTLBuffer> scratch = dq_scratch(need);
+        if (scratch != nil) {
+            if (mtl_recorder_dequant_qk(rec, wbuf, (__bridge void*)scratch, K, N, qtype) == 0 &&
+                mtl_recorder_matmul(rec, xh, (__bridge void*)scratch, oh, M, K, N, 0) == 0) {
+                return 0;
+            }
+        }
+        // fall through to the quant kernel if either step could not be recorded
+    }
+    // Matrix-unit prototype (disabled by default; see the note on gQ4KMMEnabled).
+    if (q4k_mm_eligible(M, K, qtype)) {
+        id<MTLComputeCommandEncoder> me = [cmd computeCommandEncoder];
+        [me setComputePipelineState:gQ4KMM];
+        [me setBuffer:xb offset:0 atIndex:0];
+        [me setBuffer:wb offset:0 atIndex:1];
+        [me setBuffer:ob offset:0 atIndex:2];
+        [me setBytes:P length:sizeof(P) atIndex:3];
+        [me dispatchThreadgroups:MTLSizeMake((N + 31)/32, (M + 31)/32, 1) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
+        [me endEncoding];
+        return 0;
+    }
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
     [enc setComputePipelineState:pipe];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:wb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
-    [enc setBuffer:pb offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
     if (cooperative) {
         [enc dispatchThreadgroups:MTLSizeMake((N + coopRows - 1)/coopRows, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
     } else {
@@ -3158,6 +4330,7 @@ int mtl_qmatmul_q3k(const float* X, const unsigned char* W, float* O, int M, int
 // two passes (max, then sum+weighted-accumulate) for a numerically stable softmax
 // that mirrors the reference kernel. dk is bounded at 128 so the per-thread output
 // accumulator is a fixed-size register array.
+
 static NSString* const kMHASource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
@@ -3182,9 +4355,34 @@ static NSString* const kMHASource =
      "  float sum=0.0f; float acc[128]; for(int d=0;d<dk;d++) acc[d]=0.0f;\n"
      "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<dk;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; float e=exp(s-m); sum+=e; for(int d=0;d<dk;d++) acc[d]+=e*V[j*dkv+kvOff+d]; }\n"
      "  for(int d=0;d<dk;d++) O[i*dm+qOff+d]=acc[d]/sum;\n"
+     "}\n"
+     "kernel void mha64_f32(device const float* Q [[buffer(0)]],\n"
+     "                    device const float* K [[buffer(1)]],\n"
+     "                    device const float* V [[buffer(2)]],\n"
+     "                    device float* O [[buffer(3)]],\n"
+     "                    constant int* P [[buffer(4)]],\n"
+     "                    constant float* FP [[buffer(5)]],\n"
+     "                    uint gid [[thread_position_in_grid]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6], window=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int total=heads*sq;\n"
+     "  if ((int)gid>=total) return;\n"
+     "  int h=gid/sq, i=gid%sq;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk, off=sk-sq;\n"
+     "  int jmax = causal ? (off+i+1) : sk;\n"
+     "  int jmin = (window>0 && off+i-window+1>0) ? (off+i-window+1) : 0;\n"
+     "  float m=-INFINITY;\n"
+     "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<64;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; if(s>m) m=s; }\n"
+     "  float sum=0.0f; float acc[64]; for(int d=0;d<64;d++) acc[d]=0.0f;\n"
+     "  for (int j=jmin;j<jmax;j++){ float s=0.0f; for(int d=0;d<64;d++) s+=Q[i*dm+qOff+d]*K[j*dkv+kvOff+d]; s*=scale; float e=exp(s-m); sum+=e; for(int d=0;d<64;d++) acc[d]+=e*V[j*dkv+kvOff+d]; }\n"
+     "  for(int d=0;d<64;d++) O[i*dm+qOff+d]=acc[d]/sum;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gMHA = nil;
+// dk==64 specialization of the two-pass kernel, same reason as mha_decode64_f32: a runtime
+// trip count makes acc[] dynamically indexed, so it spills out of registers.
+static id<MTLComputePipelineState> gMHA64 = nil;
 
 static int ensure_mha(void) {
     if (gMHA != nil) return 0;
@@ -3194,7 +4392,10 @@ static int ensure_mha(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"mha_f32"];
     if (fn == nil) return -11;
     gMHA = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gMHA != nil ? 0 : -12;
+    if (gMHA == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"mha64_f32"];
+    if (fn64 != nil) gMHA64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    return 0;
 }
 
 int mtl_mha_f32(const float* Q, const float* K, const float* V, float* O,
@@ -3221,7 +4422,7 @@ int mtl_mha_f32(const float* Q, const float* K, const float* V, float* O,
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gMHA];
+        [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:kb offset:0 atIndex:1];
         [enc setBuffer:vb offset:0 atIndex:2];
@@ -3291,18 +4492,321 @@ static NSString* const kMHADecodeSource =
      "    l=c1*l+c2*lo; m=M;\n"
      "  }\n"
      "  if (lane==0) { for (int d=0; d<dk; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
+     "}\n"
+     "// Split-K (flash-decoding) attention for sq==1, dk==64.\n"
+     "//\n"
+     "// The per-head kernel dispatches heads threadgroups of 32 threads — ~1024 threads for the whole\n"
+     "// GPU — so decode attention runs at a few percent occupancy and cannot hide its own memory\n"
+     "// latency. Here each (head, key-chunk) pair gets its own threadgroup, multiplying parallelism by\n"
+     "// the chunk count, and a second pass merges the per-chunk online-softmax partials.\n"
+     "//\n"
+     "// Pass 1 writes, per (head, chunk): m, l, then dk accumulators. The merge is the same (m,l,acc)\n"
+     "// combination the single-pass kernel does across lanes, just across chunks instead.\n"
+     "kernel void mha_dec_splitk_p1(device const float* Q [[buffer(0)]],\n"
+     "                              device const float* K [[buffer(1)]],\n"
+     "                              device const float* V [[buffer(2)]],\n"
+     "                              device float* PART [[buffer(3)]],\n"
+     "                              constant int* P [[buffer(4)]],\n"
+     "                              constant float* FP [[buffer(5)]],\n"
+     "                              uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                              uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64;\n"
+     "  int sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  float q[DK]; for (int d=0; d<DK; d++) q[d]=Q[h*DK+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[DK];\n"
+     "  for (int d=0; d<DK; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+(int)lane; j<j1; j+=32){\n"
+     "    float sdot=0.0f; for (int d=0; d<DK; d++) sdot+=q[d]*K[j*dkv+kvOff+d]; sdot*=scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<DK; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint off=16; off>0; off>>=1){\n"
+     "    float mo=simd_shuffle_down(m,off), lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<DK; d++){ float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    PART[base]=m; PART[base+1]=l;\n"
+     "    for (int d=0; d<DK; d++) PART[base+2+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
+     "// Split-K pass 1, dk split across LANE PAIRS.\n"
+     "//\n"
+     "// The variant above holds q[64] and acc[64] per thread — 128 registers of arrays — which caps its\n"
+     "// pipeline at 384 threads/threadgroup and limits how many simdgroups a core can host. Attention is\n"
+     "// latency-bound (8-14%% of bandwidth, ~1%% of FLOP peak), so occupancy is the lever that is left.\n"
+     "//\n"
+     "// Here lanes 2i and 2i+1 cooperate on key i: lane 2i owns dims 0..31, lane 2i+1 owns dims 32..63.\n"
+     "// Per-thread arrays halve to q[32]+acc[32]. Sixteen keys are in flight per iteration instead of\n"
+     "// 32, so the loop runs twice as many iterations, and each key costs one extra simd_shuffle_xor to\n"
+     "// complete its dot product across the pair.\n"
+     "//\n"
+     "// Both lanes of a pair see the SAME s after that reduction, so m and l evolve identically on both\n"
+     "// and the online-softmax state stays consistent. The final merge therefore runs over lanes of\n"
+     "// matching parity — widths 2,4,8,16 rather than 1,2,4,8,16 — leaving lane 0 holding the merged\n"
+     "// low half and lane 1 the high half.\n"
+     "kernel void mha_dec_splitk_p1h(device const float* Q [[buffer(0)]],\n"
+     "                               device const float* K [[buffer(1)]],\n"
+     "                               device const float* V [[buffer(2)]],\n"
+     "                               device float* PART [[buffer(3)]],\n"
+     "                               constant int* P [[buffer(4)]],\n"
+     "                               constant float* FP [[buffer(5)]],\n"
+     "                               uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                               uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64, H=32;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  int slot=(int)(lane>>1), hlf=(int)(lane&1), off=hlf*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=16){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*K[j*dkv+kvOff+off+d];\n"
+     "    sp += simd_shuffle_xor(sp, 1);\n"
+     "    float sdot=sp*scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+off+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint w=2; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<2){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
+     "// Split-K pass 1, dk split across LANE QUADS — the default. Lanes 4i..4i+3 own 16 dims each of\n"
+     "// key i, so 8 keys are in flight and each key's 64 floats are covered by four adjacent lanes.\n"
+     "//\n"
+     "// This was a prediction from the pair variant's post-mortem: that win was mostly coalescing\n"
+     "// rather than the register relief it was designed for, so fewer and wider read streams should\n"
+     "// help again. It does — 1.17x/1.05x/1.18x over the pair variant at sk=512/1024/2048 — which is\n"
+     "// the first time in this campaign a mechanism predicted the NEXT step correctly rather than\n"
+     "// being reconstructed after the fact.\n"
+     "//\n"
+     "// End to end it is only ~1.0-1.5%% at long context, inside the noise floor, because attention is\n"
+     "// a much smaller share of a token after the pair variant's 2.9x. Kept because the kernel gain is\n"
+     "// reproducible and the accuracy is unchanged, not on an end-to-end claim.\n"
+     "kernel void mha_dec_splitk_p1q(device const float* Q [[buffer(0)]],\n"
+     "                               device const float* K [[buffer(1)]],\n"
+     "                               device const float* V [[buffer(2)]],\n"
+     "                               device float* PART [[buffer(3)]],\n"
+     "                               constant int* P [[buffer(4)]],\n"
+     "                               constant float* FP [[buffer(5)]],\n"
+     "                               uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                               uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64, H=16;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  int slot=(int)(lane>>2), qrt=(int)(lane&3), off=qrt*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=8){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*K[j*dkv+kvOff+off+d];\n"
+     "    sp += simd_shuffle_xor(sp, 1);\n"
+     "    sp += simd_shuffle_xor(sp, 2);\n"
+     "    float sdot=sp*scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+off+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint w=4; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<4){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
+     "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
+     "                              device float* O [[buffer(1)]],\n"
+     "                              constant int* P [[buffer(2)]],\n"
+     "                              uint tg [[threadgroup_position_in_grid]],\n"
+     "                              uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64;\n"
+     "  int heads=P[3], nchunk=P[7];\n"
+     "  int h=(int)tg;\n"
+     "  if (h>=heads) return;\n"
+     "  float m=-INFINITY, l=0.0f, acc[DK];\n"
+     "  for (int d=0; d<DK; d++) acc[d]=0.0f;\n"
+     "  for (int c=0; c<nchunk; c++){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    float mc=PART[base], lc=PART[base+1];\n"
+     "    float M=max(m,mc);\n"
+     "    if (M==-INFINITY) continue;\n"
+     "    float c1=exp(m-M), c2=exp(mc-M);\n"
+     "    for (int d=0; d<DK; d++) acc[d]=c1*acc[d]+c2*PART[base+2+d];\n"
+     "    l=c1*l+c2*lc; m=M;\n"
+     "  }\n"
+     "  if (lane==0){ for (int d=0; d<DK; d++) O[h*DK+d]=acc[d]/l; }\n"
+     "}\n"
+     "kernel void mha_decode64_f32(device const float* Q [[buffer(0)]],\n"
+     "                           device const float* K [[buffer(1)]],\n"
+     "                           device const float* V [[buffer(2)]],\n"
+     "                           device float* O [[buffer(3)]],\n"
+     "                           constant int* P [[buffer(4)]],\n"
+     "                           constant float* FP [[buffer(5)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, i=(int)tg.y;\n"
+     "  if (h >= heads || i >= sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  int jmax = causal ? (sk - sq + i + 1) : sk;\n"
+     "  float q[64]; for (int d=0; d<64; d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[64]; for (int d=0; d<64; d++) acc[d]=0.0f;\n"
+     "  for (int j=(int)lane; j<jmax; j+=32) {\n"
+     "    float s=0.0f; for (int d=0; d<64; d++) s+=q[d]*K[j*dkv+kvOff+d]; s*=scale;\n"
+     "    float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "    l=corr*l+p; for (int d=0; d<64; d++) acc[d]=corr*acc[d]+p*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  // simdgroup merge of the (m, l, acc) online-softmax partials (tree over 32 lanes).\n"
+     "  for (uint off=16; off>0; off>>=1) {\n"
+     "    float mo=simd_shuffle_down(m,off); float lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    // guard the both-empty case: (-inf)-(-inf) = NaN would poison the merge (sk<32 lanes).\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<64; d++) { float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0) { for (int d=0; d<64; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
+     "}\n"
+     "kernel void mha_decode128_f32(device const float* Q [[buffer(0)]],\n"
+     "                           device const float* K [[buffer(1)]],\n"
+     "                           device const float* V [[buffer(2)]],\n"
+     "                           device float* O [[buffer(3)]],\n"
+     "                           constant int* P [[buffer(4)]],\n"
+     "                           constant float* FP [[buffer(5)]],\n"
+     "                           uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                           uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], dk=P[5], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, i=(int)tg.y;\n"
+     "  if (h >= heads || i >= sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk;\n"
+     "  int qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  int jmax = causal ? (sk - sq + i + 1) : sk;\n"
+     "  float q[128]; for (int d=0; d<128; d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[128]; for (int d=0; d<128; d++) acc[d]=0.0f;\n"
+     "  for (int j=(int)lane; j<jmax; j+=32) {\n"
+     "    float s=0.0f; for (int d=0; d<128; d++) s+=q[d]*K[j*dkv+kvOff+d]; s*=scale;\n"
+     "    float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "    l=corr*l+p; for (int d=0; d<128; d++) acc[d]=corr*acc[d]+p*V[j*dkv+kvOff+d]; m=mNew;\n"
+     "  }\n"
+     "  // simdgroup merge of the (m, l, acc) online-softmax partials (tree over 32 lanes).\n"
+     "  for (uint off=16; off>0; off>>=1) {\n"
+     "    float mo=simd_shuffle_down(m,off); float lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    // guard the both-empty case: (-inf)-(-inf) = NaN would poison the merge (sk<32 lanes).\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<128; d++) { float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0) { for (int d=0; d<128; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gMHADecode = nil;
+// dk<=64 specialization. The generic kernel declares q[128] and acc[128] whatever dk actually is,
+// which is 1 KB of per-thread arrays — far past the register file, so both arrays spill and every
+// acc[d] touch in the hot loop AND in the 5-level simdgroup merge becomes a memory access. The
+// merge shuffles all dk accumulators at every level and so costs the same at sk=8 as at sk=1024,
+// which is exactly the sk-independent floor measured on the decode path. Halving the arrays halves
+// the spill. Same arithmetic, same order — the two kernels are textually identical apart from the
+// array bounds, so dk<=64 callers get an identical result.
+static id<MTLComputePipelineState> gMHADecode64 = nil;
+static id<MTLComputePipelineState> gMHADecode128 = nil;
+static id<MTLComputePipelineState> gSplitKP1 = nil;
+static id<MTLComputePipelineState> gSplitKP1H = nil;
+static id<MTLComputePipelineState> gSplitKP1Q = nil;
+static int gSplitKQuad = 1;  // quad supersedes the pair variant: 1.05-1.18x on the kernel
+void mtl_set_splitk_quad(int on) { gSplitKQuad = on ? 1 : 0; }
+static int gSplitKHalf = 1;  // measured 2.9x on the kernel, 1.31x on long-context decode
+void mtl_set_splitk_half(int on) { gSplitKHalf = on ? 1 : 0; }
+static id<MTLComputePipelineState> gSplitKP2 = nil;
+static id<MTLBuffer> gSplitKPart = nil; static size_t gSplitKPartLen = 0;
+static int gSplitKEnabled = 1;
+static int gSplitKMaxChunks = 16;
+static int gSplitKPerChunk = 128;  // keys per chunk; smaller = more threadgroups
+void mtl_set_splitk_chunks(int n) { gSplitKMaxChunks = (n < 2) ? 2 : (n > 512 ? 512 : n); }
+void mtl_set_splitk_perchunk(int n) { gSplitKPerChunk = (n < 16) ? 16 : n; }
+void mtl_set_splitk_decode(int on) { gSplitKEnabled = on ? 1 : 0; }
 static int ensure_mha_decode(void) {
     if (gMHADecode != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kMHADecodeSource options:nil error:&err];
-    if (lib == nil) return -10;
+    if (lib == nil) { fprintf(stderr, "metal: mha_decode library build failed: %s\n", err?[[err localizedDescription] UTF8String]:"?"); return -10; }
     id<MTLFunction> fn = [lib newFunctionWithName:@"mha_decode_f32"];
     if (fn == nil) return -11;
     gMHADecode = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gMHADecode != nil ? 0 : -12;
+    if (gMHADecode == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"mha_decode64_f32"];
+    if (fn64 != nil) gMHADecode64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    id<MTLFunction> fn128 = [lib newFunctionWithName:@"mha_decode128_f32"];
+    if (fn128 != nil) gMHADecode128 = [gDevice newComputePipelineStateWithFunction:fn128 error:&err];
+    id<MTLFunction> sp1 = [lib newFunctionWithName:@"mha_dec_splitk_p1"];
+    id<MTLFunction> sp2 = [lib newFunctionWithName:@"mha_dec_splitk_p2"];
+    if (sp1 != nil) gSplitKP1 = [gDevice newComputePipelineStateWithFunction:sp1 error:&err];
+    id<MTLFunction> sp1q = [lib newFunctionWithName:@"mha_dec_splitk_p1q"];
+    if (sp1q != nil) gSplitKP1Q = [gDevice newComputePipelineStateWithFunction:sp1q error:&err];
+    id<MTLFunction> sp1h = [lib newFunctionWithName:@"mha_dec_splitk_p1h"];
+    if (sp1h != nil) gSplitKP1H = [gDevice newComputePipelineStateWithFunction:sp1h error:&err];
+    else fprintf(stderr, "metal: mha_dec_splitk_p1h unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
+    if (sp2 != nil) gSplitKP2 = [gDevice newComputePipelineStateWithFunction:sp2 error:&err];
+    if (gSplitKP1 == nil || gSplitKP2 == nil)
+        fprintf(stderr, "metal: split-k decode attention unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
+    return 0;
+}
+
+// mtl_probe_pipeline_occupancy reports maxTotalThreadsPerThreadgroup for the decode attention
+// pipelines. That number is set by register pressure: a kernel holding large per-thread arrays gets
+// a low ceiling, which caps how many simdgroups a core can host and therefore how much memory
+// latency can be hidden. 1024 means the compiler found room; a few hundred means it did not.
+// Writes into out[0..2] = {generic, dk64, dk128}. Returns 0 on success.
+int mtl_probe_pipeline_occupancy(int* out) {
+    if (ensure_init() != 0) return -1;
+    if (ensure_mha_decode() != 0) return -2;
+    if (out == NULL) return -3;
+    out[0] = gMHADecode   ? (int)gMHADecode.maxTotalThreadsPerThreadgroup   : -1;
+    out[1] = gMHADecode64 ? (int)gMHADecode64.maxTotalThreadsPerThreadgroup : -1;
+    out[2] = gMHADecode128? (int)gMHADecode128.maxTotalThreadsPerThreadgroup: -1;
+    out[3] = gSplitKP1 ? (int)gSplitKP1.maxTotalThreadsPerThreadgroup : -1;
+    out[4] = gSplitKP2 ? (int)gSplitKP2.maxTotalThreadsPerThreadgroup : -1;
+    out[5] = gSplitKP1H ? (int)gSplitKP1H.maxTotalThreadsPerThreadgroup : -1;
+    return 0;
 }
 
 // mtl_mha_decode_host (§T432): the cooperative decode/prefill attention (§T428/431 kernel) over
@@ -3357,6 +4861,52 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     // sq·heads single THREADS, whose serial key streaming made long-context prefill windows
     // ~12× slower (§T431: 291ms @pos1792). causal row bound jmax = sk-sq+i+1; window stays on
     // the two-pass kernel. At sq==1 causal is irrelevant, so non-causal decode also routes here.
+    // Matrix-unit flash attention for PREFILL. Gated on sq == sk because the causal mask here
+    // assumes query i aligns with key i; a decode step (sq=1 against an sk-long cache) has the
+    // offset sk-sq and must keep the decode kernel. dk==64 is what the kernel implements.
+    // Measured against the decode kernel: seq=64 2.35x, 128 2.35x, 256 3.36x, 512 3.97x.
+    if (gFlashMMEnabled && window == 0 && dk == 64 && sq >= 32 && sq == sk && qElemOff == 0 &&
+        mtl_recorder_flash_mm(rec, qh, kh, vh, oh, sq, sk, dm, heads, kvHeads, causal, scale) == 0) {
+        return 0;
+    }
+    // Split-K decode attention: the single-pass kernel launches only `heads` threadgroups of 32
+    // threads, so a decode step runs attention at a few percent occupancy. Splitting the key range
+    // multiplies parallelism by the chunk count; pass 2 merges the per-chunk (m,l,acc) partials.
+    if (gSplitKEnabled && gSplitKP1 != nil && gSplitKP2 != nil && window == 0 && sq == 1 &&
+        dk == 64 && causal != 0 && kvHeads > 0 && heads % kvHeads == 0 && sk >= 128) {
+        if (ensure_mha_decode() != 0) return -5;
+        int nchunk = (sk + gSplitKPerChunk - 1) / gSplitKPerChunk;
+        if (nchunk > gSplitKMaxChunks) nchunk = gSplitKMaxChunks;
+        if (nchunk < 2) nchunk = 2;
+        size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
+        if (gSplitKPart == nil || gSplitKPartLen < need) {
+            gSplitKPart = [gDevice newBufferWithLength:need options:MTLResourceStorageModePrivate];
+            gSplitKPartLen = (gSplitKPart != nil) ? need : 0;
+        }
+        if (gSplitKPart != nil) {
+            id<MTLCommandBuffer> scmd = (__bridge id<MTLCommandBuffer>)rec;
+            int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
+            float SFP[1] = {scale};
+            id<MTLComputeCommandEncoder> e1 = [scmd computeCommandEncoder];
+            [e1 setComputePipelineState:(gSplitKQuad && gSplitKP1Q != nil) ? gSplitKP1Q : ((gSplitKHalf && gSplitKP1H != nil) ? gSplitKP1H : gSplitKP1)];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+            [e1 setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+            [e1 setBuffer:gSplitKPart offset:0 atIndex:3];
+            [e1 setBytes:SP length:sizeof(SP) atIndex:4];
+            [e1 setBytes:SFP length:sizeof(SFP) atIndex:5];
+            [e1 dispatchThreadgroups:MTLSizeMake(heads,nchunk,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e1 endEncoding];
+            id<MTLComputeCommandEncoder> e2 = [scmd computeCommandEncoder];
+            [e2 setComputePipelineState:gSplitKP2];
+            [e2 setBuffer:gSplitKPart offset:0 atIndex:0];
+            [e2 setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:1];
+            [e2 setBytes:SP length:sizeof(SP) atIndex:2];
+            [e2 dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e2 endEncoding];
+            return 0;
+        }
+    }
     if (window == 0 && dk <= 128 && (causal != 0 || sq == 1)) {
         if (ensure_mha_decode() != 0) return -5;
         id<MTLCommandBuffer> dcmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -3366,18 +4916,18 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         id<MTLBuffer> dob = (__bridge id<MTLBuffer>)oh;
         int DP[7] = {sq, sk, dm, heads, kvHeads, dk, causal};
         float DFP[1] = {scale};
-        id<MTLBuffer> dpb = [gDevice newBufferWithBytes:DP length:sizeof(DP) options:MTLResourceStorageModeShared];
-        id<MTLBuffer> dfpb = [gDevice newBufferWithBytes:DFP length:sizeof(DFP) options:MTLResourceStorageModeShared];
-        if (dpb == nil || dfpb == nil) return -2;
         id<MTLComputeCommandEncoder> denc = [dcmd computeCommandEncoder];
-        [denc setComputePipelineState:gMHADecode];
+        id<MTLComputePipelineState> dpipe = gMHADecode;
+        if (dk == 64 && gMHADecode64 != nil) dpipe = gMHADecode64;
+        else if (dk == 128 && gMHADecode128 != nil) dpipe = gMHADecode128;
+        [denc setComputePipelineState:dpipe];
         // qElemOff: float-element offset into Q (the fused-QKV sub-row view, §T613).
         [denc setBuffer:dqb offset:(NSUInteger)qElemOff*4 atIndex:0];
         [denc setBuffer:dkb offset:0 atIndex:1];
         [denc setBuffer:dvb offset:0 atIndex:2];
         [denc setBuffer:dob offset:0 atIndex:3];
-        [denc setBuffer:dpb offset:0 atIndex:4];
-        [denc setBuffer:dfpb offset:0 atIndex:5];
+        [denc setBytes:DP length:sizeof(DP) atIndex:4];
+        [denc setBytes:DFP length:sizeof(DFP) atIndex:5];
         [denc dispatchThreadgroups:MTLSizeMake(heads,sq,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
         [denc endEncoding];
         return 0;
@@ -3390,17 +4940,14 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[8] = {sq, sk, dm, heads, kvHeads, dk, causal, window};
     float FP[1] = {scale};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
-    if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:gMHA];
+    [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
     [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:fpb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
     int total = heads * sq;
     NSUInteger tg = 64; // §T337: acc[128] register array — large threadgroups collapse occupancy
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
@@ -3458,9 +5005,47 @@ static NSString* const kFlashAttnSource =
      "    }\n"
      "  }\n"
      "  if (active) for(int d=0;d<dk;d++) O[i*dm+qOff+d]=acc[d]/l;\n"
+     "}\n"
+     "kernel void flashattn64_f32(device const float* Q [[buffer(0)]],\n"
+     "                          device const float* K [[buffer(1)]],\n"
+     "                          device const float* V [[buffer(2)]],\n"
+     "                          device float* O [[buffer(3)]],\n"
+     "                          constant int* P [[buffer(4)]],\n"
+     "                          constant float* FP [[buffer(5)]],\n"
+     "                          uint3 tgpos [[threadgroup_position_in_grid]],\n"
+     "                          uint3 tid3 [[thread_position_in_threadgroup]],\n"
+     "                          uint3 ntg3 [[threads_per_threadgroup]]) {\n"
+     "  int seq=P[0], dm=P[1], heads=P[2], dk=P[3], causal=P[4], kvHeads=P[5];\n"
+     "  float scale=FP[0];\n"
+     "  uint tid=tid3.x, ntg=ntg3.x;\n"
+     "  int h=(int)tgpos.y; int i=(int)(tgpos.x*ntg + tid);\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*dk, qOff=h*dk, kvOff=(h/rep)*dk;\n"
+     "  bool active = i < seq;\n"
+     "  int jmax = (active ? (causal ? (i+1) : seq) : 0);\n"
+     "  threadgroup float sK[FTILE*128]; threadgroup float sV[FTILE*128];\n"
+     "  float q[64]; if (active) for(int d=0;d<64;d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[64]; for(int d=0;d<64;d++) acc[d]=0.0f;\n"
+     "  int blockMaxJ = causal ? min(seq, (int)(tgpos.x*ntg + ntg)) : seq;\n"
+     "  for (int t0=0; t0<blockMaxJ; t0+=FTILE){\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    for (int e=(int)tid; e<FTILE*dk; e+=(int)ntg){ int t=e/dk, d=e%dk; int j=t0+t;\n"
+     "      float kv0=0.0f, vv0=0.0f; if (j<seq){ kv0=K[j*dkv+kvOff+d]; vv0=V[j*dkv+kvOff+d]; }\n"
+     "      sK[e]=kv0; sV[e]=vv0; }\n"
+     "    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "    int thi = min(FTILE, jmax-t0);\n"
+     "    for (int t=0;t<thi;t++){ int j=t0+t; if(j>=jmax) break;\n"
+     "      float s=0.0f; for(int d=0;d<64;d++) s+=q[d]*sK[t*dk+d]; s*=scale;\n"
+     "      float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "      l=corr*l+p; for(int d=0;d<64;d++) acc[d]=corr*acc[d]+p*sV[t*dk+d]; m=mNew;\n"
+     "    }\n"
+     "  }\n"
+     "  if (active) for(int d=0;d<64;d++) O[i*dm+qOff+d]=acc[d]/l;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gFlashAttn = nil;
+// dk==64 specialization, same defect as mha_decode64_f32: a runtime trip count makes the
+// per-thread q[]/acc[] arrays dynamically indexed, so they spill out of registers.
+static id<MTLComputePipelineState> gFlashAttn64 = nil;
 
 static int ensure_flashattn(void) {
     if (gFlashAttn != nil) return 0;
@@ -3470,7 +5055,10 @@ static int ensure_flashattn(void) {
     id<MTLFunction> fn = [lib newFunctionWithName:@"flashattn_f32"];
     if (fn == nil) return -11;
     gFlashAttn = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gFlashAttn != nil ? 0 : -12;
+    if (gFlashAttn == nil) return -12;
+    id<MTLFunction> fn64 = [lib newFunctionWithName:@"flashattn64_f32"];
+    if (fn64 != nil) gFlashAttn64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    return 0;
 }
 
 int mtl_flashattn_f32(const float* Q, const float* K, const float* V, float* O,
@@ -3494,7 +5082,7 @@ int mtl_flashattn_f32(const float* Q, const float* K, const float* V, float* O,
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        [enc setComputePipelineState:gFlashAttn];
+        [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
         [enc setBuffer:qb offset:0 atIndex:0];
         [enc setBuffer:kb offset:0 atIndex:1];
         [enc setBuffer:vb offset:0 atIndex:2];
@@ -3530,17 +5118,14 @@ int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, dm, heads, dk, causal, kvHeads};
     float FP[1] = {scale};
-    id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
-    id<MTLBuffer> fpb = [gDevice newBufferWithBytes:FP length:sizeof(FP) options:MTLResourceStorageModeShared];
-    if (pb == nil || fpb == nil) return -2;
     id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-    [enc setComputePipelineState:gFlashAttn];
+    [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
     [enc setBuffer:vb offset:0 atIndex:2];
     [enc setBuffer:ob offset:0 atIndex:3];
-    [enc setBuffer:pb offset:0 atIndex:4];
-    [enc setBuffer:fpb offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
     NSUInteger ftg = 64;
     NSUInteger gx = ((NSUInteger)seq + ftg - 1) / ftg;
     [enc dispatchThreadgroups:MTLSizeMake(gx, (NSUInteger)heads, 1) threadsPerThreadgroup:MTLSizeMake(ftg, 1, 1)];
@@ -3622,7 +5207,6 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
         if (qb == nil || kb == nil || vb == nil || ob == nil || sb == nil) return -2;
 
         int P[3] = {seq, seq, causal};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P length:sizeof(P) options:MTLResourceStorageModeShared];
 
         // strided descriptors: a head is a dk-column window of the full [seq,·] row.
         MPSMatrixDescriptor* qDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)dm*sizeof(float) dataType:MPSDataTypeFloat32];
@@ -3648,7 +5232,7 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
             id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
             [enc setComputePipelineState:gSoftmaxCausal];
             [enc setBuffer:sb offset:0 atIndex:0];
-            [enc setBuffer:pb offset:0 atIndex:1];
+            [enc setBytes:P length:sizeof(P) atIndex:1];
             [enc dispatchThreadgroups:MTLSizeMake(seq, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
             [enc endEncoding];
             // O_h = S · V_h
@@ -3889,7 +5473,6 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
         if (!qb||!kb||!vb||!dob||!dqb||!dkb||!dvb||!sb||!dpb) return -2;
 
         int P3[3] = {seq, seq, causal};
-        id<MTLBuffer> pb = [gDevice newBufferWithBytes:P3 length:sizeof(P3) options:MTLResourceStorageModeShared];
 
         MPSMatrixDescriptor* hDesc  = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)dm*sizeof(float) dataType:MPSDataTypeFloat32];    // [seq,dk] window of [seq,dm]
         MPSMatrixDescriptor* kvDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:seq columns:dk rowBytes:(size_t)kvDim*sizeof(float) dataType:MPSDataTypeFloat32]; // [seq,dk] window of [seq,kvDim]
@@ -3924,7 +5507,7 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
             [mmQK encodeToCommandBuffer:cmd leftMatrix:mQ rightMatrix:mK resultMatrix:mS];
             id<MTLComputeCommandEncoder> e1 = [cmd computeCommandEncoder];
             [e1 setComputePipelineState:gSoftmaxCausal];
-            [e1 setBuffer:sb offset:0 atIndex:0]; [e1 setBuffer:pb offset:0 atIndex:1];
+            [e1 setBuffer:sb offset:0 atIndex:0]; [e1 setBytes:P3 length:sizeof(P3) atIndex:1];
             [e1 dispatchThreadgroups:MTLSizeMake(seq,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
             [e1 endEncoding];
             // dV += Pᵀ·dO (accumulate per kv head) ; dP = dO·Vᵀ
@@ -3933,7 +5516,7 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
             // dS = P ⊙ (dP − rowsum(P⊙dP))  (in place on dpb)
             id<MTLComputeCommandEncoder> e2 = [cmd computeCommandEncoder];
             [e2 setComputePipelineState:gSoftmaxJacobian];
-            [e2 setBuffer:sb offset:0 atIndex:0]; [e2 setBuffer:dpb offset:0 atIndex:1]; [e2 setBuffer:pb offset:0 atIndex:2];
+            [e2 setBuffer:sb offset:0 atIndex:0]; [e2 setBuffer:dpb offset:0 atIndex:1]; [e2 setBytes:P3 length:sizeof(P3) atIndex:2];
             [e2 dispatchThreadgroups:MTLSizeMake(seq,1,1) threadsPerThreadgroup:MTLSizeMake(256,1,1)];
             [e2 endEncoding];
             // dQ = scale·dS·K (per query head) ; dK += scale·dSᵀ·Q (accumulate per kv head)

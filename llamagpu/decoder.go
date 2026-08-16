@@ -79,6 +79,14 @@ type qweight interface {
 	Close() error
 }
 
+// binaryNRecorder is an OPTIONAL recorder capability (same shape as quantAccRecorder): an
+// elementwise op bounded to the first n elements. Decoder buffers are sized for the whole context,
+// so an unbounded add over one decoded row touches ctx x width elements instead of width. Recorders
+// that do not implement it keep the unbounded call and stay correct, just slower.
+type binaryNRecorder interface {
+	BinaryN(a, b, o buffer, op, n int) error
+}
+
 // linear records o[m,N] = x[m,K]·W for one projection — either an f32 device weight (MatMul) or a
 // resident quantized weight (QMatMulResident). This is what lets ONE Decoder core serve both the
 // f32 and the quantized model (§T415).
@@ -87,7 +95,7 @@ type linear interface {
 	// recordAdd records dst += x·W (the residual-add epilogue, §T613). The f32 weight fuses
 	// the add into the matmul (one dispatch); the quantized weight has no accumulate path,
 	// so it multiplies into scratch and adds — the pre-fusion two-dispatch shape.
-	recordAdd(r recorder, x, scratch, dst buffer, m int) error
+	recordAdd(r recorder, x, scratch, dst buffer, m, width int) error
 	// recordMoE is record() with per-token MoE expert gating: on a recorder that implements the gated
 	// path (CUDA Q8), a token whose routing weight moeGate[row*gateStride+ex]==0 skips the weight-stream
 	// (bit-identical to record + the RowAxpy weight-0 combine, ~E/K faster). Dense-falls-back otherwise.
@@ -135,7 +143,7 @@ func (l f32Linear) record(r recorder, x, o buffer, m int) error {
 	return r.MatMul(x, l.w, o, m, l.k, l.n)
 }
 
-func (l f32Linear) recordAdd(r recorder, x, _, dst buffer, m int) error {
+func (l f32Linear) recordAdd(r recorder, x, _, dst buffer, m, _ int) error {
 	return r.MatMulAcc(x, l.w, dst, m, l.k, l.n)
 }
 
@@ -145,7 +153,7 @@ func (l quantLinear) record(r recorder, x, o buffer, m int) error {
 	return r.QMatMulResident(x, l.w, o, m)
 }
 
-func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error {
+func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m, width int) error {
 	// Decode / small batch (m<6): fuse the residual add into the quant kernel (beta=1) — ONE launch into
 	// dst instead of QMatMulResident(beta=0)→scratch + a separate Binary add, saving the add launch and
 	// the scratch HBM round-trip. The old code fused only m==1 because a beta=1 GEMV re-streams the weight
@@ -162,6 +170,14 @@ func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m int) error 
 				return err
 			}
 		}
+	}
+	// Bound the add to the m rows actually written. Without this it runs over the whole
+	// context-sized buffer — 1024x the traffic at ctx=1024, and it dominated decode.
+	if bn, ok := r.(binaryNRecorder); ok && width > 0 {
+		return firstErr(
+			r.QMatMulResident(x, l.w, scratch, m),
+			bn.BinaryN(dst, scratch, dst, binaryAdd, m*width),
+		)
 	}
 	return firstErr(
 		r.QMatMulResident(x, l.w, scratch, m),
@@ -491,10 +507,10 @@ func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
 		return firstErr(
 			b.wo.record(r, d.attn.b, d.ao.b, rows),
 			d.norm(r, d.ao.b, g, bta, d.ao.b, rows),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			d.binElem(r, d.dx.b, d.ao.b, d.dx.b, binaryAdd, rows, d.d),
 		)
 	}
-	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows)
+	e := b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows, d.d)
 	if b.oBias != nil {
 		e = firstErr(e, r.AddBias(d.dx.b, b.oBias, d.dx.b, rows, d.d))
 	}
@@ -512,10 +528,10 @@ func (d *Decoder) recordDownProj(r recorder, b block, rows int) error {
 		return firstErr(
 			b.wD.record(r, d.gate.b, d.mo.b, rows),
 			d.norm(r, d.mo.b, g, bta, d.mo.b, rows),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			d.binElem(r, d.dx.b, d.mo.b, d.dx.b, binaryAdd, rows, d.d),
 		)
 	}
-	return b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows)
+	return b.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows, d.d)
 }
 
 // recordLogits records the final projection to logits (xn·Out) plus the optional output bias
@@ -585,10 +601,10 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 		e = firstErr(e,
 			xp.wG.recordMoE(r, in, d.gate.b, rows, d.moeW.b, d.nExperts, ex),
 			xp.wU.recordMoE(r, in, d.up.b, rows, d.moeW.b, d.nExperts, ex),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),                   // silu(gate)·up
-			xp.wD.recordMoE(r, d.gate.b, d.mo.b, rows, d.moeW.b, d.nExperts, ex), // expert output → mo
-			r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1),        // extract weight column [rows]
-			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),                     // dx += w_ex · expert_ex
+			d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden), // silu(gate)·up
+			xp.wD.recordMoE(r, d.gate.b, d.mo.b, rows, d.moeW.b, d.nExperts, ex),   // expert output → mo
+			r.Copy2D(d.moeW.b, ex, d.nExperts, d.moeCol.b, 0, 1, rows, 1),          // extract weight column [rows]
+			r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d),                       // dx += w_ex · expert_ex
 		)
 	}
 	if b.moeShared.wG != nil {
@@ -598,7 +614,7 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 		e = firstErr(e,
 			s.wG.record(r, in, d.gate.b, rows),
 			s.wU.record(r, in, d.up.b, rows),
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU), // shared SwiGLU → gate
+			d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden), // shared SwiGLU → gate
 		)
 		if b.moeSharedGate != nil { // Qwen2-MoE: sigmoid-gated combine
 			e = firstErr(e,
@@ -608,7 +624,7 @@ func (d *Decoder) recordMoE(r recorder, b block, in buffer, rows int) error {
 				r.RowAxpy(d.dx.b, d.mo.b, d.moeCol.b, rows, d.d), // dx += sigmoid(gate)·shared_out
 			)
 		} else { // DeepSeek-V2: ungated — dx += shared·Wdown directly
-			e = firstErr(e, s.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows))
+			e = firstErr(e, s.wD.recordAdd(r, d.gate.b, d.mo.b, d.dx.b, rows, d.d))
 		}
 	}
 	return e
@@ -660,7 +676,7 @@ func (d *Decoder) recordMLAAttention(r recorder, b block, pos, rows int) error {
 	// Rectangular attention over the cache [0 : pos+rows], then the output projection onto dx.
 	return firstErr(e,
 		r.MHARect(d.mlaQ.b, b.kC, b.vC, d.mlaAttn.b, rows, pos+rows, H, H, qkH, vH, 1, 0, d.mlaScale),
-		b.wo.recordAdd(r, d.mlaAttn.b, d.mo.b, d.dx.b, rows), // dx += attn·Wo
+		b.wo.recordAdd(r, d.mlaAttn.b, d.mo.b, d.dx.b, rows, d.d), // dx += attn·Wo
 	)
 }
 
@@ -706,7 +722,7 @@ func (d *Decoder) recordMambaBlock(r recorder, b block) error {
 		// gate y ⊙ SiLU(z), then down-project onto the residual: dx += y·OutProj.
 		r.Unary(d.mbZ.b, d.mbZ.b, unarySiLU),
 		r.Binary(d.mbY.b, d.mbZ.b, d.mbY.b, binaryMul),
-		b.mOutProj.recordAdd(r, d.mbY.b, d.mo.b, d.dx.b, 1),
+		b.mOutProj.recordAdd(r, d.mbY.b, d.mo.b, d.dx.b, 1, d.d),
 	)
 	return e
 }
@@ -801,7 +817,7 @@ func (d *Decoder) recordMamba2Block(r recorder, b block) error {
 		r.Binary(d.m2Y.b, d.m2Z.b, d.m2Y.b, binaryMul),
 		r.RMSNorm(d.m2Y.b, b.m2NormW, d.m2Y.b, 1, I, d.eps),
 		// out_proj onto the residual: dx += y · OutProj.
-		b.m2OutProj.recordAdd(r, d.m2Y.b, d.mo.b, d.dx.b, 1),
+		b.m2OutProj.recordAdd(r, d.m2Y.b, d.mo.b, d.dx.b, 1, d.d),
 	)
 	return e
 }
@@ -966,17 +982,17 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 					r.Copy2D(d.gu.b, 0, 2*d.hidden, d.gate.b, 0, d.hidden, rows, d.hidden),
 					r.Copy2D(d.gu.b, d.hidden, 2*d.hidden, d.up.b, 0, d.hidden, rows, d.hidden),
 					r.Unary(d.gate.b, d.gate.b, unaryGELU),
-					r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul),
+					d.binElem(r, d.gate.b, d.up.b, d.gate.b, binaryMul, rows, d.hidden),
 				)
 			}
 			return firstErr(e, d.recordDownProj(r, b, rows))
 		}
 		return firstErr(
-			b.wG.record(r, in, d.gate.b, rows),              // gate = in·Wgate
-			b.wU.record(r, in, d.up.b, rows),                // up = in·Wup
-			r.Unary(d.gate.b, d.gate.b, unaryGELU),          // GELU(gate)
-			r.Binary(d.gate.b, d.up.b, d.gate.b, binaryMul), // GELU(gate)⊙up
-			d.recordDownProj(r, b, rows),                    // dx += (·)·Wdown
+			b.wG.record(r, in, d.gate.b, rows),                                  // gate = in·Wgate
+			b.wU.record(r, in, d.up.b, rows),                                    // up = in·Wup
+			r.Unary(d.gate.b, d.gate.b, unaryGELU),                              // GELU(gate)
+			d.binElem(r, d.gate.b, d.up.b, d.gate.b, binaryMul, rows, d.hidden), // GELU(gate)⊙up
+			d.recordDownProj(r, b, rows),                                        // dx += (·)·Wdown
 		)
 	}
 	if b.wGU != nil {
@@ -991,7 +1007,7 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 			e = firstErr(e,
 				r.Copy2D(d.gu.b, 0, 2*d.hidden, d.gate.b, 0, d.hidden, rows, d.hidden),
 				r.Copy2D(d.gu.b, d.hidden, 2*d.hidden, d.up.b, 0, d.hidden, rows, d.hidden),
-				r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
+				d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden),
 			)
 		}
 		return firstErr(e, d.recordDownProj(r, b, rows)) // dx += swiglu·Wdown
@@ -999,9 +1015,20 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 	return firstErr(
 		b.wG.record(r, in, d.gate.b, rows),
 		b.wU.record(r, in, d.up.b, rows),
-		r.Binary(d.gate.b, d.up.b, d.gate.b, binarySwiGLU),
+		d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden),
 		d.recordDownProj(r, b, rows), // dx += swiglu·Wdown
 	)
+}
+
+// binElem records an elementwise op bounded to the rows*width elements actually in play. Decoder
+// buffers are allocated for the whole context, so the unbounded form touches ctx*width elements for
+// a single decoded row. Recorders without the capability fall back to the unbounded call, which is
+// correct — the tail of the buffer holds stale values that no consumer reads — just far slower.
+func (d *Decoder) binElem(r recorder, a, b, o buffer, op, rows, width int) error {
+	if bn, ok := r.(binaryNRecorder); ok && rows > 0 && width > 0 {
+		return bn.BinaryN(a, b, o, op, rows*width)
+	}
+	return r.Binary(a, b, o, op)
 }
 
 // norm records the pre-sublayer normalization: LayerNorm-with-bias when lnBias (StableLM/Phi),

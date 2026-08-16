@@ -192,6 +192,123 @@ var qmatmulQ4_0Spirv []byte
 //go:embed shaders/qmatmul_q4k.spv
 var qmatmulQ4KSpirv []byte
 
+// qmatmulQ4KCoopSpirv is the cooperative M=1 Q4_K shader (shaders/qmatmul_q4k_coop.comp).
+// One workgroup per output element, its 64 invocations splitting that output's K and
+// reducing in shared memory — the Vulkan twin of the Metal simdgroup-cooperative kernel.
+//
+//go:embed shaders/qmatmul_q4k_coop.spv
+var qmatmulQ4KCoopSpirv []byte
+
+// q4kCoopEnabled gates the cooperative Q4_K path. It applies only at M==1, where the
+// scalar shader leaves all but N invocations idle. Exposed through SetQ4KCooperative
+// for the A/B control.
+var q4kCoopEnabled = true
+
+// qmatmulQ6KCoopSpirv is the cooperative M=1 Q6_K shader (shaders/qmatmul_q6k_coop.comp).
+//
+//go:embed shaders/qmatmul_q6k_coop.spv
+var qmatmulQ6KCoopSpirv []byte
+
+// q6kCoopEnabled gates the cooperative Q6_K path at M==1; see SetQ6KCooperative.
+var q6kCoopEnabled = true
+
+// qmatmulQ5KCoopSpirv is the cooperative M=1 Q5_K shader (shaders/qmatmul_q5k_coop.comp).
+//
+//go:embed shaders/qmatmul_q5k_coop.spv
+var qmatmulQ5KCoopSpirv []byte
+
+// q5kCoopEnabled gates the cooperative Q5_K path at M==1; see SetQ5KCooperative.
+var q5kCoopEnabled = true
+
+// qmatmulQ3KCoopSpirv is the cooperative M=1 Q3_K shader (shaders/qmatmul_q3k_coop.comp).
+//
+//go:embed shaders/qmatmul_q3k_coop.spv
+var qmatmulQ3KCoopSpirv []byte
+
+// q3kCoopEnabled gates the cooperative Q3_K path at M==1; see SetQ3KCooperative.
+var q3kCoopEnabled = true
+
+// qmatmulQ2KCoopSpirv is the cooperative M=1 Q2_K shader (shaders/qmatmul_q2k_coop.comp).
+//
+//go:embed shaders/qmatmul_q2k_coop.spv
+var qmatmulQ2KCoopSpirv []byte
+
+// q2kCoopEnabled gates the cooperative Q2_K path at M==1; see SetQ2KCooperative.
+var q2kCoopEnabled = true
+
+// qmatmulQ8CoopSpirv and qmatmulQ4_0CoopSpirv are the cooperative M=1 shaders for the
+// 32-weight block formats. Their split spans blocks rather than subdividing one — 64
+// invocations cannot subdivide a 32-weight block — see the shader headers.
+//
+//go:embed shaders/qmatmul_q8_coop.spv
+var qmatmulQ8CoopSpirv []byte
+
+//go:embed shaders/qmatmul_q4_0_coop.spv
+var qmatmulQ4_0CoopSpirv []byte
+
+// q8CoopEnabled and q4_0CoopEnabled gate those paths at M==1.
+var q8CoopEnabled = true
+var q4_0CoopEnabled = true
+
+// SetQ8_0Cooperative selects the cooperative M=1 Q8_0 shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ8_0Cooperative(on bool) bool {
+	prev := q8CoopEnabled
+	q8CoopEnabled = on
+	return prev
+}
+
+// SetQ4_0Cooperative selects the cooperative M=1 Q4_0 shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ4_0Cooperative(on bool) bool {
+	prev := q4_0CoopEnabled
+	q4_0CoopEnabled = on
+	return prev
+}
+
+// SetQ2KCooperative selects the cooperative M=1 Q2_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ2KCooperative(on bool) bool {
+	prev := q2kCoopEnabled
+	q2kCoopEnabled = on
+	return prev
+}
+
+// SetQ3KCooperative selects the cooperative M=1 Q3_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ3KCooperative(on bool) bool {
+	prev := q3kCoopEnabled
+	q3kCoopEnabled = on
+	return prev
+}
+
+// SetQ5KCooperative selects the cooperative M=1 Q5_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k).
+func SetQ5KCooperative(on bool) bool {
+	prev := q5kCoopEnabled
+	q5kCoopEnabled = on
+	return prev
+}
+
+// SetQ6KCooperative selects the cooperative M=1 Q6_K shader and returns the previous
+// setting. Results match the scalar shader within crossTol(k): the per-element
+// arithmetic is identical, only the summation order differs.
+func SetQ6KCooperative(on bool) bool {
+	prev := q6kCoopEnabled
+	q6kCoopEnabled = on
+	return prev
+}
+
+// SetQ4KCooperative selects the cooperative M=1 Q4_K shader and returns the previous
+// setting. Results match the scalar shader within the tolerance its cross-reference
+// test uses: the per-element arithmetic is identical, only the summation order differs
+// (per-invocation partials reduced in shared memory).
+func SetQ4KCooperative(on bool) bool {
+	prev := q4kCoopEnabled
+	q4kCoopEnabled = on
+	return prev
+}
+
 // qmatmulQ6KSpirv is the compiled Q6_K quantized-matmul shader (shaders/qmatmul_q6k.comp →
 // qmatmul_q6k.spv via `make vulkan-spv`), embedded like the others (§T141).
 //
@@ -369,6 +486,48 @@ func (Backend) QMatMul(x *tensor.Tensor, weight []byte, quantType uint32, n, k i
 }
 
 // residentSpirv returns the compiled shader for a quant type's resident matmul (nil if none).
+// residentCoopSpirv returns the cooperative M=1 shader for a quant type, or nil when
+// that type has none or its gate is off. It is consulted ONLY at m==1.
+//
+// This exists because Recorder.QMatMulResident is the path the DECODER takes, and it
+// is not the path QMatMulQ4_K takes. Wiring the cooperative shaders into the latter
+// alone left them correct, fast and UNREACHABLE from production: an end-to-end decode
+// A/B measured 1.000x-1.015x because both sides ran the scalar shader. Seven leaf A/Bs
+// had not caught it, because they all drive the standalone entry point.
+func residentCoopSpirv(qt uint32) []byte {
+	switch qt {
+	case qtQ4_0:
+		if q4_0CoopEnabled {
+			return qmatmulQ4_0CoopSpirv
+		}
+	case qtQ8_0:
+		if q8CoopEnabled {
+			return qmatmulQ8CoopSpirv
+		}
+	case qtQ2_K:
+		if q2kCoopEnabled {
+			return qmatmulQ2KCoopSpirv
+		}
+	case qtQ3_K:
+		if q3kCoopEnabled {
+			return qmatmulQ3KCoopSpirv
+		}
+	case qtQ4_K:
+		if q4kCoopEnabled {
+			return qmatmulQ4KCoopSpirv
+		}
+	case qtQ5_K:
+		if q5kCoopEnabled {
+			return qmatmulQ5KCoopSpirv
+		}
+	case qtQ6_K:
+		if q6kCoopEnabled {
+			return qmatmulQ6KCoopSpirv
+		}
+	}
+	return nil
+}
+
 func residentSpirv(qt uint32) []byte {
 	switch qt {
 	case qtQ4_0:
@@ -532,6 +691,19 @@ func QMatMulQ8_0(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q8CoopEnabled && len(qmatmulQ8CoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ8CoopSpirv[0])), C.int(len(qmatmulQ8CoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ8_0 failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q8_0(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ8Spirv[0])), C.int(len(qmatmulQ8Spirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -580,6 +752,19 @@ func QMatMulQ4_0(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q4_0CoopEnabled && len(qmatmulQ4_0CoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4_0CoopSpirv[0])), C.int(len(qmatmulQ4_0CoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ4_0 failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q4_0(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4_0Spirv[0])), C.int(len(qmatmulQ4_0Spirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -627,13 +812,24 @@ func QMatMulQ4_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
-	rc := C.vk_qmatmul_q4k(
-		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KSpirv[0])), C.int(len(qmatmulQ4KSpirv)),
-		(*C.float)(&xc.Storage().F32()[0]),
-		(*C.uchar)(unsafe.Pointer(&padded[0])),
-		(*C.float)(&out.Storage().F32()[0]),
-		C.int(m), C.int(k), C.int(n), C.int(len(padded)),
-	)
+	var rc C.int
+	if m == 1 && q4kCoopEnabled && len(qmatmulQ4KCoopSpirv) > 0 {
+		rc = C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KCoopSpirv[0])), C.int(len(qmatmulQ4KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+	} else {
+		rc = C.vk_qmatmul_q4k(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ4KSpirv[0])), C.int(len(qmatmulQ4KSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+	}
 	if rc != 0 {
 		return nil, fmt.Errorf("vulkan: QMatMulQ4_K failed (code %d)", int(rc))
 	}
@@ -674,6 +870,19 @@ func QMatMulQ6_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q6kCoopEnabled && len(qmatmulQ6KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ6KCoopSpirv[0])), C.int(len(qmatmulQ6KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ6_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q6k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ6KSpirv[0])), C.int(len(qmatmulQ6KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -721,6 +930,19 @@ func QMatMulQ5_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q5kCoopEnabled && len(qmatmulQ5KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ5KCoopSpirv[0])), C.int(len(qmatmulQ5KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ5_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q5k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ5KSpirv[0])), C.int(len(qmatmulQ5KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -768,6 +990,19 @@ func QMatMulQ2_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q2kCoopEnabled && len(qmatmulQ2KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ2KCoopSpirv[0])), C.int(len(qmatmulQ2KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ2_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q2k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ2KSpirv[0])), C.int(len(qmatmulQ2KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -815,6 +1050,19 @@ func QMatMulQ3_K(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 		copy(padded, weight)
 	}
 	xc := x.Contiguous()
+	if m == 1 && q3kCoopEnabled && len(qmatmulQ3KCoopSpirv) > 0 {
+		rc := C.vk_qmatmul_coop(
+			(*C.uint32_t)(unsafe.Pointer(&qmatmulQ3KCoopSpirv[0])), C.int(len(qmatmulQ3KCoopSpirv)),
+			(*C.float)(&xc.Storage().F32()[0]),
+			(*C.uchar)(unsafe.Pointer(&padded[0])),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(m), C.int(k), C.int(n), C.int(len(padded)),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("vulkan: QMatMulQ3_K failed (code %d)", int(rc))
+		}
+		return out, nil
+	}
 	rc := C.vk_qmatmul_q3k(
 		(*C.uint32_t)(unsafe.Pointer(&qmatmulQ3KSpirv[0])), C.int(len(qmatmulQ3KSpirv)),
 		(*C.float)(&xc.Storage().F32()[0]),
@@ -1536,16 +1784,31 @@ func (r *Recorder) QMatMulResident(x *DeviceBuffer, w *ResidentQWeight, o *Devic
 		return fmt.Errorf("vulkan: Recorder qmatmul: resident weight is nil/closed")
 	}
 	spv := residentSpirv(w.qt)
+	coop := false
+	if m == 1 {
+		if c := residentCoopSpirv(w.qt); len(c) > 0 {
+			spv, coop = c, true
+		}
+	}
 	if len(spv) == 0 {
 		return fmt.Errorf("vulkan: Recorder qmatmul: no resident shader for quant type %d", w.qt)
 	}
 	if x.n < m*w.k || o.n < m*w.n {
 		return fmt.Errorf("vulkan: Recorder qmatmul shape mismatch: x=%d (want %d) o=%d (want %d)", x.n, m*w.k, o.n, m*w.n)
 	}
-	rc := C.vk_recorder_qmatmul(r.handle,
-		(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
-		x.handle, w.handle, o.handle,
-		C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	var rc C.int
+	if coop {
+		// One workgroup per output row instead of one invocation per output element.
+		rc = C.vk_recorder_qmatmul_coop(r.handle,
+			(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
+			x.handle, w.handle, o.handle,
+			C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	} else {
+		rc = C.vk_recorder_qmatmul(r.handle,
+			(*C.uint32_t)(unsafe.Pointer(&spv[0])), C.int(len(spv)),
+			x.handle, w.handle, o.handle,
+			C.int(m), C.int(w.k), C.int(w.n), C.int(w.wBytes))
+	}
 	if rc != 0 {
 		return fmt.Errorf("vulkan: Recorder qmatmul failed (%d)", int(rc))
 	}

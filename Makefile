@@ -269,7 +269,21 @@ preflight-full: preflight
 	@$(CGO_OFF) $(GO) test ./... -run='^$$' -bench=. -benchtime=1x -timeout 15m >/dev/null
 	@echo "→ simd build (GOEXPERIMENT=simd, soft lane)"
 	@GOEXPERIMENT=simd $(CGO_OFF) $(GO) build -tags=simd ./...
+	@$(MAKE) --no-print-directory preflight-metal
 	@echo "✓ preflight-full OK"
+
+## preflight-metal: run the cgo+metal lane's tests locally (darwin only, no-op elsewhere).
+##
+## This exists because neither preflight nor preflight-full could see that lane: both run
+## CGO_ENABLED=0, so they never even COMPILE the tests under //go:build darwin && cgo. A broken
+## Metal test therefore reached CI green-locally three times before being caught, and one of them
+## was a reference arm silently measuring the wrong implementation — a wrong NUMBER, not a build
+## error, which no amount of pure-Go checking can surface.
+.PHONY: preflight-metal
+preflight-metal:
+	@if [ "$$(uname -s)" != "Darwin" ]; then echo "  (skipped: not darwin)"; exit 0; fi
+	@echo "→ cgo+metal lane (backend/metal, llamagpu)"
+	@CGO_ENABLED=1 $(GO) test -tags metal -short -count=1 -timeout 20m ./backend/metal/ ./llamagpu/
 
 ## install-hooks: wire two git hooks — a FAST pre-commit (`make gofmt-check`, milliseconds)
 ## and the comprehensive pre-push (`make preflight`, the full CI mirror). The pre-commit

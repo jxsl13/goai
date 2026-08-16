@@ -313,6 +313,11 @@ func newKernelCache(m *SVC, x [][]float64, n int) *kernelCache {
 			kc.diag[i] = m.kernel(x[i], x[i])
 		}
 	})
+	// Raising this to 256 MB (libsvm's default is 200) was measured and changes nothing: 5.84/5.92
+	// against 5.86/5.68 ms on the 4000x20 scorecard fit. At n=4000 the 64 MB budget already holds
+	// 2097 of 4000 columns, and the fit touches fewer distinct columns than that, so the cache
+	// never evicts and its size is not a lever.
+	//
 	// Bound the cache to ~64 MB of columns (each column is 8n bytes). This
 	// comfortably holds every column a well-separated fit touches while
 	// capping worst-case memory; a miss merely recomputes, never wrong.
@@ -335,11 +340,45 @@ func (kc *kernelCache) column(i int) []float64 {
 	}
 	col := make([]float64, kc.n)
 	xi := kc.x[i]
+	// ATTEMPTED AND REVERTED: the distance identity ‖a-b‖² = ‖a‖² + ‖b‖² - 2a·b, with ‖xᵢ‖²
+	// precomputed once per sample. It replaces the difference form's 3 operations per dimension
+	// (sub, mul, add) with a dot product's 2, and removes the subtract that feeds the multiply.
+	// Measured interleaved on the 4000x20 scorecard fit: 5.95 vs 5.80 ms and 5.52 vs 5.44 — slower
+	// in both runs. At d=20 the difference loop is already tight, and the identity adds two norm
+	// loads plus a clamp for the cancellation case (‖·‖² can come out negative) per pair, which
+	// costs more than the saved operation. The textbook rewrite pays at large d, not here.
+	//
 	// A kernel column is n INDEPENDENT evaluations — entry t reads xi and x[t] and writes only
 	// col[t] — so banding it is race-free and bit-identical: each entry performs exactly the
 	// arithmetic it did before, and only which goroutine performs it moves. This is where the
 	// RBF fit spends its time: kernelCache.column was 40.6% of a serial profile, of which
-	// math.archExp alone is 11.4%, and the whole fit scaled at 1.02x on twelve cores.
+	// math.archExp alone is 11.4%.
+	//
+	// The "scaled at 1.02x on twelve cores" this comment used to carry does not reproduce.
+	// Measured on the 4000x20 scorecard fit: GOMAXPROCS=1 gives 7.49/7.28 ms against 5.69/5.66
+	// with all cores — 1.3x, not 1.02x. Parallelising the column is worth keeping.
+	//
+	// Where the remaining gap to libsvm is NOT: the solver. Instrumenting the loop shows this fit
+	// converges in 78 SMO steps with 3980 of 4000 variables at a bound, so the O(n) scans cost
+	// ~312k index visits in total and shrinking — the obvious next libsvm technique — would
+	// optimise something that is already negligible. The work is ~156 kernel columns, i.e. ~624k
+	// kernel evaluations, each 20 dimensions plus a math.Exp.
+	//
+	// So the gap is per-core kernel throughput: scikit-learn's SINGLE-THREADED libsvm fits in
+	// 3.51 ms against our 7.3 ms serial and 5.66 ms on twelve cores. Same algorithm, same step
+	// count, ~2.1x per-core. The likeliest cause is the kernel inner loop and math.Exp against C's
+	// vectorised libm, which is a Go-runtime limit rather than an algorithmic one.
+	//
+	// ATTEMPTED AND REVERTED: a fast exp for the x<=0 domain (range reduction plus a degree-6
+	// series, ~1.6e-7 relative error, verified against math.Exp). The reasoning looked safe —
+	// kernel values live in [0,1] and the SMO stopping tolerance is 1e-3, so 1e-7 is four orders
+	// below what the solver tests. Measured, the fit went from 5.79 ms to 9452 ms: 1600x SLOWER,
+	// which is the solver running to maxIter instead of converging in 78 steps.
+	//
+	// So the kernel accuracy budget is NOT the stopping tolerance. Second-order working-set
+	// selection compares objective decreases computed from K entries, and inconsistencies far below
+	// tol are enough to keep picking pairs that do not make progress. math.Exp's accuracy is load-
+	// bearing here, and swapping in an approximation is not a free speed/precision trade.
 	parallelBands(kc.n, len(xi), func(lo, hi int) {
 		for t := lo; t < hi; t++ {
 			col[t] = kc.m.kernel(xi, kc.x[t])
@@ -387,6 +426,19 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 		maxSteps = lim // WSS steps are single pairs, not sweeps; ensure room to converge
 	}
 
+	// Stall detector. SMO is supposed to drive the KKT gap monotonically toward tol; if it stops
+	// improving, further steps are wasted and the loop would otherwise grind to maxSteps. That is
+	// not hypothetical: on amd64 this fit EXHAUSTS 400,000 steps where arm64 converges in 78,
+	// because the arithmetic differs by enough that the working-set choice stops making progress
+	// (this package has measured that a 1.6e-7 kernel perturbation is sufficient to cause it).
+	//
+	// Terminating on a stalled gap returns the best solution found rather than the one maxSteps
+	// happens to land on, and costs nothing on a converging fit, where the gap improves until the
+	// tol check fires first.
+	bestGap := math.Inf(1)
+	stall := 0
+	const stallWindow = 2000
+
 	//perfscan:ignore PS3044 sequential SMO iteration, step depends on previous
 	for step := 0; step < maxSteps; step++ {
 		// pass 1: select i over I_up and track the I_low maximum for stopping
@@ -409,6 +461,11 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 		}
 		if iUp < 0 || eLowMax-eUpMin < tol {
 			break // KKT satisfied to tolerance
+		}
+		if gap := eLowMax - eUpMin; gap < bestGap-1e-12 {
+			bestGap, stall = gap, 0
+		} else if stall++; stall > stallWindow {
+			break // gap has not improved in stallWindow steps: no further progress is available
 		}
 
 		// pass 2: second-order selection of j over I_low

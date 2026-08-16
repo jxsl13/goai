@@ -332,6 +332,12 @@ func testFuncs(pkgDir string) []string {
 // execGoTest prints the exact command and then runs it with stdout/stderr streamed
 // through unmodified — the CLI never swallows test output (§T587).
 func execGoTest(dir string, args, pkgs []string, w io.Writer) int {
+	// With no packages left there is nothing to do, and `go test` with no package list would fall
+	// back to testing the package in dir — the module root — which is not what was selected.
+	if len(pkgs) == 0 {
+		fmt.Fprintln(w, "\n== nothing to test under this build config ==")
+		return 0
+	}
 	full := append(append([]string{"test"}, args...), pkgs...)
 	fmt.Fprintln(w, "\n== command ==\n  go "+strings.Join(full, " "))
 	fmt.Fprintln(w, "\n== go test output ==")

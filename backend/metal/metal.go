@@ -2092,6 +2092,25 @@ func (r *Recorder) Copy2D(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceB
 
 // Binary records O = a (op) b over n elements into the command buffer over device buffers
 // (op 0=add, 1=sub, 2=mul, 3=div, 4=max, 5=min).
+// BinaryN is Binary bounded to the FIRST n elements. Decoder buffers are allocated for the whole
+// context, so an unbounded elementwise op over one decoded row touches ctx x width elements instead
+// of width — at ctx=1024 that is a factor of 1024 in memory traffic, and it dominated decode
+// (§ the 22-layer profile: 46.8 adds/token over 2,097,152 elements each). Every other recorded op
+// already takes a row count; this gives Binary the same.
+func (r *Recorder) BinaryN(a, b, o *DeviceBuffer, op, n int) error {
+	if n < 0 || n > a.n || n > b.n || n > o.n {
+		return fmt.Errorf("metal: Recorder binaryN n=%d out of range (a=%d b=%d o=%d)", n, a.n, b.n, o.n)
+	}
+	if n == 0 {
+		return nil
+	}
+	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(n), C.int(op))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder binaryN failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) Binary(a, b, o *DeviceBuffer, op int) error {
 	if a.n != o.n || b.n != o.n {
 		return fmt.Errorf("metal: Recorder binary size %d/%d != %d", a.n, b.n, o.n)
@@ -2293,6 +2312,238 @@ func (r *Recorder) Wait() error {
 	}
 	return nil
 }
+
+// LastGPUSeconds returns the GPU-side duration of the most recently waited command buffer,
+// from the device timestamps — free of host submit/wake jitter.
+func LastGPUSeconds() float64 { return float64(C.mtl_last_gpu_seconds()) }
+
+// SetQ4KDequantGemmF16 toggles the f16 short-prompt weight path (Q4_K only), which expands the
+// weight to half instead of float and runs an f16 GEMM. On by default. It halves the weight bytes,
+// which helps only while the GEMM is bandwidth-bound, so it is additionally gated on M.
+func SetQ4KDequantGemmF16(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_dq_gemm_f16(v)
+}
+
+// SetQ4KDequantGemmF16MaxM sets the largest M that takes the f16 path. Above it the GEMM is
+// compute-bound and f16 measures ~3% slower, so widening this is a pessimization, not a tuning knob.
+//
+// NOTE: this only takes effect when the weight cache is DISABLED. With the cache on (the default)
+// the cap is 512, chosen end-to-end — see the measured sweep in metal_bridge.m. A probe that varies
+// this setter while the cache is enabled measures nothing and will look like insensitivity.
+func SetQ4KDequantGemmF16MaxM(m int) { C.mtl_set_q4k_dq_gemm_f16_max_m(C.int(m)) }
+
+// SetF16MinN sets the smallest output width N that takes the f16 expand-then-GEMM path. Narrow
+// projections otherwise fall to the cooperative quantized kernel, which re-reads the weight per
+// row-group and so costs per row at prefill batch sizes.
+func SetF16MinN(n int) { C.mtl_set_f16_min_n(C.int(n)) }
+
+// SetSplitKDecode toggles split-K (flash-decoding) attention for sq==1, dk==64. The single-pass
+// kernel launches only `heads` threadgroups of 32 threads, running decode attention at a few percent
+// occupancy; splitting the key range multiplies parallelism by the chunk count. On by default.
+func SetSplitKDecode(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_decode(v)
+}
+
+// SetSplitKChunks caps how many key-chunks split-K attention divides the context into. More chunks
+// means more threadgroups (the mechanism that makes split-K win) but more per-chunk partials to
+// merge in the second pass.
+func SetSplitKChunks(n int) { C.mtl_set_splitk_chunks(C.int(n)) }
+
+// SetSplitKPerChunk sets how many keys each split-K chunk covers. Fewer keys per chunk means more
+// threadgroups — the mechanism that makes split-K win — at the cost of more partials to merge.
+func SetSplitKPerChunk(n int) { C.mtl_set_splitk_perchunk(C.int(n)) }
+
+// SetSplitKHalfDK selects the split-K pass-1 variant whose lane pairs each own half of dk, halving
+// per-thread register arrays at the cost of twice the loop iterations and one extra shuffle per key.
+func SetSplitKHalfDK(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_half(v)
+}
+
+// SetSplitKQuadDK selects the split-K pass-1 variant whose lane QUADS each own a quarter of dk.
+func SetSplitKQuadDK(on bool) {
+	var v C.int
+	if on {
+		v = 1
+	}
+	C.mtl_set_splitk_quad(v)
+}
+
+// ProbeSplitKHalfOccupancy reports maxTotalThreadsPerThreadgroup for the half-dk pass-1 variant.
+func ProbeSplitKHalfOccupancy() int {
+	var out [8]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1
+	}
+	return int(out[5])
+}
+
+// SetWeightCacheGB sets the persistent expanded-weight cache budget in gigabytes, or disables it
+// with 0. It now DEFAULTS to an eighth of physical RAM capped at 4 GB rather than to off.
+//
+// Expanding a quantized weight for a dense GEMM is the ENTIRE fixed cost of a prefill pass — 37.03
+// ms/pass for TinyLlama-1.1B Q4_K_M, against 0.00 ms for the cooperative path that does not expand —
+// and it is redone every pass over weights that never change. Caching removes it, which matters most
+// for short prompts where it is over half the pass.
+//
+// The cost is memory: the expansion is held in f16, roughly 3x the size of the quantized file (~1.94
+// GB for TinyLlama's 636 MB). Weights past the budget silently fall back to per-pass expansion, so a
+// too-small budget is slow rather than wrong. Enabling it also lifts the f16 path's M cap, since
+// without a per-pass expansion the f16 GEMM's ~3% at large M is worth taking.
+func SetWeightCacheGB(gb float64) { C.mtl_set_weight_cache(C.double(gb)) }
+
+// WeightCacheStats reports cache hits, misses and resident bytes since the last SetWeightCacheGB.
+// A miss count equal to the number of distinct weights and hits thereafter is the expected pattern;
+// misses that keep climbing mean the budget is too small.
+func WeightCacheStats() (hits, misses int, bytes float64) {
+	var h, m C.int
+	var b C.double
+	C.mtl_weight_cache_stats(&h, &m, &b)
+	return int(h), int(m), float64(b)
+}
+
+// ProbeReadBandwidth times a pure streaming read over the given number of bytes using the same
+// threadgroup shape as the cooperative quantized matmul, and returns the best GPU seconds. Compared
+// against the real kernel it separates a memory ceiling from a dequant-ALU limit.
+func ProbeReadBandwidth(bytes float64, reps int) float64 {
+	return float64(C.mtl_probe_read_bw(C.double(bytes), C.int(reps)))
+}
+
+// ProbeEncoderCost times n trivial dispatches packed per-to-an-encoder, isolating per-dispatch from
+// per-encoder overhead. A decode step issues a few hundred dispatches, so the gap between per=1 and
+// per=n says how much of a token is spent switching encoders rather than computing.
+func ProbeEncoderCost(n, per, reps int) float64 {
+	return float64(C.mtl_probe_encoder_cost(C.int(n), C.int(per), C.int(reps)))
+}
+
+// ProbeDecodeAttnOccupancy reports maxTotalThreadsPerThreadgroup for the generic, dk=64 and dk=128
+// decode attention pipelines. The value is dictated by register pressure, so it distinguishes "this
+// kernel is latency-bound because it cannot fit enough simdgroups per core" from other causes.
+func ProbeDecodeAttnOccupancy() (generic, dk64, dk128 int) {
+	var out [8]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1, -1, -1
+	}
+	return int(out[0]), int(out[1]), int(out[2])
+}
+
+// ProbeSplitKOccupancy reports maxTotalThreadsPerThreadgroup for the two split-K attention passes.
+func ProbeSplitKOccupancy() (p1, p2 int) {
+	var out [8]C.int
+	if C.mtl_probe_pipeline_occupancy(&out[0]) != 0 {
+		return -1, -1
+	}
+	return int(out[3]), int(out[4])
+}
+
+// CheckSGGemm runs the hand-written GEMM on real data so its result can be verified.
+func CheckSGGemm(a, b []float32, m, k, n int) ([]float32, error) {
+	c := make([]float32, m*n)
+	rc := C.mtl_check_sg_gemm((*C.float)(&a[0]), (*C.float)(&b[0]), (*C.float)(&c[0]),
+		C.int(m), C.int(k), C.int(n))
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: sg_gemm check failed (%d)", int(rc))
+	}
+	return c, nil
+}
+
+// ProbeSGGemm times the hand-written tiled simdgroup GEMM. It exists to price replacing MPS, not
+// to be used in the model path.
+func ProbeSGGemm(m, k, n, reps int) float64 {
+	return float64(C.mtl_probe_sg_gemm(C.int(m), C.int(k), C.int(n), C.int(reps)))
+}
+
+// ProbeGEMMDtypeCold times an MPS GEMM over nbuf rotating weight buffers, so no weight stays
+// cache-resident — the regime a real forward pass runs in. Use it, not ProbeGEMMDtype, whenever the
+// comparison depends on how many bytes a format reads.
+func ProbeGEMMDtypeCold(m, k, n int, f16 bool, nbuf int) float64 {
+	var h C.int
+	if f16 {
+		h = 1
+	}
+	return float64(C.mtl_probe_gemm_cold(C.int(m), C.int(k), C.int(n), h, C.int(nbuf)))
+}
+
+// ProbeGEMMDtype times an MPS GEMM [m,k]·[k,n] in f16 or f32 and returns the best per-GEMM GPU
+// seconds. It allocates its own buffers, so it answers "is an f16 GEMM faster at this shape" without
+// any of the f16 dequantize/convert plumbing existing yet. Returns a negative value on failure.
+func ProbeGEMMDtype(m, k, n int, f16 bool, reps int) float64 {
+	var h C.int
+	if f16 {
+		h = 1
+	}
+	return float64(C.mtl_probe_gemm_dtype(C.int(m), C.int(k), C.int(n), h, C.int(reps)))
+}
+
+// SetQ4KMatrixUnit toggles the matrix-unit Q4_K path (M>=8). Test seam: it lets a parity test
+// obtain the cooperative kernel's result for the same inputs.
+func SetQ4KMatrixUnit(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_mm(v)
+}
+
+// DequantQ4K records the dequantization of a resident Q4_K weight into a dense f32 [K][N] buffer,
+// the operand order MPS GEMM consumes.
+func (r *Recorder) DequantQ4K(w *ResidentQWeight, o *DeviceBuffer) error {
+	if w == nil || w.handle == nil {
+		return fmt.Errorf("metal: DequantQ4K: resident weight is nil/closed")
+	}
+	if o.n < w.k*w.n {
+		return fmt.Errorf("metal: DequantQ4K: output %d < %d", o.n, w.k*w.n)
+	}
+	rc := C.mtl_recorder_dequant_qk(r.handle, w.handle, o.handle, C.int(w.k), C.int(w.n), C.int(w.qt))
+	if rc != 0 {
+		return fmt.Errorf("metal: DequantQ4K failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// SetQ4KDequantGemm toggles the prompt-processing path (expand the Q4_K weight once, then a dense
+// GEMM) used above the measured batch-size crossover.
+func SetQ4KDequantGemm(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_q4k_dq_gemm(v)
+}
+
+// FlashMM records matrix-unit prefill attention (dk=64). Experimental; see flash_mm_f32.
+func (r *Recorder) FlashMM(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, causal int, scale float32) error {
+	rc := C.mtl_recorder_flash_mm(r.handle, q.handle, k.handle, v.handle, o.handle,
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(causal), C.float(scale))
+	if rc != 0 {
+		return fmt.Errorf("metal: FlashMM failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// SetFlashMM toggles the matrix-unit prefill attention path. Test seam: MHA routes to it, so a
+// parity test must switch it off to obtain the reference kernel's result for the same inputs.
+func SetFlashMM(on bool) {
+	v := C.int(0)
+	if on {
+		v = 1
+	}
+	C.mtl_set_flash_mm(v)
+}
+
+// ProbeMixedMMA reports whether this device compiles half-input MMA into a float accumulator.
+func ProbeMixedMMA() int { return int(C.mtl_probe_mixed_mma()) }
 
 func (r *Recorder) Free() {
 	if r.handle != nil {

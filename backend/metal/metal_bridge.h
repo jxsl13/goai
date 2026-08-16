@@ -214,6 +214,48 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
 int mtl_recorder_finish(void* rec);
 int mtl_recorder_commit(void* rec);
 int mtl_recorder_wait(void* rec);
+double mtl_last_gpu_seconds(void);
+
+// mtl_probe_gemm_dtype times an MPS GEMM [M,K]x[K,N] in f16 (f16!=0) or f32 and returns the best
+// per-GEMM GPU seconds over its own private buffers. <0 on failure.
+double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps);
+
+// Pure streaming read over `bytes`, same threadgroup shape as the cooperative quantized matmul.
+double mtl_probe_read_bw(double bytes, int reps);
+
+// Hand-written tiled simdgroup GEMM, for pricing a replacement of MPS.
+double mtl_probe_sg_gemm(int M, int K, int N, int reps);
+int mtl_check_sg_gemm(const float* A, const float* B, float* C, int M, int K, int N);
+
+// MPS GEMM timed with rotating weight buffers so none stays cache-resident.
+double mtl_probe_gemm_cold(int M, int K, int N, int f16, int nbuf);
+
+// Per-dispatch vs per-encoder overhead: n trivial dispatches packed `per` to a compute encoder.
+double mtl_probe_encoder_cost(int n, int per, int reps);
+
+// maxTotalThreadsPerThreadgroup for the decode attention pipelines (register-pressure proxy).
+int mtl_probe_pipeline_occupancy(int* out);
+
+// f16 short-prompt weight path (Q4_K only). On by default, gated to M <= max_m.
+void mtl_set_q4k_dq_gemm_f16(int on);
+void mtl_set_q4k_dq_gemm_f16_max_m(int m);
+
+// Persistent expanded-weight cache. max_gb <= 0 disables (default). Holds each Q4_K weight's f16
+// expansion so prefill stops paying for it every pass, at the cost of ~3x the model file in memory.
+void mtl_set_f16_min_n(int n);
+void mtl_set_splitk_decode(int on);
+void mtl_set_splitk_chunks(int n);
+void mtl_set_splitk_perchunk(int n);
+void mtl_set_splitk_half(int on);
+void mtl_set_splitk_quad(int on);
+void mtl_set_weight_cache(double max_gb);
+void mtl_weight_cache_stats(int* hits, int* misses, double* bytes);
+void mtl_set_q4k_mm(int on);
+int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt);
+void mtl_set_q4k_dq_gemm(int on);
+void mtl_set_flash_mm(int on);
+int mtl_probe_mixed_mma(void);
+int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh, int sq, int sk, int dm, int heads, int kvHeads, int causal, float scale);
 void mtl_recorder_free(void* rec);
 void* mtl_devbuf_upload(const void* data, int nbytes);
 int mtl_devbuf_download(void* handle, void* dst, int nbytes);

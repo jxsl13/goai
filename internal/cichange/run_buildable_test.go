@@ -82,7 +82,19 @@ func TestBuildablePkgsHonoursTags(t *testing.T) {
 	}
 }
 
-// TestBuildablePkgsKeepsAllWhenProbeFails asserts the fail-open direction. If `go list` itself
+// TestBuildablePkgsKeepsAllWhenProbeFails asserts the fail-open direction, which is a DELIBERATE
+// choice against the alternative: an earlier implementation dropped any package go list reported
+// with no files, including one that does not exist at all. That conflates "excluded by build tags
+// here" with "the probe could not answer", and the second is never a reason to stop testing
+// something — the selector only names packages it found in the module graph, so an unresolved
+// answer signals a probe problem, and forwarding it makes `go test` say so loudly instead of
+// silently shrinking the run.
+//
+// Worth recording about this class: `go test ./...` CANNOT reproduce the failure, because the
+// wildcard form silently skips a constraint-excluded package while naming it explicitly is a hard
+// error. That is why no local check saw the CI break, and why the protection lives here at the
+// filter — a Makefile gate on the SELECTION was tried and reverted, since once execGoTest filters,
+// a selection containing such a package is correct rather than a fault. If `go list` itself
 // cannot answer, dropping packages would silently stop testing real code; forwarding them all
 // merely lets go test report the problem itself, which is the safe way to be wrong here.
 func TestBuildablePkgsKeepsAllWhenProbeFails(t *testing.T) {

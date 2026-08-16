@@ -20,7 +20,17 @@ func t882Corpus() string {
 	return sb.String()
 }
 
-// BenchmarkGPT2Encode measures BPE encode throughput (bytes/s). On M2 Pro GoAI's
+// BenchmarkGPT2Encode measures BPE encode throughput (bytes/s).
+//
+// RE-MEASURED 2026-08-15, both sides back-to-back in one session: GoAI encodes the 1 MB corpus at
+// 46.8 MB/s against tiktoken 0.13.0's 20.08 MB/s — 2.33x — and decodes at 995.3 MB/s against
+// 372.10 — 2.68x. Token counts match exactly (237,208 each side), so the parity below still holds.
+//
+// The older figures in this comment (28.2 vs 18.8 MB/s, 1.50x) are STALE rather than wrong: the
+// O(n log n) BPE merge landed after them in #984 and #985, which is where the extra margin came
+// from. Kept as the historical record.
+//
+// Historical (T882): GoAI's
 // pure-Go GPT-2 BPE encodes the 1 MB corpus at ≈28.2 MB/s (≈6.7M tok/s), versus
 // tiktoken 0.13.0's Rust core at 18.8 MB/s — GoAI ≈1.50× faster — with the
 // identical 237,208-token output on both sides (bit-exact parity, T882). The

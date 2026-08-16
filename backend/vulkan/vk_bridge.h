@@ -167,6 +167,9 @@ int vk_qmatmul_q4_0(const uint32_t* spv, int spvLen,
 int vk_qmatmul_q4k(const uint32_t* spv, int spvLen,
                    const float* X, const unsigned char* W, float* O,
                    int M, int K, int N, int wBytes);
+int vk_qmatmul_coop(const uint32_t* spv, int spvLen,
+                    const float* X, const unsigned char* W, float* O,
+                    int M, int K, int N, int wBytes);
 
 // vk_qmatmul_q6k is the Q6_K analogue (§T141): same generic {M,K,N} byte-buffer dispatch, only
 // the SPIR-V module differs (the Q6_K in-kernel dequant, §R99). K must be a multiple of 256.
@@ -232,6 +235,7 @@ int vk_recorder_mha(void* rec, const uint32_t* spv, int spvLen, void* qh, void* 
                     int qElemOff);
 int vk_recorder_qmatmul(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh,
                         int M, int K, int N, int wBytes);
+int vk_recorder_qmatmul_coop(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh, int M, int K, int N, int wBytes);
 int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh, void* kh, void* vh, void* oh,
                            int sq, int sk, int dm, int heads, int kvHeads, int dk, int causal, float scale,
                            int qElemOff);

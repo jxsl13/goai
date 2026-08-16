@@ -1422,6 +1422,24 @@ int vk_qmatmul_q4k(const uint32_t* spv, int spvLen,
     return vk_qmatmul_bytes(spv, spvLen, X, W, O, M, K, N, wBytes);
 }
 
+// Cooperative form: ONE WORKGROUP per output element rather than one invocation, so
+// the shader's 64 invocations can split that output's K and reduce in shared memory.
+// The scalar form dispatches ceil(M*N/64) workgroups; this dispatches M*N.
+int vk_qmatmul_coop(const uint32_t* spv, int spvLen,
+                    const float* X, const unsigned char* W, float* O,
+                    int M, int K, int N, int wBytes) {
+    VkDeviceSize lens[3] = {
+        (VkDeviceSize)M * K * sizeof(float),
+        (VkDeviceSize)wBytes,
+        (VkDeviceSize)M * N * sizeof(float),
+    };
+    void* data[3] = { (void*)X, (void*)W, O };
+    int up[3] = {1, 1, 0}, down[3] = {0, 0, 1};
+    QMatPC pc = { M, K, N };
+    return vk_dispatch(spv, spvLen, 3, lens, data, up, down, &pc, sizeof(pc),
+                       (uint32_t)(M * N), 1u, 1u);
+}
+
 int vk_qmatmul_q6k(const uint32_t* spv, int spvLen,
                    const float* X, const unsigned char* W, float* O,
                    int M, int K, int N, int wBytes) {
@@ -1823,6 +1841,26 @@ int vk_recorder_mha_decode(void* rec, const uint32_t* spv, int spvLen, void* qh,
 // vk_recorder_qmatmul (§T414, mirrors metal §T413): record-mode QUANTIZED matmul — O = X·dequant(W)ᵀ
 // encoded into the recorder's command buffer over DevBuf X/O and a RESIDENT quantized weight
 // (vk_qweight_upload). The shader is the per-quant-type resident matmul spv. No submit.
+// Cooperative form: ONE WORKGROUP per output element rather than one invocation, so
+// the shader's 64 invocations split that output's K and reduce in shared memory.
+int vk_recorder_qmatmul_coop(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh,
+                        int M, int K, int N, int wBytes) {
+    if (!rec || !xh || !wHandle || !oh || M < 1 || K < 1 || N < 1) return -2;
+    DevBuf* x = (DevBuf*)xh; DevBuf* o = (DevBuf*)oh;
+    ResidentBuf* w = (ResidentBuf*)wHandle;
+    PipeCache* pc = NULL;
+    QMatPC push = { M, K, N };
+    pthread_mutex_lock(&gLock);
+    int rc = -4;
+    if (pipeline_for(spv, spvLen, 3, sizeof(push), &pc) == 0) {
+        VkBuffer buf[3] = { x->buf, w->buf, o->buf };
+        VkDeviceSize lens[3] = { (VkDeviceSize)M*K*4, (VkDeviceSize)wBytes, (VkDeviceSize)M*N*4 };
+        rc = rec_dispatch(pc, 3, buf, lens, &push, sizeof(push), (uint32_t)(M*N), 1u, 1u);
+    }
+    pthread_mutex_unlock(&gLock);
+    return rc;
+}
+
 int vk_recorder_qmatmul(void* rec, const uint32_t* spv, int spvLen, void* xh, void* wHandle, void* oh,
                         int M, int K, int N, int wBytes) {
     if (!rec || !xh || !wHandle || !oh || M < 1 || K < 1 || N < 1) return -2;

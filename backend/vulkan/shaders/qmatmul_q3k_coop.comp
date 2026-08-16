@@ -1,0 +1,104 @@
+#version 450
+
+// Cooperative M=1 Q3_K matmul — the Vulkan twin of the Metal simdgroup-cooperative
+// kernel, and sibling of qmatmul_q4k/q5k/q6k_coop.comp. The scalar shader gives ONE
+// INVOCATION PER OUTPUT (mi,ni), so at M=1 only N invocations have work and each walks
+// all of K. Here one WORKGROUP owns one output and its 64 invocations split that
+// output's K, reduced in shared memory (core Vulkan 1.0 — see the Q4_K twin for why
+// not subgroupAdd).
+//
+// Q3_K divides a 256-superblock into 16 scale groups of 16 elements, indexed
+// is = nb*8 + j*2 + grp in the scalar shader's nesting order. 64 invocations over 16
+// groups is FOUR PER GROUP: invocation I takes group g=I/4 and the four elements at
+// l in [(I%4)*4, +4). Every invocation therefore sits inside ONE scale, and the
+// per-element arithmetic is byte-for-byte the scalar shader's — the 2-bit qs field at
+// shift 2*j, the INVERTED hmask bit contributing (q3-4), and dAll*(sc-32). Only the
+// summation order differs.
+//
+// Each invocation unpacks only the one 6-bit scale it needs, not all 16.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+shared float partial[64];
+
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+uint getU32(int off) {
+    return getByte(off) | (getByte(off + 1) << 8) | (getByte(off + 2) << 16) | (getByte(off + 3) << 24);
+}
+
+void main() {
+    uint outIdx = gl_WorkGroupID.x;
+    if (outIdx >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(outIdx) / p.N;
+    int ni = int(outIdx) % p.N;
+    int inv = int(gl_LocalInvocationID.x);
+    int g = inv / 4;
+    int l0 = (inv % 4) * 4;
+    int nb = g / 8;
+    int j = (g % 8) / 2;
+    int grp = g % 2;
+    uint shift = uint(2 * j);
+    uint mbit = 1u << uint(nb * 4 + j);
+    int gOff = grp * 16;
+
+    int nsb = p.K / 256;
+    int rowBytes = nsb * 110;
+    int rowOff = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int sb = 0; sb < nsb; ++sb) {
+        int base = rowOff + sb * 110;
+        int hmB = base;
+        int qsB = base + 32;
+        int scB = base + 96;
+        uint dr = getByte(base + 108) | (getByte(base + 109) << 8);
+        float dAll = unpackHalf2x16(dr).x;
+
+        uint aux0 = getU32(scB);
+        uint aux1 = getU32(scB + 4);
+        uint aux2 = getU32(scB + 8);
+        uint tmp = aux2;
+        uint a0 = (aux0 & 0x0f0f0f0fu) | (((tmp >> 0) & 0x03030303u) << 4);
+        uint a1 = (aux1 & 0x0f0f0f0fu) | (((tmp >> 2) & 0x03030303u) << 4);
+        uint a2 = ((aux0 >> 4) & 0x0f0f0f0fu) | (((tmp >> 4) & 0x03030303u) << 4);
+        uint a3 = ((aux1 >> 4) & 0x0f0f0f0fu) | (((tmp >> 6) & 0x03030303u) << 4);
+        uint av = (g < 4) ? a0 : ((g < 8) ? a1 : ((g < 12) ? a2 : a3));
+        int scv = int((av >> (8u * uint(g & 3))) & 0xFFu);
+        float dl = dAll * float(scv - 32);
+
+        int qb = qsB + nb * 32;
+        int xk = mi * p.K + sb * 256 + nb * 128 + j * 32 + grp * 16;
+        for (int t = 0; t < 4; ++t) {
+            int l = l0 + t;
+            int q3 = int((getByte(qb + gOff + l) >> shift) & 3u);
+            int h = ((getByte(hmB + gOff + l) & mbit) != 0u) ? 0 : 4;
+            acc += x[xk + l] * dl * float(q3 - h);
+        }
+    }
+
+    partial[inv] = acc;
+    barrier();
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+        if (uint(inv) < s) {
+            partial[inv] += partial[inv + int(s)];
+        }
+        barrier();
+    }
+    if (inv == 0) {
+        o[mi * p.N + ni] = partial[0];
+    }
+}

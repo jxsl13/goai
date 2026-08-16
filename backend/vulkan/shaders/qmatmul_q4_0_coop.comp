@@ -1,0 +1,73 @@
+#version 450
+
+// Cooperative M=1 Q4_0 matmul — the Vulkan twin of the Metal simdgroup-cooperative
+// kernel. The scalar shader gives ONE INVOCATION PER OUTPUT (mi,ni), so at M=1 only N
+// invocations have work and each walks all of K. Here one WORKGROUP owns one output
+// and its 64 invocations split that output's K, reduced in shared memory.
+//
+// THE SPLIT DIFFERS FROM THE SUPERBLOCK FORMATS. Q2_K/Q3_K/Q4_K/Q5_K/Q6_K have
+// 256-element superblocks, so 64 invocations subdivide ONE block and each invocation
+// stays inside one scale group. Q4_0 blocks hold only 32 weights, so 64
+// invocations cannot subdivide one — they span blocks instead: invocation I takes
+// element I%32 of every block whose index has parity I/32, i.e. invocations 0-31 walk
+// the even blocks and 32-63 the odd ones. Each invocation therefore owns one element
+// per block it visits, and the per-element arithmetic is byte-for-byte the scalar
+// shader's. Only the summation order differs.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(std430, binding = 0) readonly buffer BufX { float x[]; };
+layout(std430, binding = 1) readonly buffer BufW { uint w[]; };
+layout(std430, binding = 2) writeonly buffer BufO { float o[]; };
+
+layout(push_constant) uniform PC {
+    int M; int K; int N;
+} p;
+
+shared float partial[64];
+
+uint getByte(int off) {
+    uint word = w[off >> 2];
+    return (word >> ((uint(off & 3)) * 8u)) & 0xFFu;
+}
+
+void main() {
+    uint outIdx = gl_WorkGroupID.x;
+    if (outIdx >= uint(p.M * p.N)) {
+        return;
+    }
+    int mi = int(outIdx) / p.N;
+    int ni = int(outIdx) % p.N;
+    int inv = int(gl_LocalInvocationID.x);
+    int sub = inv / 32;
+    int e = inv % 32;
+
+    int nb = p.K / 32;
+    int rowBytes = nb * 18;
+    int woffRow = ni * rowBytes;
+
+    float acc = 0.0;
+    for (int b = sub; b < nb; b += 2) {
+        int woff = woffRow + b * 18;
+        uint raw = getByte(woff) | (getByte(woff + 1) << 8);
+        float d = unpackHalf2x16(raw).x;
+        int xoff = mi * p.K + b * 32;
+        // Q4_0 packs x[i] in the low nibble of byte i and x[i+16] in the high one,
+        // so element e reads byte e%16 and picks the nibble by e/16.
+        uint q = getByte(woff + 2 + (e % 16));
+        float v = (e < 16) ? float(int(q & 0xFu) - 8) : float(int(q >> 4) - 8);
+        acc += x[xoff + e] * d * v;
+    }
+
+    partial[inv] = acc;
+    barrier();
+    for (uint s = 32u; s > 0u; s >>= 1u) {
+        if (uint(inv) < s) {
+            partial[inv] += partial[inv + int(s)];
+        }
+        barrier();
+    }
+    if (inv == 0) {
+        o[mi * p.N + ni] = partial[0];
+    }
+}
