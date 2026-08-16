@@ -3714,3 +3714,22 @@ DIRECTIONS NOW CLOSED, each on measurement rather than argument:
 WHAT WOULD ACTUALLY WORK, and it is a project rather than a patch: evaluate kernel entries in BATCHES via a BLAS-style gemm on the distance identity, so the arithmetic reaches Accelerate instead of a scalar Go loop. SMO asks for one column at a time, so this is a solver restructuring — batched or decomposition SMO holding several columns in flight — not a kernel change. It is the only remaining direction with the headroom to close 1.72x, and it should be scoped as such rather than attempted as an optimisation.
 
 CONTEXT for whether that is worth doing: SVC_rbf is the ONLY loss on the classical scorecard. Re-measured in-session against sklearn 1.9.0 / numpy 2.5.2 at 4000x20, GoAI leads GradientBoosting100 16.5x, RandomForest100 14.3x (4.9x against sklearn n_jobs=-1), DecisionTree 6.3x and GaussianNB 2.0x. KNN_fit is a fit-only artifact of eager ball-tree construction.
+
+## R-01M05KE0W4ENZ8AW98PTDNJNQR 5.45x prefill cliff at M=24: a threshold calibrated against a fallback that later narrowed to M==1
+kind: research
+state: draft
+created: 2026-08-16
+
+A 5.45x prefill cliff at a batch threshold, caused by an INTERACTION between two individually correct changes, and invisible to every test.
+
+SYMPTOM. TinyLlama-1.1B Q4_K_M prefill: 23 tokens cost 257.0 ms, 24 tokens cost 47.1 ms. One more token was 5.45x faster, and inside the hole cost still grew with the batch (n=2 72.7, n=8 106.2, n=16 184.3, n=20 247.5, n=23 257.0 ms).
+
+CAUSE. Both expand-then-GEMM paths gate on M >= 24. That crossover was measured against the COOPERATIVE kernel as the fallback (M=16 0.90x, M=24 1.34x, M=32 1.81x) — accepting a 10 percent loss at M=16 to protect a per-pass weight expansion. Later the cooperative kernels became M==1 only, correctly: they dispatch one simdgroup per output row, so a batch has nothing for the extra rows to do. The fallback the threshold protected then did not exist below 24, and M in [2,23] fell to the SCALAR quantized kernel, which re-reads the whole weight per output row. Neither change was wrong; nobody re-derived the crossover when the fallback narrowed.
+
+FIX. A batch threshold only means anything while the expansion is charged per pass. With the weight cache on (the default) the expansion is already paid, so the threshold protects nothing and the path is strictly better than the scalar kernel at every M. It now applies only to the uncached case. Measured: 2.15x at n=2, 2.34x at n=8, 4.02x at n=16, 5.34x at n=20, 5.52x at n=23. Controls unchanged (n=24 47.1->46.8, n=32 46.5->46.0, n=64 53.3->52.9) and the curve is monotonic in batch size again.
+
+WHO IT AFFECTS. Not the pp64/pp256/pp1024 scorecard, whose ratios are unmoved at 0.671/0.918/0.960 — those sizes were never in the hole. It affects short prompts and speculative-decoding verify batches, which are 4-8 tokens and sat at the bottom of it.
+
+WHY NOTHING CAUGHT IT. Every parity test passed throughout: the scalar kernel is CORRECT, just slow, so a correctness suite cannot see a routing regression. And the benchmark suite measures pp64 and up, which is above the threshold — the hole sits entirely between the sizes anyone measured. A dispatch threshold needs a monotonicity tripwire, not a speed target: cost may not fall off a cliff just below a boundary, because there is no less work just below it.
+
+CALIBRATING THE PARITY GUARD, which is the transferable part. Rerouting changes WHICH kernel produces the numbers, so a tolerance is needed — and it must be calibrated against the sizes that ALREADY took the new path, not guessed. Newly routed n=2..23 diverge 0.012-0.028 from the scalar kernel; the untouched n=64 diverges 0.214. The moved range is up to 7.6x TIGHTER than what was already shipping, which is the argument that the change introduces no new numerical risk. A guessed 2e-2 bound would have failed the change for being 10x better than the status quo.
