@@ -5,6 +5,7 @@ metadata:
   node_type: memory
   type: feedback
   originSessionId: 89975edc-f6ec-4912-922c-d5efd862e3d7
+  modified: 2026-08-16T14:19:29.088Z
 ---
 
 When a mapping/registry must stay in sync with code (op→Attrs type, optimizer→LR reachability, arch→convention), the test that protects it MUST derive ground truth from a source **independent of the thing it validates**, and MUST be proven to fail before shipping.
@@ -28,4 +29,13 @@ When a mapping/registry must stay in sync with code (op→Attrs type, optimizer�
 
 **Two guards on the same data must share one predicate.** Where a quantized loader validated geometry its float twin did not (§B76/§B77, 8+ pairs), the fix was to CALL the twin's predicate, never to restate it — a second independently-worded check drifts. Corollary that is easy to miss: do not make one side *stricter* either. An agent correctly **removed** a rank check it had added because the quant twin lacked one, which would have reopened the asymmetry from the other direction.
 
-Related: [[integration-audit-method]], [[t650-topic-discovery-round]], [[tokenizer-trust-boundary]], [[goai-autonomous-loop]].
+**A guard can stop measuring LONG AFTER it was written, without anyone touching it.** 2026-08-16, five found in one session once CI actually ran tests ([[green-ci-is-evidence-about-ci]]):
+- **Intercepted upstream.** `TestQ4KMatrixUnitHasNoCrossover` toggled two paths and compared them — but a THIRD path (f16 short-prompt) is checked first in the dispatch, and when the weight cache went on by default its M cap became `1<<20`, so it served both arms. The tell was in the output for months: `1.00x, 1.01x, 0.99x` where the recorded table is `0.36x-0.77x` apart. It only ever failed on thermal noise, and then "concluded" a crossover about a comparison that never ran. **When a guard toggles between paths, assert the arms actually DIFFER** — and anchor that check to the shape where the true gap is widest: a majority-of-shapes rule did NOT catch the real case, because one shape cleared 2% on noise alone.
+- **Mislabelled arm.** Same test at M=16: `q4k_dq_gemm_eligible` gates on `M >= 24`, so the arm called "dqgemm" was the fallback kernel. Invisible while the fallback happened to cost about the same; it jumped out only when the fallback changed.
+- **Printed, not asserted.** `TestBPEThroughputGuard` printed the token count (the one correctness signal that belongs in CI) and asserted only throughput. Grep your own guards for `fmt.Printf` of a value that should be a comparison.
+- **Measuring the instrumentation.** An allocation-budget guard counted the race detector's shadow memory (16 MiB against a 12 MiB budget). **Measuring the toolchain, not the program.**
+- **Comparing bytes git rewrote.** A golden byte comparison failed only on Windows because `text: unspecified` let git convert LF→CRLF on checkout. Mark byte-compared goldens `-text` in `.gitattributes`; the failure is invisible on Linux and macOS.
+
+**Corollary — thresholds calibrated on your machine INVERT on shared CI, they do not merely drift.** The Q4_K crossover reports the opposite ordering on GitHub's macOS runners; BPE floors set at 1/3 of an M2 Pro measured 1.3 MB/s there, 36× under. Put wall-clock/throughput/allocation assertions behind `testing.Short()` and keep correctness assertions in the same test unconditional.
+
+Related: [[integration-audit-method]], [[t650-topic-discovery-round]], [[tokenizer-trust-boundary]], [[goai-autonomous-loop]], [[green-ci-is-evidence-about-ci]], [[verify-amd64-on-apple-silicon]].
