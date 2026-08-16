@@ -517,3 +517,8 @@ Rationale: Consolidation branches resolved every .spectackle conflict as a union
 WHEN a change would alter the values an iterative solver's search consumes, the loop SHALL gate it on the MEASURED iteration count for the target data, never on the change's error bound.
 
 Rationale: Sweeping a relative perturbation through the SVC RBF kernel: one-ulp noise (1e-16) took the fit from 79 steps to 2025 and 7.24 to 66.60 ms, while 1e-14 also stalled and 1e-15, 1e-13, 1e-9 and 1e-7 all stayed at 79 steps. Damage is not monotonic in error, because SMO's trajectory turns on which pair each step selects. Test accuracy stayed 1.0000 throughout, so the symptom is time and not correctness, and a tolerance test cannot see it.
+
+## NARROWING-A-KERNEL-INVALIDATES-ITS-CROSSOVERS-001
+WHEN a kernel stops covering input sizes it once covered, the loop SHALL re-measure every dispatch threshold naming it as fallback, and assert cost below each boundary stays within 2x the cost above it.
+
+Rationale: The M>=24 expand-then-GEMM gate was calibrated against the cooperative kernel at M=16 0.90x. When cooperative narrowed to M==1, batches of 2 to 23 fell to the scalar kernel: 23 tokens cost 257.0 ms against 47.1 ms for 24. Correctness suites cannot see it, since the slow kernel is correct.
