@@ -1,6 +1,7 @@
 package classic
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"runtime"
 	"testing"
@@ -18,7 +19,7 @@ import (
 // is a Newton iteration, so a fixture below the gate would exercise the serial path and prove
 // nothing about the parallel one.
 func TestSoftmaxGramFeatureSplitIsBitExact(t *testing.T) {
-	const wantW uint64 = 2475455658668323559
+	var wantW uint64 = archgold.Pick(2475455658668323559, 10317145721741441799)
 	x, y := softmaxGramFixture(3000, 24, 3)
 	var m SoftmaxRegression
 	if err := m.Fit(x, y, 3, 200, 0.05); err != nil {

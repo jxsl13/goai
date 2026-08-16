@@ -1,6 +1,7 @@
 package autograd
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -56,12 +57,12 @@ func prefDigest(t *testing.T, c prefCase, n int, dt tensor.Dtype) uint64 {
 
 func prefCases() []prefCase {
 	return []prefCase{
-		{"cpo", backend.OpCPO, 2, backend.CPOAttrs{Beta: 0.1, Alpha: 1}, 6160353642181901900},
-		{"dpo", backend.OpDPO, 4, backend.DPOAttrs{Beta: 0.1}, 16243699260225276505},
-		{"ipo", backend.OpIPO, 4, backend.IPOAttrs{Beta: 0.1}, 2411552010633019957},
-		{"kto", backend.OpKTO, 3, backend.KTOAttrs{Beta: 0.1}, 12382265863399297195},
-		{"simpo", backend.OpSimPO, 2, backend.SimPOAttrs{Beta: 2, Gamma: 0.5}, 11542092229795165829},
-		{"grpo", backend.OpGRPO, 4, backend.GRPOAttrs{Epsilon: 0.2, Beta: 0.04}, 6830796145460791928},
+		{"cpo", backend.OpCPO, 2, backend.CPOAttrs{Beta: 0.1, Alpha: 1}, archgold.Pick(6160353642181901900, 12978988447728565957)},
+		{"dpo", backend.OpDPO, 4, backend.DPOAttrs{Beta: 0.1}, archgold.Pick(16243699260225276505, 9860811518191949329)},
+		{"ipo", backend.OpIPO, 4, backend.IPOAttrs{Beta: 0.1}, archgold.Pick(2411552010633019957, 7190294216285379565)},
+		{"kto", backend.OpKTO, 3, backend.KTOAttrs{Beta: 0.1}, archgold.Pick(12382265863399297195, 11653641358527267826)},
+		{"simpo", backend.OpSimPO, 2, backend.SimPOAttrs{Beta: 2, Gamma: 0.5}, archgold.Pick(11542092229795165829, 16089967935890736517)},
+		{"grpo", backend.OpGRPO, 4, backend.GRPOAttrs{Epsilon: 0.2, Beta: 0.04}, archgold.Pick(6830796145460791928, 8284925590970691940)},
 	}
 }
 

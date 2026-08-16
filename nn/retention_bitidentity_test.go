@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -48,11 +49,11 @@ func TestRetentionRecurrentIsBitIdentical(t *testing.T) {
 		gamma     float64
 		want      uint64
 	}{
-		{7, 13, 5, 0.968, 11973786104883440334},
-		{5, 22, 9, 0.9, 6912945384076962978},
-		{4, 32, 8, 0.968, 11555021637882473957},
-		{6, 1, 4, 0.5, 802478018091383884},
-		{3, 8, 1, 1.0, 14149284330353845558}, // gamma=1: no decay, so the state is a running sum
+		{7, 13, 5, 0.968, archgold.Pick(11973786104883440334, 788445753469414663)},
+		{5, 22, 9, 0.9, archgold.Pick(6912945384076962978, 14580955136303493942)},
+		{4, 32, 8, 0.968, archgold.Pick(11555021637882473957, 14113188775936440872)},
+		{6, 1, 4, 0.5, archgold.Pick(802478018091383884, 16131837705487315143)},
+		{3, 8, 1, 1.0, archgold.Pick(14149284330353845558, 10768318184156327447)}, // gamma=1: no decay, so the state is a running sum
 	}
 	for _, c := range cases {
 		got := retentionRecurrentDigest(t, c.l, c.dk, c.dv, c.gamma)

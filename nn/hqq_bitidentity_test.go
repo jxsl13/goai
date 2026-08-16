@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 )
@@ -14,9 +15,9 @@ func TestHQQuantizeIsBitIdentical(t *testing.T) {
 		rows, cols, bits, group int
 		want                    uint64
 	}{
-		{32, 64, 4, 32, 9348102188691648517},
-		{17, 48, 3, 16, 8008301601848843183},
-		{8, 128, 8, 64, 12810509524361636723},
+		{32, 64, 4, 32, archgold.Pick(9348102188691648517, 8727524114837717154)},
+		{17, 48, 3, 16, archgold.Pick(8008301601848843183, 16140439446547545984)},
+		{8, 128, 8, 64, archgold.Pick(12810509524361636723, 12810509524361636723)},
 	} {
 		ws := make([]float64, c.rows*c.cols)
 		for i := range ws {

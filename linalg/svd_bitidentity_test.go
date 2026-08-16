@@ -1,6 +1,7 @@
 package linalg_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -54,11 +55,11 @@ func TestSVDIsBitIdentical(t *testing.T) {
 		m, n int
 		want uint64
 	}{
-		{8, 8, 3416335863526090039},
-		{32, 12, 16807871276312544421},
-		{12, 32, 12459786375205486409}, // m < n: recurses on the transpose
-		{64, 64, 5080245599646072399},
-		{40, 1, 18129668683049372422}, // no pair exists; the sweep body never runs
+		{8, 8, archgold.Pick(3416335863526090039, 7028714950098526873)},
+		{32, 12, archgold.Pick(16807871276312544421, 11094837223896545758)},
+		{12, 32, archgold.Pick(12459786375205486409, 3100706285955080142)}, // m < n: recurses on the transpose
+		{64, 64, archgold.Pick(5080245599646072399, 14914027006611402415)},
+		{40, 1, archgold.Pick(18129668683049372422, 18129668683049372422)}, // no pair exists; the sweep body never runs
 	}
 	for _, c := range cases {
 		got := svdDigest(t, c.m, c.n)

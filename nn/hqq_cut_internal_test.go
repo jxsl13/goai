@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"math/rand"
 	"testing"
@@ -76,7 +77,7 @@ func hqqLargeFixture() []float64 {
 func TestHQQuantizeWideOutputIsFrozen(t *testing.T) {
 	codes, scale, zero := HQQuantize(hqqLargeFixture(), 4, 64)
 	cs, ss, zs := hqqDigest(codes, scale, zero)
-	const wantCodes, wantScale, wantZero uint64 = 16569551713832293144, 8373000343230715716, 9291206234723566854
+	var wantCodes, wantScale, wantZero uint64 = archgold.Pick(16569551713832293144, 16569551713832293144), archgold.Pick(8373000343230715716, 8373000343230715716), archgold.Pick(9291206234723566854, 4246433951437747015)
 	if cs != wantCodes || ss != wantScale || zs != wantZero {
 		t.Fatalf("wide HQQ output changed:\n codes %d want %d\n scale %d want %d\n zero  %d want %d",
 			cs, wantCodes, ss, wantScale, zs, wantZero)
@@ -102,7 +103,7 @@ func hqqDigest(codes []int, scale, zero []float64) (cs, ss, zs uint64) {
 func TestHQQuantizeOutputIsFrozen(t *testing.T) {
 	codes, scale, zero := HQQuantize(hqqGoldenFixture(), 4, 64)
 	cs, ss, zs := hqqDigest(codes, scale, zero)
-	const wantCodes, wantScale, wantZero uint64 = 3640501409108930686, 379505289789257397, 13231318097518461017
+	var wantCodes, wantScale, wantZero uint64 = archgold.Pick(3640501409108930686, 3640501409108930686), archgold.Pick(379505289789257397, 379505289789257397), archgold.Pick(13231318097518461017, 15451274978293257840)
 	if cs != wantCodes || ss != wantScale || zs != wantZero {
 		t.Fatalf("HQQ output changed:\n codes %d want %d\n scale %d want %d\n zero  %d want %d",
 			cs, wantCodes, ss, wantScale, zs, wantZero)

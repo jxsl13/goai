@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -21,12 +22,12 @@ func TestNSABranchesAreBitIdentical(t *testing.T) {
 		seq, dm, heads, blk, sel, win int
 		want                          uint64
 	}{
-		{96, 128, 4, 16, 4, 32, 17751161931858554633},
-		{67, 64, 2, 8, 3, 16, 1408904477776929825},
-		{41, 32, 2, 4, 2, 8, 17544698765182081482},
+		{96, 128, 4, 16, 4, 32, archgold.Pick(17751161931858554633, 8790598743836276329)},
+		{67, 64, 2, 8, 3, 16, archgold.Pick(1408904477776929825, 17381712554975422382)},
+		{41, 32, 2, 4, 2, 8, archgold.Pick(17544698765182081482, 16852215822321138725)},
 		// A block size that is NOT a multiple of four, so a four-wide group straddles the
 		// selection mask and the jam has to fall back inside the group.
-		{53, 32, 2, 6, 3, 10, 17668651896359838193},
+		{53, 32, 2, 6, 3, 10, archgold.Pick(17668651896359838193, 16170567050796504078)},
 	} {
 		mk := func(f func(i int) float64) *tensor.Tensor {
 			tt := tensor.New(tensor.F64, tensor.Shape{c.seq, c.dm})

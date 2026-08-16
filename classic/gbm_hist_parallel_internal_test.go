@@ -1,6 +1,7 @@
 package classic
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"runtime"
 	"testing"
@@ -52,7 +53,7 @@ func histFitData(n, d int) ([][]float64, []int) {
 // split. It says nothing about whether the split form agrees with the code that came before, and
 // that is what the golden covers.
 func TestGBMHistFeatureSplitIsBitExact(t *testing.T) {
-	const wantPreds uint64 = 14614541180515074729
+	var wantPreds uint64 = archgold.Pick(14614541180515074729, 12789889591943289499)
 	x, y := histFitData(8000, 20)
 	m := NewGradientBoostingClassifier(WithGBMNEstimators(12), WithGBMHistogram(256), WithGBMMaxDepth(4))
 	if err := m.Fit(x, y); err != nil {

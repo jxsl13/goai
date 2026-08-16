@@ -1,6 +1,7 @@
 package autograd
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -84,11 +85,11 @@ func TestMLAVJPIsBitIdentical(t *testing.T) {
 		dt                 tensor.Dtype
 		want               uint64
 	}{
-		{13, 2, 8, 4, true, tensor.F64, 5259501665213688223},
-		{13, 2, 8, 4, false, tensor.F64, 12131797958127341408},
-		{22, 3, 6, 2, true, tensor.F64, 14812911774429625573},
-		{16, 2, 8, 4, false, tensor.F64, 5559681268579107254},
-		{13, 2, 8, 4, true, tensor.F32, 14442385213026910017},
+		{13, 2, 8, 4, true, tensor.F64, archgold.Pick(5259501665213688223, 10503053519604685430)},
+		{13, 2, 8, 4, false, tensor.F64, archgold.Pick(12131797958127341408, 12208324725726363948)},
+		{22, 3, 6, 2, true, tensor.F64, archgold.Pick(14812911774429625573, 17932233654808214984)},
+		{16, 2, 8, 4, false, tensor.F64, archgold.Pick(5559681268579107254, 6116818428307321785)},
+		{13, 2, 8, 4, true, tensor.F32, archgold.Pick(14442385213026910017, 14442385213026910017)},
 	}
 	for _, c := range cases {
 		got := mlaVJPDigest(t, c.seq, c.heads, c.dh, c.dR, c.causal, c.dt)

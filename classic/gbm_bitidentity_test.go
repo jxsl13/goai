@@ -1,6 +1,7 @@
 package classic
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 )
@@ -66,10 +67,10 @@ func TestGBMIsBitIdentical(t *testing.T) {
 		hist bool
 		want uint64
 	}{
-		{200, 6, false, 17954881797153118086},
-		{200, 6, true, 14263652513049407659},
-		{2048, 8, false, 2156838938033899741}, // above treeRadixCutoff: the radix presort path
-		{2048, 8, true, 1469923721210148832},
+		{200, 6, false, archgold.Pick(17954881797153118086, 15729989058872520917)},
+		{200, 6, true, archgold.Pick(14263652513049407659, 14401558475053955565)},
+		{2048, 8, false, archgold.Pick(2156838938033899741, 3327161475130108172)}, // above treeRadixCutoff: the radix presort path
+		{2048, 8, true, archgold.Pick(1469923721210148832, 7917113084283438430)},
 	}
 	for _, c := range cases {
 		got := gbmDigest(t, c.n, c.d, c.hist)

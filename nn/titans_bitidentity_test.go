@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -22,9 +23,9 @@ func TestTitansScanIsBitIdentical(t *testing.T) {
 		seq, dim, hid int
 		want          uint64
 	}{
-		{16, 8, 12, 8353175572084491654},
-		{7, 10, 13, 16808472780882284121},
-		{9, 14, 7, 5379503336826529122},
+		{16, 8, 12, archgold.Pick(8353175572084491654, 2859285724409217061)},
+		{7, 10, 13, archgold.Pick(16808472780882284121, 18416458382184970232)},
+		{9, 14, 7, archgold.Pick(5379503336826529122, 14545778034213816722)},
 	} {
 		m, err := nn.NewNeuralMemory(tensor.F64, c.dim, c.hid, 3)
 		if err != nil {

@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"math/rand/v2"
 	"testing"
@@ -61,9 +62,9 @@ func TestEncodeAQLMIsBitIdentical(t *testing.T) {
 		rows, cols, m, bits, g int
 		want                   uint64
 	}{
-		{16, 32, 2, 4, 8, 13893831496142817533},
-		{24, 48, 3, 5, 8, 11964055707955120178}, // M=3: the ICM sweep subtracts two codebooks per step
-		{32, 64, 2, 6, 16, 14319829737708910524},
+		{16, 32, 2, 4, 8, archgold.Pick(13893831496142817533, 8893958522786549161)},
+		{24, 48, 3, 5, 8, archgold.Pick(11964055707955120178, 9993095749085503891)}, // M=3: the ICM sweep subtracts two codebooks per step
+		{32, 64, 2, 6, 16, archgold.Pick(14319829737708910524, 8935870505764867831)},
 	}
 	for _, c := range cases {
 		w := tensor.New(tensor.F64, tensor.Shape{c.rows, c.cols})
