@@ -3650,3 +3650,38 @@ A METHOD WARNING worth keeping. The pool attempt was motivated by a CPU profile 
 WHERE THE WIN IS. The serial 74%: parallelise the two working-set scans (argmin/max reduction; tie-breaking must reproduce the serial <= exactly to stay bit-identical) and the gradient update (embarrassingly parallel, one write per index). Independently, scikit-learn's libsvm is SINGLE-THREADED at 3.54 ms against our 6.82 ms serial, so ~1.9x per-core remains on top. Either alone is insufficient to take the 1.72x deficit.
 
 SCORECARD, in-session, sklearn 1.9.0 / numpy 2.5.2, 4000x20, best-of-5 fit. GoAI leads GradientBoosting100 16.5x (79.16 vs 1309.97 ms), RandomForest100 14.3x (20.05 vs 287.55, and 4.9x against sklearn n_jobs=-1 at 97.70), DecisionTree 6.3x (2.35 vs 14.81), GaussianNB 2.0x (0.35 vs 0.71). SVC_rbf is the one genuine loss at 6.08 vs 3.54 ms. KNN_fit 4.17 vs 0.30 ms remains a fit-only artifact: GoAI eager-builds the ball tree where sklearn defers it to predict.
+
+## R-01M05GX08VFEBB8YE9D19HBA7A SVC: there is no kernel accuracy budget (1-ulp noise costs 9x, 1e-7 costs nothing) and math.Exp is 32% of the fit
+kind: research
+state: draft
+created: 2026-08-16
+
+TWO CORRECTIONS to what classic/svm.go recorded, both measured rather than argued, and together they reopen a direction that had been closed for the wrong reason.
+
+1. THERE IS NO KERNEL ACCURACY BUDGET. The file recorded that a fast exp failed because "math.Exp's accuracy is load-bearing" and an approximation "is not a free speed/precision trade", after a 1.6e-7-accurate exp made the fit 1600x slower. Framing that as an accuracy failure is wrong. Injecting a controlled relative perturbation into every kernel value and sweeping its magnitude on the 4000x20 fit:
+
+    none    79 steps    7.24 ms   acc 1.0000
+    1e-16   2025 steps 66.60 ms   acc 1.0000
+    1e-15   79 steps    7.59 ms   acc 1.0000
+    1e-14   2025 steps 63.18 ms   acc 1.0000
+    1e-13   79 steps    7.84 ms   acc 1.0000
+    1e-9    79 steps    7.97 ms   acc 1.0000
+    1e-7    79 steps    8.03 ms   acc 1.0000
+
+The damage is NOT monotonic in the error. One-ulp noise costs 9x while a 1e-7 perturbation costs nothing. SMO's trajectory is chaotically sensitive to WHICH pair each step selects, so any change to the kernel values is a coin flip and no error bound predicts the outcome. CONSEQUENCE: a faster exp is admissible exactly when it is MEASURED to preserve the step count on the target data, never on the strength of its accuracy. The direction was closed on a bad argument; the correct gate is empirical.
+
+Two further facts from the same sweep. Test accuracy stayed 1.0000 in EVERY case including the stalled ones, so the cost is time and not correctness. And 2025 is the stall detector's 2000-step window plus the 25 steps to reach it — the detector is precisely what converts the recorded 1600x into 9x, and is load-bearing.
+
+2. WHERE THE SERIAL TIME GOES, measured by timing the column work in isolation instead of reading a profile. Both profiles taken here disagreed with each other and both misread background scavenger samples as critical path (54% runtime.madvise under GOGC=off; 45% pthread_cond_wait under fan-out, which was idle workers). Direct timing:
+
+    44 columns x 4000 evaluations   3.68 ms of the 6.82 ms serial fit   54%
+    math.Exp                        12.39 ns/eval                       32% of the WHOLE fit
+    distance loop                    9.58 ns/eval
+
+math.Exp is the single largest term in the fit — larger than the distance arithmetic it is applied to, and larger than the solver. scikit-learn completes the ENTIRE fit in 3.54 ms, less than our kernel column work alone.
+
+The distance loop is NOT latency-bound on its accumulator chain despite having exactly that shape: four independent accumulators measured 8.23 vs 9.58 ns/eval, only 1.16x, so the dependency-chain model that predicts ~23 ns is wrong and there is little to win there.
+
+ALSO REJECTED THIS ROUND: allocation reduction. GOGC=off moves the serial fit only 7.07 -> 6.83 ms (3.4%), so the ~27% of profile samples in madvise/kevent are not recoverable time and a slab allocator cannot pay.
+
+NEXT, in priority order: (a) a faster double-precision exp, gated on measuring that the step count stays 79 rather than on its error bound; (b) accept that fan-out is closed (R-01M05FYDNDE43, T-01M05FZ94XFNT). Nothing else in the fit is large enough to matter.

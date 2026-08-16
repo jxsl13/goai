@@ -397,10 +397,35 @@ func (kc *kernelCache) column(i int) []float64 {
 	// below what the solver tests. Measured, the fit went from 5.79 ms to 9452 ms: 1600x SLOWER,
 	// which is the solver running to maxIter instead of converging in 78 steps.
 	//
-	// So the kernel accuracy budget is NOT the stopping tolerance. Second-order working-set
-	// selection compares objective decreases computed from K entries, and inconsistencies far below
-	// tol are enough to keep picking pairs that do not make progress. math.Exp's accuracy is load-
-	// bearing here, and swapping in an approximation is not a free speed/precision trade.
+	// CORRECTED 2026-08-16: there is NO accuracy budget, and framing it as one is what made the
+	// 1600x look like an accuracy failure. Injecting a controlled relative perturbation into every
+	// kernel value and sweeping its magnitude (4000x20, steps and test accuracy recorded):
+	//
+	//	  none   79 steps   7.24 ms      1e-15   79 steps    7.59 ms
+	//	  1e-16  2025 steps 66.60 ms     1e-14   2025 steps 63.18 ms
+	//	  1e-13  79 steps   7.84 ms      1e-9    79 steps    7.97 ms
+	//	  1e-7   79 steps   8.03 ms
+	//
+	// The damage is NOT monotonic in the error: one-ulp noise costs 9x while 1e-7 costs nothing.
+	// The SMO trajectory is chaotically sensitive to WHICH pair each step selects, so any change to
+	// the kernel values is a coin flip, and an error bound cannot predict the outcome. A faster exp
+	// is therefore admissible exactly when it is MEASURED to keep the step count, per dataset —
+	// never on the strength of its accuracy.
+	//
+	// Test accuracy stayed 1.0000 in every case, including the stalled ones: the cost is time, not
+	// correctness. And 2025 = the stall detector's 2000-step window plus the 25 it took to get
+	// there, so the detector is what turns the recorded 1600x into 9x. It is load-bearing.
+	//
+	// Where the serial time actually goes, measured by timing the column work in isolation rather
+	// than reading it off a profile (the profiles here disagreed with each other and both misread
+	// background scavenger samples as critical path):
+	//
+	//	  44 columns x 4000 evaluations   3.68 ms of the 6.82 ms fit   54%
+	//	  of which math.Exp                12.39 ns/eval               32% of the whole fit
+	//	  of which the distance loop        9.58 ns/eval
+	//
+	// The distance loop is NOT latency-bound on its accumulator chain as its shape suggests: four
+	// independent accumulators buy only 1.16x. math.Exp is the single largest term in the fit.
 	parallelBands(kc.n, len(xi), func(lo, hi int) {
 		for t := lo; t < hi; t++ {
 			col[t] = kc.m.kernel(xi, kc.x[t])
