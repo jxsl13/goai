@@ -425,7 +425,27 @@ func (kc *kernelCache) column(i int) []float64 {
 	//	  of which the distance loop        9.58 ns/eval
 	//
 	// The distance loop is NOT latency-bound on its accumulator chain as its shape suggests: four
-	// independent accumulators buy only 1.16x. math.Exp is the single largest term in the fit.
+	// independent accumulators buy only 1.16x.
+	//
+	// THE FULL BUDGET, and it closes this line of work. Go's assembly math.Exp on arm64 runs at
+	// 10.27 ns standalone (8.51 ns 4-way interleaved, so only 1.21x of ILP is left on the table):
+	//
+	//	  kernel columns     3.68 ms   54%
+	//	    math.Exp         1.81 ms   27%   176k x 10.27 ns
+	//	    distance loop    1.87 ms   27%
+	//	  solver + updates   3.14 ms   46%   948k visits = 3.31 ns/visit
+	//	  TOTAL              6.82 ms         scikit-learn's WHOLE fit: 3.54 ms
+	//
+	// With math.Exp entirely FREE this fit is 5.01 ms — still behind. With the ENTIRE kernel free
+	// it is 3.14 ms, bare parity. So no single optimisation can win here: the deficit is a uniform
+	// ~2x across BOTH the kernel and the solver, not a hotspot. Targeted work on any one term is
+	// bounded above by a loss.
+	//
+	// What would be required is a different shape, not a faster line: evaluating kernel entries in
+	// BATCHES through a BLAS-style gemm on the distance identity, so the arithmetic reaches
+	// Accelerate rather than a scalar Go loop. SMO asks for one column at a time, so that is a
+	// solver restructuring (batched/decomposition SMO), not a kernel change — a real project, and
+	// the only remaining direction with the headroom to close 1.72x.
 	parallelBands(kc.n, len(xi), func(lo, hi int) {
 		for t := lo; t < hi; t++ {
 			col[t] = kc.m.kernel(xi, kc.x[t])
