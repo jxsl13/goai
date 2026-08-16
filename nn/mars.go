@@ -240,9 +240,9 @@ func (a *MARS) Step(grad GradFn) error {
 								gv := gf[i]
 								ci := gv + factor*(gv-gp[i])
 								//perfscan:ignore PS3084 moment recurrence; rule self-declares not bit-jammable, leave it
-								m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+								m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*ci)
 								//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule, bandwidth-bound
-								v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
+								v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*ci*ci)
 								pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 								gp[i] = gv
 							}
@@ -252,9 +252,9 @@ func (a *MARS) Step(grad GradFn) error {
 							for i := lo; i < hi; i++ {
 								gv := gf[i]
 								//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
-								m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+								m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*gv)
 								//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
-								v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+								v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*gv*gv)
 								pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 								gp[i] = gv
 							}
@@ -276,9 +276,9 @@ func (a *MARS) Step(grad GradFn) error {
 					for i := lo; i < hi; i++ {
 						gv := gf[i]
 						//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
-						m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+						m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*c[i])
 						//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
-						v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
+						v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*c[i]*c[i])
 						pf[i] = pf[i]*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps)
 						gp[i] = gv
 					}
@@ -295,9 +295,9 @@ func (a *MARS) Step(grad GradFn) error {
 								gv := float64(gf[i])
 								ci := gv + factor*(gv-gp[i])
 								//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
-								m[i] = a.Beta1*m[i] + (1-a.Beta1)*ci
+								m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*ci)
 								//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
-								v[i] = a.Beta2*v[i] + (1-a.Beta2)*ci*ci
+								v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*ci*ci)
 								pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 								gp[i] = gv
 							}
@@ -307,9 +307,9 @@ func (a *MARS) Step(grad GradFn) error {
 							for i := lo; i < hi; i++ {
 								gv := float64(gf[i])
 								//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
-								m[i] = a.Beta1*m[i] + (1-a.Beta1)*gv
+								m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*gv)
 								//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
-								v[i] = a.Beta2*v[i] + (1-a.Beta2)*gv*gv
+								v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*gv*gv)
 								pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 								gp[i] = gv
 							}
@@ -331,9 +331,9 @@ func (a *MARS) Step(grad GradFn) error {
 				a.clip(c)
 				for i := range gf {
 					//perfscan:ignore PS3084 moment recurrence; not bit-jammable per rule
-					m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+					m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*c[i])
 					//perfscan:ignore PS3084 variance recurrence; not bit-jammable per rule
-					v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
+					v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*c[i]*c[i])
 					pf[i] = float32(float64(pf[i])*decay - a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps))
 					gp[i] = float64(gf[i])
 				}
@@ -358,9 +358,9 @@ func (a *MARS) Step(grad GradFn) error {
 			idx := tensor.Unravel(i, shape)
 			gv := g.AtF64(idx...)
 			//perfscan:ignore PS3084 moment recurrence in cold generic fallback; not bit-jammable
-			m[i] = a.Beta1*m[i] + (1-a.Beta1)*c[i]
+			m[i] = math.FMA(a.Beta1, m[i], (1-a.Beta1)*c[i])
 			//perfscan:ignore PS3084 variance recurrence in cold generic fallback; not bit-jammable
-			v[i] = a.Beta2*v[i] + (1-a.Beta2)*c[i]*c[i]
+			v[i] = math.FMA(a.Beta2, v[i], (1-a.Beta2)*c[i]*c[i])
 			p.SetF64(p.AtF64(idx...)*decay-a.LR*(m[i]/c1)/(math.Sqrt(v[i]/c2)+a.Eps), idx...)
 			gp[i] = gv
 		}

@@ -459,3 +459,12 @@ WHEN a profile is taken alongside a benchmark, the agent SHALL pass -run =^$ and
 
 ## ACCUMULATORS-SHARING-ONE-PASS-ARE-NOT-SEPARABLE-COST-001
 WHEN a profile attributes cost to individual accumulation lines inside one streaming loop, the agent SHALL treat the whole pass as the cost, not the lines; caching two of three accumulators in a memory-bound SVD sweep made it 30 to 50 percent SLOWER because the second pass doubled the traffic.
+
+## SUPPRESSION-IS-EVIDENCE-READ-IT-BEFORE-TASKING-001
+WHEN a detector finding is promoted into a task or ADR, the loop SHALL read the target line for an existing perfscan:ignore and weigh that justification before writing the item; this check has pre-empted 2 of 2 such items.
+
+Rationale: T-01KYKSAF75FQGSFSQM9Z2RAJXQ named crossentropy math.Log, suppressed as one-per-row with the c-wide exp already vexp'd, and the code confirms 256 logs against 1048576 exps at 256x4096. ADR-01KYJYY74VE27BSEH9VGZSNFMK named the FA /l norm, suppressed as O(seq.dk) against an O(seq2.dk) body, and measurement gave 4.1 percent on one dtype of one kernel. Both were written from detector output without reading the site.
+## FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001
+WHEN a Go benchmark result is compared against another variant, the loop SHALL discard the first sample of each -count run and compare medians of INTERLEAVED runs of both variants, never a sweep of one variant against a sample of another.
+
+Rationale: Two false results in one session. (1) A 1.59x small-n win was a cold first sample (2.12 ms) read against a warm sample of another run (1.33 ms); interleaved and warmup-trimmed the two variants are 0.8 percent apart. First samples ran 20-35 percent high here, 1.55-1.75 ms against a 1.30-1.36 ms warm level. (2) A clean grain sweep showed 2.6 percent that vanished to 1.4 percent inside 57 percent spreads when interleaved, and the sweep and interleaved run disagreed on absolute level for IDENTICAL code (5.2 against 6.1 ms), proving the host drifted between them.

@@ -64,14 +64,30 @@ func TestCPUCrossEntropyBitIdenticalToRef(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// Bit-exact for F64 and on the default build; the f32-native SIMD lane
+			// is compared within its own ADR budget (see f32NativeTolerant).
+			tolerant := f32NativeTolerant(f32)
+			var maxRel float64
 			for o := range want {
 				for i := range want[o].Numel() {
 					co := tensor.Unravel(i, want[o].Shape())
 					g, w := got[o].AtF64(co...), want[o].AtF64(co...)
+					if tolerant {
+						if !parityCloseF32(g, w) {
+							t.Fatalf("b=%d c=%d f32=%v out[%d] elem %d: cpu %v vs ref %v exceeds the f32-native budget", b, c, f32, o, i, g, w)
+						}
+						if r := parityRelErr(g, w); r > maxRel {
+							maxRel = r
+						}
+						continue
+					}
 					if math.Float64bits(g) != math.Float64bits(w) {
 						t.Fatalf("b=%d c=%d f32=%v out[%d] elem %d: cpu %v != ref %v", b, c, f32, o, i, g, w)
 					}
 				}
+			}
+			if tolerant {
+				t.Logf("b=%d c=%d: f32-native max rel err %.2e", b, c, maxRel)
 			}
 		}
 	}

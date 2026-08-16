@@ -44,9 +44,13 @@ func ExampleDecoder_Generate() {
 
 // ExampleDecoder_StepN prefills a whole prompt in one recorded step — the 41× prefill fast path
 // Generate uses internally — and reads the next-token logits from the last row.
+//
+// It also shows StepNLast, the variant to prefer when only the next token matters: the LM head runs
+// over one row instead of k and the host download shrinks from k·vocab to vocab, while the returned
+// row is identical to the last row of StepN.
 func ExampleDecoder_StepN() {
 	if !metal.Available() {
-		fmt.Println("logits for 48 tokens")
+		fmt.Println("logits for 48 tokens (StepNLast agrees: true)")
 		return
 	}
 	m, err := nlp.NewLlama(nlp.LlamaConfig{
@@ -68,8 +72,15 @@ func ExampleDecoder_StepN() {
 		panic(err)
 	}
 	last := all[(len(prompt)-1)*m.Config.Vocab:] // logits after the full prompt
-	fmt.Printf("logits for %d tokens\n", len(last))
-	// Output: logits for 48 tokens
+
+	// Same prefill, but projecting only the final row — the cheaper call when you just want the
+	// next token. Its result matches the tail of StepN's above.
+	lastOnly, err := dec.StepNLast(prompt, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("logits for %d tokens (StepNLast agrees: %v)\n", len(last), len(lastOnly) == len(last))
+	// Output: logits for 48 tokens (StepNLast agrees: true)
 }
 
 // ExampleNewQuant decodes a quantized model: the projections stay in their 4-8× smaller ggml form
@@ -150,7 +161,7 @@ func ExampleSpeculativeGenerate() {
 // nlp.FromSafetensors.
 func ExampleGPTDecoder_Generate() {
 	if !metal.Available() {
-		fmt.Println("generated 5 new tokens")
+		fmt.Println("generated 5 new tokens (next-token logits: 32)")
 		return
 	}
 	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 32, Heads: 4, Layers: 1, Eps: 1e-5}
@@ -193,8 +204,15 @@ func ExampleGPTDecoder_Generate() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("generated %d new tokens\n", len(out)-2)
-	// Output: generated 5 new tokens
+
+	// StepNLast prefills a prompt and returns only the final row's logits — the same numbers
+	// Generate reads to pick the next token, without materialising a row per prompt position.
+	logits, err := dec.StepNLast([]int{3, 7}, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("generated %d new tokens (next-token logits: %d)\n", len(out)-2, len(logits))
+	// Output: generated 5 new tokens (next-token logits: 32)
 }
 
 // ExamplePromptLookupGenerate accelerates generation with NO draft model: continuations are guessed
@@ -328,4 +346,86 @@ func ExampleGPTDecoder_Step() {
 	fmt.Printf("ctx=%d vocab=%d logits=%d hidden rows=%d\n",
 		dec.Ctx(), dec.Vocab(), len(logits), len(h)/cfg.Dim)
 	// Output: ctx=16 vocab=32 logits=32 hidden rows=2
+}
+
+// ExampleDecoder_StepNLast prefills a prompt but downloads only the final row's logits — the row
+// generation actually consumes. The transformer body still runs every prompt token, so the KV cache
+// is populated identically and the returned row equals StepN's last row; what is saved is the LM head
+// over the k-1 discarded rows and their download.
+func ExampleDecoder_StepNLast() {
+	if !metal.Available() {
+		fmt.Println("last-row logits: 48")
+		return
+	}
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 48, Ctx: 32, Dim: 64, Heads: 8, KVHeads: 2, Layers: 2,
+		Hidden: 176, Eps: 1e-5, RopeBase: 10000,
+	}, 42)
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.New(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	prompt := []int{3, 17, 9, 21}
+	last, err := dec.StepNLast(prompt, 0) // one row back instead of len(prompt)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("last-row logits: %d\n", len(last))
+	// Output: last-row logits: 48
+}
+
+// ExampleGPTDecoder_StepNLast is [Decoder.StepNLast] for the GPT-2 architecture: same prefill, same
+// single-row download.
+func ExampleGPTDecoder_StepNLast() {
+	if !metal.Available() {
+		fmt.Println("last-row logits: 32")
+		return
+	}
+	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 32, Heads: 4, Layers: 1, Eps: 1e-5}
+	w := func(shape ...int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape(shape))
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = float32(i%13-6) * 0.03
+		}
+		return x
+	}
+	ones := func(n int) *tensor.Tensor {
+		x := tensor.New(tensor.F32, tensor.Shape{n})
+		d := x.Storage().F32()
+		for i := range d {
+			d[i] = 1
+		}
+		return x
+	}
+	m, err := nlp.FromSafetensors(cfg, map[string]*tensor.Tensor{
+		"tok_emb": w(cfg.Vocab, cfg.Dim), "pos_emb": w(cfg.Ctx, cfg.Dim),
+		"head": w(cfg.Dim, cfg.Vocab), "lnf.gamma": ones(cfg.Dim), "lnf.beta": w(cfg.Dim),
+		"blocks.0.ln1.gamma": ones(cfg.Dim), "blocks.0.ln1.beta": w(cfg.Dim),
+		"blocks.0.attn.wq": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wk": w(cfg.Dim, cfg.Dim),
+		"blocks.0.attn.wv": w(cfg.Dim, cfg.Dim), "blocks.0.attn.wo": w(cfg.Dim, cfg.Dim),
+		"blocks.0.ln2.gamma": ones(cfg.Dim), "blocks.0.ln2.beta": w(cfg.Dim),
+		"blocks.0.ffn.w1": w(cfg.Dim, 4*cfg.Dim), "blocks.0.ffn.b1": w(4 * cfg.Dim),
+		"blocks.0.ffn.w2": w(4*cfg.Dim, cfg.Dim), "blocks.0.ffn.b2": w(cfg.Dim),
+	})
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.NewGPT(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	last, err := dec.StepNLast([]int{3, 7, 1}, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("last-row logits: %d\n", len(last))
+	// Output: last-row logits: 32
 }

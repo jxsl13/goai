@@ -75,3 +75,38 @@ func assertMatMulF64Close(t *testing.T, got, want *tensor.Tensor, label string) 
 	}
 	t.Logf("%s: f64-FMA max rel err %.2e (rtol %g)", label, maxRel, rtol)
 }
+
+// f32NativeTolerant reports whether the F32 results of THIS build come out of an
+// f32-native SIMD kernel. Those kernels accumulate in f32 and route through the
+// NEON/AVX exp and GEMM lanes, which ADR-0021 (amd64) and ADR-0026 (arm64) put
+// under a K-scaled tolerance against the f64 reference — NOT under bit-identity.
+// F64 results, and every result on the default f64-accumulating build, stay exact.
+//
+// This exists because two production-path parity tests (cross-entropy, MHA) compared
+// bitwise unconditionally. That was correct while it was written and measured, but
+// it asserted something STRONGER than the kernels promise, and it only ever ran where
+// the stronger claim happened to hold: the arm64 SIMD lane could not build its test
+// binary at all (vgelu_f64_internal_test.go pulled amd64-only symbols), so those two
+// tests had never executed there. With the lane building, both fail on f32 by less
+// than a part in a million — four orders inside the rtol below — while their F64
+// cases still agree bit-for-bit.
+//
+// Keeping F64 exact is what preserves the mutation-detection scope those tests
+// document: a one-ulp change to the QK inner product still turns MHA red through the
+// F64 cases. Only the f32-native branch relaxes, and only to the budget its own ADR
+// already defines.
+func f32NativeTolerant(f32 bool) bool { return f32 && gemmF32Tolerant }
+
+// parityCloseF32 is the f32-native budget, the same rtol/atol assertMatMulF32Close
+// applies to the matmul these kernels route through.
+func parityCloseF32(g, w float64) bool {
+	const rtol, atol = 2e-3, 1e-4
+	return math.Abs(g-w) <= atol+rtol*math.Abs(w)
+}
+
+// parityRelErr is the relative error reported alongside a tolerant pass, so the
+// margin against the budget stays visible in the log instead of being implied.
+func parityRelErr(g, w float64) float64 {
+	const atol = 1e-4
+	return math.Abs(g-w) / (math.Abs(w) + atol)
+}
