@@ -50,22 +50,6 @@ Benchmark harness already exists at internal/benchcompare/vision_train_test.go.
 
 Migrated from cavekit SPEC.md T908.
 
-## T-01KYJNDTK2E8A9BK9SGAZ4VKYS Hoist per-layer Attrs boxing across the remaining decode models
-kind: task
-state: approved
-created: 2026-07-27
-targets: nlp
-
-Class-audit sweep in nlp. A per-layer decode closure builds a backend.RoPEAttrs or backend.AttnAttrs struct literal and boxes it into the Attrs interface inside the loop, although the fields are layer-invariant.
-
-Apply the same mechanical, provably bit-identical hoist already done for one model to the remaining decode models: cohere, falcon, gemma, gemma2, cla, blt and their siblings. Find the sites by searching nlp/*decode*.go for a dispatch call passing a backend.RoPEAttrs or backend.AttnAttrs literal.
-
-Measure per model or as a batch, with a same-session A/B and bit-identity verification before shipping.
-
-Coordination: re-check for a scope collision per file before editing, as a parallel worker is active in the mamba2 and quantized-mamba2 files.
-
-Migrated from cavekit SPEC.md T956.
-
 ## ADR-01KYJNF428F8Q9RQTABB1ZSVPC What is the agent commit and push authority on this repo?
 kind: adr
 state: submitted
@@ -3639,3 +3623,58 @@ THE DEV-BOX / RUNNER SPLIT. Timing assertions calibrated on this M2 do not merel
 NOT ADDRESSED, deliberately: nlp TestDiffusionLMGrammarE2E trains a model end to end and 1-ulp differences compound into different generated text on amd64. It is already -short-skipped so CI never runs it; freezing an arch-specific expectation for a trained model is a separate decision.
 
 VERIFICATION. main is green on every lane for the first time with CI actually running tests. The per-arch goldens are mutation-verified on BOTH arches: swapping the k and k+1 accumulation order in vjp_qr.go - same math, different summation order, exactly what these guards exist to catch - turns 4 of 5 QR cases red on each, the 5th being the shape where the jammed loop never runs.
+
+## R-01M05FYDNDE43VZF2FPEZFC2QG SVC RBF fit is Amdahl-capped at 1.35x, not kernel-bound: 74% serial; pool and specialization both measured flat
+kind: research
+state: draft
+created: 2026-08-16
+
+CORRECTION plus a decisive ceiling. The analysis standing in classic/svm.go concluded the solver was negligible and the remaining gap to libsvm was per-core kernel throughput. Both halves are wrong, and the error was assuming the kernel column count rather than counting it.
+
+MEASURED by instrumenting the fit (4000x20 scorecard shape):
+                        recorded        actual
+  kernel columns        ~156            44      (the cache hits far more than assumed)
+  kernel evaluations    ~624k           176k
+  scan index visits     ~312k           632k
+The O(n) working-set scans OUTNUMBER kernel evaluations 3.6 to 1. They were dismissed as negligible on the bad numbers, and shrinking was rejected on that basis.
+
+THE CEILING, and it is the actionable part. Only the kernel column is parallelised; both working-set scans and the gradient update are serial. Measured this session, best-of-3 at each setting: GOMAXPROCS=1 6.82 ms, 2 cores 5.38 ms, 4 cores 5.56 ms, 12 cores 5.19 ms. That 1.31x puts the parallelised fraction at 26.1%, so a 73.9% serial remainder caps this design at 1.35x with INFINITE cores. It is already at its ceiling — adding cores or cheapening the fan-out cannot move it.
+
+TWO OPTIMISATIONS MEASURED AND REJECTED, both predicted by that ceiling:
+  - persistent worker pool (internal/parallel.Rows) instead of per-column goroutine spawning: 1.01x at n=4000, 1.04x at n=1000
+  - RBF specialised per column, hoisting the per-pair cfg.kernel switch out of 176k calls: 0.99x / 1.02x
+Both interleaved in one binary, arms alternating, first sample of each burst discarded, medians compared.
+
+A METHOD WARNING worth keeping. The pool attempt was motivated by a CPU profile reading 45% pthread_cond_wait and 40% pthread_cond_signal, which looked like fan-out overhead dominating. It was idle workers parked on the barrier. A profile of a partly-serial parallel program shows the WAITING, and the waiting is not where the time goes; the Amdahl fit from a core sweep is the honest measurement and it disagreed with the profile.
+
+WHERE THE WIN IS. The serial 74%: parallelise the two working-set scans (argmin/max reduction; tie-breaking must reproduce the serial <= exactly to stay bit-identical) and the gradient update (embarrassingly parallel, one write per index). Independently, scikit-learn's libsvm is SINGLE-THREADED at 3.54 ms against our 6.82 ms serial, so ~1.9x per-core remains on top. Either alone is insufficient to take the 1.72x deficit.
+
+SCORECARD, in-session, sklearn 1.9.0 / numpy 2.5.2, 4000x20, best-of-5 fit. GoAI leads GradientBoosting100 16.5x (79.16 vs 1309.97 ms), RandomForest100 14.3x (20.05 vs 287.55, and 4.9x against sklearn n_jobs=-1 at 97.70), DecisionTree 6.3x (2.35 vs 14.81), GaussianNB 2.0x (0.35 vs 0.71). SVC_rbf is the one genuine loss at 6.08 vs 3.54 ms. KNN_fit 4.17 vs 0.30 ms remains a fit-only artifact: GoAI eager-builds the ball tree where sklearn defers it to predict.
+
+## T-01M05FZ94XFNTBQC0GWWPBQMWJ Parallelise the SVC working-set scans and gradient update — the serial 74% that caps the fit at 1.35x
+kind: task
+state: draft
+created: 2026-08-16
+
+Parallelise the SERIAL 74% of the SVC RBF fit. Per R-01M05FYDNDE43, only the kernel column is parallelised today, which caps the whole fit at 1.35x with infinite cores; it already measures 1.31x, so nothing else in the current design can move it.
+
+TARGETS, in the SMO step loop (classic/svm.go):
+1. Pass 1, the working-set scan: argmin of e over I_up and max of e over I_low, one O(n) sweep.
+2. Pass 2, second-order selection of j over I_low, another O(n) sweep reading Ki[t] and diag[t].
+3. The gradient update over all t after the two-variable sub-problem.
+Per step that is 3n; at 79 steps and n=4000 it is ~948k element visits against 176k kernel evaluations.
+
+BIT-IDENTITY IS THE HARD PART and is non-negotiable here: this package has measured that a 1.6e-7 kernel perturbation makes SMO run to maxIter instead of converging in 78 steps (1600x slower), so the working-set choice must not move.
+- (3) is safe: one write per index, no reduction.
+- (1) and (2) are REDUCTIONS. The serial loops take the LAST extremum on ties (`e[t] <= eUpMin`, `obj <= objMin`). A chunked reduction must combine partials in ASCENDING CHUNK ORDER with the same <= semantics to reproduce the identical index. Combining in completion order will silently pick a different, equally valid index and change the whole trajectory.
+- The comparisons themselves are exact float compares, so no reassociation issue arises; only the tie-break order matters.
+
+VERIFY, in this order:
+1. Confirm entry with a temporary panic in each parallel band before trusting any timing.
+2. Assert the STEP COUNT is unchanged at 79 and the digest of alpha is bit-identical to the serial fit, across several n and both classes' label encodings. A changed step count means the working set moved.
+3. Interleaved A/B, arms alternating, first sample of each burst discarded, medians compared. n=1000 and n=4000.
+4. Sweep GOMAXPROCS 1/2/4/12 and recompute the Amdahl fraction; it should rise well above 26.1%.
+
+EXPECTED CEILING, so the result can be judged: removing the serial remainder entirely would take 6.82 ms toward ~1.5-2 ms on twelve cores, against scikit-learn's SINGLE-THREADED 3.54 ms. Note n=4000 gives each pass only ~8 microseconds of work, so per-dispatch overhead is a real risk at this size — size the fan-out to the work (SIZE-THE-FANOUT-TO-THE-WORK-001) and expect the n=1000 case to want a serial path.
+
+NOT part of this task: the ~1.9x per-core deficit against libsvm (6.82 ms serial vs 3.54 ms). That is independent and neither change alone closes the 1.72x scorecard gap.
