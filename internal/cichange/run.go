@@ -329,54 +329,11 @@ func testFuncs(pkgDir string) []string {
 	return out
 }
 
-// buildablePkgs drops packages that have no Go files under the CURRENT build configuration.
-//
-// This matters because `go test ./...` and `go test <explicit pkg>` disagree: the wildcard form
-// silently skips a package whose build constraints exclude every file, while naming it explicitly is
-// a hard "build constraints exclude all Go files" error. The selective runner names packages
-// explicitly, so a cgo-only package like internal/gpudecode turned the pure-go CI lanes red even
-// though `go test ./...` passed locally — the failure was invisible to every local check.
-//
-// go list -e reports such a package with no GoFiles and no TestGoFiles rather than failing, so the
-// filter is a single call and needs no build-tag parsing of its own.
-func buildablePkgs(dir string, pkgs []string) []string {
-	if len(pkgs) == 0 {
-		return pkgs
-	}
-	args := append([]string{"list", "-e", "-f", "{{.ImportPath}}\t{{len .GoFiles}}\t{{len .TestGoFiles}}\t{{len .XTestGoFiles}}"}, pkgs...)
-	cmd := exec.Command("go", args...)
-	cmd.Dir = dir // must run in the module under test, not the process's working directory
-	out, err := cmd.Output()
-	if err != nil {
-		return pkgs // never make the runner stricter than go itself on an unexpected failure
-	}
-	keep := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) != 4 {
-			continue
-		}
-		if f[1] != "0" || f[2] != "0" || f[3] != "0" {
-			keep[f[0]] = true
-		}
-	}
-	var res []string
-	for _, p := range pkgs {
-		if keep[p] {
-			res = append(res, p)
-		}
-	}
-	return res
-}
-
 // execGoTest prints the exact command and then runs it with stdout/stderr streamed
 // through unmodified — the CLI never swallows test output (§T587).
 func execGoTest(dir string, args, pkgs []string, w io.Writer) int {
-	if filtered := buildablePkgs(dir, pkgs); len(filtered) != len(pkgs) {
-		fmt.Fprintf(w, "\n== skipped (no Go files under this build config) ==\n  %d of %d packages\n",
-			len(pkgs)-len(filtered), len(pkgs))
-		pkgs = filtered
-	}
+	// With no packages left there is nothing to do, and `go test` with no package list would fall
+	// back to testing the package in dir — the module root — which is not what was selected.
 	if len(pkgs) == 0 {
 		fmt.Fprintln(w, "\n== nothing to test under this build config ==")
 		return 0
