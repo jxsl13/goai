@@ -3183,7 +3183,20 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
     // expansion cache on, the trade changes completely: the expansion is gone in this path and paid
     // every pass in the f32 one, so the ~3% the f16 GEMM costs at large M is worth taking to save
     // 37 ms/pass. Cap applies only when the cache is off.
-    if (M < 24) return 0;
+    // M >= 24 ONLY WHEN THE EXPANSION IS PAID PER PASS. This crossover was measured against the
+    // COOPERATIVE kernel as the fallback (M=16 0.90x, M=24 1.34x, M=32 1.81x), and that fallback
+    // no longer exists below M=24: the cooperative kernels are M==1 only, since they dispatch one
+    // simdgroup per output row and a batch has nothing for the extra rows to do. So M in [2,23]
+    // stopped landing on a 0.90x alternative and started landing on the SCALAR quantized kernel,
+    // which re-reads the whole weight per output row. Measured on TinyLlama-1.1B Q4_K_M prefill,
+    // the cliff sits exactly on this line: n=23 took 257.0 ms and n=24 took 47.1 ms, 5.45x for one
+    // more token, and inside the hole the cost still GREW with the batch (n=2 72.7 ms, n=8 106.2,
+    // n=16 184.3, n=23 257.0).
+    //
+    // With the cache on the expansion is already paid, so there is nothing left for a batch
+    // threshold to protect: this path is then strictly better than the scalar kernel at every M.
+    // The threshold stays only for the uncached case, where the expansion is charged per pass.
+    if (M < (gWCacheMax > 0 ? 2 : 24)) return 0;
     // Without the cache, f16 must beat the f32 GEMM on its own and only does so while bandwidth-
     // bound (M<=64). WITH the cache there is no upper cap at all, which took two attempts to get
     // right.
