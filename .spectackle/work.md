@@ -3685,3 +3685,32 @@ The distance loop is NOT latency-bound on its accumulator chain despite having e
 ALSO REJECTED THIS ROUND: allocation reduction. GOGC=off moves the serial fit only 7.07 -> 6.83 ms (3.4%), so the ~27% of profile samples in madvise/kevent are not recoverable time and a slab allocator cannot pay.
 
 NEXT, in priority order: (a) a faster double-precision exp, gated on measuring that the step count stays 79 rather than on its error bound; (b) accept that fan-out is closed (R-01M05FYDNDE43, T-01M05FZ94XFNT). Nothing else in the fit is large enough to matter.
+
+## R-01M05H8WZSEF9RRHWFMPFAXY64 SVC_rbf gap is uniform ~2x, not a hotspot: even a free kernel only reaches parity — batched-gemm SMO is the only remaining direction
+kind: research
+state: draft
+created: 2026-08-16
+
+CLOSING FINDING for the SVC_rbf scorecard loss: it is not a hotspot and no targeted optimisation can close it. The full serial budget, every term measured by direct timing rather than profile attribution:
+
+  kernel columns      3.68 ms   54%
+    math.Exp          1.81 ms   27%    176k evaluations x 10.27 ns
+    distance loop     1.87 ms   27%
+  solver + updates    3.14 ms   46%    948k element-visits = 3.31 ns/visit
+  TOTAL               6.82 ms          scikit-learn's WHOLE fit: 3.54 ms
+
+The two counterfactuals are what settle it. With math.Exp entirely FREE the fit is 5.01 ms, still behind. With the ENTIRE kernel free it is 3.14 ms, bare parity. The deficit is a uniform ~2x across BOTH halves, so work on any single term is bounded above by a loss.
+
+Go's math.Exp is not the weak link people expect: it is ASSEMBLY on arm64 and runs at 10.27 ns standalone, 8.51 ns 4-way interleaved, so only 1.21x of instruction-level parallelism remains. Nor is the distance loop latency-bound on its accumulator chain despite having exactly that shape: four independent accumulators buy 1.16x.
+
+DIRECTIONS NOW CLOSED, each on measurement rather than argument:
+  fan-out over the serial 74 percent   1.081x best at n=4000, 0.81x at n=1000  (T-01M05FZ94XFNT)
+  persistent worker pool               1.01x
+  per-column RBF specialisation        0.99x
+  allocation reduction                 GOGC=off moves the fit 3.4 percent, so a slab cannot pay
+  faster exp                           bounded above by 1.21x ILP on 27 percent of the fit
+  four-accumulator distance            1.16x on 27 percent
+
+WHAT WOULD ACTUALLY WORK, and it is a project rather than a patch: evaluate kernel entries in BATCHES via a BLAS-style gemm on the distance identity, so the arithmetic reaches Accelerate instead of a scalar Go loop. SMO asks for one column at a time, so this is a solver restructuring — batched or decomposition SMO holding several columns in flight — not a kernel change. It is the only remaining direction with the headroom to close 1.72x, and it should be scoped as such rather than attempted as an optimisation.
+
+CONTEXT for whether that is worth doing: SVC_rbf is the ONLY loss on the classical scorecard. Re-measured in-session against sklearn 1.9.0 / numpy 2.5.2 at 4000x20, GoAI leads GradientBoosting100 16.5x, RandomForest100 14.3x (4.9x against sklearn n_jobs=-1), DecisionTree 6.3x and GaussianNB 2.0x. KNN_fit is a fit-only artifact of eager ball-tree construction.
