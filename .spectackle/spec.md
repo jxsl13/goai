@@ -482,3 +482,33 @@ Rationale: T-01KYKSAF75FQGSFSQM9Z2RAJXQ named crossentropy math.Log, suppressed 
 WHEN a Go benchmark result is compared against another variant, the loop SHALL discard the first sample of each -count run and compare medians of INTERLEAVED runs of both variants, never a sweep of one variant against a sample of another.
 
 Rationale: Two false results in one session. (1) A 1.59x small-n win was a cold first sample (2.12 ms) read against a warm sample of another run (1.33 ms); interleaved and warmup-trimmed the two variants are 0.8 percent apart. First samples ran 20-35 percent high here, 1.55-1.75 ms against a 1.30-1.36 ms warm level. (2) A clean grain sweep showed 2.6 percent that vanished to 1.4 percent inside 57 percent spreads when interleaved, and the sweep and interleaved run disagreed on absolute level for IDENTICAL code (5.2 against 6.1 ms), proving the host drifted between them.
+
+## GUARD-TOGGLE-ARMS-MUST-DIFFER-001
+WHEN a guard compares two code paths selected by toggles, the loop SHALL assert the arms DIFFER at the shape where the recorded gap is widest, since an interception upstream of both toggles makes it a path against itself; TestQ4KMatrixUnitHasNoCrossover read 1.00x where its table records 0.36x.
+
+Rationale: The f16 short-prompt path is checked first in the resident dispatch and, with the weight cache on, its M cap becomes 1<<20, so it served BOTH arms. The test failed only on thermal noise while reporting a crossover conclusion about a comparison that never ran. A majority-of-shapes vacuity rule did NOT catch it: one shape cleared 2 percent on noise alone, so anchor to the widest shape.
+
+## FP-GOLDENS-ARE-PER-ARCH-001
+WHEN a test freezes a golden digest of floating-point output, the loop SHALL key that golden on runtime.GOARCH via internal/archgold and never build the fixture from math.Sin, math.Cos or any transcendental.
+
+Rationale: Two independent causes make one constant unportable: math.Sin/Cos differ by 1 ulp across GOARCH (41 of 2048 swept values; math.Cos(84) ends e523 on arm64, e522 on amd64), and arm64 fuses a*b+c where amd64 v1 does not. With exact dyadic fixtures the only shape still matching was the one where the unrolled loop never ran, proving contraction is a second cause.
+
+## AMD64-FP-GOLDENS-COME-FROM-CI-001
+WHEN an amd64 floating-point golden is recorded from an Apple-silicon host, the loop SHALL harvest the value from CI logs, never from a Rosetta run.
+
+Rationale: Rosetta reproduces amd64 FAILURES but not amd64 FP RESULTS: TestMLAVJPIsBitIdentical gives 10503053519604685430 under Rosetta at both GOAMD64=v1 and v2 against 2081554234887433254 on real x86, while ubuntu and windows agree with each other. Rosetta appears to fuse SSE multiply-add onto ARM FMA.
+
+## TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001
+WHEN a test asserts a wall-clock threshold, a throughput floor or an allocation budget, the loop SHALL skip it under testing.Short so it never runs on shared CI runners, and keep any correctness assertion in the same test unconditional.
+
+Rationale: Runner hardware inverts orderings rather than merely adding noise: the Q4_K crossover reports mmunit ahead at M=32/48/64 on GitHub macOS, the opposite of every M2 reading, and BPE floors set at one third of an M2 Pro measured 1.3 MB/s, 36x under. Allocation budgets additionally count the race detector's shadow memory (16 MiB against a 12 MiB budget).
+
+## GOLDEN-BYTES-NEED-GITATTRIBUTES-001
+WHEN a test compares golden bytes read from a file, the loop SHALL mark the path -text in .gitattributes so git performs no EOL conversion.
+
+Rationale: An unspecified text attribute lets git convert LF to CRLF on checkout wherever core.autocrlf is on, the default on GitHub Windows runners. TestMarshalIndexMatchesTransformersGolden failed there and nowhere else; the only CRLF in the comparison was the one git introduced, and the failure is invisible on Linux and macOS.
+
+## WORKMD-MERGE-IS-NOT-A-UNION-001
+WHEN a merge conflict touches .spectackle/work.md, the loop SHALL never resolve it by keeping both sides, because work.md entries encode CURRENT STATE and a deletion IS the state change.
+
+Rationale: Consolidation branches resolved every .spectackle conflict as a union and resurrected a tombstoned task: T-01KYKSAF75FQGSFSQM9Z2RAJXQ was closed no-action with its reject event in the journal, yet spectackle get read it as draft again, so a later session would have re-picked refused work. Union is correct for journal.ndjson and for two independent record appends only.
