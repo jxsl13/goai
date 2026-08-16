@@ -3650,3 +3650,31 @@ A METHOD WARNING worth keeping. The pool attempt was motivated by a CPU profile 
 WHERE THE WIN IS. The serial 74%: parallelise the two working-set scans (argmin/max reduction; tie-breaking must reproduce the serial <= exactly to stay bit-identical) and the gradient update (embarrassingly parallel, one write per index). Independently, scikit-learn's libsvm is SINGLE-THREADED at 3.54 ms against our 6.82 ms serial, so ~1.9x per-core remains on top. Either alone is insufficient to take the 1.72x deficit.
 
 SCORECARD, in-session, sklearn 1.9.0 / numpy 2.5.2, 4000x20, best-of-5 fit. GoAI leads GradientBoosting100 16.5x (79.16 vs 1309.97 ms), RandomForest100 14.3x (20.05 vs 287.55, and 4.9x against sklearn n_jobs=-1 at 97.70), DecisionTree 6.3x (2.35 vs 14.81), GaussianNB 2.0x (0.35 vs 0.71). SVC_rbf is the one genuine loss at 6.08 vs 3.54 ms. KNN_fit 4.17 vs 0.30 ms remains a fit-only artifact: GoAI eager-builds the ball tree where sklearn defers it to predict.
+
+## T-01M05FZ94XFNTBQC0GWWPBQMWJ Parallelise the SVC working-set scans and gradient update — the serial 74% that caps the fit at 1.35x
+kind: task
+state: draft
+created: 2026-08-16
+
+Parallelise the SERIAL 74% of the SVC RBF fit. Per R-01M05FYDNDE43, only the kernel column is parallelised today, which caps the whole fit at 1.35x with infinite cores; it already measures 1.31x, so nothing else in the current design can move it.
+
+TARGETS, in the SMO step loop (classic/svm.go):
+1. Pass 1, the working-set scan: argmin of e over I_up and max of e over I_low, one O(n) sweep.
+2. Pass 2, second-order selection of j over I_low, another O(n) sweep reading Ki[t] and diag[t].
+3. The gradient update over all t after the two-variable sub-problem.
+Per step that is 3n; at 79 steps and n=4000 it is ~948k element visits against 176k kernel evaluations.
+
+BIT-IDENTITY IS THE HARD PART and is non-negotiable here: this package has measured that a 1.6e-7 kernel perturbation makes SMO run to maxIter instead of converging in 78 steps (1600x slower), so the working-set choice must not move.
+- (3) is safe: one write per index, no reduction.
+- (1) and (2) are REDUCTIONS. The serial loops take the LAST extremum on ties (`e[t] <= eUpMin`, `obj <= objMin`). A chunked reduction must combine partials in ASCENDING CHUNK ORDER with the same <= semantics to reproduce the identical index. Combining in completion order will silently pick a different, equally valid index and change the whole trajectory.
+- The comparisons themselves are exact float compares, so no reassociation issue arises; only the tie-break order matters.
+
+VERIFY, in this order:
+1. Confirm entry with a temporary panic in each parallel band before trusting any timing.
+2. Assert the STEP COUNT is unchanged at 79 and the digest of alpha is bit-identical to the serial fit, across several n and both classes' label encodings. A changed step count means the working set moved.
+3. Interleaved A/B, arms alternating, first sample of each burst discarded, medians compared. n=1000 and n=4000.
+4. Sweep GOMAXPROCS 1/2/4/12 and recompute the Amdahl fraction; it should rise well above 26.1%.
+
+EXPECTED CEILING, so the result can be judged: removing the serial remainder entirely would take 6.82 ms toward ~1.5-2 ms on twelve cores, against scikit-learn's SINGLE-THREADED 3.54 ms. Note n=4000 gives each pass only ~8 microseconds of work, so per-dispatch overhead is a real risk at this size — size the fan-out to the work (SIZE-THE-FANOUT-TO-THE-WORK-001) and expect the n=1000 case to want a serial path.
+
+NOT part of this task: the ~1.9x per-core deficit against libsvm (6.82 ms serial vs 3.54 ms). That is independent and neither change alone closes the 1.72x scorecard gap.
