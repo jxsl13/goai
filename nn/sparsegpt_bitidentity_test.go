@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -22,9 +23,9 @@ func TestSparseGPTPruneIsBitIdentical(t *testing.T) {
 		nm               bool
 		want             uint64
 	}{
-		{4, 8, 16, false, 13628133690511030499},
-		{48, 96, 64, false, 6530497775513801175},
-		{32, 64, 48, true, 18248866684583792410},
+		{4, 8, 16, false, archgold.Pick(13628133690511030499, 8973122112660946674)},
+		{48, 96, 64, false, archgold.Pick(6530497775513801175, 10559994915875960948)},
+		{32, 64, 48, true, archgold.Pick(18248866684583792410, 11466859589314545682)},
 	}
 	for _, c := range cases {
 		w := tensor.New(tensor.F64, tensor.Shape{c.out, c.in})

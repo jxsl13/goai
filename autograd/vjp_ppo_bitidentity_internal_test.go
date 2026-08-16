@@ -1,6 +1,7 @@
 package autograd
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -49,9 +50,9 @@ func TestPPOVJPIsBitIdentical(t *testing.T) {
 		eps  float64
 		want uint64
 	}{
-		{1000, 0.2, 5299779950205309273},
-		{257, 0.05, 2663088398810480165},
-		{64, 1, 17185744957343320499}, // eps=1 puts the low bound at exactly zero, where Max(0,-0) differs from <
+		{1000, 0.2, archgold.Pick(5299779950205309273, 1141810445622132973)},
+		{257, 0.05, archgold.Pick(2663088398810480165, 6111902220461594643)},
+		{64, 1, archgold.Pick(17185744957343320499, 2411941273833116206)}, // eps=1 puts the low bound at exactly zero, where Max(0,-0) differs from <
 	} {
 		got := ppoDigest(t, c.n, tensor.F64, c.eps)
 		if got != c.want {

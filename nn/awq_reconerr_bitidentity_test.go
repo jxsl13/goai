@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -61,12 +62,12 @@ func TestReconErrMatIsBitIdentical(t *testing.T) {
 		dt               tensor.Dtype
 		want             uint64
 	}{
-		{7, 13, 13, tensor.F64, 977744709366639345},
-		{7, 13, 13, tensor.F32, 7120259750929446520},
-		{5, 30, 30, tensor.F64, 10025742202500828901},
-		{5, 30, 30, tensor.F32, 2373790302529226826},
-		{9, 64, 64, tensor.F64, 11298896412261288980},
-		{3, 1, 5, tensor.F64, 11995421468116675637}, // in=1: the jammed loop never runs, only its tail
+		{7, 13, 13, tensor.F64, archgold.Pick(977744709366639345, 14460793773597635482)},
+		{7, 13, 13, tensor.F32, archgold.Pick(7120259750929446520, 1265753755051630011)},
+		{5, 30, 30, tensor.F64, archgold.Pick(10025742202500828901, 7520230798763864322)},
+		{5, 30, 30, tensor.F32, archgold.Pick(2373790302529226826, 1571131651504265091)},
+		{9, 64, 64, tensor.F64, archgold.Pick(11298896412261288980, 11298896412261288980)},
+		{3, 1, 5, tensor.F64, archgold.Pick(11995421468116675637, 11995421468116675637)}, // in=1: the jammed loop never runs, only its tail
 	}
 	for _, c := range cases {
 		got := reconErrDigest(t, c.out, c.in, c.samples, c.dt)

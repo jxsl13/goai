@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -21,9 +22,9 @@ func TestDeltaNetFamilyIsBitIdentical(t *testing.T) {
 		seq, dk, dv    int
 		wantDN, wantGD uint64
 	}{
-		{8, 4, 4, 10396212524795270898, 8262904611513938596},
-		{64, 32, 32, 1711795498884816630, 5199788972169960644},
-		{48, 128, 128, 5532324204454043268, 17362182918204471820},
+		{8, 4, 4, archgold.Pick(10396212524795270898, 16046413849923661864), archgold.Pick(8262904611513938596, 12144199990033726025)},
+		{64, 32, 32, archgold.Pick(1711795498884816630, 640110444915993727), archgold.Pick(5199788972169960644, 10267507027148984902)},
+		{48, 128, 128, archgold.Pick(5532324204454043268, 7726188374996005424), archgold.Pick(17362182918204471820, 6062825703751415547)},
 	}
 	ctx := backend.NewContext() // Recorder == nil: the fused inference path
 	for _, c := range cases {

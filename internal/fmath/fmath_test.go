@@ -48,12 +48,23 @@ func TestTheGuardIsLoadBearing(t *testing.T) {
 		key(nan, pinf): true, key(pinf, nan): true, // Max: math says +Inf, the builtin says NaN
 		key(nan, ninf): true, key(ninf, nan): true, // Min: math says -Inf, the builtin says NaN
 	}
+	// Compare by bits, EXCEPT that any two NaNs count as agreeing. A NaN's payload is not
+	// semantic, and the hardware propagates it differently per architecture: on amd64 ten further
+	// pairs report "min NaN vs NaN" where the two NaNs carry different payload bits, which is a
+	// fact about the CPU rather than about min/max. Keeping raw bit equality here made this guard
+	// pass on arm64 and fail on amd64 with 14 divergent pairs against the 4 it documents.
+	same := func(a, b float64) bool {
+		if math.IsNaN(a) && math.IsNaN(b) {
+			return true
+		}
+		return math.Float64bits(a) == math.Float64bits(b) // keeps -0 distinct from +0, which IS semantic
+	}
 	var found int
 	for _, x := range hostile {
 		for _, y := range hostile {
 			rawMin, rawMax := min(x, y), max(x, y)
-			minDiffers := math.Float64bits(rawMin) != math.Float64bits(math.Min(x, y))
-			maxDiffers := math.Float64bits(rawMax) != math.Float64bits(math.Max(x, y))
+			minDiffers := !same(rawMin, math.Min(x, y))
+			maxDiffers := !same(rawMax, math.Max(x, y))
 			if !minDiffers && !maxDiffers {
 				continue
 			}

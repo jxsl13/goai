@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
+	"github.com/jxsl13/goai/internal/archgold"
 	"github.com/jxsl13/goai/tensor"
 )
 
@@ -73,15 +74,18 @@ func TestQRVJPIsBitIdentical(t *testing.T) {
 	// The row counts straddle every remainder a jam of 2, 4 or 8 can leave: 13 is odd and
 	// prime, 22 leaves 6 modulo 8, 32 divides all three so the tail is skipped, and m=3 with
 	// n=3 is small enough that the jammed loop never runs at all.
+	if !archgold.Supported() {
+		t.Skip(archgold.Reason)
+	}
 	cases := []struct {
 		m, n int
 		want uint64
 	}{
-		{13, 5, 1026364614881149619},
-		{22, 7, 12476853988711379297},
-		{32, 8, 14029057225193316077},
-		{3, 3, 6149150020269390530},
-		{64, 32, 15802176959280348119},
+		{13, 5, archgold.Pick(1026364614881149619, 3480594611801912168)},
+		{22, 7, archgold.Pick(12476853988711379297, 13000591352421144001)},
+		{32, 8, archgold.Pick(14029057225193316077, 8144929224098374273)},
+		{3, 3, archgold.Pick(6149150020269390530, 2201155673323841883)},
+		{64, 32, archgold.Pick(15802176959280348119, 14622270553408718469)},
 	}
 	for _, c := range cases {
 		if got := qrVJPDigest(t, c.m, c.n); got != c.want {

@@ -157,12 +157,28 @@ func TestDeepSeekV2LatentCacheMemory(t *testing.T) {
 	// Same-order per-step time: best of 3 runs each, latent must stay within 5× of the
 	// reconstructed path (a loose gate — CI timing noise — that still catches an accidental
 	// O(T²) re-expansion, which would also show as gross slowdown at larger T).
+	// Time a BATCH, not a single decode. Windows' wall clock is coarse (~0.5-15ms) and one pass
+	// over T tokens can finish inside a single tick: CI measured reconstructed=0s, and the ratio
+	// below then divided by zero and reported "+Inf×", failing a test about absorption on a fact
+	// about the clock. Repeat until the batch clears the resolution, then compare per-iteration.
+	perIter := func(f func() time.Duration) time.Duration {
+		for n := 1; ; n *= 2 {
+			start := time.Now()
+			for range n {
+				f()
+			}
+			d := time.Since(start)
+			if d >= 5*time.Millisecond || n >= 1<<12 {
+				return d / time.Duration(n)
+			}
+		}
+	}
 	reconBest, latentBest := time.Duration(math.MaxInt64), time.Duration(math.MaxInt64)
 	for range 3 {
-		if d := decodeRecon(); d < reconBest {
+		if d := perIter(decodeRecon); d < reconBest {
 			reconBest = d
 		}
-		if d := decodeLatent(); d < latentBest {
+		if d := perIter(decodeLatent); d < latentBest {
 			latentBest = d
 		}
 	}

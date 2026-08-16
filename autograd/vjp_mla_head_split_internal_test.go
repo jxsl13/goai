@@ -1,6 +1,7 @@
 package autograd
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"runtime"
 	"testing"
@@ -66,8 +67,8 @@ func TestMLAVJPHeadSplitIsBitExact(t *testing.T) {
 		causal bool
 		want   uint64
 	}{
-		{"causal", true, 3570864407073999628},
-		{"full", false, 11976000054950329798},
+		{"causal", true, archgold.Pick(3570864407073999628, 13863656067931346313)},
+		{"full", false, archgold.Pick(11976000054950329798, 3426872122183439190)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vjp := vjps[backend.OpMLA]
@@ -134,8 +135,8 @@ func TestMLAVJPHeadSplitF32IsBitExact(t *testing.T) {
 		causal bool
 		want   uint64
 	}{
-		{"causal", true, 6899433073126379515},
-		{"full", false, 6359307992473138402},
+		{"causal", true, archgold.Pick(6899433073126379515, 6899433073126379515)},
+		{"full", false, archgold.Pick(6359307992473138402, 6359307992473138402)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vjp := vjps[backend.OpMLA]

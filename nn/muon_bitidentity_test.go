@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -24,8 +25,8 @@ type muonShapeSet struct {
 }
 
 var muonSets = []muonShapeSet{
-	{"below-gate", []tensor.Shape{{24, 40}, {40, 24}, {32, 32}}, 9241251877628356013, 14877648412914339811},
-	{"banded", []tensor.Shape{{72, 80}, {80, 72}, {76, 76}}, 4743616716528603079, 12900181287849649047},
+	{"below-gate", []tensor.Shape{{24, 40}, {40, 24}, {32, 32}}, archgold.Pick(9241251877628356013, 15826934832090508788), archgold.Pick(14877648412914339811, 14877648412914339811)},
+	{"banded", []tensor.Shape{{72, 80}, {80, 72}, {76, 76}}, archgold.Pick(4743616716528603079, 7910985114552742753), archgold.Pick(12900181287849649047, 12900181287849649047)},
 }
 
 // TestMuonStepIsBitIdentical freezes the parameters after three Muon steps. Banding the

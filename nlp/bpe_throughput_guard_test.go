@@ -44,6 +44,23 @@ func TestBPEThroughputGuard(t *testing.T) {
 		}
 	}
 	fmt.Printf("BPEGUARD encode %.1f MB/s (floor %.0f)  tokens=%d\n", best, encodeFloor, len(toks))
+
+	// CORRECTNESS FIRST, and unconditionally: 237208 is the count that matched tiktoken
+	// bit-for-bit in T882. This used to be printed and never asserted, so the one part of this
+	// test that belongs in CI was not actually a gate. A tokenizer that got fast by being wrong
+	// would have sailed through.
+	if len(toks) != 237208 {
+		t.Errorf("encoded %d tokens, want 237208 — the tokenizer's OUTPUT moved, not just its speed", len(toks))
+	}
+
+	// THROUGHPUT ONLY ON A DEV BOX. The floors are ~1/3 of an M2 Pro, which this file claimed was
+	// "loose enough for slower CI hardware" — measured wrong: GitHub's shared runners report as
+	// little as 1.3 MB/s encode and 20.2 MB/s decode, 36x and 12x under the floors. On hardware
+	// that variable the guard cannot tell a regression from a busy neighbour, which is the same
+	// dev-box/runner split ci.yml documents ("-short on runners").
+	if testing.Short() {
+		t.Skip("throughput floors are calibrated for a dev box; runners are too variable")
+	}
 	if best < encodeFloor {
 		t.Errorf("BPE encode %.1f MB/s is below the %.0f MB/s floor — an order-of-magnitude "+
 			"regression, not machine noise", best, encodeFloor)

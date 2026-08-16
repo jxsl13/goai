@@ -1,6 +1,7 @@
 package linalg_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -22,14 +23,14 @@ func TestCholeskyIsBitIdentical(t *testing.T) {
 		f32  bool
 		want uint64
 	}{
-		{3, 2, false, 17768641141587771019},
-		{7, 3, false, 6519991207317368223},
-		{64, 5, false, 977471996829047676},
-		{129, 4, false, 7848359424020427753},
+		{3, 2, false, archgold.Pick(17768641141587771019, 11980659079766952600)},
+		{7, 3, false, archgold.Pick(6519991207317368223, 17211136390019119064)},
+		{64, 5, false, archgold.Pick(977471996829047676, 6074487709568889395)},
+		{129, 4, false, archgold.Pick(7848359424020427753, 5307133137334945473)},
 		// F32 input takes the OTHER arm of the factorization — the one that reads through
 		// AtF64 — which the F64 rows never enter.
-		{7, 3, true, 14982212773978087913},
-		{64, 5, true, 4047594521655782583},
+		{7, 3, true, archgold.Pick(14982212773978087913, 6458871279157759121)},
+		{64, 5, true, archgold.Pick(4047594521655782583, 12445304480102178508)},
 	}
 	for _, c := range cases {
 		dt := tensor.F64

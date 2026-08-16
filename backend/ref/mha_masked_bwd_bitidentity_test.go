@@ -1,6 +1,7 @@
 package ref
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -22,10 +23,10 @@ func TestMHAMaskedBackwardIsBitIdentical(t *testing.T) {
 		perHead           bool
 		want              uint64
 	}{
-		{16, 32, 16, 2, false, 16308141056924124793},
-		{9, 19, 8, 2, false, 16345993731896056167},
-		{7, 13, 8, 2, true, 10045763495713164437},
-		{16, 32, 16, 2, true, 4901236805177551999},
+		{16, 32, 16, 2, false, archgold.Pick(16308141056924124793, 15380585875560371548)},
+		{9, 19, 8, 2, false, archgold.Pick(16345993731896056167, 8306285252414618082)},
+		{7, 13, 8, 2, true, archgold.Pick(10045763495713164437, 1286255980442546554)},
+		{16, 32, 16, 2, true, archgold.Pick(4901236805177551999, 17560688895027529855)},
 	} {
 		dm := c.heads * c.dk
 		mk := func(rows, cols int, off float64) *tensor.Tensor {

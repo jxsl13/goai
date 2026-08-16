@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -50,10 +51,10 @@ func TestGLAIsBitIdentical(t *testing.T) {
 		seq, dk, dv int
 		want        uint64
 	}{
-		{9, 13, 5, 6023223899936446705},
-		{7, 22, 9, 13067282666201662810},
-		{6, 32, 8, 17490629942812691155},
-		{5, 1, 4, 17003964984244211732},
+		{9, 13, 5, archgold.Pick(6023223899936446705, 14103420655677136326)},
+		{7, 22, 9, archgold.Pick(13067282666201662810, 2542156900422189225)},
+		{6, 32, 8, archgold.Pick(17490629942812691155, 15584311387166056903)},
+		{5, 1, 4, archgold.Pick(17003964984244211732, 2857670081055150276)},
 	}
 	for _, c := range cases {
 		if got := glaDigest(t, c.seq, c.dk, c.dv); got != c.want {

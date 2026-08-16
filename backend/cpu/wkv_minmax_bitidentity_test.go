@@ -1,6 +1,7 @@
 package cpu
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -80,11 +81,11 @@ func TestWKVOpIsBitIdentical(t *testing.T) {
 		seq, d int
 		want   uint64
 	}{
-		{backend.Ref, tensor.F64, 24, 37, 10566835949036511716},
-		{backend.Ref, tensor.F32, 24, 37, 3093831351525738813},
-		{backend.CPU, tensor.F64, 24, 37, 10566835949036511716},
-		{backend.CPU, tensor.F32, 24, 37, 3093831351525738813},
-		{backend.CPU, tensor.F64, 64, 96, 13474779355268514115},
+		{backend.Ref, tensor.F64, 24, 37, archgold.Pick(10566835949036511716, 17150419372584378800)},
+		{backend.Ref, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
+		{backend.CPU, tensor.F64, 24, 37, archgold.Pick(10566835949036511716, 17150419372584378800)},
+		{backend.CPU, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
+		{backend.CPU, tensor.F64, 64, 96, archgold.Pick(13474779355268514115, 16963565634156262264)},
 	}
 	for _, c := range cases {
 		got := wkvOpDigest(t, c.be, c.dt, c.seq, c.d)

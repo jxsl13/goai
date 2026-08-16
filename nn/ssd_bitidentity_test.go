@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -54,11 +55,11 @@ func TestSSDRecurrentIsBitIdentical(t *testing.T) {
 		T, d, n int
 		want    uint64
 	}{
-		{5, 320, 13, 14628096508942058614},
-		{4, 64, 70, 16279910178519077628},
-		{4, 64, 64, 16083548054130141405},
-		{6, 4096, 1, 11038940808816861172},
-		{5, 16, 8, 4559563584542277843}, // n*d = 128: strided path, untouched by this round
+		{5, 320, 13, archgold.Pick(14628096508942058614, 12617149635308777335)},
+		{4, 64, 70, archgold.Pick(16279910178519077628, 13377703190023568973)},
+		{4, 64, 64, archgold.Pick(16083548054130141405, 3280785829973999463)},
+		{6, 4096, 1, archgold.Pick(11038940808816861172, 17190025977838196218)},
+		{5, 16, 8, archgold.Pick(4559563584542277843, 12703570077100242087)}, // n*d = 128: strided path, untouched by this round
 	}
 	for _, c := range cases {
 		if got := ssdRecurrentDigest(t, c.T, c.d, c.n); got != c.want {

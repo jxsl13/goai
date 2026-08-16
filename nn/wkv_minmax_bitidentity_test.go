@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -93,11 +94,11 @@ func TestWKVIsBitIdentical(t *testing.T) {
 		hostile bool
 		want    uint64
 	}{
-		{16, 8, tensor.F64, false, 8704977994969926434},
-		{16, 8, tensor.F32, false, 3639629632577827843},
-		{33, 12, tensor.F64, false, 5138939865296147482},
-		{33, 12, tensor.F64, true, 16919174266983207772}, // +Inf and NaN in the same channel
-		{33, 12, tensor.F32, true, 2897106097270140966},
+		{16, 8, tensor.F64, false, archgold.Pick(8704977994969926434, 6850958381347604755)},
+		{16, 8, tensor.F32, false, archgold.Pick(3639629632577827843, 3639629632577827843)},
+		{33, 12, tensor.F64, false, archgold.Pick(5138939865296147482, 10587339890939798671)},
+		{33, 12, tensor.F64, true, archgold.Pick(16919174266983207772, 1454813574854328081)}, // +Inf and NaN in the same channel
+		{33, 12, tensor.F32, true, archgold.Pick(2897106097270140966, 3906677676722939046)},
 	}
 	for _, c := range cases {
 		got := wkvDigest(t, c.seq, c.d, c.dt, c.hostile)

@@ -1,6 +1,7 @@
 package nn_test
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -21,9 +22,9 @@ func TestGPTQuantizeIsBitIdentical(t *testing.T) {
 		out, in, samples, levels int
 		want                     uint64
 	}{
-		{4, 8, 16, 16, 9062784375536821882},
-		{48, 96, 64, 16, 6027463531619723289},
-		{48, 96, 64, 4, 210904610864373177},
+		{4, 8, 16, 16, archgold.Pick(9062784375536821882, 13208785513568894821)},
+		{48, 96, 64, 16, archgold.Pick(6027463531619723289, 3125789428405359342)},
+		{48, 96, 64, 4, archgold.Pick(210904610864373177, 15362639341335511453)},
 	}
 	for _, c := range cases {
 		w := tensor.New(tensor.F64, tensor.Shape{c.out, c.in})

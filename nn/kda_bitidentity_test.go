@@ -1,6 +1,7 @@
 package nn
 
 import (
+	"github.com/jxsl13/goai/internal/archgold"
 	"math"
 	"testing"
 
@@ -20,10 +21,10 @@ func TestKDAIsBitIdentical(t *testing.T) {
 		dt          tensor.Dtype
 		want        uint64
 	}{
-		{16, 8, 8, tensor.F64, 4297825276869110848},
-		{64, 64, 64, tensor.F64, 1344577449931651826},
-		{48, 128, 128, tensor.F64, 13733883409037120111},
-		{48, 32, 32, tensor.F32, 14432043542469650367},
+		{16, 8, 8, tensor.F64, archgold.Pick(4297825276869110848, 6446602709617325988)},
+		{64, 64, 64, tensor.F64, archgold.Pick(1344577449931651826, 758658149952110689)},
+		{48, 128, 128, tensor.F64, archgold.Pick(13733883409037120111, 6960860736063445236)},
+		{48, 32, 32, tensor.F32, archgold.Pick(14432043542469650367, 14432043542469650367)},
 	}
 	for _, c := range cases {
 		mk := func(fn func(i int) float64, r, cc int) *tensor.Tensor {
