@@ -1,0 +1,19 @@
+# Golden fixtures are compared BYTE FOR BYTE, so git must never rewrite their line endings.
+#
+# Without this, a file with `text: unspecified` is auto-detected and converted on checkout wherever
+# core.autocrlf is on — which is the default on GitHub's Windows runners. That is exactly how
+# TestMarshalIndexMatchesTransformersGolden came to fail on windows-latest and pass everywhere
+# else: the checked-in golden is LF, the checked-out copy was CRLF, and marshalIndex emits LF.
+#
+# The failure is invisible on Linux and macOS, so the whole class has to be prevented rather than
+# fixed per test.
+testdata/** -text
+**/testdata/** -text
+
+# Binary model and array formats, wherever they live.
+*.safetensors -text
+*.gguf -text
+*.npy -text
+*.npz -text
+*.bin -text
+*.pt -text
