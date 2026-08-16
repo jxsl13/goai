@@ -1386,6 +1386,81 @@ func setMatMulNoCopy(on bool) bool {
 // pre-§T622 single last-shape cache (recompile per prefill length). Benchmark/A-B knob.
 func SetAttnCacheCap(cap int) int { return int(C.mtl_attn_cache_cap_set(C.int(cap))) }
 
+// SetQ4KCooperative selects the simdgroup-cooperative resident Q4_K matvec
+// (true, default) or the historical one-thread-per-output kernel (false), and
+// returns the previous setting. It is a same-process forced-off measurement
+// hook; devices that cannot compile the cooperative pipeline keep the scalar
+// fallback regardless of this setting.
+func SetQ4KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ2KCooperative selects the SIMD-group-cooperative resident Q2_K M=1 matvec and
+// returns the previous setting. Q2_K shares Q3_K's 16-scale-group layout, so the 32
+// lanes of a SIMD group pair up two-per-group and each lane stays inside one scale.
+// Devices without a 32-lane SIMD width keep the scalar path, and this hook forces it
+// off for the A/B control.
+//
+// Results match the scalar kernel within the 2e-5 relative bar the sibling
+// cooperative kernels use: the per-element arithmetic is identical, only the
+// summation order differs.
+func SetQ2KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q2k_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ3KCooperative selects the SIMD-group-cooperative resident Q3_K M=1 matvec and
+// returns the previous setting. Q3_K splits a 256-superblock into 16 scale groups of
+// 16 elements, so the 32 lanes of a SIMD group pair up two-per-group and each lane
+// stays inside one scale. Devices without a 32-lane SIMD width keep the scalar path,
+// and this hook forces it off for the A/B control.
+//
+// Results match the scalar kernel within the 2e-5 relative bar the sibling
+// cooperative kernels use: the per-element arithmetic is identical, only the
+// summation order differs.
+func SetQ3KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q3k_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ5KCooperative selects the SIMD-group-cooperative resident Q5_K M=1 matvec
+// and returns the previous setting. At M=1 the scalar kernel gives work to only N
+// threads, each walking all of K; the cooperative kernel gives one output row to a
+// SIMD group whose 32 lanes split that row's K. Devices without a 32-lane SIMD width
+// keep the scalar path, and this hook forces it off for the A/B control.
+//
+// Results match the scalar kernel within the 2e-5 relative bar the Q4_K and Q6_K
+// cooperative kernels use — the per-element arithmetic is identical, only the
+// summation order differs (per-lane partials reduced by simd_sum).
+func SetQ5KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q5k_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ6KCooperative selects the SIMD-group-cooperative resident Q6_K M=1
+// matvec (true, default) or its historical scalar-K control (false), returning
+// the previous setting. M>1 and unsupported devices always retain scalar.
+func SetQ6KCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q6k_cooperative_set(C.int(v)) == 1
+}
+
 // mhaBackwardF32 is the GPU SDPA backward (§T86): (Q,K,V,dO) → (dQ,dK,dV). It
 // serves the same subset as the forward (heads, GQA, causal, sliding window §T128,
 // attn-scale) and falls back to the reference (§I4) for ALiBi/dk>128/degenerate
