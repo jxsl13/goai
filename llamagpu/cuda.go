@@ -487,6 +487,11 @@ func NewMixtralQ4KCUDA(m *nlp.Mixtral) (*Decoder, error) {
 	return newMixtralDecoder(m, o)
 }
 
+// NewMixtralQ8CUDA uploads an nlp.Mixtral with Q8_0-quantized weights (experts included) — the
+// higher-fidelity counterpart to [NewMixtralQ4KCUDA]: ~2x the VRAM for weights that dequantize to
+// within Q8_0's much tighter error bound, over the same ~E/K gated expert decode. Prefer it when a
+// Q4_K MoE loses accuracy on the target task and the model still fits. Returns an error when no
+// CUDA GPU is available.
 func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")

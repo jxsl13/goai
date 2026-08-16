@@ -21,6 +21,21 @@ import (
 // nothing needs to run). Every printed sequence is explicitly sorted, so identical
 // inputs produce byte-identical reports — no map-iteration order anywhere.
 func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) int {
+	// Drop a leading "--". The CLI is documented as `cichange -run <base> <head> [-- go-test-args]`
+	// and CI invokes it exactly that way, but flag.Parse stops at the first POSITIONAL (base), so
+	// the separator is never consumed as a flag terminator — it arrives here as a literal argument
+	// and used to be forwarded straight into the command line.
+	//
+	// That was silent and total: `go test -- -short ./nn/` does not run ./nn/. Everything after --
+	// is passed to the test binary, the package list is swallowed, go test falls back to the
+	// package in the current directory, and it exits 0. Every "run tests for the affected packages"
+	// step therefore tested the root package alone and reported success, which is how nn sat red on
+	// main across many green PRs (the Muon F32 panic, MARS fast-path drift, DyT FMA contraction).
+	// Only a LEADING separator is dropped: that is the whole documented contract, and a later "--"
+	// would be a deliberate argument to the test binary, not this mistake.
+	if len(goTestArgs) > 0 && goTestArgs[0] == "--" {
+		goTestArgs = goTestArgs[1:]
+	}
 	fmt.Fprintf(w, "== cichange run: %s..%s ==\n", base, head)
 	g, err := buildGraph(dir)
 	if err != nil {

@@ -323,6 +323,10 @@ func (q *AQLM) reconstructTransposedInto(dst *tensor.Tensor) {
 	}
 }
 
+// Reconstruct materializes the full [Rows, Cols] weight matrix this AQLM quantization encodes, by
+// summing the selected codebook entries for every group. It allocates a dense tensor of the layer's
+// original size, so it is for inspection, error measurement and export — not the inference path,
+// which consumes the codes directly and never forms the dense matrix.
 func (q *AQLM) Reconstruct() *tensor.Tensor {
 	w := tensor.New(q.dtype, tensor.Shape{q.Rows, q.Cols})
 	gpr := q.Cols / q.GroupSize
