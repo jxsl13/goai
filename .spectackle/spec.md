@@ -482,3 +482,8 @@ Rationale: T-01KYKSAF75FQGSFSQM9Z2RAJXQ named crossentropy math.Log, suppressed 
 WHEN a Go benchmark result is compared against another variant, the loop SHALL discard the first sample of each -count run and compare medians of INTERLEAVED runs of both variants, never a sweep of one variant against a sample of another.
 
 Rationale: Two false results in one session. (1) A 1.59x small-n win was a cold first sample (2.12 ms) read against a warm sample of another run (1.33 ms); interleaved and warmup-trimmed the two variants are 0.8 percent apart. First samples ran 20-35 percent high here, 1.55-1.75 ms against a 1.30-1.36 ms warm level. (2) A clean grain sweep showed 2.6 percent that vanished to 1.4 percent inside 57 percent spreads when interleaved, and the sweep and interleaved run disagreed on absolute level for IDENTICAL code (5.2 against 6.1 ms), proving the host drifted between them.
+
+## GUARD-TOGGLE-ARMS-MUST-DIFFER-001
+WHEN a guard compares two code paths selected by toggles, the loop SHALL assert the arms DIFFER at the shape where the recorded gap is widest, since an interception upstream of both toggles makes it a path against itself; TestQ4KMatrixUnitHasNoCrossover read 1.00x where its table records 0.36x.
+
+Rationale: The f16 short-prompt path is checked first in the resident dispatch and, with the weight cache on, its M cap becomes 1<<20, so it served BOTH arms. The test failed only on thermal noise while reporting a crossover conclusion about a comparison that never ran. A majority-of-shapes vacuity rule did NOT catch it: one shape cleared 2 percent on noise alone, so anchor to the widest shape.
