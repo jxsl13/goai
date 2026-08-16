@@ -348,3 +348,8 @@
 {"t":"2026-08-15T00:33:29Z","eid":"c4ecab5f1d6a4468","ag":"ag-6348","ev":"create","id":"R-01M01DD2A5ER9V02174WE7XXKT","k":"research","ti":"REJECTED M2 Metal Q4_K M-blocked mat-mat: 2.2-6.3x slower, occupancy beats traffic; corrects the 87x framing"}
 {"t":"2026-08-15T00:36:18Z","eid":"62bc88ce41739546","ag":"ag-5557","ev":"create","id":"R-01M01DJ74WF738NXP1A03K10MR","k":"research","ti":"M2 Q4_K prefill roofline: dequant ALU worth at most 1.41x, perfect weight reuse at most 1.67x"}
 {"t":"2026-08-15T00:59:49Z","eid":"9b0d8c4b787b9963","ag":"ag-1ba9","ev":"create","id":"R-01M01EX9BCE6SVV6A3ZF90WF3K","k":"research","ti":"Three K-quant types (Q2_K/Q3_K/Q5_K) still scalar at M=1 while Q4_K/Q6_K run cooperative; Q5_K is next"}
+{"t":"2026-08-16T09:51:30Z","eid":"9f883020563f5734","ag":"ag-5416","ev":"drift","rule":"ARCH-011","node":"go:backend.Execute","cls":"healed","oh":"e158cb98a3dd13e9","nh":"4757c976ad9c8843"}
+{"t":"2026-08-16T09:51:30Z","eid":"4a180d1d59a9812c","ag":"ag-5416","ev":"drift","rule":"ARCH-012","node":"go:backend.Execute","cls":"healed","oh":"e158cb98a3dd13e9","nh":"4757c976ad9c8843"}
+{"t":"2026-08-16T09:51:30Z","eid":"a21def7d7ce653b4","ag":"ag-5416","ev":"drift","rule":"ARCH-017","node":"go:backend.Execute","cls":"healed","oh":"e158cb98a3dd13e9","nh":"4757c976ad9c8843"}
+{"t":"2026-08-16T09:51:30Z","eid":"a292663d66b02682","ag":"ag-5416","ev":"drift","rule":"ARCH-018","node":"go:backend.Execute","cls":"healed","oh":"e158cb98a3dd13e9","nh":"4757c976ad9c8843"}
+{"t":"2026-08-16T09:51:30Z","eid":"3d276502ff8d1fd2","ag":"ag-5416","ev":"drift","rule":"NUM-013","node":"go:backend.Execute","cls":"healed","oh":"e158cb98a3dd13e9","nh":"4757c976ad9c8843"}
