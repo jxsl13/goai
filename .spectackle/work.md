@@ -915,6 +915,10 @@ BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is 
 REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.
 
 ## R-01M01KBSTZFY5THEBS6DGFMYF9 GPU quant decode M=1 campaign closed: 14 cooperative kernels, 7 formats, 2 backends, 1.80x-6.01x
+kind: 
+state: 
+created: 
+
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
 kind: 
 state: 
@@ -3608,3 +3612,30 @@ WHAT SURVIVES from R-01M01DYT2FF5J: the refreshed scorecard against sklearn 1.9.
 STANDING RULE CANDIDATE, stated but not yet filed as a rule because one instance is thin evidence: discard the first sample of every Go benchmark run before comparing, or compare only medians of interleaved runs of both variants. A -count=N series is N samples of which the first is not comparable to the rest.
 
 NET FOR SVC: no change is justified. classicBandGrain stays at 1<<13, the fan-out stays, and the 1.61x deficit to libsvm is untouched. The only bounded lever remains the libsvm norm-expansion kernel, whose ceiling is capped by archExp at 10.3 percent and the whole column path at 20.5 percent of the serial profile - well under the 1.61x needed - so it should be probe-bounded before it is built.
+
+## R-01M05ESFTPFW9T0XYW4ZMTY888 CI selection fix exposed five guards that had stopped measuring; amd64 goldens are per-arch by necessity
+kind: research
+state: draft
+created: 2026-08-16
+
+WHAT WAS FOUND. Fixing CI package selection (#1072) exposed a backlog of guards that had stopped measuring what they claim. main was red on amd64 across 33 tests in 8 packages, and several more guards failed only on CI hardware. All were invisible while the selective runner passed an empty package list.
+
+ROOT CAUSE OF THE amd64 FAMILY, measured not inferred, and it is TWO causes.
+(1) Fixtures built from math.Sin/math.Cos, which are not bit-identical across GOARCH: 41 of 2048 swept values differ by one ulp (math.Cos(84) ends e523 on arm64, e522 on amd64). Spot-checking does not reveal it - Sin(129) and Cos(451) agree exactly while the sweep diverges.
+(2) FP contraction: arm64 fuses v -= a*b to FNMSUB, amd64 at GOAMD64=v1 does not. Proof: with exact dyadic fixtures the ONLY shape whose digest matched across arches was the one small enough that the unrolled loop never ran.
+Cause 2 cannot be fixed by better fixtures, so a single frozen constant can never be portable. Resolution: internal/archgold keys each golden on runtime.GOARCH. Full bit-exactness is retained per arch; nothing relaxes to a tolerance.
+
+A WRONG METHOD, CORRECTED MID-FLIGHT. I generated the amd64 goldens under Rosetta and claimed it reproduces CI exactly, generalizing from ONE test that happened to agree. TestMLAVJPIsBitIdentical gives 10503053519604685430 under Rosetta at BOTH GOAMD64=v1 and v2, and 2081554234887433254 on real x86; ubuntu and windows agree with each other, so Rosetta is the outlier - it apparently translates SSE multiply-add onto ARM FMA, fusing where real amd64 does not. Rosetta reproduces amd64 FAILURES but is not an oracle for amd64 FP RESULTS. Final values were harvested from CI logs over five convergence rounds, matched to rows by case LABEL rather than position (MoBA reports its cases in a different order than its table, so positional filling would have mismatched silently).
+
+FIVE GUARDS THAT HAD STOPPED MEASURING.
+- TestQ4KMatrixUnitHasNoCrossover compared a path with ITSELF. The f16 short-prompt path is checked first in the resident dispatch and, with the weight cache on, its M cap becomes 1<<20, so it intercepted every shape and neither toggle selected anything. The signature was in the output: 1.00x, 1.01x, 0.99x where the recorded table has the arms 0.36x-0.77x apart. It failed only on thermal noise, reporting a crossover conclusion about a comparison that never ran. Second defect in the same test: at M=16 the arm labelled dqgemm is not dqgemm, because q4k_dq_gemm_eligible gates on M >= 24.
+- TestBPEThroughputGuard PRINTED the token count and never asserted it, so the one part that belongs in CI was not a gate.
+- The amd64 goldens above.
+- TestLoadShardedTensorReadsOneShard measured the race detector's shadow memory, not the read path.
+- TestMarshalIndexMatchesTransformersGolden compared bytes git itself had rewritten (LF to CRLF on Windows checkout, text attribute unspecified).
+
+THE DEV-BOX / RUNNER SPLIT. Timing assertions calibrated on this M2 do not merely drift on GitHub runners, they INVERT: the crossover guard reports mmunit ahead at M=32/48/64 there, the opposite of every local reading. BPE floors set at one third of an M2 Pro measured 1.3 MB/s on a runner, 36x under. Such assertions belong behind -short, which ci.yml already documents as the split.
+
+NOT ADDRESSED, deliberately: nlp TestDiffusionLMGrammarE2E trains a model end to end and 1-ulp differences compound into different generated text on amd64. It is already -short-skipped so CI never runs it; freezing an arch-specific expectation for a trained model is a separate decision.
+
+VERIFICATION. main is green on every lane for the first time with CI actually running tests. The per-arch goldens are mutation-verified on BOTH arches: swapping the k and k+1 accumulation order in vjp_qr.go - same math, different summation order, exactly what these guards exist to catch - turns 4 of 5 QR cases red on each, the 5th being the shape where the jammed loop never runs.
