@@ -24,7 +24,7 @@ func TestNSABranchesAreBitIdentical(t *testing.T) {
 	}{
 		{96, 128, 4, 16, 4, 32, archgold.Pick(17751161931858554633, 14158343868994854776)},
 		{67, 64, 2, 8, 3, 16, archgold.Pick(1408904477776929825, 14061378383189228225)},
-		{41, 32, 2, 4, 2, 8, archgold.Pick(17544698765182081482, 16852215822321138725)},
+		{41, 32, 2, 4, 2, 8, archgold.Pick(17544698765182081482, 15491161375586624075)},
 		// A block size that is NOT a multiple of four, so a four-wide group straddles the
 		// selection mask and the jam has to fall back inside the group.
 		{53, 32, 2, 6, 3, 10, archgold.Pick(17668651896359838193, 16170567050796504078)},

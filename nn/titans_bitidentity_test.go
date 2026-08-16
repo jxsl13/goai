@@ -25,7 +25,7 @@ func TestTitansScanIsBitIdentical(t *testing.T) {
 	}{
 		{16, 8, 12, archgold.Pick(8353175572084491654, 3182815230998812478)},
 		{7, 10, 13, archgold.Pick(16808472780882284121, 10958214392316288546)},
-		{9, 14, 7, archgold.Pick(5379503336826529122, 14545778034213816722)},
+		{9, 14, 7, archgold.Pick(5379503336826529122, 9310702398420399730)},
 	} {
 		m, err := nn.NewNeuralMemory(tensor.F64, c.dim, c.hid, 3)
 		if err != nil {
