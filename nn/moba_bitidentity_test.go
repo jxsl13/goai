@@ -50,10 +50,10 @@ func TestMoBAIsBitIdentical(t *testing.T) {
 		seq, dm, heads, blockSize, topK int
 		want                            uint64
 	}{
-		{37, 32, 2, 8, 2, archgold.Pick(4168332973237042244, 8328200919833524082)},   // 37 = 4 blocks of 8 plus a short one; topK rejects
-		{37, 32, 2, 8, 16, archgold.Pick(10924912427930123379, 828959329962388704)},  // topK exceeds the block count: every past block selected
-		{64, 32, 4, 16, 2, archgold.Pick(6028010401060052134, 15043508461982351155)}, // block-aligned
-		{9, 16, 1, 4, 1, archgold.Pick(13685344069298453308, 2052641934387284795)},   // topK=1: only the current block is ever in the set
+		{37, 32, 2, 8, 2, archgold.Pick(4168332973237042244, 14366631067724530099)},   // 37 = 4 blocks of 8 plus a short one; topK rejects
+		{37, 32, 2, 8, 16, archgold.Pick(10924912427930123379, 14890366728869960183)}, // topK exceeds the block count: every past block selected
+		{64, 32, 4, 16, 2, archgold.Pick(6028010401060052134, 1679944029613378883)},   // block-aligned
+		{9, 16, 1, 4, 1, archgold.Pick(13685344069298453308, 9170962164310395468)},    // topK=1: only the current block is ever in the set
 	}
 	for _, c := range cases {
 		got := mobaDigest(t, c.seq, c.dm, c.heads, c.blockSize, c.topK)

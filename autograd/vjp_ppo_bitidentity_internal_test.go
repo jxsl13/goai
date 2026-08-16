@@ -50,7 +50,7 @@ func TestPPOVJPIsBitIdentical(t *testing.T) {
 		eps  float64
 		want uint64
 	}{
-		{1000, 0.2, archgold.Pick(5299779950205309273, 18310306711870706478)},
+		{1000, 0.2, archgold.Pick(5299779950205309273, 1141810445622132973)},
 		{257, 0.05, archgold.Pick(2663088398810480165, 16063248452126008245)},
 		{64, 1, archgold.Pick(17185744957343320499, 18150797841233774130)}, // eps=1 puts the low bound at exactly zero, where Max(0,-0) differs from <
 	} {

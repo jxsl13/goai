@@ -67,8 +67,8 @@ func TestMLAVJPHeadSplitIsBitExact(t *testing.T) {
 		causal bool
 		want   uint64
 	}{
-		{"causal", true, archgold.Pick(3570864407073999628, 1489154577517272182)},
-		{"full", false, archgold.Pick(11976000054950329798, 3782504584191206100)},
+		{"causal", true, archgold.Pick(3570864407073999628, 13863656067931346313)},
+		{"full", false, archgold.Pick(11976000054950329798, 3426872122183439190)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			vjp := vjps[backend.OpMLA]

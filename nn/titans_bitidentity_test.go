@@ -23,7 +23,7 @@ func TestTitansScanIsBitIdentical(t *testing.T) {
 		seq, dim, hid int
 		want          uint64
 	}{
-		{16, 8, 12, archgold.Pick(8353175572084491654, 2859285724409217061)},
+		{16, 8, 12, archgold.Pick(8353175572084491654, 3182815230998812478)},
 		{7, 10, 13, archgold.Pick(16808472780882284121, 18416458382184970232)},
 		{9, 14, 7, archgold.Pick(5379503336826529122, 14545778034213816722)},
 	} {

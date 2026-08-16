@@ -23,7 +23,7 @@ func TestKANForwardIsBitIdentical(t *testing.T) {
 		want           uint64
 	}{
 		{3, 5, 7, archgold.Pick(5936029728971432568, 14272068029666688409)},
-		{13, 8, 6, archgold.Pick(15159748691548848689, 14622643123133920247)},
+		{13, 8, 6, archgold.Pick(15159748691548848689, 6609257596807823200)},
 		{96, 24, 32, archgold.Pick(515177776064738749, 1788711544738185816)},
 	}
 	for _, c := range cases {

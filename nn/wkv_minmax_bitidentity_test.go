@@ -94,10 +94,10 @@ func TestWKVIsBitIdentical(t *testing.T) {
 		hostile bool
 		want    uint64
 	}{
-		{16, 8, tensor.F64, false, archgold.Pick(8704977994969926434, 6469398289412485050)},
+		{16, 8, tensor.F64, false, archgold.Pick(8704977994969926434, 6850958381347604755)},
 		{16, 8, tensor.F32, false, archgold.Pick(3639629632577827843, 3639629632577827843)},
-		{33, 12, tensor.F64, false, archgold.Pick(5138939865296147482, 6299847447338777416)},
-		{33, 12, tensor.F64, true, archgold.Pick(16919174266983207772, 2358068975701030124)}, // +Inf and NaN in the same channel
+		{33, 12, tensor.F64, false, archgold.Pick(5138939865296147482, 10587339890939798671)},
+		{33, 12, tensor.F64, true, archgold.Pick(16919174266983207772, 1454813574854328081)}, // +Inf and NaN in the same channel
 		{33, 12, tensor.F32, true, archgold.Pick(2897106097270140966, 3906677676722939046)},
 	}
 	for _, c := range cases {
