@@ -75,6 +75,15 @@ func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
 	rq := rw.(*ResidentQWeight)
 	defer rq.Close()
 
+	// The f16 short-prompt path is checked BEFORE both arms in the resident dispatch, and with the
+	// weight cache on (the default) its M cap becomes 1<<20 — so it intercepts every shape measured
+	// here and NEITHER toggle selects anything. That made this guard vacuous: both arms landed
+	// within 1% at every M (the signature of a path compared with itself) and it failed only on
+	// thermal noise. Disable it for the duration so the arms are the two paths this test names.
+	SetQ4KDequantGemmF16(false)
+	defer SetQ4KDequantGemmF16(true)
+
+	vacuous := 0
 	for _, M := range []int{16, 32, 48, 64, 96, 128, 256} {
 		x, _ := NewDeviceBufferF32(make([]float32, M*K))
 		o, _ := NewDeviceBufferF32(make([]float32, M*N))
@@ -106,6 +115,17 @@ func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
 				"longer holds; re-evaluate whether qmatmul_q4k_mm should be enabled",
 				M, res["mmunit"]*1e6, res["dqgemm"]*1e6)
 		}
+		// NON-VACUITY, keyed to the WIDEST shape. At M=256 the recorded arms are 0.36x apart —
+		// mmunit takes ~2.7x as long — so anything close to parity there means the toggles stopped
+		// selecting different code, not that the paths converged. Checked at M=256 alone because
+		// that is where the true gap is largest and noise is least able to imitate it; a
+		// majority-of-shapes rule tolerated the real vacuous case, which cleared 2% at one M on
+		// noise alone.
+		if M == 256 {
+			if d := res["dqgemm"] - res["mmunit"]; d < 0.10*res["dqgemm"] && -d < 0.10*res["dqgemm"] {
+				vacuous++
+			}
+		}
 		fmt.Printf("XO M=%4d dqgemm=%8.1fus mmunit=%8.1fus  dq/mm=%.2fx\n",
 			M, res["dqgemm"]*1e6, res["mmunit"]*1e6, res["dqgemm"]/res["mmunit"])
 		x.Release()
@@ -113,4 +133,9 @@ func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
 	}
 	SetQ4KDequantGemm(true)
 	SetQ4KMatrixUnit(false)
+	if vacuous > 0 {
+		t.Error("at M=256 the two arms measured within 10% of each other, where the recorded gap is " +
+			"2.7x — the toggles no longer select different paths, so this guard proves nothing; " +
+			"find what intercepts the resident dispatch ahead of them (the f16 short-prompt path did)")
+	}
 }
