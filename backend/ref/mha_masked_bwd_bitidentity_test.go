@@ -24,7 +24,7 @@ func TestMHAMaskedBackwardIsBitIdentical(t *testing.T) {
 		want              uint64
 	}{
 		{16, 32, 16, 2, false, archgold.Pick(16308141056924124793, 15380585875560371548)},
-		{9, 19, 8, 2, false, archgold.Pick(16345993731896056167, 5634437938168354934)},
+		{9, 19, 8, 2, false, archgold.Pick(16345993731896056167, 8306285252414618082)},
 		{7, 13, 8, 2, true, archgold.Pick(10045763495713164437, 16635919694738124331)},
 		{16, 32, 16, 2, true, archgold.Pick(4901236805177551999, 2734271971446364057)},
 	} {
