@@ -512,3 +512,8 @@ Rationale: An unspecified text attribute lets git convert LF to CRLF on checkout
 WHEN a merge conflict touches .spectackle/work.md, the loop SHALL never resolve it by keeping both sides, because work.md entries encode CURRENT STATE and a deletion IS the state change.
 
 Rationale: Consolidation branches resolved every .spectackle conflict as a union and resurrected a tombstoned task: T-01KYKSAF75FQGSFSQM9Z2RAJXQ was closed no-action with its reject event in the journal, yet spectackle get read it as draft again, so a later session would have re-picked refused work. Union is correct for journal.ndjson and for two independent record appends only.
+
+## ITERATIVE-SOLVER-PERTURBATION-IS-NOT-AN-ERROR-BUDGET-001
+WHEN a change would alter the values an iterative solver's search consumes, the loop SHALL gate it on the MEASURED iteration count for the target data, never on the change's error bound.
+
+Rationale: Sweeping a relative perturbation through the SVC RBF kernel: one-ulp noise (1e-16) took the fit from 79 steps to 2025 and 7.24 to 66.60 ms, while 1e-14 also stalled and 1e-15, 1e-13, 1e-9 and 1e-7 all stayed at 79 steps. Damage is not monotonic in error, because SMO's trajectory turns on which pair each step selects. Test accuracy stayed 1.0000 throughout, so the symptom is time and not correctness, and a tolerance test cannot see it.
