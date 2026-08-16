@@ -30,6 +30,14 @@ import (
 // Reported, not asserted, apart from a loose ceiling that catches a regression back onto the
 // dynamically-indexed kernel without pinning machine-dependent absolute timings.
 func TestAttnDK64Specializations(t *testing.T) {
+	// Thresholds here are calibrated on the M2 this project targets. GitHub's macOS runners share a
+	// much weaker GPU, where these numbers do not merely drift — they invert: the crossover guard
+	// reports mmunit AHEAD at M=32/48/64 there, the opposite of every local reading. A timing
+	// assertion that flips sign on other hardware is a dev-box tool, which is exactly the split
+	// ci.yml already documents ("-short on runners, full suites are for dev boxes").
+	if testing.Short() {
+		t.Skip("timing guard calibrated for this project's M2; runner GPUs invert it")
+	}
 	if !Available() {
 		t.Skip("no metal")
 	}
