@@ -507,3 +507,8 @@ Rationale: Runner hardware inverts orderings rather than merely adding noise: th
 WHEN a test compares golden bytes read from a file, the loop SHALL mark the path -text in .gitattributes so git performs no EOL conversion.
 
 Rationale: An unspecified text attribute lets git convert LF to CRLF on checkout wherever core.autocrlf is on, the default on GitHub Windows runners. TestMarshalIndexMatchesTransformersGolden failed there and nowhere else; the only CRLF in the comparison was the one git introduced, and the failure is invisible on Linux and macOS.
+
+## WORKMD-MERGE-IS-NOT-A-UNION-001
+WHEN a merge conflict touches .spectackle/work.md, the loop SHALL never resolve it by keeping both sides, because work.md entries encode CURRENT STATE and a deletion IS the state change.
+
+Rationale: Consolidation branches resolved every .spectackle conflict as a union and resurrected a tombstoned task: T-01KYKSAF75FQGSFSQM9Z2RAJXQ was closed no-action with its reject event in the journal, yet spectackle get read it as draft again, so a later session would have re-picked refused work. Union is correct for journal.ndjson and for two independent record appends only.
