@@ -492,3 +492,8 @@ Rationale: The f16 short-prompt path is checked first in the resident dispatch a
 WHEN a test freezes a golden digest of floating-point output, the loop SHALL key that golden on runtime.GOARCH via internal/archgold and never build the fixture from math.Sin, math.Cos or any transcendental.
 
 Rationale: Two independent causes make one constant unportable: math.Sin/Cos differ by 1 ulp across GOARCH (41 of 2048 swept values; math.Cos(84) ends e523 on arm64, e522 on amd64), and arm64 fuses a*b+c where amd64 v1 does not. With exact dyadic fixtures the only shape still matching was the one where the unrolled loop never ran, proving contraction is a second cause.
+
+## AMD64-FP-GOLDENS-COME-FROM-CI-001
+WHEN an amd64 floating-point golden is recorded from an Apple-silicon host, the loop SHALL harvest the value from CI logs, never from a Rosetta run.
+
+Rationale: Rosetta reproduces amd64 FAILURES but not amd64 FP RESULTS: TestMLAVJPIsBitIdentical gives 10503053519604685430 under Rosetta at both GOAMD64=v1 and v2 against 2081554234887433254 on real x86, while ubuntu and windows agree with each other. Rosetta appears to fuse SSE multiply-add onto ARM FMA.
