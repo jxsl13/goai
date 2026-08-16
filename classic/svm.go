@@ -358,16 +358,38 @@ func (kc *kernelCache) column(i int) []float64 {
 	// Measured on the 4000x20 scorecard fit: GOMAXPROCS=1 gives 7.49/7.28 ms against 5.69/5.66
 	// with all cores — 1.3x, not 1.02x. Parallelising the column is worth keeping.
 	//
-	// Where the remaining gap to libsvm is NOT: the solver. Instrumenting the loop shows this fit
-	// converges in 78 SMO steps with 3980 of 4000 variables at a bound, so the O(n) scans cost
-	// ~312k index visits in total and shrinking — the obvious next libsvm technique — would
-	// optimise something that is already negligible. The work is ~156 kernel columns, i.e. ~624k
-	// kernel evaluations, each 20 dimensions plus a math.Exp.
+	// CORRECTED 2026-08-16 by instrumenting the loop. The paragraph that stood here concluded the
+	// solver was negligible and the gap was per-core kernel throughput. Both halves were wrong,
+	// and they were wrong because the column COUNT was assumed rather than counted:
 	//
-	// So the gap is per-core kernel throughput: scikit-learn's SINGLE-THREADED libsvm fits in
-	// 3.51 ms against our 7.3 ms serial and 5.66 ms on twelve cores. Same algorithm, same step
-	// count, ~2.1x per-core. The likeliest cause is the kernel inner loop and math.Exp against C's
-	// vectorised libm, which is a Go-runtime limit rather than an algorithmic one.
+	//	                     was recorded here   actually measured (4000x20)
+	//	  kernel columns          ~156                44   (the cache hits far more than assumed)
+	//	  kernel evaluations      ~624k              176k
+	//	  scan index visits       ~312k "negligible" 632k
+	//
+	// The O(n) scans are the MAJORITY of the per-step work, outnumbering kernel evaluations 3.6
+	// to 1 — the opposite of the claim they replaced. Shrinking was dismissed on those bad numbers.
+	//
+	// What actually caps this fit is AMDAHL, and the number is decisive. Only the kernel column is
+	// parallelised; both working-set scans and the gradient update run serially. Measured on the
+	// scorecard fit: 6.82 ms at GOMAXPROCS=1 against 5.19 ms on twelve cores = 1.31x, which puts
+	// the parallelised fraction at 26.1%. A 73.9% serial remainder caps this design at 1.35x with
+	// INFINITE cores, so it is already at its ceiling: adding cores, or making the fan-out cheaper,
+	// cannot move it. Two attempts confirmed that prediction rather than beating it —
+	//
+	//	  persistent worker pool instead of per-column goroutine spawning   1.01x (n=4000)
+	//	  RBF specialised per column, hoisting the per-pair kernel switch   0.99x
+	//
+	// — both interleaved, alternating, first sample of each burst discarded. The CPU profile that
+	// motivated the first (45% pthread_cond_wait, 40% pthread_cond_signal) was idle workers parked
+	// on the barrier, not critical-path cost; a profile of a partly-serial program shows the
+	// waiting, and that is not where the time goes.
+	//
+	// THE LEVER IS THEREFORE THE SERIAL 74%, not the kernel: parallelise the two working-set scans
+	// (an argmin/max reduction — tie-breaking must reproduce the serial `<=` exactly to stay
+	// bit-identical) and the gradient update (embarrassingly parallel, one write per index).
+	// scikit-learn's libsvm is SINGLE-THREADED at 3.54 ms against our 6.82 ms serial, so ~1.9x
+	// per-core remains on top of that; the two are independent and either alone is insufficient.
 	//
 	// ATTEMPTED AND REVERTED: a fast exp for the x<=0 domain (range reduction plus a degree-6
 	// series, ~1.6e-7 relative error, verified against math.Exp). The reasoning looked safe —
