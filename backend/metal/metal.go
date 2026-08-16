@@ -1399,6 +1399,29 @@ func SetQ4KCooperative(on bool) bool {
 	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
 }
 
+// SetQ4_0Cooperative selects the SIMD-group-cooperative resident Q4_0 M=1 matvec and
+// returns the previous setting. Lanes 0-15 take the low nibble of block byte L and
+// lanes 16-31 the high nibble of byte L-16, matching Q4_0's x[i]/x[i+16] packing, so
+// each lane owns one element per block. Exposed for the A/B control.
+func SetQ4_0Cooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q4_0_cooperative_set(C.int(v)) == 1
+}
+
+// SetQ8_0Cooperative selects the SIMD-group-cooperative resident Q8_0 M=1 matvec and
+// returns the previous setting. Exposed for the A/B control; see the kernel comment
+// for why Q8_0 is a boundary case for the cooperative transform.
+func SetQ8_0Cooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q8_0_cooperative_set(C.int(v)) == 1
+}
+
 // SetQ2KCooperative selects the SIMD-group-cooperative resident Q2_K M=1 matvec and
 // returns the previous setting. Q2_K shares Q3_K's 16-scale-group layout, so the 32
 // lanes of a SIMD group pair up two-per-group and each lane stays inside one scale.
