@@ -1399,6 +1399,12 @@ func SetQ4KCooperative(on bool) bool {
 	return C.mtl_q4k_cooperative_set(C.int(v)) == 1
 }
 
+// SetCoopMaxM sets the largest batch that takes the cooperative quantized kernels. Scratch knob
+// for probing the traffic crossover: cooperative re-reads the quantized weight per row (M x 0.626
+// GiB on TinyLlama) while expand-then-GEMM reads the f16 expansion once (2.228 GiB), so the two
+// should cross near M=3.56.
+func SetCoopMaxM(m int) { C.mtl_set_coop_max_m(C.int(m)) }
+
 // SetQ4_0Cooperative selects the SIMD-group-cooperative resident Q4_0 M=1 matvec and
 // returns the previous setting. Lanes 0-15 take the low nibble of block byte L and
 // lanes 16-31 the high nibble of byte L-16, matching Q4_0's x[i]/x[i+16] packing, so
