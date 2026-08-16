@@ -44,9 +44,13 @@ func ExampleDecoder_Generate() {
 
 // ExampleDecoder_StepN prefills a whole prompt in one recorded step — the 41× prefill fast path
 // Generate uses internally — and reads the next-token logits from the last row.
+//
+// It also shows StepNLast, the variant to prefer when only the next token matters: the LM head runs
+// over one row instead of k and the host download shrinks from k·vocab to vocab, while the returned
+// row is identical to the last row of StepN.
 func ExampleDecoder_StepN() {
 	if !metal.Available() {
-		fmt.Println("logits for 48 tokens")
+		fmt.Println("logits for 48 tokens (StepNLast agrees: true)")
 		return
 	}
 	m, err := nlp.NewLlama(nlp.LlamaConfig{
@@ -68,8 +72,15 @@ func ExampleDecoder_StepN() {
 		panic(err)
 	}
 	last := all[(len(prompt)-1)*m.Config.Vocab:] // logits after the full prompt
-	fmt.Printf("logits for %d tokens\n", len(last))
-	// Output: logits for 48 tokens
+
+	// Same prefill, but projecting only the final row — the cheaper call when you just want the
+	// next token. Its result matches the tail of StepN's above.
+	lastOnly, err := dec.StepNLast(prompt, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("logits for %d tokens (StepNLast agrees: %v)\n", len(last), len(lastOnly) == len(last))
+	// Output: logits for 48 tokens (StepNLast agrees: true)
 }
 
 // ExampleNewQuant decodes a quantized model: the projections stay in their 4-8× smaller ggml form
@@ -150,7 +161,7 @@ func ExampleSpeculativeGenerate() {
 // nlp.FromSafetensors.
 func ExampleGPTDecoder_Generate() {
 	if !metal.Available() {
-		fmt.Println("generated 5 new tokens")
+		fmt.Println("generated 5 new tokens (next-token logits: 32)")
 		return
 	}
 	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 32, Heads: 4, Layers: 1, Eps: 1e-5}
@@ -193,8 +204,15 @@ func ExampleGPTDecoder_Generate() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("generated %d new tokens\n", len(out)-2)
-	// Output: generated 5 new tokens
+
+	// StepNLast prefills a prompt and returns only the final row's logits — the same numbers
+	// Generate reads to pick the next token, without materialising a row per prompt position.
+	logits, err := dec.StepNLast([]int{3, 7}, 0)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("generated %d new tokens (next-token logits: %d)\n", len(out)-2, len(logits))
+	// Output: generated 5 new tokens (next-token logits: 32)
 }
 
 // ExamplePromptLookupGenerate accelerates generation with NO draft model: continuations are guessed

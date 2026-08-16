@@ -313,28 +313,6 @@ STILL OUTSTANDING from the earlier round, unchanged: inspect all suppressions in
 
 Nothing is applied. Tree is at the PS4001=30 baseline.
 
-## T-01KYKSAF75FQGSFSQM9Z2RAJXQ crossentropy scalar math.Log: call the existing vlogF32 (gated on PROC-007)
-kind: task
-state: draft
-created: 2026-07-28
-
-FIRST GENUINE CANDIDATE among the recently triaged detector classes. Unlike PS4001 (30 findings, all false, fixed in d1ed762), PS3002 (preconditions unmet) and the integer half of PS5001, PS4002's cross-entropy sites are real: the replacement function already exists.
-
-TARGET: backend/cpu/crossentropy.go:76 and :140 - math.Log running scalar in a loop. The file already calls vexpF32 and vexpRowF32, so the vectorized idiom is established locally, and vlogF32 / vlogQuadsNeonF32 are already in the configured vectorizedSiblingFuncs set. This is therefore CALL AN EXISTING HELPER, not write a new SIMD transcendental - a small change, which is what separates it from the PS4002 sites that would require authoring a vectorized primitive from scratch. Confirm vlogF32's signature and dtype before assuming it drops in; the crossentropy sites must be F32 for it to apply directly.
-
-Also reported and NOT part of this task: backend/cpu/elementwise.go:273,:290 (math.Erf). No vectorized Erf exists in the configured set, so those sites mean "write one" - a materially larger job that should be judged separately.
-
-GATED BY PROC-007/PROC-008. A vectorized log is a polynomial approximation, not math.Log, so this is NOT bit-identical - the same category the user just ruled on. Cross-entropy loss and its gradient are continuous outputs, so PROC-007 admits it in principle. But the standing gate applies: the two red nn ULP tests (TestGradFnBitIdenticalToSlowPath, TestEMAUpdateBitIdenticalToSlowPath) must be green first, so a deliberate approximation error does not land on top of an unexplained one and destroy attribution. Do not start until then.
-
-WHEN UNBLOCKED, in this order:
-1. Confirm entry: temporary panic at each math.Log site, run backend/cpu and nn tests, verify it fires. Do not read timings first - the AddBias lesson (benchmarks that name-match a feature but never reach it) and the gatherCast lesson both came from skipping this.
-2. Establish the ERROR BOUND before the speed: compare vlogF32 against math.Log over the actual input domain of cross-entropy (probabilities in (0,1], where log is steepest near zero and worst-case relative error is largest). Report max ulp and max relative error. If the bound is not defensible near zero, reject - a loss that is wrong for confident-but-incorrect predictions is worse than a slow one.
-3. Interleaved A/B, file-copy toggle, three alternations, medians, plus an unaffected control. Existing surfaces: BenchmarkCrossEntropyF32_256x4096_cpu and its backward twin; check they enter the changed branch per step 1.
-4. Per PROC-008, replace any bit-identical assertion with a tolerance test whose bound is the one measured in step 2, and justify it in the commit. Prove non-vacuity by mutation, scoped to the test claiming the coverage.
-5. Full-tree run to find every cross-path equality test the approximation disturbs - training-loop and reference-parity tests are the likely casualties.
-
-NOT MEASURED: nothing was benchmarked, deliberately. Measuring before the numerics gate clears would invite shipping on a good number, which is the failure mode PROC-007 exists to prevent.
-
 ## R-01KYKSDHSPFH4STY7PBCNR83AA main is red: two nn bit-identity guards fail at a2f2746
 kind: research
 state: draft
@@ -937,6 +915,22 @@ BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is 
 REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.
 
 ## R-01M01KBSTZFY5THEBS6DGFMYF9 GPU quant decode M=1 campaign closed: 14 cooperative kernels, 7 formats, 2 backends, 1.80x-6.01x
+## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
+kind: 
+state: 
+created: 
+
+## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
+kind: 
+state: 
+created: 
+
+## R-01M01DYT2FF5JB3JTDWRST33AP Classic scorecard refreshed vs sklearn 1.9.0: DecisionTree now 5.4x AHEAD; SVC_rbf the one loss; slab cache rejected
+kind: 
+state: 
+created: 
+
+## R-01M01E5JSFFD8VZC2VNAC7WPYB CORRECTION: the n=1000 serial-vs-parallel claim was a warmup artifact; grain 1<<14 also rejected
 kind: research
 state: draft
 created: 2026-08-15
@@ -3523,3 +3517,94 @@ Correctness suites do not see performance cliffs: a 1.6e-7 kernel change left ev
 passing while the SVC fit went 5.8ms -> 9452ms. Both leading levels now carry mutation-verified
 order-of-magnitude tripwires (TestClassicFitTimeGuard, TestBPEThroughputGuard), and the LLM path
 carries decode-only floors.
+MEASURED, decision support for ADR-01KYJYY74VE27BSEH9VGZSNFMK (PS5001 reciprocal-multiply). Not shipped; tree restored to baseline. The ADR asks for accept/reject/case-by-case and deliberately left its flagship site unmeasured. The size of the prize is now known, and it is small.
+
+THE ADR'S PREMISE IS SUPERSEDED IN-TREE. The ADR names backend/cpu/attn_extra.go as "THE SURVIVING TRUE POSITIVE, and it is hot ... plausibly the highest leverage of any remaining candidate". That exact site (now attn_extra.go:328, or[d] = T(acc[d] / l) in flashAttnTyped) already carries a suppression: "//perfscan:ignore PS5001 FA /l norm O(seq.dk), negligible vs O(seq2.dk) body". The asymptotic argument is correct and the measurement confirms it: the normalization is O(seq.dk) against an O(seq2.dk) body, so its share falls as 1/seq.
+
+MEASURED, on M2 Pro, interleaved A/B by file-copy toggle, three A-B alternations, -benchtime=200x -count=3, medians of 9 samples per variant. A = divide (baseline), B = hoisted invL := 1/l then multiply.
+  FlashAttnFwdF64_512x8h  7423305 -> 7134071 ns  1.041x  distributions do NOT overlap
+  FlashAttnFwdF32_512x8h  7456895 -> 7478539 ns  0.997x  overlapping, no effect
+  control RetentionFwdF64  916176 ->  905424 ns  1.012x
+  control RetentionBwdF64 3475020 -> 3474163 ns  1.000x
+  control RetentionBwdF32 3914316 -> 3905049 ns  1.002x
+
+So the flagship site yields 4.1 percent on the f64 FlashAttention forward and nothing measurable on f32, against control drift of 0.0 to 1.2 percent. The f64 gain is real (clean separation, no overlap between the A and B ranges) but it is one dtype of one kernel, not the 1.2-1.5x the ADR anticipated translating into end-to-end leverage.
+
+ENTRY PROVEN BEFORE ANY NUMBER WAS READ, per the twice-earned method lesson: a temporary panic at the divide line fired under BenchmarkFlashAttnFwdF32_512x8h. The prior broadcast round measured unchanged code because a fast path shadowed the target; that failure mode was checked for here, not assumed away.
+
+WHY F32 SHOWS NOTHING while f64 shows 4.1 percent: both arms compute the divide in float64 (acc and l are float64, T is only the store type), so the arithmetic is identical. The f32 forward spends proportionally more time in the unroll-and-jam QK body, so the same absolute saving is a smaller share. This also means the win does not scale with the f32 paths that dominate quantized inference.
+
+THE ADR'S BLOCKING PRECONDITION IS NOW CLEAR. It made recommendation (b) conditional on "ONLY after the two red nn tests are resolved". TestGradFnBitIdenticalToSlowPath and TestEMAUpdateBitIdenticalToSlowPath both PASS on main at 18589e1b. Root causes, independently re-derived: GradFn hoisted ik := 1/k and multiplied while its reference divided (a PS5001 site in miniature); EMA had two products where hardware fuses only one, and the fast loop and its reference fused opposite products. Both are resolved on main. The precondition no longer blocks a decision.
+
+A THIRD OPTION THE ADR DOES NOT CONSIDER, and its limit. The ADR states "There is NO bit-identical variant ... Rejecting bit-identity is the entire cost of the class". For a bare x/c that is true. But where the expression is a multiply-add rather than a divide, math.FMA names the fused product instead of leaving contraction to the compiler, which pins one rounding for every path at no cost: measured on nn EMA.Update, 645.8us with math.FMA versus 646.4us baseline, where forbidding fusion via float64-rounded products cost 6.8 percent (690us). That does not rescue PS5001's divides, but it means "bit-identity or speed" is not the general dichotomy - it is specific to division by a loop-invariant.
+
+RECOMMENDATION: (a) reject the class, or at most (c) case-by-case. The measurement removes the reason to take a blanket numerics loosening: the single site the ADR called highest-leverage returns 4.1 percent on one dtype of one kernel, and the remaining 77 findings were already characterized as index bookkeeping or one-shot paths. Option (b) buys a written boundary rule and a tolerance-test migration across the class for that. If any site is ever taken, this one under (c) is the candidate, and it needs the full-tree cross-path equality sweep the ADR describes, because a half-ulp shift applied to one decode path and not another is exactly what those tests exist to catch.
+
+NOT DONE, deliberately: no code shipped, no test loosened. attn_extra.go is byte-identical to origin/main.
+MEASURED. The approved task T-01KYJNDTK2E8A9BK9SGAZ4VKYS asks to hoist per-layer backend.RoPEAttrs/AttnAttrs boxing across the remaining decode models, measuring "per model or as a batch, with a same-session A/B and bit-identity verification before shipping". Done for one model. The transform works exactly as described and is a RESOURCE finding, not a time lever. Nothing shipped; nlp/cla.go is byte-identical to main.
+
+SCOPE OF THE CLASS, established by AST scan rather than grep: 72 backend.RoPEAttrs/AttnAttrs composite literals sit inside a for/range body across the non-test nlp files. nlp/cohere_decode.go is already hoisted (qRoPE/kRoPE/attn built before the layer loop) and is the pattern the task refers to.
+
+THE ALLOCATION IS REAL, confirmed before measuring anything: go build -gcflags=-m reports "backend.AttnAttrs{...} escapes to heap" at every site inspected, including nlp/cla.go:228 and :362. So each in-loop literal is one heap box per layer per token, not a stack temporary.
+
+TARGET AND ENTRY PROOF: nlp/cla.go DecodeStep, exercised by BenchmarkCLADecode500RowBuf (Layers 4, Share 2, Heads 4, Dim 256, 500 decode steps). Entry was proven by a temporary panic at the MHA call before any timing was read.
+
+MEASURED, interleaved A/B by file-copy toggle, three A-B alternations, -benchtime=20x -count=2, six samples per variant. A = baseline, B = hoisted:
+  allocs/op  188045 -> 186546   saved 1499  (0.80 percent), fully deterministic across all six samples
+  B/op       128019206 -> 127923311  saved 95895 bytes (0.075 percent), 1499 x 64 B, exactly as predicted
+  ns/op      433009360 -> 434632503  B/A 1.0037, i.e. no improvement; A's own spread is 1.85 percent
+CLA correctness tests green on the hoisted tree.
+
+THE ALLOCATION SAVING IS EXACT AND THE TIME SAVING IS ZERO. 1499 is 3 x 500 decode steps, matching the boxes removed from the decode path, and it repeats identically in every sample - so the transform does precisely what the task claims. It simply does not show up in wall clock: a 64-byte allocation costs on the order of tens of nanoseconds and the site is, as its own in-tree suppression says, "OpMHA dispatch, attention-kernel-dominated".
+
+THIS IS THE CASE A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001 DESCRIBES: a resource finding until a paired benchmark shows otherwise. The paired benchmark is now run and it shows otherwise did not happen. The prior instance in that rule removed 90 percent of the AQLM encoder allocations and moved time not at all; this is the same shape at much smaller scale.
+
+SCALING ARGUMENT, why a bigger model does not rescue it: boxes scale as layers x tokens, while the compute they sit beside scales as layers x dim squared. The share therefore FALLS on a realistic model, not rises. The 4-layer, dim-256 config measured here is close to the most favorable case in the tree.
+
+RECOMMENDATION: do not run the 72-site sweep as a performance task. Three options, in preference order. (1) Re-scope the task to a resource/GC-pressure cleanup, ship it only if allocation count per decode step is a metric worth defending in its own right, and label it as such rather than as a speedup. (2) Apply it only where a decode path is already allocation-bound by measurement - none identified so far. (3) Close it. Against any of these stands the churn: 72 edits across roughly 30 files, with the task itself warning that a parallel worker is active in the mamba2 and quantized-mamba2 files, is real merge surface bought for 0.8 percent of allocations and no measured time.
+
+METHOD NOTE: the per-model A/B the task mandated is what produced this answer. Had the sweep been applied first and measured "as a batch" afterwards, the alloc delta would have looked like a 72-site success while the time delta stayed inside noise, and the batch framing would have made the null result much harder to read.
+REFRESHED SCORECARD, and it corrects the recorded standing. Measured on this M2 Pro against sklearn 1.9.0 / numpy 2.5.1 / python 3.14.7, on the IDENTICAL 4000x20 data classic/perfcompare_test.go writes, best-of-5 fit on the sklearn side:
+
+  method                GoAI ms   sklearn n_jobs=1   sklearn n_jobs=-1   verdict
+  DecisionTree             2.58              13.90                   -   GoAI 5.39x FASTER
+  RandomForest100         22.09             271.98               93.46   GoAI 12.31x / 4.23x FASTER
+  GradientBoosting100     76.57            1235.97                   -   GoAI 16.14x FASTER
+  GaussianNB               0.29               0.64                   -   GoAI 2.21x FASTER
+  SVC_rbf                  5.45               3.38                   -   GoAI 1.61x SLOWER
+  KNN_fit                  3.93               0.28                0.26   GoAI slower, fit-only artifact
+
+CORRECTION TO THE STANDING RECORD: the previously recorded split had sklearn winning DecisionTree by 1.3x. It does not - GoAI now wins DecisionTree 5.39x. Whatever closed that gap has landed since the earlier comparison. RBF-SVC also narrowed, from a recorded 2.0x to 1.61x. The only genuine remaining loss in this scorecard is SVC_rbf; KNN_fit stays the documented artifact of eagerly building the ball tree at fit time.
+
+WHERE THE SVC TIME GOES, profiled at n=4000 (the comparison shape). The parallel profile is uninformative - 87 percent pthread_cond wait/signal plus 9 percent usleep, at 1.29 cores average - because parallelBands fans out fresh goroutines per kernel column and the workers burn CPU on sync while the main thread does the work. Wall clock still favors parallel (5.22 ms against 7.01 ms serial), so the fan-out earns its keep at this size even while burning cores. At n=1000 it does NOT: serial is 1.59x FASTER there (1.33 ms against 2.12 ms), so classicBandGrain is mis-calibrated for small n. That is a real, separable finding.
+
+The SERIAL profile shows the true work split: runtime.madvise 30.8 percent, GC-driven pthread_cond_signal 28.2 percent, math.archExp 10.3 percent, kernelCache.column 20.5 percent cumulative, smo 23.1 percent cumulative.
+
+REJECTED CANDIDATE - slab-backed kernel cache. Reading roughly 59 percent of the serial profile as allocator and GC, I replaced the per-miss make([]float64, n) with one slab carved into cap slots, eviction returning a slot instead of garbage. Correct (full classic suite green; reusing a dirty slot is safe because the fill writes all n entries before any read) and 10.3 percent SLOWER: 5.76 ms against 5.23 ms, with B/op rising 1.62 MB to 67.4 MB.
+
+WHY IT FAILED, and the number that kills the premise: the baseline allocates only about 1.62 MB and 1040 allocs per fit. At 8n = 32 KB per column that is roughly 50 distinct columns computed per fit - not the thousands the allocation-churn reading assumed. The cache (cap 2000 columns at n=4000) therefore NEVER FILLS and NEVER EVICTS, so there was no eviction garbage to recycle, and pre-reserving the full 64 MB budget cost more than the incremental allocation it replaced. The madvise share comes from the benchmark's repeated fits (60 iterations x 1.62 MB), not from within one fit.
+
+STANDING LESSON, consistent with A-RUNTIME-MEMORY-SHARE-IS-NOT-A-TIME-LEVER-001: read the alloc COUNT and BYTES before reading an allocator profile share as an opportunity. B/op and allocs/op were already in the benchmark output and would have refuted the premise before any code was written.
+
+WHAT REMAINS FOR SVC, unmeasured: the kernel evaluates ||a-b||^2 directly per pair with a scalar math.Exp. libsvm precomputes ||x||^2 and uses ||a-b||^2 = ||a||^2 + ||b||^2 - 2a.b, which turns a column into one GEMV plus a batched exp - fewer flops per dim and a vectorizable exp. That is NOT bit-identical (different rounding), so it is a PROC-007 question and would need the SVC golden parity re-established. Given math.archExp is 10.3 percent and the whole column path 20.5 percent of the serial profile, the ceiling on that lever is well under the 1.61x needed to reach sklearn; it should be bounded by a probe before anyone builds it.
+CORRECTION to R-01M01DYT2FF5J and to PR 1066. One claim in that record is WRONG and is withdrawn here; a follow-up optimization it suggested is also rejected. No code changed in either investigation; classic/ is byte-identical to main.
+
+THE WITHDRAWN CLAIM. R-01M01DYT2FF5J stated: "At n=1000 it does NOT [pay off]: serial is 1.59x FASTER there (1.33 ms against 2.12 ms), so classicBandGrain is mis-calibrated for small n. That is a real, separable finding." It is not a finding. The 2.12 ms was the FIRST sample of a benchmark run and the 1.33 ms was a warm sample of a different run, so the comparison was cold-against-warm.
+
+REMEASURED, interleaved, n=1000 only, -benchtime=100x -count=5, three alternations, medians taken with the first sample of each run discarded as warmup:
+  parallel  1348686 ns
+  serial    1359648 ns
+Serial is 0.8 percent SLOWER, i.e. the two are identical within noise. There is no small-n penalty and classicBandGrain is not mis-calibrated at n=1000.
+
+HOW THE ERROR HAPPENED, because the mechanism is reusable: Go benchmarks report every -count sample, and the first is consistently high here (1.55-1.75 ms against a 1.30-1.36 ms warm level, so 20-35 percent). Reading a median across all samples of one variant while comparing against a specific sample of another silently mixes warm and cold. Every other measurement in this session took medians over interleaved runs, which is what made them survive; this one did not.
+
+THE REJECTED FOLLOW-UP. A clean grain sweep at n=4000 suggested 1<<14 beat the current 1<<13 by 2.6 percent (5127983 against 5263524 ns, tight non-overlapping triples). It does not survive interleaving. Interleaved, -benchtime=80x -count=4, three alternations:
+  1<<13 median 6148526 ns   range 5278754-7077743
+  1<<14 median 6065477 ns   range 5051126-7944670
+1.4 percent apart with ranges spanning roughly 57 percent and overlapping almost entirely. Rejected. The sweep and the interleaved run also disagree on absolute level (5.2 against 6.1 ms for the same code), so the host drifted between them - which is exactly the condition interleaving exists to defeat and a plain sweep cannot.
+
+WHAT SURVIVES from R-01M01DYT2FF5J: the refreshed scorecard against sklearn 1.9.0 (DecisionTree 5.39x, RandomForest100 12.31x/4.23x, GradientBoosting100 16.14x, GaussianNB 2.21x, SVC_rbf 1.61x BEHIND, KNN_fit artifact), the correction that GoAI now leads DecisionTree rather than trailing it, the serial profile split, and the rejected slab cache with the allocs/op reasoning that refuted it. Those were all interleaved or single-shot facts, not cold-warm comparisons.
+
+STANDING RULE CANDIDATE, stated but not yet filed as a rule because one instance is thin evidence: discard the first sample of every Go benchmark run before comparing, or compare only medians of interleaved runs of both variants. A -count=N series is N samples of which the first is not comparable to the rest.
+
+NET FOR SVC: no change is justified. classicBandGrain stays at 1<<13, the fan-out stays, and the 1.61x deficit to libsvm is untouched. The only bounded lever remains the libsvm norm-expansion kernel, whose ceiling is capped by archExp at 10.3 percent and the whole column path at 20.5 percent of the serial profile - well under the 1.61x needed - so it should be probe-bounded before it is built.

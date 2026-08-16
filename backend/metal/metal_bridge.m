@@ -1617,7 +1617,7 @@ int mtl_qmatmul_q8_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = q8_0_cooperative_enabled();
+        const int cooperative = M == 1 && q8_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -1760,7 +1760,7 @@ int mtl_qmatmul_q4_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = q4_0_cooperative_enabled();
+        const int cooperative = M == 1 && q4_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -2518,13 +2518,13 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     OP_BEGIN;
@@ -3419,13 +3419,13 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -3549,12 +3549,6 @@ static NSString* const kQMatMulQ4KSource =
      "                                    uint3 group [[threadgroup_position_in_grid]],\n"
      "                                    ushort lane [[thread_index_in_simdgroup]],\n"
      "                                    ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
-     // rowsPerSimd is duplicated by the DISPATCH GRID in three places: coopRows at the two
-     // resident sites and a hardcoded (N+3)/4 at the standalone site below. Changing it here
-     // without changing all three silently under-dispatches and leaves the tail rows unwritten
-     // — measured: rowsPerSimd 2->1 with only the resident sites updated produced garbage in
-     // rows 4..7 of an N=8 case. The Q4_K parity tests DO catch it (they cover N=8), so this is
-     // a maintenance hazard rather than a live defect; keep them in sync.
      "  constexpr short rowsPerSimd=2, simdgroupsPerThreadgroup=2;\n"
      "  constexpr ushort mask1=0x3f3f, mask2=0x0f0f, mask3=0xc0c0;\n"
      "  int M=P[0], K=P[1], N=P[2], mi=(int)group.y, nb=K/256;\n"
@@ -3648,7 +3642,7 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = q4k_cooperative_enabled();
+        const int cooperative = M == 1 && q4k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -3809,7 +3803,7 @@ int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = q6k_cooperative_enabled();
+        const int cooperative = M == 1 && q6k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -3913,19 +3907,8 @@ static NSString* const kQMatMulQ5KSource =
      "    else { sc=(W[sbase+is+4]&0xF)|((W[sbase+is-4]>>6)<<4); mn=(W[sbase+is+4]>>4)|((W[sbase+is]>>6)<<4); }\n"
      "    float dl=d*(float)sc, ml=dmin*(float)mn;\n"
      "    int qb=qsB+pr*32; int xk=mi*K + sb*256 + pr*64 + hf*32;\n"
-     // Vectorized: this lane owns 8 CONSECUTIVE l, so its 8 qs bytes and 8 qh bytes are
-     // each two aligned uints (block stride 176, qs at +48, qh at +16, pr*32 and
-     // lbase=(lane%4)*8 are all multiples of 4). Two uint loads replace eight byte
-     // loads on each plane; the extracted values and their accumulation order are
-     // unchanged, so results stay bit-identical to the byte-wise form.
-     "    device const uint* qs4=(device const uint*)(W+qb+lbase);\n"
-     "    device const uint* qh4=(device const uint*)(W+qhB+lbase);\n"
-     "    uint qw0=qs4[0], qw1=qs4[1], hw0=qh4[0], hw1=qh4[1];\n"
-     "    for (short t=0; t<8; t++){\n"
-     "      uint qword=(t<4)?qw0:qw1; uint hword=(t<4)?hw0:hw1; short sh=8*(t&3);\n"
-     "      uchar qbyte=(uchar)((qword>>sh)&0xFFu); uchar hbyte=(uchar)((hword>>sh)&0xFFu);\n"
-     "      int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
-     "      int hb=(hbyte&um)?16:0; acc += X[xk+lbase+t]*(dl*(float)(nib+hb) - ml); }\n"
+     "    for (short l=lbase; l<lbase+8; l++){ uchar qbyte=W[qb+l]; int nib=(hf==0)?(qbyte&0xF):(qbyte>>4);\n"
+     "      int hb=(W[qhB+l]&um)?16:0; acc += X[xk+l]*(dl*(float)(nib+hb) - ml); }\n"
      "  }\n"
      "  float total=simd_sum(acc);\n"
      "  if (lane==0) O[mi*N+ni]=total;\n"
@@ -3984,7 +3967,7 @@ int mtl_qmatmul_q5k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = q5k_cooperative_enabled();
+        const int cooperative = M == 1 && q5k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -4083,15 +4066,8 @@ static NSString* const kQMatMulQ2KSource =
      "    uchar sc=W[scB+is];\n"
      "    float dl=d*(float)(sc&0xF), ml=dmin*(float)(sc>>4);\n"
      "    int q0=qsB+nb*32; int xk=mi*K + sb*256 + nb*128 + j*32 + grp*16;\n"
-     // Vectorized: 8 consecutive l means 8 consecutive qs bytes, and Q2_K's 84-byte
-     // block stride IS 4-aligned (qs at +16, nb*32, gOff and lbase all multiples of 4),
-     // so two uint loads replace eight byte loads. Values and order unchanged.
-     "    device const uint* q4=(device const uint*)(W+q0+gOff+lbase);\n"
-     "    uint w0=q4[0], w1=q4[1];\n"
-     "    for (short t=0; t<8; t++){\n"
-     "      uint word=(t<4)?w0:w1; short sh8=8*(t&3);\n"
-     "      uchar qb=(uchar)((word>>sh8)&0xFFu); int q2=(qb>>shift)&3;\n"
-     "      acc += X[xk+lbase+t]*(dl*(float)q2 - ml); }\n"
+     "    for (short l=lbase; l<lbase+8; l++){ int q2=(W[q0+gOff+l]>>shift)&3;\n"
+     "      acc += X[xk+l]*(dl*(float)q2 - ml); }\n"
      "  }\n"
      "  float total=simd_sum(acc);\n"
      "  if (lane==0) O[mi*N+ni]=total;\n"
@@ -4147,7 +4123,7 @@ int mtl_qmatmul_q2k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = q2k_cooperative_enabled();
+        const int cooperative = M == 1 && q2k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -4268,10 +4244,6 @@ static NSString* const kQMatMulQ3KSource =
      "    int scv=(int)((av>>(8*(is&3)))&0xFFu);\n"
      "    float dl=dAll*(float)(scv-32);\n"
      "    int qb=qsB+nb*32; int xk=mi*K + sb*256 + nb*128 + j*32 + grp*16;\n"
-     // Q3_K is NOT vectorized: its 110-byte block stride is 2-aligned but not
-     // 4-aligned, so only a ushort widening is legal, and that measured 1.05x —
-     // indistinguishable from noise — while changing the FP contraction enough that
-     // parity values moved. Not worth a numerics change, so the byte-wise form stays.
      "    for (short l=lbase; l<lbase+8; l++){ int q3=(W[qb+gOff+l]>>shift)&3;\n"
      "      int h=(W[hmB+gOff+l]&mbit)?0:4; acc += X[xk+l]*dl*(float)(q3-h); }\n"
      "  }\n"
@@ -4329,7 +4301,7 @@ int mtl_qmatmul_q3k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = q3k_cooperative_enabled();
+        const int cooperative = M == 1 && q3k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
