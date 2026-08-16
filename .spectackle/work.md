@@ -313,28 +313,6 @@ STILL OUTSTANDING from the earlier round, unchanged: inspect all suppressions in
 
 Nothing is applied. Tree is at the PS4001=30 baseline.
 
-## T-01KYKSAF75FQGSFSQM9Z2RAJXQ crossentropy scalar math.Log: call the existing vlogF32 (gated on PROC-007)
-kind: task
-state: draft
-created: 2026-07-28
-
-FIRST GENUINE CANDIDATE among the recently triaged detector classes. Unlike PS4001 (30 findings, all false, fixed in d1ed762), PS3002 (preconditions unmet) and the integer half of PS5001, PS4002's cross-entropy sites are real: the replacement function already exists.
-
-TARGET: backend/cpu/crossentropy.go:76 and :140 - math.Log running scalar in a loop. The file already calls vexpF32 and vexpRowF32, so the vectorized idiom is established locally, and vlogF32 / vlogQuadsNeonF32 are already in the configured vectorizedSiblingFuncs set. This is therefore CALL AN EXISTING HELPER, not write a new SIMD transcendental - a small change, which is what separates it from the PS4002 sites that would require authoring a vectorized primitive from scratch. Confirm vlogF32's signature and dtype before assuming it drops in; the crossentropy sites must be F32 for it to apply directly.
-
-Also reported and NOT part of this task: backend/cpu/elementwise.go:273,:290 (math.Erf). No vectorized Erf exists in the configured set, so those sites mean "write one" - a materially larger job that should be judged separately.
-
-GATED BY PROC-007/PROC-008. A vectorized log is a polynomial approximation, not math.Log, so this is NOT bit-identical - the same category the user just ruled on. Cross-entropy loss and its gradient are continuous outputs, so PROC-007 admits it in principle. But the standing gate applies: the two red nn ULP tests (TestGradFnBitIdenticalToSlowPath, TestEMAUpdateBitIdenticalToSlowPath) must be green first, so a deliberate approximation error does not land on top of an unexplained one and destroy attribution. Do not start until then.
-
-WHEN UNBLOCKED, in this order:
-1. Confirm entry: temporary panic at each math.Log site, run backend/cpu and nn tests, verify it fires. Do not read timings first - the AddBias lesson (benchmarks that name-match a feature but never reach it) and the gatherCast lesson both came from skipping this.
-2. Establish the ERROR BOUND before the speed: compare vlogF32 against math.Log over the actual input domain of cross-entropy (probabilities in (0,1], where log is steepest near zero and worst-case relative error is largest). Report max ulp and max relative error. If the bound is not defensible near zero, reject - a loss that is wrong for confident-but-incorrect predictions is worse than a slow one.
-3. Interleaved A/B, file-copy toggle, three alternations, medians, plus an unaffected control. Existing surfaces: BenchmarkCrossEntropyF32_256x4096_cpu and its backward twin; check they enter the changed branch per step 1.
-4. Per PROC-008, replace any bit-identical assertion with a tolerance test whose bound is the one measured in step 2, and justify it in the commit. Prove non-vacuity by mutation, scoped to the test claiming the coverage.
-5. Full-tree run to find every cross-path equality test the approximation disturbs - training-loop and reference-parity tests are the likely casualties.
-
-NOT MEASURED: nothing was benchmarked, deliberately. Measuring before the numerics gate clears would invite shipping on a good number, which is the failure mode PROC-007 exists to prevent.
-
 ## R-01KYKSDHSPFH4STY7PBCNR83AA main is red: two nn bit-identity guards fail at a2f2746
 kind: research
 state: draft
@@ -935,9 +913,22 @@ WHY THIS CANDIDATE IS DIFFERENT FROM THE ONE THAT FAILED. R-01M01DD2A5ER9 reject
 BUILD ORDER: Q5_K first. It has the highest rate of the three, so its result is least confounded by unpack complexity, and Q5_K_M is among the most widely used GGUF quantizations in circulation. Its 5-bit format splits each weight across a 4-bit qs nibble and a qh high-bit plane, which is the one real structural difference from the Q4_K kernel it would be adapted from. Q3_K and Q2_K follow; both carry more complex scale/min packing and should be judged on their own A/B rather than on Q5_K's result.
 
 REQUIRED PER TYPE, following what PR 1061 already established: capability gate, forced-off Set*Cooperative control, bit-identity or documented-tolerance test against the scalar kernel across block-boundary shapes, mutation probe to prove the test is not comparing scalar against scalar, and an interleaved warmup-trimmed A/B per FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001.
+
 ## R-01M01BZ0F1F3VVJVS2EAV73JBE PS5001 flagship site measured: 4.1 percent on f64 FA forward only, ADR premise superseded
+kind: 
+state: 
+created: 
+
 ## R-01M01CNG4SFKX9ASYA4Q81WW5H Attrs boxing hoist measured on CLA: 0.80 percent allocs, zero time - a resource finding, not a perf task
+kind: 
+state: 
+created: 
+
 ## R-01M01DYT2FF5JB3JTDWRST33AP Classic scorecard refreshed vs sklearn 1.9.0: DecisionTree now 5.4x AHEAD; SVC_rbf the one loss; slab cache rejected
+kind: 
+state: 
+created: 
+
 ## R-01M01E5JSFFD8VZC2VNAC7WPYB CORRECTION: the n=1000 serial-vs-parallel claim was a warmup artifact; grain 1<<14 also rejected
 kind: research
 state: draft
