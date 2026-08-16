@@ -2,6 +2,7 @@ package nlp_test
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 
 	"github.com/jxsl13/goai/backend"
@@ -62,6 +63,30 @@ func ExampleSampler() {
 	logits := []float64{6.0, 1.0, 0.5} // softmax ≈ 0.989 on token 0 → nucleus = {0}
 	fmt.Println(s.Sample(logits))
 	// Output: 0
+}
+
+// ExampleSampler_SampleTopPFromCandidates draws from a GPU TopK shortlist instead of the full
+// vocabulary, and gets the SAME token a full-vocab Sample would. The trick is that the caller also
+// passes the full-vocab softmax statistics (maxLogit and Zexp), so each candidate keeps its true
+// probability and the nucleus is the real one — sampling the shortlist with its own normalizer
+// would inflate the masses and cut the nucleus short. The second return reports overflow: the
+// nucleus needed more tokens than the shortlist held, so fall back to Sample.
+func ExampleSampler_SampleTopPFromCandidates() {
+	logits := []float64{6.0, 1.0, 0.5} // the full vocabulary
+	// Full-vocab statistics, as a device TopK kernel would return alongside the shortlist.
+	maxLogit := 6.0
+	Zexp := 0.0
+	for _, l := range logits {
+		Zexp += math.Exp(l - maxLogit)
+	}
+
+	// The shortlist: the top 2 of 3, with their vocabulary indices.
+	candLogits, candIdx := []float64{6.0, 1.0}, []int32{0, 1}
+
+	tok, ok := nlp.NewSampler(42, nlp.WithTopP(0.9)).SampleTopPFromCandidates(candLogits, candIdx, maxLogit, Zexp)
+	full := nlp.NewSampler(42, nlp.WithTopP(0.9)).Sample(logits)
+	fmt.Println(tok, ok, tok == full)
+	// Output: 0 true true
 }
 
 // --- Level 3: embedded in a larger decode step --------------------------------

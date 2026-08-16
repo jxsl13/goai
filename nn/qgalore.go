@@ -513,6 +513,9 @@ type qgalorePending struct {
 	rows, cols int
 }
 
+// Step applies one QGaLore update: it projects the gradient into the low-rank subspace, runs the
+// Adam moments there in quantized form, projects back, and updates the parameters. grad supplies
+// the gradient for the parameter block this optimizer owns.
 func (g *QGaLore) Step(grad GradFn) error {
 	g.t++
 	b1c := 1 - math.Pow(g.Beta1, float64(g.t))

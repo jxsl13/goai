@@ -487,6 +487,9 @@ func NewMixtralQ4KCUDA(m *nlp.Mixtral) (*Decoder, error) {
 	return newMixtralDecoder(m, o)
 }
 
+// NewMixtralQ8CUDA builds a CUDA Mixtral decoder whose expert and attention projections are held
+// as resident Q8_0 weights. Same model and call shape as NewMixtralCUDA, at roughly a quarter of
+// the weight VRAM; the MoE experts column-fuse gate|up through SwiGLUHalves as in the f32 path.
 func NewMixtralQ8CUDA(m *nlp.Mixtral) (*Decoder, error) {
 	if !cuda.Available() {
 		return nil, fmt.Errorf("llamagpu: no CUDA GPU")
