@@ -147,7 +147,116 @@ func Run(cfg *config, dir, base, head string, goTestArgs []string, w io.Writer) 
 	for i, p := range selected {
 		paths[i] = g.importPath(p) // absolute import paths, as go test prints them
 	}
+	paths = buildablePkgs(dir, goTestArgs, paths, w)
 	return execGoTest(dir, goTestArgs, paths, w)
+}
+
+// buildablePkgs drops packages that have NO Go files under the build configuration this
+// run will actually use. `go test` treats such a package as a setup failure — "build
+// constraints exclude all Go files in ..." — and fails the whole invocation, so selecting
+// one reddens a lane that had nothing to run there in the first place.
+//
+// This is not hypothetical: internal/gpudecode holds a single `//go:build darwin && cgo`
+// test file, and it broke the pure-go lane the moment the package list started reaching
+// `go test` at all (the `--` bug, §T587). Selection is per-package and tag-blind; whether
+// a package HAS files is per-configuration. Only `go list` knows, so ask it.
+//
+// It reports every drop. A filter that silently shrinks the package list is how a lane
+// ends up green while testing nothing, which is the exact failure this file already exists
+// to prevent.
+func buildablePkgs(dir string, args, pkgs []string, w io.Writer) []string {
+	if len(pkgs) == 0 {
+		return pkgs
+	}
+	// Probe under the SAME tags as the test run, or the answer describes a different build.
+	// The template prints EVERY package go list resolved, with a 1/0 buildability flag, rather
+	// than only the buildable ones: that distinguishes "go list says this package has no files"
+	// from "go list never spoke about it". Only the first is a reason to drop anything.
+	// `.Dir` is the discriminator, and the reason the template is not just a buildability flag:
+	// go list reports BOTH "build constraints exclude all Go files" and "no such package" as
+	// errors, but it only fills in .Dir for a directory it actually found. Dir set + no files is
+	// a trustworthy "nothing to build here under this configuration"; Dir empty means the probe
+	// could not resolve the package at all, which is never a reason to stop testing it.
+	listArgs := append([]string{"list", "-e", "-f",
+		"{{.ImportPath}}\t{{if .Dir}}{{if or .GoFiles .TestGoFiles .XTestGoFiles}}files{{else}}empty{{end}}{{else}}unresolved{{end}}"}, tagArgs(args)...)
+	out, err := runGoList(dir, append(listArgs, pkgs...))
+
+	// FAIL OPEN, per package. Dropping one because the PROBE could not answer would silently
+	// stop testing real code — the exact failure mode this file exists to prevent — whereas
+	// forwarding it merely lets go test report the problem in its own words. Note `go list -e`
+	// exits 0 even when it resolves nothing, so the exit code alone is not a usable signal.
+	empty, probed := map[string]bool{}, map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		name, state, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok {
+			continue
+		}
+		if state != "unresolved" {
+			probed[name] = true
+		}
+		if state == "empty" {
+			empty[name] = true
+		}
+	}
+	kept, dropped := make([]string, 0, len(pkgs)), []string(nil)
+	for _, p := range pkgs {
+		if empty[p] {
+			dropped = append(dropped, p)
+		} else {
+			kept = append(kept, p)
+		}
+	}
+	if len(dropped) > 0 {
+		sort.Strings(dropped)
+		fmt.Fprintln(w, "\n== selected but NOT RUN: no Go files under this build configuration ==")
+		for _, p := range dropped {
+			fmt.Fprintf(w, "  %s (build constraints exclude all Go files here; another lane covers it)\n", p)
+		}
+	}
+	// Anything the probe could not resolve is forwarded UNFILTERED, and said so out loud —
+	// otherwise a broken probe looks exactly like a clean run. `go list -e` exits 0 even when it
+	// resolves nothing, so err is a weak signal; the per-package state is the reliable one.
+	var unprobed []string
+	for _, p := range pkgs {
+		if !probed[p] {
+			unprobed = append(unprobed, p)
+		}
+	}
+	if len(unprobed) > 0 {
+		sort.Strings(unprobed)
+		fmt.Fprintf(w, "\n== buildability probe failed for %d package(s), forwarding them to go test unfiltered", len(unprobed))
+		if err != nil {
+			fmt.Fprintf(w, ": %v", err)
+		}
+		fmt.Fprintln(w, " ==")
+		for _, p := range unprobed {
+			fmt.Fprintf(w, "  %s\n", p)
+		}
+	}
+	return kept
+}
+
+// tagArgs returns the -tags flag from a go-test argument list, in the form go list accepts.
+func tagArgs(args []string) []string {
+	for i, a := range args {
+		switch {
+		case strings.HasPrefix(a, "-tags="), strings.HasPrefix(a, "--tags="):
+			return []string{a}
+		case a == "-tags" || a == "--tags":
+			if i+1 < len(args) {
+				return []string{"-tags", args[i+1]}
+			}
+		}
+	}
+	return nil
+}
+
+// runGoList runs `go list` in dir and returns its stdout.
+func runGoList(dir string, args []string) (string, error) {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return string(out), err
 }
 
 // hasFunctionFilter reports whether the go-test args narrow to individual test
