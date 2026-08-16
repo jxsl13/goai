@@ -14,7 +14,7 @@ import (
 // regardless of M, so it should lose at small M where that cost cannot amortize. It does not.
 // Measured on an M2 Pro, K=2048 N=5632, interleaved arms:
 //
-//	M= 16  dqgemm  492.6us  mmunit  640.6us  0.77x
+//	M= 16  dqgemm  492.6us  mmunit  640.6us  0.77x   (no longer measured; see the note in the body)
 //	M= 32  dqgemm  533.1us  mmunit  727.5us  0.73x
 //	M= 48  dqgemm  582.6us  mmunit 1133.1us  0.51x
 //	M= 64  dqgemm  740.4us  mmunit 1203.5us  0.62x
@@ -83,8 +83,38 @@ func TestQ4KMatrixUnitHasNoCrossover(t *testing.T) {
 	SetQ4KDequantGemmF16(false)
 	defer SetQ4KDequantGemmF16(true)
 
+	// WARM UP BOTH ARMS at the widest shape before timing anything. Each path allocates its scratch
+	// and fills the weight cache once, globally — and whichever arm is measured first at the first
+	// shape pays all of it. Untrimmed, that put dqgemm at M=16 at 1302us against 586us at M=32,
+	// non-monotonic in M and ~2.6x its own recorded 492.6us, which reads as a crossover that is
+	// really a cold start. Same rule as FIRST-BENCHMARK-SAMPLE-IS-NOT-COMPARABLE-001, applied to
+	// the first SHAPE rather than the first sample.
+	{
+		wx, _ := NewDeviceBufferF32(make([]float32, 256*K))
+		wo, _ := NewDeviceBufferF32(make([]float32, 256*N))
+		for _, arm := range []string{"dqgemm", "mmunit"} {
+			SetQ4KDequantGemm(arm == "dqgemm")
+			SetQ4KMatrixUnit(arm == "mmunit")
+			r, _ := NewRecorder()
+			if err := r.QMatMulResident(wx, rq, wo, 256); err != nil {
+				t.Fatal(err)
+			}
+			r.Commit()
+			r.Wait()
+			r.Free()
+		}
+		wx.Release()
+		wo.Release()
+	}
+
+	// M=16 IS NOT A VALID COMPARISON POINT and is no longer measured. q4k_dq_gemm_eligible gates on
+	// M >= 24, so at M=16 the "dqgemm" arm is not dqgemm at all — it falls through to the plain
+	// quantized kernel. That used to be the cooperative kernel and landed near dqgemm's real cost,
+	// which hid the mislabelling; once the cooperative kernels became M==1-only the fallback became
+	// the scalar kernel and the arm jumped to ~1338us against 569us at M=32. Non-monotonic in M, and
+	// read literally it says "mmunit wins at M=16" about a comparison that never involved dqgemm.
 	vacuous := 0
-	for _, M := range []int{16, 32, 48, 64, 96, 128, 256} {
+	for _, M := range []int{32, 48, 64, 96, 128, 256} {
 		x, _ := NewDeviceBufferF32(make([]float32, M*K))
 		o, _ := NewDeviceBufferF32(make([]float32, M*N))
 		res := map[string]float64{}
