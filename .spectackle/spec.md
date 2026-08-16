@@ -497,3 +497,8 @@ Rationale: Two independent causes make one constant unportable: math.Sin/Cos dif
 WHEN an amd64 floating-point golden is recorded from an Apple-silicon host, the loop SHALL harvest the value from CI logs, never from a Rosetta run.
 
 Rationale: Rosetta reproduces amd64 FAILURES but not amd64 FP RESULTS: TestMLAVJPIsBitIdentical gives 10503053519604685430 under Rosetta at both GOAMD64=v1 and v2 against 2081554234887433254 on real x86, while ubuntu and windows agree with each other. Rosetta appears to fuse SSE multiply-add onto ARM FMA.
+
+## TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001
+WHEN a test asserts a wall-clock threshold, a throughput floor or an allocation budget, the loop SHALL skip it under testing.Short so it never runs on shared CI runners, and keep any correctness assertion in the same test unconditional.
+
+Rationale: Runner hardware inverts orderings rather than merely adding noise: the Q4_K crossover reports mmunit ahead at M=32/48/64 on GitHub macOS, the opposite of every M2 reading, and BPE floors set at one third of an M2 Pro measured 1.3 MB/s, 36x under. Allocation budgets additionally count the race detector's shadow memory (16 MiB against a 12 MiB budget).
