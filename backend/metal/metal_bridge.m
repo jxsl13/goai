@@ -6,6 +6,23 @@
 // newBufferWithBytesNoCopy zero-copy is a later opt).
 #import <Foundation/Foundation.h>
 #include <sys/sysctl.h>
+
+// gCoopMaxM is the largest batch that takes the SIMD-group-cooperative quantized kernels. It was
+// effectively 1 (the gate read `M == 1`), on the reasoning that these kernels dispatch one
+// simdgroup per output row so a batch has nothing for the extra rows to do. Measured, that is
+// wrong: the dispatch already carries M in its grid, and cooperative beats expand-then-GEMM up to
+// M=64 on TinyLlama-1.1B Q4_K_M prefill —
+//
+//	  M=2  1.12x   M=4  1.50x   M=8  1.41x   M=16 1.40x
+//	  M=24 1.36x   M=32 1.37x   M=48 1.29x   M=64 1.29x
+//	  M=128 1.00x  M=256 0.99x   <- crossover
+//
+// The reason is traffic: cooperative reads the QUANTIZED weight (0.626 GiB here) while
+// expand-then-GEMM reads its f16 expansion (2.228 GiB, 3.56x), and small batches are
+// bandwidth-bound. Above ~128 the GEMM turns compute-bound and the expansion amortizes, which is
+// where the two cross.
+static int gCoopMaxM = 64;
+void mtl_set_coop_max_m(int m) { gCoopMaxM = m; }
 #import <Metal/Metal.h>
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
@@ -1617,7 +1634,7 @@ int mtl_qmatmul_q8_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q8_0_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -1760,7 +1777,7 @@ int mtl_qmatmul_q4_0(const float* X, const unsigned char* W, float* O, int M, in
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q4_0_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -2518,13 +2535,13 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     OP_BEGIN;
@@ -3432,13 +3449,13 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M == 1 && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M == 1 && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M == 1 && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M == 1 && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M == 1 && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M == 1 && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M == 1 && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
     id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
@@ -3655,7 +3672,7 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = M == 1 && q4k_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q4k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -3816,7 +3833,7 @@ int mtl_qmatmul_q6k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLBuffer> pb = pool_in(P, sizeof(P));
         if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
 
-        const int cooperative = M == 1 && q6k_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q6k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K;
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
@@ -3980,7 +3997,7 @@ int mtl_qmatmul_q5k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q5k_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q5k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -4136,7 +4153,7 @@ int mtl_qmatmul_q2k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q2k_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q2k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
@@ -4314,7 +4331,7 @@ int mtl_qmatmul_q3k(const float* X, const unsigned char* W, float* O, int M, int
         id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
-        const int cooperative = M == 1 && q3k_cooperative_enabled();
+        const int cooperative = M <= gCoopMaxM && q3k_cooperative_enabled();
         id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
