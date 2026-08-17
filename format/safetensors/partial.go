@@ -1,7 +1,6 @@
 package safetensors
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -65,10 +64,9 @@ func Names(path string) ([]TensorInfo, map[string]string, error) {
 // to pull a single weight out of a large checkpoint without materializing the
 // rest (which [LoadFile] would). It returns an error if name is not present.
 //
-// Decoding reuses the full [Load] path (verbatim-bit fast path, FP8/int widening,
-// big-endian fallback) by framing the one tensor's bytes as a minimal in-memory
-// safetensors stream, so a tensor loaded this way is bit-identical to the same
-// tensor from [LoadFile].
+// The selected byte range is decoded directly into independently owned tensor storage; no
+// synthetic safetensors stream is built and no other tensor is materialized. The returned tensor
+// remains valid after the file is closed.
 func LoadTensor(path, name string) (*tensor.Tensor, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -88,11 +86,11 @@ func LoadTensor(path, name string) (*tensor.Tensor, error) {
 	if err := json.Unmarshal(msg, &e); err != nil {
 		return nil, fmt.Errorf("safetensors: tensor %q: %w", name, err)
 	}
-	begin, end := e.DataOffsets[0], e.DataOffsets[1]
-	if begin < 0 || end < begin {
-		return nil, fmt.Errorf("safetensors: tensor %q: bad data_offsets %v", name, e.DataOffsets)
+	dt, shape, size, err := validateTensorEntry(name, e)
+	if err != nil {
+		return nil, err
 	}
-	size := end - begin
+	begin, end := e.DataOffsets[0], e.DataOffsets[1]
 
 	// Data begins after the 8-byte length field and the header. Read this
 	// tensor's exact byte range via ReadAt — no other tensor is touched.
@@ -101,31 +99,23 @@ func LoadTensor(path, name string) (*tensor.Tensor, error) {
 	if err != nil {
 		return nil, err
 	}
-	if dataStart+int64(end) > fi.Size() {
+	if dataStart > fi.Size() || int64(end) > fi.Size()-dataStart {
 		return nil, fmt.Errorf("safetensors: tensor %q: data ends at %d but the file holds only %d bytes of payload — malformed file", name, end, fi.Size()-dataStart)
 	}
+	t := tensor.New(dt.out, shape)
+	offset := dataStart + int64(begin)
+	if dst := verbatimStorageBytes(t, e.Dtype); dst != nil && nativeLittleEndian {
+		if _, err := f.ReadAt(dst, offset); err != nil {
+			return nil, fmt.Errorf("safetensors: tensor %q: read data: %w", name, err)
+		}
+		return t, nil
+	}
 	payload := make([]byte, size)
-	if _, err := f.ReadAt(payload, dataStart+int64(begin)); err != nil {
+	if _, err := f.ReadAt(payload, offset); err != nil {
 		return nil, fmt.Errorf("safetensors: tensor %q: read data: %w", name, err)
 	}
-
-	// Frame the one tensor as a minimal safetensors stream and reuse Load — so the
-	// decode is the exact same code path as LoadFile, not a second implementation.
-	single, err := json.Marshal(map[string]entry{
-		name: {Dtype: e.Dtype, Shape: e.Shape, DataOffsets: [2]int{0, size}},
-	})
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	_ = binary.Write(&buf, binary.LittleEndian, uint64(len(single)))
-	buf.Write(single)
-	buf.Write(payload)
-	ts, _, err := Load(&buf)
-	if err != nil {
-		return nil, err
-	}
-	return ts[name], nil
+	decodeTensorData(t, e.Dtype, payload)
+	return t, nil
 }
 
 // readHeaderRaw reads the length-prefixed JSON header from r (which must be

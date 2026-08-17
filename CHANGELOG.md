@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/safetensors -- direct single-tensor load takes the lead over safetensors-python (T-01M08DK6KDEH5, 2026-08-17)
+
+`LoadTensor` no longer copies a selected payload into a temporary buffer, rebuilds a synthetic
+safetensors stream, parses that second header, and copies the payload again. Allocation-driving
+entry validation and dtype decoding are now shared with `LoadFile`; common little-endian dtypes
+read straight into final independently owned tensor storage, while widening dtypes retain only one
+selected-range scratch buffer. Exact parity now covers every supported on-disk dtype, zero-sized
+tensors, malformed entries, sharded callers, and the existing no-neighbor-materialization gate.
+
+On Apple M2 Pro, 10 order-alternating fresh-process pairs for one 4 MiB F32 tensor selected from a
+64 MiB file improve the benchmark median from 614,468 ns to 280,561 ns (**2.19x**, -54.34%), reduce
+heap traffic from 12,602,318 to 4,200,899 B/op (**-66.67%**), and remove 44 allocations. Against
+safetensors 0.8.0/NumPy 2.5.1/Python 3.14.7, 10 alternating pairs put GoAI at 0.2825 ms versus
+0.4195 ms (**1.48x faster**) with matched eager materialization; full-file loading is at parity
+(5.670 vs 5.675 ms). A whole-file mmap experiment was removed after measuring 31.18% slower than
+direct `ReadAt` on this selected-range workload. Raw samples and exact commands are committed.
+
 ### format/gguf -- mmap removes whole-file staging and takes the full-load lead over gguf-py (T-01KYJPSG8XFXVRA5TER8FSAPMH, 2026-08-17)
 
 `ReadFile` now maps supported regular files read-only and parses the encoded data section directly

@@ -569,7 +569,7 @@ unmeasured axis. Lesson worth the table: on a dispatch-bound decoder the
 *round cost*, not the acceptance rate, decides the win — free-drafting
 schemes (Medusa, prompt-lookup) pay off where a draft *model* does not.
 
-## 9. File-format loading — GGUF vs gguf-py
+## 9. File-format loading — GGUF and safetensors
 
 *M2 Pro, macOS 26.5.1, warm page cache, full eager materialization. GoAI at this
 change; gguf-py 0.19.0 + NumPy 2.5.1 + Python 3.14.7. Ten paired model runs for
@@ -590,6 +590,22 @@ tensor out of their mappings, GoAI's six-session median is **3.04 ms** versus
 remain cross-checked against the fixture pattern; mapped-vs-buffered output is
 exact in the Go test suite. Raw samples and commands are retained under
 `internal/benchcompare/leadership/evidence/m2-gguf-readfile-mmap-20260817`.
+
+**Safetensors single-tensor loading.** On the same M2 Pro, GoAI now validates one selected entry
+and reads common little-endian dtypes directly into final tensor storage. The old path allocated
+the payload, rebuilt a synthetic one-tensor container, parsed it again, and copied the payload a
+second time. Ten fresh-process pairs reverse execution order on every pair; both engines eagerly
+materialize the same deterministic F32 tensor.
+
+| Safetensors workload | GoAI | safetensors 0.8.0 | Effect |
+|---|---:|---:|---:|
+| One 4 MiB tensor from a 64 MiB file | **0.2825 ms** | 0.4195 ms | **GoAI 1.48× faster** |
+| Full 64 MiB / 16 tensors | 5.670 ms | 5.675 ms | parity |
+
+The internal A/B is 614,468 to 280,561 ns/op (**2.19×**, -54.34%), with heap traffic falling
+12,602,318 to 4,200,899 B/op (-66.67%). A transient mmap was implemented but rejected: its
+347,943 ns median was 31.18% slower than direct `ReadAt` at 265,247 ns. Evidence and the exact
+contract live under `internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817`.
 
 ## 10. Correctness parity — the benchmark behind every benchmark
 
@@ -619,8 +635,6 @@ honestly documented deficit with a root cause is a deliverable):
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
 | Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
-| safetensors full load vs safetensors-python | 1.45× | Rust core + mmap + zero-copy numpy views; ours is a pure-Go hostile-gated read+parse (8.4 vs 12.2 GB/s) | mmap the file to skip the read copy |
-| safetensors one-tensor load vs `safe_open` | 2.69× | their mmap+memcpy vs our read()+frame double-copy; both read only that tensor's bytes | mmap-based partial load, no intermediate buffer |
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |

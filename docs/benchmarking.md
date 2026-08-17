@@ -533,34 +533,39 @@ parity). The lever is graph/kernel fusion on both backends. This is the first co
 GoAI-vs-torch end-to-end training measurement; run it with `make bench-gpt-train-python`
 alongside the Go benchmark.
 
-### Model-file load -- safetensors and GGUF, pure Go vs the reference readers (T885, 2026-07-20)
+### Model-file load -- safetensors and GGUF, pure Go vs the reference readers (updated 2026-08-17)
 
 Loading weights is upstream of every inference and training run, and GoAI's safetensors
 reader is hostile-gated -- it rejects a header that over-claims the file size before
-allocating (V15/V29/B99). T885 measures what that pure-Go safety costs versus the Rust-cored
+allocating (V15/V29/B99). The original T885 measurement exposed what that safety and the former
+synthetic partial-decode path cost versus the Rust-cored
 `safetensors` Python package on a byte-identical 64 MiB fixture (16 f32 tensors of
 [1024,1024], deterministic values the Go side bit-checks -- the fairness anchor). Both read
-the same file from warm page cache; best-of-7 each.
+the same file from warm page cache. Current results use ten fresh-process pairs, reverse order on
+every pair, and take the median of each best-of-7 inner sample.
 
-| safetensors load, 64 MiB | GoAI (pure Go) | safetensors-python (Rust+mmap) | gap |
+| safetensors load, 64 MiB | GoAI (pure Go) | safetensors 0.8.0 (Rust+mmap) | result |
 |---|---|---|---|
-| Full (all 16 tensors) | 8.4 GB/s | 12.2 GB/s | 1.45x |
-| One tensor from the file | 4.0 GB/s (1.05 ms) | 10.8 GB/s (0.39 ms) | 2.69x |
+| Full (all 16 tensors) | 5.670 ms | 5.675 ms | parity (1.001x) |
+| One 4 MiB tensor from the file | **0.2825 ms** | 0.4195 ms | **GoAI 1.48x faster** |
 
-An honest loss, and a modest one on full load: GoAI's pure-Go reader materializes every
-tensor at 8.4 GB/s, within 1.45x of a Rust core that mmaps the file and hands back zero-copy
-numpy views -- while GoAI also validates the header against the file size first (the safety
-B99 added). The one-tensor gap is wider (2.69x) and diagnosable: LoadTensor seeks to the
-tensor's byte range, read()s it into a buffer, then frames that buffer as a minimal stream
-for the shared decode path (two copies), whereas safe_open mmaps and memcpys once. The lever
-is an mmap-based partial read that decodes in place -- a real optimization, tracked.
+`LoadTensor` now validates the chosen entry once and reads common little-endian dtypes directly
+into final independently owned storage. The superseded implementation read into a selected-range
+buffer, marshaled a synthetic JSON header, copied both into an in-memory container, parsed it, and
+copied the payload again. The internal ten-pair A/B improves 614,468 to 280,561 ns/op (**2.19x**),
+reduces 12,602,318 to 4,200,899 B/op (-66.67%), and removes 44 allocations. Every widening dtype
+uses the same centralized decoder as full loading. A transient whole-file mmap was also built, but
+at 347,943 versus 265,247 ns it was 31.18% slower than direct `ReadAt`, so it was removed rather
+than promoted by analogy with the successful full-file GGUF optimization.
 
 The structural property both share: extracting one tensor touches only that tensor's bytes,
-not the whole file. GoAI's one-tensor load (1.05 ms) is ~7.6x faster than its own full load
-(7.95 ms) of the 16-tensor file -- the O(one tensor) path T903/T904 built, confirmed against
-the reference. Run: `ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python
+not the whole file. GoAI's one-tensor load (0.2825 ms) is ~20.1x faster than its own full load
+(5.670 ms) of the 16-tensor file -- the O(one tensor) path T903/T904 built, now without synthetic
+framing. Run: `ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python
 testdata/bench_safetensors_load.py` then `ST_BENCH_FILE=/tmp/st.safetensors go test
-./format/safetensors -run LoadCompare -v`.
+./format/safetensors -run LoadCompare -v`; use `-run '^$' -bench BenchmarkLoadTensorFile -benchmem`
+for the committed allocation benchmark. Raw samples are under
+`internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817`.
 
 **GGUF -- closed by the bulk-copy and mmap sequence.** This historical measurement first exposed
 the scalar F32 decode loop; T907 replaced it with a bulk copy. The remaining whole-file buffered
