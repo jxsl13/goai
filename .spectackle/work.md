@@ -20,7 +20,7 @@ Migrated from cavekit SPEC.md T888.
 
 ## T-01KYJNDR38E4ZSN52KVM0PC5J9 Extend the trained-optimizer comparison with APOLLO and Q-GaLore
 kind: task
-state: approved
+state: active
 created: 2026-07-27
 targets: docs/training.md
 
