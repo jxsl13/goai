@@ -3738,7 +3738,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 
 ## P-01M08WKNGEF499G77J21EQA0BB Fuse cached-f16 quant projection boundaries through MPSGraph on M2
 kind: proposal
-state: draft
+state: approved
 created: 2026-08-17
 refs: R-01M08WMQ5MFDY8V704PG7Z81D4
 grilled: 2026-08-17 open=1
