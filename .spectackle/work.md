@@ -3752,16 +3752,6 @@ targets: go:metal.NewProfilingRecorder, go:llamagpu.Decoder.ProfileMetalStep, ba
 
 A macOS CI runner exposes Metal and MPS but not stage-boundary timestamp sampling. Add an explicit public capability query, preserve NewProfilingRecorder errors, skip unsupported runnable-example work, and document the distinction. This closes a portability gap without changing the M2 profiling or production recorder paths.
 
-## P-01M08DGE6RE54VZ0B01V2G2XHC Eliminate safetensors single-tensor framing and duplicate copies
-kind: proposal
-state: active
-created: 2026-08-17
-refs: R-01M08DHP12FAQVKBDDQQB4XDGA
-grilled: 2026-08-17 open=1
-targets: format/safetensors/partial.go, format/safetensors/partial_test.go, format/safetensors/loadcompare_external_test.go, format/safetensors/bench_test.go, format/safetensors/mmap_unix.go, format/safetensors/mmap_other.go, BENCHMARKS.md, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence
-
-R-01M08DHP12FAQ measures the M2 partial-load deficit and isolates the synthetic full-container decode. Replace selected-range ReadAt plus synthetic JSON/container reconstruction plus full Load with one validated entry decoder fed by a transient read-only mapping on supported regular files and a portable ReadAt fallback. The returned tensor must own its storage after unmap. Preserve dtype widening, exact values, header caps, shape/product overflow guards, offset/file-size validation, sharded delegation, and hostile errors. Require interleaved same-machine control/candidate medians, safetensors 0.8.0 parity, CGO-disabled and cross-platform gates; do not redesign full LoadFile unless separate measurement validates it.
-
 ## R-01M08DHP12FAQVKBDDQQB4XDGA Safetensors single-tensor load spends half its latency in synthetic full-container decode
 kind: research
 state: draft
