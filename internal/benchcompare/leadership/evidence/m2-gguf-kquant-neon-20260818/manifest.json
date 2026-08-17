@@ -1,0 +1,12 @@
+{
+  "date": "2026-08-18",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "goai_control": "9c2477b5ad81f275e3c3a75ce83bfa0403008d76",
+  "goai_kernel_commit": "d9d75ae0175e93a1fdbe03224af96a01042ad069",
+  "llamacpp_commit": "ece963f41b0b02d7a0d61436ae365762c073a4c8",
+  "llamacpp_binary_sha256": "4872c16adb0d19e6ea38163095282ecdf9fa8dd84e2ae5cf4264776fcf6ad64a",
+  "model_bytes": 668788096,
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0"
+}

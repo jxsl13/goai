@@ -29,6 +29,13 @@ func dequantQ6_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 // dequantQ6_KInto is dequantQ6_K writing into a caller-provided dst — lets QMatMul
 // reuse one row buffer across all weight rows. Byte-for-byte the tensor-returning form.
 func dequantQ6_KInto(dst []float32, raw []byte) {
+	dequantQ6_KIntoArch(dst, raw)
+}
+
+// dequantQ6_KIntoScalar is the architecture-independent reference. The arm64
+// implementation keeps this function both as the correctness oracle and as the
+// portable fallback on every other architecture.
+func dequantQ6_KIntoScalar(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		blk := raw[sb*q6kBlockSize:]
 		ql, qh, sc := blk[0:128], blk[128:192], blk[192:208]

@@ -1,0 +1,28 @@
+hardware: Apple M2 Pro
+model: tinyllama-1.1b-q4km.gguf
+protocol: one process, ten rounds, order reversed every round, fresh destination pages per arm
+
+round 1 scalar: 120.999667 ms
+round 1 neon:   108.092125 ms
+round 2 neon:   106.970833 ms
+round 2 scalar: 113.171042 ms
+round 3 scalar: 115.122125 ms
+round 3 neon:   104.384959 ms
+round 4 neon:   105.221875 ms
+round 4 scalar: 113.717916 ms
+round 5 scalar: 112.092042 ms
+round 5 neon:   104.922208 ms
+round 6 neon:   104.769292 ms
+round 6 scalar: 110.139333 ms
+round 7 scalar: 115.094042 ms
+round 7 neon:   104.604084 ms
+round 8 neon:   102.415416 ms
+round 8 scalar: 111.941291 ms
+round 9 scalar: 108.534000 ms
+round 9 neon:   109.622166 ms
+round 10 neon:  103.765792 ms
+round 10 scalar: 108.393125 ms
+
+median scalar: 112.631542 ms
+median neon:   104.845750 ms
+speedup: 1.0743x

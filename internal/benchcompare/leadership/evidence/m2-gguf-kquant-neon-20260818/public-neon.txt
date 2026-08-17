@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDequantQ4_K-12 4326 80246 ns/op 1837.56 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4518 79598 ns/op 1852.52 MB/s 1048812 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4328 80791 ns/op 1825.15 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4543 80805 ns/op 1824.84 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4407 81951 ns/op 1799.31 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4185 83007 ns/op 1776.43 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4395 81464 ns/op 1810.09 MB/s 1048811 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4446 80907 ns/op 1822.54 MB/s 1048812 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4714 80662 ns/op 1828.06 MB/s 1048810 B/op 3 allocs/op
+BenchmarkDequantQ4_K-12 4213 79961 ns/op 1844.11 MB/s 1048812 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5234 72269 ns/op 2975.57 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5234 72743 ns/op 2956.15 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 4803 70364 ns/op 3056.13 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5220 72823 ns/op 2952.90 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5012 72840 ns/op 2952.24 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5250 73692 ns/op 2918.10 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5240 72712 ns/op 2957.43 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5101 73181 ns/op 2938.45 MB/s 1048815 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5350 72282 ns/op 2975.00 MB/s 1048814 B/op 3 allocs/op
+BenchmarkDequantQ6_K-12 5331 69514 ns/op 3093.48 MB/s 1048813 B/op 3 allocs/op

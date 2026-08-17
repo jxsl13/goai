@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- bit-exact ARM64 NEON Q4_K/Q6_K eager dequantization (T-01KYJNDV2VFRFR5RDBSPKJBRVK, 2026-08-18)
+
+Q4_K and Q6_K eager dequantization now dispatches to M2-tuned Plan 9 ARM64/NEON kernels while
+every other architecture retains the scalar Go path. The implementation vectorizes packed-value
+expansion, integer-to-float conversion, affine transforms, and stores without changing scalar
+operation order. Randomized finite-scale tests compare every float32 bit against the portable
+oracle; pure-Go builds, the race detector, Linux/amd64 fallback compilation, and repository
+preflight pass.
+
+On Apple M2 Pro, ten-sample zero-allocation 262,144-value kernels improve Q4_K from 95.50 to
+31.68 microseconds (**3.01x**) and Q6_K from 139.42 to 24.84 microseconds (**5.61x**), both
+`p=0.000`. Allocation-inclusive public `Dequantize` improves **2.01x** and **2.87x**. Against a
+CPU-only native-ARM build of pinned llama.cpp b10450, raw-byte throughput is **2.81x faster** for
+Q4_K and **1.27x faster** for Q6_K. Ten within-process order-reversing TinyLlama materialization
+rounds are directionally 1.074x faster, but remain supporting evidence because the spread exceeds
+the sub-10% claim gate. Raw samples, hashes, commands, and the rejected output-prepass experiment
+are committed.
+
 ### format/safetensors -- direct single-tensor load takes the lead over safetensors-python (T-01M08DK6KDEH5, 2026-08-17)
 
 `LoadTensor` no longer copies a selected payload into a temporary buffer, rebuilds a synthetic

@@ -57,6 +57,12 @@ func dequantQ4_K(shape tensor.Shape, raw []byte) (*tensor.Tensor, error) {
 // count) — lets QMatMul reuse one row buffer across all weight rows instead of
 // allocating a tensor per row. The fill is byte-for-byte the tensor-returning form.
 func dequantQ4_KInto(dst []float32, raw []byte) {
+	dequantQ4_KIntoArch(dst, raw)
+}
+
+// dequantQ4_KIntoScalar is the architecture-independent reference used by the
+// portable path and as the bit-exact oracle for architecture-specific kernels.
+func dequantQ4_KIntoScalar(dst []float32, raw []byte) {
 	for sb := 0; sb*qkK < len(dst); sb++ {
 		// Fixed-length reslices, not open-ended ones: they let the compiler prove the
 		// inner stores in range, so the per-element IsInBounds on dst[base+l] and

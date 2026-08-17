@@ -1,0 +1,20 @@
+llama.cpp commit: ece963f41b0b02d7a0d61436ae365762c073a4c8 (b10450)
+binary sha256: 4872c16adb0d19e6ea38163095282ecdf9fa8dd84e2ae5cf4264776fcf6ad64a
+configuration: Release, AppleClang 21, native ARM, Metal/Accelerate/BLAS disabled
+command: test-quantize-perf --size 262144 --op dequantize_row_q --type TYPE -i 1000
+unit: quantized GB/s
+
+run  q4_K  q6_K
+1    1.65   6.81
+2    1.66   6.82
+3    1.66   6.74
+4    1.66   6.85
+5    1.66   6.80
+6    1.65   6.76
+7    1.65   6.77
+8    1.65   6.82
+9    1.66   6.77
+10   1.65   6.80
+
+median q4_K: 1.655 GB/s
+median q6_K: 6.800 GB/s

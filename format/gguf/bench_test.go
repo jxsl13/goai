@@ -188,8 +188,15 @@ func BenchmarkWriteF64Tensor(b *testing.B) {
 
 // BenchmarkReadFileModel times a full ReadFile of a real quantized model if present
 // (models/tinyllama-1.1b-q4km.gguf, ~200 Q4_K tensors). Measures the parallel decode.
+func benchmarkGGUFModelPath() string {
+	if path := os.Getenv("TINYLLAMA_GGUF"); path != "" {
+		return path
+	}
+	return "../../models/tinyllama-1.1b-q4km.gguf"
+}
+
 func BenchmarkReadFileModel(b *testing.B) {
-	const path = "../../models/tinyllama-1.1b-q4km.gguf"
+	path := benchmarkGGUFModelPath()
 	if _, err := os.Stat(path); err != nil {
 		b.Skip("model file not present")
 	}
@@ -207,7 +214,7 @@ func BenchmarkReadFileModel(b *testing.B) {
 // in one process and one warm page-cache window. GOAI_GGUF_MMAP_CANDIDATE_FIRST reverses subtest
 // order so repeated external runs can alternate order instead of baking thermal drift into one arm.
 func BenchmarkReadFileModelPath(b *testing.B) {
-	const path = "../../models/tinyllama-1.1b-q4km.gguf"
+	path := benchmarkGGUFModelPath()
 	if _, err := os.Stat(path); err != nil {
 		b.Skip("model file not present")
 	}
