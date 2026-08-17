@@ -3735,12 +3735,3 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
-
-## P-01M08GG8GSFKTB25CEGB556A45 Attribute the current M2 K-quant decode gap against llama.cpp b10450
-kind: proposal
-state: approved
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: go:benchcompare.BenchmarkProdMetalProfiledDecodeGGUF, backend/metal, internal/benchcompare, R-01M01Q0AG0EHN, PERF-M2-LLAMACPP-ATTRIBUTION-001
-
-Produce the contract-required matched attribution bundle before selecting another Metal leaf-kernel successor. Pin GoAI origin/main and llama.cpp b10450/ece963f41b0b02d7a0d61436ae365762c073a4c8; use models/tinyllama-1.1b-q4km.gguf by SHA-256 on the same M2 Pro; align batch=1, context position, warmup boundary, KV dtype, and Metal offload; collect repeated aggregate decode samples plus per-kernel Metal GPU interval distributions for both engines; record omissions and trace coverage; reconcile the stale 2026-07-20 headline with current-main measurements; identify the largest recoverable in-situ gap without implementing an unproven kernel rewrite. Acceptance: immutable environment manifest, raw compact samples, reproducible capture/analyzer commands, matched semantics table, and a Spectackle research tombstone consuming R-01M01Q0AG0EHN or correcting it if current evidence contradicts it.
