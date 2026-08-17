@@ -1,0 +1,16 @@
+hardware: Apple M2 Pro
+os: macOS 26.5.1 (25F80)
+go: 1.26.6
+gguf-py: 0.19.0
+numpy: 2.5.1
+python: 3.14.7
+fixture: 67109632 bytes, 16 x [1024,1024] f32, full eager materialization
+
+session 1: gguf-py 6.18 ms; GoAI 3.12 ms
+session 2: GoAI 3.18 ms; gguf-py 6.43 ms
+session 3: gguf-py 6.50 ms; GoAI 3.06 ms
+session 4: GoAI 2.96 ms; gguf-py 6.11 ms
+session 5: gguf-py 6.26 ms; GoAI 3.02 ms
+session 6: GoAI 2.91 ms; gguf-py 6.13 ms
+
+median: GoAI 3.04 ms; gguf-py 6.22 ms; GoAI 2.05x faster

@@ -15,6 +15,7 @@ package gguf
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -237,7 +238,16 @@ type parsed struct {
 }
 
 // parse reads the GGUF header, metadata KVs, tensor infos and the aligned data section.
-func parse(r io.Reader) (*parsed, error) {
+func parse(r io.Reader) (*parsed, error) { return parseSource(r, nil) }
+
+// parseMapped is parse over one immutable view of the complete file. Once the header cursor reaches
+// the aligned data section, parsed.data can view the mapping directly instead of allocating and
+// copying the model-sized section. The caller owns mapped for the lifetime of the returned parsed.
+func parseMapped(mapped []byte) (*parsed, error) {
+	return parseSource(bytes.NewReader(mapped), mapped)
+}
+
+func parseSource(r io.Reader, mapped []byte) (*parsed, error) {
 	rd := &reader{r: r}
 	m, err := rd.u32()
 	if err != nil {
@@ -373,7 +383,21 @@ func parse(r io.Reader) (*parsed, error) {
 		}
 	}
 	var data []byte
-	if need == 0 || need > maxPresizedSection {
+	if mapped != nil {
+		if rd.n < 0 || rd.n > int64(len(mapped)) {
+			return nil, fmt.Errorf("gguf: data offset %d beyond mapped file %d", rd.n, len(mapped))
+		}
+		tail := mapped[rd.n:]
+		if need == 0 || need > maxPresizedSection {
+			// Keep the streaming parser's hostile-table behavior: expose only bytes that really
+			// exist and let the overflow-safe per-tensor range checks reject impossible extents.
+			data = tail
+		} else if need > uint64(len(tail)) {
+			return nil, fmt.Errorf("gguf: read data (%d bytes): %w", need, io.ErrUnexpectedEOF)
+		} else {
+			data = tail[:need:need]
+		}
+	} else if need == 0 || need > maxPresizedSection {
 		var err error
 		if data, err = io.ReadAll(rd.r); err != nil {
 			return nil, fmt.Errorf("gguf: read data: %w", err)
@@ -394,6 +418,10 @@ func Read(r io.Reader) (*File, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readParsed(p)
+}
+
+func readParsed(p *parsed) (*File, error) {
 	out := &File{Version: p.version, Metadata: p.meta, Tensors: make(map[string]*tensor.Tensor, len(p.infos))}
 	// Tensor decode/dequant is CPU-bound and independent per tensor — each reads a disjoint,
 	// read-only region of p.data and writes its own fresh output tensor, sharing no mutable
@@ -495,17 +523,42 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 
 // ReadFile parses a .gguf file.
 //
-// The file is handed to the parser through a large buffered reader. Without it every header field
-// is its own read syscall — a length, then the bytes, for every string — and a llama-family header
-// is dominated by the tokenizer arrays, so a 32k-token vocabulary costs on the order of 160k
-// syscalls before a single tensor is touched. That cost is constant in model size, which makes it
-// worst exactly where the model is small.
-func ReadFile(path string) (*File, error) {
+// On supported Unix systems, regular non-empty files are mapped read-only for the duration of the
+// call. The parser reads the data section in place, then unmaps only after every returned tensor
+// owns independent storage. Callers must not truncate the file concurrently while ReadFile is in
+// progress; use Read for mutable or streaming sources. Unsupported platforms, special or empty
+// files, and mapping failures transparently use a large buffered reader instead.
+func ReadFile(path string) (*File, error) { return readFile(path, true) }
+
+// readFile keeps the buffered control available to package benchmarks and tests. Production always
+// asks for mmap; unsupported platforms, special files, empty files, and mapping failures fall back
+// to the byte-identical streaming path.
+func readFile(path string, allowMmap bool) (*File, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+	if allowMmap {
+		if fi, statErr := f.Stat(); statErr == nil && fi.Mode().IsRegular() && fi.Size() > 0 &&
+			fi.Size() <= int64(^uint(0)>>1) {
+			if mapped, ok := mmapFileReadOnly(f, int(fi.Size())); ok {
+				p, parseErr := parseMapped(mapped)
+				var out *File
+				if parseErr == nil {
+					out, parseErr = readParsed(p)
+				}
+				unmapErr := munmapFile(mapped)
+				if parseErr != nil {
+					return nil, parseErr
+				}
+				if unmapErr != nil {
+					return nil, fmt.Errorf("gguf: unmap %q: %w", path, unmapErr)
+				}
+				return out, nil
+			}
+		}
+	}
 	return Read(bufio.NewReaderSize(f, 1<<20))
 }
 

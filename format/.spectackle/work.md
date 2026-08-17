@@ -32,8 +32,9 @@ Migrated from cavekit SPEC.md T914.
 
 ## T-01KYJPSG8XFXVRA5TER8FSAPMH Pre-size and then mmap the gguf data-section read
 kind: task
-state: draft
+state: active
 created: 2026-07-27
+grilled: 2026-08-17 open=0
 
 SITE: format/gguf/gguf.go:332 — data, err := io.ReadAll(rd.r) inside parse.
 
