@@ -96,6 +96,22 @@ func BenchmarkReadFileSynth(b *testing.B) {
 	}
 }
 
+// TestReadFileMappedMatchesBuffered pins the ownership boundary of the file-only fast path. The
+// mapped bytes may disappear as soon as ReadFile returns, so every decoded tensor and metadata
+// value must already be independent and identical to the streaming control.
+func TestReadFileMappedMatchesBuffered(t *testing.T) {
+	path := writeSynthModel(t, 12, 256, 512)
+	buffered, err := readFile(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapped, err := readFile(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesEqual(t, buffered, mapped)
+}
+
 // TestParseTruncatedDataSection pins the error path the presized read introduced. The data section
 // is now allocated from the tensor table and filled with io.ReadFull, so a file whose table
 // promises more bytes than the file holds fails HERE, naming the shortfall, instead of being
@@ -116,6 +132,9 @@ func TestParseTruncatedDataSection(t *testing.T) {
 	cut := len(full) - len(full)/4
 	if _, err := Read(bytes.NewReader(full[:cut])); err == nil {
 		t.Fatal("a truncated data section parsed without error")
+	}
+	if _, err := parseMapped(full[:cut]); err == nil {
+		t.Fatal("a truncated mapped data section parsed without error")
 	}
 }
 

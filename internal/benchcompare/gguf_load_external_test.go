@@ -11,8 +11,9 @@ import (
 
 // TestGGUFLoadCompare times GoAI's full GGUF load on the shared fixture the python
 // companion (testdata/bench_gguf_load.py) writes, so GoAI's pure-Go hostile-gated
-// GGUF reader can be compared head-to-head with gguf-py's mmap-based GGUFReader in
-// BENCHMARKS.md. Untagged (pure-Go read, no backend needed) and gated on
+// GGUF reader can be compared head-to-head with gguf-py's GGUFReader in BENCHMARKS.md.
+// Both sides map the regular file and then materialize every tensor. Untagged (pure-Go,
+// no backend needed) and gated on
 // GGUF_BENCH_FILE; the value cross-check against the generator pattern is the
 // fairness anchor. The GGUF half of T885 (safetensors half: format/safetensors).
 func TestGGUFLoadCompare(t *testing.T) {

@@ -17,6 +17,7 @@ Usage:
 import os
 import sys
 import time
+from importlib import metadata
 
 import gguf
 import numpy as np
@@ -59,7 +60,7 @@ def main() -> None:
         _ = {t.name: np.array(t.data) for t in r.tensors}
 
     full_best = best_of(full)
-    ver = getattr(gguf, "__version__", "?")
+    ver = metadata.version("gguf")
     print(f"gguf-py {ver}, numpy {np.__version__}, python {sys.version.split()[0]}")
     print(f"fixture: {nbytes} bytes ({N_TENSORS} x [{ROWS},{COLS}] f32)")
     print(f"full load best-of-7: {full_best*1e3:7.2f} ms  =>  {nbytes/full_best/1e6:7.1f} MB/s (all {N_TENSORS} tensors)")

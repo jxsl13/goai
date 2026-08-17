@@ -4,6 +4,18 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- mmap removes whole-file staging and takes the full-load lead over gguf-py (T-01KYJPSG8XFXVRA5TER8FSAPMH, 2026-08-17)
+
+`ReadFile` now maps supported regular files read-only and parses the encoded data section directly
+from that mapping, removing the model-sized buffered staging allocation while preserving the
+streaming fallback. The mapping stays alive through parallel tensor materialization and is released
+before return; mapped and buffered results are exact, truncated mapped sections are rejected, and
+unsupported platforms still compile and use the existing path. On an M2 Pro, ten order-alternating
+TinyLlama-1.1B Q4_K_M pairs improve the median from 182.00 ms to 97.12 ms (**1.87x**, −46.64%,
+`p=0.000`) and remove about 668 MB/op (−13.14%). On the shared 64 MiB F32 fixture, six alternating
+fresh sessions put GoAI at 3.04 ms versus gguf-py 0.19.0 at 6.22 ms (**2.05x faster**) with matched
+full materialization semantics. Raw evidence is committed with the benchmark contract.
+
 ### tooling -- spec/ hierarchy: SPEC.md becomes a generated view, all spec mutations via docgraph (T921, 2026-07-20)
 
 The spec corpus moved to a `spec/` source tree (one caveman-markdown file per section, worker

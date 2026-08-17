@@ -569,7 +569,29 @@ unmeasured axis. Lesson worth the table: on a dispatch-bound decoder the
 *round cost*, not the acceptance rate, decides the win — free-drafting
 schemes (Medusa, prompt-lookup) pay off where a draft *model* does not.
 
-## 9. Correctness parity — the benchmark behind every benchmark
+## 9. File-format loading — GGUF vs gguf-py
+
+*M2 Pro, macOS 26.5.1, warm page cache, full eager materialization. GoAI at this
+change; gguf-py 0.19.0 + NumPy 2.5.1 + Python 3.14.7. Ten paired model runs for
+the internal A/B; six fresh, order-alternating sessions for the incumbent race.*
+
+GoAI now maps a regular GGUF file read-only, parses its data section directly from
+that mapping, and unmaps only after all returned F32 tensors own independent
+storage. Unsupported files and platforms retain the byte-identical buffered path.
+
+| Full GGUF load | Buffered GoAI control | GoAI mmap | Effect |
+|---|---:|---:|---:|
+| TinyLlama-1.1B Q4_K_M, 638 MiB | 182.00 ms | **97.12 ms** | **1.87× faster**, −46.64% (`p=0.000`, n=10) |
+| Heap bytes/op | 4.735 GiB | **4.113 GiB** | **−13.14%** (about 668 MB/op) |
+
+On the shared deterministic 64 MiB F32 fixture, with both readers copying every
+tensor out of their mappings, GoAI's six-session median is **3.04 ms** versus
+**6.22 ms** for gguf-py: **2.05× faster** at matched eager semantics. Tensor values
+remain cross-checked against the fixture pattern; mapped-vs-buffered output is
+exact in the Go test suite. Raw samples and commands are retained under
+`internal/benchcompare/leadership/evidence/m2-gguf-readfile-mmap-20260817`.
+
+## 10. Correctness parity — the benchmark behind every benchmark
 
 Speed claims are only meaningful if both sides compute the same thing.
 Every GoAI number above sits on mechanically enforced parity gates
@@ -599,7 +621,6 @@ honestly documented deficit with a root cause is a deliverable):
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | safetensors full load vs safetensors-python | 1.45× | Rust core + mmap + zero-copy numpy views; ours is a pure-Go hostile-gated read+parse (8.4 vs 12.2 GB/s) | mmap the file to skip the read copy |
 | safetensors one-tensor load vs `safe_open` | 2.69× | their mmap+memcpy vs our read()+frame double-copy; both read only that tensor's bytes | mmap-based partial load, no intermediate buffer |
-| GGUF full load vs gguf-py | 5.4× | `decodeTensor`'s F32/F16 path is a per-element decode loop (`Float32frombits` per element), not a bulk copy — a fixable inefficiency, not a ceiling (GoAI's own safetensors reader is already bulk at 8.4 GB/s vs GGUF's 2.2) | bulk F32/F16 decode fast path → **T907** (format/gguf) |
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |

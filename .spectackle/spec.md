@@ -536,3 +536,8 @@ Rationale: Opt-in timestamp attribution must expose incomplete traces and remain
 WHEN recorder profiling capability is queried, the GoAI Metal backend SHALL return true only when stage-boundary timestamp sampling and a timestamp counter set are available through RecorderProfilingAvailable.
 
 Rationale: Metal availability does not imply counter-sampling support; callers need a stable preflight boundary before entering the optional diagnostic path.
+
+## GGUF-READFILE-MMAP-LIFETIME-001
+WHEN ReadFile maps a regular GGUF file, the format/gguf reader SHALL call munmapFile only after readParsed returns and call Read with a buffered reader when mmapFileReadOnly fails.
+
+Rationale: The file mapping replaces a model-sized staging allocation without leaking mapped lifetimes through the eager File API.

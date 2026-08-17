@@ -562,20 +562,10 @@ the reference. Run: `ST_BENCH_FILE=/tmp/st.safetensors .venv/bin/python
 testdata/bench_safetensors_load.py` then `ST_BENCH_FILE=/tmp/st.safetensors go test
 ./format/safetensors -run LoadCompare -v`.
 
-**GGUF -- a bigger gap, but a fixable one (the GGUF half).** The same 64 MiB fixture as F32
-GGUF tensors (gguf-py's GGUFWriter writes it, deterministic values the Go side bit-checks;
-F32 means no dequant on either side): GoAI `gguf.ReadFile` loads it at **2.2 GB/s**, gguf-py's
-mmap-based `GGUFReader` (materialized to numpy) at **12.2 GB/s** -- GoAI **5.4x behind**, much
-worse than safetensors' 1.45x. This one is *not* a Rust-vs-Go or mmap ceiling: it is a
-per-element decode. `decodeTensor`'s F32 (and F16) branch runs
-`dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))` in a scalar loop over
-every element, where GoAI's *own* safetensors reader already does a bulk copy (hence 8.4 vs
-2.2 GB/s for the same F32 bytes). A bulk F32/F16 decode fast path -- reinterpreting the
-little-endian bytes in one shot, as safetensors does -- should close most of the gap. Booked
-as **T907** (the reader lives in format/gguf). Run: `GGUF_BENCH_FILE=/tmp/b.gguf .venv/bin/python
-testdata/bench_gguf_load.py` then `GGUF_BENCH_FILE=/tmp/b.gguf go test ./internal/benchcompare
--run GGUFLoadCompare -v`. This is the honest-loss-with-a-lever pattern: measuring the incumbent
-surfaced a concrete pure-Go optimization, not a platform ceiling.
+**GGUF -- closed by the bulk-copy and mmap sequence.** This historical measurement first exposed
+the scalar F32 decode loop; T907 replaced it with a bulk copy. The remaining whole-file buffered
+staging copy was removed on 2026-08-17 by the mmap path documented below. The current matched
+result is GoAI **2.05x ahead** of gguf-py 0.19.0, so the former 5.4x deficit is no longer current.
 
 ### Vision models forward + train vs PyTorch (T884, 2026-07-20)
 
@@ -2342,3 +2332,42 @@ TINYLLAMA_GGUF=/absolute/path/to/tinyllama-1.1b-q4km.gguf \
 Further reading: Apple, *Counter sampling with Metal* and Xcode GPU profiling;
 Go's `benchstat` documentation for repeated-sample comparison. The repository
 contract is `PERF-M2-METAL-PROFILER-002`.
+
+## GGUF ReadFile mmap path (2026-08-17)
+
+`format/gguf.ReadFile` used to allocate and fill a model-sized encoded data
+section before its parallel decoders allocated the final F32 tensors. For a
+regular local file, the new path maps the file read-only, parses the header
+through the same hostile-input gates, and gives the decoders capacity-clamped
+views into the mapped data section. It unmaps only after every decoder has
+finished and the returned tensors own independent storage. The portable large-
+buffer reader remains the fallback for unsupported platforms, special or empty
+files, and mapping failures. A caller must not truncate a mapped file while the
+call is active; mutable and streaming sources belong on `Read`.
+
+The primary A/B uses the real 638 MiB TinyLlama-1.1B Q4_K_M checkpoint on an
+Apple M2 Pro. Ten fresh benchmark processes alternated whether buffered or mmap
+ran first, with one timed full load per arm and a warm page cache:
+
+| `BenchmarkReadFileModelPath` | buffered control | mmap candidate | delta |
+|---|---:|---:|---:|
+| time/op | 182.00 ms ±13% | **97.12 ms ±8%** | **−46.64%, 1.87x** (`p=0.000`, n=10) |
+| heap bytes/op | 4.735 GiB | **4.113 GiB** | **−13.14%**, about 668 MB/op (`p=0.000`) |
+| allocs/op | 187.6k | 187.6k | unchanged (`p=0.053`) |
+
+The incumbent comparison uses the existing deterministic 64 MiB F32 GGUF: 16
+`[1024,1024]` tensors, values cross-checked in Go, and both sides eagerly copying
+all tensor data out of the mapping. Six fresh, order-alternating sessions produced
+medians of **3.04 ms for GoAI** and **6.22 ms for gguf-py 0.19.0**, so GoAI is
+**2.05x faster** at matched semantics on this cell. The pinned environment is
+NumPy 2.5.1, Python 3.14.7, Go 1.26.6, and macOS 26.5.1 (25F80).
+
+Correctness is not inferred from timing: `TestReadFileMappedMatchesBuffered`
+compares every metadata value and tensor against the buffered control after the
+mapping has been released, and the truncated-section test exercises both parsers.
+The package suite, race detector, portable Windows cross-compile, and repository
+preflight are release gates. Raw samples, exact commands, and version pins live in
+`internal/benchcompare/leadership/evidence/m2-gguf-readfile-mmap-20260817`.
+
+This completes `T-01KYJPSG8XFXVRA5TER8FSAPMH`; the repository contract is
+`GGUF-READFILE-MMAP-LIFETIME-001`.

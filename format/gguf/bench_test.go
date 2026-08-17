@@ -203,6 +203,38 @@ func BenchmarkReadFileModel(b *testing.B) {
 	}
 }
 
+// BenchmarkReadFileModelPath compares the portable buffered control with the production mmap path
+// in one process and one warm page-cache window. GOAI_GGUF_MMAP_CANDIDATE_FIRST reverses subtest
+// order so repeated external runs can alternate order instead of baking thermal drift into one arm.
+func BenchmarkReadFileModelPath(b *testing.B) {
+	const path = "../../models/tinyllama-1.1b-q4km.gguf"
+	if _, err := os.Stat(path); err != nil {
+		b.Skip("model file not present")
+	}
+	type mode struct {
+		name      string
+		allowMmap bool
+	}
+	modes := []mode{{"buffered", false}, {"mmap", true}}
+	if os.Getenv("GOAI_GGUF_MMAP_CANDIDATE_FIRST") != "" {
+		modes[0], modes[1] = modes[1], modes[0]
+	}
+	for _, mode := range modes {
+		b.Run(mode.name, func(b *testing.B) {
+			if _, err := readFile(path, mode.allowMmap); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := readFile(path, mode.allowMmap); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkWriteQuantizedModel times quantizing+writing a many-tensor F32 "model" to
 // Q4_K (the model-producer path) — exercises the parallel encode.
 func BenchmarkWriteQuantizedModel(b *testing.B) {
