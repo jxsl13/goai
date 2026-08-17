@@ -1,0 +1,21 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+               │ public-control.txt │           public-neon.txt           │
+               │       sec/op       │   sec/op     vs base                │
+DequantQ4_K-12         162.13µ ± 2%   80.80µ ± 1%  -50.17% (p=0.000 n=10)
+DequantQ6_K-12         208.79µ ± 2%   72.73µ ± 3%  -65.17% (p=0.000 n=10)
+geomean                 184.0µ        76.66µ       -58.34%
+
+               │ public-control.txt │            public-neon.txt             │
+               │        B/s         │      B/s       vs base                 │
+DequantQ4_K-12         867.3Mi ± 2%   1740.5Mi ± 1%  +100.66% (p=0.000 n=10)
+DequantQ6_K-12         982.2Mi ± 2%   2819.8Mi ± 3%  +187.09% (p=0.000 n=10)
+geomean                923.0Mi         2.163Gi       +140.02%
+
+               │ public-control.txt │           public-neon.txt           │
+               │     allocs/op      │ allocs/op   vs base                 │
+DequantQ4_K-12           3.000 ± 0%   3.000 ± 0%       ~ (p=1.000 n=10)
+DequantQ6_K-12           3.000 ± 0%   3.000 ± 0%       ~ (p=1.000 n=10)
+geomean                  3.000        3.000       +0.00%

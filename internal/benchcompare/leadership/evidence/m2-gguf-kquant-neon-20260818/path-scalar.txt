@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDequantQ6KIntoPaths-12 2272 150739 ns/op 1426.57 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2498 140981 ns/op 1525.31 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2558 140417 ns/op 1531.43 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2610 139056 ns/op 1546.42 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2575 139467 ns/op 1541.87 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2590 139127 ns/op 1545.64 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2595 139398 ns/op 1542.63 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2587 139436 ns/op 1542.21 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2588 139247 ns/op 1544.30 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ6KIntoPaths-12 2613 139224 ns/op 1544.56 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3829 95264 ns/op 1547.87 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3795 95391 ns/op 1545.81 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3788 95690 ns/op 1540.98 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3740 97093 ns/op 1518.72 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3742 96729 ns/op 1524.42 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3656 95899 ns/op 1537.62 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3787 95531 ns/op 1543.54 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3618 95382 ns/op 1545.95 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3795 95373 ns/op 1546.10 MB/s 0 B/op 0 allocs/op
+BenchmarkDequantQ4KIntoPaths-12 3694 95474 ns/op 1544.46 MB/s 0 B/op 0 allocs/op

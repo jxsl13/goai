@@ -2446,3 +2446,46 @@ preflight are release gates. Raw samples, exact commands, and version pins live 
 
 This completes `T-01KYJPSG8XFXVRA5TER8FSAPMH`; the repository contract is
 `GGUF-READFILE-MMAP-LIFETIME-001`.
+
+## GGUF ARM64 Q4_K/Q6_K eager dequantization (2026-08-18)
+
+After mmap removed the encoded-section copy, Q4_K and Q6_K expansion remained
+the dominant work in eager `ReadFile`: the TinyLlama Q4_K_M fixture contains
+514,031,616 encoded Q4_K bytes and 152,678,400 Q6_K bytes. The arm64 path now
+uses bit-exact Plan 9 NEON kernels for both formats. Q4_K expands packed nibbles
+with table lookup and performs `step*q-offset` without fusion. Q6_K vectorizes
+the signed scales and six-bit unpacking while retaining the scalar
+`(d*scale)*q` operation order. Other architectures call the unchanged Go
+implementations.
+
+Apple M2 Pro, Go 1.26.6, 262,144 output values, ten samples per arm and 300 ms
+adaptive windows:
+
+| path | scalar Go | ARM64 NEON | result |
+|---|---:|---:|---:|
+| Q4_K direct, reusable output | 95.50 µs | **31.68 µs** | **3.01x**, `p=0.000` |
+| Q6_K direct, reusable output | 139.42 µs | **24.84 µs** | **5.61x**, `p=0.000` |
+| Q4_K public `Dequantize` | 162.13 µs | **80.80 µs** | **2.01x**, `p=0.000` |
+| Q6_K public `Dequantize` | 208.79 µs | **72.73 µs** | **2.87x**, `p=0.000` |
+
+Both direct arms remain 0 B/op and 0 allocs/op; the public API retains its
+three allocations for the result tensor. Against llama.cpp b10450 pinned to
+commit `ece963f41b0b02d7a0d61436ae365762c073a4c8` and built native-ARM CPU-only,
+GoAI processes Q4_K encoded bytes at 4.654 versus 1.655 GB/s (**2.81x**) and
+Q6_K at 8.658 versus 6.800 GB/s (**1.27x**). This comparison is a matched
+dequantization leaf cell and does not imply an inference-wide lead.
+
+The opt-in real-model harness parses once and performs ten scalar/NEON eager
+materialization rounds inside one process, reversing order every round and
+using fresh destination pages. Medians are 112.632 and 104.846 ms (1.074x).
+The result is directionally consistent with a separate fresh-process
+`ReadFile` campaign, but the arm spread is above the preferred sub-10% gate;
+therefore no statistically significant standalone model-load win is claimed.
+
+A two-pass prototype looked slightly faster in a warm leaf benchmark by using
+the output tail as coefficient scratch, yet badly regressed fresh model loads:
+it touched about 4.4 GB of newly allocated pages before overwriting them. The
+shipping block-local kernel avoids the extra pass. This generalizable
+measurement hazard is tracked as perfscan issue 762. Complete samples, hashes,
+commands, and rejection evidence live in
+`internal/benchcompare/leadership/evidence/m2-gguf-kquant-neon-20260818`.

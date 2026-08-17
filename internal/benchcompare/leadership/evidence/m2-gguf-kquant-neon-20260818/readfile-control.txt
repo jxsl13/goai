@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkReadFileModel-12 1 117260250 ns/op
+BenchmarkReadFileModel-12 1 112283791 ns/op
+BenchmarkReadFileModel-12 1 107077250 ns/op
+BenchmarkReadFileModel-12 1 99616083 ns/op
+BenchmarkReadFileModel-12 1 100551333 ns/op
+BenchmarkReadFileModel-12 1 101629750 ns/op
+BenchmarkReadFileModel-12 1 113945333 ns/op
+BenchmarkReadFileModel-12 1 117853625 ns/op
+BenchmarkReadFileModel-12 1 114347375 ns/op
+BenchmarkReadFileModel-12 1 118153666 ns/op

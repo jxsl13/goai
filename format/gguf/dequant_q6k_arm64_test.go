@@ -6,7 +6,15 @@ import (
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
+	"runtime/debug"
+	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 func TestDequantQ6KNeonBitExact(t *testing.T) {
@@ -127,4 +135,131 @@ func BenchmarkDequantQ4KIntoPaths(b *testing.B) {
 			}
 		})
 	}
+}
+
+type kDequantPath struct {
+	name string
+	q4   func([]float32, []byte)
+	q6   func([]float32, []byte)
+}
+
+// decodeTensorWithKPath mirrors decodeTensor only for the two kernels under
+// test. All unchanged formats continue through the production decoder, so the
+// real-model A/B includes the complete eager materialization workload.
+func decodeTensorWithKPath(ti tensorInfo, data []byte, path kDequantPath) (*tensor.Tensor, error) {
+	if ti.ggType != tQ4_K && ti.ggType != tQ6_K {
+		return decodeTensor(ti, data)
+	}
+	need, err := byteSize(ti.ggType, ti.shape.Numel())
+	if err != nil || ti.offset > uint64(len(data)) || uint64(need) > uint64(len(data))-ti.offset {
+		return decodeTensor(ti, data) // preserve the production error contract
+	}
+	raw := data[ti.offset : ti.offset+uint64(need)]
+	out := tensor.New(tensor.F32, ti.shape)
+	if ti.ggType == tQ4_K {
+		path.q4(out.Storage().F32(), raw)
+	} else {
+		path.q6(out.Storage().F32(), raw)
+	}
+	return out, nil
+}
+
+// readParsedWithKPath preserves readParsed's bounded work-stealing schedule.
+// It exists only to compare scalar and NEON K-quant kernels within one process;
+// production dispatch remains direct and pays no function-variable overhead.
+func readParsedWithKPath(p *parsed, path kDequantPath) (*File, error) {
+	out := &File{Version: p.version, Metadata: p.meta, Tensors: make(map[string]*tensor.Tensor, len(p.infos))}
+	decoded := make([]*tensor.Tensor, len(p.infos))
+	errs := make([]error, len(p.infos))
+	workers := min(runtime.GOMAXPROCS(0), len(p.infos))
+	if workers > 1 {
+		var next atomic.Int64
+		var wg sync.WaitGroup
+		for range workers {
+			wg.Go(func() {
+				for {
+					i := int(next.Add(1)) - 1
+					if i >= len(p.infos) {
+						return
+					}
+					decoded[i], errs[i] = decodeTensorWithKPath(p.infos[i], p.data, path)
+				}
+			})
+		}
+		wg.Wait()
+	} else {
+		for i := range p.infos {
+			decoded[i], errs[i] = decodeTensorWithKPath(p.infos[i], p.data, path)
+		}
+	}
+	for i, ti := range p.infos {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		out.Tensors[ti.name] = decoded[i]
+	}
+	return out, nil
+}
+
+func medianDuration(samples []time.Duration) time.Duration {
+	ordered := append([]time.Duration(nil), samples...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i] < ordered[j] })
+	mid := len(ordered) / 2
+	if len(ordered)%2 != 0 {
+		return ordered[mid]
+	}
+	return (ordered[mid-1] + ordered[mid]) / 2
+}
+
+// TestReadParsedKPathAB is an opt-in end-to-end evidence harness. Every arm
+// gets fresh destination pages; order reverses each round inside one process,
+// meeting the interleaving rule for sub-10% model-load claims.
+func TestReadParsedKPathAB(t *testing.T) {
+	path := os.Getenv("TINYLLAMA_GGUF")
+	if path == "" {
+		t.Skip("set TINYLLAMA_GGUF to run the real-model K-quant A/B")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := parse(f)
+	closeErr := f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+
+	paths := []kDequantPath{
+		{name: "scalar", q4: dequantQ4_KIntoScalar, q6: dequantQ6_KIntoScalar},
+		{name: "neon", q4: dequantQ4_KIntoArch, q6: dequantQ6_KIntoArch},
+	}
+	samples := map[string][]time.Duration{"scalar": {}, "neon": {}}
+	for round := range 10 {
+		order := paths
+		if round%2 != 0 {
+			order = []kDequantPath{paths[1], paths[0]}
+		}
+		for _, candidate := range order {
+			debug.FreeOSMemory()
+			start := time.Now()
+			out, err := readParsedWithKPath(p, candidate)
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("round %d %s: %v", round+1, candidate.name, err)
+			}
+			if len(out.Tensors) != len(p.infos) {
+				t.Fatalf("round %d %s: decoded %d tensors, want %d", round+1, candidate.name, len(out.Tensors), len(p.infos))
+			}
+			runtime.KeepAlive(out)
+			samples[candidate.name] = append(samples[candidate.name], elapsed)
+			t.Logf("round %d %s: %s", round+1, candidate.name, elapsed)
+		}
+	}
+	scalarMedian := medianDuration(samples["scalar"])
+	neonMedian := medianDuration(samples["neon"])
+	t.Logf("median scalar=%s neon=%s speedup=%.4fx", scalarMedian, neonMedian,
+		float64(scalarMedian)/float64(neonMedian))
 }
