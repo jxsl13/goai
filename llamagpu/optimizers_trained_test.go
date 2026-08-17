@@ -23,7 +23,7 @@ import (
 // estimator (a second backward on resampled labels) — a faithful harness of its own.
 func TestOptimizerZooTrainsGPT(t *testing.T) {
 	if testing.Short() {
-		t.Skip("trains eight models; skipped in -short")
+		t.Skip("trains the optimizer zoo; skipped in -short")
 	}
 	if !metal.Available() {
 		t.Skip("metal: no gpu")
@@ -64,6 +64,12 @@ func TestOptimizerZooTrainsGPT(t *testing.T) {
 			func(o stepper) { o.(*nn.ScheduleFree).Eval() }},
 		{"Shampoo", func(ps []*tensor.Tensor) stepper { return nn.NewShampoo(ps, 0.03, nn.WithShampooRootEvery(20)) }, nil},
 		{"SOAP", func(ps []*tensor.Tensor) stepper { return nn.NewSOAP(ps, 3e-3) }, nil},
+		// APOLLO's only explicit non-learning-rate input is the deterministic
+		// projection seed. Rank/scale/gap/limiter retain the paper defaults.
+		{"APOLLO", func(ps []*tensor.Tensor) stepper { return nn.NewAPOLLO(ps, 3e-3, 7) }, nil},
+		// QuantBits=8 is the Q-GaLore default: INT8 moments and weights, packed
+		// INT4 projection, and the adaptive 0.4/2/5 SVD cadence are all active.
+		{"Q-GaLore", func(ps []*tensor.Tensor) stepper { return nn.NewQGaLore(ps, 3e-3) }, nil},
 	}
 
 	results := make([]string, 0, len(cases))
