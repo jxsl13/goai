@@ -1,1 +1,2 @@
 {"t":"2026-07-27T21:42:14Z","eid":"fd04ac1a5c0d3715","ag":"ag-1f37","ev":"create","id":"T-01KYJREJ34FN9BEZDREAF6WYT8","k":"task","ti":"Fix the broken BenchmarkGPTDecode — it blocks honest sizing of dispatch work","dir":"backend/metal"}
+{"t":"2026-08-17T21:22:23Z","eid":"62af02106a6dc098","ag":"ag-3b78","ev":"create","id":"P-01M08SN9PFECDAK5WMYZ7TSX7H","k":"proposal","ti":"Port half-input float-accumulate Q4_K simdgroup matmul to M2","dir":"backend/metal"}
