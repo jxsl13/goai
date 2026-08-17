@@ -25,6 +25,7 @@ SCOPE: fix the harness only. Do not optimize anything in the same change — the
 kind: proposal
 state: draft
 created: 2026-08-17
+grilled: 2026-08-17 open=0
 targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/q4k_mm_parity_test.go, backend/metal/q4k_mm_crossover_test.go
 
 Context: Current matched M2 attribution leaves GoAI 1.1193x behind llama.cpp b10450 at TinyLlama Q4_K_M pp64. The retained GoAI Q4_K matrix-unit kernel stages dequantized weights and activations as float and uses float simdgroup inputs; after prior hoists it measured 1198.1 us at M64 K2048 N5632 versus 743.0 us for the then-current dequant+GEMM route and stayed disabled.
