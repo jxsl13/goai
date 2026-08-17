@@ -83,6 +83,38 @@ func ExampleDecoder_StepN() {
 	// Output: logits for 48 tokens (StepNLast agrees: true)
 }
 
+// ExampleDecoder_ProfileMetalStep attributes one normal decode command buffer to stable Metal
+// encoder labels. The profiler is diagnostic and opt-in; ordinary Step calls keep the production
+// recorder fast path.
+func ExampleDecoder_ProfileMetalStep() {
+	if !metal.Available() || !metal.RecorderProfilingAvailable() {
+		fmt.Println("profile contains encoder timings")
+		return
+	}
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 48, Ctx: 32, Dim: 64, Heads: 8, KVHeads: 2, Layers: 2,
+		Hidden: 176, Eps: 1e-5, RopeBase: 10000,
+	}, 42)
+	if err != nil {
+		panic(err)
+	}
+	dec, err := llamagpu.New(m)
+	if err != nil {
+		panic(err)
+	}
+	defer dec.Release()
+
+	_, profile, err := dec.ProfileMetalStep(3, 0, 128)
+	if err != nil {
+		panic(err)
+	}
+	if len(profile.Events) == 0 || profile.CommandDuration <= 0 {
+		panic("empty Metal profile")
+	}
+	fmt.Println("profile contains encoder timings")
+	// Output: profile contains encoder timings
+}
+
 // ExampleNewQuant decodes a quantized model: the projections stay in their 4-8× smaller ggml form
 // on the GPU, so models too big to run as float still decode on the batched path.
 func ExampleNewQuant() {

@@ -649,6 +649,7 @@ non-negotiables (§V22, §C3):
 | llama.cpp side (worker) | `scripts/bench-llamacpp.sh <model.gguf>` |
 | vLLM side (worker) | uv venv + env flags as documented in docs/benchmarking.md ("Three-way head-to-head") |
 | Apple toy head-to-head | `go run ./internal/benchcompare/exportgguf` + `llama-bench`, per docs/benchmarking.md §T607 |
+| Apple Metal per-encoder attribution | `TINYLLAMA_GGUF=/path/model.gguf go run ./internal/benchcompare/metalcounters -package ./internal/benchcompare -benchmark '^BenchmarkProdMetalProfiledDecodeGGUF$' -iterations 1 -buffers-per-iteration 1 -stage-profile -require-exclusive-gpu-window` |
 | Classical ML vs scikit-learn | `make bench-classic-python` (GoAI + scikit-learn 1.9.0 on the same CSV; §5, T881) |
 | BPE tokenizer vs tiktoken | `go test ./nlp -run '^$' -bench BenchmarkGPT2` + `.venv/bin/python internal/benchcompare/tokenizer_compare.py` (§3, T882) |
 | GPT training step vs torch | `make bench-gpt-train-python` + `GOEXPERIMENT=simd VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare -run '^$' -bench BenchmarkGPTTrainingStep` (§6, T883) |

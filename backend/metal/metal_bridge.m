@@ -27,6 +27,8 @@ void mtl_set_coop_max_m(int m) { gCoopMaxM = m; }
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include <pthread.h>
+#include <stdint.h>
+#include <string.h>
 #include <sys/mman.h> // mincore (zero-copy operand wrapping)
 #include <unistd.h>   // getpagesize
 
@@ -54,6 +56,213 @@ unsigned long long mtl_available_memory(void) {
     uint64_t limit = (uint64_t)gDevice.recommendedMaxWorkingSetSize;
     uint64_t used = (uint64_t)gDevice.currentAllocatedSize;
     return limit > used ? (unsigned long long)(limit - used) : 0;
+}
+
+// Profiling recorders use the low pointer bit as a tag while the default recorder remains the
+// exact retained raw MTLCommandBuffer fast path. NSObject allocations are pointer-aligned.
+@interface GOAIMetalProfilingRecorder : NSObject
+@property(nonatomic, strong) id<MTLCommandBuffer> commandBuffer;
+@property(nonatomic, strong) id<MTLCounterSampleBuffer> sampleBuffer;
+@property(nonatomic, strong) NSMutableArray<NSString*>* labels;
+@property(nonatomic, strong) NSData* resolvedData;
+@property(nonatomic, strong) NSArray<NSNumber*>* validEventIndices;
+@property(nonatomic) NSUInteger maxEvents;
+@property(nonatomic) NSUInteger nextEvent;
+@property(nonatomic) NSUInteger omittedMPS;
+@property(nonatomic) NSUInteger omittedOverflow;
+@property(nonatomic) NSUInteger omittedUnsupported;
+@property(nonatomic) uint64_t cpuTimestampStart;
+@property(nonatomic) uint64_t gpuTimestampStart;
+@property(nonatomic) uint64_t cpuTimestampSpan;
+@property(nonatomic) uint64_t gpuTimestampSpan;
+@property(nonatomic) BOOL completed;
+@property(nonatomic) BOOL resolved;
+@end
+
+@implementation GOAIMetalProfilingRecorder
+@end
+
+static const uintptr_t kProfilingRecorderTag = 1;
+
+static inline __attribute__((always_inline)) BOOL recorder_is_profiled(void* rec) {
+    return rec != NULL && (((uintptr_t)rec & kProfilingRecorderTag) != 0);
+}
+
+static inline __attribute__((always_inline)) GOAIMetalProfilingRecorder* recorder_profile(void* rec) {
+    uintptr_t raw = (uintptr_t)rec & ~kProfilingRecorderTag;
+    return (__bridge GOAIMetalProfilingRecorder*)((void*)raw);
+}
+
+static inline __attribute__((always_inline)) id<MTLCommandBuffer> recorder_command_buffer(void* rec) {
+    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+        return (__bridge id<MTLCommandBuffer>)rec;
+    }
+    return recorder_profile(rec).commandBuffer;
+}
+
+static id<MTLCounterSet> timestamp_counter_set(void) {
+    for (id<MTLCounterSet> set in gDevice.counterSets) {
+        if ([set.name isEqualToString:MTLCommonCounterSetTimestamp]) return set;
+    }
+    return nil;
+}
+
+// Support codes distinguish absence of a GPU/queue (-1), stage-boundary sampling (-2), and a
+// timestamp counter set (-3). Tick-to-nanosecond calibration is captured per recorder with the
+// CPU/GPU clock-pair procedure Apple specifies for MTLCounterResultTimestamp.
+int mtl_recorder_profile_support(void) {
+    if (ensure_init() != 0) return -1;
+    if (![gDevice supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) return -2;
+    if (timestamp_counter_set() == nil) return -3;
+    return 0;
+}
+
+static id<MTLComputeCommandEncoder>
+recorder_profiled_compute_encoder(GOAIMetalProfilingRecorder* p, NSString* label) {
+    id<MTLCommandBuffer> cmd = p.commandBuffer;
+    if (p.nextEvent >= p.maxEvents) {
+        p.omittedOverflow++;
+        return [cmd computeCommandEncoder];
+    }
+    NSUInteger sample = p.nextEvent * 2;
+    MTLComputePassDescriptor* pass = [MTLComputePassDescriptor computePassDescriptor];
+    MTLComputePassSampleBufferAttachmentDescriptor* attachment = pass.sampleBufferAttachments[0];
+    attachment.sampleBuffer = p.sampleBuffer;
+    attachment.startOfEncoderSampleIndex = sample;
+    attachment.endOfEncoderSampleIndex = sample + 1;
+    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoderWithDescriptor:pass];
+    if (enc == nil) {
+        p.omittedUnsupported++;
+        return [cmd computeCommandEncoder];
+    }
+    [p.labels addObject:label];
+    p.nextEvent++;
+    return enc;
+}
+
+static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
+recorder_compute_encoder(void* rec, NSString* label) {
+    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+        return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
+    }
+    return recorder_profiled_compute_encoder(recorder_profile(rec), label);
+}
+
+static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
+recorder_unary_encoder(void* rec, int op) {
+    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+        return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
+    }
+    NSString* label = @"unary.unknown";
+    switch (op) {
+        case 0: label = @"unary.neg"; break;
+        case 1: label = @"unary.exp"; break;
+        case 2: label = @"unary.log"; break;
+        case 3: label = @"unary.tanh"; break;
+        case 4: label = @"unary.relu"; break;
+        case 5: label = @"unary.sigmoid"; break;
+        case 6: label = @"unary.silu"; break;
+        case 7: label = @"unary.sqrt"; break;
+        case 8: label = @"unary.abs"; break;
+        case 9: label = @"unary.gelu"; break;
+    }
+    return recorder_compute_encoder(rec, label);
+}
+
+static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
+recorder_binary_encoder(void* rec, int op) {
+    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+        return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
+    }
+    NSString* label = @"binary.unknown";
+    switch (op) {
+        case 0: label = @"binary.add"; break;
+        case 1: label = @"binary.sub"; break;
+        case 2: label = @"binary.mul"; break;
+        case 3: label = @"binary.div"; break;
+        case 4: label = @"binary.max"; break;
+        case 5: label = @"binary.min"; break;
+        case 6: label = @"binary.swiglu"; break;
+    }
+    return recorder_compute_encoder(rec, label);
+}
+
+static inline __attribute__((always_inline)) id<MTLBlitCommandEncoder>
+recorder_blit_encoder(void* rec, NSString* label) {
+    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+        return [(__bridge id<MTLCommandBuffer>)rec blitCommandEncoder];
+    }
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    id<MTLCommandBuffer> cmd = p.commandBuffer;
+    if (p.nextEvent >= p.maxEvents) {
+        p.omittedOverflow++;
+        return [cmd blitCommandEncoder];
+    }
+    NSUInteger sample = p.nextEvent * 2;
+    MTLBlitPassDescriptor* pass = [MTLBlitPassDescriptor blitPassDescriptor];
+    MTLBlitPassSampleBufferAttachmentDescriptor* attachment = pass.sampleBufferAttachments[0];
+    attachment.sampleBuffer = p.sampleBuffer;
+    attachment.startOfEncoderSampleIndex = sample;
+    attachment.endOfEncoderSampleIndex = sample + 1;
+    id<MTLBlitCommandEncoder> enc = [cmd blitCommandEncoderWithDescriptor:pass];
+    if (enc == nil) {
+        p.omittedUnsupported++;
+        return [cmd blitCommandEncoder];
+    }
+    [p.labels addObject:label];
+    p.nextEvent++;
+    return enc;
+}
+
+static void recorder_note_mps_omission(void* rec) {
+    if (recorder_is_profiled(rec)) recorder_profile(rec).omittedMPS++;
+}
+
+static void recorder_complete_profile(void* rec, BOOL completed) {
+    if (!recorder_is_profiled(rec)) return;
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    p.completed = completed;
+    if (!completed) return;
+    MTLTimestamp cpuEnd = 0;
+    MTLTimestamp gpuEnd = 0;
+    [gDevice sampleTimestamps:&cpuEnd gpuTimestamp:&gpuEnd];
+    if ((uint64_t)cpuEnd > p.cpuTimestampStart && (uint64_t)gpuEnd > p.gpuTimestampStart) {
+        p.cpuTimestampSpan = (uint64_t)cpuEnd - p.cpuTimestampStart;
+        p.gpuTimestampSpan = (uint64_t)gpuEnd - p.gpuTimestampStart;
+    }
+}
+
+static int recorder_resolve_profile(GOAIMetalProfilingRecorder* p) {
+    if (!p.completed) return -9;
+    if (p.resolved) return 0;
+    if (p.cpuTimestampSpan == 0 || p.gpuTimestampSpan == 0) return -10;
+    p.resolved = YES;
+    if (p.nextEvent == 0) {
+        p.resolvedData = [NSData data];
+        p.validEventIndices = @[];
+        return 0;
+    }
+    NSData* data = [p.sampleBuffer resolveCounterRange:NSMakeRange(0, p.nextEvent * 2)];
+    if (data == nil || data.length < p.nextEvent * 2 * sizeof(MTLCounterResultTimestamp)) {
+        p.omittedUnsupported += p.nextEvent;
+        p.resolvedData = [NSData data];
+        p.validEventIndices = @[];
+        return 0;
+    }
+    const MTLCounterResultTimestamp* samples = data.bytes;
+    NSMutableArray<NSNumber*>* valid = [NSMutableArray arrayWithCapacity:p.nextEvent];
+    for (NSUInteger i = 0; i < p.nextEvent; i++) {
+        uint64_t start = samples[2*i].timestamp;
+        uint64_t end = samples[2*i+1].timestamp;
+        if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start) {
+            p.omittedUnsupported++;
+        } else {
+            [valid addObject:@(i)];
+        }
+    }
+    p.resolvedData = data;
+    p.validEventIndices = valid;
+    return 0;
 }
 
 // ---- process-wide buffer pool (§T336, twin of the Vulkan pool §T335) --------
@@ -318,13 +527,12 @@ int mtl_recorder_rope2(void* rec, void* qh, void* invh,
                        int hd, int half, int posOffset, float posDiv) {
     if (rec == NULL || qh == NULL || invh == NULL) return -2;
     if (ensure_rope2() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     int P[9] = {seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset};
     float F[1] = {posDiv};
     int total = seq * (headsQ + headsK) * half;
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rope_pair");
     [enc setComputePipelineState:gRoPE2];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:ib offset:0 atIndex:1];
@@ -1816,7 +2024,11 @@ static int q3k_cooperative_enabled(void);
 static int q4k_cooperative_enabled(void);
 static int q5k_cooperative_enabled(void);
 static int q6k_cooperative_enabled(void);
-static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ2KCooperative, gQMatMulQ3K, gQMatMulQ3KCooperative, gQMatMulQ4K, gQMatMulQ4KCooperative, gQMatMulQ5K, gQMatMulQ5KCooperative, gQMatMulQ6K, gQMatMulQ6KCooperative;
+static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ2KCooperative,
+    gQMatMulQ3K, gQMatMulQ3KCooperative,
+    gQMatMulQ4K, gQMatMulQ4KCooperative,
+    gQMatMulQ5K, gQMatMulQ5KCooperative,
+    gQMatMulQ6K, gQMatMulQ6KCooperative;
 
 // Device-resident quantized weights: upload a weight blob into a retained MTLBuffer once and
 // reuse it across many matmuls (§T153). ARC bridging keeps the buffer alive past the call.
@@ -1895,16 +2107,98 @@ void* mtl_recorder_begin(void) {
     return (__bridge_retained void*)cmd; // retained until finish/free
 }
 
+void* mtl_recorder_begin_profile(int maxEvents) {
+    if (maxEvents < 1 || maxEvents > 2048 || mtl_recorder_profile_support() != 0) return NULL;
+    id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+    if (cmd == nil) return NULL;
+    MTLCounterSampleBufferDescriptor* desc = [[MTLCounterSampleBufferDescriptor alloc] init];
+    desc.counterSet = timestamp_counter_set();
+    desc.label = @"goai.recorder.encoder-timestamps";
+    desc.storageMode = MTLStorageModeShared;
+    desc.sampleCount = (NSUInteger)maxEvents * 2;
+    NSError* error = nil;
+    id<MTLCounterSampleBuffer> samples = [gDevice newCounterSampleBufferWithDescriptor:desc error:&error];
+    if (samples == nil) return NULL;
+
+    GOAIMetalProfilingRecorder* p = [[GOAIMetalProfilingRecorder alloc] init];
+    p.commandBuffer = cmd;
+    p.sampleBuffer = samples;
+    p.labels = [NSMutableArray arrayWithCapacity:(NSUInteger)maxEvents];
+    p.maxEvents = (NSUInteger)maxEvents;
+    MTLTimestamp cpuStart = 0;
+    MTLTimestamp gpuStart = 0;
+    [gDevice sampleTimestamps:&cpuStart gpuTimestamp:&gpuStart];
+    p.cpuTimestampStart = (uint64_t)cpuStart;
+    p.gpuTimestampStart = (uint64_t)gpuStart;
+    void* raw = (__bridge_retained void*)p;
+    if (((uintptr_t)raw & kProfilingRecorderTag) != 0) {
+        GOAIMetalProfilingRecorder* release = (__bridge_transfer GOAIMetalProfilingRecorder*)raw;
+        (void)release;
+        return NULL;
+    }
+    return (void*)((uintptr_t)raw | kProfilingRecorderTag);
+}
+
+int mtl_recorder_profile_summary(void* rec, int* eventCount, int* omittedMPS,
+                                 int* omittedOverflow, int* omittedUnsupported,
+                                 unsigned long long* timestampFrequency,
+                                 unsigned long long* commandDurationNS) {
+    if (!recorder_is_profiled(rec)) return -8;
+    if (eventCount == NULL || omittedMPS == NULL || omittedOverflow == NULL ||
+        omittedUnsupported == NULL || timestampFrequency == NULL || commandDurationNS == NULL) return -2;
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    int rc = recorder_resolve_profile(p);
+    if (rc != 0) return rc;
+    *eventCount = (int)p.validEventIndices.count;
+    *omittedMPS = (int)p.omittedMPS;
+    *omittedOverflow = (int)p.omittedOverflow;
+    *omittedUnsupported = (int)p.omittedUnsupported;
+    *timestampFrequency = (unsigned long long)(((__uint128_t)p.gpuTimestampSpan * 1000000000ULL) /
+                                                p.cpuTimestampSpan);
+    CFTimeInterval commandSeconds = p.commandBuffer.GPUEndTime - p.commandBuffer.GPUStartTime;
+    *commandDurationNS = commandSeconds > 0 ? (unsigned long long)(commandSeconds * 1000000000.0) : 0;
+    return 0;
+}
+
+int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapacity,
+                               unsigned long long* startOffsetNS,
+                               unsigned long long* ticks, unsigned long long* durationNS) {
+    if (!recorder_is_profiled(rec)) return -8;
+    if (index < 0 || label == NULL || labelCapacity < 1 || startOffsetNS == NULL ||
+        ticks == NULL || durationNS == NULL) return -2;
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    int rc = recorder_resolve_profile(p);
+    if (rc != 0) return rc;
+    if ((NSUInteger)index >= p.validEventIndices.count) return -2;
+    NSUInteger physical = p.validEventIndices[(NSUInteger)index].unsignedIntegerValue;
+    NSUInteger firstPhysical = p.validEventIndices[0].unsignedIntegerValue;
+    const MTLCounterResultTimestamp* samples = p.resolvedData.bytes;
+    uint64_t origin = samples[2*firstPhysical].timestamp;
+    uint64_t start = samples[2*physical].timestamp;
+    uint64_t end = samples[2*physical+1].timestamp;
+    uint64_t delta = end - start;
+    NSString* eventLabel = p.labels[physical];
+    const char* utf8 = eventLabel.UTF8String;
+    if (utf8 == NULL) utf8 = "";
+    strncpy(label, utf8, (size_t)labelCapacity - 1);
+    label[labelCapacity - 1] = '\0';
+    *startOffsetNS = (unsigned long long)(((__uint128_t)(start - origin) * p.cpuTimestampSpan) /
+                                           p.gpuTimestampSpan);
+    *ticks = (unsigned long long)delta;
+    *durationNS = (unsigned long long)(((__uint128_t)delta * p.cpuTimestampSpan) /
+                                       p.gpuTimestampSpan);
+    return 0;
+}
+
 // mtl_recorder_unary encodes O = f(op, X) over n f32 elements of the device buffers
 // xh, oh (may alias) into the recorder's command buffer. No commit.
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
     if (rec == NULL || xh == NULL || oh == NULL) return -2;
     if (ensure_unary() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_unary_encoder(rec, op);
     [enc setComputePipelineState:gUnary];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
@@ -1922,11 +2216,10 @@ int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
 // default hazard tracking orders a preceding compute write before this copy. No commit.
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes) {
     if (rec == NULL || srcH == NULL || dstH == NULL || nbytes <= 0) return -2;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> sb = (__bridge id<MTLBuffer>)srcH;
     id<MTLBuffer> db = (__bridge id<MTLBuffer>)dstH;
     if ((NSUInteger)(srcOff + nbytes) > sb.length || (NSUInteger)(dstOff + nbytes) > db.length) return -2;
-    id<MTLBlitCommandEncoder> enc = [cmd blitCommandEncoder];
+    id<MTLBlitCommandEncoder> enc = recorder_blit_encoder(rec, @"blit");
     [enc copyFromBuffer:sb sourceOffset:(NSUInteger)srcOff toBuffer:db destinationOffset:(NSUInteger)dstOff size:(NSUInteger)nbytes];
     [enc endEncoding];
     return 0;
@@ -1941,13 +2234,12 @@ int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
                         void* dstH, int dstOff, int dstStride, int rows, int rowFloats) {
     if (rec == NULL || srcH == NULL || dstH == NULL || rows < 1 || rowFloats < 1 ||
         srcOff < 0 || dstOff < 0 || srcStride < rowFloats || dstStride < rowFloats) return -2;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> sb = (__bridge id<MTLBuffer>)srcH;
     id<MTLBuffer> db = (__bridge id<MTLBuffer>)dstH;
     NSUInteger sEnd = ((NSUInteger)srcOff + (NSUInteger)(rows-1)*srcStride + rowFloats) * 4;
     NSUInteger dEnd = ((NSUInteger)dstOff + (NSUInteger)(rows-1)*dstStride + rowFloats) * 4;
     if (sEnd > sb.length || dEnd > db.length) return -2;
-    id<MTLBlitCommandEncoder> enc = [cmd blitCommandEncoder];
+    id<MTLBlitCommandEncoder> enc = recorder_blit_encoder(rec, @"copy2d");
     for (int r = 0; r < rows; r++) {
         [enc copyFromBuffer:sb sourceOffset:((NSUInteger)srcOff + (NSUInteger)r*srcStride)*4
                    toBuffer:db destinationOffset:((NSUInteger)dstOff + (NSUInteger)r*dstStride)*4
@@ -1962,12 +2254,11 @@ int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) {
     if (rec == NULL || ah == NULL || bh == NULL || oh == NULL) return -2;
     if (ensure_binary() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> ab = (__bridge id<MTLBuffer>)ah;
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_binary_encoder(rec, op);
     [enc setComputePipelineState:gBinary];
     [enc setBuffer:ab offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
@@ -1990,7 +2281,7 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
                         int accumulate) {
     if (rec == NULL || ah == NULL || bh == NULL || ch == NULL) return -2;
     if (ensure_init() != 0) return -1;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     id<MTLBuffer> aBuf = (__bridge id<MTLBuffer>)ah;
     id<MTLBuffer> bBuf = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> cBuf = (__bridge id<MTLBuffer>)ch;
@@ -2006,6 +2297,7 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
         initWithDevice:gDevice transposeLeft:NO transposeRight:NO
         resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:(accumulate != 0 ? 1.0 : 0.0)];
     [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+    recorder_note_mps_omission(rec);
     return 0;
 }
 
@@ -2297,13 +2589,12 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps) {
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps) {
     if (rec == NULL || xh == NULL || gh == NULL || oh == NULL) return -2;
     if (ensure_rmsnorm() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> gb = (__bridge id<MTLBuffer>)gh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
     float E[1] = {eps};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rmsnorm");
     [enc setComputePipelineState:gRMSNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
@@ -2321,14 +2612,13 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
 int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps) {
     if (rec == NULL || xh == NULL || gh == NULL || bh == NULL || oh == NULL) return -2;
     if (ensure_layernorm() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> gb = (__bridge id<MTLBuffer>)gh;
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
     float E[1] = {eps};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"layernorm");
     [enc setComputePipelineState:gLayerNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
@@ -2347,12 +2637,11 @@ int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, in
 int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int n) {
     if (rec == NULL || xh == NULL || bh == NULL || oh == NULL) return -2;
     if (ensure_addbias() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, n};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"addbias");
     [enc setComputePipelineState:gAddBias];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:bb offset:0 atIndex:1];
@@ -2374,14 +2663,13 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
                       int elemOff) {
     if (rec == NULL || qh == NULL || invh == NULL || oh == NULL || elemOff < 0) return -2;
     if (ensure_rope() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> ib = (__bridge id<MTLBuffer>)invh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, width, heads, hd, half, posOffset};
     float F[1] = {posDiv};
     int total = seq * heads * half;
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rope");
     [enc setComputePipelineState:gRoPE];
     // elemOff is a float-element offset into Q AND O (the fused-QKV sub-row view, §T613);
     // Metal buffer-bind offsets are bytes with 4-byte alignment for float — no shader change.
@@ -2401,20 +2689,22 @@ static double gLastGPUSeconds = 0.0;
 
 int mtl_recorder_finish(void* rec) {
     if (rec == NULL) return -2;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     [cmd commit];
     [cmd waitUntilCompleted];
     // Same GPU-time capture as mtl_recorder_wait. Prefill submits through THIS entry point, not
     // commit+wait, so without this LastGPUSeconds silently reports 0 for every prefill.
     gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
-    return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
+    BOOL completed = cmd.status == MTLCommandBufferStatusCompleted;
+    recorder_complete_profile(rec, completed);
+    return completed ? 0 : -4;
 }
 
 // mtl_recorder_commit submits without waiting — the SPEC T614 encode-overlap split: the host
 // encodes the NEXT step's command buffer while this one executes. Pair with mtl_recorder_wait.
 int mtl_recorder_commit(void* rec) {
     if (rec == NULL) return -2;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     [cmd commit];
     return 0;
 }
@@ -2424,15 +2714,23 @@ double mtl_last_gpu_seconds(void) { return gLastGPUSeconds; }
 
 int mtl_recorder_wait(void* rec) {
     if (rec == NULL) return -2;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     [cmd waitUntilCompleted];
     gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
-    return cmd.status == MTLCommandBufferStatusCompleted ? 0 : -4;
+    BOOL completed = cmd.status == MTLCommandBufferStatusCompleted;
+    recorder_complete_profile(rec, completed);
+    return completed ? 0 : -4;
 }
 
 void mtl_recorder_free(void* rec) {
     if (rec == NULL) return;
-    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)rec; // ARC releases
+    if (recorder_is_profiled(rec)) {
+        void* raw = (void*)((uintptr_t)rec & ~kProfilingRecorderTag);
+        GOAIMetalProfilingRecorder* p = (__bridge_transfer GOAIMetalProfilingRecorder*)raw;
+        (void)p;
+        return;
+    }
+    id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)rec;
     (void)cmd;
 }
 
@@ -2856,10 +3154,9 @@ int mtl_recorder_flash_mm(void* rec, void* qh, void* kh, void* vh, void* oh,
                           int sq, int sk, int dm, int heads, int kvHeads, int causal, float scale) {
     if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL) return -2;
     if (ensure_flash_mm() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     int P[7] = {sq, sk, dm, heads, kvHeads, 64, causal};
     float FP[1] = {scale};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"mha.flash_mm");
     [enc setComputePipelineState:gFlashMM];
     [enc setBuffer:(__bridge id<MTLBuffer>)qh offset:0 atIndex:0];
     [enc setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
@@ -3142,10 +3439,11 @@ static id<MTLBuffer> f16_scratch(__strong id<MTLBuffer>* slot, size_t* len, size
     return *slot;
 }
 
-static void encode_cvt(id<MTLCommandBuffer> cmd, id<MTLComputePipelineState> pipe,
-                       id<MTLBuffer> in, id<MTLBuffer> out, int n) {
+static void recorder_encode_cvt(void* rec, id<MTLComputePipelineState> pipe,
+                                id<MTLBuffer> in, id<MTLBuffer> out, int n,
+                                NSString* profileLabel) {
     int P[1] = {n};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, profileLabel);
     [enc setComputePipelineState:pipe];
     [enc setBuffer:in offset:0 atIndex:0];
     [enc setBuffer:out offset:0 atIndex:1];
@@ -3159,8 +3457,9 @@ static void encode_cvt(id<MTLCommandBuffer> cmd, id<MTLComputePipelineState> pip
 // mtl_recorder_matmul_f16 encodes C = A*B with all three matrices f16. MPSMatrixMultiplication
 // requires a single data type across the operands, so the activations are converted in and the
 // result converted out by the caller.
-static int recorder_matmul_f16(id<MTLCommandBuffer> cmd, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf,
+static int recorder_matmul_f16(void* rec, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf,
                                id<MTLBuffer> cBuf, int M, int K, int N) {
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     size_t es = sizeof(uint16_t);
     MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:MPSDataTypeFloat16];
     MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)N*es dataType:MPSDataTypeFloat16];
@@ -3172,6 +3471,7 @@ static int recorder_matmul_f16(id<MTLCommandBuffer> cmd, id<MTLBuffer> aBuf, id<
         initWithDevice:gDevice transposeLeft:NO transposeRight:NO
         resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
     [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+    recorder_note_mps_omission(rec);
     return 0;
 }
 
@@ -3244,11 +3544,11 @@ static int q4k_dq_gemm_f16_eligible(int M, int K, int N, int qt) {
 int mtl_recorder_dequant_qk(void* rec, void* wbuf, void* oh, int K, int N, int qt) {
     if (rec == NULL || wbuf == NULL || oh == NULL) return -2;
     if (ensure_dequant_q4k() != 0) return -6;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {K, N};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    NSString* profileLabel = (qt == 14) ? @"dequant.q6_k" : @"dequant.q4_k";
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, profileLabel);
     [enc setComputePipelineState:(qt == 14) ? gDequantQ6K : gDequantQ4K];
     [enc setBuffer:wb offset:0 atIndex:0];
     [enc setBuffer:ob offset:0 atIndex:1];
@@ -3444,21 +3744,21 @@ double mtl_probe_encoder_cost(int n, int per, int reps) {
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
+    NSString* profileLabel = nil;
     int cooperative = 0;
     // Rows an enabled cooperative threadgroup covers: Q4_K/Q6_K put 2 rows on each of
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
     int coopRows = 4;
     switch (qtype) {
-        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
-        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
-        case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
-        case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
-        case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
-        case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; profileLabel = @"qmatmul.q4_0"; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
+        case 8:  if (ensure_qmatmul_q8()  != 0) return -6; profileLabel = @"qmatmul.q8_0"; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8; break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; profileLabel = @"qmatmul.q2_k"; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 11: if (ensure_qmatmul_q3k() != 0) return -6; profileLabel = @"qmatmul.q3_k"; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
+        case 12: if (ensure_qmatmul_q4k() != 0) return -6; profileLabel = @"qmatmul.q4_k"; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
+        case 13: if (ensure_qmatmul_q5k() != 0) return -6; profileLabel = @"qmatmul.q5_k"; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ5KCooperative : gQMatMulQ5K; break;
+        case 14: if (ensure_qmatmul_q6k() != 0) return -6; profileLabel = @"qmatmul.q6_k"; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
         default: return -7;
     }
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> wb = (__bridge id<MTLBuffer>)wbuf; // resident, not owned here
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
@@ -3476,7 +3776,8 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         if (wS != nil && xS != nil && oS != nil) {
             if (needsFill) {
                 int Pd[2] = {K, N};
-                id<MTLComputeCommandEncoder> de = [cmd computeCommandEncoder];
+                NSString* dequantLabel = (qtype == 14) ? @"dequant.q6_k.f16" : @"dequant.q4_k.f16";
+                id<MTLComputeCommandEncoder> de = recorder_compute_encoder(rec, dequantLabel);
                 [de setComputePipelineState:(qtype == 14) ? gDequantQ6KH : gDequantQ4KH];
                 [de setBuffer:wb offset:0 atIndex:0];
                 [de setBuffer:wS offset:0 atIndex:1];
@@ -3484,9 +3785,9 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
                 [de dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
                 [de endEncoding];
             }
-            encode_cvt(cmd, gCvtF32ToH, xb, xS, M*K);
-            recorder_matmul_f16(cmd, xS, wS, oS, M, K, N);
-            encode_cvt(cmd, gCvtHToF32, oS, ob, M*N);
+            recorder_encode_cvt(rec, gCvtF32ToH, xb, xS, M*K, @"convert.f32_to_f16");
+            recorder_matmul_f16(rec, xS, wS, oS, M, K, N);
+            recorder_encode_cvt(rec, gCvtHToF32, oS, ob, M*N, @"convert.f16_to_f32");
             return 0;
         }
         // fall through to the f32 path if scratch could not be allocated
@@ -3505,7 +3806,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     }
     // Matrix-unit prototype (disabled by default; see the note on gQ4KMMEnabled).
     if (q4k_mm_eligible(M, K, qtype)) {
-        id<MTLComputeCommandEncoder> me = [cmd computeCommandEncoder];
+        id<MTLComputeCommandEncoder> me = recorder_compute_encoder(rec, @"qmatmul.q4_k.matrix_unit");
         [me setComputePipelineState:gQ4KMM];
         [me setBuffer:xb offset:0 atIndex:0];
         [me setBuffer:wb offset:0 atIndex:1];
@@ -3515,7 +3816,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         [me endEncoding];
         return 0;
     }
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, profileLabel);
     [enc setComputePipelineState:pipe];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:wb offset:0 atIndex:1];
@@ -4914,10 +5215,9 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
             gSplitKPartLen = (gSplitKPart != nil) ? need : 0;
         }
         if (gSplitKPart != nil) {
-            id<MTLCommandBuffer> scmd = (__bridge id<MTLCommandBuffer>)rec;
             int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
             float SFP[1] = {scale};
-            id<MTLComputeCommandEncoder> e1 = [scmd computeCommandEncoder];
+            id<MTLComputeCommandEncoder> e1 = recorder_compute_encoder(rec, @"mha.decode.splitk.pass1");
             [e1 setComputePipelineState:(gSplitKQuad && gSplitKP1Q != nil) ? gSplitKP1Q : ((gSplitKHalf && gSplitKP1H != nil) ? gSplitKP1H : gSplitKP1)];
             [e1 setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
             [e1 setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
@@ -4927,7 +5227,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
             [e1 setBytes:SFP length:sizeof(SFP) atIndex:5];
             [e1 dispatchThreadgroups:MTLSizeMake(heads,nchunk,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
             [e1 endEncoding];
-            id<MTLComputeCommandEncoder> e2 = [scmd computeCommandEncoder];
+            id<MTLComputeCommandEncoder> e2 = recorder_compute_encoder(rec, @"mha.decode.splitk.pass2");
             [e2 setComputePipelineState:gSplitKP2];
             [e2 setBuffer:gSplitKPart offset:0 atIndex:0];
             [e2 setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:1];
@@ -4939,14 +5239,13 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     }
     if (window == 0 && dk <= 128 && (causal != 0 || sq == 1)) {
         if (ensure_mha_decode() != 0) return -5;
-        id<MTLCommandBuffer> dcmd = (__bridge id<MTLCommandBuffer>)rec;
         id<MTLBuffer> dqb = (__bridge id<MTLBuffer>)qh;
         id<MTLBuffer> dkb = (__bridge id<MTLBuffer>)kh;
         id<MTLBuffer> dvb = (__bridge id<MTLBuffer>)vh;
         id<MTLBuffer> dob = (__bridge id<MTLBuffer>)oh;
         int DP[7] = {sq, sk, dm, heads, kvHeads, dk, causal};
         float DFP[1] = {scale};
-        id<MTLComputeCommandEncoder> denc = [dcmd computeCommandEncoder];
+        id<MTLComputeCommandEncoder> denc = recorder_compute_encoder(rec, @"mha.decode");
         id<MTLComputePipelineState> dpipe = gMHADecode;
         if (dk == 64 && gMHADecode64 != nil) dpipe = gMHADecode64;
         else if (dk == 128 && gMHADecode128 != nil) dpipe = gMHADecode128;
@@ -4963,14 +5262,13 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         return 0;
     }
     if (ensure_mha() != 0) return -5;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> kb = (__bridge id<MTLBuffer>)kh;
     id<MTLBuffer> vb = (__bridge id<MTLBuffer>)vh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[8] = {sq, sk, dm, heads, kvHeads, dk, causal, window};
     float FP[1] = {scale};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"mha");
     [enc setComputePipelineState:(dk == 64 && gMHA64 != nil) ? gMHA64 : gMHA];
     [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];
@@ -5141,14 +5439,13 @@ int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
                            int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale) {
     if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL) return -2;
     if (ensure_flashattn() != 0) return -5;
-    id<MTLCommandBuffer> cmd = (__bridge id<MTLCommandBuffer>)rec;
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> kb = (__bridge id<MTLBuffer>)kh;
     id<MTLBuffer> vb = (__bridge id<MTLBuffer>)vh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[6] = {seq, dm, heads, dk, causal, kvHeads};
     float FP[1] = {scale};
-    id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"flashattn");
     [enc setComputePipelineState:(dk == 64 && gFlashAttn64 != nil) ? gFlashAttn64 : gFlashAttn];
     [enc setBuffer:qb offset:0 atIndex:0];
     [enc setBuffer:kb offset:0 atIndex:1];

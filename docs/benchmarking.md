@@ -2284,3 +2284,61 @@ non-vacuous by mutation (swapping the window source offset turns it red).
 `copyRows` grew a `copyRowsFrom` sibling that takes a source offset; the original
 now delegates to it. It returns false for dtypes it cannot move verbatim, so the
 generic per-element fallback is preserved for those.
+
+## M2 Metal per-encoder timestamp profiler (2026-08-17)
+
+The production quantized decoder now has an opt-in attribution path for one
+ordinary Metal command buffer. `Decoder.ProfileMetalStep` runs the same recorder
+operation sequence as `Step`, but asks Metal for timestamp samples at each custom
+compute or blit encoder boundary. The default `NewRecorder` path stays unprofiled.
+Callers can use `metal.RecorderProfilingAvailable` to distinguish general Metal
+availability from stage-boundary timestamp support before entering this optional
+diagnostic path.
+
+The profile is deliberately honest about work it cannot attribute. Metal
+Performance Shaders (MPS) owns the internal encoders for dense matrix multiplies,
+so those calls increment `OmittedMPS`; a full counter buffer increments
+`OmittedOverflow`; rejected or invalid samples increment
+`OmittedUnsupported`. The stage-correlation analyzer refuses an incomplete
+sidecar rather than silently assigning unattributed time to neighboring kernels.
+
+On the physical M2 Pro, one position-1 TinyLlama-1.1B Q4_K_M decode produced 340
+events with zero omissions. Explicit encoder durations covered 7.771 ms of a
+9.268 ms command buffer (83.85%), and the first-to-last event span matched the
+command interval within one nanosecond. The largest groups were Q4_K matmul at
+4.781 ms (61.52%), Q6_K matmul at 1.246 ms (16.04%), decode attention at 0.608 ms
+(7.82%), and RMSNorm at 0.513 ms (6.59%). Profiled and ordinary logits were
+bit-exact. Absolute durations vary with GPU state; the trace is retained as one
+attribution sample, not a stable throughput claim.
+
+The instrumentation is not advertised as a speed improvement. Ten fresh-process,
+order-alternating host-only pairs measured the disabled path at 18.70 us/op for
+current main and 18.56 us/op with the profiler available (`p=0.739`, unchanged
+8 B/op and one allocation). The benchmark covers recorder creation, 32 encoder
+constructions, and release without GPU execution, isolating the branch cost that
+optional profiling adds.
+
+Two carried fusion candidates were rejected during the same current-main
+revalidation. Residual add plus RMSNorm was 0.992x and changed the exact all-logit
+digest; Q4_K gate/up plus SwiGLU was exact but 0.985x after disabling the invalid
+residual path. The earlier apparent 2.84x result included an obsolete physical-
+capacity elementwise dispatch; current main already uses the logical active extent
+through `BinaryN`. None of those fusion APIs or kernels is promoted.
+
+The compact raw samples, `benchstat` result, profile output, and reproduction
+commands live in
+`internal/benchcompare/leadership/evidence/m2-metal-profiler-current-main-20260817`.
+For a counter-correlated trace, run:
+
+```sh
+TINYLLAMA_GGUF=/absolute/path/to/tinyllama-1.1b-q4km.gguf \
+  go run ./internal/benchcompare/metalcounters \
+  -package ./internal/benchcompare \
+  -benchmark '^BenchmarkProdMetalProfiledDecodeGGUF$' \
+  -iterations 1 -buffers-per-iteration 1 -stage-profile \
+  -require-exclusive-gpu-window
+```
+
+Further reading: Apple, *Counter sampling with Metal* and Xcode GPU profiling;
+Go's `benchstat` documentation for repeated-sample comparison. The repository
+contract is `PERF-M2-METAL-PROFILER-002`.

@@ -1,0 +1,25 @@
+=== RUN   TestProdMetalEncoderProfile
+METAL_ENCODER_PROFILE model=tinyllama-1.1b-q4km.gguf dim=2048 hidden=5632 layers=22 events=340 frequency_hz=1000000000 event_total=7.771132ms event_span=9.26775ms command=9.267749ms coverage=0.8385 logits_sha256=ba3f80fb5d233fe0c8fb9fbbefa132de0bc84e2f1bc1806ca8f434b349d80ab3
+METAL_ENCODER_PROFILE rank=1 label=qmatmul.q4_k count=110 total=4.780585ms share=0.6152
+METAL_ENCODER_PROFILE rank=2 label=qmatmul.q6_k count=21 total=1.246293ms share=0.1604
+METAL_ENCODER_PROFILE rank=3 label=mha.decode count=22 total=607.876us share=0.0782
+METAL_ENCODER_PROFILE rank=4 label=rmsnorm count=45 total=512.501us share=0.0659
+METAL_ENCODER_PROFILE rank=5 label=binary.add count=44 total=233.293us share=0.0300
+METAL_ENCODER_PROFILE rank=6 label=binary.swiglu count=22 total=114.331us share=0.0147
+METAL_ENCODER_PROFILE rank=7 label=rope count=20 total=108.584us share=0.0140
+METAL_ENCODER_PROFILE rank=8 label=blit count=44 total=86.129us share=0.0111
+METAL_ENCODER_PROFILE rank=9 label=rope_pair count=12 total=81.54us share=0.0105
+--- PASS: TestProdMetalEncoderProfile
+PASS
+
+One-shot sidecar benchmark:
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/benchcompare
+cpu: Apple M2 Pro
+BenchmarkProdMetalProfiledDecodeGGUF-12    1    12697375 ns/op    207664 B/op    1373 allocs/op
+
+Sidecar identity: version=1, logits_sha256=86985e26eaadd8dbe67f1f1ceb02767d2c3a15d5751cf62da560c83a6208a852,
+events=340, command_duration_ns=9146000, event_span_ns=9146000,
+omitted_mps=0, omitted_overflow=0, omitted_unsupported=0.

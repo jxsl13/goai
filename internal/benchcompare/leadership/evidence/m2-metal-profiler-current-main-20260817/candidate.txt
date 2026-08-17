@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18818 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    19257 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18633 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18382 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18050 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18938 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18321 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18743 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18394 ns/op    8 B/op    1 allocs/op
+BenchmarkMetalRecorderDisabledOverhead-10    10000    18477 ns/op    8 B/op    1 allocs/op

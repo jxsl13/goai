@@ -20,6 +20,14 @@ type mBuf struct{ *metal.DeviceBuffer }
 
 type mRec struct{ r *metal.Recorder }
 
+// mProfileRec is used only by ProfileMetalStep. It captures the completed recorder before the
+// normal Step lifecycle frees it; embedding mRec keeps the production adapter and operation set
+// identical.
+type mProfileRec struct {
+	mRec
+	profile *metal.RecorderProfile
+}
+
 func (m mRec) RMSNorm(x, g, o buffer, rows, dim int, eps float32) error {
 	return m.r.RMSNorm(mb(x), mb(g), mb(o), rows, dim, eps)
 }
@@ -100,6 +108,28 @@ func (m mRec) Commit() error { return m.r.Commit() }
 func (m mRec) Wait() error   { return m.r.Wait() }
 func (m mRec) Finish() error { return m.r.Finish() }
 func (m mRec) Free()         { m.r.Free() }
+
+func (m mProfileRec) Finish() error {
+	if err := m.r.Finish(); err != nil {
+		return err
+	}
+	p, err := m.r.Profile()
+	if err == nil {
+		*m.profile = p
+	}
+	return err
+}
+
+func (m mProfileRec) Wait() error {
+	if err := m.r.Wait(); err != nil {
+		return err
+	}
+	p, err := m.r.Profile()
+	if err == nil {
+		*m.profile = p
+	}
+	return err
+}
 
 func mb(b buffer) *metal.DeviceBuffer { return b.(mBuf).DeviceBuffer }
 
@@ -189,4 +219,44 @@ func NewQuant(m *nlp.QuantLlama) (*Decoder, error) {
 		},
 		uploadQWeight: metalUploadQWeight,
 	})
+}
+
+// ProfileMetalStep runs one ordinary Decoder.Step through an opt-in Metal timestamp recorder and
+// returns both its logits and per-encoder GPU durations. It disables next-step pre-encoding for
+// this diagnostic call so exactly one command buffer is attributed, then restores the decoder's
+// production recorder factory. Any pending pre-encoded step is discarded; Decoder is already
+// documented as not safe for concurrent use.
+func (d *Decoder) ProfileMetalStep(token, pos, maxEvents int) ([]float32, metal.RecorderProfile, error) {
+	if d.ops.name != string(backend.Metal) {
+		return nil, metal.RecorderProfile{}, fmt.Errorf("llamagpu: ProfileMetalStep requires the Metal backend, got %s", d.ops.name)
+	}
+	if pos < 0 || pos >= d.maxLen {
+		return nil, metal.RecorderProfile{}, fmt.Errorf("llamagpu(%s): pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
+	}
+	if token < 0 || token >= d.v {
+		return nil, metal.RecorderProfile{}, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, token, d.v)
+	}
+	if maxEvents < 1 || maxEvents > 2048 {
+		return nil, metal.RecorderProfile{}, fmt.Errorf("llamagpu: ProfileMetalStep maxEvents=%d outside [1,2048]", maxEvents)
+	}
+	d.dropPending()
+	oldNewRecorder, oldAsyncEncode := d.ops.newRecorder, d.ops.asyncEncode
+	defer func() {
+		d.ops.newRecorder = oldNewRecorder
+		d.ops.asyncEncode = oldAsyncEncode
+	}()
+	var profile metal.RecorderProfile
+	d.ops.newRecorder = func() (recorder, error) {
+		r, err := metal.NewProfilingRecorder(maxEvents)
+		if err != nil {
+			return nil, err
+		}
+		return mProfileRec{mRec: mRec{r: r}, profile: &profile}, nil
+	}
+	d.ops.asyncEncode = false
+	logits, err := d.Step(token, pos)
+	if err != nil {
+		return nil, metal.RecorderProfile{}, err
+	}
+	return logits, profile, nil
 }
