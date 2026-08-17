@@ -26,6 +26,7 @@ kind: task
 state: draft
 created: 2026-08-17
 parent: P-01M08TT3TTE7ZBJCE64TC94G5C
+grilled: 2026-08-17 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/q4k_mm_parity_test.go, backend/metal/q4k_mm_crossover_test.go
 
 Replace the disabled qmatmul_q4k_mm experiment with a faithful GoAI-oriented adaptation of the pinned llama.cpp b10450 legacy Q4_K matrix-matrix geometry: output tile M=32 rows by N=64 channels, K=32 iteration, four simdgroups, 4096-byte half Q4_K weight staging, 2048-byte half f32-input staging, eight float accumulators per simdgroup, direct full-tile f32 stores, and guarded partial-tile writeback. Preserve Q4_K block bytes and dequantization semantics, row-major X[M,K], W[N,K], O[M,N], the public test toggle, and all production selectors for the first pass.
