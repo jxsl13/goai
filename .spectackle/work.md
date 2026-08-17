@@ -3748,7 +3748,7 @@ Research R-01M08WMQ5MFDY is the consumed deliberation record. Current merged mai
 
 ## T-01M08WVXA2F6WTNZ1CRSH8Z4AG Implement and gate cached-f16 MPSGraph quant projections on M2
 kind: task
-state: draft
+state: active
 created: 2026-08-17
 parent: P-01M08WKNGEF499G77J21EQA0BB
 refs: R-01M08WMQ5MFDY8V704PG7Z81D4
