@@ -515,3 +515,4 @@
 {"t":"2026-08-17T17:51:53Z","eid":"2ff395c25dc56774","ag":"ag-4879","ev":"move","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","fr":"draft","to":"active","note":"Activated under the user standing mandate to continue measured bottom-up performance work, create PRs for gains, and merge only after successful CI."}
 {"t":"2026-08-17T17:51:53Z","eid":"0aed664d7385232a","ag":"ag-4879","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-17T17:52:23Z","eid":"e2dd05bc2461031d","ag":"ag-281f","ev":"grill","id":"T-01M08DK6KDEH5BV1PZXBNBWQEF","gr":"2026-08-17 open=1","hash":"889fa77e2f79c19a8e66d3fa185baa081ee1c33864271ef7528e834a826e7d66","open":1,"keys":["blast:10"]}
+{"t":"2026-08-17T17:52:36Z","eid":"c7f3a72e07cc5b4b","ag":"ag-089c","ev":"move","id":"T-01M08DK6KDEH5BV1PZXBNBWQEF","fr":"draft","to":"active","note":"Activated under the approved parent proposal and standing user authorization for measured performance work."}

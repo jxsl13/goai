@@ -3772,7 +3772,7 @@ On Apple M2 with Python 3.14.7, safetensors 0.8.0, NumPy 2.5.1, and the shared d
 
 ## T-01M08DK6KDEH5BV1PZXBNBWQEF Decode one safetensors tensor directly from a transient mapping
 kind: task
-state: draft
+state: active
 created: 2026-08-17
 parent: P-01M08DGE6RE54VZ0B01V2G2XHC
 refs: P-01M08DGE6RE54VZ0B01V2G2XHC, R-01M08DHP12FAQVKBDDQQB4XDGA
