@@ -3762,3 +3762,19 @@ targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, 
 Implement a Metal-only optional recorder fast path for plain quantized SwiGLU FFNs at rows>1. Reuse the existing persistent f16 weight cache; convert the normalized f32 input once; retain gate/up outputs and the SwiGLU result in half scratch; perform SwiGLU in float arithmetic while preserving the current half input/output rounding boundaries; run down directly from half; and convert only the final down result to f32 before the existing residual add. All unsupported formats, shapes, architectures, post-norm variants, and non-Metal recorders must retain the current path.
 
 Verification: Q4_K/Q6_K mixed-weight parity against the current cached-f16 sequence with explicit NaN/Inf rejection; selector mutation proof; ten alternating warm TinyLlama-shape leaf samples at rows=64 requiring >=1.10x; ten alternating fresh-decoder TinyLlama Q4_K_M pp64 pairs requiring >=1.03x median, identical greedy argmax, finite logits, unchanged steady-state allocations; controls pp128/pp512/tg64 each >=0.98x. Fully revert executable changes if any promotion gate fails.
+
+## R-01M08S3QNGFE3S1Q5T864VFTTB M2 half-resident cached-f16 FFN is exact but only 1.0348x at the full leaf seam
+kind: research
+state: draft
+created: 2026-08-17
+targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul
+
+The cross-projection cached-f16 FFN experiment was implemented and fully reverted after its first promotion gate failed.
+
+Implementation shape: convert the rows=64 normalized input f32->f16 once; run cached f16 gate and up through MPS; compute SwiGLU from half inputs in float and round directly to half; feed that half buffer into cached f16 down; convert only the final down output to f32. It did not concatenate weights, and the residual add remained outside the primitive.
+
+Correctness was non-vacuous: a mixed Q4_K gate/up plus Q6_K down fixture used finite trained-like scales; every output was checked for NaN/Inf before error aggregation; the final f32 output matched the current cached-f16 sequence exactly (maxAbs=0, maxRel=0); disabling the selector made the capability decline the same supported shape.
+
+Ten alternating warm Apple M2 samples, eight complete TinyLlama-shape FFNs per sample (M=64, D=2048, H=5632), measured baseline 1198.542 us versus half-resident 1158.206 us, only 1.0348x. Baseline/candidate ranges were 4.47%/4.76%. The predeclared 1.10x leaf gate therefore rejected the design before production benchmarking. All executable and test changes were reverted.
+
+Learning: the removed conversion and elementwise passes are too small relative to three tuned MPS GEMMs to justify cross-language recorder/cache plumbing. Future GPU residency proposals should first measure or upper-bound the aggregate removable-pass share against their promotion threshold. Generalized as jxsl13/perfscan#758.
