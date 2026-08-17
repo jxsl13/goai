@@ -3740,6 +3740,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 kind: proposal
 state: draft
 created: 2026-08-17
+refs: R-01M08WMQ5MFDY8V704PG7Z81D4
 grilled: 2026-08-17 open=1
 targets: objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.q4k_dq_gemm_f16_eligible, go:llamagpu.Decoder.stepN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/dequant_gemm_bench_test.go, internal/benchcompare/prod_decode_external_test.go
 
