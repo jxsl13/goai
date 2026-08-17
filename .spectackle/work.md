@@ -3756,6 +3756,7 @@ kind: task
 state: draft
 created: 2026-08-17
 parent: P-01M08R4T1WEX9841D28YAPRE5Q
+grilled: 2026-08-17 open=4
 targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal.go, backend/metal/metal_bridge.h
 
 Implement a Metal-only optional recorder fast path for plain quantized SwiGLU FFNs at rows>1. Reuse the existing persistent f16 weight cache; convert the normalized f32 input once; retain gate/up outputs and the SwiGLU result in half scratch; perform SwiGLU in float arithmetic while preserving the current half input/output rounding boundaries; run down directly from half; and convert only the final down result to f32 before the existing residual add. All unsupported formats, shapes, architectures, post-norm variants, and non-Metal recorders must retain the current path.
