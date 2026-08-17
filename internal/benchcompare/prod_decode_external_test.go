@@ -5,6 +5,7 @@ package benchcompare
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -45,9 +46,19 @@ func TestProdDecodeGGUF(t *testing.T) {
 	}
 	defer dec.Release()
 
-	const nGen, nProm, reps = 64, 64, 3
+	const nGen, nProm = 64, 64
+	reps := 3
+	if value := os.Getenv("GOAI_PROD_REPS"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 {
+			t.Fatalf("GOAI_PROD_REPS=%q must be a positive integer", value)
+		}
+		reps = parsed
+	}
 
-	// Sanity: the first decode step must return finite logits of the right width.
+	// llama-bench warms generation with one token, clears its logical memory,
+	// then measures positions 0..63. Re-running pos 0 overwrites this decoder's
+	// cache row, giving the same warm-boundary semantics without a cold re-upload.
 	logits, err := dec.Step(1, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -61,7 +72,7 @@ func TestProdDecodeGGUF(t *testing.T) {
 	for range reps {
 		s := time.Now()
 		for i := range nGen {
-			if _, err := dec.Step((i*7+1)%c.Vocab, 1+i); err != nil {
+			if _, err := dec.Step((i*7+1)%c.Vocab, i); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -75,13 +86,13 @@ func TestProdDecodeGGUF(t *testing.T) {
 	for i := range prompt {
 		prompt[i] = (i*13 + 1) % c.Vocab
 	}
-	if _, err := dec.StepN(prompt, 0); err != nil { // warm
+	if _, err := dec.StepNLast(prompt, 0); err != nil { // warm; llama-bench also retains only the final logits row
 		t.Fatal(err)
 	}
 	bestPp := time.Hour
 	for range reps {
 		s := time.Now()
-		if _, err := dec.StepN(prompt, 0); err != nil {
+		if _, err := dec.StepNLast(prompt, 0); err != nil {
 			t.Fatal(err)
 		}
 		if d := time.Since(s); d < bestPp {
@@ -89,7 +100,7 @@ func TestProdDecodeGGUF(t *testing.T) {
 		}
 	}
 
-	fmt.Printf("GOAI_PROD metal: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
-		nGen, float64(nGen)/bestTg.Seconds(),
+	fmt.Printf("GOAI_PROD metal kv=f32 context=0..63 reps=%d: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
+		reps, nGen, float64(nGen)/bestTg.Seconds(),
 		nProm, float64(nProm)/bestPp.Seconds())
 }

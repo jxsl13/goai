@@ -1196,39 +1196,6 @@ WHAT THIS DOES NOT SEPARATE: the 35.81 ms contains the quant matmuls AND the oth
 
 NEXT: split the 35.81 ms between quant matmul and the other KV-independent ops by observation. The cooperative on/off toggle changes ONLY the quant matmuls, so measuring GPU time (not wall time) with it on and off attributes their share in situ, without the assumed-k arithmetic that made the earlier apportionment a range.
 
-## R-01M01Q0AG0EHNAC09QEG6YDF6N Diagnosed: quant kernels are per-weight-bound, not bandwidth-bound — achieved GB/s rises with block size
-kind: research
-state: draft
-created: 2026-08-15
-
-DIAGNOSED. GoAI's quant kernels are bound by PER-WEIGHT PROCESSING, not by weight traffic. Observed, not inferred. Instrumentation reverted; nothing shipped.
-
-METHOD. Sweep WEIGHT BYTES at fixed architecture — one 6-layer TinyLlama-shaped model quantized to five types — so op count, layer count and KV length are identical and only traffic changes. GPU time read from Metal's own GPUStartTime/GPUEndTime.
-
-MEASURED, 16 generated tokens per point:
-  fmt      MB   ms/token    GB/s   B/256w   bits/weight
-  Q2_K  119.4       8.33    14.3       84          2.62
-  Q4_K  204.7       6.06    33.8      144          4.50
-  Q5_K  250.2       9.71    25.8      176          5.50
-  Q6_K  298.5       6.58    45.4      210          6.56
-  Q8_0  386.6       7.58    51.0      272          8.50
-
-TIME DOES NOT TRACK BYTES. Q2_K reads the LEAST (119 MB) and takes the LONGEST (8.33 ms); Q8_0 reads 3.2x more and is faster. A bandwidth-bound kernel cannot behave this way, so the intended linear fit (slope = bandwidth, intercept = fixed work) is not applicable — the premise is refuted by the data rather than fitted.
-
-THE PATTERN IS MONOTONIC IN BLOCK SIZE. Achieved bandwidth rises 14.3 -> 51.0 GB/s as bytes-per-256-weights rises 84 -> 272. The denser the packing, the WORSE the throughput. That is the signature of a cost paid per WEIGHT rather than per BYTE: every format decodes the same 256 weights per block, and the formats that spend more instructions doing it are slower regardless of how few bytes they read.
-
-WHY THE EARLIER ALU PROBE MISSED IT. Removing ALL of Q3_K's unpacking arithmetic was worth at most 1.08x, which ruled out the shift-and-mask math. This result is consistent with that and sharper: the per-weight cost is not the arithmetic but the load/issue pattern — one byte-granular access per weight or per few weights, where llama.cpp reads wide vectors and unpacks in registers.
-
-THE CHAIN IS NOW COMPLETE for the 7.14x gap to llama.cpp on TinyLlama-1.1B:
-  host and synchronisation          12 percent of wall, ruled out
-  submit batching                   already optimal at one command buffer per token
-  attention and KV growth           2 percent at decode lengths, ruled out
-  weight traffic                    NOT the bound — time does not scale with bytes
-  per-weight processing in the      the residual, and the only candidate left standing
-    quant matmul kernels
-
-CANDIDATE FOR THE FIRST TIME WORTH NAMING: wide loads. GoAI's kernels index the weight blob as individual uchar/byte reads; the achieved-bandwidth ordering says the cost scales with how many such accesses each weight needs. Staging a block through uint4/float4 reads and unpacking in registers is the standard remedy and is what the ordering predicts would help. It remains UNPROBED, and four candidates in this campaign have died on probe, so it should be bounded before it is built — but unlike those four it is the residual of an elimination rather than a guess.
-
 ## R-01M01Q5T70FEDTY330ERTFN7GC Wide loads bounded at 1.34x: the quant kernels are per-weight issue-bound and need vectorizing, not tuning
 kind: research
 state: draft

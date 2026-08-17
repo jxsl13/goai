@@ -232,19 +232,21 @@ type windowReport struct {
 }
 
 type report struct {
-	Version                int                 `json:"version"`
-	Scope                  string              `json:"scope"`
-	GPU                    string              `json:"gpu"`
-	CounterSet             string              `json:"counter_set"`
-	Benchmark              string              `json:"benchmark"`
-	Iterations             int                 `json:"iterations"`
-	BuffersPerIteration    int                 `json:"buffers_per_iteration"`
-	ObservedCommandBuffers int                 `json:"observed_command_buffers"`
-	SelectedCommandBuffers int                 `json:"selected_command_buffers"`
-	Window                 windowReport        `json:"window"`
-	Policy                 counterPolicyReport `json:"counter_policy"`
-	Counters               []counterReport     `json:"counters"`
-	Stage                  *stageReport        `json:"stage_profile,omitempty"`
+	Version                    int                 `json:"version"`
+	Scope                      string              `json:"scope"`
+	GPU                        string              `json:"gpu"`
+	CounterSet                 string              `json:"counter_set"`
+	Benchmark                  string              `json:"benchmark"`
+	Iterations                 int                 `json:"iterations"`
+	BuffersPerIteration        int                 `json:"buffers_per_iteration"`
+	ObservedCommandBuffers     int                 `json:"observed_command_buffers"`
+	SelectedCommandBuffers     int                 `json:"selected_command_buffers"`
+	SkippedFinalCommandBuffers int                 `json:"skipped_final_command_buffers,omitempty"`
+	Window                     windowReport        `json:"window"`
+	Policy                     counterPolicyReport `json:"counter_policy"`
+	Counters                   []counterReport     `json:"counters"`
+	Stage                      *stageReport        `json:"stage_profile,omitempty"`
+	Shader                     *shaderReport       `json:"shader_profile,omitempty"`
 }
 
 type rowDecoder struct {
@@ -297,13 +299,15 @@ func (d *rowDecoder) row(row xml.StartElement) ([]string, error) {
 }
 
 func (d *rowDecoder) element(start xml.StartElement) (string, error) {
-	var id, ref string
+	var id, ref, formatted string
 	for _, attr := range start.Attr {
 		switch attr.Name.Local {
 		case "id":
 			id = attr.Value
 		case xmlReferenceAttribute:
 			ref = attr.Value
+		case "fmt":
+			formatted = attr.Value
 		}
 	}
 	if ref != "" {
@@ -315,6 +319,18 @@ func (d *rowDecoder) element(start xml.StartElement) (string, error) {
 			return "", err
 		}
 		return value, nil
+	}
+	// A process element's raw nested text is PID plus device-session metadata
+	// (for example "88150TODO"). Its fmt attribute is the stable, human-readable
+	// target identity emitted by xctrace and shared across Metal tables.
+	if start.Name.Local == "process" && formatted != "" {
+		if err := d.dec.Skip(); err != nil {
+			return "", err
+		}
+		if id != "" {
+			d.values[id] = formatted
+		}
+		return formatted, nil
 	}
 
 	var text strings.Builder

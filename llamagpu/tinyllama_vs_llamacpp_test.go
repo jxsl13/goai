@@ -18,20 +18,17 @@ import (
 	"github.com/jxsl13/goai/nlp"
 )
 
-// TestTinyLlamaVsLlamaCpp decodes the SAME GGUF file llama-bench measures, so the two
-// numbers are directly comparable rather than related by argument.
+// TestTinyLlamaVsLlamaCpp decodes the SAME GGUF file llama-bench measures. This is the
+// shipping-config comparison, not a strict dtype match: GoAI stores K/V as f32, while
+// llama-bench b10450 rejects f32 in its local argument parser and runs f16-KV/FA-auto.
 //
 // The llama.cpp side is MEASURED here whenever llama-bench is on PATH, not read from a constant.
 // A hardcoded incumbent rots: the 172.19 t/s recorded for build 48d22e295 was still in this file
 // when llama-bench on the same host and the same file measured 201.61 +/- 3.25 t/s, so every ratio
 // computed against it flattered GoAI by ~17%. The fallback constant below is only used when
 // llama-bench is absent, and it is stamped with the build that produced it precisely because it is
-// expected to go stale.
-//
-// Read the RATIO, not the absolute numbers. Both sides are measured in the same session precisely
-// so thermal drift cancels: back-to-back runs on this host gave GoAI 143.17 / llama.cpp 201.61
-// (cold, separate runs) and GoAI 112.84 / llama.cpp 155.09 (hot, one run) — absolute values 20%
-// apart, ratios 0.710 and 0.728. The ratio is what survives.
+// expected to go stale. Read the bracketed ratio, not either absolute number; Metal throughput
+// moves with GPU and thermal state even across adjacent processes.
 //
 // Skips when the model is absent so the suite stays hermetic; GOAI_TINYLLAMA_GGUF
 // overrides the path.
@@ -103,38 +100,17 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 		}
 		llamaCpp = (llamaCpp + second) / 2
 	}
-	t.Logf("TinyLlama-1.1B Q4_K_M tg64 (decode only), Metal: GoAI %.2f tok/s vs llama.cpp %.2f tok/s (%s, bracketed) = %.3fx  (samples %v)",
+	t.Logf("TinyLlama-1.1B Q4_K_M tg64 (decode only), Metal: GoAI f32-KV %.2f tok/s vs llama.cpp shipping f16-KV %.2f tok/s (%s, bracketed) = %.3fx  (samples %v)",
 		got, llamaCpp, src, got/llamaCpp, tps)
 
-	// Prompt processing, at SEVERAL lengths. pp64 alone is misleading: GoAI's deficit is
+	// Prompt processing, at SEVERAL lengths. pp64 alone is incomplete: GoAI's deficit is
 	// concentrated at short prompts, where fixed weight expansion dominates, and shrinks as the
 	// prompt grows and attention (now on the matrix-unit flash kernel) amortizes. Measuring only
 	// the length llama-bench defaults to hid that for most of this work.
 	//
-	// Both sides measured in one session, M2 Pro:
-	//
-	// Both sides measured in one session, M2 Pro, 2026-08-16 — and llama.cpp's side is measured
-	// LIVE below rather than read from this table, because the table it replaces had gone stale in
-	// GoAI's DISfavour: it recorded pp64 0.46 where a live run now measures 0.675, and tg64 0.97
-	// where GoAI is now AHEAD at 1.019. A stale incumbent misleads in whichever direction the code
-	// moved; the only fix is to stop writing the ratio down.
-	//
-	//	          GoAI    llama.cpp   ratio (3 runs)
-	//	pp64    ~1177       ~1720      0.664 - 0.695
-	//	pp256   ~1910       ~2100      0.904 - 0.909
-	//	pp1024  ~1980       ~2090      0.933 - 0.951
-	//	tg64     ~160        ~176      0.843 - 0.907   (see the variance note below)
-	//
-	// Against the table this replaces (pp64 0.46, pp256 0.75, pp1024 0.84) prefill has improved
-	// substantially; the stale comment was understating GoAI by a third at pp64.
-	//
-	// PREFILL ratios are stable across runs and are the trustworthy signal. DECODE is not: it moved
-	// 0.843 - 1.019 across three runs because llama.cpp's own tg64 varied 162.58 - 200.19 t/s on
-	// this host. One of those runs read as GoAI OVERTAKING llama.cpp on decode; it had not. Quote
-	// decode as a band, never a figure, and only from a bracketed run.
-	//
-	// The remaining gap is CONCENTRATED AT SHORT PROMPTS and essentially closed by pp1024 — the
-	// fixed weight-expansion cost, most of which the persistent f16 weight cache already removed.
+	// The current immutable five-pair pp64/tg64 campaign and its exact semantic boundary live under
+	// internal/benchcompare/leadership/evidence/m2-llamacpp-attribution-20260817. This live smoke
+	// test deliberately logs rather than asserts a ratio; it must not become another frozen table.
 	lens := []int{64, 256, 1024}
 	ref, how := llamaCppPP(t, path, lens)
 	for _, n := range lens {
@@ -170,12 +146,12 @@ func TestTinyLlamaVsLlamaCpp(t *testing.T) {
 // tell a live comparison from a stale one.
 func llamaCppTG64(t *testing.T, model string) (float64, string) {
 	t.Helper()
-	// Recorded 2026-08-15 on an M2 Pro, llama.cpp build 48d22e295 (10360), ggml 0.19.0, Metal+BLAS:
-	//   llama-bench -m tinyllama-1.1b-q4km.gguf -p 0 -n 64 -r 3 -> tg64 201.61 +/- 3.25 t/s
-	const recorded = 201.61
-	v, how := llamaBench(t, model, "-p", "0", "-n", "64", "-r", "3")
+	// Median recorded 2026-08-17 on this M2 Pro, llama.cpp b10450/ece963f41, ggml 0.20.1,
+	// Metal+BLAS, five fresh shipping-config processes. It is provenance, not a current claim.
+	const recorded = 196.792160
+	v, how := llamaBench(t, model, "-p", "0", "-n", "64", "-r", "3", "-ctk", "f16", "-ctv", "f16", "-fa", "auto")
 	if how != "measured live" {
-		return recorded, "recorded, build 48d22e295 — " + how
+		return recorded, "recorded, build b10450/ece963f41 — " + how
 	}
 	return v["tg64"], how
 }
@@ -191,7 +167,7 @@ func llamaCppPP(t *testing.T, model string, lens []int) (map[string]float64, str
 	for i, n := range lens {
 		ps[i] = strconv.Itoa(n)
 	}
-	return llamaBench(t, model, "-p", strings.Join(ps, ","), "-n", "0", "-r", "3")
+	return llamaBench(t, model, "-p", strings.Join(ps, ","), "-n", "0", "-r", "3", "-ctk", "f16", "-ctv", "f16", "-fa", "auto")
 }
 
 // llamaBench runs llama-bench and returns every "test -> throughput" row it printed, keyed by the

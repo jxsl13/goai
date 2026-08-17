@@ -50,6 +50,20 @@ func TestRowDecoderResolvesIDDefinedInsideCompositeElement(t *testing.T) {
 	}
 }
 
+func TestRowDecoderUsesFormattedProcessIdentity(t *testing.T) {
+	xml := `<trace-query-result><row>` +
+		`<process id="p" fmt="llama-bench (88150)"><pid>88150</pid><device-session>TODO</device-session></process>` +
+		`<process ref="p"/>` +
+		`</row></trace-query-result>`
+	row, err := newRowDecoder(strings.NewReader(xml)).next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(row) != 2 || row[0] != "llama-bench (88150)" || row[1] != row[0] {
+		t.Fatalf("row=%q", row)
+	}
+}
+
 func TestCounterInfoTableXPathsReturnsEveryCandidate(t *testing.T) {
 	toc := `<trace-toc><run><data>` +
 		`<table schema="gpu-counter-info" counter-profile="0" shader-profiler="0"/>` +
@@ -117,6 +131,27 @@ func TestSelectCommandBuffersFailsClosed(t *testing.T) {
 	}
 	if _, err := selectCommandBuffers(commands, map[uint64]uint64{}, 1); err == nil {
 		t.Fatal("expected missing-completion error")
+	}
+}
+
+func TestSelectCommandBuffersWithSkipExcludesTrailingBlit(t *testing.T) {
+	commands := []commandBuffer{
+		{StartNS: 100, ID: 1, GPU: "M2 Pro"},
+		{StartNS: 300, ID: 2, GPU: "M2 Pro"},
+		{StartNS: 500, ID: 3, GPU: "M2 Pro"},
+	}
+	completed := map[uint64]uint64{1: 200, 2: 450, 3: 510}
+	got, err := selectCommandBuffersWithSkip(commands, completed, 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != 2 || got[0].StartNS != 300 || got[0].EndNS != 450 {
+		t.Fatalf("selected=%+v", got)
+	}
+	for _, skip := range []int{-1, 3} {
+		if _, err := selectCommandBuffersWithSkip(commands, completed, 1, skip); err == nil {
+			t.Fatalf("skip=%d unexpectedly succeeded", skip)
+		}
 	}
 }
 

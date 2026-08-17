@@ -777,8 +777,10 @@ here. Both readings confirm the recorded figures are the right order and the gap
 is real, not a harness artifact. The production-scale story is the three-way
 TinyLlama-1.1B head-to-head below, where the toy-size caveat is discharged.
 
-**Apple production-scale head-to-head (T887, 2026-07-20) — the toy caveat discharged on
-darwin, and the gap WIDENS.** A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, downloaded to
+**Historical Apple production-scale head-to-head (T887, 2026-07-20).** This
+section preserves the original campaign as history; its 9.9 tok/s GoAI decode,
+82 tok/s prefill, and 20-23x conclusion are superseded by the matched
+2026-08-17 current-main attribution below. A real TinyLlama-1.1B Q4_K_M GGUF (669 MB, downloaded to
 models/) timed by both engines on the same M2 Pro Metal GPU, same file: llama.cpp llama-bench
 b9960 (3 reps) vs GoAI's batched quant decoder (gguf.ReadRaw -> nlp.QuantLlamaFromGGUF ->
 llamagpu.NewQuant, best-of-3; harness internal/benchcompare/prod_decode_external_test.go gated
@@ -2337,6 +2339,74 @@ TINYLLAMA_GGUF=/absolute/path/to/tinyllama-1.1b-q4km.gguf \
 Further reading: Apple, *Counter sampling with Metal* and Xcode GPU profiling;
 Go's `benchstat` documentation for repeated-sample comparison. The repository
 contract is `PERF-M2-METAL-PROFILER-002`.
+
+## Current M2 production attribution against llama.cpp b10450 (2026-08-17)
+
+The old T887 production row was re-measured rather than carried forward. The
+current campaign pins GoAI base
+`35de401722eca2ed2e08fc8e4349dae4025bef57`, llama.cpp build 10450 / upstream
+`ece963f41b0b02d7a0d61436ae365762c073a4c8`, ggml 0.20.1, and the identical
+668,788,096-byte TinyLlama-1.1B Q4_K_M file with SHA-256
+`9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0`.
+Both engines ran on the same Apple M2 Pro at batch one. Five rounds alternated
+fresh GoAI and llama.cpp processes; model loading, upload, and one generation
+warmup were outside the measured boundary.
+
+The harness correction matters. llama-bench retains only the final logits row
+for prompt processing, while the old GoAI comparison used `StepN` and copied
+all 64 rows. The current arm uses the already-shipping `StepNLast`. Generation
+warms once and then measures context positions 0..63, matching llama-bench's
+logical reset after warmup. The test accepts `GOAI_PROD_REPS`; this campaign
+sets it to one so every tabulated observation is one fresh-process sample
+rather than an unpaired best-of-run.
+
+| Campaign, median of five | GoAI | llama.cpp b10450 | llama.cpp / GoAI |
+|---|---:|---:|---:|
+| tg64, same Q4_K_M and f32 KV, FA off | 172.0 tok/s | 179.465 tok/s | 1.0434x |
+| pp64, same Q4_K_M and f32 KV, FA off | 1,517.9 tok/s | 1,699.017 tok/s | 1.1193x |
+| tg64, shipping configs | 172.2 tok/s, f32 KV | 196.792 tok/s, f16 KV/FA auto | 1.1428x |
+| pp64, shipping configs | 1,517.9 tok/s, f32 KV | 1,772.679 tok/s, f16 KV/FA auto | 1.1678x |
+
+The f32 arm needed a transparent compatibility repair: b10450 advertises
+`-ctk/-ctv` but its local llama-bench parser omits the `f32` spelling. A
+three-line parser branch was rebuilt only into `libllama-bench-impl.dylib` and
+injected into the original Homebrew executable; the original llama, ggml,
+Metal, BLAS, and CPU libraries remained loaded. JSON output gates `type_k=f32`,
+`type_v=f32`, build number, and commit. The unmodified shipping arm makes the
+configuration difference explicit with `-ctk f16 -ctv f16 -fa auto`.
+
+The result corrects, rather than incrementally improves, the old headline:
+current main is 4.34% behind on matched decode, not about 20x behind. The July
+MLX number is not promoted into this matrix because it used MLX-native 4-bit
+weights, pp56, and an older session. It remains historical context only.
+
+The per-engine GPU profiles bound the next move. GoAI's exact encoder timestamp
+sample covered 7.927 ms of a 9.655 ms command buffer with zero omissions and
+bit-identical logits. Q4_K plus Q6_K account for 75.90% of attributed duration
+and 62.32% of total command time. The external Xcode analyzer joins the pinned
+llama-bench process, GPU, command buffers, counters, and shader intervals; it
+must skip a final 2.96 us blit to select the preceding compute buffer. In the
+retained shipping-config trace, Q4_K/Q6_K are 99.982% of the 2.790 ms sampled
+shader duration over a 4.909 ms target shader span.
+
+That external trace also demonstrates the fail-closed boundary. Strict
+exclusive-GPU validation rejects it because WindowServer overlaps 417,667 ns
+(8.51% of the shader span). The non-exclusive replay retains the overlap in
+JSON, so the kernel ranking is usable but absolute cross-engine kernel times
+are not claimed. Instruments rejected/stalled the parser-injected f32 launch;
+therefore the llama shader distribution is from the original f16-KV/FA-auto
+binary, and only the shared K-quant weight-kernel ranking is compared.
+
+This consumes the historical `R-01M01Q0AG0EHN` 7.1x-gap claim. K-quant matvec
+is still the largest GoAI family, but a speculative leaf rewrite cannot recover
+more than the current 4.34% matched decode deficit. The additional shipping
+distance is partly an f16-KV/FlashAttention capability frontier, so it requires
+graph/feature attribution before another kernel promotion.
+
+Raw aggregate samples, hashes, the complete parser patch, exact commands, the
+GoAI profile, and the compact external shader distribution are committed in
+`internal/benchcompare/leadership/evidence/m2-llamacpp-attribution-20260817`.
+The repository contract is `M2-INCUMBENT-ATTRIBUTION-HARNESS-001`.
 
 ## GGUF ReadFile mmap path (2026-08-17)
 
