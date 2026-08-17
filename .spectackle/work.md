@@ -3738,7 +3738,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 
 ## P-01M08TT3TTE7ZBJCE64TC94G5C Port the complete llama.cpp legacy Q4_K simdgroup tile to M2
 kind: proposal
-state: draft
+state: approved
 created: 2026-08-17
 grilled: 2026-08-17 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/q4k_mm_parity_test.go, backend/metal/q4k_mm_crossover_test.go, internal/benchcompare/prod_decode_external_test.go
