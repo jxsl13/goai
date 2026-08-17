@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJNDV2VFRFR5RDBSPKJBRVK Cut the residual serial cost in gguf ReadFile
 kind: task
-state: approved
+state: active
 created: 2026-07-27
 targets: format/gguf
 
