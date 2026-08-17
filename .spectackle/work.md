@@ -3738,7 +3738,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 
 ## P-01M08R4T1WEX9841D28YAPRE5Q Keep the M2 cached-f16 FFN chain half-resident
 kind: proposal
-state: draft
+state: approved
 created: 2026-08-17
 grilled: 2026-08-17 open=0
 targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal.go, backend/metal/metal_bridge.h
