@@ -3750,3 +3750,14 @@ Hypothesis: a Metal-only optional resident-FFN recorder capability can convert t
 Prior rejection boundary: R-01M024DQCHEXH8PT2TATEE04H0 rejected an older standalone f16 chain because random weights overflowed half and its max-relative harness ignored NaN. This proposal must use trained-model values, reject NaN/Inf explicitly, and compare the fused path against the current cached-f16 chain. The rejected fused gate/up weight and strided chunk-expansion designs are not repeated.
 
 Promotion gates on Apple M2: (1) exact or explicitly bounded finite parity for gate/up/SwiGLU/down outputs across Q4_K and Q6_K mixed blocks, with mutation proof that the production selector reaches the new path; (2) ten alternating warm leaf samples at TinyLlama rows=64 with stable spreads and at least 1.10x for the three-projection FFN sequence; (3) ten alternating fresh-decoder production pairs for TinyLlama pp64, identical greedy argmax and finite logits, at least 1.03x median speedup, no control cell pp128/pp512/tg64 below 0.98x, and unchanged steady-state allocations. If any gate fails, fully revert the executable experiment and archive the rejection evidence.
+
+## T-01M08R8SGSETDR16X1H39846S0 Implement and gate half-resident M2 cached-f16 FFN
+kind: task
+state: draft
+created: 2026-08-17
+parent: P-01M08R4T1WEX9841D28YAPRE5Q
+targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal.go, backend/metal/metal_bridge.h
+
+Implement a Metal-only optional recorder fast path for plain quantized SwiGLU FFNs at rows>1. Reuse the existing persistent f16 weight cache; convert the normalized f32 input once; retain gate/up outputs and the SwiGLU result in half scratch; perform SwiGLU in float arithmetic while preserving the current half input/output rounding boundaries; run down directly from half; and convert only the final down result to f32 before the existing residual add. All unsupported formats, shapes, architectures, post-norm variants, and non-Metal recorders must retain the current path.
+
+Verification: Q4_K/Q6_K mixed-weight parity against the current cached-f16 sequence with explicit NaN/Inf rejection; selector mutation proof; ten alternating warm TinyLlama-shape leaf samples at rows=64 requiring >=1.10x; ten alternating fresh-decoder TinyLlama Q4_K_M pp64 pairs requiring >=1.03x median, identical greedy argmax, finite logits, unchanged steady-state allocations; controls pp128/pp512/tg64 each >=0.98x. Fully revert executable changes if any promotion gate fails.
