@@ -25,3 +25,4 @@ TOK-003	go:nlp.BPETokenizer.EncodeSpecial	nlp/special.go	334-336	899aa72f8cc1c8e
 TOK-004	go:nlp.BPETokenizer.EncodeSpecial	nlp/special.go	334-336	899aa72f8cc1c8e2	723755715720b71f
 DEC-003	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	205-258	47e882ed07cfcff7	7eace3a6ede6f253
 DEC-004	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	205-258	47e882ed07cfcff7	2b65ba005e867bd7
+M2-INCUMBENT-ATTRIBUTION-HARNESS-001	go:benchcompare.BenchmarkProdMetalProfiledDecodeGGUF	internal/benchcompare/prod_metal_profile_external_test.go	61-127	822d8faad69ec5cd	be62aced583aeee6

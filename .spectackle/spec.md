@@ -543,3 +543,8 @@ Rationale: Metal availability does not imply counter-sampling support; callers n
 WHEN ReadFile maps a regular GGUF file, the format/gguf reader SHALL call munmapFile only after readParsed returns and call Read with a buffered reader when mmapFileReadOnly fails.
 
 Rationale: The file mapping replaces a model-sized staging allocation without leaking mapped lifetimes through the eager File API.
+
+## M2-INCUMBENT-ATTRIBUTION-HARNESS-001 {applies: go:benchcompare.BenchmarkProdMetalProfiledDecodeGGUF}
+WHEN comparing production M2 K-quant decode with llama.cpp before another leaf-kernel successor, the GoAI benchmark suite SHALL record immutable revisions, the identical model hash, matched semantics, five alternating samples, and both engines per-kernel Metal GPU distributions.
+
+Rationale: An isolated leaf can sit near the memory roofline while the heterogeneous full token remains slower; matched in-situ attribution prevents selecting a locally fast but globally irrelevant kernel rewrite.
