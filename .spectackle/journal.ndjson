@@ -599,3 +599,4 @@
 {"t":"2026-08-17T21:42:29Z","eid":"d84e8839f383fdcf","ag":"ag-6977","ev":"create","id":"P-01M08TT3TTE7ZBJCE64TC94G5C","k":"proposal","ti":"x"}
 {"t":"2026-08-17T21:42:29Z","eid":"d22d577d13e53bb0","ag":"ag-6977","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-17T21:43:17Z","eid":"fb8d2af431c43480","ag":"ag-d775","ev":"revise","id":"P-01M08TT3TTE7ZBJCE64TC94G5C","note":"title+body+targets revised"}
+{"t":"2026-08-17T21:43:30Z","eid":"f753e350335e2318","ag":"ag-e81d","ev":"grill","id":"P-01M08TT3TTE7ZBJCE64TC94G5C","gr":"2026-08-17 open=0","hash":"162fde8386eba1048adcd61ed965cda51990a772142210c158b626a21e763ea2"}

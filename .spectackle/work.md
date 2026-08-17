@@ -3740,6 +3740,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 kind: proposal
 state: draft
 created: 2026-08-17
+grilled: 2026-08-17 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/q4k_mm_parity_test.go, backend/metal/q4k_mm_crossover_test.go, internal/benchcompare/prod_decode_external_test.go
 
 Context: current merged main 90f774680445429abb342e5939868ffdaf645e1a measured 1537.3 tok/s at TinyLlama Q4_K_M pp64 in a fresh three-repetition run, while pinned llama.cpp b10450 commit ece963f41b0b02d7a0d61436ae365762c073a4c8 measured 1664.0 tok/s on the same model, host, f32 KV, FlashAttention off boundary. The robust prior five-pair campaign retained a 1.1193x incumbent advantage. Runtime capability output confirms Apple M2 Pro has simdgroup matrix multiplication but has_tensor=false, so the incumbent uses its legacy kernel_mul_mm_q4_K_f32 path rather than M5/A19 tensor operations.
