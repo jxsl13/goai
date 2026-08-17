@@ -37,3 +37,14 @@ Hypothesis: half-input/float-accumulate staging can remove the previous matrix-u
 Prior rejection boundary: R-01M02431SFE9VS94RN2V14AM0P rejected only the float-staged matrix-unit kernel after it reached 1.198 ms; it did not test half simdgroup operands. R-01M022K6X1ENYBCN7YVGXRV53M requires explicit reachability and partial-tile mutation proof. The recently rejected R-01M08S3QNGFE3 rules out conversion-only FFN residency and makes matmul execution itself the target.
 
 Promotion gates on Apple M2: (1) explicit candidate reachability and mutation proof; finite parity against the scalar/current cached-f16 paths across full and partial M/N tiles, Q4_K K multiples, and trained-model logits, with NaN/Inf rejected before aggregate errors; (2) ten alternating warm samples at M64 for K2048xN5632, K2048xN2048, and K5632xN2048 where applicable, requiring at least 1.10x on the Q4_K gate/up leaf and no sampled Q4_K production shape below 0.98x; (3) a rows sweep M32/64/128/256/512 to derive a shape gate rather than globally replacing MPS; (4) ten alternating fresh-decoder TinyLlama Q4_K_M production pairs requiring pp64 >=1.03x, identical greedy argmax, finite logits, unchanged steady-state allocations, controls pp128/pp512/tg64 each >=0.98x. Fully revert executable changes if any promotion gate fails.
+
+## T-01M08SPZPNEG69NCZB79G4R386 Implement and gate M2 Q4_K half-input simdgroup matmul
+kind: task
+state: draft
+created: 2026-08-17
+parent: P-01M08SN9PFECDAK5WMYZ7TSX7H
+targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit, go:metal.TestQ4KMatrixUnitMatchesCooperative, go:metal.TestQ4KMatrixUnitHasNoCrossover
+
+Change the retained Metal qmatmul_q4k_mm candidate from float threadgroup operands and simdgroup_float8x8 inputs to half threadgroup operands and simdgroup_half8x8 inputs while preserving float accumulators and f32 output. Keep the existing Q4_K dequant formula, 32x32 tile, bounds handling, and explicit selector for the first pass. Update parity/reachability tests and add an alternating M2 leaf matrix against the current cached-f16 MPS route.
+
+Only after the leaf matrix passes, derive an M/N gate and place the matrix-unit selector ahead of cached-f16 MPS for winning Q4_K shapes. Then run ten alternating fresh-decoder TinyLlama Q4_K_M pairs at pp64 plus pp128/pp512/tg64 controls. Require finite outputs, identical greedy argmax, pp64 >=1.03x, each control >=0.98x, and unchanged steady-state allocations. Fully revert executable changes if any gate fails.
