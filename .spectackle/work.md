@@ -3753,7 +3753,7 @@ Promotion gates on Apple M2: (1) exact or explicitly bounded finite parity for g
 
 ## T-01M08R8SGSETDR16X1H39846S0 Implement and gate half-resident M2 cached-f16 FFN
 kind: task
-state: draft
+state: active
 created: 2026-08-17
 parent: P-01M08R4T1WEX9841D28YAPRE5Q
 grilled: 2026-08-17 open=4
