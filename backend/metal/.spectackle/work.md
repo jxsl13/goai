@@ -23,7 +23,7 @@ SCOPE: fix the harness only. Do not optimize anything in the same change — the
 
 ## P-01M08SN9PFECDAK5WMYZ7TSX7H Port half-input float-accumulate Q4_K simdgroup matmul to M2
 kind: proposal
-state: draft
+state: approved
 created: 2026-08-17
 grilled: 2026-08-17 open=0
 targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/q4k_mm_parity_test.go, backend/metal/q4k_mm_crossover_test.go
