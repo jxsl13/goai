@@ -494,3 +494,24 @@
 {"t":"2026-08-17T17:26:05Z","eid":"80c34acda5288963","ag":"ag-8f31","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-17T17:26:16Z","eid":"869a9195910b5679","ag":"ag-db3f","ev":"rule","op":"edit","rule":"GGUF-READFILE-MMAP-LIFETIME-001","txt":"WHEN ReadFile maps a regular GGUF file, the format/gguf reader SHALL call munmapFile only after readParsed returns and call Read with a buffered reader when mmapFileReadOnly fails.","item":"T-01KYJPSG8XFXVRA5TER8FSAPMH"}
 {"t":"2026-08-17T17:26:17Z","eid":"7bbbf73af28cc38b","ag":"ag-db3f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:00Z","eid":"6384c0bae3e9becf","ag":"ag-df9b","ev":"create","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","k":"proposal","ti":"Eliminate safetensors single-tensor framing and duplicate copies"}
+{"t":"2026-08-17T17:50:01Z","eid":"799c1cad465facbc","ag":"ag-df9b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:22Z","eid":"f18d22e787e7fab1","ag":"ag-3673","ev":"revise","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","note":"body+targets revised"}
+{"t":"2026-08-17T17:50:22Z","eid":"d17bd57cb1c5cbee","ag":"ag-3673","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:28Z","eid":"0dc1085bb4e986f1","ag":"ag-3f15","ev":"grill","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","gr":"2026-08-17 open=1","hash":"a2cea329df6f0a7f132be1cc481fadd61fe6ef85a0173cc73e19e63460706862","open":1,"keys":["blast:11"]}
+{"t":"2026-08-17T17:50:29Z","eid":"de9e81fb98639532","ag":"ag-3f15","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:41Z","eid":"ca647b1620caa795","ag":"ag-9ab6","ev":"create","id":"R-01M08DHP12FAQVKBDDQQB4XDGA","k":"research","ti":"Safetensors single-tensor load spends half its latency in synthetic full-container decode"}
+{"t":"2026-08-17T17:50:42Z","eid":"2c74ccb8c57f2085","ag":"ag-9ab6","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:54Z","eid":"abd2e311adc72448","ag":"ag-799f","ev":"revise","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","note":"body+targets revised"}
+{"t":"2026-08-17T17:50:54Z","eid":"747b4ae699d94707","ag":"ag-799f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:50:56Z","eid":"762c5752678af05e","ag":"ag-aa51","ev":"grill","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","gr":"2026-08-17 open=1","hash":"829f1c779dbce548d58aa25d7f553ef3b852348f115b952d2c4c8c7d4ea51840","open":1,"keys":["blast:10"]}
+{"t":"2026-08-17T17:50:56Z","eid":"a0432efac08ec727","ag":"ag-aa51","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:51:08Z","eid":"7c51fa4fb05212d0","ag":"ag-da9a","ev":"revise","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","note":"targets+refs revised"}
+{"t":"2026-08-17T17:51:08Z","eid":"755426ca7ed71c72","ag":"ag-da9a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:51:15Z","eid":"8f4a10c7c77852f9","ag":"ag-cbc0","ev":"grill","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","gr":"2026-08-17 open=1","hash":"829f1c779dbce548d58aa25d7f553ef3b852348f115b952d2c4c8c7d4ea51840","open":1,"keys":["blast:10"]}
+{"t":"2026-08-17T17:51:15Z","eid":"c127d17ce9a569d8","ag":"ag-cbc0","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:51:31Z","eid":"4cc969f171294cd4","ag":"ag-58e7","ev":"create","id":"T-01M08DK6KDEH5BV1PZXBNBWQEF","k":"task","ti":"Decode one safetensors tensor directly from a transient mapping"}
+{"t":"2026-08-17T17:51:31Z","eid":"aed52585fcf60c43","ag":"ag-58e7","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:51:53Z","eid":"2ff395c25dc56774","ag":"ag-4879","ev":"move","id":"P-01M08DGE6RE54VZ0B01V2G2XHC","fr":"draft","to":"active","note":"Activated under the user standing mandate to continue measured bottom-up performance work, create PRs for gains, and merge only after successful CI."}
+{"t":"2026-08-17T17:51:53Z","eid":"0aed664d7385232a","ag":"ag-4879","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-17T17:52:23Z","eid":"e2dd05bc2461031d","ag":"ag-281f","ev":"grill","id":"T-01M08DK6KDEH5BV1PZXBNBWQEF","gr":"2026-08-17 open=1","hash":"889fa77e2f79c19a8e66d3fa185baa081ee1c33864271ef7528e834a826e7d66","open":1,"keys":["blast:10"]}

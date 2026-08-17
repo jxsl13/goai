@@ -3751,3 +3751,32 @@ grilled: 2026-08-17 open=0
 targets: go:metal.NewProfilingRecorder, go:llamagpu.Decoder.ProfileMetalStep, backend/metal/recorder_profile_test.go, llamagpu/example_test.go, docs/benchmarking.md
 
 A macOS CI runner exposes Metal and MPS but not stage-boundary timestamp sampling. Add an explicit public capability query, preserve NewProfilingRecorder errors, skip unsupported runnable-example work, and document the distinction. This closes a portability gap without changing the M2 profiling or production recorder paths.
+
+## P-01M08DGE6RE54VZ0B01V2G2XHC Eliminate safetensors single-tensor framing and duplicate copies
+kind: proposal
+state: active
+created: 2026-08-17
+refs: R-01M08DHP12FAQVKBDDQQB4XDGA
+grilled: 2026-08-17 open=1
+targets: format/safetensors/partial.go, format/safetensors/partial_test.go, format/safetensors/loadcompare_external_test.go, format/safetensors/bench_test.go, format/safetensors/mmap_unix.go, format/safetensors/mmap_other.go, BENCHMARKS.md, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence
+
+R-01M08DHP12FAQ measures the M2 partial-load deficit and isolates the synthetic full-container decode. Replace selected-range ReadAt plus synthetic JSON/container reconstruction plus full Load with one validated entry decoder fed by a transient read-only mapping on supported regular files and a portable ReadAt fallback. The returned tensor must own its storage after unmap. Preserve dtype widening, exact values, header caps, shape/product overflow guards, offset/file-size validation, sharded delegation, and hostile errors. Require interleaved same-machine control/candidate medians, safetensors 0.8.0 parity, CGO-disabled and cross-platform gates; do not redesign full LoadFile unless separate measurement validates it.
+
+## R-01M08DHP12FAQVKBDDQQB4XDGA Safetensors single-tensor load spends half its latency in synthetic full-container decode
+kind: research
+state: draft
+created: 2026-08-17
+targets: go:safetensors.LoadTensor, format/safetensors/loadcompare_external_test.go, BENCHMARKS.md
+
+On Apple M2 with Python 3.14.7, safetensors 0.8.0, NumPy 2.5.1, and the shared deterministic 64 MiB fixture, GoAI LoadTensor best-of-7 is 0.751 ms versus safe_open plus get_tensor at 0.376 ms, a 2.00x deficit. GoAI reads only the selected 4 MiB range but then marshals a synthetic JSON header, appends the payload to an in-memory container, and invokes full Load, which parses again and copies into final storage. Full-file GoAI is 6.43 ms versus 5.50 ms, only 17 percent behind, so partial loading is the higher-leverage isolated target. The proposed experiment keeps the mapped bytes transient and the returned tensor independently owned; buffered ReadAt remains the portability control.
+
+## T-01M08DK6KDEH5BV1PZXBNBWQEF Decode one safetensors tensor directly from a transient mapping
+kind: task
+state: draft
+created: 2026-08-17
+parent: P-01M08DGE6RE54VZ0B01V2G2XHC
+refs: P-01M08DGE6RE54VZ0B01V2G2XHC, R-01M08DHP12FAQVKBDDQQB4XDGA
+grilled: 2026-08-17 open=1
+targets: format/safetensors/partial.go, format/safetensors/partial_test.go, format/safetensors/loadcompare_external_test.go, format/safetensors/bench_test.go, format/safetensors/mmap_unix.go, format/safetensors/mmap_other.go, BENCHMARKS.md, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence
+
+Implement a shared validated single-entry decoder. On supported Unix regular files, map read-only and decode the selected byte range directly into independently owned tensor storage; unmap before returning. On unsupported files/platforms or mapping failure, ReadAt only the selected range and use the same decoder. Delete synthetic header marshaling and full Load invocation. Preserve exact dtype behavior, hostile gates, API, and sharded callers. Add mapped-versus-buffered parity and malformed-file tests plus an interleaved benchmark. Ship only if median latency improves materially and correctness, race, CGO-disabled, cross-build, and incumbent gates pass.
