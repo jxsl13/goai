@@ -40,7 +40,7 @@ Promotion gates on Apple M2: (1) explicit candidate reachability and mutation pr
 
 ## T-01M08SPZPNEG69NCZB79G4R386 Implement and gate M2 Q4_K half-input simdgroup matmul
 kind: task
-state: draft
+state: active
 created: 2026-08-17
 parent: P-01M08SN9PFECDAK5WMYZ7TSX7H
 grilled: 2026-08-17 open=0
