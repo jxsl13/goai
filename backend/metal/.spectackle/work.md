@@ -49,3 +49,19 @@ targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit, go:metal.TestQ4KMatrixUn
 Change the retained Metal qmatmul_q4k_mm candidate from float threadgroup operands and simdgroup_float8x8 inputs to half threadgroup operands and simdgroup_half8x8 inputs while preserving float accumulators and f32 output. Keep the existing Q4_K dequant formula, 32x32 tile, bounds handling, and explicit selector for the first pass. Update parity/reachability tests and add an alternating M2 leaf matrix against the current cached-f16 MPS route.
 
 Only after the leaf matrix passes, derive an M/N gate and place the matrix-unit selector ahead of cached-f16 MPS for winning Q4_K shapes. Then run ten alternating fresh-decoder TinyLlama Q4_K_M pairs at pp64 plus pp128/pp512/tg64 controls. Require finite outputs, identical greedy argmax, pp64 >=1.03x, each control >=0.98x, and unchanged steady-state allocations. Fully revert executable changes if any gate fails.
+
+## R-01M08T14CKES181P11RG303W1H M2 Q4_K half-MMA improves the old prototype but is 0.4018x of cached-f16 MPS
+kind: research
+state: draft
+created: 2026-08-17
+targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit
+
+The pinned llama.cpp b10450 evidence was tested as a bounded change to GoAI's retained Q4_K matrix-unit prototype and fully reverted.
+
+Candidate: change 32x64 dequantized-weight and activation threadgroup tiles from float to half; feed simdgroup_half8x8 operands; retain simdgroup_float8x8 accumulators, f32 output, the existing 32x32 output tile, dequant formula, and bounds logic. This reduced live threadgroup storage from about 20 KB to 12 KB and matched the incumbent operand/accumulator split at commit ece963f41b0b02d7a0d61436ae365762c073a4c8.
+
+Correctness: a finite trained-like Q4_K M64 K2048 N5632 fixture produced no NaN/Inf and differed from the current cached-f16 MPS output by max relative 2.947e-4. The existing selector/crossover guard turned red, proving the half-MMA path was live.
+
+Performance: against uncached f32 dequant+GEMM, half-MMA won only at M32 (484.4 us versus 555.4 us, 1.15x), then lost at M48/M64/M96/M128/M256; at M64 it was 841.0 us versus 765.9 us. Against the actual production cached-f16 MPS comparator, a ten-sample alternating run measured 960.125 us half-MMA versus 385.750 us cached-f16, only 0.4018x. The sample ranges were high (83.64%/101.02%), but the 2.49x median loss is independently bounded by the M64 loss to slower f32 dequant+GEMM and by the established f16 MPS advantage at M64. It cannot approach the 1.10x leaf gate.
+
+Learning: the half-input mechanism improves the old float prototype but does not port the incumbent performance. llama.cpp couples it to a different 64x32 output tile, K32 staging layout, dequant placement, and no persistent expanded-weight policy. A mechanism-only port compared the source reason for selecting direct quant matmul with a target that already trades memory for a tuned dense MPS kernel. Any later attempt must port and price the complete tile/layout or target memory footprint explicitly; half dtype alone is closed. Generalized as jxsl13/perfscan#759.
