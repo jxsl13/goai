@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -70,11 +72,16 @@ func TestCanonicalShaderName(t *testing.T) {
 }
 
 func TestDecodeLaunchCommand(t *testing.T) {
-	got, err := decodeLaunchCommand(`["/opt/homebrew/bin/llama-bench","-p","1"]`)
+	executable := filepath.Join(t.TempDir(), "llama-bench")
+	encoded, err := json.Marshal([]string{executable, "-p", "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 3 || got[0] != "/opt/homebrew/bin/llama-bench" || got[2] != "1" {
+	got, err := decodeLaunchCommand(string(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0] != executable || got[2] != "1" {
 		t.Fatalf("command=%q", got)
 	}
 	for _, value := range []string{`[]`, `["llama-bench"]`, `["/bin/tool"] {}`, `{}`} {
