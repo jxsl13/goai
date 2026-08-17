@@ -3770,13 +3770,11 @@ targets: go:safetensors.LoadTensor, format/safetensors/loadcompare_external_test
 
 On Apple M2 with Python 3.14.7, safetensors 0.8.0, NumPy 2.5.1, and the shared deterministic 64 MiB fixture, GoAI LoadTensor best-of-7 is 0.751 ms versus safe_open plus get_tensor at 0.376 ms, a 2.00x deficit. GoAI reads only the selected 4 MiB range but then marshals a synthetic JSON header, appends the payload to an in-memory container, and invokes full Load, which parses again and copies into final storage. Full-file GoAI is 6.43 ms versus 5.50 ms, only 17 percent behind, so partial loading is the higher-leverage isolated target. The proposed experiment keeps the mapped bytes transient and the returned tensor independently owned; buffered ReadAt remains the portability control.
 
-## T-01M08DK6KDEH5BV1PZXBNBWQEF Decode one safetensors tensor directly from a transient mapping
-kind: task
-state: active
+## R-01M08ENS24EPVT9W3GG7564SJ7 Safetensors selected-range mmap loses to direct ReadAt after framing removal
+kind: research
+state: draft
 created: 2026-08-17
-parent: P-01M08DGE6RE54VZ0B01V2G2XHC
-refs: P-01M08DGE6RE54VZ0B01V2G2XHC, R-01M08DHP12FAQVKBDDQQB4XDGA
-grilled: 2026-08-17 open=1
-targets: format/safetensors/partial.go, format/safetensors/partial_test.go, format/safetensors/loadcompare_external_test.go, format/safetensors/bench_test.go, format/safetensors/mmap_unix.go, format/safetensors/mmap_other.go, BENCHMARKS.md, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence
+refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FAQVKBDDQQB4XDGA
+targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
-Implement a shared validated single-entry decoder. On supported Unix regular files, map read-only and decode the selected byte range directly into independently owned tensor storage; unmap before returning. On unsupported files/platforms or mapping failure, ReadAt only the selected range and use the same decoder. Delete synthetic header marshaling and full Load invocation. Preserve exact dtype behavior, hostile gates, API, and sharded callers. Add mapped-versus-buffered parity and malformed-file tests plus an interleaved benchmark. Ship only if median latency improves materially and correctness, race, CGO-disabled, cross-build, and incumbent gates pass.
+On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
