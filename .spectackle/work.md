@@ -3735,18 +3735,3 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
-
-## P-01M08R4T1WEX9841D28YAPRE5Q Keep the M2 cached-f16 FFN chain half-resident
-kind: proposal
-state: approved
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal.go, backend/metal/metal_bridge.h
-
-Context: Current M2 TinyLlama Q4_K_M attribution shows pp64 at 1517.9 tok/s versus llama.cpp 1699.0 tok/s (1.1193x incumbent lead), while 97% of the GoAI per-layer GPU time is quantized matmul. The cached f16 route converts the same normalized input separately for gate and up, converts both half outputs to f32, executes f32 SwiGLU, and converts that result back to half for down.
-
-Hypothesis: a Metal-only optional resident-FFN recorder capability can convert the normalized input once, run cached f16 gate and up MPS matmuls into half scratch, compute SwiGLU with half inputs and a half output using float arithmetic, feed that half output directly to cached f16 down MPS matmul, and convert only the final down result to f32. This preserves the existing half rounding boundaries without concatenating weights or changing portable fallbacks.
-
-Prior rejection boundary: R-01M024DQCHEXH8PT2TATEE04H0 rejected an older standalone f16 chain because random weights overflowed half and its max-relative harness ignored NaN. This proposal must use trained-model values, reject NaN/Inf explicitly, and compare the fused path against the current cached-f16 chain. The rejected fused gate/up weight and strided chunk-expansion designs are not repeated.
-
-Promotion gates on Apple M2: (1) exact or explicitly bounded finite parity for gate/up/SwiGLU/down outputs across Q4_K and Q6_K mixed blocks, with mutation proof that the production selector reaches the new path; (2) ten alternating warm leaf samples at TinyLlama rows=64 with stable spreads and at least 1.10x for the three-projection FFN sequence; (3) ten alternating fresh-decoder production pairs for TinyLlama pp64, identical greedy argmax and finite logits, at least 1.03x median speedup, no control cell pp128/pp512/tg64 below 0.98x, and unchanged steady-state allocations. If any gate fails, fully revert the executable experiment and archive the rejection evidence.
