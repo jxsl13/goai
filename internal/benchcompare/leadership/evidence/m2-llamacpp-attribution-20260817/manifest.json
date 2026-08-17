@@ -1,0 +1,35 @@
+{
+  "captured_at": "2026-08-17",
+  "host": {
+    "model": "MacBook Pro Mac14,10",
+    "chip": "Apple M2 Pro",
+    "memory_bytes": 34359738368,
+    "logical_cpus": 12,
+    "os": "macOS 26.5.1 (25F80)",
+    "kernel": "Darwin 25.5.0",
+    "go": "go1.26.6 darwin/arm64",
+    "xcode": "26.6 (17F113)"
+  },
+  "goai": {
+    "base_commit": "35de401722eca2ed2e08fc8e4349dae4025bef57",
+    "spectackle": "0.9.3"
+  },
+  "model": {
+    "path": "/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf",
+    "file_bytes": 668788096,
+    "payload_bytes_reported_by_llama_bench": 667078656,
+    "parameters": 1100048384,
+    "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0"
+  },
+  "llama_cpp": {
+    "build_number": 10450,
+    "upstream_commit": "ece963f41b0b02d7a0d61436ae365762c073a4c8",
+    "ggml": "0.20.1",
+    "executable": "/opt/homebrew/Cellar/llama.cpp/10450/bin/llama-bench",
+    "executable_bytes": 33616,
+    "executable_sha256": "04415bd2df8d1bed3c6c62e9ad1518191a2ce47699989383b3afa8021c852844",
+    "f32_parser_patch_sha256": "63ee552a3ea13a61d32633100757a968518920786ccc4e8bd22d1614cab4c372",
+    "patched_impl_bytes": 321520,
+    "patched_impl_sha256": "5abb369ecb727f39db6bb2b52b98588e760946802446957d0c957b17cf4f9b59"
+  }
+}

@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	counterValueXPath = `/trace-toc/run[@number="1"]/data/table[@schema="gpu-counter-value"]`
-	submissionXPath   = `/trace-toc/run[@number="1"]/data/table[@schema="metal-application-command-buffer-submissions"]`
-	completionXPath   = `/trace-toc/run[@number="1"]/data/table[@schema="metal-command-buffer-completed"]`
-	gpuIntervalsXPath = `/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]`
-	stageProfileEnv   = "GOAI_METAL_STAGE_PROFILE"
+	counterValueXPath    = `/trace-toc/run[@number="1"]/data/table[@schema="gpu-counter-value"]`
+	submissionXPath      = `/trace-toc/run[@number="1"]/data/table[@schema="metal-application-command-buffer-submissions"]`
+	completionXPath      = `/trace-toc/run[@number="1"]/data/table[@schema="metal-command-buffer-completed"]`
+	gpuIntervalsXPath    = `/trace-toc/run[@number="1"]/data/table[@schema="metal-gpu-intervals"]`
+	shaderIntervalsXPath = `/trace-toc/run[@number="1"]/data/table[@schema="metal-shader-profiler-intervals"]`
+	stageProfileEnv      = "GOAI_METAL_STAGE_PROFILE"
 )
 
 type options struct {
@@ -39,6 +40,10 @@ type options struct {
 	stageProfile        bool
 	requireExclusiveGPU bool
 	benchmark           string
+	launchJSON          string
+	launchLabel         string
+	launchRequire       string
+	launchSkipFinal     int
 	iterations          int
 	buffersPerIteration int
 	timeLimit           time.Duration
@@ -61,6 +66,10 @@ func main() {
 	flag.BoolVar(&opts.stageProfile, "stage-profile", false, "correlate a one-buffer Recorder stage sidecar with target GPU intervals (report JSON v4)")
 	flag.BoolVar(&opts.requireExclusiveGPU, "require-exclusive-gpu-window", false, "reject stage reports with any foreign same-GPU interval overlapping the target command-buffer span")
 	flag.StringVar(&opts.benchmark, "benchmark", `^BenchmarkMetalQ4KDecodeLeaf/K2048N5632/cooperative$`, "exact Go benchmark regular expression")
+	flag.StringVar(&opts.launchJSON, "launch-json", "", "external target as a JSON string array; bypasses Go benchmark compilation and enables shader attribution")
+	flag.StringVar(&opts.launchLabel, "launch-label", "", "stable workload label recorded for an external target")
+	flag.StringVar(&opts.launchRequire, "launch-require", "", "substring required in external target output before its trace is accepted")
+	flag.IntVar(&opts.launchSkipFinal, "launch-skip-final-buffers", 0, "external-only count of trailing command buffers to exclude before selecting the attributed buffer")
 	flag.IntVar(&opts.iterations, "iterations", 10000, "fixed benchmark iteration count")
 	flag.IntVar(&opts.buffersPerIteration, "buffers-per-iteration", 1, "expected Metal command buffers per timed benchmark iteration")
 	flag.DurationVar(&opts.timeLimit, "time-limit", 30*time.Second, "xctrace recording time limit")
@@ -75,11 +84,34 @@ func main() {
 }
 
 func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
+	launch, err := decodeLaunchCommand(opts.launchJSON)
+	if err != nil {
+		return err
+	}
+	external := len(launch) != 0
 	if opts.iterations <= 0 || opts.buffersPerIteration <= 0 {
 		return errors.New("iterations and buffers-per-iteration must be positive")
 	}
-	if strings.TrimSpace(opts.packagePath) == "" {
+	if !external && strings.TrimSpace(opts.packagePath) == "" {
 		return errors.New("package must not be empty")
+	}
+	if external && opts.iterations*opts.buffersPerIteration != 1 {
+		return errors.New("external shader attribution requires exactly one selected command buffer")
+	}
+	if external && strings.TrimSpace(opts.launchLabel) == "" {
+		return errors.New("launch-label is required with launch-json")
+	}
+	if external && opts.launchRequire == "" {
+		return errors.New("launch-require is required with launch-json")
+	}
+	if opts.launchSkipFinal < 0 {
+		return errors.New("launch-skip-final-buffers must be nonnegative")
+	}
+	if !external && opts.launchSkipFinal != 0 {
+		return errors.New("launch-skip-final-buffers requires launch-json")
+	}
+	if external && opts.stageProfile {
+		return errors.New("launch-json and stage-profile are mutually exclusive")
 	}
 	if opts.stageProfile && (opts.iterations != 1 || opts.buffersPerIteration != 1) {
 		return errors.New("stage-profile requires exactly one iteration and one buffer per iteration")
@@ -87,8 +119,8 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	if opts.stageProfile && forwardedEnvContains(opts.forwardEnv, stageProfileEnv) {
 		return fmt.Errorf("stage-profile reserves forward-env %s", stageProfileEnv)
 	}
-	if opts.requireExclusiveGPU && !opts.stageProfile {
-		return errors.New("require-exclusive-gpu-window requires stage-profile")
+	if opts.requireExclusiveGPU && !opts.stageProfile && !external {
+		return errors.New("require-exclusive-gpu-window requires stage-profile or launch-json")
 	}
 	ceilings, err := parseCounterCeilings(opts.activeCounterMax)
 	if err != nil {
@@ -150,8 +182,10 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	}
 
 	testBinary := filepath.Join(tmp, "metal.test")
-	if err := command(ctx, repo, stderr, "go", compileBenchmarkArgs(opts, testBinary)...); err != nil {
-		return err
+	if !external {
+		if err := command(ctx, repo, stderr, "go", compileBenchmarkArgs(opts, testBinary)...); err != nil {
+			return err
+		}
 	}
 	tracePath := filepath.Join(tmp, "capture.trace")
 	targetOutput := filepath.Join(tmp, "benchmark.txt")
@@ -161,11 +195,12 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		"--instrument", "Metal GPU Counters",
 		"--instrument", "Metal Application",
 	}
-	if opts.stageProfile {
+	if opts.stageProfile || external {
 		testArgs = append(testArgs, "--instrument", "GPU")
 	}
 	testArgs = append(testArgs,
 		"--time-limit", timeLimit,
+		"--no-prompt",
 		"--output", tracePath,
 		"--target-stdout", targetOutput,
 	)
@@ -177,14 +212,19 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	if opts.stageProfile {
 		testArgs = append(testArgs, "--env", stageProfileEnv+"="+filepath.Join(tmp, "stage-profile.json"))
 	}
-	testArgs = append(testArgs,
-		"--launch", "--", testBinary,
-		"-test.run", "^$",
-		"-test.bench", opts.benchmark,
-		"-test.benchtime="+strconv.Itoa(opts.iterations)+"x",
-		"-test.count=1",
-		"-test.benchmem",
-	)
+	testArgs = append(testArgs, "--launch", "--")
+	if external {
+		testArgs = append(testArgs, launch...)
+	} else {
+		testArgs = append(testArgs,
+			testBinary,
+			"-test.run", "^$",
+			"-test.bench", opts.benchmark,
+			"-test.benchtime="+strconv.Itoa(opts.iterations)+"x",
+			"-test.count=1",
+			"-test.benchmem",
+		)
+	}
 	deadline, cancel := context.WithTimeout(ctx, opts.timeLimit+2*time.Minute)
 	defer cancel()
 	if err := command(deadline, repo, stderr, "xcrun", testArgs...); err != nil {
@@ -194,7 +234,10 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read benchmark output: %w", err)
 	}
-	if !completedFixedBenchmark(string(benchmarkOutput), opts.iterations) {
+	if external && !strings.Contains(string(benchmarkOutput), opts.launchRequire) {
+		return fmt.Errorf("external target output lacks required marker %q: %s", opts.launchRequire, strings.TrimSpace(string(benchmarkOutput)))
+	}
+	if !external && !completedFixedBenchmark(string(benchmarkOutput), opts.iterations) {
 		return fmt.Errorf("target output has no completed %d-iteration benchmark: %s", opts.iterations, strings.TrimSpace(string(benchmarkOutput)))
 	}
 
@@ -237,14 +280,18 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		return fmt.Errorf("no GPU counter-info table contains Performance Limiters: %s", strings.Join(infoErrors, "; "))
 	}
 	queries := map[string]string{
-		"counter-value": counterValueXPath,
-		"submissions":   submissionXPath,
-		"completions":   completionXPath,
-		"gpu-intervals": gpuIntervalsXPath,
+		"counter-value":    counterValueXPath,
+		"submissions":      submissionXPath,
+		"completions":      completionXPath,
+		"gpu-intervals":    gpuIntervalsXPath,
+		"shader-intervals": shaderIntervalsXPath,
 	}
 	exports := []string{"submissions", "completions", "counter-value"}
-	if opts.stageProfile {
+	if opts.stageProfile || external {
 		exports = append(exports, "gpu-intervals")
+	}
+	if external {
+		exports = append(exports, "shader-intervals")
 	}
 	for _, name := range exports {
 		if err := command(deadline, repo, stderr, "xcrun", "xctrace", "export", "--input", tracePath, "--xpath", queries[name], "--output", paths[name]); err != nil {
@@ -260,6 +307,33 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 		return err
 	}
 	return emitReport(stdout, stderr, opts.output, result)
+}
+
+func decodeLaunchCommand(value string) ([]string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var command []string
+	dec := json.NewDecoder(strings.NewReader(value))
+	if err := dec.Decode(&command); err != nil {
+		return nil, fmt.Errorf("decode launch-json: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("launch-json has a trailing JSON value")
+		}
+		return nil, fmt.Errorf("decode launch-json trailer: %w", err)
+	}
+	if len(command) == 0 || !filepath.IsAbs(command[0]) {
+		return nil, errors.New("launch-json must start with an absolute executable path")
+	}
+	for i, arg := range command {
+		if strings.IndexByte(arg, 0) >= 0 {
+			return nil, fmt.Errorf("launch-json argument %d contains NUL", i)
+		}
+	}
+	return command, nil
 }
 
 func compileBenchmarkArgs(opts options, output string) []string {
@@ -375,12 +449,13 @@ func validateCounterCeilings(result report, ceilings []counterCeiling) error {
 
 func exportPaths(dir string) map[string]string {
 	return map[string]string{
-		"counter-info":  filepath.Join(dir, "counter-info.xml"),
-		"counter-value": filepath.Join(dir, "counter-value.xml"),
-		"submissions":   filepath.Join(dir, "submissions.xml"),
-		"completions":   filepath.Join(dir, "completions.xml"),
-		"gpu-intervals": filepath.Join(dir, "gpu-intervals.xml"),
-		"stage-profile": filepath.Join(dir, "stage-profile.json"),
+		"counter-info":     filepath.Join(dir, "counter-info.xml"),
+		"counter-value":    filepath.Join(dir, "counter-value.xml"),
+		"submissions":      filepath.Join(dir, "submissions.xml"),
+		"completions":      filepath.Join(dir, "completions.xml"),
+		"gpu-intervals":    filepath.Join(dir, "gpu-intervals.xml"),
+		"shader-intervals": filepath.Join(dir, "shader-intervals.xml"),
+		"stage-profile":    filepath.Join(dir, "stage-profile.json"),
 	}
 }
 
@@ -476,7 +551,7 @@ func analyzeFiles(paths map[string]string, opts options, policy counterPolicy) (
 		return report{}, err
 	}
 	selectedCount := opts.iterations * opts.buffersPerIteration
-	intervals, err := selectCommandBuffers(commands, completed, selectedCount)
+	intervals, err := selectCommandBuffersWithSkip(commands, completed, selectedCount, opts.launchSkipFinal)
 	if err != nil {
 		return report{}, err
 	}
@@ -491,18 +566,19 @@ func analyzeFiles(paths map[string]string, opts options, policy counterPolicy) (
 		return report{}, err
 	}
 	result := report{
-		Version:                reportVersion,
-		Scope:                  "device-wide counters sampled within target command-buffer timing windows",
-		GPU:                    intervals[0].GPU,
-		CounterSet:             "Performance Limiters",
-		Benchmark:              opts.benchmark,
-		Iterations:             opts.iterations,
-		BuffersPerIteration:    opts.buffersPerIteration,
-		ObservedCommandBuffers: len(commands),
-		SelectedCommandBuffers: selectedCount,
-		Window:                 window,
-		Policy:                 policy.report(),
-		Counters:               counters,
+		Version:                    reportVersion,
+		Scope:                      "device-wide counters sampled within target command-buffer timing windows",
+		GPU:                        intervals[0].GPU,
+		CounterSet:                 "Performance Limiters",
+		Benchmark:                  profileLabel(opts),
+		Iterations:                 opts.iterations,
+		BuffersPerIteration:        opts.buffersPerIteration,
+		ObservedCommandBuffers:     len(commands),
+		SelectedCommandBuffers:     selectedCount,
+		SkippedFinalCommandBuffers: opts.launchSkipFinal,
+		Window:                     window,
+		Policy:                     policy.report(),
+		Counters:                   counters,
 	}
 	if opts.stageProfile {
 		stage, err := analyzeStageProfile(paths, infos, intervals, policy, opts.requireExclusiveGPU)
@@ -512,7 +588,49 @@ func analyzeFiles(paths map[string]string, opts options, policy counterPolicy) (
 		result.Version = stageReportVersion
 		result.Stage = &stage
 	}
+	if strings.TrimSpace(opts.launchJSON) != "" {
+		gpuFile, err := os.Open(paths["gpu-intervals"])
+		if err != nil {
+			return report{}, fmt.Errorf("open GPU intervals for shader profile: %w", err)
+		}
+		gpuIntervals, overlap, err := parseGPUIntervalsWithOverlap(gpuFile, intervals[0])
+		gpuFile.Close()
+		if err != nil {
+			return report{}, err
+		}
+		if err := validateGPUOverlap(overlap, opts.requireExclusiveGPU); err != nil {
+			return report{}, err
+		}
+		shaderFile, err := os.Open(paths["shader-intervals"])
+		if err != nil {
+			return report{}, fmt.Errorf("open shader intervals: %w", err)
+		}
+		shader, err := analyzeShaderIntervals(shaderFile, intervals[0], gpuIntervals, overlap)
+		shaderFile.Close()
+		if err != nil {
+			return report{}, err
+		}
+		result.Version = shaderReportVersion
+		result.Shader = &shader
+	}
 	return result, nil
+}
+
+func selectCommandBuffersWithSkip(commands []commandBuffer, completed map[uint64]uint64, count, skipFinal int) ([]commandBuffer, error) {
+	if skipFinal < 0 {
+		return nil, fmt.Errorf("final command-buffer skip must be nonnegative, got %d", skipFinal)
+	}
+	if len(commands) <= skipFinal {
+		return nil, fmt.Errorf("found %d command buffers, cannot skip final %d", len(commands), skipFinal)
+	}
+	return selectCommandBuffers(commands[:len(commands)-skipFinal], completed, count)
+}
+
+func profileLabel(opts options) string {
+	if strings.TrimSpace(opts.launchJSON) != "" {
+		return opts.launchLabel
+	}
+	return opts.benchmark
 }
 
 func command(ctx context.Context, dir string, stderr io.Writer, name string, args ...string) error {

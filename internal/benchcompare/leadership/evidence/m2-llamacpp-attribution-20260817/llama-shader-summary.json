@@ -1,0 +1,43 @@
+{
+  "version": 5,
+  "scope": "device-wide counters sampled within target command-buffer timing windows",
+  "gpu": "M2 Pro",
+  "benchmark": "llama.cpp-b10450-tg1",
+  "observed_command_buffers": 13,
+  "selected_command_buffers": 1,
+  "skipped_final_command_buffers": 1,
+  "counter_window_ns": 6463375,
+  "counters": {
+    "alu_limiter_mean": 48.48362557663124,
+    "buffer_read_limiter_mean": 66.12161818446563,
+    "compute_occupancy_mean": 16.572148295240616,
+    "samples_each": 320
+  },
+  "shader_profile": {
+    "process": "llama-bench (88150)",
+    "gpu": "M2 Pro",
+    "command_buffer_id": 94949246649,
+    "gpu_start_ns": 939424750,
+    "gpu_end_ns": 944334125,
+    "gpu_span_ns": 4909375,
+    "sample_count": 47,
+    "sample_duration_ns": 2790373,
+    "sampled_span_ratio": 0.5683764226607256,
+    "gpu_overlap": {
+      "interval_count": 6,
+      "duration_ns": 417667,
+      "processes": ["WindowServer (400)"]
+    },
+    "kernels": [
+      {"name":"kernel_mul_mv_q4_K_f32","samples":20,"sample_duration_ns":2289080,"min_ns":41,"median_ns":107333,"p90_ns":178792,"max_ns":321875},
+      {"name":"kernel_mul_mv_q6_K_f32","samples":9,"sample_duration_ns":500788,"min_ns":41,"median_ns":35708,"p90_ns":250333,"max_ns":250333},
+      {"name":"kernel_flash_attn_ext_vec_f16_dk64_dv64","samples":5,"sample_duration_ns":209,"min_ns":41,"median_ns":42,"p90_ns":42,"max_ns":42},
+      {"name":"kernel_bin_fuse_f32_f32_f32_4","samples":3,"sample_duration_ns":125,"min_ns":41,"median_ns":42,"p90_ns":42,"max_ns":42},
+      {"name":"kernel_rope_norm_f32","samples":3,"sample_duration_ns":83,"min_ns":1,"median_ns":41,"p90_ns":41,"max_ns":41},
+      {"name":"kernel_set_rows_f32_i64_f16","samples":3,"sample_duration_ns":43,"min_ns":1,"median_ns":1,"p90_ns":41,"max_ns":41},
+      {"name":"kernel_flash_attn_ext_vec_reduce","samples":1,"sample_duration_ns":42,"min_ns":42,"median_ns":42,"p90_ns":42,"max_ns":42},
+      {"name":"kernel_rms_norm_mul_f32_4","samples":2,"sample_duration_ns":2,"min_ns":1,"median_ns":1,"p90_ns":1,"max_ns":1},
+      {"name":"kernel_swiglu_f32","samples":1,"sample_duration_ns":1,"min_ns":1,"median_ns":1,"p90_ns":1,"max_ns":1}
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+=== RUN   TestProdMetalEncoderProfile
+METAL_ENCODER_PROFILE model=tinyllama-1.1b-q4km.gguf dim=2048 hidden=5632 layers=22 events=340 frequency_hz=1000000000 event_total=7.927486ms event_span=9.654875ms command=9.654874ms coverage=0.8211 logits_sha256=ba3f80fb5d233fe0c8fb9fbbefa132de0bc84e2f1bc1806ca8f434b349d80ab3
+METAL_ENCODER_PROFILE rank=1 label=qmatmul.q4_k count=110 total=4.727625ms share=0.5964
+METAL_ENCODER_PROFILE rank=2 label=qmatmul.q6_k count=21 total=1.28904ms share=0.1626
+METAL_ENCODER_PROFILE rank=3 label=rmsnorm count=45 total=612.623us share=0.0773
+METAL_ENCODER_PROFILE rank=4 label=mha.decode count=22 total=609.832us share=0.0769
+METAL_ENCODER_PROFILE rank=5 label=binary.add count=44 total=291.162us share=0.0367
+METAL_ENCODER_PROFILE rank=6 label=rope count=20 total=145.918us share=0.0184
+METAL_ENCODER_PROFILE rank=7 label=binary.swiglu count=22 total=95.666us share=0.0121
+METAL_ENCODER_PROFILE rank=8 label=blit count=44 total=85.455us share=0.0108
+METAL_ENCODER_PROFILE rank=9 label=rope_pair count=12 total=70.165us share=0.0089
+--- PASS: TestProdMetalEncoderProfile
+PASS
