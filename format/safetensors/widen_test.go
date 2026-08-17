@@ -2,14 +2,16 @@ package safetensors
 
 import (
 	"bytes"
-
 	"encoding/binary"
 	"fmt"
-	"github.com/jxsl13/goai/tensor"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/jxsl13/goai/tensor"
 )
 
 // buildFile assembles a minimal single-tensor safetensors byte stream around raw
@@ -165,6 +167,87 @@ func TestLoadIntegerWidening(t *testing.T) {
 				t.Errorf("%s[%d]: got %v, want %v", tc.dtype, i, got[i], w)
 			}
 		}
+	}
+}
+
+// The file-selective path and the full stream path share the same widening decoder. Exercise every
+// load-only dtype through both APIs so a future fast path cannot silently diverge by dtype.
+func TestLoadTensorWidenedMatchesLoad(t *testing.T) {
+	cases := []struct {
+		dtype string
+		data  []byte
+		n     int
+	}{
+		{"F8_E4M3", []byte{0x00, 0x38, 0xB8}, 3},
+		{"F8_E5M2", []byte{0x00, 0x3C, 0xBC}, 3},
+		{"BOOL", []byte{0, 1, 7}, 3},
+		{"I8", []byte{0x80, 0xFF, 0x7F}, 3},
+		{"U8", []byte{0, 1, 0xFF}, 3},
+		{"I16", []byte{0x00, 0x80, 0xFF, 0x7F}, 2},
+		{"U16", []byte{0, 0, 0xFF, 0xFF}, 2},
+		{"I32", []byte{0, 0, 0, 0x80, 0xFF, 0xFF, 0xFF, 0x7F}, 2},
+		{"U32", []byte{0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF}, 2},
+		{"I64", []byte{0, 0, 0, 0, 0, 0, 0, 0x80, 1, 0, 0, 0, 0, 0, 0, 0}, 2},
+		{"U64", []byte{0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0}, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dtype, func(t *testing.T) {
+			data := buildFile(tc.dtype, []int{tc.n}, tc.data)
+			all, _, err := Load(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "one.safetensors")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			one, err := LoadTensor(path, "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			whole := all["x"]
+			if one.Dtype() != whole.Dtype() || !one.Shape().Equal(whole.Shape()) {
+				t.Fatalf("dtype/shape = %v/%v, want %v/%v", one.Dtype(), one.Shape(), whole.Dtype(), whole.Shape())
+			}
+			switch one.Dtype() {
+			case tensor.F32:
+				for i, got := range one.Storage().F32() {
+					if math.Float32bits(got) != math.Float32bits(whole.Storage().F32()[i]) {
+						t.Fatalf("element %d bits differ: %08x != %08x", i, math.Float32bits(got), math.Float32bits(whole.Storage().F32()[i]))
+					}
+				}
+			case tensor.F64:
+				for i, got := range one.Storage().F64() {
+					if math.Float64bits(got) != math.Float64bits(whole.Storage().F64()[i]) {
+						t.Fatalf("element %d bits differ: %016x != %016x", i, math.Float64bits(got), math.Float64bits(whole.Storage().F64()[i]))
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestLoadTensorRejectsMalformedEntryBeforeAllocation(t *testing.T) {
+	truncated := buildFile("F64", []int{2}, make([]byte, 16))
+	truncated = truncated[:len(truncated)-1]
+	cases := []struct {
+		name string
+		data []byte
+	}{
+		{"unknown dtype", buildFile("I128", []int{1}, make([]byte, 16))},
+		{"shape byte mismatch", buildFile("F32", []int{2}, make([]byte, 4))},
+		{"truncated payload", truncated},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "bad.safetensors")
+			if err := os.WriteFile(path, tc.data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadTensor(path, "x"); err == nil {
+				t.Fatal("malformed entry loaded without an error")
+			}
+		})
 	}
 }
 

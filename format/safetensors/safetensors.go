@@ -158,6 +158,130 @@ func dtypeOf(name string) (fileDtype, error) {
 	}
 }
 
+// validateTensorEntry checks every allocation-driving field of one tensor entry and returns its
+// decoded storage description. It deliberately computes the element product in uint64 with a
+// division-before-multiply guard: Shape.Numel cannot be called safely until hostile dimensions
+// have passed this check.
+func validateTensorEntry(name string, e entry) (fileDtype, tensor.Shape, int, error) {
+	dt, err := dtypeOf(e.Dtype)
+	if err != nil {
+		return fileDtype{}, nil, 0, fmt.Errorf("%w (tensor %q)", err, name)
+	}
+	shape := tensor.Shape(e.Shape)
+	if !shape.IsValid() {
+		return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q: invalid shape %v", name, e.Shape)
+	}
+	const maxDim = uint64(1 << 40)
+	numel := uint64(1)
+	for _, dv := range shape {
+		if uint64(dv) > maxDim {
+			return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q dim %d exceeds cap", name, dv)
+		}
+		if dv != 0 && numel > maxDim/uint64(dv) {
+			return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q element count exceeds cap", name)
+		}
+		numel *= uint64(dv)
+	}
+	begin, end := e.DataOffsets[0], e.DataOffsets[1]
+	if begin < 0 || end < begin {
+		return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q: bad data_offsets %v", name, e.DataOffsets)
+	}
+	want64 := numel * uint64(dt.size)
+	if uint64(end-begin) != want64 {
+		return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q: %d bytes ≠ shape %v × %s", name, end-begin, shape, e.Dtype)
+	}
+	if want64 > uint64(^uint(0)>>1) {
+		return fileDtype{}, nil, 0, fmt.Errorf("safetensors: tensor %q: %d-byte storage exceeds platform address space", name, want64)
+	}
+	return dt, shape, int(want64), nil
+}
+
+// decodeTensorData converts exactly one already-validated on-disk tensor payload into t. The
+// verbatim little-endian dtypes normally bypass this function and bulk-copy into storage; this is
+// the shared widening and big-endian fallback used by both full and single-tensor loading.
+func decodeTensorData(t *tensor.Tensor, dtype string, src []byte) {
+	switch dtype {
+	case "F32":
+		dst := t.Storage().F32()
+		if !rawCopyLE(dst, src, 4) {
+			for i := range dst {
+				dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(src[i*4:]))
+			}
+		}
+	case "F64":
+		dst := t.Storage().F64()
+		if !rawCopyLE(dst, src, 8) {
+			for i := range dst {
+				dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(src[i*8:]))
+			}
+		}
+	case "F16", "BF16":
+		dst := t.Storage().U16()
+		if !rawCopyLE(dst, src, 2) {
+			for i := range dst {
+				dst[i] = binary.LittleEndian.Uint16(src[i*2:])
+			}
+		}
+	case "F8_E4M3":
+		dst := t.Storage().F32()
+		for i, b := range src {
+			dst[i] = f8e4m3Table[b]
+		}
+	case "F8_E5M2":
+		dst := t.Storage().F32()
+		for i, b := range src {
+			dst[i] = f8e5m2Table[b]
+		}
+	case "BOOL":
+		dst := t.Storage().F32()
+		for i, b := range src {
+			if b != 0 {
+				dst[i] = 1
+			}
+		}
+	case "I8":
+		dst := t.Storage().F32()
+		for i, b := range src {
+			dst[i] = float32(int8(b))
+		}
+	case "U8":
+		dst := t.Storage().F32()
+		for i, b := range src {
+			dst[i] = float32(b)
+		}
+	case "I16":
+		dst := t.Storage().F32()
+		for i := range dst {
+			dst[i] = float32(int16(binary.LittleEndian.Uint16(src[i*2:])))
+		}
+	case "U16":
+		dst := t.Storage().F32()
+		for i := range dst {
+			dst[i] = float32(binary.LittleEndian.Uint16(src[i*2:]))
+		}
+	case "I32":
+		dst := t.Storage().F64()
+		for i := range dst {
+			dst[i] = float64(int32(binary.LittleEndian.Uint32(src[i*4:])))
+		}
+	case "U32":
+		dst := t.Storage().F64()
+		for i := range dst {
+			dst[i] = float64(binary.LittleEndian.Uint32(src[i*4:]))
+		}
+	case "I64":
+		dst := t.Storage().F64()
+		for i := range dst {
+			dst[i] = float64(int64(binary.LittleEndian.Uint64(src[i*8:])))
+		}
+	case "U64":
+		dst := t.Storage().F64()
+		for i := range dst {
+			dst[i] = float64(binary.LittleEndian.Uint64(src[i*8:]))
+		}
+	}
+}
+
 // Save writes tensors (and optional string metadata) to w. Deterministic:
 // sorted names, contiguous offsets, header padded to 8 bytes with spaces.
 func Save(w io.Writer, tensors map[string]*tensor.Tensor, meta map[string]string) error {
@@ -356,37 +480,13 @@ func loadFrom(r io.Reader, fileSize int64) (map[string]*tensor.Tensor, map[strin
 	var buf []byte // reused scratch for the decode fallback (widening / big-endian)
 	for _, ne := range entries {
 		e := ne.e
-		dt, err := dtypeOf(e.Dtype)
+		dt, shape, want, err := validateTensorEntry(ne.name, e)
 		if err != nil {
-			return nil, nil, fmt.Errorf("%w (tensor %q)", err, ne.name)
-		}
-		shape := tensor.Shape(e.Shape)
-		if !shape.IsValid() {
-			return nil, nil, fmt.Errorf("safetensors: tensor %q: invalid shape %v", ne.name, e.Shape)
-		}
-		// cap dims/product so Numel cannot wrap and lie to the size check (§V15).
-		// The product guard divides BEFORE multiplying: the old post-multiply
-		// check itself wrapped uint64 (shape [2^40, 2^40] → 2^80 ≡ 0), letting a
-		// hostile header pass the cap and return a tensor whose shape claims
-		// 2^80 elements over empty storage.
-		const maxDim = 1 << 40
-		numel := uint64(1)
-		for _, dv := range shape {
-			if uint64(dv) > maxDim {
-				return nil, nil, fmt.Errorf("safetensors: tensor %q dim %d exceeds cap", ne.name, dv)
-			}
-			if dv != 0 && numel > maxDim/uint64(dv) {
-				return nil, nil, fmt.Errorf("safetensors: tensor %q element count exceeds cap", ne.name)
-			}
-			numel *= uint64(dv)
+			return nil, nil, err
 		}
 		begin, end := e.DataOffsets[0], e.DataOffsets[1]
-		want := shape.Numel() * dt.size
 		if begin != cursor {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: offset %d leaves gap/overlap at %d", ne.name, begin, cursor)
-		}
-		if end-begin != want {
-			return nil, nil, fmt.Errorf("safetensors: tensor %q: %d bytes ≠ shape %v × %s", ne.name, end-begin, shape, e.Dtype)
 		}
 		// DoS guard: when the file size is known, this tensor's declared data
 		// cannot extend past the file. Without it a tiny file with a huge declared
@@ -417,86 +517,7 @@ func loadFrom(r io.Reader, fileSize int64) (map[string]*tensor.Tensor, map[strin
 		if _, err := io.ReadFull(r, src); err != nil {
 			return nil, nil, fmt.Errorf("safetensors: tensor %q: read data: %w", ne.name, err)
 		}
-		switch e.Dtype {
-		case "F32":
-			dst := t.Storage().F32()
-			if !rawCopyLE(dst, src, 4) {
-				for i := range dst {
-					dst[i] = math.Float32frombits(binary.LittleEndian.Uint32(src[i*4:]))
-				}
-			}
-		case "F64":
-			dst := t.Storage().F64()
-			if !rawCopyLE(dst, src, 8) {
-				for i := range dst {
-					dst[i] = math.Float64frombits(binary.LittleEndian.Uint64(src[i*8:]))
-				}
-			}
-		case "F16", "BF16":
-			dst := t.Storage().U16() // raw 16-bit bits, verbatim
-			if !rawCopyLE(dst, src, 2) {
-				for i := range dst {
-					dst[i] = binary.LittleEndian.Uint16(src[i*2:])
-				}
-			}
-		case "F8_E4M3": // §T577: FP8 and integer dtypes widen on load
-			dst := t.Storage().F32()
-			for i, b := range src {
-				dst[i] = f8e4m3Table[b]
-			}
-		case "F8_E5M2":
-			dst := t.Storage().F32()
-			for i, b := range src {
-				dst[i] = f8e5m2Table[b]
-			}
-		case "BOOL":
-			dst := t.Storage().F32()
-			for i, b := range src {
-				if b != 0 {
-					dst[i] = 1
-				}
-			}
-		case "I8":
-			dst := t.Storage().F32()
-			for i, b := range src {
-				dst[i] = float32(int8(b))
-			}
-		case "U8":
-			dst := t.Storage().F32()
-			for i, b := range src {
-				dst[i] = float32(b)
-			}
-		case "I16":
-			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = float32(int16(binary.LittleEndian.Uint16(src[i*2:])))
-			}
-		case "U16":
-			dst := t.Storage().F32()
-			for i := range dst {
-				dst[i] = float32(binary.LittleEndian.Uint16(src[i*2:]))
-			}
-		case "I32":
-			dst := t.Storage().F64()
-			for i := range dst {
-				dst[i] = float64(int32(binary.LittleEndian.Uint32(src[i*4:])))
-			}
-		case "U32":
-			dst := t.Storage().F64()
-			for i := range dst {
-				dst[i] = float64(binary.LittleEndian.Uint32(src[i*4:]))
-			}
-		case "I64":
-			dst := t.Storage().F64()
-			for i := range dst {
-				dst[i] = float64(int64(binary.LittleEndian.Uint64(src[i*8:])))
-			}
-		case "U64":
-			dst := t.Storage().F64()
-			for i := range dst {
-				dst[i] = float64(binary.LittleEndian.Uint64(src[i*8:]))
-			}
-		}
+		decodeTensorData(t, e.Dtype, src)
 		out[ne.name] = t
 		cursor = end
 	}

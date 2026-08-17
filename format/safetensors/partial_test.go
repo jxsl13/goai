@@ -116,6 +116,22 @@ func TestLoadTensorErrors(t *testing.T) {
 	}
 }
 
+func TestLoadTensorZeroSizedTensor(t *testing.T) {
+	p := t.TempDir() + "/zero.safetensors"
+	if err := safetensors.SaveFile(p, map[string]*tensor.Tensor{
+		"zero": tensor.Zeros(tensor.F32, tensor.Shape{2, 0, 3}),
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	x, err := safetensors.LoadTensor(p, "zero")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Numel() != 0 || !x.Shape().Equal(tensor.Shape{2, 0, 3}) {
+		t.Fatalf("zero tensor = shape %v, numel %d", x.Shape(), x.Numel())
+	}
+}
+
 // The whole point: LoadTensor pulling a small tensor from a file with a large one
 // must NOT allocate the large tensor. A 64 MiB tensor sits next to a tiny one;
 // loading the tiny one allocates far less than 64 MiB.
