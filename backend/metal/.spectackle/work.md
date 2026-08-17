@@ -23,7 +23,7 @@ SCOPE: fix the harness only. Do not optimize anything in the same change — the
 
 ## T-01M08TYB09FY9BCTHEVDRGQPE9 Implement and gate the M2 Q4_K 64x32 legacy simdgroup tile
 kind: task
-state: draft
+state: active
 created: 2026-08-17
 parent: P-01M08TT3TTE7ZBJCE64TC94G5C
 grilled: 2026-08-17 open=0
