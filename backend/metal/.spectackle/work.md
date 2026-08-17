@@ -43,6 +43,7 @@ kind: task
 state: draft
 created: 2026-08-17
 parent: P-01M08SN9PFECDAK5WMYZ7TSX7H
+grilled: 2026-08-17 open=0
 targets: msl:qmatmul_q4k_mm, go:metal.SetQ4KMatrixUnit, go:metal.TestQ4KMatrixUnitMatchesCooperative, go:metal.TestQ4KMatrixUnitHasNoCrossover
 
 Change the retained Metal qmatmul_q4k_mm candidate from float threadgroup operands and simdgroup_float8x8 inputs to half threadgroup operands and simdgroup_half8x8 inputs while preserving float accumulators and f32 output. Keep the existing Q4_K dequant formula, 32x32 tile, bounds handling, and explicit selector for the first pass. Update parity/reachability tests and add an alternating M2 leaf matrix against the current cached-f16 MPS route.
