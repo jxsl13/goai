@@ -3740,6 +3740,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 kind: proposal
 state: draft
 created: 2026-08-17
+grilled: 2026-08-17 open=0
 targets: go:llamagpu.Decoder.recordFFN, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal.go, backend/metal/metal_bridge.h
 
 Context: Current M2 TinyLlama Q4_K_M attribution shows pp64 at 1517.9 tok/s versus llama.cpp 1699.0 tok/s (1.1193x incumbent lead), while 97% of the GoAI per-layer GPU time is quantized matmul. The cached f16 route converts the same normalized input separately for gate and up, converts both half outputs to f32, executes f32 SwiGLU, and converts that result back to half for down.
