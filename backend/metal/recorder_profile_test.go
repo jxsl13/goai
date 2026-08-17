@@ -27,6 +27,9 @@ func requireMetalProfile(t *testing.T) {
 	if !metal.Available() {
 		t.Skip("Metal unavailable")
 	}
+	if !metal.RecorderProfilingAvailable() {
+		t.Skip("Metal timestamp profiling unavailable")
+	}
 	probe, err := metal.NewProfilingRecorder(1)
 	if err != nil {
 		t.Skipf("Metal timestamp profiling unavailable: %v", err)
@@ -399,6 +402,12 @@ func TestRecorderProfileErrorsAreExplicit(t *testing.T) {
 	}
 	if !metal.Available() {
 		t.Skip("Metal unavailable")
+	}
+	if !metal.RecorderProfilingAvailable() {
+		if _, err := metal.NewProfilingRecorder(1); err == nil {
+			t.Fatal("profiling recorder unexpectedly available")
+		}
+		t.Skip("Metal timestamp profiling unavailable")
 	}
 	r, err := metal.NewRecorder()
 	if err != nil {

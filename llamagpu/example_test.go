@@ -87,7 +87,7 @@ func ExampleDecoder_StepN() {
 // encoder labels. The profiler is diagnostic and opt-in; ordinary Step calls keep the production
 // recorder fast path.
 func ExampleDecoder_ProfileMetalStep() {
-	if !metal.Available() {
+	if !metal.Available() || !metal.RecorderProfilingAvailable() {
 		fmt.Println("profile contains encoder timings")
 		return
 	}

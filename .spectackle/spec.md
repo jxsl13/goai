@@ -345,6 +345,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - R-01KZ121PQ2FEMSCG5Y3KT3RW5V Round T1055: tensor axis coalescing -8 to -12 percent, plus three fresh sweeps recorded: Consumed: axis coalescing shipped at -7.5 to -11.9 percent across four cells with an oracle-based gate, and the allocate-before-knowing lesson became a rule after it flipped one cell to +18.4 percent. The three fresh sweeps (tensor, classic, rl plus llamagpu) are summarized in the body with their top candidates and the measured impossibility of inlining AtF64, so later rounds start from them.
 - T-01M088VKVJEP8AJ47MWWS5E8CG Port and validate the M2 Metal encoder profiler: Archived after successful implementation, physical M2 evidence, full local verification, and durable perfscan backpropagation.
 - P-01M088T3ZBF0BTTY4MGS94NY5A Retain current-main M2 Metal encoder profiling and reject stale fusion promotions: Archived after successful implementation, physical M2 evidence, full local verification, and durable perfscan backpropagation.
+- T-01M08AHZK0E7J81XBB4G7Q9M3X Expose and gate Metal recorder profiling support: Added RecorderProfilingAvailable, gated the runnable profiler example and tests on stage-boundary timestamp support, retained explicit constructor failure, and documented the capability split. Physical M2 profiler and llamagpu suites, the executable example, apicheck, and make preflight pass. This fixes the macOS CI runner where Metal exists without encoder-stage counter sampling.
+- P-01M08AFT7YF5Z87D0V45TMS7X2 Make Metal profiler capability discovery explicit: Capability discovery is now explicit and verified without changing the M2 profiling fast path. The contract is API-METAL-PROFILING-CAPABILITY-001; PR #1086 carries the fix and will merge only after all CI lanes pass.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -529,3 +531,8 @@ Rationale: The M>=24 expand-then-GEMM gate was calibrated against the cooperativ
 WHEN encoder profiling is enabled, the GoAI Metal recorder SHALL emit stable labels and GPU intervals with exact output parity, explicit omission counts, at most 2048 event pairs, and disabled-path benchmark overhead within two percent.
 
 Rationale: Opt-in timestamp attribution must expose incomplete traces and remain performance-neutral when disabled, or it can mis-rank kernel work and perturb the production path it is intended to diagnose.
+
+## API-METAL-PROFILING-CAPABILITY-001
+WHEN recorder profiling capability is queried, the GoAI Metal backend SHALL return true only when stage-boundary timestamp sampling and a timestamp counter set are available through RecorderProfilingAvailable.
+
+Rationale: Metal availability does not imply counter-sampling support; callers need a stable preflight boundary before entering the optional diagnostic path.

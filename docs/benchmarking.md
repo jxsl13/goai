@@ -2291,6 +2291,9 @@ The production quantized decoder now has an opt-in attribution path for one
 ordinary Metal command buffer. `Decoder.ProfileMetalStep` runs the same recorder
 operation sequence as `Step`, but asks Metal for timestamp samples at each custom
 compute or blit encoder boundary. The default `NewRecorder` path stays unprofiled.
+Callers can use `metal.RecorderProfilingAvailable` to distinguish general Metal
+availability from stage-boundary timestamp support before entering this optional
+diagnostic path.
 
 The profile is deliberately honest about work it cannot attribute. Metal
 Performance Shaders (MPS) owns the internal encoders for dense matrix multiplies,

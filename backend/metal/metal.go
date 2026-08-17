@@ -68,6 +68,11 @@ func (Backend) Synchronize() error    { return nil }
 // Available reports whether a Metal device with MPS support exists.
 func Available() bool { return C.mtl_available() == 1 }
 
+// RecorderProfilingAvailable reports whether the Metal device supports timestamp counter
+// sampling at encoder stage boundaries. Check it before NewProfilingRecorder when profiling is
+// optional; Metal can be available on devices that do not expose this counter-sampling mode.
+func RecorderProfilingAvailable() bool { return C.mtl_recorder_profile_support() == 0 }
+
 // AvailableMemory implements backend.MemoryProber using Metal's remaining
 // recommended working-set budget, which is safer for placement than total UMA.
 func (Backend) AvailableMemory() (bytes int64, ok bool) {

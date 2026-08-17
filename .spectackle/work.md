@@ -3742,3 +3742,12 @@ grilled: 2026-08-17 open=0
 targets: .
 
 Rebase the encoder-observability work onto current main and retain only the opt-in timestamp profiler plus its stage analyzer. Current main already fixes the logical active-extent mismatch through BinaryN. Exact 200-token revalidation measures residual add/RMSNorm at 0.992x with a different all-logit digest and Q4_K gate/up/SwiGLU at 0.985x with an identical digest when the invalid residual path is disabled. Remove both promotions, APIs, kernels, and claim-bearing documentation. Keep profiling disabled by default, prove disabled-path overhead and exact profiled parity, retain current cooperative, F16, and split-K paths, and publish compact current-main evidence only. Historical raw campaigns remain research inputs, not current leadership claims.
+
+## P-01M08AFT7YF5Z87D0V45TMS7X2 Make Metal profiler capability discovery explicit
+kind: proposal
+state: done
+created: 2026-08-17
+grilled: 2026-08-17 open=0
+targets: go:metal.NewProfilingRecorder, go:llamagpu.Decoder.ProfileMetalStep, backend/metal/recorder_profile_test.go, llamagpu/example_test.go, docs/benchmarking.md
+
+A macOS CI runner exposes Metal and MPS but not stage-boundary timestamp sampling. Add an explicit public capability query, preserve NewProfilingRecorder errors, skip unsupported runnable-example work, and document the distinction. This closes a portability gap without changing the M2 profiling or production recorder paths.
