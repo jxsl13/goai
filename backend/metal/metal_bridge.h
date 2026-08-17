@@ -191,6 +191,18 @@ void mtl_qweight_free(void* handle);
 int mtl_batch_dispatch_bench(int iters, int oneBuffer);
 int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int K, int N);
 void* mtl_recorder_begin(void);
+// mtl_recorder_begin_profile opens an opt-in recorder that samples GPU timestamps at the
+// boundaries of at most maxEvents explicit compute/blit encoders. The default recorder stays
+// allocation- and sampling-free. Profiling requires Apple stage-boundary timestamp counters.
+int mtl_recorder_profile_support(void);
+void* mtl_recorder_begin_profile(int maxEvents);
+int mtl_recorder_profile_summary(void* rec, int* eventCount, int* omittedMPS,
+                                 int* omittedOverflow, int* omittedUnsupported,
+                                 unsigned long long* timestampFrequency,
+                                 unsigned long long* commandDurationNS);
+int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapacity,
+                               unsigned long long* startOffsetNS,
+                               unsigned long long* ticks, unsigned long long* durationNS);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);

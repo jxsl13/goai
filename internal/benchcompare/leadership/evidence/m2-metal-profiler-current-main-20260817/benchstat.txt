@@ -1,0 +1,17 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+                                 │ control.txt │ candidate.txt │
+                                 │   sec/op    │    sec/op     │ vs base
+MetalRecorderDisabledOverhead-10   18.70µ ± 4%    18.56µ ± 2%    ~ (p=0.739 n=10)
+
+                                 │ control.txt │ candidate.txt │
+                                 │    B/op     │     B/op      │ vs base
+MetalRecorderDisabledOverhead-10    8.000 ± 0%     8.000 ± 0%    ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                                 │ control.txt │ candidate.txt │
+                                 │  allocs/op  │   allocs/op   │ vs base
+MetalRecorderDisabledOverhead-10    1.000 ± 0%     1.000 ± 0%    ~ (p=1.000 n=10) ¹
+¹ all samples are equal

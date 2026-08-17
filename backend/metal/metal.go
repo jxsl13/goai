@@ -14,6 +14,7 @@ import (
 	"math"
 	"runtime"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/jxsl13/goai/backend"
@@ -2040,6 +2041,30 @@ func flashAttnHost(q, k, v []float32, seq, dm, heads, dk, causal, kvHeads int, s
 // batched-decode engine that is ~3× faster than per-op dispatch at realistic decode sizes, §T379).
 type Recorder struct{ handle unsafe.Pointer }
 
+// RecorderProfileEvent is one explicit custom Metal compute/blit encoder measured at its GPU
+// stage boundaries. Ticks are retained alongside Duration so profiles remain auditable against
+// the recorder's CPU/GPU clock-pair calibration rather than assuming that one tick is one
+// nanosecond.
+type RecorderProfileEvent struct {
+	Label       string
+	StartOffset time.Duration
+	Ticks       uint64
+	Duration    time.Duration
+}
+
+// RecorderProfile is available after a profiling recorder has completed. MPS matrix operations
+// are counted rather than silently attributed because MPS owns their internal encoders. Overflow
+// and invalid/unsupported samples are likewise explicit.
+type RecorderProfile struct {
+	Events             []RecorderProfileEvent
+	OmittedMPS         int
+	OmittedOverflow    int
+	OmittedUnsupported int
+	TimestampFrequency uint64 // effective calibrated GPU counter ticks per second
+	CommandDuration    time.Duration
+	EventSpan          time.Duration
+}
+
 // NewRecorder opens a Recorder (a fresh command buffer). Record ops into it, then Finish to submit
 // and wait, and Free to release it. Not safe for concurrent use; drive one Recorder per goroutine.
 func NewRecorder() (*Recorder, error) {
@@ -2048,6 +2073,74 @@ func NewRecorder() (*Recorder, error) {
 		return nil, fmt.Errorf("metal: Recorder begin failed")
 	}
 	return &Recorder{handle: h}, nil
+}
+
+// NewProfilingRecorder opens a Recorder that measures explicit custom compute/blit encoder GPU
+// time. maxEvents bounds the counter buffer (two timestamp samples per encoder); Apple GPU Family
+// 8 permits 2048 timestamp event pairs in its 32 KiB counter-sample limit. Profiling is opt-in so
+// NewRecorder retains its production allocation and latency characteristics.
+func NewProfilingRecorder(maxEvents int) (*Recorder, error) {
+	if maxEvents < 1 || maxEvents > 2048 {
+		return nil, fmt.Errorf("metal: profiling recorder maxEvents=%d outside [1,2048]", maxEvents)
+	}
+	support := int(C.mtl_recorder_profile_support())
+	if support != 0 {
+		return nil, fmt.Errorf("metal: profiling recorder unsupported (code %d)", support)
+	}
+	h := C.mtl_recorder_begin_profile(C.int(maxEvents))
+	if h == nil {
+		return nil, fmt.Errorf("metal: profiling Recorder begin failed")
+	}
+	return &Recorder{handle: h}, nil
+}
+
+// Profile resolves a completed profiling recorder. Call it after Finish, or after Commit followed
+// by Wait, and before Free. Calling it on a default recorder or an incomplete command buffer is an
+// error; no partial timings are returned.
+func (r *Recorder) Profile() (RecorderProfile, error) {
+	if r == nil || r.handle == nil {
+		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile after Free")
+	}
+	var count, omittedMPS, omittedOverflow, omittedUnsupported C.int
+	var frequency, commandDurationNS C.ulonglong
+	rc := C.mtl_recorder_profile_summary(r.handle, &count, &omittedMPS, &omittedOverflow,
+		&omittedUnsupported, &frequency, &commandDurationNS)
+	if rc != 0 {
+		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile unavailable (code %d)", int(rc))
+	}
+	p := RecorderProfile{
+		Events:             make([]RecorderProfileEvent, int(count)),
+		OmittedMPS:         int(omittedMPS),
+		OmittedOverflow:    int(omittedOverflow),
+		OmittedUnsupported: int(omittedUnsupported),
+		TimestampFrequency: uint64(frequency),
+		CommandDuration:    time.Duration(uint64(commandDurationNS)),
+	}
+	const labelCapacity = 96
+	for i := range p.Events {
+		label := make([]byte, labelCapacity)
+		var startOffsetNS, ticks, durationNS C.ulonglong
+		rc = C.mtl_recorder_profile_event(r.handle, C.int(i), (*C.char)(unsafe.Pointer(&label[0])),
+			C.int(len(label)), &startOffsetNS, &ticks, &durationNS)
+		if rc != 0 {
+			return RecorderProfile{}, fmt.Errorf("metal: Recorder profile event %d failed (code %d)", i, int(rc))
+		}
+		n := 0
+		for n < len(label) && label[n] != 0 {
+			n++
+		}
+		p.Events[i] = RecorderProfileEvent{
+			Label:       string(label[:n]),
+			StartOffset: time.Duration(uint64(startOffsetNS)),
+			Ticks:       uint64(ticks),
+			Duration:    time.Duration(uint64(durationNS)),
+		}
+		end := p.Events[i].StartOffset + p.Events[i].Duration
+		if end > p.EventSpan {
+			p.EventSpan = end
+		}
+	}
+	return p, nil
 }
 
 // Unary encodes o = f(op, x) over x's elements into the Recorder (no commit).

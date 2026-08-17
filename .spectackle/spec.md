@@ -343,6 +343,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - R-01KYZJED1BEV69HHF7G1NGYVFA Round T1043: distill per-worker scratch -16%, gguf ReadFile buffering -91.7%, PS3029: Consumed: distill helper shipped at -16.6 percent with allocations down, gguf ReadFile buffering shipped at -91.7 percent on a header-heavy load, and the class became PS3029. The durable part is the benchmark: BenchmarkReadFileSynth builds its own model in a temp directory and has two shapes because the load has two independently sized halves, which unblocks the three remaining gguf candidates tha [body truncated at tombstone retention cap]
 - R-01KYZKSNV3E47BC2WXTHBWCRXB Round T1045: Quantize aliasing -88% bytes, SolveSPD interchange -35.6%: Consumed: both shipped with measurements (Quantize -87.7 percent bytes and -9.1 percent time, SolveSPD -35.6 percent), each with a bit-identity or invariant gate written for it — the SolveSPD kernel had no test at all before this. The class detection already existed as PS6011; what was added is the interchange remedy and its price, so a reader can tell a two-line fix from a relayout. Four candid [body truncated at tombstone retention cap]
 - R-01KZ121PQ2FEMSCG5Y3KT3RW5V Round T1055: tensor axis coalescing -8 to -12 percent, plus three fresh sweeps recorded: Consumed: axis coalescing shipped at -7.5 to -11.9 percent across four cells with an oracle-based gate, and the allocate-before-knowing lesson became a rule after it flipped one cell to +18.4 percent. The three fresh sweeps (tensor, classic, rl plus llamagpu) are summarized in the body with their top candidates and the measured impossibility of inlining AtF64, so later rounds start from them.
+- T-01M088VKVJEP8AJ47MWWS5E8CG Port and validate the M2 Metal encoder profiler: Archived after successful implementation, physical M2 evidence, full local verification, and durable perfscan backpropagation.
+- P-01M088T3ZBF0BTTY4MGS94NY5A Retain current-main M2 Metal encoder profiling and reject stale fusion promotions: Archived after successful implementation, physical M2 evidence, full local verification, and durable perfscan backpropagation.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -522,3 +524,8 @@ Rationale: Sweeping a relative perturbation through the SVC RBF kernel: one-ulp 
 WHEN a kernel stops covering input sizes it once covered, the loop SHALL re-measure every dispatch threshold naming it as fallback, and assert cost below each boundary stays within 2x the cost above it.
 
 Rationale: The M>=24 expand-then-GEMM gate was calibrated against the cooperative kernel at M=16 0.90x. When cooperative narrowed to M==1, batches of 2 to 23 fell to the scalar kernel: 23 tokens cost 257.0 ms against 47.1 ms for 24. Correctness suites cannot see it, since the slow kernel is correct.
+
+## PERF-M2-METAL-PROFILER-002
+WHEN encoder profiling is enabled, the GoAI Metal recorder SHALL emit stable labels and GPU intervals with exact output parity, explicit omission counts, at most 2048 event pairs, and disabled-path benchmark overhead within two percent.
+
+Rationale: Opt-in timestamp attribution must expose incomplete traces and remain performance-neutral when disabled, or it can mis-rank kernel work and perturb the production path it is intended to diagnose.
