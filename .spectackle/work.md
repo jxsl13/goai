@@ -3671,15 +3671,6 @@ targets: format/safetensors/partial.go, format/safetensors/bench_test.go, intern
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
 
-## P-01M09KZ8SEEH2B6T0R2QRJBCBS Fuse M2 gate and up prefill through one cached-f16 projection
-kind: proposal
-state: active
-created: 2026-08-18
-grilled: 2026-08-18 open=0
-targets: go:llamagpu.Decoder.recordFFN, go:llamagpu.newQuantDecoder, go:metal.NewResidentQGroup, backend/metal/metal_bridge.m
-
-M2 shipping medians at merged main 41b109de are 177.8 tg64 and 1589 pp64 versus pinned llama.cpp b10450 at 197.0 and 1771.0 tok/s, leaving about 1.11x gaps. TinyLlama gate and up share Q4_K and currently execute two cached-f16 MPS projections plus Binary SwiGLU at pp64. Add a prefill-only 24<=M<=64 combined gate|up resident weight, one cached-f16 MPS projection, and a Metal SwiGLUHalves kernel whose arithmetic is bit-identical to BinaryN op 6. Retain separate raw-quant gate/up for M<24 decode and the established paths for M>64, mixed quant types, other backends, GeGLU, MoE, and unsupported shapes. Provide a constructor-local candidate/control seam. Promotion requires exact combined-versus-separate leaf outputs, exact trained logits and greedy tokens, one versus two MPS projections by profile, leaf >=1.08x, pp64 >=1.03x in each of three independent invocations containing three interleaved fresh-decoder campaigns, pp512 and tg64 >=0.99x, and unchanged-control spread <=1.15x. Revert executable changes if any gate fails and report the general finding to perfscan.
-
 ## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
 kind: adr
 state: done
