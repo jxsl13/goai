@@ -2054,6 +2054,38 @@ func (b *DeviceBuffer) DownloadF32(dst []float32) error {
 	return nil
 }
 
+// TopKN returns the k highest (index, value) pairs among the first n resident f32 elements. The
+// Metal buffer uses Shared storage on Apple Silicon, so the bridge scans coherent UMA directly and
+// materializes only O(k) result data in Go. Results are ordered by descending value, then ascending
+// index for ties; k must be in [1,min(256,n)].
+func (b *DeviceBuffer) TopKN(n, k int) ([]int32, []float32, error) {
+	if b.handle == nil {
+		return nil, nil, fmt.Errorf("metal: TopKN on released buffer")
+	}
+	if b.bytes != 4 {
+		return nil, nil, fmt.Errorf("metal: TopKN requires f32 storage, got %d-byte elements", b.bytes)
+	}
+	if n < 1 || n > b.n {
+		return nil, nil, fmt.Errorf("metal: TopKN n=%d out of range (1..%d)", n, b.n)
+	}
+	if k < 1 || k > 256 || k > n {
+		return nil, nil, fmt.Errorf("metal: TopKN k=%d out of range for n=%d (1..min(256,n))", k, n)
+	}
+	indices := make([]int32, k)
+	values := make([]float32, k)
+	rc := C.mtl_devbuf_topk(
+		b.handle,
+		C.int(n),
+		C.int(k),
+		(*C.int)(unsafe.Pointer(&indices[0])),
+		(*C.float)(unsafe.Pointer(&values[0])),
+	)
+	if rc != 0 {
+		return nil, nil, fmt.Errorf("metal: TopKN failed (code %d)", int(rc))
+	}
+	return indices, values, nil
+}
+
 // downloadF16Bits is the exact-storage test seam for the specialized KV cache. The public
 // arithmetic API intentionally does not expose half tensors; tests still need to pin the on-device
 // f32→binary16 rounding contract independently of downstream attention.

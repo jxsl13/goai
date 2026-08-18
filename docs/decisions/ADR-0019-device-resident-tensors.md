@@ -73,3 +73,25 @@ Concretely, the pieces:
 - **Zero-copy UMA alone** (ADR-0018): rejected — the copy is not the floor (§B42).
 - **Routing everything small to the CPU**: rejected as a blanket default (§T361, the
   crossover is size- and hardware-dependent); `WithBackend` already gives the choice.
+
+## Amendment: resident reductions at the consumer boundary (2026-08-18)
+
+Device residency does not require every consumer to execute as a GPU command.
+On Apple Silicon, a completed `MTLResourceStorageModeShared` buffer is coherent
+UMA. If the public result is bounded while the resident tensor is large—for
+example Top-K sampling over vocabulary logits—the backend should return the
+bounded result without first materializing the full tensor in Go.
+
+The first promoted instance is Metal `DeviceBuffer.TopKN`: a bounded native
+heap scans the coherent resident f32 buffer and returns only k index/value
+pairs. At n=32,000 and k=56 it measures 62.7-66.7 us and clears the end-to-end
+gate without adding a second GPU command buffer after decode has already
+synchronized. This is still a device-resident boundary: the n-element tensor
+never becomes a Go tensor, and only O(k) data crosses cgo. CUDA retains its GPU
+reduction because discrete-memory economics differ.
+
+The architectural rule is capability-based, not backend-name branching. The
+decoder asks whether its logits buffer implements the narrow `TopKN` contract;
+unsupported backends and samplers whose semantics need arbitrary logits retain
+the complete host fallback. Exact token parity and an end-to-end generation
+gain are required independently of leaf timing.

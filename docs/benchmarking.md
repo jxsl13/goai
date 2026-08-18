@@ -2453,6 +2453,35 @@ Raw trained-model and incumbent samples, leaf ranges, hashes, exact commands,
 and configuration axes are committed in
 `internal/benchcompare/leadership/evidence/m2-metal-f16kv-20260818`.
 
+### Resident Metal Top-K sampling and the forward-only boundary (2026-08-18)
+
+The mixed-QKV follow-up refreshes the shipping forward-only medians to 178.5
+tok/s tg64 and 1,592.4 tok/s pp64 for GoAI versus 193.311717 and 1,770.109320
+for pinned llama.cpp b10450. The incumbent factors are 1.082979× and
+1.111598×.
+
+Source inspection found one remaining semantic mismatch in that harness:
+llama-bench calls `llama_decode` and `llama_synchronize` but never requests
+logits, while GoAI `Step` allocates and copies the full 32,000-float logits
+vector. A ten-round alternating attribution measures 178.96 tok/s with that
+copy and 179.28 tok/s without it, only 1.00181×. The copy is therefore bounded
+as a minor harness charge rather than misreported as the remaining decode
+bottleneck.
+
+The charge becomes material only when the complete host fallback also widens
+and samples the distribution. On the trained logits, temperature 0.8 + Top-K
+40 + Top-P 0.9 costs 459.297 us/token on the host. Metal now implements the
+narrow `deviceTopKer` capability by scanning its completed coherent Shared
+buffer with a bounded native heap and returning only K pairs. At n=32,000 and
+k=56 the leaf measures 62.669-66.691 us/op, 448 B/op, and two O(k) allocations.
+
+Ten alternating trained-model generation pairs preserve the exact 70-token
+sequence and improve the full-vocabulary fallback from 153.97 to 163.67 tok/s,
+a 1.06301× end-to-end gain. This sampled-generation cell is deliberately not
+compared with llama-bench: the incumbent benchmark does not sample. Evidence,
+raw samples, model hash, and reproduction commands are under
+`internal/benchcompare/leadership/evidence/m2-metal-resident-topk-20260818`.
+
 ## GGUF ReadFile mmap path (2026-08-17)
 
 `format/gguf.ReadFile` used to allocate and fill a model-sized encoded data
