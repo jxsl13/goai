@@ -18,20 +18,6 @@ Value: SGLang's RadixAttention prefix reuse is the industry mirror of this repo'
 
 Migrated from cavekit SPEC.md T888.
 
-## T-01KYJNDR38E4ZSN52KVM0PC5J9 Extend the trained-optimizer comparison with APOLLO and Q-GaLore
-kind: task
-state: done
-created: 2026-07-27
-targets: docs/training.md
-
-The nn package ships APOLLO and Q-GaLore, but the trained-optimizer zoo in llamagpu/optimizers_trained_test.go and the tables in docs/training.md still end at the earlier optimizer set. Godoc alone cannot give the comparative same-task cross-entropy-after-120-steps measurement, which is the value here.
-
-Work: add APOLLO (seed-only projection default) and Q-GaLore (default QuantBits, plus the QuantBits=0 GaLore-collapse datapoint) rows to the zoo and wrapper harness using the same task, step count and protocol; refresh the zoo and wrapper tables in docs/training.md; record which defaults were used, with the research grounding for each.
-
-Also fix the stale section-range header in training.md so it names the range actually covered.
-
-Migrated from cavekit SPEC.md T891.
-
 ## T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension
 kind: task
 state: done
