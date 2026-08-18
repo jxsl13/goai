@@ -3654,15 +3654,6 @@ WHY NOTHING CAUGHT IT. Every parity test passed throughout: the scalar kernel is
 
 CALIBRATING THE PARITY GUARD, which is the transferable part. Rerouting changes WHICH kernel produces the numbers, so a tolerance is needed — and it must be calibrated against the sizes that ALREADY took the new path, not guessed. Newly routed n=2..23 diverge 0.012-0.028 from the scalar kernel; the untouched n=64 diverges 0.214. The moved range is up to 7.6x TIGHTER than what was already shipping, which is the argument that the change introduces no new numerical risk. A guessed 2e-2 bound would have failed the change for being 10x better than the status quo.
 
-## P-01M08AFT7YF5Z87D0V45TMS7X2 Make Metal profiler capability discovery explicit
-kind: proposal
-state: done
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: go:metal.NewProfilingRecorder, go:llamagpu.Decoder.ProfileMetalStep, backend/metal/recorder_profile_test.go, llamagpu/example_test.go, docs/benchmarking.md
-
-A macOS CI runner exposes Metal and MPS but not stage-boundary timestamp sampling. Add an explicit public capability query, preserve NewProfilingRecorder errors, skip unsupported runnable-example work, and document the distinction. This closes a portability gap without changing the M2 profiling or production recorder paths.
-
 ## R-01M08DHP12FAQVKBDDQQB4XDGA Safetensors single-tensor load spends half its latency in synthetic full-container decode
 kind: research
 state: draft
