@@ -3670,3 +3670,18 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
+
+## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
+kind: adr
+state: done
+created: 2026-08-18
+decision: Only 24<=M<=64 prefill with identical quant types and bit-exact output
+consequences: Production decode, M>64 prefill, mixed quant types, non-Metal backends, GeGLU, and MoE retain their current graph. The candidate must preserve every f32 output bit and is removed if repeated pp64 leverage is below 1.03x or either unaffected axis falls below 0.99x.
+status: accepted
+
+kind: radio
+option: Only 24<=M<=64 prefill with identical quant types and bit-exact output
+option: All M including single-token decode to maximize dispatch reduction
+option: All prefill sizes including M>64 despite the established f16 crossover
+blocks: P-01M09KZ8SEEH2B6T0R2QRJBCBS
+choice: Only 24<=M<=64 prefill with identical quant types and bit-exact output
