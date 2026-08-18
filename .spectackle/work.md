@@ -3763,12 +3763,3 @@ option: Require exact expanded operand bytes plus bounded output NRMSE and train
 option: Require bit-exact GEMM output and reject all shape-changing fusion
 blocks: P-01M09A28JWF5ZBR8ADMM2P13MN
 choice: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
-
-## T-01M09A4TMCF2E9GDEG967PVV8E Implement and gate bounded-reassociation mixed Metal QKV
-kind: task
-state: active
-created: 2026-08-18
-parent: P-01M09A28JWF5ZBR8ADMM2P13MN
-targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/mixed_qgroup_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/mixed_qkv_realmodel_test.go
-
-Implement the successor proposal and validate exact combined expansion storage, bounded per-segment numerical error, M<24 fallback, one-GEMM path proof, budget accounting, ten-sample M64/M512 leaf gates, trained TinyLlama quality and three interleaved fresh-decoder pp64/pp512/tg64 campaigns, full tests, spectackle drift, pinned five-pair llama.cpp comparison, and perfscan reporting. Revert executable changes on any corrected gate failure.
