@@ -3738,7 +3738,7 @@ On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, fi
 
 ## P-01M093C3MFF0E8E1THCWYA1757 Close the M2 shipping gap with an opt-in f16 KV cache
 kind: proposal
-state: approved
+state: active
 created: 2026-08-18
 refs: R-01M08N4Z5QEJFBZXSAH6F5591E
 grilled: 2026-08-18 open=0
