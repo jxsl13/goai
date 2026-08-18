@@ -18,38 +18,6 @@ Value: SGLang's RadixAttention prefix reuse is the industry mirror of this repo'
 
 Migrated from cavekit SPEC.md T888.
 
-## T-01KYJNDR38E4ZSN52KVM0PC5J9 Extend the trained-optimizer comparison with APOLLO and Q-GaLore
-kind: task
-state: done
-created: 2026-07-27
-targets: docs/training.md
-
-The nn package ships APOLLO and Q-GaLore, but the trained-optimizer zoo in llamagpu/optimizers_trained_test.go and the tables in docs/training.md still end at the earlier optimizer set. Godoc alone cannot give the comparative same-task cross-entropy-after-120-steps measurement, which is the value here.
-
-Work: add APOLLO (seed-only projection default) and Q-GaLore (default QuantBits, plus the QuantBits=0 GaLore-collapse datapoint) rows to the zoo and wrapper harness using the same task, step count and protocol; refresh the zoo and wrapper tables in docs/training.md; record which defaults were used, with the research grounding for each.
-
-Also fix the stale section-range header in training.md so it names the range actually covered.
-
-Migrated from cavekit SPEC.md T891.
-
-## T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension
-kind: task
-state: done
-created: 2026-07-27
-targets: vision
-
-vision.ViT.Forward processes a [batch,C,H,W] input by looping over the batch: slice image b, forwardOne, concat. A batch of N therefore runs as N independent length-(patches+1) encoder forward and backward passes. On GPU each per-image op pays the roughly 0.27ms Metal/Vulkan dispatch floor, multiplied by N, which measured about 40x behind torch-mps for ViT training. On CPU the same defect costs only 2.6x to 4.2x because there is no dispatch floor, so this is a GPU lever specifically.
-
-Fix: carry a leading batch dimension through patch-embed, class-token prepend, positional embedding, the MHA blocks, final layer norm and the head, so attention runs one [N, patches+1, D] pass.
-
-Feasibility, already scoped: nlp.MHA.Forward asserts x.Ndim()==2, so the shared attention is 2D-only and the ViT loops per image because attention cannot batch. Three routes: (a) add a batch dimension to OpMHA, nlp.MHA and every backend MHA kernel, the real fix but deep and cross-cutting into the worker's attention kernels; (b) a ViT-local batched attention in vision/ that bypasses nlp.MHA, moderate but duplicates attention; (c) wire the batched recorder to the autograd tape, currently parked.
-
-Correctness bar: bit-identical to the per-image loop at batch=1 and equal to looping for batch>1, pinned by a gradient check and a per-image-versus-batched parity test.
-
-Benchmark harness already exists at internal/benchcompare/vision_train_test.go.
-
-Migrated from cavekit SPEC.md T908.
-
 ## ADR-01KYJNF428F8Q9RQTABB1ZSVPC What is the agent commit and push authority on this repo?
 kind: adr
 state: submitted
@@ -767,21 +735,6 @@ cholSolve (autograd) — 0.93x. Slower. Distinct from the Cholesky VJP work that
 RELATED MEASUREMENT HYGIENE from the same campaign, worth carrying: one Cholesky measurement at n=64 was thrown out as unusable rather than reported — the OLD arm swung 87% within a single set and would have read as 17% SLOWER. Re-run at n=128 it was stable. An arm that will not hold still is not a result, in either direction.
 
 STANDING: none of these four is suppressed in perfscan. They are declined at the measured sizes on this host (Apple M2 Pro, darwin/arm64, go1.26.5). A different shape or a machine with different memory behavior could move them, but the burden is a fresh interleaved measurement, not an argument from the code shape.
-
-## ADR-01KZ3HW0ZSFE7T23XD65GPBRE6 Lower classic treeRadixCutoff from 512 to 32? It is worth 17.3 percent on the forest fit and changes which trees are grown.
-kind: adr
-state: done
-created: 2026-08-03
-context: MEASURED, interleaved over three rounds: BenchmarkForestFit 123.3 to 101.9 ms, minus 17.3 percent, and the variance disappears - 101.9 ms every run at 32 against 123 to 144 ms at 512. TreeFit is flat. The comparison-sort path is about half the forest fit: radixByFeature is 50.7 percent of a parallel profile and its closure comparator, the pdqsort partition and the insertion sort are most of that. Cutoffs of 32 and 128 both land near 102 ms. THE COST: the bit-exact forest digest FAILS at 32, 64 and 128 and passes only at 512, so the change alters which trees are grown. WHY, AND THIS CORRECTS A CLAIM IN THE CODE: radixByFeature documented its unspecified tie order as irrelevant because thresholds sit between distinct values. That is wrong - the sweep skips a candidate cut when the gap between consecutive values is at most featureThreshold, a TOLERANCE of 1e-7, so values that are distinct yet closer than that behave like ties, and reordering them changes which pairs are adjacent and therefore which cuts are considered. Two sorts that disagree on those runs grow different trees. The comment has been corrected; no behavior was changed.
-decision: Keep 512 - preserve the exact trees the frozen digest pins
-consequences: THE QUESTION WAS MALFORMED AND THE ANSWER IS BOTH OPTIONS AT ONCE. treeRadixCutoff was serving two callers with opposite cost profiles: a PER-NODE sort of a shrinking range in the CART builder, which wants a low cutoff, and a ONE-TIME presort of every row in the GBM builder, which wants a high one. Splitting it resolves the tradeoff instead of choosing a side. The GBM presort keeps 512 as the new gbmRadixCutoff - that is the option chosen here - and the CART per-node cutoff drops to 32. With the two separated: BenchmarkForestFit 121.5 to 101.3 ms, minus 16.6 percent with all three new runs below all three base runs; GBMFit flat at 66.5 to 64.0; and BOTH bit-exact digests pass UNCHANGED. The apparent model-behavior change was entirely the shared constant dragging the GBM presort along with the CART one, which also cost GBMFit about 25 percent. No trees change and nothing is re-frozen.
-status: accepted
-
-kind: radio
-option: Keep 512 - preserve the exact trees the frozen digest pins
-option: Lower to 32 and re-freeze the digest - accept different but equally valid trees for 17.3 percent
-option: Lower only for classification, where the risk is smallest, and keep 512 for regression
-choice: Keep 512 - preserve the exact trees the frozen digest pins
 
 ## R-01M01CYGEBETMARNK7BDJ7P8S3 M2 Metal prefill quant matmul re-reads the weight per row: 87x at M=256, 0.31 TFLOP/s effective
 kind: research
@@ -3701,24 +3654,6 @@ WHY NOTHING CAUGHT IT. Every parity test passed throughout: the scalar kernel is
 
 CALIBRATING THE PARITY GUARD, which is the transferable part. Rerouting changes WHICH kernel produces the numbers, so a tolerance is needed — and it must be calibrated against the sizes that ALREADY took the new path, not guessed. Newly routed n=2..23 diverge 0.012-0.028 from the scalar kernel; the untouched n=64 diverges 0.214. The moved range is up to 7.6x TIGHTER than what was already shipping, which is the argument that the change introduces no new numerical risk. A guessed 2e-2 bound would have failed the change for being 10x better than the status quo.
 
-## P-01M088T3ZBF0BTTY4MGS94NY5A Retain current-main M2 Metal encoder profiling and reject stale fusion promotions
-kind: proposal
-state: done
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: .
-
-Rebase the encoder-observability work onto current main and retain only the opt-in timestamp profiler plus its stage analyzer. Current main already fixes the logical active-extent mismatch through BinaryN. Exact 200-token revalidation measures residual add/RMSNorm at 0.992x with a different all-logit digest and Q4_K gate/up/SwiGLU at 0.985x with an identical digest when the invalid residual path is disabled. Remove both promotions, APIs, kernels, and claim-bearing documentation. Keep profiling disabled by default, prove disabled-path overhead and exact profiled parity, retain current cooperative, F16, and split-K paths, and publish compact current-main evidence only. Historical raw campaigns remain research inputs, not current leadership claims.
-
-## P-01M08AFT7YF5Z87D0V45TMS7X2 Make Metal profiler capability discovery explicit
-kind: proposal
-state: done
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: go:metal.NewProfilingRecorder, go:llamagpu.Decoder.ProfileMetalStep, backend/metal/recorder_profile_test.go, llamagpu/example_test.go, docs/benchmarking.md
-
-A macOS CI runner exposes Metal and MPS but not stage-boundary timestamp sampling. Add an explicit public capability query, preserve NewProfilingRecorder errors, skip unsupported runnable-example work, and document the distinction. This closes a portability gap without changing the M2 profiling or production recorder paths.
-
 ## R-01M08DHP12FAQVKBDDQQB4XDGA Safetensors single-tensor load spends half its latency in synthetic full-container decode
 kind: research
 state: draft
@@ -3735,18 +3670,3 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
-
-## ADR-01M09A3S9JFMHAYHX35BG0HRNY How should numerical equivalence be gated when a vendor GEMM changes reduction scheduling after column fusion?
-kind: adr
-state: done
-created: 2026-08-18
-context: The combined Q4_K/Q4_K/Q6_K f16 expansion is bit-exact. MPS result-column-dependent tiling changes output bits only through reassociation, with segment NRMSE <=8.98e-4, while the measured projection stage improves 1.7308x at M64 and 1.2160x at M512. perfscan #765 records the general finding.
-decision: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
-consequences: Fusion correctness is decomposed into an exact storage/layout invariant and a numerical-semantic invariant. The grouped projection must keep per-segment NRMSE <=1.5e-3, finite outputs, trained-model logit NRMSE <=2e-3, and unchanged greedy tokens; it cannot claim bit-identical GEMM outputs across vendor-selected result shapes. Performance gates remain mandatory, and any quality failure rejects the path.
-status: accepted
-
-kind: radio
-option: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
-option: Require bit-exact GEMM output and reject all shape-changing fusion
-blocks: P-01M09A28JWF5ZBR8ADMM2P13MN
-choice: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
