@@ -16,6 +16,3 @@ Rationale: Exact deterministic selection preserves the existing sampler draw.
 WHEN TopKN returns k candidates from n resident logits, the Metal sampling boundary SHALL copy and allocate O(k) result data in Go without materializing the n logits.
 
 Rationale: The optimization exists to eliminate the measured full-vocabulary host boundary.
-
-## METAL-QUANT-PREFILL-GATE-UP-001
-WHEN a SwiGLU FFN records 24 through 64 rows with matching gate and up quant types, the Metal quantized prefill gate-up path SHALL execute 1 cached-f16 combined gate|up projection and produce bit-exact SwiGLUHalves output.
