@@ -30,22 +30,6 @@ Three independent levers, each a dedicated fresh-context piece of work rather th
 
 Migrated from cavekit SPEC.md T914.
 
-## T-01KYJPSGQMFGER0YD90EG3PGRK Eliminate the bounds checks and unhoisted scale products in the Q4_K and Q6_K dequant loops
-kind: task
-state: done
-created: 2026-07-27
-targets: format/gguf/q4k.go, format/gguf/q6k.go, docs/benchmarking.md
-
-PROGRESS: the Q4_K half is LANDED and measured; the Q6_K half is NOT DONE and is why this item stays open.
-
-LANDED (Q4_K). dequantQ4_KInto now reslices to fixed lengths — raw[o:o+q4kBlockSize] and dst[base:base+64] — instead of the open-ended raw[sb*q4kBlockSize:]. MEASURED 177,736 -> 154,195 ns on BenchmarkDequantQ4_K, 1.15x, via an interleaved three-round A/B with a file-copy toggle on the same host in one session; inside the predicted 1.10-1.25x. MECHANISM VERIFIED both before and after with -gcflags=-d=ssa/check_bce/debug=1: the per-element IsInBounds at q4k.go:75:8 and :76:8 are gone, replaced by one IsSliceInBounds per sub-block for the two reslices — N per-element checks traded for one per-run check. Bit-identity is exact: no arithmetic expression changed, y[l] addresses the same element as dst[base+l] by construction, so operand order, accumulation and rounding are untouched. Golden, round-trip, hostile-input and fuzz suites pass. The fixed-length reslices also concentrate the length check at one named site, so a short raw or dst panics there rather than mid-loop — the defense-in-depth the task asked for, without a separate guard clause. Recorded in docs/benchmarking.md.
-
-CORRECTION to the original brief, worth carrying forward: it claimed q5k.go and q2k.go compile bounds-check-free and could serve as the clean comparison. They do NOT — a check_bce dump over the package reports 29 findings across those two files. The idiom they use is still the right model for the INNER STORE loop, but the blanket claim that they are BCE-clean is wrong and should not be repeated.
-
-STILL TO DO (Q6_K, the larger win at 1.35-1.7x): q6k.go:37-49. Two parts. (a) The same fixed-length reslicing for blk and for dst[yo:yo+128]. (b) The real win: is := l / 16 at :39 takes exactly two values across the 32-iteration l loop, yet d * float32(int8(sc[sco+is+0])) is recomputed every iteration — 8 distinct scale products per 128-element group, computed 128 times. Split the l loop at the is boundary and hoist the four scale products per half. That is a pure reassociation of (d*sc)*(q-32) with the multiply order unchanged, so it stays bit-identical — but unlike the Q4_K half it DOES touch arithmetic grouping, so verify with a golden comparison rather than assuming. Existing benchmark BenchmarkDequantQ6_K covers it; add BenchmarkQMatMulQ6_K_M1/_M16 via the benchQMatMul helper since load and inference paths have different cache behavior.
-
-HARNESS NOTE that applies to the Q6_K A/B: BenchmarkDecodeF32 spends about 60 percent of its time in GC of its 1 MB/op allocation (77.5us vs 31.5us with GOGC=off), a harness artifact rather than a ReadFile cost. Compare at fixed GOGC or it will mislead.
-
 ## T-01KYJPSH4HE33TTJBJM602RMBG Make gguf ReadRaw subslice instead of copying every tensor
 kind: task
 state: draft
