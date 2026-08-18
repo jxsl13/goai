@@ -26,6 +26,86 @@ type f16KVFixture struct {
 	q, k32, v32, k16, v16, out32, out16 *DeviceBuffer
 }
 
+func TestF32ToF16CacheRoundingGolden(t *testing.T) {
+	if !Available() {
+		t.Skip("Metal unavailable")
+	}
+	src := []float32{
+		0,
+		float32(math.Copysign(0, -1)),
+		1,
+		-2,
+		65504,
+		1 + 1.0/2048,  // halfway 0x3c00..0x3c01: lower-even -> 0x3c00
+		1 + 3.0/2048,  // halfway 0x3c01..0x3c02: upper-even -> 0x3c02
+		-1 - 1.0/2048, // signed counterpart of the lower-even tie
+		-1 - 3.0/2048, // signed counterpart of the upper-even tie
+	}
+	want := []uint16{0x0000, 0x8000, 0x3c00, 0xc000, 0x7bff, 0x3c00, 0x3c02, 0xbc00, 0xbc02}
+	sb, err := NewDeviceBufferF32(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sb.Release()
+	db, err := NewDeviceBufferF16Zeros(len(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Release()
+	r, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Free()
+	if err := r.CopyF32ToF16(sb, 0, db, 0, len(src)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]uint16, len(src))
+	if err := db.downloadF16Bits(got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("f32-to-f16 bits=%#04x, want round-to-nearest-even %#04x", got, want)
+	}
+
+	// Production cache append converts K and V through the paired half2 kernel. Pin the same
+	// tie-to-even contract there independently; the odd element count also exercises its scalar tail.
+	pk, err := NewDeviceBufferF16Zeros(len(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pk.Release()
+	pv, err := NewDeviceBufferF16Zeros(len(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pv.Release()
+	rp, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rp.Free()
+	if err := rp.Copy2DF32ToF16Pair(sb, 0, len(src), sb, 0, len(src), pk, 0, len(src), pv, 0, len(src), 1, len(src)); err != nil {
+		t.Fatal(err)
+	}
+	if err := rp.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	gotK, gotV := make([]uint16, len(src)), make([]uint16, len(src))
+	if err := pk.downloadF16Bits(gotK); err != nil {
+		t.Fatal(err)
+	}
+	if err := pv.downloadF16Bits(gotV); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotK, want) || !reflect.DeepEqual(gotV, want) {
+		t.Fatalf("paired f32-to-f16 K/V bits=%#04x/%#04x, want round-to-nearest-even %#04x", gotK, gotV, want)
+	}
+}
+
 func newF16KVFixture(tb testing.TB, context int) *f16KVFixture {
 	tb.Helper()
 	q := make([]float32, f16KVDim)

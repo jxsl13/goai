@@ -2250,8 +2250,9 @@ int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
 }
 
 static id<MTLComputePipelineState> gF32ToF16Copy = nil;
+static id<MTLComputePipelineState> gF32ToF16KVCopy = nil;
 static int ensure_f32_to_f16_copy(void) {
-    if (gF32ToF16Copy != nil) return 0;
+    if (gF32ToF16Copy != nil && gF32ToF16KVCopy != nil) return 0;
     NSError* err = nil;
     NSString* src = @"#include <metal_stdlib>\n"
                     "using namespace metal;\n"
@@ -2262,13 +2263,36 @@ static int ensure_f32_to_f16_copy(void) {
                     "  int cols=p[6], total=p[5]*cols; if ((int)gid>=total) return;\n"
                     "  int row=(int)gid/cols, col=(int)gid-row*cols;\n"
                     "  dst[p[3]+row*p[4]+col]=half(src[p[0]+row*p[1]+col]);\n"
+                    "}\n"
+                    "kernel void f32_to_f16_kv_2d(device const float* ks [[buffer(0)]],\n"
+                    "                                 device const float* vs [[buffer(1)]],\n"
+                    "                                 device half* kd [[buffer(2)]],\n"
+                    "                                 device half* vd [[buffer(3)]],\n"
+                    "                                 constant int* p [[buffer(4)]],\n"
+                    "                                 uint gid [[thread_position_in_grid]]) {\n"
+                    "  int cols=p[9], pairs=(cols+1)/2, total=p[8]*pairs; if ((int)gid>=total) return;\n"
+                    "  int row=(int)gid/pairs, col=((int)gid-row*pairs)*2;\n"
+                    "  int ki=p[0]+row*p[1]+col, vi=p[2]+row*p[3]+col;\n"
+                    "  int ko=p[4]+row*p[5]+col, vo=p[6]+row*p[7]+col;\n"
+                    "  if (col+1<cols) {\n"
+                    "    if (((ko|vo)&1)==0) {\n"
+                    "      *((device half2*)(kd+ko))=half2(ks[ki],ks[ki+1]);\n"
+                    "      *((device half2*)(vd+vo))=half2(vs[vi],vs[vi+1]);\n"
+                    "    } else {\n"
+                    "      kd[ko]=half(ks[ki]); kd[ko+1]=half(ks[ki+1]);\n"
+                    "      vd[vo]=half(vs[vi]); vd[vo+1]=half(vs[vi+1]);\n"
+                    "    }\n"
+                    "  } else { kd[ko]=half(ks[ki]); vd[vo]=half(vs[vi]); }\n"
                     "}\n";
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:src options:nil error:&err];
     if (lib == nil) return -10;
     id<MTLFunction> fn = [lib newFunctionWithName:@"f32_to_f16_2d"];
     if (fn == nil) return -11;
     gF32ToF16Copy = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gF32ToF16Copy == nil ? -12 : 0;
+    id<MTLFunction> kvfn = [lib newFunctionWithName:@"f32_to_f16_kv_2d"];
+    if (kvfn == nil) return -11;
+    gF32ToF16KVCopy = [gDevice newComputePipelineStateWithFunction:kvfn error:&err];
+    return (gF32ToF16Copy == nil || gF32ToF16KVCopy == nil) ? -12 : 0;
 }
 
 int mtl_recorder_f32_to_f16_2d(void* rec, void* srcH, int srcOff, int srcStride,
@@ -2289,6 +2313,43 @@ int mtl_recorder_f32_to_f16_2d(void* rec, void* srcH, int srcOff, int srcStride,
     [enc setBytes:p length:sizeof(p) atIndex:2];
     NSUInteger total = (NSUInteger)rows * (NSUInteger)rowFloats;
     NSUInteger tg = gF32ToF16Copy.maxTotalThreadsPerThreadgroup;
+    if (total < tg) tg = total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+int mtl_recorder_f32_to_f16_kv_2d(void* rec,
+                                  void* kSrcH, int kSrcOff, int kSrcStride,
+                                  void* vSrcH, int vSrcOff, int vSrcStride,
+                                  void* kDstH, int kDstOff, int kDstStride,
+                                  void* vDstH, int vDstOff, int vDstStride,
+                                  int rows, int rowFloats) {
+    if (rec == NULL || kSrcH == NULL || vSrcH == NULL || kDstH == NULL || vDstH == NULL ||
+        kSrcOff < 0 || vSrcOff < 0 || kDstOff < 0 || vDstOff < 0 || rows < 1 || rowFloats < 1 ||
+        kSrcStride < rowFloats || vSrcStride < rowFloats ||
+        kDstStride < rowFloats || vDstStride < rowFloats) return -2;
+    if (ensure_f32_to_f16_copy() != 0) return -5;
+    id<MTLBuffer> ksb = (__bridge id<MTLBuffer>)kSrcH;
+    id<MTLBuffer> vsb = (__bridge id<MTLBuffer>)vSrcH;
+    id<MTLBuffer> kdb = (__bridge id<MTLBuffer>)kDstH;
+    id<MTLBuffer> vdb = (__bridge id<MTLBuffer>)vDstH;
+    NSUInteger ksEnd = ((NSUInteger)kSrcOff + (NSUInteger)(rows-1)*kSrcStride + rowFloats) * 4;
+    NSUInteger vsEnd = ((NSUInteger)vSrcOff + (NSUInteger)(rows-1)*vSrcStride + rowFloats) * 4;
+    NSUInteger kdEnd = ((NSUInteger)kDstOff + (NSUInteger)(rows-1)*kDstStride + rowFloats) * 2;
+    NSUInteger vdEnd = ((NSUInteger)vDstOff + (NSUInteger)(rows-1)*vDstStride + rowFloats) * 2;
+    if (ksEnd > ksb.length || vsEnd > vsb.length || kdEnd > kdb.length || vdEnd > vdb.length) return -3;
+    int p[10] = {kSrcOff, kSrcStride, vSrcOff, vSrcStride,
+                 kDstOff, kDstStride, vDstOff, vDstStride, rows, rowFloats};
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"kv.f32_to_f16_pair");
+    [enc setComputePipelineState:gF32ToF16KVCopy];
+    [enc setBuffer:ksb offset:0 atIndex:0];
+    [enc setBuffer:vsb offset:0 atIndex:1];
+    [enc setBuffer:kdb offset:0 atIndex:2];
+    [enc setBuffer:vdb offset:0 atIndex:3];
+    [enc setBytes:p length:sizeof(p) atIndex:4];
+    NSUInteger total = (NSUInteger)rows * ((NSUInteger)rowFloats + 1) / 2;
+    NSUInteger tg = gF32ToF16KVCopy.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
     [enc endEncoding];

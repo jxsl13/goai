@@ -61,8 +61,26 @@ func (m mRec) Blit(src buffer, srcOff int, dst buffer, dstOff, n int) error {
 func (m mRec) Copy2D(src buffer, srcOff, srcStride int, dst buffer, dstOff, dstStride, rows, rowFloats int) error {
 	return m.r.Copy2D(mb(src), srcOff, srcStride, mb(dst), dstOff, dstStride, rows, rowFloats)
 }
+func (m mRec) Copy2DF32ToF16Pair(
+	kSrc buffer, kSrcOff, kSrcStride int,
+	vSrc buffer, vSrcOff, vSrcStride int,
+	kDst buffer, kDstOff, kDstStride int,
+	vDst buffer, vDstOff, vDstStride int,
+	rows, rowFloats int,
+) error {
+	return m.r.Copy2DF32ToF16Pair(
+		mb(kSrc), kSrcOff, kSrcStride,
+		mb(vSrc), vSrcOff, vSrcStride,
+		mb(kDst), kDstOff, kDstStride,
+		mb(vDst), vDstOff, vDstStride,
+		rows, rowFloats,
+	)
+}
 func (m mRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return m.r.MHA(mb(q), mb(k), mb(v), mb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
+func (m mRec) MHAF16KV(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return m.r.MHAF16KV(mb(q), mb(k), mb(v), mb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }
 func (mRec) MHACap(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale, cap float32) error {
 	return fmt.Errorf("llamagpu(metal): attention-logit soft-cap not implemented (Gemma-2-class softcap decoders are cuda-only for now)")
@@ -197,10 +215,23 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 // projection as a device-resident quantized weight — the 4-8× smaller weights of quantization
 // combined with the batched-decode speedup (§T415). Metal.
 func NewQuant(m *nlp.QuantLlama) (*Decoder, error) {
+	return newQuantMetal(m, false)
+}
+
+// NewQuantF16KV is NewQuant with an opt-in IEEE-binary16 K/V cache. It halves retained cache
+// storage and uses half-reading Metal attention while Q/O and accumulation remain f32. The initial
+// prompt still uses the established f32 FlashMM path as its K/V rows are converted into the cache.
+// NewQuant and every non-Metal backend remain unchanged. The current M2-specialized path requires
+// head dimension 64 and returns an explicit error for other geometries.
+func NewQuantF16KV(m *nlp.QuantLlama) (*Decoder, error) {
+	return newQuantMetal(m, true)
+}
+
+func newQuantMetal(m *nlp.QuantLlama, f16KV bool) (*Decoder, error) {
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
-	return newQuantDecoder(m, backendOps{
+	ops := backendOps{
 		name:        string(backend.Metal),
 		asyncEncode: true, // metal command buffers are independent objects (§T614)
 		newBuffer: func(data []float32) (buffer, error) {
@@ -218,7 +249,17 @@ func NewQuant(m *nlp.QuantLlama) (*Decoder, error) {
 			return mRec{r}, nil
 		},
 		uploadQWeight: metalUploadQWeight,
-	})
+	}
+	if f16KV {
+		ops.newF16KVBuffer = func(n int) (buffer, error) {
+			b, err := metal.NewDeviceBufferF16Zeros(n)
+			if err != nil {
+				return nil, err
+			}
+			return mBuf{b}, nil
+		}
+	}
+	return newQuantDecoder(m, ops)
 }
 
 // ProfileMetalStep runs one ordinary Decoder.Step through an opt-in Metal timestamp recorder and

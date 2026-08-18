@@ -40,9 +40,21 @@ func TestProdDecodeGGUF(t *testing.T) {
 	t.Logf("loaded: vocab=%d dim=%d hidden=%d heads=%d kv=%d layers=%d ctx=%d",
 		c.Vocab, c.Dim, c.Hidden, c.Heads, c.KVHeads, c.Layers, c.Ctx)
 
-	dec, err := llamagpu.NewQuant(qm)
+	kv := os.Getenv("GOAI_PROD_KV")
+	if kv == "" {
+		kv = "f32"
+	}
+	var dec *llamagpu.Decoder
+	switch kv {
+	case "f32":
+		dec, err = llamagpu.NewQuant(qm)
+	case "f16":
+		dec, err = llamagpu.NewQuantF16KV(qm)
+	default:
+		t.Fatalf("GOAI_PROD_KV=%q must be f32 or f16", kv)
+	}
 	if err != nil {
-		t.Fatalf("llamagpu.NewQuant: %v", err)
+		t.Fatalf("llamagpu quant decoder kv=%s: %v", kv, err)
 	}
 	defer dec.Release()
 
@@ -100,7 +112,7 @@ func TestProdDecodeGGUF(t *testing.T) {
 		}
 	}
 
-	fmt.Printf("GOAI_PROD metal kv=f32 context=0..63 reps=%d: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
-		reps, nGen, float64(nGen)/bestTg.Seconds(),
+	fmt.Printf("GOAI_PROD metal kv=%s context=0..63 reps=%d: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
+		kv, reps, nGen, float64(nGen)/bestTg.Seconds(),
 		nProm, float64(nProm)/bestPp.Seconds())
 }

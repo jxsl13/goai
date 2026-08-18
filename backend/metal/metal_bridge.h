@@ -210,6 +210,12 @@ int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
                         void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
 int mtl_recorder_f32_to_f16_2d(void* rec, void* srcH, int srcOff, int srcStride,
                                void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
+int mtl_recorder_f32_to_f16_kv_2d(void* rec,
+                                  void* kSrcH, int kSrcOff, int kSrcStride,
+                                  void* vSrcH, int vSrcOff, int vSrcStride,
+                                  void* kDstH, int kDstOff, int kDstStride,
+                                  void* vDstH, int vDstOff, int vDstStride,
+                                  int rows, int rowFloats);
 int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N,
                         int accumulate);
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps);

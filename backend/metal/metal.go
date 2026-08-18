@@ -1975,6 +1975,29 @@ func (b *DeviceBuffer) DownloadF32(dst []float32) error {
 	return nil
 }
 
+// downloadF16Bits is the exact-storage test seam for the specialized KV cache. The public
+// arithmetic API intentionally does not expose half tensors; tests still need to pin the on-device
+// f32→binary16 rounding contract independently of downstream attention.
+func (b *DeviceBuffer) downloadF16Bits(dst []uint16) error {
+	if b.bytes != 2 {
+		return fmt.Errorf("metal: f16 bit download requires 2-byte storage, got %d-byte elements", b.bytes)
+	}
+	if len(dst) > b.n {
+		return fmt.Errorf("metal: f16 bit download dst len %d > %d", len(dst), b.n)
+	}
+	if len(dst) == 0 {
+		return nil
+	}
+	if b.handle == nil {
+		return fmt.Errorf("metal: f16 bit download from released buffer")
+	}
+	rc := C.mtl_devbuf_download(b.handle, unsafe.Pointer(&dst[0]), C.int(len(dst)*2))
+	if rc != 0 {
+		return fmt.Errorf("metal: f16 bit download failed (code %d)", int(rc))
+	}
+	return nil
+}
+
 // UploadF32 overwrites the buffer contents with src (host→device), reusing the buffer across
 // steps without reallocating. src must hold at most Len() elements.
 func (b *DeviceBuffer) UploadF32(src []float32) error {
@@ -2257,6 +2280,43 @@ func (r *Recorder) Copy2DF32ToF16(src *DeviceBuffer, srcOff, srcStride int, dst 
 		dst.handle, C.int(dstOff), C.int(dstStride), C.int(rows), C.int(rowFloats))
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder f32-to-f16 copy failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// Copy2DF32ToF16Pair converts K and V row bands into their two half caches in one dispatch. KV
+// append always has matched geometry, so a paired vectorized kernel removes one encoder/dispatch per
+// layer without coupling cache storage to tensor dtypes.
+func (r *Recorder) Copy2DF32ToF16Pair(
+	kSrc *DeviceBuffer, kSrcOff, kSrcStride int,
+	vSrc *DeviceBuffer, vSrcOff, vSrcStride int,
+	kDst *DeviceBuffer, kDstOff, kDstStride int,
+	vDst *DeviceBuffer, vDstOff, vDstStride int,
+	rows, rowFloats int,
+) error {
+	if kSrc.bytes != 4 || vSrc.bytes != 4 || kDst.bytes != 2 || vDst.bytes != 2 {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy requires f32/f32 sources and f16/f16 destinations, got %d/%d/%d/%d-byte elements",
+			kSrc.bytes, vSrc.bytes, kDst.bytes, vDst.bytes)
+	}
+	valid := func(off, stride, n int) bool {
+		return off >= 0 && stride >= rowFloats && off+(rows-1)*stride+rowFloats <= n
+	}
+	if rows < 1 || rowFloats < 1 ||
+		!valid(kSrcOff, kSrcStride, kSrc.n) || !valid(vSrcOff, vSrcStride, vSrc.n) ||
+		!valid(kDstOff, kDstStride, kDst.n) || !valid(vDstOff, vDstStride, vDst.n) {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy out of range: rows=%d cols=%d K src/dst=%d/%d V src/dst=%d/%d",
+			rows, rowFloats, kSrc.n, kDst.n, vSrc.n, vDst.n)
+	}
+	rc := C.mtl_recorder_f32_to_f16_kv_2d(
+		r.handle,
+		kSrc.handle, C.int(kSrcOff), C.int(kSrcStride),
+		vSrc.handle, C.int(vSrcOff), C.int(vSrcStride),
+		kDst.handle, C.int(kDstOff), C.int(kDstStride),
+		vDst.handle, C.int(vDstOff), C.int(vDstStride),
+		C.int(rows), C.int(rowFloats),
+	)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy failed (%d)", int(rc))
 	}
 	return nil
 }
