@@ -3699,3 +3699,12 @@ option: Fuse only the final f32 projection-total plus residual addition and requ
 option: Fuse residual addition together with downstream RMSNorm and accept bounded numerical change
 blocks: P-01M09HZ85PF84B4N1642KEMCET
 choice: Fuse only the final f32 projection-total plus residual addition and require bit-exact output
+
+## T-01M09J21QXEW9ANTRWF76CBBAV Implement and gate exact Metal quant residual epilogues
+kind: task
+state: active
+created: 2026-08-18
+parent: P-01M09HZ85PF84B4N1642KEMCET
+targets: go:llamagpu.quantLinear.recordAdd, go:metal.Recorder.QMatMulResident, c:mtl_recorder_qmatmul, llamagpu/llamagpu.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/qmatmul_test.go, internal/benchcompare/metal_encoder_profile_external_test.go
+
+Implement and gate the exact Metal Q4_K/Q6_K M1 beta-one epilogue described by the parent proposal. Add the guarded bridge and recorder API, the Metal adapter control seam, exact and ordinary-path tests, profile-count proof, repeated leaf campaigns, and three independent trained TinyLlama campaigns. Preserve all M>1, non-Q4_K/Q6_K, post-norm, sandwich, and non-Metal fallbacks. Produce pinned evidence and a perfscan issue; remove executable changes and reject if any exactness or 1.02x tg64 gate fails.
