@@ -52,6 +52,12 @@ func (m mRec) RoPEAt(q, inv, o buffer, off, seq, width, heads, hd, half, pos int
 func (m mRec) RoPEPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, pos int, posDiv float32) error {
 	return m.r.RoPEPair(mb(qkv), mb(inv), seq, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv)
 }
+func (m mRec) RoPEPairSplit(qkv, inv, q, k, v buffer,
+	seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos int, posDiv float32,
+) error {
+	return m.r.RoPEPairSplit(mb(qkv), mb(inv), mb(q), mb(k), mb(v),
+		seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, posDiv)
+}
 func (mRec) RoPEPartialPair(qkv, inv buffer, seq, stride, headsQ, offQ, headsK, offK, hd, rotaryDim, pos int, posDiv float32) error {
 	return fmt.Errorf("llamagpu(metal): partial-rotary RoPE not implemented (partial-rotary decoders are cuda-only for now)")
 }
@@ -120,7 +126,14 @@ func (m mRec) BinaryN(a, b, o buffer, op, n int) error {
 	return m.r.BinaryN(mb(a), mb(b), mb(o), op, n)
 }
 func (m mRec) QMatMulResident(x buffer, w qweight, o buffer, mm int) error {
-	return m.r.QMatMulResident(mb(x), w.(*metal.ResidentQWeight), mb(o), mm)
+	switch w := w.(type) {
+	case *metal.ResidentQWeight:
+		return m.r.QMatMulResident(mb(x), w, mb(o), mm)
+	case *metal.ResidentQGroup:
+		return m.r.QMatMulResidentGroup(mb(x), w, mb(o), mm)
+	default:
+		return fmt.Errorf("llamagpu(metal): unsupported resident quant weight %T", w)
+	}
 }
 func (m mRec) Commit() error { return m.r.Commit() }
 func (m mRec) Wait() error   { return m.r.Wait() }
@@ -211,6 +224,21 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	return rw.(*metal.ResidentQWeight), nil
 }
 
+func metalGroupQWeights(weights []qweight) (qweight, error) {
+	if len(weights) != 3 {
+		return nil, fmt.Errorf("llamagpu(metal): mixed QKV group needs 3 weights, got %d", len(weights))
+	}
+	concrete := make([]*metal.ResidentQWeight, 3)
+	for i, w := range weights {
+		var ok bool
+		concrete[i], ok = w.(*metal.ResidentQWeight)
+		if !ok {
+			return nil, fmt.Errorf("llamagpu(metal): mixed QKV weight %d has type %T", i, w)
+		}
+	}
+	return metal.NewResidentQGroup(concrete...)
+}
+
 // NewQuant uploads a quantized Llama (nlp.QuantizeLlama / nlp.QuantLlamaFromGGUF) with every
 // projection as a device-resident quantized weight — the 4-8× smaller weights of quantization
 // combined with the batched-decode speedup (§T415). Metal.
@@ -228,6 +256,13 @@ func NewQuantF16KV(m *nlp.QuantLlama) (*Decoder, error) {
 }
 
 func newQuantMetal(m *nlp.QuantLlama, f16KV bool) (*Decoder, error) {
+	return newQuantMetalWithMixedQKV(m, f16KV, true)
+}
+
+// newQuantMetalWithMixedQKV is the production constructor plus a narrow control seam for the
+// trained-model promotion campaign. Public constructors always enable the grouped path; tests can
+// build the otherwise-identical established separate-projection arm without environment switches.
+func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decoder, error) {
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
@@ -249,6 +284,9 @@ func newQuantMetal(m *nlp.QuantLlama, f16KV bool) (*Decoder, error) {
 			return mRec{r}, nil
 		},
 		uploadQWeight: metalUploadQWeight,
+	}
+	if mixedQKV {
+		ops.groupQWeights = metalGroupQWeights
 	}
 	if f16KV {
 		ops.newF16KVBuffer = func(n int) (buffer, error) {

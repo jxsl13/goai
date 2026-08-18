@@ -227,6 +227,10 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
 int mtl_recorder_rope2(void* rec, void* qh, void* invh,
                        int seq, int stride, int headsQ, int offQ, int headsK, int offK,
                        int hd, int half, int posOffset, float posDiv);
+int mtl_recorder_rope2_split(void* rec, void* qkvh, void* invh,
+                             void* qh, void* kh, void* vh,
+                             int seq, int stride, int headsQ, int offQ, int headsK, int offK,
+                             int hd, int half, int vOff, int vDim, int posOffset, float posDiv);
 int mtl_recorder_flashattn(void* rec, void* qh, void* kh, void* vh, void* oh,
                            int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
@@ -296,6 +300,18 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 // mtl_recorder_qmatmul (§T413): record-mode quantized matmul over a DeviceBuffer X/O and a resident
 // quantized weight — the quantized batched-decode building block. Same qtype codes as above.
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype);
+
+// Heterogeneous QKV prefill group: q/k/v retain their original resident quantized buffers and
+// types, while one budgeted f16 [K,Nq+Nk+Nv] expansion feeds a single MPS matmul. The caller passes
+// needsFill=1 until the command buffer containing the three exact segment expansions completes.
+void* mtl_qgroup_alloc(int nbytes);
+void mtl_qgroup_free(void* handle);
+int mtl_qgroup_download(void* handle, void* dst, int nbytes);
+int mtl_recorder_qmatmul_mixed3(void* rec, void* xh,
+                               void* w0, int n0, int qt0,
+                               void* w1, int n1, int qt1,
+                               void* w2, int n2, int qt2,
+                               void* expanded, void* oh, int M, int K, int needsFill);
 
 // mtl_mha_f32 computes fused multi-head scaled-dot-product attention (forward):
 // Q[sq,dm], K[sk,dkv], V[sk,dkv] → O[sq,dm], dkv = kvHeads*dk, dk = dm/heads.

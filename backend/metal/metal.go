@@ -224,6 +224,85 @@ type ResidentQWeight struct {
 	cleanup runtime.Cleanup // frees the buffer if the value is GC'd without an explicit Close
 }
 
+// ResidentQGroup is a Metal-only heterogeneous projection group. It reuses three ordinary
+// resident quantized weights for the established decode path and owns one budgeted f16 expansion
+// whose columns preserve the segment order. The current user is mixed Q4_K/Q6_K QKV prefill.
+type ResidentQGroup struct {
+	segments [3]*ResidentQWeight
+	handle   unsafe.Pointer // retained combined f16 MTLBuffer (nil after Close)
+	n, k     int
+	filled   bool
+	cleanup  runtime.Cleanup
+}
+
+// NewResidentQGroup reserves one combined f16 expansion for three Q4_K/Q6_K weights with a common
+// K. It returns backend.ErrQuantUnsupported when the configured expanded-weight cache budget cannot
+// admit the group, allowing the decoder to retain its established separate-projection fallback.
+func NewResidentQGroup(weights ...*ResidentQWeight) (*ResidentQGroup, error) {
+	if len(weights) != 3 {
+		return nil, fmt.Errorf("metal: resident quant group needs exactly 3 weights, got %d", len(weights))
+	}
+	k, n := 0, 0
+	for i, w := range weights {
+		if w == nil || w.handle == nil {
+			return nil, fmt.Errorf("metal: resident quant group weight %d is nil/closed", i)
+		}
+		if w.qt != qtQ4_K && w.qt != qtQ6_K {
+			return nil, backend.ErrQuantUnsupported
+		}
+		if i == 0 {
+			k = w.k
+		} else if w.k != k {
+			return nil, fmt.Errorf("metal: resident quant group K mismatch: weight %d has %d, want %d", i, w.k, k)
+		}
+		if w.n <= 0 || n > int(^uint(0)>>1)-w.n {
+			return nil, fmt.Errorf("metal: resident quant group invalid output width at weight %d", i)
+		}
+		n += w.n
+	}
+	const maxCInt = int(^uint32(0) >> 1)
+	if k <= 0 || n <= 0 || k > maxCInt/n/2 {
+		return nil, fmt.Errorf("metal: resident quant group expansion %dx%d exceeds bridge limit", k, n)
+	}
+	h := C.mtl_qgroup_alloc(C.int(k * n * 2))
+	if h == nil {
+		return nil, backend.ErrQuantUnsupported
+	}
+	g := &ResidentQGroup{handle: h, n: n, k: k}
+	copy(g.segments[:], weights)
+	g.cleanup = runtime.AddCleanup(g, func(p unsafe.Pointer) { C.mtl_qgroup_free(p) }, h)
+	return g, nil
+}
+
+// Close releases the combined f16 expansion. The ordinary segment weights keep their independent
+// lifetime and are closed by their owner. Safe to call more than once.
+func (g *ResidentQGroup) Close() error {
+	if g.handle != nil {
+		g.cleanup.Stop()
+		C.mtl_qgroup_free(g.handle)
+		g.handle = nil
+	}
+	return nil
+}
+
+// downloadExpandedF16Bits is the exact-storage test seam for the private combined expansion.
+func (g *ResidentQGroup) downloadExpandedF16Bits(dst []uint16) error {
+	if g == nil || g.handle == nil {
+		return fmt.Errorf("metal: resident quant group is nil/closed")
+	}
+	if len(dst) > g.k*g.n {
+		return fmt.Errorf("metal: resident quant group download len %d > %d", len(dst), g.k*g.n)
+	}
+	if len(dst) == 0 {
+		return nil
+	}
+	rc := C.mtl_qgroup_download(g.handle, unsafe.Pointer(&dst[0]), C.int(len(dst)*2))
+	if rc != 0 {
+		return fmt.Errorf("metal: resident quant group download failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // residentRowBytes returns the per-row byte size of a quantized [·,k] weight of ggml type qt, and
 // the required alignment (block element count) of k. rowBytes*N is the full resident buffer size.
 func residentRowBytes(qt uint32, k int) (rowBytes, align int, ok bool) {
@@ -2102,7 +2181,10 @@ func flashAttnHost(q, k, v []float32, seq, dm, heads, dk, causal, kvHeads int, s
 // Finish submits once. Metal's hazard tracking orders dependent buffer accesses within the buffer,
 // so intermediates stay device-resident across a whole decode step (§T370, ADR-0019 Phase 2 — the
 // batched-decode engine that is ~3× faster than per-op dispatch at realistic decode sizes, §T379).
-type Recorder struct{ handle unsafe.Pointer }
+type Recorder struct {
+	handle        unsafe.Pointer
+	pendingGroups []*ResidentQGroup
+}
 
 // RecorderProfileEvent is one explicit custom Metal compute/blit encoder measured at its GPU
 // stage boundaries. Ticks are retained alongside Duration so profiles remain auditable against
@@ -2501,6 +2583,27 @@ func (r *Recorder) RoPEPair(qkv, inv *DeviceBuffer, seq, stride, headsQ, offQ, h
 	return nil
 }
 
+// RoPEPairSplit rotates the q/k bands of a fused QKV projection while scattering q, k and v into
+// their contiguous attention scratch in the same dispatch. It removes the three strided Copy2D
+// dispatches that otherwise erase the value of grouping mixed QKV at full-model prefill sizes.
+func (r *Recorder) RoPEPairSplit(qkv, inv, q, k, v *DeviceBuffer,
+	seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, posOffset int, posDiv float32,
+) error {
+	qDim, kDim := headsQ*hd, headsK*hd
+	if seq < 1 || stride < qDim+kDim+vDim || offQ < 0 || offK < 0 || vOff < 0 ||
+		qkv.n < seq*stride || inv.n < half || q.n < seq*qDim || k.n < seq*kDim || v.n < seq*vDim {
+		return fmt.Errorf("metal: Recorder rope2-split shape mismatch: qkv=%d stride=%d q/k/v=%d/%d/%d seq=%d dims=%d/%d/%d",
+			qkv.n, stride, q.n, k.n, v.n, seq, qDim, kDim, vDim)
+	}
+	rc := C.mtl_recorder_rope2_split(r.handle, qkv.handle, inv.handle, q.handle, k.handle, v.handle,
+		C.int(seq), C.int(stride), C.int(headsQ), C.int(offQ), C.int(headsK), C.int(offK),
+		C.int(hd), C.int(half), C.int(vOff), C.int(vDim), C.int(posOffset), C.float(posDiv))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder rope2-split failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // LayerNorm records O = layernorm(X)·gamma + beta into the command buffer over device buffers
 // (GPT-2-style norm; rmsnorm is the Llama variant). x, o are rows×dim; g, b are dim-length.
 func (r *Recorder) LayerNorm(x, g, b, o *DeviceBuffer, rows, dim int, eps float32) error {
@@ -2533,6 +2636,44 @@ func (r *Recorder) QMatMulResident(x *DeviceBuffer, w *ResidentQWeight, o *Devic
 	return nil
 }
 
+// QMatMulResidentGroup records one heterogeneous three-segment projection through a combined f16
+// expansion. It is intentionally separate from QMatMulResident: single-token decode keeps the raw
+// quantized segment kernels, while batched prefill opts into this path through the decoder builder.
+func (r *Recorder) QMatMulResidentGroup(x *DeviceBuffer, g *ResidentQGroup, o *DeviceBuffer, m int) error {
+	if g == nil || g.handle == nil {
+		return fmt.Errorf("metal: Recorder mixed qgroup is nil/closed")
+	}
+	if m < 24 {
+		return fmt.Errorf("metal: Recorder mixed qgroup requires measured prefill M>=24, got %d", m)
+	}
+	if x.n < m*g.k || o.n < m*g.n {
+		return fmt.Errorf("metal: Recorder mixed qgroup shape mismatch: x=%d (want %d) o=%d (want %d)", x.n, m*g.k, o.n, m*g.n)
+	}
+	for i, w := range g.segments {
+		if w == nil || w.handle == nil {
+			return fmt.Errorf("metal: Recorder mixed qgroup segment %d is nil/closed", i)
+		}
+	}
+	fill := C.int(0)
+	if !g.filled {
+		fill = 1
+	}
+	rc := C.mtl_recorder_qmatmul_mixed3(
+		r.handle, x.handle,
+		g.segments[0].handle, C.int(g.segments[0].n), C.int(g.segments[0].qt),
+		g.segments[1].handle, C.int(g.segments[1].n), C.int(g.segments[1].qt),
+		g.segments[2].handle, C.int(g.segments[2].n), C.int(g.segments[2].qt),
+		g.handle, o.handle, C.int(m), C.int(g.k), fill,
+	)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder mixed qgroup failed (%d)", int(rc))
+	}
+	if fill != 0 {
+		r.pendingGroups = append(r.pendingGroups, g)
+	}
+	return nil
+}
+
 // AddBias records O[i,j] = X[i,j] + B[j] into the command buffer over device buffers (x, o are
 // rows×n; b is the n-length bias) — the broadcast bias-add multi-token GPT steps need (§T423).
 func (r *Recorder) AddBias(x, b, o *DeviceBuffer, rows, n int) error {
@@ -2552,6 +2693,10 @@ func (r *Recorder) Finish() error {
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder finish failed (%d)", int(rc))
 	}
+	for _, g := range r.pendingGroups {
+		g.filled = true
+	}
+	r.pendingGroups = nil
 	return nil
 }
 
@@ -2572,6 +2717,10 @@ func (r *Recorder) Wait() error {
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder wait failed (%d)", int(rc))
 	}
+	for _, g := range r.pendingGroups {
+		g.filled = true
+	}
+	r.pendingGroups = nil
 	return nil
 }
 
@@ -2812,6 +2961,7 @@ func (r *Recorder) Free() {
 		C.mtl_recorder_free(r.handle)
 		r.handle = nil
 	}
+	r.pendingGroups = nil
 }
 
 // chainMatMulReLU records an MPS matmul then a ReLU into one command buffer over a
