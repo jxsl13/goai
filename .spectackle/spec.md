@@ -362,6 +362,7 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - T-01M09E0P15ERA9K4BPBM2SE39D Implement and gate M2 resident TopKN sampling: Implemented Metal DeviceBuffer.TopKN with a coherent-UMA bounded native heap, exact deterministic top-k tests through n=128000 and k=256, public Generate fast/fallback token parity, and O(k) Go result materialization. The 32k/K56 leaf is 62.669-66.691 us with 448 B and 2 allocations. Four trained TinyLlama ten-pair campaigns preserve exact 70-token sequences and deliver 1.06301x, 1.06615x, 1.06778 [body truncated at tombstone retention cap]
 - P-01M09DYYWEEW9T8ERKNT02ZCNC Keep M2 Top-K generation logits device-resident: Promoted the M2 resident Top-K generation boundary in commit 47fe6387. Exact top-k and full Generate parity pass; four trained-model campaigns deliver 1.06301x-1.06778x sampled-generation speedups while forward-only readback remains only 1.00170x-1.00482x. The architecture and benchmark matrix now separate llama-bench forward-only semantics from real sampled generation. Evidence is retained under [body truncated at tombstone retention cap]
 - T-01KYJNDR38E4ZSN52KVM0PC5J9 Extend the trained-optimizer comparison with APOLLO and Q-GaLore: compact
+- T-01KYJNDT44EKJAXN8W0Y4QFZCE Batch the ViT encoder instead of looping over the batch dimension: compact
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
