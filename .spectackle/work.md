@@ -3694,3 +3694,12 @@ option: All M including single-token decode to maximize dispatch reduction
 option: All prefill sizes including M>64 despite the established f16 crossover
 blocks: P-01M09KZ8SEEH2B6T0R2QRJBCBS
 choice: Only 24<=M<=64 prefill with identical quant types and bit-exact output
+
+## T-01M09M2EM7EPYBSWZMSMATGJ5H Implement and gate prefill-only Metal gate-up grouping
+kind: task
+state: active
+created: 2026-08-18
+parent: P-01M09KZ8SEEH2B6T0R2QRJBCBS
+targets: go:llamagpu.Decoder.recordFFN, go:llamagpu.newQuantDecoder, backend/metal/metal_bridge.m
+
+Add the constructor-local feature seam, same-quant combined gate|up resident weight, 24<=M<=64 selection, Metal SwiGLUHalves recorder operation, exact/profiler tests, leaf benchmarks, and three-invocation trained TinyLlama campaign. Preserve the current decode, M>64, mixed-type, GeGLU, MoE, and non-Metal paths. Remove executable changes on any frozen gate failure and preserve evidence plus the required perfscan finding.
