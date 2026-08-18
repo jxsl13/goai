@@ -3764,3 +3764,12 @@ Merged-main evidence at caf5d7f4 leaves GoAI forward-only decode behind pinned l
 Add a Metal-only M1 QKV group specialized to raw Q4_K/Q4_K/Q6_K segments. It must consume the original resident quant bytes, preserve the established cooperative per-row arithmetic, produce canonical contiguous q||k||v output, then reuse one fused RoPE and the existing paired KV blit. This is distinct from the rejected f16-expanded M1 design: there is no f16 expansion, vendor GEMM, requantization, or altered reduction schedule. M>=24 keeps the current combined-f16 MPS path; M=2..23 and every other quant pattern keep their established fallback.
 
 Promotion gates: bit-exact M1 segment output against three established raw kernels including ties, tails, and finite-value checks; selector coverage proving only Q4_K/Q4_K/Q6_K with aligned K and N enters the new path; no M1 combined-f16 cache fill; one grouped profile event with no MPS projection event; at least 1.10x across ten interleaved production-shape mixed-projection samples; trained TinyLlama exact greedy-token parity and checked-logit parity with tg64 at least 1.03x across three fresh-decoder interleaved campaigns, stable controls, and pp64/pp512 no regression relative to the existing grouped prefill path. If any gate fails, remove executable changes and archive the measured rejection. Pin all comparison baselines and report every generalizable finding on jxsl13/perfscan.
+
+## T-01M09G5NTDEVCBVV4Q84ESEA5B Implement and gate raw mixed-quant M1 QKV fusion
+kind: task
+state: active
+created: 2026-08-18
+parent: P-01M09G3PGREC4V2QG3P1RC6J1K
+targets: go:metal.Recorder.QMatMulResidentGroup, c:mtl_recorder_qmatmul_mixed3, go:llamagpu.Decoder.encodeStep, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/mixed_qgroup_test.go, llamagpu/mixed_qkv_realmodel_test.go
+
+Implement and gate the Metal-only raw Q4_K/Q4_K/Q6_K M1 QKV group described by the parent proposal. Add the guarded bridge/kernel path, canonical q||k||v layout, decoder selector, exact and profile tests, ten-sample production-shape leaf campaign, and three trained TinyLlama campaigns. Preserve the current M>=24 combined-f16 MPS route and every other fallback. Produce a pinned evidence bundle and report the generalizable result to perfscan. Remove executable changes and reject this task if exactness, quality, or leverage gates fail.

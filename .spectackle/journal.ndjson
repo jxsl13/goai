@@ -715,3 +715,6 @@
 {"t":"2026-08-18T03:55:17Z","eid":"2c0805aed32e8ffd","ag":"ag-67ce","ev":"grill","id":"P-01M09G3PGREC4V2QG3P1RC6J1K","gr":"2026-08-18 open=1","hash":"5b21f2cfb7a60399cfce4a4e59c24b9904b256f3b769e8fe146495ee57d6c6c8","open":1,"keys":["blast:9"]}
 {"t":"2026-08-18T03:55:18Z","eid":"4950e89a45b94e66","ag":"ag-67ce","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-18T03:55:34Z","eid":"e3ea07087fd7c7b0","ag":"ag-25e2","ev":"move","id":"P-01M09G3PGREC4V2QG3P1RC6J1K","fr":"draft","to":"active","note":"Authorized by the standing M2-first performance goal. Prototype only the raw Q4_K/Q4_K/Q6_K M1 dispatch and revert executable code unless exactness and trained-model leverage gates pass."}
+{"t":"2026-08-18T03:55:48Z","eid":"4e77cf4b47897cd2","ag":"ag-48db","ev":"create","id":"T-01M09G5NTDEVCBVV4Q84ESEA5B","k":"task","ti":"Implement and gate raw mixed-quant M1 QKV fusion"}
+{"t":"2026-08-18T03:55:48Z","eid":"37c28ef5f60cd3d7","ag":"ag-48db","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-18T03:56:10Z","eid":"7d816cb174e8994a","ag":"ag-b69c","ev":"move","id":"T-01M09G5NTDEVCBVV4Q84ESEA5B","fr":"draft","to":"active","note":"Implement the frozen prototype and validate every exactness and leverage gate before promotion."}
