@@ -3735,3 +3735,26 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
+
+## P-01M098NFP0FXGVPQN54J2QV2QR Fuse mixed-quant M2 QKV after exact f16 expansion
+kind: proposal
+state: active
+created: 2026-08-18
+refs: R-01M08WMQ5MFDY8V704PG7Z81D4, R-01M08VQWMFEB9S9JCJ8NVSTYC2, P-01M093C3MFF0E8E1THCWYA1757
+grilled: 2026-08-18 open=0
+targets: go:llamagpu.newQuantDecoder, go:llamagpu.Decoder.recordQKVProj, go:metal.Recorder.QMatMulResident, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go
+
+Merged-main evidence at ca859046 leaves llama.cpp b10450 ahead by 1.1690x at pp64 after the f16-KV promotion. Existing attribution proves production prefill already uses one command buffer, encoder packing is below one percent, cached MPSGraph cast-matmul-cast fusion violates reduction semantics, and the legacy Q4_K tile loses to warmed cached-f16 MPS. The remaining measured structural seam is mixed-quant QKV: TinyLlama Q4_K_M fully fuses 12 of 22 blocks, but 10 blocks issue q, k, and v separately because q/k are Q4_K and v is Q6_K. The retained production-shape probe measures the current 12-fused/10-split projection stage at 6.311 ms for M64; an all-fused dense-f16 shape is 4.861 ms, 1.298x faster for that stage and predicts about 1.038x pp64.
+
+Implement a Metal-only heterogeneous resident projection group. It SHALL retain the original raw quant segments for the existing M<24 decode kernels, but for eligible M>=24 it SHALL expand each segment with its original Q4_K/Q6_K semantics into disjoint columns of one combined f16 [K,Ntotal] matrix and encode one established MPSMatrixMultiplication. The output layout remains canonical q||k||v, so RoPE, cache append, attention, and every non-Metal backend remain unchanged. Do not requantize v, use MPSGraph, thread f16 through tensor, or allocate both separate and combined expanded caches.
+
+Promotion gates: exact combined f16 expansion bytes against separately expanded Q4_K/Q4_K/Q6_K controls; finite output with exact parity against the established separate projection chain at M1, M64, and M512; timestamp labels proving grouped expansion/matmul execute and selector arms differ; combined expanded bytes no greater than the sum of the replaced expansions and enforcement of the existing cache budget; at least 1.10x for the mixed projection stage at M64 across ten interleaved samples; full trained TinyLlama pp64 at least 1.03x across three interleaved fresh-decoder campaigns, pp512 and tg64 no worse than 0.99x, unchanged greedy tokens, and stable controls. If promoted, rerun the pinned five-pair llama.cpp shipping campaign under PERF-015 and M2-INCUMBENT-ATTRIBUTION-HARNESS-001. Revert executable changes if any leverage, parity, memory, or fallback gate fails. Report every generalizable performance finding on jxsl13/perfscan.
+
+## T-01M098PYFVEN8TX45DK0RBQ0CW Implement and gate heterogeneous f16-expanded Metal QKV
+kind: task
+state: active
+created: 2026-08-18
+parent: P-01M098NFP0FXGVPQN54J2QV2QR
+targets: go:llamagpu.newQuantDecoder, go:llamagpu.Decoder.recordQKVProj, go:metal.Recorder.QMatMulResident, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go
+
+Add the Metal-only resident mixed-projection group, exact segment expansion into canonical q||k||v columns, M<24 raw-quant fallback, M>=24 one-MPS-matmul route, cache-budget accounting, path/parity/memory tests, ten-sample M64 leaf gate, three trained pp64/pp512/tg64 campaigns, pinned llama.cpp rerun on promotion, evidence bundle, and required perfscan issue. Revert all executable changes if any declared gate fails.
