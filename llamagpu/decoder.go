@@ -49,7 +49,6 @@ import (
 	"math"
 
 	"github.com/jxsl13/goai/backend"
-	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
@@ -317,9 +316,6 @@ type backendOps struct {
 	// ffn_gate|ffn_up can be column-fused into ONE GEMV (into the gu buffer) + one SwiGLUHalves op,
 	// instead of two GEMVs + a Binary SwiGLU. Set by the CUDA SwiGLU constructors; nil elsewhere.
 	fusedGateUp bool
-	// prefillFusedGateUp enables a separate 24..64-row combined quant weight while retaining the
-	// established gate/up weights for decode and larger prompts. Metal Q4_K/Q6_K only.
-	prefillFusedGateUp bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -340,10 +336,7 @@ type block struct {
 	// wGU is the column-fused ffn_gate|ffn_up projection: one [in, 2·hidden] weight whose output row
 	// is [gate | up]. Non-nil (built only when ops.fusedGateUp, i.e. CUDA SwiGLU) = recordFFN runs one
 	// GEMV into the gu buffer + one SwiGLUHalves; nil = the separate wG/wU two-GEMV SwiGLU path.
-	wGU linear
-	// wGUPrefill is the Metal-only short-prefill companion: a combined same-quant gate|up weight.
-	// Decode and M>64 keep wG/wU, avoiding the rejected all-shape gate/up fusion.
-	wGUPrefill          linear
+	wGU                 linear
 	gAttn, gFFN, kC, vC buffer
 	bAttn, bFFN         buffer // LayerNorm betas (nil ⇒ RMSNorm, the Llama default)
 	// projection biases (nil ⇒ no bias): the fused-QKV bias [D+2·kvDim], the o-proj bias [D],
@@ -1101,15 +1094,6 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 			d.recordDownProj(r, b, rows),                                        // dx += (·)·Wdown
 		)
 	}
-	if b.wGUPrefill != nil && rows >= 24 && rows <= 64 {
-		sh, ok := r.(swiGLUHalvesRecorder)
-		if !ok {
-			return fmt.Errorf("llamagpu: prefill gate-up projection requires SwiGLUHalves recorder")
-		}
-		e := b.wGUPrefill.record(r, in, d.gu.b, rows)
-		e = firstErr(e, sh.SwiGLUHalves(d.gu.b, d.gate.b, rows, d.hidden))
-		return firstErr(e, d.recordDownProj(r, b, rows))
-	}
 	if b.wGU != nil {
 		// Column-fused ffn_gate|ffn_up: one GEMV into gu = [·, 2·hidden], then SwiGLU over its halves
 		// into gate — one launch instead of two GEMVs, bit-identical (each output column quantizes
@@ -1190,7 +1174,7 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	d.ao = mk(make([]float32, c*d.d))
 	d.gate = mk(make([]float32, c*d.hidden))
 	d.up = mk(make([]float32, c*d.hidden))
-	if d.ops.fusedGateUp || d.ops.prefillFusedGateUp {
+	if d.ops.fusedGateUp {
 		d.gu = mk(make([]float32, c*2*d.hidden)) // fused gate|up GEMV output for the SwiGLUHalves path
 	}
 	d.mo = mk(make([]float32, c*d.d))
@@ -3147,8 +3131,8 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 	// [Out,In] row-major, so fusing = appending the raw quant bytes of gate‖up out-rows). Only when the
 	// backend supports SwiGLUHalves (ops.fusedGateUp) and both share one quant type; else nil → the
 	// unfused two-GEMV wG/wU path. Mirrors newDecoder's wGU so the raw-quant decode matches its speed.
-	qfused2 := func(q1, q2 *nn.QuantLinear, enabled bool) linear {
-		if err != nil || !enabled || q1.QT != q2.QT {
+	qfused2 := func(q1, q2 *nn.QuantLinear) linear {
+		if err != nil || !ops.fusedGateUp || q1.QT != q2.QT {
 			return nil
 		}
 		wb := make([]byte, 0, len(q1.Weight)+len(q2.Weight))
@@ -3163,7 +3147,7 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 	}
 	//perfscan:ignore PS3032 newQuantDecoder block-upload, one-time model build
 	for _, b := range m.Blocks {
-		wgu := qfused2(b.FFN.Gate, b.FFN.Up, ops.fusedGateUp)
+		wgu := qfused2(b.FFN.Gate, b.FFN.Up)
 		gb := block{
 			wqkv: qfused(b.Wq, b.Wk, b.Wv), wo: qlin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
@@ -3172,10 +3156,6 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		}
 		if wgu == nil { // no SwiGLUHalves backend or mixed types: keep the two-GEMV gate/up path
 			gb.wG, gb.wU = qlin(b.FFN.Gate), qlin(b.FFN.Up)
-		}
-		if ops.prefillFusedGateUp &&
-			(b.FFN.Gate.QT == gguf.Q4_K || b.FFN.Gate.QT == gguf.Q6_K) {
-			gb.wGUPrefill = qfused2(b.FFN.Gate, b.FFN.Up, true)
 		}
 		if gb.wqkv == nil { // mixed quant types: keep exact raw projections for single-token decode
 			gb.wq, gb.wk, gb.wv = qlin(b.Wq), qlin(b.Wk), qlin(b.Wv)

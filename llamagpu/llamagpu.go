@@ -125,9 +125,6 @@ func (m mRec) Binary(a, b, o buffer, op int) error {
 func (m mRec) BinaryN(a, b, o buffer, op, n int) error {
 	return m.r.BinaryN(mb(a), mb(b), mb(o), op, n)
 }
-func (m mRec) SwiGLUHalves(gu, out buffer, rows, hidden int) error {
-	return m.r.SwiGLUHalves(mb(gu), mb(out), rows, hidden)
-}
 func (m mRec) QMatMulResident(x buffer, w qweight, o buffer, mm int) error {
 	switch w := w.(type) {
 	case *metal.ResidentQWeight:
@@ -259,19 +256,13 @@ func NewQuantF16KV(m *nlp.QuantLlama) (*Decoder, error) {
 }
 
 func newQuantMetal(m *nlp.QuantLlama, f16KV bool) (*Decoder, error) {
-	return newQuantMetalWithFeatures(m, f16KV, true, true)
+	return newQuantMetalWithMixedQKV(m, f16KV, true)
 }
 
 // newQuantMetalWithMixedQKV is the production constructor plus a narrow control seam for the
 // trained-model promotion campaign. Public constructors always enable the grouped path; tests can
 // build the otherwise-identical established separate-projection arm without environment switches.
 func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decoder, error) {
-	return newQuantMetalWithFeatures(m, f16KV, mixedQKV, true)
-}
-
-// newQuantMetalWithFeatures exposes independent control arms for trained-model promotion tests.
-// Production constructors enable both features; callers outside this package cannot alter them.
-func newQuantMetalWithFeatures(m *nlp.QuantLlama, f16KV, mixedQKV, prefillGateUp bool) (*Decoder, error) {
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
@@ -292,8 +283,7 @@ func newQuantMetalWithFeatures(m *nlp.QuantLlama, f16KV, mixedQKV, prefillGateUp
 			}
 			return mRec{r}, nil
 		},
-		uploadQWeight:      metalUploadQWeight,
-		prefillFusedGateUp: prefillGateUp,
+		uploadQWeight: metalUploadQWeight,
 	}
 	if mixedQKV {
 		ops.groupQWeights = metalGroupQWeights

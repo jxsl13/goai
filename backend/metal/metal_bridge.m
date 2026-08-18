@@ -1297,33 +1297,19 @@ static NSString* const kBinarySource =
      "    default: r=x; break;\n"
      "  }\n"
      "  O[gid]=r;\n"
-     "}\n"
-     "kernel void swiglu_halves(device const float* GU [[buffer(0)]],\n"
-     "                           device float* O [[buffer(1)]],\n"
-     "                           constant int* P [[buffer(2)]],\n"
-     "                           uint gid [[thread_position_in_grid]]) {\n"
-     "  int rows=P[0], hidden=P[1], n=rows*hidden;\n"
-     "  if((int)gid>=n) return;\n"
-     "  int row=(int)gid/hidden, col=(int)gid-row*hidden;\n"
-     "  int base=row*(2*hidden)+col;\n"
-     "  float x=GU[base], y=GU[base+hidden];\n"
-     "  O[gid]=(x/(1.0f+exp(-x)))*y;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gBinary = nil;
-static id<MTLComputePipelineState> gSwiGLUHalves = nil;
 
 static int ensure_binary(void) {
-    if (gBinary != nil && gSwiGLUHalves != nil) return 0;
+    if (gBinary != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kBinarySource options:nil error:&err];
     if (lib == nil) return -6;
     id<MTLFunction> fn = [lib newFunctionWithName:@"binaryop"];
-    id<MTLFunction> halves = [lib newFunctionWithName:@"swiglu_halves"];
-    if (fn == nil || halves == nil) return -6;
+    if (fn == nil) return -6;
     gBinary = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    gSwiGLUHalves = [gDevice newComputePipelineStateWithFunction:halves error:&err];
-    return (gBinary != nil && gSwiGLUHalves != nil) ? 0 : -6;
+    return gBinary != nil ? 0 : -6;
 }
 
 int mtl_binary_f32(const float* A, const float* B, float* O, int n, int op) {
@@ -2443,28 +2429,6 @@ int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) 
     NSUInteger tg = gBinary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
-    return 0;
-}
-
-int mtl_recorder_swiglu_halves(void* rec, void* guh, void* oh, int rows, int hidden) {
-    if (rec == NULL || guh == NULL || oh == NULL || rows <= 0 || hidden <= 0) return -2;
-    if (ensure_binary() != 0) return -6;
-    id<MTLBuffer> gu = (__bridge id<MTLBuffer>)guh;
-    id<MTLBuffer> out = (__bridge id<MTLBuffer>)oh;
-    int n = rows * hidden;
-    if (gu.length < (size_t)2*(size_t)n*sizeof(float) ||
-        out.length < (size_t)n*sizeof(float)) return -3;
-    int P[2] = {rows, hidden};
-    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"binary.swiglu_halves");
-    [enc setComputePipelineState:gSwiGLUHalves];
-    [enc setBuffer:gu offset:0 atIndex:0];
-    [enc setBuffer:out offset:0 atIndex:1];
-    [enc setBytes:P length:sizeof(P) atIndex:2];
-    NSUInteger tg = gSwiGLUHalves.maxTotalThreadsPerThreadgroup;
-    if ((NSUInteger)n < tg) tg = (NSUInteger)n;
-    [enc dispatchThreads:MTLSizeMake((NSUInteger)n, 1, 1)
-       threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
     [enc endEncoding];
     return 0;
 }

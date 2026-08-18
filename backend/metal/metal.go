@@ -2467,19 +2467,6 @@ func (r *Recorder) Binary(a, b, o *DeviceBuffer, op int) error {
 	return nil
 }
 
-// SwiGLUHalves records O[row,col] = SiLU(GU[row,col])*GU[row,hidden+col], where
-// GU is row-major [rows,2*hidden]. Its expression matches BinaryN op 6 exactly.
-func (r *Recorder) SwiGLUHalves(gu, o *DeviceBuffer, rows, hidden int) error {
-	if rows < 1 || hidden < 1 || gu.n < rows*2*hidden || o.n < rows*hidden {
-		return fmt.Errorf("metal: Recorder swiglu-halves shape mismatch: gu=%d o=%d rows=%d hidden=%d", gu.n, o.n, rows, hidden)
-	}
-	rc := C.mtl_recorder_swiglu_halves(r.handle, gu.handle, o.handle, C.int(rows), C.int(hidden))
-	if rc != 0 {
-		return fmt.Errorf("metal: Recorder swiglu-halves failed (%d)", int(rc))
-	}
-	return nil
-}
-
 // MatMul records C = A·B (M×K · K×N → M×N, MPS f32) into the command buffer over
 // device-resident buffers. c must be distinct from a and b (MPS forbids aliasing result).
 func (r *Recorder) MatMul(a, b, c *DeviceBuffer, m, k, n int) error {
