@@ -1,4 +1,4 @@
-# Training on real models: measured findings (§T483–§T485)
+# Training on real models: measured findings (§T483–§T552)
 
 > **In plain terms:** "training" is teaching a model from data. GoAI ships a
 > box of optimizers and training tricks; this page shows how each one behaved
@@ -16,14 +16,22 @@ in-repo per run (`-short`-skipped tests in `llamagpu/`).
 
 ## The optimizer zoo (`optimizers_trained_test.go`, 120 steps, CE 3.135 start)
 
+Rows exercised by the optimizer-zoo test report the median of three consecutive
+Apple M2 Pro runs. Parentheses show the observed range where the displayed
+precision changed; the shared model, initialization, corpus order, clipping
+threshold, and 120-step protocol are fixed. Sophia retains its dedicated GNB
+harness result.
+
 | Optimizer | Final CE | Note |
 |-----------|---------:|------|
-| SOAP | **1.188** | second-order leads |
+| SOAP | **1.333** (1.198–1.433) | second-order method; this short Metal run has material execution variance |
 | ScheduleFreeAdamW | 1.342 | `Eval()` before evaluation |
-| Shampoo | 1.416 | needs `WithShampooRootEvery` (see below) |
+| Q-GaLore | 1.382 (1.380–1.382) | default paper path: INT8 moments/weights, packed INT4 projection, adaptive 0.4/2/5 SVD cadence |
 | Sophia (GNB every 10, §T503) | 1.414 | lr ~6× below AdamW; labels resampled from the model for the Hessian |
+| Shampoo | 1.416 | needs `WithShampooRootEvery` (see below) |
+| APOLLO | 1.436 | defaults: rank 128, scale 1, gap 200, limiter γ=1.01; seed 7 is the only trajectory input and the projection matrix is regenerated rather than persisted |
 | Muon(2D)+AdamW(1D) | 1.468 | Muon is 2-D-only by contract; this composite is the paper's recipe |
-| AdamW | 1.489 | the reference |
+| AdamW | 1.488 | the reference |
 | Adafactor | 1.490 | at its relative-step defaults |
 | AdEMAMix | 1.491 | |
 | LAMB | 1.513 | trust-ratio scaling wants a LARGE lr (0.01 here; 3e-3 failed the bar) |
@@ -38,11 +46,21 @@ amortizes the roots (k=10–50 typical); the default stays the exact paper rule.
 
 ## The wrappers (`wrappers_trained_test.go`)
 
-GaLore 1.380 (leads plain AdamW), Lookahead 1.473, Grokfast 1.502, CautiousAdamW
-1.514, SAM 1.555 — SAM exercised through its real two-pass contract (gradients
-recomputed at the perturbed point). Grokfast's λ=2 amplification roughly doubles
-the effective step: retune the wrapped lr down (the paper does), or it
-underperforms.
+| Wrapper | Final CE (median of 3) | Contract exercised |
+|---------|-----------------------:|--------------------|
+| GaLore | 1.380 | full-precision low-rank reference |
+| Q-GaLore (`QuantBits=0`) | 1.380 | every parameter remains bit-identical to a GaLore shadow after every step under the same clipped GPT gradient stream |
+| Lookahead(AdamW) | 1.473 | slow/fast weight interpolation |
+| Grokfast(AdamW) | 1.502 | λ=2; wrapped learning rate compensated to 1.5e-3 |
+| CautiousAdamW | 1.516 | update/gradient agreement mask |
+| SAM(AdamW) | 1.555 (1.555–1.557) | real two-pass contract; gradients recomputed at the perturbed point |
+
+The paired shadow is important for the Q-GaLore collapse gate: comparing two
+independent Metal runs admits GPU reduction-order noise and cannot prove optimizer
+identity. Q-GaLore's special values `QuantBits=0` and `64` disable its complete
+quantized path; the default `8` row remains in the zoo above. Grokfast's λ=2
+amplification roughly doubles the effective step: retune the wrapped learning rate
+down (the paper does), or it underperforms.
 
 ## NEFTune (`neftune_trained_test.go`)
 
@@ -154,6 +172,8 @@ not claimed (the frozen base is materialized dequantized in memory).
 
 ## Further reading
 
+- Zhu, Zhang, Hao et al. 2024, [*APOLLO: SGD-like Memory, AdamW-level Performance*](https://arxiv.org/abs/2412.05270), plus the [official implementation](https://github.com/zhuhanqing/APOLLO).
+- Zhang et al. 2024, [*Q-GaLore: Quantized GaLore with INT4 Projection and Layer-Adaptive Low-Rank Gradients*](https://arxiv.org/abs/2407.08296), plus the [official implementation](https://github.com/VITA-Group/Q-GaLore).
 - Goodfellow, Bengio & Courville, *Deep Learning* (MIT Press 2016) — the standard textbook behind the optimizer/regularization vocabulary used here.
 - Ruder 2016, *An Overview of Gradient Descent Optimization Algorithms* — the classic survey connecting SGD to the adaptive family.
 - Lialin, Deshpande & Rumshisky 2023, *Scaling Down to Scale Up: A Guide to Parameter-Efficient Fine-Tuning* — the PEFT survey covering the LoRA-family methods measured here.

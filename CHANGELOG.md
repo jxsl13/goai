@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### training -- APOLLO and Q-GaLore join the controlled GPT optimizer comparison (T-01KYJNDR38E4ZSN52KVM0PC5J9, 2026-08-18)
+
+The 120-step, same-model Metal optimizer zoo now measures APOLLO with its default
+rank/scale/gap/limiter and seed-only persistent projection state, plus the complete default
+Q-GaLore paper path. The wrapper harness adds the `QuantBits=0` GaLore-collapse datapoint and
+strengthens its semantic gate: Q-GaLore and a GaLore shadow consume the same clipped real-GPT
+gradient stream, with every parameter checked for bit identity after every step. This avoids
+mistaking independent Metal reduction-order noise for an optimizer difference.
+
+Across three consecutive M2 Pro runs, APOLLO ends at CE 1.436 and default Q-GaLore at median CE
+1.382 (range 1.380–1.382), both from 3.135; the full-precision Q-GaLore collapse ends at 1.380 and
+remains bit-identical to GaLore for all 120 updates. The documentation now reports repeated-run
+medians/ranges, records both methods' defaults and primary sources, and corrects its stale task
+range header.
+
 ### format/gguf -- bit-exact ARM64 NEON Q4_K/Q6_K eager dequantization (T-01KYJNDV2VFRFR5RDBSPKJBRVK, 2026-08-18)
 
 Q4_K and Q6_K eager dequantization now dispatches to M2-tuned Plan 9 ARM64/NEON kernels while
