@@ -2976,6 +2976,94 @@ int mtl_devbuf_download(void* handle, void* dst, int nbytes) {
     return 0;
 }
 
+// topk_better defines the total ordering used by resident TopK: larger values win, then smaller
+// vocab indices. NaNs sort below every number (and by index among themselves), making the bridge
+// deterministic even though model logits are required to be finite at the generation boundary.
+static inline int topk_better(float av, int ai, float bv, int bi) {
+    int an = av != av;
+    int bn = bv != bv;
+    if (an != bn) return !an;
+    if (an) return ai < bi;
+    return av > bv || (av == bv && ai < bi);
+}
+
+static inline int topk_worse(float av, int ai, float bv, int bi) {
+    return topk_better(bv, bi, av, ai);
+}
+
+static inline void topk_swap(float* values, int* indices, int a, int b) {
+    float v = values[a];
+    values[a] = values[b];
+    values[b] = v;
+    int i = indices[a];
+    indices[a] = indices[b];
+    indices[b] = i;
+}
+
+static inline void topk_sift_down(float* values, int* indices, int size, int pos) {
+    for (;;) {
+        int left = 2 * pos + 1;
+        if (left >= size) return;
+        int child = left;
+        int right = left + 1;
+        if (right < size && topk_worse(values[right], indices[right], values[left], indices[left])) {
+            child = right;
+        }
+        if (!topk_worse(values[child], indices[child], values[pos], indices[pos])) return;
+        topk_swap(values, indices, pos, child);
+        pos = child;
+    }
+}
+
+// mtl_devbuf_topk scans the coherent Shared MTLBuffer directly from the CPU after the decoder's
+// command-buffer wait. A bounded min-heap makes this O(n log k), uses no heap allocation, and sends
+// only k pairs across cgo. On Apple Silicon this avoids both a second GPU dispatch/wait and the
+// full-vocabulary Go copy+widen+selection path; the end-to-end gate decides whether that UMA choice
+// remains the winner.
+int mtl_devbuf_topk(void* handle, int n, int k, int* out_idx, float* out_val) {
+    if (handle == NULL || out_idx == NULL || out_val == NULL) return -2;
+    if (n < 1 || k < 1 || k > 256 || k > n) return -3;
+    id<MTLBuffer> buf = (__bridge id<MTLBuffer>)handle;
+    if ((int)(buf.length / sizeof(float)) < n) return -4;
+    const float* input = (const float*)buf.contents;
+    if (input == NULL) return -5;
+
+    float heap_values[256];
+    int heap_indices[256];
+    int size = 0;
+    for (int i = 0; i < n; ++i) {
+        float v = input[i];
+        if (size < k) {
+            int pos = size++;
+            heap_values[pos] = v;
+            heap_indices[pos] = i;
+            while (pos > 0) {
+                int parent = (pos - 1) / 2;
+                if (!topk_worse(heap_values[pos], heap_indices[pos], heap_values[parent], heap_indices[parent])) break;
+                topk_swap(heap_values, heap_indices, pos, parent);
+                pos = parent;
+            }
+        } else if (topk_better(v, i, heap_values[0], heap_indices[0])) {
+            heap_values[0] = v;
+            heap_indices[0] = i;
+            topk_sift_down(heap_values, heap_indices, size, 0);
+        }
+    }
+
+    // Pop the worst retained entry into the output from back to front, yielding descending order.
+    for (int out = k - 1; out >= 0; --out) {
+        out_idx[out] = heap_indices[0];
+        out_val[out] = heap_values[0];
+        --size;
+        if (size > 0) {
+            heap_values[0] = heap_values[size];
+            heap_indices[0] = heap_indices[size];
+            topk_sift_down(heap_values, heap_indices, size, 0);
+        }
+    }
+    return 0;
+}
+
 // mtl_devbuf_upload_into overwrites an existing device buffer's contents (host→buffer memcpy).
 // Reuses a buffer across decode steps (e.g. the new token's hidden) without realloc. Shared
 // storage on UMA → the write is visible to the next command buffer.

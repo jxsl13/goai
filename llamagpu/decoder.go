@@ -3581,10 +3581,11 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 	pos := len(prompt)
 	logits := all // last-row-only prefill returns exactly the post-prompt row's [vocab] logits
 	buf := make([]float64, d.v)
-	// On-device top-k sampling fast-path: for a penalty-free TopK sampler AND a device logits buffer that
-	// can TopK (CUDA), skip the whole-vocab host download + CPU sort each token — read the K highest
-	// logits on device and draw over them, bit-identical to the full-vocab sampler (see fastTopKSampler /
-	// sampleTopKCandidates). Any other sampler/backend takes the flexible host path.
+	// Device-resident top-k sampling fast-path: for a penalty-free TopK sampler AND a logits buffer that
+	// can TopK (CUDA GPU reduction or Metal coherent-UMA selection), skip the whole-vocab host download.
+	// Read the K highest logits at the resident boundary and draw over them, bit-identical to the
+	// full-vocab sampler (see fastTopKSampler/sampleTopKCandidates). Any other sampler/backend takes the
+	// flexible host path.
 	sp, fastK := fastTopKSampler(s, d.v)
 	spP, fastC := fastTopPSampler(s, d.v) // pure-top-p device path (mutually exclusive with sp: needs top-k off)
 	dt, hasDev := d.logits.b.(deviceTopKer)

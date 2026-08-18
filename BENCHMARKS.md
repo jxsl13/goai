@@ -122,7 +122,7 @@ figure on file to pair).
 | CPU tokenizer encode | GPT-2 BPE 1 MB, M2 Pro | ≈28.2 MB/s (6.7M tok/s) | tiktoken Rust 18.8 | **GoAI 1.50×** (237,208-token parity) |
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
-| Apple-GPU LLM decode (production) | TinyLlama-1.1B Q4_K_M, M2 Pro | 172.0 tok/s (f32 KV) | llama.cpp b10450 179.5 (f32 KV) / 196.8 (shipping f16 KV) | llama.cpp 1.043× matched / 1.143× shipping (§2) |
+| Apple-GPU LLM decode (production, forward-only) | TinyLlama-1.1B Q4_K_M, M2 Pro | 178.5 tok/s (f16 KV) | llama.cpp b10450 193.3 (f16 KV, FA auto) | llama.cpp 1.083× (§2) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
 | Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 2.4–40× behind (ViT per-image loop → T908) |
 
@@ -353,6 +353,26 @@ NRMSE 0.000170697. This is a promoted feature gain, not an overall leadership
 claim: llama.cpp still leads decode by 1.096× and prefill by 1.169×. Raw
 samples and pins are in
 `internal/benchcompare/leadership/evidence/m2-metal-f16kv-20260818`.
+
+**Current mixed-QKV and sampling-boundary refresh (2026-08-18).** After the
+mixed-quant QKV prefill promotion, five alternating shipping pairs measure
+GoAI at 178.5 tok/s tg64 and 1,592.4 tok/s pp64 versus pinned llama.cpp b10450
+at 193.311717 and 1,770.109320 tok/s. The remaining incumbent factors are
+1.082979× and 1.111598×.
+
+Those llama-bench cells are **forward-only**: its generation loop calls
+`llama_decode` and synchronizes but never reads or samples logits. GoAI's
+historical harness additionally copied all 32,000 logits through `Step`.
+Removing only that copy changes same-session tg64 by 1.00181× (178.96 to
+179.28 tok/s), so it does not explain or erase the incumbent lead.
+
+Real sampled generation is a separate matrix cell. For temperature 0.8,
+Top-K 40, Top-P 0.9, Metal now selects candidates from the resident coherent
+buffer and returns only K pairs. Ten alternating trained-model pairs preserve
+the exact 70-token sequence and improve 153.97 to **163.67 tok/s (1.06301×)**.
+There is no llama-bench comparator for this cell because llama-bench does not
+sample. Raw samples and contracts live in
+`internal/benchcompare/leadership/evidence/m2-metal-resident-topk-20260818`.
 
 This is now a narrow, configuration-dependent frontier rather than a 20×
 kernel-maturity deficit. GoAI's exact in-situ timestamp profile attributes

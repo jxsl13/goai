@@ -9,9 +9,10 @@ import (
 )
 
 // deviceTopKer is implemented by a device logits buffer that can return its k highest (index, value)
-// pairs computed ON DEVICE — the CUDA logits buffer (cBuf, via cuda.DeviceF32.TopK). Metal/vulkan
-// buffers do not implement it, so the on-device sampling fast-path type-asserts this and falls back to
-// the full-vocab host path when it is absent. Keeping this an interface keeps decoder.go backend-neutral.
+// pairs selected at the device-resident boundary. CUDA computes them on the GPU; Metal scans its
+// coherent Shared MTLBuffer directly on Apple Silicon and materializes only O(k) result data. Vulkan
+// does not implement it, so the sampling fast-path type-asserts this and falls back to the full-vocab
+// host path when it is absent. Keeping this an interface keeps decoder.go backend-neutral.
 type deviceTopKer interface {
 	// TopKN returns the k highest (index, value) pairs over the FIRST n elements (n = vocab; the decode
 	// logits occupy [0,n) of a buffer that may be over-allocated for prefill/batch).
@@ -29,13 +30,20 @@ type deviceTopPer interface {
 	ToHost() (*tensor.Tensor, error)
 }
 
+// deviceTopKSamplingDisabled honors the backend-neutral switch and the original CUDA-named switch
+// for compatibility with existing benchmark and fallback-parity campaigns.
+func deviceTopKSamplingDisabled() bool {
+	return os.Getenv("GOAI_DEVICE_TOPK_SAMPLE") == "0" || os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0"
+}
+
 // fastTopKSampler reports (sampler, K) when s is a penalty-free *nlp.Sampler with TopK>0 whose selection
 // is confined to the top-TopK — so a device TopK(K>TopK) superset lets the CPU draw EXACTLY on the K
 // candidates (see sampleTopKCandidates), avoiding the whole-vocab logits D2H + CPU sort per token.
 // Returns (nil, 0) for any other sampler (penalties on, TopK off/too large, a non-*Sampler impl, or
-// GOAI_CUDA_TOPK_SAMPLE=0) → the flexible full-vocab host fallback.
+// GOAI_DEVICE_TOPK_SAMPLE=0) → the flexible full-vocab host fallback. The original
+// GOAI_CUDA_TOPK_SAMPLE=0 spelling remains a compatibility alias.
 func fastTopKSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
-	if os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0" {
+	if deviceTopKSamplingDisabled() {
 		return nil, 0
 	}
 	sp, ok := s.(*nlp.Sampler)
@@ -70,9 +78,9 @@ const toppCandidateK = 64
 // the exact full-vocab nucleus and draw, avoiding the whole-vocab logits D2H + host sort per token.
 // The nucleus is Z-dependent (unlike top-k), so the caller must also supply the full-vocab softmax
 // stats (maxLogit, Zexp); see SampleTopPFromCandidates. Returns (nil,0) for any richer sampler →
-// the flexible full-vocab host fallback. Disabled by GOAI_CUDA_TOPK_SAMPLE=0 (shared switch).
+// the flexible full-vocab host fallback. Disabled by GOAI_DEVICE_TOPK_SAMPLE=0.
 func fastTopPSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
-	if os.Getenv("GOAI_CUDA_TOPK_SAMPLE") == "0" {
+	if deviceTopKSamplingDisabled() {
 		return nil, 0
 	}
 	sp, ok := s.(*nlp.Sampler)

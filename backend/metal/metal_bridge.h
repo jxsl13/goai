@@ -289,6 +289,9 @@ void* mtl_devbuf_upload(const void* data, int nbytes);
 void* mtl_devbuf_alloc_zero(int nbytes);
 int mtl_devbuf_download(void* handle, void* dst, int nbytes);
 int mtl_devbuf_upload_into(void* handle, const void* src, int nbytes);
+// Select the k highest values from the first n resident f32 elements. Results are ordered by
+// descending value and ascending index for ties. The coherent-UMA scan materializes only k pairs.
+int mtl_devbuf_topk(void* handle, int n, int k, int* out_idx, float* out_val);
 void mtl_devbuf_free(void* handle);
 
 // mtl_qmatmul_resident is a quantized matmul whose weight is the already-resident buffer `wbuf`

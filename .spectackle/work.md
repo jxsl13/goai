@@ -3750,3 +3750,22 @@ option: Require exact expanded operand bytes plus bounded output NRMSE and train
 option: Require bit-exact GEMM output and reject all shape-changing fusion
 blocks: P-01M09A28JWF5ZBR8ADMM2P13MN
 choice: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
+
+## P-01M09DYYWEEW9T8ERKNT02ZCNC Keep M2 Top-K generation logits device-resident
+kind: proposal
+state: active
+created: 2026-08-18
+grilled: 2026-08-18 open=0
+targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/sampling_fastpath.go, llamagpu/decoder.go, llamagpu/metal_logits_readback_attribution_test.go
+
+Context: pinned llama.cpp b10450 llama-bench calls llama_decode plus synchronize and never reads logits. On Apple M2 Pro with the pinned TinyLlama-1.1B Q4_K_M model (vocab 32000, f16 KV), ten alternating tg64 samples measured Decoder.Step including the complete host copy versus the same private stepInto forward without it at 181.42 versus 181.73 tok/s (1.00170x boundary factor); an already synchronized 32000-float shared-memory download cost 9.788 us. Therefore the copy is not the remaining forward bottleneck. Real generation additionally widens all logits to f64 and samples them: greedy measured 64.729 us/token, while temperature 0.8 + TopK 40 + TopP 0.9 measured 551.502 us/token, about 10% of the approximately 5.5 ms TinyLlama decode step. Add the narrow Metal DeviceBuffer.TopKN capability so the existing backend-neutral deviceTopKer path returns only K index/value pairs and reconstructs the exact existing sampler draw. Evaluate the fastest M2 implementation at the device-resident boundary, including an optimized coherent-UMA selection and a Metal reduction when warranted by measurement; do not assume GPU dispatch wins. Promotion requires exact top-K value/index sets against a host reference across boundary sizes and K through 256, exact generated token parity with the forced full-vocabulary fallback on deterministic and trained-model campaigns, invalid-range guards, no full-vocabulary Go allocation/copy after the first generated token, at least 1.05x median end-to-end trained TinyLlama TopK generation speedup in five alternating same-session pairs, unchanged Step semantics, and no material regression in tg64 forward-only or pp64/pp512. Greedy Argmax and pure TopP softmax statistics remain separate candidates because their measured opportunity and contracts differ. Update the M2 leadership matrix to distinguish forward-only llama-bench semantics from sampled generation semantics; never credit the 0.17%-0.55% readback delta as a kernel win.
+
+## T-01M09E0P15ERA9K4BPBM2SE39D Implement and gate M2 resident TopKN sampling
+kind: task
+state: active
+created: 2026-08-18
+parent: P-01M09DYYWEEW9T8ERKNT02ZCNC
+grilled: 2026-08-18 open=4
+targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/decoder_topk_sample_test.go, llamagpu/metal_logits_readback_attribution_test.go
+
+Implement DeviceBuffer.TopKN over the first n resident f32 logits with k in [1,min(256,n)]. Start with the coherent-UMA path because MTLBuffer storage is shared and the decoder has already waited for completion; use an allocation-free bounded selection structure inside the bridge and return only k index/value pairs. Benchmark it against the existing whole-vocabulary Go sampling fallback and only add a separate Metal command-buffer reduction if the direct resident scan misses the 1.05x trained-model generation gate. Validate exact top-K value/index sets for distinct logits across small, boundary, 32k, and 128k n; deterministic tie behavior; invalid n/k and released/non-f32 buffers; exact fast/fallback token sequence parity; and five alternating real-model end-to-end samples. Preserve Step, CUDA, Vulkan, rich-sampler fallback, and CGO-disabled behavior.
