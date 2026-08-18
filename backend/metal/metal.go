@@ -1896,14 +1896,13 @@ func boolToCInt(b bool) C.int {
 	return 0
 }
 
-// DeviceBuffer is a host-visible GPU-resident buffer (ADR-0019 Phase 1, §T367): f32
-// data uploaded into a retained MTLBuffer, read back with DownloadF32, freed with
-// Release. On Apple Silicon UMA it is host memory. Nothing dispatches over it yet — it
-// is the storage primitive the batched-decode path (Phase 2) will chain ops over so
-// intermediates stay on the GPU instead of a host round-trip per op.
+// DeviceBuffer is a host-visible GPU-resident buffer (ADR-0019 Phase 1, §T367).
+// Ordinary buffers hold f32. NewDeviceBufferF16Zeros creates the specialized f16
+// storage used only by the opt-in KV-cache path; arithmetic still accumulates in f32.
 type DeviceBuffer struct {
 	handle unsafe.Pointer
-	n      int // element count (f32)
+	n      int // logical element count
+	bytes  int // bytes per logical element: 4=f32, 2=f16
 }
 
 // NewDeviceBufferF32 uploads data into a device-resident buffer.
@@ -1912,19 +1911,49 @@ func NewDeviceBufferF32(data []float32) (*DeviceBuffer, error) {
 		return nil, fmt.Errorf("metal: no GPU (§V4)")
 	}
 	if len(data) == 0 {
-		return &DeviceBuffer{}, nil
+		return &DeviceBuffer{bytes: 4}, nil
 	}
 	h := C.mtl_devbuf_upload(unsafe.Pointer(&data[0]), C.int(len(data)*4))
 	if h == nil {
 		return nil, fmt.Errorf("metal: devbuf upload failed")
 	}
-	b := &DeviceBuffer{handle: h, n: len(data)}
+	b := &DeviceBuffer{handle: h, n: len(data), bytes: 4}
 	runtime.SetFinalizer(b, (*DeviceBuffer).Release) // safety net; callers should Release explicitly
+	return b, nil
+}
+
+// NewDeviceBufferF16Zeros allocates n IEEE binary16 zero values in a retained
+// Metal buffer. It is intentionally narrow: callers populate it on-device through
+// Recorder.CopyF32ToF16 rather than exposing half storage through tensor.
+func NewDeviceBufferF16Zeros(n int) (*DeviceBuffer, error) {
+	if !Available() {
+		return nil, fmt.Errorf("metal: no GPU (§V4)")
+	}
+	if n < 0 {
+		return nil, fmt.Errorf("metal: negative f16 buffer length %d", n)
+	}
+	const maxCInt = int(^uint32(0) >> 1)
+	if n > maxCInt/2 {
+		return nil, fmt.Errorf("metal: f16 buffer length %d exceeds Metal bridge limit", n)
+	}
+	if n == 0 {
+		return &DeviceBuffer{bytes: 2}, nil
+	}
+	h := C.mtl_devbuf_alloc_zero(C.int(n * 2))
+	if h == nil {
+		return nil, fmt.Errorf("metal: f16 devbuf allocation failed")
+	}
+	b := &DeviceBuffer{handle: h, n: n, bytes: 2}
+	runtime.SetFinalizer(b, (*DeviceBuffer).Release)
 	return b, nil
 }
 
 // Len returns the element count.
 func (b *DeviceBuffer) Len() int { return b.n }
+
+// ByteLen returns the physical storage size. An f16 KV cache therefore reports
+// exactly half the bytes of an equal-length f32 buffer.
+func (b *DeviceBuffer) ByteLen() int { return b.n * b.bytes }
 
 // DownloadF32 copies the leading len(dst) elements of the buffer into dst (a prefix download —
 // over-allocated scratch buffers, §T418, hand back just the rows a step produced). len(dst) must
@@ -1936,9 +1965,35 @@ func (b *DeviceBuffer) DownloadF32(dst []float32) error {
 	if len(dst) > b.n {
 		return fmt.Errorf("metal: devbuf download dst len %d > %d", len(dst), b.n)
 	}
+	if b.bytes != 4 {
+		return fmt.Errorf("metal: DownloadF32 requires f32 storage, got %d-byte elements", b.bytes)
+	}
 	rc := C.mtl_devbuf_download(b.handle, unsafe.Pointer(&dst[0]), C.int(len(dst)*4))
 	if rc != 0 {
 		return fmt.Errorf("metal: devbuf download failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+// downloadF16Bits is the exact-storage test seam for the specialized KV cache. The public
+// arithmetic API intentionally does not expose half tensors; tests still need to pin the on-device
+// f32→binary16 rounding contract independently of downstream attention.
+func (b *DeviceBuffer) downloadF16Bits(dst []uint16) error {
+	if b.bytes != 2 {
+		return fmt.Errorf("metal: f16 bit download requires 2-byte storage, got %d-byte elements", b.bytes)
+	}
+	if len(dst) > b.n {
+		return fmt.Errorf("metal: f16 bit download dst len %d > %d", len(dst), b.n)
+	}
+	if len(dst) == 0 {
+		return nil
+	}
+	if b.handle == nil {
+		return fmt.Errorf("metal: f16 bit download from released buffer")
+	}
+	rc := C.mtl_devbuf_download(b.handle, unsafe.Pointer(&dst[0]), C.int(len(dst)*2))
+	if rc != 0 {
+		return fmt.Errorf("metal: f16 bit download failed (code %d)", int(rc))
 	}
 	return nil
 }
@@ -1951,6 +2006,9 @@ func (b *DeviceBuffer) UploadF32(src []float32) error {
 	}
 	if len(src) > b.n {
 		return fmt.Errorf("metal: devbuf upload src len %d > %d", len(src), b.n)
+	}
+	if b.bytes != 4 {
+		return fmt.Errorf("metal: UploadF32 requires f32 storage, got %d-byte elements", b.bytes)
 	}
 	rc := C.mtl_devbuf_upload_into(b.handle, unsafe.Pointer(&src[0]), C.int(len(src)*4))
 	if rc != 0 {
@@ -2164,6 +2222,9 @@ func (r *Recorder) Unary(x, o *DeviceBuffer, op int) error {
 // buffer (offsets and count in f32 elements). This is the KV-cache append: copy the new
 // token's k/v row into cache[cacheLen] each decode step, staying device-resident.
 func (r *Recorder) Blit(src *DeviceBuffer, srcOff int, dst *DeviceBuffer, dstOff, n int) error {
+	if src.bytes != 4 || dst.bytes != 4 {
+		return fmt.Errorf("metal: Recorder blit requires f32 buffers, got %d/%d-byte elements", src.bytes, dst.bytes)
+	}
 	if srcOff < 0 || dstOff < 0 || n <= 0 || srcOff+n > src.n || dstOff+n > dst.n {
 		return fmt.Errorf("metal: Recorder blit out of range: src[%d:%d]/%d dst[%d:%d]/%d", srcOff, srcOff+n, src.n, dstOff, dstOff+n, dst.n)
 	}
@@ -2181,6 +2242,9 @@ func (r *Recorder) Blit(src *DeviceBuffer, srcOff int, dst *DeviceBuffer, dstOff
 // are column bands of a wider matrix, and prefill needs them as contiguous rows (or written
 // row-wise into the KV cache). rows=1 degenerates to Blit.
 func (r *Recorder) Copy2D(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceBuffer, dstOff, dstStride, rows, rowFloats int) error {
+	if src.bytes != 4 || dst.bytes != 4 {
+		return fmt.Errorf("metal: Recorder copy2d requires f32 buffers, got %d/%d-byte elements", src.bytes, dst.bytes)
+	}
 	if srcOff < 0 || dstOff < 0 || rows < 1 || rowFloats < 1 || srcStride < rowFloats || dstStride < rowFloats ||
 		srcOff+(rows-1)*srcStride+rowFloats > src.n || dstOff+(rows-1)*dstStride+rowFloats > dst.n {
 		return fmt.Errorf("metal: Recorder copy2d out of range: src off=%d stride=%d n=%d dst off=%d stride=%d n=%d rows=%d rowFloats=%d",
@@ -2190,6 +2254,69 @@ func (r *Recorder) Copy2D(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceB
 		dst.handle, C.int(dstOff), C.int(dstStride), C.int(rows), C.int(rowFloats))
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder copy2d failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// CopyF32ToF16 records a contiguous f32-to-IEEE-binary16 conversion into dst.
+// Conversion uses Metal's round-to-nearest-even half cast; offsets and n are in
+// logical elements, not bytes.
+func (r *Recorder) CopyF32ToF16(src *DeviceBuffer, srcOff int, dst *DeviceBuffer, dstOff, n int) error {
+	return r.Copy2DF32ToF16(src, srcOff, n, dst, dstOff, n, 1, n)
+}
+
+// Copy2DF32ToF16 records a strided rows×rowFloats conversion. It is the fused-QKV
+// prefill/decode cache append: no intermediate half tensor and no host round trip.
+func (r *Recorder) Copy2DF32ToF16(src *DeviceBuffer, srcOff, srcStride int, dst *DeviceBuffer, dstOff, dstStride, rows, rowFloats int) error {
+	if src.bytes != 4 || dst.bytes != 2 {
+		return fmt.Errorf("metal: Recorder f32-to-f16 copy requires f32 source/f16 destination, got %d/%d-byte elements", src.bytes, dst.bytes)
+	}
+	if srcOff < 0 || dstOff < 0 || rows < 1 || rowFloats < 1 || srcStride < rowFloats || dstStride < rowFloats ||
+		srcOff+(rows-1)*srcStride+rowFloats > src.n || dstOff+(rows-1)*dstStride+rowFloats > dst.n {
+		return fmt.Errorf("metal: Recorder f32-to-f16 copy out of range: src off=%d stride=%d n=%d dst off=%d stride=%d n=%d rows=%d rowFloats=%d",
+			srcOff, srcStride, src.n, dstOff, dstStride, dst.n, rows, rowFloats)
+	}
+	rc := C.mtl_recorder_f32_to_f16_2d(r.handle, src.handle, C.int(srcOff), C.int(srcStride),
+		dst.handle, C.int(dstOff), C.int(dstStride), C.int(rows), C.int(rowFloats))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder f32-to-f16 copy failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// Copy2DF32ToF16Pair converts K and V row bands into their two half caches in one dispatch. KV
+// append always has matched geometry, so a paired vectorized kernel removes one encoder/dispatch per
+// layer without coupling cache storage to tensor dtypes.
+func (r *Recorder) Copy2DF32ToF16Pair(
+	kSrc *DeviceBuffer, kSrcOff, kSrcStride int,
+	vSrc *DeviceBuffer, vSrcOff, vSrcStride int,
+	kDst *DeviceBuffer, kDstOff, kDstStride int,
+	vDst *DeviceBuffer, vDstOff, vDstStride int,
+	rows, rowFloats int,
+) error {
+	if kSrc.bytes != 4 || vSrc.bytes != 4 || kDst.bytes != 2 || vDst.bytes != 2 {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy requires f32/f32 sources and f16/f16 destinations, got %d/%d/%d/%d-byte elements",
+			kSrc.bytes, vSrc.bytes, kDst.bytes, vDst.bytes)
+	}
+	valid := func(off, stride, n int) bool {
+		return off >= 0 && stride >= rowFloats && off+(rows-1)*stride+rowFloats <= n
+	}
+	if rows < 1 || rowFloats < 1 ||
+		!valid(kSrcOff, kSrcStride, kSrc.n) || !valid(vSrcOff, vSrcStride, vSrc.n) ||
+		!valid(kDstOff, kDstStride, kDst.n) || !valid(vDstOff, vDstStride, vDst.n) {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy out of range: rows=%d cols=%d K src/dst=%d/%d V src/dst=%d/%d",
+			rows, rowFloats, kSrc.n, kDst.n, vSrc.n, vDst.n)
+	}
+	rc := C.mtl_recorder_f32_to_f16_kv_2d(
+		r.handle,
+		kSrc.handle, C.int(kSrcOff), C.int(kSrcStride),
+		vSrc.handle, C.int(vSrcOff), C.int(vSrcStride),
+		kDst.handle, C.int(kDstOff), C.int(kDstStride),
+		vDst.handle, C.int(vDstOff), C.int(vDstStride),
+		C.int(rows), C.int(rowFloats),
+	)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder paired f32-to-f16 copy failed (%d)", int(rc))
 	}
 	return nil
 }
@@ -2291,6 +2418,9 @@ func (r *Recorder) MHA(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk,
 // fused-QKV view (§T613): after ONE combined QKV matmul the query part is a sub-range of
 // the wider qkv buffer. o still receives its sq×dm rows from offset 0.
 func (r *Recorder) MHAAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	if q.bytes != 4 || k.bytes != 4 || v.bytes != 4 || o.bytes != 4 {
+		return fmt.Errorf("metal: Recorder mha requires f32 q/k/v/o buffers, got %d/%d/%d/%d-byte elements", q.bytes, k.bytes, v.bytes, o.bytes)
+	}
 	// k,v may be an over-allocated KV cache; the kernel reads only the first sk rows, so
 	// require they are AT LEAST sk*kvHeads*dk (not exactly).
 	if qOff < 0 || q.n < qOff+sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
@@ -2300,6 +2430,34 @@ func (r *Recorder) MHAAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads, kvHe
 		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff))
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder mha failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// MHAF16KV records f32 Q × f16 K/V attention with f32 accumulation and output.
+// The initial M2 frontier supports unwindowed dk=64 attention; callers that need
+// another shape receive an explicit error and can retain the established f32 path.
+func (r *Recorder) MHAF16KV(q, k, v, o *DeviceBuffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	return r.MHAF16KVAt(q, k, v, o, 0, sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
+}
+
+// MHAF16KVAt is MHAF16KV with q starting at logical f32 offset qOff.
+func (r *Recorder) MHAF16KVAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
+	if q.bytes != 4 || k.bytes != 2 || v.bytes != 2 || o.bytes != 4 {
+		return fmt.Errorf("metal: Recorder f16-KV mha requires f32/f16/f16/f32 buffers, got %d/%d/%d/%d-byte elements", q.bytes, k.bytes, v.bytes, o.bytes)
+	}
+	if dk != 64 || window != 0 {
+		return fmt.Errorf("metal: Recorder f16-KV mha supports dk=64 and window=0, got dk=%d window=%d", dk, window)
+	}
+	if sq < 1 || sk < 1 || dm != heads*dk || heads < 1 || kvHeads < 1 || heads%kvHeads != 0 ||
+		qOff < 0 || q.n < qOff+sq*dm || o.n < sq*dm || k.n < sk*kvHeads*dk || v.n < sk*kvHeads*dk {
+		return fmt.Errorf("metal: Recorder f16-KV mha shape mismatch: q=%d(off %d) o=%d (want %d) k=%d v=%d (need >=%d), dm=%d heads=%d kvHeads=%d dk=%d",
+			q.n, qOff, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk, dm, heads, kvHeads, dk)
+	}
+	rc := C.mtl_recorder_mha_f16kv(r.handle, q.handle, k.handle, v.handle, o.handle,
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder f16-KV mha failed (%d)", int(rc))
 	}
 	return nil
 }

@@ -23,8 +23,10 @@
 //
 //   - [Decoder.StepN]: a whole multi-token window in one recorded step. Generate uses it to prefill
 //     the prompt in a single dispatch round-trip — measured 41× faster than token-at-a-time (§T418).
-//   - [NewQuant] / [NewQuantVulkan]: decode a quantized model (nlp.QuantizeLlama or a quantized
-//     GGUF) with every projection held device-resident in its 4-8× smaller ggml form (§T415).
+//   - [NewQuant] / [NewQuantF16KV] / [NewQuantVulkan]: decode a quantized model
+//     (nlp.QuantizeLlama or a quantized GGUF) with every projection held device-resident in its
+//     4-8× smaller ggml form (§T415). NewQuantF16KV additionally halves retained Metal K/V cache
+//     storage while preserving the existing f32-cache constructor as the default.
 //   - [SpeculativeGenerate]: lossless speculative decoding — a small draft Decoder proposes, the
 //     target verifies the window in one StepN, and the output stays exactly target-distributed
 //     (§T419; ~2-3× at typical acceptance rates with a trained draft).
@@ -66,7 +68,9 @@ const (
 	binarySwiGLU  = 6 // fused silu(a)·b — one dispatch instead of SiLU+Mul (§T613)
 )
 
-// buffer is a device-resident f32 buffer (metal.DeviceBuffer / vulkan.DeviceBuffer).
+// buffer is device-resident storage (metal/cuda/vulkan DeviceBuffer). Decoder arithmetic buffers
+// are f32. The opt-in Metal f16-KV capability uses this same lifetime-only interface for K/V cache
+// storage; it never calls UploadF32/DownloadF32 on those half buffers.
 type buffer interface {
 	UploadF32([]float32) error
 	DownloadF32([]float32) error
@@ -85,6 +89,21 @@ type qweight interface {
 // that do not implement it keep the unbounded call and stay correct, just slower.
 type binaryNRecorder interface {
 	BinaryN(a, b, o buffer, op, n int) error
+}
+
+// f16KVRecorder is the optional narrow capability needed by an f16 KV cache: convert f32 projection
+// rows into retained binary16 cache storage, then read that cache in attention while Q/O and all
+// accumulators remain f32. Keeping it outside recorder preserves every existing backend and default
+// decoder path; only NewQuantF16KV supplies both this capability and an f16 cache allocator.
+type f16KVRecorder interface {
+	Copy2DF32ToF16Pair(
+		kSrc buffer, kSrcOff, kSrcStride int,
+		vSrc buffer, vSrcOff, vSrcStride int,
+		kDst buffer, kDstOff, kDstStride int,
+		vDst buffer, vDstOff, vDstStride int,
+		rows, rowFloats int,
+	) error
+	MHAF16KV(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 }
 
 // linear records o[m,N] = x[m,K]·W for one projection — either an f32 device weight (MatMul) or a
@@ -269,10 +288,11 @@ type recorder interface {
 
 // backendOps is the per-backend constructor vtable the adapters fill in.
 type backendOps struct {
-	name          string
-	newBuffer     func([]float32) (buffer, error)
-	newRecorder   func() (recorder, error)
-	uploadQWeight func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
+	name           string
+	newBuffer      func([]float32) (buffer, error)
+	newF16KVBuffer func(int) (buffer, error) // nil unless this constructor opts into binary16 K/V storage
+	newRecorder    func() (recorder, error)
+	uploadQWeight  func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
 	// quantizeF32 quantizes a host f32 weight [in,out] to a resident Q8_0 device weight in one call
 	// (no pre-quantized ggml bytes needed). Set only by the cuda Q8 recurrent-decode constructors —
 	// nil elsewhere, so the caller keeps the f32 path. Lets a decoder trade the f32 weight's bandwidth
@@ -371,6 +391,7 @@ type Decoder struct {
 	mlaScale, mlaPosDiv                           float32 // MLA pre-softmax scale (1/√qkHead default) and the QKRope rope posDiv
 	eps, posDiv, scale                            float32
 	embMult                                       float32 // gathered embeddings ×= embMult (IBM Granite EmbeddingMult); 1 for everything else
+	f16KV                                         bool    // opt-in: K/V cache storage is IEEE binary16; compute remains f32
 
 	blocks                                                         []block
 	out                                                            linear
@@ -484,15 +505,76 @@ func (d *Decoder) recordQKNorm(r recorder, b block, seq, stride int) error {
 
 // recordOProj records the attention output projection with its residual-add epilogue (dx +=
 // attn·Wo) plus the optional o-bias broadcast onto the residual stream.
-// recordMHA runs the attention core, dispatching to the soft-capped kernel (Gemma2) when attnCap>0.
+// recordMHA runs attention against the Decoder's configured cache storage. The f16 capability is
+// selected only by the opt-in constructor; all established constructors still take the exact f32
+// calls below. Initial batched prefill can explicitly pass f16=false to recordMHAStorage so FlashMM
+// consumes its already-resident f32 K/V rows while those rows are also converted into the cache.
 func (d *Decoder) recordMHA(r recorder, q, kC, vC, o buffer, sq, sk int) error {
+	return d.recordMHAStorage(r, q, kC, vC, o, sq, sk, d.f16KV)
+}
+
+func (d *Decoder) recordMHAStorage(r recorder, q, kC, vC, o buffer, sq, sk int, f16 bool) error {
 	if d.aliBiSlopes != nil {
 		return r.MHAALiBi(q, kC, vC, o, d.aliBiSlopes, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale)
 	}
 	if d.attnCap > 0 {
 		return r.MHACap(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale, d.attnCap)
 	}
+	if f16 {
+		fr, ok := r.(f16KVRecorder)
+		if !ok {
+			return fmt.Errorf("llamagpu(%s): f16 KV cache requires recorder conversion/attention capability", d.ops.name)
+		}
+		return fr.MHAF16KV(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale)
+	}
 	return r.MHA(q, kC, vC, o, sq, sk, d.qDim, d.h, d.kvH, d.dk, 1, 0, d.scale)
+}
+
+func (d *Decoder) recordKVPairBlit(r recorder,
+	kSrc buffer, kSrcOff int, vSrc buffer, vSrcOff int,
+	kDst, vDst buffer, dstOff, n int,
+) error {
+	if !d.f16KV {
+		return firstErr(
+			r.Blit(kSrc, kSrcOff, kDst, dstOff, n),
+			r.Blit(vSrc, vSrcOff, vDst, dstOff, n),
+		)
+	}
+	fr, ok := r.(f16KVRecorder)
+	if !ok {
+		return fmt.Errorf("llamagpu(%s): f16 KV cache requires recorder conversion capability", d.ops.name)
+	}
+	return fr.Copy2DF32ToF16Pair(
+		kSrc, kSrcOff, n,
+		vSrc, vSrcOff, n,
+		kDst, dstOff, n,
+		vDst, dstOff, n,
+		1, n,
+	)
+}
+
+func (d *Decoder) recordKVPairCopy2D(r recorder,
+	kSrc buffer, kSrcOff, kSrcStride int,
+	vSrc buffer, vSrcOff, vSrcStride int,
+	kDst, vDst buffer, dstOff, dstStride, rows, rowFloats int,
+) error {
+	if !d.f16KV {
+		return firstErr(
+			r.Copy2D(kSrc, kSrcOff, kSrcStride, kDst, dstOff, dstStride, rows, rowFloats),
+			r.Copy2D(vSrc, vSrcOff, vSrcStride, vDst, dstOff, dstStride, rows, rowFloats),
+		)
+	}
+	fr, ok := r.(f16KVRecorder)
+	if !ok {
+		return fmt.Errorf("llamagpu(%s): f16 KV cache requires recorder conversion capability", d.ops.name)
+	}
+	return fr.Copy2DF32ToF16Pair(
+		kSrc, kSrcOff, kSrcStride,
+		vSrc, vSrcOff, vSrcStride,
+		kDst, dstOff, dstStride,
+		vDst, dstOff, dstStride,
+		rows, rowFloats,
+	)
 }
 
 func (d *Decoder) recordOProj(r recorder, b block, rows int) error {
@@ -2940,9 +3022,10 @@ func newGPTNeoXDecoder(m *nlp.GPTNeoX, ops backendOps) (*Decoder, error) {
 	return d, nil
 }
 
-// newQuantDecoder uploads a quantized Llama: RMSNorm gains + KV caches as f32 device buffers, every
-// projection as a RESIDENT quantized weight consumed by the record-mode QMatMulResident (§T415) —
-// the 4-8× smaller weights of quantization combined with the batched-decode speedup.
+// newQuantDecoder uploads a quantized Llama: RMSNorm gains + device-resident KV caches, every
+// projection as a RESIDENT quantized weight consumed by the record-mode QMatMulResident (§T415).
+// Cache storage stays f32 unless the constructor supplies newF16KVBuffer; that opt-in is deliberately
+// limited to dk=64, the Metal kernel shape proven by P-01M093C3MFF0E8E1THCWYA1757.
 func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 	if ops.uploadQWeight == nil {
 		return nil, fmt.Errorf("llamagpu(%s): backend has no resident quantized upload", ops.name)
@@ -2952,8 +3035,29 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 	if derr != nil {
 		return nil, derr
 	}
+	if ops.newF16KVBuffer != nil {
+		if d.dk != 64 {
+			return nil, fmt.Errorf("llamagpu(%s): f16 KV cache requires head dimension 64, got %d", ops.name, d.dk)
+		}
+		d.f16KV = true
+	}
 	var err error
 	mk := d.mkBuf(&err)
+	mkCache := func(n int) buffer {
+		if !d.f16KV {
+			return mk(make([]float32, n)).b
+		}
+		if err != nil {
+			return nil
+		}
+		b, e := ops.newF16KVBuffer(n)
+		if e != nil {
+			err = e
+			return nil
+		}
+		d.all = append(d.all, b)
+		return b
+	}
 	qlin := func(q *nn.QuantLinear) linear { // resident quantized [Out,In] weight
 		if err != nil {
 			return quantLinear{}
@@ -3008,7 +3112,7 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 			wqkv: qfused(b.Wq, b.Wk, b.Wv), wo: qlin(b.Wo),
 			gAttn: mk(flat1D(b.AttnNorm.Gamma)).b, gFFN: mk(flat1D(b.FFNNorm.Gamma)).b,
 			wGU: wgu, wD: qlin(b.FFN.Down),
-			kC: mk(make([]float32, d.maxLen*d.kvDim)).b, vC: mk(make([]float32, d.maxLen*d.kvDim)).b,
+			kC: mkCache(d.maxLen * d.kvDim), vC: mkCache(d.maxLen * d.kvDim),
 		}
 		if wgu == nil { // no SwiGLUHalves backend or mixed types: keep the two-GEMV gate/up path
 			gb.wG, gb.wU = qlin(b.FFN.Gate), qlin(b.FFN.Up)
@@ -3099,8 +3203,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 				d.recordQKVProj(r, b, 1),
 				d.recordQKNorm(r, b, 1, D+2*kvDim),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
-				r.Blit(d.qkv.b, D, b.kC, pos*kvDim, kvDim),
-				r.Blit(d.qkv.b, D+kvDim, b.vC, pos*kvDim, kvDim),
+				d.recordKVPairBlit(r, d.qkv.b, D, d.qkv.b, D+kvDim, b.kC, b.vC, pos*kvDim, kvDim),
 			)
 		} else if e == nil {
 			e = firstErr(
@@ -3109,8 +3212,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 				b.wv.record(r, d.xn.b, d.v_.b, 1),
 				r.RoPE(d.q.b, d.dinv.b, d.q.b, 1, D, H, dk, d.half, pos, d.posDiv),
 				r.RoPE(d.k.b, d.dinv.b, d.k.b, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
-				r.Blit(d.k.b, 0, b.kC, pos*kvDim, kvDim),
-				r.Blit(d.v_.b, 0, b.vC, pos*kvDim, kvDim),
+				d.recordKVPairBlit(r, d.k.b, 0, d.v_.b, 0, b.kC, b.vC, pos*kvDim, kvDim),
 			)
 		}
 		e = firstErr(
@@ -3318,15 +3420,28 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		// and deposits the k/v bands directly as cache rows. Recording order = execution
 		// order: norm first, then the projection branch.
 		e := d.recordAttnNorm(r, b, k)
+		attnK, attnV, attnF16 := b.kC, b.vC, d.f16KV
 		if e == nil && b.wqkv != nil {
 			e = firstErr(
 				d.recordQKVProj(r, b, k),
 				d.recordQKNorm(r, b, k, stride),                // per-head QK-norm (Qwen3); no-op otherwise
 				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
 				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
-				r.Copy2D(d.qkv.b, D, stride, b.kC, pos*kvDim, kvDim, k, kvDim),
-				r.Copy2D(d.qkv.b, D+kvDim, stride, b.vC, pos*kvDim, kvDim, k, kvDim),
 			)
+			// At initial prefill, retain contiguous f32 K/V scratch for the established FlashMM
+			// attention path while independently converting the same rows into the f16 decode cache.
+			// This avoids routing a large prompt through the latency-oriented f16 decode kernel.
+			if d.f16KV && pos == 0 {
+				e = firstErr(e,
+					r.Copy2D(d.qkv.b, D, stride, d.k.b, 0, kvDim, k, kvDim),
+					r.Copy2D(d.qkv.b, D+kvDim, stride, d.v_.b, 0, kvDim, k, kvDim),
+				)
+				attnK, attnV, attnF16 = d.k.b, d.v_.b, false
+			}
+			e = firstErr(e, d.recordKVPairCopy2D(
+				r, d.qkv.b, D, stride, d.qkv.b, D+kvDim, stride,
+				b.kC, b.vC, pos*kvDim, kvDim, k, kvDim,
+			))
 		} else if e == nil {
 			e = firstErr(
 				b.wq.record(r, d.xn.b, d.q.b, k),
@@ -3334,15 +3449,17 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 				b.wv.record(r, d.xn.b, d.v_.b, k),
 				r.RoPE(d.q.b, d.dinv.b, d.q.b, k, D, H, dk, d.half, pos, d.posDiv),
 				r.RoPE(d.k.b, d.dinv.b, d.k.b, k, kvDim, KVH, dk, d.half, pos, d.posDiv),
-				r.Blit(d.k.b, 0, b.kC, pos*kvDim, k*kvDim),
-				r.Blit(d.v_.b, 0, b.vC, pos*kvDim, k*kvDim),
+				d.recordKVPairBlit(r, d.k.b, 0, d.v_.b, 0, b.kC, b.vC, pos*kvDim, k*kvDim),
 			)
+			if d.f16KV && pos == 0 {
+				attnK, attnV, attnF16 = d.k.b, d.v_.b, false
+			}
 		}
 		e = firstErr(
 			e,
 			// sq=k vs sk=pos+k: the kernel's causal offset (sk-sq = pos) makes row i attend
 			// through absolute position pos+i — exactly the prefill/verify semantics.
-			d.recordMHA(r, d.q.b, b.kC, b.vC, d.attn.b, k, pos+k),
+			d.recordMHAStorage(r, d.q.b, attnK, attnV, d.attn.b, k, pos+k, attnF16),
 			d.recordOProj(r, b, k), // dx += attn·Wo (+ optional o-bias)
 			d.recordFFNSublayer(r, b, k),
 		)

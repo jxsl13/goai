@@ -2249,6 +2249,113 @@ int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
     return 0;
 }
 
+static id<MTLComputePipelineState> gF32ToF16Copy = nil;
+static id<MTLComputePipelineState> gF32ToF16KVCopy = nil;
+static int ensure_f32_to_f16_copy(void) {
+    if (gF32ToF16Copy != nil && gF32ToF16KVCopy != nil) return 0;
+    NSError* err = nil;
+    NSString* src = @"#include <metal_stdlib>\n"
+                    "using namespace metal;\n"
+                    "kernel void f32_to_f16_2d(device const float* src [[buffer(0)]],\n"
+                    "                              device half* dst [[buffer(1)]],\n"
+                    "                              constant int* p [[buffer(2)]],\n"
+                    "                              uint gid [[thread_position_in_grid]]) {\n"
+                    "  int cols=p[6], total=p[5]*cols; if ((int)gid>=total) return;\n"
+                    "  int row=(int)gid/cols, col=(int)gid-row*cols;\n"
+                    "  dst[p[3]+row*p[4]+col]=half(src[p[0]+row*p[1]+col]);\n"
+                    "}\n"
+                    "kernel void f32_to_f16_kv_2d(device const float* ks [[buffer(0)]],\n"
+                    "                                 device const float* vs [[buffer(1)]],\n"
+                    "                                 device half* kd [[buffer(2)]],\n"
+                    "                                 device half* vd [[buffer(3)]],\n"
+                    "                                 constant int* p [[buffer(4)]],\n"
+                    "                                 uint gid [[thread_position_in_grid]]) {\n"
+                    "  int cols=p[9], pairs=(cols+1)/2, total=p[8]*pairs; if ((int)gid>=total) return;\n"
+                    "  int row=(int)gid/pairs, col=((int)gid-row*pairs)*2;\n"
+                    "  int ki=p[0]+row*p[1]+col, vi=p[2]+row*p[3]+col;\n"
+                    "  int ko=p[4]+row*p[5]+col, vo=p[6]+row*p[7]+col;\n"
+                    "  if (col+1<cols) {\n"
+                    "    if (((ko|vo)&1)==0) {\n"
+                    "      *((device half2*)(kd+ko))=half2(ks[ki],ks[ki+1]);\n"
+                    "      *((device half2*)(vd+vo))=half2(vs[vi],vs[vi+1]);\n"
+                    "    } else {\n"
+                    "      kd[ko]=half(ks[ki]); kd[ko+1]=half(ks[ki+1]);\n"
+                    "      vd[vo]=half(vs[vi]); vd[vo+1]=half(vs[vi+1]);\n"
+                    "    }\n"
+                    "  } else { kd[ko]=half(ks[ki]); vd[vo]=half(vs[vi]); }\n"
+                    "}\n";
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:src options:nil error:&err];
+    if (lib == nil) return -10;
+    id<MTLFunction> fn = [lib newFunctionWithName:@"f32_to_f16_2d"];
+    if (fn == nil) return -11;
+    gF32ToF16Copy = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    id<MTLFunction> kvfn = [lib newFunctionWithName:@"f32_to_f16_kv_2d"];
+    if (kvfn == nil) return -11;
+    gF32ToF16KVCopy = [gDevice newComputePipelineStateWithFunction:kvfn error:&err];
+    return (gF32ToF16Copy == nil || gF32ToF16KVCopy == nil) ? -12 : 0;
+}
+
+int mtl_recorder_f32_to_f16_2d(void* rec, void* srcH, int srcOff, int srcStride,
+                               void* dstH, int dstOff, int dstStride, int rows, int rowFloats) {
+    if (rec == NULL || srcH == NULL || dstH == NULL || srcOff < 0 || dstOff < 0 ||
+        rows < 1 || rowFloats < 1 || srcStride < rowFloats || dstStride < rowFloats) return -2;
+    if (ensure_f32_to_f16_copy() != 0) return -5;
+    id<MTLBuffer> sb = (__bridge id<MTLBuffer>)srcH;
+    id<MTLBuffer> db = (__bridge id<MTLBuffer>)dstH;
+    NSUInteger sEnd = ((NSUInteger)srcOff + (NSUInteger)(rows-1)*srcStride + rowFloats) * 4;
+    NSUInteger dEnd = ((NSUInteger)dstOff + (NSUInteger)(rows-1)*dstStride + rowFloats) * 2;
+    if (sEnd > sb.length || dEnd > db.length) return -3;
+    int p[7] = {srcOff, srcStride, 0, dstOff, dstStride, rows, rowFloats};
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"kv.f32_to_f16");
+    [enc setComputePipelineState:gF32ToF16Copy];
+    [enc setBuffer:sb offset:0 atIndex:0];
+    [enc setBuffer:db offset:0 atIndex:1];
+    [enc setBytes:p length:sizeof(p) atIndex:2];
+    NSUInteger total = (NSUInteger)rows * (NSUInteger)rowFloats;
+    NSUInteger tg = gF32ToF16Copy.maxTotalThreadsPerThreadgroup;
+    if (total < tg) tg = total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+int mtl_recorder_f32_to_f16_kv_2d(void* rec,
+                                  void* kSrcH, int kSrcOff, int kSrcStride,
+                                  void* vSrcH, int vSrcOff, int vSrcStride,
+                                  void* kDstH, int kDstOff, int kDstStride,
+                                  void* vDstH, int vDstOff, int vDstStride,
+                                  int rows, int rowFloats) {
+    if (rec == NULL || kSrcH == NULL || vSrcH == NULL || kDstH == NULL || vDstH == NULL ||
+        kSrcOff < 0 || vSrcOff < 0 || kDstOff < 0 || vDstOff < 0 || rows < 1 || rowFloats < 1 ||
+        kSrcStride < rowFloats || vSrcStride < rowFloats ||
+        kDstStride < rowFloats || vDstStride < rowFloats) return -2;
+    if (ensure_f32_to_f16_copy() != 0) return -5;
+    id<MTLBuffer> ksb = (__bridge id<MTLBuffer>)kSrcH;
+    id<MTLBuffer> vsb = (__bridge id<MTLBuffer>)vSrcH;
+    id<MTLBuffer> kdb = (__bridge id<MTLBuffer>)kDstH;
+    id<MTLBuffer> vdb = (__bridge id<MTLBuffer>)vDstH;
+    NSUInteger ksEnd = ((NSUInteger)kSrcOff + (NSUInteger)(rows-1)*kSrcStride + rowFloats) * 4;
+    NSUInteger vsEnd = ((NSUInteger)vSrcOff + (NSUInteger)(rows-1)*vSrcStride + rowFloats) * 4;
+    NSUInteger kdEnd = ((NSUInteger)kDstOff + (NSUInteger)(rows-1)*kDstStride + rowFloats) * 2;
+    NSUInteger vdEnd = ((NSUInteger)vDstOff + (NSUInteger)(rows-1)*vDstStride + rowFloats) * 2;
+    if (ksEnd > ksb.length || vsEnd > vsb.length || kdEnd > kdb.length || vdEnd > vdb.length) return -3;
+    int p[10] = {kSrcOff, kSrcStride, vSrcOff, vSrcStride,
+                 kDstOff, kDstStride, vDstOff, vDstStride, rows, rowFloats};
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"kv.f32_to_f16_pair");
+    [enc setComputePipelineState:gF32ToF16KVCopy];
+    [enc setBuffer:ksb offset:0 atIndex:0];
+    [enc setBuffer:vsb offset:0 atIndex:1];
+    [enc setBuffer:kdb offset:0 atIndex:2];
+    [enc setBuffer:vdb offset:0 atIndex:3];
+    [enc setBytes:p length:sizeof(p) atIndex:4];
+    NSUInteger total = (NSUInteger)rows * ((NSUInteger)rowFloats + 1) / 2;
+    NSUInteger tg = gF32ToF16KVCopy.maxTotalThreadsPerThreadgroup;
+    if (total < tg) tg = total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 // mtl_recorder_binary encodes O = A (op) B over n f32 elements of device buffers into the
 // recorder's command buffer (op 0=add,1=sub,2=mul,3=div,4=max,5=min). No commit.
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) {
@@ -2797,6 +2904,16 @@ void* mtl_devbuf_upload(const void* data, int nbytes) {
     id<MTLBuffer> buf = [gDevice newBufferWithBytes:data length:(size_t)nbytes options:MTLResourceStorageModeShared];
     if (buf == nil) return NULL;
     return (__bridge_retained void*)buf; // +1 retain transferred to the handle
+}
+
+// Allocate a retained zeroed Shared buffer without first materializing an equal-size
+// Go slice. Metal does not promise newBufferWithLength contents, so zero explicitly.
+void* mtl_devbuf_alloc_zero(int nbytes) {
+    if (ensure_init() != 0 || nbytes <= 0) return NULL;
+    id<MTLBuffer> buf = [gDevice newBufferWithLength:(size_t)nbytes options:MTLResourceStorageModeShared];
+    if (buf == nil) return NULL;
+    memset(buf.contents, 0, (size_t)nbytes);
+    return (__bridge_retained void*)buf;
 }
 
 int mtl_devbuf_download(void* handle, void* dst, int nbytes) {
@@ -4981,6 +5098,48 @@ static NSString* const kMHADecodeSource =
      "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
      "  }\n"
      "}\n"
+     "kernel void mha_dec_splitk_p1q_f16kv(device const float* Q [[buffer(0)]],\n"
+     "                                     device const half* K [[buffer(1)]],\n"
+     "                                     device const half* V [[buffer(2)]],\n"
+     "                                     device float* PART [[buffer(3)]],\n"
+     "                                     constant int* P [[buffer(4)]],\n"
+     "                                     constant float* FP [[buffer(5)]],\n"
+     "                                     uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                                     uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  const int DK=64, H=16;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, c=(int)tg.y;\n"
+     "  if (h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK;\n"
+     "  int kvOff=(h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk;\n"
+     "  int j0=c*per, j1=min(sk, j0+per);\n"
+     "  int slot=(int)(lane>>2), qrt=(int)(lane&3), off=qrt*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=8){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*float(K[j*dkv+kvOff+off+d]);\n"
+     "    sp += simd_shuffle_xor(sp, 1);\n"
+     "    sp += simd_shuffle_xor(sp, 2);\n"
+     "    float sdot=sp*scale;\n"
+     "    float mNew=max(m,sdot); float corr=exp(m-mNew); float pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*float(V[j*dkv+kvOff+off+d]); m=mNew;\n"
+     "  }\n"
+     "  for (uint w=4; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<4){\n"
+     "    int base=(h*nchunk+c)*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "}\n"
      "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
      "                              device float* O [[buffer(1)]],\n"
      "                              constant int* P [[buffer(2)]],\n"
@@ -5036,6 +5195,37 @@ static NSString* const kMHADecodeSource =
      "  }\n"
      "  if (lane==0) { for (int d=0; d<64; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
      "}\n"
+     "kernel void mha_decode64_f16kv(device const float* Q [[buffer(0)]],\n"
+     "                               device const half* K [[buffer(1)]],\n"
+     "                               device const half* V [[buffer(2)]],\n"
+     "                               device float* O [[buffer(3)]],\n"
+     "                               constant int* P [[buffer(4)]],\n"
+     "                               constant float* FP [[buffer(5)]],\n"
+     "                               uint2 tg [[threadgroup_position_in_grid]],\n"
+     "                               uint lane [[thread_index_in_simdgroup]]) {\n"
+     "  int sq=P[0], sk=P[1], dm=P[2], heads=P[3], kvHeads=P[4], causal=P[6];\n"
+     "  float scale=FP[0];\n"
+     "  int h=(int)tg.x, i=(int)tg.y;\n"
+     "  if (h >= heads || i >= sq) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*64;\n"
+     "  int qOff=h*64, kvOff=(h/rep)*64;\n"
+     "  int jmax = causal ? (sk - sq + i + 1) : sk;\n"
+     "  float q[64]; for (int d=0; d<64; d++) q[d]=Q[i*dm+qOff+d];\n"
+     "  float m=-INFINITY, l=0.0f; float acc[64]; for (int d=0; d<64; d++) acc[d]=0.0f;\n"
+     "  for (int j=(int)lane; j<jmax; j+=32) {\n"
+     "    float s=0.0f; for (int d=0; d<64; d++) s+=q[d]*float(K[j*dkv+kvOff+d]); s*=scale;\n"
+     "    float mNew=max(m,s); float corr=exp(m-mNew); float p=exp(s-mNew);\n"
+     "    l=corr*l+p; for (int d=0; d<64; d++) acc[d]=corr*acc[d]+p*float(V[j*dkv+kvOff+d]); m=mNew;\n"
+     "  }\n"
+     "  for (uint off=16; off>0; off>>=1) {\n"
+     "    float mo=simd_shuffle_down(m,off); float lo=simd_shuffle_down(l,off);\n"
+     "    float M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<64; d++) { float ao=simd_shuffle_down(acc[d],off); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane==0) { for (int d=0; d<64; d++) O[i*dm+qOff+d]=acc[d]/l; }\n"
+     "}\n"
      "kernel void mha_decode128_f32(device const float* Q [[buffer(0)]],\n"
      "                           device const float* K [[buffer(1)]],\n"
      "                           device const float* V [[buffer(2)]],\n"
@@ -5080,9 +5270,11 @@ static id<MTLComputePipelineState> gMHADecode = nil;
 // array bounds, so dk<=64 callers get an identical result.
 static id<MTLComputePipelineState> gMHADecode64 = nil;
 static id<MTLComputePipelineState> gMHADecode128 = nil;
+static id<MTLComputePipelineState> gMHADecode64F16KV = nil;
 static id<MTLComputePipelineState> gSplitKP1 = nil;
 static id<MTLComputePipelineState> gSplitKP1H = nil;
 static id<MTLComputePipelineState> gSplitKP1Q = nil;
+static id<MTLComputePipelineState> gSplitKP1QF16KV = nil;
 static int gSplitKQuad = 1;  // quad supersedes the pair variant: 1.05-1.18x on the kernel
 void mtl_set_splitk_quad(int on) { gSplitKQuad = on ? 1 : 0; }
 static int gSplitKHalf = 1;  // measured 2.9x on the kernel, 1.31x on long-context decode
@@ -5106,6 +5298,8 @@ static int ensure_mha_decode(void) {
     if (gMHADecode == nil) return -12;
     id<MTLFunction> fn64 = [lib newFunctionWithName:@"mha_decode64_f32"];
     if (fn64 != nil) gMHADecode64 = [gDevice newComputePipelineStateWithFunction:fn64 error:&err];
+    id<MTLFunction> fn64f16kv = [lib newFunctionWithName:@"mha_decode64_f16kv"];
+    if (fn64f16kv != nil) gMHADecode64F16KV = [gDevice newComputePipelineStateWithFunction:fn64f16kv error:&err];
     id<MTLFunction> fn128 = [lib newFunctionWithName:@"mha_decode128_f32"];
     if (fn128 != nil) gMHADecode128 = [gDevice newComputePipelineStateWithFunction:fn128 error:&err];
     id<MTLFunction> sp1 = [lib newFunctionWithName:@"mha_dec_splitk_p1"];
@@ -5113,6 +5307,8 @@ static int ensure_mha_decode(void) {
     if (sp1 != nil) gSplitKP1 = [gDevice newComputePipelineStateWithFunction:sp1 error:&err];
     id<MTLFunction> sp1q = [lib newFunctionWithName:@"mha_dec_splitk_p1q"];
     if (sp1q != nil) gSplitKP1Q = [gDevice newComputePipelineStateWithFunction:sp1q error:&err];
+    id<MTLFunction> sp1qf16kv = [lib newFunctionWithName:@"mha_dec_splitk_p1q_f16kv"];
+    if (sp1qf16kv != nil) gSplitKP1QF16KV = [gDevice newComputePipelineStateWithFunction:sp1qf16kv error:&err];
     id<MTLFunction> sp1h = [lib newFunctionWithName:@"mha_dec_splitk_p1h"];
     if (sp1h != nil) gSplitKP1H = [gDevice newComputePipelineStateWithFunction:sp1h error:&err];
     else fprintf(stderr, "metal: mha_dec_splitk_p1h unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
@@ -5280,6 +5476,78 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
     NSUInteger tg = 64; // §T337: acc[128] register array — large threadgroups collapse occupancy
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+// f16-KV attention keeps Q/O and every accumulator in f32. Only the retained K/V
+// cache is IEEE binary16, halving cache traffic and footprint. This first frontier
+// slice is deliberately restricted to the dk=64, unwindowed path used by the M2
+// TinyLlama leadership lane; unsupported shapes fail rather than silently changing
+// storage or routing through an f32 kernel.
+int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
+                           int sq, int sk, int dm, int heads, int kvHeads, int dk,
+                           int causal, int window, float scale, int qElemOff) {
+    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL ||
+        qElemOff < 0 || sq < 1 || sk < 1 || dm < 1 || heads < 1 || kvHeads < 1 ||
+        heads % kvHeads != 0 || dk != 64 || dm != heads*dk || window != 0) return -2;
+    if (ensure_mha_decode() != 0 || gMHADecode64F16KV == nil) return -5;
+
+    id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
+    id<MTLBuffer> kb = (__bridge id<MTLBuffer>)kh;
+    id<MTLBuffer> vb = (__bridge id<MTLBuffer>)vh;
+    id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
+    NSUInteger qNeed = ((NSUInteger)qElemOff + (NSUInteger)sq*dm) * sizeof(float);
+    NSUInteger kvNeed = (NSUInteger)sk * kvHeads * dk * sizeof(uint16_t);
+    NSUInteger oNeed = (NSUInteger)sq * dm * sizeof(float);
+    if (qNeed > qb.length || kvNeed > kb.length || kvNeed > vb.length || oNeed > ob.length) return -3;
+
+    if (gSplitKEnabled && gSplitKP1QF16KV != nil && gSplitKP2 != nil &&
+        sq == 1 && causal != 0 && sk >= 128) {
+        int nchunk = (sk + gSplitKPerChunk - 1) / gSplitKPerChunk;
+        if (nchunk > gSplitKMaxChunks) nchunk = gSplitKMaxChunks;
+        if (nchunk < 2) nchunk = 2;
+        size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
+        if (gSplitKPart == nil || gSplitKPartLen < need) {
+            gSplitKPart = [gDevice newBufferWithLength:need options:MTLResourceStorageModePrivate];
+            gSplitKPartLen = (gSplitKPart != nil) ? need : 0;
+        }
+        if (gSplitKPart != nil) {
+            int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
+            float SFP[1] = {scale};
+            id<MTLComputeCommandEncoder> e1 = recorder_compute_encoder(rec, @"mha.f16kv.decode.splitk.pass1");
+            [e1 setComputePipelineState:gSplitKP1QF16KV];
+            [e1 setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
+            [e1 setBuffer:kb offset:0 atIndex:1];
+            [e1 setBuffer:vb offset:0 atIndex:2];
+            [e1 setBuffer:gSplitKPart offset:0 atIndex:3];
+            [e1 setBytes:SP length:sizeof(SP) atIndex:4];
+            [e1 setBytes:SFP length:sizeof(SFP) atIndex:5];
+            [e1 dispatchThreadgroups:MTLSizeMake(heads,nchunk,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e1 endEncoding];
+
+            id<MTLComputeCommandEncoder> e2 = recorder_compute_encoder(rec, @"mha.f16kv.decode.splitk.pass2");
+            [e2 setComputePipelineState:gSplitKP2];
+            [e2 setBuffer:gSplitKPart offset:0 atIndex:0];
+            [e2 setBuffer:ob offset:0 atIndex:1];
+            [e2 setBytes:SP length:sizeof(SP) atIndex:2];
+            [e2 dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+            [e2 endEncoding];
+            return 0;
+        }
+    }
+
+    int P[7] = {sq, sk, dm, heads, kvHeads, dk, causal};
+    float FP[1] = {scale};
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"mha.f16kv.decode");
+    [enc setComputePipelineState:gMHADecode64F16KV];
+    [enc setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
+    [enc setBuffer:kb offset:0 atIndex:1];
+    [enc setBuffer:vb offset:0 atIndex:2];
+    [enc setBuffer:ob offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:FP length:sizeof(FP) atIndex:5];
+    [enc dispatchThreadgroups:MTLSizeMake(heads,sq,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
     [enc endEncoding];
     return 0;
 }
