@@ -13,6 +13,7 @@ WHEN a //perfscan:ignore directive is written, the a perfscan suppression SHALL 
 
 ## intent
 - R-01KZ11ASDMFQVS5D6FYJS94MBV Invariant-nest check: three attempts, all withheld — the motivating transform is loop DISTRIBUTION, not hoisting: No action: three predicates drafted and all withheld, with each failure diagnosed. The conclusion is that the motivating transform is loop DISTRIBUTION rather than hoisting — the invariant work is a statement prefix inside a loop that is itself dependent — so no loop-level AST predicate can see it. Recorded to stop a fourth attempt from repeating the first three.
+- T-01KYJR34RJE7HSS68635PKJYZ2 PS3003 is blind to named integer map keys — it cannot see any enum-keyed dispatch table: compact
 
 ## A-NEW-PARALLELISM-CHECK-REPORTS-ITS-OWN-CONVERSIONS-001
 WHEN a new check looks for unused parallelism, the its author SHALL run it tree-wide and classify EVERY candidate before shipping, because the shapes an applied conversion leaves behind look exactly like the shape being hunted.
