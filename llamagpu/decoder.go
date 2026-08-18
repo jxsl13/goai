@@ -106,6 +106,15 @@ type f16KVRecorder interface {
 	MHAF16KV(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 }
 
+// ropePairSplitRecorder is the Metal-only fused-QKV post-projection capability. It preserves the
+// ordinary recorder interface for every other backend while allowing a grouped projection to
+// rotate q/k and materialize contiguous q/k/v in one dispatch instead of rotate plus three copies.
+type ropePairSplitRecorder interface {
+	RoPEPairSplit(qkv, inv, q, k, v buffer,
+		seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos int, posDiv float32,
+	) error
+}
+
 // linear records o[m,N] = x[m,K]·W for one projection — either an f32 device weight (MatMul) or a
 // resident quantized weight (QMatMulResident). This is what lets ONE Decoder core serve both the
 // f32 and the quantized model (§T415).
@@ -293,6 +302,7 @@ type backendOps struct {
 	newF16KVBuffer func(int) (buffer, error) // nil unless this constructor opts into binary16 K/V storage
 	newRecorder    func() (recorder, error)
 	uploadQWeight  func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
+	groupQWeights  func(weights []qweight) (qweight, error)                  // optional heterogeneous prefill group
 	// quantizeF32 quantizes a host f32 weight [in,out] to a resident Q8_0 device weight in one call
 	// (no pre-quantized ggml bytes needed). Set only by the cuda Q8 recurrent-decode constructors —
 	// nil elsewhere, so the caller keeps the f32 path. Lets a decoder trade the f32 weight's bandwidth
@@ -320,6 +330,9 @@ type block struct {
 	// is [q | k | v]. Non-nil = Step/StepN run the fused chain (one matmul instead of three);
 	// nil = fall back to wq/wk/wv (quantized blocks whose projections mix quant types).
 	wqkv linear
+	// wqkvPrefill is the Metal-only mixed-quant companion: StepN uses one exact post-expansion
+	// projection, while Step keeps wq/wk/wv and therefore preserves the established decode kernels.
+	wqkvPrefill linear
 	// wGU is the column-fused ffn_gate|ffn_up projection: one [in, 2·hidden] weight whose output row
 	// is [gate | up]. Non-nil (built only when ops.fusedGateUp, i.e. CUDA SwiGLU) = recordFFN runs one
 	// GEMV into the gu buffer + one SwiGLUHalves; nil = the separate wG/wU two-GEMV SwiGLU path.
@@ -471,9 +484,13 @@ func (d *Decoder) recordAttnNorm(r recorder, b block, rows int) error {
 }
 
 func (d *Decoder) recordQKVProj(r recorder, b block, rows int) error {
-	e := b.wqkv.record(r, d.xn.b, d.qkv.b, rows)
-	if b.qkvBias != nil {
-		e = firstErr(e, r.AddBias(d.qkv.b, b.qkvBias, d.qkv.b, rows, d.qDim+2*d.kvDim))
+	return d.recordQKVProjWith(r, b.wqkv, b.qkvBias, rows)
+}
+
+func (d *Decoder) recordQKVProjWith(r recorder, w linear, bias buffer, rows int) error {
+	e := w.record(r, d.xn.b, d.qkv.b, rows)
+	if bias != nil {
+		e = firstErr(e, r.AddBias(d.qkv.b, bias, d.qkv.b, rows, d.qDim+2*d.kvDim))
 	}
 	return e
 }
@@ -3087,6 +3104,29 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		d.qweights = append(d.qweights, w)
 		return quantLinear{w: w}
 	}
+	qgroup := func(weights ...linear) linear {
+		if err != nil || ops.groupQWeights == nil || len(weights) != 3 {
+			return nil
+		}
+		qw := make([]qweight, 3)
+		for i, w := range weights {
+			ql, ok := w.(quantLinear)
+			if !ok || ql.w == nil {
+				return nil
+			}
+			qw[i] = ql.w
+		}
+		g, e := ops.groupQWeights(qw)
+		if e == backend.ErrQuantUnsupported {
+			return nil
+		}
+		if e != nil {
+			err = e
+			return nil
+		}
+		d.qweights = append(d.qweights, g)
+		return quantLinear{w: g}
+	}
 	// Column-fused ffn_gate|ffn_up for quantized blocks (same trick as qfused: ggml resident weights are
 	// [Out,In] row-major, so fusing = appending the raw quant bytes of gate‖up out-rows). Only when the
 	// backend supports SwiGLUHalves (ops.fusedGateUp) and both share one quant type; else nil → the
@@ -3117,8 +3157,9 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 		if wgu == nil { // no SwiGLUHalves backend or mixed types: keep the two-GEMV gate/up path
 			gb.wG, gb.wU = qlin(b.FFN.Gate), qlin(b.FFN.Up)
 		}
-		if gb.wqkv == nil { // mixed quant types: keep the unfused projections
+		if gb.wqkv == nil { // mixed quant types: keep exact raw projections for single-token decode
 			gb.wq, gb.wk, gb.wv = qlin(b.Wq), qlin(b.Wk), qlin(b.Wv)
+			gb.wqkvPrefill = qgroup(gb.wq, gb.wk, gb.wv)
 		}
 		d.blocks = append(d.blocks, gb)
 	}
@@ -3421,27 +3462,53 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		// order: norm first, then the projection branch.
 		e := d.recordAttnNorm(r, b, k)
 		attnK, attnV, attnF16 := b.kC, b.vC, d.f16KV
-		if e == nil && b.wqkv != nil {
+		prefillQKV := b.wqkv
+		mixedQKV := prefillQKV == nil && b.wqkvPrefill != nil && k >= 24
+		if mixedQKV {
+			prefillQKV = b.wqkvPrefill
+		}
+		if e == nil && prefillQKV != nil {
 			e = firstErr(
-				d.recordQKVProj(r, b, k),
-				d.recordQKNorm(r, b, k, stride),                // per-head QK-norm (Qwen3); no-op otherwise
-				d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
-				r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
+				d.recordQKVProjWith(r, prefillQKV, b.qkvBias, k),
+				d.recordQKNorm(r, b, k, stride), // per-head QK-norm (Qwen3); no-op otherwise
 			)
-			// At initial prefill, retain contiguous f32 K/V scratch for the established FlashMM
-			// attention path while independently converting the same rows into the f16 decode cache.
-			// This avoids routing a large prompt through the latency-oriented f16 decode kernel.
-			if d.f16KV && pos == 0 {
-				e = firstErr(e,
-					r.Copy2D(d.qkv.b, D, stride, d.k.b, 0, kvDim, k, kvDim),
-					r.Copy2D(d.qkv.b, D+kvDim, stride, d.v_.b, 0, kvDim, k, kvDim),
-				)
-				attnK, attnV, attnF16 = d.k.b, d.v_.b, false
+			split := false
+			if sr, ok := r.(ropePairSplitRecorder); ok && mixedQKV && !d.noRope && d.rotaryDim == d.dk {
+				// The mixed group wins at the projection but lost its full-model gate when the
+				// canonical fused layout was unpacked by three standalone Copy2D dispatches. Rotate
+				// q/k and scatter q/k/v together; cache conversion then reads contiguous k/v.
+				e = firstErr(e, sr.RoPEPairSplit(
+					d.qkv.b, d.dinv.b, d.q.b, d.k.b, d.v_.b,
+					k, stride, H, 0, KVH, D, dk, d.half, D+kvDim, kvDim, pos, d.posDiv,
+				))
+				split = true
+				if d.f16KV && pos == 0 {
+					attnK, attnV, attnF16 = d.k.b, d.v_.b, false
+				}
+				e = firstErr(e, d.recordKVPairBlit(
+					r, d.k.b, 0, d.v_.b, 0, b.kC, b.vC, pos*kvDim, k*kvDim,
+				))
 			}
-			e = firstErr(e, d.recordKVPairCopy2D(
-				r, d.qkv.b, D, stride, d.qkv.b, D+kvDim, stride,
-				b.kC, b.vC, pos*kvDim, kvDim, k, kvDim,
-			))
+			if !split {
+				e = firstErr(
+					e,
+					d.ropeQK(r, d.qkv.b, d.dinv.b, k, stride, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
+					r.Copy2D(d.qkv.b, 0, stride, d.q.b, 0, D, k, D),
+				)
+				// At initial prefill, retain contiguous f32 K/V scratch for the established FlashMM
+				// attention path while independently converting the same rows into the f16 decode cache.
+				if d.f16KV && pos == 0 {
+					e = firstErr(e,
+						r.Copy2D(d.qkv.b, D, stride, d.k.b, 0, kvDim, k, kvDim),
+						r.Copy2D(d.qkv.b, D+kvDim, stride, d.v_.b, 0, kvDim, k, kvDim),
+					)
+					attnK, attnV, attnF16 = d.k.b, d.v_.b, false
+				}
+				e = firstErr(e, d.recordKVPairCopy2D(
+					r, d.qkv.b, D, stride, d.qkv.b, D+kvDim, stride,
+					b.kC, b.vC, pos*kvDim, kvDim, k, kvDim,
+				))
+			}
 		} else if e == nil {
 			e = firstErr(
 				b.wq.record(r, d.xn.b, d.q.b, k),

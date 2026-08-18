@@ -3735,3 +3735,18 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
+
+## ADR-01M09A3S9JFMHAYHX35BG0HRNY How should numerical equivalence be gated when a vendor GEMM changes reduction scheduling after column fusion?
+kind: adr
+state: done
+created: 2026-08-18
+context: The combined Q4_K/Q4_K/Q6_K f16 expansion is bit-exact. MPS result-column-dependent tiling changes output bits only through reassociation, with segment NRMSE <=8.98e-4, while the measured projection stage improves 1.7308x at M64 and 1.2160x at M512. perfscan #765 records the general finding.
+decision: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
+consequences: Fusion correctness is decomposed into an exact storage/layout invariant and a numerical-semantic invariant. The grouped projection must keep per-segment NRMSE <=1.5e-3, finite outputs, trained-model logit NRMSE <=2e-3, and unchanged greedy tokens; it cannot claim bit-identical GEMM outputs across vendor-selected result shapes. Performance gates remain mandatory, and any quality failure rejects the path.
+status: accepted
+
+kind: radio
+option: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
+option: Require bit-exact GEMM output and reject all shape-changing fusion
+blocks: P-01M09A28JWF5ZBR8ADMM2P13MN
+choice: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence

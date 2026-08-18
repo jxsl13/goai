@@ -505,19 +505,46 @@ static NSString* const kRoPE2Source =
      "  float qi=Q[base], qih=Q[base+halfd];\n"
      "  Q[base]=qi*c-qih*s;\n"
      "  Q[base+halfd]=qih*c+qi*s;\n"
+     "}\n"
+     "kernel void rope2_split(device const float* QKV [[buffer(0)]],\n"
+     "                        device const float* INV [[buffer(1)]],\n"
+     "                        device float* QOut [[buffer(2)]],\n"
+     "                        device float* KOut [[buffer(3)]],\n"
+     "                        device float* VOut [[buffer(4)]],\n"
+     "                        constant int* P [[buffer(5)]],\n"
+     "                        constant float* F [[buffer(6)]],\n"
+     "                        uint gid [[thread_position_in_grid]]) {\n"
+     "  int seq=P[0], stride=P[1], headsQ=P[2], offQ=P[3], headsK=P[4], offK=P[5];\n"
+     "  int hd=P[6], halfd=P[7], vOff=P[8], vDim=P[9], posOffset=P[10];\n"
+     "  int pairCols=(headsQ+headsK)*halfd, rowWork=pairCols+vDim;\n"
+     "  int total=seq*rowWork; if ((int)gid >= total) return;\n"
+     "  int p=(int)gid/rowWork, rem=(int)gid%rowWork;\n"
+     "  if (rem >= pairCols) { int j=rem-pairCols; VOut[p*vDim+j]=QKV[p*stride+vOff+j]; return; }\n"
+     "  int h=rem/halfd, i=rem%halfd; bool isQ=h<headsQ;\n"
+     "  int localH=isQ?h:(h-headsQ);\n"
+     "  int src=(isQ?offQ:offK)+p*stride+localH*hd+i;\n"
+     "  int dst=p*(isQ?headsQ*hd:headsK*hd)+localH*hd+i;\n"
+     "  float pos=float(p+posOffset)/F[0], theta=INV[i];\n"
+     "  float c=cos(pos*theta), s=sin(pos*theta);\n"
+     "  float x=QKV[src], xh=QKV[src+halfd];\n"
+     "  if (isQ) { QOut[dst]=x*c-xh*s; QOut[dst+halfd]=xh*c+x*s; }\n"
+     "  else { KOut[dst]=x*c-xh*s; KOut[dst+halfd]=xh*c+x*s; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gRoPE2 = nil;
+static id<MTLComputePipelineState> gRoPE2Split = nil;
 
 static int ensure_rope2(void) {
-    if (gRoPE2 != nil) return 0;
+    if (gRoPE2 != nil && gRoPE2Split != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kRoPE2Source options:nil error:&err];
     if (lib == nil) return -6;
     id<MTLFunction> fn = [lib newFunctionWithName:@"rope2"];
-    if (fn == nil) return -6;
+    id<MTLFunction> split = [lib newFunctionWithName:@"rope2_split"];
+    if (fn == nil || split == nil) return -6;
     gRoPE2 = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gRoPE2 != nil ? 0 : -6;
+    gRoPE2Split = [gDevice newComputePipelineStateWithFunction:split error:&err];
+    return (gRoPE2 != nil && gRoPE2Split != nil) ? 0 : -6;
 }
 
 // mtl_recorder_rope2 encodes the fused two-band in-place rotation (see kRoPE2Source) into the
@@ -539,6 +566,31 @@ int mtl_recorder_rope2(void* rec, void* qh, void* invh,
     [enc setBytes:P length:sizeof(P) atIndex:2];
     [enc setBytes:F length:sizeof(F) atIndex:3];
     NSUInteger tg = gRoPE2.maxTotalThreadsPerThreadgroup;
+    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+int mtl_recorder_rope2_split(void* rec, void* qkvh, void* invh,
+                             void* qh, void* kh, void* vh,
+                             int seq, int stride, int headsQ, int offQ, int headsK, int offK,
+                             int hd, int half, int vOff, int vDim, int posOffset, float posDiv) {
+    if (rec == NULL || qkvh == NULL || invh == NULL || qh == NULL || kh == NULL || vh == NULL) return -2;
+    if (ensure_rope2() != 0) return -6;
+    int P[11] = {seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, posOffset};
+    float F[1] = {posDiv};
+    int total = seq * ((headsQ + headsK) * half + vDim);
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rope_pair_split");
+    [enc setComputePipelineState:gRoPE2Split];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qkvh offset:0 atIndex:0];
+    [enc setBuffer:(__bridge id<MTLBuffer>)invh offset:0 atIndex:1];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qh offset:0 atIndex:2];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:3];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:4];
+    [enc setBytes:P length:sizeof(P) atIndex:5];
+    [enc setBytes:F length:sizeof(F) atIndex:6];
+    NSUInteger tg = gRoPE2Split.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
     [enc endEncoding];
@@ -3379,6 +3431,7 @@ static int q4k_dq_gemm_eligible(int M, int K, int N, int qt) {
 // serve the wrong expansion.
 static NSMutableDictionary* gWCache = nil;   // NSValue(ptr) -> @[src, expanded]
 static size_t gWCacheBytes = 0;
+static size_t gWGroupBytes = 0;               // owner-managed grouped expansions survive cache resets
 static size_t gWCacheMax = (size_t)-1;        // (size_t)-1 = not yet initialised; 0 = disabled
 static int gWCacheHits = 0, gWCacheMisses = 0;
 
@@ -3403,7 +3456,7 @@ void mtl_set_weight_cache(double max_gb) {
 void mtl_weight_cache_stats(int* hits, int* misses, double* bytes) {
     if (hits) *hits = gWCacheHits;
     if (misses) *misses = gWCacheMisses;
-    if (bytes) *bytes = (double)gWCacheBytes;
+    if (bytes) *bytes = (double)(gWCacheBytes + gWGroupBytes);
 }
 
 // wcache_lookup returns the cached f16 expansion for src, or nil. On a miss it allocates and
@@ -3416,7 +3469,7 @@ static id<MTLBuffer> wcache_lookup(id<MTLBuffer> src, size_t bytes, int* needsFi
     NSValue* key = [NSValue valueWithPointer:(__bridge const void*)src];
     NSArray* hit = [gWCache objectForKey:key];
     if (hit != nil) { gWCacheHits++; return (id<MTLBuffer>)hit[1]; }
-    if (gWCacheBytes + bytes > gWCacheMax) return nil;   // over budget: fall back to scratch
+    if (gWCacheBytes + gWGroupBytes + bytes > gWCacheMax) return nil; // over budget: fall back to scratch
     id<MTLBuffer> buf = [gDevice newBufferWithLength:bytes options:MTLResourceStorageModePrivate];
     if (buf == nil) return nil;
     [gWCache setObject:@[src, buf] forKey:key];
@@ -3424,6 +3477,45 @@ static id<MTLBuffer> wcache_lookup(id<MTLBuffer> src, size_t bytes, int* needsFi
     gWCacheMisses++;
     *needsFill = 1;
     return buf;
+}
+
+// A heterogeneous QKV group cannot use gWCache's source-buffer pointer key: it has three sources
+// and one interleaved destination. Reserve its combined f16 expansion against the SAME byte budget
+// instead. The Go owner retains all three sources and this buffer, so no duplicate per-segment
+// expansions are added to gWCache and the reservation is returned exactly once at Close.
+void* mtl_qgroup_alloc(int nbytes) {
+    if (ensure_init() != 0 || nbytes <= 0) return NULL;
+    if (gWCacheMax == (size_t)-1) gWCacheMax = (size_t)default_cache_bytes();
+    if (gWCacheMax == 0 || gWCacheBytes + gWGroupBytes + (size_t)nbytes > gWCacheMax) return NULL;
+    id<MTLBuffer> buf = [gDevice newBufferWithLength:(size_t)nbytes options:MTLResourceStorageModePrivate];
+    if (buf == nil) return NULL;
+    gWGroupBytes += (size_t)nbytes;
+    gWCacheMisses++;
+    return (__bridge_retained void*)buf;
+}
+
+void mtl_qgroup_free(void* handle) {
+    if (handle == NULL) return;
+    id<MTLBuffer> buf = (__bridge_transfer id<MTLBuffer>)handle;
+    size_t bytes = (size_t)buf.length;
+    gWGroupBytes = bytes <= gWGroupBytes ? gWGroupBytes - bytes : 0;
+}
+
+int mtl_qgroup_download(void* handle, void* dst, int nbytes) {
+    if (handle == NULL || dst == NULL || nbytes < 0) return -2;
+    id<MTLBuffer> src = (__bridge id<MTLBuffer>)handle;
+    if ((size_t)nbytes > src.length) return -3;
+    id<MTLBuffer> staging = [gDevice newBufferWithLength:(size_t)nbytes options:MTLResourceStorageModeShared];
+    if (staging == nil) return -4;
+    id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+    id<MTLBlitCommandEncoder> blit = [cmd blitCommandEncoder];
+    [blit copyFromBuffer:src sourceOffset:0 toBuffer:staging destinationOffset:0 size:(size_t)nbytes];
+    [blit endEncoding];
+    [cmd commit];
+    [cmd waitUntilCompleted];
+    if (cmd.status != MTLCommandBufferStatusCompleted) return -5;
+    memcpy(dst, staging.contents, (size_t)nbytes);
+    return 0;
 }
 
 // ---- f16 prefill weight path (small-M only) --------------------------------
@@ -3442,7 +3534,7 @@ static NSString* const kQ4KF16Source =
      "                            constant int* P [[buffer(2)]],\n"
      "                            uint2 tg [[threadgroup_position_in_grid]],\n"
      "                            ushort t [[thread_index_in_threadgroup]]) {\n"
-     "  int K=P[0], N=P[1];\n"
+     "  int K=P[0], N=P[1], DN=P[2], DO=P[3];\n"
      "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
      "  int rowBytes=(K/256)*144;\n"
      "  int sb=s>>3, pr=(s>>1)&3, hf=s&1;\n"
@@ -3471,7 +3563,7 @@ static NSString* const kQ4KF16Source =
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  for (int l=0;l<32;l++){\n"
      "    int nn=n0+(int)t;\n"
-     "    if (nn<N) Out[(k0+l)*N + nn] = (half)sT[(int)t*32+l];\n"
+     "    if (nn<N) Out[(k0+l)*DN + DO + nn] = (half)sT[(int)t*32+l];\n"
      "  }\n"
      "}\n"
      "kernel void dequant_q6k_t_h(device const uchar* W [[buffer(0)]],\n"
@@ -3479,7 +3571,7 @@ static NSString* const kQ4KF16Source =
      "                            constant int* P [[buffer(2)]],\n"
      "                            uint2 tg [[threadgroup_position_in_grid]],\n"
      "                            ushort t [[thread_index_in_threadgroup]]) {\n"
-     "  int K=P[0], N=P[1];\n"
+     "  int K=P[0], N=P[1], DN=P[2], DO=P[3];\n"
      "  int n0=(int)tg.x*32, s=(int)tg.y;\n"
      "  int rowBytes=(K/256)*210;\n"
      "  int sb=s>>3, sub=s&7;\n"
@@ -3507,7 +3599,7 @@ static NSString* const kQ4KF16Source =
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  for (int i=0;i<32;i++){\n"
      "    int nn=n0+(int)t;\n"
-     "    if (nn<N) Out[(k0+i)*N + nn] = (half)sT[(int)t*32+i];\n"
+     "    if (nn<N) Out[(k0+i)*DN + DO + nn] = (half)sT[(int)t*32+i];\n"
      "  }\n"
      "}\n"
      "kernel void cvt_f32_to_h(device const float* In [[buffer(0)]],\n"
@@ -3571,6 +3663,27 @@ static void recorder_encode_cvt(void* rec, id<MTLComputePipelineState> pipe,
     [enc endEncoding];
 }
 
+static int recorder_dequant_f16_segment(void* rec, id<MTLBuffer> weight,
+                                        id<MTLBuffer> expanded, int K, int N,
+                                        int destinationN, int destinationOffset,
+                                        int qtype, NSString* profileLabel) {
+    if (ensure_q4k_f16() != 0) return -6;
+    id<MTLComputePipelineState> pipe = nil;
+    if (qtype == 12) pipe = gDequantQ4KH;
+    else if (qtype == 14) pipe = gDequantQ6KH;
+    else return -7;
+    int P[4] = {K, N, destinationN, destinationOffset};
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, profileLabel);
+    [enc setComputePipelineState:pipe];
+    [enc setBuffer:weight offset:0 atIndex:0];
+    [enc setBuffer:expanded offset:0 atIndex:1];
+    [enc setBytes:P length:sizeof(P) atIndex:2];
+    [enc dispatchThreadgroups:MTLSizeMake((N+31)/32, K/32, 1)
+                 threadsPerThreadgroup:MTLSizeMake(32,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 // mtl_recorder_matmul_f16 encodes C = A*B with all three matrices f16. MPSMatrixMultiplication
 // requires a single data type across the operands, so the activations are converted in and the
 // result converted out by the caller.
@@ -3589,6 +3702,54 @@ static int recorder_matmul_f16(void* rec, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf
         resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
     [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
     recorder_note_mps_omission(rec);
+    return 0;
+}
+
+int mtl_recorder_qmatmul_mixed3(void* rec, void* xh,
+                                void* w0h, int n0, int qt0,
+                                void* w1h, int n1, int qt1,
+                                void* w2h, int n2, int qt2,
+                                void* expandedh, void* oh, int M, int K, int needsFill) {
+    if (rec == NULL || xh == NULL || w0h == NULL || w1h == NULL || w2h == NULL ||
+        expandedh == NULL || oh == NULL) return -2;
+    if (M < 24 || K <= 0 || K % 256 != 0 || n0 <= 0 || n1 <= 0 || n2 <= 0) return -3;
+    if ((qt0 != 12 && qt0 != 14) || (qt1 != 12 && qt1 != 14) ||
+        (qt2 != 12 && qt2 != 14)) return -7;
+    if (ensure_q4k_f16() != 0) return -6;
+
+    int N = n0 + n1 + n2;
+    id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
+    id<MTLBuffer> w0 = (__bridge id<MTLBuffer>)w0h;
+    id<MTLBuffer> w1 = (__bridge id<MTLBuffer>)w1h;
+    id<MTLBuffer> w2 = (__bridge id<MTLBuffer>)w2h;
+    id<MTLBuffer> expanded = (__bridge id<MTLBuffer>)expandedh;
+    id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
+    if (xb.length < (size_t)M*(size_t)K*sizeof(float) ||
+        expanded.length < (size_t)K*(size_t)N*sizeof(uint16_t) ||
+        ob.length < (size_t)M*(size_t)N*sizeof(float)) return -4;
+
+    if (needsFill) {
+        int rc = recorder_dequant_f16_segment(rec, w0, expanded, K, n0, N, 0, qt0,
+            qt0 == 14 ? @"dequant.qkv_mixed.q6_k.f16" : @"dequant.qkv_mixed.q4_k.f16");
+        if (rc != 0) return rc;
+        rc = recorder_dequant_f16_segment(rec, w1, expanded, K, n1, N, n0, qt1,
+            qt1 == 14 ? @"dequant.qkv_mixed.q6_k.f16" : @"dequant.qkv_mixed.q4_k.f16");
+        if (rc != 0) return rc;
+        rc = recorder_dequant_f16_segment(rec, w2, expanded, K, n2, N, n0+n1, qt2,
+            qt2 == 14 ? @"dequant.qkv_mixed.q6_k.f16" : @"dequant.qkv_mixed.q4_k.f16");
+        if (rc != 0) return rc;
+    } else {
+        gWCacheHits++;
+    }
+
+    id<MTLBuffer> xS = f16_scratch(&gF16X, &gF16XLen,
+                                    (size_t)M*(size_t)K*sizeof(uint16_t));
+    id<MTLBuffer> oS = f16_scratch(&gF16O, &gF16OLen,
+                                    (size_t)M*(size_t)N*sizeof(uint16_t));
+    if (xS == nil || oS == nil) return -5;
+    recorder_encode_cvt(rec, gCvtF32ToH, xb, xS, M*K, @"qmatmul.qkv_mixed.f32_to_f16");
+    recorder_matmul_f16(rec, xS, expanded, oS, M, K, N);
+    recorder_encode_cvt(rec, gCvtHToF32, oS, ob, M*N, @"qmatmul.qkv_mixed.f16_to_f32");
     return 0;
 }
 
@@ -3892,7 +4053,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         id<MTLBuffer> oS = f16_scratch(&gF16O, &gF16OLen, (size_t)M*(size_t)N*sizeof(uint16_t));
         if (wS != nil && xS != nil && oS != nil) {
             if (needsFill) {
-                int Pd[2] = {K, N};
+                int Pd[4] = {K, N, N, 0};
                 NSString* dequantLabel = (qtype == 14) ? @"dequant.q6_k.f16" : @"dequant.q4_k.f16";
                 id<MTLComputeCommandEncoder> de = recorder_compute_encoder(rec, dequantLabel);
                 [de setComputePipelineState:(qtype == 14) ? gDequantQ6KH : gDequantQ4KH];
