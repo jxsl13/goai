@@ -3654,15 +3654,6 @@ WHY NOTHING CAUGHT IT. Every parity test passed throughout: the scalar kernel is
 
 CALIBRATING THE PARITY GUARD, which is the transferable part. Rerouting changes WHICH kernel produces the numbers, so a tolerance is needed — and it must be calibrated against the sizes that ALREADY took the new path, not guessed. Newly routed n=2..23 diverge 0.012-0.028 from the scalar kernel; the untouched n=64 diverges 0.214. The moved range is up to 7.6x TIGHTER than what was already shipping, which is the argument that the change introduces no new numerical risk. A guessed 2e-2 bound would have failed the change for being 10x better than the status quo.
 
-## P-01M088T3ZBF0BTTY4MGS94NY5A Retain current-main M2 Metal encoder profiling and reject stale fusion promotions
-kind: proposal
-state: done
-created: 2026-08-17
-grilled: 2026-08-17 open=0
-targets: .
-
-Rebase the encoder-observability work onto current main and retain only the opt-in timestamp profiler plus its stage analyzer. Current main already fixes the logical active-extent mismatch through BinaryN. Exact 200-token revalidation measures residual add/RMSNorm at 0.992x with a different all-logit digest and Q4_K gate/up/SwiGLU at 0.985x with an identical digest when the invalid residual path is disabled. Remove both promotions, APIs, kernels, and claim-bearing documentation. Keep profiling disabled by default, prove disabled-path overhead and exact profiled parity, retain current cooperative, F16, and split-K paths, and publish compact current-main evidence only. Historical raw campaigns remain research inputs, not current leadership claims.
-
 ## P-01M08AFT7YF5Z87D0V45TMS7X2 Make Metal profiler capability discovery explicit
 kind: proposal
 state: done
