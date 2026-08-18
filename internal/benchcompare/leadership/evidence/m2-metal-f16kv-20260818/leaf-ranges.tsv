@@ -1,0 +1,5 @@
+context	gpu_speedup_min	gpu_speedup_max	host_speedup_min	host_speedup_max	campaigns	result
+128	1.009	1.017	0.992	1.013	5	pass-short-context
+512	1.192	1.290	1.022	1.104	5	pass-gpu
+1024	1.416	1.594	1.065	1.138	5	pass
+2048	1.525	1.751	1.137	1.279	5	pass

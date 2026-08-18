@@ -2408,6 +2408,51 @@ GoAI profile, and the compact external shader distribution are committed in
 `internal/benchcompare/leadership/evidence/m2-llamacpp-attribution-20260817`.
 The repository contract is `M2-INCUMBENT-ATTRIBUTION-HARNESS-001`.
 
+### Opt-in Metal f16 KV cache follow-up (2026-08-18)
+
+The feature-attribution branch promoted `llamagpu.NewQuantF16KV` at commit
+`5ade743b3457370a7b3e40c70ae064696f568d0d`. It stores retained K/V as IEEE
+binary16, converts paired K/V projection rows in one Metal dispatch, and reads
+the half cache in dk=64 cooperative/split-K attention while retaining f32 Q/O
+and accumulation. The established `NewQuant` path and non-Metal backends remain
+unchanged.
+
+Three post-commit trained TinyLlama campaigns each ran three interleaved
+f32-before/f16/f32-after rounds per context. Every gate passed:
+
+| Context | Full-token f16-KV speedup range | Worst unchanged-f32 spread |
+|---:|---:|---:|
+| 8 | 1.0270-1.0318x | 1.035x |
+| 512 | 1.0310-1.0358x | 1.029x |
+| 1024 | 1.0503-1.0634x | 1.036x |
+| 1536 | 1.0624-1.0691x | 1.056x |
+
+The representative tokenized prompt retained 76/76 greedy tokens over 64
+generated tokens, including a repeated f16 determinism run. Decode logits were
+finite with NRMSE 0.000170697 and maximum absolute error 0.00239384. Cache
+bytes are exactly halved; exact golden tests cover scalar and paired IEEE
+binary16 round-to-nearest-even conversion including an odd tail. Timestamp
+labels prove the paired converter and f16 attention execute.
+
+The required five-pair comparison against the same pinned llama.cpp b10450
+shipping configuration measured medians of 178.4 versus 195.466625 tok/s at
+tg64 and 1,516.2 versus 1,772.392904 tok/s at pp64. The incumbent factors are
+now 1.0957x at decode and 1.1690x at prefill. Relative to the preceding GoAI
+f32-cache shipping median, decode moves by 1.0360x and prefill remains neutral
+at 0.9989x. Because that delta crosses campaigns, the same-process trained-model
+A/B above is the primary promotion evidence.
+
+The first implementation used separate K and V conversion dispatches and
+missed the ctx512 end-to-end gate at 1.019-1.023x. Pairing both streams in one
+alignment-aware `half2` dispatch reduced conversion time from about 143.6 us to
+95-108 us and moved every retained ctx512 campaign above 1.03x. The reusable
+finding is filed as perfscan issue 764; command-buffer-floor attribution is
+tracked in issue 763.
+
+Raw trained-model and incumbent samples, leaf ranges, hashes, exact commands,
+and configuration axes are committed in
+`internal/benchcompare/leadership/evidence/m2-metal-f16kv-20260818`.
+
 ## GGUF ReadFile mmap path (2026-08-17)
 
 `format/gguf.ReadFile` used to allocate and fill a model-sized encoded data

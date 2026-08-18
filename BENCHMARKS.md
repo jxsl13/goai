@@ -336,6 +336,24 @@ and FlashAttention auto.
 | Decode tg64, shipping configs | 172.2 tok/s (f32 KV) | 196.8 tok/s (f16 KV, FA auto) | 1.143× |
 | Prefill pp64, shipping configs | 1,517.9 tok/s (f32 KV) | 1,772.7 tok/s (f16 KV, FA auto) | 1.168× |
 
+**Opt-in f16-KV follow-up (2026-08-18).** `NewQuantF16KV` now closes the
+storage-semantics difference on Metal while leaving `NewQuant` unchanged. Five
+new fresh-process pairs against the same pinned incumbent produced:
+
+| TinyLlama-1.1B Q4_K_M, f16 KV (median of 5) | GoAI Metal | llama.cpp b10450 | Incumbent / GoAI |
+|---|---:|---:|---:|
+| Decode tg64 | **178.4 tok/s** | 195.5 tok/s | 1.096× |
+| Prefill pp64 | 1,516.2 tok/s | 1,772.4 tok/s | 1.169× |
+
+Against the preceding GoAI f32-cache shipping median, decode improves 1.036×
+and prefill is neutral at 0.999×. The stronger same-process trained-model gate
+measures 1.031-1.036× at ctx512, 1.050-1.063× at ctx1024, and 1.062-1.069× at
+ctx1536 across three campaigns, with 76/76 greedy tokens unchanged and logit
+NRMSE 0.000170697. This is a promoted feature gain, not an overall leadership
+claim: llama.cpp still leads decode by 1.096× and prefill by 1.169×. Raw
+samples and pins are in
+`internal/benchcompare/leadership/evidence/m2-metal-f16kv-20260818`.
+
 This is now a narrow, configuration-dependent frontier rather than a 20×
 kernel-maturity deficit. GoAI's exact in-situ timestamp profile attributes
 75.90% of encoder time to Q4_K/Q6_K matvecs, but matched end-to-end decode is
@@ -639,7 +657,7 @@ honestly documented deficit with a root cause is a deliverable):
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
-| Apple production decode vs llama.cpp | 1.043× at matched f32 KV; 1.143× against shipping f16-KV/FA-auto | K-quant matvecs remain GoAI's largest family, while the shipping-only delta also includes f16 KV and FlashAttention | graph/feature attribution before another leaf rewrite |
+| Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
 
 ## Not yet measured — booked benchmark tasks
 
