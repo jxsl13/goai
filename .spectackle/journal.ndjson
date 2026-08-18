@@ -202,3 +202,4 @@
 {"t":"2026-08-18T05:03:57Z","eid":"fee64ce4e85a66f4","ag":"ag-d30e","ev":"create","id":"T-01M09M2EM7EPYBSWZMSMATGJ5H","k":"task","ti":"Implement and gate prefill-only Metal gate-up grouping"}
 {"t":"2026-08-18T05:03:57Z","eid":"7aa49faf216a043e","ag":"ag-d30e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-18T05:04:16Z","eid":"d8b9e62bbff182e5","ag":"ag-504b","ev":"move","id":"T-01M09M2EM7EPYBSWZMSMATGJ5H","fr":"draft","to":"active","note":"Implement the ADR-bounded prefill-only combined gate|up projection and enforce all frozen correctness, profile, leaf, trained-model, and unaffected-axis gates before promotion."}
+{"t":"2026-08-18T05:04:38Z","eid":"6a33f75adf98ed75","ag":"ag-0416","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

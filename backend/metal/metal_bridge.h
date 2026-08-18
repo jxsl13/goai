@@ -205,6 +205,7 @@ int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapac
                                unsigned long long* ticks, unsigned long long* durationNS);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
+int mtl_recorder_swiglu_halves(void* rec, void* guh, void* oh, int rows, int hidden);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
 int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
                         void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
