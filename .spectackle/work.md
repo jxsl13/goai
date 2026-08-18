@@ -3736,19 +3736,6 @@ targets: format/safetensors/partial.go, format/safetensors/bench_test.go, intern
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
 
-## P-01M09A28JWF5ZBR8ADMM2P13MN Fuse mixed-quant M2 QKV with bounded MPS reassociation
-kind: proposal
-state: active
-created: 2026-08-18
-grilled: 2026-08-18 open=1
-targets: go:llamagpu.newQuantDecoder, go:llamagpu.Decoder.recordQKVProj, go:metal.Recorder.QMatMulResident, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/mixed_qgroup_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/mixed_qkv_realmodel_test.go
-
-Successor to rejected P-01M098NFP0FXG. Exact combined Q4_K/Q4_K/Q6_K f16 expansion bytes match independent controls, while changing three MPS GEMMs into one wider GEMM changes output bits solely through result-width-dependent reduction scheduling (perfscan #765). Measured numerical deltas are bounded: M64 segment NRMSE 2.29e-4, 2.63e-4, 8.88e-4; M512 leading wide segment exact, narrow segments 2.59e-4 and 8.97e-4. The same ten-layer projection stage improves 1.7308x at M64 and 1.2160x at M512 across ten interleaved samples.
-
-Implement the Metal-only heterogeneous resident QKV group for M>=24. Preserve original raw quantized segments and established single-token/small-batch kernels. Expand each segment with its original Q4_K/Q6_K semantics into disjoint columns of one budgeted f16 [K,Ntotal] matrix, then encode one established MPSMatrixMultiplication with canonical q||k||v output. Do not requantize, use MPSGraph, expose f16 tensors, duplicate production expanded caches, or alter non-Metal backends.
-
-Promotion gates: combined expansion bits exactly match independent Q4_K/Q4_K/Q6_K controls; all grouped outputs finite and per-segment NRMSE <=1.5e-3 at M64 and M512; selector/path proof shows M<24 uses separate projections and M>=24 executes three expansions, two conversions, and one MPS GEMM; group bytes equal the sum of replaced expansions and obey the existing cache budget; mixed projection stage M64 >=1.10x across ten interleaved samples and M512 >=0.99x; trained TinyLlama candidate versus an otherwise-identical separate-projection control keeps 64 greedy tokens, finite logits with NRMSE <=2e-3, pp64 >=1.03x across three interleaved fresh-decoder campaigns, pp512 and tg64 >=0.99x, and stable controls. On promotion rerun the pinned five-pair llama.cpp shipping campaign under PERF-015 and M2-INCUMBENT-ATTRIBUTION-HARNESS-001. Revert executable changes if any corrected gate fails and report generalizable findings to jxsl13/perfscan.
-
 ## ADR-01M09A3S9JFMHAYHX35BG0HRNY How should numerical equivalence be gated when a vendor GEMM changes reduction scheduling after column fusion?
 kind: adr
 state: done
