@@ -3670,3 +3670,32 @@ refs: P-01M08DGE6RE54VZ0B01V2G2XHC, T-01M08DK6KDEH5BV1PZXBNBWQEF, R-01M08DHP12FA
 targets: format/safetensors/partial.go, format/safetensors/bench_test.go, internal/benchcompare/leadership/evidence/m2-safetensors-loadtensor-direct-20260817/README.md, docs/benchmarking.md, BENCHMARKS.md
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
+
+## P-01M09HZ85PF84B4N1642KEMCET Accumulate M2 quant projections directly into residuals
+kind: proposal
+state: active
+created: 2026-08-18
+refs: ADR-01M09J0A8XFY1RH7QMCJVKVJTG
+grilled: 2026-08-18 open=1
+targets: go:llamagpu.quantLinear.recordAdd, go:llamagpu.Decoder.recordOProj, go:llamagpu.Decoder.recordDownProj, go:metal.Recorder.QMatMulResident, c:mtl_recorder_qmatmul, llamagpu/llamagpu.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/qmatmul_test.go, internal/benchcompare/metal_encoder_profile_external_test.go
+
+Merged-main physical M2 profiling at f3332361 attributes 44 binary.add encoders to one TinyLlama Q4_K_M decode step: 317.958 microseconds of a 10.620541 millisecond command, or a measured 2.99 percent wall-time ceiling before considering scratch traffic. These are exactly the pre-norm attention-output and FFN-down residual epilogues. Their Q4_K/Q6_K projection kernels already compute the same f32 total that the following bounded BinaryN adds to dx. The prior rejected residual-add-plus-RMSNorm fusion changed the logit digest because it reordered more than the final addition; this proposal does not fuse normalization or alter reduction order.
+
+Add a Metal-only optional QMatMulResidentAcc path for M=1 Q4_K and Q6_K cooperative kernels. It must write dx = dx + total in the lane-zero epilogue using the established f32 total, eliminate the separate scratch-target projection and BinaryN encoder, and leave ordinary QMatMulResident, M>1, every other quant type, post-norm/sandwich models, and non-Metal recorders unchanged. A narrow constructor seam must permit interleaved trained-model control and candidate arms without environment state.
+
+Promotion gates: bit-exact output against established QMatMulResident followed by bounded BinaryN for Q4_K and Q6_K across production K/N shapes, nonzero initial destinations, tails, and finite-value checks; ordinary beta-zero Q4_K/Q6_K parity and median performance no worse than 0.99x; profile evidence proving each eligible epilogue emits one quant-acc event and zero binary.add events, with the production TinyLlama step reducing binary.add count from 44 to zero; at least 1.02x trained TinyLlama tg64 across three independent invocations of three fresh-decoder interleaved campaigns, exact checked logits and greedy tokens, stable controls, and pp64/pp512 no worse than 0.99x. If any exactness, fallback, ordinary-path, or end-to-end leverage gate fails, remove executable changes and preserve only the measured rejection. Pin the model and base commit and report every generalizable finding on jxsl13/perfscan.
+
+## ADR-01M09J0A8XFY1RH7QMCJVKVJTG What is the valid Metal residual-fusion boundary for quantized decode projections?
+kind: adr
+state: done
+created: 2026-08-18
+context: A prior add-plus-RMSNorm fusion changed the trained-model logit digest. The current graph exposes 44 standalone BinaryN adds taking 317.958 microseconds per 10.620541 millisecond TinyLlama step. Q4_K/Q6_K cooperative kernels already hold the exact f32 projection total immediately before the same final residual addition.
+decision: Fuse only the final f32 projection-total plus residual addition and require bit-exact output
+consequences: The Metal candidate may add the established cooperative f32 total directly to dst but must not absorb RMSNorm, change the quant reduction, or relax exact output parity. Any bit difference rejects the path.
+status: accepted
+
+kind: radio
+option: Fuse only the final f32 projection-total plus residual addition and require bit-exact output
+option: Fuse residual addition together with downstream RMSNorm and accept bounded numerical change
+blocks: P-01M09HZ85PF84B4N1642KEMCET
+choice: Fuse only the final f32 projection-total plus residual addition and require bit-exact output
