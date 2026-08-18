@@ -16,3 +16,8 @@ Rationale: Exact deterministic selection preserves the existing sampler draw.
 WHEN TopKN returns k candidates from n resident logits, the Metal sampling boundary SHALL copy and allocate O(k) result data in Go without materializing the n logits.
 
 Rationale: The optimization exists to eliminate the measured full-vocabulary host boundary.
+
+## METAL-QUANT-RESIDUAL-EPILOGUE-001
+WHEN QMatMulResidentAcc receives M=1 Q4_K or Q6_K weights and valid f32 buffers, the Metal recorder SHALL produce bit-exact QMatMulResident plus BinaryN residual output in one profiled encoder.
+
+Rationale: Only the final f32 residual addition may be fused; normalization and quant reduction order remain fixed.

@@ -173,3 +173,4 @@
 {"t":"2026-08-18T04:28:46Z","eid":"e3eb55f6d4232fcf","ag":"ag-e7e2","ev":"create","id":"T-01M09J21QXEW9ANTRWF76CBBAV","k":"task","ti":"Implement and gate exact Metal quant residual epilogues"}
 {"t":"2026-08-18T04:28:47Z","eid":"3cad7bebcfc8300b","ag":"ag-e7e2","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-18T04:28:59Z","eid":"68a1808ac1e0ca6c","ag":"ag-c0d7","ev":"move","id":"T-01M09J21QXEW9ANTRWF76CBBAV","fr":"draft","to":"active","note":"Implement the frozen exact Q4_K/Q6_K M1 beta-one prototype and validate the measured 1.02x trained decode threshold before promotion."}
+{"t":"2026-08-18T04:29:11Z","eid":"132d4deb6f6d22fe","ag":"ag-a0fa","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
