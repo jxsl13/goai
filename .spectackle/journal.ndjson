@@ -677,3 +677,5 @@
 {"t":"2026-08-18T02:10:29Z","eid":"a1971529e07debc1","ag":"ag-e77c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-18T02:10:39Z","eid":"c32654999d2afcc4","ag":"ag-183d","ev":"move","id":"T-01M09A4TMCF2E9GDEG967PVV8E","fr":"draft","to":"active"}
 {"t":"2026-08-18T02:10:39Z","eid":"ec2562cf35348dd7","ag":"ag-183d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-18T02:39:50Z","eid":"0814fae22325d277","ag":"ag-a9ed","ev":"rule","op":"add","rule":"METAL-MIXED-QUANT-QKV-001","txt":"WHILE mixed Q4_K/Q6_K QKV segments share K and fit the f16 cache budget, the Metal decoder SHALL use one exact combined f16 expansion and MPS GEMM at M\u003e=24, preserve raw quant kernels below M24, and fuse RoPE with q/k/v scatter."}
+{"t":"2026-08-18T02:39:50Z","eid":"4e98f275aa9b22a3","ag":"ag-a9ed","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

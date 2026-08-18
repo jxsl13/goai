@@ -556,3 +556,8 @@ Rationale: The file mapping replaces a model-sized staging allocation without le
 WHEN comparing production M2 K-quant decode with llama.cpp before another leaf-kernel successor, the GoAI benchmark suite SHALL record immutable revisions, the identical model hash, matched semantics, five alternating samples, and both engines per-kernel Metal GPU distributions.
 
 Rationale: An isolated leaf can sit near the memory roofline while the heterogeneous full token remains slower; matched in-situ attribution prevents selecting a locally fast but globally irrelevant kernel rewrite.
+
+## METAL-MIXED-QUANT-QKV-001
+WHILE mixed Q4_K/Q6_K QKV segments share K and fit the f16 cache budget, the Metal decoder SHALL use one exact combined f16 expansion and MPS GEMM at M>=24, preserve raw quant kernels below M24, and fuse RoPE with q/k/v scatter.
+
+Rationale: Ten TinyLlama mixed layers improve 1.7378x at M64 and 1.2198x at M512; fused scatter preserves the end-to-end gain.
