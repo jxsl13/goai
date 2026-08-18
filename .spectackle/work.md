@@ -3750,17 +3750,3 @@ option: Require exact expanded operand bytes plus bounded output NRMSE and train
 option: Require bit-exact GEMM output and reject all shape-changing fusion
 blocks: P-01M09A28JWF5ZBR8ADMM2P13MN
 choice: Require exact expanded operand bytes plus bounded output NRMSE and trained-model semantic equivalence
-
-## P-01M09G3PGREC4V2QG3P1RC6J1K Fuse raw mixed-quant M2 QKV at single-token decode
-kind: proposal
-state: active
-created: 2026-08-18
-refs: P-01M09A28JWF5ZBR8ADMM2P13MN, ADR-01M09A3S9JFMHAYHX35BG0HRNY
-grilled: 2026-08-18 open=1
-targets: go:metal.Recorder.QMatMulResidentGroup, c:mtl_recorder_qmatmul_mixed3, go:llamagpu.newQuantDecoder, go:llamagpu.Decoder.encodeStep, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/mixed_qgroup_test.go, llamagpu/mixed_qkv_realmodel_test.go, internal/benchcompare/leadership/README.md
-
-Merged-main evidence at caf5d7f4 leaves GoAI forward-only decode behind pinned llama.cpp b10450 by 1.083x under matched f16-KV semantics. The Q4_K and Q6_K M1 kernels are already near the M2 DRAM roofline, and prior attribution rejects encoder packing as sub-percent. TinyLlama Q4_K_M still splits q, k, and v in 10 of 22 blocks because q and k use Q4_K while v uses Q6_K; this costs three projection dispatches plus two RoPE dispatches per affected block. A noisy all-Q4 screen shows a 1.10x to 1.47x projection-stage upper bound, so the only candidate worth building is full heterogeneous fusion.
-
-Add a Metal-only M1 QKV group specialized to raw Q4_K/Q4_K/Q6_K segments. It must consume the original resident quant bytes, preserve the established cooperative per-row arithmetic, produce canonical contiguous q||k||v output, then reuse one fused RoPE and the existing paired KV blit. This is distinct from the rejected f16-expanded M1 design: there is no f16 expansion, vendor GEMM, requantization, or altered reduction schedule. M>=24 keeps the current combined-f16 MPS path; M=2..23 and every other quant pattern keep their established fallback.
-
-Promotion gates: bit-exact M1 segment output against three established raw kernels including ties, tails, and finite-value checks; selector coverage proving only Q4_K/Q4_K/Q6_K with aligned K and N enters the new path; no M1 combined-f16 cache fill; one grouped profile event with no MPS projection event; at least 1.10x across ten interleaved production-shape mixed-projection samples; trained TinyLlama exact greedy-token parity and checked-logit parity with tg64 at least 1.03x across three fresh-decoder interleaved campaigns, stable controls, and pp64/pp512 no regression relative to the existing grouped prefill path. If any gate fails, remove executable changes and archive the measured rejection. Pin all comparison baselines and report every generalizable finding on jxsl13/perfscan.
