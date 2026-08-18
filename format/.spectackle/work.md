@@ -101,18 +101,3 @@ PRECEDENT CUTS BOTH WAYS: format/gguf ALREADY spawns a bounded worker pool in Re
 OPTIONS for the decision: (a) land as prototyped with the threshold, accepting nested oversubscription; (b) route through a bounded pool with an in-worker guard, as backend/cpu does, which means either lifting that pool somewhere both packages can use or duplicating it; (c) leave serial and let the caller parallelize, which forfeits the 1.70x for single-stream decode — the latency-sensitive case.
 
 Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
-
-## ADR-01KYMWJ76AFA2BJ9R8ZE403KB1 May format/gguf QMatMul parallelize across output rows, and under what pooling policy?
-kind: adr
-state: done
-created: 2026-07-28
-context: Row-parallel QMatMul measures 1.70x on QuantMamba2 decode (536.3-547.6us serial vs 315.3-318.7us parallel, interleaved, 3 alternations) and is bit-identical by construction: each output row is an independent dot writing its own index, sharing no mutable state. After the fusion campaign, gguf.dotQ4_KRow is 82% of the decode step, so this is where the remaining leverage is. The blocker is threading policy, not correctness or speed. QMatMul runs several times per token on the innermost path, so a caller already serving requests concurrently would go from N goroutines to N x GOMAXPROCS — a regression no benchmark on this host would surface. Precedent cuts both ways: format/gguf already spawns a bounded pool in ReadFile, but that is a one-shot load-time call. backend/cpu solved the same problem with a bounded pool plus an in-worker guard, and records that naive wg.Wait parking cost a full M-stop per barrier. The tree is currently SERIAL; nothing was shipped pending this.
-decision: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
-status: accepted
-
-kind: radio
-option: Land as prototyped: goroutines per call above a 1<<15 rows-x-k threshold, matching backend/cpu's measured M-series crossover. Simplest, gets the 1.70x, accepts nested oversubscription.
-option: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
-option: Stay serial and let callers parallelize. Forfeits the 1.70x for single-stream decode, which is the latency-sensitive interactive case.
-blocks: R-01KYMWGGNMER3B16KBXB8JY18H
-choice: Route through a bounded pool with an in-worker guard, as backend/cpu already does. Correct under nesting, but needs that pool lifted somewhere both packages can import, or duplicated.
