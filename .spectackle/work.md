@@ -3741,7 +3741,7 @@ The current M2 Pro F32 SigmoidFocalLoss gamma=2 alpha=0.25 composes nine full el
 
 ## T-01M0GK57K7FF39GCDNBH43PJCJ Implement and gate fused Sigmoid Focal core and VJP
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0GK31T4FKNRRJD8FVG6RD6E
 grilled: 2026-08-20 open=0
