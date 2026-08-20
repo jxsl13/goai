@@ -63,3 +63,12 @@ parent: P-01M0FYJQFBF59ARSF0MP0QXZ50
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go
 
 Add a same-binary GOEXPERIMENT=simd benchmark for GELU and SiLU forward and backward with direct Metal controls and explicit optimized CPU candidates. Use decode, GPT training, Llama-width training, and large tensor shapes; ten untimed warmups; three independent count-7 campaigns after a stability pilot. Route only operations and contiguous size zones whose every campaign clears 1.10x, keep non-SIMD builds and unmeasured sizes on direct Metal, prove tolerant parity and both selector arms, measure full GPT training, run complete Metal and repository validation, publish evidence, and report each generalizable finding to perfscan.
+
+## ADR-01M0FYKCJMFRES5PEZMQWB7KQC Choose execution sides for SIMD-build Metal activations
+kind: adr
+state: draft
+created: 2026-08-20
+parent: P-01M0FYJQFBF59ARSF0MP0QXZ50
+targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go
+
+Decide independently for GELU forward, GELU backward, SiLU forward, and SiLU backward among direct Metal, optimized CPU, or measured size-bounded selection. Historical T535 remains binding for scalar non-SIMD CPU kernels. A route may change only under GOEXPERIMENT=simd when same-binary M2 Pro campaigns, numerical parity, selector mutation tests, and the end-to-end throughput floor establish a stable winner zone.
