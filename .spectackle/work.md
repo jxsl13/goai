@@ -3713,7 +3713,7 @@ choice: Host-only batch patchify plus OpEmbed row gathers
 
 ## T-01M0FMRTE7F5PVC2BZNWDBY9Z0 Implement and gate constant-dispatch batched ViT boundaries
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0FMNNMKFRXR0FDEYZ8GXX7S
 targets: go:vision.ViT.Forward, vision/vit.go, vision/vit_batched_test.go, internal/benchcompare/vision_train_test.go, internal/perfscan
