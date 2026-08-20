@@ -307,3 +307,4 @@
 {"t":"2026-08-20T19:12:05Z","eid":"637a356aeaae3047","ag":"ag-450c","ev":"move","id":"T-01M0G9BREWER3S6WHYQ5H229HS","fr":"draft","to":"active","note":"Begin the exact arm64 implementation under the proposal benchmark and revert gates."}
 {"t":"2026-08-20T19:12:44Z","eid":"67a66ceb71fd2b79","ag":"ag-016b","ev":"create","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","k":"adr","ti":"Which arm64 vector formulation should replace the scalar F32 widen-Abs-narrow loop without changing NaN payload semantics?"}
 {"t":"2026-08-20T19:12:44Z","eid":"ca099667f57c4dfb","ag":"ag-016b","ev":"move","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","fr":"draft","to":"submitted"}
+{"t":"2026-08-20T19:12:58Z","eid":"77f75b8ad57e4e01","ag":"ag-a7bb","ev":"decide","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","note":"Vector sign-clear plus integer NaN classification and quiet-bit select"}
