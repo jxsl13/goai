@@ -3720,7 +3720,7 @@ choice: Typed deterministic host scatter at the current synchronous boundary
 
 ## P-01M0FVFC9BFDCVSSYEVNKT0F6H Revalidate host-resident Metal bias-gradient reduction routing
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 targets: go:metal.addBiasBackwardF32, backend/metal/metal_bridge.m, backend/metal/metal_test.go
 
