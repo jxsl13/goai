@@ -3725,3 +3725,12 @@ created: 2026-08-20
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
 
 The synchronous Metal OpAddBias path still uploads host-resident tensors, dispatches one memory-bound kernel, waits, and downloads the output even though ADR-0008 routes equivalent binary elementwise work through the optimized CPU backend. Establish a mutation-resistant same-binary control/candidate benchmark across representative row and width shapes on Apple M2 Pro, require three independent count-7 campaigns with at least 1.10x median speedup for every routed shape, preserve direct Metal outside the measured winner zone, prove exact CPU parity for routed inputs and direct-Metal parity for the fallback arm, and retain at least 0.99x full GPT training throughput. Publish any generalizable benchmark or routing finding to perfscan.
+
+## T-01M0FX2EBSFC2RGQ42W0KHWCEY Benchmark and gate Metal bias-add routing
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
+targets: backend/metal/metal.go, backend/metal/metal_test.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
+
+Isolate direct Metal bias add as the control and optimized CPU dispatch as the candidate without changing production routing first. Measure representative M2 Pro row and width shapes with ten untimed warmups, fixed-count count-7 samples, and three independent campaigns. Route only a contiguous winner zone whose every campaign clears 1.10x; otherwise preserve direct Metal. Add mutation-resistant two-arm selector coverage, exact parity checks, full Metal and repository validation, full GPT training throughput at or above 0.99x, benchmark evidence, perfscan analysis, and a perfscan issue for each generalizable finding.
