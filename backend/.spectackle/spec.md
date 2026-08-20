@@ -10,6 +10,6 @@ schema: v1
 - T-01M0FYK7ZYFNT8V8PNCS3WAQ4W Benchmark and gate SIMD-aware Metal activation routing: Implemented the darwin/arm64 GOEXPERIMENT=simd production selector for GELU and SiLU forward/backward through 4,194,304 contiguous offset-zero F32 elements. All 84 medians across three isolated 100x count-7 campaigns cleared 1.10x (1.743x to 85.043x), and full SIMD GPT training improved 1.038x. Default builds, strided/offset tensors, invalid inputs, and larger sizes retain direct Metal. Both full [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
-WHERE default arm64 unary routing, WHEN a synchronous F32 unary operation is requested, the Metal unary selector SHALL the system shall route Neg/Sqrt/Abs at no more than 4,194,304 elements, ReLU at no more than 65,536, and Exp/Log/Tanh/Sigmoid at no more than 2,048; otherwise it shall use direct Metal.
+WHERE default arm64 unary routing, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall route Neg/Sqrt/Abs at 4,194,304 or less, ReLU at 65,536 or less, and Exp/Log/Tanh/Sigmoid at 2,048 or less; otherwise use Metal.
 
 Rationale: Three isolated 100x count-7 M2 campaigns retain all 234 routed medians above 1.10x, selector and recorder tests pin semantics, and Griffin RGLRU improves 1.881x default and 2.337x SIMD.
