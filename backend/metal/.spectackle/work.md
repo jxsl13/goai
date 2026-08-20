@@ -26,6 +26,20 @@ kind: task
 state: active
 created: 2026-08-20
 parent: P-01M0FVFC9BFDCVSSYEVNKT0F6H
+needs: ADR-01M0FVWNPKEX6917B1N0VBM0FJ
 targets: go:metal.addBiasBackwardF32, backend/metal/metal_test.go
 
 Add a mutation-proven direct-Metal benchmark control and production selector over the frozen F32 shape matrix. Run three independent count-7 campaigns, reject unstable timing before routing, pin both selector arms, strengthen contiguous and noncontiguous reference parity, run an end-to-end GPT training-step no-regression gate, and retain only a measured winner zone. Record reproducible evidence and update perfscan issue 773 with the Metal sibling finding.
+
+## ADR-01M0FVWNPKEX6917B1N0VBM0FJ How should synchronous host-resident F32 Metal bias gradients route after the CPU reduction optimization?
+kind: adr
+state: submitted
+created: 2026-08-20
+context: Three independent count-7 M2 campaigns show the production CPU selector is 3.263x to 199.71x faster than direct Metal through 2,097,152 elements, with worst candidate spread 1.788x, exact reference parity, and 0.994x end-to-end GPT throughput.
+status: proposed
+
+kind: radio
+option: Route measured shapes through CPU and preserve direct Metal above the bound
+option: Retain direct Metal for all shapes
+option: Remove the direct Metal implementation
+blocks: T-01M0FVGM88EWMRQCHFN4B748AV
