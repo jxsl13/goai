@@ -57,7 +57,7 @@ choice: Use a measured shape crossover and preserve Vulkan outside proven CPU wi
 
 ## T-01M0G5J741FHKVGS8ZJNHXGEMN Implement and gate the semantics-exact arm64 F32 ReLU leaf
 kind: task
-state: active
+state: done
 created: 2026-08-20
 parent: P-01M0G5H18YENC9Y7EVVM63MVNH
 targets: go:cpu.reluKernelCPU, backend/cpu/relu_arm64.go, backend/cpu/relu_arm64.s, backend/cpu/relu_arm64_test.go, backend/cpu/relu_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go
