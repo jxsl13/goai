@@ -52,6 +52,20 @@ kind: task
 state: active
 created: 2026-08-20
 parent: P-01M0FS2S8AFRKVGF6THXA58KVZ
+needs: ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8
 targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
 
 Add a darwin+cgo+vulkan same-binary route benchmark for the six frozen [rows,cols] shapes. Preserve the current Vulkan reduction as the control and call the optimized CPU backend as candidate. Run three independent count-7 campaigns on Apple M2 Pro, calculate medians and candidate spreads, and derive a production crossover only for stable winners. Prove exact reference parity including non-contiguous F32 input, run a real GPT training-step A/B with at least 0.99x throughput, then run the full Vulkan and repository gates. Document retained and rejected zones and report the general detector/crossover lesson to jxsl13/perfscan.
+
+## ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8 How should synchronous host-resident Vulkan bias-gradient reduction choose its execution side?
+kind: adr
+state: submitted
+created: 2026-08-20
+context: The incumbent Vulkan route predates the later bit-exact parallel CPU kernel. The current API returns host tensors synchronously, while future recorder/device-buffer graphs have a different residency contract.
+status: proposed
+
+kind: radio
+option: Always use Vulkan to preserve nominal backend affinity
+option: Always route F32 reductions to CPU
+option: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
+blocks: T-01M0FS3HRCE44AKTADYZEQVADR

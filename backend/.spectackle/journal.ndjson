@@ -20,3 +20,5 @@
 {"t":"2026-08-20T14:27:09Z","eid":"83c7c586327eeddd","ag":"ag-960f","ev":"move","id":"P-01M0FS2S8AFRKVGF6THXA58KVZ","dir":"backend","fr":"draft","to":"active"}
 {"t":"2026-08-20T14:27:22Z","eid":"b475cb6e0070c889","ag":"ag-1372","ev":"create","id":"T-01M0FS3HRCE44AKTADYZEQVADR","k":"task","ti":"Gate Vulkan bias-gradient routing against the optimized CPU kernel","dir":"backend"}
 {"t":"2026-08-20T14:27:42Z","eid":"bae71ab7d2e2338d","ag":"ag-55f0","ev":"move","id":"T-01M0FS3HRCE44AKTADYZEQVADR","dir":"backend","fr":"draft","to":"active"}
+{"t":"2026-08-20T14:27:56Z","eid":"ec454174726febca","ag":"ag-151e","ev":"create","id":"ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8","k":"adr","ti":"How should synchronous host-resident Vulkan bias-gradient reduction choose its execution side?","dir":"backend"}
+{"t":"2026-08-20T14:27:56Z","eid":"dd107adb2df81a0a","ag":"ag-151e","ev":"move","id":"ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8","dir":"backend","fr":"draft","to":"submitted"}
