@@ -3729,12 +3729,3 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
-
-## P-01M0G9AWDGEK5TE6WASXSQS6YQ Accelerate exact F32 Abs on arm64 and remeasure M2 routing
-kind: proposal
-state: active
-created: 2026-08-20
-grilled: 2026-08-20 open=1
-targets: go:cpu.absKernelCPU, backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_arm64.s, backend/cpu/abs_f32_arm64_test.go, backend/cpu/abs_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nlp/eagle.go, nlp/eagle_bench_test.go
-
-Replace the scalar F32 widen-Abs-narrow loop with a semantics-exact arm64 NEON leaf. Preserve every finite and infinity magnitude bit, map both zero signs to +0, clear NaN signs, preserve NaN payloads, and quiet signaling NaNs exactly as float32(math.Abs(float64(x))) does on arm64. Keep the scalar tail and non-arm64 fallback exact. Establish complete-operation CPU baselines at 2K through 4M elements, run 20 warmups and three independent count-7 campaigns, and require every promoted CPU cell to improve by at least 1.10x with unchanged allocation counts. Remeasure direct Metal versus the production host route through and beyond the current 4,194,304-element ceiling; change a selector boundary only when every campaign median is at least 1.10x. Measure an EAGLE Smooth-L1 workload cell and require at least 1.03x end-to-end, otherwise reject or revert the production acceleration. Record exact evidence, pin toolchain and hardware, and report any generalizable performance finding to perfscan.
