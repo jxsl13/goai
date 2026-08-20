@@ -20,3 +20,12 @@ FIX: diagnose the position/cache-row mismatch. The error says the loop advanced 
 VALIDATION: the benchmark runs to completion on both sub-benchmarks and produces a stable tok/s figure across -count=3. Then confirm it actually exercises the intended regime by checking with GOAI_TIME_OPS=1 that per-token Execute counts match the model's layer count, so it is measuring decode and not accidentally re-running prefill.
 
 SCOPE: fix the harness only. Do not optimize anything in the same change — the entire point is to obtain a trustworthy measuring instrument before optimizing, and a benchmark repaired in the same commit as the thing it measures cannot serve as the A/B baseline.
+
+## T-01M0FVGM88EWMRQCHFN4B748AV Gate Metal bias-gradient routing against the optimized CPU kernel
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0FVFC9BFDCVSSYEVNKT0F6H
+targets: go:metal.addBiasBackwardF32, backend/metal/metal_test.go
+
+Add a mutation-proven direct-Metal benchmark control and production selector over the frozen F32 shape matrix. Run three independent count-7 campaigns, reject unstable timing before routing, pin both selector arms, strengthen contiguous and noncontiguous reference parity, run an end-to-end GPT training-step no-regression gate, and retain only a measured winner zone. Record reproducible evidence and update perfscan issue 773 with the Metal sibling finding.
