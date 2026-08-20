@@ -1475,13 +1475,25 @@ func TestMetalMatMulTransposedCrossReference(t *testing.T) {
 	check("256×512·(2048×512)ᵀ", []*tensor.Tensor{big, bwt})
 }
 
-// §V-CROSS (§T354): the GPU bias-add backward db[j]=Σ_i g[i,j] matches the Pure-Go reference.
+// §V-CROSS: the measured host-resident bias-gradient route is bit-identical to
+// the reference's row-order F64 accumulation, including a non-contiguous input.
 func TestMetalAddBiasBackwardCrossReference(t *testing.T) {
 	skipNoGPU(t)
 	mb, _ := backend.Get(backend.Metal)
 	ref, _ := backend.Get(backend.Ref)
-	for _, sh := range []tensor.Shape{{1, 1}, {3, 5}, {256, 2048}, {7, 512}} {
-		g := bench.RandF32(sh, 1)
+	inputs := []*tensor.Tensor{
+		bench.RandF32(tensor.Shape{1, 1}, 1),
+		bench.RandF32(tensor.Shape{3, 5}, 1),
+		bench.RandF32(tensor.Shape{256, 2048}, 1),
+		bench.RandF32(tensor.Shape{7, 512}, 1),
+	}
+	noncontiguous, err := bench.RandF32(tensor.Shape{9, 6}, 2).Transpose(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs = append(inputs, noncontiguous)
+	for _, g := range inputs {
+		sh := g.Shape()
 		ins := []*tensor.Tensor{g}
 		gv, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpAddBiasBackward, ins, nil)
 		if err != nil {
@@ -1490,7 +1502,7 @@ func TestMetalAddBiasBackwardCrossReference(t *testing.T) {
 		gr, _ := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpAddBiasBackward, ins, nil)
 		for j := range gv[0].Numel() {
 			a, r := gv[0].AtF64(j), gr[0].AtF64(j)
-			if math.Abs(a-r) > 1e-5*math.Max(1, math.Abs(r)) {
+			if a != r {
 				t.Fatalf("addbias-backward %v [%d]: metal %v vs ref %v", sh, j, a, r)
 			}
 		}
