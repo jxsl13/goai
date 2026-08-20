@@ -16,3 +16,6 @@ Rationale: Exact deterministic selection preserves the existing sampler draw.
 WHEN TopKN returns k candidates from n resident logits, the Metal sampling boundary SHALL copy and allocate O(k) result data in Go without materializing the n logits.
 
 Rationale: The optimization exists to eliminate the measured full-vocabulary host boundary.
+
+## HOST-RESIDENT-EMBED-BACKWARD-001
+WHEN receives a valid host-resident F32 table, index vector, and upstream gradient, the Metal OpEmbedBackward SHALL execute exactly 0 Metal command submissions and return the deterministic reference-order scatter-add gradient.
