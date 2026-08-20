@@ -67,3 +67,6 @@ Rationale: Measured twice, on the two post-training compression sweeps, both bit
 
 ## SIGMOID-FOCAL-FUSION-001 {applies: go:nn.SigmoidFocalLoss}
 WHEN the active backend provides OpSigmoidFocalCore for same-dtype contiguous logits and targets, the SigmoidFocalLoss SHALL dispatch exactly one OpSigmoidFocalCore followed by OpMean and preserve the composite forward and VJP contract.
+
+## SIGMOID-FOCAL-FUSION-002 {applies: go:nn.SigmoidFocalLoss}
+WHEN OpSigmoidFocalCore is unavailable or its same-dtype contiguous input contract is not met, the SigmoidFocalLoss SHALL execute the existing composite graph and perform zero implicit backend migrations.
