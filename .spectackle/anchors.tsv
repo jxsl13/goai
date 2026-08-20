@@ -43,3 +43,7 @@ ARM64-EXACT-RELU-001	backend/cpu/relu_f32_arm64.s	-	0-0	-	62bb1c680db3b6dc
 ARM64-EXACT-ABS-001	backend/cpu/elementwise.go	-	0-0	-	e498f2367ef863ed
 ARM64-EXACT-ABS-001	backend/cpu/abs_f32_arm64.go	-	0-0	-	e498f2367ef863ed
 ARM64-EXACT-ABS-001	backend/cpu/abs_f32_arm64.s	-	0-0	-	e498f2367ef863ed
+EAGLE-SMOOTHL1-FUSION-001	nlp/eagle.go	-	0-0	-	4396cc4b316fa3a3
+EAGLE-SMOOTHL1-FUSION-001	backend/cpu/smoothl1.go	-	0-0	-	4396cc4b316fa3a3
+EAGLE-SMOOTHL1-FUSION-001	backend/ref/smoothl1.go	-	0-0	-	4396cc4b316fa3a3
+EAGLE-SMOOTHL1-FUSION-001	autograd/vjp_smoothl1.go	-	0-0	-	4396cc4b316fa3a3

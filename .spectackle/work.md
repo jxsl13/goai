@@ -3735,6 +3735,7 @@ kind: proposal
 state: active
 created: 2026-08-20
 grilled: 2026-08-20 open=1
+needs: ADR-01M0GAC04JF6ARA3SE738R8MGY
 targets: go:cpu.absKernelCPU, backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_arm64.s, backend/cpu/abs_f32_arm64_test.go, backend/cpu/abs_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nlp/eagle.go, nlp/eagle_bench_test.go
 
 Replace the scalar F32 widen-Abs-narrow loop with a semantics-exact arm64 NEON leaf. Preserve every finite and infinity magnitude bit, map both zero signs to +0, clear NaN signs, preserve NaN payloads, and quiet signaling NaNs exactly as float32(math.Abs(float64(x))) does on arm64. Keep the scalar tail and non-arm64 fallback exact. Establish complete-operation CPU baselines at 2K through 4M elements, run 20 warmups and three independent count-7 campaigns, and require every promoted CPU cell to improve by at least 1.10x with unchanged allocation counts. Remeasure direct Metal versus the production host route through and beyond the current 4,194,304-element ceiling; change a selector boundary only when every campaign median is at least 1.10x. Measure an EAGLE Smooth-L1 workload cell and require at least 1.03x end-to-end, otherwise reject or revert the production acceleration. Record exact evidence, pin toolchain and hardware, and report any generalizable performance finding to perfscan.
@@ -3772,3 +3773,16 @@ parent: P-01M0G9AWDGEK5TE6WASXSQS6YQ
 targets: go:nlp.eagleSmoothL1, backend/op.go, backend/cpu/smoothl1.go, backend/ref/smoothl1.go, autograd/vjp_smoothl1.go, backend/cpu/smoothl1_test.go, autograd/vjp_smoothl1_test.go, nlp/eagle_abs_control_bench_test.go
 
 The exact Abs leaf clears every CPU and host-route cell, but the order-alternating EAGLE workload medians remain about 1.03x at 349,440 elements and about 1.02x at 2,097,152, so the leaf alone is insufficient leverage. Add a fused elementwise Smooth-L1 backend operation and optimized backward operation for F32/F64, preserving the existing branch-free composite result per element and active-backend gradient semantics. Route EAGLE through the fused op while retaining the composite fallback for unsupported dtypes. Gate forward bit parity, gradient parity, race safety, full tests, and three paired count-7 workload campaigns at at least 1.03x.
+
+## ADR-01M0GAC04JF6ARA3SE738R8MGY How should the Abs tranche clear the EAGLE end-to-end leverage gate after the exact leaf hits an Amdahl limit?
+kind: adr
+state: submitted
+created: 2026-08-20
+context: Three same-binary order-alternating campaigns show that replacing only Abs is near the 1.03 gate at 349,440 elements and roughly 1.02x at 2,097,152. The primitive and Metal routing gains are strong, but the workload still materializes six elementwise intermediates.
+status: proposed
+
+kind: radio
+option: Fuse the elementwise Smooth-L1 expression and retain Mean plus scale
+option: Fuse the entire scalar Smooth-L1 loss including reduction
+option: Weaken the workload gate and ship the leaf alone
+blocks: P-01M0G9AWDGEK5TE6WASXSQS6YQ
