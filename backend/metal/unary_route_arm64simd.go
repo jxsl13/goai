@@ -9,9 +9,10 @@ import "github.com/jxsl13/goai/backend"
 // constant so later kernel changes can invalidate one crossover independently.
 func measuredHostUnaryMaxElements(op backend.Op) int {
 	switch op {
-	case backend.OpNeg, backend.OpExp, backend.OpLog, backend.OpTanh,
-		backend.OpSigmoid, backend.OpSqrt:
+	case backend.OpExp, backend.OpLog, backend.OpTanh, backend.OpSigmoid, backend.OpSqrt:
 		return maxHostUnaryBroadElements
+	case backend.OpNeg:
+		return maxHostUnaryNegElements
 	case backend.OpReLU:
 		return maxHostUnaryReLUElements
 	case backend.OpAbs:

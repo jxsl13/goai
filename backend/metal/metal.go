@@ -725,6 +725,7 @@ const (
 	maxHostUnaryBroadElements = 1024 * 4096
 	maxHostUnaryReLUElements  = maxHostUnaryBroadElements
 	maxHostUnaryAbsElements   = 4096 * 4096
+	maxHostUnaryNegElements   = 4096 * 4096
 )
 
 // measuredHostUnaryCandidate excludes views because their materialization cost

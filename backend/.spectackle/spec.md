@@ -13,16 +13,17 @@ schema: v1
 - P-01M0G1P2CTFSRS8R2KZ73M78PW Complete M2 synchronous Metal unary routing after CPU specialization: Completed the M2 synchronous unary audit and shipped only measured winner zones. Default and SIMD production selectors pass 234 routed campaign medians, affected Griffin RGLRU gains 1.881x/2.337x, correctness and recorder invariants are pinned, all 15 first-head CI checks passed, and the reusable operation/build-specific invalidation finding was reported to perfscan #773. Durable policy lives in A [body truncated at tombstone retention cap]
 - T-01M0G5J741FHKVGS8ZJNHXGEMN Implement and gate the semantics-exact arm64 F32 ReLU leaf: Shipped task result: exact arm64 ordered-compare/select ReLU, 2.892x-6.197x faster at the complete CPU operation boundary and a measured M2 host-route ceiling of 4,194,304 elements. The alternating wide-MLP proof passes in default and SIMD builds. Evidence: internal/benchcompare/leadership/evidence/m2-arm64-relu-acceleration-20260820/README.md. Generalized detector finding: jxsl13/perfscan#777. Di [body truncated at tombstone retention cap]
 - ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU: Adopted ordered arm64 FCMGT plus BSL for exact F32 ReLU; rejected FMAX on NaN/signed-zero semantics and rejected scalar Go on measured cost. Complete CPU operation gains are 2.892x-6.197x. The audited default and SIMD M2 host-route contracts now retain ReLU through 4,194,304 elements with direct Metal outside the measured zone. Alternating same-binary wide-MLP campaigns pass. Evidence: internal/be [body truncated at tombstone retention cap]
+- T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg: Shipped exact arm64 F32 Neg sign-bit toggling with a portable exact fallback, a measured 1,048,576-element serial/parallel crossover, and default/SIMD M2 host routing through 16,777,216 elements. Every frozen CPU and Metal promotion cell passed across three count-7 campaigns. Evidence lives at internal/benchcompare/leadership/evidence/m2-arm64-neg-acceleration-20260820/README.md; perfscan issue 78 [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
-WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg/ReLU/Sqrt through CPU up to 4,194,304 elements and Exp/Log/Tanh/Sigmoid up to 2,048 elements; otherwise use direct Metal.
+WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg through CPU up to 16,777,216 elements, ReLU/Sqrt through CPU up to 4,194,304, and Exp/Log/Tanh/Sigmoid through CPU up to 2,048; otherwise use direct Metal.
 
-Rationale: Three isolated 100x count-7 M2 campaigns retain all established non-Abs routed medians above the 1.10x gate.
+Rationale: Three independent 100x count-7 M2 campaigns measure exact CPU Neg 3.14x-3.98x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
 
 ## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
-WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg/Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304 elements; otherwise use direct Metal.
+WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg through CPU up to 16,777,216 elements and Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304; otherwise use direct Metal.
 
-Rationale: Three isolated 100x count-7 M2 SIMD campaigns retain the established non-Abs broad ceiling above the 1.10x gate.
+Rationale: Three independent 100x count-7 M2 SIMD campaigns measure exact CPU Neg 3.01x-3.76x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
 
 ## MEASURED-METAL-UNARY-FALLBACK-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryCandidate}
 WHERE measured host unary execution, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall execute CPU with a nil nested recorder; all other inputs and unmeasured architectures shall use direct Metal.

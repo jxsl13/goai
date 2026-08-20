@@ -9,8 +9,10 @@ import "github.com/jxsl13/goai/backend"
 // operation-specific ceilings are the winner zones from isolated campaigns.
 func measuredHostUnaryMaxElements(op backend.Op) int {
 	switch op {
-	case backend.OpNeg, backend.OpSqrt:
+	case backend.OpSqrt:
 		return maxHostUnaryBroadElements
+	case backend.OpNeg:
+		return maxHostUnaryNegElements
 	case backend.OpReLU:
 		return maxHostUnaryReLUElements
 	case backend.OpAbs:

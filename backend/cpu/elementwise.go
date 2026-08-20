@@ -352,11 +352,11 @@ func negKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		parallel(len(o), func(lo, hi int) {
-			for i := lo; i < hi; i++ {
-				o[i] = -d[i]
-			}
-		})
+		if len(o) < negF32ParallelThreshold {
+			negF32(o, d)
+			break
+		}
+		parallel(len(o), func(lo, hi int) { negF32(o[lo:hi], d[lo:hi]) })
 	default:
 		return nil, fmt.Errorf("cpu: neg unsupported dtype %v", in[0].Dtype())
 	}
