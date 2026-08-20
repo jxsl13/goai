@@ -3738,9 +3738,13 @@ Isolate direct Metal bias add as the control and optimized CPU dispatch as the c
 
 ## ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ Choose the execution side for host-resident Metal bias add
 kind: adr
-state: draft
+state: done
 created: 2026-08-20
 parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
+decision: Route measured shapes through the optimized CPU and preserve direct Metal above the bound
+consequences: Set the measured upper bound at 8,388,608 elements for valid host-resident F32 rank-2 AddBias inputs. Dispatch through CPU with the nested recorder removed at or below the bound, preserve direct Metal above it and whenever the optimized CPU kernel is unavailable, and retain a same-binary direct-Metal control plus a two-arm selector test.
+status: accepted
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
 
 Decide among unconditional direct Metal, unconditional optimized CPU, or a measured shape-bounded selector for synchronous host-resident F32 AddBias. The decision must be based on direct same-binary measurements on M2 Pro, exact semantic parity, a contiguous and mutation-proven route, and the full GPT training throughput floor; no production route changes before the evidence establishes a stable winner zone.
+choice: Route measured shapes through the optimized CPU and preserve direct Metal above the bound

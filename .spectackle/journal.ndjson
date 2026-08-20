@@ -267,3 +267,4 @@
 {"t":"2026-08-20T15:36:53Z","eid":"17fd9dd653754047","ag":"ag-4490","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T15:37:08Z","eid":"5d6131b6e0256b94","ag":"ag-b24b","ev":"move","id":"T-01M0FX2EBSFC2RGQ42W0KHWCEY","fr":"draft","to":"active"}
 {"t":"2026-08-20T15:37:13Z","eid":"34e9bd3adea6493f","ag":"ag-8454","ev":"create","id":"ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ","k":"adr","ti":"Choose the execution side for host-resident Metal bias add"}
+{"t":"2026-08-20T15:39:52Z","eid":"2afd35e8debf4564","ag":"ag-d285","ev":"decide","id":"ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ","note":"Route measured shapes through the optimized CPU and preserve direct Metal above the bound"}
