@@ -3744,6 +3744,7 @@ kind: task
 state: draft
 created: 2026-08-20
 parent: P-01M0GK31T4FKNRRJD8FVG6RD6E
+grilled: 2026-08-20 open=0
 targets: go:nn.SigmoidFocalLoss, backend/op.go, backend/attrs.go, backend/cpu/focal.go, backend/ref/focal.go, autograd/vjp_focal.go, nn/focal_test.go
 
 Add OpSigmoidFocalCore and OpSigmoidFocalCoreBackward with gamma/alpha attrs. Implement F32/F64 CPU and reference kernels that preserve the stable softplus identity and composite rounding barriers. Register a VJP returning the fused logits gradient and a zero target gradient. Route SigmoidFocalLoss through the core only when the active backend supports it and the fast-path input contract holds; otherwise retain the current composite graph. Keep OpMean outside the core to preserve reduction semantics. Add exact or contract-tolerance forward parity, composite VJP parity, special/random values, gamma zero, alpha disabled, noncontiguous/mixed-dtype fallback, gradcheck, mutation, race, complete forward and forward-plus-backward paired benchmarks across 349,440 and 2,097,152 elements, focused perfscan, and pinned evidence. Promote only if every target cell clears 1.10x in three count-7 campaigns.
