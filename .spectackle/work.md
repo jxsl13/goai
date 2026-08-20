@@ -3767,7 +3767,7 @@ choice: Vector sign-clear plus integer NaN classification and quiet-bit select
 
 ## T-01M0GABTVEF6YRS1H0VFWDC61P Fuse EAGLE Smooth-L1 after the Abs Amdahl gate
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0G9AWDGEK5TE6WASXSQS6YQ
 targets: go:nlp.eagleSmoothL1, backend/op.go, backend/cpu/smoothl1.go, backend/ref/smoothl1.go, autograd/vjp_smoothl1.go, backend/cpu/smoothl1_test.go, autograd/vjp_smoothl1_test.go, nlp/eagle_abs_control_bench_test.go

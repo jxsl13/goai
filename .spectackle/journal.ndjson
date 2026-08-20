@@ -311,3 +311,4 @@
 {"t":"2026-08-20T19:28:59Z","eid":"be4c83444e1210ce","ag":"ag-0874","ev":"create","id":"T-01M0GABTVEF6YRS1H0VFWDC61P","k":"task","ti":"Fuse EAGLE Smooth-L1 after the Abs Amdahl gate"}
 {"t":"2026-08-20T19:29:05Z","eid":"2b2db71525c73f70","ag":"ag-45b8","ev":"create","id":"ADR-01M0GAC04JF6ARA3SE738R8MGY","k":"adr","ti":"How should the Abs tranche clear the EAGLE end-to-end leverage gate after the exact leaf hits an Amdahl limit?"}
 {"t":"2026-08-20T19:29:05Z","eid":"ae6c938a5acfebc7","ag":"ag-45b8","ev":"move","id":"ADR-01M0GAC04JF6ARA3SE738R8MGY","fr":"draft","to":"submitted"}
+{"t":"2026-08-20T19:38:01Z","eid":"a0826d41a139e96d","ag":"ag-c78c","ev":"move","id":"T-01M0GABTVEF6YRS1H0VFWDC61P","fr":"draft","to":"active","note":"The Abs checkpoint is committed and all primitive and host-route gates pass; implement the fused next layer to satisfy the unchanged EAGLE workload gate."}
