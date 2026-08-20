@@ -41,7 +41,7 @@ choice: Typed deterministic host scatter at the current boundary
 
 ## P-01M0FS2S8AFRKVGF6THXA58KVZ Revalidate host-resident Vulkan bias-gradient reduction routing
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
 
