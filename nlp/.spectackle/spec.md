@@ -31,6 +31,11 @@ Rationale: Without the control, a failing gate cannot distinguish real drift fro
 - T-01KYJQZE63ERCSRSWEFEJAFE69 Rewrite keepSinkRecent as typed row copies: compact
 
 ## EAGLE-SMOOTHL1-FUSION-001 {applies: nlp/eagle.go,backend/cpu/smoothl1.go,backend/ref/smoothl1.go,autograd/vjp_smoothl1.go}
-WHEN EAGLE feature regression executes on F32 or F64 tensors, the loss path SHALL dispatch one fused elementwise Smooth-L1 operation whose forward values match the existing branch-free composite and whose VJP executes an optimized active-backend backward operation.
+WHEN feature regression executes on F32 or F64 and the active backend provides a native Smooth-L1 core, the EAGLE loss path SHALL dispatch one fused elementwise core whose forward values and VJP are bit-identical to the branch-free composite.
 
-Rationale: The semantics-exact Abs leaf materially improves the primitive and Metal host route, but paired EAGLE measurements expose an Amdahl limit below the 1.03 workload gate. Fusing the six elementwise intermediates removes the dominant extra passes and allocations without folding the mean or scale, which keeps the established reduction boundary unchanged.
+Rationale: The exact Abs leaf remains below the 1.03 EAGLE workload gate alone. Fusion removes six elementwise passes and their allocations without folding the mean or scale, while an exact composite-VJP oracle pins floating-point accumulation order.
+
+## EAGLE-SMOOTHL1-FUSION-002 {applies: nlp/eagle.go}
+WHEN the active backend lacks a native Smooth-L1 core for the feature dtype, the EAGLE loss path SHALL retain the composite implementation rather than force an implicit CPU fallback.
+
+Rationale: A CPU-only fused kernel is an M2-first training optimization. Backend capability gating prevents the fusion from regressing CUDA, Vulkan, or Metal workloads that already execute the composite operations natively.

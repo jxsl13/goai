@@ -313,3 +313,12 @@
 {"t":"2026-08-20T19:29:05Z","eid":"ae6c938a5acfebc7","ag":"ag-45b8","ev":"move","id":"ADR-01M0GAC04JF6ARA3SE738R8MGY","fr":"draft","to":"submitted"}
 {"t":"2026-08-20T19:38:01Z","eid":"a0826d41a139e96d","ag":"ag-c78c","ev":"move","id":"T-01M0GABTVEF6YRS1H0VFWDC61P","fr":"draft","to":"active","note":"The Abs checkpoint is committed and all primitive and host-route gates pass; implement the fused next layer to satisfy the unchanged EAGLE workload gate."}
 {"t":"2026-08-20T19:38:04Z","eid":"9f3bbfd2f1f495fa","ag":"ag-447e","ev":"decide","id":"ADR-01M0GAC04JF6ARA3SE738R8MGY","note":"Fuse the elementwise Smooth-L1 expression and retain Mean plus scale"}
+{"t":"2026-08-20T20:07:57Z","eid":"86a82aa0f63ad688","ag":"ag-7b4b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:08:01Z","eid":"979cc3c73be83c4e","ag":"ag-e7bd","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:08:04Z","eid":"7caa2ca61d5f36f3","ag":"ag-de58","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:08:14Z","eid":"a73f25eaa55bd29a","ag":"ag-3055","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:08:25Z","eid":"5583f0bc58782202","ag":"ag-68ca","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:10:38Z","eid":"46d39f87da7b2ace","ag":"ag-c7e9","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:10:40Z","eid":"dbd6efd56dbd094b","ag":"ag-f1f0","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:11:10Z","eid":"f44c774fb97c7ebb","ag":"ag-669d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T20:11:11Z","eid":"a6ee4906b4b28539","ag":"ag-95fe","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
