@@ -303,3 +303,4 @@
 {"t":"2026-08-20T19:11:00Z","eid":"9576cff7908e0201","ag":"ag-11c5","ev":"create","id":"P-01M0G9AWDGEK5TE6WASXSQS6YQ","k":"proposal","ti":"Accelerate exact F32 Abs on arm64 and remeasure M2 routing"}
 {"t":"2026-08-20T19:11:26Z","eid":"aed0bcd9193c225d","ag":"ag-412a","ev":"move","id":"P-01M0G9AWDGEK5TE6WASXSQS6YQ","fr":"draft","to":"active","note":"Standing goal authorizes implementation. Exact signaling-NaN behavior is characterized; proceed under benchmark and revert gates."}
 {"t":"2026-08-20T19:11:28Z","eid":"83f77b04710dc0d7","ag":"ag-c5e2","ev":"create","id":"T-01M0G9BREWER3S6WHYQ5H229HS","k":"task","ti":"Implement and gate exact arm64 F32 Abs"}
+{"t":"2026-08-20T19:11:44Z","eid":"5e399199d43214cf","ag":"ag-25a6","ev":"grill","id":"P-01M0G9AWDGEK5TE6WASXSQS6YQ","gr":"2026-08-20 open=1","hash":"2346d4b2f8c07fe0b0e69c27c856251530283ab605aeb952b61aad49edb8c5e6","open":1,"keys":["blast:10"]}
