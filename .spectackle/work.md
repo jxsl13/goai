@@ -3729,3 +3729,15 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0G5H18YENC9Y7EVVM63MVNH Accelerate F32 ReLU with semantics-exact arm64 NEON
+kind: proposal
+state: active
+created: 2026-08-20
+targets: go:cpu.reluKernelCPU, backend/cpu/relu_arm64.go, backend/cpu/relu_arm64.s, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nn/train_bench_test.go
+
+Context: merged PR #1111 proves ReLU is the only audited synchronous Metal unary operation whose optimized host route stops at 65,536 elements in both default and SIMD builds. At 131,072 elements the existing scalar Go CPU arm is only about 1.09x-1.11x direct Metal, while other typed unary kernels retain measured host wins through 4,194,304. ReLU is used by generic MLPs, ReGLU, T5 v1.0, and ReLU-squared model paths, so improving the CPU leaf can raise both CPU execution and the Metal host-route crossover. Historical host-routing rejection applied to scalar closure kernels; P-01M0FYJQFBF59 and P-01M0G1P2CTFSR establish that route invalidation must be operation/build/shape-specific after the candidate kernel changes.
+
+Implement a darwin/arm64-capable native F32 ReLU leaf using ordered greater-than-zero masks and integer select, preserving current exact semantics: positive finite and +Inf values retain their bits; negative values, NaNs, +0, and -0 become +0. Keep F64, non-arm64, noncontiguous materialization, allocation, public API, and direct-Metal fallback behavior unchanged. Prefer a reusable arm64 assembly leaf available in default and GOEXPERIMENT=simd builds; do not use FMAX because its NaN and signed-zero behavior is not the existing contract.
+
+Promotion gates: bit-exact exhaustive special-value and misaligned-tail parity against the current scalar contract; isolated CPU campaigns on Apple M2 Pro with at least 20 warmups and three independent count-7 campaigns, requiring every promoted size to show at least 1.10x median speedup over pinned merged main and no tested size below 0.98x; then remeasure the production Metal ReLU selector and extend only contiguous offset-zero F32 ceilings where three campaigns each prove at least 1.10x over direct Metal. Require an affected ReLU MLP workload to improve at least 1.03x or document why the leaf has no material end-to-end leverage and reject/revert promotion. Run default and SIMD correctness, complete affected package tests, make preflight, perfscan, and full CI. Report generalizable performance findings to jxsl13/perfscan. Retain exact commands, samples, environment, pinned SHAs, and benchmark caveats as repository evidence.

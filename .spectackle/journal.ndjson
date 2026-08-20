@@ -290,3 +290,8 @@
 {"t":"2026-08-20T16:58:38Z","eid":"0477e56301fe2046","ag":"ag-8a0d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T17:22:04Z","eid":"7162e819806aa9b5","ag":"ag-3a9d","ev":"create","id":"ADR-01M0G33EGWF9K8B5XBB9PPE7DC","k":"adr","ti":"Which execution-side policy should govern the eight remaining synchronous Metal unary operations on Apple Silicon?"}
 {"t":"2026-08-20T17:22:04Z","eid":"8bfa2df8ff211940","ag":"ag-3a9d","ev":"move","id":"ADR-01M0G33EGWF9K8B5XBB9PPE7DC","fr":"draft","to":"submitted"}
+{"t":"2026-08-20T18:04:27Z","eid":"f1a27c561a00cec6","ag":"ag-1528","ev":"create","id":"P-01M0G5H18YENC9Y7EVVM63MVNH","k":"proposal","ti":"Accelerate F32 ReLU with semantics-exact arm64 NEON"}
+{"t":"2026-08-20T18:04:27Z","eid":"e53987acb3a015ed","ag":"ag-1528","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T18:04:36Z","eid":"6cd0a45507cce1f8","ag":"ag-1095","ev":"move","id":"P-01M0G5H18YENC9Y7EVVM63MVNH","fr":"draft","to":"active"}
+{"t":"2026-08-20T18:04:36Z","eid":"1526b9560b12ac90","ag":"ag-1095","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T18:05:06Z","eid":"2cd75fa04c990d18","ag":"ag-d9ba","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
