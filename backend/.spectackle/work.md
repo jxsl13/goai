@@ -75,9 +75,13 @@ Add same-binary direct-Metal controls and production-selector candidates for Neg
 
 ## ADR-01M0G1PTQPF5795JMHPQFY6Y50 Choose execution sides for the remaining synchronous Metal unary operations
 kind: adr
-state: draft
+state: done
 created: 2026-08-20
 parent: P-01M0G1P2CTFSRS8R2KZ73M78PW
+decision: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
+consequences: Default arm64 routes Neg/Sqrt/Abs through 4,194,304 elements, ReLU through 65,536, and Exp/Log/Tanh/Sigmoid through 2,048. arm64 SIMD extends Exp/Log/Tanh/Sigmoid through 4,194,304. Only valid contiguous offset-zero F32 tensors route; Intel Darwin, invalid or empty inputs, views, larger sizes, and unlisted operations preserve direct Metal. Any kernel or wrapper implementation-class change invalidates only the affected matrix cells and requires same-binary remeasurement.
+status: accepted
 targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend/cpu/vexp_arm64.go
 
 Decide independently for Neg, Exp, Log, Tanh, ReLU, Sigmoid, Sqrt, and Abs and independently for default versus arm64 SIMD builds among direct Metal, optimized CPU, or a measured size-bounded selector. Historical T535 remains binding until same-binary production-selector campaigns, numerical parity, selector mutation tests, recorder safety, and an affected workload floor establish a new winner zone.
+choice: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone

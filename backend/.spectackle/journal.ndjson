@@ -43,3 +43,4 @@
 {"t":"2026-08-20T16:57:42Z","eid":"6cf371c767d5f961","ag":"ag-8447","ev":"create","id":"ADR-01M0G1PTQPF5795JMHPQFY6Y50","k":"adr","ti":"Choose execution sides for the remaining synchronous Metal unary operations","dir":"backend"}
 {"t":"2026-08-20T16:58:38Z","eid":"00b61bfbf4a754fd","ag":"ag-8a0d","ev":"move","id":"P-01M0G1P2CTFSRS8R2KZ73M78PW","dir":"backend","fr":"draft","to":"active"}
 {"t":"2026-08-20T16:59:10Z","eid":"9f47b045889cf3db","ag":"ag-826c","ev":"move","id":"T-01M0G1PRH9E13VST4PPCK2QGF4","dir":"backend","fr":"draft","to":"active"}
+{"t":"2026-08-20T17:22:20Z","eid":"9abb4be7d89a65e9","ag":"ag-d1ec","ev":"decide","id":"ADR-01M0G1PTQPF5795JMHPQFY6Y50","dir":"backend","note":"Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone"}
