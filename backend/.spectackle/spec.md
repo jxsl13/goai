@@ -15,9 +15,9 @@ schema: v1
 - ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU: Adopted ordered arm64 FCMGT plus BSL for exact F32 ReLU; rejected FMAX on NaN/signed-zero semantics and rejected scalar Go on measured cost. Complete CPU operation gains are 2.892x-6.197x. The audited default and SIMD M2 host-route contracts now retain ReLU through 4,194,304 elements with direct Metal outside the measured zone. Alternating same-binary wide-MLP campaigns pass. Evidence: internal/be [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
-WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg/ReLU/Sqrt through CPU up to 4,194,304 elements and Exp/Log/Tanh/Sigmoid up to 2,048 elements; otherwise use direct Metal.
+WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg through CPU up to 16,777,216 elements, ReLU/Sqrt through CPU up to 4,194,304, and Exp/Log/Tanh/Sigmoid through CPU up to 2,048; otherwise use direct Metal.
 
-Rationale: Three isolated 100x count-7 M2 campaigns retain all established non-Abs routed medians above the 1.10x gate.
+Rationale: Three independent 100x count-7 M2 campaigns measure exact CPU Neg 3.14x-3.98x faster than direct Metal through 16,777,216 elements; all other unary ceilings remain unchanged.
 
 ## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg/Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304 elements; otherwise use direct Metal.
