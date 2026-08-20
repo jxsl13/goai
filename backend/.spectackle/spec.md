@@ -18,7 +18,7 @@ WHEN contiguous offset-zero F32 unary is requested, the selector SHALL route Neg
 Rationale: Three isolated 100x count-7 M2 campaigns retain all 234 routed medians above 1.10x, selector and recorder tests pin semantics, and Griffin RGLRU improves 1.881x default and 2.337x SIMD.
 
 ## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
-WHERE SIMD arm64 unary routing, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall route Neg/Exp/Log/Tanh/Sigmoid/Sqrt/Abs at 4,194,304 or less and ReLU at 65,536 or less; otherwise use Metal.
+WHEN contiguous offset-zero F32 unary is requested, the selector SHALL route Neg/Exp/Log/Tanh/ReLU/Sigmoid/Sqrt/Abs through CPU up to 4,194,304 elements; otherwise use direct Metal.
 
 ## MEASURED-METAL-UNARY-FALLBACK-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryCandidate}
 WHERE measured host unary execution, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall execute CPU with a nil nested recorder; all other inputs and unmeasured architectures shall use direct Metal.
