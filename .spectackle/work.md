@@ -3685,3 +3685,11 @@ option: All M including single-token decode to maximize dispatch reduction
 option: All prefill sizes including M>64 despite the established f16 crossover
 blocks: P-01M09KZ8SEEH2B6T0R2QRJBCBS
 choice: Only 24<=M<=64 prefill with identical quant types and bit-exact output
+
+## P-01M0FMNNMKFRXR0FDEYZ8GXX7S Flatten residual batched ViT dispatch boundaries
+kind: proposal
+state: draft
+created: 2026-08-20
+targets: go:vision.ViT.Forward, vision/vit.go, vision/vit_batched_test.go, internal/benchcompare/vision_train_test.go, internal/perfscan
+
+Current merged main fd6d08bb runs ViT as one packed encoder but still performs 2B patchify Slice/Reshape operations plus Concat, 3B class/position operations plus Concat, and B class-row slices plus Concat. At B=8 these are 51 boundary operations; current M2 Pro medians are 26.197 ms forward and 97.711 ms training. Replace them with one host batch patchify, a class|patch table plus two OpEmbed gathers and one OpAdd, and one OpEmbed class-row gather. Preserve the single-image path and all encoder math. Freeze exact F64 forward parity at B=1,4,8; backward bit identity except Class/Pos may use rel-RMS <=1e-6 because repeated EmbedBackward indices use atomic scatter on Metal; structural count must fall by at least 46 operations at B=8. Three independent interleaved control/candidate campaigns must each show Metal B=8 forward >=1.25x and training >=1.15x, B=32 forward >=1.50x and training >=1.25x, while B=1 plus CPU/Vulkan axes remain >=0.99x and control spread stays <=1.15x. Revert executable changes if any gate fails. Add the general batch-indexed Slice/Concat detector to perfscan and report the finding on jxsl13/perfscan.
