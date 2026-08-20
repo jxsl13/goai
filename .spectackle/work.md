@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0G5H18YENC9Y7EVVM63MVNH Accelerate F32 ReLU with semantics-exact arm64 NEON
 kind: proposal
-state: active
+state: done
 created: 2026-08-20
 targets: go:cpu.reluKernelCPU, backend/cpu/relu_arm64.go, backend/cpu/relu_arm64.s, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nn/train_bench_test.go
 
