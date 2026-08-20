@@ -54,12 +54,3 @@ option: Always route F32 reductions to CPU
 option: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
 blocks: T-01M0FS3HRCE44AKTADYZEQVADR
 choice: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
-
-## P-01M0G1P2CTFSRS8R2KZ73M78PW Complete M2 synchronous Metal unary routing after CPU specialization
-kind: proposal
-state: active
-created: 2026-08-20
-grilled: 2026-08-20 open=0
-targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend/cpu/vexp_arm64.go
-
-Historical T535 correctly rejected broad host routing while unary CPU alternatives used scalar closure kernels. The CPU backend now has devirtualized parallel Neg, ReLU, Sqrt, and Abs kernels plus typed arm64 SIMD Exp, Log, Tanh, and Sigmoid kernels. Revalidate the eight remaining Metal unary operations independently in default and GOEXPERIMENT=simd builds across decode-sized, training-sized, and large contiguous F32 tensors. Require three isolated count-7 production-selector campaigns with at least 1.10x median speedup in every routed cell, exact or operation-specific numerical parity, mutation tests for every selected and preserved arm, and at least 0.99x throughput in an affected end-to-end workload. Preserve direct Metal for unmeasured architectures, layouts, sizes, build modes, and operations. Report all generalizable routing or harness findings to perfscan.
