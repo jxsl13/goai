@@ -22,3 +22,19 @@ VALIDATION GATE (benchmark only): NOTHING EXISTING ISOLATES THIS, and the one be
 EXPECTED, per op: about 10 ns (map to array), 25 ns (fallback memoization including one 48 B allocation), 15 ns (Metal closure allocation), 150 ns (Metal binary double-dispatch). High confidence on the mechanism, LOW-TO-MEDIUM on end-to-end impact until a working decode benchmark exists.
 
 BIT-IDENTITY BAR: ZERO NUMERIC RISK — no arithmetic is touched anywhere. The risks are semantic and each is testable: the memo must reproduce the exact cpu-then-reference preference order of execute.go:77-94 including the cpu != ctx.Backend guard (backend/routing_test.go and preference_test.go cover this); invalidation must be correct if any program calls SetPreference after contexts exist (the doc at registry.go:112 says call it once at startup — assert that); and declining ops in metal.Kernel changes what Available()-style introspection reports for Metal, so confirm backend/metal/zzz_fallbackaudit_internal_test.go still means what it claims.
+
+## ADR-01M0FQ1AP8FBCSCA67X0RCPS8A Where should Vulkan OpEmbedBackward execute while the backend contract returns host-resident tensors synchronously?
+kind: adr
+state: done
+created: 2026-08-20
+context: The sibling Metal route has already passed exactness and 3.93x to 30.76x M2 gates; Vulkan must still pass its own MoltenVK measurements before sharing the decision.
+decision: Typed deterministic host scatter at the current boundary
+consequences: Vulkan OpEmbedBackward will use zero Vulkan submissions only if its independent MoltenVK campaigns clear every frozen speed and spread gate. Reference-order F32 accumulation becomes deterministic. Persistent device residency remains a separate graph-level redesign and invalidates this route decision when introduced.
+status: accepted
+
+kind: radio
+option: Typed deterministic host scatter at the current boundary
+option: Vulkan atomic scatter with upload, wait, and full-table download
+option: Introduce persistent device-resident embedding state in this slice
+blocks: P-01M0FQ0RWQE8PT2GT7FFP4WKBE
+choice: Typed deterministic host scatter at the current boundary

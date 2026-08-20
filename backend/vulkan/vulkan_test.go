@@ -1363,8 +1363,8 @@ func TestVulkanCrossEntropyBackwardCrossReference(t *testing.T) {
 	}
 }
 
-// §V-CROSS: the GPU embedding backward (atomic scatter-add) matches the Pure-Go reference,
-// including REPEATED indices (which collide on a table row). Enables GPU embedding training.
+// §V-CROSS: the Vulkan backend's deterministic host-resident embedding backward matches the
+// Pure-Go reference, including repeated indices that accumulate into one table row.
 func TestVulkanEmbedBackwardCrossReference(t *testing.T) {
 	skipNoGPU(t)
 	vb, ok := backend.Get(backend.Vulkan)
