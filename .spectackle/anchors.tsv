@@ -31,9 +31,12 @@ MEASURED-METAL-BIAS-GRAD-ROUTE-001	go:metal.addBiasBackwardF32	backend/metal/met
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/metal.go	-	0-0	-	a2fecb1a11d676f2
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_arm64simd.go	-	0-0	-	a2fecb1a11d676f2
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_default.go	-	0-0	-	a2fecb1a11d676f2
-MEASURED-METAL-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	6e646f7e2c356c1d
-MEASURED-METAL-UNARY-ROUTE-001	backend/metal/unary_route_arm64_default.go	-	0-0	-	6e646f7e2c356c1d
-MEASURED-METAL-SIMD-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	ef97e45acf458c04
-MEASURED-METAL-SIMD-UNARY-ROUTE-001	backend/metal/unary_route_arm64simd.go	-	0-0	-	ef97e45acf458c04
+MEASURED-METAL-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	8ddf9ffd24ecf34f
+MEASURED-METAL-UNARY-ROUTE-001	backend/metal/unary_route_arm64_default.go	-	0-0	-	8ddf9ffd24ecf34f
+MEASURED-METAL-SIMD-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	299c2965b01c316e
+MEASURED-METAL-SIMD-UNARY-ROUTE-001	backend/metal/unary_route_arm64simd.go	-	0-0	-	299c2965b01c316e
 MEASURED-METAL-UNARY-FALLBACK-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	c51140e5f2d44c3d
 MEASURED-METAL-UNARY-FALLBACK-001	go:metal.measuredHostUnaryCandidate	backend/metal/metal.go	732-739	9d8c75b26c64262b	c51140e5f2d44c3d
+ARM64-EXACT-RELU-001	backend/cpu/elementwise.go	-	0-0	-	62bb1c680db3b6dc
+ARM64-EXACT-RELU-001	backend/cpu/relu_f32_arm64.go	-	0-0	-	62bb1c680db3b6dc
+ARM64-EXACT-RELU-001	backend/cpu/relu_f32_arm64.s	-	0-0	-	62bb1c680db3b6dc

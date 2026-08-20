@@ -722,8 +722,8 @@ func unaryF32(op backend.Op, sel int) backend.Kernel {
 
 const (
 	maxHostUnaryTinyElements  = 2048
-	maxHostUnaryReLUElements  = 65536
 	maxHostUnaryBroadElements = 1024 * 4096
+	maxHostUnaryReLUElements  = maxHostUnaryBroadElements
 )
 
 // measuredHostUnaryCandidate excludes views because their materialization cost

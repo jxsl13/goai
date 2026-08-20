@@ -4,9 +4,9 @@ package metal
 
 import "github.com/jxsl13/goai/backend"
 
-// Default M2 builds retain scalar transcendental CPU kernels but have typed,
-// devirtualized Neg/ReLU/Sqrt/Abs kernels. These operation-specific ceilings
-// are the provisional winner zones from the isolated route pilot.
+// Default M2 builds retain scalar transcendental CPU kernels but have typed
+// Neg/Sqrt/Abs kernels and the native arm64 ReLU leaf. These operation-specific
+// ceilings are the winner zones from the isolated route campaigns.
 func measuredHostUnaryMaxElements(op backend.Op) int {
 	switch op {
 	case backend.OpNeg, backend.OpSqrt, backend.OpAbs:
