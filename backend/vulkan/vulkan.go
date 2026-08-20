@@ -1238,9 +1238,29 @@ func addBiasF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) 
 	return []*tensor.Tensor{out}, nil
 }
 
-// addBiasBackwardF32 computes dbias[j] = Σ_i g[i,j] on the GPU (§T354) — the bias-add VJP
-// dispatches this so the column-sum doesn't run as a CPU scalar loop. in = (g[rows,n]).
+// maxHostBiasGradElements is the upper edge of the frozen M2 route matrix. The
+// optimized CPU reduction won all three count-7 campaigns through this size;
+// larger tensors retain direct Vulkan until separately measured.
+const maxHostBiasGradElements = 512 * 4096
+
+// addBiasBackwardF32 selects the measured synchronous host-resident route for
+// dbias[j] = Σ_i g[i,j]. The direct Vulkan implementation remains isolated in
+// addBiasBackwardVulkanF32 as a mutation-proven same-binary control and as the
+// unmeasured large-shape fallback.
 func addBiasBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 1 {
+		g := in[0]
+		if g.Dtype() == tensor.F32 && g.Ndim() == 2 && g.Shape()[0] > 0 && g.Shape()[1] > 0 && g.Numel() <= maxHostBiasGradElements {
+			if cpu, ok := cpuPrefers(backend.OpAddBiasBackward, tensor.F32); ok {
+				return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), backend.OpAddBiasBackward, in, attrs)
+			}
+		}
+	}
+	return addBiasBackwardVulkanF32(ctx, in, attrs)
+}
+
+// addBiasBackwardVulkanF32 is the incumbent upload → Vulkan reduction → download route.
+func addBiasBackwardVulkanF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpAddBiasBackward, in, attrs)
 	}
