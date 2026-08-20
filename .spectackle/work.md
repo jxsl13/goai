@@ -3710,3 +3710,12 @@ option: Metal-specific fused preprocessing kernel
 option: Retain per-image generic backend operations
 blocks: P-01M0FMNNMKFRXR0FDEYZ8GXX7S
 choice: Host-only batch patchify plus OpEmbed row gathers
+
+## T-01M0FMRTE7F5PVC2BZNWDBY9Z0 Implement and gate constant-dispatch batched ViT boundaries
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0FMNNMKFRXR0FDEYZ8GXX7S
+targets: go:vision.ViT.Forward, vision/vit.go, vision/vit_batched_test.go, internal/benchcompare/vision_train_test.go, internal/perfscan
+
+Implement one host batch patchify, immutable batch-shaped class/position/class-row indices, two differentiable OpEmbed gathers plus one Add for sequence construction, and one OpEmbed class gather. Add mutation-proven control/candidate routing, operation-count assertions, F64 forward and backward parity, and batch 1/8/32 CPU/Metal/Vulkan benchmarks. Meet every frozen proposal threshold or revert executable changes. Add the batch-indexed Slice/Concat perfscan detector with positive and negative fixtures, scan the repository, and file the generalized finding on jxsl13/perfscan.
