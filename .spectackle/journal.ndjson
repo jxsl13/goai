@@ -280,3 +280,4 @@
 {"t":"2026-08-20T16:20:15Z","eid":"5382ff5f4b40bece","ag":"ag-02a8","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T16:20:57Z","eid":"85d25b44247cd3fe","ag":"ag-d14e","ev":"rule","op":"add","rule":"MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001","txt":"WHEN contiguous offset-zero F32 GELU or SiLU forward or backward executes on a darwin/arm64 SIMD build, the Metal SHALL use optimized CPU through 4,194,304 elements, with direct Metal retained elsewhere.","ap":["backend/metal/metal.go","backend/metal/activation_route_arm64simd.go","backend/metal/activation_route_default.go"]}
 {"t":"2026-08-20T16:20:58Z","eid":"987d09322021bcaf","ag":"ag-d14e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T16:41:34Z","eid":"76b37307ecff5a21","ag":"ag-d95c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
