@@ -3720,7 +3720,7 @@ choice: Typed deterministic host scatter at the current synchronous boundary
 
 ## P-01M0FX1QZ9F088KW6S3EVH0VGR Revalidate host-resident Metal bias-add routing
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
 
