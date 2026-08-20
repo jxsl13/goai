@@ -23,7 +23,7 @@ SCOPE: fix the harness only. Do not optimize anything in the same change — the
 
 ## T-01M0FVGM88EWMRQCHFN4B748AV Gate Metal bias-gradient routing against the optimized CPU kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0FVFC9BFDCVSSYEVNKT0F6H
 targets: go:metal.addBiasBackwardF32, backend/metal/metal_test.go
