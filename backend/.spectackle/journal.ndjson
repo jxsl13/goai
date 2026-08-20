@@ -19,3 +19,4 @@
 {"t":"2026-08-20T14:26:57Z","eid":"85a7872a53b92ee5","ag":"ag-0f53","ev":"create","id":"P-01M0FS2S8AFRKVGF6THXA58KVZ","k":"proposal","ti":"Revalidate host-resident Vulkan bias-gradient reduction routing","dir":"backend"}
 {"t":"2026-08-20T14:27:09Z","eid":"83c7c586327eeddd","ag":"ag-960f","ev":"move","id":"P-01M0FS2S8AFRKVGF6THXA58KVZ","dir":"backend","fr":"draft","to":"active"}
 {"t":"2026-08-20T14:27:22Z","eid":"b475cb6e0070c889","ag":"ag-1372","ev":"create","id":"T-01M0FS3HRCE44AKTADYZEQVADR","k":"task","ti":"Gate Vulkan bias-gradient routing against the optimized CPU kernel","dir":"backend"}
+{"t":"2026-08-20T14:27:42Z","eid":"bae71ab7d2e2338d","ag":"ag-55f0","ev":"move","id":"T-01M0FS3HRCE44AKTADYZEQVADR","dir":"backend","fr":"draft","to":"active"}

@@ -49,7 +49,7 @@ Base ba625e6e8ab5d4d8e430335d17ed1385330c9e5a. Re-evaluate OpAddBiasBackward bec
 
 ## T-01M0FS3HRCE44AKTADYZEQVADR Gate Vulkan bias-gradient routing against the optimized CPU kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0FS2S8AFRKVGF6THXA58KVZ
 targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
