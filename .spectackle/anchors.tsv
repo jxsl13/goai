@@ -27,7 +27,13 @@ DEC-003	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	205-258	47e882ed07cfcf
 DEC-004	go:nlp.Llama.SelfExtendForward	nlp/self_extend.go	205-258	47e882ed07cfcff7	2b65ba005e867bd7
 M2-INCUMBENT-ATTRIBUTION-HARNESS-001	go:benchcompare.BenchmarkProdMetalProfiledDecodeGGUF	internal/benchcompare/prod_metal_profile_external_test.go	61-127	822d8faad69ec5cd	be62aced583aeee6
 MEASURED-VULKAN-BIAS-GRAD-ROUTE-001	go:vulkan.addBiasBackwardF32	backend/vulkan/vulkan.go	1250-1260	e00f000ef2504b5e	4ff1e2fd49285fed
-MEASURED-METAL-BIAS-GRAD-ROUTE-001	go:metal.addBiasBackwardF32	backend/metal/metal.go	849-859	74c74869199b8083	25108c6c075c962a
+MEASURED-METAL-BIAS-GRAD-ROUTE-001	go:metal.addBiasBackwardF32	backend/metal/metal.go	877-887	74c74869199b8083	25108c6c075c962a
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/metal.go	-	0-0	-	a2fecb1a11d676f2
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_arm64simd.go	-	0-0	-	a2fecb1a11d676f2
 MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001	backend/metal/activation_route_default.go	-	0-0	-	a2fecb1a11d676f2
+MEASURED-METAL-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	6e646f7e2c356c1d
+MEASURED-METAL-UNARY-ROUTE-001	backend/metal/unary_route_arm64_default.go	-	0-0	-	6e646f7e2c356c1d
+MEASURED-METAL-SIMD-UNARY-ROUTE-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	ef97e45acf458c04
+MEASURED-METAL-SIMD-UNARY-ROUTE-001	backend/metal/unary_route_arm64simd.go	-	0-0	-	ef97e45acf458c04
+MEASURED-METAL-UNARY-FALLBACK-001	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	c51140e5f2d44c3d
+MEASURED-METAL-UNARY-FALLBACK-001	go:metal.measuredHostUnaryCandidate	backend/metal/metal.go	732-739	9d8c75b26c64262b	c51140e5f2d44c3d
