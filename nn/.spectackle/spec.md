@@ -70,3 +70,6 @@ WHEN the active backend provides OpSigmoidFocalCore for same-dtype contiguous lo
 
 ## SIGMOID-FOCAL-FUSION-002 {applies: go:nn.SigmoidFocalLoss}
 WHEN OpSigmoidFocalCore is unavailable or its same-dtype contiguous input contract is not met, the SigmoidFocalLoss SHALL retain the existing OpMul, OpSoftplus, OpNeg, OpExp, and OpMean composite path with zero implicit backend migrations.
+
+## SIGMOID-FOCAL-FUSION-PERF-001 {applies: go:nn.SigmoidFocalLoss}
+WHEN a CPU OpSigmoidFocalCore implementation is promoted, the benchmark gate SHALL require at least 1.10x median speedup in every 349440-element and 2097152-element forward and forward-plus-backward cell across 3 paired count-7 campaigns.
