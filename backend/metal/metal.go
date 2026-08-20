@@ -696,6 +696,23 @@ const (
 // tensors fall back to the reference (§I4). GELU (exact erf, §T352) now runs here too —
 // it dominated the FFN as a CPU fallback; Metal's erf matches the reference within tol.
 func unaryF32(op backend.Op, sel int) backend.Kernel {
+	direct := unaryMetalF32(op, sel)
+	if op != backend.OpGELU && op != backend.OpSiLU {
+		return direct
+	}
+	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+		if hostSIMDActivationCandidate(in, 1) {
+			if cpu, ok := cpuPrefers(op, tensor.F32); ok {
+				return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), op, in, attrs)
+			}
+		}
+		return direct(ctx, in, attrs)
+	}
+}
+
+// unaryMetalF32 is the incumbent synchronous upload → Metal unary → download route.
+// Keeping it isolated gives route benchmarks a mutation-resistant same-binary control.
+func unaryMetalF32(op backend.Op, sel int) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 		refFallback := func() ([]*tensor.Tensor, error) {
 			return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), op, in, attrs)
@@ -870,9 +887,42 @@ func addBiasBackwardMetalF32(ctx *backend.Context, in []*tensor.Tensor, attrs ba
 	return []*tensor.Tensor{out}, nil
 }
 
-// geluBackwardF32 computes dx = g·gelu'(x) on the GPU (§T353) — the GELU VJP dispatches
-// this so training doesn't fall back to the ~30ms CPU scalar loop. in = (x, g), same shape.
+// maxHostSIMDActivationElements is the upper edge of the frozen M2 Pro route
+// matrix. The typed arm64 NEON kernels won all 84 medians across three isolated
+// campaigns through this size. Larger and unmeasured strided tensors retain
+// direct Metal.
+const maxHostSIMDActivationElements = 1024 * 4096
+
+// hostSIMDActivationCandidate gates the measured host-resident activation
+// route. Its build-time flag is true only on darwin/arm64 GOEXPERIMENT=simd;
+// default builds therefore preserve direct Metal even though the CPU backend
+// registers slower scalar forward kernels there.
+func hostSIMDActivationCandidate(in []*tensor.Tensor, arity int) bool {
+	if !hostSIMDActivationRouteEnabled || len(in) != arity {
+		return false
+	}
+	x := in[0]
+	if x.Dtype() != tensor.F32 || x.Numel() == 0 || x.Numel() > maxHostSIMDActivationElements ||
+		!x.IsContiguous() || x.Offset() != 0 {
+		return false
+	}
+	return arity == 1 || (in[1].Dtype() == tensor.F32 && in[1].Shape().Equal(x.Shape()) &&
+		in[1].IsContiguous() && in[1].Offset() == 0)
+}
+
+// geluBackwardF32 selects the execution side for dx = g·gelu'(x).
 func geluBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if hostSIMDActivationCandidate(in, 2) {
+		if cpu, ok := cpuPrefers(backend.OpGELUBackward, tensor.F32); ok {
+			return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), backend.OpGELUBackward, in, attrs)
+		}
+	}
+	return geluBackwardMetalF32(ctx, in, attrs)
+}
+
+// geluBackwardMetalF32 is the incumbent synchronous upload → Metal VJP → download route.
+// in = (x, g), same shape.
+func geluBackwardMetalF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpGELUBackward, in, attrs)
 	}
@@ -898,9 +948,19 @@ func geluBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.At
 	return []*tensor.Tensor{out}, nil
 }
 
-// siluBackwardF32 computes dx = g·silu'(x) on the GPU (§T362) — the SiLU VJP dispatches
-// this so SwiGLU/Llama training doesn't fall back to the CPU scalar loop. in = (x, g).
+// siluBackwardF32 selects the execution side for dx = g·silu'(x).
 func siluBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if hostSIMDActivationCandidate(in, 2) {
+		if cpu, ok := cpuPrefers(backend.OpSiLUBackward, tensor.F32); ok {
+			return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
+		}
+	}
+	return siluBackwardMetalF32(ctx, in, attrs)
+}
+
+// siluBackwardMetalF32 is the incumbent synchronous upload → Metal VJP → download route.
+// in = (x, g), same shape.
+func siluBackwardMetalF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
 	}
