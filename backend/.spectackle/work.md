@@ -57,7 +57,7 @@ choice: Use a measured shape crossover and preserve Vulkan outside proven CPU wi
 
 ## T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg
 kind: task
-state: active
+state: done
 created: 2026-08-20
 parent: P-01M0GFFBN1F1N8ABTY2ECZ1X7S
 grilled: 2026-08-20 open=0
