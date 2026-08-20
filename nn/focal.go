@@ -159,6 +159,35 @@ func SigmoidFocalLoss(ctx *backend.Context, logits, targets *tensor.Tensor, gamm
 	if !logits.Shape().Equal(targets.Shape()) {
 		return nil, fmt.Errorf("nn: SigmoidFocalLoss needs equal-shaped logits/targets, got %v and %v", logits.Shape(), targets.Shape())
 	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	ex := func(op backend.Op, at backend.Attrs, in ...*tensor.Tensor) (*tensor.Tensor, error) {
+		o, err := backend.Execute(ctx, op, in, at)
+		if err != nil {
+			return nil, err
+		}
+		return o[0], nil
+	}
+	// Fusion is a capability, not an implicit migration. A backend that owns the
+	// focal core gets one per-element pass followed by the contract-preserving
+	// mean. Mixed-dtype or strided inputs retain the established composite path.
+	if logits.Dtype() == targets.Dtype() && logits.IsContiguous() && targets.IsContiguous() {
+		if _, ok := ctx.Backend.Kernel(backend.OpSigmoidFocalCore, logits.Dtype()); ok {
+			weighted, err := ex(backend.OpSigmoidFocalCore, backend.SigmoidFocalAttrs{Gamma: gamma, Alpha: alpha}, logits, targets)
+			if err != nil {
+				return nil, err
+			}
+			return ex(backend.OpMean, nil, weighted)
+		}
+	}
+	return sigmoidFocalComposite(ctx, logits, targets, gamma, alpha)
+}
+
+// sigmoidFocalComposite is the compatibility oracle and fallback for backends or
+// layouts without OpSigmoidFocalCore. Keep its op graph and rounding barriers
+// stable: the fused kernels and their VJP are validated against this function.
+func sigmoidFocalComposite(ctx *backend.Context, logits, targets *tensor.Tensor, gamma, alpha float64) (*tensor.Tensor, error) {
 	// per-element constants from the (non-differentiable) targets: sign s=1−2y and weight α_t.
 	sign := tensor.New(logits.Dtype(), logits.Shape())
 	alphaT := tensor.New(logits.Dtype(), logits.Shape())
