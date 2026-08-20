@@ -13,7 +13,7 @@ schema: v1
 - P-01M0G1P2CTFSRS8R2KZ73M78PW Complete M2 synchronous Metal unary routing after CPU specialization: Completed the M2 synchronous unary audit and shipped only measured winner zones. Default and SIMD production selectors pass 234 routed campaign medians, affected Griffin RGLRU gains 1.881x/2.337x, correctness and recorder invariants are pinned, all 15 first-head CI checks passed, and the reusable operation/build-specific invalidation finding was reported to perfscan #773. Durable policy lives in A [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
-WHEN a contiguous offset-zero F32 unary operation is requested, the Metal unary selector SHALL route Neg, ReLU, Sqrt, and Abs through CPU at 4,194,304 elements or less; route Exp, Log, Tanh, and Sigmoid through CPU at 2,048 elements or less; and otherwise use direct Metal.
+WHEN contiguous offset-zero F32 unary is requested, the selector SHALL route Neg/ReLU/Sqrt/Abs through CPU up to 4,194,304 elements and Exp/Log/Tanh/Sigmoid up to 2,048; otherwise use direct Metal.
 
 Rationale: Three isolated 100x count-7 M2 campaigns retain all 234 routed medians above 1.10x, selector and recorder tests pin semantics, and Griffin RGLRU improves 1.881x default and 2.337x SIMD.
 
