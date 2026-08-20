@@ -63,16 +63,3 @@ grilled: 2026-08-20 open=0
 targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend/cpu/vexp_arm64.go
 
 Historical T535 correctly rejected broad host routing while unary CPU alternatives used scalar closure kernels. The CPU backend now has devirtualized parallel Neg, ReLU, Sqrt, and Abs kernels plus typed arm64 SIMD Exp, Log, Tanh, and Sigmoid kernels. Revalidate the eight remaining Metal unary operations independently in default and GOEXPERIMENT=simd builds across decode-sized, training-sized, and large contiguous F32 tensors. Require three isolated count-7 production-selector campaigns with at least 1.10x median speedup in every routed cell, exact or operation-specific numerical parity, mutation tests for every selected and preserved arm, and at least 0.99x throughput in an affected end-to-end workload. Preserve direct Metal for unmeasured architectures, layouts, sizes, build modes, and operations. Report all generalizable routing or harness findings to perfscan.
-
-## ADR-01M0G1PTQPF5795JMHPQFY6Y50 Choose execution sides for the remaining synchronous Metal unary operations
-kind: adr
-state: done
-created: 2026-08-20
-parent: P-01M0G1P2CTFSRS8R2KZ73M78PW
-decision: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
-consequences: Default arm64 routes Neg/Sqrt/Abs through 4,194,304 elements, ReLU through 65,536, and Exp/Log/Tanh/Sigmoid through 2,048. arm64 SIMD extends Exp/Log/Tanh/Sigmoid through 4,194,304. Only valid contiguous offset-zero F32 tensors route; Intel Darwin, invalid or empty inputs, views, larger sizes, and unlisted operations preserve direct Metal. Any kernel or wrapper implementation-class change invalidates only the affected matrix cells and requires same-binary remeasurement.
-status: accepted
-targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend/cpu/vexp_arm64.go
-
-Decide independently for Neg, Exp, Log, Tanh, ReLU, Sigmoid, Sqrt, and Abs and independently for default versus arm64 SIMD builds among direct Metal, optimized CPU, or a measured size-bounded selector. Historical T535 remains binding until same-binary production-selector campaigns, numerical parity, selector mutation tests, recorder safety, and an affected workload floor establish a new winner zone.
-choice: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
