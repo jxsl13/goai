@@ -20,3 +20,8 @@ Rationale: The optimization exists to eliminate the measured full-vocabulary hos
 
 ## HOST-RESIDENT-EMBED-BACKWARD-001
 WHEN receives a valid host-resident F32 table, index vector, and upstream gradient, the Metal OpEmbedBackward SHALL execute exactly 0 Metal command submissions and return the deterministic reference-order scatter-add gradient.
+
+## MEASURED-METAL-BIAS-GRAD-ROUTE-001 {applies: go:metal.addBiasBackwardF32}
+WHEN a synchronous host-resident F32 bias gradient is requested, the Metal add-bias backward SHALL route through CPU only where 3 count-7 campaigns each prove at least 1.10x median speedup, and preserve direct Metal elsewhere.
+
+Rationale: A later exact CPU reduction can invalidate an older synchronous GPU route, but the winner zone must remain measurement-bounded.
