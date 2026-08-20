@@ -102,3 +102,56 @@ func BenchmarkMetalUnaryRouteCandidates(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkMetalAbsRouteExtension compares direct synchronous Metal with the
+// optimized CPU host arm beyond the current production selector ceiling. It
+// does not depend on that ceiling, so it can prove a wider winner zone before
+// production routing changes.
+func BenchmarkMetalAbsRouteExtension(b *testing.B) {
+	mb, ok := backend.Get(backend.Metal)
+	if !ok {
+		b.Skip("Metal unavailable")
+	}
+	cpu, ok := cpuPrefers(backend.OpAbs, tensor.F32)
+	if !ok {
+		b.Skip("optimized CPU Abs unavailable")
+	}
+	ctx := backend.NewContext().WithBackend(mb)
+	direct := unaryMetalF32(backend.OpAbs, unaryAbs)
+	for _, n := range []int{4194304, 8388608, 16777216} {
+		b.Run("n"+strconv.Itoa(n), func(b *testing.B) {
+			x := bench.RandF32(tensor.Shape{n}, 41)
+			inputs := []*tensor.Tensor{x}
+			for _, arm := range []struct {
+				name string
+				run  func() error
+			}{
+				{name: "control", run: func() error {
+					_, err := direct(ctx, inputs, nil)
+					return err
+				}},
+				{name: "candidate", run: func() error {
+					_, err := backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), backend.OpAbs, inputs, nil)
+					return err
+				}},
+			} {
+				arm := arm
+				b.Run(arm.name, func(b *testing.B) {
+					for range 20 {
+						if err := arm.run(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						if err := arm.run(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.ReportMetric(float64(2*n*4)*float64(b.N)/b.Elapsed().Seconds()/1e9, "GB/s")
+				})
+			}
+		})
+	}
+}

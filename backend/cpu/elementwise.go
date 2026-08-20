@@ -825,10 +825,12 @@ func absKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
+		if len(o) < absF32ParallelThreshold {
+			absF32(o, d)
+			break
+		}
 		parallel(len(o), func(lo, hi int) {
-			for i := lo; i < hi; i++ {
-				o[i] = float32(math.Abs(float64(d[i])))
-			}
+			absF32(o[lo:hi], d[lo:hi])
 		})
 	default:
 		return nil, fmt.Errorf("cpu: abs unsupported dtype %v", in[0].Dtype())
