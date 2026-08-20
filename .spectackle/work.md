@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0GFFBN1F1N8ABTY2ECZ1X7S Accelerate exact F32 Neg on arm64 and remeasure M2 routing
 kind: proposal
-state: active
+state: done
 created: 2026-08-20
 grilled: 2026-08-20 open=0
 targets: go:cpu.negKernelCPU, go:metal.unaryF32, backend/cpu/elementwise.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go
