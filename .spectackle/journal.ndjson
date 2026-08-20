@@ -211,3 +211,4 @@
 {"t":"2026-08-20T13:10:09Z","eid":"bd6f5b3143aa95bd","ag":"ag-0ee4","ev":"grill","id":"P-01M0FMNNMKFRXR0FDEYZ8GXX7S","gr":"2026-08-20 open=0","hash":"60a98ff988908d92b770325719cc3375338d8097042a042de803c2480aa66533"}
 {"t":"2026-08-20T13:10:45Z","eid":"68dd5fc3d00710ed","ag":"ag-6f16","ev":"create","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","k":"adr","ti":"Which boundary should replace ViT residual per-image preparation and class-row extraction?"}
 {"t":"2026-08-20T13:10:45Z","eid":"19b654589d733a5f","ag":"ag-6f16","ev":"move","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","fr":"draft","to":"submitted"}
+{"t":"2026-08-20T13:11:09Z","eid":"6abc525591b9668f","ag":"ag-6940","ev":"decide","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","note":"Host-only batch patchify plus OpEmbed row gathers"}
