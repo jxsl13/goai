@@ -20,3 +20,12 @@ FIX: diagnose the position/cache-row mismatch. The error says the loop advanced 
 VALIDATION: the benchmark runs to completion on both sub-benchmarks and produces a stable tok/s figure across -count=3. Then confirm it actually exercises the intended regime by checking with GOAI_TIME_OPS=1 that per-token Execute counts match the model's layer count, so it is measuring decode and not accidentally re-running prefill.
 
 SCOPE: fix the harness only. Do not optimize anything in the same change — the entire point is to obtain a trustworthy measuring instrument before optimizing, and a benchmark repaired in the same commit as the thing it measures cannot serve as the A/B baseline.
+
+## T-01M0FNQVFTFQ0ABX96T9QM18R4 Gate deterministic host Metal embedding backward
+kind: task
+state: active
+created: 2026-08-20
+parent: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
+targets: backend/metal/metal.go, backend/metal/embed_backward_route_bench_test.go
+
+Implement the typed F32 host scatter in embedBackwardF32, preserve reference per-add rounding and repeated-index accumulation, retain the legacy bridge only as dormant infrastructure, add five-shape M2 control/candidate evidence, validate the full Metal and repository suites, publish the host-resident accelerator routing finding to jxsl13/perfscan, then open and merge a dedicated PR only after all CI checks pass.
