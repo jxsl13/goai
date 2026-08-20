@@ -47,15 +47,6 @@ targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
 
 Base ba625e6e8ab5d4d8e430335d17ed1385330c9e5a. Re-evaluate OpAddBiasBackward because the Vulkan route predates the bit-exact parallel CPU column reduction. Preserve the current MoltenVK upload-reduce-download implementation as a same-binary control. Measure CPU routing on Apple M2 Pro across [rows,cols] = [1,512], [7,512], [65,128], [256,512], [256,2048], [512,4096] in three independent seven-sample campaigns. Derive an explicit shape route only from a stable crossover: every retained CPU zone must have campaign median speedup at least 1.10x and candidate max/min spread at most 3.0x; every retained Vulkan zone must remain unchanged. Require bit-exact parity with the CPU/reference F64-accumulation contract, the full tagged Vulkan suite, repository preflight, focused perfscan, and a real GPT training-step no-regression gate of at least 0.99x when the route is exercised. Retain only measured winners; document and reject a blanket route if no stable boundary exists.
 
-## T-01M0FS3HRCE44AKTADYZEQVADR Gate Vulkan bias-gradient routing against the optimized CPU kernel
-kind: task
-state: active
-created: 2026-08-20
-parent: P-01M0FS2S8AFRKVGF6THXA58KVZ
-targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
-
-Add a darwin+cgo+vulkan same-binary route benchmark for the six frozen [rows,cols] shapes. Preserve the current Vulkan reduction as the control and call the optimized CPU backend as candidate. Run three independent count-7 campaigns on Apple M2 Pro, calculate medians and candidate spreads, and derive a production crossover only for stable winners. Prove exact reference parity including non-contiguous F32 input, run a real GPT training-step A/B with at least 0.99x throughput, then run the full Vulkan and repository gates. Document retained and rejected zones and report the general detector/crossover lesson to jxsl13/perfscan.
-
 ## ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8 How should synchronous host-resident Vulkan bias-gradient reduction choose its execution side?
 kind: adr
 state: done
