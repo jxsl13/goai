@@ -30,3 +30,4 @@
 {"t":"2026-08-20T16:03:19Z","eid":"04a4a295b15ee978","ag":"ag-b523","ev":"create","id":"T-01M0FYK7ZYFNT8V8PNCS3WAQ4W","k":"task","ti":"Benchmark and gate SIMD-aware Metal activation routing","dir":"backend"}
 {"t":"2026-08-20T16:03:24Z","eid":"97f5d9ff70fc97ab","ag":"ag-8074","ev":"create","id":"ADR-01M0FYKCJMFRES5PEZMQWB7KQC","k":"adr","ti":"Choose execution sides for SIMD-build Metal activations","dir":"backend"}
 {"t":"2026-08-20T16:03:45Z","eid":"eacde7e320fb9cba","ag":"ag-1cb8","ev":"move","id":"T-01M0FYK7ZYFNT8V8PNCS3WAQ4W","dir":"backend","fr":"draft","to":"active"}
+{"t":"2026-08-20T16:20:15Z","eid":"33999b3caf703c54","ag":"ag-02a8","ev":"decide","id":"ADR-01M0FYKCJMFRES5PEZMQWB7KQC","dir":"backend","note":"Use optimized CPU for GELU forward, GELU backward, SiLU forward, and SiLU backward only on darwin/arm64 GOEXPERIMENT=simd when every F32 input is contiguous, offset-zero, valid, and at most 4,194,304 elements; use direct Metal otherwise."}

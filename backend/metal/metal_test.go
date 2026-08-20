@@ -1376,7 +1376,10 @@ func TestMetalUnaryCrossReference(t *testing.T) {
 			for i := range gv[0].Numel() {
 				idx := tensor.Unravel(i, sh)
 				g, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
-				if math.Abs(g-r) > 1e-5*math.Max(1, math.Abs(r)) {
+				if (o.op == backend.OpGELU || o.op == backend.OpSiLU) && !metalActivationCrossClose(g, r) {
+					t.Fatalf("%v %v [%d]: metal %v vs ref %v", o.op, sh, i, g, r)
+				}
+				if o.op != backend.OpGELU && o.op != backend.OpSiLU && math.Abs(g-r) > 1e-5*math.Max(1, math.Abs(r)) {
 					t.Fatalf("%v %v [%d]: metal %v vs ref %v", o.op, sh, i, g, r)
 				}
 			}
@@ -1527,7 +1530,7 @@ func TestMetalSiLUBackwardCrossReference(t *testing.T) {
 		for i := range gv[0].Numel() {
 			idx := tensor.Unravel(i, sh)
 			gg, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
-			if math.Abs(gg-r) > 1e-5*math.Max(1, math.Abs(r)) {
+			if !metalActivationCrossClose(gg, r) {
 				t.Fatalf("silu-backward %v [%d]: metal %v vs ref %v", sh, i, gg, r)
 			}
 		}
@@ -1552,7 +1555,7 @@ func TestMetalGELUBackwardCrossReference(t *testing.T) {
 		for i := range gv[0].Numel() {
 			idx := tensor.Unravel(i, sh)
 			gg, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
-			if math.Abs(gg-r) > 1e-5*math.Max(1, math.Abs(r)) {
+			if !metalActivationCrossClose(gg, r) {
 				t.Fatalf("gelu-backward %v [%d]: metal %v vs ref %v", sh, i, gg, r)
 			}
 		}

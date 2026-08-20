@@ -574,3 +574,8 @@ Rationale: An isolated leaf can sit near the memory roofline while the heterogen
 WHILE mixed Q4_K/Q6_K QKV segments share K and fit the f16 cache budget, the Metal decoder SHALL use one exact combined f16 expansion and MPS GEMM at M>=24, preserve raw quant kernels below M24, and fuse RoPE with q/k/v scatter.
 
 Rationale: Ten TinyLlama mixed layers improve 1.7378x at M64 and 1.2198x at M512; fused scatter preserves the end-to-end gain.
+
+## MEASURED-METAL-SIMD-ACTIVATION-ROUTE-001 {applies: backend/metal/metal.go,backend/metal/activation_route_arm64simd.go,backend/metal/activation_route_default.go}
+WHEN contiguous offset-zero F32 GELU or SiLU forward or backward executes on a darwin/arm64 SIMD build, the Metal SHALL use optimized CPU through 4,194,304 elements, with direct Metal retained elsewhere.
+
+Rationale: ADR-01M0FYKCJMFRE: all 84 production-selector medians cleared 1.10x across three isolated count-7 campaigns, and full SIMD GPT training improved 1.038x.
