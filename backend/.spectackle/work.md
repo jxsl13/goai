@@ -63,3 +63,15 @@ parent: P-01M0G5H18YENC9Y7EVVM63MVNH
 targets: go:cpu.reluKernelCPU, backend/cpu/relu_arm64.go, backend/cpu/relu_arm64.s, backend/cpu/relu_arm64_test.go, backend/cpu/relu_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go
 
 Add the smallest reusable arm64 F32 ReLU primitive that exactly implements x > 0 ? x : +0 for every bit pattern, including NaNs and both zeros. Route only the F32 CPU leaf through it on arm64; preserve scalar tails and every other dtype/architecture. Add focused special-value, random, length-boundary, and noncontiguous parity tests. Build isolated CPU and production Metal route benchmarks at the old 65,536 crossover and through 4,194,304 elements. Capture three independent warmed count-7 campaigns against pinned merged main and an affected ReLU MLP workload. Promote only measured CPU and Metal winner zones, update the existing route contracts after evidence, run perfscan and all validation, and fully revert executable changes if end-to-end leverage or promotion gates fail.
+
+## ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU
+kind: adr
+state: draft
+created: 2026-08-20
+parent: P-01M0G5H18YENC9Y7EVVM63MVNH
+refs: T-01M0G5J741FHKVGS8ZJNHXGEMN
+targets: go:cpu.reluKernelCPU, backend/cpu/relu_f32_arm64.go, backend/cpu/relu_f32_arm64.s, backend/metal/metal.go, backend/metal/relu_route_workload_test.go
+
+Decision: implement F32 ReLU on every arm64 build as a 16-lane NEON ordered greater-than-zero mask followed by bit select, with a scalar tail and generic non-arm64 sibling. This preserves x > 0 ? x : +0 exactly: positive finite/+Inf bits pass through, while negative values, NaNs, +0, and -0 become +0. FMAX is rejected because its NaN and signed-zero semantics are not this contract. Keeping scalar Go is rejected because Go 1.26 does not vectorize the loop and the complete CPU operation measured 2.89x-6.20x slower across 2,048-4,194,304 elements. Restricting the leaf to GOEXPERIMENT=simd is rejected because this transform is bit-exact and does not consume a tolerance budget.
+
+The Metal synchronous host selector retains operation-specific policy but widens ReLU from 65,536 to 4,194,304 elements in default and SIMD darwin/arm64 builds. Three warmed count-7 campaigns per build show every promoted shape at least 1.10x faster than direct Metal. A 256x1 -> 1365 -> 1 ReLU MLP benchmark alternates direct-Metal control and routed candidate in the same binary; default campaign medians are 1.063x, 1.048x, and 1.065x, while SIMD medians are 1.184x, 1.111x, and 1.134x. Strided, offset, invalid, non-arm64, and above-ceiling inputs retain direct Metal. General detector finding: jxsl13/perfscan#777.
