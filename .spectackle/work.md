@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0GK31T4FKNRRJD8FVG6RD6E Fuse Sigmoid Focal Loss core on CPU
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 grilled: 2026-08-20 open=0
 targets: go:nn.SigmoidFocalLoss, backend/op.go, backend/attrs.go, backend/cpu/focal.go, backend/ref/focal.go, autograd/vjp_focal.go
