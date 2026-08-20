@@ -54,3 +54,12 @@ option: Always route F32 reductions to CPU
 option: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
 blocks: T-01M0FS3HRCE44AKTADYZEQVADR
 choice: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
+
+## T-01M0FYK7ZYFNT8V8PNCS3WAQ4W Benchmark and gate SIMD-aware Metal activation routing
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0FYJQFBF59ARSF0MP0QXZ50
+targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go
+
+Add a same-binary GOEXPERIMENT=simd benchmark for GELU and SiLU forward and backward with direct Metal controls and explicit optimized CPU candidates. Use decode, GPT training, Llama-width training, and large tensor shapes; ten untimed warmups; three independent count-7 campaigns after a stability pilot. Route only operations and contiguous size zones whose every campaign clears 1.10x, keep non-SIMD builds and unmeasured sizes on direct Metal, prove tolerant parity and both selector arms, measure full GPT training, run complete Metal and repository validation, publish evidence, and report each generalizable finding to perfscan.
