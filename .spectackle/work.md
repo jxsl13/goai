@@ -3717,25 +3717,3 @@ option: Metal atomic scatter with upload, synchronization, and full-table downlo
 option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
-
-## P-01M0FX1QZ9F088KW6S3EVH0VGR Revalidate host-resident Metal bias-add routing
-kind: proposal
-state: active
-created: 2026-08-20
-grilled: 2026-08-20 open=0
-targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
-
-The synchronous Metal OpAddBias path still uploads host-resident tensors, dispatches one memory-bound kernel, waits, and downloads the output even though ADR-0008 routes equivalent binary elementwise work through the optimized CPU backend. Establish a mutation-resistant same-binary control/candidate benchmark across representative row and width shapes on Apple M2 Pro, require three independent count-7 campaigns with at least 1.10x median speedup for every routed shape, preserve direct Metal outside the measured winner zone, prove exact CPU parity for routed inputs and direct-Metal parity for the fallback arm, and retain at least 0.99x full GPT training throughput. Publish any generalizable benchmark or routing finding to perfscan.
-
-## ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ Choose the execution side for host-resident Metal bias add
-kind: adr
-state: done
-created: 2026-08-20
-parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
-decision: Route measured shapes through the optimized CPU and preserve direct Metal above the bound
-consequences: Set the measured upper bound at 8,388,608 elements for valid host-resident F32 rank-2 AddBias inputs. Dispatch through CPU with the nested recorder removed at or below the bound, preserve direct Metal above it and whenever the optimized CPU kernel is unavailable, and retain a same-binary direct-Metal control plus a two-arm selector test.
-status: accepted
-targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
-
-Decide among unconditional direct Metal, unconditional optimized CPU, or a measured shape-bounded selector for synchronous host-resident F32 AddBias. The decision must be based on direct same-binary measurements on M2 Pro, exact semantic parity, a contiguous and mutation-proven route, and the full GPT training throughput floor; no production route changes before the evidence establishes a stable winner zone.
-choice: Route measured shapes through the optimized CPU and preserve direct Metal above the bound
