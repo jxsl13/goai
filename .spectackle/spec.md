@@ -366,6 +366,7 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - ADR-01KZ3HW0ZSFE7T23XD65GPBRE6 Lower classic treeRadixCutoff from 512 to 32? It is worth 17.3 percent on the forest fit and changes which trees are grown.: compact
 - ADR-01M09A3S9JFMHAYHX35BG0HRNY How should numerical equivalence be gated when a vendor GEMM changes reduction scheduling after column fusion?: compact
 - ADR-01M09J0A8XFY1RH7QMCJVKVJTG What is the valid Metal residual-fusion boundary for quantized decode projections?: The decision correctly constrained the experiment to the final f32 residual addition and required bit identity. The resulting prototype preserved exactness but failed the frozen stable end-to-end leverage gates, so the decision is archived with the rejected proposal; evidence is m2-metal-quant-acc-20260818 and perfscan #769.
+- P-01M0FNKC7DEJZBE5XQQ7MRF6VA Route host-resident Metal embedding backward deterministically: Retained M2 winner: deterministic host scatter replaces the synchronous upload/atomic/download route for host-resident OpEmbedBackward. All 15 frozen campaign medians cleared the 1.20x gate (3.931x to 30.762x), semantics are exact and deterministic, full local and first-pass PR #1105 CI are green, and perfscan#771 preserves the reusable detector insight.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.

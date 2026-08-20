@@ -3685,3 +3685,35 @@ option: All M including single-token decode to maximize dispatch reduction
 option: All prefill sizes including M>64 despite the established f16 crossover
 blocks: P-01M09KZ8SEEH2B6T0R2QRJBCBS
 choice: Only 24<=M<=64 prefill with identical quant types and bit-exact output
+
+## ADR-01M0FMQ8N8EGB9NV2BEJVX72DW Which boundary should replace ViT residual per-image preparation and class-row extraction?
+kind: adr
+state: done
+created: 2026-08-20
+context: The packed encoder already removes per-image GEMMs, but batch-indexed Slice, Reshape, Concat, and Add operations still scale linearly with B. Image inputs carry no gradient; class and position parameters must remain differentiable.
+decision: Host-only batch patchify plus OpEmbed row gathers
+consequences: Single-image behavior and packed encoder math remain unchanged. Batch index tensors are immutable and shape-keyed. Candidate must revert if exactness or frozen batch 1/8/32 performance gates fail.
+status: accepted
+
+kind: radio
+option: Host-only batch patchify plus OpEmbed row gathers
+option: Metal-specific fused preprocessing kernel
+option: Retain per-image generic backend operations
+blocks: P-01M0FMNNMKFRXR0FDEYZ8GXX7S
+choice: Host-only batch patchify plus OpEmbed row gathers
+
+## ADR-01M0FNMY7XF3SBYXA4W9C0XJBY Where should OpEmbedBackward execute while Metal tensors cross the API as host-resident values?
+kind: adr
+state: done
+created: 2026-08-20
+context: The current backend contract returns a host tensor from every operation; the frozen benchmark measures five ViT and conventional embedding shapes on M2 Pro.
+decision: Typed deterministic host scatter at the current synchronous boundary
+consequences: OpEmbedBackward becomes deterministic and bit-identical to the F32 reference accumulation order at the current host-resident boundary. The legacy Metal bridge remains available for future graph-resident work but is not selected until tensors stay resident across operations. Five shape gates and the full Metal suite protect the route.
+status: accepted
+
+kind: radio
+option: Typed deterministic host scatter at the current synchronous boundary
+option: Metal atomic scatter with upload, synchronization, and full-table download
+option: Introduce persistent device-resident embedding state in this slice
+blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
+choice: Typed deterministic host scatter at the current synchronous boundary

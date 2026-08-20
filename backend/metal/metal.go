@@ -1078,10 +1078,12 @@ func ropeKernelF32(op backend.Op, backward bool) backend.Kernel {
 	}
 }
 
-// embedBackwardF32 computes the embedding gradient on the GPU (§T34): scatter-add g[i,:] into
-// dtable[idx[i],:] with float atomics (tokens sharing an index collide). It makes the token/
-// position-embedding gradient run on the GPU during training. g must be f32; idx read via
-// AtF64 into an f32 buffer (any dtype). Empty/non-f32 g → ref (§I4).
+// embedBackwardF32 computes dtable[idx[i],:] += g[i,:] directly in host memory. GoAI tensors
+// are host-resident at this boundary: the former Metal path uploaded idx, g, and a zeroed full
+// table, submitted and synchronized an atomic kernel, then downloaded the full table before
+// returning. A typed host scatter performs strictly less movement, avoids atomics, and is
+// deterministic while preserving the reference backend's per-add f32 rounding exactly.
+// Empty/non-f32 inputs still use the reference fallback (§I4).
 func embedBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpEmbedBackward, in, attrs)
@@ -1101,16 +1103,42 @@ func embedBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	if m == 0 || d == 0 || n == 0 {
 		return refFallback()
 	}
-	idxF := make([]float32, m)
-	for i := range idxF {
+	gc := g.Contiguous()
+	dtable := tensor.New(tensor.F32, table.Shape())
+	ds := dtable.Storage().F32()
+	gs := gc.Storage().F32()
+	for i := range m {
 		t := int(idx.AtF64(i))
 		if t < 0 || t >= n {
 			return nil, fmt.Errorf("metal: embed-backward index %d out of range [0,%d)", t, n)
 		}
+		drow := ds[t*d : t*d+d]
+		grow := gs[i*d : i*d+d]
+		for j, gv := range grow {
+			drow[j] = float32(float64(drow[j]) + float64(gv))
+		}
+	}
+	return []*tensor.Tensor{dtable}, nil
+}
+
+// benchmarkEmbedBackwardMetalF32 preserves the pre-change upload → atomic Metal scatter →
+// download implementation as a mutation-proven benchmark control. Production dispatch never
+// calls this function; keeping the control in this cgo translation unit lets benchmarks compare
+// both arms in one binary without build-reverting the candidate under measurement.
+func benchmarkEmbedBackwardMetalF32(in []*tensor.Tensor) ([]*tensor.Tensor, error) {
+	table, idx, g := in[0], in[1], in[2]
+	n, d := table.Shape()[0], table.Shape()[1]
+	m := idx.Shape()[0]
+	idxF := make([]float32, m)
+	for i := range idxF {
+		t := int(idx.AtF64(i))
+		if t < 0 || t >= n {
+			return nil, fmt.Errorf("metal: embed-backward control index %d out of range [0,%d)", t, n)
+		}
 		idxF[i] = float32(t)
 	}
 	gc := g.Contiguous()
-	dtable := tensor.New(tensor.F32, table.Shape()) // zero-init atomic accumulator
+	dtable := tensor.New(tensor.F32, table.Shape())
 	rc := C.mtl_embed_backward_f32(
 		(*C.float)(&idxF[0]),
 		(*C.float)(&gc.Storage().F32()[0]),
@@ -1118,7 +1146,7 @@ func embedBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 		C.int(n), C.int(d), C.int(m),
 	)
 	if rc != 0 {
-		return nil, fmt.Errorf("metal: embed-backward failed (code %d)", int(rc))
+		return nil, fmt.Errorf("metal: embed-backward control failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{dtable}, nil
 }
