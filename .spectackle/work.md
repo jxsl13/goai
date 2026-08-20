@@ -3729,3 +3729,12 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0GFFBN1F1N8ABTY2ECZ1X7S Accelerate exact F32 Neg on arm64 and remeasure M2 routing
+kind: proposal
+state: active
+created: 2026-08-20
+grilled: 2026-08-20 open=0
+targets: go:cpu.negKernelCPU, go:metal.unaryF32, backend/cpu/elementwise.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go
+
+The incumbent F32 Neg path is a scalar Go loop, yet synchronous Metal already routes Neg to CPU through 4,194,304 elements. A three-run M2 Pro baseline measured the current CPU route at 40.6-58.1 GB/s versus direct Metal at 17.6-18.9 GB/s for 4,194,304 elements, with CPU wins across all frozen smaller cells. Implement an arm64 exact-sign-toggle kernel, preserve every raw F32 bit except the sign bit including signaling-NaN payloads, and independently gate complete-operation CPU gains plus any wider default/SIMD Metal winner zone. Promotion requires paired multi-campaign benchmarks, exact special-value and randomized raw-bit parity, route mutation tests, recorder safety, race/preflight, focused perfscan, and affected workload evidence. Generalizable findings must be reported to jxsl13/perfscan.
