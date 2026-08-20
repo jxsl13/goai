@@ -691,23 +691,51 @@ const (
 	binaryMin = 5
 )
 
-// unaryF32 returns a GPU kernel for a simple unary elementwise op (one Metal thread per
-// element, selected by `sel`), keeping activations resident on the GPU. f32-only; empty
-// tensors fall back to the reference (§I4). GELU (exact erf, §T352) now runs here too —
-// it dominated the FFN as a CPU fallback; Metal's erf matches the reference within tol.
+// unaryF32 selects the measured execution side for a synchronous host-resident
+// unary op. The direct Metal control remains the default outside the frozen
+// Apple-Silicon build/operation/layout/size matrix.
 func unaryF32(op backend.Op, sel int) backend.Kernel {
 	direct := unaryMetalF32(op, sel)
-	if op != backend.OpGELU && op != backend.OpSiLU {
+	if op == backend.OpGELU || op == backend.OpSiLU {
+		return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+			if hostSIMDActivationCandidate(in, 1) {
+				if cpu, ok := cpuPrefers(op, tensor.F32); ok {
+					return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), op, in, attrs)
+				}
+			}
+			return direct(ctx, in, attrs)
+		}
+	}
+	maxElements := measuredHostUnaryMaxElements(op)
+	if maxElements == 0 {
 		return direct
 	}
 	return func(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
-		if hostSIMDActivationCandidate(in, 1) {
+		if measuredHostUnaryCandidate(in, maxElements) {
 			if cpu, ok := cpuPrefers(op, tensor.F32); ok {
 				return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), op, in, attrs)
 			}
 		}
 		return direct(ctx, in, attrs)
 	}
+}
+
+const (
+	maxHostUnaryTinyElements  = 2048
+	maxHostUnaryReLUElements  = 65536
+	maxHostUnaryBroadElements = 1024 * 4096
+)
+
+// measuredHostUnaryCandidate excludes views because their materialization cost
+// was not present in the frozen route matrix. The direct Metal implementation
+// retains validation and reference fallbacks for every rejected case.
+func measuredHostUnaryCandidate(in []*tensor.Tensor, maxElements int) bool {
+	if maxElements <= 0 || len(in) != 1 || in[0] == nil {
+		return false
+	}
+	x := in[0]
+	return x.Dtype() == tensor.F32 && x.Numel() > 0 && x.Numel() <= maxElements &&
+		x.IsContiguous() && x.Offset() == 0
 }
 
 // unaryMetalF32 is the incumbent synchronous upload → Metal unary → download route.

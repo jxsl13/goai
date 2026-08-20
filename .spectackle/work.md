@@ -3717,3 +3717,15 @@ option: Metal atomic scatter with upload, synchronization, and full-table downlo
 option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
+
+## ADR-01M0G33EGWF9K8B5XBB9PPE7DC Which execution-side policy should govern the eight remaining synchronous Metal unary operations on Apple Silicon?
+kind: adr
+state: submitted
+created: 2026-08-20
+context: Three independent production-selector campaigns retained all 81 default-build and 153 SIMD routed medians above 1.10x. Crossovers differ materially by operation and build; the affected RGLRU workload improves 1.881x default and 2.337x SIMD with parity preserved.
+status: proposed
+
+kind: radio
+option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
+option: Keep every operation on direct Metal
+option: Use one universal CPU threshold for the whole unary family
