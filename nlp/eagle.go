@@ -252,7 +252,34 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 	return exec1(ctx, backend.OpAdd, nil, lossF, lossT)
 }
 
-// eagleSmoothL1 is the EAGLE feature-regression term (paper §4.1), averaged
+// eagleSmoothL1 is the EAGLE feature-regression term (paper §4.1), averaged.
+// F32/F64 execute the fused elementwise core when the active backend implements
+// it. Other backends and lower-precision dtypes retain the original composition
+// until they have a native kernel and parity contract; fusion must not turn a
+// GPU-resident loss into an implicit CPU fallback.
+func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, error) {
+	if pred.Dtype() != tensor.F32 && pred.Dtype() != tensor.F64 {
+		return eagleSmoothL1Composite(ctx, pred, target)
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if _, ok := ctx.Backend.Kernel(backend.OpSmoothL1Core, pred.Dtype()); !ok {
+		return eagleSmoothL1Composite(ctx, pred, target)
+	}
+	smooth, err := exec1(ctx, backend.OpSmoothL1Core, nil, pred, target)
+	if err != nil {
+		return nil, err
+	}
+	mean, err := exec1(ctx, backend.OpMean, nil, smooth)
+	if err != nil {
+		return nil, err
+	}
+	return exec1(ctx, backend.OpAXPY, backend.AXPYAttrs{Alpha: 0.5}, mean, tensor.New(mean.Dtype(), tensor.Shape{}))
+}
+
+// eagleSmoothL1Composite is the pre-fusion definition retained as the truth
+// path for unsupported dtypes and the same-binary benchmark control. It is
 // elementwise with β=1:
 //
 //	0.5·d²                 if |d| ≤ 1
@@ -261,7 +288,7 @@ func EagleLoss(ctx *backend.Context, head *EagleHead, base *GPT, tokens []int, h
 // The branch-free identity 0.5·(d²−ReLU(|d|−1)²) composes only existing
 // differentiable ops, so the head's ordinary first-order tape receives the
 // exact Smooth-L1 gradient without a new backend kernel.
-func eagleSmoothL1(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, error) {
+func eagleSmoothL1Composite(ctx *backend.Context, pred, target *tensor.Tensor) (*tensor.Tensor, error) {
 	d, err := exec1(ctx, backend.OpSub, nil, pred, target)
 	if err != nil {
 		return nil, err
@@ -356,12 +383,10 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 		if err != nil {
 			return nil, stats, err
 		}
-		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul/Forward
 		f, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: len(out) - 1, End: len(out)}, hidden)
 		if err != nil {
 			return nil, stats, err
 		}
-		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 		lg, err := exec1(ctx, backend.OpMatMul, nil, f, base.Head)
 		if err != nil {
 			return nil, stats, err
@@ -377,7 +402,6 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 			if f, err = head.Predict(ctx, f, emb); err != nil {
 				return nil, stats, err
 			}
-			//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 			if lg, err = exec1(ctx, backend.OpMatMul, nil, f, base.Head); err != nil {
 				return nil, stats, err
 			}

@@ -15,12 +15,19 @@ schema: v1
 - ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU: Adopted ordered arm64 FCMGT plus BSL for exact F32 ReLU; rejected FMAX on NaN/signed-zero semantics and rejected scalar Go on measured cost. Complete CPU operation gains are 2.892x-6.197x. The audited default and SIMD M2 host-route contracts now retain ReLU through 4,194,304 elements with direct Metal outside the measured zone. Alternating same-binary wide-MLP campaigns pass. Evidence: internal/be [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
-WHEN contiguous offset-zero F32 unary is requested, the selector SHALL route Neg/ReLU/Sqrt/Abs through CPU up to 4,194,304 elements and Exp/Log/Tanh/Sigmoid up to 2,048; otherwise use direct Metal.
+WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg/ReLU/Sqrt through CPU up to 4,194,304 elements and Exp/Log/Tanh/Sigmoid up to 2,048 elements; otherwise use direct Metal.
 
-Rationale: Three isolated 100x count-7 M2 campaigns retain all 234 routed medians above 1.10x, selector and recorder tests pin semantics, and Griffin RGLRU improves 1.881x default and 2.337x SIMD.
+Rationale: Three isolated 100x count-7 M2 campaigns retain all established non-Abs routed medians above the 1.10x gate.
 
 ## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
-WHEN contiguous offset-zero F32 unary is requested, the selector SHALL route Neg/Exp/Log/Tanh/ReLU/Sigmoid/Sqrt/Abs through CPU up to 4,194,304 elements; otherwise use direct Metal.
+WHEN a contiguous offset-zero F32 unary other than Abs is requested under GOEXPERIMENT=simd, the backend SHALL route Neg/Exp/Log/Tanh/ReLU/Sigmoid/Sqrt through CPU up to 4,194,304 elements; otherwise use direct Metal.
+
+Rationale: Three isolated 100x count-7 M2 SIMD campaigns retain the established non-Abs broad ceiling above the 1.10x gate.
 
 ## MEASURED-METAL-UNARY-FALLBACK-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryCandidate}
 WHERE measured host unary execution, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall execute CPU with a nil nested recorder; all other inputs and unmeasured architectures shall use direct Metal.
+
+## MEASURED-METAL-UNARY-FALLBACK-002 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go,backend/metal/unary_route_arm64simd.go}
+WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHALL route through CPU up to 16,777,216 elements; otherwise use direct Metal.
+
+Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.

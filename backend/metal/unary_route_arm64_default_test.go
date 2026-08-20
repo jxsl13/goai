@@ -6,10 +6,12 @@ import "github.com/jxsl13/goai/backend"
 
 func expectedMeasuredHostUnaryMaxElements(op backend.Op) int {
 	switch op {
-	case backend.OpNeg, backend.OpSqrt, backend.OpAbs:
+	case backend.OpNeg, backend.OpSqrt:
 		return maxHostUnaryBroadElements
 	case backend.OpReLU:
 		return maxHostUnaryReLUElements
+	case backend.OpAbs:
+		return maxHostUnaryAbsElements
 	case backend.OpExp, backend.OpLog, backend.OpTanh, backend.OpSigmoid:
 		return maxHostUnaryTinyElements
 	default:
