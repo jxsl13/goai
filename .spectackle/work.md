@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0G9AWDGEK5TE6WASXSQS6YQ Accelerate exact F32 Abs on arm64 and remeasure M2 routing
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 targets: go:cpu.absKernelCPU, backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_arm64.s, backend/cpu/abs_f32_arm64_test.go, backend/cpu/abs_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nlp/eagle.go, nlp/eagle_bench_test.go
 
