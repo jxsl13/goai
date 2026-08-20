@@ -3741,7 +3741,7 @@ Replace the scalar F32 widen-Abs-narrow loop with a semantics-exact arm64 NEON l
 
 ## T-01M0G9BREWER3S6WHYQ5H229HS Implement and gate exact arm64 F32 Abs
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0G9AWDGEK5TE6WASXSQS6YQ
 targets: go:cpu.absKernelCPU, backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_arm64.s, backend/cpu/abs_f32_arm64_test.go, backend/cpu/abs_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go, nlp/eagle_bench_test.go
