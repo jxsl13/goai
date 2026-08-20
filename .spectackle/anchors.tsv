@@ -51,3 +51,5 @@ MEASURED-METAL-UNARY-FALLBACK-002	backend/metal/unary_route_arm64simd.go	-	0-0	-
 MEASURED-METAL-UNARY-FALLBACK-002	go:metal.unaryF32	backend/metal/metal.go	697-721	3f81e1cae1d2bb11	13e6aacc52e6c700
 EAGLE-SMOOTHL1-FUSION-001	go:nlp.eagleSmoothL1	nlp/eagle.go	260-279	3231c12b043ef451	a385ea1d0ae6dcd4
 EAGLE-SMOOTHL1-FUSION-002	go:nlp.eagleSmoothL1	nlp/eagle.go	260-279	3231c12b043ef451	11d5b17c6c0f445f
+ARM64-EXACT-NEG-001	go:cpu.negKernelCPU	backend/cpu/elementwise.go	342-364	aa5bf0c6cb0b2d86	e34dfeb6991041b1
+ARM64-EXACT-NEG-PERF-001	go:cpu.negKernelCPU	backend/cpu/elementwise.go	342-364	aa5bf0c6cb0b2d86	3692ebb4e3447fc2
