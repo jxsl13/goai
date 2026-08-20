@@ -13,3 +13,6 @@ schema: v1
 WHERE default arm64 unary routing, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall route Neg/Sqrt/Abs at 4,194,304 or less, ReLU at 65,536 or less, and Exp/Log/Tanh/Sigmoid at 2,048 or less; otherwise use Metal.
 
 Rationale: Three isolated 100x count-7 M2 campaigns retain all 234 routed medians above 1.10x, selector and recorder tests pin semantics, and Griffin RGLRU improves 1.881x default and 2.337x SIMD.
+
+## MEASURED-METAL-SIMD-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64simd.go}
+WHERE SIMD arm64 unary routing, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall route Neg/Exp/Log/Tanh/Sigmoid/Sqrt/Abs at 4,194,304 or less and ReLU at 65,536 or less; otherwise use Metal.
