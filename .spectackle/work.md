@@ -3719,3 +3719,28 @@ parent: P-01M0FMNNMKFRXR0FDEYZ8GXX7S
 targets: go:vision.ViT.Forward, vision/vit.go, vision/vit_batched_test.go, internal/benchcompare/vision_train_test.go, internal/perfscan
 
 Implement one host batch patchify, immutable batch-shaped class/position/class-row indices, two differentiable OpEmbed gathers plus one Add for sequence construction, and one OpEmbed class gather. Add mutation-proven control/candidate routing, operation-count assertions, F64 forward and backward parity, and batch 1/8/32 CPU/Metal/Vulkan benchmarks. Meet every frozen proposal threshold or revert executable changes. Add the batch-indexed Slice/Concat perfscan detector with positive and negative fixtures, scan the repository, and file the generalized finding on jxsl13/perfscan.
+
+## P-01M0FNKC7DEJZBE5XQQ7MRF6VA Route host-resident Metal embedding backward deterministically
+kind: proposal
+state: active
+created: 2026-08-20
+grilled: 2026-08-20 open=0
+targets: backend/metal/metal.go, backend/metal/embed_backward_route_bench_test.go
+
+Context: GoAI tensors are host-resident at the synchronous backend boundary. The Metal OpEmbedBackward path uploads indices, upstream gradient, and a zeroed full table, launches an atomic scatter, synchronizes, and downloads the full table. ADR-01M0FNMY7XF3S selects a direct typed host scatter because it removes those transfers and atomics while preserving reference per-add F32 rounding; persistent device residency is explicitly a separate future architecture. Frozen gate: Apple M2 Pro, exact cross-reference including repeated indices; five shapes n513/d128/m520, n65/d128/m520, n520/d128/m8, n4096/d512/m128, and n32768/d128/m512; three independent repeated campaigns; every median must improve by at least 1.20x, candidate spread at most 3.0x for allocation-sensitive large tables, no supported semantic or API change. Retain only if the full Metal suite and repository tests pass. Record the general host-resident accelerator routing finding on jxsl13/perfscan.
+
+## ADR-01M0FNMY7XF3SBYXA4W9C0XJBY Where should OpEmbedBackward execute while Metal tensors cross the API as host-resident values?
+kind: adr
+state: done
+created: 2026-08-20
+context: The current backend contract returns a host tensor from every operation; the frozen benchmark measures five ViT and conventional embedding shapes on M2 Pro.
+decision: Typed deterministic host scatter at the current synchronous boundary
+consequences: OpEmbedBackward becomes deterministic and bit-identical to the F32 reference accumulation order at the current host-resident boundary. The legacy Metal bridge remains available for future graph-resident work but is not selected until tensors stay resident across operations. Five shape gates and the full Metal suite protect the route.
+status: accepted
+
+kind: radio
+option: Typed deterministic host scatter at the current synchronous boundary
+option: Metal atomic scatter with upload, synchronization, and full-table download
+option: Introduce persistent device-resident embedding state in this slice
+blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
+choice: Typed deterministic host scatter at the current synchronous boundary
