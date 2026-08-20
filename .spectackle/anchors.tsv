@@ -53,3 +53,6 @@ EAGLE-SMOOTHL1-FUSION-001	go:nlp.eagleSmoothL1	nlp/eagle.go	260-279	3231c12b043e
 EAGLE-SMOOTHL1-FUSION-002	go:nlp.eagleSmoothL1	nlp/eagle.go	260-279	3231c12b043ef451	11d5b17c6c0f445f
 ARM64-EXACT-NEG-001	go:cpu.negKernelCPU	backend/cpu/elementwise.go	342-364	cc5f07a3df1704fe	e34dfeb6991041b1
 ARM64-EXACT-NEG-PERF-001	go:cpu.negKernelCPU	backend/cpu/elementwise.go	342-364	cc5f07a3df1704fe	3692ebb4e3447fc2
+SIGMOID-FOCAL-FUSION-001	go:nn.SigmoidFocalLoss	nn/focal.go	158-185	05ed5d448d1b38f6	bc912be08e6a52e2
+SIGMOID-FOCAL-FUSION-002	go:nn.SigmoidFocalLoss	nn/focal.go	158-185	05ed5d448d1b38f6	173a3b6b9d2b79a8
+SIGMOID-FOCAL-FUSION-PERF-001	go:nn.SigmoidFocalLoss	nn/focal.go	158-185	05ed5d448d1b38f6	1f12c0e264e15d1f

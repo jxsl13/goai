@@ -160,6 +160,9 @@ const (
 	OpSmoothL1Core         // unscaled branch-free core d²−ReLU(|d|−1)²; grad via OpSmoothL1CoreBackward
 	OpSmoothL1CoreBackward // fused core backward (pred,target,g)→(dpred,dtarget)
 
+	OpSigmoidFocalCore         // per-element stable sigmoid focal term; reduction stays explicit
+	OpSigmoidFocalCoreBackward // fused focal backward (logits,targets,g)→dlogits; targets stay detached
+
 	numOps
 )
 
@@ -258,6 +261,9 @@ var opName = [...]string{
 	OpAddBiasBackward:      "addbias_backward",
 	OpSiLUBackward:         "silu_backward",
 	OpSoftplusBackward:     "softplus_backward",
+
+	OpSigmoidFocalCore:         "sigmoid_focal_core",
+	OpSigmoidFocalCoreBackward: "sigmoid_focal_core_backward",
 }
 
 // String implements fmt.Stringer.

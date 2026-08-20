@@ -349,6 +349,16 @@ func (a DistillAttrs) WithDefaults() DistillAttrs {
 	return a
 }
 
+// SigmoidFocalAttrs parameterises the per-element stable binary focal-loss
+// primitive. Gamma=0 deliberately means binary cross-entropy; Alpha<0 disables
+// class weighting, matching nn.SigmoidFocalLoss.
+type SigmoidFocalAttrs struct {
+	Gamma float64 // focusing exponent γ
+	Alpha float64 // positive-class weight α; <0 disables weighting
+}
+
+func (SigmoidFocalAttrs) opAttrs() {}
+
 // DPOAttrs parameterises Direct Preference Optimization loss (OpDPO).
 type DPOAttrs struct {
 	Beta float64 // KL strength β trading off reward vs. staying near the reference; 0 → 0.1
@@ -680,6 +690,9 @@ var opAttrsSpec = [numOps]attrsSpec{
 	OpGSPO:    attrsOf(GSPOAttrs{}),
 	OpDistill: attrsOf(DistillAttrs{}),
 	OpZLoss:   attrsOf(ZLossAttrs{}),
+
+	OpSigmoidFocalCore:         attrsOf(SigmoidFocalAttrs{}),
+	OpSigmoidFocalCoreBackward: attrsOf(SigmoidFocalAttrs{}),
 
 	// moe
 	OpMoEBalance: attrsOf(MoEBalanceAttrs{}),
