@@ -3722,13 +3722,14 @@ choice: Typed deterministic host scatter at the current synchronous boundary
 kind: proposal
 state: active
 created: 2026-08-20
+grilled: 2026-08-20 open=0
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
 
 The synchronous Metal OpAddBias path still uploads host-resident tensors, dispatches one memory-bound kernel, waits, and downloads the output even though ADR-0008 routes equivalent binary elementwise work through the optimized CPU backend. Establish a mutation-resistant same-binary control/candidate benchmark across representative row and width shapes on Apple M2 Pro, require three independent count-7 campaigns with at least 1.10x median speedup for every routed shape, preserve direct Metal outside the measured winner zone, prove exact CPU parity for routed inputs and direct-Metal parity for the fallback arm, and retain at least 0.99x full GPT training throughput. Publish any generalizable benchmark or routing finding to perfscan.
 
 ## T-01M0FX2EBSFC2RGQ42W0KHWCEY Benchmark and gate Metal bias-add routing
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
 targets: backend/metal/metal.go, backend/metal/metal_test.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
