@@ -3717,11 +3717,3 @@ option: Metal atomic scatter with upload, synchronization, and full-table downlo
 option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
-
-## P-01M0FVFC9BFDCVSSYEVNKT0F6H Revalidate host-resident Metal bias-gradient reduction routing
-kind: proposal
-state: active
-created: 2026-08-20
-targets: go:metal.addBiasBackwardF32, backend/metal/metal_bridge.m, backend/metal/metal_test.go
-
-The Metal wrapper still uploads, submits, synchronizes, and downloads each F32 bias gradient even though the CPU backend later gained an exact parallel column reduction. Freeze a same-binary direct-Metal control and production-selector candidate across representative M2 shapes. Route only a measured winner zone after three independent count-7 campaigns each clear 1.10x median speedup with candidate spread at most 3.0x, exact reference parity, a direct-Metal fallback above the bound, and at least 0.99x end-to-end GPT training-step throughput. Preserve unsupported inputs and unmeasured shapes on the incumbent path.
