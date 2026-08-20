@@ -64,15 +64,6 @@ targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend
 
 Historical T535 correctly rejected broad host routing while unary CPU alternatives used scalar closure kernels. The CPU backend now has devirtualized parallel Neg, ReLU, Sqrt, and Abs kernels plus typed arm64 SIMD Exp, Log, Tanh, and Sigmoid kernels. Revalidate the eight remaining Metal unary operations independently in default and GOEXPERIMENT=simd builds across decode-sized, training-sized, and large contiguous F32 tensors. Require three isolated count-7 production-selector campaigns with at least 1.10x median speedup in every routed cell, exact or operation-specific numerical parity, mutation tests for every selected and preserved arm, and at least 0.99x throughput in an affected end-to-end workload. Preserve direct Metal for unmeasured architectures, layouts, sizes, build modes, and operations. Report all generalizable routing or harness findings to perfscan.
 
-## T-01M0G1PRH9E13VST4PPCK2QGF4 Benchmark and gate the remaining M2 Metal unary routes
-kind: task
-state: active
-created: 2026-08-20
-parent: P-01M0G1P2CTFSRS8R2KZ73M78PW
-targets: go:metal.unaryF32, c:mtl_unary_f32, backend/cpu/elementwise.go, backend/cpu/vexp_arm64.go
-
-Add same-binary direct-Metal controls and production-selector candidates for Neg, Exp, Log, Tanh, ReLU, Sigmoid, Sqrt, and Abs. Benchmark default and GOEXPERIMENT=simd builds independently across 2,048 through 4,194,304 contiguous F32 elements, isolating operations by process with 20 untimed warmups and three independent 100x count-7 campaigns. Route only operation/build/size cells whose every median clears 1.10x; retain direct Metal for unmeasured builds, architectures, layouts, and sizes. Prove reference parity using existing exact or SIMD tolerance contracts, pin selected and preserved selector arms, guard autograd single-record behavior for differentiable routes, and measure at least one affected end-to-end workload at a 0.99x floor. Publish evidence and report generalizable findings to perfscan.
-
 ## ADR-01M0G1PTQPF5795JMHPQFY6Y50 Choose execution sides for the remaining synchronous Metal unary operations
 kind: adr
 state: done
