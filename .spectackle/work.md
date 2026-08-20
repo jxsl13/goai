@@ -3739,22 +3739,6 @@ targets: go:cpu.absKernelCPU, backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_
 
 Replace the scalar F32 widen-Abs-narrow loop with a semantics-exact arm64 NEON leaf. Preserve every finite and infinity magnitude bit, map both zero signs to +0, clear NaN signs, preserve NaN payloads, and quiet signaling NaNs exactly as float32(math.Abs(float64(x))) does on arm64. Keep the scalar tail and non-arm64 fallback exact. Establish complete-operation CPU baselines at 2K through 4M elements, run 20 warmups and three independent count-7 campaigns, and require every promoted CPU cell to improve by at least 1.10x with unchanged allocation counts. Remeasure direct Metal versus the production host route through and beyond the current 4,194,304-element ceiling; change a selector boundary only when every campaign median is at least 1.10x. Measure an EAGLE Smooth-L1 workload cell and require at least 1.03x end-to-end, otherwise reject or revert the production acceleration. Record exact evidence, pin toolchain and hardware, and report any generalizable performance finding to perfscan.
 
-## ADR-01M0G9E2XSE1E8K3GJ6GEM650F Which arm64 vector formulation should replace the scalar F32 widen-Abs-narrow loop without changing NaN payload semantics?
-kind: adr
-state: done
-created: 2026-08-20
-context: The incumbent M2 instruction sequence widens F32 to F64, applies FABS, and narrows back. Raw-bit probes prove that signaling NaNs are quieted while signs are cleared and payloads remain intact. Plain FABS or a sign mask is therefore insufficient.
-decision: Vector sign-clear plus integer NaN classification and quiet-bit select
-consequences: Process 16 F32 lanes per iteration. Clear sign bits unconditionally, classify exponent-all-ones plus nonzero mantissa using integer vector operations, and OR the quiet bit only for NaN lanes. This preserves the incumbent finite, infinity, zero, and NaN payload results without four-lane F64 expansion. The scalar tail retains the original Go expression. Exhaustive boundary classes and randomized raw-bit parity tests are mandatory before benchmarking.
-status: accepted
-
-kind: radio
-option: Vector sign-clear plus integer NaN classification and quiet-bit select
-option: Vector widen-FABS-narrow on four lanes
-option: Retain the scalar loop
-blocks: P-01M0G9AWDGEK5TE6WASXSQS6YQ
-choice: Vector sign-clear plus integer NaN classification and quiet-bit select
-
 ## ADR-01M0GAC04JF6ARA3SE738R8MGY How should the Abs tranche clear the EAGLE end-to-end leverage gate after the exact leaf hits an Amdahl limit?
 kind: adr
 state: done
