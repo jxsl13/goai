@@ -353,3 +353,4 @@
 {"t":"2026-08-20T22:01:29Z","eid":"faa30c5e6af7c456","ag":"ag-7222","ev":"create","id":"P-01M0GK31T4FKNRRJD8FVG6RD6E","k":"proposal","ti":"Fuse Sigmoid Focal Loss core on CPU"}
 {"t":"2026-08-20T22:01:29Z","eid":"9fb20cc08491c077","ag":"ag-7222","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T22:01:56Z","eid":"7a96162a5ebfe1be","ag":"ag-39b8","ev":"revise","id":"P-01M0GK31T4FKNRRJD8FVG6RD6E","note":"body+targets revised"}
+{"t":"2026-08-20T22:02:10Z","eid":"ae100cf915863bf7","ag":"ag-6d02","ev":"grill","id":"P-01M0GK31T4FKNRRJD8FVG6RD6E","gr":"2026-08-20 open=0","hash":"11b877b05b7c598c049dc24868934c59b2c963ea198900ab09d4538693ed05d6"}
