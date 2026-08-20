@@ -157,6 +157,9 @@ const (
 
 	OpSoftplusBackward // softplus backward: (x,g)→dx = g·σ(x); dispatched by softplus's VJP so the vectorized exp runs on the active backend
 
+	OpSmoothL1Core         // unscaled branch-free core d²−ReLU(|d|−1)²; grad via OpSmoothL1CoreBackward
+	OpSmoothL1CoreBackward // fused core backward (pred,target,g)→(dpred,dtarget)
+
 	numOps
 )
 
@@ -228,6 +231,8 @@ var opName = [...]string{
 	OpTranspose:            "transpose",
 	OpSqrt:                 "sqrt",
 	OpAbs:                  "abs",
+	OpSmoothL1Core:         "smoothl1_core",
+	OpSmoothL1CoreBackward: "smoothl1_core_backward",
 	OpClip:                 "clip",
 	OpStopGradient:         "stopgradient",
 	OpMaximum:              "maximum",

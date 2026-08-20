@@ -48,7 +48,7 @@ func BenchmarkMetalUnaryRouteCandidates(b *testing.B) {
 		direct := unaryMetalF32(unary.op, unary.selector)
 		production := unaryF32(unary.op, unary.selector)
 		b.Run(unary.name, func(b *testing.B) {
-			for _, shape := range []tensor.Shape{
+			shapes := []tensor.Shape{
 				{2048},
 				{65536},
 				{256, 512},
@@ -56,7 +56,11 @@ func BenchmarkMetalUnaryRouteCandidates(b *testing.B) {
 				{256, 2048},
 				{512, 4096},
 				{1024, 4096},
-			} {
+			}
+			if unary.op == backend.OpAbs {
+				shapes = append(shapes, tensor.Shape{2048, 4096}, tensor.Shape{4096, 4096})
+			}
+			for _, shape := range shapes {
 				shape := shape
 				b.Run("n"+strconv.Itoa(shape.Numel()), func(b *testing.B) {
 					x := bench.RandF32(shape, 17)
