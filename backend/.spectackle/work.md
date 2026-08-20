@@ -39,14 +39,6 @@ option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FQ0RWQE8PT2GT7FFP4WKBE
 choice: Typed deterministic host scatter at the current boundary
 
-## P-01M0FS2S8AFRKVGF6THXA58KVZ Revalidate host-resident Vulkan bias-gradient reduction routing
-kind: proposal
-state: active
-created: 2026-08-20
-targets: go:vulkan.addBiasBackwardF32, go:cpu.addBiasBackwardKernel
-
-Base ba625e6e8ab5d4d8e430335d17ed1385330c9e5a. Re-evaluate OpAddBiasBackward because the Vulkan route predates the bit-exact parallel CPU column reduction. Preserve the current MoltenVK upload-reduce-download implementation as a same-binary control. Measure CPU routing on Apple M2 Pro across [rows,cols] = [1,512], [7,512], [65,128], [256,512], [256,2048], [512,4096] in three independent seven-sample campaigns. Derive an explicit shape route only from a stable crossover: every retained CPU zone must have campaign median speedup at least 1.10x and candidate max/min spread at most 3.0x; every retained Vulkan zone must remain unchanged. Require bit-exact parity with the CPU/reference F64-accumulation contract, the full tagged Vulkan suite, repository preflight, focused perfscan, and a real GPT training-step no-regression gate of at least 0.99x when the route is exercised. Retain only measured winners; document and reject a blanket route if no stable boundary exists.
-
 ## ADR-01M0FS4JSXFD4TBKY3ESMRGSQ8 How should synchronous host-resident Vulkan bias-gradient reduction choose its execution side?
 kind: adr
 state: done
