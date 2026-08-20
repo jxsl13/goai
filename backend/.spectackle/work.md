@@ -54,16 +54,3 @@ option: Always route F32 reductions to CPU
 option: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
 blocks: T-01M0FS3HRCE44AKTADYZEQVADR
 choice: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
-
-## ADR-01M0FYKCJMFRES5PEZMQWB7KQC Choose execution sides for SIMD-build Metal activations
-kind: adr
-state: done
-created: 2026-08-20
-parent: P-01M0FYJQFBF59ARSF0MP0QXZ50
-decision: Use optimized CPU for GELU forward, GELU backward, SiLU forward, and SiLU backward only on darwin/arm64 GOEXPERIMENT=simd when every F32 input is contiguous, offset-zero, valid, and at most 4,194,304 elements; use direct Metal otherwise.
-consequences: Default builds retain byte-identical direct Metal behavior. Intel Darwin, strided or offset views, empty or invalid inputs, and tensors above the measured bound remain on direct Metal. SIMD numerical parity uses CPU-002 (relative 2e-3, absolute 1e-4). Rare non-recurring scheduler excursions stay disclosed in evidence and perfscan issue 774.
-status: accepted
-targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go
-
-Decide independently for GELU forward, GELU backward, SiLU forward, and SiLU backward among direct Metal, optimized CPU, or measured size-bounded selection. Historical T535 remains binding for scalar non-SIMD CPU kernels. A route may change only under GOEXPERIMENT=simd when same-binary M2 Pro campaigns, numerical parity, selector mutation tests, and the end-to-end throughput floor establish a stable winner zone.
-choice: Use optimized CPU for GELU forward, GELU backward, SiLU forward, and SiLU backward only on darwin/arm64 GOEXPERIMENT=simd when every F32 input is contiguous, offset-zero, valid, and at most 4,194,304 elements; use direct Metal otherwise.

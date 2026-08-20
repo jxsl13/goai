@@ -3717,12 +3717,3 @@ option: Metal atomic scatter with upload, synchronization, and full-table downlo
 option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
-
-## P-01M0FYJQFBF59ARSF0MP0QXZ50 Revalidate M2 Metal activation routing after NEON kernels
-kind: proposal
-state: active
-created: 2026-08-20
-grilled: 2026-08-20 open=0
-targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go, go:ops.GELU
-
-Historical T535 correctly rejected host CPU routing for Metal unary activations because the CPU alternatives were scalar closure kernels and reduced Metal training throughput by 13 percent. T663 through T666 later replaced the relevant arm64 SIMD-build GELU and SiLU forward and backward paths with typed NEON kernels, invalidating the old comparison. Under GOEXPERIMENT=simd, benchmark direct synchronous Metal against optimized CPU for GELU and SiLU forward and backward across decode, training, and large tensor shapes. Require three independent count-7 campaigns with at least 1.10x median speedup for every routed operation and shape, preserve direct Metal outside each measured winner zone and in non-SIMD builds, prove tolerant numerical parity and both selector arms, and retain at least 0.99x full GPT training throughput. Publish every generalizable route or benchmark finding to perfscan.
