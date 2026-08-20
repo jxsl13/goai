@@ -55,15 +55,6 @@ option: Use a measured shape crossover and preserve Vulkan outside proven CPU wi
 blocks: T-01M0FS3HRCE44AKTADYZEQVADR
 choice: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
 
-## T-01M0G5J741FHKVGS8ZJNHXGEMN Implement and gate the semantics-exact arm64 F32 ReLU leaf
-kind: task
-state: done
-created: 2026-08-20
-parent: P-01M0G5H18YENC9Y7EVVM63MVNH
-targets: go:cpu.reluKernelCPU, backend/cpu/relu_arm64.go, backend/cpu/relu_arm64.s, backend/cpu/relu_arm64_test.go, backend/cpu/relu_bench_test.go, backend/metal/unary_route_arm64_default.go, backend/metal/unary_route_arm64simd.go, backend/metal/unary_route_bench_test.go
-
-Add the smallest reusable arm64 F32 ReLU primitive that exactly implements x > 0 ? x : +0 for every bit pattern, including NaNs and both zeros. Route only the F32 CPU leaf through it on arm64; preserve scalar tails and every other dtype/architecture. Add focused special-value, random, length-boundary, and noncontiguous parity tests. Build isolated CPU and production Metal route benchmarks at the old 65,536 crossover and through 4,194,304 elements. Capture three independent warmed count-7 campaigns against pinned merged main and an affected ReLU MLP workload. Promote only measured CPU and Metal winner zones, update the existing route contracts after evidence, run perfscan and all validation, and fully revert executable changes if end-to-end leverage or promotion gates fail.
-
 ## ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU
 kind: adr
 state: active
