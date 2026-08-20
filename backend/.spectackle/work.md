@@ -66,7 +66,7 @@ Add the smallest reusable arm64 F32 ReLU primitive that exactly implements x > 0
 
 ## ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU
 kind: adr
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0G5H18YENC9Y7EVVM63MVNH
 refs: T-01M0G5J741FHKVGS8ZJNHXGEMN
