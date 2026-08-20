@@ -26,3 +26,8 @@ WHEN receives a valid host-resident F32 table, index vector, and upstream gradie
 WHEN a synchronous host-resident F32 bias gradient is requested, the Metal add-bias backward SHALL route through CPU only where 3 count-7 campaigns each prove at least 1.10x median speedup, and preserve direct Metal elsewhere.
 
 Rationale: A later exact CPU reduction can invalidate an older synchronous GPU route, but the winner zone must remain measurement-bounded.
+
+## MEASURED-METAL-BIAS-ROUTE-001
+WHEN a synchronous host-resident F32 bias add is requested, the Metal host wrapper SHALL route through CPU only where 3 count-7 campaigns each prove at least 1.10x median speedup and preserve direct Metal elsewhere.
+
+Rationale: A later optimized CPU broadcast kernel can invalidate an older synchronous GPU route, but the winner zone must remain measurement-bounded.

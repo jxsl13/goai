@@ -767,10 +767,31 @@ func binaryF32(op backend.Op, sel int) backend.Kernel {
 	}
 }
 
-// addBiasF32 computes O[i,j] = X[i,j] + B[j] on the GPU — the FFN's bias add, which
-// was a ref/CPU fallback dominating the forward (§T352). x rank-2, bias rank-1 [cols];
-// anything else falls back to the reference (§I4).
+// maxHostBiasElements is the upper edge of the frozen M2 route matrix. The
+// optimized CPU broadcast won all three campaigns through this size; larger
+// tensors retain direct Metal until separately measured.
+const maxHostBiasElements = 2048 * 4096
+
+// addBiasF32 selects the measured synchronous host-resident route for
+// O[i,j] = X[i,j] + B[j]. The direct Metal implementation remains isolated in
+// addBiasMetalF32 as a mutation-proven same-binary control and as the unmeasured
+// large-shape fallback.
 func addBiasF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	if len(in) == 2 {
+		x, b := in[0], in[1]
+		if x.Dtype() == tensor.F32 && b.Dtype() == tensor.F32 && x.Ndim() == 2 && b.Ndim() == 1 &&
+			x.Shape()[0] > 0 && x.Shape()[1] > 0 && b.Shape()[0] == x.Shape()[1] && x.Numel() <= maxHostBiasElements {
+			if cpu, ok := cpuPrefers(backend.OpAddBias, tensor.F32); ok {
+				return backend.Execute(ctx.WithBackend(cpu).WithRecorder(nil), backend.OpAddBias, in, attrs)
+			}
+		}
+	}
+	return addBiasMetalF32(ctx, in, attrs)
+}
+
+// addBiasMetalF32 is the incumbent synchronous upload → Metal add → download route.
+// x rank-2, bias rank-1 [cols]; anything else falls back to the reference (§I4).
+func addBiasMetalF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpAddBias, in, attrs)
 	}
