@@ -43,3 +43,6 @@ WHEN F32 ReLU executes on arm64, the CPU backend SHALL use ordered comparison an
 WHEN F32 Abs executes on arm64, the CPU backend SHALL clear the sign bit, preserve finite, infinity, and NaN payload bits, and set the F32 quiet bit on every NaN so the result is bit-identical to float32(math.Abs(float64(x))).
 
 Rationale: M2 emits FCVT F32-to-F64, FABS, then FCVT F64-to-F32 for the incumbent expression. Raw-bit probes show that this clears signs and quiets signaling NaNs while preserving payloads; a plain vector FABS or sign mask would change the contract.
+
+## ARM64-EXACT-NEG-001 {applies: go:cpu.negKernelCPU}
+WHEN F32 Neg executes on arm64, the CPU backend SHALL toggle only bit 31 of every input lane so outputBits equals inputBits XOR 0x80000000 for all elements.
