@@ -27,7 +27,7 @@ Rationale: Three isolated 100x count-7 M2 SIMD campaigns retain the established 
 ## MEASURED-METAL-UNARY-FALLBACK-001 {applies: go:metal.unaryF32,go:metal.measuredHostUnaryCandidate}
 WHERE measured host unary execution, WHEN an F32 unary operation is requested, the Metal unary selector SHALL the system shall execute CPU with a nil nested recorder; all other inputs and unmeasured architectures shall use direct Metal.
 
-## MEASURED-METAL-UNARY-FALLBACK-002 {applies: backend/metal/metal.go,backend/metal/unary_route_arm64_default.go,backend/metal/unary_route_arm64simd.go}
+## MEASURED-METAL-UNARY-FALLBACK-002 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go,backend/metal/unary_route_arm64simd.go}
 WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHALL route through CPU up to 16,777,216 elements; otherwise use direct Metal.
 
-Rationale: Three default and three SIMD route-extension campaigns plus three production-selector campaigns per build mode show the exact NEON path winning every frozen cell. At 8M and 16M elements, the weakest median speedups remain about 2.82x and 2.84x.
+Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.
