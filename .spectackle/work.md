@@ -3688,7 +3688,7 @@ choice: Only 24<=M<=64 prefill with identical quant types and bit-exact output
 
 ## P-01M0FMNNMKFRXR0FDEYZ8GXX7S Flatten residual batched ViT dispatch boundaries
 kind: proposal
-state: draft
+state: active
 created: 2026-08-20
 grilled: 2026-08-20 open=0
 targets: go:vision.ViT.Forward, vision/vit.go, vision/vit_batched_test.go, internal/benchcompare/vision_train_test.go, internal/perfscan

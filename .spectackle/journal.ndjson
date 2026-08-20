@@ -212,3 +212,4 @@
 {"t":"2026-08-20T13:10:45Z","eid":"68dd5fc3d00710ed","ag":"ag-6f16","ev":"create","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","k":"adr","ti":"Which boundary should replace ViT residual per-image preparation and class-row extraction?"}
 {"t":"2026-08-20T13:10:45Z","eid":"19b654589d733a5f","ag":"ag-6f16","ev":"move","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","fr":"draft","to":"submitted"}
 {"t":"2026-08-20T13:11:09Z","eid":"6abc525591b9668f","ag":"ag-6940","ev":"decide","id":"ADR-01M0FMQ8N8EGB9NV2BEJVX72DW","note":"Host-only batch patchify plus OpEmbed row gathers"}
+{"t":"2026-08-20T13:11:23Z","eid":"de6ce95ee530fa86","ag":"ag-cb30","ev":"move","id":"P-01M0FMNNMKFRXR0FDEYZ8GXX7S","fr":"draft","to":"active","note":"Authorized by the standing M2-first high-leverage goal and the user explicit continue-do-not-stop instruction. Implement only under the frozen exactness, structural, batch-axis, and rollback gates."}
