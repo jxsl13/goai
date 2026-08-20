@@ -31,3 +31,12 @@ Rationale: A later exact CPU reduction can invalidate an older synchronous GPU r
 WHEN a synchronous host-resident F32 bias add is requested, the Metal host wrapper SHALL route through CPU only where 3 count-7 campaigns each prove at least 1.10x median speedup and preserve direct Metal elsewhere.
 
 Rationale: A later optimized CPU broadcast kernel can invalidate an older synchronous GPU route, but the winner zone must remain measurement-bounded.
+
+## METAL-Q5K-WIDE-LOAD-PERF-001
+WHEN a resident M=1 Q5_K vector-load kernel is considered for production on Apple M2, the Metal Q5_K selector SHALL retain it only when every representative shape in three independent count-7 same-binary campaigns reaches at least 1.10x the current cooperative kernel.
+
+## METAL-Q5K-WIDE-LOAD-NUMERIC-001
+WHEN it executes a valid resident M=1 projection, the Metal Q5_K vector-load kernel SHALL match the current cooperative output within 2e-5 relative error across K=256 through K=4096, preserve NaN class, and leave activation and weight inputs unchanged.
+
+## METAL-Q5K-WIDE-LOAD-SCOPE-001
+WHEN M is greater than 1 or the device lacks a 32-lane SIMD group with 64-thread threadgroups, the Metal Q5_K selector SHALL execute the existing Q5_K path with zero vector-load-candidate dispatches.
