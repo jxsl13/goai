@@ -54,3 +54,12 @@ option: Always route F32 reductions to CPU
 option: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
 blocks: T-01M0FS3HRCE44AKTADYZEQVADR
 choice: Use a measured shape crossover and preserve Vulkan outside proven CPU winner zones
+
+## T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0GFFBN1F1N8ABTY2ECZ1X7S
+targets: go:cpu.negKernelCPU, go:metal.unaryF32, backend/cpu/elementwise.go, backend/metal/unary_route_bench_test.go
+
+Add a default arm64 F32 kernel that toggles only bit 31 for each lane and a portable scalar fallback. Preserve raw bits exactly for finite values, signed zero, infinities, quiet NaNs, signaling NaNs, and every payload. Benchmark the complete backend.Execute operation against a frozen scalar control across small, model-shaped, and large tensors in at least three paired campaigns. Independently remeasure default and SIMD synchronous Metal production routing beyond 4,194,304 elements; promote only cells meeting the frozen minimum speedup in every campaign. Add exact randomized parity, short/unaligned/tail coverage, race tests, route mutation and recorder tests, focused perfscan, evidence, and affected workload validation.
