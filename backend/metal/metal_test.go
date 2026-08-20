@@ -1559,14 +1559,25 @@ func TestMetalGELUBackwardCrossReference(t *testing.T) {
 	}
 }
 
-// §V-CROSS (§T352): the GPU bias add O[i,j]=X[i,j]+B[j] matches the Pure-Go reference.
-// This op dominated the FFN as a CPU fallback before it moved to the GPU.
+// §V-CROSS (§T352): the measured host-resident bias-add route is bit-identical
+// to the Pure-Go reference, including a non-contiguous activation.
 func TestMetalAddBiasCrossReference(t *testing.T) {
 	skipNoGPU(t)
 	mb, _ := backend.Get(backend.Metal)
 	ref, _ := backend.Get(backend.Ref)
-	for _, sh := range []tensor.Shape{{1, 1}, {3, 5}, {256, 512}, {7, 2048}} {
-		x := bench.RandF32(sh, 1)
+	inputs := []*tensor.Tensor{
+		bench.RandF32(tensor.Shape{1, 1}, 1),
+		bench.RandF32(tensor.Shape{3, 5}, 1),
+		bench.RandF32(tensor.Shape{256, 512}, 1),
+		bench.RandF32(tensor.Shape{7, 2048}, 1),
+	}
+	noncontiguous, err := bench.RandF32(tensor.Shape{5, 3}, 2).Transpose(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs = append(inputs, noncontiguous)
+	for _, x := range inputs {
+		sh := x.Shape()
 		b := bench.RandF32(tensor.Shape{sh[1]}, 2)
 		ins := []*tensor.Tensor{x, b}
 		gv, err := backend.Execute(backend.NewContext().WithBackend(mb), backend.OpAddBias, ins, nil)
@@ -1574,11 +1585,10 @@ func TestMetalAddBiasCrossReference(t *testing.T) {
 			t.Fatalf("metal addbias %v: %v", sh, err)
 		}
 		gr, _ := backend.Execute(backend.NewContext().WithBackend(ref), backend.OpAddBias, ins, nil)
-		for i := range gv[0].Numel() {
-			idx := tensor.Unravel(i, sh)
-			g, r := gv[0].AtF64(idx...), gr[0].AtF64(idx...)
-			if math.Abs(g-r) > 1e-5*math.Max(1, math.Abs(r)) {
-				t.Fatalf("addbias %v [%d]: metal %v vs ref %v", sh, i, g, r)
+		gs, rs := gv[0].Storage().F32(), gr[0].Storage().F32()
+		for i := range gs {
+			if math.Float32bits(gs[i]) != math.Float32bits(rs[i]) {
+				t.Fatalf("addbias %v [%d]: metal %v vs ref %v", sh, i, gs[i], rs[i])
 			}
 		}
 	}
