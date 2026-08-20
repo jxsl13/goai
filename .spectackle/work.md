@@ -3738,3 +3738,12 @@ grilled: 2026-08-20 open=0
 targets: go:nn.SigmoidFocalLoss, backend/op.go, backend/attrs.go, backend/cpu/focal.go, backend/ref/focal.go, autograd/vjp_focal.go
 
 The current M2 Pro F32 SigmoidFocalLoss gamma=2 alpha=0.25 composes nine full elementwise tensors plus a mean. A pinned count-7 complete-loss baseline measures a 4.96 ms median and 16.8 MB/op at 349,440 elements, and 23.35 ms and 100.7 MB/op at 2,097,152 elements, with 77-80 allocations. Fuse the weighted per-element stable-softplus identity into one capability-gated backend core, retain the existing mean so float64 accumulation order remains unchanged, and add a fused backward that reproduces the composite tape rounding and fan-out order. CPU and reference shall support F32/F64; unsupported backends or layouts shall retain the composite graph. Promotion requires forward and VJP parity across special/random values, gradcheck, race/preflight, at least three paired count-7 complete forward and forward-plus-backward campaigns, a minimum 1.10x median speedup in every target cell without degraded semantics, focused perfscan, and pinned evidence. Any generalizable finding must be filed on jxsl13/perfscan.
+
+## T-01M0GK57K7FF39GCDNBH43PJCJ Implement and gate fused Sigmoid Focal core and VJP
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0GK31T4FKNRRJD8FVG6RD6E
+targets: go:nn.SigmoidFocalLoss, backend/op.go, backend/attrs.go, backend/cpu/focal.go, backend/ref/focal.go, autograd/vjp_focal.go, nn/focal_test.go
+
+Add OpSigmoidFocalCore and OpSigmoidFocalCoreBackward with gamma/alpha attrs. Implement F32/F64 CPU and reference kernels that preserve the stable softplus identity and composite rounding barriers. Register a VJP returning the fused logits gradient and a zero target gradient. Route SigmoidFocalLoss through the core only when the active backend supports it and the fast-path input contract holds; otherwise retain the current composite graph. Keep OpMean outside the core to preserve reduction semantics. Add exact or contract-tolerance forward parity, composite VJP parity, special/random values, gamma zero, alpha disabled, noncontiguous/mixed-dtype fallback, gradcheck, mutation, race, complete forward and forward-plus-backward paired benchmarks across 349,440 and 2,097,152 elements, focused perfscan, and pinned evidence. Promote only if every target cell clears 1.10x in three count-7 campaigns.
