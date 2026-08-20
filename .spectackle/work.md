@@ -3717,3 +3717,11 @@ option: Metal atomic scatter with upload, synchronization, and full-table downlo
 option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
+
+## P-01M0FX1QZ9F088KW6S3EVH0VGR Revalidate host-resident Metal bias-add routing
+kind: proposal
+state: draft
+created: 2026-08-20
+targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
+
+The synchronous Metal OpAddBias path still uploads host-resident tensors, dispatches one memory-bound kernel, waits, and downloads the output even though ADR-0008 routes equivalent binary elementwise work through the optimized CPU backend. Establish a mutation-resistant same-binary control/candidate benchmark across representative row and width shapes on Apple M2 Pro, require three independent count-7 campaigns with at least 1.10x median speedup for every routed shape, preserve direct Metal outside the measured winner zone, prove exact CPU parity for routed inputs and direct-Metal parity for the fallback arm, and retain at least 0.99x full GPT training throughput. Publish any generalizable benchmark or routing finding to perfscan.
