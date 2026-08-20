@@ -383,12 +383,10 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 		if err != nil {
 			return nil, stats, err
 		}
-		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul/Forward
 		f, err := exec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: len(out) - 1, End: len(out)}, hidden)
 		if err != nil {
 			return nil, stats, err
 		}
-		//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 		lg, err := exec1(ctx, backend.OpMatMul, nil, f, base.Head)
 		if err != nil {
 			return nil, stats, err
@@ -404,7 +402,6 @@ func EagleGenerate(base *GPT, head *EagleHead, prompt []int, maxNew, draftLen in
 			if f, err = head.Predict(ctx, f, emb); err != nil {
 				return nil, stats, err
 			}
-			//perfscan:ignore PS6017 resource-only variadic-slice alloc; dominated by MatMul
 			if lg, err = exec1(ctx, backend.OpMatMul, nil, f, base.Head); err != nil {
 				return nil, stats, err
 			}

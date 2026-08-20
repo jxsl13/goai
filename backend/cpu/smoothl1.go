@@ -67,6 +67,7 @@ func smoothL1F32(dst, pred, target []float32) {
 	for i := range dst {
 		d := float32(pred[i] - target[i])
 		d2 := float32(d * d)
+		//perfscan:ignore PS5007 exact composite parity; sign clearing does not quiet signaling NaNs
 		a := float32(math.Abs(float64(d)))
 		excess := float32(a - 1)
 		if !(excess > 0) {
@@ -99,6 +100,7 @@ func smoothL1BackwardF32(dPred, dTarget, pred, target, grad []float32) {
 		// contribute twice, then fan-out accumulation adds (absGrad+p)+p.
 		// Reassociation into a closed-form derivative changes low bits.
 		d := float32(pred[i] - target[i])
+		//perfscan:ignore PS5007 exact composite VJP parity; sign clearing does not quiet signaling NaNs
 		a := float32(math.Abs(float64(d)))
 		excessInput := float32(a - 1)
 		excess := excessInput

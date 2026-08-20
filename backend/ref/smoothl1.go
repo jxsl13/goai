@@ -24,6 +24,7 @@ func smoothL1Kernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) 
 		for i := range os {
 			d := float32(ps[i] - ts[i])
 			d2 := float32(d * d)
+			//perfscan:ignore PS5007 exact composite parity; sign clearing does not quiet signaling NaNs
 			a := float32(math.Abs(float64(d)))
 			excess := float32(a - 1)
 			if !(excess > 0) {
@@ -70,6 +71,7 @@ func smoothL1BackwardKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend
 			// Match the composite tape's fan-out and accumulation order exactly;
 			// algebraic reassociation changes low bits.
 			d := float32(ps[i] - ts[i])
+			//perfscan:ignore PS5007 exact composite VJP parity; sign clearing does not quiet signaling NaNs
 			a := float32(math.Abs(float64(d)))
 			excessInput := float32(a - 1)
 			excess := excessInput
