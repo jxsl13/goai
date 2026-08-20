@@ -47,3 +47,4 @@
 {"t":"2026-08-20T15:16:02Z","eid":"c135fbfe67399951","ag":"ag-5894","ev":"create","id":"ADR-01M0FVWNPKEX6917B1N0VBM0FJ","k":"adr","ti":"How should synchronous host-resident F32 Metal bias gradients route after the CPU reduction optimization?","dir":"backend/metal"}
 {"t":"2026-08-20T15:16:02Z","eid":"d1c5816c621d4190","ag":"ag-5894","ev":"move","id":"ADR-01M0FVWNPKEX6917B1N0VBM0FJ","dir":"backend/metal","fr":"draft","to":"submitted"}
 {"t":"2026-08-20T15:16:14Z","eid":"9ea5f020824f76c3","ag":"ag-5340","ev":"decide","id":"ADR-01M0FVWNPKEX6917B1N0VBM0FJ","dir":"backend/metal","note":"Route measured shapes through CPU and preserve direct Metal above the bound"}
+{"t":"2026-08-20T15:21:36Z","eid":"49f3510df0aa3234","ag":"ag-c36b","ev":"drift","dir":"backend/metal","rule":"MEASURED-METAL-BIAS-GRAD-ROUTE-001","node":"go:metal.addBiasBackwardF32","cls":"healed","oh":"59b19320550067b7","nh":"74c74869199b8083"}
