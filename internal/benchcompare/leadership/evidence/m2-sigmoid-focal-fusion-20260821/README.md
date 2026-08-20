@@ -90,4 +90,4 @@ Benchmark-control code is excluded from production binaries unless `goai_bench_c
 - `git diff --check` passes;
 - `make preflight`, focused race, Linux/amd64 cross-build, full SIMD cross-build, and `make preflight-metal` pass;
 - external perfscan v1.71.0 reports no findings in the changed production files;
-- Spectackle check has no errors or tranche-specific warnings; reindex records 2,563 files, 17,608 nodes, and 32,723 edges, with the typed-call pass unavailable because `go/packages` reports invalid package names, so this checkpoint has a syntactic graph only.
+- Spectackle check has no errors or tranche-specific warnings; the implementation checkpoint initially fell back to a syntactic graph after a transient `go/packages` invalid-package-name diagnostic, while the final post-archive reindex records 2,563 files, 17,608 nodes, 32,723 edges, and 6,749 typed calls.
