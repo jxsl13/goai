@@ -3735,3 +3735,12 @@ parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
 targets: backend/metal/metal.go, backend/metal/metal_test.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
 
 Isolate direct Metal bias add as the control and optimized CPU dispatch as the candidate without changing production routing first. Measure representative M2 Pro row and width shapes with ten untimed warmups, fixed-count count-7 samples, and three independent campaigns. Route only a contiguous winner zone whose every campaign clears 1.10x; otherwise preserve direct Metal. Add mutation-resistant two-arm selector coverage, exact parity checks, full Metal and repository validation, full GPT training throughput at or above 0.99x, benchmark evidence, perfscan analysis, and a perfscan issue for each generalizable finding.
+
+## ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ Choose the execution side for host-resident Metal bias add
+kind: adr
+state: draft
+created: 2026-08-20
+parent: P-01M0FX1QZ9F088KW6S3EVH0VGR
+targets: backend/metal/metal.go, objc:metal_bridge.mtl_addbias_f32, go:ops.AddBias
+
+Decide among unconditional direct Metal, unconditional optimized CPU, or a measured shape-bounded selector for synchronous host-resident F32 AddBias. The decision must be based on direct same-binary measurements on M2 Pro, exact semantic parity, a contiguous and mutation-proven route, and the full GPT training throughput floor; no production route changes before the evidence establishes a stable winner zone.

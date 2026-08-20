@@ -266,3 +266,4 @@
 {"t":"2026-08-20T15:36:53Z","eid":"1dd81592121b3ae0","ag":"ag-4490","ev":"grill","id":"P-01M0FX1QZ9F088KW6S3EVH0VGR","gr":"2026-08-20 open=0","hash":"672fd7a523e8f7ab8f4a6f4a24a85d2118448d963a5ab409fb55f6876b2c9b37"}
 {"t":"2026-08-20T15:36:53Z","eid":"17fd9dd653754047","ag":"ag-4490","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T15:37:08Z","eid":"5d6131b6e0256b94","ag":"ag-b24b","ev":"move","id":"T-01M0FX2EBSFC2RGQ42W0KHWCEY","fr":"draft","to":"active"}
+{"t":"2026-08-20T15:37:13Z","eid":"34e9bd3adea6493f","ag":"ag-8454","ev":"create","id":"ADR-01M0FX3E7JFNBRWAGTS6QZC0EJ","k":"adr","ti":"Choose the execution side for host-resident Metal bias add"}
