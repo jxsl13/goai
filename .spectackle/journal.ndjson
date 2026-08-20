@@ -288,3 +288,5 @@
 {"t":"2026-08-20T16:57:41Z","eid":"c13e774a07b0c035","ag":"ag-4aad","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T16:57:43Z","eid":"982efb403b38814e","ag":"ag-8447","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-20T16:58:38Z","eid":"0477e56301fe2046","ag":"ag-8a0d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-20T17:22:04Z","eid":"7162e819806aa9b5","ag":"ag-3a9d","ev":"create","id":"ADR-01M0G33EGWF9K8B5XBB9PPE7DC","k":"adr","ti":"Which execution-side policy should govern the eight remaining synchronous Metal unary operations on Apple Silicon?"}
+{"t":"2026-08-20T17:22:04Z","eid":"8bfa2df8ff211940","ag":"ag-3a9d","ev":"move","id":"ADR-01M0G33EGWF9K8B5XBB9PPE7DC","fr":"draft","to":"submitted"}
