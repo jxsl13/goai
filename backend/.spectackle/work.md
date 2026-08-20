@@ -57,7 +57,7 @@ choice: Use a measured shape crossover and preserve Vulkan outside proven CPU wi
 
 ## T-01M0FYK7ZYFNT8V8PNCS3WAQ4W Benchmark and gate SIMD-aware Metal activation routing
 kind: task
-state: draft
+state: active
 created: 2026-08-20
 parent: P-01M0FYJQFBF59ARSF0MP0QXZ50
 targets: backend/metal/metal.go, objc:metal_bridge.mtl_unary_f32, objc:metal_bridge.mtl_gelu_backward_f32, objc:metal_bridge.mtl_silu_backward_f32, backend/cpu/vexp_arm64.go
