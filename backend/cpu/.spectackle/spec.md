@@ -46,3 +46,6 @@ Rationale: M2 emits FCVT F32-to-F64, FABS, then FCVT F64-to-F32 for the incumben
 
 ## ARM64-EXACT-NEG-001 {applies: go:cpu.negKernelCPU}
 WHEN F32 Neg executes on arm64, the CPU backend SHALL toggle only bit 31 of every input lane so outputBits equals inputBits XOR 0x80000000 for all elements.
+
+## ARM64-EXACT-NEG-PERF-001 {applies: go:cpu.negKernelCPU}
+WHEN an arm64 F32 Neg kernel is promoted, the benchmark gate SHALL require at least 1.10x median complete-operation speedup in every target cell across 3 paired count-7 campaigns.
