@@ -1,13 +1,13 @@
 //go:build darwin && cgo && arm64
 
-package metal_test
+package metal
 
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/jxsl13/goai/backend"
-	"github.com/jxsl13/goai/backend/metal"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
 
@@ -32,7 +32,7 @@ func reluRouteWideMLPFixture() (*nn.Sequential, *tensor.Tensor) {
 }
 
 func TestMetalReLUWideMLPRouteWorkloadParity(t *testing.T) {
-	if !metal.Available() {
+	if !Available() {
 		t.Skip("Metal unavailable")
 	}
 	mb, ok := backend.Get(backend.Metal)
@@ -56,8 +56,19 @@ func TestMetalReLUWideMLPRouteWorkloadParity(t *testing.T) {
 	}
 }
 
+type directReLUBackend struct {
+	backend.Backend
+}
+
+func (b directReLUBackend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) {
+	if op == backend.OpReLU && dtype == tensor.F32 {
+		return unaryMetalF32(backend.OpReLU, unaryReLU), true
+	}
+	return b.Backend.Kernel(op, dtype)
+}
+
 func BenchmarkMetalReLUWideMLPRouteWorkload(b *testing.B) {
-	if !metal.Available() {
+	if !Available() {
 		b.Skip("Metal unavailable")
 	}
 	mb, ok := backend.Get(backend.Metal)
@@ -65,17 +76,38 @@ func BenchmarkMetalReLUWideMLPRouteWorkload(b *testing.B) {
 		b.Fatal("Metal available but not registered")
 	}
 	model, x := reluRouteWideMLPFixture()
-	ctx := backend.NewContext().WithBackend(mb)
+	candidateCtx := backend.NewContext().WithBackend(mb)
+	controlCtx := backend.NewContext().WithBackend(directReLUBackend{Backend: mb})
 	for range 20 {
-		if _, err := model.Forward(ctx, x); err != nil {
+		if _, err := model.Forward(controlCtx, x); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := model.Forward(candidateCtx, x); err != nil {
 			b.Fatal(err)
 		}
 	}
-	b.ReportAllocs()
+	var controlElapsed, candidateElapsed time.Duration
+	run := func(ctx *backend.Context, elapsed *time.Duration) {
+		start := time.Now()
+		if _, err := model.Forward(ctx, x); err != nil {
+			b.Fatal(err)
+		}
+		*elapsed += time.Since(start)
+	}
 	b.ResetTimer()
-	for range b.N {
-		if _, err := model.Forward(ctx, x); err != nil {
-			b.Fatal(err)
+	for i := range b.N {
+		if i&1 == 0 {
+			run(controlCtx, &controlElapsed)
+			run(candidateCtx, &candidateElapsed)
+		} else {
+			run(candidateCtx, &candidateElapsed)
+			run(controlCtx, &controlElapsed)
 		}
 	}
+	b.StopTimer()
+	controlNs := float64(controlElapsed.Nanoseconds()) / float64(b.N)
+	candidateNs := float64(candidateElapsed.Nanoseconds()) / float64(b.N)
+	b.ReportMetric(controlNs, "control-ns/op")
+	b.ReportMetric(candidateNs, "candidate-ns/op")
+	b.ReportMetric(controlNs/candidateNs, "speedup")
 }
