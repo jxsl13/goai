@@ -305,3 +305,5 @@
 {"t":"2026-08-20T19:11:28Z","eid":"83f77b04710dc0d7","ag":"ag-c5e2","ev":"create","id":"T-01M0G9BREWER3S6WHYQ5H229HS","k":"task","ti":"Implement and gate exact arm64 F32 Abs"}
 {"t":"2026-08-20T19:11:44Z","eid":"5e399199d43214cf","ag":"ag-25a6","ev":"grill","id":"P-01M0G9AWDGEK5TE6WASXSQS6YQ","gr":"2026-08-20 open=1","hash":"2346d4b2f8c07fe0b0e69c27c856251530283ab605aeb952b61aad49edb8c5e6","open":1,"keys":["blast:10"]}
 {"t":"2026-08-20T19:12:05Z","eid":"637a356aeaae3047","ag":"ag-450c","ev":"move","id":"T-01M0G9BREWER3S6WHYQ5H229HS","fr":"draft","to":"active","note":"Begin the exact arm64 implementation under the proposal benchmark and revert gates."}
+{"t":"2026-08-20T19:12:44Z","eid":"67a66ceb71fd2b79","ag":"ag-016b","ev":"create","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","k":"adr","ti":"Which arm64 vector formulation should replace the scalar F32 widen-Abs-narrow loop without changing NaN payload semantics?"}
+{"t":"2026-08-20T19:12:44Z","eid":"ca099667f57c4dfb","ag":"ag-016b","ev":"move","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","fr":"draft","to":"submitted"}
