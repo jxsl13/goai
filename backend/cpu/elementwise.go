@@ -394,13 +394,7 @@ func reluKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 		})
 	case tensor.F32:
 		d, o := xc.Storage().F32(), out.Storage().F32()
-		parallel(len(o), func(lo, hi int) {
-			for i := lo; i < hi; i++ {
-				if d[i] > 0 {
-					o[i] = d[i]
-				}
-			}
-		})
+		parallel(len(o), func(lo, hi int) { reluF32(o[lo:hi], d[lo:hi]) })
 	default:
 		return nil, fmt.Errorf("cpu: relu unsupported dtype %v", in[0].Dtype())
 	}
