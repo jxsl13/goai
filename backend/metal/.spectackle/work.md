@@ -20,3 +20,19 @@ FIX: diagnose the position/cache-row mismatch. The error says the loop advanced 
 VALIDATION: the benchmark runs to completion on both sub-benchmarks and produces a stable tok/s figure across -count=3. Then confirm it actually exercises the intended regime by checking with GOAI_TIME_OPS=1 that per-token Execute counts match the model's layer count, so it is measuring decode and not accidentally re-running prefill.
 
 SCOPE: fix the harness only. Do not optimize anything in the same change — the entire point is to obtain a trustworthy measuring instrument before optimizing, and a benchmark repaired in the same commit as the thing it measures cannot serve as the A/B baseline.
+
+## ADR-01M0FVWNPKEX6917B1N0VBM0FJ How should synchronous host-resident F32 Metal bias gradients route after the CPU reduction optimization?
+kind: adr
+state: done
+created: 2026-08-20
+context: Three independent count-7 M2 campaigns show the production CPU selector is 3.263x to 199.71x faster than direct Metal through 2,097,152 elements, with worst candidate spread 1.788x, exact reference parity, and 0.994x end-to-end GPT throughput.
+decision: Route measured shapes through CPU and preserve direct Metal above the bound
+consequences: F32 rank-2 gradients with positive dimensions and at most 2,097,152 elements use the exact optimized CPU kernel with recorder suppression. Larger, unsupported, or CPU-unavailable cases retain the isolated direct Metal implementation. Future device-resident graph execution requires a new benchmark boundary and does not inherit this host-resident decision.
+status: accepted
+
+kind: radio
+option: Route measured shapes through CPU and preserve direct Metal above the bound
+option: Retain direct Metal for all shapes
+option: Remove the direct Metal implementation
+blocks: T-01M0FVGM88EWMRQCHFN4B748AV
+choice: Route measured shapes through CPU and preserve direct Metal above the bound
