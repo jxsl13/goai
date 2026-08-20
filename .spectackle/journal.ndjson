@@ -308,3 +308,4 @@
 {"t":"2026-08-20T19:12:44Z","eid":"67a66ceb71fd2b79","ag":"ag-016b","ev":"create","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","k":"adr","ti":"Which arm64 vector formulation should replace the scalar F32 widen-Abs-narrow loop without changing NaN payload semantics?"}
 {"t":"2026-08-20T19:12:44Z","eid":"ca099667f57c4dfb","ag":"ag-016b","ev":"move","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","fr":"draft","to":"submitted"}
 {"t":"2026-08-20T19:12:58Z","eid":"77f75b8ad57e4e01","ag":"ag-a7bb","ev":"decide","id":"ADR-01M0G9E2XSE1E8K3GJ6GEM650F","note":"Vector sign-clear plus integer NaN classification and quiet-bit select"}
+{"t":"2026-08-20T19:28:59Z","eid":"be4c83444e1210ce","ag":"ag-0874","ev":"create","id":"T-01M0GABTVEF6YRS1H0VFWDC61P","k":"task","ti":"Fuse EAGLE Smooth-L1 after the Abs Amdahl gate"}

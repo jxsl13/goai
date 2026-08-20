@@ -3763,3 +3763,12 @@ option: Vector widen-FABS-narrow on four lanes
 option: Retain the scalar loop
 blocks: P-01M0G9AWDGEK5TE6WASXSQS6YQ
 choice: Vector sign-clear plus integer NaN classification and quiet-bit select
+
+## T-01M0GABTVEF6YRS1H0VFWDC61P Fuse EAGLE Smooth-L1 after the Abs Amdahl gate
+kind: task
+state: draft
+created: 2026-08-20
+parent: P-01M0G9AWDGEK5TE6WASXSQS6YQ
+targets: go:nlp.eagleSmoothL1, backend/op.go, backend/cpu/smoothl1.go, backend/ref/smoothl1.go, autograd/vjp_smoothl1.go, backend/cpu/smoothl1_test.go, autograd/vjp_smoothl1_test.go, nlp/eagle_abs_control_bench_test.go
+
+The exact Abs leaf clears every CPU and host-route cell, but the order-alternating EAGLE workload medians remain about 1.03x at 349,440 elements and about 1.02x at 2,097,152, so the leaf alone is insufficient leverage. Add a fused elementwise Smooth-L1 backend operation and optimized backward operation for F32/F64, preserving the existing branch-free composite result per element and active-backend gradient semantics. Route EAGLE through the fused op while retaining the composite fallback for unsupported dtypes. Gate forward bit parity, gradient parity, race safety, full tests, and three paired count-7 workload campaigns at at least 1.03x.
