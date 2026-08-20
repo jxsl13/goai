@@ -39,17 +39,34 @@ func BenchmarkMetalEmbedBackwardRoute(b *testing.B) {
 			}
 			g := bench.RandF32(tensor.Shape{shape.m, shape.d}, 7)
 			inputs := []*tensor.Tensor{table, idx, g}
-			if _, err := backend.Execute(ctx, backend.OpEmbedBackward, inputs, nil); err != nil {
-				b.Fatal(err)
+			for _, arm := range []struct {
+				name string
+				run  func() error
+			}{
+				{name: "control", run: func() error {
+					_, err := benchmarkEmbedBackwardMetalF32(inputs)
+					return err
+				}},
+				{name: "candidate", run: func() error {
+					_, err := embedBackwardF32(ctx, inputs, nil)
+					return err
+				}},
+			} {
+				arm := arm
+				b.Run(arm.name, func(b *testing.B) {
+					if err := arm.run(); err != nil {
+						b.Fatal(err)
+					}
+					b.ResetTimer()
+					for range b.N {
+						if err := arm.run(); err != nil {
+							b.Fatal(err)
+						}
+					}
+					bytes := float64((shape.n*shape.d + shape.m*shape.d) * 4)
+					b.ReportMetric(bytes*float64(b.N)/b.Elapsed().Seconds()/1e9, "GB/s")
+				})
 			}
-			b.ResetTimer()
-			for range b.N {
-				if _, err := backend.Execute(ctx, backend.OpEmbedBackward, inputs, nil); err != nil {
-					b.Fatal(err)
-				}
-			}
-			bytes := float64((shape.n*shape.d + shape.m*shape.d) * 4)
-			b.ReportMetric(bytes*float64(b.N)/b.Elapsed().Seconds()/1e9, "GB/s")
 		})
 	}
 }

@@ -1121,6 +1121,36 @@ func embedBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	return []*tensor.Tensor{dtable}, nil
 }
 
+// benchmarkEmbedBackwardMetalF32 preserves the pre-change upload → atomic Metal scatter →
+// download implementation as a mutation-proven benchmark control. Production dispatch never
+// calls this function; keeping the control in this cgo translation unit lets benchmarks compare
+// both arms in one binary without build-reverting the candidate under measurement.
+func benchmarkEmbedBackwardMetalF32(in []*tensor.Tensor) ([]*tensor.Tensor, error) {
+	table, idx, g := in[0], in[1], in[2]
+	n, d := table.Shape()[0], table.Shape()[1]
+	m := idx.Shape()[0]
+	idxF := make([]float32, m)
+	for i := range idxF {
+		t := int(idx.AtF64(i))
+		if t < 0 || t >= n {
+			return nil, fmt.Errorf("metal: embed-backward control index %d out of range [0,%d)", t, n)
+		}
+		idxF[i] = float32(t)
+	}
+	gc := g.Contiguous()
+	dtable := tensor.New(tensor.F32, table.Shape())
+	rc := C.mtl_embed_backward_f32(
+		(*C.float)(&idxF[0]),
+		(*C.float)(&gc.Storage().F32()[0]),
+		(*C.float)(&dtable.Storage().F32()[0]),
+		C.int(n), C.int(d), C.int(m),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: embed-backward control failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{dtable}, nil
+}
+
 // crossentropyBackwardF32 computes the cross-entropy gradient on the GPU (ADR-0007), one
 // Metal thread per row: dz = gv·(softmax(z) − q')/b (+z-loss). It makes the loss gradient
 // (which seeds the whole backward pass) run on the GPU. Logits z must be f32; targets are
