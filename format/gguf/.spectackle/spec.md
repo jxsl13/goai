@@ -130,3 +130,8 @@ WHEN contiguous F32 M1 activations use IQ3_XXS weights, the Apple ARM64 IQ3_XXS 
 
 ## ARM64-IQ3XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.dotIQ3XXSRowFn,go:gguf.QMatMul,go:gguf.TestQMatMulIQ3XXSSelectorScope}
 The IQ3_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+## IQ2XXS-PORTABLE-QMATMUL-001 {applies: go:gguf.dequantIQ2_XXS,go:gguf.QMatMul}
+WHEN IQ2_XXS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 256-entry eight-wide grid, four 7-bit ksigns indices per 32 weights, float32 d*(0.5+s)*0.25 scaling, ascending element mapping, and float64 accumulation.
+
+Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific optimization.
