@@ -276,3 +276,5 @@
 {"t":"2026-08-21T21:09:34Z","eid":"f70e2143550d66be","ag":"ag-3e89","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T21:23:10Z","eid":"91014e06b626c6c5","ag":"ag-d9fc","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T21:23:48Z","eid":"040c4f933ee89a97","ag":"ag-b7f1","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T21:28:21Z","eid":"58243e1b9ef48fa2","ag":"ag-cd4a","ev":"create","id":"ADR-01M0K3K391ERQSKF6T8MH14J47","k":"adr","ti":"Which atomic boundary should the next M2-first IQ3 tranche use?"}
+{"t":"2026-08-21T21:28:21Z","eid":"bc062de0a1768c9e","ag":"ag-cd4a","ev":"move","id":"ADR-01M0K3K391ERQSKF6T8MH14J47","fr":"draft","to":"submitted"}
