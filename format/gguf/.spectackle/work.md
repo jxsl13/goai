@@ -20,7 +20,7 @@ choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable de
 
 ## P-01M0KBF17FE9Z83X9MEJ23S1VM M2-first exact IQ2_XS fused row dot and portable QMatMul
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 refs: ADR-01M0K6C6PEF4JT8435XC34X2GQ
 grilled: 2026-08-21 open=0

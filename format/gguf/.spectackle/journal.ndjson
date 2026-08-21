@@ -124,3 +124,4 @@
 {"t":"2026-08-21T23:47:01Z","eid":"35a3530c2432d143","ag":"ag-0c60","ev":"revise","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","note":"body+targets+refs revised"}
 {"t":"2026-08-21T23:47:13Z","eid":"c70ce666cb46d8bb","ag":"ag-7a63","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"a50bbf23ed9128428cf689a8dfe91908c8cb173f120cbe8d0d31b9882ca3646a"}
 {"t":"2026-08-21T23:47:25Z","eid":"06e7916404afe76b","ag":"ag-939d","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"a50bbf23ed9128428cf689a8dfe91908c8cb173f120cbe8d0d31b9882ca3646a"}
+{"t":"2026-08-21T23:47:39Z","eid":"228e9bb36519017a","ag":"ag-2770","ev":"move","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","fr":"draft","to":"active"}
