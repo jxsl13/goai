@@ -60,3 +60,23 @@ Rationale: Changing load width must not change Q4_K bytes, arithmetic semantics,
 WHEN M is greater than 1 or the device lacks a 32-lane SIMD group with 64-thread threadgroups, the Metal Q4_K selector SHALL execute the existing Q4_K path with zero vector-load-candidate dispatches.
 
 Rationale: The experiment is an M2 M=1 specialization and must retain the portable historical fallback.
+
+## METAL-Q6K-PACKED-LOAD-PERF-001-001
+WHEN three independent count-seven same-binary M2 campaigns cover every representative shape, the Metal Q6_K packed-load promotion SHALL the system shall retain the candidate only when every eligible shape is at least 1.10x control.
+
+Rationale: A narrow or noisy speedup cannot justify another permanent kernel route.
+
+## METAL-Q6K-PACKED-LOAD-NUMERIC-001-001
+WHEN the candidate processes finite or nonfinite inputs, the Metal Q6_K packed-load candidate SHALL the system shall preserve value error within 2e-5, floating-point class, and input immutability.
+
+Rationale: Load packing must not change observable numerical semantics.
+
+## METAL-Q6K-PACKED-LOAD-ALIGNMENT-001-001
+WHEN a packed byte-plane load is issued across 210-byte blocks or rows, the Metal Q6_K packed-load candidate SHALL the system shall use only ushort pointer loads and never require wider alignment.
+
+Rationale: Q6_K guarantees two-byte but not four-byte alignment across consecutive blocks.
+
+## METAL-Q6K-PACKED-LOAD-SCOPE-001-001
+WHEN M exceeds one or packed-load support is unavailable, the Metal Q6_K dispatch SHALL the system shall use the historical route and issue zero candidate dispatches.
+
+Rationale: The experiment is scoped to supported single-token M2 decode.
