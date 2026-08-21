@@ -83,3 +83,6 @@ WHEN two-aligned ranges cover the same channels as one whole scan, the TestWKVSc
 
 ## ARM64-F64-WKV-MEMORY-001
 WHEN the fused path processes paired channels or a scalar channel tail, the BenchmarkWKVScan_SIMD_512x1024 SHALL report exactly 0 B/op and 0 allocs/op without heap scratch.
+
+## ARM64-F64-WKV-ARCH-001
+WHEN the arm64 goexperiment.simd test binary is inspected, the fused WKV leaf SHALL contain D2 recurrence arithmetic, FRINTN range reduction, and exponent-bit construction.
