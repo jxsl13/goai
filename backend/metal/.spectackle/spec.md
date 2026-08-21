@@ -136,3 +136,6 @@ WHEN the pair-load candidate processes finite or nonfinite inputs, the Metal Q4_
 
 ## METAL-Q4-0-PAIR-LOAD-ALIGNMENT-001
 WHEN the candidate reads one 16-byte Q4_0 quant plane across 18-byte blocks or rows, the Metal Q4_0 quant-plane loader SHALL issue exactly eight aligned ushort device loads and zero uint-or-wider device-pointer loads per SIMD group.
+
+## METAL-Q4-0-PAIR-LOAD-SCOPE-001
+WHEN M exceeds one, support is unavailable, or the pair-load toggle is disabled, the Metal Q4_0 dispatch SHALL select the historical pipeline and issue exactly zero pair-load candidate dispatches.
