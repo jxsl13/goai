@@ -1,0 +1,14 @@
+{
+  "date": "2026-08-21",
+  "base_commit": "89795e4a40d053148f5ce347aa157bd67b0188e2",
+  "branch": "codex/m2-arm64-q6k-fused-dot",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "spectackle": "v0.9.3",
+  "samples_recorded": 11,
+  "samples_discarded_per_benchmark": 1,
+  "samples_analyzed": 10,
+  "benchtime": "250ms",
+  "candidate_scope": "arm64 Q6_K M1 fused unpack-scale-dot only"
+}

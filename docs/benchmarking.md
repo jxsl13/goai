@@ -2018,9 +2018,23 @@ The 2026-08-21 ARM64 Q4_K fused unpack-and-dot kernel closes this mechanism for
 the dominant Q4_K single-token projection path, but not for the Q8_0 benchmark
 above. On M2 Pro it reduces Q4_K M1/N4096/K1024 from 689.5 to 145.9 µs
 (4.73×) and a quantized Mamba2 recurrent step from 349.2 to 118.8 µs (2.94×),
-with unchanged allocations (`p=0.000`, n=10 after first-sample removal). The
-Q6_K negative control is unchanged. See
+with unchanged allocations (`p=0.000`, n=10 after first-sample removal). In
+that Q4_K-only campaign Q6_K was the unchanged negative control. See
 `internal/benchcompare/leadership/evidence/m2-arm64-q4k-fused-dot-20260821`.
+
+The adjacent ARM64 Q6_K fused unpack-scale-dot kernel then closes the same
+scalar bypass for higher-precision K-quant tensors. Its same-binary M2 Pro
+campaign moves the K=4096 row dot from 4,815.5 to 452.2 ns (10.65×),
+M1/N64/K1024 QMatMul from 76.437 to 7.451 µs (10.26×), and
+M1/N4096/K1024 QMatMul from 709.6 to 117.2 µs (6.05×). The quantized Mamba2
+recurrent step falls from 364.3 to 101.6 µs (3.59×), while Q4_K remains flat
+at 118.9 µs (`p=0.853`). All Q6_K time deltas have `p=0.000`, n=10 after
+first-sample removal, and unchanged allocations. The QMatMul benchmark's B/s
+field counts logical `M*N*K*4` f32 work and is not a physical memory-bandwidth
+claim. This remains an internal ARM64 leadership cell rather than a matched
+llama.cpp CPU comparison; the separate Q8_0 whole-model gap above remains
+open. See
+`internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
 
 ## Further reading
 

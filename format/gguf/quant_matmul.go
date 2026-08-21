@@ -36,6 +36,10 @@ const (
 // override it with tolerance-gated vector unpack-and-dot kernels.
 var dotQ4KRowFn = dotQ4_KRow
 
+// dotQ6KRowFn is dotQ6_KRow (scalar) on portable builds. ARM64 overrides it
+// with a tolerance-gated vector unpack-scale-dot kernel.
+var dotQ6KRowFn = dotQ6_KRow
+
 // q8FusedDecodeM1, when non-nil (amd64+simd build), computes the Q8_0 m==1 decode
 // matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
@@ -95,8 +99,8 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 // The weight is dequantized ONE ROW at a time (not the whole matrix), so a
 // quantized model runs without materializing full-precision weights — the point
 // of quantized inference (§T39). Portable accumulation is f64 (§V10); the
-// architecture-specific Q4_K SIMD path uses tolerance-gated f32 vector partials
-// before the public f32 result. Dequantization follows the ggml-verified path
+// architecture-specific Q4_K/Q6_K SIMD paths use tolerance-gated f32 vector
+// partials before the public f32 result. Dequantization follows the ggml-verified path
 // (§R19/§R21).
 func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != k {
@@ -264,7 +268,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q5_K:
 			dot = dotQ5_KRow
 		case Q6_K:
-			dot = dotQ6_KRow
+			dot = dotQ6KRowFn
 		}
 		row := xf32[:k]
 		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.

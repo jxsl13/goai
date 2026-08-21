@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                          │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-control-trimmed.txt │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-candidate-trimmed.txt │
+                          │                                              sec/op                                               │                                   sec/op                                     vs base                │
+DotQ6K-12                                                                                                        4815.5n ± 1%                                                                   452.2n ± 1%  -90.61% (p=0.000 n=10)
+QMatMulQ6K/N64_K1024-12                                                                                          76.437µ ± 1%                                                                   7.451µ ± 1%  -90.25% (p=0.000 n=10)
+QMatMulQ6K/N4096_K1024-12                                                                                         709.6µ ± 2%                                                                   117.2µ ± 2%  -83.48% (p=0.000 n=10)
+geomean                                                                                                           63.92µ                                                                        7.337µ       -88.52%
+
+                          │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-control-trimmed.txt │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-candidate-trimmed.txt │
+                          │                                               B/op                                                │                                    B/op                                     vs base                 │
+DotQ6K-12                                                                                                        0.000 ± 0%                                                                     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ6K/N64_K1024-12                                                                                          592.0 ± 0%                                                                     592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ6K/N4096_K1024-12                                                                                      17.00Ki ± 0%                                                                   17.00Ki ± 0%       ~ (p=0.474 n=10)
+geomean                                                                                                                     ²                                                                               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                          │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-control-trimmed.txt │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-candidate-trimmed.txt │
+                          │                                             allocs/op                                             │                                 allocs/op                                   vs base                 │
+DotQ6K-12                                                                                                        0.000 ± 0%                                                                     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ6K/N64_K1024-12                                                                                          4.000 ± 0%                                                                     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ6K/N4096_K1024-12                                                                                        29.00 ± 0%                                                                     29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                     ²                                                                               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                          │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-control-trimmed.txt │ internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821/q6k-candidate-trimmed.txt │
+                          │                                                B/s                                                │                                    B/s                                      vs base                 │
+QMatMulQ6K/N64_K1024-12                                                                                          3.194Gi ± 1%                                                                32.767Gi ± 1%  +925.88% (p=0.000 n=10)
+QMatMulQ6K/N4096_K1024-12                                                                                        22.02Gi ± 2%                                                                133.31Gi ± 2%  +505.42% (p=0.000 n=10)
+geomean                                                                                                          8.387Gi                                                                      66.09Gi       +688.09%
+
