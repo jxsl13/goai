@@ -105,3 +105,6 @@ WHEN contiguous F32 M1 activations use MXFP4 weights, the ARM64 MXFP4 selector S
 
 ## ARM64-MXFP4-FUSED-DOT-SCOPE-001
 The MXFP4 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 ARM64 M1 kernel calls.
+
+## IQ3S-PORTABLE-QMATMUL-001
+WHEN IQ3_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry odd-value grid, 9-bit indices, direct sign-bit mapping, 8 unsigned four-bit sub-scales expanded as 1+2*s, float32 block scaling, and float64 accumulation while using exactly 1 reusable decode scratch per worker.
