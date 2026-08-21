@@ -467,3 +467,4 @@
 {"t":"2026-08-21T09:23:33Z","eid":"c0d18e8147dec814","ag":"ag-c0f7","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T10:02:37Z","eid":"6e2a230d210c0ebc","ag":"ag-d4ce","ev":"create","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","k":"task","ti":"Fuse the F64 NEON SSM recurrence on Apple arm64"}
 {"t":"2026-08-21T10:04:45Z","eid":"8fa00e1835933691","ag":"ag-9a07","ev":"revise","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","note":"body revised"}
+{"t":"2026-08-21T10:05:13Z","eid":"fe1f8991cbf97476","ag":"ag-24b7","ev":"grill","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","gr":"2026-08-21 open=1","hash":"ffa8781a7fb2b01c201f9c44463e71e931c4c2d81bb1091943310be461f1ec2b","open":1,"keys":["nopath:internal/simd.SSMScanF64"]}

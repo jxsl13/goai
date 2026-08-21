@@ -3734,6 +3734,7 @@ option: Use one universal CPU threshold for the whole unary family
 kind: task
 state: draft
 created: 2026-08-21
+grilled: 2026-08-21 open=1
 
 Objective: accelerate internal/simd.SSMScanF64 and SSMScanRangeF64 on Apple arm64 under goexperiment.simd by fusing the existing proven two-lane F64 NEON negative-exponential polynomial with the selective-scan state update and C reduction.
 
