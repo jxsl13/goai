@@ -168,5 +168,7 @@ WHEN contiguous F32 M1 activations use IQ2_XS weights, the Apple ARM64 IQ2_XS se
 
 Rationale: The assembly leaf, numerical gates, cancellation case, known block, and allocation gate jointly prove the ARM64 contract.
 
-## ARM64-IQ2XS-FUSED-DOT-SCOPE-001
+## ARM64-IQ2XS-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul,go:gguf.dotIQ2XSRowASM,go:gguf.TestQMatMulIQ2XSSelectorScope}
 The IQ2_XS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: The selector test injects a counting oracle and proves only contiguous F32 M1 reaches the row leaf.
