@@ -45,7 +45,7 @@ WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIM
 WHEN valid decay-domain fixtures use N 1, 2, 3, 16, 17, or 128 with or without D-skip, the fused arm64 F64 SSM implementation SHALL match scalar output and recurrent state within 1e-10 relative error.
 
 ## ARM64-F64-SSM-FALLBACK-001
-WHEN delta or A contains a NaN, infinity, sign violation, or a product outside the proven negative-exponential domain, the arm64 SIMD F64 SSM dispatcher SHALL select the existing scalar scan before mutating output or recurrent state and preserve arbitrary public API semantics.
+WHEN delta or A violates sign, finiteness, or the proven product range, the arm64 SIMD F64 SSM dispatcher SHALL select the scalar scan before mutating output or recurrent state and preserve API semantics.
 
 ## ARM64-F64-SSM-MEMORY-001
 WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
