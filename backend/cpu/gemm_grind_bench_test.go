@@ -73,3 +73,4 @@ func BenchmarkGemmDirF32_511x513x515(b *testing.B) { benchGemmF32Direct(b, 511, 
 func BenchmarkGemmDirF64_512(b *testing.B)           { benchGemmF64Direct(b, 512, 512, 512) }
 func BenchmarkGemmDirF64_1024(b *testing.B)          { benchGemmF64Direct(b, 1024, 1024, 1024) }
 func BenchmarkGemmDirF64_512x2048x2048(b *testing.B) { benchGemmF64Direct(b, 512, 2048, 2048) }
+func BenchmarkGemmDirF64_511x513x515(b *testing.B)   { benchGemmF64Direct(b, 511, 513, 515) }
