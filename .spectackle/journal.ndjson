@@ -455,3 +455,4 @@
 {"t":"2026-08-21T04:12:14Z","eid":"bfc87072a3c91c6d","ag":"ag-e9af","ev":"create","id":"P-01M0H89XBWFF0RG24N9673Y3DX","k":"proposal","ti":"Inline Tensor scalar accessors"}
 {"t":"2026-08-21T04:12:14Z","eid":"7ca7d684ccf047cf","ag":"ag-e9af","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T04:12:43Z","eid":"5f78696685229b8e","ag":"ag-d647","ev":"revise","id":"P-01M0H89XBWFF0RG24N9673Y3DX","note":"title+body+targets revised"}
+{"t":"2026-08-21T04:13:07Z","eid":"84feae15684c6d8b","ag":"ag-60b4","ev":"move","id":"P-01M0H89XBWFF0RG24N9673Y3DX","fr":"draft","to":"active","note":"Activated under the standing user authorization to pursue benchmark-gated bottom-up performance work. The proposal is narrowly scoped to the still-live scalar-access boundary and excludes the already-merged Storage layout."}

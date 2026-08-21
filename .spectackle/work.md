@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0H89XBWFF0RG24N9673Y3DX Inline rank-1/rank-2 Tensor scalar access without changing Storage layout
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 targets: go:tensor.Tensor.AtF64, go:tensor.Tensor.SetF64, go:tensor.Tensor.flatOffset, go:tensor.Storage.atF64, go:tensor.Storage.setF64
 
