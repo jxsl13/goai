@@ -65,3 +65,6 @@ WHEN the same valid fixture runs through whole and range entry points, the fused
 
 ## ARM64-F64-WKV-PERF-001
 WHEN three alternating count-seven M2 campaigns measure BenchmarkWKVScan_SIMD_512x1024, the arm64 SIMD WKV path SHALL retain only with at least 35 percent lower median latency, p below 0.05, and exactly 0 allocs/op.
+
+## ARM64-F64-WKV-E2E-PERF-001
+WHEN three alternating count-seven M2 campaigns measure backend/cpu BenchmarkWKV_512x1024, the arm64 CPU WKV path SHALL retain only with at least 20 percent lower median latency and p below 0.05.
