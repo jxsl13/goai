@@ -84,10 +84,31 @@ func sigmoidF64Scalar(dst, src []float64) {
 	}
 }
 
-// SigmoidF64 remains scalar until the shared leaf's composed route is gated.
+// SigmoidF64 composes the shared exp body with the stable scalar recombination.
 func SigmoidF64(dst, src []float64) {
 	dst = dst[:len(src)]
-	sigmoidF64Scalar(dst, src)
+	if len(src) != 0 && &dst[0] == &src[0] {
+		sigmoidF64Scalar(dst, src)
+		return
+	}
+	for _, x := range src {
+		if !expNegF64Safe(-math.Abs(x)) {
+			sigmoidF64Scalar(dst, src)
+			return
+		}
+	}
+	for i, x := range src {
+		dst[i] = -math.Abs(x)
+	}
+	expNegSliceF64(dst)
+	for i, x := range src {
+		z := dst[i]
+		if x >= 0 {
+			dst[i] = 1 / (1 + z)
+		} else {
+			dst[i] = z / (1 + z)
+		}
+	}
 }
 
 func softplusNegLLSumF64Scalar(f, y []float64) float64 {
@@ -103,8 +124,35 @@ func softplusNegLLSumF64Scalar(f, y []float64) float64 {
 	return sum
 }
 
-// SoftplusNegLLSumF64 remains scalar until the shared leaf is composed and gated.
+// SoftplusNegLLSumF64 amortizes the shared exp leaf over stack-resident blocks;
+// log1p and the reduction retain scalar order and therefore need no heap scratch.
 func SoftplusNegLLSumF64(f, y []float64) float64 {
 	y = y[:len(f)]
-	return softplusNegLLSumF64Scalar(f, y)
+	for i := range f {
+		x := (1 - 2*y[i]) * f[i]
+		if !expNegF64Safe(-math.Abs(x)) {
+			return softplusNegLLSumF64Scalar(f, y)
+		}
+	}
+	const blockSize = 256
+	var z [blockSize]float64
+	var sum float64
+	for base := 0; base < len(f); base += blockSize {
+		end := min(base+blockSize, len(f))
+		block := z[:end-base]
+		for i := range block {
+			x := (1 - 2*y[base+i]) * f[base+i]
+			block[i] = -math.Abs(x)
+		}
+		expNegSliceF64(block)
+		for i, e := range block {
+			x := (1 - 2*y[base+i]) * f[base+i]
+			if x > 0 {
+				sum += x + math.Log1p(e)
+			} else {
+				sum += math.Log1p(e)
+			}
+		}
+	}
+	return sum
 }
