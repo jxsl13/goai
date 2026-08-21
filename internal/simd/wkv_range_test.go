@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-// WKVScanRangeF64 over 4-aligned channel chunks must be BIT-IDENTICAL to the single
+// WKVScanRangeF64 over 2-aligned channel chunks must be BIT-IDENTICAL to the single
 // whole-range WKVScanF64 — the invariant the channel-parallel cpu kernel relies on.
-// Covers d multiple-of-4 (all SIMD) and not (scalar tail), and several chunk sizes.
+// Covers even d (all SIMD), odd d (scalar tail), and several chunk sizes.
 func TestWKVScanRangeF64BitExactVsWhole(t *testing.T) {
 	rng := rand.New(rand.NewSource(5))
 	for _, dims := range [][2]int{{128, 512}, {64, 1024}, {200, 64}, {130, 17}, {96, 12}} {
@@ -27,14 +27,19 @@ func TestWKVScanRangeF64BitExactVsWhole(t *testing.T) {
 		}
 		whole := make([]float64, seq*d)
 		WKVScanF64(k, v, w, u, whole, seq, d)
-		for _, chunk := range []int{4, 8, 16, 64} {
+		for _, chunk := range []int{2, 4, 8, 16, 64} {
 			got := make([]float64, seq*d)
+			calls := 0
 			for lo := 0; lo < d; lo += chunk {
 				hi := lo + chunk
 				if hi > d {
 					hi = d
 				}
 				WKVScanRangeF64(k, v, w, u, got, seq, d, lo, hi)
+				calls++
+			}
+			if calls == 0 {
+				t.Fatalf("seq=%d d=%d chunk=%d: range scan was not exercised", seq, d, chunk)
 			}
 			for i := range got {
 				if math.Float64bits(got[i]) != math.Float64bits(whole[i]) {

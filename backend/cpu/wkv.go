@@ -15,10 +15,9 @@ import (
 // wkvKernelCPU is the channel-vectorized RWKV-4 WKV time-mixing recurrence (Peng et
 // al. 2023, arXiv:2305.13048). The d channels each carry an independent running
 // numerator/denominator/max-exponent, so simd.WKVScanF64 runs the numerically-stable
-// log-space scan 4 channels at a time (expF64x4v; ~1 ulp vs libm, riding the model
-// f64 tolerance — RWKV goldens gate at 1e-9). Same recurrence and iteration order as
-// ref.wkvKernel's F64 fast path; the non-AVX build's simd fallback is the byte-for-
-// byte scalar scan, so the two backends stay consistent per build. F64-only — F32 and
+// log-space scan in architecture-native channel groups (four on AVX, two on Apple
+// arm64 NEON). Same recurrence and iteration order as ref.wkvKernel's F64 fast path;
+// portable builds use the byte-for-byte scalar scan. F64-only — F32 and
 // exotic/mixed-dtype inputs fall through to the ref scalar kernel; the mixed-dtype
 // path below (verbatim ref) guards the rare case where OpWKV dispatches here on F64
 // output with a non-F64 input.
@@ -79,9 +78,10 @@ func wkvKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 
 // wkvParallelScanF64 runs the channel-vectorized WKV scan across GOMAXPROCS goroutines,
 // each owning a disjoint block of the d channels (channels are independent recurrences).
-// Chunks are rounded up to a multiple of 4 so the SIMD 4-lane channel groups align with
-// the single-threaded WKVScanF64 — each channel lands in the same group and gets the same
-// expF64x4v bits, so the parallel scan is BIT-IDENTICAL to WKVScanF64 (locked by
+// Chunks are rounded up to a multiple of 4, which preserves both AVX's four-channel
+// groups and Apple arm64 NEON's two-channel groups. Each channel therefore lands in
+// the same group as the single-threaded scan, so the parallel scan is BIT-IDENTICAL
+// to WKVScanF64 (locked by
 // TestWKVScanRangeF64BitExactVsWhole). Workers write disjoint output columns → no race.
 // Small work stays single-threaded (WKVScanRangeF64(0,d) ≡ WKVScanF64).
 func wkvParallelScanF64(k, v, w, u, out []float64, seq, d int) {

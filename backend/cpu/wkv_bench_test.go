@@ -9,13 +9,11 @@ import (
 )
 
 // benchWKV measures OpWKV (RWKV-4 time-mixing recurrence) at a realistic
-// [seq, d] shape. The F64 CPU kernel (wkvKernelCPU) now runs the channel-
-// vectorized simd.WKVScanF64 scan (the d channels are independent → 4-wide over d
-// with expF64x4v) — 5.6–6.7× over the scalar ref path this benchmark first
-// measured (28.8ms→4.3ms at 512×1024, 116ms→20.8ms at 1024×2048). The SIMD exp is
-// ~1 ulp vs libm; RWKV's decode step stays scalar and forward/decode still agree
-// to ~1e-15 (TestRWKVDecodeMatchesForward, gate 1e-9). The non-AVX build falls back
-// to the byte-for-byte scalar scan.
+// [seq, d] shape. The F64 CPU kernel (wkvKernelCPU) runs the channel-vectorized
+// simd.WKVScanF64 scan: AVX processes four channels per group and Apple arm64 NEON
+// processes two, while portable builds use the byte-for-byte scalar scan. The SIMD
+// exp stays within the model's 1e-10 kernel tolerance; RWKV's decode step remains
+// scalar and forward/decode agreement is gated separately.
 func benchWKV(b *testing.B, seq, d int) {
 	k := bench.RandF64(tensor.Shape{seq, d}, 1)
 	v := bench.RandF64(tensor.Shape{seq, d}, 2)
