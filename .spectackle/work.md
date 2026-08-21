@@ -3837,3 +3837,15 @@ option: Add portable IQ4_XS QMatMul plus a fused 256-weight ARM64 super-block do
 option: Decode every IQ4_XS scale and weight in one row-level assembly call immediately
 option: Add portable IQ4_XS QMatMul only and defer ARM64 acceleration
 choice: Add portable IQ4_XS QMatMul plus a fused 256-weight ARM64 super-block dot behind a zero-allocation row wrapper
+
+## ADR-01M0K18S8HF46ARNK03RQMD0BE Which unsupported quantized QMatMul family should follow the completed IQ4 work on Apple ARM64?
+kind: adr
+state: submitted
+created: 2026-08-21
+context: Merged main now supports fused ARM64 QMatMul for the scalar K-quant family and both IQ4 variants. MXFP4 is the OCP microscaling FP4 format used by gpt-oss, already has exact encode/decode support, and its 32-weight block uses a 16-entry signed nibble codebook that can reuse the proven IQ4 nonlinear lookup strategy. IQ3/IQ2/IQ1 remain explicit later families with larger grid and sign-unpack complexity. The next tranche must add portable semantics before ARM64 specialization and retain only benchmarked leverage.
+status: proposed
+
+kind: radio
+option: Add portable MXFP4 QMatMul plus a row-level ARM64 fused E8M0-scale/codebook dot
+option: Start the IQ3_S/IQ3_XXS grid family before MXFP4
+option: Optimize only eager MXFP4 dequantization without exposing QMatMul
