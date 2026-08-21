@@ -1,0 +1,10 @@
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3126	    187959 ns/op	89259.87 MB/s	   17504 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3217	    187769 ns/op	89350.08 MB/s	   17498 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3099	    188600 ns/op	88956.46 MB/s	   17501 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3195	    188226 ns/op	89133.59 MB/s	   17498 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3169	    188063 ns/op	89210.84 MB/s	   17498 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3232	    188538 ns/op	88985.82 MB/s	   17497 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3104	    188833 ns/op	88846.96 MB/s	   17497 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3170	    188362 ns/op	89069.12 MB/s	   17499 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    3198	    189006 ns/op	88765.44 MB/s	   17493 B/op	      29 allocs/op
+BenchmarkQMatMulIQ3_XXS_M1_N4096-12    	    2902	    200503 ns/op	83675.79 MB/s	   17500 B/op	      29 allocs/op

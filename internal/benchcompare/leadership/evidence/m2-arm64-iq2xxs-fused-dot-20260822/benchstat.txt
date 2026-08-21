@@ -1,0 +1,65 @@
+                             │ iq2xxs-scalar.txt │           iq2xxs-neon.txt           │
+                             │      sec/op       │   sec/op     vs base                │
+DotIQ2XXS-12                        4734.0n ± 2%   754.8n ± 0%  -84.06% (p=0.000 n=10)
+QMatMulIQ2XXS/N64_K1024-12           75.25µ ± 2%   12.58µ ± 2%  -83.28% (p=0.000 n=10)
+QMatMulIQ2XXS/N4096_K1024-12         761.2µ ± 7%   182.1µ ± 3%  -76.08% (p=0.000 n=10)
+geomean                              64.73µ        12.00µ       -81.46%
+
+                             │ iq2xxs-scalar.txt │            iq2xxs-neon.txt             │
+                             │        B/s        │      B/s       vs base                 │
+DotIQ2XXS-12                        3.223Gi ± 2%   20.218Gi ± 0%  +527.26% (p=0.000 n=10)
+QMatMulIQ2XXS/N64_K1024-12          3.244Gi ± 2%   19.409Gi ± 2%  +498.25% (p=0.000 n=10)
+QMatMulIQ2XXS/N4096_K1024-12        20.53Gi ± 6%    85.83Gi ± 3%  +318.10% (p=0.000 n=10)
+geomean                             5.988Gi         32.29Gi       +439.35%
+
+                             │ iq2xxs-scalar.txt │            iq2xxs-neon.txt            │
+                             │       B/op        │     B/op      vs base                 │
+DotIQ2XXS-12                        0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2XXS/N64_K1024-12          592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2XXS/N4096_K1024-12      17.21Ki ± 2%     17.04Ki ± 0%       ~ (p=0.061 n=10)
+geomean                                        ²                 -0.33%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                             │ iq2xxs-scalar.txt │           iq2xxs-neon.txt           │
+                             │     allocs/op     │ allocs/op   vs base                 │
+DotIQ2XXS-12                        0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2XXS/N64_K1024-12          4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2XXS/N4096_K1024-12        29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                        ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                  │ dequant-base.txt │     dequant-candidate.txt     │
+                  │      sec/op      │   sec/op     vs base          │
+DequantIQ2_XXS-12        232.1µ ± 2%   228.5µ ± 2%  ~ (p=0.143 n=10)
+
+                  │ dequant-base.txt │     dequant-candidate.txt      │
+                  │       B/s        │     B/s       vs base          │
+DequantIQ2_XXS-12       277.7Mi ± 2%   282.1Mi ± 2%  ~ (p=0.143 n=10)
+
+                  │ dequant-base.txt │     dequant-candidate.txt      │
+                  │       B/op       │     B/op      vs base          │
+DequantIQ2_XXS-12       1.000Mi ± 0%   1.000Mi ± 0%  ~ (p=0.337 n=10)
+
+                  │ dequant-base.txt │     dequant-candidate.txt      │
+                  │    allocs/op     │ allocs/op   vs base            │
+DequantIQ2_XXS-12         3.000 ± 0%   3.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                           │ control-base.txt │     control-candidate.txt     │
+                           │      sec/op      │   sec/op     vs base          │
+QMatMulIQ3_XXS_M1_N4096-12        188.5µ ± 0%   188.7µ ± 1%  ~ (p=0.529 n=10)
+
+                           │ control-base.txt │     control-candidate.txt      │
+                           │       B/s        │     B/s       vs base          │
+QMatMulIQ3_XXS_M1_N4096-12       82.91Gi ± 0%   82.80Gi ± 1%  ~ (p=0.529 n=10)
+
+                           │ control-base.txt │     control-candidate.txt      │
+                           │       B/op       │     B/op      vs base          │
+QMatMulIQ3_XXS_M1_N4096-12       17.09Ki ± 0%   17.09Ki ± 0%  ~ (p=0.745 n=10)
+
+                           │ control-base.txt │     control-candidate.txt      │
+                           │    allocs/op     │ allocs/op   vs base            │
+QMatMulIQ3_XXS_M1_N4096-12         29.00 ± 0%   29.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

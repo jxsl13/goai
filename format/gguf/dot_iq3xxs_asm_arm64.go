@@ -4,9 +4,10 @@ package gguf
 
 import "encoding/binary"
 
-// iq3xxsSignMasks expands one ksigns byte into eight float32 sign masks. The
-// 4 KiB table avoids branchy per-lane sign extraction in the row-dot leaf.
-var iq3xxsSignMasks = func() (table [128][8]uint32) {
+// iqKSignMasks expands one shared i-quant ksigns byte into eight float32 sign
+// masks. The 4 KiB table avoids branchy per-lane sign extraction in the IQ2_XXS
+// and IQ3_XXS row-dot leaves.
+var iqKSignMasks = func() (table [128][8]uint32) {
 	for index := range table {
 		signs := iq2xxsKSigns[index]
 		for lane := range table[index] {
@@ -39,7 +40,7 @@ func dotIQ3XXSRowASM(row []float32, raw []byte, k int) float64 {
 			coeff[g] = d * (0.5 + float32(scale)) * 0.5
 		}
 		acc += dotIQ3XXSBlockNeon(
-			&row[b*qkK], &blk[2], &coeff[0], &iq3xxsGrid[0][0], &iq3xxsSignMasks[0][0],
+			&row[b*qkK], &blk[2], &coeff[0], &iq3xxsGrid[0][0], &iqKSignMasks[0][0],
 		)
 	}
 	return acc

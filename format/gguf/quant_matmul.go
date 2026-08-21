@@ -60,6 +60,10 @@ var dotIQ3SRowFn = dotIQ3SRow
 // it with a tolerance-gated fused grid/ksigns row dot.
 var dotIQ3XXSRowFn = dotIQ3XXSRow
 
+// dotIQ2XXSRowFn is dotIQ2XXSRow (scalar) on portable builds. ARM64 overrides
+// it with a tolerance-gated fused eight-wide-grid/ksigns row dot.
+var dotIQ2XXSRowFn = dotIQ2XXSRow
+
 // dotQ3KRowFn is dotQ3_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ3KRowFn = dotQ3_KRow
@@ -289,7 +293,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// value into a later return. That would have made this function report a gap it no
 	// longer has, and silenced the check for whoever adds the next quant type.
 	if m == 1 && xf32 != nil &&
-		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == MXFP4) {
+		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == IQ2_XXS || qt == MXFP4) {
 		var dot func([]float32, []byte, int) float64
 		switch qt {
 		case Q2_K:
@@ -310,6 +314,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotIQ3SRowFn
 		case IQ3_XXS:
 			dot = dotIQ3XXSRowFn
+		case IQ2_XXS:
+			dot = dotIQ2XXSRowFn
 		case MXFP4:
 			dot = dotMXFP4RowFn
 		}
@@ -329,7 +335,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
 	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
 	switch qt {
-	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, MXFP4:
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, IQ2_XXS, MXFP4:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
@@ -362,6 +368,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantIQ3_SInto(scratch, rowBits)
 		case IQ3_XXS:
 			dequantIQ3_XXSInto(scratch, rowBits)
+		case IQ2_XXS:
+			dequantIQ2_XXSInto(scratch, rowBits)
 		case MXFP4:
 			dequantMXFP4Into(scratch, rowBits)
 		}

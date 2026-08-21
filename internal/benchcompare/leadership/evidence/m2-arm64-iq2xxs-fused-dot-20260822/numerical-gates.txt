@@ -1,0 +1,30 @@
+=== RUN   TestDotIQ2XXSBlockNeonKnownValue
+--- PASS: TestDotIQ2XXSBlockNeonKnownValue (0.00s)
+=== RUN   TestDotIQ2XXSAsmRandomRaw
+    dot_iq2xxs_asm_arm64_test.go:64: maximum scalar-relative error across arbitrary raw rows: 8.731189028573922e-15
+--- PASS: TestDotIQ2XXSAsmRandomRaw (0.01s)
+=== RUN   TestDotIQ2XXSAsmCancellationHeavy
+--- PASS: TestDotIQ2XXSAsmCancellationHeavy (0.00s)
+=== RUN   TestDotIQ2XXSAsmAllocs
+--- PASS: TestDotIQ2XXSAsmAllocs (0.00s)
+=== RUN   TestDequantIQ2XXSIntoMatchesTensorDecoderExactly
+--- PASS: TestDequantIQ2XXSIntoMatchesTensorDecoderExactly (0.00s)
+=== RUN   TestDotIQ2XXSRowMatchesMaterializedReferenceExactly
+--- PASS: TestDotIQ2XXSRowMatchesMaterializedReferenceExactly (0.00s)
+=== RUN   TestQMatMulIQ2XXSMatchesDequantizedReference
+=== RUN   TestQMatMulIQ2XXSMatchesDequantizedReference/F32_M1
+=== RUN   TestQMatMulIQ2XXSMatchesDequantizedReference/F32_M3
+=== RUN   TestQMatMulIQ2XXSMatchesDequantizedReference/F64_M1
+=== RUN   TestQMatMulIQ2XXSMatchesDequantizedReference/F64_M3
+--- PASS: TestQMatMulIQ2XXSMatchesDequantizedReference (0.00s)
+    --- PASS: TestQMatMulIQ2XXSMatchesDequantizedReference/F32_M1 (0.00s)
+    --- PASS: TestQMatMulIQ2XXSMatchesDequantizedReference/F32_M3 (0.00s)
+    --- PASS: TestQMatMulIQ2XXSMatchesDequantizedReference/F64_M1 (0.00s)
+    --- PASS: TestQMatMulIQ2XXSMatchesDequantizedReference/F64_M3 (0.00s)
+=== RUN   TestQMatMulIQ2XXSRejectsInvalidInputs
+--- PASS: TestQMatMulIQ2XXSRejectsInvalidInputs (0.00s)
+=== RUN   TestQMatMulIQ2XXSScratchAllocationsDoNotScaleWithOutputRows
+--- PASS: TestQMatMulIQ2XXSScratchAllocationsDoNotScaleWithOutputRows (0.00s)
+=== RUN   TestQMatMulIQ2XXSSelectorScope
+--- PASS: TestQMatMulIQ2XXSSelectorScope (0.00s)
+PASS

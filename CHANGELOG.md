@@ -4,6 +4,28 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- exact IQ2_XXS QMatMul and M2 ARM64 fused row dot (T-01M0K90SRGFGR, 2026-08-22)
+
+`IQ2_XXS` now participates in portable F32/F64 `QMatMul` without materializing
+the complete weight matrix. The caller-owned decoder reuses fixed per-worker
+scratch, while contiguous F32 single-token decode on Apple ARM64 dispatches a
+zero-allocation NEON leaf that fuses eight-wide grid gathers, 7-bit ksigns
+expansion, packed sub-scales, and the activation dot with float64 partial
+accumulation. Other architectures, activation dtypes, and M>1 calls retain the
+portable path.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 4.7340 to 0.7548 microseconds (**6.27x**), M1/N64/K1024
+from 75.25 to 12.58 microseconds (**5.98x**), and M1/N4096/K1024 from 761.2 to
+182.1 microseconds (**4.18x**); all are `p=0.000`. Bytes and allocations are
+flat, the unrelated IQ3_XXS control is neutral (`p=0.529`), and existing
+IQ2_XXS tensor dequantization is neutral (`p=0.143`). Maximum scalar-relative
+error over 100 arbitrary packed rows is `8.731189028573922e-15`. This is a
+same-semantics GoAI comparison, not a llama.cpp leadership claim: the pinned
+llama.cpp ARM kernel consumes Q8_K-quantized activations. Reproducible streams,
+binary/source hashes, specification bindings, and controls are committed; the
+generalized dispatch-coverage gap is tracked as perfscan issue #804.
+
 ### format/gguf -- exact IQ3_XXS QMatMul and M2 ARM64 fused row dot (T-01M0K6D56YFAY, 2026-08-22)
 
 `IQ3_XXS` now participates in portable F32/F64 `QMatMul` without materializing

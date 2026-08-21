@@ -85,28 +85,23 @@ func init() {
 	}
 }
 
-// dequantIQ2_XXS decodes IQ2_XXS blocks into an F32 tensor of the given shape.
-func dequantIQ2_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
-	n := shape.Numel()
-	if n%qkK != 0 {
-		return nil, fmt.Errorf("gguf: IQ2_XXS numel %d not multiple of %d", n, qkK)
-	}
-	nb := n / qkK
-	if len(data) != nb*iq2xxsBlockSize {
-		return nil, fmt.Errorf("gguf: IQ2_XXS data %dB, want %d", len(data), nb*iq2xxsBlockSize)
-	}
-	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+// dequantIQ2_XXSInto decodes complete IQ2_XXS blocks into caller-owned storage.
+// Shape and byte-length validation stay at the public tensor boundary below;
+// QMatMul validates one complete quantized row before reusing this allocation-free
+// block decoder across output rows.
+func dequantIQ2_XXSInto(dst []float32, data []byte) {
+	for b := 0; b*iq2xxsBlockSize < len(data); b++ {
 		blk := data[b*iq2xxsBlockSize : (b+1)*iq2xxsBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 66-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		for pair := range 8 {
-			qs0 := binary.LittleEndian.Uint32(blk[2+pair*8:])
-			qs1 := binary.LittleEndian.Uint32(blk[2+pair*8+4:])
-			db := d * (0.5 + float32(qs1>>28)) * 0.25
+			pairBits := blk[2+pair*8:]
+			//perfscan:ignore PS4001 all 28 sign bits and the high scale nibble are consumed from this heterogeneous pair
+			signsAndScale := binary.LittleEndian.Uint32(pairBits[4:])
+			db := d * (0.5 + float32(signsAndScale>>28)) * 0.25
 			for g := range 4 {
-				gridRow := &iq2xxsGrid[byte(qs0>>(8*g))]
-				signs := iq2xxsKSigns[(qs1>>(7*g))&0x7F]
+				gridRow := &iq2xxsGrid[pairBits[g]]
+				signs := iq2xxsKSigns[(signsAndScale>>(7*g))&0x7F]
 				base := b*qkK + pair*32 + g*8
 				y := dst[base : base+8]
 				for k := range y {
@@ -119,5 +114,19 @@ func dequantIQ2_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
+}
+
+// dequantIQ2_XXS decodes IQ2_XXS blocks into an F32 tensor of the given shape.
+func dequantIQ2_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
+	n := shape.Numel()
+	if n%qkK != 0 {
+		return nil, fmt.Errorf("gguf: IQ2_XXS numel %d not multiple of %d", n, qkK)
+	}
+	nb := n / qkK
+	if len(data) != nb*iq2xxsBlockSize {
+		return nil, fmt.Errorf("gguf: IQ2_XXS data %dB, want %d", len(data), nb*iq2xxsBlockSize)
+	}
+	out := tensor.New(tensor.F32, shape)
+	dequantIQ2_XXSInto(out.Storage().F32(), data)
 	return out, nil
 }
