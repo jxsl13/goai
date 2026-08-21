@@ -1,6 +1,7 @@
 package cpu_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -55,9 +56,17 @@ func BenchmarkSSMF64_512x1024x16_cpu(b *testing.B) {
 	L, D, N := 512, 1024, 16
 	be, _ := backend.Get(backend.CPU)
 	ctx := backend.NewContext().WithBackend(be)
+	u := bench.RandF64(tensor.Shape{L, D}, 1)
+	delta := bench.RandF64(tensor.Shape{L, D}, 2)
+	a := bench.RandF64(tensor.Shape{D, N}, 3)
+	for i, v := range delta.Storage().F64() {
+		delta.Storage().F64()[i] = 0.1 + 0.5*math.Abs(v)
+	}
+	for i, v := range a.Storage().F64() {
+		a.Storage().F64()[i] = -0.1 - math.Abs(v)
+	}
 	ins := []*tensor.Tensor{
-		bench.RandF64(tensor.Shape{L, D}, 1), bench.RandF64(tensor.Shape{L, D}, 2),
-		bench.RandF64(tensor.Shape{D, N}, 3), bench.RandF64(tensor.Shape{L, N}, 4),
+		u, delta, a, bench.RandF64(tensor.Shape{L, N}, 4),
 		bench.RandF64(tensor.Shape{L, N}, 5),
 	}
 	b.ReportAllocs()
