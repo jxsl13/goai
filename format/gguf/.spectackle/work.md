@@ -26,12 +26,3 @@ option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K ker
 option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
-
-## T-01M0K6D56YFAYSY4QQPYVXCE4A Implement and statistically gate exact IQ3_XXS QMatMul and M2 ARM64 fused row dot
-kind: task
-state: active
-created: 2026-08-21
-parent: P-01M0K6A4A6F0SAGEMT1937ZQQN
-targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
-
-Freeze the merged-main baseline and source manifest. Refactor IQ3_XXS into a caller-owned exact decoder; add exact scalar row dot, portable F32/F64 QMatMul, fixed per-worker scratch, and an F32 M=1 selector. Implement an Apple ARM64 zero-allocation leaf that gathers two 4-wide grid rows, expands each 7-bit ksigns index through a compact sign-mask table, applies the exact float32 d*(0.5+s)*0.5 coefficient, and accumulates products into independent float64 partials. Verify bit-exact caller-owned decode and scalar/materialized mapping, F32/F64 M1/M3 QMatMul, selector scope, output-row-independent scratch, arbitrary raw blocks including negative f16 scales, cancellation, immutability, zero leaf allocations, race safety, amd64/arm64 cross-builds, full preflight, Metal preflight, and external perfscan with GOPROXY=direct. Retain native code only when n=10 fresh-process 500 ms alternating-order benchstat meets the proposal thresholds at K4096 leaf and both QMatMul shapes, with flat memory and neutral unrelated-quant and tensor-dequant controls. Commit evidence, file generalized perfscan findings, open a PR, merge only after every CI lane passes, verify origin/main ancestry, and delete the remote branch.
