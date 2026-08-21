@@ -456,3 +456,5 @@
 {"t":"2026-08-21T04:12:14Z","eid":"7ca7d684ccf047cf","ag":"ag-e9af","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T04:12:43Z","eid":"5f78696685229b8e","ag":"ag-d647","ev":"revise","id":"P-01M0H89XBWFF0RG24N9673Y3DX","note":"title+body+targets revised"}
 {"t":"2026-08-21T04:13:07Z","eid":"84feae15684c6d8b","ag":"ag-60b4","ev":"move","id":"P-01M0H89XBWFF0RG24N9673Y3DX","fr":"draft","to":"active","note":"Activated under the standing user authorization to pursue benchmark-gated bottom-up performance work. The proposal is narrowly scoped to the still-live scalar-access boundary and excludes the already-merged Storage layout."}
+{"t":"2026-08-21T04:13:15Z","eid":"1a9a7d3e7a593909","ag":"ag-4858","ev":"grill","id":"P-01M0H89XBWFF0RG24N9673Y3DX","gr":"2026-08-21 open=0","hash":"535735608c4b6ecdd43d3e1a4c2b85d35b06b1fcca7d41721f4d36a2b48b3f2b"}
+{"t":"2026-08-21T04:13:15Z","eid":"a01abaea963d6e28","ag":"ag-4858","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

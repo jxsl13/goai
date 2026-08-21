@@ -3734,6 +3734,7 @@ option: Use one universal CPU threshold for the whole unary family
 kind: proposal
 state: active
 created: 2026-08-21
+grilled: 2026-08-21 open=0
 targets: go:tensor.Tensor.AtF64, go:tensor.Tensor.SetF64, go:tensor.Tensor.flatOffset, go:tensor.Storage.atF64, go:tensor.Storage.setF64
 
 CONTEXT: PR #703 already removed Storage.data any. The remaining scalar-access defect is the public wrapper boundary: Go 1.26.6 reports Tensor.flatOffset inline cost 75 and Storage.atF64 cost 67, but Tensor.AtF64 and Tensor.SetF64 cost 149 and 139, so every element pays two calls plus repeated field loads. Apple M2 Pro baselines over 4096 elements are 8.47 us for contiguous AtF64, 12.1-13.0 us for contiguous SetF64, and 8.48-8.74 us for strided AtF64.
