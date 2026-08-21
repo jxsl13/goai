@@ -39,7 +39,7 @@ choice: Route measured shapes through CPU and preserve direct Metal above the bo
 
 ## P-01M0H0SG6FFVKBE666TCKH10MG Pack Q4_0 quant bytes into aligned ushort loads
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 targets: msl:qmatmul_q4_0_cooperative, objc:metal_bridge.ensure_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul
 
