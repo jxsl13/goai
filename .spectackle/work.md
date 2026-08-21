@@ -3762,3 +3762,18 @@ parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
 targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_asm_arm64.go, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, format/gguf/bench_test.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
 
 Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
+
+## ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P Which Q5_K ARM64 fusion boundary best balances first-tranche leverage, numerical auditability, and implementation risk?
+kind: adr
+state: done
+created: 2026-08-21
+decision: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+consequences: The initial kernel makes one architecture call per superblock and preserves portable dispatch and prefill semantics. If call and coefficient overhead remains material after fusion, a later evidence-backed tranche may move the full row into assembly; CPU-to-Metal routing remains a separate backend decision.
+status: accepted
+
+kind: radio
+option: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+option: Whole-row assembly including scale/min decode
+option: Route CPU decode through Metal
+blocks: P-01M0JNATZFE9TT3P428PGMHEYX
+choice: Per-superblock NEON unpack-affine-dot with Go scale/min decode
