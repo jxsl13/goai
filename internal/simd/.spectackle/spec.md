@@ -26,7 +26,7 @@ Rationale: The rule inverts against amd64 and following the amd64 form here woul
 ## ARM64-F64-EXP-PERF-001 {applies: go:simd.expNegPairsNeonF64,asm:simd.expNegPairsNeonF64,go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
 WHEN three paired count-seven M2 campaigns measure the five declared F64 cells, the arm64 SIMD F64 path SHALL retain only when the direct leaf reaches 2.00x control, every complete-operation median reaches 1.25x control, and every target has zero allocations.
 
-## ARM64-F64-EXP-NUMERIC-001
+## ARM64-F64-EXP-NUMERIC-001 {applies: go:simd.expNegPairsNeonF64,asm:simd.expNegPairsNeonF64,go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
 WHEN the arm64 SIMD candidate evaluates any declared F64 operation, the result SHALL match the scalar reference within 1e-13 relative error and preserve scalar NaN, infinity, signed-zero, and exact deep-underflow behavior.
 
 ## ARM64-F64-EXP-MEMORY-001
