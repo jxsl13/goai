@@ -446,8 +446,8 @@ func mhaSoftmaxBandVexpF32(sb []float32, g mhaGeo, h, i0, iN int) {
 				}
 			}
 		} else {
-			// No-slope band: scale + row-max + ×1/sum all run 8-wide (rowMaxF32/scaleRowF32 are the
-			// AVX2 amd64 primitives, scalar elsewhere) — the exp already goes through vexpRowF32.
+			// No-slope band: scale + row-max + ×1/sum use the architecture-specific
+			// row primitives; the exp already goes through vexpRowF32.
 			scaleRowF32(span, scale)
 			m = rowMaxF32(span)
 			sum := vexpRowF32(span, m)
@@ -506,10 +506,10 @@ func softmaxVexpF32(x, out []float32, rows, d int) {
 			base := r * d
 			xr := x[base : base+d : base+d]
 			or := out[base : base+d : base+d]
-			m := rowMaxF32(xr) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
+			m := rowMaxF32(xr) // AVX2/NEON SIMD, scalar −Inf-start reduction elsewhere
 			copy(or, xr)
 			sum := vexpRowF32(or, m)
-			scaleRowF32(or, 1/sum) // AVX2 ×1/sum / scalar elsewhere
+			scaleRowF32(or, 1/sum) // AVX2/NEON ×1/sum, scalar elsewhere
 		}
 	})
 }
@@ -526,7 +526,7 @@ func softmaxWideVexpF32(x, out []float32, d, nw int) {
 	sums := make([]float64, nch)
 	parallelWork(nch, 4*chunk, func(lo, hi int) {
 		for c := lo; c < hi; c++ {
-			maxs[c] = rowMaxF32(x[c*chunk : min((c+1)*chunk, d)]) // AVX2 max / scalar elsewhere
+			maxs[c] = rowMaxF32(x[c*chunk : min((c+1)*chunk, d)]) // AVX2/NEON max, scalar elsewhere
 		}
 	})
 	m := float32(math.Inf(-1))
@@ -549,6 +549,6 @@ func softmaxWideVexpF32(x, out []float32, d, nw int) {
 	}
 	inv := float32(1 / sum)
 	parallelWork(d, 2, func(lo, hi int) {
-		scaleRowF32(out[lo:hi], inv) // AVX2 ×1/sum / scalar elsewhere
+		scaleRowF32(out[lo:hi], inv) // AVX2/NEON ×1/sum, scalar elsewhere
 	})
 }

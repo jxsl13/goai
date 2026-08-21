@@ -23,25 +23,6 @@ EXPECTED: 2a alone 1.4-1.8x (removing the store-port bottleneck); 2a+2b 2.0-2.6x
 
 BIT-IDENTITY BAR: BIT-EXACT, and it must be — TestGemmCrossReferenceExact (gemm_test.go:17) and TestConvCrossReferenceExact (conv_test.go:19) gate this kernel at tolerance 0. Three conditions: (i) vectorize j only, p stays scalar-ordered ascending; (ii) USE FMLA, NOT FMUL+FADD — this is the arm64 inversion now recorded as SIMD-007: the scalar twin at gemm_nosimd.go:41 compiles to FMADDD, so separate mul and add would introduce a SECOND rounding and break exactness, the precise opposite of the amd64 rule in SIMD-006; (iii) load C before the p-loop and store after, preserving +=. The tail must obey the same rule. Add the f64 arm64 case to gemm_simd_test.go:19, which already exists to probe residues at the body/tail boundary.
 
-## T-01KYJQ3QB2EMCR0T09D7XA4TEX Vectorize rowMaxF32 and scaleRowF32 on arm64 — two of every softmax's three passes are scalar
-kind: task
-state: draft
-created: 2026-07-27
-
-BEST EFFORT-TO-PAYOFF RATIO IN THE SIMD UNIT.
-
-SITE: backend/cpu/softmax_avx_other.go:10 rowMaxF32, :20 axpbRowF32, :26 scaleRowF32, tag !(goexperiment.simd && amd64). The file's own comment at :7 says the quiet part out loud — "arm64's SIMD build included — vectorizing these is an amd64-only change". Vectorized siblings exist at softmax_avx_amd64.go:18/:69/:51.
-
-WHY HOT: these bracket the NEON exp on EVERY f32 softmax row in the tree. vexp.go:480 m := rowMaxF32(xr) and :483 scaleRowF32(or, 1/sum) in softmaxVexpF32; :500 and :523 in the wide (1x32000 logit) form; :421-423 in mhaSoftmaxBandVexpF32, the MHA band softmax, on every head of every layer. The comments at vexp.go:420-421 and :480 even annotate them "AVX2 ... / scalar elsewhere". Net effect on this host: pass 1 (max) scalar, pass 2 (exp) 4-wide NEON, pass 3 (scale) scalar. Since the NEON exp costs about 1 cycle/element amortized while a scalar compare-select or multiply costs 1-2, the two scalar passes plausibly dominate the vectorized one.
-
-FIX: three small Plan9 NEON kernels in vexp_arm64.s (which already has the constant block and quad-loop scaffolding), with //go:noescape declarations in vexp_arm64.go next to vexpQuadsNeonF32. rowMaxQuadsNeonF32: FMAXNM Vacc.4S accumulate, horizontal reduce, scalar -Inf-start tail, two accumulators unrolled by 2. scaleRowQuadsNeonF32: VDUP plus FMUL Vd.4S in place. axpbRowQuadsNeonF32: FMLA Vd.4S. Follow the established driver shape (nv := len(x) &^ 3, NEON body, scalar tail through the identical scalar expression) so a value gets the same result regardless of where it lands — the contract vexpRowF32 (vexp.go:446) already documents. Add softmax_neon_arm64.go and narrow the other tag; delete nothing, keep one definition per build.
-
-VALIDATION GATE (benchmark only), existing and well-targeted: softmax_bench_test.go:11 BenchmarkSoftmaxF32_512x512_cpu and :14 _2048sq_cpu; elementwise_grind_bench_test.go:68 BenchmarkSoftmaxF32_1x32000_cpu (hits softmaxWideVexpF32 where all three passes are separately parallelized — the cleanest isolation) and :71 _4x32000_cpu; :62 _32x2048_cpu for attention-row scale; backend/cpu/normattn_bench_test.go for the MHA level. To separate the max pass from the scale pass add direct microbenchmarks BenchmarkRowMaxF32_2048 and BenchmarkScaleRowF32_2048 with b.SetBytes.
-
-EXPECTED: 1.5-2.2x on the 32000-wide and 2048-wide row cases; 1.15-1.3x on MHA forward (softmax is one of three stages there, the two GEMMs already being NEON/AMX). High confidence — the change is small, the ops are trivially vectorizable, and the pass structure is fully visible in vexp.go:470-486.
-
-BIT-IDENTITY BAR, mixed and cleanly separable: scaleRowF32 is BIT-EXACT (a single multiply; FMUL.4S is the identical IEEE op per lane, no reassociation). rowMaxF32 is BIT-EXACT ON ALL FINITE INPUTS, which is the entire domain here — max is associative and commutative over finite floats. The one divergence is NaN: FMAX propagates NaN where the serial if v > m scan skips it. USE FMAXNM, whose IEEE-754-2008 maxNum semantics IS NaN-skipping, making it bit-exact including NaN — it costs nothing and closes the caveat the amd64 sibling explicitly left open at softmax_avx_amd64.go:16. axpbRowF32 is the interesting one: its scalar twin x[j] = x[j]*a + b contracts to FMADDS on arm64, so FMLA.4S is BIT-IDENTICAL here — whereas the amd64 sibling had to accept one rounding versus two. Same code, exact on arm64, tolerant on amd64: a clean illustration of why SIMD-006 and SIMD-007 had to be split by architecture.
-
 ## T-01KYJR5YCJF4M9BC6F960CGG9Z Investigate the worker-pool park/wake cost that dominates small-model training steps
 kind: task
 state: draft

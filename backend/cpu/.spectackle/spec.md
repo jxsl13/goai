@@ -11,6 +11,7 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 ## intent
 - R-01KZ15RPY3E9DT1W3ZXXGDA8Q8 Round T1060: masked-MHA mixed-dtype panic fixed; the check for that class drafted and withheld: Consumed: the mixed-dtype panic fixed on both arms with a reference-parity gate, and the check for the class withheld with its two noise sources diagnosed (a guard split across an enclosing type switch, and outputs allocated from an input dtype). Also records that the same class of bug is invisible to CI because the only test reaching it is skipped under -short.
 - T-01KYJQ7822FVBBKJV7F9T08ZAK Enable the f32 norm fast path on arm64 — RMSNorm/LayerNorm currently normalize through a per-element f64 round trip: Implemented M2-first arm64 SIMD acceleration for F32 RMSNorm and LayerNorm forward paths using concrete F32 drivers and 16-lane NEON normalize/write kernels. F64 reductions remain unchanged and F32 backward remains on the prior path. Three paired M2 campaigns across complete 512x1024 and 512x4096 operators delivered 1.291x-1.540x median speedups (22.54%-35.07% time reduction); all second and third [body truncated at tombstone retention cap]
+- T-01KYJQ3QB2EMCR0T09D7XA4TEX Vectorize rowMaxF32 and scaleRowF32 on arm64 — two of every softmax's three passes are scalar: Shipped M2 arm64 SIMD acceleration for the three F32 softmax row primitives: rowMax now uses 16-lane FMAXNM accumulation, scale uses 16-lane FMUL, and axpb uses 16-lane FMLA, each with scalar tails. rowMax repairs signed zero by selecting the first zero when the numeric maximum is zero, preserving ordered scalar semantics while still skipping NaNs. Non-arm64 SIMD targets and F64 behavior remain un [body truncated at tombstone retention cap]
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -62,3 +63,23 @@ WHEN the target is not an arm64 goexperiment.simd forward build or the operation
 
 ## DTYPE-FAST-PATH-ISOLATES-GENERIC-INSTANTIATIONS-001
 WHEN a dtype-specific SIMD arm is added to a generic numeric driver, the Go implementation SHALL isolate it in a concrete driver and prove with go tool objdump that non-target stack-frame and instruction-count increases are both 0.
+
+## ARM64-F32-SOFTMAX-PASS-PERF-001
+WHEN three paired count-seven M2 Pro campaigns measure F32 softmax at 512x512, 2048x2048, 32x2048, 1x32000, and 4x32000, the arm64 SIMD row passes SHALL retain only if every complete-operation median is at least 1.25x baseline.
+
+Rationale: Require broad end-to-end leverage across attention and LLM-logit shapes, not merely faster helper microbenchmarks.
+
+## ARM64-F32-SOFTMAX-PASS-NUMERICS-001
+WHEN direct parity exercises tail widths, finite values, NaNs, infinities, and signed zeros, the arm64 SIMD row passes SHALL preserve rowMaxF32 input and match scalar result bits for rowMaxF32, scaleRowF32, and axpbRowF32.
+
+Rationale: Vector maxNum changes mixed signed-zero ties unless the driver repairs scalar first-match semantics; tails and nonfinite behavior must remain exact.
+
+## ARM64-F32-SOFTMAX-PASS-SCOPE-001
+WHEN the target is not arm64 goexperiment.simd or the softmax dtype is F64, the softmax row-pass dispatch SHALL preserve the existing implementation and behavior without reaching the new NEON helpers.
+
+Rationale: Keep the optimization architecture-, experiment-, and dtype-specific with a portable scalar fallback.
+
+## SIMD-MAXNUM-PRESERVES-FIRST-ZERO-001
+WHEN vector maxNum replaces an ordered scalar max reduction, the SIMD reduction SHALL skip NaNs identically and repair a zero result to the first scalar zero sign.
+
+Rationale: IEEE maximumNumber selects +0 for mixed zero signs, while ordered greater-than preserves the sign of the first zero maximum.

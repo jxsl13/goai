@@ -77,7 +77,7 @@ func crossEntropyKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 		//perfscan:ignore PS4002 math.Log one-per-row not per-element; c-wide exp already vexp'd
 		for i := lo; i < hi; i++ {
 			row := zs[i*c : (i+1)*c : (i+1)*c]
-			m := rowMaxF32(row) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
+			m := rowMaxF32(row) // AVX2/NEON SIMD, scalar −Inf-start reduction elsewhere
 			copy(scratch, row)
 			sum := vexpRowF32(scratch, m) // exp(z−m) + 8-lane f32 sum (AVX) / NEON / scalar
 			lse := float64(m) + math.Log(float64(sum))
@@ -144,7 +144,7 @@ func crossEntropyBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, at
 		for i := lo; i < hi; i++ {
 			zr := zs[i*c : (i+1)*c : (i+1)*c]
 			dr := dzs[i*c : (i+1)*c : (i+1)*c]
-			m := rowMaxF32(zr) // AVX2 max (amd64-SIMD) / scalar −Inf-start reduction elsewhere
+			m := rowMaxF32(zr) // AVX2/NEON SIMD, scalar −Inf-start reduction elsewhere
 			copy(dr, zr)
 			sum := vexpRowF32(dr, m) // dr[j] = exp(z−m), reused as p below
 			inv := 1 / sum
