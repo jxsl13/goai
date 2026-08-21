@@ -41,7 +41,7 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 ## ARM64-F64-SSM-PERF-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3}
 WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIMD SSM path SHALL retain only with at least 20 percent lower median latency, p below 0.05, and zero allocations.
 
-## ARM64-F64-SSM-NUMERIC-001
+## ARM64-F64-SSM-NUMERIC-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3,go:simd.TestSSMScanF64Accuracy}
 WHEN valid decay-domain fixtures use N 1, 2, 3, 16, 17, or 128 with or without D-skip, the fused arm64 F64 SSM implementation SHALL match scalar output and recurrent state within 1e-10 relative error.
 
 ## ARM64-F64-SSM-FALLBACK-001
