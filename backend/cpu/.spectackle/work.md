@@ -30,6 +30,7 @@ kind: task
 state: draft
 created: 2026-08-21
 parent: P-01M0J0BWPDE4P97Q05AZV0PSJS
+grilled: 2026-08-21 open=0
 targets: go:cpu.TestGemmBandUnrollIsBitExact, go:cpu.gemmF32Band, go:cpu.gemmF32BandScalarF64, backend/cpu/gemm_band_unroll_default_test.go, backend/cpu/gemm_band_unroll_simd_amd64_test.go
 
 PR #1129 changes a backend/cpu WKV test, causing the affected-package SIMD lane to compile backend/cpu on amd64. Exact base 24360555396d1b694cbd5bcfec979c0416332497 already fails because TestGemmBandUnrollIsBitExact calls gemmF32Band, which is excluded by amd64 && goexperiment.simd; the equivalent scalar F64-accumulating oracle is gemmF32BandScalarF64. Add a test-only build-tag adapter: portable/default builds call gemmF32Band, while amd64 SIMD calls gemmF32BandScalarF64. Keep the common exhaustive bit-exact test unchanged apart from routing through the adapter. Validate native default and Rosetta amd64 SIMD execution plus Linux/Windows amd64 SIMD test-binary compilation. No product code or benchmark semantics may change.

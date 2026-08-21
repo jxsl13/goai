@@ -107,3 +107,6 @@ Rationale: The task contains two separable mechanisms. Staged binaries prevent a
 
 ## ARM64-F64-EXP-SCOPE-001 {applies: go:cpu.vexpF64Fast~2,go:cpu.vsiluPairsNeonF64,asm:cpu.vsiluPairsNeonF64}
 WHEN the internal two-lane F64 exponential leaf is available, the first landing SHALL keep backend vexpF64Fast false, preserve the existing SiLU route, and defer backend composites, WKV, and SSM to separately gated work.
+
+## AMD64-SIMD-GEMM-BAND-TEST-BUILD-001
+WHEN backend/cpu tests compile on amd64 with GOEXPERIMENT=simd, the backend/cpu test adapter SHALL route F32 through gemmF32BandScalarF64 and make TestGemmBandUnrollIsBitExact pass with 0 undefined symbols.
