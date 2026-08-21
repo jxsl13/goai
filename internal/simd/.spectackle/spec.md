@@ -40,3 +40,6 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 
 ## ARM64-F64-SSM-PERF-001
 WHEN three alternating paired count-seven physical Apple M2 Pro campaigns measure the declared internal and end-to-end SSM cells, the arm64 SIMD F64 SSM path SHALL retain the candidate only when internal 512x2048x16 median latency improves by at least 20 percent, end-to-end 512x1024x16 median latency improves by at least 15 percent, benchstat reports p below 0.05, and the internal cell remains zero-allocation.
+
+## ARM64-F64-SSM-NUMERIC-001
+WHEN a valid finite nonpositive decay-domain fixture with N equal to 1, 2, 3, 16, 17, or 128 runs with or without D-skip, the fused arm64 F64 SSM implementation SHALL match the scalar reference within 1e-10 relative error and keep range execution bit-identical to whole execution for both output and recurrent state.
