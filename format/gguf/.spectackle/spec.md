@@ -161,3 +161,6 @@ The portable IQ2_XS QMatMul SHALL use exactly 1 scratch-set allocation per worke
 
 ## ARM64-IQ2XS-FUSED-DOT-001
 WHEN contiguous F32 M1 activations use IQ2_XS weights, the Apple ARM64 IQ2_XS selector SHALL dispatch 1 row-level fused NEON grid, ksign, explicit-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-IQ2XS-FUSED-DOT-SCOPE-001
+The IQ2_XS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
