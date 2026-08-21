@@ -3820,7 +3820,7 @@ Close the final scalar K-quant M=1 selector edge on Apple ARM64. Add an architec
 
 ## T-01M0JSVYWCEYPTM9XBY8Y9M2QC Implement and gate ARM64 Q2_K fused decode GEMV
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0JSKA87F83B9PXPGAKCBD3H
 refs: P-01M0JSKA87F83B9PXPGAKCBD3H, ADR-01M0JSJQEXFTJBDFE71EWS8C7D
