@@ -497,3 +497,6 @@
 {"t":"2026-08-21T12:47:20Z","eid":"163d27aa109aabf2","ag":"ag-2588","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T13:12:16Z","eid":"33b469a0a2f753e5","ag":"ag-1f8b","ev":"bench","id":"M-01M0J76R3QECK90QXPSERYEPR9","k":"bench","ti":"apple m2 f32 mha band alignment campaign envelope","note":"apple-m2-f32-mha-band-alignment-campaign-envelope|arch=arm64|campaigns=3|cpu=apple_m2_pro|gpu=apple_m2_pro|os=darwin|ram=32gb|samples=21|scope=mha_forward"}
 {"t":"2026-08-21T13:12:55Z","eid":"52b08ef12c62816f","ag":"ag-7e11","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T13:47:27Z","eid":"6e6cb1be7c3a61bb","ag":"ag-7c1e","ev":"create","id":"P-01M0J975XHFD5AXGP661E8G644","k":"proposal","ti":"Route ARM64 F32 MHA bands through strided GEMM I/O"}
+{"t":"2026-08-21T13:47:27Z","eid":"bd6ceafcb6d97ce1","ag":"ag-7c1e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T13:49:12Z","eid":"8206e1efcb097aa0","ag":"ag-b70f","ev":"revise","id":"P-01M0J975XHFD5AXGP661E8G644","note":"body+targets+refs revised"}

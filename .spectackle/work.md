@@ -3729,3 +3729,12 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0J975XHFD5AXGP661E8G644 Route ARM64 F32 MHA bands through strided GEMM I/O
+kind: proposal
+state: draft
+created: 2026-08-21
+refs: T-01M0J5KPW5EFY8TM91JY3WZFD2
+targets: go:cpu.mhaFwdGemmBand, go:cpu.gemmF32RowsCols, go:cpu.gemmF32Tile4x16Neon, backend/cpu/mha.go, backend/cpu/gemm_rows_arm64.go, backend/cpu/gemm_rows_amd64.go, backend/cpu/gemm_rows_default.go, backend/cpu/gemm_neon_arm64.go
+
+The post-PR1130 Apple M2 profile leaves runtime.memmove at 0.41 seconds flat while the forward band copies every strided Q head into qb scratch and scatters every ob scratch row into output. The existing 4x16 NEON microkernel already accepts independent lda and ldc values. Introduce a worker-callable strided-row F32 GEMM surface, route the two unmasked MHA band GEMMs directly from Q and directly into output, and remove qb/ob scratch without changing score, softmax, contraction, or row order. M2 promotion gates: deterministic causal/full/GQA digest unchanged and non-vacuous; native default and SIMD suites plus SIMD race and cross-builds pass; steady-state allocations do not increase; MHA512 and seq128/512 GQA/full forward cells improve at least 8 percent with p<0.01 in three alternating campaigns; decode remains statistically neutral; matched pprof reduces memmove and introduces no scalar remainder. Keep non-SIMD behavior and amd64 results unchanged through build-tagged implementations or exact portable fallbacks. Baseline evidence is benchmark ledger M-01M0J76R3QECK and perfscan issue 797.
