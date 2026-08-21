@@ -429,11 +429,22 @@ nibble unpack, affine dequantization and dot-product reduction in one NEON
 pass. Against the scalar mainline control, QMatMul improves **7.77×** at
 M1/N64/K1024 and **4.73×** at M1/N4096/K1024; the recurrent quantized Mamba2
 decode step improves **2.94×** (349.2 → 118.8 µs). All cells use n=10 after
-discarding the first sample, `p=0.000`, with unchanged allocation counts. The
-untouched Q6_K recurrent cell is flat (`p=0.853`), serving as the negative
-control. This does **not** close or restate the Q8_0 8.8× whole-model gap, and
-it is not yet a matched llama.cpp CPU leadership claim. Evidence:
+discarding the first sample, `p=0.000`, with unchanged allocation counts. In
+that Q4_K-only campaign the untouched Q6_K recurrent cell was flat
+(`p=0.853`). Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q4k-fused-dot-20260821`.
+
+**ARM64 Q6_K progress (2026-08-21):** the adjacent Q6_K M1 path now fuses
+six-bit unpack, signed sub-block scaling and dot reduction in one NEON pass.
+Against the scalar same-binary control, the K=4096 row dot improves **10.65×**,
+QMatMul improves **10.26×** at M1/N64/K1024 and **6.05×** at
+M1/N4096/K1024, and recurrent quantized Mamba2 improves **3.59×**
+(364.3 → 101.6 µs). Every time cell has `p=0.000`, n=10 after first-sample
+removal, and unchanged allocations; Q4_K is flat (`p=0.853`) as the negative
+control. Reported QMatMul B/s is logical f32 work, not physical bandwidth.
+Neither K-quant gain closes or restates the separate Q8_0 8.8× whole-model gap,
+and neither is yet a matched llama.cpp CPU leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
 
 ### Tokenizer throughput — pure-Go BPE vs tiktoken
 

@@ -1,0 +1,71 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotQ6KAsm-12          	  628276	       463.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  650546	       460.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  654003	       451.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  684982	       452.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  670640	       452.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  683344	       454.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  673891	       453.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  682942	       450.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  639590	       449.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  658586	       448.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KAsm-12          	  666117	       450.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62766	      4798 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62775	      4803 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62730	      4807 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62715	      4830 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62618	      4810 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62258	      4844 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   61982	      6481 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62062	      4829 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62422	      4819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62578	      4805 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ6KScalar-12       	   62841	      4812 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   40084	      7453 ns/op	35172.54 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   40044	      7423 ns/op	35316.84 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39825	      7428 ns/op	35292.11 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39784	      7425 ns/op	35307.27 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   40182	      7469 ns/op	35096.34 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39361	      7532 ns/op	34802.27 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39667	      7518 ns/op	34871.10 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39728	      7467 ns/op	35104.73 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39772	      7479 ns/op	35052.78 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39783	      7417 ns/op	35342.35 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/neon-12    	   39620	      7434 ns/op	35261.27 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3904	     76322 ns/op	3434.71 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    4003	     76201 ns/op	3440.14 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3926	     76440 ns/op	3429.39 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3940	     76433 ns/op	3429.73 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3952	     76304 ns/op	3435.54 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3969	     76856 ns/op	3410.83 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3987	     76636 ns/op	3420.63 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3968	     76839 ns/op	3411.59 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3830	     76552 ns/op	3424.39 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    3872	     76315 ns/op	3435.04 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N64_K1024/scalar-12  	    4008	     76344 ns/op	3433.73 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2116	    121398 ns/op	138200.66 MB/s	   17466 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2188	    116542 ns/op	143958.97 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2169	    116016 ns/op	144610.65 MB/s	   17409 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2182	    117272 ns/op	143061.98 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2166	    117778 ns/op	142448.39 MB/s	   17410 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2140	    116881 ns/op	143540.53 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2156	    119931 ns/op	139890.40 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2104	    119786 ns/op	140060.25 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2157	    119594 ns/op	140284.52 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2144	    117135 ns/op	143229.21 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/neon-12  	    2178	    116561 ns/op	143934.80 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     409	    710689 ns/op	23606.96 MB/s	   17420 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     402	    707637 ns/op	23708.79 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     403	    706343 ns/op	23752.24 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     405	    709048 ns/op	23661.60 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     394	    719718 ns/op	23310.83 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     396	    725588 ns/op	23122.23 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     394	    729000 ns/op	23014.03 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     404	    710096 ns/op	23626.67 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     404	    706358 ns/op	23751.72 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     399	    704912 ns/op	23800.43 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     403	    724232 ns/op	23165.52 MB/s	   17408 B/op	      29 allocs/op
+PASS

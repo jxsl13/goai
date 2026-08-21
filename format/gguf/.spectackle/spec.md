@@ -20,6 +20,7 @@ Rationale: Two applications of the same transform in one package, measured the s
 
 ## intent
 - P-01M0JBW0SVETY8QC1HZV6G561V Open quantized GGUF files through retained read-only mappings: Consumed by archived task T-01M0JBX2XYFNR. OpenRaw ships explicit retained-mapping ownership, passed all gates, delivered 8.90x raw-open and 1.57x full-consumer-copy speedups, and leads matched gguf-py by 89.17x/11.86x. Evidence and perfscan #798 are committed.
+- P-01M0JE35SGFV0BNHQA5AQC2GDA Fuse ARM64 Q4_K decode unpack and dot on M2: Merged in PR #1132 at 89795e4a after all 15 CI lanes passed. The retained ARM64 Q4_K fused dot delivered 4.73x at the largest measured production QMatMul shape and 2.94x in Mamba2 while preserving all non-ARM64 and M>1 routes. Generalizable fast-path bypass risk was reported as perfscan issue #799. The Q6_K negative control was statistically flat and is intentionally left for a separate measured p [body truncated at tombstone retention cap]
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -30,3 +31,9 @@ Rationale: M2 evidence shows 8.00x leaf, 4.73x production-shaped QMatMul, and 2.
 The non-ARM64 and M>1 Q4_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
 
 Rationale: The measured gain and tolerance contract cover only ARM64 single-token decode.
+
+## ARM64-Q6K-FUSED-DOT-001
+WHEN QMatMul receives contiguous F32 M1 activations with Q6_K weights, the ARM64 Q6_K single-token QMatMul selector SHALL dispatch to fused NEON unpack-scale-dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-Q6K-FUSED-DOT-SCOPE-001
+The non-ARM64 and M greater than one Q6_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.

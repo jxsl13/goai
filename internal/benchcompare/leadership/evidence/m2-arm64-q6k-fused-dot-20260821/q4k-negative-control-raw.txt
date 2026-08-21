@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/nlp
+cpu: Apple M2 Pro
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2514	    117264 ns/op	   53954 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2546	    118827 ns/op	   53932 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2514	    119037 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2493	    118396 ns/op	   53920 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2510	    119410 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2466	    118090 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2512	    118551 ns/op	   53924 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2461	    119045 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2499	    119164 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2456	    118793 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2424	    118942 ns/op	   53915 B/op	      93 allocs/op
+PASS

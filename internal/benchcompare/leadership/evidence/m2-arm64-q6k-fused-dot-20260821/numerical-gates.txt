@@ -1,0 +1,13 @@
+=== RUN   TestDotQ6KBlockNeonKnownValue
+--- PASS: TestDotQ6KBlockNeonKnownValue (0.00s)
+=== RUN   TestDotQ6KAsm
+    dot_q6k_asm_test.go:29: k=256: asm=-45.03754425048828 scalar=-45.03754456405581 rel=6.9623583779019045e-09
+    dot_q6k_asm_test.go:29: k=512: asm=-153.05284118652344 scalar=-153.05284401768267 rel=1.849791981384609e-08
+    dot_q6k_asm_test.go:29: k=4096: asm=-6.816525459289551 scalar=-6.816528463514131 rel=4.4072647768669817e-07
+--- PASS: TestDotQ6KAsm (0.00s)
+=== RUN   TestDotQ6KAsmRandomRaw
+    dot_q6k_asm_test.go:64: maximum scalar-relative error across random raw blocks: 1.1971254583275479e-05
+--- PASS: TestDotQ6KAsmRandomRaw (0.00s)
+=== RUN   TestQMatMulFusedDecodeMatchesGeneralPathExactly
+--- PASS: TestQMatMulFusedDecodeMatchesGeneralPathExactly (0.02s)
+PASS
