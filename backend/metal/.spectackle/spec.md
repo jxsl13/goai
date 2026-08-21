@@ -120,3 +120,8 @@ Rationale: Q2_K guarantees four-byte but not eight-byte alignment.
 WHEN M exceeds one or word-load support is unavailable, the Metal Q2_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
 
 Rationale: The experiment is limited to supported single-token decode.
+
+## METAL-Q2K-WORD-LOAD-THRESHOLD-001
+WHEN it evaluates an M=1 decode shape, the Metal Q2_K cooperative selector SHALL select scalar-word loads only when K times N is at least 6291456; otherwise retain control.
+
+Rationale: The pilot showed broad gains beginning at K2048,N3072 while smaller cells were unstable.

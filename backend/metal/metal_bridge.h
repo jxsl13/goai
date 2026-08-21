@@ -133,6 +133,8 @@ int mtl_qmatmul_q4k(const float* X, const unsigned char* W, float* O, int M, int
 // one-thread-per-output kernel (off) for same-process forced-off A/B measurement.
 // Returns the previous setting. Unsupported devices transparently retain scalar.
 int mtl_q2k_cooperative_set(int on);
+int mtl_q2k_word_load_set(int on);
+int mtl_q2k_word_load_active(int m, int k, int n);
 void mtl_set_coop_max_m(int m);
 int mtl_q4_0_cooperative_set(int on);
 int mtl_q8_0_cooperative_set(int on);
