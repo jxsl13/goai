@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## P-01M0J975XHFD5AXGP661E8G644 Route ARM64 F32 MHA bands through strided GEMM I/O
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 refs: T-01M0J5KPW5EFY8TM91JY3WZFD2
 grilled: 2026-08-21 open=1
