@@ -3736,7 +3736,7 @@ state: draft
 created: 2026-08-21
 grilled: 2026-08-21 open=1
 
-Objective: accelerate internal/simd.SSMScanF64 and SSMScanRangeF64 on Apple arm64 under goexperiment.simd by fusing the existing proven two-lane F64 NEON negative-exponential polynomial with the selective-scan state update and C reduction.
+Objective: accelerate go:simd.SSMScanF64 and go:simd.SSMScanRangeF64 on Apple arm64 under goexperiment.simd by fusing the existing proven two-lane F64 NEON negative-exponential polynomial with the selective-scan state update and C reduction.
 
 Baseline and leverage evidence:
 - exact base d3d2f68a35addbc2784c7799486a767818fef016, verified merge of PR #1127;
@@ -3747,7 +3747,7 @@ Baseline and leverage evidence:
 Required scope:
 1. Only arm64 && goexperiment.simd receives the optimized implementation. Portable, amd64, default Go, CUDA, Vulkan, and Metal product behavior remain byte-identical unless a build/test integration change is strictly required.
 2. Implement a fused two-lane NEON leaf for each SSM state row: abar=exp(delta*A), h=abar*h+delta*B*u, store h, and accumulate C*h. Reuse the exact degree-13 range reduction and constants already proven by expNegPairsNeonF64; no new approximation family.
-3. SSMScanF64 and SSMScanRangeF64 must use the same per-channel operation/reduction ordering so range execution is bit-identical to whole execution. N-even pairs use NEON; an odd final state uses the scalar formula in ascending-N order.
+3. go:simd.SSMScanF64 and go:simd.SSMScanRangeF64 must use the same per-channel operation/reduction ordering so range execution is bit-identical to whole execution. N-even pairs use NEON; an odd final state uses the scalar formula in ascending-N order.
 4. Preserve arbitrary public API semantics. The optimized path may run only when finite delta is nonnegative, finite A is nonpositive, and every product is inside the proven [-708,0] domain. Any unsafe, NaN, Inf, positive, or underflow-boundary input falls back to the existing scalar scan without partial mutation.
 5. Internal scan remains 0 B/op and 0 allocs/op. No heap scratch, per-token allocation, or hidden slice escape.
 6. Accuracy versus the scalar reference must stay within the existing 1e-10 relative bound for representative N=1,2,3,16,17,128 shapes, with and without D-skip; state h and outputs must remain finite for valid-domain fixtures.
