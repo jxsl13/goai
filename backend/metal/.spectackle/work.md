@@ -36,12 +36,3 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
-
-## P-01M0GZESBAFGS8J03YXK0YS5YF Pack Q2_K quant bytes into aligned uint loads
-kind: proposal
-state: active
-created: 2026-08-21
-grilled: 2026-08-21 open=1
-targets: msl:qmatmul_q2k_cooperative, objc:metal_bridge.ensure_qmatmul_q2k, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.mtl_qmatmul_q2k, go:metal.SetQ2KCooperative, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q2k_cooperative_test.go, backend/metal/kquant_gap_bench_test.go
-
-The cooperative Q2_K decode kernel currently reads eight contiguous quant bytes per lane through indexed uchar accesses. The 84-byte block stride, every row stride, the 16-byte quant-plane offset, group offsets, and lane offsets guarantee four-byte alignment but not eight-byte alignment across alternating blocks. Test a separately selectable qmatmul_q2k_cooperative_word candidate on Apple M2 Pro: load those eight bytes as exactly two scalar uint words per lane, extract identical bytes in registers, and preserve shift, scale/min unpacking, and float accumulation order. Never use uint2, ulong, or wider device-pointer loads. Wire one default-off predicate through direct, resident, and Recorder selectors. Validate scalar/control/candidate parity, finite and nonfinite class, immutability, odd tails, support guards, and M>1 fallback. Benchmark same-binary AB/BA resident decode across KV, square, mid-up/down, gate/up, down, and vocabulary shapes with transition dispatches excluded. Promote only if every eligible production shape reaches at least 1.10x control in each of three independent count-seven campaigns; otherwise revert and preserve negative evidence.
