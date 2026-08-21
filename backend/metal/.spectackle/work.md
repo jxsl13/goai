@@ -47,7 +47,7 @@ On Apple M2, test an alignment-safe Q4_0 cooperative decode kernel that replaces
 
 ## T-01M0H0T9FNEWPBMJKESF613K7D Implement and gate Q4_0 SIMD pair loads
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 parent: P-01M0H0SG6FFVKBE666TCKH10MG
 targets: msl:qmatmul_q4_0_cooperative, objc:metal_bridge.ensure_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul
