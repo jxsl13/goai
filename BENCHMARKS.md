@@ -418,11 +418,12 @@ DeepSeek's absorbed-latent attention cache at 6.7× less KV memory, O(1)
 recurrent decode for RWKV/Mamba/Jamba, and a latency-aware thread pool for
 1.68× end-to-end decode.
 
-**Honest open gap:** CPU *quantized* decode runs ≈8.8× slower than f32
-decode (Q8_0, dim-256 model) because the CPU quantized matmul dequantizes
-ggml blocks on the fly — quantization currently buys memory (4–8× less), not
-CPU speed. The fix (a block-native quantized GEMV kernel) is flagged in the
-log; on GPU the quantized decoders already run block-native.
+**Historical open gap:** CPU *quantized* decode ran ≈8.8× slower than f32
+decode (Q8_0, dim-256 model) because its scalar quantized matmul decoded ggml
+blocks inside the hot dot. The ARM64 Q8_0 kernel below closes that primitive
+defect and nearly halves a recurrent model's measured step, but the original
+whole-model comparison has not yet been rerun and is therefore not restated as
+closed. On GPU the quantized decoders already run block-native.
 
 **ARM64 Q4_K progress (2026-08-21):** the M2 single-token Q4_K path now fuses
 nibble unpack, affine dequantization and dot-product reduction in one NEON
@@ -445,6 +446,21 @@ control. Reported QMatMul B/s is logical f32 work, not physical bandwidth.
 Neither K-quant gain closes or restates the separate Q8_0 8.8× whole-model gap,
 and neither is yet a matched llama.cpp CPU leadership claim. Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
+
+**ARM64 Q8_0 progress (2026-08-21):** the common 8-bit M1 path now widens
+signed quants, applies each f16 block scale, and reduces the entire row in one
+NEON call instead of executing the portable per-element f64 loop. Against the
+same-binary scalar selector, the K=4096 row dot improves **14.84×**, QMatMul
+improves **4.09×** at M1/N64/K1024 and **2.50×** at M1/N4096/K1024, and
+recurrent quantized Mamba2 improves **1.93×** (169.60 → 87.98 µs). Every Q8_0
+time cell has `p=0.000`, n=10 after first-sample removal, and unchanged
+allocation counts; the untouched Q6_K recurrent cell is flat (`p=0.579`). The
+maximum scalar-relative error over 100 arbitrary raw rows is 2.93e-5, below
+the 1e-4 contract. Reported leaf and QMatMul B/s is logical f32 work, not
+physical memory bandwidth. This is an internal ARM64 win; a matched llama.cpp
+CPU comparison and the original dim-256 whole-model rerun remain required for
+a leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q8-fused-dot-20260821`.
 
 ### Tokenizer throughput — pure-Go BPE vs tiktoken
 
@@ -714,7 +730,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
-| CPU Q8_0 quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop; the 2026-08-21 ARM64 Q4_K fused kernel does not cover Q8_0 | block-native Q8_0 ARM64 GEMV; then rerun the whole-model comparison |
+| CPU Q8_0 quantized decode vs own f32 | historical 8.8×; rerun pending after the 2026-08-21 kernel | scalar block-dot defect is closed on ARM64; the published whole-model cell predates the 1.93× Mamba2 / 2.50–4.09× QMatMul gain | rerun the original dim-256 whole-model cell and add a matched llama.cpp CPU comparison |
 | Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
 
 ## Not yet measured — booked benchmark tasks

@@ -39,3 +39,6 @@ Rationale: The exact Abs leaf remains below the 1.03 EAGLE workload gate alone. 
 WHEN the active backend lacks a native Smooth-L1 core for the feature dtype, the EAGLE loss path SHALL retain the composite implementation rather than force an implicit CPU fallback.
 
 Rationale: A CPU-only fused kernel is an M2-first training optimization. Backend capability gating prevents the fusion from regressing CUDA, Vulkan, or Metal workloads that already execute the composite operations natively.
+
+## Q8-SIMD-MODEL-PARITY-001
+WHEN a registered Q8_0 SIMD selector changes summation order, the model-level Q8_0 decode-vs-Forward gates SHALL require exact equality on portable builds and absolute error at most 5e-5*abs(reference)+1e-6 on SIMD builds.

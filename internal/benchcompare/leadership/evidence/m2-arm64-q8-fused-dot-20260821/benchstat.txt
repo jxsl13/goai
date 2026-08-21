@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Pro
+                        │ control.txt │ candidate.txt │
+                        │   sec/op    │    sec/op     vs base                │
+Q8RowK4096-8                 4849.5n ± 1%     326.8n ± 0%  -93.26% (p=0.000 n=10)
+QMatMulQ8M1N64K1024-8        22.362µ ± 1%      5.470µ ± 1%  -75.54% (p=0.000 n=10)
+QMatMulQ8M1N4096K1024-8       258.7µ ± 6%      103.5µ ± 0%  -59.99% (p=0.000 n=10)
+QuantMamba2DecodeQ8_0-8      169.60µ ± 1%      87.98µ ± 1%  -48.13% (p=0.000 n=10)
+QuantMamba2DecodeQ6_K-8       100.1µ ± 1%      100.2µ ± 1%        ~ (p=0.579 n=10)
+
+                        │  allocs/op  │  allocs/op   vs base                 │
+Q8RowK4096-8                    0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10)
+QMatMulQ8M1N64K1024-8           4.000 ± 0%       4.000 ± 0%       ~ (p=1.000 n=10)
+QMatMulQ8M1N4096K1024-8         21.00 ± 0%       21.00 ± 0%       ~ (p=1.000 n=10)
+QuantMamba2DecodeQ8_0-8         93.00 ± 0%       93.00 ± 0%       ~ (p=1.000 n=10)
+QuantMamba2DecodeQ6_K-8         93.00 ± 0%       93.00 ± 0%       ~ (p=1.000 n=10)
+
+Generated with:
+  benchstat control.txt candidate.txt
+
+The full benchstat B/s and B/op tables can be regenerated from the retained
+inputs. B/s in the leaf and QMatMul cells counts logical f32 work and is not a
+physical bandwidth claim.

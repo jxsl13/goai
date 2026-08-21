@@ -1,0 +1,25 @@
+{
+  "date": "2026-08-21",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "base_commit": "0d8ffffc3bad4ab2314d62200c93afd8cb532842",
+  "branch": "codex/m2-arm64-q8-dot",
+  "spectackle": "v0.9.3 (go1.26.6)",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan@v1.71.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "benchstat": "golang.org/x/perf/cmd/benchstat",
+  "binary_sha256": {
+    "base_gguf": "ffdc906e1a5958ab743d3dee448edef0bee12efacfe78739c054f3388c297c2e",
+    "candidate_gguf": "7f79500b721e39720075a8d58f6c62c8ec469930e7a91529b38621fcd22838fa",
+    "base_nlp": "69fd0ef429b7a8249f8d301c1d5841cab1c83cde92a38ca394a9c18bdeed0e04",
+    "candidate_nlp": "62c489662f276297b63e1815afaf632fbb360f714318a51235e23374dd2cc282"
+  },
+  "sampling": {
+    "benchtime": "250ms",
+    "runs_per_cell": 11,
+    "discarded": "first sample only",
+    "benchstat_n": 10,
+    "order": "alternated scalar/candidate first on each invocation; base/candidate order alternated for end-to-end binaries"
+  }
+}

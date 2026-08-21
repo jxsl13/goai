@@ -312,7 +312,7 @@ func TestQuantMamba2DecodeMatchesForward(t *testing.T) {
 			t.Fatal(err)
 		}
 		for j := range full.Shape()[1] {
-			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); got != want {
+			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); !quantQ8DecodeParity(got, want) {
 				t.Fatalf("decode logit[%d][%d] = %v, full-Forward %v — recurrent step diverged from the batched scan", pos, j, got, want)
 			}
 		}

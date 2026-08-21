@@ -393,8 +393,8 @@ func TestQuantGemma2DecodeMatchesForward(t *testing.T) {
 		if x := math.Abs(got - want); x > d {
 			d = x
 		}
-		if got != want {
-			t.Errorf("decode logit[%d] = %.9g, full-Forward %.9g (want bit-exact)", j, got, want)
+		if !quantQ8DecodeParity(got, want) {
+			t.Errorf("decode logit[%d] = %.9g, full-Forward %.9g (outside Q8_0 parity contract)", j, got, want)
 		}
 	}
 	t.Logf("QuantGemma2 decode-vs-Forward (last row) max abs diff: %.3e", d)

@@ -37,3 +37,9 @@ WHEN QMatMul receives contiguous F32 M1 activations with Q6_K weights, the ARM64
 
 ## ARM64-Q6K-FUSED-DOT-SCOPE-001
 The non-ARM64 and M greater than one Q6_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
+
+## ARM64-Q8-FUSED-DOT-001
+WHEN QMatMul receives contiguous F32 M1 activations with Q8_0 weights, the ARM64 Q8_0 single-token QMatMul selector SHALL dispatch to a fused NEON signed-int8 scale dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-Q8-FUSED-DOT-SCOPE-001
+The non-ARM64, M greater than one, and non-Q8_0 QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 Q8_0 M1 kernel.
