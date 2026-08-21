@@ -136,7 +136,7 @@ WHEN the paired campaigns measure seq128 and seq512 full and GQA forward control
 WHEN the ARM64 SIMD F32 MHA direct-stride route executes deterministic causal, full, and GQA fixtures, the CPU backend SHALL preserve digest 73550b82110bb18f and satisfy relative tolerance 2e-3 plus absolute tolerance 1e-4.
 
 ## ARM64-F32-MHA-STRIDED-IO-GUARDS-001
-WHEN guarded A, B, and C buffers exercise aligned and tail row or column shapes, the strided F32 row GEMM SHALL leave A and B unchanged, write only the requested C rows and columns, and preserve every sentinel outside that region.
+WHEN guarded A, B, and C buffers exercise aligned and tail row or column shapes, the strided F32 row GEMM SHALL make gemmF32RowsStridedCols preserve A and B bits plus every C sentinel outside the requested region with 0 unexpected writes.
 
 ## ARM64-F32-MHA-STRIDED-IO-ALLOC-001
 WHEN steady-state allocation auditing compares the direct-stride candidate with exact merged control, the MHA forward band SHALL use no qb or ob scratch buffers and report no more allocations per operation than control.
