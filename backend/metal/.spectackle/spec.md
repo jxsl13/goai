@@ -8,6 +8,8 @@ schema: v1
 - R-01M08XC0VNF9RVA1AG1HF28714 Reject M2 MPSGraph quant projection fusion despite broad-shape speedups: Closed no-action and consumed by the rejection of T-01M08WVXA2F6W and P-01M08WKNGEF49. MPSGraph delivered 1.152x-1.381x on broad M64 projection leaves but changed reduction results far beyond the 5e-4 gate; two explicit rounding/accumulation repairs failed. All executable changes were reverted. The generalized parity-before-timing guard is jxsl13/perfscan#761.
 - T-01M0FNQVFTFQ0ABX96T9QM18R4 Gate deterministic host Metal embedding backward: Implemented deterministic host-resident F32 scatter with reference-order rounding; preserved the old Metal atomic route as a mutation-proven benchmark control. Three independent seven-sample M2 campaigns cleared all five frozen shapes, worst 3.931x and best 30.762x. Cross-reference, preflight, full Metal lane, focused perfscan, and all 15 PR #1105 CI checks passed. Evidence: internal/benchcompare/ [body truncated at tombstone retention cap]
 - T-01M0FVGM88EWMRQCHFN4B748AV Gate Metal bias-gradient routing against the optimized CPU kernel: Add a mutation-proven direct-Metal benchmark control and production selector over the frozen F32 shape matrix. Run three independent count-7 campaigns, reject unstable timing before routing, pin both selector arms, strengthen contiguous and noncontiguous reference parity, run an end-to-end GPT training-step no-regression gate, and retain only a measured winner zone. Record reproducible evidence an [body truncated at tombstone retention cap]
+- T-01M0GZFS4DFY08YRAND3TRHB5N Implement and gate Q2_K scalar-word loads: Implemented and validated default-on M2 Metal Q2_K scalar-word quant loads for eligible M=1 decode shapes. Replaced eight indexed uchar reads per lane with two aligned scalar uint loads while preserving byte order and accumulation semantics; uint2/ulong were excluded because the 84-byte block stride guarantees only 4-byte alignment. Production routing requires K*N >= 6291456 and preserves the hist [body truncated at tombstone retention cap]
+- P-01M0GZESBAFGS8J03YXK0YS5YF Pack Q2_K quant bytes into aligned uint loads: Delivered the M2-first Q2_K word-load optimization through task T-01M0GZFS4DFY0. The aligned scalar-uint design is numerically equivalent within 2.068e-6 max scalar relative error, guarded by an explicit K*N >= 6291456 decode threshold, and measured 1.300x-1.788x faster across five eligible production shapes in each of three independent AB/BA campaigns; fallback routing stayed within 0.983x-1.016x [body truncated at tombstone retention cap]
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -100,3 +102,28 @@ Rationale: Q3_K guarantees two-byte but not four-byte alignment.
 WHEN M exceeds one or scale-broadcast support is unavailable, the Metal Q3_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
 
 Rationale: The experiment is limited to supported single-token decode.
+
+## METAL-Q2K-WORD-LOAD-PERF-001
+WHEN three independent count-seven M2 campaigns cover every representative shape, the Metal Q2_K word-load selector SHALL retain the candidate only when every eligible shape reaches at least 1.10x control.
+
+Rationale: Packed lane-unique loads must produce broad end-to-end leverage.
+
+## METAL-Q2K-WORD-LOAD-NUMERIC-001
+WHEN the candidate processes finite or nonfinite inputs, the Metal Q2_K word-load kernel SHALL match control within 2e-5, preserve finite Inf and NaN class, and mutate zero input bytes.
+
+Rationale: Word extraction must preserve observable quant semantics.
+
+## METAL-Q2K-WORD-LOAD-ALIGNMENT-001
+WHEN it reads eight lane-unique bytes across 84-byte blocks or rows, the Metal Q2_K quant-plane loader SHALL issue exactly two uint loads and zero uint2-or-wider device-pointer loads.
+
+Rationale: Q2_K guarantees four-byte but not eight-byte alignment.
+
+## METAL-Q2K-WORD-LOAD-SCOPE-001
+WHEN M exceeds one or word-load support is unavailable, the Metal Q2_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
+
+Rationale: The experiment is limited to supported single-token decode.
+
+## METAL-Q2K-WORD-LOAD-THRESHOLD-001
+WHEN it evaluates an M=1 decode shape, the Metal Q2_K cooperative selector SHALL select scalar-word loads only when K times N is at least 6291456; otherwise retain control.
+
+Rationale: The pilot showed broad gains beginning at K2048,N3072 while smaller cells were unstable.

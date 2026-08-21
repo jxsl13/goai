@@ -1689,6 +1689,23 @@ func SetQ2KCooperative(on bool) bool {
 	return C.mtl_q2k_cooperative_set(C.int(v)) == 1
 }
 
+// SetQ2KWordLoad selects alignment-safe scalar-word quant loads in eligible
+// cooperative Q2_K M=1 kernels and returns the previous setting. The historical
+// cooperative kernel remains the same-process performance control below the
+// measured K*N threshold and whenever this hook disables the candidate.
+func SetQ2KWordLoad(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q2k_word_load_set(C.int(v)) == 1
+}
+
+// q2KWordLoadActive reports whether native Q2_K selectors choose the candidate.
+func q2KWordLoadActive(m, k, n int) bool {
+	return C.mtl_q2k_word_load_active(C.int(m), C.int(k), C.int(n)) == 1
+}
+
 // SetQ3KCooperative selects the SIMD-group-cooperative resident Q3_K M=1 matvec and
 // returns the previous setting. Q3_K splits a 256-superblock into 16 scale groups of
 // 16 elements, so the 32 lanes of a SIMD group pair up two-per-group and each lane

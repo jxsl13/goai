@@ -2072,6 +2072,9 @@ static int ensure_qmatmul_q6k(void);
 static int q4_0_cooperative_enabled(void);
 static int q8_0_cooperative_enabled(void);
 static int q2k_cooperative_enabled(void);
+static int q2k_word_load_enabled(void);
+static int q2k_word_load_active(int m, int k, int n);
+static id<MTLComputePipelineState> q2k_cooperative_pipeline(int m, int k, int n);
 static int q3k_cooperative_enabled(void);
 static int q4k_cooperative_enabled(void);
 static int q5k_cooperative_enabled(void);
@@ -2079,7 +2082,7 @@ static int q5k_wide_load_enabled(void);
 static int q5k_wide_load_active(int m, int k, int n);
 static id<MTLComputePipelineState> q5k_cooperative_pipeline(int m, int k, int n);
 static int q6k_cooperative_enabled(void);
-static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ2KCooperative,
+static id<MTLComputePipelineState> gQMatMulQ2K, gQMatMulQ2KCooperative, gQMatMulQ2KCooperativeWord,
     gQMatMulQ3K, gQMatMulQ3KCooperative,
     gQMatMulQ4K, gQMatMulQ4KCooperative,
     gQMatMulQ5K, gQMatMulQ5KCooperative, gQMatMulQ5KCooperativeWide,
@@ -3095,7 +3098,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     switch (qtype) {
         case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
         case 8:  if (ensure_qmatmul_q8()  != 0) return -6; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8;  break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q2k_cooperative_pipeline(M, K, N) : gQMatMulQ2K; break;
         case 11: if (ensure_qmatmul_q3k() != 0) return -6; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
         case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q5k_cooperative_pipeline(M, K, N) : gQMatMulQ5K; break;
@@ -4121,7 +4124,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     switch (qtype) {
         case 2:  if (ensure_qmatmul_q4_0() != 0) return -6; profileLabel = @"qmatmul.q4_0"; cooperative = M <= gCoopMaxM && q4_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ4_0Cooperative : gQMatMulQ4_0; break;
         case 8:  if (ensure_qmatmul_q8()  != 0) return -6; profileLabel = @"qmatmul.q8_0"; cooperative = M <= gCoopMaxM && q8_0_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ8Cooperative : gQMatMulQ8; break;
-        case 10: if (ensure_qmatmul_q2k() != 0) return -6; profileLabel = @"qmatmul.q2_k"; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K; break;
+        case 10: if (ensure_qmatmul_q2k() != 0) return -6; profileLabel = @"qmatmul.q2_k"; cooperative = M <= gCoopMaxM && q2k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q2k_cooperative_pipeline(M, K, N) : gQMatMulQ2K; break;
         case 11: if (ensure_qmatmul_q3k() != 0) return -6; profileLabel = @"qmatmul.q3_k"; cooperative = M <= gCoopMaxM && q3k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulQ3KCooperative : gQMatMulQ3K; break;
         case 12: if (ensure_qmatmul_q4k() != 0) return -6; profileLabel = @"qmatmul.q4_k"; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; profileLabel = @"qmatmul.q5_k"; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q5k_cooperative_pipeline(M, K, N) : gQMatMulQ5K; break;
@@ -4862,9 +4865,48 @@ static NSString* const kQMatMulQ2KSource =
      "  }\n"
      "  float total=simd_sum(acc);\n"
      "  if (lane==0) O[mi*N+ni]=total;\n"
+     "}\n"
+     // Alignment-safe packed-load experiment for the same cooperative route.
+     // The 84-byte block/row stride and every quant-plane/lane offset preserve
+     // four-byte alignment, but alternating blocks do not preserve eight-byte
+     // alignment. Use two scalar uint loads, never a uint2 or ulong load.
+     "kernel void qmatmul_q2k_cooperative_word(device const float* X [[buffer(0)]],\n"
+     "                                         device const uchar* W [[buffer(1)]],\n"
+     "                                         device float* O [[buffer(2)]],\n"
+     "                                         constant int* P [[buffer(3)]],\n"
+     "                                         uint3 group [[threadgroup_position_in_grid]],\n"
+     "                                         ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                         ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     "  constexpr short simdgroupsPerThreadgroup=2;\n"
+     "  int M=P[0], K=P[1], N=P[2], mi=(int)group.y, nsb=K/256;\n"
+     "  int ni=(int)group.x*simdgroupsPerThreadgroup+(int)simdgroup;\n"
+     "  if (mi>=M || ni>=N) return;\n"
+     "  int rowBytes=nsb*84; int rowOff=ni*rowBytes;\n"
+     "  short g=lane/2, hh=lane%2;\n"
+     "  short nb=g/8, j=(g%8)/2, grp=g%2;\n"
+     "  short shift=2*j, gOff=grp*16, lbase=hh*8; int is=(int)g;\n"
+     "  float acc=0.0f;\n"
+     "  for (int sb=0; sb<nsb; sb++){\n"
+     "    int base=rowOff+sb*84; int scB=base; int qsB=base+16;\n"
+     "    ushort dr=(ushort)W[base+80] | ((ushort)W[base+81]<<8);\n"
+     "    ushort dmr=(ushort)W[base+82] | ((ushort)W[base+83]<<8);\n"
+     "    float d=float(as_type<half>(dr)); float dmin=float(as_type<half>(dmr));\n"
+     "    uchar sc=W[scB+is];\n"
+     "    float dl=d*(float)(sc&0xF), ml=dmin*(float)(sc>>4);\n"
+     "    int q0=qsB+nb*32; int xk=mi*K + sb*256 + nb*128 + j*32 + grp*16;\n"
+     "    device const uint* qpack=(device const uint*)(W+q0+gOff+lbase);\n"
+     "    uint qword0=qpack[0], qword1=qpack[1];\n"
+     "    for (short l=0; l<8; l++){ uint qword=(l<4)?qword0:qword1;\n"
+     "      int q2=(qword>>(8*(l&3)+shift))&3; acc += X[xk+lbase+l]*(dl*(float)q2 - ml); }\n"
+     "  }\n"
+     "  float total=simd_sum(acc);\n"
+     "  if (lane==0) O[mi*N+ni]=total;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gQMatMulQ2K = nil;
+static id<MTLComputePipelineState> gQMatMulQ2KCooperativeWord = nil;
+static int gQMatMulQ2KUseWordLoad = 1;
+static int gQMatMulQ2KWordLoadSupported = 0;
 
 static int ensure_qmatmul_q2k(void) {
     if (gQMatMulQ2K != nil) return 0;
@@ -4881,6 +4923,13 @@ static int ensure_qmatmul_q2k(void) {
             gQMatMulQ2KCooperative.threadExecutionWidth == 32 &&
             gQMatMulQ2KCooperative.maxTotalThreadsPerThreadgroup >= 64;
     }
+    id<MTLFunction> word = [lib newFunctionWithName:@"qmatmul_q2k_cooperative_word"];
+    if (word != nil) {
+        gQMatMulQ2KCooperativeWord = [gDevice newComputePipelineStateWithFunction:word error:&err];
+        gQMatMulQ2KWordLoadSupported = gQMatMulQ2KCooperativeWord != nil &&
+            gQMatMulQ2KCooperativeWord.threadExecutionWidth == 32 &&
+            gQMatMulQ2KCooperativeWord.maxTotalThreadsPerThreadgroup >= 64;
+    }
     return gQMatMulQ2K != nil ? 0 : -6;
 }
 
@@ -4890,8 +4939,34 @@ int mtl_q2k_cooperative_set(int on) {
     return prev;
 }
 
+int mtl_q2k_word_load_set(int on) {
+    int prev = gQMatMulQ2KUseWordLoad;
+    gQMatMulQ2KUseWordLoad = on ? 1 : 0;
+    return prev;
+}
+
 static int q2k_cooperative_enabled(void) {
     return gQMatMulQ2KUseCooperative && gQMatMulQ2KCooperativeSupported;
+}
+
+static int q2k_word_load_enabled(void) {
+    return gQMatMulQ2KUseWordLoad && gQMatMulQ2KWordLoadSupported;
+}
+
+static int q2k_word_load_active(int m, int k, int n) {
+    // The first shape that cleared the three-campaign 1.10x gate was
+    // 2048x3072. K*N keeps the same byte-work boundary for down projections.
+    return m == 1 && (int64_t)k*(int64_t)n >= 2048LL*3072LL &&
+        q2k_cooperative_enabled() && q2k_word_load_enabled();
+}
+
+int mtl_q2k_word_load_active(int m, int k, int n) {
+    if (ensure_init() != 0 || ensure_qmatmul_q2k() != 0) return 0;
+    return q2k_word_load_active(m, k, n);
+}
+
+static id<MTLComputePipelineState> q2k_cooperative_pipeline(int m, int k, int n) {
+    return q2k_word_load_active(m, k, n) ? gQMatMulQ2KCooperativeWord : gQMatMulQ2KCooperative;
 }
 
 int mtl_qmatmul_q2k(const float* X, const unsigned char* W, float* O, int M, int K, int N) {
@@ -4915,7 +4990,7 @@ int mtl_qmatmul_q2k(const float* X, const unsigned char* W, float* O, int M, int
         if (cmd == nil) return -3;
         id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
         const int cooperative = M <= gCoopMaxM && q2k_cooperative_enabled();
-        id<MTLComputePipelineState> pipe = cooperative ? gQMatMulQ2KCooperative : gQMatMulQ2K;
+        id<MTLComputePipelineState> pipe = cooperative ? q2k_cooperative_pipeline(M, K, N) : gQMatMulQ2K;
         [enc setComputePipelineState:pipe];
         [enc setBuffer:xb offset:0 atIndex:0];
         [enc setBuffer:wb offset:0 atIndex:1];
