@@ -38,6 +38,8 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 ## intent
 - T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
 - P-01M0HWDB7BEBY99M96950C5DHE Apple arm64 fused F64 SSM selective scan: Single-task proposal completed by archived task T-01M0HWBG9QEC2 and GoAI PR #1128. The Apple arm64 F64 SSM recurrence now has a fused NEON fast path, numeric-domain proof, scalar fallback, exact range semantics, three statistically significant physical M2 Pro benchmark campaigns, and complete local plus hosted CI evidence. Product gains are internal geomeans -79.08% to -84.45% and backend/cpu end- [body truncated at tombstone retention cap]
+- T-01M0J17HEEEF7VTW4RGEJ4MNWF Mask underflow and fuse the F64 NEON WKV recurrence: validated pass by codex-root-validator diff 4a9bb207ef52 — Validated pass by codex-root-validator. Archived after PR #1129 first corrected CI matrix passed 15/15 at exact head 42d26b68f20991336c7eded0016653eefa151d86. Product implementation e3cb7b80 and strengthened-test candidate c88bc795d76409c3ea002afef96f302b61fc69cc add guarded two-channel Apple-arm64 F64 WKV NEON execution with exact-zero [body truncated at tombstone retention cap]
+- P-01M0J0BWPDE4P97Q05AZV0PSJS Apple arm64 fused F64 WKV recurrence: Proposal completed and archived after both implementation task T-01M0J17HEEEF7 and support task T-01M0J2XM0TF8H were validated, moved through done, and archived following PR #1129 first corrected 15/15 CI matrix at head 42d26b68f20991336c7eded0016653eefa151d86. The Apple M2 F64 WKV path now has a fused guarded two-channel NEON recurrence with 68.84% aggregate internal and 58.35% backend/cpu latenc [body truncated at tombstone retention cap]
 
 ## ARM64-F64-SSM-PERF-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3}
 WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIMD SSM path SHALL retain only with at least 20 percent lower median latency, p below 0.05, and zero allocations.
@@ -62,3 +64,33 @@ WHEN paired count-seven M2 campaigns measure backend/cpu 512x1024x16, the arm64 
 
 ## ARM64-F64-SSM-RANGE-001 {applies: go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanRangeF64BitExactVsWhole}
 WHEN the same valid fixture runs through whole and range entry points, the fused arm64 F64 SSM implementation SHALL pass go:simd.TestSSMScanRangeF64BitExactVsWhole with bit-identical output and recurrent state.
+
+## ARM64-F64-WKV-PERF-001
+WHEN three alternating count-seven M2 campaigns measure BenchmarkWKVScan_SIMD_512x1024, the arm64 SIMD WKV path SHALL retain only with at least 35 percent lower median latency, p below 0.05, and exactly 0 allocs/op.
+
+## ARM64-F64-WKV-E2E-PERF-001
+WHEN three alternating count-seven M2 campaigns measure backend/cpu BenchmarkWKV_512x1024, the arm64 CPU WKV path SHALL retain only with at least 20 percent lower median latency and p below 0.05.
+
+## ARM64-F64-WKV-NUMERIC-001
+WHEN RWKV-like and boundary fixtures exercise fresh or continuing WKV scans, the arm64 SIMD WKV implementation SHALL match scalar output and AA/BB/PP state within 1e-10 relative error.
+
+## ARM64-F64-WKV-FALLBACK-001
+WHEN a channel pair contains non-finite operands or invalid PP/max evolution, the arm64 WKV dispatcher SHALL select wkvScanStateScalar before mutating output or AA/BB/PP state.
+
+## ARM64-F64-WKV-STATE-001
+WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the arm64 SIMD WKV state path SHALL make TestWKVScanStateF64ChunkEqualsWhole pass with bit-identical output and final AA/BB/PP.
+
+## ARM64-F64-WKV-RANGE-001
+WHEN two-aligned ranges cover the same channels as one whole scan, the arm64 SIMD WKV range path SHALL make TestWKVScanRangeF64BitExactVsWhole pass bit-identically for every declared shape.
+
+## ARM64-F64-WKV-MEMORY-001
+WHEN the fused path processes paired channels or a scalar channel tail, the BenchmarkWKVScan_SIMD_512x1024 SHALL report exactly 0 B/op and 0 allocs/op without heap scratch.
+
+## ARM64-F64-WKV-ARCH-001
+WHEN the arm64 goexperiment.simd test binary is inspected, the fused WKV leaf SHALL contain D2 recurrence arithmetic, FRINTN range reduction, and exponent-bit construction.
+
+## ARM64-F64-WKV-SCOPE-001
+The F64 WKV optimization SHALL change only arm64 goexperiment.simd product code and leave F32, amd64, default, reference, and backend ownership paths unchanged.
+
+## ARM64-F64-WKV-UNDERFLOW-001
+WHEN a finite max-subtracted exponential argument is below -708, the fused WKV leaf SHALL use float64 +0.0 for that exponential lane before recurrence arithmetic.

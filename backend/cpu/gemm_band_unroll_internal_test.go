@@ -101,9 +101,9 @@ func TestGemmBandUnrollIsBitExact(t *testing.T) {
 					v := math.Sin(float64(i) * 0.23)
 					got64[i], want64[i], got32[i], want32[i] = v, v, v, v
 				}
-				gemmF64Band(a64, b64, got64, 0, rows, k, n)
+				gemmF64BandUnderTest(a64, b64, got64, 0, rows, k, n)
 				gemmF64BandRef(a64, b64, want64, 0, rows, k, n)
-				gemmF32Band(a32, b32, got32, 0, rows, k, n)
+				gemmF32BandUnderTest(a32, b32, got32, 0, rows, k, n)
 				gemmF32BandRef(a32, b32, want32, 0, rows, k, n)
 				for i := range want64 {
 					if math.Float64bits(got64[i]) != math.Float64bits(want64[i]) {

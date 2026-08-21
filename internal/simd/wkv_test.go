@@ -67,6 +67,20 @@ func TestWKVScanStateF64ChunkEqualsWhole(t *testing.T) {
 		}
 		whole := make([]float64, seq*d)
 		WKVScanF64(k, v, w, u, whole, seq, d)
+		wholeStateOut := make([]float64, seq*d)
+		wholeAA := make([]float64, d)
+		wholeBB := make([]float64, d)
+		wholePP := make([]float64, d)
+		for c := range wholePP {
+			wholePP[c] = -1e38
+		}
+		WKVScanStateF64(k, v, w, u, wholeStateOut, wholeAA, wholeBB, wholePP, seq, d)
+		for i := range whole {
+			if math.Float64bits(whole[i]) != math.Float64bits(wholeStateOut[i]) {
+				t.Fatalf("seq=%d d=%d i=%d: fresh output %.17g != stateful whole %.17g",
+					seq, d, i, whole[i], wholeStateOut[i])
+			}
+		}
 
 		// Absorb the same sequence in three uneven chunks against persistent state.
 		aa := make([]float64, d)
@@ -82,9 +96,16 @@ func TestWKVScanStateF64ChunkEqualsWhole(t *testing.T) {
 			WKVScanStateF64(k[t0*d:t1*d], v[t0*d:t1*d], w, u, chunked[t0*d:t1*d], aa, bb, pp, n, d)
 		}
 		for i := range whole {
-			if whole[i] != chunked[i] {
+			if math.Float64bits(whole[i]) != math.Float64bits(chunked[i]) {
 				t.Fatalf("seq=%d d=%d i=%d: chunked decode %.17g != whole forward %.17g (must be bit-exact)",
 					seq, d, i, chunked[i], whole[i])
+			}
+		}
+		for c := range d {
+			if math.Float64bits(wholeAA[c]) != math.Float64bits(aa[c]) ||
+				math.Float64bits(wholeBB[c]) != math.Float64bits(bb[c]) ||
+				math.Float64bits(wholePP[c]) != math.Float64bits(pp[c]) {
+				t.Fatalf("seq=%d d=%d c=%d: final chunk state differs from whole", seq, d, c)
 			}
 		}
 		t.Logf("seq=%d d=%d: chunked continuing scan bit-exact vs whole scan", seq, d)

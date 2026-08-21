@@ -11,9 +11,7 @@ import (
 
 // The WKV recurrence's running maximum is a math.Max per token per channel, and it lives in
 // THREE places that a per-file sweep does not connect: backend/ref/wkv.go, the F32 scan in
-// backend/cpu/wkv.go, and internal/simd/wkv_scalar.go — which is where the CPU backend's F64
-// path actually lands on this build, since simd.WKVScanRangeF64 is a portable Go fallback
-// rather than assembly outside the AVX build.
+// backend/cpu/wkv.go, and the architecture-selected internal/simd WKV scan.
 //
 // This digest runs the op on BOTH backends in BOTH dtypes, so a conversion that misses one of
 // the three files shows up as an unchanged number where a change was expected, and a
@@ -68,10 +66,10 @@ func wkvOpDigest(t *testing.T, be backend.Name, dt tensor.Dtype, seq, d int) uin
 	return h
 }
 
-// The Ref and CPU digests below are EQUAL within a dtype, which is the parity contract the
-// CPU kernel was written to hold. That makes the pair a second gate on top of the frozen
-// constants: converting one backend's max and not the other would break the equality even if
-// someone re-froze the numbers.
+// Ref and CPU remain bit-identical within a dtype in default builds. Experimental SIMD
+// transcendental kernels intentionally carry a separately frozen architecture-specific CPU F64
+// digest; the internal SIMD suite independently gates their 1e-10 accuracy and hostile fallback.
+// F32 remains bit-identical in both build modes.
 func TestWKVOpIsBitIdentical(t *testing.T) {
 	// 37 channels rather than a round number: the CPU F64 path bands the channels across
 	// GOMAXPROCS, and a shape that divides evenly would leave the remainder band untested.
@@ -83,9 +81,13 @@ func TestWKVOpIsBitIdentical(t *testing.T) {
 	}{
 		{backend.Ref, tensor.F64, 24, 37, archgold.Pick(10566835949036511716, 17150419372584378800)},
 		{backend.Ref, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
-		{backend.CPU, tensor.F64, 24, 37, archgold.Pick(10566835949036511716, 17150419372584378800)},
+		{backend.CPU, tensor.F64, 24, 37, archgold.PickSIMD(
+			10566835949036511716, 17150419372584378800,
+			15900442622490220052, 17150419372584378800)},
 		{backend.CPU, tensor.F32, 24, 37, archgold.Pick(3093831351525738813, 3093831351525738813)},
-		{backend.CPU, tensor.F64, 64, 96, archgold.Pick(13474779355268514115, 16963565634156262264)},
+		{backend.CPU, tensor.F64, 64, 96, archgold.PickSIMD(
+			13474779355268514115, 16963565634156262264,
+			1970352338795860704, 16963565634156262264)},
 	}
 	for _, c := range cases {
 		got := wkvOpDigest(t, c.be, c.dt, c.seq, c.d)

@@ -1,0 +1,154 @@
+## benchstat_c1_internal
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/simd
+cpu: Apple M2 Pro
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_candidate.txt │
+                         │                                                  sec/op                                                  │                                       sec/op                                         vs base               │
+WKVScan_SIMD_512x1024-12                                                                                               15.344m ± 1%                                                                           4.717m ± 4%  -69.26% (p=0.001 n=7)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_candidate.txt │
+                         │                                                   B/op                                                   │                                          B/op                                            vs base           │
+WKVScan_SIMD_512x1024-12                                                                                                 0.000 ± 0%                                                                                0.000 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_internal_candidate.txt │
+                         │                                                allocs/op                                                 │                                        allocs/op                                         vs base           │
+WKVScan_SIMD_512x1024-12                                                                                                 0.000 ± 0%                                                                                0.000 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_c1_cpu
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_candidate.txt │
+                │                                               sec/op                                                │                                     sec/op                                      vs base               │
+WKV_512x1024-12                                                                                          2.474m ± 21%                                                                      1.035m ± 1%  -58.18% (p=0.001 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_candidate.txt │
+                │                                                B/op                                                 │                                         B/op                                          vs base         │
+WKV_512x1024-12                                                                                          4.002Mi ± 0%                                                                           4.002Mi ± 0%  ~ (p=0.803 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c1_cpu_candidate.txt │
+                │                                              allocs/op                                              │                                     allocs/op                                       vs base           │
+WKV_512x1024-12                                                                                            29.00 ± 0%                                                                           29.00 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_c2_internal
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/simd
+cpu: Apple M2 Pro
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_candidate.txt │
+                         │                                                  sec/op                                                  │                                       sec/op                                         vs base               │
+WKVScan_SIMD_512x1024-12                                                                                              15.489m ± 11%                                                                           5.019m ± 2%  -67.59% (p=0.001 n=7)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_candidate.txt │
+                         │                                                   B/op                                                   │                                          B/op                                            vs base           │
+WKVScan_SIMD_512x1024-12                                                                                                 0.000 ± 0%                                                                                0.000 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_internal_candidate.txt │
+                         │                                                allocs/op                                                 │                                        allocs/op                                         vs base           │
+WKVScan_SIMD_512x1024-12                                                                                                 0.000 ± 0%                                                                                0.000 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_c2_cpu
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_candidate.txt │
+                │                                               sec/op                                                │                                     sec/op                                      vs base               │
+WKV_512x1024-12                                                                                           2.521m ± 2%                                                                      1.028m ± 2%  -59.22% (p=0.001 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_candidate.txt │
+                │                                                B/op                                                 │                                         B/op                                          vs base         │
+WKV_512x1024-12                                                                                          4.002Mi ± 0%                                                                           4.002Mi ± 0%  ~ (p=0.268 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c2_cpu_candidate.txt │
+                │                                              allocs/op                                              │                                     allocs/op                                       vs base           │
+WKV_512x1024-12                                                                                            29.00 ± 0%                                                                           29.00 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_c3_internal
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/simd
+cpu: Apple M2 Pro
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_candidate.txt │
+                         │                                                  sec/op                                                  │                                       sec/op                                         vs base               │
+WKVScan_SIMD_512x1024-12                                                                                              15.701m ± 13%                                                                           4.693m ± 6%  -70.11% (p=0.001 n=7)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_candidate.txt │
+                         │                                                   B/op                                                   │                                           B/op                                             vs base         │
+WKVScan_SIMD_512x1024-12                                                                                                  0.000 ± ?                                                                                  0.000 ± 0%  ~ (p=1.000 n=7)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_internal_candidate.txt │
+                         │                                                allocs/op                                                 │                                        allocs/op                                         vs base           │
+WKVScan_SIMD_512x1024-12                                                                                                 0.000 ± 0%                                                                                0.000 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_c3_cpu
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_candidate.txt │
+                │                                               sec/op                                                │                                     sec/op                                      vs base               │
+WKV_512x1024-12                                                                                           2.491m ± 1%                                                                      1.189m ± 2%  -52.26% (p=0.001 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_candidate.txt │
+                │                                                B/op                                                 │                                         B/op                                          vs base         │
+WKV_512x1024-12                                                                                          4.002Mi ± 0%                                                                           4.002Mi ± 0%  ~ (p=0.247 n=7)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/raw/wkv_c3_cpu_candidate.txt │
+                │                                              allocs/op                                              │                                     allocs/op                                       vs base           │
+WKV_512x1024-12                                                                                            29.00 ± 0%                                                                           29.00 ± 0%  ~ (p=1.000 n=7) ¹
+¹ all samples are equal
+
+## benchstat_aggregate_internal
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/simd
+cpu: Apple M2 Pro
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-candidate.txt │
+                         │                                            sec/op                                             │                                 sec/op                                   vs base                │
+WKVScan_SIMD_512x1024-12                                                                                    15.489m ± 1%                                                               4.826m ± 3%  -68.84% (p=0.000 n=21)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-candidate.txt │
+                         │                                             B/op                                              │                                     B/op                                       vs base          │
+WKVScan_SIMD_512x1024-12                                                                                      0.000 ± 0%                                                                      0.000 ± 0%  ~ (p=1.000 n=21)
+
+                         │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/internal-candidate.txt │
+                         │                                           allocs/op                                           │                                  allocs/op                                   vs base            │
+WKVScan_SIMD_512x1024-12                                                                                      0.000 ± 0%                                                                    0.000 ± 0%  ~ (p=1.000 n=21) ¹
+¹ all samples are equal
+
+## benchstat_aggregate_cpu
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-candidate.txt │
+                │                                          sec/op                                          │                               sec/op                                vs base                │
+WKV_512x1024-12                                                                                2.496m ± 1%                                                         1.040m ± 14%  -58.35% (p=0.000 n=21)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-candidate.txt │
+                │                                           B/op                                           │                                   B/op                                    vs base          │
+WKV_512x1024-12                                                                               4.002Mi ± 0%                                                               4.002Mi ± 0%  ~ (p=0.876 n=21)
+
+                │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-control.txt │ internal/benchcompare/leadership/evidence/m2-arm64-f64-wkv-neon-20260821/cpu-candidate.txt │
+                │                                        allocs/op                                         │                               allocs/op                                 vs base            │
+WKV_512x1024-12                                                                                 29.00 ± 0%                                                               29.00 ± 0%  ~ (p=1.000 n=21) ¹
+¹ all samples are equal
+

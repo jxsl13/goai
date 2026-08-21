@@ -1,0 +1,13 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/simd
+cpu: Apple M2 Pro
+BenchmarkWKVScan_SIMD_512x1024-12    	     120	   4991938 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     100	   5114284 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     100	   5033708 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     121	   4902687 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     121	   4896753 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     122	   5019129 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWKVScan_SIMD_512x1024-12    	     100	   5055210 ns/op	       0 B/op	       0 allocs/op
+PASS
+
