@@ -36,6 +36,10 @@ const (
 // override it with tolerance-gated vector unpack-and-dot kernels.
 var dotQ4KRowFn = dotQ4_KRow
 
+// dotQ5KRowFn is dotQ5_KRow (scalar) on portable builds. ARM64 overrides it
+// with a tolerance-gated vector unpack-affine-dot kernel.
+var dotQ5KRowFn = dotQ5_KRow
+
 // dotQ6KRowFn is dotQ6_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ6KRowFn = dotQ6_KRow
@@ -267,7 +271,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		case Q4_K:
 			dot = dotQ4KRowFn
 		case Q5_K:
-			dot = dotQ5_KRow
+			dot = dotQ5KRowFn
 		case Q6_K:
 			dot = dotQ6KRowFn
 		}

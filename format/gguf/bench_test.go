@@ -145,6 +145,7 @@ func benchQMatMul(b *testing.B, m int, qt QuantType) {
 
 func BenchmarkQMatMulQ8_0_M1(b *testing.B)  { benchQMatMul(b, 1, Q8_0) }
 func BenchmarkQMatMulQ4_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_K) }
+func BenchmarkQMatMulQ5_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q5_K) }
 func BenchmarkQMatMulQ6_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q6_K) }
 func BenchmarkQMatMulQ4_K_M16(b *testing.B) { benchQMatMul(b, 16, Q4_K) }
 
@@ -283,6 +284,8 @@ func benchQMatMulNK(b *testing.B, m, n, k int, qt QuantType) {
 }
 
 func BenchmarkQMatMulQ4_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_K) }
+
+func BenchmarkQMatMulQ5_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q5_K) }
 
 func BenchmarkQMatMulQ6_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q6_K) }
 

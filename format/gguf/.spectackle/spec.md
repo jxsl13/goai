@@ -43,3 +43,13 @@ WHEN QMatMul receives contiguous F32 M1 activations with Q8_0 weights, the ARM64
 
 ## ARM64-Q8-FUSED-DOT-SCOPE-001
 The non-ARM64, M greater than one, and non-Q8_0 QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 Q8_0 M1 kernel.
+
+## ARM64-Q8-FUSED-DOT-SCOPE-002 {applies: go:gguf.QMatMul,go:gguf.dotQ5_KRow,go:gguf.dotQ5_KRowASM,go:gguf.dotQ5KBlockNeon}
+WHEN QMatMul receives contiguous F32 M1 activations with Q5_K weights, the ARM64 Q5_K single-token QMatMul selector SHALL dispatch to fused NEON nibble-plus-high-bit unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: Q5_K decode currently bypasses the architecture selector used by adjacent K-quants and repeatedly decodes byte planes in scalar Go.
+
+## ARM64-Q8-FUSED-DOT-SCOPE-003 {applies: go:gguf.QMatMul}
+The non-ARM64 and M greater than one Q5_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
+
+Rationale: The optimization is an ARM64 single-token kernel and must not alter portable builds or the general matrix path.

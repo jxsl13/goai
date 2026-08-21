@@ -3763,19 +3763,44 @@ targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_
 
 Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
 
-## T-01M0JJC669FBR8AP1H3K6KSNR7 Implement and gate ARM64 Q8_0 fused decode GEMV
+## ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P Which Q5_K ARM64 fusion boundary best balances first-tranche leverage, numerical auditability, and implementation risk?
+kind: adr
+state: done
+created: 2026-08-21
+decision: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+consequences: The initial kernel makes one architecture call per superblock and preserves portable dispatch and prefill semantics. If call and coefficient overhead remains material after fusion, a later evidence-backed tranche may move the full row into assembly; CPU-to-Metal routing remains a separate backend decision.
+status: accepted
+
+kind: radio
+option: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+option: Whole-row assembly including scale/min decode
+option: Route CPU decode through Metal
+blocks: P-01M0JNATZFE9TT3P428PGMHEYX
+choice: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+
+## P-01M0JNF7VGE7J9PV7PQ8DN2CNN Fuse ARM64 Q5_K decode dot on M2
+kind: proposal
+state: active
+created: 2026-08-21
+refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+
+Q5_K is the only Q4_K/Q5_K/Q6_K decode path still bound directly to a scalar row dot on ARM64. An immutable Apple M2 Pro baseline measures QuantMamba2DecodeQ5_K at 362.5-367.3 us/op with 93 allocations, versus the already fused neighboring formats at materially lower latency. Implement an ARM64-only NEON row-dot that fuses Q5_K nibble and fifth-bit unpack, affine scale/min dequantization, and activation accumulation. Preserve scalar dispatch on other architectures, preserve the general m>1 path, and keep allocation counts unchanged. Retain only if randomized scalar-relative maximum error is at most 1e-4, QMatMul M1 and model-level decode improve significantly under repeated benchstat samples, and an adjacent SIMD quant path remains flat as a negative control. Record reproducible evidence and report the reusable architecture-selector finding to perfscan. ADR-01M0JNC6MSFD4 selects a per-superblock NEON unpack-affine-dot boundary with Go scale/min decoding: it isolates the measured scalar hotspot behind the proven Q4_K boundary while keeping layout semantics auditable; a whole-row assembly rewrite is reserved for a later measured residual-overhead tranche.
+
+RESTORE/ROLLBACK
+The architecture selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar selector and remove only the isolated Q5_K ARM64 files and evidence; portable, M>1, Metal, and Vulkan paths remain untouched.
+
+## T-01M0JNJ3WYE8J9Z1ND423RYHTG Implement and gate ARM64 Q5_K fused decode GEMV
 kind: task
 state: done
 created: 2026-08-21
-parent: P-01M0JJ7DWEENN9THBDNDNYKEM1
-targets: go:gguf.QMatMul, go:gguf.q8FusedDecodeM1, format/gguf/quant_matmul.go, format/gguf/quant_matmul_q8_arm64.go, format/gguf/quant_matmul_q8_arm64.s, format/gguf/quant_matmul_q8_arm64_test.go, format/gguf/quant_matmul_fused_test.go, format/gguf/quant_matmul_bitidentity_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, nlp/quant_decode_parity_test.go, nlp/quant_decode_parity_simd_test.go, nlp/quant_decode_parity_portable_test.go, nlp/quant_deepseekv2_gguf_test.go, nlp/quant_gemma2_gguf_test.go, nlp/quant_jamba_gguf_test.go, nlp/quant_mamba2_gguf_test.go, nlp/quant_mamba_gguf_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-arm64-q8-fused-dot-20260821, .spectackle
+parent: P-01M0JNF7VGE7J9PV7PQ8DN2CNN
+refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
 
-Implement an ARM64-only fused Q8_0 M=1 row dot that widens signed int8 quants directly in NEON, applies each FP16 block scale in-register, accumulates contiguous F32 activations without materializing dequantized weights, and writes directly into caller output. Preserve existing routes for non-ARM64, M>1, non-Q8_0, and invalid shapes. Validate deterministic and randomized numerical parity at relative error <=1e-4, input immutability, unchanged allocations, leaf and QMatMul retention >=1.5x, statistically significant end-to-end Mamba2 Q8_0 improvement on M2, and a negative control. Preserve benchstat/perfscan evidence and report the generalizable kernel pattern to perfscan.
+Add an ARM64 architecture selector for the Q5_K M1 row dot in format/gguf/quant_matmul.go. Implement format/gguf/dot_q5k_asm_arm64.go and format/gguf/dot_q5k_asm_arm64.s so each 256-weight block keeps scale/min extraction in Go while NEON fuses low-nibble unpack, qh fifth-bit insertion, affine dequantization, and activation dot. Add format/gguf/dot_q5k_scalar.go for portable capability reporting, architecture tests with randomized arbitrary raw rows and max scalar-relative error at most 1e-4, extend format/gguf/quant_matmul_fused_test.go tolerance gating, and add direct QMatMul Q5_K benchmarks. Scope excludes M greater than one and every non-ARM64 build. Compile test binaries with go test -c, execute exact tests via the compiled binary -test.run flag, cross-compile portable and amd64+simd packages, run repeated interleaved benchstat samples for leaf, QMatMul, and nlp/BenchmarkQuantMamba2DecodeQ5_K, require unchanged allocations and statistically significant end-to-end gain, and keep Q6_K or Q8_0 flat as a negative control. Write the full environment, commands, raw samples, numerical bound, and result matrix under internal/benchcompare/leadership/evidence and summarize the retained gain in BENCHMARKS.md. Run external perfscan with GOPROXY=direct and report the generalized selector asymmetry on jxsl13/perfscan.
 
-## P-01M0JJ7DWEENN9THBDNDNYKEM1 Fuse ARM64 Q8_0 decode dot on M2
-kind: proposal
-state: done
-created: 2026-08-21
-targets: go:gguf.QMatMul, go:gguf.q8FusedDecodeM1, format/gguf/quant_matmul.go, format/gguf/quant_matmul_q8_arm64.go, format/gguf/quant_matmul_q8_arm64.s, format/gguf/quant_matmul_q8_arm64_test.go, format/gguf/quant_matmul_fused_test.go, format/gguf/quant_matmul_bitidentity_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, nlp/quant_decode_parity_test.go, nlp/quant_decode_parity_simd_test.go, nlp/quant_decode_parity_portable_test.go, nlp/quant_deepseekv2_gguf_test.go, nlp/quant_gemma2_gguf_test.go, nlp/quant_jamba_gguf_test.go, nlp/quant_mamba2_gguf_test.go, nlp/quant_mamba_gguf_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-arm64-q8-fused-dot-20260821, .spectackle
-
-Apple M2 Pro recurrent QuantMamba2 Q8_0 currently measures about 173 us/op after the Q4_K and Q6_K ARM64 kernels, while the Q8_0 M1 selector still uses a scalar four-row dot because q8FusedDecodeM1 is registered only by amd64 goexperiment.simd. Implement an ARM64 NEON Q8_0 row-dot that loads f16 scales through the existing table, widens signed int8 quants, applies the per-block scale, and accumulates against contiguous F32 activations without materializing weights. Preserve non-ARM64, M greater than one, and non-Q8_0 paths. Retain only if same-binary repeated M2 benchmarks show at least 1.5x on representative QMatMul and statistically significant recurrent Mamba2 improvement with unchanged allocations and scalar-relative error at most 1e-4. This directly attacks the still-open documented Q8_0 CPU decode gap and follows the existing amd64 SIMD hook rather than redesigning the public API.
+RESTORE/ROLLBACK
+If any correctness or leverage gate fails, restore the scalar Q5_K selector and remove only format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, and Q5_K-specific evidence. Portable, prefill, Metal, and Vulkan paths remain unchanged.
