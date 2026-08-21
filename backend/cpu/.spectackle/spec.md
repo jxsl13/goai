@@ -49,3 +49,6 @@ WHEN F32 Neg executes on arm64, the CPU backend SHALL toggle only bit 31 of ever
 
 ## ARM64-EXACT-NEG-PERF-001 {applies: go:cpu.negKernelCPU}
 WHEN an arm64 F32 Neg kernel is promoted, the benchmark gate SHALL require at least 1.10x median complete-operation speedup in every target cell across 3 paired count-7 campaigns.
+
+## ARM64-F32-NORM-PERF-001
+WHEN three independent paired count-seven Apple M2 Pro campaigns measure 512x1024 and 512x4096 forward cells, the arm64 SIMD F32 LayerNorm and RMSNorm forward normalization SHALL retain the candidate only when every complete-operation median is at least 1.25x the exact baseline.
