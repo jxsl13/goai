@@ -89,3 +89,6 @@ WHEN the arm64 goexperiment.simd test binary is inspected, the fused WKV leaf SH
 
 ## ARM64-F64-WKV-SCOPE-001
 The F64 WKV optimization SHALL change only arm64 goexperiment.simd product code and leave F32, amd64, default, reference, and backend ownership paths unchanged.
+
+## ARM64-F64-WKV-UNDERFLOW-001
+WHEN a finite max-subtracted exponential argument is below -708, the fused WKV leaf SHALL mask that exponential lane to exact positive zero before recurrence arithmetic.
