@@ -30,6 +30,7 @@ kind: task
 state: draft
 created: 2026-08-21
 parent: P-01M0J975XHFD5AXGP661E8G644
+grilled: 2026-08-21 open=1
 targets: backend/cpu/mha.go, backend/cpu/gemm_rows.go, backend/cpu/gemm_rows_arm64.go, backend/cpu/gemm_rows_amd64.go, backend/cpu/gemm_rows_default.go, backend/cpu/gemm_neon_arm64.go, backend/cpu/gemm_f32_strided_internal_test.go, backend/cpu/mha_band_rows_arm64_simd_test.go, backend/cpu/mha_test.go, backend/cpu/normattn_bench_test.go
 
 Add lda/ldc-aware worker-callable F32 row GEMM entry points without changing the existing contiguous APIs. Implement the ARM64 SIMD path by passing independent row strides into the existing 4x16 NEON tile and handling row/column tails safely; provide amd64 SIMD and portable definitions so every build remains valid. Route only mhaFwdGemmBand through direct strided Q reads and direct strided output stores, retaining score scratch and its causal compaction. Remove qb and ob scratch from this band. Add guard-region and contiguous-equivalence tests for the strided surface plus the existing deterministic MHA digest. Pilot exact merged control versus candidate first; reject or redesign if the five forward cells do not all clear 8 percent, decode regresses, semantics drift, allocations increase, or pprof does not reduce memmove.
