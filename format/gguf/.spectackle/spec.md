@@ -111,3 +111,6 @@ WHEN IQ3_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL p
 
 ## ARM64-IQ3S-FUSED-DOT-001
 WHEN contiguous F32 M1 activations use IQ3_S weights, the Apple ARM64 IQ3_S selector SHALL dispatch 1 row-level fused NEON 9-bit-grid and direct-sign dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-IQ3S-FUSED-DOT-SCOPE-001
+The IQ3_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
