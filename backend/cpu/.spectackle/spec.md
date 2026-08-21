@@ -151,4 +151,4 @@ WHEN the paired campaigns measure single-token GQA decode and steady-state alloc
 WHEN matched five-second MHA512 profiles compare control and candidate, the ARM64 SIMD MHA implementation SHALL reduce runtime.memmove flat samples by at least 25 percent and keep scalar GEMM samples at most 5 percent of NEON tile samples.
 
 ## ARM64-F32-MHA-STRIDED-IO-SCOPE-001
-WHEN the build lacks arm64 goexperiment.simd or the operation is F64, backward, masked, selective, or shorter than the F32 GEMM threshold, the CPU backend SHALL keep mhaFwdStridedIO false and execute the existing qb or ob scratch route with unchanged public semantics.
+WHEN the build is not arm64 goexperiment.simd or the operation is F64, backward, masked, selective, or below the F32 GEMM threshold, the CPU backend SHALL keep mhaFwdStridedIO false and execute the existing qb or ob scratch route with unchanged public semantics.
