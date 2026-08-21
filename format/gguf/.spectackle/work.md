@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0JWHMHZEDQVCFCT3GJVPME7 Add IQ4_NL QMatMul and fuse its ARM64 decode dot
 kind: proposal
-state: active
+state: done
 created: 2026-08-21
 refs: ADR-01M0JWG7KKFVE9V1KTEEQ556WF
 grilled: 2026-08-21 open=0
