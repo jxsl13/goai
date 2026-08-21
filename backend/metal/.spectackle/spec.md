@@ -45,3 +45,18 @@ WHEN M is greater than 1 or the device lacks a 32-lane SIMD group with 64-thread
 WHEN a Q5_K cooperative pipeline is selected, the Metal Q5_K selector SHALL dispatch the aligned per-lane uint2 vector-load candidate only when M equals 1 and K times N is at least 6291456; otherwise dispatch the historical cooperative pipeline.
 
 Rationale: The steady-state M2 boundary sweep measured 1.117x at 2048x3072 but only 1.055x at 2048x2048; per-lane coalesced uint2 loads also beat the simd_shuffle sharing variant on eligible FFN cells.
+
+## METAL-Q4K-WIDE-LOAD-PERF-001
+WHEN a resident M=1 Q4_K vector-load candidate is considered for production on Apple M2, the Metal Q4_K selector SHALL retain it only when every eligible shape in three independent count-7 same-binary campaigns reaches at least 1.10x the cooperative kernel.
+
+Rationale: A packed-load microbenchmark is promotable only as a repeatable shape-bounded production win.
+
+## METAL-Q4K-WIDE-LOAD-NUMERIC-001
+WHEN it executes a valid resident M=1 projection, the Metal Q4_K vector-load kernel SHALL match the current cooperative output within 2e-5 relative error, preserve finite Inf and NaN classification, and leave activation and weight inputs unchanged.
+
+Rationale: Changing load width must not change Q4_K bytes, arithmetic semantics, exceptional-value behavior, or ownership.
+
+## METAL-Q4K-WIDE-LOAD-SCOPE-001
+WHEN M is greater than 1 or the device lacks a 32-lane SIMD group with 64-thread threadgroups, the Metal Q4_K selector SHALL execute the existing Q4_K path with zero vector-load-candidate dispatches.
+
+Rationale: The experiment is an M2 M=1 specialization and must retain the portable historical fallback.

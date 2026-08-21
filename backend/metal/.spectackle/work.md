@@ -36,3 +36,17 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
+
+## T-01M0GW2FQPEGWR3NEHJTTRX9N8 Implement and gate aligned Q4_K uint64 loads
+kind: task
+state: active
+created: 2026-08-21
+parent: P-01M0GVZY39F019H2V39YGZYT6S
+grilled: 2026-08-21 open=5
+targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_qmatmul_q4k, go:metal.SetQ4KCooperative, go:metal.Recorder.QMatMulResident, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
+
+Implement a separately selectable qmatmul_q4k_cooperative_wide candidate. For each row and super-block, replace the four indexed ushort q1 loads with one aligned ulong and the four indexed ushort q2 loads with one aligned ulong; extract ushort values in registers and preserve the existing accumulation statement order. Prove alignment from resident buffer base, 144-byte block stride, row stride, and 8-byte per-lane qs offset. Keep the control and scalar kernels intact.
+
+Expose a test-only/public toggle and a shared route predicate used by direct, resident, and Recorder selectors. Begin with candidate routing disabled. Add scalar/control/candidate parity, non-finite classification, input immutability, support guard, M>1 fallback, and threshold boundary tests. Add an AB/BA resident-buffer benchmark over KV, square, mid-up, mid-down, gate/up, and down shapes, excluding one transition dispatch and timing 32 steady-state dispatches per arm.
+
+Reject or retain the candidate from three independent count=7 campaigns. Production promotion requires every eligible cell to reach at least 1.10x median speedup in every campaign and fallback cells to stay within 3%; otherwise archive as a measured rejection with the exact counterevidence. Run full repository, SIMD, and Metal validation. Save evidence and report generalizable findings to jxsl13/perfscan.
