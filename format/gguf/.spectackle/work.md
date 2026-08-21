@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0K1A86JFY3RHNM84CR28WKW Add MXFP4 QMatMul and fuse its ARM64 row dot
 kind: proposal
-state: active
+state: done
 created: 2026-08-21
 refs: ADR-01M0K18S8HF46ARNK03RQMD0BE
 grilled: 2026-08-21 open=1
