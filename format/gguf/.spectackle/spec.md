@@ -140,3 +140,8 @@ Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary 
 The portable IQ2_XXS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
 
 Rationale: Reusable worker-local scratch removes allocation growth with N while preserving the all-M portable path.
+
+## ARM64-IQ2XXS-FUSED-DOT-001 {applies: go:gguf.QMatMul}
+WHEN contiguous F32 M1 activations use IQ2_XXS weights, the Apple ARM64 IQ2_XXS selector SHALL dispatch 1 row-level fused NEON eight-wide grid, ksigns, and scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: The M2 decode hot path must eliminate materialized weights while retaining a measurable numerical gate.
