@@ -25,7 +25,7 @@ BIT-IDENTITY BAR: BIT-EXACT, and it must be — TestGemmCrossReferenceExact (gem
 
 ## T-01KYJQ3QB2EMCR0T09D7XA4TEX Vectorize rowMaxF32 and scaleRowF32 on arm64 — two of every softmax's three passes are scalar
 kind: task
-state: draft
+state: active
 created: 2026-07-27
 
 BEST EFFORT-TO-PAYOFF RATIO IN THE SIMD UNIT.
