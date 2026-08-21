@@ -35,3 +35,6 @@ Rationale: Three route-extension and three production-selector campaigns per bui
 
 ## EXECUTE-RESOLUTION-CACHE-PERF-001
 WHEN three count-seven campaigns measure warmed nil-routing CPU fallback dispatch, the Execute resolution cache SHALL improve median ns/op by at least 1.25x while keeping direct CPU between 0.97x and 1.03x of control.
+
+## EXECUTE-METAL-BINARY-SINGLE-DISPATCH-001
+WHEN Metal resolves a CPU-preferred F32 binary operation and the CPU backend is registered, the Metal Backend.Kernel SHALL decline the operation so Execute performs exactly one resolver lookup and one CPU kernel invocation.
