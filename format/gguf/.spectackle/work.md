@@ -14,7 +14,7 @@ Extend the importance-quant QMatMul family bottom-up from merged IQ4_NL to IQ4_X
 
 ## T-01M0JZ5WKSFH0SGA8PSCGEDYFR Implement and benchmark IQ4_XS QMatMul with ARM64 fused super-block dot
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0JZ33ZVEMKS1K6FYAEFJFK6
 refs: P-01M0JZ33ZVEMKS1K6FYAEFJFK6, ADR-01M0JZ1Y2MF948ZEGM1K33ZWTM
