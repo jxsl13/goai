@@ -3729,32 +3729,3 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
-
-## T-01M0HWBG9QEC2B5JQXEBJT2EZ9 Fuse the F64 NEON SSM recurrence on Apple arm64
-kind: task
-state: done
-created: 2026-08-21
-grilled: 2026-08-21 open=0
-
-Objective: accelerate go:simd.SSMScanF64 and go:simd.SSMScanRangeF64 on Apple arm64 under goexperiment.simd by fusing the existing proven two-lane F64 NEON negative-exponential polynomial with the selective-scan state update and C reduction.
-
-Baseline and leverage evidence:
-- exact base d3d2f68a35addbc2784c7799486a767818fef016, verified merge of PR #1127;
-- physical Apple M2 Pro internal/simd BenchmarkSSMScan_SIMD_512x2048x16, count=7, benchtime=500ms: 221.639-228.917 ms/op, 0 B/op, 0 allocs/op;
-- backend/cpu BenchmarkSSMF64_512x1024x16_cpu, count=7, benchtime=500ms: 18.346-23.841 ms/op, about 4.33 MB/op and 30-35 allocs/op from existing backend output/state ownership;
-- 3 second CPU profile: 99.37% cumulative in the scalar SSM step, with 20.44% flat directly in math.archExp, supporting full-loop fusion rather than an exp-only substitution.
-
-Required scope:
-1. Only arm64 && goexperiment.simd receives the optimized implementation. Portable, amd64, default Go, CUDA, Vulkan, and Metal product behavior remain byte-identical unless a build/test integration change is strictly required.
-2. Implement a fused two-lane NEON leaf for each SSM state row: abar=exp(delta*A), h=abar*h+delta*B*u, store h, and accumulate C*h. Reuse the exact degree-13 range reduction and constants already proven by expNegPairsNeonF64; no new approximation family.
-3. go:simd.SSMScanF64 and go:simd.SSMScanRangeF64 must use the same per-channel operation/reduction ordering so range execution is bit-identical to whole execution. N-even pairs use NEON; an odd final state uses the scalar formula in ascending-N order.
-4. Preserve arbitrary public API semantics. The optimized path may run only when finite delta is nonnegative, finite A is nonpositive, and every product is inside the proven [-708,0] domain. Any unsafe, NaN, Inf, positive, or underflow-boundary input falls back to the existing scalar scan without partial mutation.
-5. Internal scan remains 0 B/op and 0 allocs/op. No heap scratch, per-token allocation, or hidden slice escape.
-6. Accuracy versus the scalar reference must stay within the existing 1e-10 relative bound for representative N=1,2,3,16,17,128 shapes, with and without D-skip; state h and outputs must remain finite for valid-domain fixtures.
-7. Existing default, amd64 SIMD, arm64 SIMD, range/whole parity, race, and cross-build gates remain green. Objdump must prove D2 FMUL/FMLA/FADD or equivalent vector state arithmetic plus the existing FRINTN/exponent construction inside the fused leaf.
-8. Performance acceptance on physical Apple M2 Pro: at least 20% median latency reduction for internal/simd 512x2048x16 and at least 15% median latency reduction for end-to-end backend/cpu 512x1024x16, across alternating paired count>=7 campaigns with benchstat significance p<0.05; no internal allocation regression. Record N=128 as a secondary shape.
-9. Do not promote WKV, backend/cpu.vexpF64Fast, generic OpExp, or other consumers in this task. Do not claim cross-platform or universal leadership; report a hardware/shape/build-tag-specific cell.
-
-If the fused approach misses the acceptance gate or violates semantic fallback, reject or redesign it before PR creation. Generalizable findings must be filed on jxsl13/perfscan.
-
-Parent proposal: P-01M0HWDB7BEBY.
