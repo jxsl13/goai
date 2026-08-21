@@ -117,7 +117,7 @@ WHEN contiguous F32 M1 activations use IQ3_S weights, the Apple ARM64 IQ3_S sele
 ## ARM64-IQ3S-FUSED-DOT-SCOPE-001
 The IQ3_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
-## IQ3XXS-PORTABLE-QMATMUL-001
+## IQ3XXS-PORTABLE-QMATMUL-001 {applies: go:gguf.dequantIQ3_XXSInto,go:gguf.dotIQ3XXSRow,go:gguf.QMatMul,go:gguf.TestDotIQ3XXSRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ3XXSMatchesDequantizedReference}
 WHEN IQ3_XXS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 256-entry grid, four 7-bit ksigns indices per 32 weights, float32 d*(0.5+s)*0.5 scaling, ascending mapping, and float64 accumulation.
 
 ## IQ3XXS-PORTABLE-SCRATCH-001
