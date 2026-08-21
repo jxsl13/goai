@@ -28,3 +28,6 @@ WHEN three paired count-seven M2 campaigns measure the five declared F64 cells, 
 
 ## ARM64-F64-EXP-NUMERIC-001
 WHEN the arm64 SIMD candidate evaluates any declared F64 operation, the result SHALL match the scalar reference within 1e-13 relative error and preserve scalar NaN, infinity, signed-zero, and exact deep-underflow behavior.
+
+## ARM64-F64-EXP-MEMORY-001
+WHEN a declared F64 operation receives odd lengths, aliased ExpSum storage, or distinct input and output buffers, the implementation SHALL use a length-determined scalar tail, preserve in-place ExpSum safety, and leave distinct input buffers unchanged.
