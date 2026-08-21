@@ -49,3 +49,6 @@ WHEN delta or A contains a NaN, infinity, sign violation, or a product outside t
 
 ## ARM64-F64-SSM-MEMORY-001
 WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
+
+## ARM64-F64-SSM-ARCH-001
+WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 SSM leaf SHALL contain two-lane D2 vector state arithmetic together with FRINTN and exponent-bit construction from the proven degree-13 negative-exp approximation.
