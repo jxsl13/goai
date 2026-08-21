@@ -135,3 +135,8 @@ The IQ3_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F
 WHEN IQ2_XXS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 256-entry eight-wide grid, four 7-bit ksigns indices per 32 weights, float32 d*(0.5+s)*0.25 scaling, ascending element mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific optimization.
+
+## IQ2XXS-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul}
+The portable IQ2_XXS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Reusable worker-local scratch removes allocation growth with N while preserving the all-M portable path.
