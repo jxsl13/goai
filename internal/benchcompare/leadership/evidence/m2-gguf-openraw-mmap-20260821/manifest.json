@@ -1,0 +1,23 @@
+{
+  "candidate": "gguf.OpenRaw retained read-only mapping with explicit RawFileHandle.Close",
+  "control": "openRawFile(path, false): existing buffered ReadRaw file boundary",
+  "date": "2026-08-21",
+  "go": "go1.26.6 darwin/arm64",
+  "hardware": "Apple M2 Pro, 12 logical CPUs, 32 GiB",
+  "incumbent": {
+    "gguf": "0.19.0",
+    "numpy": "2.5.1",
+    "python": "3.14.7"
+  },
+  "model": {
+    "encoded_tensor_bytes": 667078656,
+    "file_bytes": 668788096,
+    "name": "tinyllama-1.1b-q4km.gguf",
+    "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+    "tensors": 201
+  },
+  "os": "macOS 26.5.1 (25F80)",
+  "perfscan": "github.com/jxsl13/perfscan/perfscan v1.71.0",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/798",
+  "spectackle": "0.9.3"
+}

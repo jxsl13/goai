@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -481,6 +482,42 @@ type RawFile struct {
 	Tensors  map[string]QuantTensor // name → still-quantized tensor
 }
 
+// rawFileOwner is indirect so even an accidental value-copy of RawFileHandle shares one close state
+// instead of copying a used sync.Once and risking a second munmap of the same address range.
+type rawFileOwner struct {
+	closeOnce sync.Once
+	closeErr  error
+	release   func() error
+}
+
+// RawFileHandle owns the resources behind a raw GGUF opened by OpenRaw. It embeds the parsed
+// RawFile so Metadata and Tensors remain directly accessible while keeping the existing RawFile
+// data structure source-compatible.
+type RawFileHandle struct {
+	*RawFile
+	owner *rawFileOwner
+}
+
+// Close releases the file mapping retained by OpenRaw. It is safe to call Close more than once;
+// OpenRaw's buffered fallback has nothing to release and Close is a no-op.
+//
+// Every QuantTensor.Data view obtained from h becomes invalid after Close. Callers must keep h
+// open for as long as any tensor bytes are in use and must not call Close concurrently with their
+// use. OpenRaw deliberately installs no finalizer: a copied QuantTensor can outlive its handle,
+// so garbage collection of the wrapper is not a safe mapping-lifetime boundary.
+func (h *RawFileHandle) Close() error {
+	if h == nil || h.owner == nil {
+		return nil
+	}
+	h.owner.closeOnce.Do(func() {
+		if h.owner.release != nil {
+			h.owner.closeErr = h.owner.release()
+			h.owner.release = nil
+		}
+	})
+	return h.owner.closeErr
+}
+
 // ReadRaw parses a GGUF stream KEEPING each tensor quantized (QuantTensor) — the inverse of the
 // eager dequantization Read does, so a quantized model can be loaded without ever materializing
 // full-precision weights.
@@ -494,6 +531,10 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	return readRawParsed(p)
+}
+
+func readRawParsed(p *parsed) (*RawFile, error) {
 	out := &RawFile{Version: p.version, Metadata: p.meta, Tensors: make(map[string]QuantTensor, len(p.infos))}
 	for _, ti := range p.infos {
 		need, err := byteSize(ti.ggType, ti.shape.Numel())
@@ -519,6 +560,55 @@ func ReadRaw(r io.Reader) (*RawFile, error) {
 		out.Tensors[ti.name] = QuantTensor{Data: raw, GGType: ti.ggType, Shape: ti.shape}
 	}
 	return out, nil
+}
+
+// OpenRaw opens a GGUF file while keeping every tensor in its encoded ggml block form. On
+// supported Unix systems, a regular non-empty file is mapped read-only and QuantTensor.Data
+// values are capacity-clamped views into that mapping, avoiding a model-sized heap allocation and
+// copy. The mapping remains live until RawFileHandle.Close; every tensor byte view is invalid
+// afterward.
+//
+// Unsupported platforms, special or empty files, and mapping failures transparently use ReadRaw
+// through a buffered reader. Close remains valid and is a no-op for that fallback. A caller must
+// not truncate the file or call Close while tensor bytes are in use.
+func OpenRaw(path string) (*RawFileHandle, error) { return openRawFile(path, true) }
+
+// openRawMapped establishes the ownership boundary shared by OpenRaw and its cleanup tests. On
+// success the returned RawFileHandle owns release. On failure this function invokes release before
+// it returns, so no malformed input can leak a mapping.
+func openRawMapped(mapped []byte, release func() error) (*RawFileHandle, error) {
+	p, err := parseMapped(mapped)
+	if err == nil {
+		var out *RawFile
+		out, err = readRawParsed(p)
+		if err == nil {
+			return &RawFileHandle{RawFile: out, owner: &rawFileOwner{release: release}}, nil
+		}
+	}
+	return nil, errors.Join(err, release())
+}
+
+// openRawFile retains the buffered control for benchmarks and tests. Production always requests
+// mmap, while unsupported files and platforms preserve the portable ReadRaw path.
+func openRawFile(path string, allowMmap bool) (*RawFileHandle, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if allowMmap {
+		if fi, statErr := f.Stat(); statErr == nil && fi.Mode().IsRegular() && fi.Size() > 0 &&
+			fi.Size() <= int64(^uint(0)>>1) {
+			if mapped, ok := mmapFileReadOnly(f, int(fi.Size())); ok {
+				return openRawMapped(mapped, func() error { return munmapFile(mapped) })
+			}
+		}
+	}
+	raw, err := ReadRaw(bufio.NewReaderSize(f, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	return &RawFileHandle{RawFile: raw}, nil
 }
 
 // ReadFile parses a .gguf file.

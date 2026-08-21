@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"testing"
 
 	"github.com/jxsl13/goai/tensor"
@@ -184,6 +186,129 @@ func BenchmarkReadRawSynth(b *testing.B) {
 		if _, err := ReadRaw(bytes.NewReader(data)); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+// BenchmarkOpenRawModelPath compares the production mmap path with the former buffered
+// ReadRaw(os.File) boundary on one real model. One load and Close is one operation; consumers may
+// retain the mapping much longer, but its open cost and heap footprint are the startup lever.
+// Alternate GOAI_GGUF_MMAP_CANDIDATE_FIRST across fresh processes to remove arm-order bias.
+func BenchmarkOpenRawModelPath(b *testing.B) {
+	path := os.Getenv("TINYLLAMA_GGUF")
+	if path == "" {
+		b.Skip("set TINYLLAMA_GGUF to a production GGUF model")
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		b.Fatal(err)
+	}
+	type arm struct {
+		name      string
+		allowMmap bool
+	}
+	arms := []arm{{"buffered", false}, {"mmap", true}}
+	if os.Getenv("GOAI_GGUF_MMAP_CANDIDATE_FIRST") == "1" {
+		arms[0], arms[1] = arms[1], arms[0]
+	}
+	for _, a := range arms {
+		b.Run(a.name, func(b *testing.B) {
+			warm, err := openRawFile(path, a.allowMmap)
+			if err != nil {
+				b.Fatal(err)
+			}
+			if len(warm.Tensors) == 0 {
+				b.Fatal("model has no tensors")
+			}
+			if err := warm.Close(); err != nil {
+				b.Fatal(err)
+			}
+			b.SetBytes(fi.Size())
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				raw, err := openRawFile(path, a.allowMmap)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := raw.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+var openRawCopySink byte
+
+// BenchmarkOpenRawModelCopy adds a full consumer copy of every encoded tensor to the open cost.
+// It is the strict eager-consumer cell: mmap must still win after every payload page is read, not
+// only when a caller keeps the mapping and lets the OS fault weights lazily during inference.
+func BenchmarkOpenRawModelCopy(b *testing.B) {
+	path := os.Getenv("TINYLLAMA_GGUF")
+	if path == "" {
+		b.Skip("set TINYLLAMA_GGUF to a production GGUF model")
+	}
+	seed, err := openRawFile(path, true)
+	if err != nil {
+		b.Fatal(err)
+	}
+	names := make([]string, 0, len(seed.Tensors))
+	total := 0
+	for name, qt := range seed.Tensors {
+		names = append(names, name)
+		total += len(qt.Data)
+	}
+	sort.Strings(names)
+	if err := seed.Close(); err != nil {
+		b.Fatal(err)
+	}
+
+	type arm struct {
+		name      string
+		allowMmap bool
+	}
+	arms := []arm{{"buffered", false}, {"mmap", true}}
+	if os.Getenv("GOAI_GGUF_MMAP_CANDIDATE_FIRST") == "1" {
+		arms[0], arms[1] = arms[1], arms[0]
+	}
+	for _, a := range arms {
+		b.Run(a.name, func(b *testing.B) {
+			dst := make([]byte, total)
+			copyAll := func(raw *RawFile) {
+				off := 0
+				for _, name := range names {
+					off += copy(dst[off:], raw.Tensors[name].Data)
+				}
+				if off != total {
+					b.Fatalf("copied %d bytes, want %d", off, total)
+				}
+				openRawCopySink ^= dst[off-1]
+			}
+			warm, err := openRawFile(path, a.allowMmap)
+			if err != nil {
+				b.Fatal(err)
+			}
+			copyAll(warm.RawFile)
+			if err := warm.Close(); err != nil {
+				b.Fatal(err)
+			}
+			warm = nil
+			runtime.GC()
+
+			b.SetBytes(int64(total))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				raw, err := openRawFile(path, a.allowMmap)
+				if err != nil {
+					b.Fatal(err)
+				}
+				copyAll(raw.RawFile)
+				if err := raw.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

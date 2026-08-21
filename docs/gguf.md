@@ -26,10 +26,15 @@ tok, err := nlp.BPEFromGGUF(f.Metadata) // the embedded tokenizer
 For quantized decode the tensors stay in their ggml block form:
 
 ```go
-r, err := os.Open("model.Q4_K_M.gguf")
-raw, err := gguf.ReadRaw(r) // tensors kept in their ggml Q-block bytes
+raw, err := gguf.OpenRaw("model.Q4_K_M.gguf") // mmap-backed on supported Unix systems
+defer raw.Close() // keep open while the quantized model uses raw.Tensors
 qmodel, err := nlp.QuantLlamaFromGGUF(raw.Metadata, raw.Tensors)
 ```
+
+`OpenRaw` avoids copying the encoded model into Go heap and retains its read-only
+mapping behind the explicit handle. Every `QuantTensor.Data` view becomes invalid
+after `Close`. Use `ReadRaw(r)` for streams; that API owns a heap buffer and needs
+no close.
 
 ## Float loaders (20 architectures)
 

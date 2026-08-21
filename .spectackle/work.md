@@ -3745,3 +3745,13 @@ option: Retune the 4x16 NEON tile
 option: Continue copy elimination around NEON
 blocks: P-01M0JAMADPFG5R8S5TX1BDAB7F
 choice: Extend sanctioned Accelerate SGEMM from ADR-0027 to strides/transposed B and call whole heads outside parallelWork
+
+## T-01M0JBX2XYFNR95M4RC7KHTN6A Implement and benchmark closable mmap-backed raw GGUF loading
+kind: task
+state: done
+created: 2026-08-21
+parent: P-01M0JBW0SVETY8QC1HZV6G561V
+grilled: 2026-08-21 open=1
+targets: format/gguf/gguf.go, format/gguf/mmap_unix.go, format/gguf/mmap_other.go, format/gguf/readfile_synth_bench_test.go, format/gguf/readraw_test.go, docs/gguf.md, docs/benchmarking.md, BENCHMARKS.md, testdata/bench_gguf_raw_open.py, internal/benchcompare/leadership/evidence/m2-gguf-openraw-mmap-20260821
+
+Add a closable, ownership-signaling raw file API for regular GGUF files. Parse a retained read-only mapping into capacity-clamped QuantTensor views; release the mapping exactly once on Close; release immediately on parse/build failure; never use a finalizer. Fall back to buffered ReadRaw on unsupported platforms, special/empty files, or mmap failure. Preserve ReadRaw and ReadFile behavior. Add mapped-versus-buffered exact-parity and lifetime tests, hostile/truncation coverage, an order-alternated real TinyLlama benchmark, M2 evidence, API docs, and cross-platform build gates. Ship only if the pinned M2 real-model median is at least 1.25x faster and removes the model-sized heap allocation.

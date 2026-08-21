@@ -630,6 +630,22 @@ remain cross-checked against the fixture pattern; mapped-vs-buffered output is
 exact in the Go test suite. Raw samples and commands are retained under
 `internal/benchcompare/leadership/evidence/m2-gguf-readfile-mmap-20260817`.
 
+**Quantized raw open.** The inference-oriented path keeps Q-block weights encoded.
+`OpenRaw` now retains read-only mapped tensor views instead of copying the entire
+encoded section into Go heap. The strict consumer cell copies every encoded tensor
+before closing, so it includes complete payload access.
+
+| TinyLlama-1.1B Q4_K_M raw load | Buffered GoAI | GoAI mmap | gguf-py 0.19.0 mmap | Verdict |
+|---|---:|---:|---:|---|
+| Open mapped views | 78.824 ms | **8.860 ms** | 789.996 ms | GoAI **8.90×** internal; **89.17×** vs gguf-py |
+| Open + copy all encoded tensors | 113.81 ms | **72.72 ms** | 862.237 ms | GoAI **1.57×** internal; **11.86×** vs gguf-py |
+| Heap bytes/op | 652.25 MiB | **15.07 MiB** | — | **−97.69%** |
+
+These are warm-page-cache medians from ten fresh processes per arm on the same M2
+Pro and same 668,788,096-byte file. The open row is startup/API latency, not disk
+throughput. The explicit handle must remain open while any tensor view is used.
+Evidence: `internal/benchcompare/leadership/evidence/m2-gguf-openraw-mmap-20260821`.
+
 **Safetensors single-tensor loading.** On the same M2 Pro, GoAI now validates one selected entry
 and reads common little-endian dtypes directly into final tensor storage. The old path allocated
 the payload, rebuilt a synthetic one-tensor container, parsed it again, and copied the payload a

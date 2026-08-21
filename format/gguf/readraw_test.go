@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"reflect"
+	"runtime"
 	"testing"
 
 	"github.com/jxsl13/goai/tensor"
@@ -69,6 +71,92 @@ func TestReadRawRoundTrip(t *testing.T) {
 	}
 }
 
+func TestOpenRawMatchesBuffered(t *testing.T) {
+	path := writeSynthModel(t, 12, 256, 512)
+	buffered, err := openRawFile(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer buffered.Close()
+	mapped, err := OpenRaw(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mapped.Close()
+
+	if !reflect.DeepEqual(buffered.Metadata, mapped.Metadata) {
+		t.Fatalf("metadata differs\nbuffered: %#v\nmapped:   %#v", buffered.Metadata, mapped.Metadata)
+	}
+	if len(buffered.Tensors) != len(mapped.Tensors) {
+		t.Fatalf("tensor count %d != %d", len(buffered.Tensors), len(mapped.Tensors))
+	}
+	for name, want := range buffered.Tensors {
+		got, ok := mapped.Tensors[name]
+		if !ok {
+			t.Fatalf("mapped result is missing %q", name)
+		}
+		if got.GGType != want.GGType || !got.Shape.Equal(want.Shape) || !bytes.Equal(got.Data, want.Data) {
+			t.Fatalf("tensor %q differs: type %d/%d shape %v/%v bytes-equal=%v",
+				name, got.GGType, want.GGType, got.Shape, want.Shape, bytes.Equal(got.Data, want.Data))
+		}
+		if cap(got.Data) != len(got.Data) {
+			t.Fatalf("tensor %q mapping view has cap %d, want len %d", name, cap(got.Data), len(got.Data))
+		}
+	}
+	switch runtime.GOOS {
+	case "darwin", "dragonfly", "freebsd", "linux", "netbsd", "openbsd":
+		if mapped.owner == nil {
+			t.Fatal("OpenRaw used the buffered fallback for a regular non-empty temporary file")
+		}
+	}
+}
+
+func TestOpenRawMappingLifetime(t *testing.T) {
+	path := writeSynthModel(t, 4, 128, 64)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releases := 0
+	rf, err := openRawMapped(data, func() error {
+		releases++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if releases != 0 {
+		t.Fatalf("mapping released before Close: %d", releases)
+	}
+	if err := rf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := rf.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 1 {
+		t.Fatalf("Close released mapping %d times, want exactly once", releases)
+	}
+	copyOfHandle := *rf
+	if err := copyOfHandle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if releases != 1 {
+		t.Fatalf("closing a RawFileHandle value-copy released mapping %d times, want exactly once", releases)
+	}
+
+	releases = 0
+	if _, err := openRawMapped(data[:len(data)/2], func() error {
+		releases++
+		return nil
+	}); err == nil {
+		t.Fatal("truncated mapping parsed without error")
+	}
+	if releases != 1 {
+		t.Fatalf("failed parse released mapping %d times, want exactly once", releases)
+	}
+}
+
 // FuzzReadRaw: no byte stream may panic ReadRaw (it shares parse with Read, plus the per-tensor
 // byte slicing).
 func FuzzReadRaw(f *testing.F) {
@@ -103,4 +191,20 @@ func ExampleReadRaw() {
 	qt := rf.Tensors["w"]
 	fmt.Println(qt.Shape, len(qt.Data), "quantized bytes (vs", 128*4, "f32)")
 	// Output: (4, 32) 136 quantized bytes (vs 512 f32)
+}
+
+// RawFileHandle keeps an OpenRaw mapping alive until Close. Keep the handle open for as long as
+// the model retains any QuantTensor.Data view.
+func ExampleRawFileHandle() {
+	w := tensor.FromFloat64(tensor.Shape{4, 32}, randF32Block(128, 0))
+	f, _ := os.CreateTemp("", "goai-openraw-*.gguf")
+	defer os.Remove(f.Name())
+	_ = WriteQuantized(f, &File{Version: 3, Metadata: map[string]any{"a": uint32(1)},
+		Tensors: map[string]*tensor.Tensor{"w": w}}, map[string]QuantType{"w": Q8_0})
+	_ = f.Close()
+
+	raw, _ := OpenRaw(f.Name())
+	defer raw.Close()
+	fmt.Println(raw.Tensors["w"].Shape, len(raw.Tensors["w"].Data))
+	// Output: (4, 32) 136
 }

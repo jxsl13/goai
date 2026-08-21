@@ -1,0 +1,22 @@
+BenchmarkOpenRawModelPath-12         	       1	  78649375 ns/op	8503.41 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12         	       1	 113908833 ns/op	5856.25 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12     	       1	  80495917 ns/op	8308.35 MB/s	683939480 B/op	  186932 allocs/op
+BenchmarkOpenRawModelCopy-12     	       1	 113718916 ns/op	5866.03 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12         	       1	  81818000 ns/op	8174.09 MB/s	683939480 B/op	  186932 allocs/op
+BenchmarkOpenRawModelCopy-12         	       1	 115972708 ns/op	5752.03 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12     	       1	  76948833 ns/op	8691.34 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12     	       1	 113621958 ns/op	5871.04 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12         	       1	  77431916 ns/op	8637.11 MB/s	683939480 B/op	  186932 allocs/op
+BenchmarkOpenRawModelCopy-12         	       1	 114088709 ns/op	5847.02 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12     	       1	  78119667 ns/op	8561.07 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12     	       1	 112418375 ns/op	5933.89 MB/s	683939480 B/op	  186932 allocs/op
+BenchmarkOpenRawModelPath-12         	       1	  78998791 ns/op	8465.80 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12         	       1	 112963792 ns/op	5905.24 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12     	       1	  79479917 ns/op	8414.55 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12     	       1	 114859375 ns/op	5807.79 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12         	       1	  80225292 ns/op	8336.37 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12         	       1	 116635125 ns/op	5719.36 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelPath-12     	       1	  77854791 ns/op	8590.20 MB/s	683934160 B/op	  186926 allocs/op
+BenchmarkOpenRawModelCopy-12     	       1	 113587125 ns/op	5872.84 MB/s	683934160 B/op	  186926 allocs/op
+
+
