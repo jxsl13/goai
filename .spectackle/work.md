@@ -3729,3 +3729,17 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0GVZY39F019H2V39YGZYT6S Vector-load M2 Metal Q4_K decode
+kind: proposal
+state: active
+created: 2026-08-21
+targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_qmatmul_q4k, go:metal.Recorder.QMatMulResident, backend/metal/metal_bridge.m, backend/metal/metal.go, backend/metal/q4k_bench_test.go
+
+Context: Apple M2 Pro Q4_K M=1 decode is a retained cooperative leaf used by quantized LLM projections. Fresh 200 ms count=3 baselines after PR #1116 place real FFN shapes at roughly 278-304 us for K2048xN5632 and K5632xN2048. The kernel reads each aligned eight-byte q1/q2 span as four separate ushort elements for every output row and super-block. The Q4_K 144-byte super-block, row stride, and per-lane qs offsets are all multiples of eight, so an aligned ulong load can replace each four-load group without changing the GGUF layout or arithmetic order.
+
+Hypothesis: load q1 and q2 once each as aligned ulong values, extract the same four ushort lanes in registers, and retain the existing float accumulation sequence. This is distinct from the rejected half-input Q4_K experiment, which changed operand precision, and from rejected raw mixed-QKV fusion, which improved an isolated leaf but missed its end-to-end gate.
+
+Scope: add an independently selectable runtime-compiled cooperative candidate; preserve scalar and historical cooperative kernels. Route only M=1 shapes whose same-binary interleaved measurements prove a repeatable win. Apply the identical selector predicate to direct, resident, and Recorder paths. Do not alter Q4_K bytes, public tensor semantics, M>1 routing, unsupported-device fallback, or other quant types.
+
+Gates: scalar, control, and candidate outputs must agree within the existing Q4_K numerical envelope, preserve finite/Inf/NaN classification, and leave inputs immutable. Benchmark identical resident buffers with AB/BA reversal, exclude one pipeline-transition dispatch, then time at least 32 steady-state dispatches per arm. Cover KV, square, mid-up, mid-down, gate/up, and down shapes. Promote only a contiguous measured M=1 region where every eligible shape reaches at least 1.10x median speedup in each of three independent count=7 campaigns; fallback controls must remain within 3%. Run full Metal and repository preflight validation. Record rejected variants and reproducible evidence. File any generalizable benchmark or packed-load finding on jxsl13/perfscan.
