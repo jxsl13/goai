@@ -3807,3 +3807,18 @@ option: Per-superblock NEON two-bit affine dot with Go coefficient preparation
 option: Whole-row assembly including f16 and coefficient unpack
 option: Scratch dequantization followed by a generic dot
 choice: Per-superblock NEON two-bit affine dot with Go coefficient preparation
+
+## ADR-01M0JWG7KKFVE9V1KTEEQ556WF Which first IQ4 ARM64 boundary should extend QMatMul after the scalar K-quant selector family is complete?
+kind: adr
+state: done
+created: 2026-08-21
+context: IQ4_NL is currently dequantization-only and QMatMul rejects it. Its 32-value block uses a fixed nonlinear 16-entry codebook and is the inner primitive reused by IQ4_XS. The next tranche must add portable semantics before claiming an ARM64 gain, preserve M greater than one behavior, and remain small enough for exact raw-byte and cross-platform gates.
+decision: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
+consequences: This creates the missing portable API semantics and a separately measurable ARM64 selector without coupling two wire formats. IQ4_XS stays explicit follow-up work but can reuse the proven nonlinear lookup leaf. The tranche must benchmark the scalar and NEON paths in one binary because merged main currently rejects IQ4_NL QMatMul, and it must not make an incumbent-leadership claim without a matched llama.cpp harness.
+status: accepted
+
+kind: radio
+option: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
+option: Implement IQ4_NL and IQ4_XS portable and ARM64 fused paths together
+option: Optimize only IQ4 dequantization before exposing QMatMul support
+choice: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
