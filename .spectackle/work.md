@@ -3755,3 +3755,5 @@ Required scope:
 9. Do not promote WKV, backend/cpu.vexpF64Fast, generic OpExp, or other consumers in this task. Do not claim cross-platform or universal leadership; report a hardware/shape/build-tag-specific cell.
 
 If the fused approach misses the acceptance gate or violates semantic fallback, reject or redesign it before PR creation. Generalizable findings must be filed on jxsl13/perfscan.
+
+Parent proposal: P-01M0HWDB7BEBY.
