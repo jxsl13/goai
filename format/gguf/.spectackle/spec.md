@@ -27,6 +27,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0JZ33ZVEMKS1K6FYAEFJFK6 Add IQ4_XS QMatMul and fuse its ARM64 super-block dot: Merged by PR #1139 after all 15 CI checks passed; evidence retained under m2-arm64-iq4xs-fused-dot-20260821.
 - T-01M0K1CEY0FNEBG4A4TWD9VKMN Implement and benchmark MXFP4 QMatMul with ARM64 fused row dot: validated pass by codex-root-post-validator no attributed diff (c193f3ddce65 binds the target list, not code) :: Post-commit source review confirms portable MXFP4 QMatMul dispatch, caller-owned exact decode, and an ARM64-only row selector across every declared target. Numerical gates pass: exact 48 golden, all 256 E8M0 entries bit-exact, caller-owned decode and scalar fused dot bit-exact, maximum [body truncated at tombstone retention cap]
 - P-01M0K1A86JFY3RHNM84CR28WKW Add MXFP4 QMatMul and fuse its ARM64 row dot: Merged as goai PR #1140 at d1daf49033de16b26711aca26fca849200f15345 with all 15 CI lanes green. Portable MXFP4 QMatMul and the Apple ARM64 fused row dot clear every retained 2x gate; evidence and perfscan #799 report are published. IQ3, IQ2, and IQ1 remain explicit next families.
+- T-01M0K3PD38FVWSMA8JTVVD2ERE Implement and statistically gate exact IQ3_S QMatMul and M2 ARM64 fused row dot: Merged in goai PR #1141 at merge commit 1daaf7163700f288337f36d17ed0fa4a2b71d910 after all 15 CI lanes passed. Implemented exact caller-owned IQ3_S decode, portable F32/F64 QMatMul, constant per-worker scratch, and an Apple ARM64 zero-allocation fused row dot. Retained n=10 fresh-process 500 ms alternating-order results: K4096 leaf 5.254 us to 1.080 us (4.86x, p=0.000), M1/N64/K1024 84.83 us to 17 [body truncated at tombstone retention cap]
+- P-01M0K3NE11FSRAY6V751A2PC1K M2-first exact IQ3_S fused row dot and portable QMatMul: Delivered and merged by goai PR #1141 at 1daaf7163700f288337f36d17ed0fa4a2b71d910 with all 15 CI lanes green. The direct-F32 IQ3_S boundary is exact and materially faster on M2: 4.86x K4096 leaf, 4.73x M1/N64/K1024, and 3.64x M1/N4096/K1024, all p=0.000, with neutral IQ4_XS and tensor-dequant controls, flat allocation/byte profiles, and 2.223032812824975e-15 maximum scalar-relative row error. Exte [body truncated at tombstone retention cap]
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -114,3 +116,15 @@ WHEN contiguous F32 M1 activations use IQ3_S weights, the Apple ARM64 IQ3_S sele
 
 ## ARM64-IQ3S-FUSED-DOT-SCOPE-001
 The IQ3_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+## IQ3XXS-PORTABLE-QMATMUL-001 {applies: go:gguf.dequantIQ3_XXSInto,go:gguf.dotIQ3XXSRow,go:gguf.QMatMul,go:gguf.TestDotIQ3XXSRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ3XXSMatchesDequantizedReference}
+WHEN IQ3_XXS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 256-entry grid, four 7-bit ksigns indices per 32 weights, float32 d*(0.5+s)*0.5 scaling, ascending mapping, and float64 accumulation.
+
+## IQ3XXS-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.TestQMatMulIQ3XXSScratchAllocationsDoNotScaleWithOutputRows}
+The portable IQ3_XXS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+## ARM64-IQ3XXS-FUSED-DOT-001 {applies: go:gguf.dotIQ3XXSRowASM,go:gguf.TestDotIQ3XXSBlockNeonKnownValue,go:gguf.TestDotIQ3XXSAsmRandomRaw,go:gguf.TestDotIQ3XXSAsmCancellationHeavy,go:gguf.TestDotIQ3XXSAsmAllocs}
+WHEN contiguous F32 M1 activations use IQ3_XXS weights, the Apple ARM64 IQ3_XXS selector SHALL dispatch 1 row-level fused NEON grid, ksigns, and scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-IQ3XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.dotIQ3XXSRowFn,go:gguf.QMatMul,go:gguf.TestQMatMulIQ3XXSSelectorScope}
+The IQ3_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.

@@ -80,12 +80,20 @@ func dequantIQ3_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: IQ3_XXS data %dB, want %d", len(data), nb*iq3xxsBlockSize)
 	}
 	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+	dequantIQ3_XXSInto(out.Storage().F32(), data)
+	return out, nil
+}
+
+// dequantIQ3_XXSInto decodes IQ3_XXS into caller-owned storage so QMatMul can
+// reuse a fixed scratch set instead of allocating one tensor per weight row.
+func dequantIQ3_XXSInto(dst []float32, data []byte) {
+	for b := 0; b*qkK < len(dst); b++ {
 		blk := data[b*iq3xxsBlockSize : (b+1)*iq3xxsBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 98-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		qs := blk[2:66]
 		for g := range 8 { // one uint32 → 32 elements (4 sub-groups of 8)
+			//perfscan:ignore PS4001 eight unaligned sign/scale words per heterogeneous 98-byte block cannot use a same-layout bulk copy
 			sg := binary.LittleEndian.Uint32(blk[66+g*4:])
 			db := d * (0.5 + float32(sg>>28)) * 0.5
 			for j := range 4 { // sub-group: two grid rows of 4 = 8 elements
@@ -104,5 +112,4 @@ func dequantIQ3_XXS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return out, nil
 }

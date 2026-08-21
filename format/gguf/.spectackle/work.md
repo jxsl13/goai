@@ -2,19 +2,36 @@
 schema: v1
 ---
 
-## P-01M0K3NE11FSRAY6V751A2PC1K M2-first exact IQ3_S fused row dot and portable QMatMul
+## P-01M0K6A4A6F0SAGEMT1937ZQQN M2-first exact IQ3_XXS fused row dot and portable QMatMul
 kind: proposal
 state: active
 created: 2026-08-21
-targets: go:gguf.dequantIQ3_S, format/gguf/quant_matmul.go, format/gguf/iq3s.go
+grilled: 2026-08-21 open=0
+targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
 
-Add caller-owned IQ3_S decode and QMatMul support for F32/F64, then specialize only the F32 M=1 path on Apple ARM64 with a fused 9-bit grid/direct-sign row dot. Preserve exact materialized-reference semantics, input immutability, and constant scratch. Retain native code only when repeated fresh-process benchmarks show at least 2x speedup for K4096 leaf, M1/N64/K1024, and M1/N4096/K1024, with p<=0.01 and no statistically significant regression in an unrelated quantized negative control. IQ3_XXS remains a separate future tranche per ADR-01M0K3K391ERQ.
+Following ARCHITECTURE-RESEARCH.md CPU §§5.4-5.8 and benchmark §14, add caller-owned IQ3_XXS decoding and direct-F32/F64 QMatMul support, then specialize only contiguous F32 M=1 on Apple ARM64. Fuse 256x4 grid lookup, 7-bit ksigns expansion, packed sub-scale application, and activation dot without materializing weights or quantizing activations. Preserve exact materialized-reference semantics, input immutability, portable fallback, and output-row-independent scratch. Use llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 as an executable layout/kernel reference; its Q8_K activation boundary is not a matched cross-library claim. Retain native code only if n=10 fresh-process, 500 ms, alternating-order samples show at least 2x improvement on K4096 leaf, M1/N64/K1024, and M1/N4096/K1024 with p<=0.01, flat allocation/byte profiles, and no statistically significant regression in an unrelated quantized control. Commit a reproducible evidence manifest and report any generalized finding to perfscan.
 
-## T-01M0K3PD38FVWSMA8JTVVD2ERE Implement and statistically gate exact IQ3_S QMatMul and M2 ARM64 fused row dot
+## ADR-01M0K6C6PEF4JT8435XC34X2GQ Which semantic boundary should the IQ3_XXS M2 tranche optimize?
+kind: adr
+state: done
+created: 2026-08-21
+context: ARCHITECTURE-RESEARCH.md requires one semantic definition, explicit numerical modes, portable fallback, shape-specific M=1 kernels, and matched benchmark cells. The GoAI public QMatMul accepts F32/F64 activations and accumulates portable results in F64. llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 uses Q8_K activations for its ARM IQ3_XXS dot, so adopting that boundary would introduce activation quantization error and a different public semantic contract.
+decision: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+consequences: The portable path remains the semantic oracle and supports F32/F64 plus M greater than one. Only contiguous F32 M=1 dispatches the ARM64 leaf. The leaf expands grids, sign masks, and scale factors in registers and retains float64 partial accumulation. Cross-library leadership is not claimed against llama.cpp Q8_K activation kernels because the numerical boundary differs; the retained claim is an internal same-semantics M2 gain with a reproducible cell manifest.
+status: accepted
+
+kind: radio
+option: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K kernel boundary
+option: Implement only a tensor dequantization optimization and defer QMatMul
+blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
+choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+
+## T-01M0K6D56YFAYSY4QQPYVXCE4A Implement and statistically gate exact IQ3_XXS QMatMul and M2 ARM64 fused row dot
 kind: task
 state: active
 created: 2026-08-21
-parent: P-01M0K3NE11FSRAY6V751A2PC1K
-targets: go:gguf.dequantIQ3_S, format/gguf/quant_matmul.go, format/gguf/iq3s.go
+parent: P-01M0K6A4A6F0SAGEMT1937ZQQN
+targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
 
-Freeze a merged-state baseline binary. Add caller-owned exact IQ3_S decoding, portable F32/F64 QMatMul, one-scratch-per-worker reuse, and an F32 M=1 selector. Implement a zero-allocation Apple ARM64 row-level fused 9-bit grid/direct-sign dot without changing inputs. Verify exact decoder and mapping parity, F64 reference correctness, M1/M3 behavior, selector scope, allocation invariants, cancellation and random packed blocks, race safety, cross-builds, and perfscan. Retain native code only if n=10 fresh-process 500ms alternating-order samples show at least 2x on K4096 leaf, M1/N64/K1024, and M1/N4096/K1024 with p<=0.01, while an unrelated quantized negative control does not regress significantly.
+Freeze the merged-main baseline and source manifest. Refactor IQ3_XXS into a caller-owned exact decoder; add exact scalar row dot, portable F32/F64 QMatMul, fixed per-worker scratch, and an F32 M=1 selector. Implement an Apple ARM64 zero-allocation leaf that gathers two 4-wide grid rows, expands each 7-bit ksigns index through a compact sign-mask table, applies the exact float32 d*(0.5+s)*0.5 coefficient, and accumulates products into independent float64 partials. Verify bit-exact caller-owned decode and scalar/materialized mapping, F32/F64 M1/M3 QMatMul, selector scope, output-row-independent scratch, arbitrary raw blocks including negative f16 scales, cancellation, immutability, zero leaf allocations, race safety, amd64/arm64 cross-builds, full preflight, Metal preflight, and external perfscan with GOPROXY=direct. Retain native code only when n=10 fresh-process 500 ms alternating-order benchstat meets the proposal thresholds at K4096 leaf and both QMatMul shapes, with flat memory and neutral unrelated-quant and tensor-dequant controls. Commit evidence, file generalized perfscan findings, open a PR, merge only after every CI lane passes, verify origin/main ancestry, and delete the remote branch.

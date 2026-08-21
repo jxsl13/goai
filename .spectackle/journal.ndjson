@@ -279,3 +279,8 @@
 {"t":"2026-08-21T21:28:21Z","eid":"58243e1b9ef48fa2","ag":"ag-cd4a","ev":"create","id":"ADR-01M0K3K391ERQSKF6T8MH14J47","k":"adr","ti":"Which atomic boundary should the next M2-first IQ3 tranche use?"}
 {"t":"2026-08-21T21:28:21Z","eid":"bc062de0a1768c9e","ag":"ag-cd4a","ev":"move","id":"ADR-01M0K3K391ERQSKF6T8MH14J47","fr":"draft","to":"submitted"}
 {"t":"2026-08-21T21:28:32Z","eid":"410a538446702fce","ag":"ag-6632","ev":"decide","id":"ADR-01M0K3K391ERQSKF6T8MH14J47","note":"IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche"}
+{"t":"2026-08-21T22:15:20Z","eid":"4fbf84d38ed1b351","ag":"ag-e24c","ev":"create","id":"P-01M0K694ANF608CA2KYMZ6XEBC","k":"proposal","ti":"probe"}
+{"t":"2026-08-21T22:15:20Z","eid":"57c0278c370c62d0","ag":"ag-e24c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T22:15:36Z","eid":"4f48f97a717c71b3","ag":"ag-786f","ev":"move","id":"P-01M0K694ANF608CA2KYMZ6XEBC","fr":"draft","to":"rejected","note":"Schema probe only. No design or implementation intent; superseded immediately by the fully specified IQ3_XXS proposal."}
+{"t":"2026-08-21T22:15:36Z","eid":"fd0c8add3ad40701","ag":"ag-786f","ev":"reject","id":"P-01M0K694ANF608CA2KYMZ6XEBC","k":"proposal","ti":"probe","note":"Schema probe only. No design or implementation intent; superseded immediately by the fully specified IQ3_XXS proposal.","sum":"proposal probe"}
+{"t":"2026-08-21T22:32:04Z","eid":"67293a8a3ff453ec","ag":"ag-ac63","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

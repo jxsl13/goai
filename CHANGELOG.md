@@ -4,6 +4,27 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- exact IQ3_XXS QMatMul and M2 ARM64 fused row dot (T-01M0K6D56YFAY, 2026-08-22)
+
+`IQ3_XXS` now participates in portable F32/F64 `QMatMul` without materializing
+the complete weight matrix. The caller-owned decoder reuses fixed per-worker
+scratch, while contiguous F32 single-token decode on Apple ARM64 dispatches a
+zero-allocation NEON leaf that fuses grid gathers, 7-bit ksigns expansion,
+packed sub-scales, and the activation dot with float64 partial accumulation.
+Other architectures, activation dtypes, and M>1 calls retain the portable path.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 5.0805 to 0.8041 microseconds (**6.32x**), M1/N64/K1024
+from 82.25 to 13.42 microseconds (**6.13x**), and M1/N4096/K1024 from 810.2 to
+190.1 microseconds (**4.26x**); all are `p=0.000`. Bytes and allocations are
+flat, the unrelated IQ4_XS control is neutral (`p=0.796`), and existing
+IQ3_XXS tensor dequantization is neutral (`p=0.631`). Maximum scalar-relative
+error over 100 arbitrary packed rows is `1.3257546909390963e-15`. This is a
+same-semantics GoAI comparison, not a llama.cpp leadership claim: the pinned
+llama.cpp ARM kernel consumes Q8_K-quantized activations. Reproducible streams,
+binary/source hashes, specification bindings, and controls are committed; the
+generalized subfield-decode finding is tracked as perfscan issue #803.
+
 ### training -- APOLLO and Q-GaLore join the controlled GPT optimizer comparison (T-01KYJNDR38E4ZSN52KVM0PC5J9, 2026-08-18)
 
 The 120-step, same-model Metal optimizer zoo now measures APOLLO with its default
