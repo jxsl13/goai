@@ -36,3 +36,11 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
+
+## P-01M0H0SG6FFVKBE666TCKH10MG Pack Q4_0 quant bytes into aligned ushort loads
+kind: proposal
+state: draft
+created: 2026-08-21
+targets: msl:qmatmul_q4_0_cooperative, objc:metal_bridge.ensure_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul
+
+On Apple M2, test an alignment-safe Q4_0 cooperative decode kernel that replaces 32 scalar uchar reads per 32-weight block with eight aligned ushort reads and SIMD shuffles. The proof relies on the buffer base, 18-byte row/block strides, and 2-byte q offset preserving two-byte alignment. Retain the candidate only behind an explicit M=1 shape gate when three independent same-binary count-7 campaigns show at least 1.10x median speedup for every eligible production shape, numerical parity stays within 2e-5 relative error, nonfinite classes match, inputs remain immutable, and all direct, resident, Recorder, fallback, and platform tests pass. Otherwise reject and revert the product diff.
