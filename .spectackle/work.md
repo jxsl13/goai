@@ -3822,3 +3822,18 @@ option: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; us
 option: Implement IQ4_NL and IQ4_XS portable and ARM64 fused paths together
 option: Optimize only IQ4 dequantization before exposing QMatMul support
 choice: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
+
+## ADR-01M0JZ1Y2MF948ZEGM1K33ZWTM Which ARM64 boundary should accelerate IQ4_XS after IQ4_NL is merged?
+kind: adr
+state: done
+created: 2026-08-21
+context: IQ4_XS reuses IQ4_NL nonlinear nibble decoding but adds eight signed six-bit sub-scales and one f16 super-scale per 256 weights. A 256-weight fused leaf matches existing Q2_K/Q3_K/Q4_K/Q5_K/Q6_K boundaries, keeps exact scale unpack in Go, and costs K/256 calls; a full row leaf removes those calls but duplicates variable-row scale decoding in assembly before leverage is measured.
+decision: Add portable IQ4_XS QMatMul plus a fused 256-weight ARM64 super-block dot behind a zero-allocation row wrapper
+consequences: This reuses the proven IQ4_NL vector lookup and the existing K-quant leaf boundary while keeping signed six-bit scale unpack exact and reviewable in Go. Same-binary scalar-versus-NEON measurements must prove material leverage; if K/256 call overhead prevents a strong win, the same tranche may upgrade to one row-level call before retention. Portable M greater than one and non-ARM64 paths remain explicit.
+status: accepted
+
+kind: radio
+option: Add portable IQ4_XS QMatMul plus a fused 256-weight ARM64 super-block dot behind a zero-allocation row wrapper
+option: Decode every IQ4_XS scale and weight in one row-level assembly call immediately
+option: Add portable IQ4_XS QMatMul only and defer ARM64 acceleration
+choice: Add portable IQ4_XS QMatMul plus a fused 256-weight ARM64 super-block dot behind a zero-allocation row wrapper
