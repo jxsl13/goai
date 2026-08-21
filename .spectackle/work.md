@@ -3805,3 +3805,17 @@ Q3_K is now the slowest recurrent quant path on Apple M2 Pro: an immutable merge
 
 RESTORE/ROLLBACK
 The selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar Q3_K selector and remove only the isolated Q3_K ARM64 files and evidence; portable, M greater than one, Metal, and Vulkan paths remain untouched.
+
+## T-01M0JQHRA5EPEBAY8A6BPSSXV3 Implement and gate ARM64 Q3_K fused decode GEMV
+kind: task
+state: active
+created: 2026-08-21
+parent: P-01M0JQGRZ9EANTP6DTZ44R8AX9
+refs: ADR-01M0JQFQCNFXF9XW2MAR7RWGGC
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, go:gguf.dotQ3_KRow, format/gguf/quant_matmul.go, format/gguf/q3k.go, format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+
+Add an ARM64 architecture selector for the Q3_K M1 row dot in format/gguf/quant_matmul.go. Implement format/gguf/dot_q3k_asm_arm64.go and format/gguf/dot_q3k_asm_arm64.s so each 256-weight block keeps q3kUnpackScales and f16 scale decoding in Go while NEON fuses two-bit extraction, inverted high-mask insertion, signed conversion, sub-block scaling, and activation reduction. Add format/gguf/dot_q3k_scalar.go for portable capability reporting, randomized arbitrary-raw-row and immutability tests with maximum scalar-relative error at most 1e-4, extend format/gguf/quant_matmul_fused_test.go tolerance gating, and add direct QMatMul Q3_K benchmarks. Scope excludes M greater than one and every non-ARM64 build. Compile test binaries with go test -c, execute exact tests via the compiled binary -test.run flag, cross-compile portable and amd64+simd packages, run repeated alternating benchstat samples for leaf, QMatMul, and nlp/BenchmarkQuantMamba2DecodeQ3_K, require unchanged allocations and statistically significant end-to-end gain, and keep Q5_K flat as a negative control. Write the full environment, commands, raw samples, numerical bound, and result matrix under internal/benchcompare/leadership/evidence and summarize any retained gain in BENCHMARKS.md. Run external perfscan with GOPROXY=direct and extend issue #799 with the generalized selector-family evidence.
+
+RESTORE/ROLLBACK
+If any correctness or leverage gate fails, restore the scalar Q3_K selector and remove only format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, and Q3_K-specific evidence. Portable, prefill, Metal, and Vulkan paths remain unchanged.
