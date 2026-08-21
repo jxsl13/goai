@@ -50,7 +50,7 @@ WHEN delta or A violates sign, finiteness, or the proven product range, the arm6
 ## ARM64-F64-SSM-MEMORY-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.BenchmarkSSMScan_SIMD_512x2048x16,go:simd.BenchmarkSSMScan_SIMD_512x2048x128}
 WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
 
-## ARM64-F64-SSM-ARCH-001
+## ARM64-F64-SSM-ARCH-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64}
 WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 SSM leaf SHALL contain two-lane D2 vector state arithmetic together with FRINTN and exponent-bit construction from the proven degree-13 negative-exp approximation.
 
 ## ARM64-F64-SSM-SCOPE-001
