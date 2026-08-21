@@ -145,3 +145,8 @@ Rationale: Reusable worker-local scratch removes allocation growth with N while 
 WHEN contiguous F32 M1 activations use IQ2_XXS weights, the Apple ARM64 IQ2_XXS selector SHALL dispatch 1 row-level fused NEON eight-wide grid, ksigns, and scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: The M2 decode hot path must eliminate materialized weights while retaining a measurable numerical gate.
+
+## ARM64-IQ2XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul}
+The IQ2_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: Architecture and dtype specialization must not leak into portable or prefill semantics.
