@@ -95,9 +95,16 @@ func dequantIQ3_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: IQ3_S data %dB, want %d", len(data), nb*iq3sBlockSize)
 	}
 	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+	dequantIQ3_SInto(out.Storage().F32(), data)
+	return out, nil
+}
+
+// dequantIQ3_SInto decodes IQ3_S into caller-owned storage so QMatMul can
+// reuse a fixed scratch set instead of allocating one tensor per weight row.
+func dequantIQ3_SInto(dst []float32, data []byte) {
+	for b := 0; b*qkK < len(dst); b++ {
 		blk := data[b*iq3sBlockSize : (b+1)*iq3sBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 110-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		qs, qh, signs, scales := blk[2:66], blk[66:74], blk[74:106], blk[106:110]
 		for g := range 8 { // 32 elements per scale nibble
@@ -121,5 +128,4 @@ func dequantIQ3_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
-	return out, nil
 }

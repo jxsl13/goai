@@ -1,0 +1,15 @@
+{
+  "date": "2026-08-21",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6",
+  "baseline_source": "ec1d39fa (code-equivalent to merged main d1daf490; intervening commits are Spectackle-only)",
+  "candidate_source": "containing commit",
+  "spectackle": "v0.9.3",
+  "perfscan_module": "v1.71.0",
+  "llama_cpp_audit_commit": "3af988fabcf79fd81f8720505e684d2aa5bfc786",
+  "samples": 10,
+  "benchtime": "500ms",
+  "sample_policy": "fresh process, scalar/NEON order alternated, no samples removed",
+  "negative_control": "IQ4_XS M1/N4096/K1024, separate merged-baseline and candidate binaries"
+}

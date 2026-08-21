@@ -1,0 +1,10 @@
+TestDotIQ3SBlockNeonKnownValue: exact 256
+TestDotIQ3SAsmRandomRaw: maximum scalar-relative error 2.223032812824975e-15 across 100 arbitrary packed rows at K=256, 512, and 4096
+TestDotIQ3SAsmCancellationHeavy: PASS at relative error <= 1e-4
+TestDotIQ3SAsmAllocs: 0 allocations per row dot
+TestDequantIQ3SIntoMatchesTensorDecoderExactly: bit-exact
+TestDotIQ3SRowMatchesMaterializedReferenceExactly: bit-exact
+TestQMatMulIQ3SMatchesDequantizedReference: PASS for F32/F64 and M1/M3
+TestQMatMulIQ3SScratchAllocationsDoNotScaleWithOutputRows: PASS for N1/N31
+TestQMatMulIQ3SSelectorScope: F32 M1 only; F32 M2 and F64 M1 remain portable
+Linux ARM64 and AMD64 package test binaries: compile PASS
