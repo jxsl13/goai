@@ -267,3 +267,4 @@
 {"t":"2026-08-21T22:17:00Z","eid":"8ccd8a7e4dbae282","ag":"ag-0c4f","ev":"create","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","k":"adr","ti":"Which semantic boundary should the IQ3_XXS M2 tranche optimize?","dir":"format/gguf"}
 {"t":"2026-08-21T22:17:00Z","eid":"8a430beb69d093d8","ag":"ag-0c4f","ev":"move","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","dir":"format/gguf","fr":"draft","to":"submitted"}
 {"t":"2026-08-21T22:17:16Z","eid":"56912777d4911517","ag":"ag-c857","ev":"decide","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","dir":"format/gguf","note":"Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot"}
+{"t":"2026-08-21T22:17:32Z","eid":"4dd8038d95058814","ag":"ag-8efa","ev":"create","id":"T-01M0K6D56YFAYSY4QQPYVXCE4A","k":"task","ti":"Implement and statistically gate exact IQ3_XXS QMatMul and M2 ARM64 fused row dot","dir":"format/gguf"}
