@@ -14,7 +14,7 @@ Extend QMatMul into the importance-quant family bottom-up by adding portable IQ4
 
 ## T-01M0JWPKA3E13AFRYG012RQ706 Implement and benchmark IQ4_NL QMatMul with ARM64 fused lookup dot
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0JWHMHZEDQVCFCT3GJVPME7
 refs: P-01M0JWHMHZEDQVCFCT3GJVPME7, ADR-01M0JWG7KKFVE9V1KTEEQ556WF
