@@ -126,5 +126,5 @@ The portable IQ3_XXS QMatMul SHALL use exactly 1 scratch-set allocation per work
 ## ARM64-IQ3XXS-FUSED-DOT-001 {applies: go:gguf.dotIQ3XXSRowASM,go:gguf.TestDotIQ3XXSBlockNeonKnownValue,go:gguf.TestDotIQ3XXSAsmRandomRaw,go:gguf.TestDotIQ3XXSAsmCancellationHeavy,go:gguf.TestDotIQ3XXSAsmAllocs}
 WHEN contiguous F32 M1 activations use IQ3_XXS weights, the Apple ARM64 IQ3_XXS selector SHALL dispatch 1 row-level fused NEON grid, ksigns, and scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
-## ARM64-IQ3XXS-FUSED-DOT-SCOPE-001
+## ARM64-IQ3XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.dotIQ3XXSRowFn,go:gguf.QMatMul,go:gguf.TestQMatMulIQ3XXSSelectorScope}
 The IQ3_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
