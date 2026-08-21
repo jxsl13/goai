@@ -137,3 +137,6 @@ WHEN the ARM64 SIMD F32 MHA direct-stride route executes deterministic causal, f
 
 ## ARM64-F32-MHA-STRIDED-IO-GUARDS-001
 WHEN guarded A, B, and C buffers exercise aligned and tail row or column shapes, the strided F32 row GEMM SHALL leave A and B unchanged, write only the requested C rows and columns, and preserve every sentinel outside that region.
+
+## ARM64-F32-MHA-STRIDED-IO-ALLOC-001
+WHEN steady-state allocation auditing compares the direct-stride candidate with exact merged control, the MHA forward band SHALL use no qb or ob scratch buffers and report no more allocations per operation than control.
