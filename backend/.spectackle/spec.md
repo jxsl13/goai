@@ -44,3 +44,8 @@ WHEN cached dispatch receives invalid attrs, a recorder, or an unsupported activ
 
 ## EXECUTE-RESOLUTION-CACHE-INVALIDATION-001
 WHEN the backend registry generation changes or Context opBackends is nonnil, the Execute resolution cache SHALL ignore every stale entry and preserve the live override route with zero cached-route substitutions.
+
+## EXECUTE-RESOLUTION-CACHE-INVALIDATION-002
+WHEN a Context uses an unregistered backend or wrapper that shares a registered backend name, the Execute resolution cache SHALL make go:backend.TestRegisteredDispatchTableRequiresExactBackendIdentity observe 2 Kernel lookups across 2 Execute calls.
+
+Rationale: Backend names identify registry entries but wrappers and custom backends may change Kernel resolution dynamically; live dispatch preserves historical cold and mutation semantics.

@@ -4,12 +4,18 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 )
 
 var (
 	regMu     sync.RWMutex
 	registry  = map[Name]Backend{}
 	reference Backend // the Pure-Go truth backend; fallback target (§I4, §V9)
+
+	// registryGeneration invalidates warmed Execute resolution entries after any
+	// registry or preference mutation. Registration is normally init-only, so
+	// the atomic increment stays off the hot dispatch path.
+	registryGeneration atomic.Uint64
 
 	// preference is the descending-performance order Default() auto-selects from:
 	// the first REGISTERED name wins (§T46). Discrete-GPU cuBLAS beats Apple MPS
@@ -38,6 +44,8 @@ func Register(b Backend) {
 		panic(fmt.Sprintf("backend: duplicate registration %q", name))
 	}
 	registry[name] = b
+	registerDispatchBackend(b)
+	registryGeneration.Add(1)
 }
 
 // RegisterReference registers b and marks it the reference backend: the source
@@ -47,6 +55,7 @@ func RegisterReference(b Backend) {
 	Register(b)
 	regMu.Lock()
 	reference = b
+	registryGeneration.Add(1)
 	regMu.Unlock()
 }
 
@@ -63,6 +72,7 @@ func RegisterDefault(b Backend) {
 	if !slices.Contains(preference, b.Name()) {
 		preference = append(preference, b.Name())
 	}
+	registryGeneration.Add(1)
 }
 
 // Get returns the backend registered under name.
@@ -114,6 +124,7 @@ func SetPreference(order ...Name) {
 	regMu.Lock()
 	defer regMu.Unlock()
 	preference = append([]Name(nil), order...)
+	registryGeneration.Add(1)
 }
 
 // Default returns the backend to use when the caller does not choose one — the
