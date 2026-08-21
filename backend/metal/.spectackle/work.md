@@ -36,3 +36,18 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
+
+## P-01M0GX86TYEEJSJ2SB873CJDDY Pack aligned Q6_K byte-plane loads on M2
+kind: proposal
+state: active
+created: 2026-08-21
+grilled: 2026-08-21 open=1
+targets: msl:qmatmul_q6k_cooperative, objc:metal_bridge.mtl_qmatmul_q6k, go:metal.SetQ6KCooperative, go:metal.Recorder.QMatMulResident, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q6k_bench_test.go
+
+Context: Apple M2 Pro Q6_K M=1 decode is the higher-precision projection leaf used in Q4_K_M models. Fresh post-PR #1116 baselines measured K2048xN256 at roughly 149-210 us, K2048xN2048 at 242-252 us, and K5632xN2048 at 255-341 us. Each cooperative lane currently reads four contiguous bytes from q1, q2, and qh through twelve indexed uchar loads per block. The 210-byte block and row strides preserve only two-byte alignment, so uint, uint2, or ulong casts are invalid for alternating blocks; aligned ushort pairs are safe.
+
+Hypothesis: replace each four-byte uchar group with two aligned ushort loads for q1, q2, and qh, then extract the original bytes in registers while preserving the existing q6 reconstruction and float accumulation order. This is not the rejected Q4_K experiment: Q4_K already used ushort quant loads, whereas Q6_K still issues twelve byte-level bit-plane reads.
+
+Scope: add an independently selectable runtime-compiled cooperative candidate, initially disabled. Preserve scalar and historical cooperative kernels. Use one shared route predicate in direct, resident, and Recorder selectors. Do not alter GGUF layout, numerical semantics, M>1 paths, unsupported-device fallback, or other quant types.
+
+Gates: scalar, control, and candidate outputs must agree within 2e-5 relative error, preserve finite/Inf/NaN classification, and leave inputs immutable. Benchmark identical resident buffers with AB/BA reversal, exclude one transition dispatch, and time at least 32 steady-state dispatches per arm. Cover KV, square, mid-up/down, gate/up, down, and vocabulary shapes. Promote only a measured M=1 region where every eligible shape reaches at least 1.10x median speedup in each of three independent count=7 campaigns; fallback cells must remain within 3%. Run full Metal and repository validation, retain negative variants as Spectackle evidence, and report generalizable findings to jxsl13/perfscan.
