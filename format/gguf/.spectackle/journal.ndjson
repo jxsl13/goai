@@ -126,3 +126,4 @@
 {"t":"2026-08-21T23:47:25Z","eid":"06e7916404afe76b","ag":"ag-939d","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"a50bbf23ed9128428cf689a8dfe91908c8cb173f120cbe8d0d31b9882ca3646a"}
 {"t":"2026-08-21T23:47:39Z","eid":"228e9bb36519017a","ag":"ag-2770","ev":"move","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","fr":"draft","to":"active"}
 {"t":"2026-08-21T23:47:54Z","eid":"28af8561a912f1d3","ag":"ag-0bba","ev":"create","id":"T-01M0KBJMSPENETC1VE2QPSM91C","k":"task","ti":"Implement and statistically gate exact IQ2_XS QMatMul and M2 ARM64 fused row dot","dir":"format/gguf"}
+{"t":"2026-08-21T23:48:06Z","eid":"a87fb14ac50dec50","ag":"ag-0901","ev":"move","id":"T-01M0KBJMSPENETC1VE2QPSM91C","dir":"format/gguf","fr":"draft","to":"active"}
