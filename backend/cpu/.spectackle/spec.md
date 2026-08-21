@@ -100,6 +100,6 @@ WHEN the build is not arm64 with goexperiment.simd or the operation uses F32, th
 Rationale: The optimization targets only F64 band GEMM on Apple arm64 SIMD builds. Existing amd64 SIMD and F32-native paths remain untouched.
 
 ## ARM64-F64-GEMM-BAND-ATTRIBUTION-001 {applies: go:cpu.gemmF64Band~2,go:cpu.gemmF64BandCols}
-WHEN pure-Go register accumulation and the NEON tile are evaluated, the benchmark record SHALL identify exact control, pure-Go, and final commits and report both marginal speedups independently.
+WHEN pure-Go register accumulation and the NEON tile are evaluated, the benchmark record SHALL identify 3 exact SHA-1 commits and report the 2 marginal median speedup ratios independently.
 
 Rationale: The task contains two separable mechanisms. Staged binaries prevent a combined win from hiding a neutral or harmful phase.
