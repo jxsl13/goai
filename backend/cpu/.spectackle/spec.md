@@ -148,7 +148,7 @@ WHEN three paired count-seven M2 campaigns measure MHA512 and seq128 or seq512 f
 WHEN the paired campaigns measure single-token GQA decode and steady-state allocation controls, the MHA direct-stride candidate SHALL show no statistically significant decode regression at p below 0.05 and no allocation increase.
 
 ## ARM64-F32-MHA-STRIDED-IO-PROFILE-001
-WHEN matched five-second MHA512 CPU profiles compare exact control with the promoted candidate, the ARM64 SIMD MHA implementation SHALL reduce runtime.memmove flat samples by at least 25 percent and keep scalar GEMM flat samples no more than 5 percent of NEON tile samples.
+WHEN matched five-second MHA512 profiles compare control and candidate, the ARM64 SIMD MHA implementation SHALL reduce runtime.memmove flat samples by at least 25 percent and keep scalar GEMM samples at most 5 percent of NEON tile samples.
 
 ## ARM64-F32-MHA-STRIDED-IO-SCOPE-001
 WHEN the build lacks arm64 goexperiment.simd or the operation is F64, backward, masked, selective, or shorter than the F32 GEMM threshold, the CPU backend SHALL preserve the existing route and public semantics without selecting the new ARM64 direct-stride MHA path.
