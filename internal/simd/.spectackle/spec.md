@@ -47,7 +47,7 @@ WHEN valid decay-domain fixtures use N 1, 2, 3, 16, 17, or 128 with or without D
 ## ARM64-F64-SSM-FALLBACK-001 {applies: go:simd.ssmNeonRangeSafe,go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanF64UnsafeDomainFallsBackBeforeMutation}
 WHEN delta or A violates sign, finiteness, or the proven product range, the arm64 SIMD F64 SSM dispatcher SHALL select the scalar scan before mutating output or recurrent state and preserve API semantics.
 
-## ARM64-F64-SSM-MEMORY-001
+## ARM64-F64-SSM-MEMORY-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.BenchmarkSSMScan_SIMD_512x2048x16,go:simd.BenchmarkSSMScan_SIMD_512x2048x128}
 WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
 
 ## ARM64-F64-SSM-ARCH-001
