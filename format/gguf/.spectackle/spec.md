@@ -152,3 +152,6 @@ Rationale: The M2 decode hot path must eliminate materialized weights while reta
 The IQ2_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: Architecture and dtype specialization must not leak into portable or prefill semantics.
+
+## IQ2XS-PORTABLE-QMATMUL-001
+WHEN IQ2_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry eight-wide grid, each 9-bit grid and 7-bit ksign index, one explicit 4-bit scale per 16 weights, float32 d*(0.5+s)*0.25 scaling, ascending element mapping, and float64 accumulation.
