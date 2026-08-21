@@ -36,7 +36,7 @@ Exact base is verified merge 305dd29b65cccf0521bded9f773546b3e587c166. On physic
 
 ## T-01M0J5KPW5EFY8TM91JY3WZFD2 Sweep ARM64 four-row-aligned MHA forward bands
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0J5GFQJET5VFRAN479DTRES
 grilled: 2026-08-21 open=0
