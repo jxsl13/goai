@@ -44,7 +44,7 @@ WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIM
 ## ARM64-F64-SSM-NUMERIC-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3,go:simd.TestSSMScanF64Accuracy}
 WHEN valid decay-domain fixtures use N 1, 2, 3, 16, 17, or 128 with or without D-skip, the fused arm64 F64 SSM implementation SHALL match scalar output and recurrent state within 1e-10 relative error.
 
-## ARM64-F64-SSM-FALLBACK-001
+## ARM64-F64-SSM-FALLBACK-001 {applies: go:simd.ssmNeonRangeSafe,go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanF64UnsafeDomainFallsBackBeforeMutation}
 WHEN delta or A violates sign, finiteness, or the proven product range, the arm64 SIMD F64 SSM dispatcher SHALL select the scalar scan before mutating output or recurrent state and preserve API semantics.
 
 ## ARM64-F64-SSM-MEMORY-001
