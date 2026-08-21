@@ -44,7 +44,7 @@ BIT-IDENTITY BAR, mixed and cleanly separable: scaleRowF32 is BIT-EXACT (a singl
 
 ## T-01KYJQ7822FVBBKJV7F9T08ZAK Enable the f32 norm fast path on arm64 — RMSNorm/LayerNorm currently normalize through a per-element f64 round trip
 kind: task
-state: draft
+state: active
 created: 2026-07-27
 
 SITE: backend/cpu/norm_avx_other.go:10 const normF32Fast = false, tag !(goexperiment.simd && amd64), with the exclusion stated deliberately at :8. Consumed at norm.go:143 (rmsNormFwd) and :232 (layerNormFwd); the scalar bodies that actually run here are norm.go:169 and :265. Vectorized siblings at norm_avx_amd64.go:12/:19/:44.
