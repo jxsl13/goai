@@ -120,3 +120,6 @@ WHEN three paired count-seven physical Apple M2 Pro campaigns measure causal MHA
 
 ## ARM64-F32-MHA-BAND-NUMERIC-001
 WHEN the selected ARM64 band schedule executes deterministic causal, full, and GQA F32 fixtures, the CPU backend SHALL preserve the exact control output digest and satisfy CPU-002 relative 2e-3 and absolute 1e-4 parity.
+
+## ARM64-F32-MHA-BAND-SCOPE-001
+WHEN the build is not arm64 with goexperiment.simd or the MHA route is F64, backward, or query length below 16, the CPU backend SHALL preserve the existing 30-row non-target constant and prior route without selecting the ARM64 band override.
