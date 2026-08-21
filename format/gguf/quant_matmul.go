@@ -44,6 +44,10 @@ var dotQ2KRowFn = dotQ2_KRow
 // it with a tolerance-gated fused nonlinear-lookup dot kernel.
 var dotIQ4NLRowFn = dotIQ4NLRow
 
+// dotIQ4XSRowFn is dotIQ4XSRow (scalar) on portable builds. ARM64 overrides
+// it with a tolerance-gated fused super-block nonlinear-lookup dot.
+var dotIQ4XSRowFn = dotIQ4XSRow
+
 // dotQ3KRowFn is dotQ3_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ3KRowFn = dotQ3_KRow
@@ -273,7 +277,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// value into a later return. That would have made this function report a gap it no
 	// longer has, and silenced the check for whoever adds the eighth quant type.
 	if m == 1 && xf32 != nil &&
-		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL) {
+		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS) {
 		var dot func([]float32, []byte, int) float64
 		switch qt {
 		case Q2_K:
@@ -288,6 +292,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotQ6KRowFn
 		case IQ4_NL:
 			dot = dotIQ4NLRowFn
+		case IQ4_XS:
+			dot = dotIQ4XSRowFn
 		}
 		row := xf32[:k]
 		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.
@@ -311,7 +317,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
 	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
 	switch qt {
-	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL:
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
@@ -338,6 +344,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantQ6_KInto(scratch, rowBits)
 		case IQ4_NL:
 			dequantIQ4_NLInto(scratch, rowBits)
+		case IQ4_XS:
+			dequantIQ4_XSInto(scratch, rowBits)
 		}
 	}
 	process := func(scratch []float32, ni int) {
