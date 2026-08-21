@@ -34,3 +34,6 @@ WHEN a declared F64 operation receives odd lengths, aliased ExpSum storage, or d
 
 ## ARM64-F64-EXP-FALLBACK-001 {applies: go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64,go:simd.ExpSumF64~2,go:simd.ExpScaledF64~2,go:simd.SigmoidF64~2,go:simd.SoftplusNegLLSumF64~2}
 WHEN an input lane is outside the vector polynomial safe domain or the build is not arm64 with goexperiment.simd, the implementation SHALL preserve scalar API semantics without imposing a new input restriction and leave non-target builds unchanged.
+
+## intent
+- T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
