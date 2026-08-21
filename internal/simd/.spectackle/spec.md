@@ -31,3 +31,6 @@ WHEN the arm64 SIMD candidate evaluates any declared F64 operation, the result S
 
 ## ARM64-F64-EXP-MEMORY-001
 WHEN a declared F64 operation receives odd lengths, aliased ExpSum storage, or distinct input and output buffers, the implementation SHALL use a length-determined scalar tail, preserve in-place ExpSum safety, and leave distinct input buffers unchanged.
+
+## ARM64-F64-EXP-FALLBACK-001
+WHEN an input lane is outside the vector polynomial safe domain or the build is not arm64 with goexperiment.simd, the implementation SHALL preserve scalar API semantics without imposing a new input restriction and leave non-target builds unchanged.
