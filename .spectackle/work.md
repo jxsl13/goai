@@ -3792,16 +3792,3 @@ option: Per-superblock NEON quant-plane dot with Go scale unpack
 option: Whole-row assembly including packed scale decode
 option: Materialize SIMD dequant scratch then dot
 choice: Per-superblock NEON quant-plane dot with Go scale unpack
-
-## P-01M0JQGRZ9EANTP6DTZ44R8AX9 Fuse ARM64 Q3_K decode dot on M2
-kind: proposal
-state: active
-created: 2026-08-21
-refs: ADR-01M0JQFQCNFXF9XW2MAR7RWGGC
-grilled: 2026-08-21 open=0
-targets: go:gguf.QMatMul, go:gguf.dotQ3_KRow, format/gguf/quant_matmul.go, format/gguf/q3k.go, format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
-
-Q3_K is now the slowest recurrent quant path on Apple M2 Pro: an immutable merged-main pilot measures QuantMamba2DecodeQ3_K at about 390.9-393.4 us/op with 93 allocations, versus about 124.5 us for the newly fused Q5_K path. QMatMul still binds Q3_K directly to its scalar row dot. Implement an ARM64-only NEON row-dot that fuses two-bit plane extraction, inverted high-mask application, signed sub-block scaling, and activation accumulation while retaining q3kUnpackScales in Go. Preserve scalar dispatch on other architectures, the general M greater than one path, and allocation counts. Retain only if randomized scalar-relative maximum error is at most 1e-4, direct QMatMul and model-level decode improve significantly under repeated benchstat samples, and the adjacent Q5_K path remains flat as a negative control. Record reproducible evidence and extend perfscan issue #799 with the reusable selector-family result. ADR-01M0JQFQCNFXF selects the per-superblock boundary and rejects scratch materialization because prior measured memory traffic erased SIMD leverage.
-
-RESTORE/ROLLBACK
-The selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar Q3_K selector and remove only the isolated Q3_K ARM64 files and evidence; portable, M greater than one, Metal, and Vulkan paths remain untouched.
