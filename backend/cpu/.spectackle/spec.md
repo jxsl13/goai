@@ -117,3 +117,6 @@ WHEN an F32 MHA forward band is scheduled on arm64 under goexperiment.simd, the 
 
 ## ARM64-F32-MHA-BAND-PERF-001
 WHEN three paired count-seven physical Apple M2 Pro campaigns measure causal MHA512 plus seq128 and seq512 full and GQA forward cells, the MHA band selector SHALL retain the selected band only if every causal MHA512 median is at least 1.15x faster than control 30 and no forward control has a statistically significant regression.
+
+## ARM64-F32-MHA-BAND-NUMERIC-001
+WHEN the selected ARM64 band schedule executes deterministic causal, full, and GQA F32 fixtures, the CPU backend SHALL preserve the exact control output digest and satisfy CPU-002 relative 2e-3 and absolute 1e-4 parity.
