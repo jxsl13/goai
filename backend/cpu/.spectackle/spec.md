@@ -89,7 +89,7 @@ WHEN three paired count-seven M2 Pro campaigns measure the target cells, the ben
 
 Rationale: Target cells are direct F64 GEMM 512x512x512, 1024x1024x1024, 512x2048x2048, and ragged 511x513x515. Complete F64 MatMul, Conv2D, and Conv2DBackward consumers must also be reported.
 
-## ARM64-F64-GEMM-BAND-NUMERICS-001 {applies: go:cpu.gemmF64Band~2,go:cpu.gemmF64BandCols}
+## ARM64-F64-GEMM-BAND-NUMERICS-001 {applies: go:cpu.gemmF64Full,go:cpu.gemmF64Tile4x8Neon,asm:cpu.gemmF64Tile4x8Neon,go:cpu.gemmF64FourRowTail,go:cpu.gemmF64BandPortable}
 WHEN parity covers every row and column residue, finite values, nonfinite values, and nonzero destination matrices, the arm64 SIMD F64 band kernel SHALL match the prior gemmF64Band result bits and preserve ordered C plus-equals accumulation.
 
 Rationale: The p reduction order remains ascending and unchanged. Vectorization may span only independent columns. FMLA is required to match the scalar arm64 FMADDD contraction.
