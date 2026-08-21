@@ -100,3 +100,23 @@ Rationale: Q3_K guarantees two-byte but not four-byte alignment.
 WHEN M exceeds one or scale-broadcast support is unavailable, the Metal Q3_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
 
 Rationale: The experiment is limited to supported single-token decode.
+
+## METAL-Q2K-WORD-LOAD-PERF-001
+WHEN three independent count-seven M2 campaigns cover every representative shape, the Metal Q2_K word-load selector SHALL retain the candidate only when every eligible shape reaches at least 1.10x control.
+
+Rationale: Packed lane-unique loads must produce broad end-to-end leverage.
+
+## METAL-Q2K-WORD-LOAD-NUMERIC-001
+WHEN the candidate processes finite or nonfinite inputs, the Metal Q2_K word-load kernel SHALL match control within 2e-5, preserve finite Inf and NaN class, and mutate zero input bytes.
+
+Rationale: Word extraction must preserve observable quant semantics.
+
+## METAL-Q2K-WORD-LOAD-ALIGNMENT-001
+WHEN it reads eight lane-unique bytes across 84-byte blocks or rows, the Metal Q2_K quant-plane loader SHALL issue exactly two uint loads and zero uint2-or-wider device-pointer loads.
+
+Rationale: Q2_K guarantees four-byte but not eight-byte alignment.
+
+## METAL-Q2K-WORD-LOAD-SCOPE-001
+WHEN M exceeds one or word-load support is unavailable, the Metal Q2_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
+
+Rationale: The experiment is limited to supported single-token decode.
