@@ -71,3 +71,6 @@ WHEN three alternating count-seven M2 campaigns measure backend/cpu BenchmarkWKV
 
 ## ARM64-F64-WKV-NUMERIC-001
 WHEN RWKV-like and boundary fixtures exercise fresh or continuing WKV scans, the arm64 SIMD WKV implementation SHALL match scalar output and AA/BB/PP state within 1e-10 relative error.
+
+## ARM64-F64-WKV-FALLBACK-001
+WHEN a vector pair encounters non-finite operands or exponential arguments below the proven safe domain, the arm64 WKV dispatcher SHALL rerun that pair through wkvScanStateScalar from unchanged state and overwrite partial output.
