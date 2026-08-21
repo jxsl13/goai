@@ -31,3 +31,9 @@ Rationale: M2 evidence shows 8.00x leaf, 4.73x production-shaped QMatMul, and 2.
 The non-ARM64 and M>1 Q4_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
 
 Rationale: The measured gain and tolerance contract cover only ARM64 single-token decode.
+
+## ARM64-Q6K-FUSED-DOT-001
+WHEN QMatMul receives contiguous F32 M1 activations with Q6_K weights, the ARM64 Q6_K single-token QMatMul selector SHALL dispatch to fused NEON unpack-scale-dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-Q6K-FUSED-DOT-SCOPE-001
+The non-ARM64 and M greater than one Q6_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
