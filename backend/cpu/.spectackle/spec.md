@@ -93,3 +93,8 @@ Rationale: Target cells are direct F64 GEMM 512x512x512, 1024x1024x1024, 512x204
 WHEN parity covers every row and column residue, finite values, nonfinite values, and nonzero destination matrices, the arm64 SIMD F64 band kernel SHALL match the prior gemmF64Band result bits and preserve ordered C plus-equals accumulation.
 
 Rationale: The p reduction order remains ascending and unchanged. Vectorization may span only independent columns. FMLA is required to match the scalar arm64 FMADDD contraction.
+
+## ARM64-F64-GEMM-BAND-SCOPE-001 {applies: go:cpu.gemmF64Band~2}
+WHEN the build is not arm64 with goexperiment.simd or the operation uses F32, the GEMM selector SHALL preserve the existing implementation and numerical behavior without selecting the new F64 NEON tile.
+
+Rationale: The optimization targets only F64 band GEMM on Apple arm64 SIMD builds. Existing amd64 SIMD and F32-native paths remain untouched.
