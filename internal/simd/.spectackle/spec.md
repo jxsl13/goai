@@ -76,7 +76,7 @@ WHEN RWKV-like and boundary fixtures exercise fresh or continuing WKV scans, the
 WHEN a vector pair encounters non-finite operands or exponential arguments below the proven safe domain, the arm64 WKV dispatcher SHALL rerun that pair through wkvScanStateScalar from unchanged state and overwrite partial output.
 
 ## ARM64-F64-WKV-STATE-001
-WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the TestWKVScanStateF64ChunkEqualsWhole SHALL report bit-identical output and final recurrent state.
+WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the arm64 SIMD WKV state path SHALL make TestWKVScanStateF64ChunkEqualsWhole pass with bit-identical output and final AA/BB/PP.
 
 ## ARM64-F64-WKV-RANGE-001
 WHEN two-aligned ranges cover the same channels as one whole scan, the TestWKVScanRangeF64BitExactVsWhole SHALL report bit-identical output for every declared shape.
