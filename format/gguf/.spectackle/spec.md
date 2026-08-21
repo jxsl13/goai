@@ -97,3 +97,6 @@ The IQ4_XS QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths 
 
 ## MXFP4-PORTABLE-QMATMUL-001
 WHEN MXFP4 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve E8M0-half scale conversion, low-half then high-half signed E2M1 codebook order, float32 scale multiplication, and float64 accumulation.
+
+## ARM64-MXFP4-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use MXFP4 weights, the ARM64 MXFP4 selector SHALL dispatch one row-level fused NEON E8M0-scale and signed-codebook dot with 0 leaf allocations and scalar-relative error at most 1e-4.
