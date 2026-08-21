@@ -43,3 +43,6 @@ WHEN three alternating paired count-seven physical Apple M2 Pro campaigns measur
 
 ## ARM64-F64-SSM-NUMERIC-001
 WHEN a valid finite nonpositive decay-domain fixture with N equal to 1, 2, 3, 16, 17, or 128 runs with or without D-skip, the fused arm64 F64 SSM implementation SHALL match the scalar reference within 1e-10 relative error and keep range execution bit-identical to whole execution for both output and recurrent state.
+
+## ARM64-F64-SSM-FALLBACK-001
+WHEN delta or A contains a NaN, infinity, sign violation, or a product outside the proven negative-exponential domain, the arm64 SIMD F64 SSM dispatcher SHALL select the existing scalar scan before mutating output or recurrent state and preserve arbitrary public API semantics.
