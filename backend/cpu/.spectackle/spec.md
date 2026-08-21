@@ -131,3 +131,6 @@ WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM6
 
 ## ARM64-F32-MHA-BAND-CONTROLS-001
 WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.
+
+## ARM64-F32-MHA-STRIDED-IO-NUMERIC-001
+WHEN the ARM64 SIMD F32 MHA direct-stride route executes deterministic causal, full, and GQA fixtures, the CPU backend SHALL preserve digest 73550b82110bb18f and satisfy relative tolerance 2e-3 plus absolute tolerance 1e-4.
