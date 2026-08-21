@@ -1,0 +1,54 @@
+File: goai-mha-band-e875.test
+Type: cpu
+Time: 2026-08-21 15:01:11 CEST
+Duration: 6.01s, Total samples = 41.48s (689.81%)
+Showing nodes accounting for 40.77s, 98.29% of 41.48s total
+Dropped 92 nodes (cum <= 0.21s)
+      flat  flat%   sum%        cum   cum%
+    32.73s 78.91% 78.91%     32.73s 78.91%  runtime.pthread_cond_wait
+     4.18s 10.08% 88.98%      4.18s 10.08%  runtime.usleep
+     1.31s  3.16% 92.14%      1.31s  3.16%  runtime.pthread_cond_signal
+     1.29s  3.11% 95.25%      1.29s  3.11%  github.com/jxsl13/goai/backend/cpu.gemmF32Tile4x16Neon
+     0.41s  0.99% 96.24%      0.41s  0.99%  runtime.memmove
+     0.23s  0.55% 96.79%      0.23s  0.55%  github.com/jxsl13/goai/backend/cpu.vexpQuadsNeonF32
+     0.21s  0.51% 97.30%      0.23s  0.55%  github.com/jxsl13/goai/backend/cpu.rowMaxF32
+     0.11s  0.27% 97.57%      2.73s  6.58%  github.com/jxsl13/goai/backend/cpu.mhaFwdGemmBand
+     0.11s  0.27% 97.83%      0.87s  2.10%  github.com/jxsl13/goai/backend/cpu.mhaSoftmaxBandVexpF32
+     0.09s  0.22% 98.05%      1.38s  3.33%  github.com/jxsl13/goai/backend/cpu.gemmF32BandNeonCols
+     0.05s  0.12% 98.17%      0.32s  0.77%  github.com/jxsl13/goai/backend/cpu.vexpRowF32
+     0.04s 0.096% 98.26%      0.21s  0.51%  runtime.stealWork
+     0.01s 0.024% 98.29%     32.74s 78.93%  runtime.semasleep
+         0     0% 98.29%      0.26s  0.63%  github.com/jxsl13/goai/backend.Execute
+         0     0% 98.29%      0.95s  2.29%  github.com/jxsl13/goai/backend/cpu.gemmF32BandNeon
+         0     0% 98.29%      0.95s  2.29%  github.com/jxsl13/goai/backend/cpu.gemmF32Rows
+         0     0% 98.29%      0.43s  1.04%  github.com/jxsl13/goai/backend/cpu.gemmF32RowsCols
+         0     0% 98.29%      0.23s  0.55%  github.com/jxsl13/goai/backend/cpu.mhaFwdGemmF32
+         0     0% 98.29%      2.73s  6.58%  github.com/jxsl13/goai/backend/cpu.mhaFwdGemmF32.func2
+         0     0% 98.29%      0.26s  0.63%  github.com/jxsl13/goai/backend/cpu.mhaKernelCPU
+         0     0% 98.29%      0.87s  2.10%  github.com/jxsl13/goai/backend/cpu.mhaSoftmaxBandF32 (inline)
+         0     0% 98.29%      0.22s  0.53%  github.com/jxsl13/goai/backend/cpu.parallelWork
+         0     0% 98.29%      2.72s  6.56%  github.com/jxsl13/goai/backend/cpu.poolWorker
+         0     0% 98.29%      0.23s  0.55%  github.com/jxsl13/goai/backend/cpu.vexpF32 (inline)
+         0     0% 98.29%      0.26s  0.63%  github.com/jxsl13/goai/backend/cpu_test.BenchmarkMHA512.func1
+         0     0% 98.29%     37.10s 89.44%  runtime.findRunnable
+         0     0% 98.29%      4.17s 10.05%  runtime.lock (inline)
+         0     0% 98.29%      4.17s 10.05%  runtime.lock2
+         0     0% 98.29%      4.17s 10.05%  runtime.lockWithRank (inline)
+         0     0% 98.29%     32.64s 78.69%  runtime.mPark (inline)
+         0     0% 98.29%     37.40s 90.16%  runtime.mcall
+         0     0% 98.29%     32.64s 78.69%  runtime.notesleep
+         0     0% 98.29%      1.21s  2.92%  runtime.notewakeup
+         0     0% 98.29%      4.09s  9.86%  runtime.osyield (inline)
+         0     0% 98.29%     37.38s 90.12%  runtime.park_m
+         0     0% 98.29%      0.83s  2.00%  runtime.ready
+         0     0% 98.29%      0.62s  1.49%  runtime.readyWithTime.goready.func1
+         0     0% 98.29%      0.37s  0.89%  runtime.resetspinning
+         0     0% 98.29%     37.47s 90.33%  runtime.schedule
+         0     0% 98.29%      1.31s  3.16%  runtime.semawakeup
+         0     0% 98.29%      0.21s  0.51%  runtime.send.goready.func1
+         0     0% 98.29%      1.21s  2.92%  runtime.startm
+         0     0% 98.29%     33.27s 80.21%  runtime.stopm
+         0     0% 98.29%      0.96s  2.31%  runtime.systemstack
+         0     0% 98.29%      1.23s  2.97%  runtime.wakep
+         0     0% 98.29%      0.26s  0.63%  testing.(*B).run1.func1
+         0     0% 98.29%      0.26s  0.63%  testing.(*B).runN
