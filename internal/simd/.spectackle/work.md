@@ -13,9 +13,10 @@ Merged main 24360555396d1b694cbd5bcfec979c0416332497 leaves all Apple arm64 F64 
 
 ## T-01M0J17HEEEF7VTW4RGEJ4MNWF Mask underflow and fuse the F64 NEON WKV recurrence
 kind: task
-state: done
+state: active
 created: 2026-08-21
 parent: P-01M0J0BWPDE4P97Q05AZV0PSJS
+rounds: 1
 grilled: 2026-08-21 open=11
 targets: internal/simd/exp_f64_arm64.s, internal/simd/simd_arm64.go, internal/simd/wkv_arm64.go, internal/simd/wkv_arm64_test.go, internal/simd/wkv_test.go, internal/simd/wkv_range_test.go, backend/cpu/wkv.go, backend/cpu/wkv_bench_test.go
 
