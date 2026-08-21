@@ -77,3 +77,6 @@ WHEN a vector pair encounters non-finite operands or exponential arguments below
 
 ## ARM64-F64-WKV-STATE-001
 WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the TestWKVScanStateF64ChunkEqualsWhole SHALL report bit-identical output and final recurrent state.
+
+## ARM64-F64-WKV-RANGE-001
+WHEN two-aligned ranges cover the same channels as one whole scan, the TestWKVScanRangeF64BitExactVsWhole SHALL report bit-identical output for every declared shape.
