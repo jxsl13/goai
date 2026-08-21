@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64
 kind: task
-state: active
+state: done
 created: 2026-07-27
 grilled: 2026-08-21 open=1
 targets: go:simd.ExpSumF64, go:simd.ExpScaledF64, go:simd.SigmoidF64, go:simd.SoftplusNegLLSumF64, go:cpu.vsiluPairsNeonF64, asm:cpu.vsiluPairsNeonF64, go:cpu.vexpF64Fast~2
