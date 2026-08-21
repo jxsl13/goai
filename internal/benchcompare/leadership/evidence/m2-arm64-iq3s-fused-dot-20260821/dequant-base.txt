@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDequantIQ3_S-12 2398 261946 ns/op 430.01 MB/s
+BenchmarkDequantIQ3_S-12 2424 238783 ns/op 471.73 MB/s
+BenchmarkDequantIQ3_S-12 2415 233941 ns/op 481.49 MB/s
+BenchmarkDequantIQ3_S-12 2510 239257 ns/op 470.79 MB/s
+BenchmarkDequantIQ3_S-12 2377 243249 ns/op 463.06 MB/s
+BenchmarkDequantIQ3_S-12 2416 237906 ns/op 473.46 MB/s
+BenchmarkDequantIQ3_S-12 2574 233501 ns/op 482.40 MB/s
+BenchmarkDequantIQ3_S-12 2257 241050 ns/op 467.29 MB/s
+BenchmarkDequantIQ3_S-12 2352 240619 ns/op 468.13 MB/s
+BenchmarkDequantIQ3_S-12 2391 237167 ns/op 474.94 MB/s

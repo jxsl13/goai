@@ -2,23 +2,19 @@
 schema: v1
 ---
 
-## P-01M0K1A86JFY3RHNM84CR28WKW Add MXFP4 QMatMul and fuse its ARM64 row dot
+## P-01M0K3NE11FSRAY6V751A2PC1K M2-first exact IQ3_S fused row dot and portable QMatMul
 kind: proposal
-state: done
+state: active
 created: 2026-08-21
-refs: ADR-01M0K18S8HF46ARNK03RQMD0BE
-grilled: 2026-08-21 open=1
-targets: format/gguf/mxfp4.go, format/gguf/quant_matmul.go, format/gguf/mxfp4_test.go, format/gguf/dot_mxfp4_scalar.go, format/gguf/dot_mxfp4_asm_arm64.go, format/gguf/dot_mxfp4_asm_arm64.s, format/gguf/dot_mxfp4_asm_arm64_test.go, format/gguf/bench_test.go
+targets: go:gguf.dequantIQ3_S, format/gguf/quant_matmul.go, format/gguf/iq3s.go
 
-Add portable MXFP4 QMatMul semantics for F32 and F64 inputs with caller-owned decode scratch, then add a contiguous-F32 M1 Apple ARM64 row-level fused E8M0-scale, nibble-codebook, and dot kernel. Preserve decoder float32 operation order before f64 accumulation, exact subnormal scale behavior, portable fallback, selector boundaries, and zero leaf allocations. Benchmark scalar versus NEON at K4096, M1/N64/K1024, and M1/N4096/K1024 with n=10 alternating fresh-process order and an unchanged IQ4_XS negative control. Retain only if all three accelerated cells exceed 2x with no allocation regression; otherwise redesign the kernel boundary or reject. Commit reproducible evidence, run race/cross-build/preflight/external perfscan/Spectackle gates, report the generalizable selector gap on jxsl13/perfscan, open a PR, and merge only after every CI lane passes.
+Add caller-owned IQ3_S decode and QMatMul support for F32/F64, then specialize only the F32 M=1 path on Apple ARM64 with a fused 9-bit grid/direct-sign row dot. Preserve exact materialized-reference semantics, input immutability, and constant scratch. Retain native code only when repeated fresh-process benchmarks show at least 2x speedup for K4096 leaf, M1/N64/K1024, and M1/N4096/K1024, with p<=0.01 and no statistically significant regression in an unrelated quantized negative control. IQ3_XXS remains a separate future tranche per ADR-01M0K3K391ERQ.
 
-## T-01M0K1CEY0FNEBG4A4TWD9VKMN Implement and benchmark MXFP4 QMatMul with ARM64 fused row dot
+## T-01M0K3PD38FVWSMA8JTVVD2ERE Implement and statistically gate exact IQ3_S QMatMul and M2 ARM64 fused row dot
 kind: task
-state: done
+state: active
 created: 2026-08-21
-parent: P-01M0K1A86JFY3RHNM84CR28WKW
-refs: P-01M0K1A86JFY3RHNM84CR28WKW, ADR-01M0K18S8HF46ARNK03RQMD0BE
-grilled: 2026-08-21 open=1
-targets: format/gguf/mxfp4.go, format/gguf/quant_matmul.go, format/gguf/mxfp4_test.go, format/gguf/dot_mxfp4_scalar.go, format/gguf/dot_mxfp4_asm_arm64.go, format/gguf/dot_mxfp4_asm_arm64.s, format/gguf/dot_mxfp4_asm_arm64_test.go, format/gguf/bench_test.go
+parent: P-01M0K3NE11FSRAY6V751A2PC1K
+targets: go:gguf.dequantIQ3_S, format/gguf/quant_matmul.go, format/gguf/iq3s.go
 
-Implement caller-owned MXFP4 decode and portable QMatMul for F32/F64 and M1/M>1, preserving E8M0 subnormal scale conversion, low-half then high-half signed E2M1 codebook order, float32 scale multiplication, and f64 accumulation. Add a 256-entry exact E8M0-half table and an Apple ARM64 contiguous-F32 M1 row selector that performs one zero-allocation assembly call per output row, table-loads each 17-byte block scale, vector-looks up signed nibble weights, and accumulates f64 partials. Prove exact scale-table/decode identity, known packed golden, arbitrary and cancellation-heavy error at most 1e-4, input immutability, selector boundaries, zero row allocations, portable F32/F64 parity, and M>1 scratch invariance. Benchmark scalar/NEON at K4096, M1/N64/K1024, and M1/N4096/K1024 using n=10 alternating fresh-process order with no retained-sample removal and an untouched IQ4_XS baseline/candidate control. Retain only if every cell exceeds 2x; otherwise redesign or reject. Commit evidence, run GGUF/race/cross-build/preflight/external perfscan/Spectackle gates, report generalized findings on perfscan #799, open a PR, wait for every CI lane, and merge only when all pass.
+Freeze a merged-state baseline binary. Add caller-owned exact IQ3_S decoding, portable F32/F64 QMatMul, one-scratch-per-worker reuse, and an F32 M=1 selector. Implement a zero-allocation Apple ARM64 row-level fused 9-bit grid/direct-sign dot without changing inputs. Verify exact decoder and mapping parity, F64 reference correctness, M1/M3 behavior, selector scope, allocation invariants, cancellation and random packed blocks, race safety, cross-builds, and perfscan. Retain native code only if n=10 fresh-process 500ms alternating-order samples show at least 2x on K4096 leaf, M1/N64/K1024, and M1/N4096/K1024 with p<=0.01, while an unrelated quantized negative control does not regress significantly.

@@ -25,6 +25,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0JWHMHZEDQVCFCT3GJVPME7 Add IQ4_NL QMatMul and fuse its ARM64 decode dot: Implemented and merged by PR #1138 after all CI checks passed; merge commit 61a34fed57c179222b895a74bdc21a4599b8d17d.
 - T-01M0JZ5WKSFH0SGA8PSCGEDYFR Implement and benchmark IQ4_XS QMatMul with ARM64 fused super-block dot: validated pass by codex-root-post-validator diff 0e6626269f33 :: Committed source implements portable IQ4_XS F32/F64 QMatMul and a scoped ARM64 F32-M1 fused super-block dot. Exact decode identity, packed golden -29568, cancellation, immutability, selector scope, zero leaf allocations, race, three cross-builds, full preflight, benchmark smoke, and external perfscan all pass. Retained n=10 alternati [body truncated at tombstone retention cap]
 - P-01M0JZ33ZVEMKS1K6FYAEFJFK6 Add IQ4_XS QMatMul and fuse its ARM64 super-block dot: Merged by PR #1139 after all 15 CI checks passed; evidence retained under m2-arm64-iq4xs-fused-dot-20260821.
+- T-01M0K1CEY0FNEBG4A4TWD9VKMN Implement and benchmark MXFP4 QMatMul with ARM64 fused row dot: validated pass by codex-root-post-validator no attributed diff (c193f3ddce65 binds the target list, not code) :: Post-commit source review confirms portable MXFP4 QMatMul dispatch, caller-owned exact decode, and an ARM64-only row selector across every declared target. Numerical gates pass: exact 48 golden, all 256 E8M0 entries bit-exact, caller-owned decode and scalar fused dot bit-exact, maximum [body truncated at tombstone retention cap]
+- P-01M0K1A86JFY3RHNM84CR28WKW Add MXFP4 QMatMul and fuse its ARM64 row dot: Merged as goai PR #1140 at d1daf49033de16b26711aca26fca849200f15345 with all 15 CI lanes green. Portable MXFP4 QMatMul and the Apple ARM64 fused row dot clear every retained 2x gate; evidence and perfscan #799 report are published. IQ3, IQ2, and IQ1 remain explicit next families.
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -103,3 +105,12 @@ WHEN contiguous F32 M1 activations use MXFP4 weights, the ARM64 MXFP4 selector S
 
 ## ARM64-MXFP4-FUSED-DOT-SCOPE-001
 The MXFP4 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 ARM64 M1 kernel calls.
+
+## IQ3S-PORTABLE-QMATMUL-001
+WHEN IQ3_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry grid, 9-bit indices, direct signs, eight four-bit scales expanded as 1+2*s, float32 block scaling, and float64 accumulation with exactly 1 scratch-set allocation per worker.
+
+## ARM64-IQ3S-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use IQ3_S weights, the Apple ARM64 IQ3_S selector SHALL dispatch 1 row-level fused NEON 9-bit-grid and direct-sign dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-IQ3S-FUSED-DOT-SCOPE-001
+The IQ3_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.

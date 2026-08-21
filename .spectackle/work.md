@@ -3852,3 +3852,17 @@ option: Add portable MXFP4 QMatMul plus a row-level ARM64 fused E8M0-scale/codeb
 option: Start the IQ3_S/IQ3_XXS grid family before MXFP4
 option: Optimize only eager MXFP4 dequantization without exposing QMatMul
 choice: Add portable MXFP4 QMatMul plus a row-level ARM64 fused E8M0-scale/codebook dot
+
+## ADR-01M0K3K391ERQSKF6T8MH14J47 Which atomic boundary should the next M2-first IQ3 tranche use?
+kind: adr
+state: done
+created: 2026-08-21
+context: IQ3_S and IQ3_XXS have distinct packed layouts and distinct llama.cpp ARM64 Q8_K kernels. GoAI needs an exact direct-F32 boundary, caller-owned decode, zero row-scaled scratch, and independently benchmarkable native retention.
+decision: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+status: accepted
+
+kind: radio
+option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
+option: Bundle and accelerate both IQ3 formats in one tranche
+choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche

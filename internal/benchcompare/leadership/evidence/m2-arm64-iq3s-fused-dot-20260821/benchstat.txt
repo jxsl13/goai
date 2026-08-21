@@ -1,0 +1,22 @@
+IQ3_S scalar vs ARM64 NEON, n=10:
+
+name                              scalar         neon           delta
+DotIQ3S/K4096-12                  5.254us +/- 1%  1.080us +/- 0% -79.44% (p=0.000 n=10)
+QMatMulIQ3S/N64_K1024-12          84.83us +/- 0%  17.93us +/- 0% -78.87% (p=0.000 n=10)
+QMatMulIQ3S/N4096_K1024-12        895.0us +/- 6%  245.9us +/- 3% -72.52% (p=0.000 n=10)
+
+Bytes and allocations are statistically flat for every accelerated cell.
+The leaf remains at 0 B/op and 0 allocs/op; N64 remains at 592 B/op and
+4 allocs/op; N4096 remains at 29 allocs/op.
+
+IQ4_XS negative control, merged baseline vs candidate, n=10:
+
+name                              baseline       candidate      delta
+QMatMulIQ4_XS_M1_N4096-12         209.9us +/- 4% 213.7us +/- 5% ~ (p=0.971 n=10)
+
+Control bytes and allocations are flat: p=1.000 and 29 allocs/op.
+
+IQ3_S tensor dequant delegation, merged baseline vs candidate, n=10:
+
+name                              baseline       candidate      delta
+DequantIQ3_S-12                   239.0us +/- 2% 236.9us +/- 3% ~ (p=0.436 n=10)
