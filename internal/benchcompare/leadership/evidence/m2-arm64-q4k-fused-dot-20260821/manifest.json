@@ -1,0 +1,14 @@
+{
+  "date": "2026-08-21",
+  "base_commit": "9a21d73b98be9b4cd21a75357a435a2e24cdbeb8",
+  "branch": "codex/m2-arm64-kquant-gemv",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "spectackle": "v0.9.3",
+  "samples_recorded": 11,
+  "samples_discarded_per_benchmark": 1,
+  "samples_analyzed": 10,
+  "benchtime": "250ms",
+  "candidate_scope": "arm64 Q4_K M1 fused unpack-and-dot only"
+}

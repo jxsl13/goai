@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotQ4KAsm-12       	  497511	       602.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  508183	       595.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  505315	       599.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  478334	       599.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  505944	       599.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  487867	       601.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  510710	       596.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  511657	       599.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  508750	       596.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KAsm-12       	  514053	       595.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   60208	      4807 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62732	      4788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62804	      4785 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62673	      4803 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62196	      4834 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   61171	      4811 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62089	      4788 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   63134	      4794 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   62565	      4790 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ4KScalar-12    	   63006	      4777 ns/op	       0 B/op	       0 allocs/op
+PASS

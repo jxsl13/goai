@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/nlp
+cpu: Apple M2 Pro
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2575	    117295 ns/op	   53936 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2504	    119243 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2511	    118883 ns/op	   53916 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2509	    118842 ns/op	   53916 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2449	    118854 ns/op	   53923 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2472	    118129 ns/op	   53916 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2493	    118677 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2517	    118873 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2497	    118679 ns/op	   53916 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ4_K-12    	    2426	    119158 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     830	    362657 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     811	    363317 ns/op	   53923 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     819	    363727 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     822	    366024 ns/op	   53929 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     819	    367105 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     813	    364681 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     819	    363980 ns/op	   53919 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     823	    364284 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     822	    363585 ns/op	   53917 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-12    	     823	    364210 ns/op	   53916 B/op	      93 allocs/op
+PASS
