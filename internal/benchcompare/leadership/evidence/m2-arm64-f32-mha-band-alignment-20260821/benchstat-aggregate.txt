@@ -1,0 +1,34 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                                    │ /private/tmp/goai-mha-evidence/aggregate-control.txt │ /private/tmp/goai-mha-evidence/aggregate-candidate.txt │
+                                    │                        sec/op                        │             sec/op              vs base                │
+MHA512/fwd/cpu-10                                                             1102.9µ ± 1%                      697.6µ ± 2%  -36.75% (p=0.000 n=21)
+Attention/MHAFwdGQA/f32/seq128-10                                              437.2µ ± 1%                      327.9µ ± 1%  -24.99% (p=0.000 n=21)
+Attention/MHAFwdFull/f32/seq128-10                                             474.8µ ± 1%                      361.3µ ± 1%  -23.90% (p=0.000 n=21)
+Attention/MHAFwdGQA/f32/seq512-10                                              3.987m ± 1%                      2.357m ± 2%  -40.88% (p=0.000 n=21)
+Attention/MHAFwdFull/f32/seq512-10                                             4.304m ± 1%                      2.657m ± 2%  -38.26% (p=0.000 n=21)
+Attention/MHADecodeGQA/f32/kv512-10                                            158.3µ ± 1%                      158.7µ ± 1%        ~ (p=0.881 n=21)
+geomean                                                                        923.9µ                           659.4µ       -28.63%
+
+                                    │ /private/tmp/goai-mha-evidence/aggregate-control.txt │ /private/tmp/goai-mha-evidence/aggregate-candidate.txt │
+                                    │                         B/op                         │              B/op                vs base               │
+MHA512/fwd/cpu-10                                                             1.026Mi ± 1%                      1.026Mi ± 0%       ~ (p=0.672 n=21)
+Attention/MHAFwdGQA/f32/seq128-10                                             1.023Mi ± 0%                      1.024Mi ± 0%  +0.12% (p=0.031 n=21)
+Attention/MHAFwdFull/f32/seq128-10                                            1.031Mi ± 1%                      1.030Mi ± 1%       ~ (p=0.765 n=21)
+Attention/MHAFwdGQA/f32/seq512-10                                             4.027Mi ± 0%                      4.041Mi ± 0%       ~ (p=0.126 n=21)
+Attention/MHAFwdFull/f32/seq512-10                                            4.001Mi ± 0%                      4.001Mi ± 1%  +0.00% (p=0.004 n=21)
+Attention/MHADecodeGQA/f32/kv512-10                                           48.48Ki ± 0%                      48.48Ki ± 0%       ~ (p=0.488 n=21)
+geomean                                                                       991.7Ki                           992.4Ki       +0.07%
+
+                                    │ /private/tmp/goai-mha-evidence/aggregate-control.txt │ /private/tmp/goai-mha-evidence/aggregate-candidate.txt │
+                                    │                      allocs/op                       │           allocs/op            vs base                 │
+MHA512/fwd/cpu-10                                                               11.00 ± 0%                      11.00 ± 0%       ~ (p=1.000 n=21)
+Attention/MHAFwdGQA/f32/seq128-10                                               12.00 ± 0%                      12.00 ± 0%       ~ (p=1.000 n=21) ¹
+Attention/MHAFwdFull/f32/seq128-10                                              9.000 ± 0%                      9.000 ± 0%       ~ (p=1.000 n=21) ¹
+Attention/MHAFwdGQA/f32/seq512-10                                               11.00 ± 9%                      12.00 ± 0%  +9.09% (p=0.012 n=21)
+Attention/MHAFwdFull/f32/seq512-10                                              9.000 ± 0%                      9.000 ± 0%       ~ (p=1.000 n=21)
+Attention/MHADecodeGQA/f32/kv512-10                                             30.00 ± 0%                      30.00 ± 0%       ~ (p=1.000 n=21) ¹
+geomean                                                                         12.34                           12.52       +1.46%
+¹ all samples are equal

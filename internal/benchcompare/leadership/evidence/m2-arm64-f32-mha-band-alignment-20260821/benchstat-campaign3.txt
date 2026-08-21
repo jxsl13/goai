@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+                                    │ /private/tmp/goai-mha-evidence/c3-control.txt │ /private/tmp/goai-mha-evidence/c3-candidate.txt │
+                                    │                    sec/op                     │          sec/op           vs base               │
+MHA512/fwd/cpu-10                                                     1101.2µ ± 29%               699.3µ ± 29%  -36.49% (p=0.001 n=7)
+Attention/MHAFwdGQA/f32/seq128-10                                      433.9µ ±  3%               327.9µ ±  3%  -24.42% (p=0.001 n=7)
+Attention/MHAFwdFull/f32/seq128-10                                     473.4µ ±  2%               361.0µ ±  2%  -23.74% (p=0.001 n=7)
+Attention/MHAFwdGQA/f32/seq512-10                                      3.997m ±  1%               2.366m ±  2%  -40.81% (p=0.001 n=7)
+Attention/MHAFwdFull/f32/seq512-10                                     4.320m ± 35%               2.670m ±  2%  -38.20% (p=0.001 n=7)
+Attention/MHADecodeGQA/f32/kv512-10                                    158.4µ ±  1%               158.9µ ± 20%        ~ (p=0.456 n=7)
+geomean                                                                923.1µ                     660.6µ        -28.43%
+
+                                    │ /private/tmp/goai-mha-evidence/c3-control.txt │ /private/tmp/goai-mha-evidence/c3-candidate.txt │
+                                    │                     B/op                      │          B/op            vs base                │
+MHA512/fwd/cpu-10                                                     1.023Mi ±  7%             1.030Mi ±  3%       ~ (p=0.209 n=7)
+Attention/MHAFwdGQA/f32/seq128-10                                     1.023Mi ±  0%             1.023Mi ±  0%       ~ (p=0.535 n=7)
+Attention/MHAFwdFull/f32/seq128-10                                    1.032Mi ±  2%             1.027Mi ±  2%       ~ (p=0.456 n=7)
+Attention/MHAFwdGQA/f32/seq512-10                                     4.024Mi ±  1%             4.044Mi ±  1%       ~ (p=0.053 n=7)
+Attention/MHAFwdFull/f32/seq512-10                                    4.001Mi ± 24%             4.001Mi ± 15%  +0.00% (p=0.024 n=7)
+Attention/MHADecodeGQA/f32/kv512-10                                   48.48Ki ±  0%             48.48Ki ±  0%       ~ (p=1.000 n=7) ¹
+geomean                                                               991.2Ki                   992.5Ki        +0.13%
+¹ all samples are equal
+
+                                    │ /private/tmp/goai-mha-evidence/c3-control.txt │ /private/tmp/goai-mha-evidence/c3-candidate.txt │
+                                    │                   allocs/op                   │        allocs/op         vs base                │
+MHA512/fwd/cpu-10                                                       11.00 ±  9%               11.00 ±  9%       ~ (p=1.000 n=7)
+Attention/MHAFwdGQA/f32/seq128-10                                       12.00 ±  0%               12.00 ±  0%       ~ (p=1.000 n=7) ¹
+Attention/MHAFwdFull/f32/seq128-10                                      9.000 ±  0%               9.000 ±  0%       ~ (p=1.000 n=7) ¹
+Attention/MHAFwdGQA/f32/seq512-10                                       11.00 ±  9%               12.00 ±  8%       ~ (p=0.103 n=7)
+Attention/MHAFwdFull/f32/seq512-10                                      9.000 ± 22%               9.000 ± 11%       ~ (p=1.000 n=7)
+Attention/MHADecodeGQA/f32/kv512-10                                     30.00 ±  0%               30.00 ±  0%       ~ (p=1.000 n=7) ¹
+geomean                                                                 12.34                     12.52        +1.46%
+¹ all samples are equal

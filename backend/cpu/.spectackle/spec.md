@@ -14,6 +14,8 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 - T-01KYJQ3QB2EMCR0T09D7XA4TEX Vectorize rowMaxF32 and scaleRowF32 on arm64 — two of every softmax's three passes are scalar: Shipped M2 arm64 SIMD acceleration for the three F32 softmax row primitives: rowMax now uses 16-lane FMAXNM accumulation, scale uses 16-lane FMUL, and axpb uses 16-lane FMLA, each with scalar tails. rowMax repairs signed zero by selecting the first zero when the numeric maximum is zero, preserving ordered scalar semantics while still skipping NaNs. Non-arm64 SIMD targets and F64 behavior remain un [body truncated at tombstone retention cap]
 - T-01KYJQ3PXEFMW9RAY47HDFTM18 Give gemmF64Band a NEON kernel and move its accumulators out of memory: Archived after PR #1126 completed its first full 15-of-15 CI matrix successfully at head 2dce0d08e830b9fb0b9d8bff4bd1cef6a4114041. Local validation, benchmark evidence, rejection attribution, final assembly inspection, code anchors, perfscan issues 792 and 793, and the operation-level redesign rationale are recorded. The implementation retains 1.649x to 2.471x direct GEMM gains and 2.04x to 2.38x [body truncated at tombstone retention cap]
 - T-01M0J2XM0TF8HSNP6JBFT68C3Y Route the GEMM band oracle across amd64 SIMD build tags: validated pass by codex-root-ci-validator diff 671dcfe7a86c — Validated pass by codex-root-ci-validator. Archived after PR #1129 first corrected CI matrix passed 15/15 at exact head 42d26b68f20991336c7eded0016653eefa151d86. Commit 45e1ada5 adds mutually exclusive test-only GEMM band oracle adapters: default builds call gemmF64Band and gemmF32Band, while amd64 goexperiment.simd calls the existing [body truncated at tombstone retention cap]
+- T-01M0J5KPW5EFY8TM91JY3WZFD2 Sweep ARM64 four-row-aligned MHA forward bands: validated pass by codex-root-mha-evidence-validator diff 2088c3a48efe :: PASS: exact ARM64 SIMD and default binaries pass; full SIMD race passes; vet and cross-builds pass; the digest is exact and non-vacuous; three alternating campaigns show 23.90-40.88% gains with p<0.001 and neutral decode; pprof removes the scalar remainder; steady-state allocations remain nine; build tags isolate the implemen [body truncated at tombstone retention cap]
+- P-01M0J5GFQJET5VFRAN479DTRES Align ARM64 F32 MHA forward bands to the four-row NEON tile: Completed by archived task T-01M0J5KPW5EFY and benchmark ledger M-01M0J76R3QECK. PR #1130 first matrix run 32486219596 passed 15/15 at head dcfe37bc89e1dd92e780fb2f998636ca2c6b675e. Apple ARM64 SIMD now uses a 32-row NEON-aligned MHA forward grain with 23.90-40.88% measured gains, neutral decode, exact semantics, stable steady-state allocations, and default 30-row preservation elsewhere.
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -111,3 +113,21 @@ WHEN the internal two-lane F64 exponential leaf is available, the first landing 
 
 ## AMD64-SIMD-GEMM-BAND-TEST-BUILD-001
 WHEN backend/cpu tests compile on amd64 with GOEXPERIMENT=simd, the backend/cpu test adapter SHALL route F32 through gemmF32BandScalarF64 and make TestGemmBandUnrollIsBitExact pass with 0 undefined symbols.
+
+## ARM64-F32-MHA-BAND-TILE-001
+WHEN an F32 MHA forward band is scheduled on arm64 under goexperiment.simd, the CPU backend SHALL use a band-row count divisible by 4 so every complete band feeds only whole rows into the four-row NEON GEMM tile.
+
+## ARM64-F32-MHA-BAND-PERF-001
+WHEN three paired count-seven M2 campaigns measure causal MHA512, the MHA band selector SHALL retain the selected band only if every median is at least 1.15x faster than control 30.
+
+## ARM64-F32-MHA-BAND-NUMERIC-001
+WHEN the selected ARM64 band schedule executes deterministic causal, full, and GQA F32 fixtures, the CPU backend SHALL preserve the exact control output digest and satisfy CPU-002 relative 2e-3 and absolute 1e-4 parity.
+
+## ARM64-F32-MHA-BAND-SCOPE-001
+WHEN the build is not arm64 with goexperiment.simd or the MHA route is F64, backward, or query length below 16, the CPU backend SHALL preserve the existing 30-row non-target constant and prior route without selecting the ARM64 band override.
+
+## ARM64-F32-MHA-BAND-PROFILE-001
+WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM64 MHA implementation SHALL make gemmF32RowsScalar flat samples no more than 5 percent of gemmF32Tile4x16Neon flat samples while adding zero steady-state allocations.
+
+## ARM64-F32-MHA-BAND-CONTROLS-001
+WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.

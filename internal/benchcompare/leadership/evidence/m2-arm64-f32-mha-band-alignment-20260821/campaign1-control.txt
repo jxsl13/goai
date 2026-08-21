@@ -1,0 +1,53 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkMHA512/fwd/cpu-10         	     536	   1136369 ns/op	 1116395 B/op	      12 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     523	   1117610 ns/op	 1085708 B/op	      11 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     522	   1120227 ns/op	 1071025 B/op	      11 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     524	   1102906 ns/op	 1085622 B/op	      11 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     526	   1105141 ns/op	 1087748 B/op	      11 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     538	   1093475 ns/op	 1080526 B/op	      11 allocs/op
+BenchmarkMHA512/fwd/cpu-10         	     540	   1093830 ns/op	 1063951 B/op	      11 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1288	    446987 ns/op	 1075564 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1365	    441986 ns/op	 1072452 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1296	    443425 ns/op	 1072213 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1384	    433630 ns/op	 1071082 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1384	    434114 ns/op	 1073494 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1401	    432457 ns/op	 1071940 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq128-10         	    1326	    438014 ns/op	 1071397 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1065	    480330 ns/op	 1100787 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1242	    481880 ns/op	 1094134 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1238	    480268 ns/op	 1083053 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1270	    471523 ns/op	 1079714 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1267	    472965 ns/op	 1074723 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1254	    472005 ns/op	 1087774 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq128-10        	    1246	    476862 ns/op	 1069101 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     152	   3975003 ns/op	 4244412 B/op	      11 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     148	   3987249 ns/op	 4236684 B/op	      11 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     151	   3936820 ns/op	 4223503 B/op	      11 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     152	   3903804 ns/op	 4278572 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     152	   3906796 ns/op	 4222844 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     152	   3911404 ns/op	 4250566 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     100	   5333135 ns/op	 4219363 B/op	      12 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     136	   4353627 ns/op	 5182065 B/op	      10 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     138	   4330993 ns/op	 4195071 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     139	   4271125 ns/op	 4195068 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     141	   4228811 ns/op	 4195067 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     141	   4199314 ns/op	 4195067 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     141	   4202733 ns/op	 4195068 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdFull/f32/seq512-10        	     141	   4201524 ns/op	 4195067 B/op	       9 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3927	    156438 ns/op	   49648 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3739	    160512 ns/op	   49648 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3830	    158175 ns/op	   49649 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3771	    158323 ns/op	   49648 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3943	    157274 ns/op	   49648 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3621	    157548 ns/op	   49648 B/op	      30 allocs/op
+BenchmarkAttention/MHADecodeGQA/f32/kv512-10       	    3807	    158083 ns/op	   49648 B/op	      30 allocs/op
+PASS

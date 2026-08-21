@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     134	   4347891 ns/op	 4336841 B/op	      10 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     153	   3912962 ns/op	 4194997 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     154	   3856187 ns/op	 4194996 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     153	   3881394 ns/op	 4194996 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     154	   3866715 ns/op	 4194996 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     151	   3938653 ns/op	 4194997 B/op	       9 allocs/op
+BenchmarkAttention/MHAFwdGQA/f32/seq512-10         	     151	   3927861 ns/op	 4194997 B/op	       9 allocs/op
+PASS
