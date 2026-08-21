@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                                 │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-scalar.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-neon.txt │
+                                 │                                            sec/op                                            │                               sec/op                                vs base                │
+DotIQ4NLPaths-12                                                                                                   4813.0n ± 1%                                                          733.1n ± 1%  -84.77% (p=0.000 n=10)
+QMatMulIQ4NLPaths/N64_K1024-12                                                                                      75.81µ ± 1%                                                          12.04µ ± 1%  -84.12% (p=0.000 n=10)
+QMatMulIQ4NLPaths/N4096_K1024-12                                                                                    705.7µ ± 3%                                                          175.5µ ± 2%  -75.14% (p=0.000 n=10)
+geomean                                                                                                             63.62µ                                                               11.57µ       -81.82%
+
+                                 │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-scalar.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-neon.txt │
+                                 │                                             B/s                                              │                                B/s                                 vs base                 │
+DotIQ4NLPaths-12                                                                                                   3.170Gi ± 1%                                                       20.814Gi ± 1%  +556.55% (p=0.000 n=10)
+QMatMulIQ4NLPaths/N64_K1024-12                                                                                     3.220Gi ± 1%                                                       20.286Gi ± 1%  +529.91% (p=0.000 n=10)
+QMatMulIQ4NLPaths/N4096_K1024-12                                                                                   22.14Gi ± 3%                                                        89.05Gi ± 2%  +302.21% (p=0.000 n=10)
+geomean                                                                                                            6.092Gi                                                             33.50Gi       +449.96%
+
+                                 │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-scalar.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-neon.txt │
+                                 │                                             B/op                                             │                               B/op                                 vs base                 │
+DotIQ4NLPaths-12                                                                                                   0.000 ± 0%                                                            0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ4NLPaths/N64_K1024-12                                                                                     592.0 ± 0%                                                            592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ4NLPaths/N4096_K1024-12                                                                                 17.00Ki ± 0%                                                          17.00Ki ± 0%       ~ (p=0.753 n=10)
+geomean                                                                                                                       ²                                                                      +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                 │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-scalar.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/iq4nl-neon.txt │
+                                 │                                          allocs/op                                           │                             allocs/op                              vs base                 │
+DotIQ4NLPaths-12                                                                                                   0.000 ± 0%                                                            0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ4NLPaths/N64_K1024-12                                                                                     4.000 ± 0%                                                            4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ4NLPaths/N4096_K1024-12                                                                                   29.00 ± 0%                                                            29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                                       ²                                                                      +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+

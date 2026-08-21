@@ -1,0 +1,71 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8002	     74812 ns/op	56064.29 MB/s	  140676 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3468	    160270 ns/op	104681.18 MB/s	   17412 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    7898	     73427 ns/op	57122.11 MB/s	  140678 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3120	    163061 ns/op	102889.51 MB/s	   17409 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8019	     73721 ns/op	56893.98 MB/s	  140677 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3210	    162645 ns/op	103152.60 MB/s	   17408 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    7966	     74349 ns/op	56413.92 MB/s	  140676 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3462	    163434 ns/op	102654.25 MB/s	   17412 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8116	     74261 ns/op	56480.43 MB/s	  140676 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3464	    163786 ns/op	102434.00 MB/s	   17408 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8391	     74547 ns/op	56263.90 MB/s	  140675 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3458	    162814 ns/op	103044.97 MB/s	   17412 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8272	     73560 ns/op	57018.68 MB/s	  140677 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3445	    163114 ns/op	102855.92 MB/s	   17413 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    7779	     73862 ns/op	56785.51 MB/s	  140681 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3211	    162271 ns/op	103389.85 MB/s	   17408 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    8266	     74484 ns/op	56311.78 MB/s	  140677 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3265	    163436 ns/op	102653.02 MB/s	   17410 B/op	      29 allocs/op
+PASS
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M16-12         	    7951	     74563 ns/op	56252.09 MB/s	  140679 B/op	      40 allocs/op
+BenchmarkQMatMulQ5_K_M1_N4096-12    	    3448	    163364 ns/op	102698.09 MB/s	   17408 B/op	      29 allocs/op
+PASS
+

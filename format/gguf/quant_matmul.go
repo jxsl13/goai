@@ -40,6 +40,10 @@ var dotQ4KRowFn = dotQ4_KRow
 // with a tolerance-gated vector unpack-affine-dot kernel.
 var dotQ2KRowFn = dotQ2_KRow
 
+// dotIQ4NLRowFn is dotIQ4NLRow (scalar) on portable builds. ARM64 overrides
+// it with a tolerance-gated fused nonlinear-lookup dot kernel.
+var dotIQ4NLRowFn = dotIQ4NLRow
+
 // dotQ3KRowFn is dotQ3_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ3KRowFn = dotQ3_KRow
@@ -255,7 +259,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		return out, nil
 	}
 
-	// The K-quants carry the same gap, and they are llama.cpp's common deployment
+	// The K-quants and IQ4_NL carry the same gap. The K-quants are llama.cpp's common deployment
 	// formats. Their per-row dot lives in a helper each: the superblock unpacking is
 	// long enough that inlining four copies of it here would bury the dispatch.
 	// The aggressive quants (Q2_K/Q3_K/Q5_K) were measured before being fused rather
@@ -269,7 +273,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// value into a later return. That would have made this function report a gap it no
 	// longer has, and silenced the check for whoever adds the eighth quant type.
 	if m == 1 && xf32 != nil &&
-		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K) {
+		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL) {
 		var dot func([]float32, []byte, int) float64
 		switch qt {
 		case Q2_K:
@@ -282,6 +286,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotQ5KRowFn
 		case Q6_K:
 			dot = dotQ6KRowFn
+		case IQ4_NL:
+			dot = dotIQ4NLRowFn
 		}
 		row := xf32[:k]
 		// Decode (m==1) K-quant row dots are independent per output row → chunk-parallel.
@@ -305,7 +311,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
 	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
 	switch qt {
-	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K:
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
@@ -330,6 +336,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantQ5_KInto(scratch, rowBits)
 		case Q6_K:
 			dequantQ6_KInto(scratch, rowBits)
+		case IQ4_NL:
+			dequantIQ4_NLInto(scratch, rowBits)
 		}
 	}
 	process := func(scratch []float32, ni int) {
@@ -574,9 +582,12 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		nw = n
 	}
 	if nw <= 1 || m*n*k < 1<<20 {
-		scratch := make([]float32, k)
-		sb := make([]float32, k)
-		sc := make([]float32, k)
+		// One reusable backing allocation owns the three fixed row lanes needed by
+		// process3. Output-column count therefore does not change scratch allocations.
+		scratchSet := make([]float32, 3*k)
+		scratch := scratchSet[:k]
+		sb := scratchSet[k : 2*k]
+		sc := scratchSet[2*k:]
 		ni := 0
 		for ; ni+3 <= n; ni += 3 {
 			process3(scratch, sb, sc, ni)
@@ -601,9 +612,10 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 		wg.Add(1)
 		go func(lo, hi int) {
 			defer wg.Done()
-			scratch := make([]float32, k)
-			sb := make([]float32, k)
-			sc := make([]float32, k)
+			scratchSet := make([]float32, 3*k)
+			scratch := scratchSet[:k]
+			sb := scratchSet[k : 2*k]
+			sc := scratchSet[2*k:]
 			ni := lo
 			for ; ni+3 <= hi; ni += 3 {
 				process3(scratch, sb, sc, ni)

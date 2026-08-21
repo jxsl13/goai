@@ -3808,23 +3808,17 @@ option: Whole-row assembly including f16 and coefficient unpack
 option: Scratch dequantization followed by a generic dot
 choice: Per-superblock NEON two-bit affine dot with Go coefficient preparation
 
-## P-01M0JSKA87F83B9PXPGAKCBD3H Fuse ARM64 Q2_K decode dot on M2
-kind: proposal
-state: active
-created: 2026-08-21
-refs: ADR-01M0JSJQEXFTJBDFE71EWS8C7D
-grilled: 2026-08-21 open=0
-targets: go:gguf.QMatMul, format/gguf/quant_matmul.go, format/gguf/q2k.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md
-
-Close the final scalar K-quant M=1 selector edge on Apple ARM64. Add an architecture-dispatched Q2_K row dot whose Go wrapper decodes d/dmin and prepares sixteen interleaved scale/min coefficient pairs per superblock, while a noescape NEON leaf extracts packed two-bit quants, applies affine dequantization, and accumulates the activation dot without materializing weights. Preserve every non-ARM64 and M>1 path. Gate element mapping, coefficient selection, input immutability, zero leaf allocations, and maximum scalar-relative error at 1e-4. Require retained alternating n=10 leaf, M1/N64/K1024, M1/N4096/K1024, and recurrent Mamba2 evidence with an untouched negative control before keeping the selector. Run external perfscan with GOPROXY=direct and extend issue #799 with any generalized selector-family learning.
-
-## T-01M0JSVYWCEYPTM9XBY8Y9M2QC Implement and gate ARM64 Q2_K fused decode GEMV
-kind: task
+## ADR-01M0JWG7KKFVE9V1KTEEQ556WF Which first IQ4 ARM64 boundary should extend QMatMul after the scalar K-quant selector family is complete?
+kind: adr
 state: done
 created: 2026-08-21
-parent: P-01M0JSKA87F83B9PXPGAKCBD3H
-refs: P-01M0JSKA87F83B9PXPGAKCBD3H, ADR-01M0JSJQEXFTJBDFE71EWS8C7D
-grilled: 2026-08-21 open=1
-targets: format/gguf/quant_matmul.go, format/gguf/dot_q2k_asm_arm64.go, format/gguf/dot_q2k_asm_arm64.s, format/gguf/dot_q2k_scalar.go, format/gguf/dot_q2k_asm_arm64_test.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go
+context: IQ4_NL is currently dequantization-only and QMatMul rejects it. Its 32-value block uses a fixed nonlinear 16-entry codebook and is the inner primitive reused by IQ4_XS. The next tranche must add portable semantics before claiming an ARM64 gain, preserve M greater than one behavior, and remain small enough for exact raw-byte and cross-platform gates.
+decision: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
+consequences: This creates the missing portable API semantics and a separately measurable ARM64 selector without coupling two wire formats. IQ4_XS stays explicit follow-up work but can reuse the proven nonlinear lookup leaf. The tranche must benchmark the scalar and NEON paths in one binary because merged main currently rejects IQ4_NL QMatMul, and it must not make an incumbent-leadership claim without a matched llama.cpp harness.
+status: accepted
 
-Introduce an ARM64-dispatched Q2_K row-dot wrapper and noescape NEON leaf. Decode each superblock d and dmin once in Go, prepare sixteen interleaved step/offset coefficient pairs, and let assembly unpack the two-bit planes, apply step*q-offset, and accumulate against the activation row without materializing weights. Preserve the portable scalar implementation on non-ARM64 and the existing QMatMul prefill path for M>1. Prove exact packed-element mapping including a nonzero offset case, randomized scalar-relative agreement at or below 1e-4 across arbitrary raw rows, input immutability, and zero leaf allocations. Compile immutable baseline test binaries before edits. Retain alternating n=10 leaf, M1/N64/K1024, M1/N4096/K1024, QuantMamba2 Q2_K, and untouched Q5_K negative-control evidence; reject the selector if the measured path gains are not material. Run the full GGUF and NLP packages, race coverage, portable/cross-build gates, make preflight, external perfscan with GOPROXY=direct, and post-implementation Spectackle validation. If retained, update BENCHMARKS.md, store reproducible evidence, extend perfscan issue #799 with generalized learning, and open a PR for merge only after all CI checks pass.
+kind: radio
+option: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS
+option: Implement IQ4_NL and IQ4_XS portable and ARM64 fused paths together
+option: Optimize only IQ4 dequantization before exposing QMatMul support
+choice: Add portable IQ4_NL QMatMul plus an ARM64 fused nonlinear-lookup dot; use it as the measured foundation for later IQ4_XS

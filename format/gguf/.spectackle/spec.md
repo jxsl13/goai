@@ -69,3 +69,15 @@ The Q2_K QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths on
 
 ## ARM64-Q2K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q2_K weights, the ARM64 Q2_K single-token selector SHALL dispatch to fused NEON two-bit affine unpack-dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+## IQ4NL-PORTABLE-QMATMUL-001
+WHEN IQ4_NL weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 16-entry nonlinear codebook, low-half then high-half order, f16 block scaling, and f64 accumulation.
+
+## IQ4NL-PORTABLE-SCRATCH-001
+The portable IQ4_NL QMatMul SHALL use exactly 1 reusable scratch per worker for M greater than one and perform 0 per-output-row tensor allocations.
+
+## ARM64-IQ4NL-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use IQ4_NL weights, the ARM64 IQ4_NL selector SHALL dispatch one row-level fused NEON nonlinear-lookup dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-IQ4NL-FUSED-DOT-SCOPE-001
+The IQ4_NL QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths portable and dispatch 0 ARM64 M1 kernel calls.

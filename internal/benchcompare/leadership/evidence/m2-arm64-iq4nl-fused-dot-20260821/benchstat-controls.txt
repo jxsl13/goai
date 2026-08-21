@@ -1,0 +1,29 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                        │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-base.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-candidate.txt │
+                        │                                            sec/op                                            │                                   sec/op                                    vs base               │
+QMatMulQ4_K_M16-12                                                                                         76.05µ ± 1%                                                                  74.31µ ± 1%  -2.29% (p=0.000 n=10)
+QMatMulQ5_K_M1_N4096-12                                                                                    163.1µ ± 1%                                                                  163.1µ ± 1%       ~ (p=0.436 n=10)
+geomean                                                                                                    111.4µ                                                                       110.1µ       -1.15%
+
+                        │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-base.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-candidate.txt │
+                        │                                             B/s                                              │                                    B/s                                      vs base               │
+QMatMulQ4_K_M16-12                                                                                        51.37Gi ± 1%                                                                 52.57Gi ± 1%  +2.34% (p=0.000 n=10)
+QMatMulQ5_K_M1_N4096-12                                                                                   95.80Gi ± 1%                                                                 95.81Gi ± 1%       ~ (p=0.436 n=10)
+geomean                                                                                                   70.15Gi                                                                      70.97Gi       +1.17%
+
+                        │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-base.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-candidate.txt │
+                        │                                             B/op                                             │                                    B/op                                     vs base               │
+QMatMulQ4_K_M16-12                                                                                        137.4Ki ± 0%                                                                 137.4Ki ± 0%       ~ (p=0.799 n=10)
+QMatMulQ5_K_M1_N4096-12                                                                                   17.00Ki ± 0%                                                                 17.00Ki ± 0%       ~ (p=0.763 n=10)
+geomean                                                                                                   48.33Ki                                                                      48.33Ki       -0.00%
+
+                        │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-base.txt │ internal/benchcompare/leadership/evidence/m2-arm64-iq4nl-fused-dot-20260821/control-candidate.txt │
+                        │                                          allocs/op                                           │                                allocs/op                                 vs base                  │
+QMatMulQ4_K_M16-12                                                                                          62.00 ± 0%                                                                40.00 ± 0%  -35.48% (p=0.000 n=10)
+QMatMulQ5_K_M1_N4096-12                                                                                     29.00 ± 0%                                                                29.00 ± 0%        ~ (p=1.000 n=10) ¹
+geomean                                                                                                     42.40                                                                     34.06       -19.68%
+¹ all samples are equal
+

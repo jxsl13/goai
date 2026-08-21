@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ4NLPaths-12 	  121039	      4876 ns/op	3359.82 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  124796	      4806 ns/op	3408.82 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  123696	      4839 ns/op	3385.52 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  124249	      4820 ns/op	3399.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  125617	      4793 ns/op	3418.20 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    8048	     75727 ns/op	3461.68 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7884	     75824 ns/op	3457.27 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7933	     75439 ns/op	3474.91 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7555	     75664 ns/op	3464.60 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    8006	     75564 ns/op	3469.17 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     818	    701362 ns/op	23920.90 MB/s	   17758 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     794	    732680 ns/op	22898.42 MB/s	   17432 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     788	    716577 ns/op	23412.99 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     788	    712327 ns/op	23552.69 MB/s	   17414 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     830	    684855 ns/op	24497.48 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  125625	      4793 ns/op	3418.35 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  126342	      4786 ns/op	3423.00 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  125566	      4780 ns/op	3427.51 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  125192	      4839 ns/op	3385.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths-12 	  122548	      4851 ns/op	3377.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7828	     76542 ns/op	3424.83 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7832	     76414 ns/op	3430.57 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7815	     75803 ns/op	3458.24 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7594	     75908 ns/op	3453.46 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024-12  	    7826	     75816 ns/op	3457.63 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     829	    697862 ns/op	24040.86 MB/s	   17455 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     843	    686031 ns/op	24455.49 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     754	    696078 ns/op	24102.48 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     808	    710100 ns/op	23626.54 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024-12         	     804	    723728 ns/op	23181.67 MB/s	   17408 B/op	      29 allocs/op
+
