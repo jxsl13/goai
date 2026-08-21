@@ -22,3 +22,6 @@ Rationale: Vectorizing the reduction changes summation order. On amd64 the scala
 WHERE the arm64 NEON build, the bit-exact SIMD kernels SHALL use FMLA rather than separate FMUL and FADD, since the Go arm64 backend already contracts the scalar twin into FMADDS.
 
 Rationale: The rule inverts against amd64 and following the amd64 form here would BREAK bit-exactness, not preserve it: the repo verified on objdump that the scalar SAXPY loop compiles to scalar FMADDS (backend/cpu/gemm_neon_arm64.go), and the NEON kernel header records that each C element accumulates its k products in ascending p order in one fused-FMA chain (gemm_neon_arm64.s). A kernel using separate mul and add would round twice where the scalar rounds once, failing TestGemmCrossReferenceExact. Note also that the real arm64 NEON kernels live in backend/cpu, not in internal/simd, which has no arm64 files at all.
+
+## ARM64-F64-EXP-PERF-001
+WHEN three independent paired count-seven Apple M2 Pro campaigns measure ExpSumF64 at 4096 and 32768 elements, ExpScaledF64 at 128 elements, SigmoidF64 at 65536 elements, and SoftplusNegLLSumF64 at 65536 elements, the arm64 SIMD F64 transcendental path SHALL retain the candidate only when the direct vector leaf is at least 2.00x the exact scalar control, every complete-operation median is at least 1.25x control, and no target allocates.

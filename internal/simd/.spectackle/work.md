@@ -6,6 +6,7 @@ schema: v1
 kind: task
 state: active
 created: 2026-07-27
+grilled: 2026-08-21 open=1
 targets: go:simd.ExpSumF64, go:simd.ExpScaledF64, go:simd.SigmoidF64, go:simd.SoftplusNegLLSumF64, go:cpu.vsiluPairsNeonF64, asm:cpu.vsiluPairsNeonF64, go:cpu.vexpF64Fast~2
 
 CURRENT GAP: on arm64 with goexperiment.simd, internal/simd.ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 still compile from the scalar math.Exp fallback. amd64 has a degree-13 F64 vector polynomial. backend/cpu already owns a separate two-lane NEON SiLU polynomial, proving the leaf is implementable, but vexpF64Fast remains false for other backend composites.
