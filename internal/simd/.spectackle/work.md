@@ -13,7 +13,7 @@ Merged main 24360555396d1b694cbd5bcfec979c0416332497 leaves all Apple arm64 F64 
 
 ## T-01M0J0WCG5F86TJ2M8TP7C7ZW0 Preflight and fuse the F64 NEON WKV recurrence
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 parent: P-01M0J0BWPDE4P97Q05AZV0PSJS
 grilled: 2026-08-21 open=0
