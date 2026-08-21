@@ -2,15 +2,6 @@
 schema: v1
 ---
 
-## P-01M0K6A4A6F0SAGEMT1937ZQQN M2-first exact IQ3_XXS fused row dot and portable QMatMul
-kind: proposal
-state: active
-created: 2026-08-21
-grilled: 2026-08-21 open=0
-targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
-
-Following ARCHITECTURE-RESEARCH.md CPU §§5.4-5.8 and benchmark §14, add caller-owned IQ3_XXS decoding and direct-F32/F64 QMatMul support, then specialize only contiguous F32 M=1 on Apple ARM64. Fuse 256x4 grid lookup, 7-bit ksigns expansion, packed sub-scale application, and activation dot without materializing weights or quantizing activations. Preserve exact materialized-reference semantics, input immutability, portable fallback, and output-row-independent scratch. Use llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 as an executable layout/kernel reference; its Q8_K activation boundary is not a matched cross-library claim. Retain native code only if n=10 fresh-process, 500 ms, alternating-order samples show at least 2x improvement on K4096 leaf, M1/N64/K1024, and M1/N4096/K1024 with p<=0.01, flat allocation/byte profiles, and no statistically significant regression in an unrelated quantized control. Commit a reproducible evidence manifest and report any generalized finding to perfscan.
-
 ## ADR-01M0K6C6PEF4JT8435XC34X2GQ Which semantic boundary should the IQ3_XXS M2 tranche optimize?
 kind: adr
 state: done
@@ -27,11 +18,20 @@ option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
 
-## T-01M0K6D56YFAYSY4QQPYVXCE4A Implement and statistically gate exact IQ3_XXS QMatMul and M2 ARM64 fused row dot
+## P-01M0K8Z3S1ER2BYJ5H815QYNM8 M2-first exact IQ2_XXS fused row dot and portable QMatMul
+kind: proposal
+state: active
+created: 2026-08-21
+grilled: 2026-08-21 open=0
+targets: go:gguf.dequantIQ2_XXS, go:gguf.QMatMul, format/gguf/iq2xxs.go, format/gguf/quant_matmul.go
+
+Close the bottom-up IQ2_XXS CPU execution gap without weakening QMatMul semantics. Add caller-owned portable dequantization and an exact scalar row-dot oracle, support F32 and F64 activations for all M through reusable scratch, and select an Apple ARM64 fused M=1 F32 leaf only after numerical and allocation gates. Benchmark fresh-process matched cells on M2, retain neutral dequant and unrelated-quant controls, inspect generated instructions, cross-build Linux ARM64 and AMD64, run the full package/race/Metal preflight matrix, and make no cross-library leadership claim against llama.cpp because its pinned ARM IQ2_XXS kernel consumes Q8_K activations rather than direct F32. Version evidence, source pins, sample order, and binary hashes. Report any generalizable perfscan improvement upstream.
+
+## T-01M0K90SRGFGRSGF2MZZ4V2R4Q Implement and statistically gate exact IQ2_XXS QMatMul and M2 ARM64 fused row dot
 kind: task
 state: active
 created: 2026-08-21
-parent: P-01M0K6A4A6F0SAGEMT1937ZQQN
-targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
+parent: P-01M0K8Z3S1ER2BYJ5H815QYNM8
+targets: go:gguf.dequantIQ2_XXS, go:gguf.QMatMul, format/gguf/iq2xxs.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_test.go
 
-Freeze the merged-main baseline and source manifest. Refactor IQ3_XXS into a caller-owned exact decoder; add exact scalar row dot, portable F32/F64 QMatMul, fixed per-worker scratch, and an F32 M=1 selector. Implement an Apple ARM64 zero-allocation leaf that gathers two 4-wide grid rows, expands each 7-bit ksigns index through a compact sign-mask table, applies the exact float32 d*(0.5+s)*0.5 coefficient, and accumulates products into independent float64 partials. Verify bit-exact caller-owned decode and scalar/materialized mapping, F32/F64 M1/M3 QMatMul, selector scope, output-row-independent scratch, arbitrary raw blocks including negative f16 scales, cancellation, immutability, zero leaf allocations, race safety, amd64/arm64 cross-builds, full preflight, Metal preflight, and external perfscan with GOPROXY=direct. Retain native code only when n=10 fresh-process 500 ms alternating-order benchstat meets the proposal thresholds at K4096 leaf and both QMatMul shapes, with flat memory and neutral unrelated-quant and tensor-dequant controls. Commit evidence, file generalized perfscan findings, open a PR, merge only after every CI lane passes, verify origin/main ancestry, and delete the remote branch.
+Implement under ADR-01M0K6C6PEF4J and repository ADR-0016. Refactor dequantIQ2_XXS through a caller-owned into decoder, add an exact portable row-dot oracle, admit IQ2_XXS into QMatMul for F32/F64 and all M with one scratch set per worker, and select an Apple ARM64 fused M=1 F32 leaf only. Preserve the 256-entry 8-wide grid, four 7-bit ksigns indices per 32 weights, d*(0.5+s)*0.25 float32 scaling, ascending element mapping, direct F32/F64 activation semantics, cancellation behavior, input immutability, and portable fallback. Add non-vacuous selector-scope, scratch-allocation, scalar/materialized parity, arbitrary raw-row error, known-block, F32/F64 M1/M3, invalid-shape, cancellation, immutability, and zero-leaf-allocation tests. Benchmark leaf K4096 and QMatMul M1/N64 and M1/N4096 with dequant and unrelated-quant controls in alternating fresh-process samples; preserve raw streams, benchstat, manifests, source pins, sample order, and binary hashes. Inspect disassembly, cross-build Linux ARM64 and AMD64, run package/race/preflight/Metal gates, scan with external perfscan using GOPROXY=direct, report generalizable findings upstream, and ship via a proper PR only after statistically validated leverage.

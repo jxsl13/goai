@@ -1,0 +1,23 @@
+primary samples:
+1 scalar-first
+2 neon-first
+3 scalar-first
+4 neon-first
+5 scalar-first
+6 neon-first
+7 scalar-first
+8 neon-first
+9 scalar-first
+10 neon-first
+
+control pairs:
+1 baseline-first
+2 candidate-first
+3 baseline-first
+4 candidate-first
+5 baseline-first
+6 candidate-first
+7 baseline-first
+8 candidate-first
+9 baseline-first
+10 candidate-first

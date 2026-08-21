@@ -284,3 +284,6 @@
 {"t":"2026-08-21T22:15:36Z","eid":"4f48f97a717c71b3","ag":"ag-786f","ev":"move","id":"P-01M0K694ANF608CA2KYMZ6XEBC","fr":"draft","to":"rejected","note":"Schema probe only. No design or implementation intent; superseded immediately by the fully specified IQ3_XXS proposal."}
 {"t":"2026-08-21T22:15:36Z","eid":"fd0c8add3ad40701","ag":"ag-786f","ev":"reject","id":"P-01M0K694ANF608CA2KYMZ6XEBC","k":"proposal","ti":"probe","note":"Schema probe only. No design or implementation intent; superseded immediately by the fully specified IQ3_XXS proposal.","sum":"proposal probe"}
 {"t":"2026-08-21T22:32:04Z","eid":"67293a8a3ff453ec","ag":"ag-ac63","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T22:59:56Z","eid":"700716a412d107b8","ag":"ag-ed5a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T23:02:49Z","eid":"0a85209ecf16ecd1","ag":"ag-648c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T23:19:47Z","eid":"52fc94e3906d26d0","ag":"ag-ae0e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

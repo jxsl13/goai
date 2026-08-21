@@ -29,6 +29,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0K1A86JFY3RHNM84CR28WKW Add MXFP4 QMatMul and fuse its ARM64 row dot: Merged as goai PR #1140 at d1daf49033de16b26711aca26fca849200f15345 with all 15 CI lanes green. Portable MXFP4 QMatMul and the Apple ARM64 fused row dot clear every retained 2x gate; evidence and perfscan #799 report are published. IQ3, IQ2, and IQ1 remain explicit next families.
 - T-01M0K3PD38FVWSMA8JTVVD2ERE Implement and statistically gate exact IQ3_S QMatMul and M2 ARM64 fused row dot: Merged in goai PR #1141 at merge commit 1daaf7163700f288337f36d17ed0fa4a2b71d910 after all 15 CI lanes passed. Implemented exact caller-owned IQ3_S decode, portable F32/F64 QMatMul, constant per-worker scratch, and an Apple ARM64 zero-allocation fused row dot. Retained n=10 fresh-process 500 ms alternating-order results: K4096 leaf 5.254 us to 1.080 us (4.86x, p=0.000), M1/N64/K1024 84.83 us to 17 [body truncated at tombstone retention cap]
 - P-01M0K3NE11FSRAY6V751A2PC1K M2-first exact IQ3_S fused row dot and portable QMatMul: Delivered and merged by goai PR #1141 at 1daaf7163700f288337f36d17ed0fa4a2b71d910 with all 15 CI lanes green. The direct-F32 IQ3_S boundary is exact and materially faster on M2: 4.86x K4096 leaf, 4.73x M1/N64/K1024, and 3.64x M1/N4096/K1024, all p=0.000, with neutral IQ4_XS and tensor-dequant controls, flat allocation/byte profiles, and 2.223032812824975e-15 maximum scalar-relative row error. Exte [body truncated at tombstone retention cap]
+- T-01M0K6D56YFAYSY4QQPYVXCE4A Implement and statistically gate exact IQ3_XXS QMatMul and M2 ARM64 fused row dot: Shipped in goai PR #1142. All 15 CI lanes passed; merge commit 6667d30f0aaa7e4214aa2a68de4f1402a527e1b0 contains validated head d5026cafd73689315c9da7789fd8bde74350e4f7, and the remote feature branch was deleted after ancestry verification. Added portable IQ3_XXS F32/F64 QMatMul and scratch reuse plus an Apple ARM64 exact fused M=1 F32 row dot. M2 gains: leaf K4096 6.32x, M1/N64/K1024 6.13x, M1/N4 [body truncated at tombstone retention cap]
+- P-01M0K6A4A6F0SAGEMT1937ZQQN M2-first exact IQ3_XXS fused row dot and portable QMatMul: Completed by goai PR #1142 and merge commit 6667d30f0aaa7e4214aa2a68de4f1402a527e1b0 after all 15 CI lanes passed. The tranche established portable IQ3_XXS F32/F64 QMatMul semantics and scratch reuse, then added an exact Apple ARM64 M=1 F32 fused row dot while retaining the portable oracle and fallback. Statistically significant M2 improvements were 6.32x at leaf K4096, 6.13x at M1/N64/K1024, and [body truncated at tombstone retention cap]
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -128,3 +130,23 @@ WHEN contiguous F32 M1 activations use IQ3_XXS weights, the Apple ARM64 IQ3_XXS 
 
 ## ARM64-IQ3XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.dotIQ3XXSRowFn,go:gguf.QMatMul,go:gguf.TestQMatMulIQ3XXSSelectorScope}
 The IQ3_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+## IQ2XXS-PORTABLE-QMATMUL-001 {applies: go:gguf.dequantIQ2_XXSInto,go:gguf.dotIQ2XXSRow,go:gguf.QMatMul,go:gguf.TestDotIQ2XXSRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ2XXSMatchesDequantizedReference}
+WHEN IQ2_XXS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 256-entry eight-wide grid, four 7-bit ksigns indices per 32 weights, float32 d*(0.5+s)*0.25 scaling, ascending element mapping, and float64 accumulation.
+
+Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific optimization.
+
+## IQ2XXS-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.TestQMatMulIQ2XXSScratchAllocationsDoNotScaleWithOutputRows}
+The portable IQ2_XXS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Reusable worker-local scratch removes allocation growth with N while preserving the all-M portable path.
+
+## ARM64-IQ2XXS-FUSED-DOT-001 {applies: go:gguf.dotIQ2XXSRowASM,asm:gguf.dotIQ2XXSBlockNeon,go:gguf.TestDotIQ2XXSBlockNeonKnownValue,go:gguf.TestDotIQ2XXSAsmRandomRaw,go:gguf.TestDotIQ2XXSAsmAllocs}
+WHEN contiguous F32 M1 activations use IQ2_XXS weights, the Apple ARM64 IQ2_XXS selector SHALL dispatch 1 row-level fused NEON eight-wide grid, ksigns, and scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: The M2 decode hot path must eliminate materialized weights while retaining a measurable numerical gate.
+
+## ARM64-IQ2XXS-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul,go:gguf.TestQMatMulIQ2XXSSelectorScope}
+The IQ2_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: Architecture and dtype specialization must not leak into portable or prefill semantics.
