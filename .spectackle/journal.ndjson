@@ -465,3 +465,4 @@
 {"t":"2026-08-21T09:21:19Z","eid":"a0452214403c89eb","ag":"ag-79ad","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T09:22:45Z","eid":"c33d1140f063f24c","ag":"ag-a40c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T09:23:33Z","eid":"c0d18e8147dec814","ag":"ag-c0f7","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T10:02:37Z","eid":"6e2a230d210c0ebc","ag":"ag-d4ce","ev":"create","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","k":"task","ti":"Fuse the F64 NEON SSM recurrence on Apple arm64"}
