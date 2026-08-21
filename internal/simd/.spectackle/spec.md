@@ -46,3 +46,6 @@ WHEN a valid finite nonpositive decay-domain fixture with N equal to 1, 2, 3, 16
 
 ## ARM64-F64-SSM-FALLBACK-001
 WHEN delta or A contains a NaN, infinity, sign violation, or a product outside the proven negative-exponential domain, the arm64 SIMD F64 SSM dispatcher SHALL select the existing scalar scan before mutating output or recurrent state and preserve arbitrary public API semantics.
+
+## ARM64-F64-SSM-MEMORY-001
+WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
