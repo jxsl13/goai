@@ -51,3 +51,17 @@ Hypothesis: replace each four-byte uchar group with two aligned ushort loads for
 Scope: add an independently selectable runtime-compiled cooperative candidate, initially disabled. Preserve scalar and historical cooperative kernels. Use one shared route predicate in direct, resident, and Recorder selectors. Do not alter GGUF layout, numerical semantics, M>1 paths, unsupported-device fallback, or other quant types.
 
 Gates: scalar, control, and candidate outputs must agree within 2e-5 relative error, preserve finite/Inf/NaN classification, and leave inputs immutable. Benchmark identical resident buffers with AB/BA reversal, exclude one transition dispatch, and time at least 32 steady-state dispatches per arm. Cover KV, square, mid-up/down, gate/up, down, and vocabulary shapes. Promote only a measured M=1 region where every eligible shape reaches at least 1.10x median speedup in each of three independent count=7 campaigns; fallback cells must remain within 3%. Run full Metal and repository validation, retain negative variants as Spectackle evidence, and report generalizable findings to jxsl13/perfscan.
+
+## T-01M0GX9710E94T4WT73GTTR3GZ Implement and gate aligned Q6_K ushort pairs
+kind: task
+state: active
+created: 2026-08-21
+parent: P-01M0GX86TYEEJSJ2SB873CJDDY
+grilled: 2026-08-21 open=5
+targets: msl:qmatmul_q6k_cooperative, objc:metal_bridge.mtl_qmatmul_q6k, go:metal.SetQ6KCooperative, go:metal.Recorder.QMatMulResident, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q6k_bench_test.go
+
+Implement a separately selectable qmatmul_q6k_cooperative_packed candidate. For each lane and Q6_K block, load q1, q2, and qh as six aligned ushort pairs instead of twelve indexed uchar values, then extract the identical bytes and preserve q6 reconstruction, scale indexing, and float accumulation order. Prove that the resident buffer base, 210-byte block stride, row stride, and all q offsets are two-byte aligned. Do not use wider pointer types.
+
+Expose a toggle and shared route predicate used by direct, resident, and Recorder paths. Start default-off. Add scalar/control/candidate parity, planted non-finite classification, input immutability, support guard, M>1 fallback, and eventual threshold-boundary tests. Add an AB/BA resident benchmark covering KV, square, mid-up/down, gate/up, down, and vocabulary shapes with one transition dispatch excluded and 32 steady-state dispatches timed per arm.
+
+Promote only if every eligible cell reaches at least 1.10x median speedup in each of three independent count=7 campaigns while fallback cells stay within 3%. Otherwise revert the experiment and preserve exact negative evidence. Run full repository, SIMD, and Metal validation, save reproducible evidence for any gain, and report generalizable findings to jxsl13/perfscan.
