@@ -14,7 +14,7 @@ Add portable MXFP4 QMatMul semantics for F32 and F64 inputs with caller-owned de
 
 ## T-01M0K1CEY0FNEBG4A4TWD9VKMN Implement and benchmark MXFP4 QMatMul with ARM64 fused row dot
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0K1A86JFY3RHNM84CR28WKW
 refs: P-01M0K1A86JFY3RHNM84CR28WKW, ADR-01M0K18S8HF46ARNK03RQMD0BE
