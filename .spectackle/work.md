@@ -3729,3 +3729,17 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0H89XBWFF0RG24N9673Y3DX Inline rank-1/rank-2 Tensor scalar access without changing Storage layout
+kind: proposal
+state: draft
+created: 2026-08-21
+targets: go:tensor.Tensor.AtF64, go:tensor.Tensor.SetF64, go:tensor.Tensor.flatOffset, go:tensor.Storage.atF64, go:tensor.Storage.setF64
+
+CONTEXT: PR #703 already removed Storage.data any. The remaining scalar-access defect is the public wrapper boundary: Go 1.26.6 reports Tensor.flatOffset inline cost 75 and Storage.atF64 cost 67, but Tensor.AtF64 and Tensor.SetF64 cost 149 and 139, so every element pays two calls plus repeated field loads. Apple M2 Pro baselines over 4096 elements are 8.47 us for contiguous AtF64, 12.1-13.0 us for contiguous SetF64, and 8.48-8.74 us for strided AtF64.
+
+CHANGE: specialize rank-1 and rank-2 public scalar access in one body so the common offset arithmetic and dtype arm are visible together. Keep rank mismatch, rank-N fallback, view offsets/strides, dtype conversions, half rounding, and panic behavior semantically unchanged. Evaluate F32 first; retain only changes that improve all declared common cells without regressing rank-N fallback outside noise.
+
+GATES: add dtype-specific F32/F64/F16 access benchmarks and rank-1/rank-2/rank-N controls. Use three independent count-seven M2 campaigns, bit-exact cross-dtype/view tests, full tensor tests, race, pure-Go preflight, and final full CI. Report the general pattern of composable individually-inline helpers exceeding the caller budget to perfscan.
+
+NON-GOALS: no storage-layout or allocator change, no unsafe indexing, no bounds-check removal that weakens panics, no bulk-kernel replacement, and no arithmetic reassociation.

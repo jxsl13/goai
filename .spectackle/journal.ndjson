@@ -452,3 +452,6 @@
 {"t":"2026-08-21T03:29:25Z","eid":"6c297cafcbfbdec5","ag":"ag-de39","ev":"drift","rule":"NUM-013","node":"go:backend.Execute","cls":"healed","oh":"c07f926e9112ede3","nh":"6eb8f3a1c62145fe"}
 {"t":"2026-08-21T03:29:25Z","eid":"ea36822c3944643d","ag":"ag-de39","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T03:29:41Z","eid":"1821541afdad6891","ag":"ag-bb11","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T04:12:14Z","eid":"bfc87072a3c91c6d","ag":"ag-e9af","ev":"create","id":"P-01M0H89XBWFF0RG24N9673Y3DX","k":"proposal","ti":"Inline Tensor scalar accessors"}
+{"t":"2026-08-21T04:12:14Z","eid":"7ca7d684ccf047cf","ag":"ag-e9af","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T04:12:43Z","eid":"5f78696685229b8e","ag":"ag-d647","ev":"revise","id":"P-01M0H89XBWFF0RG24N9673Y3DX","note":"title+body+targets revised"}
