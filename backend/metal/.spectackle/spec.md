@@ -127,3 +127,6 @@ Rationale: The experiment is limited to supported single-token decode.
 WHEN it evaluates an M=1 decode shape, the Metal Q2_K cooperative selector SHALL select scalar-word loads only when K times N is at least 6291456; otherwise retain control.
 
 Rationale: The pilot showed broad gains beginning at K2048,N3072 while smaller cells were unstable.
+
+## METAL-Q4-0-PAIR-LOAD-PERF-001
+WHEN three independent count-seven M2 campaigns cover every eligible and fallback shape, the Metal Q4_0 pair-load selector SHALL retain the candidate only when every eligible median is at least 1.10x control and every fallback ratio is between 0.97x and 1.03x.
