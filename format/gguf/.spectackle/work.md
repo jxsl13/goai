@@ -12,7 +12,7 @@ Add caller-owned IQ3_S decode and QMatMul support for F32/F64, then specialize o
 
 ## T-01M0K3PD38FVWSMA8JTVVD2ERE Implement and statistically gate exact IQ3_S QMatMul and M2 ARM64 fused row dot
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 parent: P-01M0K3NE11FSRAY6V751A2PC1K
 targets: go:gguf.dequantIQ3_S, format/gguf/quant_matmul.go, format/gguf/iq3s.go
