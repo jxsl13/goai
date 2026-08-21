@@ -1,11 +1,11 @@
-//go:build !(goexperiment.simd && amd64)
+//go:build !(goexperiment.simd && (amd64 || arm64))
 
 package cpu
 
 import "math"
 
-// Non-(amd64 SIMD) builds keep the scalar row-max and scale loops of the f32 softmax fast path
-// bit-for-bit (arm64's SIMD build included — vectorizing these is an amd64-only change).
+// Builds without an architecture-specific SIMD implementation keep the scalar
+// row-max, scale, and affine loops of the f32 softmax fast path bit-for-bit.
 
 func rowMaxF32(x []float32) float32 {
 	m := float32(math.Inf(-1))

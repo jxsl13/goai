@@ -10,8 +10,7 @@ import (
 // amd64 SIMD perf build: the two remaining scalar passes of the f32 softmax fast path — the row max
 // and the ×1/sum scale — run through AVX2 8-wide here (the exp+sum already goes through vexpF32).
 // The max/scale primitives are shared by softmaxVexpF32 (row-parallel) and softmaxWideVexpF32
-// (intra-row). Other builds keep the scalar loops (softmax_avx_other.go); arm64's SIMD build included
-// (this is an amd64-only vectorization), so its behaviour is bit-for-bit unchanged.
+// (intra-row). Arm64 SIMD has its own NEON sibling; remaining builds use softmax_avx_other.go.
 
 // rowMaxF32 returns max(x) with an −Inf start, matching the scalar `m:=-Inf; if v>m {m=v}` reduction
 // (NaN-skip identical on finite logit inputs). 8-lane Max accumulate + horizontal max + scalar tail.
