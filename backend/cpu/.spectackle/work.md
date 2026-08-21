@@ -24,3 +24,12 @@ EXPECTED: unknown, deliberately. The profile suggests a large fraction of a smal
 BIT-IDENTITY BAR: any change to parallel decomposition must preserve per-output reduction order. The band kernels currently guarantee each C element accumulates its k products in ascending order in one chain; a change that alters banding or work-splitting could break the tolerance-0 cross-reference gate (TestGemmCrossReferenceExact, TestConvCrossReferenceExact). A change that only alters WHEN workers park, not how work is split, is bit-identical by construction — prefer that class.
 
 COORDINATION NOTE: a separate agent was researching the backend package concurrently in this round. Check its findings before starting, to avoid duplicate or conflicting work on the same file.
+
+## T-01M0J9DC3ZE7RTEEHKES6R9RJ6 Eliminate ARM64 F32 MHA band Q/O copies with strided GEMM
+kind: task
+state: draft
+created: 2026-08-21
+parent: P-01M0J975XHFD5AXGP661E8G644
+targets: backend/cpu/mha.go, backend/cpu/gemm_rows.go, backend/cpu/gemm_rows_arm64.go, backend/cpu/gemm_rows_amd64.go, backend/cpu/gemm_rows_default.go, backend/cpu/gemm_neon_arm64.go, backend/cpu/gemm_f32_strided_internal_test.go, backend/cpu/mha_band_rows_arm64_simd_test.go, backend/cpu/mha_test.go, backend/cpu/normattn_bench_test.go
+
+Add lda/ldc-aware worker-callable F32 row GEMM entry points without changing the existing contiguous APIs. Implement the ARM64 SIMD path by passing independent row strides into the existing 4x16 NEON tile and handling row/column tails safely; provide amd64 SIMD and portable definitions so every build remains valid. Route only mhaFwdGemmBand through direct strided Q reads and direct strided output stores, retaining score scratch and its causal compaction. Remove qb and ob scratch from this band. Add guard-region and contiguous-equivalence tests for the strided surface plus the existing deterministic MHA digest. Pilot exact merged control versus candidate first; reject or redesign if the five forward cells do not all clear 8 percent, decode regresses, semantics drift, allocations increase, or pprof does not reduce memmove.
