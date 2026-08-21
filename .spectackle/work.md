@@ -3793,7 +3793,7 @@ The architecture selector is one function variable and the new files are ARM64-s
 
 ## T-01M0JNJ3WYE8J9Z1ND423RYHTG Implement and gate ARM64 Q5_K fused decode GEMV
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0JNF7VGE7J9PV7PQ8DN2CNN
 refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
