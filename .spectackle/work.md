@@ -3729,12 +3729,3 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
-
-## P-01M0GPYWZ2ENZV68FJXGX2GMX5 Vector-load the M2 Metal Q5_K decode leaf
-kind: proposal
-state: active
-created: 2026-08-20
-grilled: 2026-08-20 open=0
-targets: go:metal.QMatMulQ5_K, backend/metal/metal_bridge.m, backend/metal/kquant_gap_bench_test.go, backend/metal/q5k_cooperative_test.go, internal/benchcompare/leadership/evidence/m2-metal-q5k-wide-load-20260821/README.md
-
-Current-main Q5_K already uses one SIMD group per M=1 output row, so the old cooperative-occupancy gap is closed. The remaining measured attribution is per-weight issue cost: a TinyLlama-shaped sweep recorded Q5_K at 9.71 ms/token and 25.8 GB/s versus Q4_K at 6.06 ms and Q6_K at 6.58 ms, while the Q5_K cooperative shader still indexes its 176-byte block through byte-granular uchar reads. Add a separately selectable cooperative Q5_K kernel that performs one aligned 16-byte header load per SIMD group, broadcasts d/dmin/scales in-register, loads each lane-pair qh and qs segment through aligned uint2 vector loads, and shares the packed words with simd_shuffle before preserving the established nibble/high-bit decode and per-lane accumulation order. Freeze the current cooperative kernel as the same-binary control. Measure representative M=1 resident decode shapes on Apple M2 Pro with three independent count-7 campaigns and retain the new route only if every cell clears 1.10x with the existing numerical contract, no input mutation, and no fallback migration. Record a leadership matrix and report any reusable vector-load/cooperative-sharing finding to perfscan. Q2_K, Q3_K, Q4_K, Q6_K, M>1, Vulkan, CUDA, and portable fallbacks stay unchanged unless a correctness dependency requires otherwise.
