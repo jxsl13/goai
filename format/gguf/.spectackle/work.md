@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0K6A4A6F0SAGEMT1937ZQQN M2-first exact IQ3_XXS fused row dot and portable QMatMul
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 targets: go:gguf.dequantIQ3_XXS, go:gguf.QMatMul, format/gguf/iq3xxs.go, format/gguf/quant_matmul.go
 
