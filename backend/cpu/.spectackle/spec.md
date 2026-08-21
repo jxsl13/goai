@@ -146,3 +146,6 @@ WHEN three alternating paired count-seven Apple M2 campaigns measure MHA512 plus
 
 ## ARM64-F32-MHA-STRIDED-IO-CONTROLS-001
 WHEN the paired campaigns measure single-token GQA decode and steady-state allocation controls, the MHA direct-stride candidate SHALL show no statistically significant decode regression at p below 0.05 and no allocation increase.
+
+## ARM64-F32-MHA-STRIDED-IO-PROFILE-001
+WHEN matched five-second MHA512 CPU profiles compare exact control with the promoted candidate, the ARM64 SIMD MHA implementation SHALL reduce runtime.memmove flat samples by at least 25 percent and keep scalar GEMM flat samples no more than 5 percent of NEON tile samples.
