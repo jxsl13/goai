@@ -61,6 +61,9 @@ func TestDotIQ4NLAsmRandomRaw(t *testing.T) {
 			t.Fatalf("trial=%d k=%d: kernel mutated an input", trial, k)
 		}
 	}
+	if maxRel > 1e-4 {
+		t.Fatalf("maximum scalar-relative error %g exceeds 1e-4", maxRel)
+	}
 	t.Logf("maximum scalar-relative error across arbitrary raw rows: %g", maxRel)
 }
 
