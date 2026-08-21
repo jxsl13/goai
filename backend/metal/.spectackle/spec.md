@@ -130,3 +130,6 @@ Rationale: The pilot showed broad gains beginning at K2048,N3072 while smaller c
 
 ## METAL-Q4-0-PAIR-LOAD-PERF-001
 WHEN three independent count-seven M2 campaigns cover every eligible and fallback shape, the Metal Q4_0 pair-load selector SHALL retain the candidate only when every eligible median is at least 1.10x control and every fallback ratio is between 0.97x and 1.03x.
+
+## METAL-Q4-0-PAIR-LOAD-NUMERIC-001
+WHEN the pair-load candidate processes finite or nonfinite inputs, the Metal Q4_0 pair-load kernel SHALL match control within 2e-5 relative error, preserve finite, Inf, and NaN class, and mutate exactly zero input bytes.
