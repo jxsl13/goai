@@ -37,3 +37,28 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 
 ## intent
 - T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
+- P-01M0HWDB7BEBY99M96950C5DHE Apple arm64 fused F64 SSM selective scan: Single-task proposal completed by archived task T-01M0HWBG9QEC2 and GoAI PR #1128. The Apple arm64 F64 SSM recurrence now has a fused NEON fast path, numeric-domain proof, scalar fallback, exact range semantics, three statistically significant physical M2 Pro benchmark campaigns, and complete local plus hosted CI evidence. Product gains are internal geomeans -79.08% to -84.45% and backend/cpu end- [body truncated at tombstone retention cap]
+
+## ARM64-F64-SSM-PERF-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3}
+WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIMD SSM path SHALL retain only with at least 20 percent lower median latency, p below 0.05, and zero allocations.
+
+## ARM64-F64-SSM-NUMERIC-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3,go:simd.TestSSMScanF64Accuracy}
+WHEN valid decay-domain fixtures use N 1, 2, 3, 16, 17, or 128 with or without D-skip, the fused arm64 F64 SSM implementation SHALL match scalar output and recurrent state within 1e-10 relative error.
+
+## ARM64-F64-SSM-FALLBACK-001 {applies: go:simd.ssmNeonRangeSafe,go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanF64UnsafeDomainFallsBackBeforeMutation}
+WHEN delta or A violates sign, finiteness, or the proven product range, the arm64 SIMD F64 SSM dispatcher SHALL select the scalar scan before mutating output or recurrent state and preserve API semantics.
+
+## ARM64-F64-SSM-MEMORY-001 {applies: go:simd.ssmChannelNegNeonF64,go:simd.BenchmarkSSMScan_SIMD_512x2048x16,go:simd.BenchmarkSSMScan_SIMD_512x2048x128}
+WHEN the fused path processes any declared N shape including an odd state tail, the optimized arm64 F64 SSM scan SHALL use no heap scratch and report exactly 0 B/op and 0 allocs/op in the internal benchmark.
+
+## ARM64-F64-SSM-ARCH-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64}
+WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 SSM leaf SHALL contain two-lane D2 vector state arithmetic together with FRINTN and exponent-bit construction from the proven degree-13 negative-exp approximation.
+
+## ARM64-F64-SSM-SCOPE-001 {applies: go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.ssmChannelNegNeonF64}
+The F64 SSM optimization SHALL change only arm64 with goexperiment.simd product code and leave WKV, generic Exp capability flags, non-target product implementations, and backend ownership allocations outside this task.
+
+## ARM64-F64-SSM-E2E-PERF-001 {applies: go:cpu_test.BenchmarkSSMF64_512x1024x16_cpu,go:cpu.ssmKernelCPU,go:cpu.ssmParallelScanF64,go:simd.SSMScanRangeF64~3}
+WHEN paired count-seven M2 campaigns measure backend/cpu 512x1024x16, the arm64 CPU SSM path SHALL retain only with at least 15 percent lower median latency and p below 0.05.
+
+## ARM64-F64-SSM-RANGE-001 {applies: go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanRangeF64BitExactVsWhole}
+WHEN the same valid fixture runs through whole and range entry points, the fused arm64 F64 SSM implementation SHALL pass go:simd.TestSSMScanRangeF64BitExactVsWhole with bit-identical output and recurrent state.
