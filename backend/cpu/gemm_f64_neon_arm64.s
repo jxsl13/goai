@@ -1,0 +1,124 @@
+//go:build goexperiment.simd
+
+#include "textflag.h"
+
+// func gemmF64Tile4x8Neon(a, b, c *float64, k, lda, ldb, ldc int)
+//
+// Accumulate a 4x8 tile into C with sixteen 2-lane f64 accumulators. B is a
+// packed kx8 panel, so every 64-byte row load is contiguous. The k-loop is
+// unrolled by two and reads each A scalar directly from a vector lane. Go's
+// assembler has no by-element f64 FMLA mnemonic, so the instructions are
+// WORD-encoded from clang-verified arm64 encodings.
+TEXT ·gemmF64Tile4x8Neon(SB), NOSPLIT, $0-56
+	MOVD a+0(FP), R0
+	MOVD b+8(FP), R1
+	MOVD c+16(FP), R2
+	MOVD k+24(FP), R3
+	MOVD lda+32(FP), R4
+	MOVD ldb+40(FP), R5
+	MOVD ldc+48(FP), R6
+
+	LSL $3, R4, R4
+	LSL $3, R5, R5
+	LSL $3, R6, R6
+
+	MOVD R0, R7
+	ADD  R4, R7, R8
+	ADD  R4, R8, R9
+	ADD  R4, R9, R10
+
+	// Load the live destination once; gemmF64Band has += semantics.
+	MOVD R2, R13
+	VLD1 (R13), [V0.D2, V1.D2, V2.D2, V3.D2]
+	ADD  R6, R13, R13
+	VLD1 (R13), [V4.D2, V5.D2, V6.D2, V7.D2]
+	ADD  R6, R13, R13
+	VLD1 (R13), [V8.D2, V9.D2, V10.D2, V11.D2]
+	ADD  R6, R13, R13
+	VLD1 (R13), [V12.D2, V13.D2, V14.D2, V15.D2]
+
+	LSR $1, R3, R11
+	AND $1, R3, R12
+	CBZ R11, tail
+
+loop2:
+	VLD1.P 16(R7), [V20.D2]
+	VLD1.P 16(R8), [V21.D2]
+	VLD1.P 16(R9), [V22.D2]
+	VLD1.P 16(R10), [V23.D2]
+
+	VLD1 (R1), [V16.D2, V17.D2, V18.D2, V19.D2]
+	ADD R5, R1, R1
+	WORD $0x4FD41200 // FMLA V0.2D, V16.2D, V20.D[0]
+	WORD $0x4FD41221
+	WORD $0x4FD41242
+	WORD $0x4FD41263
+	WORD $0x4FD51204
+	WORD $0x4FD51225
+	WORD $0x4FD51246
+	WORD $0x4FD51267
+	WORD $0x4FD61208
+	WORD $0x4FD61229
+	WORD $0x4FD6124A
+	WORD $0x4FD6126B
+	WORD $0x4FD7120C
+	WORD $0x4FD7122D
+	WORD $0x4FD7124E
+	WORD $0x4FD7126F
+
+	VLD1 (R1), [V16.D2, V17.D2, V18.D2, V19.D2]
+	ADD R5, R1, R1
+	WORD $0x4FD41A00 // FMLA V0.2D, V16.2D, V20.D[1]
+	WORD $0x4FD41A21
+	WORD $0x4FD41A42
+	WORD $0x4FD41A63
+	WORD $0x4FD51A04
+	WORD $0x4FD51A25
+	WORD $0x4FD51A46
+	WORD $0x4FD51A67
+	WORD $0x4FD61A08
+	WORD $0x4FD61A29
+	WORD $0x4FD61A4A
+	WORD $0x4FD61A6B
+	WORD $0x4FD71A0C
+	WORD $0x4FD71A2D
+	WORD $0x4FD71A4E
+	WORD $0x4FD71A6F
+
+	SUBS $1, R11, R11
+	BNE loop2
+
+tail:
+	CBZ R12, store
+	FMOVD (R7), F20
+	FMOVD (R8), F21
+	FMOVD (R9), F22
+	FMOVD (R10), F23
+	VLD1 (R1), [V16.D2, V17.D2, V18.D2, V19.D2]
+	WORD $0x4FD41200
+	WORD $0x4FD41221
+	WORD $0x4FD41242
+	WORD $0x4FD41263
+	WORD $0x4FD51204
+	WORD $0x4FD51225
+	WORD $0x4FD51246
+	WORD $0x4FD51267
+	WORD $0x4FD61208
+	WORD $0x4FD61229
+	WORD $0x4FD6124A
+	WORD $0x4FD6126B
+	WORD $0x4FD7120C
+	WORD $0x4FD7122D
+	WORD $0x4FD7124E
+	WORD $0x4FD7126F
+
+store:
+	MOVD R2, R13
+	VST1 [V0.D2, V1.D2, V2.D2, V3.D2], (R13)
+	ADD R6, R13, R13
+	VST1 [V4.D2, V5.D2, V6.D2, V7.D2], (R13)
+	ADD R6, R13, R13
+	VST1 [V8.D2, V9.D2, V10.D2, V11.D2], (R13)
+	ADD R6, R13, R13
+	VST1 [V12.D2, V13.D2, V14.D2, V15.D2], (R13)
+	RET
