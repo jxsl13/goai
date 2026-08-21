@@ -492,3 +492,5 @@
 {"t":"2026-08-21T11:50:35Z","eid":"93c2d04ed05d8842","ag":"ag-0077","ev":"bench","id":"M-01M0J2H657FGRB8S4KBMVPWB63","k":"bench","ti":"apple m2 f64 wkv fused neon","note":"apple-m2-f64-wkv-fused-neon|arch=arm64|campaigns=3|cpu=apple_m2_pro|gpu=apple_m2_pro|os=darwin|ram=32gb|samples=7|scope=wkv_512x1024"}
 {"t":"2026-08-21T11:57:29Z","eid":"a8fa62a114535791","ag":"ag-ed11","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T12:04:27Z","eid":"dc64443be6482a8e","ag":"ag-70c1","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T12:06:19Z","eid":"fdf6ef46028117d3","ag":"ag-ec3e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-21T12:06:50Z","eid":"d6be9ef2749b8582","ag":"ag-39f2","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
