@@ -72,3 +72,8 @@ Rationale: Require broad end-to-end leverage across attention and LLM-logit shap
 WHEN direct parity exercises tail widths, finite values, NaNs, infinities, and signed zeros, the arm64 SIMD row passes SHALL preserve rowMaxF32 input and match scalar result bits for rowMaxF32, scaleRowF32, and axpbRowF32.
 
 Rationale: Vector maxNum changes mixed signed-zero ties unless the driver repairs scalar first-match semantics; tails and nonfinite behavior must remain exact.
+
+## ARM64-F32-SOFTMAX-PASS-SCOPE-001
+WHEN the target is not arm64 goexperiment.simd or the softmax dtype is F64, the softmax row-pass dispatch SHALL preserve the existing implementation and behavior without reaching the new NEON helpers.
+
+Rationale: Keep the optimization architecture-, experiment-, and dtype-specific with a portable scalar fallback.
