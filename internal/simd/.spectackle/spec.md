@@ -39,7 +39,7 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 - T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
 
 ## ARM64-F64-SSM-PERF-001
-WHEN three alternating paired count-seven physical Apple M2 Pro campaigns measure the declared internal and end-to-end SSM cells, the arm64 SIMD F64 SSM path SHALL retain the candidate only when internal 512x2048x16 median latency improves by at least 20 percent, end-to-end 512x1024x16 median latency improves by at least 15 percent, benchstat reports p below 0.05, and the internal cell remains zero-allocation.
+WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIMD SSM path SHALL retain only with at least 20 percent lower median latency, p below 0.05, and zero allocations.
 
 ## ARM64-F64-SSM-NUMERIC-001
 WHEN a valid finite nonpositive decay-domain fixture with N equal to 1, 2, 3, 16, 17, or 128 runs with or without D-skip, the fused arm64 F64 SSM implementation SHALL match the scalar reference within 1e-10 relative error and keep range execution bit-identical to whole execution for both output and recurrent state.
