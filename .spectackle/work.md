@@ -3777,3 +3777,16 @@ option: Whole-row assembly including scale/min decode
 option: Route CPU decode through Metal
 blocks: P-01M0JNATZFE9TT3P428PGMHEYX
 choice: Per-superblock NEON unpack-affine-dot with Go scale/min decode
+
+## P-01M0JNF7VGE7J9PV7PQ8DN2CNN Fuse ARM64 Q5_K decode dot on M2
+kind: proposal
+state: active
+created: 2026-08-21
+refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+
+Q5_K is the only Q4_K/Q5_K/Q6_K decode path still bound directly to a scalar row dot on ARM64. An immutable Apple M2 Pro baseline measures QuantMamba2DecodeQ5_K at 362.5-367.3 us/op with 93 allocations, versus the already fused neighboring formats at materially lower latency. Implement an ARM64-only NEON row-dot that fuses Q5_K nibble and fifth-bit unpack, affine scale/min dequantization, and activation accumulation. Preserve scalar dispatch on other architectures, preserve the general m>1 path, and keep allocation counts unchanged. Retain only if randomized scalar-relative maximum error is at most 1e-4, QMatMul M1 and model-level decode improve significantly under repeated benchstat samples, and an adjacent SIMD quant path remains flat as a negative control. Record reproducible evidence and report the reusable architecture-selector finding to perfscan. ADR-01M0JNC6MSFD4 selects a per-superblock NEON unpack-affine-dot boundary with Go scale/min decoding: it isolates the measured scalar hotspot behind the proven Q4_K boundary while keeping layout semantics auditable; a whole-row assembly rewrite is reserved for a later measured residual-overhead tranche.
+
+RESTORE/ROLLBACK
+The architecture selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar selector and remove only the isolated Q5_K ARM64 files and evidence; portable, M>1, Metal, and Vulkan paths remain untouched.
