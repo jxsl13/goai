@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0JZ33ZVEMKS1K6FYAEFJFK6 Add IQ4_XS QMatMul and fuse its ARM64 super-block dot
 kind: proposal
-state: active
+state: done
 created: 2026-08-21
 refs: ADR-01M0JZ1Y2MF948ZEGM1K33ZWTM, P-01M0JWHMHZEDQVCFCT3GJVPME7
 grilled: 2026-08-21 open=0
