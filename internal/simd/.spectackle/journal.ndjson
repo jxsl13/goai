@@ -86,3 +86,4 @@
 {"t":"2026-08-21T11:27:36Z","eid":"d62eb0cc058bc7b4","ag":"ag-a09b","ev":"rule","dir":"internal/simd","op":"edit","rule":"ARM64-F64-WKV-UNDERFLOW-001","txt":"WHEN a finite max-subtracted exponential argument is below -708, the fused WKV leaf SHALL use float64 +0.0 for that exponential lane before recurrence arithmetic."}
 {"t":"2026-08-21T11:27:50Z","eid":"dd06f3df4789889e","ag":"ag-b88b","ev":"create","id":"T-01M0J17HEEEF7VTW4RGEJ4MNWF","k":"task","ti":"Mask underflow and fuse the F64 NEON WKV recurrence","dir":"internal/simd"}
 {"t":"2026-08-21T11:28:03Z","eid":"3ec2e11e88bc2e74","ag":"ag-27e1","ev":"grill","id":"T-01M0J17HEEEF7VTW4RGEJ4MNWF","dir":"internal/simd","gr":"2026-08-21 open=0","hash":"97bc8d9a0f8b76180492a57b041bb91e4e05762b73fec2f5ccd2ba06afcc8e43"}
+{"t":"2026-08-21T11:28:28Z","eid":"eb3d338a0e41b5df","ag":"ag-672c","ev":"revise","id":"T-01M0J17HEEEF7VTW4RGEJ4MNWF","dir":"internal/simd","note":"targets revised"}
