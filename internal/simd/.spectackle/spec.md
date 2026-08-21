@@ -53,7 +53,7 @@ WHEN the fused path processes any declared N shape including an odd state tail, 
 ## ARM64-F64-SSM-ARCH-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64}
 WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 SSM leaf SHALL contain two-lane D2 vector state arithmetic together with FRINTN and exponent-bit construction from the proven degree-13 negative-exp approximation.
 
-## ARM64-F64-SSM-SCOPE-001
+## ARM64-F64-SSM-SCOPE-001 {applies: go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.ssmChannelNegNeonF64}
 The F64 SSM optimization SHALL change only arm64 with goexperiment.simd product code and leave WKV, generic Exp capability flags, non-target product implementations, and backend ownership allocations outside this task.
 
 ## ARM64-F64-SSM-E2E-PERF-001 {applies: go:cpu_test.BenchmarkSSMF64_512x1024x16_cpu,go:cpu.ssmKernelCPU,go:cpu.ssmParallelScanF64,go:simd.SSMScanRangeF64~3}
