@@ -77,3 +77,8 @@ Rationale: Vector maxNum changes mixed signed-zero ties unless the driver repair
 WHEN the target is not arm64 goexperiment.simd or the softmax dtype is F64, the softmax row-pass dispatch SHALL preserve the existing implementation and behavior without reaching the new NEON helpers.
 
 Rationale: Keep the optimization architecture-, experiment-, and dtype-specific with a portable scalar fallback.
+
+## SIMD-MAXNUM-PRESERVES-FIRST-ZERO-001
+WHEN vector maxNum replaces an ordered scalar max reduction, the SIMD reduction SHALL skip NaNs identically and repair a zero result to the first scalar zero sign.
+
+Rationale: IEEE maximumNumber selects +0 for mixed zero signs, while ordered greater-than preserves the sign of the first zero maximum.
