@@ -52,3 +52,6 @@ WHEN an arm64 F32 Neg kernel is promoted, the benchmark gate SHALL require at le
 
 ## ARM64-F32-NORM-PERF-001
 WHEN three independent paired count-seven Apple M2 Pro campaigns measure 512x1024 and 512x4096 forward cells, the arm64 SIMD F32 LayerNorm and RMSNorm forward normalization SHALL retain the candidate only when every complete-operation median is at least 1.25x the exact baseline.
+
+## ARM64-F32-NORM-NUMERICS-001
+WHEN finite, nonfinite, tail-width, and input-immutability parity tests compare the accelerated outputs with the existing CPU implementation, the arm64 SIMD F32 LayerNorm and RMSNorm forward normalization SHALL match nonfinite classes, preserve every input, and stay within the documented F32 norm tolerance of rtol 5e-5.
