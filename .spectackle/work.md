@@ -3734,6 +3734,7 @@ option: Use one universal CPU threshold for the whole unary family
 kind: proposal
 state: active
 created: 2026-08-21
+grilled: 2026-08-21 open=0
 targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_qmatmul_q4k, go:metal.Recorder.QMatMulResident, backend/metal/metal_bridge.m, backend/metal/metal.go, backend/metal/q4k_bench_test.go
 
 Context: Apple M2 Pro Q4_K M=1 decode is a retained cooperative leaf used by quantized LLM projections. Fresh 200 ms count=3 baselines after PR #1116 place real FFN shapes at roughly 278-304 us for K2048xN5632 and K5632xN2048. The kernel reads each aligned eight-byte q1/q2 span as four separate ushort elements for every output row and super-block. The Q4_K 144-byte super-block, row stride, and per-lane qs offsets are all multiples of eight, so an aligned ulong load can replace each four-load group without changing the GGUF layout or arithmetic order.
