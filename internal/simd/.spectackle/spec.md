@@ -86,3 +86,6 @@ WHEN the fused path processes paired channels or a scalar channel tail, the Benc
 
 ## ARM64-F64-WKV-ARCH-001
 WHEN the arm64 goexperiment.simd test binary is inspected, the fused WKV leaf SHALL contain D2 recurrence arithmetic, FRINTN range reduction, and exponent-bit construction.
+
+## ARM64-F64-WKV-SCOPE-001
+The F64 WKV optimization SHALL change only arm64 goexperiment.simd product code and leave F32, amd64, default, reference, and backend ownership paths unchanged.
