@@ -62,3 +62,6 @@ WHEN paired count-seven M2 campaigns measure backend/cpu 512x1024x16, the arm64 
 
 ## ARM64-F64-SSM-RANGE-001 {applies: go:simd.SSMScanF64~3,go:simd.SSMScanRangeF64~3,go:simd.TestSSMScanRangeF64BitExactVsWhole}
 WHEN the same valid fixture runs through whole and range entry points, the fused arm64 F64 SSM implementation SHALL pass go:simd.TestSSMScanRangeF64BitExactVsWhole with bit-identical output and recurrent state.
+
+## ARM64-F64-WKV-PERF-001
+WHEN three alternating count-seven M2 campaigns measure BenchmarkWKVScan_SIMD_512x1024, the arm64 SIMD WKV path SHALL retain only with at least 35 percent lower median latency, p below 0.05, and exactly 0 allocs/op.
