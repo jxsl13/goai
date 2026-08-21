@@ -158,8 +158,10 @@ WHEN IQ2_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL 
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ2_XS optimization.
 
-## IQ2XS-PORTABLE-SCRATCH-001
+## IQ2XS-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_XSInto,go:gguf.TestQMatMulIQ2XSScratchAllocationsDoNotScaleWithOutputRows}
 The portable IQ2_XS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: The allocation gate proves output-row growth reuses worker scratch instead of recreating materialized tensors.
 
 ## ARM64-IQ2XS-FUSED-DOT-001
 WHEN contiguous F32 M1 activations use IQ2_XS weights, the Apple ARM64 IQ2_XS selector SHALL dispatch 1 row-level fused NEON grid, ksign, explicit-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
