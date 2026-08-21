@@ -100,3 +100,6 @@ WHEN MXFP4 weights are multiplied by F32 or F64 activations, the QMatMul SHALL p
 
 ## ARM64-MXFP4-FUSED-DOT-001
 WHEN contiguous F32 M1 activations use MXFP4 weights, the ARM64 MXFP4 selector SHALL dispatch one row-level fused NEON E8M0-scale and signed-codebook dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-MXFP4-FUSED-DOT-SCOPE-001
+The MXFP4 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 ARM64 M1 kernel calls.
