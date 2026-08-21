@@ -126,3 +126,6 @@ WHEN the build is not arm64 with goexperiment.simd or the MHA route is F64, back
 
 ## ARM64-F32-MHA-BAND-PROFILE-001
 WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM64 MHA implementation SHALL make gemmF32RowsScalar flat samples no more than 5 percent of gemmF32Tile4x16Neon flat samples while adding zero steady-state allocations.
+
+## ARM64-F32-MHA-BAND-CONTROLS-001
+WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.
