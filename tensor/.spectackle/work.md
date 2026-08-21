@@ -25,7 +25,7 @@ PERFSCAN RULE REQUIRED: a fast path gated on an exact rank or dimension literal 
 
 ## T-01M0H8C73BFWX820S798P27FYG Specialize rank-1/rank-2 Tensor AtF64 and SetF64
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 parent: P-01M0H89XBWFF0RG24N9673Y3DX
 targets: go:tensor.Tensor.AtF64, go:tensor.Tensor.SetF64, go:tensor.Tensor.flatOffset, go:tensor.Storage.atF64, go:tensor.Storage.setF64
