@@ -3778,29 +3778,44 @@ option: Route CPU decode through Metal
 blocks: P-01M0JNATZFE9TT3P428PGMHEYX
 choice: Per-superblock NEON unpack-affine-dot with Go scale/min decode
 
-## P-01M0JNF7VGE7J9PV7PQ8DN2CNN Fuse ARM64 Q5_K decode dot on M2
+## ADR-01M0JQFQCNFXF9XW2MAR7RWGGC Which Q3_K ARM64 fusion boundary should the first measured tranche use?
+kind: adr
+state: done
+created: 2026-08-21
+context: Q3_K is now the slowest recurrent quant path at about 392 us on M2. Its scalar row dot unpacks one f16 scale, sixteen signed six-bit sub-scales, two-bit quant planes, and an inverted high-bit mask per 256-weight superblock. Neighboring Q4_K, Q5_K, and Q6_K retained large end-to-end gains with per-superblock NEON kernels and Go-side header decoding.
+decision: Per-superblock NEON quant-plane dot with Go scale unpack
+consequences: Go keeps the packed six-bit scale decoder as the audited layout oracle and passes sixteen d-times-signed-scale coefficients to one NEON call per superblock. NEON owns two-bit extraction, inverted high-mask application, signed conversion, and activation reduction. A whole-row rewrite is deferred unless residual profiling proves call or header overhead material; scratch materialization is rejected because prior Q4_K evidence showed extra memory traffic and allocations can erase the SIMD win.
+status: accepted
+
+kind: radio
+option: Per-superblock NEON quant-plane dot with Go scale unpack
+option: Whole-row assembly including packed scale decode
+option: Materialize SIMD dequant scratch then dot
+choice: Per-superblock NEON quant-plane dot with Go scale unpack
+
+## P-01M0JQGRZ9EANTP6DTZ44R8AX9 Fuse ARM64 Q3_K decode dot on M2
 kind: proposal
 state: active
 created: 2026-08-21
-refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+refs: ADR-01M0JQFQCNFXF9XW2MAR7RWGGC
 grilled: 2026-08-21 open=0
-targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+targets: go:gguf.QMatMul, go:gguf.dotQ3_KRow, format/gguf/quant_matmul.go, format/gguf/q3k.go, format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
 
-Q5_K is the only Q4_K/Q5_K/Q6_K decode path still bound directly to a scalar row dot on ARM64. An immutable Apple M2 Pro baseline measures QuantMamba2DecodeQ5_K at 362.5-367.3 us/op with 93 allocations, versus the already fused neighboring formats at materially lower latency. Implement an ARM64-only NEON row-dot that fuses Q5_K nibble and fifth-bit unpack, affine scale/min dequantization, and activation accumulation. Preserve scalar dispatch on other architectures, preserve the general m>1 path, and keep allocation counts unchanged. Retain only if randomized scalar-relative maximum error is at most 1e-4, QMatMul M1 and model-level decode improve significantly under repeated benchstat samples, and an adjacent SIMD quant path remains flat as a negative control. Record reproducible evidence and report the reusable architecture-selector finding to perfscan. ADR-01M0JNC6MSFD4 selects a per-superblock NEON unpack-affine-dot boundary with Go scale/min decoding: it isolates the measured scalar hotspot behind the proven Q4_K boundary while keeping layout semantics auditable; a whole-row assembly rewrite is reserved for a later measured residual-overhead tranche.
+Q3_K is now the slowest recurrent quant path on Apple M2 Pro: an immutable merged-main pilot measures QuantMamba2DecodeQ3_K at about 390.9-393.4 us/op with 93 allocations, versus about 124.5 us for the newly fused Q5_K path. QMatMul still binds Q3_K directly to its scalar row dot. Implement an ARM64-only NEON row-dot that fuses two-bit plane extraction, inverted high-mask application, signed sub-block scaling, and activation accumulation while retaining q3kUnpackScales in Go. Preserve scalar dispatch on other architectures, the general M greater than one path, and allocation counts. Retain only if randomized scalar-relative maximum error is at most 1e-4, direct QMatMul and model-level decode improve significantly under repeated benchstat samples, and the adjacent Q5_K path remains flat as a negative control. Record reproducible evidence and extend perfscan issue #799 with the reusable selector-family result. ADR-01M0JQFQCNFXF selects the per-superblock boundary and rejects scratch materialization because prior measured memory traffic erased SIMD leverage.
 
 RESTORE/ROLLBACK
-The architecture selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar selector and remove only the isolated Q5_K ARM64 files and evidence; portable, M>1, Metal, and Vulkan paths remain untouched.
+The selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar Q3_K selector and remove only the isolated Q3_K ARM64 files and evidence; portable, M greater than one, Metal, and Vulkan paths remain untouched.
 
-## T-01M0JNJ3WYE8J9Z1ND423RYHTG Implement and gate ARM64 Q5_K fused decode GEMV
+## T-01M0JQHRA5EPEBAY8A6BPSSXV3 Implement and gate ARM64 Q3_K fused decode GEMV
 kind: task
 state: done
 created: 2026-08-21
-parent: P-01M0JNF7VGE7J9PV7PQ8DN2CNN
-refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+parent: P-01M0JQGRZ9EANTP6DTZ44R8AX9
+refs: ADR-01M0JQFQCNFXF9XW2MAR7RWGGC
 grilled: 2026-08-21 open=0
-targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+targets: go:gguf.QMatMul, go:gguf.dotQ3_KRow, format/gguf/quant_matmul.go, format/gguf/q3k.go, format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
 
-Add an ARM64 architecture selector for the Q5_K M1 row dot in format/gguf/quant_matmul.go. Implement format/gguf/dot_q5k_asm_arm64.go and format/gguf/dot_q5k_asm_arm64.s so each 256-weight block keeps scale/min extraction in Go while NEON fuses low-nibble unpack, qh fifth-bit insertion, affine dequantization, and activation dot. Add format/gguf/dot_q5k_scalar.go for portable capability reporting, architecture tests with randomized arbitrary raw rows and max scalar-relative error at most 1e-4, extend format/gguf/quant_matmul_fused_test.go tolerance gating, and add direct QMatMul Q5_K benchmarks. Scope excludes M greater than one and every non-ARM64 build. Compile test binaries with go test -c, execute exact tests via the compiled binary -test.run flag, cross-compile portable and amd64+simd packages, run repeated interleaved benchstat samples for leaf, QMatMul, and nlp/BenchmarkQuantMamba2DecodeQ5_K, require unchanged allocations and statistically significant end-to-end gain, and keep Q6_K or Q8_0 flat as a negative control. Write the full environment, commands, raw samples, numerical bound, and result matrix under internal/benchcompare/leadership/evidence and summarize the retained gain in BENCHMARKS.md. Run external perfscan with GOPROXY=direct and report the generalized selector asymmetry on jxsl13/perfscan.
+Add an ARM64 architecture selector for the Q3_K M1 row dot in format/gguf/quant_matmul.go. Implement format/gguf/dot_q3k_asm_arm64.go and format/gguf/dot_q3k_asm_arm64.s so each 256-weight block keeps q3kUnpackScales and f16 scale decoding in Go while NEON fuses two-bit extraction, inverted high-mask insertion, signed conversion, sub-block scaling, and activation reduction. Add format/gguf/dot_q3k_scalar.go for portable capability reporting, randomized arbitrary-raw-row and immutability tests with maximum scalar-relative error at most 1e-4, extend format/gguf/quant_matmul_fused_test.go tolerance gating, and add direct QMatMul Q3_K benchmarks. Scope excludes M greater than one and every non-ARM64 build. Compile test binaries with go test -c, execute exact tests via the compiled binary -test.run flag, cross-compile portable and amd64+simd packages, run repeated alternating benchstat samples for leaf, QMatMul, and nlp/BenchmarkQuantMamba2DecodeQ3_K, require unchanged allocations and statistically significant end-to-end gain, and keep Q5_K flat as a negative control. Write the full environment, commands, raw samples, numerical bound, and result matrix under internal/benchcompare/leadership/evidence and summarize any retained gain in BENCHMARKS.md. Run external perfscan with GOPROXY=direct and extend issue #799 with the generalized selector-family evidence.
 
 RESTORE/ROLLBACK
-If any correctness or leverage gate fails, restore the scalar Q5_K selector and remove only format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, and Q5_K-specific evidence. Portable, prefill, Metal, and Vulkan paths remain unchanged.
+If any correctness or leverage gate fails, restore the scalar Q3_K selector and remove only format/gguf/dot_q3k_asm_arm64.go, format/gguf/dot_q3k_asm_arm64.s, format/gguf/dot_q3k_asm_arm64_test.go, format/gguf/dot_q3k_scalar.go, and Q3_K-specific evidence. Portable, prefill, Metal, and Vulkan paths remain unchanged.

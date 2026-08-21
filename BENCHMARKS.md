@@ -460,6 +460,19 @@ separate Q8_0 8.8× whole-model gap, and they are not yet matched llama.cpp CPU
 leadership claims. Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q5k-fused-dot-20260821`.
 
+**ARM64 Q3_K progress (2026-08-21):** the Q3_K M1 path now reconstructs its
+two-bit plane and inverted high mask, applies signed sub-block scales, and
+reduces each superblock against f32 activations in one NEON call. Against the
+scalar same-binary control, the K=4096 row dot improves **6.84×**, QMatMul
+improves **6.56×** at M1/N64/K1024 and **4.51×** at M1/N4096/K1024, and
+recurrent quantized Mamba2 improves **3.05×** (392.3 → 128.7 µs). Every Q3_K
+time cell has `p=0.000`, n=10 after excluded warm-up, and unchanged allocation
+counts; Q5_K is flat (`p=0.247`) as the negative control. Maximum
+scalar-relative error over 100 arbitrary raw rows is 1.59e-5, below the 1e-4
+contract. This is an internal ARM64 result, not a matched llama.cpp CPU
+leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q3k-fused-dot-20260821`.
+
 **ARM64 Q8_0 progress (2026-08-21):** the common 8-bit M1 path now widens
 signed quants, applies each f16 block scale, and reduces the entire row in one
 NEON call instead of executing the portable per-element f64 loop. Against the
