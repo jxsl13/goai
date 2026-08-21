@@ -94,3 +94,6 @@ WHEN contiguous F32 M1 activations use IQ4_XS weights, the ARM64 IQ4_XS selector
 
 ## ARM64-IQ4XS-FUSED-DOT-SCOPE-001
 The IQ4_XS QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths portable and dispatch 0 ARM64 M1 kernel calls.
+
+## MXFP4-PORTABLE-QMATMUL-001
+WHEN MXFP4 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve E8M0-half scale conversion, low-half then high-half signed E2M1 codebook order, float32 scale multiplication, and float64 accumulation.
