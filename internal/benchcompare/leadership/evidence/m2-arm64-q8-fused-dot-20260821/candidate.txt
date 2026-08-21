@@ -1,0 +1,53 @@
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Pro
+BenchmarkQ8RowK4096-8 836275 326.9 ns/op 50121.40 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 910527 325.2 ns/op 50387.03 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 900562 326.2 ns/op 50232.11 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 913519 325.8 ns/op 50295.31 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 873796 327.6 ns/op 50017.96 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 924036 327.1 ns/op 50091.80 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 898281 326.6 ns/op 50165.41 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 908689 328.3 ns/op 49913.10 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 904760 326.7 ns/op 50156.99 MB/s 0 B/op 0 allocs/op
+BenchmarkQ8RowK4096-8 921942 327.8 ns/op 49974.32 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 55519 5413 ns/op 48433.01 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54444 5425 ns/op 48324.90 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 55334 5403 ns/op 48516.12 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54178 5473 ns/op 47899.61 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 55185 5474 ns/op 47889.57 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54343 5533 ns/op 47377.66 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 55297 5456 ns/op 48048.44 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54334 5476 ns/op 47871.87 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54804 5473 ns/op 47895.52 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N64K1024-8 54777 5466 ns/op 47959.07 MB/s 576 B/op 4 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2727 102964 ns/op 162942.88 MB/s 17192 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2828 103503 ns/op 162094.41 MB/s 17168 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2697 103606 ns/op 161932.82 MB/s 17200 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2744 103698 ns/op 161789.14 MB/s 17168 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2780 103604 ns/op 161935.82 MB/s 17198 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2798 104143 ns/op 161097.13 MB/s 17168 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2812 103543 ns/op 162031.13 MB/s 17197 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2822 103058 ns/op 162794.39 MB/s 17168 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2768 103482 ns/op 162126.95 MB/s 17189 B/op 21 allocs/op
+BenchmarkQMatMulQ8M1N4096K1024-8 2830 103506 ns/op 162088.93 MB/s 17168 B/op 21 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3400 88442 ns/op 53851 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3336 88259 ns/op 53858 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3397 87526 ns/op 53851 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3354 87087 ns/op 53855 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3352 87970 ns/op 53858 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3374 87270 ns/op 53861 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3372 88573 ns/op 53855 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3238 88144 ns/op 53857 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3421 87846 ns/op 53852 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ8_0-8 3325 87980 ns/op 53852 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2740 100503 ns/op 53946 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 3080 99835 ns/op 53936 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 3001 100553 ns/op 53934 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2946 99811 ns/op 53938 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 3001 100493 ns/op 53929 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2971 98477 ns/op 53940 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2972 100492 ns/op 53945 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2913 100323 ns/op 53938 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2991 99504 ns/op 53944 B/op 93 allocs/op
+BenchmarkQuantMamba2DecodeQ6_K-8 2946 99993 ns/op 53941 B/op 93 allocs/op

@@ -19,6 +19,14 @@ import (
 // The row counts straddle the jam: 1 and 3 run entirely in the tail, 16 is a whole number of
 // groups, and 11 and 19 leave remainders of 3 after one and two full groups.
 func TestQMatMulIsBitIdentical(t *testing.T) {
+	// This test freezes the portable scalar path's exact accumulation order. An
+	// architecture kernel is intentionally tolerance-gated and has its own
+	// direct plus fused-vs-general numerical tests; letting it replace only the
+	// M=1 arm here would turn one portable golden into an architecture golden.
+	oldQ8FusedDecodeM1 := q8FusedDecodeM1
+	q8FusedDecodeM1 = nil
+	defer func() { q8FusedDecodeM1 = oldQ8FusedDecodeM1 }()
+
 	raw, err := os.ReadFile("testdata/qmatmul.json")
 	if err != nil {
 		t.Fatalf("read golden (run make golden): %v", err)

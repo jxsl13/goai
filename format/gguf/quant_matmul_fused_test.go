@@ -62,7 +62,7 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 				qkTol := qt == Q4_K && q4kDotIsAsm || qt == Q6_K && q6kDotIsAsm
 				// Q8_0's m==1 fused path is the SIMD dequant-dot (tolerance-gated: f32
 				// within-block sum + per-block factored scale) when that kernel is
-				// registered (amd64+simd build); every other format's fused path stays
+				// registered (ARM64 or amd64+simd); every other format's fused path stays
 				// bit-identical to the general one.
 				q8Tol := qt == Q8_0 && q8FusedDecodeM1 != nil
 				for ni := range n {

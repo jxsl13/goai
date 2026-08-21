@@ -40,8 +40,9 @@ var dotQ4KRowFn = dotQ4_KRow
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ6KRowFn = dotQ6_KRow
 
-// q8FusedDecodeM1, when non-nil (amd64+simd build), computes the Q8_0 m==1 decode
-// matmul with the SIMD dequant-dot kernel (tolerance-gated). Nil → scalar fused path.
+// q8FusedDecodeM1, when non-nil (ARM64 or amd64+simd build), computes the Q8_0
+// m==1 decode matmul with a SIMD dequant-dot kernel (tolerance-gated). Nil →
+// scalar fused path.
 var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf []float32)
 
 // qmatmulParallelChunks runs body over disjoint output-row chunks of [0,n) across

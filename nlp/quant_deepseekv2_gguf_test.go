@@ -366,8 +366,9 @@ func TestQuantDeepSeekV2FromGGUF(t *testing.T) {
 }
 
 // §V3/§T152 for deepseek2 (split form): the ABSORBED-latent decode of the
-// quantized-GGUF-loaded model matches its full Forward BIT-FOR-BIT at every
-// step — Forward runs the same absorbed kernel sequence batched with a causal
+// quantized-GGUF-loaded model matches its full Forward at every step. Portable
+// Q8_0 is bit-identical; registered SIMD Q8_0 selectors use gguf's numerical
+// parity bound. Forward runs the same absorbed kernel sequence batched with a causal
 // mask whose masked terms contribute exact zeros, the quantized projections are
 // row-independent, and the MoE routes each row identically in both paths (dense
 // dispatch, see [nlp.QuantDeepSeekMoE]). The cache stores ONLY the latents —
@@ -398,7 +399,7 @@ func TestQuantDeepSeekV2DecodeMatchesForward(t *testing.T) {
 			t.Fatal(err)
 		}
 		for j := range full.Shape()[1] {
-			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); got != want {
+			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); !quantQ8DecodeParity(got, want) {
 				t.Fatalf("decode logit[%d][%d] = %v, full-Forward %v — absorbed step diverged from the batched pass", pos, j, got, want)
 			}
 		}
@@ -472,7 +473,8 @@ func TestQuantDeepSeekV2LegacyKvB(t *testing.T) {
 	}
 	quantDeepSeekV2EqLogits(t, "legacy quant-GGUF vs QuantizeDeepSeekV2(legacy)", lq, ld)
 
-	// Reconstructed decode ≡ Forward, bit for bit.
+	// Reconstructed decode ≡ Forward: bit-exact on portable Q8_0 and bounded
+	// by the registered SIMD Q8_0 selector's numerical contract otherwise.
 	prompt := []int{1, 3, 2, 5, 4, 11, 0, 7}
 	full, err := q.Forward(backend.NewContext(), prompt)
 	if err != nil {
@@ -486,7 +488,7 @@ func TestQuantDeepSeekV2LegacyKvB(t *testing.T) {
 			t.Fatal(err)
 		}
 		for j := range full.Shape()[1] {
-			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); got != want {
+			if got, want := logits.AtF64(0, j), full.AtF64(pos, j); !quantQ8DecodeParity(got, want) {
 				t.Fatalf("legacy decode logit[%d][%d] = %v, full-Forward %v", pos, j, got, want)
 			}
 		}
