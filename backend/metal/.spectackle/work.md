@@ -36,3 +36,12 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
+
+## P-01M0GYKMR4E468TCHNX9G0930R Broadcast Q3_K scale headers once per SIMD group
+kind: proposal
+state: active
+created: 2026-08-21
+grilled: 2026-08-21 open=1
+targets: msl:qmatmul_q3k_cooperative, objc:metal_bridge.ensure_qmatmul_q3k, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.mtl_qmatmul_q3k, go:metal.SetQ3KCooperative, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q3k_cooperative_test.go
+
+The cooperative Q3_K decode kernel currently rebuilds the same 12-byte packed scale header independently in all 32 SIMD lanes for every 256-value superblock, even though each lane consumes only one of the 16 unpacked scales. Test a separately selectable qmatmul_q3k_cooperative_broadcast candidate on Apple M2 Pro: lane zero loads the header as six alignment-safe ushort values, combines them into aux0/aux1/aux2, broadcasts those three words with simd_broadcast_first, and preserves the existing per-lane scale splice, q3 reconstruction, inverted hmask semantics, and accumulation order. Q3_K blocks and rows are 110-byte aligned only to two bytes, so no uint or wider device-pointer loads are allowed. Wire one default-off predicate through direct, resident, and Recorder selectors. Validate scalar/control/candidate parity, finite and nonfinite classes, immutability, odd tails, support guards, and M>1 fallback. Benchmark same-binary AB/BA resident decode across KV, square, mid-up/down, gate/up, down, and vocabulary shapes with transition dispatches excluded. Promote only if every eligible production shape reaches at least 1.10x control in each of three independent count-seven campaigns; otherwise revert and preserve negative evidence.
