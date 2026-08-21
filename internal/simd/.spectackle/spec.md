@@ -73,7 +73,7 @@ WHEN three alternating count-seven M2 campaigns measure backend/cpu BenchmarkWKV
 WHEN RWKV-like and boundary fixtures exercise fresh or continuing WKV scans, the arm64 SIMD WKV implementation SHALL match scalar output and AA/BB/PP state within 1e-10 relative error.
 
 ## ARM64-F64-WKV-FALLBACK-001
-WHEN a vector pair encounters non-finite operands or exponential arguments below the proven safe domain, the arm64 WKV dispatcher SHALL rerun that pair through wkvScanStateScalar from unchanged state and overwrite partial output.
+WHEN a channel pair contains non-finite operands or exponential arguments below the proven safe domain, the arm64 WKV dispatcher SHALL select wkvScanStateScalar before mutating output or AA/BB/PP state.
 
 ## ARM64-F64-WKV-STATE-001
 WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the arm64 SIMD WKV state path SHALL make TestWKVScanStateF64ChunkEqualsWhole pass with bit-identical output and final AA/BB/PP.
