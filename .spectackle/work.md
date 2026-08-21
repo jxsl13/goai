@@ -3790,3 +3790,17 @@ Q5_K is the only Q4_K/Q5_K/Q6_K decode path still bound directly to a scalar row
 
 RESTORE/ROLLBACK
 The architecture selector is one function variable and the new files are ARM64-scoped. If correctness or leverage gates fail, restore the scalar selector and remove only the isolated Q5_K ARM64 files and evidence; portable, M>1, Metal, and Vulkan paths remain untouched.
+
+## T-01M0JNJ3WYE8J9Z1ND423RYHTG Implement and gate ARM64 Q5_K fused decode GEMV
+kind: task
+state: active
+created: 2026-08-21
+parent: P-01M0JNF7VGE7J9PV7PQ8DN2CNN
+refs: ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, go:gguf.dotQ5_KRow, format/gguf/quant_matmul.go, format/gguf/q5k.go, format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, internal/benchcompare/leadership/evidence
+
+Add an ARM64 architecture selector for the Q5_K M1 row dot in format/gguf/quant_matmul.go. Implement format/gguf/dot_q5k_asm_arm64.go and format/gguf/dot_q5k_asm_arm64.s so each 256-weight block keeps scale/min extraction in Go while NEON fuses low-nibble unpack, qh fifth-bit insertion, affine dequantization, and activation dot. Add format/gguf/dot_q5k_scalar.go for portable capability reporting, architecture tests with randomized arbitrary raw rows and max scalar-relative error at most 1e-4, extend format/gguf/quant_matmul_fused_test.go tolerance gating, and add direct QMatMul Q5_K benchmarks. Scope excludes M greater than one and every non-ARM64 build. Compile test binaries with go test -c, execute exact tests via the compiled binary -test.run flag, cross-compile portable and amd64+simd packages, run repeated interleaved benchstat samples for leaf, QMatMul, and nlp/BenchmarkQuantMamba2DecodeQ5_K, require unchanged allocations and statistically significant end-to-end gain, and keep Q6_K or Q8_0 flat as a negative control. Write the full environment, commands, raw samples, numerical bound, and result matrix under internal/benchcompare/leadership/evidence and summarize the retained gain in BENCHMARKS.md. Run external perfscan with GOPROXY=direct and report the generalized selector asymmetry on jxsl13/perfscan.
+
+RESTORE/ROLLBACK
+If any correctness or leverage gate fails, restore the scalar Q5_K selector and remove only format/gguf/dot_q5k_asm_arm64.go, format/gguf/dot_q5k_asm_arm64.s, format/gguf/dot_q5k_asm_arm64_test.go, format/gguf/dot_q5k_scalar.go, and Q5_K-specific evidence. Portable, prefill, Metal, and Vulkan paths remain unchanged.

@@ -127,3 +127,6 @@ ARM64-F64-SSM-ARCH-001	asm:simd.ssmChannelNegNeonF64	internal/simd/exp_f64_arm64
 ARM64-F64-SSM-SCOPE-001	go:simd.SSMScanF64~3	internal/simd/ssm_arm64.go	73-79	bacd2b44709df9c6	fe0820f2f45c0b89
 ARM64-F64-SSM-SCOPE-001	go:simd.SSMScanRangeF64~3	internal/simd/ssm_arm64.go	83-89	2665e56872664a69	fe0820f2f45c0b89
 ARM64-F64-SSM-SCOPE-001	go:simd.ssmChannelNegNeonF64	internal/simd/ssm_arm64.go	8-8	14cb44602c4069e0	fe0820f2f45c0b89
+ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.QMatMul	format/gguf/quant_matmul.go	106-606	fc7321d3c41b5b5a	574de0a02a45d1e5
+ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.dotQ5_KRow	format/gguf/q5k.go	157-190	cefc83f33b911cfb	574de0a02a45d1e5
+ARM64-Q8-FUSED-DOT-SCOPE-003	go:gguf.QMatMul	format/gguf/quant_matmul.go	106-606	fc7321d3c41b5b5a	812f3ae73130c444
