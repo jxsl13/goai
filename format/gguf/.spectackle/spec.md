@@ -155,3 +155,6 @@ Rationale: Architecture and dtype specialization must not leak into portable or 
 
 ## IQ2XS-PORTABLE-QMATMUL-001
 WHEN IQ2_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry eight-wide grid, 9-bit grid and 7-bit ksign indices, one 4-bit scale per 16 weights, float32 d*(0.5+s)*0.25 scaling, ascending mapping, and float64 accumulation.
+
+## IQ2XS-PORTABLE-SCRATCH-001
+The portable IQ2_XS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
