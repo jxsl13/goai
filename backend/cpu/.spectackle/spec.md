@@ -58,3 +58,6 @@ WHEN parity tests cover finite, nonfinite, tail-width, and input-immutability ca
 
 ## ARM64-F32-NORM-SCOPE-001
 WHEN the target is not an arm64 goexperiment.simd forward build or the operation is F64 or backward, the F32 norm fast-path selection SHALL preserve the existing implementation and behavior without selecting the new NEON normalize kernels.
+
+## DTYPE-FAST-PATH-ISOLATES-GENERIC-INSTANTIATIONS-001
+WHEN a dtype-specific SIMD arm is added to a generic numeric driver, the Go implementation SHALL isolate it in a concrete driver and make go tool objdump report no larger non-target stack frame or instruction count.
