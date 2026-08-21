@@ -3808,7 +3808,7 @@ The selector is one function variable and the new files are ARM64-scoped. If cor
 
 ## T-01M0JQHRA5EPEBAY8A6BPSSXV3 Implement and gate ARM64 Q3_K fused decode GEMV
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0JQGRZ9EANTP6DTZ44R8AX9
 refs: ADR-01M0JQFQCNFXF9XW2MAR7RWGGC

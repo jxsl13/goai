@@ -1,0 +1,50 @@
+BenchmarkDotQ3K-12    	  405798	       732.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  392241	       735.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  395978	       732.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  407604	       735.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  403024	       732.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  405649	       735.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  404994	       744.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  405379	       741.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  403960	       740.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDotQ3K-12    	  404055	       741.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24318	     12223 ns/op	21446.76 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12  	    1604	    176287 ns/op	95170.16 MB/s	   17449 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24171	     12290 ns/op	21329.70 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12           	    1706	    178978 ns/op	93738.92 MB/s	   17411 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24314	     12451 ns/op	21053.58 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12  	    1645	    348081 ns/op	48199.20 MB/s	   17467 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24086	     12486 ns/op	20994.92 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12           	    1690	    179027 ns/op	93713.07 MB/s	   17411 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24236	     12423 ns/op	21102.18 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12  	    1629	    181044 ns/op	92669.28 MB/s	   17487 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24010	     12439 ns/op	21073.53 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12           	    1641	    182345 ns/op	92008.24 MB/s	   17409 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24025	     12423 ns/op	21100.90 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12  	    1592	    189973 ns/op	88313.76 MB/s	   17474 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24168	     12301 ns/op	21310.71 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12           	    1642	    181902 ns/op	92232.34 MB/s	   17411 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24236	     12343 ns/op	21238.44 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12  	    1597	    178454 ns/op	94014.19 MB/s	   17475 B/op	      29 allocs/op
+BenchmarkQMatMulQ3KPaths/N64_K1024-12    	   24348	     12382 ns/op	21171.38 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ3KPaths/N4096_K1024-12           	    1666	    177475 ns/op	94532.59 MB/s	   17411 B/op	      29 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2312	    128745 ns/op	   53958 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2383	    124893 ns/op	   53928 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2258	    128156 ns/op	   53971 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2356	    124529 ns/op	   53915 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2353	    128497 ns/op	   53974 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2352	    123958 ns/op	   53927 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2301	    129128 ns/op	   53966 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2396	    123996 ns/op	   53926 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2288	    127873 ns/op	   53958 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2448	    124002 ns/op	   53934 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2260	    128581 ns/op	   53962 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2415	    124666 ns/op	   53929 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2323	    128291 ns/op	   53961 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2382	    124229 ns/op	   53916 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2281	    128762 ns/op	   53958 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2365	    124830 ns/op	   53924 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2307	    129268 ns/op	   53954 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2359	    124573 ns/op	   53934 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ3_K-12    	    2317	    129347 ns/op	   53961 B/op	      93 allocs/op
+BenchmarkQuantMamba2DecodeQ5_K-12    	    2334	    124149 ns/op	   53935 B/op	      93 allocs/op

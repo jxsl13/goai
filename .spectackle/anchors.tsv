@@ -127,11 +127,11 @@ ARM64-F64-SSM-ARCH-001	asm:simd.ssmChannelNegNeonF64	internal/simd/exp_f64_arm64
 ARM64-F64-SSM-SCOPE-001	go:simd.SSMScanF64~3	internal/simd/ssm_arm64.go	73-79	bacd2b44709df9c6	fe0820f2f45c0b89
 ARM64-F64-SSM-SCOPE-001	go:simd.SSMScanRangeF64~3	internal/simd/ssm_arm64.go	83-89	2665e56872664a69	fe0820f2f45c0b89
 ARM64-F64-SSM-SCOPE-001	go:simd.ssmChannelNegNeonF64	internal/simd/ssm_arm64.go	8-8	14cb44602c4069e0	fe0820f2f45c0b89
-ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.QMatMul	format/gguf/quant_matmul.go	110-610	fbcaa2a52bc54703	574de0a02a45d1e5
+ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.QMatMul	format/gguf/quant_matmul.go	114-614	38aef332942c67f0	574de0a02a45d1e5
 ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.dotQ5_KRow	format/gguf/q5k.go	157-190	cefc83f33b911cfb	574de0a02a45d1e5
-ARM64-Q8-FUSED-DOT-SCOPE-003	go:gguf.QMatMul	format/gguf/quant_matmul.go	110-610	fbcaa2a52bc54703	812f3ae73130c444
+ARM64-Q8-FUSED-DOT-SCOPE-003	go:gguf.QMatMul	format/gguf/quant_matmul.go	114-614	38aef332942c67f0	812f3ae73130c444
 ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.dotQ5_KRowASM	format/gguf/dot_q5k_asm_arm64.go	18-42	40830e146a03123a	574de0a02a45d1e5
 ARM64-Q8-FUSED-DOT-SCOPE-002	go:gguf.dotQ5KBlockNeon	format/gguf/dot_q5k_asm_arm64.go	16-16	7ed8838d20d60ee6	574de0a02a45d1e5
-ARM64-Q8-FUSED-DOT-SCOPE-004	go:gguf.QMatMul	format/gguf/quant_matmul.go	110-610	fbcaa2a52bc54703	e14ba4473f6750fc
+ARM64-Q8-FUSED-DOT-SCOPE-004	go:gguf.QMatMul	format/gguf/quant_matmul.go	114-614	38aef332942c67f0	e14ba4473f6750fc
 ARM64-Q8-FUSED-DOT-SCOPE-004	go:gguf.dotQ3_KRow	format/gguf/q3k.go	190-223	421ca4f4edf1b92a	e14ba4473f6750fc
-ARM64-Q8-FUSED-DOT-SCOPE-005	go:gguf.QMatMul	format/gguf/quant_matmul.go	110-610	fbcaa2a52bc54703	9bb8d45cf5a59304
+ARM64-Q8-FUSED-DOT-SCOPE-005	go:gguf.QMatMul	format/gguf/quant_matmul.go	114-614	38aef332942c67f0	9bb8d45cf5a59304

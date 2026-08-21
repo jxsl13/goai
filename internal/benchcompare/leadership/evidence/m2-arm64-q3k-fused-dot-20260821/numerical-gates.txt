@@ -1,0 +1,19 @@
+TestDotQ3KBlockNeonKnownValue: PASS (got exactly -128)
+TestDotQ3KAsmRandomRaw: PASS
+  trials: 100 arbitrary raw rows
+  K values: 256, 512, 4096
+  maximum scalar-relative error: 1.5923603989341695e-05
+  tolerance: 1e-4
+  activation and quant-byte inputs: immutable
+TestQMatMulFusedDecodeMatchesGeneralPathExactly: PASS
+Full format/gguf suite: PASS
+Full format/gguf race suite: PASS
+Linux amd64 portable test-binary cross-build: PASS
+Linux amd64 simd test-binary cross-build: PASS
+Linux ARM64 test-binary cross-build: PASS
+Objdump: VTBL, SCVTF, FMUL, VFMLA, and FADDP present in dotQ3KBlockNeon
+Full nlp suite excluding TestDiffusionLMGrammarE2E: PASS
+TestDiffusionLMGrammarE2E immutable base and candidate:
+  masked-diffusion eval CE: 2.924 -> 0.085
+  generated: "a sra s ee s a s"
+  identical known failure in both binaries
