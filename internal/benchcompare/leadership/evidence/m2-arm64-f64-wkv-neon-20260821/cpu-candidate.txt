@@ -1,0 +1,39 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkWKV_512x1024-12    	     530	   1025195 ns/op	 4196950 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     574	   1035517 ns/op	 4196910 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     568	   1042696 ns/op	 4196867 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     570	   1046587 ns/op	 4196864 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     571	   1030337 ns/op	 4196861 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     567	   1034692 ns/op	 4196862 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     578	   1030128 ns/op	 4196871 B/op	      29 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkWKV_512x1024-12    	     506	   1039641 ns/op	 4197033 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     564	   1026253 ns/op	 4196864 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     579	   1027947 ns/op	 4196883 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     544	   1049595 ns/op	 4196864 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     561	   1035696 ns/op	 4196863 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     542	   1027825 ns/op	 4196861 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     554	   1022174 ns/op	 4196864 B/op	      29 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkWKV_512x1024-12    	     484	   1214625 ns/op	 4197003 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     498	   1185398 ns/op	 4196871 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     494	   1188876 ns/op	 4196877 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     488	   1201880 ns/op	 4196868 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     490	   1192540 ns/op	 4196863 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     492	   1189052 ns/op	 4196865 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     484	   1185775 ns/op	 4196863 B/op	      29 allocs/op
+PASS
+

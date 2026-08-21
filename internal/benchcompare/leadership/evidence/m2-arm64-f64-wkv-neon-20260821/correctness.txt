@@ -1,0 +1,31 @@
+=== RUN   TestWKVNeonFreshSentinelAndDeepUnderflow
+--- PASS: TestWKVNeonFreshSentinelAndDeepUnderflow (0.00s)
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-k
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-v
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-w
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-u
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-aa
+=== RUN   TestWKVNeonUnsafePairsFallBackBeforeMutation/overflow-ppw
+--- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-k (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-v (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-w (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/inf-u (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/nan-aa (0.00s)
+    --- PASS: TestWKVNeonUnsafePairsFallBackBeforeMutation/overflow-ppw (0.00s)
+=== RUN   TestWKVScanRangeF64BitExactVsWhole
+--- PASS: TestWKVScanRangeF64BitExactVsWhole (0.01s)
+=== RUN   TestWKVScanF64Accuracy
+    wkv_test.go:40: seq=128 d=512 maxRel=1.386e-12
+    wkv_test.go:40: seq=64 d=1024 maxRel=4.501e-12
+    wkv_test.go:40: seq=130 d=17 maxRel=2.950e-14
+    wkv_test.go:40: seq=200 d=64 maxRel=1.526e-13
+--- PASS: TestWKVScanF64Accuracy (0.01s)
+=== RUN   TestWKVScanStateF64ChunkEqualsWhole
+    wkv_test.go:111: seq=96 d=512: chunked continuing scan bit-exact vs whole scan
+    wkv_test.go:111: seq=96 d=130: chunked continuing scan bit-exact vs whole scan
+    wkv_test.go:111: seq=50 d=17: chunked continuing scan bit-exact vs whole scan
+--- PASS: TestWKVScanStateF64ChunkEqualsWhole (0.00s)
+PASS
+

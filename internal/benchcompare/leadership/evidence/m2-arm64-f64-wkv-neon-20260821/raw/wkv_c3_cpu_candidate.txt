@@ -1,0 +1,13 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/cpu
+cpu: Apple M2 Pro
+BenchmarkWKV_512x1024-12    	     484	   1214625 ns/op	 4197003 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     498	   1185398 ns/op	 4196871 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     494	   1188876 ns/op	 4196877 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     488	   1201880 ns/op	 4196868 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     490	   1192540 ns/op	 4196863 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     492	   1189052 ns/op	 4196865 B/op	      29 allocs/op
+BenchmarkWKV_512x1024-12    	     484	   1185775 ns/op	 4196863 B/op	      29 allocs/op
+PASS
+
