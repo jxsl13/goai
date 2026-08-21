@@ -110,7 +110,11 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 	if xc.Dtype() == gc.Dtype() {
 		switch xc.Dtype() {
 		case tensor.F32:
-			rmsNormFwd(xc.Storage().F32(), gc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			if normF32ForwardFast {
+				rmsNormFwdF32Fast(xc.Storage().F32(), gc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			} else {
+				rmsNormFwd(xc.Storage().F32(), gc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			}
 			return []*tensor.Tensor{out}, nil
 		case tensor.F64:
 			rmsNormFwd(xc.Storage().F64(), gc.Storage().F64(), out.Storage().F64(), rows, d, eps)
@@ -141,12 +145,6 @@ func rmsNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.A
 func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 	x32, isF32 := any(x).([]float32) // boxed ONCE per kernel call, not per row
 	gm := gamma[:d:d]
-	fast := isF32 && normF32Fast // amd64-SIMD: AVX2 FMA normalize pass (see layerNormFwd)
-	var g32, o32 []float32
-	if fast {
-		g32, _ = any(gamma).([]float32)
-		o32, _ = any(out).([]float32)
-	}
 	parallelWork(rows, 3*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
@@ -163,14 +161,24 @@ func rmsNormFwd[T normFloat](x, gamma, out []T, rows, d int, eps float64) {
 				}
 			}
 			inv := 1 / math.Sqrt(ms/float64(d)+eps)
-			if fast {
-				rmsNormNormalizeF32(x32[base:base+d], g32, o32[base:base+d], float32(inv))
-				continue
-			}
 			//perfscan:ignore PS3074 f64/non-SIMD fallback; f32 hot path uses rmsNormNormalizeF32
 			for j, g := range gm {
 				or[j] = T(float64(xr[j]) * inv * float64(g))
 			}
+		}
+	})
+}
+
+// rmsNormFwdF32Fast is separate from the generic scalar driver so enabling the
+// F32 normalize path cannot enlarge or branch the F64 instantiation.
+func rmsNormFwdF32Fast(x, gamma, out []float32, rows, d int, eps float64) {
+	gamma = gamma[:d:d]
+	parallelWork(rows, 3*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			ms := sumSqF32(x[base : base+d])
+			inv := float32(1 / math.Sqrt(ms/float64(d)+eps))
+			rmsNormNormalizeF32(x[base:base+d], gamma, out[base:base+d], inv)
 		}
 	})
 }
@@ -193,7 +201,11 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 	if xc.Dtype() == gc.Dtype() && xc.Dtype() == bc.Dtype() {
 		switch xc.Dtype() {
 		case tensor.F32:
-			layerNormFwd(xc.Storage().F32(), gc.Storage().F32(), bc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			if normF32ForwardFast {
+				layerNormFwdF32Fast(xc.Storage().F32(), gc.Storage().F32(), bc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			} else {
+				layerNormFwd(xc.Storage().F32(), gc.Storage().F32(), bc.Storage().F32(), out.Storage().F32(), rows, d, eps)
+			}
 			return []*tensor.Tensor{out}, nil
 		case tensor.F64:
 			layerNormFwd(xc.Storage().F64(), gc.Storage().F64(), bc.Storage().F64(), out.Storage().F64(), rows, d, eps)
@@ -229,16 +241,6 @@ func layerNormKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend
 func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64) {
 	x32, isF32 := any(x).([]float32)
 	gm, bt := gamma[:d:d], beta[:d:d]
-	// amd64-SIMD f32 fast path: vectorize the normalize pass (the profiled ~45% scalar-f64 hotspot)
-	// through AVX2 FMA while the mean/variance reductions stay f64. Rounds mean/inv to f32 once per
-	// row (ADR-0021 tolerant f32 parity, norm_test rtol 5e-5); other builds keep the scalar loop.
-	fast := isF32 && normF32Fast
-	var g32, b32, o32 []float32
-	if fast {
-		g32, _ = any(gamma).([]float32)
-		b32, _ = any(beta).([]float32)
-		o32, _ = any(out).([]float32)
-	}
 	parallelWork(rows, 4*d, func(lo, hi int) {
 		for r := lo; r < hi; r++ {
 			base := r * d
@@ -262,14 +264,27 @@ func layerNormFwd[T normFloat](x, gamma, beta, out []T, rows, d int, eps float64
 				}
 			}
 			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
-			if fast {
-				layerNormNormalizeF32(x32[base:base+d], g32, b32, o32[base:base+d], float32(mean), float32(inv))
-				continue
-			}
 			//perfscan:ignore PS3074 f64/non-SIMD fallback normalize; fast path continues past
 			for j, g := range gm {
 				or[j] = T((float64(xr[j])-mean)*inv*float64(g) + float64(bt[j]))
 			}
+		}
+	})
+}
+
+// layerNormFwdF32Fast keeps f64 row-statistic reductions but performs the
+// normalize/write pass in F32 SIMD. Keeping this outside the generic driver is
+// required to preserve the F64 instantiation's pre-existing code generation.
+func layerNormFwdF32Fast(x, gamma, beta, out []float32, rows, d int, eps float64) {
+	gamma, beta = gamma[:d:d], beta[:d:d]
+	parallelWork(rows, 4*d, func(lo, hi int) {
+		for r := lo; r < hi; r++ {
+			base := r * d
+			row := x[base : base+d]
+			mean := sumF32(row) / float64(d)
+			varsum := varSumF32(row, mean)
+			inv := 1 / math.Sqrt(varsum/float64(d)+eps)
+			layerNormNormalizeF32(row, gamma, beta, out[base:base+d], float32(mean), float32(inv))
 		}
 	})
 }
@@ -377,7 +392,7 @@ func rmsNormBwd[T normFloat](x, gamma, up, dx, dgamma []T, rows, d int, eps floa
 					s += a * float64(xr[j])
 				}
 			}
-			if isF32 && normF32Fast {
+			if isF32 && normF32BackwardFast {
 				// AVX2 8-wide dx write (f32 budget); scalar f32 kept below for other builds.
 				c := iv * iv * s / float64(d)
 				rmsNormDxF32(u32[base:base+d], g32, x32[base:base+d], d32[base:base+d], float32(iv), float32(c))
@@ -575,7 +590,7 @@ func layerNormBwd[T normFloat](x, gamma, up, dx, dgamma, dbeta []T, rows, d int,
 			}
 			meanA /= float64(d)
 			meanAX /= float64(d)
-			if isF32 && normF32Fast {
+			if isF32 && normF32BackwardFast {
 				layerNormDxF32(u32[base:base+d], g32, x32[base:base+d], d32[base:base+d],
 					float32(mu), float32(iv), float32(meanA), float32(meanAX))
 			} else {

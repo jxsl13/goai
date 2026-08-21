@@ -33,9 +33,8 @@ func BenchmarkLayerNormBwdF32_512x1024(b *testing.B) {
 }
 func BenchmarkRMSNormBwdF32_512x1024(b *testing.B) { benchNormBwd(b, backend.OpRMSNormBackward) }
 
-func benchNormFwd(b *testing.B, op backend.Op, nin int) {
+func benchNormFwd(b *testing.B, op backend.Op, nin, rows, d int) {
 	be, _ := backend.Get(backend.CPU)
-	rows, d := 512, 1024
 	x := bench.RandF32(tensor.Shape{rows, d}, 1)
 	gamma := bench.RandF32(tensor.Shape{d}, 2)
 	beta := bench.RandF32(tensor.Shape{d}, 3)
@@ -49,5 +48,15 @@ func benchNormFwd(b *testing.B, op backend.Op, nin int) {
 	}
 }
 
-func BenchmarkLayerNormFwdF32_512x1024(b *testing.B) { benchNormFwd(b, backend.OpLayerNorm, 3) }
-func BenchmarkRMSNormFwdF32_512x1024(b *testing.B)   { benchNormFwd(b, backend.OpRMSNorm, 2) }
+func BenchmarkLayerNormFwdF32_512x1024(b *testing.B) {
+	benchNormFwd(b, backend.OpLayerNorm, 3, 512, 1024)
+}
+func BenchmarkRMSNormFwdF32_512x1024(b *testing.B) {
+	benchNormFwd(b, backend.OpRMSNorm, 2, 512, 1024)
+}
+func BenchmarkLayerNormFwdF32_512x4096(b *testing.B) {
+	benchNormFwd(b, backend.OpLayerNorm, 3, 512, 4096)
+}
+func BenchmarkRMSNormFwdF32_512x4096(b *testing.B) {
+	benchNormFwd(b, backend.OpRMSNorm, 2, 512, 4096)
+}

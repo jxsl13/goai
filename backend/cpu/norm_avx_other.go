@@ -2,23 +2,10 @@
 
 package cpu
 
-// Non-(amd64 SIMD) builds keep the scalar f64 normalize passes bit-for-bit: normF32Fast is false so
-// layerNormFwd/rmsNormFwd never call the functions below (they exist only so the driver type-checks,
-// same dead-code pattern as vexp_default.go). arm64's SIMD perf build is included here deliberately —
-// vectorizing these passes is an amd64-only change; arm64 keeps its exact current path.
-const normF32Fast = false
-
-func layerNormNormalizeF32(x, gamma, beta, out []float32, mean, inv float32) {
-	for j, g := range gamma {
-		out[j] = (x[j]-mean)*inv*g + beta[j]
-	}
-}
-
-func rmsNormNormalizeF32(x, gamma, out []float32, inv float32) {
-	for j, g := range gamma {
-		out[j] = x[j] * inv * g
-	}
-}
+// Non-(amd64 SIMD) builds keep the existing scalar-f64 backward write pass.
+// The arm64 SIMD build is included deliberately: its NEON specialization is
+// forward-only, so backward remains a performance and numerical negative control.
+const normF32BackwardFast = false
 
 func rmsNormDxF32(u, g, x, dx []float32, inv, c float32) {
 	for j := range dx {

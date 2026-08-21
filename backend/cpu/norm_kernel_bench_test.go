@@ -39,7 +39,11 @@ func BenchmarkNormCore(b *testing.B) {
 
 	b.Run("RMSNormFwd/f32", func(b *testing.B) {
 		for b.Loop() {
-			rmsNormFwd(x32, g32, o32, rows, d, 1e-5)
+			if normF32ForwardFast {
+				rmsNormFwdF32Fast(x32, g32, o32, rows, d, 1e-5)
+			} else {
+				rmsNormFwd(x32, g32, o32, rows, d, 1e-5)
+			}
 		}
 	})
 	b.Run("RMSNormFwd/f64", func(b *testing.B) {
@@ -49,7 +53,11 @@ func BenchmarkNormCore(b *testing.B) {
 	})
 	b.Run("LayerNormFwd/f32", func(b *testing.B) {
 		for b.Loop() {
-			layerNormFwd(x32, g32, b32, o32, rows, d, 1e-5)
+			if normF32ForwardFast {
+				layerNormFwdF32Fast(x32, g32, b32, o32, rows, d, 1e-5)
+			} else {
+				layerNormFwd(x32, g32, b32, o32, rows, d, 1e-5)
+			}
 		}
 	})
 	b.Run("LayerNormFwd/f64", func(b *testing.B) {
