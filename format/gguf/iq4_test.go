@@ -26,6 +26,37 @@ func makeIQ4NLRaw(elements int) []byte {
 	return raw
 }
 
+func putIQ4XSSubscale(block []byte, subblock int, scale int8) {
+	packed := byte(int(scale) + 32)
+	shift := 4 * (subblock % 2)
+	low := 4 + subblock/2
+	mask := byte(0x0f << shift)
+	block[low] = block[low]&^mask | (packed&0x0f)<<shift
+	high := binary.LittleEndian.Uint16(block[2:4])
+	high &^= 0x03 << (2 * subblock)
+	high |= uint16(packed>>4) << (2 * subblock)
+	binary.LittleEndian.PutUint16(block[2:4], high)
+}
+
+func makeIQ4XSRaw(elements int) []byte {
+	raw := make([]byte, elements/qkK*iq4xsBlockSize)
+	superScales := [...]float32{0.0625, -0.125, 0.5, 1, 2}
+	for b := 0; b*qkK < elements; b++ {
+		block := raw[b*iq4xsBlockSize : (b+1)*iq4xsBlockSize]
+		//perfscan:ignore PS4001 test setup writes one intentionally varied f16 scale per strided super-block
+		binary.LittleEndian.PutUint16(block, f32ToF16(superScales[b%len(superScales)]))
+		for sb := range 8 {
+			putIQ4XSSubscale(block, sb, int8((b*9+sb*7)%64-32))
+			for i := range 16 {
+				lo := byte((b*7 + sb*5 + i*11 + 3) & 0x0f)
+				hi := byte((b*13 + sb*3 + i*5 + 9) & 0x0f)
+				block[8+sb*16+i] = lo | hi<<4
+			}
+		}
+	}
+	return raw
+}
+
 func iq4Golden(t *testing.T, file string, qt QuantType) {
 	t.Helper()
 	raw, err := os.ReadFile(file)
@@ -77,6 +108,24 @@ func TestDequantIQ4NLIntoMatchesTensorPathExactly(t *testing.T) {
 	}
 }
 
+func TestDequantIQ4XSIntoMatchesTensorPathExactly(t *testing.T) {
+	const n = 4096
+	raw := makeIQ4XSRaw(n)
+	full, err := dequantIQ4_XS(tensor.Shape{n}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]float32, n)
+	dequantIQ4_XSInto(got, raw)
+	want := full.Storage().F32()
+	for i := range got {
+		if math.Float32bits(got[i]) != math.Float32bits(want[i]) {
+			t.Fatalf("element %d: into=%v (%#x), tensor=%v (%#x)",
+				i, got[i], math.Float32bits(got[i]), want[i], math.Float32bits(want[i]))
+		}
+	}
+}
+
 func TestDotIQ4NLRowMatchesMaterializedReferenceExactly(t *testing.T) {
 	const k = 4096
 	raw := makeIQ4NLRaw(k)
@@ -93,6 +142,28 @@ func TestDotIQ4NLRowMatchesMaterializedReferenceExactly(t *testing.T) {
 		want += float64(x[i]) * float64(w)
 	}
 	got := dotIQ4NLRow(x, raw, k)
+	if math.Float64bits(got) != math.Float64bits(want) {
+		t.Fatalf("fused scalar=%v (%#x), materialized=%v (%#x)",
+			got, math.Float64bits(got), want, math.Float64bits(want))
+	}
+}
+
+func TestDotIQ4XSRowMatchesMaterializedReferenceExactly(t *testing.T) {
+	const k = 4096
+	raw := makeIQ4XSRaw(k)
+	x := make([]float32, k)
+	for i := range x {
+		x[i] = float32(math.Sin(float64(i)*0.071) * math.Pow(2, float64(i%9-4)))
+	}
+	decoded, err := dequantIQ4_XS(tensor.Shape{k}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want float64
+	for i, w := range decoded.Storage().F32() {
+		want += float64(x[i]) * float64(w)
+	}
+	got := dotIQ4XSRow(x, raw, k)
 	if math.Float64bits(got) != math.Float64bits(want) {
 		t.Fatalf("fused scalar=%v (%#x), materialized=%v (%#x)",
 			got, math.Float64bits(got), want, math.Float64bits(want))
@@ -150,6 +221,57 @@ func TestQMatMulIQ4NLMatchesDequantizedReference(t *testing.T) {
 	}
 }
 
+func TestQMatMulIQ4XSMatchesDequantizedReference(t *testing.T) {
+	const n, k = 3, 512
+	raw := makeIQ4XSRaw(n * k)
+	weights, err := dequantIQ4_XS(tensor.Shape{n, k}, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wf := weights.Storage().F32()
+	for _, tc := range []struct {
+		name string
+		m    int
+		f64  bool
+	}{{"F32_M1", 1, false}, {"F32_M3", 3, false}, {"F64_M1", 1, true}, {"F64_M3", 3, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			var x *tensor.Tensor
+			if tc.f64 {
+				data := make([]float64, tc.m*k)
+				for i := range data {
+					data[i] = math.Sin(float64(i)*0.19) * math.Pow(2, float64(i%7-3))
+				}
+				x = tensor.FromFloat64(tensor.Shape{tc.m, k}, data)
+			} else {
+				data := make([]float32, tc.m*k)
+				for i := range data {
+					data[i] = float32(math.Sin(float64(i)*0.19) * math.Pow(2, float64(i%7-3)))
+				}
+				x = tensor.FromFloat32(tensor.Shape{tc.m, k}, data)
+			}
+			got, err := QMatMul(x, raw, IQ4_XS, n, k)
+			if err != nil {
+				t.Fatal(err)
+			}
+			gf := got.Storage().F32()
+			for mi := range tc.m {
+				for ni := range n {
+					var want float64
+					for ki := range k {
+						want += x.AtF64(mi, ki) * float64(wf[ni*k+ki])
+					}
+					want32 := float32(want)
+					diff := math.Abs(float64(gf[mi*n+ni] - want32))
+					if diff > 1e-4*(math.Abs(float64(want32))+1e-9) {
+						t.Fatalf("m=%d n=%d: got %v want %v (relative=%g)",
+							mi, ni, gf[mi*n+ni], want32, diff/(math.Abs(float64(want32))+1e-9))
+					}
+				}
+			}
+		})
+	}
+}
+
 var iq4QMatMulSink *tensor.Tensor
 
 func TestQMatMulIQ4NLScratchAllocationsDoNotScaleWithOutputRows(t *testing.T) {
@@ -160,6 +282,25 @@ func TestQMatMulIQ4NLScratchAllocationsDoNotScaleWithOutputRows(t *testing.T) {
 		return testing.AllocsPerRun(100, func() {
 			var err error
 			iq4QMatMulSink, err = QMatMul(x, raw, IQ4_NL, n, k)
+			if err != nil {
+				panic(err)
+			}
+		})
+	}
+	one, many := allocs(1), allocs(31)
+	if many != one {
+		t.Fatalf("QMatMul allocations scale with output rows: N1=%g N31=%g", one, many)
+	}
+}
+
+func TestQMatMulIQ4XSScratchAllocationsDoNotScaleWithOutputRows(t *testing.T) {
+	const m, k = 2, 256
+	x := tensor.FromFloat32(tensor.Shape{m, k}, make([]float32, m*k))
+	allocs := func(n int) float64 {
+		raw := makeIQ4XSRaw(n * k)
+		return testing.AllocsPerRun(100, func() {
+			var err error
+			iq4QMatMulSink, err = QMatMul(x, raw, IQ4_XS, n, k)
 			if err != nil {
 				panic(err)
 			}
@@ -198,6 +339,37 @@ func TestQMatMulIQ4NLSelectorScope(t *testing.T) {
 		t.Fatalf("F32 M2 dispatched M1 row leaf %d times", calls)
 	}
 	if _, err := QMatMul(tensor.New(tensor.F64, tensor.Shape{1, k}), raw, IQ4_NL, n, k); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("F64 M1 dispatched F32 row leaf %d times", calls)
+	}
+}
+
+func TestQMatMulIQ4XSSelectorScope(t *testing.T) {
+	const n, k = 3, 256
+	raw := makeIQ4XSRaw(n * k)
+	old := dotIQ4XSRowFn
+	defer func() { dotIQ4XSRowFn = old }()
+	calls := 0
+	dotIQ4XSRowFn = func(row []float32, weight []byte, width int) float64 {
+		calls++
+		return dotIQ4XSRow(row, weight, width)
+	}
+	if _, err := QMatMul(tensor.New(tensor.F32, tensor.Shape{1, k}), raw, IQ4_XS, n, k); err != nil {
+		t.Fatal(err)
+	}
+	if calls != n {
+		t.Fatalf("contiguous F32 M1 selector calls = %d, want %d", calls, n)
+	}
+	calls = 0
+	if _, err := QMatMul(tensor.New(tensor.F32, tensor.Shape{2, k}), raw, IQ4_XS, n, k); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("F32 M2 dispatched M1 row leaf %d times", calls)
+	}
+	if _, err := QMatMul(tensor.New(tensor.F64, tensor.Shape{1, k}), raw, IQ4_XS, n, k); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {

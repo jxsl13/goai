@@ -73,19 +73,29 @@ func dequantIQ4_XS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: IQ4_XS data %dB, want %d", len(data), nb*iq4xsBlockSize)
 	}
 	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+	dequantIQ4_XSInto(out.Storage().F32(), data)
+	return out, nil
+}
+
+func iq4XSSubscale(scalesH uint16, scalesL []byte, subblock int) int8 {
+	sl := scalesL[subblock/2] >> (4 * (subblock % 2)) & 0x0f
+	sh := byte(scalesH>>(2*subblock)) & 0x03
+	return int8(sl|sh<<4) - 32
+}
+
+// dequantIQ4_XSInto decodes IQ4_XS into caller-owned storage so QMatMul can
+// reuse its fixed scratch set across all output columns.
+func dequantIQ4_XSInto(dst []float32, data []byte) {
+	for b := 0; b*qkK < len(dst); b++ {
 		blk := data[b*iq4xsBlockSize : (b+1)*iq4xsBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 136-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		scalesH := binary.LittleEndian.Uint16(blk[2:])
 		scalesL := blk[4:8]
 		qs := blk[8:136]
 		for sb := range 8 { // 8 sub-blocks of 32
-			sl := scalesL[sb/2] >> (4 * (sb % 2)) & 0x0F
-			sh := byte(scalesH>>(2*sb)) & 0x03
-			scale := float32(int8(sl|sh<<4) - 32)
+			scale := float32(iq4XSSubscale(scalesH, scalesL, sb))
 			iq4Nibbles(qs[sb*16:(sb+1)*16], d*scale, dst[b*qkK+sb*32:])
 		}
 	}
-	return out, nil
 }
