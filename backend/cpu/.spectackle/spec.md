@@ -131,24 +131,3 @@ WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM6
 
 ## ARM64-F32-MHA-BAND-CONTROLS-001
 WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.
-
-## ARM64-F32-MHA-STRIDED-IO-NUMERIC-001
-WHEN the ARM64 SIMD F32 MHA direct-stride route executes deterministic causal, full, and GQA fixtures, the CPU backend SHALL preserve digest 73550b82110bb18f and satisfy relative tolerance 2e-3 plus absolute tolerance 1e-4.
-
-## ARM64-F32-MHA-STRIDED-IO-GUARDS-001
-WHEN guarded A, B, and C buffers exercise aligned and tail row or column shapes, the strided F32 row GEMM SHALL make gemmF32RowsStridedCols preserve A and B bits plus every C sentinel outside the requested region with 0 unexpected writes.
-
-## ARM64-F32-MHA-STRIDED-IO-ALLOC-001
-WHEN steady-state allocation auditing compares the direct-stride candidate with exact merged control, the MHA forward band SHALL allocate 0 qb and 0 ob scratch buffers and keep allocs per operation less than or equal to control.
-
-## ARM64-F32-MHA-STRIDED-IO-PERF-001
-WHEN three paired count-seven M2 campaigns measure MHA512 and seq128 or seq512 full or GQA forward, the MHA direct-stride candidate SHALL retain only if every median is at least 1.08x control with p below 0.01.
-
-## ARM64-F32-MHA-STRIDED-IO-CONTROLS-001
-WHEN the paired campaigns measure single-token GQA decode and steady-state allocation controls, the MHA direct-stride candidate SHALL show no statistically significant decode regression at p below 0.05 and no allocation increase.
-
-## ARM64-F32-MHA-STRIDED-IO-PROFILE-001
-WHEN matched five-second MHA512 profiles compare control and candidate, the ARM64 SIMD MHA implementation SHALL reduce runtime.memmove flat samples by at least 25 percent and keep scalar GEMM samples at most 5 percent of NEON tile samples.
-
-## ARM64-F32-MHA-STRIDED-IO-SCOPE-001
-WHEN the build is not arm64 goexperiment.simd or the operation is F64, backward, masked, selective, or below the F32 GEMM threshold, the CPU backend SHALL keep mhaFwdStridedIO false and execute the existing qb or ob scratch route with unchanged semantics.
