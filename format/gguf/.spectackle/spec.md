@@ -23,6 +23,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0JE35SGFV0BNHQA5AQC2GDA Fuse ARM64 Q4_K decode unpack and dot on M2: Merged in PR #1132 at 89795e4a after all 15 CI lanes passed. The retained ARM64 Q4_K fused dot delivered 4.73x at the largest measured production QMatMul shape and 2.94x in Mamba2 while preserving all non-ARM64 and M>1 routes. Generalizable fast-path bypass risk was reported as perfscan issue #799. The Q6_K negative control was statistically flat and is intentionally left for a separate measured p [body truncated at tombstone retention cap]
 - T-01M0JWPKA3E13AFRYG012RQ706 Implement and benchmark IQ4_NL QMatMul with ARM64 fused lookup dot: validated pass by codex-root-validator diff b53186d69cc4 :: Committed source implements portable IQ4_NL F32/F64 QMatMul, caller-owned decode, scoped M1 selector, and a row-level noescape ARM64 fused lookup dot. Direct gates prove exact layout, scalar bit identity, selector boundaries, input immutability, zero leaf allocations, <=1e-4 cancellation/random error (observed max 4.55e-16), and allocatio [body truncated at tombstone retention cap]
 - P-01M0JWHMHZEDQVCFCT3GJVPME7 Add IQ4_NL QMatMul and fuse its ARM64 decode dot: Implemented and merged by PR #1138 after all CI checks passed; merge commit 61a34fed57c179222b895a74bdc21a4599b8d17d.
+- T-01M0JZ5WKSFH0SGA8PSCGEDYFR Implement and benchmark IQ4_XS QMatMul with ARM64 fused super-block dot: validated pass by codex-root-post-validator diff 0e6626269f33 :: Committed source implements portable IQ4_XS F32/F64 QMatMul and a scoped ARM64 F32-M1 fused super-block dot. Exact decode identity, packed golden -29568, cancellation, immutability, selector scope, zero leaf allocations, race, three cross-builds, full preflight, benchmark smoke, and external perfscan all pass. Retained n=10 alternati [body truncated at tombstone retention cap]
+- P-01M0JZ33ZVEMKS1K6FYAEFJFK6 Add IQ4_XS QMatMul and fuse its ARM64 super-block dot: Merged by PR #1139 after all 15 CI checks passed; evidence retained under m2-arm64-iq4xs-fused-dot-20260821.
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -92,3 +94,12 @@ WHEN contiguous F32 M1 activations use IQ4_XS weights, the ARM64 IQ4_XS selector
 
 ## ARM64-IQ4XS-FUSED-DOT-SCOPE-001
 The IQ4_XS QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths portable and dispatch 0 ARM64 M1 kernel calls.
+
+## MXFP4-PORTABLE-QMATMUL-001
+WHEN MXFP4 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve E8M0-half scale conversion, low-half then high-half signed E2M1 codebook order, float32 scale multiplication, and float64 accumulation.
+
+## ARM64-MXFP4-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use MXFP4 weights, the ARM64 MXFP4 selector SHALL dispatch one row-level fused NEON E8M0-scale and signed-codebook dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-MXFP4-FUSED-DOT-SCOPE-001
+The MXFP4 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 ARM64 M1 kernel calls.

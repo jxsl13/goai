@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                                 | scalar sec/op | NEON sec/op | delta
+DotMXFP4Paths-12                    6.896u ± 19%     1.044u ± 28%  -84.87% (p=0.000 n=10)
+QMatMulMXFP4Paths/N64_K1024-12     100.08u ± 15%    17.04u ± 16%  -82.98% (p=0.000 n=10)
+QMatMulMXFP4Paths/N4096_K1024-12   2004.2u ± 36%    671.0u ± 36%  -66.52% (p=0.000 n=10)
+geomean                              111.4u           22.85u        -79.49%
+
+                                 | scalar B/s | NEON B/s | delta
+DotMXFP4Paths-12                    2.213Gi ± 23%   14.630Gi ± 22%  +561.03% (p=0.000 n=10)
+QMatMulMXFP4Paths/N64_K1024-12     2.440Gi ± 13%   14.333Gi ± 13%  +487.48% (p=0.000 n=10)
+QMatMulMXFP4Paths/N4096_K1024-12   7.922Gi ± 33%   23.359Gi ± 33%  +194.88% (p=0.000 n=10)
+geomean                              3.497Gi          16.98Gi       +385.61%
+
+                                 | scalar B/op | NEON B/op | delta
+DotMXFP4Paths-12                    0.000 ± 0%      0.000 ± 0%   ~ (p=1.000 n=10)
+QMatMulMXFP4Paths/N64_K1024-12     592.0 ± 0%      592.0 ± 0%   ~ (p=1.000 n=10)
+QMatMulMXFP4Paths/N4096_K1024-12   17.33Ki ± 2%    17.07Ki ± 2% ~ (p=0.122 n=10)
+
+                                 | scalar allocs/op | NEON allocs/op | delta
+DotMXFP4Paths-12                    0.000 ± 0%         0.000 ± 0%      ~ (p=1.000 n=10)
+QMatMulMXFP4Paths/N64_K1024-12     4.000 ± 0%         4.000 ± 0%      ~ (p=1.000 n=10)
+QMatMulMXFP4Paths/N4096_K1024-12   29.50 ± 2%         29.00 ± 0%      ~ (p=0.119 n=10)
+
+IQ4_XS negative control:
+QMatMulIQ4_XS_M1_N4096-12: baseline 662.3u ± 28%, candidate 653.0u ± 29%, ~ (p=0.631 n=10)
+B/op: baseline 17.19Ki ± 0%, candidate 17.18Ki ± 1%, ~ (p=0.739 n=10)
+allocs/op: baseline 29.00 ± 0%, candidate 29.00 ± 0%, ~ (p=1.000 n=10)
