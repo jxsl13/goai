@@ -7,3 +7,6 @@ schema: v1
 
 ## TENSOR-SCALAR-ACCESS-PERF-001
 WHEN three independent count-seven Apple M2 Pro campaigns measure F32 rank-1 and rank-2 scalar access, the Tensor.AtF64 and Tensor.SetF64 SHALL improve every common-cell median by at least 1.15x versus the exact main baseline.
+
+## TENSOR-SCALAR-ACCESS-SEMANTICS-001
+WHEN rank-1, rank-2, or rank-N access covers F32, F64, F16, BF16, a strided view, a rank mismatch, or uninitialized storage, the Tensor.AtF64 and Tensor.SetF64 SHALL produce 0 bit differences from the historical accessor or preserve its exact panic class and mutation behavior.
