@@ -3792,3 +3792,28 @@ option: Per-superblock NEON quant-plane dot with Go scale unpack
 option: Whole-row assembly including packed scale decode
 option: Materialize SIMD dequant scratch then dot
 choice: Per-superblock NEON quant-plane dot with Go scale unpack
+
+## ADR-01M0JSJQEXFTJBDFE71EWS8C7D Which Q2_K ARM64 fusion boundary should the first measured M2 tranche use?
+kind: adr
+state: done
+created: 2026-08-21
+context: Q2_K is the last K-quant M=1 selector bound directly to a scalar row dot. Its 84-byte superblock has 16 nibble scale/min pairs, 64 packed two-bit quant bytes, and two f16 super-scales. Q3_K, Q4_K, Q5_K, and Q6_K demonstrate that per-superblock Go coefficient preparation plus a noescape NEON unpack-dequant-dot leaf retains large end-to-end gains while keeping format decoding auditable. The tranche must preserve portable and M>1 paths, zero leaf allocations, input immutability, and the 1e-4 scalar-relative contract.
+decision: Per-superblock NEON two-bit affine dot with Go coefficient preparation
+consequences: Prepare 16 interleaved f32 scale/min coefficient pairs per 256-weight superblock in Go, then call one noescape NEON leaf that extracts the four two-bit planes, applies step*q-offset in f32, and reduces against contiguous activations. This matches the proven Q5_K boundary and isolates bit mapping for randomized raw-block tests. Reject whole-row assembly for now because f16 lookup conversion and coefficient unpack would enlarge the unaudited assembly surface before leverage is proven. Reject scratch dequantization because it adds stores, reloads, and workspace traffic to the decode hot path. Revisit a whole-row kernel only if per-block call/coefficient overhead dominates after retained end-to-end measurements.
+status: accepted
+
+kind: radio
+option: Per-superblock NEON two-bit affine dot with Go coefficient preparation
+option: Whole-row assembly including f16 and coefficient unpack
+option: Scratch dequantization followed by a generic dot
+choice: Per-superblock NEON two-bit affine dot with Go coefficient preparation
+
+## P-01M0JSKA87F83B9PXPGAKCBD3H Fuse ARM64 Q2_K decode dot on M2
+kind: proposal
+state: active
+created: 2026-08-21
+refs: ADR-01M0JSJQEXFTJBDFE71EWS8C7D
+grilled: 2026-08-21 open=0
+targets: go:gguf.QMatMul, format/gguf/quant_matmul.go, format/gguf/q2k.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md
+
+Close the final scalar K-quant M=1 selector edge on Apple ARM64. Add an architecture-dispatched Q2_K row dot whose Go wrapper decodes d/dmin and prepares sixteen interleaved scale/min coefficient pairs per superblock, while a noescape NEON leaf extracts packed two-bit quants, applies affine dequantization, and accumulates the activation dot without materializing weights. Preserve every non-ARM64 and M>1 path. Gate element mapping, coefficient selection, input immutability, zero leaf allocations, and maximum scalar-relative error at 1e-4. Require retained alternating n=10 leaf, M1/N64/K1024, M1/N4096/K1024, and recurrent Mamba2 evidence with an untouched negative control before keeping the selector. Run external perfscan with GOPROXY=direct and extend issue #799 with any generalized selector-family learning.
