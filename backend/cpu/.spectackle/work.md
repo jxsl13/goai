@@ -27,7 +27,7 @@ COORDINATION NOTE: a separate agent was researching the backend package concurre
 
 ## P-01M0J5GFQJET5VFRAN479DTRES Align ARM64 F32 MHA forward bands to the four-row NEON tile
 kind: proposal
-state: active
+state: done
 created: 2026-08-21
 grilled: 2026-08-21 open=0
 targets: go:cpu.mhaFwdBandRows, go:cpu.mhaFwdGemmF32, go:cpu.mhaFwdGemmBand, go:cpu.gemmF32BandNeonCols, go:cpu.gemmF32RowsScalar, go:cpu.BenchmarkMHA512
