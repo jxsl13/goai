@@ -44,3 +44,12 @@ created: 2026-08-21
 targets: msl:qmatmul_q4_0_cooperative, objc:metal_bridge.ensure_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul
 
 On Apple M2, test an alignment-safe Q4_0 cooperative decode kernel that replaces 32 scalar uchar reads per 32-weight block with eight aligned ushort reads and SIMD shuffles. The proof relies on the buffer base, 18-byte row/block strides, and 2-byte q offset preserving two-byte alignment. Retain the candidate only behind an explicit M=1 shape gate when three independent same-binary count-7 campaigns show at least 1.10x median speedup for every eligible production shape, numerical parity stays within 2e-5 relative error, nonfinite classes match, inputs remain immutable, and all direct, resident, Recorder, fallback, and platform tests pass. Otherwise reject and revert the product diff.
+
+## T-01M0H0T9FNEWPBMJKESF613K7D Implement and gate Q4_0 SIMD pair loads
+kind: task
+state: draft
+created: 2026-08-21
+parent: P-01M0H0SG6FFVKBE666TCKH10MG
+targets: msl:qmatmul_q4_0_cooperative, objc:metal_bridge.ensure_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_q4_0, objc:metal_bridge.mtl_qmatmul_resident, objc:metal_bridge.mtl_recorder_qmatmul
+
+Add a control-preserving Q4_0 cooperative candidate that loads the 16-byte quant plane through exactly eight aligned ushort device reads and distributes each packed pair with SIMD shuffle. Expose one shared test toggle and route predicate across direct, resident, and Recorder paths. Prove alignment, numerical and nonfinite parity, input immutability, eligible and fallback dispatch counts, then run three independent same-binary AB/BA count-7 M2 campaigns. Promote only if every eligible shape is at least 1.10x control and fallbacks stay within three percent; otherwise revert product code and archive the rejection evidence.
