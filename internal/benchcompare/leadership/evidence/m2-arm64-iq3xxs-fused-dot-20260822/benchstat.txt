@@ -1,0 +1,57 @@
+                             │ iq3xxs-scalar.txt │ iq3xxs-neon.txt  │
+                             │                sec/op                │   sec/op     vs base                │
+DotIQ3XXS-12                                          5080.5n ±  0%   804.1n ± 1%  -84.17% (p=0.000 n=10)
+QMatMulIQ3XXS/N64_K1024-12                             82.25µ ±  1%   13.42µ ± 0%  -83.69% (p=0.000 n=10)
+QMatMulIQ3XXS/N4096_K1024-12                           810.2µ ± 13%   190.1µ ± 5%  -76.54% (p=0.000 n=10)
+geomean                                                69.70µ         12.70µ       -81.77%
+
+                             │ iq3xxs-scalar.txt │   iq3xxs-neon.txt   │
+                             │                 B/s                  │      B/s       vs base                 │
+DotIQ3XXS-12                                          3.003Gi ±  0%   18.976Gi ± 1%  +531.79% (p=0.000 n=10)
+QMatMulIQ3XXS/N64_K1024-12                            2.968Gi ±  1%   18.198Gi ± 0%  +513.07% (p=0.000 n=10)
+QMatMulIQ3XXS/N4096_K1024-12                          19.29Gi ± 11%    82.20Gi ± 4%  +326.25% (p=0.000 n=10)
+geomean                                               5.561Gi          30.50Gi       +448.59%
+
+                             │ iq3xxs-scalar.txt │  iq3xxs-neon.txt   │
+                             │                 B/op                 │     B/op      vs base                 │
+DotIQ3XXS-12                                           0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ3XXS/N64_K1024-12                             592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ3XXS/N4096_K1024-12                         17.23Ki ± 1%     17.04Ki ± 0%       ~ (p=0.089 n=10)
+geomean                                                           ²                 -0.35%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                             │ iq3xxs-scalar.txt │ iq3xxs-neon.txt  │
+                             │              allocs/op               │ allocs/op   vs base                 │
+DotIQ3XXS-12                                           0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ3XXS/N64_K1024-12                             4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ3XXS/N4096_K1024-12                           29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                           ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+
+                          │ control-base+dequant-base │ control-candidate+dequant-candidate │
+                          │                     sec/op                     │          sec/op           vs base               │
+DequantIQ3_XXS-12                                              233.7µ ± 2%                232.2µ ± 2%       ~ (p=0.631 n=10)
+QMatMulIQ4_XS_M1_N4096-12                                      196.0µ ± 4%                196.1µ ± 1%       ~ (p=0.796 n=10)
+geomean                                                        214.0µ                     213.4µ       -0.29%
+
+                          │ control-base+dequant-base │ control-candidate+dequant-candidate │
+                          │                      B/s                       │           B/s             vs base               │
+DequantIQ3_XXS-12                                             409.5Mi ± 3%               412.1Mi ± 2%       ~ (p=0.631 n=10)
+QMatMulIQ4_XS_M1_N4096-12                                     79.74Gi ± 4%               79.68Gi ± 1%       ~ (p=0.796 n=10)
+geomean                                                       5.647Gi                    5.663Gi       +0.29%
+
+                          │ control-base+dequant-base │ control-candidate+dequant-candidate │
+                          │                      B/op                      │           B/op            vs base               │
+DequantIQ3_XXS-12                                             1.000Mi ± 0%               1.000Mi ± 0%       ~ (p=0.766 n=10)
+QMatMulIQ4_XS_M1_N4096-12                                     17.09Ki ± 0%               17.09Ki ± 0%       ~ (p=0.924 n=10)
+geomean                                                       132.3Ki                    132.3Ki       -0.00%
+
+                          │ control-base+dequant-base │ control-candidate+dequant-candidate │
+                          │                   allocs/op                    │       allocs/op         vs base                 │
+DequantIQ3_XXS-12                                               3.000 ± 0%               3.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ4_XS_M1_N4096-12                                       29.00 ± 0%               29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                         9.327                    9.327       +0.00%
+¹ all samples are equal

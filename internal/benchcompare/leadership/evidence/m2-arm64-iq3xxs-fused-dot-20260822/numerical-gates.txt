@@ -1,0 +1,11 @@
+TestDotIQ3XXSBlockNeonKnownValue: PASS (1024)
+TestDotIQ3XXSAsmRandomRaw: PASS
+maximum scalar-relative error across 100 arbitrary raw rows: 1.3257546909390963e-15
+TestDotIQ3XXSAsmCancellationHeavy: PASS (relative error <= 1e-4)
+TestDotIQ3XXSAsmAllocs: PASS (0 allocations)
+TestDotIQ3XXSRowMatchesMaterializedReferenceExactly: PASS (bit-exact)
+TestQMatMulIQ3XXSMatchesDequantizedReference: PASS (F32/F64, M1/M3)
+TestQMatMulIQ3XXSScratchAllocationsDoNotScaleWithOutputRows: PASS (N1 == N31)
+TestQMatMulIQ3XXSSelectorScope: PASS
+TestIQ3XXSDequantMatchesGGUFPy: PASS
+inputs immutable: PASS
