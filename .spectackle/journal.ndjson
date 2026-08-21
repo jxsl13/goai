@@ -470,3 +470,4 @@
 {"t":"2026-08-21T10:05:13Z","eid":"fe1f8991cbf97476","ag":"ag-24b7","ev":"grill","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","gr":"2026-08-21 open=1","hash":"ffa8781a7fb2b01c201f9c44463e71e931c4c2d81bb1091943310be461f1ec2b","open":1,"keys":["nopath:internal/simd.SSMScanF64"]}
 {"t":"2026-08-21T10:05:33Z","eid":"17e175115d675b02","ag":"ag-f9c2","ev":"revise","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","note":"body revised"}
 {"t":"2026-08-21T10:05:43Z","eid":"eae6513d77d3fc32","ag":"ag-75a2","ev":"grill","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","gr":"2026-08-21 open=0","hash":"905e5a4ef73b237537dc812f9aaf612a25040ab3114f992c54bf311806be99e8"}
+{"t":"2026-08-21T10:08:06Z","eid":"f042a34606d02f76","ag":"ag-8a35","ev":"move","id":"T-01M0HWBG9QEC2B5JQXEBJT2EZ9","fr":"draft","to":"active","note":"Proposal P-01M0HWDB7BEBY is active under standing user approval; task grill is open=0 and eight atomic SSM contracts define the implementation and evidence gates."}

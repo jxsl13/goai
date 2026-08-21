@@ -3732,7 +3732,7 @@ option: Use one universal CPU threshold for the whole unary family
 
 ## T-01M0HWBG9QEC2B5JQXEBJT2EZ9 Fuse the F64 NEON SSM recurrence on Apple arm64
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 grilled: 2026-08-21 open=0
 
