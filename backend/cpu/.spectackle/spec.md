@@ -123,3 +123,6 @@ WHEN the selected ARM64 band schedule executes deterministic causal, full, and G
 
 ## ARM64-F32-MHA-BAND-SCOPE-001
 WHEN the build is not arm64 with goexperiment.simd or the MHA route is F64, backward, or query length below 16, the CPU backend SHALL preserve the existing 30-row non-target constant and prior route without selecting the ARM64 band override.
+
+## ARM64-F32-MHA-BAND-PROFILE-001
+WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM64 MHA implementation SHALL make gemmF32RowsScalar flat samples no more than 5 percent of gemmF32Tile4x16Neon flat samples while adding zero steady-state allocations.
