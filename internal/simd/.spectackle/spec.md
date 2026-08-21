@@ -58,3 +58,6 @@ The F64 SSM optimization SHALL change only arm64 with goexperiment.simd product 
 
 ## ARM64-F64-SSM-E2E-PERF-001
 WHEN paired count-seven M2 campaigns measure backend/cpu 512x1024x16, the arm64 CPU SSM path SHALL retain only with at least 15 percent lower median latency and p below 0.05.
+
+## ARM64-F64-SSM-RANGE-001
+WHEN the same valid fixture runs through whole and range entry points, the fused arm64 F64 SSM implementation SHALL produce bit-identical output and recurrent state.
