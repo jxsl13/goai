@@ -23,7 +23,7 @@ WHERE the arm64 NEON build, the bit-exact SIMD kernels SHALL use FMLA rather tha
 
 Rationale: The rule inverts against amd64 and following the amd64 form here would BREAK bit-exactness, not preserve it: the repo verified on objdump that the scalar SAXPY loop compiles to scalar FMADDS (backend/cpu/gemm_neon_arm64.go), and the NEON kernel header records that each C element accumulates its k products in ascending p order in one fused-FMA chain (gemm_neon_arm64.s). A kernel using separate mul and add would round twice where the scalar rounds once, failing TestGemmCrossReferenceExact. Note also that the real arm64 NEON kernels live in backend/cpu, not in internal/simd, which has no arm64 files at all.
 
-## ARM64-F64-EXP-PERF-001
+## ARM64-F64-EXP-PERF-001 {applies: go:simd.expNegPairsNeonF64,asm:simd.expNegPairsNeonF64,go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
 WHEN three paired count-seven M2 campaigns measure the five declared F64 cells, the arm64 SIMD F64 path SHALL retain only when the direct leaf reaches 2.00x control, every complete-operation median reaches 1.25x control, and every target has zero allocations.
 
 ## ARM64-F64-EXP-NUMERIC-001
