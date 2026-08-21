@@ -386,9 +386,9 @@ jobs:
           go mod tidy
           git diff --exit-code go.mod
 
-  # §T604 capability matrix, simd axis: the GOEXPERIMENT=simd build on every
-  # amd64 OS (windows included); arm64 runners skip transparently — their SIMD
-  # class (NEON) is served by the default build. Soft gate until §T11b lands.
+  # §T604 capability matrix, simd axis: compile GOEXPERIMENT=simd on every
+  # runner and execute the SIMD primitive tests. amd64 exercises archsimd;
+  # arm64 exercises the native NEON leaves that are intentionally experiment-gated.
   simd:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -411,16 +411,13 @@ jobs:
       - name: capability probe (§T601 — what does this runner offer?)
         shell: bash
         run: go run ./internal/capprobe
-      - name: compile with GOEXPERIMENT=simd (amd64 runners; arm64 skips transparently)
+      - name: compile and test with GOEXPERIMENT=simd
         shell: bash
         env:
           CGO_ENABLED: "0"
         run: |
-          if [ "$(go env GOARCH)" != "amd64" ]; then
-            echo "skip: GOEXPERIMENT=simd is amd64-only; this runner is $(go env GOARCH) (NEON served by the default build) — rc=0"
-            exit 0
-          fi
           GOEXPERIMENT=simd go build -tags=simd ./...
+          GOEXPERIMENT=simd go test -short -count=1 ./internal/simd
 
   # §T604 capability matrix, cgo axis on windows (mingw): the tagless cgo build
   # must behave like everywhere else; tests run selectively via the runner.
