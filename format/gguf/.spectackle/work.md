@@ -22,6 +22,16 @@ choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable de
 kind: proposal
 state: active
 created: 2026-08-21
+grilled: 2026-08-21 open=0
 targets: go:gguf.dequantIQ2_XXS, go:gguf.QMatMul, format/gguf/iq2xxs.go, format/gguf/quant_matmul.go
 
 Close the bottom-up IQ2_XXS CPU execution gap without weakening QMatMul semantics. Add caller-owned portable dequantization and an exact scalar row-dot oracle, support F32 and F64 activations for all M through reusable scratch, and select an Apple ARM64 fused M=1 F32 leaf only after numerical and allocation gates. Benchmark fresh-process matched cells on M2, retain neutral dequant and unrelated-quant controls, inspect generated instructions, cross-build Linux ARM64 and AMD64, run the full package/race/Metal preflight matrix, and make no cross-library leadership claim against llama.cpp because its pinned ARM IQ2_XXS kernel consumes Q8_K activations rather than direct F32. Version evidence, source pins, sample order, and binary hashes. Report any generalizable perfscan improvement upstream.
+
+## T-01M0K90SRGFGRSGF2MZZ4V2R4Q Implement and statistically gate exact IQ2_XXS QMatMul and M2 ARM64 fused row dot
+kind: task
+state: draft
+created: 2026-08-21
+parent: P-01M0K8Z3S1ER2BYJ5H815QYNM8
+targets: go:gguf.dequantIQ2_XXS, go:gguf.QMatMul, format/gguf/iq2xxs.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_test.go
+
+Implement under ADR-01M0K6C6PEF4J and repository ADR-0016. Refactor dequantIQ2_XXS through a caller-owned into decoder, add an exact portable row-dot oracle, admit IQ2_XXS into QMatMul for F32/F64 and all M with one scratch set per worker, and select an Apple ARM64 fused M=1 F32 leaf only. Preserve the 256-entry 8-wide grid, four 7-bit ksigns indices per 32 weights, d*(0.5+s)*0.25 float32 scaling, ascending element mapping, direct F32/F64 activation semantics, cancellation behavior, input immutability, and portable fallback. Add non-vacuous selector-scope, scratch-allocation, scalar/materialized parity, arbitrary raw-row error, known-block, F32/F64 M1/M3, invalid-shape, cancellation, immutability, and zero-leaf-allocation tests. Benchmark leaf K4096 and QMatMul M1/N64 and M1/N4096 with dequant and unrelated-quant controls in alternating fresh-process samples; preserve raw streams, benchstat, manifests, source pins, sample order, and binary hashes. Inspect disassembly, cross-build Linux ARM64 and AMD64, run package/race/preflight/Metal gates, scan with external perfscan using GOPROXY=direct, report generalizable findings upstream, and ship via a proper PR only after statistically validated leverage.
