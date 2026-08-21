@@ -1,0 +1,22 @@
+TestDotQ2KBlockNeonKnownValue: PASS (got exactly 3648)
+TestDotQ2KAsmRandomRaw: PASS
+  trials: 100 arbitrary raw rows
+  K values: 256, 512, 4096
+  observed maximum scalar-relative error: 0
+  tolerance: 1e-4
+  activation and quant-byte inputs: immutable
+TestDotQ2KAsmAllocs: PASS (0 allocations)
+TestQMatMulFusedDecodeMatchesGeneralPathExactly: PASS
+Full format/gguf suite: PASS
+Full format/gguf race suite: PASS
+Linux amd64 portable test-binary cross-build: PASS
+Linux amd64 simd test-binary cross-build: PASS
+Linux ARM64 test-binary cross-build: PASS
+Objdump: VTBL, UCVTF, FMUL, FSUB, VFCVTL/VFCVTL2, VFMLA.D2, and FADDP.D2 present in dotQ2KBlockNeon
+Full nlp suite excluding TestDiffusionLMGrammarE2E: PASS
+TestDiffusionLMGrammarE2E immutable base and candidate:
+  masked-diffusion eval CE: 2.924 -> 0.085
+  generated: "a sra s ee s a s"
+  identical known failure in both binaries
+make preflight: PASS
+External perfscan v1.71.0 with GOPROXY=direct: complete repository scan; no findings in changed GGUF files

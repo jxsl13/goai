@@ -1,0 +1,26 @@
+{
+  "date": "2026-08-21",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "base_commit": "512d496a2fd66d40bfc0c31b264396524f2b3e05",
+  "branch": "codex/m2-arm64-q2k-dot",
+  "spectackle": "v0.9.3 (go1.26.6)",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan@v1.71.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/799#issuecomment-5374003019",
+  "benchstat": "golang.org/x/perf/cmd/benchstat",
+  "binary_sha256": {
+    "base_gguf": "3cef7a7e81f9590c94aee68643715704985b5665717f638fdc5a6fccb2a0695a",
+    "candidate_gguf": "f04d90f92eb215cc58acc48dbff439ba41fcc5a5ef23bc68e005a0c088a70946",
+    "base_nlp": "f87d26569d10bff3f67208273ec1b72f48d053aa767658c8b95c0afd65760b7d",
+    "candidate_nlp": "245366a4eef8abd36eddb344cbe032c90571e7ba6d665c0881e28eb2cae0907f"
+  },
+  "sampling": {
+    "benchtime": "250ms",
+    "warmup": "one excluded invocation in every exercised order",
+    "retained_samples_per_cell": 10,
+    "benchstat_n": 10,
+    "order": "alternated scalar/candidate first; base/candidate order alternated for end-to-end binaries"
+  }
+}

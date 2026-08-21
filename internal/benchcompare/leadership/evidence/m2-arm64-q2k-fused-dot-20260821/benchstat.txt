@@ -1,0 +1,38 @@
+/Users/john/go/bin/benchstat
+                               │ control.txt │ candidate.txt  │
+                               │              sec/op              │   sec/op     vs base                │
+DotQ2K-12                                             4.849µ ± 1%   1.066µ ± 0%  -78.02% (p=0.000 n=10)
+QMatMulQ2KPaths/N64_K1024-12                          77.17µ ± 1%   17.02µ ± 1%  -77.94% (p=0.000 n=10)
+QMatMulQ2KPaths/N4096_K1024-12                        750.8µ ± 2%   227.4µ ± 2%  -69.71% (p=0.000 n=10)
+QuantMamba2DecodeQ2_K-12                              374.2µ ± 2%   147.9µ ± 1%  -60.46% (p=0.000 n=10)
+QuantMamba2DecodeQ5_K-12                              124.3µ ± 0%   123.9µ ± 1%        ~ (p=0.247 n=10)
+geomean                                               105.5µ        37.65µ       -64.31%
+
+                               │ control.txt │  candidate.txt   │
+                               │               B/op               │     B/op      vs base                 │
+DotQ2K-12                                            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ2KPaths/N64_K1024-12                         592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ2KPaths/N4096_K1024-12                     17.03Ki ± 0%     17.03Ki ± 0%       ~ (p=0.636 n=10)
+QuantMamba2DecodeQ2_K-12                           52.74Ki ± 0%     52.68Ki ± 0%  -0.11% (p=0.000 n=10)
+QuantMamba2DecodeQ5_K-12                           52.66Ki ± 0%     52.67Ki ± 0%  +0.03% (p=0.003 n=10)
+geomean                                                         ²                 -0.01%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                               │ control.txt │ candidate.txt  │
+                               │            allocs/op             │ allocs/op   vs base                 │
+DotQ2K-12                                            0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ2KPaths/N64_K1024-12                         4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ2KPaths/N4096_K1024-12                       29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10) ¹
+QuantMamba2DecodeQ2_K-12                             93.00 ± 0%     93.00 ± 0%       ~ (p=1.000 n=10) ¹
+QuantMamba2DecodeQ5_K-12                             93.00 ± 0%     93.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                         ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                               │ control.txt │   candidate.txt   │
+                               │               B/s                │      B/s       vs base                 │
+QMatMulQ2KPaths/N64_K1024-12                         3.164Gi ± 1%   14.343Gi ± 1%  +353.40% (p=0.000 n=10)
+QMatMulQ2KPaths/N4096_K1024-12                       20.81Gi ± 2%    68.70Gi ± 2%  +230.09% (p=0.000 n=10)
+geomean                                              8.114Gi         31.39Gi       +286.86%
+
