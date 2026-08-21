@@ -22,3 +22,18 @@ EXPECTED: 1.5-2.5x on rank-3/4 strided Contiguous/Cast. High confidence that the
 BIT-IDENTITY BAR: none — pure reordering of independent element copies and conversions, the same (i,j) -> dst[i*cols+j] mapping, no accumulation involved. gatherBlocked2D's doc comment at tensor.go:130-134 already makes this argument for rank 2 and it carries over unchanged. Verify with TestContiguousPermuted3DMatchesGeneric asserting exact []float32 equality against gatherCast.
 
 PERFSCAN RULE REQUIRED: a fast path gated on an exact rank or dimension literal where the underlying condition is rank-agnostic. AST shape: an assignment whose RHS is a BinaryExpr{&&} containing X == <int literal> where X is len(<field>) or a variable assigned from it, and where the guarded branch calls a helper ALSO reachable from a default/else branch handling the same dtypes. Report as "dimensionality-gated fast path — check whether the general case is reachable". Related sub-check worth adding at the same time: flag stale NOTE(... rejected) comments whose claim contradicts a currently-live code path.
+
+## T-01M0H8C73BFWX820S798P27FYG Specialize rank-1/rank-2 Tensor AtF64 and SetF64
+kind: task
+state: draft
+created: 2026-08-21
+parent: P-01M0H89XBWFF0RG24N9673Y3DX
+targets: go:tensor.Tensor.AtF64, go:tensor.Tensor.SetF64, go:tensor.Tensor.flatOffset, go:tensor.Storage.atF64, go:tensor.Storage.setF64
+
+Implement a direct rank-1/rank-2 scalar accessor path for Tensor.AtF64 and Tensor.SetF64 on top of the existing typed Storage layout.
+
+First add F32, F64, F16, and BF16 rank-1/rank-2/rank-N correctness and benchmark controls. Preserve exact offsets, strides, conversions, half rounding, mismatch panics, and uninitialized-storage behavior.
+
+Retain the implementation only if three independent count-seven Apple M2 Pro campaigns improve every F32 rank-1/rank-2 common cell by at least 1.15x, do not reduce any F64 common cell below 0.97x, and keep rank-N fallback within 0.97x to 1.03x. Attribute code size and inliner decisions explicitly.
+
+File the compositional inlining-budget mechanism as a generalized perfscan issue, then run tensor tests, tensor race, pure-Go preflight, cgo short validation, and the full PR CI lifecycle.
