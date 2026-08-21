@@ -1995,7 +1995,7 @@ norm-into-matmul) is ~1.8% of decode time, below run-to-run bench noise, so elem
 fusion was **rejected on measurement** rather than built. The data instead points any future
 CPU decode work at the GEMV kernel itself (the `[1,dim]` f64 matmul is ~66% of everything).
 
-### Quantized decode vs float (T819, a measured gap, not yet closed)
+### Quantized decode vs float (T819, the Q8_0 gap is not yet closed)
 
 `BenchmarkQuantLlamaGenerate500` puts a permanent number on Q8_0 quantized decode over the
 same geometry as the float benchmark (dim 256, 4 layers). Measured on the M2 Pro:
@@ -2013,6 +2013,14 @@ block-native quantized GEMV kernel (dequantize into the dot product, SIMD over t
 layout) in `format/gguf` / the CPU backend, not in `nlp`. Flagged there; the benchmark here
 is the baseline any such kernel must beat. On GPU the quantized decoders already run
 block-native (see the `llamagpu` numbers above), so this gap is CPU-specific.
+
+The 2026-08-21 ARM64 Q4_K fused unpack-and-dot kernel closes this mechanism for
+the dominant Q4_K single-token projection path, but not for the Q8_0 benchmark
+above. On M2 Pro it reduces Q4_K M1/N4096/K1024 from 689.5 to 145.9 µs
+(4.73×) and a quantized Mamba2 recurrent step from 349.2 to 118.8 µs (2.94×),
+with unchanged allocations (`p=0.000`, n=10 after first-sample removal). The
+Q6_K negative control is unchanged. See
+`internal/benchcompare/leadership/evidence/m2-arm64-q4k-fused-dot-20260821`.
 
 ## Further reading
 

@@ -424,6 +424,17 @@ ggml blocks on the fly — quantization currently buys memory (4–8× less), no
 CPU speed. The fix (a block-native quantized GEMV kernel) is flagged in the
 log; on GPU the quantized decoders already run block-native.
 
+**ARM64 Q4_K progress (2026-08-21):** the M2 single-token Q4_K path now fuses
+nibble unpack, affine dequantization and dot-product reduction in one NEON
+pass. Against the scalar mainline control, QMatMul improves **7.77×** at
+M1/N64/K1024 and **4.73×** at M1/N4096/K1024; the recurrent quantized Mamba2
+decode step improves **2.94×** (349.2 → 118.8 µs). All cells use n=10 after
+discarding the first sample, `p=0.000`, with unchanged allocation counts. The
+untouched Q6_K recurrent cell is flat (`p=0.853`), serving as the negative
+control. This does **not** close or restate the Q8_0 8.8× whole-model gap, and
+it is not yet a matched llama.cpp CPU leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q4k-fused-dot-20260821`.
+
 ### Tokenizer throughput — pure-Go BPE vs tiktoken
 
 *M2 Pro, GPT-2 / r50k_base vocab, one 1,000,116-byte corpus, single-threaded
@@ -692,7 +703,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
-| CPU quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop | block-native quantized GEMV (flagged) |
+| CPU Q8_0 quantized decode vs own f32 | 8.8× | on-the-fly block dequantize in the hot loop; the 2026-08-21 ARM64 Q4_K fused kernel does not cover Q8_0 | block-native Q8_0 ARM64 GEMV; then rerun the whole-model comparison |
 | Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
 
 ## Not yet measured — booked benchmark tasks

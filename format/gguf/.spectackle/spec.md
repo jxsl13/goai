@@ -20,3 +20,13 @@ Rationale: Two applications of the same transform in one package, measured the s
 
 ## intent
 - P-01M0JBW0SVETY8QC1HZV6G561V Open quantized GGUF files through retained read-only mappings: Consumed by archived task T-01M0JBX2XYFNR. OpenRaw ships explicit retained-mapping ownership, passed all gates, delivered 8.90x raw-open and 1.57x full-consumer-copy speedups, and leads matched gguf-py by 89.17x/11.86x. Evidence and perfscan #798 are committed.
+
+## ARM64-Q4K-FUSED-DOT-001
+WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: M2 evidence shows 8.00x leaf, 4.73x production-shaped QMatMul, and 2.94x recurrent decode gains; materialize-then-dot regressed and allocated.
+
+## ARM64-Q4K-FUSED-DOT-SCOPE-001
+The non-ARM64 and M>1 Q4_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
+
+Rationale: The measured gain and tolerance contract cover only ARM64 single-token decode.

@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulQ4_K_M1-12          	    3816	     76626 ns/op	3421.09 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    3985	     75388 ns/op	3477.28 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    4012	     76484 ns/op	3427.44 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    4023	     76049 ns/op	3447.05 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    4022	     76155 ns/op	3442.23 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    4011	     74995 ns/op	3495.51 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    3958	     75466 ns/op	3473.67 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    4012	     75479 ns/op	3473.07 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    3996	     75568 ns/op	3469.00 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1-12          	    3990	     75367 ns/op	3478.24 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     403	    677449 ns/op	24765.28 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     379	    684398 ns/op	24513.84 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     415	    720023 ns/op	23300.95 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     400	    754204 ns/op	22244.92 MB/s	   17477 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     402	    692799 ns/op	24216.56 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     411	    683370 ns/op	24550.70 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     411	    679600 ns/op	24686.88 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     409	    700889 ns/op	23937.04 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     412	    752989 ns/op	22280.83 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulQ4_K_M1_N4096-12    	     411	    686118 ns/op	24452.36 MB/s	   17421 B/op	      29 allocs/op
+PASS
