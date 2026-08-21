@@ -84,7 +84,7 @@ WHEN vector maxNum replaces an ordered scalar max reduction, the SIMD reduction 
 
 Rationale: IEEE maximumNumber selects +0 for mixed zero signs, while ordered greater-than preserves the sign of the first zero maximum.
 
-## ARM64-F64-GEMM-BAND-PERF-001 {applies: go:cpu.gemmF64Band~2,go:cpu.gemmF64BandCols}
+## ARM64-F64-GEMM-BAND-PERF-001 {applies: go:cpu.gemmF64Full,go:cpu.packBPanelsF64,go:cpu.gemmF64Tile4x8Neon,asm:cpu.gemmF64Tile4x8Neon}
 WHEN three paired count-seven M2 Pro campaigns measure the target cells, the benchmark gate SHALL retain the kernel only if every dense direct median is at least 1.25x baseline and ragged performance has no statistically significant regression.
 
 Rationale: Target cells are direct F64 GEMM 512x512x512, 1024x1024x1024, 512x2048x2048, and ragged 511x513x515. Complete F64 MatMul, Conv2D, and Conv2DBackward consumers must also be reported.
