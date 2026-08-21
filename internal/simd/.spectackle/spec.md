@@ -52,3 +52,6 @@ WHEN the fused path processes any declared N shape including an odd state tail, 
 
 ## ARM64-F64-SSM-ARCH-001
 WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 SSM leaf SHALL contain two-lane D2 vector state arithmetic together with FRINTN and exponent-bit construction from the proven degree-13 negative-exp approximation.
+
+## ARM64-F64-SSM-SCOPE-001
+The F64 SSM optimization SHALL change only arm64 with goexperiment.simd product code and leave WKV, generic Exp capability flags, non-target product implementations, and backend ownership allocations outside this task.
