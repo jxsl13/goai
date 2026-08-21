@@ -37,6 +37,7 @@ WHEN an input lane is outside the vector polynomial safe domain or the build is 
 
 ## intent
 - T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
+- P-01M0HWDB7BEBY99M96950C5DHE Apple arm64 fused F64 SSM selective scan: Single-task proposal completed by archived task T-01M0HWBG9QEC2 and GoAI PR #1128. The Apple arm64 F64 SSM recurrence now has a fused NEON fast path, numeric-domain proof, scalar fallback, exact range semantics, three statistically significant physical M2 Pro benchmark campaigns, and complete local plus hosted CI evidence. Product gains are internal geomeans -79.08% to -84.45% and backend/cpu end- [body truncated at tombstone retention cap]
 
 ## ARM64-F64-SSM-PERF-001 {applies: go:simd.ssmChannelNegNeonF64,asm:simd.ssmChannelNegNeonF64,go:simd.SSMScanF64~3}
 WHEN paired count-seven M2 campaigns measure internal 512x2048x16, the arm64 SIMD SSM path SHALL retain only with at least 20 percent lower median latency, p below 0.05, and zero allocations.
