@@ -12,6 +12,7 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 - R-01KZ15RPY3E9DT1W3ZXXGDA8Q8 Round T1060: masked-MHA mixed-dtype panic fixed; the check for that class drafted and withheld: Consumed: the mixed-dtype panic fixed on both arms with a reference-parity gate, and the check for the class withheld with its two noise sources diagnosed (a guard split across an enclosing type switch, and outputs allocated from an input dtype). Also records that the same class of bug is invisible to CI because the only test reaching it is skipped under -short.
 - T-01KYJQ7822FVBBKJV7F9T08ZAK Enable the f32 norm fast path on arm64 — RMSNorm/LayerNorm currently normalize through a per-element f64 round trip: Implemented M2-first arm64 SIMD acceleration for F32 RMSNorm and LayerNorm forward paths using concrete F32 drivers and 16-lane NEON normalize/write kernels. F64 reductions remain unchanged and F32 backward remains on the prior path. Three paired M2 campaigns across complete 512x1024 and 512x4096 operators delivered 1.291x-1.540x median speedups (22.54%-35.07% time reduction); all second and third [body truncated at tombstone retention cap]
 - T-01KYJQ3QB2EMCR0T09D7XA4TEX Vectorize rowMaxF32 and scaleRowF32 on arm64 — two of every softmax's three passes are scalar: Shipped M2 arm64 SIMD acceleration for the three F32 softmax row primitives: rowMax now uses 16-lane FMAXNM accumulation, scale uses 16-lane FMUL, and axpb uses 16-lane FMLA, each with scalar tails. rowMax repairs signed zero by selecting the first zero when the numeric maximum is zero, preserving ordered scalar semantics while still skipping NaNs. Non-arm64 SIMD targets and F64 behavior remain un [body truncated at tombstone retention cap]
+- T-01KYJQ3PXEFMW9RAY47HDFTM18 Give gemmF64Band a NEON kernel and move its accumulators out of memory: Archived after PR #1126 completed its first full 15-of-15 CI matrix successfully at head 2dce0d08e830b9fb0b9d8bff4bd1cef6a4114041. Local validation, benchmark evidence, rejection attribution, final assembly inspection, code anchors, perfscan issues 792 and 793, and the operation-level redesign rationale are recorded. The implementation retains 1.649x to 2.471x direct GEMM gains and 2.04x to 2.38x [body truncated at tombstone retention cap]
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -83,3 +84,23 @@ Rationale: Keep the optimization architecture-, experiment-, and dtype-specific 
 WHEN vector maxNum replaces an ordered scalar max reduction, the SIMD reduction SHALL skip NaNs identically and repair a zero result to the first scalar zero sign.
 
 Rationale: IEEE maximumNumber selects +0 for mixed zero signs, while ordered greater-than preserves the sign of the first zero maximum.
+
+## ARM64-F64-GEMM-BAND-PERF-001 {applies: go:cpu.gemmF64Full,go:cpu.packBPanelsF64,go:cpu.gemmF64Tile4x8Neon,asm:cpu.gemmF64Tile4x8Neon}
+WHEN three paired count-seven M2 Pro campaigns measure the target cells, the benchmark gate SHALL retain the kernel only if every dense direct median is at least 1.25x baseline and ragged performance has no statistically significant regression.
+
+Rationale: Target cells are direct F64 GEMM 512x512x512, 1024x1024x1024, 512x2048x2048, and ragged 511x513x515. Complete F64 MatMul, Conv2D, and Conv2DBackward consumers must also be reported.
+
+## ARM64-F64-GEMM-BAND-NUMERICS-001 {applies: go:cpu.gemmF64Full,go:cpu.gemmF64Tile4x8Neon,asm:cpu.gemmF64Tile4x8Neon,go:cpu.gemmF64FourRowTail,go:cpu.gemmF64BandPortable}
+WHEN parity covers every row and column residue, finite values, nonfinite values, and nonzero destination matrices, the arm64 SIMD F64 band kernel SHALL match the prior gemmF64Band result bits and preserve ordered C plus-equals accumulation.
+
+Rationale: The p reduction order remains ascending and unchanged. Vectorization may span only independent columns. FMLA is required to match the scalar arm64 FMADDD contraction.
+
+## ARM64-F64-GEMM-BAND-SCOPE-001 {applies: go:cpu.matmulKernel,go:cpu.gemmF64Full,go:cpu.gemmF64Full~2,go:cpu.gemmF64BandPortable}
+WHEN the build is not arm64 with goexperiment.simd or the operation uses F32, the GEMM selector SHALL preserve the existing implementation and numerical behavior without selecting the new F64 NEON tile.
+
+Rationale: The optimization targets only F64 band GEMM on Apple arm64 SIMD builds. Existing amd64 SIMD and F32-native paths remain untouched.
+
+## ARM64-F64-GEMM-BAND-ATTRIBUTION-001 {applies: go:cpu.gemmF64Full,go:cpu.gemmF64Tile4x8Neon,asm:cpu.gemmF64Tile4x8Neon,go:cpu.gemmF64BandPortable}
+WHEN pure-Go register accumulation and the NEON tile are evaluated, the benchmark record SHALL identify 3 exact SHA-1 commits and report the 2 marginal median speedup ratios independently.
+
+Rationale: The task contains two separable mechanisms. Staged binaries prevent a combined win from hiding a neutral or harmful phase.

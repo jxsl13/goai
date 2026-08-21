@@ -43,9 +43,11 @@ func benchGemmF64Direct(b *testing.B, m, k, n int) {
 	b.ResetTimer()
 	for range b.N {
 		clear(C) // += contract: zero C each iteration
-		parallelWork(m, k*n, func(lo, hi int) {
-			gemmF64Band(A, B, C, lo, hi, k, n)
-		})
+		if !gemmF64Full(A, B, C, m, k, n) {
+			parallelWork(m, k*n, func(lo, hi int) {
+				gemmF64Band(A, B, C, lo, hi, k, n)
+			})
+		}
 	}
 	b.StopTimer()
 	flops := 2 * float64(m) * float64(k) * float64(n)
@@ -73,3 +75,4 @@ func BenchmarkGemmDirF32_511x513x515(b *testing.B) { benchGemmF32Direct(b, 511, 
 func BenchmarkGemmDirF64_512(b *testing.B)           { benchGemmF64Direct(b, 512, 512, 512) }
 func BenchmarkGemmDirF64_1024(b *testing.B)          { benchGemmF64Direct(b, 1024, 1024, 1024) }
 func BenchmarkGemmDirF64_512x2048x2048(b *testing.B) { benchGemmF64Direct(b, 512, 2048, 2048) }
+func BenchmarkGemmDirF64_511x513x515(b *testing.B)   { benchGemmF64Direct(b, 511, 513, 515) }
