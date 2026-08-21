@@ -10,7 +10,10 @@ import "simd/archsimd"
 // ~45% scalar-f64 hotspot — is vectorized. Numerics ride the ADR-0021 tolerant f32 budget the
 // surrounding f32-native kernels already use (norm_test rtol 5e-5): mean/inv are computed in f64 and
 // rounded to f32 once here, the per-element (x−mean)·inv·γ+β is evaluated in f32.
-const normF32Fast = true
+const (
+	normF32ForwardFast  = true
+	normF32BackwardFast = true
+)
 
 // layerNormNormalizeF32 writes out[j] = (x[j]−mean)·inv·gamma[j] + beta[j] 8-wide via AVX2 FMA.
 // mean/inv are the f64-computed row statistics rounded to f32 by the caller. 8-lane body + scalar
