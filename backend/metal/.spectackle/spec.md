@@ -133,3 +133,6 @@ WHEN three independent count-seven M2 campaigns cover every eligible and fallbac
 
 ## METAL-Q4-0-PAIR-LOAD-NUMERIC-001
 WHEN the pair-load candidate processes finite or nonfinite inputs, the Metal Q4_0 pair-load kernel SHALL match control within 2e-5 relative error, preserve finite, Inf, and NaN class, and mutate exactly zero input bytes.
+
+## METAL-Q4-0-PAIR-LOAD-ALIGNMENT-001
+WHEN the candidate reads one 16-byte Q4_0 quant plane across 18-byte blocks or rows, the Metal Q4_0 quant-plane loader SHALL issue exactly eight aligned ushort device loads and zero uint-or-wider device-pointer loads per SIMD group.
