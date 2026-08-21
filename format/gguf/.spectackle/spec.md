@@ -108,3 +108,6 @@ The MXFP4 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32
 
 ## IQ3S-PORTABLE-QMATMUL-001
 WHEN IQ3_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry odd-value grid, 9-bit indices, direct sign-bit mapping, 8 unsigned four-bit sub-scales expanded as 1+2*s, float32 block scaling, and float64 accumulation while using exactly 1 reusable decode scratch per worker.
+
+## ARM64-IQ3S-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use IQ3_S weights, the Apple ARM64 IQ3_S selector SHALL dispatch 1 row-level fused NEON 9-bit-grid and direct-sign dot with 0 leaf allocations and scalar-relative error at most 1e-4.
