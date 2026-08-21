@@ -56,7 +56,7 @@ WHEN the arm64 goexperiment.simd test binary is inspected, the fused arm64 F64 S
 ## ARM64-F64-SSM-SCOPE-001
 The F64 SSM optimization SHALL change only arm64 with goexperiment.simd product code and leave WKV, generic Exp capability flags, non-target product implementations, and backend ownership allocations outside this task.
 
-## ARM64-F64-SSM-E2E-PERF-001
+## ARM64-F64-SSM-E2E-PERF-001 {applies: go:cpu_test.BenchmarkSSMF64_512x1024x16_cpu,go:cpu.ssmKernelCPU,go:cpu.ssmParallelScanF64,go:simd.SSMScanRangeF64~3}
 WHEN paired count-seven M2 campaigns measure backend/cpu 512x1024x16, the arm64 CPU SSM path SHALL retain only with at least 15 percent lower median latency and p below 0.05.
 
 ## ARM64-F64-SSM-RANGE-001
