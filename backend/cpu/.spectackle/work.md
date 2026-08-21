@@ -24,3 +24,11 @@ EXPECTED: unknown, deliberately. The profile suggests a large fraction of a smal
 BIT-IDENTITY BAR: any change to parallel decomposition must preserve per-output reduction order. The band kernels currently guarantee each C element accumulates its k products in ascending order in one chain; a change that alters banding or work-splitting could break the tolerance-0 cross-reference gate (TestGemmCrossReferenceExact, TestConvCrossReferenceExact). A change that only alters WHEN workers park, not how work is split, is bit-identical by construction — prefer that class.
 
 COORDINATION NOTE: a separate agent was researching the backend package concurrently in this round. Check its findings before starting, to avoid duplicate or conflicting work on the same file.
+
+## P-01M0J5GFQJET5VFRAN479DTRES Align ARM64 F32 MHA forward bands to the four-row NEON tile
+kind: proposal
+state: draft
+created: 2026-08-21
+targets: go:cpu.mhaFwdBandRows, go:cpu.mhaFwdGemmF32, go:cpu.mhaFwdGemmBand, go:cpu.gemmF32BandNeonCols, go:cpu.gemmF32RowsScalar, go:cpu.BenchmarkMHA512
+
+Exact base is verified merge 305dd29b65cccf0521bded9f773546b3e587c166. On physical Apple M2 Pro with Go 1.26.6 and GOEXPERIMENT=simd, BenchmarkMHA512/fwd/cpu has a count-seven median of 1.096232 ms at GOMAXPROCS=10. A 5 s CPU profile attributes 6.10 sampled seconds to gemmF32RowsScalar and 6.62 to gemmF32Tile4x16Neon across workers. The dynamic forward scheduler uses 30-row bands even though both QK and PV ARM64 GEMMs consume four-row NEON tiles, forcing two rows of every full band plus the final residue through the scalar fallback. Sweep ARM64 SIMD band sizes divisible by four around the current load-balancing point, retain the smallest robust winner, and keep default, non-ARM64, F64, backward, and decode paths unchanged. Gate the change with three paired count-seven M2 campaigns at 500 ms over causal MHA512 plus full-attention and GQA controls. Require at least 1.15x complete-operation median speedup in the causal primary cell in every campaign, no statistically significant regression in controls, unchanged numerical output under existing CPU-002 parity, no extra steady-state allocations, and a refreshed profile showing the avoidable full-band scalar tail removed. Pin exact control and candidate commits and report the tile-grain scheduling pattern to perfscan.
