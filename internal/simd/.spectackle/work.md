@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0HWDB7BEBY99M96950C5DHE Apple arm64 fused F64 SSM selective scan
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 targets: go:simd.SSMScanF64, go:simd.SSMScanRangeF64, go:simd.ExpScaledF64
 
