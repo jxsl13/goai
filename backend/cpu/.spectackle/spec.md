@@ -64,6 +64,6 @@ WHEN the target is not an arm64 goexperiment.simd forward build or the operation
 WHEN a dtype-specific SIMD arm is added to a generic numeric driver, the Go implementation SHALL isolate it in a concrete driver and prove with go tool objdump that non-target stack-frame and instruction-count increases are both 0.
 
 ## ARM64-F32-SOFTMAX-PASS-PERF-001
-WHEN three independent paired count-seven Apple M2 Pro campaigns measure complete 512x512, 2048x2048, 32x2048, 1x32000, and 4x32000 F32 softmax cells, the arm64 SIMD F32 softmax row-pass implementation SHALL retain the candidate only when every complete-operation median is at least 1.25x the exact baseline.
+WHEN three paired count-seven M2 Pro campaigns measure F32 softmax at 512x512, 2048x2048, 32x2048, 1x32000, and 4x32000, the arm64 SIMD row passes SHALL retain only if every complete-operation median is at least 1.25x baseline.
 
 Rationale: Require broad end-to-end leverage across attention and LLM-logit shapes, not merely faster helper microbenchmarks.
