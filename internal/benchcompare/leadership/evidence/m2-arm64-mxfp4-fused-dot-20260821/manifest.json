@@ -1,0 +1,23 @@
+{
+  "date": "2026-08-21",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "baseline_binary_source": "d967e8b96e4d2f655e94173c11efbdf1f53da00f",
+  "baseline_code_source": "9b38bb89559ebdc749b62eae24903717801c5c51",
+  "candidate": "this evidence bundle's containing commit",
+  "spectackle": "v0.9.3",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan v1.71.0",
+  "benchstat": "golang.org/x/perf/cmd/benchstat",
+  "spectackle_adr": "ADR-01M0K18S8HF46",
+  "spectackle_proposal": "P-01M0K1A86JFY3",
+  "spectackle_task": "T-01M0K1CEY0FNE",
+  "protocol": {
+    "benchtime": "500ms",
+    "samples_per_arm": 10,
+    "order": "fresh-process paired samples; scalar/NEON or baseline/candidate first alternated every invocation",
+    "removed_samples": 0
+  },
+  "retention_gate": "at least 2x in all three accelerated MXFP4 cells",
+  "result": "pass"
+}

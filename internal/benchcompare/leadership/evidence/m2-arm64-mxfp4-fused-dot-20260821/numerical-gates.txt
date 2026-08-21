@@ -1,0 +1,10 @@
+TestDotMXFP4RowNeonKnownValue: exact 48
+TestDotMXFP4AsmRandomRaw: maximum scalar-relative error 8.925221112271966e-16 across 100 arbitrary raw rows at K=32,64,256,4096
+TestDotMXFP4AsmCancellationHeavy: pass at relative-error threshold 1e-4
+TestDotMXFP4AsmAllocs: 0 allocations
+TestE8M0HalfTableExact: all 256 entries bit-exact
+TestDequantMXFP4IntoMatchesTensorPathExactly: bit-exact
+TestDotMXFP4RowMatchesMaterializedReferenceExactly: bit-exact
+TestQMatMulMXFP4MatchesDequantizedReference: F32/F64 M1/M3 pass at relative-error threshold 1e-4
+TestQMatMulMXFP4ScratchAllocationsDoNotScaleWithOutputRows: N1 equals N31
+TestQMatMulMXFP4SelectorScope: ARM64 selector restricted to contiguous F32 M1

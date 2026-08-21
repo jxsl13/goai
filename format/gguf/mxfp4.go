@@ -25,6 +25,15 @@ const (
 // negative half (index 8 = −0 = 0).
 var mxfp4KValues = [16]float32{0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12}
 
+// e8m0HalfTable keeps the exact codec conversion available to the ARM64 row
+// kernel without rebuilding exponent bits for every 32-weight block.
+var e8m0HalfTable = func() (table [256]float32) {
+	for e := range table {
+		table[e] = e8m0ToF32Half(byte(e))
+	}
+	return table
+}()
+
 // e8m0ToF32Half decodes an E8M0 exponent byte to 2^(e−127)/2, with the sub-2
 // range mapping to subnormal bit patterns exactly like ggml_e8m0_to_fp32_half.
 func e8m0ToF32Half(e byte) float32 {
@@ -89,8 +98,14 @@ func dequantMXFP4(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: MXFP4 data %dB, want %d", len(data), nb*mxfp4BlockSize)
 	}
 	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+	dequantMXFP4Into(out.Storage().F32(), data)
+	return out, nil
+}
+
+// dequantMXFP4Into decodes MXFP4 into caller-owned storage so QMatMul can
+// reuse one fixed scratch set instead of allocating one tensor per weight row.
+func dequantMXFP4Into(dst []float32, data []byte) {
+	for b := 0; b*blockElems < len(dst); b++ {
 		blk := data[b*mxfp4BlockSize : (b+1)*mxfp4BlockSize]
 		d := e8m0ToF32Half(blk[0])
 		y, q := dst[b*blockElems:b*blockElems+blockElems], blk[1:17]
@@ -99,5 +114,4 @@ func dequantMXFP4(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			y[16+i] = d * mxfp4KValues[v>>4]
 		}
 	}
-	return out, nil
 }

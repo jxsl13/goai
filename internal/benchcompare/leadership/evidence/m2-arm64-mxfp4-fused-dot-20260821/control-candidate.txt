@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 873 782928 ns/op 21428.81 MB/s 17722 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 2133 575363 ns/op 29159.36 MB/s 17534 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1524 862475 ns/op 19452.42 MB/s 17581 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 958 843240 ns/op 19896.13 MB/s 17692 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1575 632066 ns/op 26543.46 MB/s 17574 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1466 628573 ns/op 26690.94 MB/s 17594 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1148 785295 ns/op 21364.21 MB/s 17612 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1375 401071 ns/op 41831.04 MB/s 17600 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 883 628528 ns/op 26692.87 MB/s 17648 B/op 29 allocs/op
+BenchmarkQMatMulIQ4_XS_M1_N4096-12 1654 673967 ns/op 24893.21 MB/s 17565 B/op 29 allocs/op
