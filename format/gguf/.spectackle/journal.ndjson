@@ -122,3 +122,4 @@
 {"t":"2026-08-21T23:46:09Z","eid":"1a58b2c0d75de834","ag":"ag-5aed","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"d89ec92c6af360eeeeda9a63f806e216af3d2abf3fd3fc1fdf54f8e05131d655"}
 {"t":"2026-08-21T23:46:22Z","eid":"5efa917330c52e03","ag":"ag-d2ad","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"d89ec92c6af360eeeeda9a63f806e216af3d2abf3fd3fc1fdf54f8e05131d655"}
 {"t":"2026-08-21T23:47:01Z","eid":"35a3530c2432d143","ag":"ag-0c60","ev":"revise","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","note":"body+targets+refs revised"}
+{"t":"2026-08-21T23:47:13Z","eid":"c70ce666cb46d8bb","ag":"ag-7a63","ev":"grill","id":"P-01M0KBF17FE9Z83X9MEJ23S1VM","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"a50bbf23ed9128428cf689a8dfe91908c8cb173f120cbe8d0d31b9882ca3646a"}
