@@ -56,10 +56,10 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 					t.Fatalf("general qt=%d k=%d n=%d: %v", qt, k, n, err)
 				}
 				gf, ff := general.Storage().F32(), fused.Storage().F32()
-				// Q3_K/Q4_K/Q5_K/Q6_K row dots are tolerance-gated asm kernels on ARM64 (Q4_K
+				// Q2_K/Q3_K/Q4_K/Q5_K/Q6_K row dots are tolerance-gated asm kernels on ARM64 (Q4_K
 				// also on the amd64 simd build): f32-vector accumulation vs scalar f64
 				// is within a tight tolerance, not bit-identical.
-				qkTol := qt == Q3_K && q3kDotIsAsm || qt == Q4_K && q4kDotIsAsm ||
+				qkTol := qt == Q2_K && q2kDotIsAsm || qt == Q3_K && q3kDotIsAsm || qt == Q4_K && q4kDotIsAsm ||
 					qt == Q5_K && q5kDotIsAsm || qt == Q6_K && q6kDotIsAsm
 				// Q8_0's m==1 fused path is the SIMD dequant-dot (tolerance-gated: f32
 				// within-block sum + per-block factored scale) when that kernel is

@@ -63,3 +63,9 @@ Rationale: Q3_K is the slowest current recurrent quant path and bypasses the arc
 The non-ARM64 and M greater than one Q3_K QMatMul paths SHALL remain on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
 
 Rationale: The optimization is an ARM64 single-token kernel and must not alter portable builds or the general matrix path.
+
+## ARM64-Q2K-FUSED-DOT-SCOPE-001
+The Q2_K QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths on their portable or prefill implementations without dispatching the ARM64 M1 kernel.
+
+## ARM64-Q2K-FUSED-DOT-001
+WHEN QMatMul receives contiguous F32 M1 activations with Q2_K weights, the ARM64 Q2_K single-token selector SHALL dispatch to fused NEON two-bit affine unpack-dot with zero leaf allocations and scalar-relative error at most 1e-4.

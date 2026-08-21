@@ -473,6 +473,20 @@ contract. This is an internal ARM64 result, not a matched llama.cpp CPU
 leadership claim. Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q3k-fused-dot-20260821`.
 
+**ARM64 Q2_K progress (2026-08-21):** the final scalar K-quant selector edge
+now unpacks its two-bit streams, applies affine scale/min coefficients, and
+widens into an eight-bank f64 dot reduction after preserving the format's f32
+dequantization order. Against the scalar same-binary control, the K=4096 row
+dot improves **4.55×**, QMatMul improves **4.53×** at M1/N64/K1024 and
+**3.30×** at M1/N4096/K1024, and recurrent quantized Mamba2 improves
+**2.53×** (374.2 → 147.9 µs). Every Q2_K time cell has `p=0.000`, n=10
+after excluded warm-ups, and unchanged allocation counts; Q5_K is flat
+(`p=0.247`) as the negative control. The observed maximum scalar-relative
+error over 100 arbitrary raw rows is 0; an earlier f32-accumulation pilot
+failed the 1e-4 cancellation gate and was not retained. This is an internal
+ARM64 result, not a matched llama.cpp CPU leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q2k-fused-dot-20260821`.
+
 **ARM64 Q8_0 progress (2026-08-21):** the common 8-bit M1 path now widens
 signed quants, applies each f16 block scale, and reduces the entire row in one
 NEON call instead of executing the portable per-element f64 loop. Against the
