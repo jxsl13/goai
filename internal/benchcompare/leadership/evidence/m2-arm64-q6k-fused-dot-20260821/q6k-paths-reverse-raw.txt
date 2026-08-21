@@ -69,4 +69,3 @@ BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     404	    706358 ns/o
 BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     399	    704912 ns/op	23800.43 MB/s	   17408 B/op	      29 allocs/op
 BenchmarkQMatMulQ6KPaths/N4096_K1024/scalar-12         	     403	    724232 ns/op	23165.52 MB/s	   17408 B/op	      29 allocs/op
 PASS
-

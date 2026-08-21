@@ -32,4 +32,3 @@ BenchmarkQMatMulQ6K/N4096_K1024-12  	    2104	    119786 ns/op	140060.25 MB/s	  
 BenchmarkQMatMulQ6K/N4096_K1024-12  	    2157	    119594 ns/op	140284.52 MB/s	   17408 B/op	      29 allocs/op
 BenchmarkQMatMulQ6K/N4096_K1024-12  	    2144	    117135 ns/op	143229.21 MB/s	   17408 B/op	      29 allocs/op
 BenchmarkQMatMulQ6K/N4096_K1024-12  	    2178	    116561 ns/op	143934.80 MB/s	   17408 B/op	      29 allocs/op
-

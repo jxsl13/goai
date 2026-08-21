@@ -12,4 +12,3 @@ BenchmarkQuantMamba2DecodeQ6_K-12    	    2959	    101752 ns/op	   53918 B/op	  
 BenchmarkQuantMamba2DecodeQ6_K-12    	    2872	    101232 ns/op	   53917 B/op	      93 allocs/op
 BenchmarkQuantMamba2DecodeQ6_K-12    	    2899	    101488 ns/op	   53917 B/op	      93 allocs/op
 BenchmarkQuantMamba2DecodeQ6_K-12    	    2911	    101415 ns/op	   53917 B/op	      93 allocs/op
-

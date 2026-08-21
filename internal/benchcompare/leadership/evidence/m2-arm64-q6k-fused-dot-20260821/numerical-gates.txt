@@ -11,4 +11,3 @@
 === RUN   TestQMatMulFusedDecodeMatchesGeneralPathExactly
 --- PASS: TestQMatMulFusedDecodeMatchesGeneralPathExactly (0.02s)
 PASS
-

@@ -14,4 +14,3 @@ QuantMamba2DecodeQ4_K-12                                                        
                          │                                                 allocs/op                                                  │                                        allocs/op                                          vs base            │
 QuantMamba2DecodeQ4_K-12                                                                                                   93.00 ± 0%                                                                                 93.00 ± 0%  ~ (p=1.000 n=10) ¹
 ¹ all samples are equal
-
