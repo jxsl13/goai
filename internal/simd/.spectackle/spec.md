@@ -79,7 +79,7 @@ WHEN a vector pair encounters non-finite operands or exponential arguments below
 WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the arm64 SIMD WKV state path SHALL make TestWKVScanStateF64ChunkEqualsWhole pass with bit-identical output and final AA/BB/PP.
 
 ## ARM64-F64-WKV-RANGE-001
-WHEN two-aligned ranges cover the same channels as one whole scan, the TestWKVScanRangeF64BitExactVsWhole SHALL report bit-identical output for every declared shape.
+WHEN two-aligned ranges cover the same channels as one whole scan, the arm64 SIMD WKV range path SHALL make TestWKVScanRangeF64BitExactVsWhole pass bit-identically for every declared shape.
 
 ## ARM64-F64-WKV-MEMORY-001
 WHEN the fused path processes paired channels or a scalar channel tail, the BenchmarkWKVScan_SIMD_512x1024 SHALL report exactly 0 B/op and 0 allocs/op without heap scratch.
