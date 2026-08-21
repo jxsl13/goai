@@ -80,3 +80,6 @@ WHEN identical tokens run whole or in uneven chunks with carried AA/BB/PP, the T
 
 ## ARM64-F64-WKV-RANGE-001
 WHEN two-aligned ranges cover the same channels as one whole scan, the TestWKVScanRangeF64BitExactVsWhole SHALL report bit-identical output for every declared shape.
+
+## ARM64-F64-WKV-MEMORY-001
+WHEN the fused path processes paired channels or a scalar channel tail, the BenchmarkWKVScan_SIMD_512x1024 SHALL report exactly 0 B/op and 0 allocs/op without heap scratch.
