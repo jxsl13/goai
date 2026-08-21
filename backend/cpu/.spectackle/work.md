@@ -27,7 +27,7 @@ COORDINATION NOTE: a separate agent was researching the backend package concurre
 
 ## T-01M0J2XM0TF8HSNP6JBFT68C3Y Route the GEMM band oracle across amd64 SIMD build tags
 kind: task
-state: active
+state: done
 created: 2026-08-21
 parent: P-01M0J0BWPDE4P97Q05AZV0PSJS
 grilled: 2026-08-21 open=0
