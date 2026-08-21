@@ -443,9 +443,22 @@ M1/N4096/K1024, and recurrent quantized Mamba2 improves **3.59×**
 (364.3 → 101.6 µs). Every time cell has `p=0.000`, n=10 after first-sample
 removal, and unchanged allocations; Q4_K is flat (`p=0.853`) as the negative
 control. Reported QMatMul B/s is logical f32 work, not physical bandwidth.
-Neither K-quant gain closes or restates the separate Q8_0 8.8× whole-model gap,
-and neither is yet a matched llama.cpp CPU leadership claim. Evidence:
+Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
+
+**ARM64 Q5_K progress (2026-08-21):** the remaining Q4_K/Q5_K/Q6_K selector
+asymmetry is closed: the Q5_K M1 path now inserts its fifth-bit plane into the
+packed nibbles and fuses affine dequantization with the activation dot. Against
+the scalar same-binary control, the K=4096 row dot improves **7.24×**, QMatMul
+improves **6.99×** at M1/N64/K1024 and **4.53×** at M1/N4096/K1024, and
+recurrent quantized Mamba2 improves **2.93×** (364.3 → 124.5 µs). Every Q5_K
+time cell has `p=0.000`, n=10 after excluded warm-up, and unchanged allocation
+counts; Q6_K is flat (`p=0.684`) as the negative control. Maximum
+scalar-relative error over 100 arbitrary raw rows is 9.36e-6, more than 10×
+below the 1e-4 contract. These K-quant gains do not close or restate the
+separate Q8_0 8.8× whole-model gap, and they are not yet matched llama.cpp CPU
+leadership claims. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q5k-fused-dot-20260821`.
 
 **ARM64 Q8_0 progress (2026-08-21):** the common 8-bit M1 path now widens
 signed quants, applies each f16 block scale, and reduces the entire row in one

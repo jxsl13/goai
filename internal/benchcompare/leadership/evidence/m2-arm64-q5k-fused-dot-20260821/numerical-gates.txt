@@ -1,0 +1,9 @@
+$ goai-q5-final-gguf.test -test.run '^(TestDotQ5KBlockNeonKnownValue|TestDotQ5KAsmRandomRaw|TestQMatMulFusedDecodeMatchesGeneralPathExactly)$' -test.count=1 -test.v
+=== RUN   TestDotQ5KBlockNeonKnownValue
+--- PASS: TestDotQ5KBlockNeonKnownValue (0.00s)
+=== RUN   TestDotQ5KAsmRandomRaw
+    dot_q5k_asm_arm64_test.go:77: maximum scalar-relative error across random raw blocks: 9.359696090657784e-06
+--- PASS: TestDotQ5KAsmRandomRaw (0.00s)
+=== RUN   TestQMatMulFusedDecodeMatchesGeneralPathExactly
+--- PASS: TestQMatMulFusedDecodeMatchesGeneralPathExactly (0.02s)
+PASS

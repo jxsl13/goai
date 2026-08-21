@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+cpu: Apple M2 Pro
+                                      │ control.txt │ candidate.txt │
+                                      │   sec/op    │    sec/op     vs base                │
+DotQ5K-12                                  4824.5n ± 0%     666.4n ± 1%  -86.19% (p=0.000 n=10)
+QMatMulQ5KPaths/N64_K1024-12               76.50µ ± 1%      10.95µ ± 1%  -85.69% (p=0.000 n=10)
+QMatMulQ5KPaths/N4096_K1024-12             735.4µ ± 4%      162.3µ ± 2%  -77.93% (p=0.000 n=10)
+QuantMamba2DecodeQ5_K-12                    364.3µ ± 0%      124.5µ ± 0%  -65.83% (p=0.000 n=10)
+QuantMamba2DecodeQ6_K-12                    100.4µ ± 1%      100.5µ ± 1%        ~ (p=0.684 n=10)
+
+                                      │ allocs/op │ allocs/op  vs base                 │
+DotQ5K-12                                     0.000 ± 0%      0.000 ± 0%       ~ (p=1.000 n=10)
+QMatMulQ5KPaths/N64_K1024-12                  4.000 ± 0%      4.000 ± 0%       ~ (p=1.000 n=10)
+QMatMulQ5KPaths/N4096_K1024-12                29.00 ± 0%      29.00 ± 0%       ~ (p=1.000 n=10)
+QuantMamba2DecodeQ5_K-12                      93.00 ± 0%      93.00 ± 0%       ~ (p=1.000 n=10)
+QuantMamba2DecodeQ6_K-12                      93.00 ± 0%      93.00 ± 0%       ~ (p=1.000 n=10)
+
+Generated with:
+  benchstat control.txt candidate.txt
+
+The full benchstat B/s and B/op tables can be regenerated from the retained
+inputs. B/s in QMatMul counts logical f32 work and is not a physical bandwidth
+claim.
