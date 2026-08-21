@@ -27,7 +27,7 @@ COORDINATION NOTE: a separate agent was researching the backend package concurre
 
 ## T-01M0J9DC3ZE7RTEEHKES6R9RJ6 Eliminate ARM64 F32 MHA band Q/O copies with strided GEMM
 kind: task
-state: draft
+state: active
 created: 2026-08-21
 parent: P-01M0J975XHFD5AXGP661E8G644
 grilled: 2026-08-21 open=1
