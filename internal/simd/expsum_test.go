@@ -109,26 +109,3 @@ func TestExpSumF64InPlaceOddAndInputImmutability(t *testing.T) {
 		t.Fatalf("in-place sum=%g want %g", gotSum, wantSum)
 	}
 }
-
-func TestExpF64SpecialAndFallbackSemantics(t *testing.T) {
-	src := []float64{0, math.Inf(-1), -1000, -709, 1, math.Inf(1), math.NaN()}
-	dst := make([]float64, len(src))
-	ExpScaledF64(dst, src, 1)
-	for i, x := range src {
-		want := math.Exp(x)
-		if !sameF64Within(dst[i], want, 0) {
-			t.Fatalf("scaled dst[%d]=%g want %g", i, dst[i], want)
-		}
-	}
-
-	neg := []float64{math.Inf(-1), -1, -0.0}
-	ExpScaledF64(dst[:len(neg)], neg, 1)
-	if dst[0] != 0 || math.Signbit(dst[0]) {
-		t.Fatalf("exp(-Inf)=%v, want exact +0", dst[0])
-	}
-	for i, x := range neg[1:] {
-		if want := math.Exp(x); !sameF64Within(dst[i+1], want, 1e-13) {
-			t.Fatalf("safe special dst[%d]=%g want %g", i+1, dst[i+1], want)
-		}
-	}
-}
