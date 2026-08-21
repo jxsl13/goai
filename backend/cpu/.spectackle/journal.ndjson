@@ -81,3 +81,4 @@
 {"t":"2026-08-21T12:44:23Z","eid":"26c207eac1294355","ag":"ag-70a8","ev":"create","id":"T-01M0J5KPW5EFY8TM91JY3WZFD2","k":"task","ti":"Sweep ARM64 four-row-aligned MHA forward bands","dir":"backend/cpu"}
 {"t":"2026-08-21T12:44:35Z","eid":"9a4b428e259ca382","ag":"ag-85ed","ev":"grill","id":"T-01M0J5KPW5EFY8TM91JY3WZFD2","dir":"backend/cpu","gr":"2026-08-21 open=1","hash":"afadcff1157f1dcefda76a54b213729f8bec38a2eff825fe883a56d5652fb582","open":1,"keys":["blast:11"]}
 {"t":"2026-08-21T12:44:58Z","eid":"3ea79cec46b22c9f","ag":"ag-95e7","ev":"revise","id":"T-01M0J5KPW5EFY8TM91JY3WZFD2","dir":"backend/cpu","note":"targets revised"}
+{"t":"2026-08-21T12:45:09Z","eid":"41039a5b27d3d568","ag":"ag-c3ed","ev":"grill","id":"T-01M0J5KPW5EFY8TM91JY3WZFD2","dir":"backend/cpu","gr":"2026-08-21 open=0","hash":"4ad5ab725f94d73f319e65ecfcea3b2e3887b0d12afc1cfdc3136b7a367bd44b"}

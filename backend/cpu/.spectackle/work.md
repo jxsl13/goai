@@ -39,7 +39,7 @@ kind: task
 state: draft
 created: 2026-08-21
 parent: P-01M0J5GFQJET5VFRAN479DTRES
-grilled: 2026-08-21 open=1
+grilled: 2026-08-21 open=0
 targets: backend/cpu/mha.go, backend/cpu/mha_band_rows_arm64_simd.go, backend/cpu/mha_band_rows_default.go, backend/cpu/mha_band_rows_arm64_simd_test.go, backend/cpu/mha_band_rows_default_test.go, backend/cpu/mha_test.go, backend/cpu/normattn_bench_test.go
 
 Base 305dd29b65cccf0521bded9f773546b3e587c166 uses one 30-row scheduler grain for both architectures. That grain is correctly divisible by the amd64 six-row AVX2 tile but not by the Apple arm64 four-row NEON tile, so a global replacement would trade one architecture for another. Sweep ARM64 SIMD candidates 24, 28, 32, 36, and 40 against control 30 using same-binary-or-exact-commit paired M2 measurements. Promote only the robust winner through build-tag-specific constants: arm64 plus goexperiment.simd receives the selected multiple of four; every other build retains exactly 30. Add direct build-scoped assertions for the four-row divisibility and the untouched default value. Measure causal BenchmarkMHA512 plus seq128 and seq512 full and GQA forward controls and the decode control. Three paired count-seven 500 ms campaigns must show at least 1.15x primary speedup in every campaign, no statistically significant regression in any forward control, unchanged decode, no extra steady-state allocations, and existing MHA parity plus default/SIMD/race/cross-build suites green. Refresh the CPU profile to verify scalar full-band remainder work disappears rather than merely moving time. Pin exact commits and report the architecture tile-grain scheduling pattern to perfscan.
