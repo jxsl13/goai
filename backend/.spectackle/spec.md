@@ -14,6 +14,7 @@ schema: v1
 - T-01M0G5J741FHKVGS8ZJNHXGEMN Implement and gate the semantics-exact arm64 F32 ReLU leaf: Shipped task result: exact arm64 ordered-compare/select ReLU, 2.892x-6.197x faster at the complete CPU operation boundary and a measured M2 host-route ceiling of 4,194,304 elements. The alternating wide-MLP proof passes in default and SIMD builds. Evidence: internal/benchcompare/leadership/evidence/m2-arm64-relu-acceleration-20260820/README.md. Generalized detector finding: jxsl13/perfscan#777. Di [body truncated at tombstone retention cap]
 - ADR-01M0G6N8SDF2XS634WQJTFF9KP Use ordered NEON compare-select for exact arm64 F32 ReLU: Adopted ordered arm64 FCMGT plus BSL for exact F32 ReLU; rejected FMAX on NaN/signed-zero semantics and rejected scalar Go on measured cost. Complete CPU operation gains are 2.892x-6.197x. The audited default and SIMD M2 host-route contracts now retain ReLU through 4,194,304 elements with direct Metal outside the measured zone. Alternating same-binary wide-MLP campaigns pass. Evidence: internal/be [body truncated at tombstone retention cap]
 - T-01M0GFJMPQE4GANWAQM376TK7B Implement and gate exact arm64 F32 Neg: Shipped exact arm64 F32 Neg sign-bit toggling with a portable exact fallback, a measured 1,048,576-element serial/parallel crossover, and default/SIMD M2 host routing through 16,777,216 elements. Every frozen CPU and Metal promotion cell passed across three count-7 campaigns. Evidence lives at internal/benchcompare/leadership/evidence/m2-arm64-neg-acceleration-20260820/README.md; perfscan issue 78 [body truncated at tombstone retention cap]
+- T-01KYJREHNVE9QS89QB05TW5SWV Memoize kernel resolution in Execute and stop Metal re-entering the dispatcher: Implemented a generation-aware dense Execute resolution cache keyed by exact registered backend identity, operation, and dtype. The registry publishes immutable atomic identity tables; generation changes from Register, RegisterReference, RegisterDefault, or SetPreference invalidate warmed entries. Dynamic opBackends routes and unregistered or same-name wrappers deliberately remain live and uncache [body truncated at tombstone retention cap]
 
 ## MEASURED-METAL-UNARY-ROUTE-001 {applies: go:metal.unaryF32,backend/metal/unary_route_arm64_default.go}
 WHEN a contiguous offset-zero F32 unary other than Abs is requested, the backend SHALL route Neg through CPU up to 16,777,216 elements, ReLU/Sqrt through CPU up to 4,194,304, and Exp/Log/Tanh/Sigmoid through CPU up to 2,048; otherwise use direct Metal.
@@ -32,3 +33,20 @@ WHERE measured host unary execution, WHEN an F32 unary operation is requested, t
 WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHALL route through CPU up to 16,777,216 elements; otherwise use direct Metal.
 
 Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.
+
+## EXECUTE-RESOLUTION-CACHE-PERF-001
+WHEN three count-seven campaigns measure warmed nil-routing CPU fallback dispatch, the Execute resolution cache SHALL improve median fallback ns/op by at least 1.25x and keep control direct ns/op divided by candidate direct ns/op at least 0.97x.
+
+## EXECUTE-METAL-BINARY-SINGLE-DISPATCH-001
+WHEN Metal resolves a CPU-preferred F32 binary operation and the CPU backend is registered, the Metal Backend.Kernel SHALL decline the operation so Execute performs exactly one resolver lookup and one CPU kernel invocation.
+
+## EXECUTE-RESOLUTION-CACHE-SEMANTICS-001
+WHEN cached dispatch receives invalid attrs, a recorder, or an unsupported active backend, the Execute SHALL run checkAttrs before resolution, preserve CPU-then-reference fallback order, and call Recorder.Record exactly once after success.
+
+## EXECUTE-RESOLUTION-CACHE-INVALIDATION-001
+WHEN the backend registry generation changes or Context opBackends is nonnil, the Execute resolution cache SHALL ignore every stale entry and preserve the live override route with zero cached-route substitutions.
+
+## EXECUTE-RESOLUTION-CACHE-INVALIDATION-002
+WHEN a Context uses an unregistered backend or wrapper that shares a registered backend name, the Execute resolution cache SHALL make go:backend.TestRegisteredDispatchTableRequiresExactBackendIdentity observe 2 Kernel lookups across 2 Execute calls.
+
+Rationale: Backend names identify registry entries but wrappers and custom backends may change Kernel resolution dynamically; live dispatch preserves historical cold and mutation semantics.

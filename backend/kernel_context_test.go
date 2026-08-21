@@ -74,10 +74,11 @@ func TestKernelContextKeepsPerOpRouting(t *testing.T) {
 	Register(be)
 	ctx := NewContext().WithBackend(be).WithOpBackend(OpAbs, Name("redispatch-test")).
 		WithRecorder(&countingRecorder{})
-	if ctx.noRec == nil {
+	table := ctx.dispatch.Load()
+	if table == nil || table.noRec == nil {
 		t.Fatal("a recording context has no recorder-free twin")
 	}
-	if got := ctx.noRec.opBackends[OpAbs]; got != Name("redispatch-test") {
+	if got := table.noRec.opBackends[OpAbs]; got != Name("redispatch-test") {
 		t.Fatalf("the twin's per-op routing is %q, want the parent's", got)
 	}
 }

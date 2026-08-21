@@ -6,7 +6,11 @@
 // numeric truth (§V9).
 package backend
 
-import "github.com/jxsl13/goai/tensor"
+import (
+	"sync/atomic"
+
+	"github.com/jxsl13/goai/tensor"
+)
 
 // Kernel executes one primitive op: it reads inputs, allocates and writes its
 // outputs (on ctx's device), and returns them. A Kernel is pure with respect to
@@ -59,12 +63,13 @@ type Context struct {
 	// and heterogeneous spec-decoding, not as a default speedup).
 	opBackends map[Op]Name
 
-	// noRec is this context's recorder-free twin, built once at construction when a Recorder is
-	// attached. Execute must hand kernels a context WITHOUT the recorder (§V25) — a kernel that
-	// re-dispatches would otherwise record the op twice and double its gradients — and deriving
-	// that twin per op allocated a Context on every dispatch of every training step. It is
-	// immutable and shared, which is safe because a Context is read-only once built.
-	noRec *Context
+	// dispatch replaces the former noRec pointer, keeping Context in its existing
+	// 48-byte allocation class. Exact registered backends share a dense table;
+	// custom backends and same-name wrappers retain live resolution. Routed
+	// recording contexts keep their recorder-free twin in a local table. Cached
+	// kernels always receive a recorder-free kernel Context, so the common
+	// nil-routing recording path no longer needs a per-Context twin.
+	dispatch atomic.Pointer[dispatchTable]
 }
 
 // NewContext returns an eager context bound to the default backend, with no
@@ -77,14 +82,17 @@ func (c *Context) WithBackend(b Backend) *Context {
 	return newContext(b, c.Recorder, c.opBackends)
 }
 
-// newContext builds a Context and, when it records, its recorder-free twin. Every constructor goes
-// through here so no path can produce a recording context whose twin is missing — Execute falls
-// back to deriving one when noRec is nil, so a missed path would be correct but would quietly give
-// back the allocation this exists to remove.
+// newContext builds a Context and attaches shared registered dispatch state when
+// available. Routed recording contexts also retain a recorder-free twin because
+// their dynamic path deliberately bypasses the resolution cache.
 func newContext(b Backend, r Recorder, ob map[Op]Name) *Context {
 	c := &Context{Backend: b, Recorder: r, opBackends: ob}
-	if r != nil {
-		c.noRec = &Context{Backend: b, opBackends: ob}
+	if r != nil && ob != nil {
+		c.dispatch.Store(&dispatchTable{noRec: &Context{Backend: b, opBackends: ob}})
+		return c
+	}
+	if table := registeredDispatchTable(b); table != nil {
+		c.dispatch.Store(table)
 	}
 	return c
 }

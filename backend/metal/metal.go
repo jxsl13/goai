@@ -651,16 +651,34 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 		case backend.OpAddBiasBackward:
 			return addBiasBackwardF32, true
 		case backend.OpAdd:
+			if _, ok := cpuPrefers(backend.OpAdd, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpAdd, binaryAdd), true
 		case backend.OpSub:
+			if _, ok := cpuPrefers(backend.OpSub, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpSub, binarySub), true
 		case backend.OpMul:
+			if _, ok := cpuPrefers(backend.OpMul, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpMul, binaryMul), true
 		case backend.OpDiv:
+			if _, ok := cpuPrefers(backend.OpDiv, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpDiv, binaryDiv), true
 		case backend.OpMaximum:
+			if _, ok := cpuPrefers(backend.OpMaximum, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpMaximum, binaryMax), true
 		case backend.OpMinimum:
+			if _, ok := cpuPrefers(backend.OpMinimum, dtype); ok {
+				return nil, false
+			}
 			return binaryF32(backend.OpMinimum, binaryMin), true
 		}
 	}
