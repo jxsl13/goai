@@ -41,3 +41,6 @@ WHEN Metal resolves a CPU-preferred F32 binary operation and the CPU backend is 
 
 ## EXECUTE-RESOLUTION-CACHE-SEMANTICS-001
 WHEN cached dispatch receives invalid attrs, a recorder, or an unsupported active backend, the Execute SHALL run checkAttrs before resolution, preserve CPU-then-reference fallback order, and call Recorder.Record exactly once after success.
+
+## EXECUTE-RESOLUTION-CACHE-INVALIDATION-001
+WHEN the backend registry generation changes or Context opBackends is nonnil, the Execute resolution cache SHALL ignore every stale entry and preserve the live override route with zero cached-route substitutions.
