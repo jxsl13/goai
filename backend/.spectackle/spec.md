@@ -32,3 +32,6 @@ WHERE measured host unary execution, WHEN an F32 unary operation is requested, t
 WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHALL route through CPU up to 16,777,216 elements; otherwise use direct Metal.
 
 Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.
+
+## EXECUTE-RESOLUTION-CACHE-PERF-001
+WHEN three count-seven campaigns measure warmed nil-routing CPU fallback dispatch, the Execute resolution cache SHALL improve median ns/op by at least 1.25x while keeping direct CPU between 0.97x and 1.03x of control.
