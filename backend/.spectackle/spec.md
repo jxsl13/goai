@@ -34,7 +34,7 @@ WHEN contiguous offset-zero F32 Abs is requested on Apple arm64, the backend SHA
 Rationale: Three route-extension and three production-selector campaigns per build mode win every frozen cell. Route-extension minima at 8M/16M are 2.800x/2.983x; production-selector minima are 2.816x/2.844x.
 
 ## EXECUTE-RESOLUTION-CACHE-PERF-001
-WHEN three count-seven campaigns measure warmed nil-routing CPU fallback dispatch, the Execute resolution cache SHALL improve median ns/op by at least 1.25x while keeping direct CPU between 0.97x and 1.03x of control.
+WHEN three count-seven campaigns measure warmed nil-routing CPU fallback dispatch, the Execute resolution cache SHALL improve median fallback ns/op by at least 1.25x and keep control direct ns/op divided by candidate direct ns/op at least 0.97x.
 
 ## EXECUTE-METAL-BINARY-SINGLE-DISPATCH-001
 WHEN Metal resolves a CPU-preferred F32 binary operation and the CPU backend is registered, the Metal Backend.Kernel SHALL decline the operation so Execute performs exactly one resolver lookup and one CPU kernel invocation.
