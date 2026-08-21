@@ -39,7 +39,10 @@ func ssmInputs(rng *rand.Rand, L, D, N int, skip bool) (u, delta, a, b, c, dsk [
 // the scalar state-dim tail; the D-skip path is covered both ways.
 func TestSSMScanF64Accuracy(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	for _, dims := range [][3]int{{64, 128, 16}, {32, 64, 128}, {40, 48, 17}, {50, 32, 4}} {
+	for _, dims := range [][3]int{
+		{8, 12, 1}, {8, 12, 2}, {8, 12, 3},
+		{64, 128, 16}, {32, 64, 128}, {40, 48, 17}, {50, 32, 4},
+	} {
 		L, D, N := dims[0], dims[1], dims[2]
 		for _, skip := range []bool{false, true} {
 			u, delta, a, b, c, dsk := ssmInputs(rng, L, D, N, skip)
@@ -59,6 +62,12 @@ func TestSSMScanF64Accuracy(t *testing.T) {
 			t.Logf("L=%d D=%d N=%d skip=%v maxRel=%.3e", L, D, N, skip, maxRel)
 			if maxRel > 1e-10 {
 				t.Fatalf("L=%d D=%d N=%d skip=%v: SSMScanF64 maxRel=%.3e exceeds 1e-10", L, D, N, skip, maxRel)
+			}
+			for i := range hGot {
+				den := math.Max(1e-6, math.Abs(hWant[i]))
+				if rel := math.Abs(hGot[i]-hWant[i]) / den; rel > 1e-10 {
+					t.Fatalf("L=%d D=%d N=%d skip=%v: state idx=%d rel=%.3e exceeds 1e-10", L, D, N, skip, i, rel)
+				}
 			}
 		}
 	}

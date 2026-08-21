@@ -48,6 +48,11 @@ func TestSSMScanRangeF64BitExactVsWhole(t *testing.T) {
 					t.Fatalf("L=%d D=%d N=%d chunk=%d idx=%d: chunked %v vs whole %v", L, D, N, chunk, i, got[i], whole[i])
 				}
 			}
+			for i := range hg {
+				if math.Float64bits(hg[i]) != math.Float64bits(hw[i]) {
+					t.Fatalf("L=%d D=%d N=%d chunk=%d state=%d: chunked %v vs whole %v", L, D, N, chunk, i, hg[i], hw[i])
+				}
+			}
 		}
 	}
 }

@@ -75,14 +75,6 @@ func WKVScanRangeF64(k, v, w, u, out []float64, seq, d, cLo, cHi int) {
 	wkvScanScalar(k, v, w, u, out, seq, d, cLo, cHi)
 }
 
-func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
-	ssmScanScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, 0, N)
-}
-
-func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, dHi int) {
-	ssmScanDRangeScalar(u, delta, as, bs, cs, dsk, out, h, L, D, N, dLo, dHi)
-}
-
 func FWHTF64(a []float64) {
 	n := len(a)
 	for h := 1; h < n; h <<= 1 {
