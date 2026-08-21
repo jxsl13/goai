@@ -2,6 +2,7 @@ package simd
 
 import (
 	"math"
+	"slices"
 	"testing"
 )
 
@@ -12,7 +13,11 @@ func TestSigmoidF64Parity(t *testing.T) {
 			src[i] = -30 + 60*float64(i)/float64(max(n-1, 1)) // spans ±30 (saturation both ends)
 		}
 		dst := make([]float64, n)
+		original := slices.Clone(src)
 		SigmoidF64(dst, src)
+		if !slices.Equal(src, original) {
+			t.Fatalf("n=%d: sigmoid source was modified", n)
+		}
 		var maxRel float64
 		for i, x := range src {
 			w := 1 / (1 + math.Exp(-x))
@@ -36,7 +41,11 @@ func TestSoftplusNegLLSumF64Parity(t *testing.T) {
 				y[i] = 1
 			}
 		}
+		originalF, originalY := slices.Clone(f), slices.Clone(y)
 		got := SoftplusNegLLSumF64(f, y)
+		if !slices.Equal(f, originalF) || !slices.Equal(y, originalY) {
+			t.Fatalf("n=%d: softplus input was modified", n)
+		}
 		var want float64
 		for i := range f {
 			x := (1 - 2*y[i]) * f[i]

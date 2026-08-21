@@ -104,3 +104,6 @@ Rationale: The optimization targets only F64 band GEMM on Apple arm64 SIMD build
 WHEN pure-Go register accumulation and the NEON tile are evaluated, the benchmark record SHALL identify 3 exact SHA-1 commits and report the 2 marginal median speedup ratios independently.
 
 Rationale: The task contains two separable mechanisms. Staged binaries prevent a combined win from hiding a neutral or harmful phase.
+
+## ARM64-F64-EXP-SCOPE-001 {applies: go:cpu.vexpF64Fast~2,go:cpu.vsiluPairsNeonF64,asm:cpu.vsiluPairsNeonF64}
+WHEN the internal two-lane F64 exponential leaf is available, the first landing SHALL keep backend vexpF64Fast false, preserve the existing SiLU route, and defer backend composites, WKV, and SSM to separately gated work.

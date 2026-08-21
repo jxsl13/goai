@@ -47,3 +47,15 @@ func Pick(arm64, amd64 uint64) uint64 {
 	}
 	return arm64
 }
+
+// PickSIMD extends Pick for tests whose output intentionally changes when the
+// experimental SIMD implementation replaces a scalar transcendental path.
+func PickSIMD(arm64, amd64, arm64SIMD, amd64SIMD uint64) uint64 {
+	if simdExperiment {
+		if runtime.GOARCH == "amd64" {
+			return amd64SIMD
+		}
+		return arm64SIMD
+	}
+	return Pick(arm64, amd64)
+}

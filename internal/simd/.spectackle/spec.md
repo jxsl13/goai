@@ -22,3 +22,18 @@ Rationale: Vectorizing the reduction changes summation order. On amd64 the scala
 WHERE the arm64 NEON build, the bit-exact SIMD kernels SHALL use FMLA rather than separate FMUL and FADD, since the Go arm64 backend already contracts the scalar twin into FMADDS.
 
 Rationale: The rule inverts against amd64 and following the amd64 form here would BREAK bit-exactness, not preserve it: the repo verified on objdump that the scalar SAXPY loop compiles to scalar FMADDS (backend/cpu/gemm_neon_arm64.go), and the NEON kernel header records that each C element accumulates its k products in ascending p order in one fused-FMA chain (gemm_neon_arm64.s). A kernel using separate mul and add would round twice where the scalar rounds once, failing TestGemmCrossReferenceExact. Note also that the real arm64 NEON kernels live in backend/cpu, not in internal/simd, which has no arm64 files at all.
+
+## ARM64-F64-EXP-PERF-001 {applies: go:simd.expNegPairsNeonF64,asm:simd.expNegPairsNeonF64,go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
+WHEN three paired count-seven M2 campaigns measure the five declared F64 cells, the arm64 SIMD F64 path SHALL retain only when the direct leaf reaches 2.00x control, every complete-operation median reaches 1.25x control, and every target has zero allocations.
+
+## ARM64-F64-EXP-NUMERIC-001 {applies: go:simd.expNegPairsNeonF64,asm:simd.expNegPairsNeonF64,go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
+WHEN the arm64 SIMD candidate evaluates any declared F64 operation, the result SHALL match the scalar reference within 1e-13 relative error and preserve scalar NaN, infinity, signed-zero, and exact deep-underflow behavior.
+
+## ARM64-F64-EXP-MEMORY-001 {applies: go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64}
+WHEN a declared F64 operation receives odd lengths, aliased ExpSum storage, or distinct input and output buffers, the implementation SHALL use a length-determined scalar tail, preserve in-place ExpSum safety, and leave distinct input buffers unchanged.
+
+## ARM64-F64-EXP-FALLBACK-001 {applies: go:simd.ExpSumF64,go:simd.ExpScaledF64,go:simd.SigmoidF64,go:simd.SoftplusNegLLSumF64,go:simd.ExpSumF64~2,go:simd.ExpScaledF64~2,go:simd.SigmoidF64~2,go:simd.SoftplusNegLLSumF64~2}
+WHEN an input lane is outside the vector polynomial safe domain or the build is not arm64 with goexperiment.simd, the implementation SHALL preserve scalar API semantics without imposing a new input restriction and leave non-target builds unchanged.
+
+## intent
+- T-01KYJPYBM5E7YAG33QW56DWEVW Build the f64 NEON transcendental leaf so nine ops stop falling to scalar math.Exp on arm64: Archived after PR #1127 head e0b7095dfa176a3fefa8b14a5eca0a8261a7d498 completed the full 15-check CI matrix successfully (run 32468409469). The final implementation adds an Apple arm64 goexperiment.simd two-lane F64 NEON exponential leaf and composes ExpSumF64, ExpScaledF64, SigmoidF64, and SoftplusNegLLSumF64 with scalar fallback for unsafe, non-finite, and subnormal-boundary domains; odd tails, [body truncated at tombstone retention cap]
