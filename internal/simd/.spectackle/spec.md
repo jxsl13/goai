@@ -68,3 +68,6 @@ WHEN three alternating count-seven M2 campaigns measure BenchmarkWKVScan_SIMD_51
 
 ## ARM64-F64-WKV-E2E-PERF-001
 WHEN three alternating count-seven M2 campaigns measure backend/cpu BenchmarkWKV_512x1024, the arm64 CPU WKV path SHALL retain only with at least 20 percent lower median latency and p below 0.05.
+
+## ARM64-F64-WKV-NUMERIC-001
+WHEN RWKV-like and boundary fixtures exercise fresh or continuing WKV scans, the arm64 SIMD WKV implementation SHALL match scalar output and AA/BB/PP state within 1e-10 relative error.
