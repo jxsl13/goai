@@ -4,7 +4,7 @@ schema: v1
 
 ## P-01M0J0BWPDE4P97Q05AZV0PSJS Apple arm64 fused F64 WKV recurrence
 kind: proposal
-state: draft
+state: active
 created: 2026-08-21
 grilled: 2026-08-21 open=0
 targets: go:simd.WKVScanF64~2, go:simd.WKVScanStateF64~2, go:simd.WKVScanRangeF64~2, go:simd.wkvScanStateScalar, go:simd.benchWKVScan, go:cpu.wkvParallelScanF64
