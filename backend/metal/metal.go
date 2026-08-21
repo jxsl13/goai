@@ -1723,6 +1723,25 @@ func SetQ5KCooperative(on bool) bool {
 	return C.mtl_q5k_cooperative_set(C.int(v)) == 1
 }
 
+// SetQ5KWideLoad selects aligned vector loads in the cooperative Q5_K M=1
+// kernel and returns the previous setting. The historical cooperative kernel
+// remains available as the same-process performance control. Unsupported
+// devices and non-decode shapes transparently retain the existing route.
+func SetQ5KWideLoad(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_q5k_wide_load_set(C.int(v)) == 1
+}
+
+// q5KWideLoadActive reports whether a Q5_K call selects the vector-load pipeline.
+// Tests use the same native predicate as every host and resident selector,
+// avoiding hot-path route counters solely for observability.
+func q5KWideLoadActive(m, k, n int) bool {
+	return C.mtl_q5k_wide_load_active(C.int(m), C.int(k), C.int(n)) == 1
+}
+
 // SetQ6KCooperative selects the SIMD-group-cooperative resident Q6_K M=1
 // matvec (true, default) or its historical scalar-K control (false), returning
 // the previous setting. M>1 and unsupported devices always retain scalar.

@@ -40,3 +40,8 @@ WHEN it executes a valid resident M=1 projection, the Metal Q5_K vector-load ker
 
 ## METAL-Q5K-WIDE-LOAD-SCOPE-001
 WHEN M is greater than 1 or the device lacks a 32-lane SIMD group with 64-thread threadgroups, the Metal Q5_K selector SHALL execute the existing Q5_K path with zero vector-load-candidate dispatches.
+
+## METAL-Q5K-WIDE-LOAD-THRESHOLD-001
+WHEN a Q5_K cooperative pipeline is selected, the Metal Q5_K selector SHALL dispatch the aligned per-lane uint2 vector-load candidate only when M equals 1 and K times N is at least 6291456; otherwise dispatch the historical cooperative pipeline.
+
+Rationale: The steady-state M2 boundary sweep measured 1.117x at 2048x3072 but only 1.055x at 2048x2048; per-lane coalesced uint2 loads also beat the simd_shuffle sharing variant on eligible FFN cells.

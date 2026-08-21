@@ -3,8 +3,9 @@
 package metal_test
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/jxsl13/goai/backend/metal"
 	"github.com/jxsl13/goai/format/gguf"
@@ -31,12 +32,8 @@ func syntheticKQuant(n, k, blockBytes, scaleHdr int) []byte {
 }
 
 // BenchmarkMetalKQuantM1Gap times the M=1 resident decode leaf for every K-quant
-// type at one shape. Q4_K and Q6_K have simdgroup-cooperative kernels; Q2_K, Q3_K
-// and Q5_K have only the scalar one-thread-per-output-row kernel, which is the
-// same occupancy shape the cooperative work was built to fix. This measures
-// whether that gap is worth closing for the remaining three. all five K-quant types are
-// cooperative as of the kernels added alongside this file; the benchmark now tracks
-// their relative rates rather than a covered/uncovered split.
+// type at one shape. All five K-quant types have cooperative kernels; this tracks
+// their relative rates and catches regressions in the decode leaves.
 func BenchmarkMetalKQuantM1Gap(b *testing.B) {
 	if !metal.Available() {
 		b.Skip("metal device unavailable")
@@ -54,7 +51,7 @@ func BenchmarkMetalKQuantM1Gap(b *testing.B) {
 		{"Q5K_cooperative", uint32(gguf.Q5_K), 176, 4},
 		{"Q6K_cooperative", uint32(gguf.Q6_K), 210, 2},
 	} {
-		b.Run(fmt.Sprintf("%s", tc.name), func(b *testing.B) {
+		b.Run(tc.name, func(b *testing.B) {
 			weight := syntheticKQuant(n, k, tc.blockBytes, tc.scaleHdr)
 			raw, err := metal.Backend{}.UploadQuant(weight, tc.qtype, n, k)
 			if err != nil {
@@ -96,5 +93,107 @@ func BenchmarkMetalKQuantM1Gap(b *testing.B) {
 				run()
 			}
 		})
+	}
+}
+
+// BenchmarkMetalQ5KWideLoad is the same-binary promotion gate for replacing
+// byte-granular Q5_K loads with aligned packed loads on M2. Each shape reuses one
+// resident weight and identical device buffers across both arms. Every iteration
+// times both arms and reverses their AB/BA order, cancelling the substantial
+// warm-state bias seen when Go sub-benchmarks ran control and candidate in blocks.
+func BenchmarkMetalQ5KWideLoad(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal device unavailable")
+	}
+	previousCooperative := metal.SetQ5KCooperative(true)
+	previousWideLoad := metal.SetQ5KWideLoad(false)
+	defer func() {
+		metal.SetQ5KWideLoad(previousWideLoad)
+		metal.SetQ5KCooperative(previousCooperative)
+	}()
+	for _, shape := range []struct {
+		name string
+		k    int
+		n    int
+	}{
+		{name: "kv", k: 2048, n: 256},
+		{name: "square", k: 2048, n: 2048},
+		{name: "mid_up", k: 2048, n: 3072},
+		{name: "mid_down", k: 4096, n: 2048},
+		{name: "gate_up", k: 2048, n: 5632},
+		{name: "down", k: 5632, n: 2048},
+	} {
+		shape := shape
+		weight := syntheticKQuant(shape.n, shape.k, 176, 4)
+		raw, err := metal.Backend{}.UploadQuant(weight, uint32(gguf.Q5_K), shape.n, shape.k)
+		if err != nil {
+			b.Fatalf("UploadQuant %s: %v", shape.name, err)
+		}
+		rw := raw.(*metal.ResidentQWeight)
+		x, err := metal.NewDeviceBufferF32(make([]float32, shape.k))
+		if err != nil {
+			rw.Close()
+			b.Fatal(err)
+		}
+		o, err := metal.NewDeviceBufferF32(make([]float32, shape.n))
+		if err != nil {
+			x.Release()
+			rw.Close()
+			b.Fatal(err)
+		}
+		run := func(tb testing.TB) {
+			r, err := metal.NewRecorder()
+			if err != nil {
+				tb.Fatal(err)
+			}
+			if err := r.QMatMulResident(x, rw, o, 1); err != nil {
+				r.Free()
+				tb.Fatal(err)
+			}
+			if err := r.Finish(); err != nil {
+				r.Free()
+				tb.Fatal(err)
+			}
+			r.Free()
+		}
+		benchmarkName := shape.name + "_k" + strconv.Itoa(shape.k) + "_n" + strconv.Itoa(shape.n)
+		b.Run(benchmarkName, func(b *testing.B) {
+			for i := range 40 {
+				metal.SetQ5KWideLoad(i%2 == 1)
+				run(b)
+			}
+			const measuredPerArm = 32
+			timed := func(wide bool) time.Duration {
+				metal.SetQ5KWideLoad(wide)
+				// Exclude the transition dispatch: production decode repeats one
+				// pipeline, while the benchmark deliberately switches pipelines.
+				run(b)
+				start := time.Now()
+				for range measuredPerArm {
+					run(b)
+				}
+				return time.Since(start)
+			}
+			var controlTime, wideTime time.Duration
+			b.ResetTimer()
+			for i := range b.N {
+				if i%2 == 0 {
+					controlTime += timed(false)
+					wideTime += timed(true)
+				} else {
+					wideTime += timed(true)
+					controlTime += timed(false)
+				}
+			}
+			denominator := float64(b.N * measuredPerArm)
+			controlNS := float64(controlTime.Nanoseconds()) / denominator
+			wideNS := float64(wideTime.Nanoseconds()) / denominator
+			b.ReportMetric(controlNS, "control-ns/op")
+			b.ReportMetric(wideNS, "wide-ns/op")
+			b.ReportMetric(controlNS/wideNS, "speedup-x")
+		})
+		o.Release()
+		x.Release()
+		rw.Close()
 	}
 }

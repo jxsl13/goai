@@ -139,6 +139,8 @@ int mtl_q8_0_cooperative_set(int on);
 int mtl_q3k_cooperative_set(int on);
 int mtl_q4k_cooperative_set(int on);
 int mtl_q5k_cooperative_set(int on);
+int mtl_q5k_wide_load_set(int on);
+int mtl_q5k_wide_load_active(int m, int k, int n);
 
 // mtl_qmatmul_q6k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q6_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 210 bytes, §R99) — the higher-precision
