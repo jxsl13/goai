@@ -266,3 +266,4 @@
 {"t":"2026-08-21T22:16:21Z","eid":"83cc898f52ba4847","ag":"ag-8576","ev":"grill","id":"P-01M0K6A4A6F0SAGEMT1937ZQQN","dir":"format/gguf","gr":"2026-08-21 open=0","hash":"c4bcd818cf4e997e3b12b0add21f97fc1e913ffa1c32a26686dac0ce6c8385d6"}
 {"t":"2026-08-21T22:17:00Z","eid":"8ccd8a7e4dbae282","ag":"ag-0c4f","ev":"create","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","k":"adr","ti":"Which semantic boundary should the IQ3_XXS M2 tranche optimize?","dir":"format/gguf"}
 {"t":"2026-08-21T22:17:00Z","eid":"8a430beb69d093d8","ag":"ag-0c4f","ev":"move","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","dir":"format/gguf","fr":"draft","to":"submitted"}
+{"t":"2026-08-21T22:17:16Z","eid":"56912777d4911517","ag":"ag-c857","ev":"decide","id":"ADR-01M0K6C6PEF4JT8435XC34X2GQ","dir":"format/gguf","note":"Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot"}
