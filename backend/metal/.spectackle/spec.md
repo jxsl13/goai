@@ -127,3 +127,18 @@ Rationale: The experiment is limited to supported single-token decode.
 WHEN it evaluates an M=1 decode shape, the Metal Q2_K cooperative selector SHALL select scalar-word loads only when K times N is at least 6291456; otherwise retain control.
 
 Rationale: The pilot showed broad gains beginning at K2048,N3072 while smaller cells were unstable.
+
+## METAL-Q4-0-PAIR-LOAD-PERF-001
+WHEN three independent count-seven M2 campaigns cover every eligible and fallback shape, the Metal Q4_0 pair-load selector SHALL retain the candidate only when every eligible median is at least 1.10x control and every fallback ratio is between 0.97x and 1.03x.
+
+## METAL-Q4-0-PAIR-LOAD-NUMERIC-001
+WHEN the pair-load candidate processes finite or nonfinite inputs, the Metal Q4_0 pair-load kernel SHALL match control within 2e-5 relative error, preserve finite, Inf, and NaN class, and mutate exactly zero input bytes.
+
+## METAL-Q4-0-PAIR-LOAD-ALIGNMENT-001
+WHEN the candidate reads one 16-byte Q4_0 quant plane across 18-byte blocks or rows, the Metal Q4_0 quant-plane loader SHALL issue exactly eight aligned ushort device loads and zero uint-or-wider device-pointer loads per SIMD group.
+
+## METAL-Q4-0-PAIR-LOAD-SCOPE-001
+WHEN M exceeds one, support is unavailable, or the pair-load toggle is disabled, the Metal Q4_0 dispatch SHALL select the historical pipeline and issue exactly zero pair-load candidate dispatches.
+
+## METAL-Q4-0-PAIR-LOAD-THRESHOLD-001
+WHEN it evaluates an M=1 Q4_0 decode shape, the Metal Q4_0 cooperative selector SHALL select pair loads only when K times N is at least 6291456; otherwise retain control.
