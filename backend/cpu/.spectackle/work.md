@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJQ3PXEFMW9RAY47HDFTM18 Give gemmF64Band a NEON kernel and move its accumulators out of memory
 kind: task
-state: draft
+state: active
 created: 2026-07-27
 
 SITE: backend/cpu/gemm_nosimd.go:22 gemmF64Band and its f32-into-f64 twin :56 gemmF32Band, build tag !(amd64 && goexperiment.simd) — so arm64 with the experiment gets the SCALAR body. The vectorized replacement exists only for amd64 at backend/cpu/gemm_simd.go:31.
