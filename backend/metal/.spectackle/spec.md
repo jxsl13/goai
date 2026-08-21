@@ -139,3 +139,6 @@ WHEN the candidate reads one 16-byte Q4_0 quant plane across 18-byte blocks or r
 
 ## METAL-Q4-0-PAIR-LOAD-SCOPE-001
 WHEN M exceeds one, support is unavailable, or the pair-load toggle is disabled, the Metal Q4_0 dispatch SHALL select the historical pipeline and issue exactly zero pair-load candidate dispatches.
+
+## METAL-Q4-0-PAIR-LOAD-THRESHOLD-001
+WHEN it evaluates an M=1 Q4_0 decode shape, the Metal Q4_0 cooperative selector SHALL select pair loads only when K times N is at least 6291456; otherwise retain control.
