@@ -67,3 +67,8 @@ WHEN a dtype-specific SIMD arm is added to a generic numeric driver, the Go impl
 WHEN three paired count-seven M2 Pro campaigns measure F32 softmax at 512x512, 2048x2048, 32x2048, 1x32000, and 4x32000, the arm64 SIMD row passes SHALL retain only if every complete-operation median is at least 1.25x baseline.
 
 Rationale: Require broad end-to-end leverage across attention and LLM-logit shapes, not merely faster helper microbenchmarks.
+
+## ARM64-F32-SOFTMAX-PASS-NUMERICS-001
+WHEN direct parity exercises tail widths, finite values, NaNs, infinities, and signed zeros, the arm64 SIMD row passes SHALL preserve rowMaxF32 input and match scalar result bits for rowMaxF32, scaleRowF32, and axpbRowF32.
+
+Rationale: Vector maxNum changes mixed signed-zero ties unless the driver repairs scalar first-match semantics; tails and nonfinite behavior must remain exact.
