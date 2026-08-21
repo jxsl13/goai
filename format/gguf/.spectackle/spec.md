@@ -158,3 +158,6 @@ WHEN IQ2_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL 
 
 ## IQ2XS-PORTABLE-SCRATCH-001
 The portable IQ2_XS QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+## ARM64-IQ2XS-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use IQ2_XS weights, the Apple ARM64 IQ2_XS selector SHALL dispatch 1 row-level fused NEON grid, ksign, explicit-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
