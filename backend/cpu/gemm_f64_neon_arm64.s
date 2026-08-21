@@ -4,8 +4,8 @@
 
 // func gemmF64Tile4x8Neon(a, b, c *float64, k, lda, ldb, ldc int)
 //
-// Accumulate a 4x8 tile into C with sixteen 2-lane f64 accumulators. B is a
-// packed kx8 panel, so every 64-byte row load is contiguous. The k-loop is
+// Accumulate a 4x8 tile into C with sixteen 2-lane f64 accumulators. Each B
+// reduction row contributes one contiguous 64-byte load. The k-loop is
 // unrolled by two and reads each A scalar directly from a vector lane. Go's
 // assembler has no by-element f64 FMLA mnemonic, so the instructions are
 // WORD-encoded from clang-verified arm64 encodings.

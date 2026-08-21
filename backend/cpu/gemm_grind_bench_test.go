@@ -43,9 +43,11 @@ func benchGemmF64Direct(b *testing.B, m, k, n int) {
 	b.ResetTimer()
 	for range b.N {
 		clear(C) // += contract: zero C each iteration
-		parallelWork(m, k*n, func(lo, hi int) {
-			gemmF64Band(A, B, C, lo, hi, k, n)
-		})
+		if !gemmF64Full(A, B, C, m, k, n) {
+			parallelWork(m, k*n, func(lo, hi int) {
+				gemmF64Band(A, B, C, lo, hi, k, n)
+			})
+		}
 	}
 	b.StopTimer()
 	flops := 2 * float64(m) * float64(k) * float64(n)

@@ -165,7 +165,7 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			// matmul uses this higher gate — bandwidth-bound elementwise and expensive-
 			// per-element transcendentals keep parThreshold so they still parallelize.
 			gemmF64Band(A, B, C, 0, m, k, n)
-		} else {
+		} else if !gemmF64Full(A, B, C, m, k, n) {
 			parallelWork(m, k*n, func(loRow, hiRow int) {
 				gemmF64Band(A, B, C, loRow, hiRow, k, n)
 			})

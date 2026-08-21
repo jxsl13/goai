@@ -36,7 +36,9 @@ func TestGemmF64NeonMatchesPortableBits(t *testing.T) {
 				want := slices.Clone(got)
 				aBefore, bBefore := slices.Clone(a), slices.Clone(b)
 
-				gemmF64Band(a, b, got, 0, rows, k, n)
+				if !gemmF64Full(a, b, got, rows, k, n) {
+					t.Fatalf("rows=%d k=%d n=%d: full NEON path declined", rows, k, n)
+				}
 				gemmF64BandPortable(a, b, want, 0, rows, k, n)
 
 				bitsEqual := func(x, y float64) bool { return math.Float64bits(x) == math.Float64bits(y) }
@@ -52,4 +54,42 @@ func TestGemmF64NeonMatchesPortableBits(t *testing.T) {
 			}
 		}
 	}
+}
+
+func BenchmarkGemmF64Tile4x8Neon1024(b *testing.B) {
+	const k = 1024
+	a := make([]float64, 4*k)
+	panel := make([]float64, k*8)
+	c := make([]float64, 4*8)
+	for i := range a {
+		a[i] = float64(i%17-8) / 16
+	}
+	for i := range panel {
+		panel[i] = float64(i%13-6) / 16
+	}
+	b.ResetTimer()
+	for range b.N {
+		gemmF64Tile4x8Neon(&a[0], &panel[0], &c[0], k, k, 8, 8)
+	}
+	b.StopTimer()
+	b.ReportMetric(2*4*8*k/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
+}
+
+func BenchmarkGemmF64Portable4x8x1024(b *testing.B) {
+	const k = 1024
+	a := make([]float64, 4*k)
+	panel := make([]float64, k*8)
+	c := make([]float64, 4*8)
+	for i := range a {
+		a[i] = float64(i%17-8) / 16
+	}
+	for i := range panel {
+		panel[i] = float64(i%13-6) / 16
+	}
+	b.ResetTimer()
+	for range b.N {
+		gemmF64BandPortable(a, panel, c, 0, 4, k, 8)
+	}
+	b.StopTimer()
+	b.ReportMetric(2*4*8*k/(b.Elapsed().Seconds()/float64(b.N))/1e9, "GFLOP/s")
 }
