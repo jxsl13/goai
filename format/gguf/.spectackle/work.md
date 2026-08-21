@@ -17,3 +17,11 @@ option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K ker
 option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+
+## P-01M0KBF17FE9Z83X9MEJ23S1VM M2-first exact IQ2_XS fused row dot and portable QMatMul
+kind: proposal
+state: draft
+created: 2026-08-21
+targets: go:gguf.dequantIQ2_XS, go:gguf.QMatMul, format/gguf/iq2xs.go, format/gguf/quant_matmul.go
+
+Close the bottom-up IQ2_XS CPU execution gap without weakening QMatMul semantics. Refactor the decoder through caller-owned storage, add an exact scalar row-dot oracle, support direct F32/F64 activations for all M with reusable worker scratch, and select an ARM64 fused M=1 F32 leaf only after numerical and allocation gates. Preserve the 512-entry eight-wide grid, per-eight 9-bit grid and 7-bit ksign indices, per-sixteen explicit 4-bit scales, d*(0.5+s)*0.25 float32 scaling, ascending element mapping, cancellation behavior, input immutability, and portable fallback. Benchmark matched M2 cells with neutral dequant and unrelated-quant controls, retain every final stream plus source and binary pins, inspect disassembly, cross-build Linux ARM64 and AMD64, run package, race, preflight, Metal, Spectackle, and external perfscan gates, report generalizable findings upstream, and ship only statistically validated leverage through a proper PR. Treat pinned llama.cpp ARM IQ2_XS as a structural reference rather than a leadership baseline because it consumes Q8_K activations.
