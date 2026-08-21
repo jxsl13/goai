@@ -80,3 +80,23 @@ Rationale: Q6_K guarantees two-byte but not four-byte alignment across consecuti
 WHEN M exceeds one or packed-load support is unavailable, the Metal Q6_K dispatch SHALL the system shall use the historical route and issue zero candidate dispatches.
 
 Rationale: The experiment is scoped to supported single-token M2 decode.
+
+## METAL-Q3K-SCALE-BROADCAST-PERF-001
+WHEN three independent count-seven M2 campaigns cover every representative shape, the Metal Q3_K scale-broadcast selector SHALL retain the candidate only when every eligible shape reaches at least 1.10x control.
+
+Rationale: Uniform-header elimination must produce broad end-to-end leverage.
+
+## METAL-Q3K-SCALE-BROADCAST-NUMERIC-001
+WHEN the candidate processes finite or nonfinite inputs, the Metal Q3_K scale-broadcast kernel SHALL match control within 2e-5, preserve finite Inf and NaN class, and mutate zero input bytes.
+
+Rationale: Broadcasting scale metadata must preserve observable quant semantics.
+
+## METAL-Q3K-SCALE-BROADCAST-ALIGNMENT-001
+WHEN it reads a 12-byte scale header across 110-byte blocks or rows, the Metal Q3_K scale-header loader SHALL issue exactly six ushort loads and zero uint-or-wider device-pointer loads.
+
+Rationale: Q3_K guarantees two-byte but not four-byte alignment.
+
+## METAL-Q3K-SCALE-BROADCAST-SCOPE-001
+WHEN M exceeds one or scale-broadcast support is unavailable, the Metal Q3_K dispatch SHALL select the historical pipeline and issue zero candidate dispatches.
+
+Rationale: The experiment is limited to supported single-token decode.
