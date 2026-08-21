@@ -48,3 +48,6 @@ LANDED: commit 621f4b68. Learning in PERF-FASTPATH-FAMILY-001 and NUM-ACCUM-NARR
 
 ## SAFETENSORS-PARTIAL-LOAD-OWNERSHIP-001
 WHEN reading one tensor from a regular safetensors file, the safetensors.LoadTensor SHALL validate the selected byte range against os.File.Stat, return 1 independently owned tensor, materialize 0 other tensors, and retain 0 mapped bytes after LoadTensor returns.
+
+## GGUF-RAW-MMAP-LIFETIME-001
+WHEN gguf.OpenRaw maps a regular GGUF file, the returned *gguf.RawFileHandle SHALL retain the mapping until RawFileHandle.Close, call munmapFile exactly once, invalidate every QuantTensor.Data view after RawFileHandle.Close, and make RawFileHandle.Close a no-op on the buffered fallback.

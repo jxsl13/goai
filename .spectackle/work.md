@@ -3729,3 +3729,19 @@ kind: radio
 option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
+
+## ADR-01M0JANZ6FFEJT0D9T93J6JX2R Which M2 compute path should replace the near-ceiling NEON head GEMMs?
+kind: adr
+state: done
+created: 2026-08-21
+context: ADR-0027 measures Accelerate at 1.5-3.5x NEON on relevant dense shapes; the current tile is already about 93 percent of NEON FMA peak, and three copy-removal pilots delivered only 2-5 percent.
+decision: Extend sanctioned Accelerate SGEMM from ADR-0027 to strides/transposed B and call whole heads outside parallelWork
+consequences: This maximizes M2 leverage using the established AMX backend, avoids nested worker pools, and keeps all non-eligible builds on the merged NEON path. It accepts cgo-only peak performance and requires strict end-to-end crossover, stride/transpose parity, CPU-002, allocation, and decode gates.
+status: accepted
+
+kind: radio
+option: Extend sanctioned Accelerate SGEMM from ADR-0027 to strides/transposed B and call whole heads outside parallelWork
+option: Retune the 4x16 NEON tile
+option: Continue copy elimination around NEON
+blocks: P-01M0JAMADPFG5R8S5TX1BDAB7F
+choice: Extend sanctioned Accelerate SGEMM from ADR-0027 to strides/transposed B and call whole heads outside parallelWork

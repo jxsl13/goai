@@ -2521,6 +2521,46 @@ preflight are release gates. Raw samples, exact commands, and version pins live 
 This completes `T-01KYJPSG8XFXVRA5TER8FSAPMH`; the repository contract is
 `GGUF-READFILE-MMAP-LIFETIME-001`.
 
+## GGUF mmap-backed quantized open (2026-08-21)
+
+Quantized inference used `ReadRaw(os.File)`, so it avoided the 4.4 GiB eager-F32
+expansion but still allocated and filled a 638 MiB encoded-section buffer. The new
+`OpenRaw` path exposes the same capacity-clamped `QuantTensor.Data` views directly
+from a retained read-only mapping. Its `RawFileHandle.Close` owns the lifetime;
+there is deliberately no finalizer because copied tensor views can outlive the
+handle. Unsupported platforms and mapping failures retain the buffered `ReadRaw`
+fallback.
+
+The Apple M2 Pro A/B uses the real 668,788,096-byte TinyLlama-1.1B Q4_K_M file
+(201 tensors; 667,078,656 encoded tensor bytes). Ten fresh processes alternated
+arm order, warmed each path outside the timer, used one timed operation, and kept
+the page cache warm:
+
+| cell | buffered `ReadRaw` file path | mmap `OpenRaw` | delta |
+|---|---:|---:|---:|
+| mapped-view open | 78.824 ms ±2% | **8.860 ms ±10%** | **−88.76%, 8.90x** (`p=0.000`, n=10) |
+| open + copy every encoded tensor | 113.81 ms ±2% | **72.72 ms ±8%** | **−36.11%, 1.57x** (`p=0.000`, n=10) |
+| heap bytes/op, both cells | 652.25 MiB | **15.07 MiB** | **−97.69%**, about 637 MiB/op (`p=0.000`) |
+
+The second cell uses one preallocated consumer buffer and copies all encoded tensor
+bytes before closing, so the win survives full payload consumption and is not only
+deferred page faults. The open cell measures warm startup/API latency, not physical
+disk throughput; its benchmark-derived B/s is not a storage claim.
+
+At matched raw semantics, gguf-py 0.19.0 also maps the same file and exposes its
+encoded tensor arrays. Across ten fresh warmed processes its medians are 789.996 ms
+for open and 862.237 ms with a full encoded-tensor copy. GoAI's corresponding
+medians are 8.8595 and 72.7198 ms: **89.17x** and **11.86x faster**. The incumbent
+environment is NumPy 2.5.1 and Python 3.14.7.
+
+Exact mapped/buffered metadata, type, shape and byte parity; capacity clamps;
+single-release behavior across handle copies; malformed-input cleanup; package,
+race, CGO-disabled and portable cross-compile gates form the correctness boundary.
+Raw samples, pins and commands live under
+`internal/benchcompare/leadership/evidence/m2-gguf-openraw-mmap-20260821`.
+The lifetime contract is `GGUF-RAW-MMAP-LIFETIME-001`; the reusable analyzer
+opportunity is tracked as [perfscan issue 798](https://github.com/jxsl13/perfscan/issues/798).
+
 ## GGUF ARM64 Q4_K/Q6_K eager dequantization (2026-08-18)
 
 After mmap removed the encoded-section copy, Q4_K and Q6_K expansion remained

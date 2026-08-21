@@ -1,0 +1,24 @@
+                    │ /private/tmp/goai-openraw-control.txt │ /private/tmp/goai-openraw-candidate.txt │
+                    │                sec/op                 │     sec/op       vs base                │
+OpenRawModelPath-12                            78.824m ± 2%      8.860m ± 10%  -88.76% (p=0.000 n=10)
+OpenRawModelCopy-12                            113.81m ± 2%      72.72m ±  8%  -36.11% (p=0.000 n=10)
+geomean                                         94.72m           25.38m        -73.20%
+
+                    │ /private/tmp/goai-openraw-control.txt │ /private/tmp/goai-openraw-candidate.txt │
+                    │                  B/s                  │      B/s        vs base                 │
+OpenRawModelPath-12                            7.902Gi ± 2%    70.309Gi ± 9%  +789.77% (p=0.000 n=10)
+OpenRawModelCopy-12                            5.459Gi ± 2%     8.544Gi ± 8%   +56.51% (p=0.000 n=10)
+geomean                                        6.568Gi          24.51Gi       +273.18%
+
+                    │ /private/tmp/goai-openraw-control.txt │ /private/tmp/goai-openraw-candidate.txt │
+                    │                 B/op                  │      B/op        vs base                │
+OpenRawModelPath-12                           652.25Mi ± 0%      15.07Mi ± 0%  -97.69% (p=0.000 n=10)
+OpenRawModelCopy-12                           652.25Mi ± 0%      15.07Mi ± 0%  -97.69% (p=0.000 n=10)
+geomean                                        652.3Mi           15.07Mi       -97.69%
+
+                    │ /private/tmp/goai-openraw-control.txt │ /private/tmp/goai-openraw-candidate.txt │
+                    │               allocs/op               │    allocs/op      vs base               │
+OpenRawModelPath-12                             186.9k ± 0%        186.9k ± 0%  +0.00% (p=0.005 n=10)
+OpenRawModelCopy-12                             186.9k ± 0%        186.9k ± 0%  +0.00% (p=0.000 n=10)
+geomean                                         186.9k             186.9k       +0.00%
+
