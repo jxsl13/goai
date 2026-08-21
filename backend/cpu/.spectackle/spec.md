@@ -55,3 +55,6 @@ WHEN three independent paired count-seven Apple M2 Pro campaigns measure 512x102
 
 ## ARM64-F32-NORM-NUMERICS-001
 WHEN finite, nonfinite, tail-width, and input-immutability parity tests compare the accelerated outputs with the existing CPU implementation, the arm64 SIMD F32 LayerNorm and RMSNorm forward normalization SHALL match nonfinite classes, preserve every input, and stay within the documented F32 norm tolerance of rtol 5e-5.
+
+## ARM64-F32-NORM-SCOPE-001
+WHEN the target is not an arm64 goexperiment.simd forward build or the operation is F64 or backward, the F32 norm fast-path selection SHALL preserve the existing implementation and behavior without selecting the new NEON normalize kernels.
