@@ -1150,3 +1150,4 @@
 {"t":"2026-08-21T20:31:10Z","eid":"93b72cf6ba02437e","ag":"ag-b01a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T20:47:45Z","eid":"7dbcdecd3393298f","ag":"ag-ad86","ev":"create","id":"ADR-01M0K18S8HF46ARNK03RQMD0BE","k":"adr","ti":"Which unsupported quantized QMatMul family should follow the completed IQ4 work on Apple ARM64?"}
 {"t":"2026-08-21T20:47:45Z","eid":"bdfb828fb196752a","ag":"ag-ad86","ev":"move","id":"ADR-01M0K18S8HF46ARNK03RQMD0BE","fr":"draft","to":"submitted"}
+{"t":"2026-08-21T20:48:05Z","eid":"84504ba422ed8515","ag":"ag-1155","ev":"decide","id":"ADR-01M0K18S8HF46ARNK03RQMD0BE","note":"Add portable MXFP4 QMatMul plus a row-level ARM64 fused E8M0-scale/codebook dot"}
