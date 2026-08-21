@@ -46,13 +46,20 @@ func dequantIQ4_NL(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: IQ4_NL data %dB, want %d", len(data), nb*iq4nlBlockSize)
 	}
 	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+	dequantIQ4_NLInto(out.Storage().F32(), data)
+	return out, nil
+}
+
+// dequantIQ4_NLInto decodes IQ4_NL into caller-owned storage. QMatMul uses it
+// to reuse its fixed scratch set across weight rows instead of materializing a
+// tensor for every output column.
+func dequantIQ4_NLInto(dst []float32, data []byte) {
+	for b := 0; b*blockElems < len(dst); b++ {
 		blk := data[b*iq4nlBlockSize : (b+1)*iq4nlBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 18-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		iq4Nibbles(blk[2:18], d, dst[b*blockElems:])
 	}
-	return out, nil
 }
 
 // dequantIQ4_XS decodes IQ4_XS blocks into an F32 tensor of the given shape.

@@ -1,0 +1,36 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ4NLPaths/neon-12   	  800088	       742.8 ns/op	22056.37 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/neon-12   	  795667	       992.1 ns/op	16514.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/neon-12   	  814870	       737.0 ns/op	22231.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/neon-12   	  833452	       731.9 ns/op	22385.83 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/neon-12   	  814723	       730.9 ns/op	22416.05 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/scalar-12 	  125625	      4793 ns/op	3418.35 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/scalar-12 	  126342	      4786 ns/op	3423.00 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/scalar-12 	  125566	      4780 ns/op	3427.51 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/scalar-12 	  125192	      4839 ns/op	3385.84 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotIQ4NLPaths/scalar-12 	  122548	      4851 ns/op	3377.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/neon-12    	   49938	     11995 ns/op	21854.71 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/neon-12    	   49726	     12036 ns/op	21780.72 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/neon-12    	   49423	     12034 ns/op	21782.80 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/neon-12    	   49741	     11992 ns/op	21859.22 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/neon-12    	   49399	     12051 ns/op	21752.83 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/scalar-12  	    7828	     76542 ns/op	3424.83 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/scalar-12  	    7832	     76414 ns/op	3430.57 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/scalar-12  	    7815	     75803 ns/op	3458.24 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/scalar-12  	    7594	     75908 ns/op	3453.46 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N64_K1024/scalar-12  	    7826	     75816 ns/op	3457.63 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/neon-12  	    3188	    174341 ns/op	96232.06 MB/s	   17490 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/neon-12  	    3400	    175128 ns/op	95799.79 MB/s	   17412 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/neon-12  	    3346	    179313 ns/op	93564.01 MB/s	   17415 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/neon-12  	    3320	    176390 ns/op	95114.40 MB/s	   17409 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/neon-12  	    3366	    176367 ns/op	95126.77 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/scalar-12         	     829	    697862 ns/op	24040.86 MB/s	   17455 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/scalar-12         	     843	    686031 ns/op	24455.49 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/scalar-12         	     754	    696078 ns/op	24102.48 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/scalar-12         	     808	    710100 ns/op	23626.54 MB/s	   17408 B/op	      29 allocs/op
+BenchmarkQMatMulIQ4NLPaths/N4096_K1024/scalar-12         	     804	    723728 ns/op	23181.67 MB/s	   17408 B/op	      29 allocs/op
+PASS
+

@@ -285,6 +285,19 @@ func benchQMatMulNK(b *testing.B, m, n, k int, qt QuantType) {
 	}
 }
 
+func benchQMatMulIQ4NLNK(b *testing.B, m, n, k int) {
+	raw := makeIQ4NLRaw(n * k)
+	x := tensor.FromFloat32(tensor.Shape{m, k}, benchF32(m*k))
+	b.SetBytes(int64(m) * int64(n) * int64(k) * 4)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := QMatMul(x, raw, IQ4_NL, n, k); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkQMatMulQ4_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_K) }
 
 func BenchmarkQMatMulQ2_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q2_K) }
@@ -296,3 +309,9 @@ func BenchmarkQMatMulQ5_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 10
 func BenchmarkQMatMulQ6_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q6_K) }
 
 func BenchmarkQMatMulQ8_0_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q8_0) }
+
+func BenchmarkQMatMulIQ4_NL_M1(b *testing.B) { benchQMatMulIQ4NLNK(b, 1, 64, 1024) }
+
+func BenchmarkQMatMulIQ4_NL_M1_N4096(b *testing.B) { benchQMatMulIQ4NLNK(b, 1, 4096, 1024) }
+
+func BenchmarkQMatMulIQ4_NL_M16(b *testing.B) { benchQMatMulIQ4NLNK(b, 16, 64, 1024) }
