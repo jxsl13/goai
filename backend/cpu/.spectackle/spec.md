@@ -111,3 +111,6 @@ WHEN the internal two-lane F64 exponential leaf is available, the first landing 
 
 ## AMD64-SIMD-GEMM-BAND-TEST-BUILD-001
 WHEN backend/cpu tests compile on amd64 with GOEXPERIMENT=simd, the backend/cpu test adapter SHALL route F32 through gemmF32BandScalarF64 and make TestGemmBandUnrollIsBitExact pass with 0 undefined symbols.
+
+## ARM64-F32-MHA-BAND-TILE-001
+WHEN an F32 MHA forward band is scheduled on arm64 under goexperiment.simd, the CPU backend SHALL use a band-row count divisible by 4 so every complete band feeds only whole rows into the four-row NEON GEMM tile.
