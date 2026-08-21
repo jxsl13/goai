@@ -140,3 +140,6 @@ WHEN guarded A, B, and C buffers exercise aligned and tail row or column shapes,
 
 ## ARM64-F32-MHA-STRIDED-IO-ALLOC-001
 WHEN steady-state allocation auditing compares the direct-stride candidate with exact merged control, the MHA forward band SHALL use no qb or ob scratch buffers and report no more allocations per operation than control.
+
+## ARM64-F32-MHA-STRIDED-IO-PERF-001
+WHEN three alternating paired count-seven Apple M2 campaigns measure MHA512 plus seq128 and seq512 full and GQA forward cells, the MHA direct-stride candidate SHALL retain only when every forward median is at least 1.08x faster than exact control with p below 0.01.
