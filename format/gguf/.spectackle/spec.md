@@ -83,3 +83,12 @@ WHEN contiguous F32 M1 activations use IQ4_NL weights, the ARM64 IQ4_NL selector
 
 ## ARM64-IQ4NL-FUSED-DOT-SCOPE-001
 The IQ4_NL QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths portable and dispatch 0 ARM64 M1 kernel calls.
+
+## IQ4XS-PORTABLE-QMATMUL-001
+WHEN IQ4_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve f16 super-scaling, 8 signed six-bit sub-scales per 256 weights, low-half then high-half nonlinear lookup order, and f64 accumulation.
+
+## ARM64-IQ4XS-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use IQ4_XS weights, the ARM64 IQ4_XS selector SHALL dispatch a zero-allocation fused 256-weight NEON nonlinear-lookup dot with scalar-relative error at most 1e-4.
+
+## ARM64-IQ4XS-FUSED-DOT-SCOPE-001
+The IQ4_XS QMatMul dispatcher SHALL keep non-ARM64 and M greater than one paths portable and dispatch 0 ARM64 M1 kernel calls.
