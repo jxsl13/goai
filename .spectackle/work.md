@@ -3952,15 +3952,6 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
 
-## P-01M0MQYAGFF3PRC2P0632PCDDB Accelerate resident IQ1 decode on M2 Metal
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:gguf.dequantIQ1_SInto, go:gguf.dequantIQ1_MInto, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.c, nlp/quant_llama_gguf.go
-
-Add exact native Metal IQ1_S and IQ1_M resident matvec paths for M=1 transformer decode, sharing a one-time device-resident ternary codebook while preserving each wire format independently. Gate promotion on cross-reference parity, immutable inputs, validation failures, fresh-process count-seven GPU and wall-time campaigns, a fused ARM64 CPU baseline, whole-token reachability with identical tokens, and unchanged-control drift. Keep host-bound synchronous execution on CPU unless measurements prove Metal wins. Admit GGUF loader formats only where the recorder path is complete. Pin benchmark evidence and report any generalizable optimization to perfscan.
-
 ## ADR-01M0MR09H9ERTTFKQGTM705Z2Z How should Metal IQ1_S and IQ1_M share lookup and dispatch infrastructure while retaining independent performance gates?
 kind: adr
 state: done
