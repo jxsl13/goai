@@ -334,3 +334,8 @@ WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation, the QMa
 WHEN 3 unequal-row Q4_K or Q6_K matrices receive 1 contiguous F32 M1 activation, the QMatMulTriple SHALL invoke qmatmulParallelChunks exactly 1 time and match 3 independent QMatMul outputs bit-for-bit.
 
 Rationale: One work-sized fan-out removes 2 scheduler barriers without changing row arithmetic.
+
+## GGUF-MIXED-QKV-OUTPUT-001
+The QMatMulTriple SHALL return 3 F32 tensors with shapes [1,n0], [1,n1], and [1,n2].
+
+Rationale: Unequal grouped projections retain every matrix output shape.
