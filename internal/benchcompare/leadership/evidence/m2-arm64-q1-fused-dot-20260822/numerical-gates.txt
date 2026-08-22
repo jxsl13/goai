@@ -1,0 +1,22 @@
+Q1_0 known all-positive block: PASS (128)
+Q1_0 known all-negative block: PASS (-128)
+Q1_0 arbitrary packed rows: PASS (100 trials, K=128/256/4096)
+maximum scalar-relative error: 1.138970942829309e-16
+cancellation-heavy paired-half input: PASS (relative <= 1e-4)
+input immutability: PASS
+ARM64 row allocations: 0
+portable row/materialized decode bit parity: PASS
+pinned quantization byte layout: PASS
+eager/raw/public dequantization parity: PASS
+F32/F64 M1/M3 QMatMul reference parity: PASS
+hostile input validation: PASS
+portable scratch allocation invariance: PASS
+selector scope: PASS
+complete GGUF test binary: PASS
+race-enabled GGUF test binary: PASS
+linux/arm64 CGO0 test compile: PASS
+linux/amd64 CGO0 test compile: PASS
+make preflight: PASS
+make preflight-metal: PASS
+external perfscan ratchet: PASS (0 new normalized findings)
+Spectackle fully paged drift check: PASS (0 drift records)

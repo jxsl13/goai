@@ -711,6 +711,8 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 		return dequantQ5_K(ti.shape, raw)
 	case tQ6_K:
 		return dequantQ6_K(ti.shape, raw)
+	case tQ1_0:
+		return dequantQ1_0(ti.shape, raw)
 	default:
 		return nil, fmt.Errorf("gguf: tensor %q: unsupported ggml type %d", ti.name, ti.ggType)
 	}
@@ -734,6 +736,11 @@ func byteSize(ggType uint32, n int) (int, error) {
 			return 0, fmt.Errorf("Q4_0 numel %d not multiple of %d", n, blockElems)
 		}
 		return n / blockElems * 18, nil // f16 scale + 16 nibble-bytes
+	case tQ1_0:
+		if n%q1BlockElems != 0 {
+			return 0, fmt.Errorf("Q1_0 numel %d not multiple of %d", n, q1BlockElems)
+		}
+		return n / q1BlockElems * q1BlockSize, nil
 	case tQ2_K:
 		if n%qkK != 0 {
 			return 0, fmt.Errorf("Q2_K numel %d not multiple of %d", n, qkK)

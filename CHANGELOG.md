@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- complete Q1_0 and M2 ARM64 fused row dot (T-01M0KPVJQVFCS, 2026-08-22)
+
+ggml type-41 `Q1_0` now works end to end: eager and raw-tensor decode, public
+encode/decode, portable F32/F64 `QMatMul`, caller-owned prefill scratch, and
+an ARM64 contiguous-F32 M1 leaf. The leaf expands packed LSB-first signs from
+a 2 KiB byte table, widens them into exact float32 sign masks, applies them by
+XOR, and accumulates four float64 FMA chains without materializing weights.
+Other architectures, activation dtypes, and M>1 calls remain portable.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 4.8895 to 0.6153 microseconds (**7.95x**), M1/N64/K1024
+from 79.15 to 10.16 microseconds (**7.79x**), and M1/N4096/K1024 from 859.1
+to 163.3 microseconds (**5.26x**); all are `p=0.000`. Allocation counts are
+flat and both unchanged IQ1_M controls are neutral (`p=0.481`/`p=0.853`). Maximum
+scalar-relative error over 100 arbitrary packed rows is
+`1.138970942829309e-16`. A twelve-pair design sweep retained the 2 KiB table
+over an equally fast 8 KiB alternative, cutting hot-table footprint by 75%.
+This is a same-semantics GoAI comparison, not a llama.cpp leadership claim:
+the pinned llama.cpp ARM kernel consumes Q8_0 activations. Reproducible
+streams, hashes, reference pins, specification bindings, and controls are
+committed; the generalized compact sign-expansion technique is tracked as
+perfscan issue #815.
+
 ### format/gguf -- exact IQ1_M QMatMul and M2 ARM64 fused row dot (T-01M0KM5H42FBT, 2026-08-22)
 
 `IQ1_M` now participates in portable F32/F64 `QMatMul` without materializing

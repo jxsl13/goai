@@ -1,0 +1,7 @@
+method: 12 alternating fresh-process pairs, 500ms per sample, K=4096 leaf
+8 KiB uint32 mask-table samples (ns/op): 606.4 606.6 608.8 606.5 605.9 606.8 607.2 606.4 606.2 609.2 606.2 607.4
+2 KiB byte-table + SHLL samples (ns/op): 606.5 607.1 606.7 605.8 605.5 606.0 606.2 606.8 606.2 606.6 606.4 605.9
+8 KiB geomean: 606.9658490422951 ns/op
+2 KiB geomean: 606.3081718901307 ns/op
+2 KiB versus 8 KiB: -0.10835488573238683%
+retained: 2 KiB byte table plus SHLL; 75% smaller table with flat throughput

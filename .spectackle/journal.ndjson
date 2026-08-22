@@ -326,3 +326,10 @@
 {"t":"2026-08-22T03:04:47Z","eid":"695de15be24fc068","ag":"ag-dcaa","ev":"move","id":"P-01M0KPSF31FYVAEB7ZHPN5Y4AS","fr":"draft","to":"active","note":"Approved under the standing bottom-up M2-first goal after confirming Q1_0 at 1.125 bpw precedes TQ1_0 and has no prior rejection. Exact source pins and the 2x statistical gate are recorded in the proposal."}
 {"t":"2026-08-22T03:05:01Z","eid":"8a60bb8ba845b9d8","ag":"ag-8210","ev":"create","id":"T-01M0KPVJQVFCS9TKR58HY2TKW7","k":"task","ti":"Implement and statistically gate complete Q1_0 support and M2 ARM64 fused row dot"}
 {"t":"2026-08-22T03:05:12Z","eid":"c0bfcf7c79f5c7aa","ag":"ag-4bd9","ev":"move","id":"T-01M0KPVJQVFCS9TKR58HY2TKW7","fr":"draft","to":"active","note":"Activated under proposal P-01M0KPSF31FYV after exact layout and enum audit. Implementation begins with portable end-to-end semantics and a precompiled merged-main baseline before native ARM64 work."}
+{"t":"2026-08-22T03:28:53Z","eid":"d396b8d246836eb8","ag":"ag-4683","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:28:54Z","eid":"3cbf69a67c1f7fe0","ag":"ag-7c1c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:28:56Z","eid":"472592fa318bdaeb","ag":"ag-3790","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:28:57Z","eid":"4846c98fa8dd7cee","ag":"ag-da98","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:28:59Z","eid":"48283507d3e19ab9","ag":"ag-e03e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:29:05Z","eid":"9a7c8fc096494686","ag":"ag-aa99","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:29:59Z","eid":"ebcc9118be5fdba3","ag":"ag-3415","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

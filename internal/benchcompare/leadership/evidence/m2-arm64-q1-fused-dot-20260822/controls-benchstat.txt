@@ -1,0 +1,28 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                         │ control-base.txt │         control-candidate.txt         │
+                         │      sec/op      │    sec/op      vs base                │
+DequantIQ1_M-12                446.0µ ± 33%   330.3µ ±  70%        ~ (p=0.481 n=10)
+QMatMulIQ1_M_M1_N4096-12       296.0µ ± 86%   226.2µ ± 102%        ~ (p=0.853 n=10)
+geomean                        363.3µ         273.4µ         -24.76%
+
+                         │ control-base.txt │         control-candidate.txt         │
+                         │       B/s        │      B/s       vs base                │
+DequantIQ1_M-12               123.1Mi ± 44%   165.7Mi ± 41%        ~ (p=0.481 n=10)
+QMatMulIQ1_M_M1_N4096-12      52.79Gi ± 46%   69.12Gi ± 51%        ~ (p=0.853 n=10)
+geomean                       2.519Gi         3.345Gi        +32.79%
+
+                         │ control-base.txt │        control-candidate.txt        │
+                         │       B/op       │     B/op      vs base               │
+DequantIQ1_M-12                1.000Mi ± 0%   1.000Mi ± 0%       ~ (p=0.401 n=10)
+QMatMulIQ1_M_M1_N4096-12       17.09Ki ± 0%   17.11Ki ± 0%       ~ (p=0.516 n=10)
+geomean                        132.3Ki        132.4Ki       +0.05%
+
+                         │ control-base.txt │        control-candidate.txt        │
+                         │    allocs/op     │ allocs/op   vs base                 │
+DequantIQ1_M-12                  3.000 ± 0%   3.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1_M_M1_N4096-12         29.00 ± 0%   29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                          9.327        9.327       +0.00%
+¹ all samples are equal

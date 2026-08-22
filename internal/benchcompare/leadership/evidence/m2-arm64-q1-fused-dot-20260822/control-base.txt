@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDequantIQ1_M-12             	    2030	    335854 ns/op	 170.74 MB/s	 1048808 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    3726	    162034 ns/op	103541.31 MB/s	   17479 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1935	    472346 ns/op	 121.40 MB/s	 1048812 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2986	    293098 ns/op	57241.01 MB/s	   17493 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1280	    616451 ns/op	  93.02 MB/s	 1048819 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2912	    401830 ns/op	41752.04 MB/s	   17500 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1839	    591400 ns/op	  96.96 MB/s	 1048815 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    1899	    571156 ns/op	29374.15 MB/s	   17547 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1794	    533566 ns/op	 107.47 MB/s	 1048811 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2920	    351164 ns/op	47775.99 MB/s	   17498 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1401	    419562 ns/op	 136.68 MB/s	 1048817 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	     950	    550578 ns/op	30471.99 MB/s	   17639 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1827	    479437 ns/op	 119.61 MB/s	 1048808 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    1849	    298961 ns/op	56118.44 MB/s	   17547 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1917	    308591 ns/op	 185.83 MB/s	 1048803 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2835	    217860 ns/op	77009.26 MB/s	   17508 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1863	    311257 ns/op	 184.23 MB/s	 1048802 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2804	    215177 ns/op	77969.28 MB/s	   17500 B/op	      29 allocs/op
+BenchmarkDequantIQ1_M-12             	    1851	    309572 ns/op	 185.24 MB/s	 1048802 B/op	       3 allocs/op
+BenchmarkQMatMulIQ1_M_M1_N4096-12    	    2901	    212977 ns/op	78774.87 MB/s	   17498 B/op	      29 allocs/op

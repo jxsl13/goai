@@ -42,6 +42,7 @@ func BenchmarkDequantQ8_0(b *testing.B) { benchDequant(b, Q8_0) }
 func BenchmarkDequantQ4_0(b *testing.B) { benchDequant(b, Q4_0) }
 func BenchmarkDequantQ4_K(b *testing.B) { benchDequant(b, Q4_K) }
 func BenchmarkDequantQ6_K(b *testing.B) { benchDequant(b, Q6_K) }
+func BenchmarkDequantQ1_0(b *testing.B) { benchDequant(b, Q1_0) }
 
 // benchDequantRaw drives the READ-only formats (no encoder exists) with
 // deterministic pseudo-random block bytes — decoding is total over any input.
@@ -92,6 +93,7 @@ func benchQuantize(b *testing.B, qt QuantType) {
 
 func BenchmarkQuantizeQ8_0(b *testing.B) { benchQuantize(b, Q8_0) }
 func BenchmarkQuantizeQ4_K(b *testing.B) { benchQuantize(b, Q4_K) }
+func BenchmarkQuantizeQ1_0(b *testing.B) { benchQuantize(b, Q1_0) }
 
 // decodeTensor F16 path: the per-element f16ToF32 conversion.
 func BenchmarkDecodeF32(b *testing.B) {
@@ -415,7 +417,26 @@ func benchQMatMulIQ1MNK(b *testing.B, m, n, k int) {
 	}
 }
 
+func benchQMatMulQ1NK(b *testing.B, m, n, k int) {
+	raw := makeQ1Raw(n * k)
+	x := tensor.FromFloat32(tensor.Shape{m, k}, benchF32(m*k))
+	b.SetBytes(int64(m * n * k * 4))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := QMatMul(x, raw, Q1_0, n, k); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkQMatMulQ4_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_K) }
+
+func BenchmarkQMatMulQ1_0_M1(b *testing.B) { benchQMatMulQ1NK(b, 1, 64, 1024) }
+
+func BenchmarkQMatMulQ1_0_M1_N4096(b *testing.B) { benchQMatMulQ1NK(b, 1, 4096, 1024) }
+
+func BenchmarkQMatMulQ1_0_M16(b *testing.B) { benchQMatMulQ1NK(b, 16, 64, 1024) }
 
 func BenchmarkQMatMulQ2_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q2_K) }
 

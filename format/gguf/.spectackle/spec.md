@@ -239,27 +239,27 @@ The IQ1_M QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32
 
 Rationale: The native leaf assumes Apple ARM64 F32 row layout and must not leak into portable or prefill semantics.
 
-## Q1-FORMAT-001 {applies: go:gguf.byteSize,go:gguf.decodeTensor,go:gguf.Quantize,go:gguf.Dequantize}
+## Q1-FORMAT-001 {applies: go:gguf.byteSize,go:gguf.decodeTensor,go:gguf.Quantize,go:gguf.Dequantize,go:gguf.dequantQ1_0Into,go:gguf.dequantQ1_0,go:gguf.quantizeQ1_0,go:gguf.TestQ1FormatAPIsMatchPinnedLayout,go:gguf.TestQuantizeQ1MatchesPinnedReferenceLayout,go:gguf.TestDequantQ1IntoMatchesTensorDecoderExactly,go:gguf.TestQ1RejectsInvalidInputs}
 WHEN ggml type 41 Q1_0 data is encoded or decoded, the format APIs SHALL preserve 18-byte blocks of 128 weights, f16 scale, LSB-first sign bits, and bit-one positive semantics.
 
 Rationale: End-to-end support prevents a fast QMatMul path from accepting bytes that Read, QuantTensor.Dequantize, Quantize, or Dequantize cannot reproduce.
 
-## Q1-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.Dequantize}
+## Q1-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.Dequantize,go:gguf.dotQ1Row,go:gguf.dequantQ1_0Into,go:gguf.TestDotQ1RowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulQ1MatchesDequantizedReference,go:gguf.TestQMatMulQ1RejectsInvalidInputs}
 WHEN Q1_0 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve f16 scale, LSB-first signs, bit-one positive weights, ascending element mapping, and float64 accumulation.
 
 Rationale: The portable row dot is the semantic oracle for every architecture-specific Q1_0 path.
 
-## Q1-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul}
+## Q1-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.dequantQ1_0Into,go:gguf.TestQMatMulQ1ScratchAllocationsDoNotScaleWithOutputRows}
 The portable Q1_0 QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
 
 Rationale: Caller-owned decode scratch prevents output-row count from multiplying temporary allocations.
 
-## ARM64-Q1-FUSED-DOT-001 {applies: go:gguf.QMatMul}
+## ARM64-Q1-FUSED-DOT-001 {applies: go:gguf.QMatMul,go:gguf.dotQ1RowASM,go:gguf.dotQ1RowNeon,asm:gguf.dotQ1RowNeon,go:gguf.TestDotQ1RowNeonKnownSigns,go:gguf.TestDotQ1AsmRandomRaw,go:gguf.TestDotQ1AsmCancellationHeavy,go:gguf.TestDotQ1AsmAllocs}
 WHEN contiguous F32 M1 activations use Q1_0 weights, the Apple ARM64 Q1_0 selector SHALL dispatch 1 whole-row NEON sign-XOR and f16-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: Single-token direct-F32 decode is the M2 CPU hot path; sign-bit expansion can avoid materialized weights.
 
-## ARM64-Q1-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul}
+## ARM64-Q1-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul,go:gguf.dotQ1RowFn,go:gguf.dotQ1RowASM,go:gguf.TestQMatMulQ1SelectorScope}
 The Q1_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The native leaf assumes ARM64 F32 row layout and must not leak into portable, F64, or prefill semantics.
