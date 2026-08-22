@@ -717,6 +717,10 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 		return dequantTQ2_0(ti.shape, raw)
 	case tQ1_0:
 		return dequantQ1_0(ti.shape, raw)
+	case tIQ2_S:
+		return dequantIQ2_S(ti.shape, raw)
+	case tIQ1_S:
+		return dequantIQ1_S(ti.shape, raw)
 	default:
 		return nil, fmt.Errorf("gguf: tensor %q: unsupported ggml type %d", ti.name, ti.ggType)
 	}

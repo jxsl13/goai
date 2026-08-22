@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- correct IQ1_S and IQ2_S wire IDs (T-01M0M1625WFQG, 2026-08-22)
+
+The GGUF registry now matches the pinned ggml enum: `IQ1_S` is wire type 19
+and `IQ2_S` is wire type 22. Type 24 is reserved for unsupported `I8`
+instead of being silently exposed as `IQ1_S`. Public `Dequantize`, eager
+`Read`, `ReadRaw` plus `QuantTensor.Dequantize`, and numeric `QMatMul`
+dispatch now agree for both corrected IDs. Decoder layouts, numerical
+semantics, ARM64 selectors, and allocation behavior are unchanged.
+
+Ten fresh-process 500 ms baseline/candidate pairs keep IQ2_S M1/N4096 at
+198.2/198.0 microseconds (`p=0.481`) and IQ1_S at 147.8/148.0 microseconds
+(`p=0.218`); both remain at 29 allocations. This is a correctness and
+wire-compatibility repair, not a performance claim.
+
 ### format/gguf -- complete TQ2_0 and M2 ARM64 fused row dot (T-01M0KYDJXBEK0, 2026-08-22)
 
 ggml type-35 `TQ2_0` now works end to end: exact 66-byte block handling,
