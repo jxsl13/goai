@@ -318,3 +318,6 @@ The IQ1_S and IQ2_S identifier correction SHALL preserve each existing block siz
 
 ## GGUF-IQ-WIRE-DISPATCH-001
 WHEN Read or QuantTensor.Dequantize receives wire type 19 or 22, the GGUF decoder SHALL dispatch IQ1_S for type 19 and IQ2_S for type 22 with the same result as public Dequantize.
+
+## GGUF-IQ-MXFP4-WIRE-DISPATCH-001
+WHEN Read or QuantTensor.Dequantize receives 1 of wire types 16, 17, 18, 20, 21, 23, 29, or 39, the GGUF decoder SHALL dispatch the 1 matching IQ2_XXS, IQ2_XS, IQ3_XXS, IQ4_NL, IQ3_S, IQ4_XS, IQ1_M, or MXFP4 decoder and return F32 values exactly equal to public Dequantize.
