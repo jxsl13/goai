@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0NWKBGDFCQ9BQ3EF0N18N8Z Keep private research sources out of Git
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 targets: .gitignore
 
