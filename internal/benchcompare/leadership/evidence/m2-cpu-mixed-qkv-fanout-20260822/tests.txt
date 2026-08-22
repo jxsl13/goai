@@ -1,0 +1,15 @@
+PASS: QMatMulTriple matches three independent mixed Q4_K/Q4_K/Q6_K QMatMul calls bit-for-bit across unequal parallel row ranges
+PASS: QMatMulTriple rejects unsupported quant type, dtype, M>1, truncated weights, and non-positive dimensions
+PASS: eager CPU QuantLlama grouped QKV matches the recorded three-projection fallback bit-for-bit for Forward M1 and DecodeStep, count=10
+PASS: go test ./format/gguf
+PASS: make apicheck
+PASS: go vet ./format/gguf ./nlp
+PASS: go test -race ./format/gguf
+PASS: race-built NLP grouped-QKV test, count=3
+PASS: Linux AMD64 and ARM64 cross-compilation for format/gguf and nlp tests
+PASS: external perfscan v1.80.0 via GOPROXY=direct; zero findings in the new primitive or QuantLlama routing helper
+PASS: Spectackle reindex with 6,879 typed calls and no drift records for the new contracts
+PASS: make preflight-full (formatting, pure-Go build/vet/test, module drift, benchmark smoke, SIMD build, native M2 Metal and llamagpu)
+KNOWN PRE-EXISTING: the unfiltered NLP suite fails TestDiffusionLMGrammarE2E with the deterministic string "a sra s ee s a s"; a detached merged-main 2383ccff binary fails the isolated test identically.
+KNOWN PRE-EXISTING: perfscan reports PS2126 and PS2110 on unchanged Generate lines in quant_llama_decode.go; merged main reports the same two findings.
+KNOWN PRE-EXISTING: repository-wide Spectackle check reports legacy warning, context-record, and 16 path-valued anchor records unrelated to this tranche; no new contract appears in them.

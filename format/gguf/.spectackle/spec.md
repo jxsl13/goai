@@ -329,3 +329,18 @@ The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes,
 
 ## GGUF-Q4K-PAIRED-M1-001
 WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation, the QMatMulPair SHALL allocate 2 F32 outputs, invoke qmatmulParallelChunks exactly once, and match 2 independent QMatMul outputs bit-for-bit.
+
+## GGUF-MIXED-QKV-M1-001
+WHEN 3 unequal-row Q4_K or Q6_K matrices receive 1 contiguous F32 M1 activation, the QMatMulTriple SHALL invoke qmatmulParallelChunks exactly 1 time and match 3 independent QMatMul outputs bit-for-bit.
+
+Rationale: One work-sized fan-out removes 2 scheduler barriers without changing row arithmetic.
+
+## GGUF-MIXED-QKV-OUTPUT-001
+The QMatMulTriple SHALL return 3 F32 tensors with shapes [1,n0], [1,n1], and [1,n2].
+
+Rationale: Unequal grouped projections retain every matrix output shape.
+
+## GGUF-MIXED-QKV-BALANCE-001
+WHEN 1 grouped fan-out combines Q4_K and Q6_K matrices with unequal row counts, the QMatMulTriple SHALL partition every matrix proportionally across every scheduler chunk, creating 0 quant-type-only tail chunks.
+
+Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial production pairs; proportional distribution produced the retained gain.

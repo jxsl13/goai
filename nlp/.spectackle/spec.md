@@ -63,3 +63,13 @@ WHEN a supported projection uses wire type 34 TQ1_0 or type 35 TQ2_0, the quanti
 
 ## QUANT-GGUF-Q1-MXFP4-ADMISSION-001
 WHEN a supported projection uses wire type 41 Q1_0 or wire type 39 MXFP4, the quantized GGUF model loader SHALL preserve compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.
+
+## CPU-QUANT-ATTN-QKV-GROUP-001
+WHEN QuantLlama attention receives 1 contiguous F32 row in an explicit eager CPU context with a CPU default backend and supported Q4_K or Q6_K projections, the QuantLlama SHALL route Q, K, and V through exactly 1 QMatMulTriple call.
+
+Rationale: One grouped CPU fan-out removes 2 projection scheduler barriers.
+
+## CPU-QUANT-ATTN-QKV-GROUP-SCOPE-001
+The grouped QuantLlama QKV route SHALL exclude recorder, accelerator, multi-row, noncontiguous, offset, mismatched-input, and unsupported-quant inputs, preserving 3 independent QuantLinear calls.
+
+Rationale: CPU scheduling coalescing must not bypass graph, device, or fallback semantics.

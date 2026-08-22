@@ -1,0 +1,8 @@
+module: github.com/jxsl13/perfscan@v1.80.0
+resolution: GOPROXY=direct
+packages: ./format/gguf ./nlp
+new primitive format/gguf/quant_matmul_triple.go: 0 findings
+new routing helper nlp/quant_llama.go: 0 findings
+touched nlp/quant_llama_decode.go: PS2126 and PS2110 on unchanged Generate lines
+baseline 2383ccff nlp/quant_llama_decode.go: the same PS2126 and PS2110 findings
+generalizable heterogeneous-fanout report: https://github.com/jxsl13/perfscan/issues/831
