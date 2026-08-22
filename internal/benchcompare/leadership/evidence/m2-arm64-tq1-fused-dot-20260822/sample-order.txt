@@ -1,0 +1,11 @@
+Final candidate binary SHA-256: 1c0685d7077cbd0385502d3f910d284b3f398aa1da2502d2e6ad6ab11e4ed24f
+1 scalar-first
+2 neon-first
+3 scalar-first
+4 neon-first
+5 scalar-first
+6 neon-first
+7 scalar-first
+8 neon-first
+9 scalar-first
+10 neon-first

@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkControlDequantQ1-12 2310 252379 ns/op 146.07 MB/s 1048804 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3786 148058 ns/op 113315.13 MB/s 17474 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2301 255616 ns/op 144.22 MB/s 1048803 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3368 150526 ns/op 111457.05 MB/s 17487 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2340 253377 ns/op 145.49 MB/s 1048802 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3802 148812 ns/op 112741.19 MB/s 17475 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2305 255469 ns/op 144.30 MB/s 1048805 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3609 149487 ns/op 112232.30 MB/s 17479 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2266 254714 ns/op 144.73 MB/s 1048804 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3774 149314 ns/op 112362.06 MB/s 17474 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2308 254424 ns/op 144.89 MB/s 1048801 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3708 150373 ns/op 111570.62 MB/s 17479 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2323 255585 ns/op 144.23 MB/s 1048802 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3748 148541 ns/op 112946.83 MB/s 17475 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2304 257347 ns/op 143.25 MB/s 1048805 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3736 149021 ns/op 112582.83 MB/s 17477 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2287 256777 ns/op 143.56 MB/s 1048801 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3657 149046 ns/op 112563.80 MB/s 17481 B/op 29 allocs/op
+BenchmarkControlDequantQ1-12 2185 259501 ns/op 142.06 MB/s 1048801 B/op 3 allocs/op
+BenchmarkControlQMatMulQ1-12 3758 149963 ns/op 111875.67 MB/s 17474 B/op 29 allocs/op

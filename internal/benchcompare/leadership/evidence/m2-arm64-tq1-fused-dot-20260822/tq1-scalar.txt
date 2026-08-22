@@ -1,0 +1,34 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ1-12 124932 4711 ns/op 3477.70 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7994 75028 ns/op 3493.93 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 784 780179 ns/op 21504.31 MB/s 17827 B/op 29 allocs/op
+BenchmarkDotTQ1-12 122799 4893 ns/op 3348.46 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7644 75970 ns/op 3450.62 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 784 779299 ns/op 21528.61 MB/s 17459 B/op 29 allocs/op
+BenchmarkDotTQ1-12 127264 4712 ns/op 3477.03 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7996 74923 ns/op 3498.82 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 696 791889 ns/op 21186.33 MB/s 17860 B/op 29 allocs/op
+BenchmarkDotTQ1-12 124562 4697 ns/op 3487.92 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7994 75213 ns/op 3485.34 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 786 781366 ns/op 21471.64 MB/s 17453 B/op 29 allocs/op
+BenchmarkDotTQ1-12 123462 4823 ns/op 3397.33 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7993 75073 ns/op 3491.86 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 716 782189 ns/op 21449.06 MB/s 17899 B/op 29 allocs/op
+BenchmarkDotTQ1-12 127915 4685 ns/op 3497.06 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7976 74975 ns/op 3496.40 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 744 789239 ns/op 21257.45 MB/s 17448 B/op 29 allocs/op
+BenchmarkDotTQ1-12 124258 4815 ns/op 3402.83 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7999 77046 ns/op 3402.44 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 741 780689 ns/op 21490.28 MB/s 17832 B/op 29 allocs/op
+BenchmarkDotTQ1-12 125797 4794 ns/op 3417.59 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 8005 76298 ns/op 3435.77 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 780 787390 ns/op 21307.38 MB/s 17437 B/op 29 allocs/op
+BenchmarkDotTQ1-12 124110 4825 ns/op 3395.65 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7879 77651 ns/op 3375.95 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 774 779175 ns/op 21532.04 MB/s 17792 B/op 29 allocs/op
+BenchmarkDotTQ1-12 123853 4820 ns/op 3399.22 MB/s 0 B/op 0 allocs/op
+BenchmarkQMatMulTQ1_N64_K1024-12 7836 77005 ns/op 3404.23 MB/s 592 B/op 4 allocs/op
+BenchmarkQMatMulTQ1_N4096_K1024-12 784 787207 ns/op 21312.33 MB/s 17444 B/op 29 allocs/op

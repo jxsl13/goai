@@ -1,0 +1,24 @@
+Pinned llama.cpp commit: 3af988fabcf79fd81f8720505e684d2aa5bfc786
+Build: Release static CPU; Metal, BLAS, and Accelerate disabled
+Harness binary SHA-256: 6b1c38397ebfa549d17deff649aa0329fa8efe68973d4d3eb43868deb0746973
+Samples: ten independent processes; all retained
+
+sample quant_K4096_ns dot_only_K4096_ns f32_boundary_K4096_ns f32_boundary_N64_K1024_ns
+1 7033.286 110.668 6552.562 4277.769
+2 7115.545 108.237 6513.915 3396.250
+3 6177.449 143.459 6541.004 3253.415
+4 6569.153 116.718 7108.648 3246.668
+5 6399.126 108.685 6186.953 4376.114
+6 6751.094 111.322 6447.220 3770.124
+7 6214.851 116.772 7480.592 3319.060
+8 6227.399 110.201 6761.840 3740.025
+9 6839.870 108.800 7310.264 3765.181
+10 7096.717 114.348 7144.150 5397.171
+median 6660.124 110.995 6657.201 3752.603
+
+Interpretation:
+- f32_boundary_K4096 includes Q8_K activation quantization plus one TQ1_0/Q8_K dot
+- f32_boundary_N64_K1024 quantizes the activation once and performs 64 dots
+- dot_only_K4096 excludes the required F32 activation conversion
+- llama.cpp's Q8_K activation changes numerical semantics, so these are
+  boundary-throughput measurements rather than same-semantics leadership cells

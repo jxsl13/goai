@@ -1,0 +1,13 @@
+Binary SHA-256: 1c0685d7077cbd0385502d3f910d284b3f398aa1da2502d2e6ad6ab11e4ed24f
+Symbol: github.com/jxsl13/goai/format/gguf.dotTQ1RowNeon.abi0
+Command: go tool objdump -s github.com/jxsl13/goai/format/gguf.dotTQ1RowNeon /private/tmp/goai-tq1-candidate.test
+
+Observed instructions and invariants:
+- base-243 extraction uses VUSHR, VUHADD, VUSHR, and VSUB
+- byte-lane multiply-by-three uses two wrapping VADD instructions
+- qK byte-to-float lookup uses four VTBL instructions
+- f16-derived scale is broadcast once per block with VLD1R
+- float32 scale application precedes VFCVTL/VFCVTL2 widening
+- four persistent float64 accumulator vectors use VFMLA
+- the 16-value tail uses the function's fixed 16-byte stack frame
+- no BL or other call occurs inside the native leaf

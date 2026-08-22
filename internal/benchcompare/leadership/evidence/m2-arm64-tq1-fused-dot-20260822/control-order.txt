@@ -1,0 +1,12 @@
+Baseline binary SHA-256: c9f9ac46727711e37ff3ef92f0af9ef6225debd03b620ba906bf8464bcb68e2f
+Candidate binary SHA-256: 1c0685d7077cbd0385502d3f910d284b3f398aa1da2502d2e6ad6ab11e4ed24f
+1 baseline-first
+2 candidate-first
+3 baseline-first
+4 candidate-first
+5 baseline-first
+6 candidate-first
+7 baseline-first
+8 candidate-first
+9 baseline-first
+10 candidate-first

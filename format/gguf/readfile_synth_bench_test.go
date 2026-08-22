@@ -148,7 +148,7 @@ func TestParseTruncatedDataSection(t *testing.T) {
 // disagree, and nothing else would notice.
 func TestQuantizeDoesNotModifyInput(t *testing.T) {
 	const n = 512
-	for _, qt := range []QuantType{Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4} {
+	for _, qt := range []QuantType{TQ1_0, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, MXFP4} {
 		x := tensor.New(tensor.F32, tensor.Shape{n})
 		s := x.Storage().F32()
 		for i := range s {

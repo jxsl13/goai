@@ -1,0 +1,22 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                          | scalar          | neon            | vs base
+DotTQ1-12                  4804.5ns +/- 2%     847.9ns +/- 1%    -82.35% (p=0.000 n=10)
+QMatMulTQ1_N64_K1024-12     75.59us +/- 2%     13.90us +/- 0%    -81.62% (p=0.000 n=10)
+QMatMulTQ1_N4096_K1024-12  781.8us +/- 1%      199.5us +/- 4%    -74.48% (p=0.000 n=10)
+geomean                     65.73us             13.30us          -79.77%
+
+                          | scalar B/op      | neon B/op       | vs base
+DotTQ1-12                    0.000 +/- 0%        0.000 +/- 0%       ~ (p=1.000 n=10)
+QMatMulTQ1_N64_K1024-12    592.0 +/- 0%        592.0 +/- 0%       ~ (p=1.000 n=10)
+QMatMulTQ1_N4096_K1024-12 17.21Ki +/- 1%      17.04Ki +/- 0%       ~ (p=0.058 n=10)
+
+                          | scalar allocs/op | neon allocs/op  | vs base
+DotTQ1-12                    0.000 +/- 0%        0.000 +/- 0%       ~ (p=1.000 n=10)
+QMatMulTQ1_N64_K1024-12      4.000 +/- 0%        4.000 +/- 0%       ~ (p=1.000 n=10)
+QMatMulTQ1_N4096_K1024-12   29.00 +/- 0%        29.00 +/- 0%       ~ (p=1.000 n=10)
+
+Command:
+benchstat tq1-scalar.txt tq1-neon.txt
