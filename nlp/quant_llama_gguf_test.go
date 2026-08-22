@@ -30,12 +30,31 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 	} else if qt == gguf.IQ3_S {
 		blocks = shape.Numel() / 256
 		blockBytes = 110
+	} else if qt == gguf.IQ1_S {
+		blocks = shape.Numel() / 256
+		blockBytes = 50
+	} else if qt == gguf.IQ1_M {
+		blocks = shape.Numel() / 256
+		blockBytes = 56
 	} else if qt == gguf.Q4_1 {
 		blockBytes = 20
 	}
 	raw := make([]byte, blocks*blockBytes)
 	for block := range blocks {
 		base := block * blockBytes
+		if qt == gguf.IQ1_M {
+			for i := range 48 {
+				raw[base+i] = byte((block*17 + i*29 + seed) & 0xff)
+			}
+			const d = uint16(0x1000)
+			for word := range 4 {
+				low := uint16((block*313 + word*149 + seed) & 0x0fff)
+				top := (d >> (4 * word) & 0x0f) << 12
+				//perfscan:ignore PS4001 IQ1_M intentionally splits f16 across four scale words
+				binary.LittleEndian.PutUint16(raw[base+48+word*2:], low|top)
+			}
+			continue
+		}
 		binary.LittleEndian.PutUint16(raw[base:], 0x3000) // f16 d=0.125
 		start := 2
 		if qt == gguf.IQ4_XS {
@@ -48,7 +67,7 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 		} else if qt == gguf.Q4_1 {
 			binary.LittleEndian.PutUint16(raw[base+2:], 0) // f16 m=0
 			start = 4
-		} else if qt == gguf.IQ2_XXS || qt == gguf.IQ2_XS || qt == gguf.IQ3_XXS || qt == gguf.IQ3_S {
+		} else if qt == gguf.IQ2_XXS || qt == gguf.IQ2_XS || qt == gguf.IQ3_XXS || qt == gguf.IQ3_S || qt == gguf.IQ1_S {
 			binary.LittleEndian.PutUint16(raw[base:], 0x1000) // small f16 d
 		}
 		for i := start; i < blockBytes; i++ {
@@ -85,7 +104,7 @@ func TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		qt   gguf.QuantType
-	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ4_XS", gguf.IQ4_XS}} {
+	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ1_S", gguf.IQ1_S}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ4_XS", gguf.IQ4_XS}, {"IQ1_M", gguf.IQ1_M}} {
 		t.Run(tc.name, func(t *testing.T) {
 			qt := tc.qt
 			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))

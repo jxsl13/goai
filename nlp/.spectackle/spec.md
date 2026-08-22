@@ -51,3 +51,6 @@ WHEN a real GGUF projection uses type 18 IQ3_XXS or type 21 IQ3_S, the quantized
 
 ## QUANT-GGUF-IQ2-ADMISSION-001
 WHEN a supported projection uses wire type 16 IQ2_XXS or type 17 IQ2_XS, the quantized GGUF model loader SHALL preserve its compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.
+
+## QUANT-GGUF-IQ1-ADMISSION-001
+WHEN a supported projection uses wire type 19 IQ1_S or type 29 IQ1_M, the quantized GGUF model loader SHALL preserve its compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.

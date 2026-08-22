@@ -1,0 +1,9 @@
+=== RUN   TestMetalIQ1CooperativeEndToEnd
+=== RUN   TestMetalIQ1CooperativeEndToEnd/IQ1_S
+    iq1_e2e_test.go:137: IQ1_S end-to-end: scalar 55.51 tok/s -> cooperative 233.62 tok/s = 4.209x
+=== RUN   TestMetalIQ1CooperativeEndToEnd/IQ1_M
+    iq1_e2e_test.go:137: IQ1_M end-to-end: scalar 66.38 tok/s -> cooperative 278.04 tok/s = 4.189x
+--- PASS: TestMetalIQ1CooperativeEndToEnd (18.84s)
+    --- PASS: TestMetalIQ1CooperativeEndToEnd/IQ1_S (10.28s)
+    --- PASS: TestMetalIQ1CooperativeEndToEnd/IQ1_M (8.56s)
+PASS

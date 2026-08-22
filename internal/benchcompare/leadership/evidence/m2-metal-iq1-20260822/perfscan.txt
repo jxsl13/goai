@@ -1,0 +1,14 @@
+perfscan version: github.com/jxsl13/perfscan/perfscan@v1.71.0
+module resolution: GOPROXY=direct
+scope: ./backend/metal ./nlp ./llamagpu
+base revision: f21a506578580a82eb0d40687d01bb04f9caa829
+
+production baseline: 778 findings
+candidate result: 778 baselined findings suppressed; 0 new findings; exit 0
+
+test-inclusive baseline: 1811 findings
+candidate result: 1811 baselined findings suppressed; 0 new findings; exit 0
+
+The exact-base baseline worktree prefix was normalized to the candidate
+worktree prefix before comparison because perfscan baseline file keys include
+the worktree directory name.
