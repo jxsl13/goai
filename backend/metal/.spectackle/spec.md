@@ -147,3 +147,6 @@ WHEN it evaluates an M=1 Q4_0 decode shape, the Metal Q4_0 cooperative selector 
 WHEN a valid GGUF type-3 Q4_1 block is decoded, the Metal kernel SHALL decode each 20-byte block as f16 d, f16 m, and sixteen split-half nibble bytes, reconstructing weights as d times q plus m for q from zero through fifteen.
 
 Rationale: This is the exact GGUF Q4_1 wire contract.
+
+## METAL-Q4-1-DISPATCH-001
+WHEN type-3 Q4_1 receives valid F32 activations and a valid quantized matrix, the Metal backend SHALL support synchronous, resident, and recorder matmul dispatch with K divisible by 32 and exactly 20 bytes per weight block.
