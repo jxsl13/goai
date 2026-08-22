@@ -3991,12 +3991,3 @@ option: Independent scalar/cooperative pipelines per format under a shared lifec
 option: One shared kernel with a qtype branch in the decode hot loop
 blocks: P-01M0N04WSRFV7A6MC3TV25CE7X
 choice: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
-
-## T-01M0N0AVG4EHQS8RNM42QXVNVY Implement and gate native M2 Metal Q1_0 and MXFP4 decode
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0N04WSRFV7A6MC3TV25CE7X
-targets: go:gguf.dequantQ1_0, go:gguf.dequantMXFP4, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
-
-Implement native M2 Metal resident decode for GGUF Q1_0 (wire type 41, 18 bytes/128 values) and MXFP4 (wire type 39, 17 bytes/32 values). Build independent scalar and two-SIMD-group cooperative pipelines per format, direct/resident/recorder paths, recorder-only model admission, and explicit per-format toggles. Q1_0 decodes f16 scale followed by sixteen LSB-first sign bytes: set bit +d, clear bit -d. MXFP4 decodes E8M0 scale and the exact split-half E2M1 nibble codebook [0,1,2,3,4,6,8,12,0,-1,-2,-3,-4,-6,-8,-12]. Validate against independent GGUF reference, hostile inputs, floating classes, immutability, validation errors, and allocation bounds. Run three count=7 benchmark campaigns covering scalar/cooperative GPU, recorder wall, resident Metal versus fused ARM64 CPU, and direct host routing; retain CPU fallback unless every direct host cell wins. Run identical-token whole-model tests, publish reproducible evidence, and report generalizable findings to perfscan.
