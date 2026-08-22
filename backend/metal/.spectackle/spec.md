@@ -322,3 +322,6 @@ WHEN a GGUF wire type 39 MXFP4 block is decoded, the Metal MXFP4 kernel SHALL de
 
 ## METAL-MXFP4-CODES-001
 WHEN an MXFP4 nibble is decoded, the Metal MXFP4 kernel SHALL map codes 0 through 7 to 0,1,2,3,4,6,8,12 and codes 8 through 15 to 0,-1,-2,-3,-4,-6,-8,-12 respectively.
+
+## METAL-MXFP4-SCALE-001
+WHEN an MXFP4 exponent byte e is decoded, the Metal MXFP4 kernel SHALL construct scale bits as 0x00200000 shifted left by e when e is below 2, and as (e minus 1) shifted left by 23 otherwise.
