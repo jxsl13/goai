@@ -4,6 +4,31 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- exact IQ1_S QMatMul and M2 ARM64 fused row dot (T-01M0KGWNMSF72, 2026-08-22)
+
+`IQ1_S` now participates in portable F32/F64 `QMatMul` without materializing
+the complete weight matrix. Contiguous F32 single-token decode on ARM64
+dispatches one zero-allocation native call per row, fusing f16 scale lookup,
+2048-entry ternary-grid gathers, packed three-bit index highs, shared odd
+multipliers, signed deltas, and the activation dot with four persistent
+float64 FMA chains. Other architectures, activation dtypes, and M>1 calls
+retain the exact portable path.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 5.1835 to 0.6691 microseconds (**7.75x**, `p=0.000`),
+M1/N64/K1024 from 87.94 to 11.27 microseconds (**7.80x**, `p=0.000`), and
+M1/N4096/K1024 from 1,685.9 to 300.2 microseconds (**5.62x**, `p=0.000`).
+Every final sample, including visible system-contention outliers, is retained.
+Allocation counts are flat, the unrelated IQ2_S control is neutral
+(`p=0.481`), and existing IQ1_S tensor dequantization is neutral (`p=0.631`).
+Maximum scalar-relative error over 100 arbitrary packed rows is
+`3.452027636539311e-14`. This is a same-semantics GoAI comparison, not a
+llama.cpp leadership claim: the pinned llama.cpp ARM kernel consumes Q8_K
+activations. Reproducible streams, binary/source hashes, specification
+bindings, and controls are committed; generalized lookup-table, coefficient,
+whole-row native-call, and endian-plane findings are tracked as perfscan
+issues #808 through #811.
+
 ### format/gguf -- exact IQ2_S QMatMul and M2 ARM64 fused row dot (T-01M0KEGBWFFG0, 2026-08-22)
 
 `IQ2_S` now participates in portable F32/F64 `QMatMul` without materializing
