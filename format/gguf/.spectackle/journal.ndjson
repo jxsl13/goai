@@ -395,3 +395,4 @@
 {"t":"2026-08-22T06:36:57Z","eid":"fb906107a66d901a","ag":"ag-cb04","ev":"move","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","dir":"format/gguf","fr":"draft","to":"submitted"}
 {"t":"2026-08-22T06:37:10Z","eid":"b5057b49202bf533","ag":"ag-e8b2","ev":"decide","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","dir":"format/gguf","note":"Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors"}
 {"t":"2026-08-22T06:37:24Z","eid":"61165fb294a41a1f","ag":"ag-fb9b","ev":"create","id":"T-01M0M30EFGEN49ZG22VFTE4JSE","k":"task","ti":"Route every supported IQ and MXFP4 wire type through decodeTensor","dir":"format/gguf"}
+{"t":"2026-08-22T06:37:53Z","eid":"f75a35a957f71537","ag":"ag-bd58","ev":"move","id":"T-01M0M30EFGEN49ZG22VFTE4JSE","dir":"format/gguf","fr":"draft","to":"active","note":"Approved under the active proposal and standing directive to continue implementation through benchmarked PR validation."}
