@@ -313,6 +313,6 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 IF direct host-bound TQ1_0 or TQ2_0 loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve ARM64 CPU for that wire type.
 
 ## METAL-Q1-BLOCK-001
-WHEN a GGUF wire type 41 Q1_0 block is decoded, the Metal Q1_0 kernel SHALL decode each 18-byte block as one leading f16 scale and sixteen LSB-first sign bytes, mapping set bits to positive scale and clear bits to negative scale across exactly 128 values.
+WHEN a GGUF wire type 41 Q1_0 block is decoded, the Metal Q1_0 kernel SHALL decode each 18-byte block as a leading f16 scale plus sixteen LSB-first sign bytes, producing 128 values where set bits select positive scale and clear bits select negative scale.
 
 Rationale: Pin the Q1_0 wire layout independently of the implementation.
