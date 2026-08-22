@@ -1,0 +1,14 @@
+go version go1.26.6 darwin/arm64
+
+ProductName: macOS
+ProductVersion: 26.5.1
+BuildVersion: 25F80
+
+Model Name: MacBook Pro
+Model Identifier: Mac14,10
+Chip: Apple M2 Pro
+CPU cores: 12 (8 performance, 4 efficiency)
+Memory: 32 GB
+
+origin/main: 8e0a0d8216124320bf02d9d06ceaae1b9796c36e
+Evidence intentionally omits device serial, UUID, and provisioning identifiers.

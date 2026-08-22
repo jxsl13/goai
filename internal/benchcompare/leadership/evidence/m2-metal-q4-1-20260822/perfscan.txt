@@ -1,0 +1,35 @@
+External perfscan ratchet
+========================
+
+Binary source:
+  GOPROXY=direct go install github.com/jxsl13/perfscan/perfscan@v1.71.0
+
+Compared trees:
+  base      8e0a0d8216124320bf02d9d06ceaae1b9796c36e
+  candidate codex/metal-q4-1 working tree
+
+Production command, run independently in each tree:
+  perfscan -exit-zero -config internal/perfscan/perfscan.json ./backend/metal ./llamagpu
+
+Changed production files, normalized by file + rule + message:
+  base findings:      40
+  candidate findings: 40
+  new findings:       0
+  resolved findings:  0
+
+Test command, run independently in each tree:
+  perfscan -exit-zero -tests -config internal/perfscan/perfscan.json ./backend/metal ./llamagpu
+
+Changed existing test files, normalized by file + rule + message:
+  base findings:      9
+  candidate findings: 9
+  new findings:       0
+  resolved findings:  0
+
+New Q4_1 test and benchmark files:
+  findings: 0
+
+The pinned subpackage CLI predates several keys in the repository's current perfscan config and
+warns that those domain keys are unknown. Generic checks still ran. A whole-repository baseline
+also captured 5,977 pre-existing findings; the exact-base changed-package comparison above is the
+reviewable no-regression ratchet for this tranche.

@@ -54,6 +54,7 @@ func TestMetalCooperativeEndToEnd(t *testing.T) {
 		{"Q2_K", gguf.Q2_K, metal.SetQ2KCooperative},
 		{"Q3_K", gguf.Q3_K, metal.SetQ3KCooperative},
 		{"Q4_0", gguf.Q4_0, metal.SetQ4_0Cooperative},
+		{"Q4_1", gguf.Q4_1, metal.SetQ4_1Cooperative},
 		{"Q4_K", gguf.Q4_K, metal.SetQ4KCooperative},
 		{"Q5_K", gguf.Q5_K, metal.SetQ5KCooperative},
 		{"Q6_K", gguf.Q6_K, metal.SetQ6KCooperative},

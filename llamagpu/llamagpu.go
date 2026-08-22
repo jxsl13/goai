@@ -217,6 +217,9 @@ func NewGPT(m *nlp.GPT) (*GPTDecoder, error) {
 }
 
 func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
+	if qt == 3 { // GGUF Q4_1: recorder-only residency; host QuantLinear stays on faster ARM64.
+		return metal.UploadQWeightQ4_1(weight, n, k)
+	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
 		return nil, err

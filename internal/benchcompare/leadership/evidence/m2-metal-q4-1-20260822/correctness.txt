@@ -1,0 +1,27 @@
+M2 correctness and integration summary, 2026-08-22
+
+TestMetalQMatMulQ4_1CrossReference:
+  PASS across M/N/K cases from K=32 through K=4096.
+  Maximum observed relative error versus gguf.QMatMul: 1.626e-7.
+
+TestMetalQMatMulQ4_1CooperativeMatchesScalar:
+  PASS across odd/even N and K=32 through K=4096.
+  Maximum observed relative error: 1.460e-6 (contract: 2e-5).
+
+TestMetalQMatMulQ4_1FloatingPointClass:
+  PASS for positive infinity, negative infinity, and NaN classes.
+
+TestMetalQMatMulQ4_1DispatchAndValidation:
+  PASS. Explicit native function works; generic host dispatcher returns backend.ErrQuantUnsupported.
+  Invalid K, truncated weight, and F64 activation are rejected.
+
+TestMetalQMatMulQ4_1RecorderResident:
+  PASS. Explicit resident upload and recorder output match gguf.QMatMul.
+
+TestMetalUploadQ4_1UsesRecorderOnlyResidentPath:
+  PASS. llamagpu reaches *metal.ResidentQWeight through the opt-in Q4_1 upload.
+
+Full compiled suites:
+  backend/metal -test.short: PASS
+  llamagpu -test.short: PASS
+  TestMetalCooperativeEndToEnd: PASS; Q4_1 72.00 -> 182.52 token/s = 2.535x.
