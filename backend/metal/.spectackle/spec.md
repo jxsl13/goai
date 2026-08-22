@@ -207,3 +207,6 @@ WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_XS by at least 1.10
 
 ## METAL-IQ3S-BLOCK-001
 WHEN a GGUF type-21 IQ3_S super-block is decoded, the Metal IQ3_S kernel SHALL read one f16 scale, 64 low grid indices, eight high-bit bytes, 32 direct-sign bytes, and four packed sub-scale bytes from exactly 110 bytes.
+
+## METAL-IQ3XXS-BLOCK-001
+WHEN a GGUF type-18 IQ3_XXS super-block is decoded, the Metal IQ3_XXS kernel SHALL read one f16 scale, 64 grid indices, and eight packed sign-and-scale words from exactly 98 bytes.
