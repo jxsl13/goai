@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0ND1PT6EMKSAX9S889TRKQ5 Profile and reduce M2 CPU quantized decode allocations
 kind: proposal
-state: active
+state: done
 created: 2026-08-22
 targets: go:nlp.QuantLlama.DecodeStep, go:gguf.QMatMul, internal/benchcompare/prod_cpu_quant_test.go
 
