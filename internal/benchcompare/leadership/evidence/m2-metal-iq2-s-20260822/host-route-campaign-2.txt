@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalIQ2HostRouteCampaign/IQ2_S/kv-12      	       7	   2558179 ns/op	     88084 cpu-wall-ns/op	    231632 metal-direct-wall-ns/op	         0.3803 metal-vs-cpu-wall-x
+BenchmarkMetalIQ2HostRouteCampaign/IQ2_S/square-12  	       7	   4041696 ns/op	    193741 cpu-wall-ns/op	    311430 metal-direct-wall-ns/op	         0.6221 metal-vs-cpu-wall-x
+BenchmarkMetalIQ2HostRouteCampaign/IQ2_S/gate-12    	       7	   7146107 ns/op	    432054 cpu-wall-ns/op	    461139 metal-direct-wall-ns/op	         0.9369 metal-vs-cpu-wall-x
+BenchmarkMetalIQ2HostRouteCampaign/IQ2_S/down-12    	       7	   6929708 ns/op	    448904 cpu-wall-ns/op	    417234 metal-direct-wall-ns/op	         1.076 metal-vs-cpu-wall-x
+PASS

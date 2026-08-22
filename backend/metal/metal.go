@@ -103,6 +103,7 @@ const (
 	qtIQ1_S   = 19
 	qtIQ4_NL  = 20
 	qtIQ3_S   = 21
+	qtIQ2_S   = 22
 	qtIQ4_XS  = 23
 	qtIQ1_M   = 29
 )
@@ -116,7 +117,7 @@ func (Backend) UploadQuant(weight []byte, quantType uint32, n, k int) (backend.R
 	// for the latency-sensitive small/medium shapes on M2.
 	// Keep generic QuantLinear on those CPU routes; llamagpu opts into explicit compressed
 	// device residency, where a whole decode step amortizes submission overhead.
-	if quantType == qtQ4_1 || quantType == qtIQ2_XXS || quantType == qtIQ2_XS || quantType == qtIQ3_XXS || quantType == qtIQ1_S || quantType == qtIQ4_NL || quantType == qtIQ3_S || quantType == qtIQ4_XS || quantType == qtIQ1_M {
+	if quantType == qtQ4_1 || quantType == qtIQ2_XXS || quantType == qtIQ2_XS || quantType == qtIQ3_XXS || quantType == qtIQ1_S || quantType == qtIQ4_NL || quantType == qtIQ3_S || quantType == qtIQ2_S || quantType == qtIQ4_XS || quantType == qtIQ1_M {
 		return nil, backend.ErrQuantUnsupported
 	}
 	rw, err := uploadResident(weight, quantType, n, k)
@@ -412,6 +413,45 @@ func QMatMulIQ2_XS(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, e
 	return out, nil
 }
 
+// QMatMulIQ2_S computes y[M,N] = x[M,K] · dequant(weight)ᵀ from exact GGUF
+// type-22 blocks. Each 82-byte block stores f16 d, thirty-two low grid
+// indices, thirty-two direct sign bytes, eight high-index bytes, and eight
+// packed scale bytes.
+func QMatMulIQ2_S(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, error) {
+	if x.Ndim() != 2 || x.Shape()[1] != k {
+		return nil, fmt.Errorf("metal: QMatMulIQ2_S x must be [M,%d], got %v", k, x.Shape())
+	}
+	if x.Dtype() != tensor.F32 {
+		return nil, fmt.Errorf("metal: QMatMulIQ2_S is f32-only, got %v", x.Dtype())
+	}
+	if k <= 0 || k%256 != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ2_S K=%d must be a positive multiple of 256", k)
+	}
+	blocks := k / 256
+	if len(weight) != n*blocks*82 {
+		return nil, fmt.Errorf("metal: QMatMulIQ2_S weight %d bytes != %d (N·K/256·82)", len(weight), n*blocks*82)
+	}
+	m := x.Shape()[0]
+	out := tensor.New(tensor.F32, tensor.Shape{m, n})
+	if m == 0 || n == 0 {
+		return out, nil
+	}
+	if err := ensureIQ2Grid(qtIQ2_S); err != nil {
+		return nil, err
+	}
+	xc := x.Contiguous()
+	rc := C.mtl_qmatmul_iq2_s(
+		(*C.float)(&xc.Storage().F32()[0]),
+		(*C.uchar)(unsafe.Pointer(&weight[0])),
+		(*C.float)(&out.Storage().F32()[0]),
+		C.int(m), C.int(k), C.int(n),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ2_S failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
 // QMatMulIQ1_S computes y[M,N] = x[M,K] · dequant(weight)ᵀ from exact GGUF
 // type-19 blocks. Each 50-byte block stores one f16 scale, thirty-two low grid
 // indices, and eight packed high-index, multiplier, and delta-sign words.
@@ -680,6 +720,8 @@ func residentRowBytes(qt uint32, k int) (rowBytes, align int, ok bool) {
 		return (k / 256) * 66, 256, true
 	case qtIQ2_XS:
 		return (k / 256) * 74, 256, true
+	case qtIQ2_S:
+		return (k / 256) * 82, 256, true
 	case qtIQ3_XXS:
 		return (k / 256) * 98, 256, true
 	case qtIQ1_S:
@@ -708,7 +750,7 @@ func uploadResident(weight []byte, qt uint32, n, k int) (*ResidentQWeight, error
 	if len(weight) != n*rowBytes {
 		return nil, fmt.Errorf("metal: resident upload weight %d bytes != %d", len(weight), n*rowBytes)
 	}
-	if qt == qtIQ2_XXS || qt == qtIQ2_XS {
+	if qt == qtIQ2_XXS || qt == qtIQ2_XS || qt == qtIQ2_S {
 		if err := ensureIQ2Grid(qt); err != nil {
 			return nil, err
 		}
@@ -770,6 +812,12 @@ func UploadQWeightIQ2_XXS(weight []byte, n, k int) (*ResidentQWeight, error) {
 // The generic host-input/output route remains on the fused ARM64 implementation.
 func UploadQWeightIQ2_XS(weight []byte, n, k int) (*ResidentQWeight, error) {
 	return uploadResident(weight, qtIQ2_XS, n, k)
+}
+
+// UploadQWeightIQ2_S uploads exact GGUF type-22 blocks for the resident recorder path.
+// The generic host-input/output route remains on the fused ARM64 implementation.
+func UploadQWeightIQ2_S(weight []byte, n, k int) (*ResidentQWeight, error) {
+	return uploadResident(weight, qtIQ2_S, n, k)
 }
 
 // UploadQWeightIQ1_S uploads exact GGUF type-19 blocks for the resident recorder path.
@@ -2169,6 +2217,16 @@ func SetIQ2XSCooperative(on bool) bool {
 		v = 1
 	}
 	return C.mtl_iq2_xs_cooperative_set(C.int(v)) == 1
+}
+
+// SetIQ2SCooperative selects the two-SIMD-group IQ2_S kernel and returns the
+// previous setting. It is exposed for same-binary correctness and performance controls.
+func SetIQ2SCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_iq2_s_cooperative_set(C.int(v)) == 1
 }
 
 // SetIQ1SCooperative selects the two-SIMD-group IQ1_S kernel and returns the

@@ -30,6 +30,7 @@ func metalIQ2Cases() []metalIQ2Case {
 	return []metalIQ2Case{
 		{"IQ2_XXS", gguf.IQ2_XXS, 66, syntheticIQ2XXS, metal.QMatMulIQ2_XXS, metal.UploadQWeightIQ2_XXS, metal.SetIQ2XXSCooperative},
 		{"IQ2_XS", gguf.IQ2_XS, 74, syntheticIQ2XS, metal.QMatMulIQ2_XS, metal.UploadQWeightIQ2_XS, metal.SetIQ2XSCooperative},
+		{"IQ2_S", gguf.IQ2_S, 82, syntheticIQ2S, metal.QMatMulIQ2_S, metal.UploadQWeightIQ2_S, metal.SetIQ2SCooperative},
 	}
 }
 
@@ -58,6 +59,21 @@ func syntheticIQ2XS(n, k, seed int) []byte {
 		binary.LittleEndian.PutUint16(raw[base:], scales[(block+seed)%len(scales)])
 		for i := 2; i < 74; i++ {
 			raw[base+i] = byte((block*131 + i*61 + seed*17) & 0xff)
+		}
+	}
+	return raw
+}
+
+func syntheticIQ2S(n, k, seed int) []byte {
+	blocks := n * (k / 256)
+	raw := make([]byte, blocks*82)
+	scales := [...]uint16{0x2800, 0xa800, 0x3000, 0x3400}
+	for block := range blocks {
+		base := block * 82
+		//perfscan:ignore PS4001 strided f16 field in a heterogeneous IQ2_S fixture
+		binary.LittleEndian.PutUint16(raw[base:], scales[(block+seed)%len(scales)])
+		for i := 2; i < 82; i++ {
+			raw[base+i] = byte((block*127 + i*59 + seed*19) & 0xff)
 		}
 	}
 	return raw
