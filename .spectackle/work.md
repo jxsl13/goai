@@ -3972,6 +3972,7 @@ choice: Use one TQ compile and initialization boundary with specialized per-form
 kind: proposal
 state: active
 created: 2026-08-22
+grilled: 2026-08-22 open=0
 targets: go:gguf.dequantQ1_0, go:gguf.dequantMXFP4, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
 
 Add exact native resident Metal matvec paths for the final two gguf.QMatMul formats absent from the device backend: Q1_0 wire type 41 and MXFP4 wire type 39. Preserve Q1_0 18-byte/128-value f16-scale plus LSB-first sign blocks and MXFP4 17-byte/32-value E8M0 plus split-half E2M1 nibble blocks. Use independent per-format scalar and SIMD-group cooperative kernels, direct/resident/recorder paths, recorder-only model admission, and CPU fallback for every losing host-bound cell. Gate on public GGUF cross-reference parity, input immutability, floating-point classes, hostile codes/exponents, validation failures, three fresh-process count-seven campaigns over KV/square/gate/down against scalar Metal and fused ARM64 controls, identical-token whole-model reachability, hash-pinned evidence, and a generalized perfscan report.
