@@ -3941,7 +3941,7 @@ choice: Implement both as one shared IQ3 Metal family with independent numerical
 
 ## T-01M0MJ7CE3FFPRYDZ9R1G83K72 Implement and benchmark the native M2 Metal IQ3 family
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0MJ2RYQF4QR01T9CCYCBQSS
 refs: ADR-01M0MJ4KTREPXRNG4NX30VMAF5
