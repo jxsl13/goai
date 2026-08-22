@@ -4007,12 +4007,3 @@ grilled: 2026-08-22 open=0
 targets: go:gguf.QMatMul, go:nn.QuantSwiGLU.Forward
 
 Profile-backed M2 CPU decode experiment: compute same-shape M1 F32 gate and up quantized projections under one unchanged qmatmulParallelChunks fan-out, writing two independent output tensors and preserving each row dot arithmetic. This attacks the 52.49% qmatmulParallelChunks allocation-object source by reducing calls, not by changing scheduler placement. It is distinct from rejected work-first P-01M0NGMVFZFCW and persistent-pool P-01M0NA415WF6XT701CATX8HB8W. Metal prefill P-01M09KZ8SEEH2B6T0R2QRJBCBS and raw M2 QKV P-01M09G3PGREC4V2QG3P1RC6J1K show leaf wins can fail end-to-end; retain only on exact digest plus significant production latency or high allocation leverage without time regression.
-
-## T-01M0NHAMKMEDNRFHEGP8MKT2T4 Implement and gate paired Q4_K M1 CPU projections
-kind: task
-state: done
-created: 2026-08-22
-parent: P-01M0NH9R8RFQT9RXN9THYAJBBK
-targets: go:gguf.QMatMul, go:nn.QuantSwiGLU.Forward
-
-Prototype a paired Q4_K M1 F32 QMatMul entry point that validates both raw matrices, allocates two independent outputs, runs the unchanged row-dot function for each matrix under one qmatmulParallelChunks call, and preserves exact results. Route only eager CPU QuantSwiGLU with matching Gate/Up geometry and quant type; recorder, accelerator, resident, mismatched, non-F32, and M greater than one paths retain separate projections. Gate with leaf and full TinyLlama production A/B; remove on end-to-end non-leverage.
