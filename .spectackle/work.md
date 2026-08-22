@@ -3976,12 +3976,3 @@ option: Build entirely separate TQ1_0 and TQ2_0 source and lifecycle boundaries
 option: Use one generic runtime-branching ternary kernel selected by qtype inside the hot loop
 blocks: P-01M0MXA8ZRF94TCEP455E4VT5G
 choice: Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts
-
-## T-01M0MXCMPMF3JTXQBMCSA5V48Z Implement and gate native M2 Metal TQ1_0 and TQ2_0 decode
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0MXA8ZRF94TCEP455E4VT5G
-targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, go:gguf.dequantTQ1_0Into, go:gguf.dequantTQ2_0Into
-
-Implement exact TQ1_0 and TQ2_0 scalar and two-SIMD-group Metal kernels inside one family compilation boundary; preserve the 54-byte base-243 and 66-byte two-bit wire formats without materialization; wire direct, resident, and recorder dispatch with independent toggles; add explicit recorder-only uploads and Llama/Phi-3 loader admission; prove numerical parity, raw TQ2 code-3 semantics, floating-point class, immutability, validation, routing, three fresh-process count-seven campaigns against scalar Metal and fused ARM64 CPU controls for each format, and identical-token whole-model reachability. Preserve per-format CPU fallback for every losing direct host-bound route and archive hash-pinned evidence.
