@@ -1,0 +1,5 @@
+=== RUN   TestProdCPUQuantDecodeGGUF
+GOAI_CPU_PROD threads=8 steps=64 reps=7 median=1.987397959s throughput=32.203 tok/s digest=ea3df5516f17df83 alloc_bytes_median=279642384 allocs_median=296507 samples=[1.960408209s 1.974522459s 1.983117875s 1.987397959s 2.094657042s 2.33067825s 2.5400055s]
+--- PASS: TestProdCPUQuantDecodeGGUF (17.74s)
+PASS
+

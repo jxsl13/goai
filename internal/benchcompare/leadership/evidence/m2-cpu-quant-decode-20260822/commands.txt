@@ -1,0 +1,11 @@
+GOTOOLCHAIN=go1.26.6 go test -c ./nlp -o /private/tmp/goai-nlp-quant-refresh.test
+GOMAXPROCS=8 /private/tmp/goai-nlp-quant-refresh.test -test.run '^$' -test.bench '^(BenchmarkQuantLlamaGenerate500|BenchmarkLlamaGenerate500RowBuf)$' -test.benchtime=3x -test.count=11 -test.benchmem
+
+GOTOOLCHAIN=go1.26.6 go test -c ./internal/benchcompare -o /private/tmp/goai-benchcompare-cpu-final.test
+GOMAXPROCS=8 GOAI_CPU_TINYLLAMA_GGUF=/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf GOAI_CPU_DECODE_STEPS=64 GOAI_CPU_DECODE_REPS=7 /private/tmp/goai-benchcompare-cpu-final.test -test.run '^TestProdCPUQuantDecodeGGUF$' -test.v
+
+/opt/homebrew/bin/llama-bench -m /Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf -p 1 -n 64 -r 7 -t 8 -ngl 0 -nkvo 1 -dev none -fa off -o json
+
+/Users/john/go/bin/benchstat float-retained.txt q8-retained.txt
+GOPROXY=direct go run github.com/jxsl13/perfscan@v1.80.0 internal/benchcompare/prod_cpu_quant_test.go
+

@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/nlp
+cpu: Apple M2 Pro
+              │ float-retained.txt │ q8-retained.txt │
+              │       sec/op       │     sec/op       vs base
+Generate500-8           316.2m ± 7%       251.8m ± 7%  -20.38% (p=0.002 n=10)
+
+              │ float-retained.txt │ q8-retained.txt │
+              │        B/op        │      B/op        vs base
+Generate500-8         130.34Mi ± 0%      79.92Mi ± 0%  -38.69% (p=0.000 n=10)
+
+              │ float-retained.txt │ q8-retained.txt │
+              │     allocs/op      │   allocs/op      vs base
+Generate500-8           202.7k ± 0%       247.4k ± 0%  +22.04% (p=0.000 n=10)
+

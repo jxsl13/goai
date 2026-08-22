@@ -1,0 +1,29 @@
+[
+  {
+    "build_commit": "bb4caa754",
+    "build_number": 10566,
+    "cpu_info": "Accelerate, Apple M2 Pro",
+    "gpu_info": "",
+    "model_filename": "tinyllama-1.1b-q4km.gguf",
+    "model_type": "llama 1B Q4_K - Medium",
+    "model_n_params": 1100048384,
+    "n_batch": 2048,
+    "n_ubatch": 512,
+    "n_threads": 8,
+    "type_k": "f16",
+    "type_v": "f16",
+    "n_gpu_layers": 0,
+    "no_kv_offload": true,
+    "flash_attn": 0,
+    "devices": "none",
+    "n_prompt": 0,
+    "n_gen": 64,
+    "avg_ns": 561082488,
+    "stddev_ns": 15765500,
+    "avg_ts": 114.139596,
+    "stddev_ts": 3.088740,
+    "samples_ns": [594342334, 553415208, 561592541, 564180750, 547966333, 555783250, 550297000],
+    "samples_ts": [107.682, 115.646, 113.962, 113.439, 116.795, 115.153, 116.301]
+  }
+]
+

@@ -632,3 +632,12 @@ Rationale: Ten TinyLlama mixed layers improve 1.7378x at M64 and 1.2198x at M512
 WHEN contiguous offset-zero F32 GELU or SiLU forward or backward executes on a darwin/arm64 SIMD build, the Metal SHALL use optimized CPU through 4,194,304 elements, with direct Metal retained elsewhere.
 
 Rationale: ADR-01M0FYKCJMFRE: all 84 production-selector medians cleared 1.10x across three isolated count-7 campaigns, and full SIMD GPT training improved 1.038x.
+
+## M2-CPU-QUANT-WHOLEMODEL-001
+WHEN a post-kernel Q8_0 whole-model result is published, the GoAI CPU decode benchmark SHALL run BenchmarkQuantLlamaGenerate500 and BenchmarkLlamaGenerate500RowBuf from the same Go 1.26.6 binary, discard warmup, retain 10 samples, and report medians plus allocations.
+
+## M2-CPU-QUANT-INCUMBENT-001
+WHEN a CPU quantized-decode comparison against llama.cpp is published, the GoAI leadership matrix SHALL use the identical GGUF, hardware, thread count, prompt and generation lengths, batch, and forward-only boundary, and record model hash plus exact commits.
+
+## M2-CPU-QUANT-LOSS-001
+IF the matched llama.cpp CPU cell leads GoAI beyond measurement spread, THEN the GoAI performance roadmap SHALL publish the loss and profile GoAI before booking an implementation lever.

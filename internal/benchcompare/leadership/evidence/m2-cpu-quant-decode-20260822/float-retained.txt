@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/nlp
+cpu: Apple M2 Pro
+BenchmarkGenerate500-8 3 315932764 ns/op 136672880 B/op 202692 allocs/op
+BenchmarkGenerate500-8 3 317019486 ns/op 136672938 B/op 202701 allocs/op
+BenchmarkGenerate500-8 3 316057320 ns/op 136672762 B/op 202694 allocs/op
+BenchmarkGenerate500-8 3 339273069 ns/op 136672816 B/op 202687 allocs/op
+BenchmarkGenerate500-8 3 355897431 ns/op 136672186 B/op 202673 allocs/op
+BenchmarkGenerate500-8 3 312809278 ns/op 136672493 B/op 202682 allocs/op
+BenchmarkGenerate500-8 3 315298931 ns/op 136672541 B/op 202687 allocs/op
+BenchmarkGenerate500-8 3 312923403 ns/op 136672704 B/op 202692 allocs/op
+BenchmarkGenerate500-8 3 318772403 ns/op 136673034 B/op 202704 allocs/op
+BenchmarkGenerate500-8 3 316360458 ns/op 136672506 B/op 202688 allocs/op
+

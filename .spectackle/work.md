@@ -3998,3 +3998,22 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0N996E4ETXTWFTDCTF17CWW Refresh M2 CPU quantized decode leadership
+kind: proposal
+state: done
+created: 2026-08-22
+refs: P-01M0JJ7DWEENN9THBDNDNYKEM1, R-01KYMVHB75F3ETH2YCC3NVZGEQ
+grilled: 2026-08-22 open=1
+targets: go:nlp.BenchmarkQuantLlamaGenerate500, go:nlp.BenchmarkLlamaGenerate500RowBuf, nlp/quant_decode_perf_test.go, nlp/kvcache_perf_test.go, internal/benchcompare, BENCHMARKS.md, docs/benchmarking.md, .spectackle
+
+Refresh the stale M2 CPU quantized-decode matrix after the 2026-08-21 ARM64 fused row-dot campaign. First rerun the permanent dim-256 BenchmarkQuantLlamaGenerate500 and its float BenchmarkLlamaGenerate500RowBuf control from one pinned Go 1.26.6 binary with warmup excluded and at least ten retained samples. Then measure GoAI CPU and pinned llama.cpp CPU on the same TinyLlama-1.1B Q4_K_M GGUF, identical prompt/generation lengths, thread count, batch, and forward-only boundary. Record medians, variance, allocations, exact commits/tool versions, model hash, and whether output semantics are matched. Update BENCHMARKS.md and docs/benchmarking.md only from raw evidence. If GoAI still loses, profile the GoAI CPU path and book the dominant measured lever; do not infer a kernel defect from the historical 8.8x number.
+
+## T-01M0N9C5ATEE18E7J23JVJKTSC Rerun M2 quantized decode and compare llama.cpp CPU
+kind: task
+state: done
+created: 2026-08-22
+parent: P-01M0N996E4ETXTWFTDCTF17CWW
+targets: nlp/quant_decode_perf_test.go, nlp/kvcache_perf_test.go, internal/benchcompare, BENCHMARKS.md, docs/benchmarking.md, .spectackle
+
+Compile the merged-main nlp benchmarks once with Go 1.26.6 and measure BenchmarkQuantLlamaGenerate500 beside BenchmarkLlamaGenerate500RowBuf using at least ten retained runs after warmup. Add or reuse a production-size CPU harness for TinyLlama-1.1B Q4_K_M and run it against pinned llama.cpp CPU on the identical GGUF, prompt/generation lengths, thread count, batch, and forward-only boundary. Preserve output/correctness gates and allocation reporting. Store raw and summarized evidence with exact commits, model hash, hardware, and commands; update the leadership docs. If the matched comparison still loses, profile before proposing code changes and report any generalizable benchmark or performance lesson to perfscan.
