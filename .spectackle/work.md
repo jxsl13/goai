@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0N73GJ6E7S8JKQRSY1RJBH2 Fuse grouped M2 QKV RoPE with f16 KV append
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: llamagpu/decoder.go, llamagpu/llamagpu.go, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/f16kv_test.go, llamagpu/rope_f16kv_append_realmodel_test.go
-
-The active separate-QKV RoPE/f16-KV fusion removes 20 events from 10 mixed-quant TinyLlama layers and produces exact logits, but three count-seven trained-model campaigns reach only 1.0081x to 1.0087x against a frozen 1.01x promotion floor. The remaining 12 homogeneous layers already group QKV projection yet still record rope_pair plus paired f32-to-f16 append. Add a Metal-only grouped-QKV full-RoPE/f16-KV append kernel that rotates Q/K in the combined buffer, preserves its complete float32 state, and appends K/V binary16 cache bytes in one dispatch. Scope is single token, grouped contiguous QKV, full RoPE, f16 KV, dk=64; all other routes remain unchanged. Exact QKV float32 and cache binary16 parity, mutation proof, and profile evidence are mandatory. Combined with the active separate path, the trained profile must reduce 54 control RoPE/copy events to 22 fused events and every one of three count-seven TinyLlama campaigns must exceed 1.01x. Reject and remove both candidates if the combined gate fails.
