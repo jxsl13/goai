@@ -204,3 +204,6 @@ WHEN three count-seven M2 campaigns cover representative resident single-token I
 
 ## METAL-IQ4XS-HOST-ROUTE-001
 WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_XS by at least 1.10 times, the generic Metal IQ4_XS dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU path.
+
+## METAL-IQ3S-BLOCK-001
+WHEN a GGUF type-21 IQ3_S super-block is decoded, the Metal IQ3_S kernel SHALL read one f16 scale, 64 low grid indices, eight high-bit bytes, 32 direct-sign bytes, and four packed sub-scale bytes from exactly 110 bytes.
