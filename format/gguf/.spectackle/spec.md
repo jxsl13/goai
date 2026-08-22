@@ -179,3 +179,8 @@ Rationale: The selector test injects a counting oracle and proves only contiguou
 WHEN IQ2_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 1024-entry eight-wide grid, 10-bit low-byte-plus-qh indices, 1 direct sign byte per 8 weights, 1 four-bit scale per 16 weights, float32 d*(0.5+s)*0.25 scaling, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ2_S optimization.
+
+## IQ2S-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul}
+The portable IQ2_S QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Worker-owned scratch prevents output-row fanout from turning decoding into allocation traffic.
