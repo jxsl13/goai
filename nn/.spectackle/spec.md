@@ -75,4 +75,4 @@ WHEN OpSigmoidFocalCore is unavailable or its same-dtype contiguous input contra
 WHEN a CPU OpSigmoidFocalCore implementation is promoted, the benchmark gate SHALL require at least 1.10x median speedup in every 349440-element and 2097152-element forward and forward-plus-backward cell across 3 paired count-7 campaigns.
 
 ## CPU-QUANT-SWIGLU-PAIRED-ROUTE-001
-WHEN eager CPU execution has matching Q4_K Gate and Up geometry with a contiguous F32 M1 input, the QuantSwiGLU.Forward SHALL use exactly 1 QMatMulPair call before in-place SwiGLU fusion, while all unsupported routes retain exactly 2 QuantLinear.Forward calls.
+WHEN eager CPU execution has matching Q4_K Gate and Up geometry, a contiguous F32 M1 input, and an aligned chunk fuser, the QuantSwiGLU.Forward SHALL use exactly 1 QMatMulPairApply call and pass its sole fused output to Down, while every unsupported route retains the established paired or 2-QuantLinear fallback.
