@@ -319,3 +319,6 @@ Rationale: Pin the Q1_0 wire layout independently of the implementation.
 
 ## METAL-MXFP4-BLOCK-001
 WHEN a GGUF wire type 39 MXFP4 block is decoded, the Metal MXFP4 kernel SHALL decode each 17-byte block as one leading E8M0 exponent byte plus sixteen split-half nibble bytes, producing exactly 32 values.
+
+## METAL-MXFP4-CODES-001
+WHEN an MXFP4 nibble is decoded, the Metal MXFP4 kernel SHALL map codes 0 through 7 to 0,1,2,3,4,6,8,12 and codes 8 through 15 to 0,-1,-2,-3,-4,-6,-8,-12 respectively.
