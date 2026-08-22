@@ -1,0 +1,23 @@
+External perfscan base/candidate ratchet
+Date: 2026-08-22
+Tool: github.com/jxsl13/perfscan/perfscan@v1.71.0
+Toolchain: GOTOOLCHAIN=go1.26.6
+Network: GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan
+Base: 368ac4ca1081c6d7ea799e61b0bc26b551468c8e
+
+Production scan:
+- exact base baseline: 778 findings
+- candidate: all 778 baselined findings suppressed
+- new findings: 0
+
+Test-inclusive scan:
+- exact base baseline: 1811 findings
+- candidate: all 1811 baselined findings suppressed
+- new findings: 0
+
+The generated temporary baseline paths were normalized from the detached base
+worktree name to the candidate worktree name before the candidate ratchet.
+No production or test source suppression was added to hide a candidate finding.
+
+Generalizable result report:
+https://github.com/jxsl13/perfscan/issues/565#issuecomment-5380389629

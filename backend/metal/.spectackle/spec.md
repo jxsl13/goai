@@ -225,3 +225,21 @@ WHEN three count-seven M2 campaigns cover four resident single-token geometries 
 
 ## METAL-IQ3-HOST-ROUTE-001
 WHEN equal host-boundary M2 benchmarks do not beat fused ARM64 IQ3 by at least 1.10 times, the generic Metal IQ3 dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU route.
+
+## METAL-IQ2-XXS-BLOCK-001
+The Metal IQ2_XXS decoder SHALL decode every 66-byte type-16 block as one f16 d plus eight 8-byte pairs, applying four 8-value grid indices, four seven-bit sign indices, and the high-nibble scale to exactly 256 values.
+
+## METAL-IQ2-XS-BLOCK-001
+The Metal IQ2_XS decoder SHALL decode every 74-byte type-17 block as one f16 d, thirty-two little-endian grid/sign words, and sixteen four-bit scales to exactly 256 values.
+
+## METAL-IQ2-GRID-RESIDENCY-001
+WHEN type 16 or 17 is first used, the Metal IQ2 runtime SHALL reconstruct its 8-value codebook through the public GGUF decoder exactly once and retain one immutable process-lifetime Metal buffer reused by direct, resident, and recorder paths.
+
+## METAL-IQ2-DISPATCH-001
+WHEN an M=1 supported IQ2 projection is encoded, the Metal IQ2 dispatcher SHALL select scalar or cooperative execution with one per-type predicate shared by direct, resident, and recorder paths, with mtl_iq2_*_cooperative_set proving distinct toggle arms.
+
+## METAL-IQ2-PERF-001
+WHEN the route is promoted on M2, the Metal IQ2 cooperative route SHALL exceed scalar by 1.10x for GPU and recorder wall time in every required cell across three fresh-process count-seven AB/BA campaigns.
+
+## METAL-IQ2-HOST-ROUTE-001
+IF either IQ2 format fails to beat the fused ARM64 CPU route by at least 1.10x in every required host cell and campaign, THEN the generic synchronous Metal quant dispatcher SHALL retain CPU fallback for that format.

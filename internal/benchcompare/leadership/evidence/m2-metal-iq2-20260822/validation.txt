@@ -1,0 +1,14 @@
+PASS: git diff --check
+PASS: GOTOOLCHAIN=go1.26.6 make preflight
+PASS: GOTOOLCHAIN=go1.26.6 make preflight-metal
+PASS: GOTOOLCHAIN=go1.26.6 go test -race -tags metal -short -count=1 ./backend/metal ./llamagpu
+PASS: compiled backend/metal IQ2 correctness suite
+PASS: compiled llamagpu IQ2 recorder integration suite
+PASS: compiled llamagpu six-layer whole-token IQ2 suite
+PASS: compiled nlp IQ2 admission and Phi-3 exact byte-slicing suite
+PASS: perfscan v1.71.0 production ratchet, 778/778, zero additions
+PASS: perfscan v1.71.0 test-inclusive ratchet, 1811/1811, zero additions
+PASS: spectackle reindex, 2729 files, 18535 nodes, 34251 edges
+PASS: spectackle lint, 408 rules, 133 legacy warnings, zero errors
+NOTE: Spectackle 0.10.0 was built with Go 1.25 and cannot type-index this Go 1.26 module; syntactic indexing completed.
+NOTE: full non-short nlp has one exact-base-reproduced DiffusionLM grammar failure; see baseline-validation.txt.
