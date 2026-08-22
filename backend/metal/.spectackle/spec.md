@@ -287,3 +287,6 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-IQ2S-HOST-ROUTE-001
 IF direct host-bound IQ2_S fails to beat fused ARM64 CPU by 1.10 times in any required cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve the fused ARM64 CPU route.
+
+## METAL-TQ1-BLOCK-001
+WHEN a GGUF wire type 34 TQ1_0 block is decoded, the Metal TQ1_0 kernel SHALL decode each 54-byte block as 48 five-trit base-243 bytes, 4 four-trit tail bytes, and 1 trailing f16 scale in the pinned 256-element order.
