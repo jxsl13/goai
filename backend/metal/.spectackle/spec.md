@@ -337,3 +337,6 @@ WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the
 
 ## METAL-Q1-MXFP4-PERF-001
 WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one format, the cooperative Q1_0 or MXFP4 route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-Q1-MXFP4-HOST-ROUTE-001
+IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported for that wire type and preserve the fused ARM64 CPU route.
