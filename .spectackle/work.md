@@ -4009,7 +4009,7 @@ A fresh Go 1.26.6 M2 Pro profile of current main attributes 22.94% cumulative CP
 
 ## T-01M0NY5H7EEDRSP7BHBHQSN0QQ Implement and gate fused Q4_K pair-to-SwiGLU chunks
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0NY3846EDBT6GMMC5BCM0CE
 targets: format/gguf/quant_matmul_pair.go, format/gguf/quant_matmul_pair_test.go, backend/fusion.go, backend/cpu/swiglu_fusion.go, backend/cpu/swiglu_fusion_test.go, nn/quant_swiglu.go, nn/quant_swiglu_test.go, internal/benchcompare/leadership/evidence, BENCHMARKS.md, docs/benchmarking.md

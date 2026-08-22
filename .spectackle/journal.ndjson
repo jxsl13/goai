@@ -442,3 +442,4 @@
 {"t":"2026-08-22T23:50:02Z","eid":"babef08d017118f5","ag":"ag-8a08","ev":"create","id":"P-01M0NY3846EDBT6GMMC5BCM0CE","k":"proposal","ti":"Fuse paired Q4_K production into CPU SwiGLU consumption"}
 {"t":"2026-08-22T23:51:10Z","eid":"ae185e3ceb23a271","ag":"ag-b8a5","ev":"move","id":"P-01M0NY3846EDBT6GMMC5BCM0CE","fr":"draft","to":"active"}
 {"t":"2026-08-22T23:51:16Z","eid":"8d2896388c061464","ag":"ag-98d7","ev":"create","id":"T-01M0NY5H7EEDRSP7BHBHQSN0QQ","k":"task","ti":"Implement and gate fused Q4_K pair-to-SwiGLU chunks"}
+{"t":"2026-08-22T23:53:21Z","eid":"5f79c5e4259ebb34","ag":"ag-dbe0","ev":"move","id":"T-01M0NY5H7EEDRSP7BHBHQSN0QQ","fr":"draft","to":"active"}
