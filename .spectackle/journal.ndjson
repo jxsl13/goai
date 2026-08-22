@@ -456,3 +456,4 @@
 {"t":"2026-08-22T08:28:24Z","eid":"2abd303e9b776439","ag":"ag-5d5c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T09:24:33Z","eid":"d38cd3aa193c0fe0","ag":"ag-e884","ev":"create","id":"P-01M0MCJGS5F459EZNA0QYG4H1K","k":"proposal","ti":"Add native M2 Metal IQ4_NL quantized decode"}
 {"t":"2026-08-22T09:24:51Z","eid":"c3700aca92940120","ag":"ag-7c23","ev":"grill","id":"P-01M0MCJGS5F459EZNA0QYG4H1K","gr":"2026-08-22 open=0","hash":"00bdc803c30d46efd636bf7972c0bd377eb3bb96ad87f28d2cfeae94a664980d"}
+{"t":"2026-08-22T09:25:31Z","eid":"7e2a4a8645f128f8","ag":"ag-d48e","ev":"move","id":"P-01M0MCJGS5F459EZNA0QYG4H1K","fr":"draft","to":"active","note":"Standing user directive authorizes continued M2-first spec-driven performance work; proceed with the production-complete IQ4_NL slice and benchmark gates."}

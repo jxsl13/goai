@@ -3899,7 +3899,7 @@ choice: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validat
 
 ## P-01M0MCJGS5F459EZNA0QYG4H1K Add native M2 Metal IQ4_NL quantized decode
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 grilled: 2026-08-22 open=0
 targets: go:nlp.quantMatMulSupported, go:gguf.dequantIQ4_NL, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go
