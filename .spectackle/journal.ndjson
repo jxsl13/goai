@@ -295,3 +295,4 @@
 {"t":"2026-08-22T00:38:12Z","eid":"c273cc95edb11c33","ag":"ag-bb91","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T01:02:45Z","eid":"1beaccbe3d0377a8","ag":"ag-cc05","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T01:17:39Z","eid":"052fa0c7670459f1","ag":"ag-445d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T01:19:30Z","eid":"4ef7dc554ae52438","ag":"ag-213a","ev":"create","id":"P-01M0KGTBCHF59VJBME52TDJ43A","k":"proposal","ti":"M2-first exact IQ1_S fused row dot and portable QMatMul"}

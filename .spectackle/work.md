@@ -3866,3 +3866,11 @@ option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
 option: Bundle and accelerate both IQ3 formats in one tranche
 choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+
+## P-01M0KGTBCHF59VJBME52TDJ43A M2-first exact IQ1_S fused row dot and portable QMatMul
+kind: proposal
+state: draft
+created: 2026-08-22
+targets: go:gguf.dequantIQ1_S, go:gguf.QMatMul, format/gguf/iq1.go, format/gguf/quant_matmul.go, docs/decisions/ADR-0016-quant-matmul-capability.md
+
+Context: merged main decodes IQ1_S tensors exactly but QMatMul rejects the type. Add caller-owned block decode and exact portable F32/F64 QMatMul, then specialize only contiguous F32 M1 on ARM64 with a zero-allocation leaf that fuses the 2048x8 ternary grid, packed three-bit index highs, odd multipliers, signed delta, and activation dot. Preserve float32 weight semantics before float64 accumulation. Hard gates: at least 2x retained speedup for K4096 leaf and M1 N64/N4096 K1024 cells, zero leaf allocations, non-scaling M>1 scratch allocations, no allocation regression, maximum scalar-relative error at most 1e-4 across arbitrary packed rows, exact portable parity, neutral existing IQ1_S tensor-dequant and unchanged IQ2_S control comparisons, full/race/cross-build/preflight/Metal/perfscan/spec/CI gates. Pin architecture research commit eb8b5a7f and llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786, blob b988abf9963a192e16177661a7d99596effc0d36. Do not claim llama.cpp leadership because its ARM kernel consumes Q8_K activations rather than GoAI direct F32. Risks are qh field ordering, shared odd scale per four grid rows, delta sign, gather offsets, cancellation, and dispatch leakage.
