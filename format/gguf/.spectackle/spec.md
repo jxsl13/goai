@@ -201,3 +201,8 @@ Rationale: The ARM64 leaf must not narrow portable dtype, shape, or architecture
 WHEN IQ1_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve 2048 eight-wide ternary grid rows, packed 11-bit indices, odd qh multipliers, signed 0.125 deltas, float32 scaling, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_S optimization.
+
+## IQ1S-PORTABLE-SCRATCH-001
+The portable IQ1_S QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: M greater than one must reuse decoded-row storage instead of rebuilding a full tensor or allocating per output row.
