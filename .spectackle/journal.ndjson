@@ -296,3 +296,6 @@
 {"t":"2026-08-22T01:02:45Z","eid":"1beaccbe3d0377a8","ag":"ag-cc05","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T01:17:39Z","eid":"052fa0c7670459f1","ag":"ag-445d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T01:19:30Z","eid":"4ef7dc554ae52438","ag":"ag-213a","ev":"create","id":"P-01M0KGTBCHF59VJBME52TDJ43A","k":"proposal","ti":"M2-first exact IQ1_S fused row dot and portable QMatMul"}
+{"t":"2026-08-22T01:19:37Z","eid":"ad5b714887d040d4","ag":"ag-db49","ev":"grill","id":"P-01M0KGTBCHF59VJBME52TDJ43A","gr":"2026-08-22 open=0","hash":"6046fd3ff89e5f58fea44d9f30c318cb8ac52cece818e4e740a3eb2816d8ac46"}
+{"t":"2026-08-22T01:19:37Z","eid":"6231b79ef333c866","ag":"ag-db49","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T01:20:29Z","eid":"1b9987eaca5f86d4","ag":"ag-71a7","ev":"move","id":"P-01M0KGTBCHF59VJBME52TDJ43A","fr":"draft","to":"active","note":"Authorized by the standing M2-first bottom-up performance goal. Grill completed with zero open questions. Existing ADR-0016 preserves the direct-F32/F64 boundary; the proposal pins historical architecture research and exact llama.cpp source while explicitly excluding incomparable Q8_K-activation leadership claims."}
