@@ -222,3 +222,8 @@ Rationale: The specialized leaf assumes contiguous F32 activations and must not 
 WHEN IQ1_M weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve split-f16 super-scale reconstruction, 2048 ternary grid rows, packed 11-bit indices, paired odd multipliers, signed 0.125 deltas, float32 scaling, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_M optimization.
+
+## IQ1M-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul}
+The portable IQ1_M QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Caller-owned decode scratch prevents output-row count from multiplying temporary allocations.
