@@ -4006,3 +4006,12 @@ created: 2026-08-22
 targets: format/gguf/quant_matmul_pair.go, format/gguf/quant_matmul_pair_test.go, backend/fusion.go, backend/cpu/swiglu_fusion.go, backend/cpu/swiglu_fusion_test.go, nn/quant_swiglu.go, nn/quant_swiglu_test.go, internal/benchcompare/leadership/evidence, BENCHMARKS.md, docs/benchmarking.md
 
 A fresh Go 1.26.6 M2 Pro profile of current main attributes 22.94% cumulative CPU samples to QMatMulPair, versus 11.47% to remaining individual QMatMul and 2.74% to grouped QKV. qmatmulParallelChunks still contributes 40.07% of allocation objects. The accepted Q4_K pair route materializes both hidden-width outputs, then the accepted CPU in-place SwiGLU route scans them afterward. Prototype one optional CPU chunk-fusion capability: QMatMul computes aligned gate/up row chunks, applies the existing exact build-selected vector SiLU-times-up operation on each disjoint chunk, returns only gate, and recycles bounded raw up scratch. Preserve independent, recorder, accelerator, unsupported-quant, multi-row, misaligned, and unsupported-backend paths. Promote only with bit-identical pair-consumer output and production digest, at least 1.10x leaf speedup, at least 1.03x whole 64-step decode speedup across order-alternating fresh processes, and lower allocated bytes; otherwise remove and reject.
+
+## T-01M0NY5H7EEDRSP7BHBHQSN0QQ Implement and gate fused Q4_K pair-to-SwiGLU chunks
+kind: task
+state: draft
+created: 2026-08-22
+parent: P-01M0NY3846EDBT6GMMC5BCM0CE
+targets: format/gguf/quant_matmul_pair.go, format/gguf/quant_matmul_pair_test.go, backend/fusion.go, backend/cpu/swiglu_fusion.go, backend/cpu/swiglu_fusion_test.go, nn/quant_swiglu.go, nn/quant_swiglu_test.go, internal/benchcompare/leadership/evidence, BENCHMARKS.md, docs/benchmarking.md
+
+Add an optional backend raw-F32 SwiGLU chunk capability, a QMatMul pair-consumer primitive with eight-element-aligned disjoint chunks and bounded reusable up scratch, and an exact eager CPU QuantSwiGLU route. Reuse the existing build-selected CPU SiLU and Mul leaves. Add low-level exactness, fallback, callback-count, scratch-allocation, end-to-end, and permanent leaf benchmarks. Run order-alternating fresh-process M2 production gates; retain only if leaf and whole-model thresholds in the parent proposal clear.
