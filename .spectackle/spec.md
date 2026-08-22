@@ -427,6 +427,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - P-01M0N996E4ETXTWFTDCTF17CWW Refresh M2 CPU quantized decode leadership: Archived after the M2 CPU quantized-decode matrix was refreshed: Q8_0 now beats float 1.256x in the original whole-model cell, while the production llama.cpp comparison remains explicitly unmatched and the failed pool candidate remains removed.
 - T-01M0ND3KXJFPZ91B0VM9BR6DK5 Attribute and eliminate dominant M2 CPU decode allocations: Archived after green full preflight, M2 Metal, race, cross-platform compile, exact-digest production A/B, and committed evidence.
 - P-01M0ND1PT6EMKSAX9S889TRKQ5 Profile and reduce M2 CPU quantized decode allocations: Archived after implementation commit 9e58e031 and complete M2-first validation. Durable learning lives in CPU-SWIGLU-INPLACE-FUSION-001, CPU-SWIGLU-INPLACE-FALLBACK-001, benchmark documentation, evidence bundle, and perfscan #828.
+- T-01M0NHAMKMEDNRFHEGP8MKT2T4 Implement and gate paired Q4_K M1 CPU projections: Archived after the paired Q4_K projection implementation, permanent leaf benchmark, production TinyLlama A/B, exactness tests, full validation, evidence bundle, and perfscan issue 830 were committed.
+- P-01M0NH9R8RFQT9RXN9THYAJBBK Fuse CPU QuantSwiGLU gate and up QMatMul fan-out: Archived after the child task, two contracts, exactness boundary, benchmark evidence, full validation, and perfscan issue 830 were committed. The result is an internal M2 CPU improvement, not a matched cross-library leadership claim.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.

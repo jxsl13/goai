@@ -1,0 +1,12 @@
+perfscan: github.com/jxsl13/perfscan@v1.80.0
+resolution: GOPROXY=direct
+
+The format/gguf and nn package scans contain existing repository findings.
+Filtering JSON output to the changed production files returns an empty array:
+
+- format/gguf/quant_matmul_pair.go: no findings
+- nn/quant_swiglu.go: no findings
+
+The generalizable optimization pattern is filed as:
+https://github.com/jxsl13/perfscan/issues/830
+Detect sibling kernels that can share one parallel fan-out

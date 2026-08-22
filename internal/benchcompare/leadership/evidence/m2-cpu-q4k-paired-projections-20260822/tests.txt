@@ -1,0 +1,13 @@
+PASS: paired Q4_K outputs are bit-exact to two independent QMatMul calls
+PASS: QMatMulPair rejects unsupported quant type, dtype, M>1, truncated weights, and non-positive dimensions
+PASS: existing QMatMul bit-identity and fused-decode exactness tests
+PASS: eager QuantSwiGLU matches recorded fallback for Q8_0 and paired Q4_K
+PASS: recorder fallback observes OpSiLU and OpMul; public input remains unchanged
+PASS: go test ./format/gguf ./nn ./internal/benchcompare
+PASS: make apicheck
+PASS: go test -race ./format/gguf ./nn
+PASS: Linux AMD64 and ARM64 cross-compilation for format/gguf and nn tests
+PASS: external perfscan v1.80.0 via GOPROXY=direct; no changed-production-file findings
+PASS: Spectackle reindex with 6,866 typed calls and no drift records for the two active contracts
+PASS: make preflight-full (pure-Go build/vet/test, module drift, benchmark smoke, SIMD build, native M2 Metal and llamagpu)
+KNOWN PRE-EXISTING: the repository-wide Spectackle check reports 16 legacy path-valued anchors and context-record warnings unrelated to this tranche; neither new contract appears in those records.

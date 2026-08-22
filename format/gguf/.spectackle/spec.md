@@ -326,3 +326,6 @@ WHEN Read or QuantTensor.Dequantize receives wire type 16, 17, 18, 20, 21, 23, 2
 
 ## GGUF-IQ-MXFP4-WIRE-SCOPE-001
 The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes, decoder arithmetic, QMatMul selectors, platform routes, and unsupported-type errors.
+
+## GGUF-Q4K-PAIRED-M1-001
+WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation, the QMatMulPair SHALL allocate 2 F32 outputs, invoke qmatmulParallelChunks exactly once, and match 2 independent QMatMul outputs bit-for-bit.
