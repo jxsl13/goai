@@ -3979,7 +3979,7 @@ choice: Use one TQ compile and initialization boundary with specialized per-form
 
 ## T-01M0MXCMPMF3JTXQBMCSA5V48Z Implement and gate native M2 Metal TQ1_0 and TQ2_0 decode
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0MXA8ZRF94TCEP455E4VT5G
 targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, go:gguf.dequantTQ1_0Into, go:gguf.dequantTQ2_0Into

@@ -643,3 +643,4 @@
 {"t":"2026-08-22T14:17:57Z","eid":"cd5649da74491cb2","ag":"ag-3ba1","ev":"decide","id":"ADR-01M0MXBCD9EY2V25H7YY10EVWR","note":"Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts"}
 {"t":"2026-08-22T14:18:12Z","eid":"200314f16eed940e","ag":"ag-ba88","ev":"move","id":"P-01M0MXA8ZRF94TCEP455E4VT5G","fr":"draft","to":"active"}
 {"t":"2026-08-22T14:18:26Z","eid":"593270973995fedb","ag":"ag-73ed","ev":"create","id":"T-01M0MXCMPMF3JTXQBMCSA5V48Z","k":"task","ti":"Implement and gate native M2 Metal TQ1_0 and TQ2_0 decode"}
+{"t":"2026-08-22T14:18:37Z","eid":"b25df19c7d08b4a8","ag":"ag-2b53","ev":"move","id":"T-01M0MXCMPMF3JTXQBMCSA5V48Z","fr":"draft","to":"active"}
