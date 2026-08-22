@@ -296,3 +296,6 @@ WHEN a GGUF wire type 35 TQ2_0 block is decoded, the Metal TQ2_0 kernel SHALL de
 
 ## METAL-TQ2-CODES-001
 WHEN arbitrary raw TQ2_0 codes execute on Metal, the Metal TQ2_0 kernel SHALL map codes 0, 1, 2, and 3 to minus 1, 0, plus 1, and plus 2 times the block scale.
+
+## METAL-TQ-NUMERIC-001
+WHEN valid TQ1_0 or TQ2_0 matrix multiplication executes, the Metal TQ backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and mutate 0 activation or compressed-weight bytes for both wire types.
