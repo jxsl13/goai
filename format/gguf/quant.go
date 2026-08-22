@@ -73,6 +73,8 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 		return quantizeQ8_0(x), nil
 	case Q4_0:
 		return quantizeQ4_0(x), nil
+	case Q4_1:
+		return quantizeQ4_1(x), nil
 	case Q2_K:
 		return quantizeQ2_K(x), nil
 	case Q3_K:
@@ -111,6 +113,8 @@ func Dequantize(data []byte, qt QuantType, n int) (*tensor.Tensor, error) {
 		return dequantQ8_0(tensor.Shape{n}, data)
 	case Q4_0:
 		return dequantQ4_0(tensor.Shape{n}, data)
+	case Q4_1:
+		return dequantQ4_1(tensor.Shape{n}, data)
 	case Q2_K:
 		return dequantQ2_K(tensor.Shape{n}, data)
 	case Q3_K:

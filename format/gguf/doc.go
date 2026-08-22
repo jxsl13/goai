@@ -10,13 +10,13 @@
 // uses. [Read]/[ReadFile] parse a stream into a [File] holding the version, the
 // metadata map, and every tensor.
 //
-// Weights are usually quantized. On read, F16 is widened and the block-quantized
-// types Q8_0 and Q4_0 are dequantized to F32, so [File.Tensors] always hands back
+// Weights are usually quantized. On read, F16 is widened and supported block-quantized
+// types including Q8_0, Q4_0, affine Q4_1, K-quants, i-quants, and MXFP4 are dequantized to F32, so [File.Tensors] always hands back
 // ready-to-compute F32 tensors — verified block-for-block against the ggml
 // reference (§V1, §R19/§R21). For inference that must stay compressed, [QMatMul]
 // multiplies by a quantized weight while dequantizing ONE ROW at a time, so a
 // quantized model runs without ever materializing the full-precision weight matrix
-// (§T39) — the memory payoff of quantization (~3.8× for Q8_0, ~7.1× for Q4_0).
+// (§T39) — the memory payoff of quantization (~3.8× for Q8_0 and ~6.4× for Q4_1).
 //
 // The parser is written to be safe on hostile input (§V15): string and array
 // lengths are bounded, metadata array nesting is depth-capped so a crafted file

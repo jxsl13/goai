@@ -1,11 +1,11 @@
 // Package gguf reads and writes the GGUF model format (ggml/llama.cpp, §T22, §T107,
 // §R7): header (magic "GGUF", version 3), metadata KVs, tensor infos, aligned data
-// section. Quantized tensors are dequantized to F32 on load: Q8_0 (f16 scale +
-// 32×int8 per block) and Q4_0 (f16 scale + 32 4-bit values, offset −8), plus
-// F16→F32 and raw F32/F64. GGUF stores dims innermost-first; shapes are
+// section. Quantized tensors are dequantized to F32 on load, including Q8_0,
+// symmetric Q4_0, affine Q4_1, K-quants, i-quants, and MXFP4, plus F16→F32 and
+// raw F32/F64. GGUF stores dims innermost-first; shapes are
 // reversed into our row-major convention on read. Write serializes a File back
 // (tensors as F32), so Read→Write→Read round-trips exactly (§V15). Quantize/Dequantize
-// (§T122) also encode f32↔Q8_0/Q4_0 directly, so quantized weights can be produced,
+// (§T122) also encode supported write formats such as Q8_0/Q4_0/Q4_1 directly, so quantized weights can be produced,
 // not just read.
 //
 // Further reading: the GGUF specification (ggml-org/ggml docs) and the llama.cpp quantization source — the defining references for this format (file formats have no paper, SPEC V16).
@@ -76,6 +76,7 @@ const (
 	tF32  = 0
 	tF16  = 1
 	tQ4_0 = 2
+	tQ4_1 = 3
 	tQ8_0 = 8
 	tQ2_K = 10 // k-quant super-block, asymmetric affine 2-bit (§R104)
 	tQ3_K = 11 // k-quant super-block, symmetric 3-bit + high-bit plane (§R103)
@@ -701,6 +702,8 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 		return dequantQ8_0(ti.shape, raw)
 	case tQ4_0:
 		return dequantQ4_0(ti.shape, raw)
+	case tQ4_1:
+		return dequantQ4_1(ti.shape, raw)
 	case tQ2_K:
 		return dequantQ2_K(ti.shape, raw)
 	case tQ3_K:
@@ -760,6 +763,11 @@ func byteSize(ggType uint32, n int) (int, error) {
 			return 0, fmt.Errorf("Q4_0 numel %d not multiple of %d", n, blockElems)
 		}
 		return n / blockElems * 18, nil // f16 scale + 16 nibble-bytes
+	case tQ4_1:
+		if n%blockElems != 0 {
+			return 0, fmt.Errorf("Q4_1 numel %d not multiple of %d", n, blockElems)
+		}
+		return n / blockElems * q41BlockSize, nil // f16 scale + f16 minimum + 16 nibble-bytes
 	case tTQ1_0:
 		if n%tq1BlockElems != 0 {
 			return 0, fmt.Errorf("TQ1_0 numel %d not multiple of %d", n, tq1BlockElems)

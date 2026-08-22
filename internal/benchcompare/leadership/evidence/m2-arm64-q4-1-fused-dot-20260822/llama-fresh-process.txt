@@ -1,0 +1,17 @@
+Pinned commit: 3af988fabcf79fd81f8720505e684d2aa5bfc786
+Build: Release, CPU-only, static, GGML_NATIVE=ON
+Compiler: Apple clang 21.0.0
+Shape: K=4096
+Iterations per process: 200000
+Processes: 10, alternating LLAMA_Q41_QUANT_FIRST
+Discarded: none
+
+dot_q4_1_q8_1_ns:
+206.700 120.324 120.602 121.358 120.012 120.483 121.492 120.588 119.903 122.545
+median: 120.595
+
+quantize_q8_1_plus_dot_ns:
+1137.887 1099.678 1093.636 1094.896 1113.849 1097.283 1097.609 1088.672 1088.984 1088.843
+median: 1096.0895
+
+The first dot-only sample is retained. The median is robust to the cold outlier.

@@ -35,7 +35,7 @@ Load a quantized llama.cpp model and generate text — in plain terms: open a
 ready-made model file, ask it a question, print its answer:
 
 ```go
-f, err := gguf.ReadFile("model.gguf") // any llama.cpp GGUF: K-quants, i-quants, MXFP4
+f, err := gguf.ReadFile("model.gguf") // llama.cpp GGUF: legacy Q4_1, K-quants, i-quants, MXFP4
 if err != nil {
 	log.Fatal(err)
 }

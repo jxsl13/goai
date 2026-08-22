@@ -1,0 +1,39 @@
+Hardware: Apple M2 Pro
+Go: go1.26.6 darwin/arm64
+Benchtime: 300ms per sub-benchmark
+Processes: 10, alternating GOAI_GGUF_Q41_NEON_FIRST
+Discarded: none
+
+BenchmarkDotQ41Paths/scalar-fused ns/op:
+4998 4926 4983 4975 4959 5030 5061 5274 5306 4976
+median: 4990.5
+
+BenchmarkDotQ41Paths/neon-fused ns/op:
+821.3 818.6 826.6 822.9 827.9 824.9 826.1 878.9 897.6 841.3
+median: 826.35
+
+BenchmarkDotQ41Paths/materialized ns/op:
+7526 7458 7578 8562 7613 7609 7920 12430 8563 7479
+median: 7611
+
+BenchmarkQMatMulQ41Paths/N64_K1024/scalar ns/op:
+89281 78469 78020 78441 78318 78637 79855 91451 88335 78032
+median: 78553
+allocations: 4 allocs/op, 592 B/op in every sample
+
+BenchmarkQMatMulQ41Paths/N64_K1024/neon ns/op:
+14310 13532 13462 13534 13444 13497 14817 15060 16884 14088
+median: 13811
+allocations: 4 allocs/op, 592 B/op in every sample
+
+BenchmarkQMatMulQ41Paths/N4096_K1024/scalar ns/op:
+754676 860151 748313 770886 750344 764643 897131 1498326 1272967 859114
+median: 815000
+allocations: 29 allocs/op
+
+BenchmarkQMatMulQ41Paths/N4096_K1024/neon ns/op:
+200549 192726 189357 189715 187817 190445 611511 546899 203403 197669
+median: 195197.5
+allocations: 29 allocs/op
+
+System-load outliers are retained. Medians are descriptive; no p-value is claimed.

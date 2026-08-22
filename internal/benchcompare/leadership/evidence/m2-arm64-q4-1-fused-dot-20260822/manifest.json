@@ -1,0 +1,26 @@
+{
+  "date": "2026-08-22",
+  "hardware": "Apple M2 Pro",
+  "os": "macOS 26.5.1 (25F80)",
+  "go": "go1.26.6 darwin/arm64",
+  "clang": "Apple clang 21.0.0 (clang-2100.1.1.101)",
+  "base_commit": "433f58e147ca015566471857e46c9ef18daa6b07",
+  "branch": "codex/gguf-q4-1",
+  "spectackle": "v0.9.3 (go1.26.6)",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan@v1.71.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "llama_cpp_commit": "3af988fabcf79fd81f8720505e684d2aa5bfc786",
+  "sampling": {
+    "go_benchtime": "300ms; leaf and QMatMul in separate fresh-process campaigns; QMatMul uses -test.benchmem",
+    "fresh_processes_per_cell": 10,
+    "discarded": "none",
+    "order": "alternated scalar/NEON first; alternated llama dot/conversion-plus-dot first",
+    "summary": "median; no inferential-statistics claim"
+  },
+  "binary_sha256": {
+    "goai_gguf": "74d7dc9d4f5aafce1fe7bd47d613d86b71b54224bf595e7ae19d2722f50f24ce",
+    "goai_gguf_race": "fc3aff1c624d076107fb7c2c5ca0f10848451d1a320a82a4b5bc700237c5cf85",
+    "llama_harness": "81d32812ac1fe3b03f6bd822c298774c2ee7050469cfd8d803db4516f2abcfd4",
+    "llama_libggml_cpu": "7fa6a73ead70cbb67055329afa99c9b40a937808b604ac9a329bdd8052a239b1"
+  }
+}

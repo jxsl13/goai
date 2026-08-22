@@ -118,7 +118,7 @@ func TestQuantizeOnGridExact(t *testing.T) {
 // §V15: re-quantizing a dequantized block yields byte-identical output — the grid is
 // stable (idempotent), the strongest round-trip invariant.
 func TestQuantizeIdempotent(t *testing.T) {
-	for _, qt := range []QuantType{Q8_0, Q4_0} {
+	for _, qt := range []QuantType{Q8_0, Q4_0, Q4_1} {
 		x := tensor.FromFloat64(tensor.Shape{64}, randF32Block(64, 3))
 		b1, _ := Quantize(x, qt)
 		deq, _ := Dequantize(b1, qt, 64)

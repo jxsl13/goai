@@ -92,7 +92,7 @@ construction) and
 the absorbed operator, so the latent decode runs fully quantized with the MLA
 cache-memory win and a bit-exact anchor; the pe-row de-interleave is a lossless
 row permutation on the quantized bytes) decode
-straight from ggml Q-blocks (Q8_0, Q4_0, and the K-quants) with no dequantize
+straight from ggml Q-blocks (Q8_0, Q4_0, affine Q4_1, and the K-quants) with no dequantize
 step: each projection is a `nn.QuantLinear` over the raw block bytes, and only
 the small precision-sensitive pieces (norm gains, the embedding lookup table,
 MoE routers) are dequantized to f32.
