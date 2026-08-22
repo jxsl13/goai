@@ -3954,7 +3954,7 @@ Duplicated per-format residency was rejected because it repeats initialization a
 
 ## P-01M0MXA8ZRF94TCEP455E4VT5G Accelerate resident TQ1_0 and TQ2_0 decode on M2 Metal
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 grilled: 2026-08-22 open=0
 targets: go:gguf.dequantTQ1_0Into, go:gguf.dequantTQ2_0Into, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
