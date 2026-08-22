@@ -137,6 +137,15 @@ int mtl_qmatmul_iq4_nl(const float* X, const unsigned char* W, float* O, int M, 
 // split-half nonlinear-codebook nibbles. K must be a multiple of 256.
 int mtl_qmatmul_iq4_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// mtl_iq2_grid_upload copies one exact reconstructed IQ2 codebook into a process-lifetime
+// immutable Metal buffer. qtype 16 expects 256x8 floats; qtype 17 expects 512x8 floats.
+int mtl_iq2_grid_upload(int qtype, const float* grid, int count);
+
+// Native exact-grid IQ2 matmuls over GGUF type-16 (66-byte IQ2_XXS blocks) and type-17
+// (74-byte IQ2_XS blocks). K must be a positive multiple of 256.
+int mtl_qmatmul_iq2_xxs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+int mtl_qmatmul_iq2_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
 // mtl_iq3_grid_upload copies one exact reconstructed IQ3 codebook into a process-lifetime
 // immutable Metal buffer. qtype 18 expects 256x4 floats; qtype 21 expects 512x4 floats.
 int mtl_iq3_grid_upload(int qtype, const float* grid, int count);
@@ -164,6 +173,8 @@ int mtl_q4_0_cooperative_set(int on);
 int mtl_q4_1_cooperative_set(int on);
 int mtl_iq4_nl_cooperative_set(int on);
 int mtl_iq4_xs_cooperative_set(int on);
+int mtl_iq2_xxs_cooperative_set(int on);
+int mtl_iq2_xs_cooperative_set(int on);
 int mtl_iq3_xxs_cooperative_set(int on);
 int mtl_iq3_s_cooperative_set(int on);
 int mtl_q8_0_cooperative_set(int on);

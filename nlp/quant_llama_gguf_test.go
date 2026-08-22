@@ -18,6 +18,12 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 	if qt == gguf.IQ4_XS {
 		blocks = shape.Numel() / 256
 		blockBytes = 136
+	} else if qt == gguf.IQ2_XXS {
+		blocks = shape.Numel() / 256
+		blockBytes = 66
+	} else if qt == gguf.IQ2_XS {
+		blocks = shape.Numel() / 256
+		blockBytes = 74
 	} else if qt == gguf.IQ3_XXS {
 		blocks = shape.Numel() / 256
 		blockBytes = 98
@@ -42,7 +48,7 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 		} else if qt == gguf.Q4_1 {
 			binary.LittleEndian.PutUint16(raw[base+2:], 0) // f16 m=0
 			start = 4
-		} else if qt == gguf.IQ3_XXS || qt == gguf.IQ3_S {
+		} else if qt == gguf.IQ2_XXS || qt == gguf.IQ2_XS || qt == gguf.IQ3_XXS || qt == gguf.IQ3_S {
 			binary.LittleEndian.PutUint16(raw[base:], 0x1000) // small f16 d
 		}
 		for i := start; i < blockBytes; i++ {
@@ -53,7 +59,7 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 }
 
 // The real raw-GGUF loader admits modern read-only quant formats without eagerly expanding their
-// projection weights, including 256-value IQ3 and IQ4 super-blocks.
+// projection weights, including 256-value IQ2, IQ3, and IQ4 super-blocks.
 func TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants(t *testing.T) {
 	m, err := nlp.NewLlama(nlp.LlamaConfig{
 		Vocab: 12, Ctx: 16, Dim: 256, Heads: 8, KVHeads: 2, Layers: 1, Hidden: 256, Eps: 1e-5, RopeBase: 10000,
@@ -79,7 +85,7 @@ func TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		qt   gguf.QuantType
-	}{{"Q4_1", gguf.Q4_1}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ4_XS", gguf.IQ4_XS}} {
+	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ4_XS", gguf.IQ4_XS}} {
 		t.Run(tc.name, func(t *testing.T) {
 			qt := tc.qt
 			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))

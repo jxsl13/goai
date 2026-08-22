@@ -1,0 +1,55 @@
+^D=== RUN   TestMetalQMatMulIQ2CrossReference
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XXS
+    iq2_test.go:111: maximum relative difference 1.844e-07
+    iq2_test.go:111: maximum relative difference 7.416e-07
+    iq2_test.go:111: maximum relative difference 2.017e-06
+    iq2_test.go:111: maximum relative difference 2.139e-06
+    iq2_test.go:111: maximum relative difference 2.083e-06
+=== RUN   TestMetalQMatMulIQ2CrossReference/IQ2_XS
+    iq2_test.go:111: maximum relative difference 7.889e-07
+    iq2_test.go:111: maximum relative difference 2.055e-06
+    iq2_test.go:111: maximum relative difference 2.712e-07
+    iq2_test.go:111: maximum relative difference 8.966e-06
+    iq2_test.go:111: maximum relative difference 4.483e-07
+--- PASS: TestMetalQMatMulIQ2CrossReference (0.01s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XXS (0.01s)
+    --- PASS: TestMetalQMatMulIQ2CrossReference/IQ2_XS (0.00s)
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS
+    iq2_test.go:140: maximum relative difference 2.766e-07
+    iq2_test.go:140: maximum relative difference 1.959e-06
+    iq2_test.go:140: maximum relative difference 3.362e-06
+    iq2_test.go:140: maximum relative difference 5.147e-07
+    iq2_test.go:140: maximum relative difference 4.983e-06
+=== RUN   TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS
+    iq2_test.go:140: maximum relative difference 4.733e-06
+    iq2_test.go:140: maximum relative difference 4.951e-06
+    iq2_test.go:140: maximum relative difference 7.354e-07
+    iq2_test.go:140: maximum relative difference 1.481e-06
+    iq2_test.go:140: maximum relative difference 1.510e-05
+--- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2CooperativeMatchesScalar/IQ2_XS (0.00s)
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS
+=== RUN   TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS
+--- PASS: TestMetalQMatMulIQ2FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2FloatingPointClass/IQ2_XS (0.00s)
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS
+    iq2_test.go:193: maximum relative difference 2.004e-07
+=== RUN   TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS
+    iq2_test.go:193: maximum relative difference 1.259e-07
+--- PASS: TestMetalQMatMulIQ2DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2DispatchAndValidation/IQ2_XS (0.00s)
+=== RUN   TestMetalQMatMulIQ2RecorderResident
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XXS
+    iq2_test.go:255: maximum relative difference 9.765e-06
+=== RUN   TestMetalQMatMulIQ2RecorderResident/IQ2_XS
+    iq2_test.go:255: maximum relative difference 2.055e-06
+--- PASS: TestMetalQMatMulIQ2RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ2RecorderResident/IQ2_XS (0.00s)
+PASS

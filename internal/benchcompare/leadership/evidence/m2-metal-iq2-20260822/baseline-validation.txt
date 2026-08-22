@@ -1,0 +1,15 @@
+Full local NLP package command:
+GOTOOLCHAIN=go1.26.6 go test ./nlp
+
+Candidate result:
+FAIL TestDiffusionLMGrammarE2E
+masked-diffusion eval CE 2.924 -> 0.085
+generated "a sra s ee s a s" is not a valid 16-char grammar window
+
+Exact-base isolated reproduction:
+base=368ac4ca1081c6d7ea799e61b0bc26b551468c8e
+/private/tmp/goai-metal-iq2-nlp-base.test -test.run '^TestDiffusionLMGrammarE2E$' -test.v
+FAIL with the identical CE, generated string, and assertion.
+
+The IQ2-specific NLP admission and Phi-3 byte-slicing tests pass. Repository
+preflight uses the supported short lane and passes all packages, including nlp.

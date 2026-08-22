@@ -220,6 +220,12 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 3 { // GGUF Q4_1: recorder-only residency; host QuantLinear stays on faster ARM64.
 		return metal.UploadQWeightQ4_1(weight, n, k)
 	}
+	if qt == 16 { // GGUF IQ2_XXS: exact eight-value grids, recorder-only after the M2 host-route gate.
+		return metal.UploadQWeightIQ2_XXS(weight, n, k)
+	}
+	if qt == 17 { // GGUF IQ2_XS: exact 9-bit grid blocks, recorder-only after the M2 host-route gate.
+		return metal.UploadQWeightIQ2_XS(weight, n, k)
+	}
 	if qt == 18 { // GGUF IQ3_XXS: exact grid blocks, recorder-only after the M2 host-route gate.
 		return metal.UploadQWeightIQ3_XXS(weight, n, k)
 	}

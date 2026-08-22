@@ -1,0 +1,7 @@
+^D=== RUN   TestMetalUploadIQ2UsesRecorderOnlyResidentPath
+=== RUN   TestMetalUploadIQ2UsesRecorderOnlyResidentPath/IQ2_XXS
+=== RUN   TestMetalUploadIQ2UsesRecorderOnlyResidentPath/IQ2_XS
+--- PASS: TestMetalUploadIQ2UsesRecorderOnlyResidentPath (0.00s)
+    --- PASS: TestMetalUploadIQ2UsesRecorderOnlyResidentPath/IQ2_XXS (0.00s)
+    --- PASS: TestMetalUploadIQ2UsesRecorderOnlyResidentPath/IQ2_XS (0.00s)
+PASS
