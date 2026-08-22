@@ -258,3 +258,8 @@ Rationale: Caller-owned decode scratch prevents output-row count from multiplyin
 WHEN contiguous F32 M1 activations use Q1_0 weights, the Apple ARM64 Q1_0 selector SHALL dispatch 1 whole-row NEON sign-XOR and f16-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: Single-token direct-F32 decode is the M2 CPU hot path; sign-bit expansion can avoid materialized weights.
+
+## ARM64-Q1-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul}
+The Q1_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: The native leaf assumes ARM64 F32 row layout and must not leak into portable, F64, or prefill semantics.
