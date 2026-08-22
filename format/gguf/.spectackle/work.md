@@ -41,12 +41,3 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
-
-## T-01M0M30EFGEN49ZG22VFTE4JSE Route every supported IQ and MXFP4 wire type through decodeTensor
-kind: task
-state: done
-created: 2026-08-22
-parent: P-01M0M2XZRGFSWVT5G94ZXT61S8
-targets: go:gguf.decodeTensor, go:gguf.QuantTensor.Dequantize, go:gguf.Read, format/gguf/iq_wire_id_test.go
-
-Implement exact decodeTensor cases for IQ2_XXS (16), IQ2_XS (17), IQ3_XXS (18), IQ4_NL (20), IQ3_S (21), IQ4_XS (23), IQ1_M (29), and MXFP4 (39). Add table-driven tests that construct real single-tensor GGUF bytes and prove eager Read, ReadRaw plus QuantTensor.Dequantize, direct decodeTensor, and public Dequantize are exactly equal for every type. Keep unsupported wire IDs as clean errors. Run focused, package, race, cross-compile, benchmark, external perfscan, and preflight gates; file a perfscan issue only if a generalizable performance gain is observed.
