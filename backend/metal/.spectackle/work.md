@@ -52,12 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0NSPZ36FZKRC1N1CFER4XCG Stabilize the fused RoPE F16-KV performance gate
-kind: proposal
-state: done
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:metal.TestRoPEF16KVAppendInterleavedCampaigns
-
-The hosted macOS ARM64 runner failed the same unrelated timing gate in three consecutive CI attempts although all correctness lanes passed. The gate already gathers 21 order-alternated samples per arm, but it incorrectly requires every seven-sample campaign median to exceed 1.25x. Preserve the production-shaped 22-boundary command buffer and all per-campaign diagnostics, then gate on the aggregate 21-sample median with a conservative 1.20x floor. Validate locally across repeated fresh test-binary invocations and prove the aggregation logic rejects ratios below the floor.
