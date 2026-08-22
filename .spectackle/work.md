@@ -4009,7 +4009,7 @@ Production TinyLlama Q4_K_M CPU decode on Apple M2 Pro currently reports a media
 
 ## T-01M0ND3KXJFPZ91B0VM9BR6DK5 Attribute and eliminate dominant M2 CPU decode allocations
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0ND1PT6EMKSAX9S889TRKQ5
 targets: go:nlp.QuantLlama.DecodeStep, go:gguf.QMatMul, internal/benchcompare/prod_cpu_quant_test.go
