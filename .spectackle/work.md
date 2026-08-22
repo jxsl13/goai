@@ -3951,3 +3951,11 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
+
+## P-01M0MXA8ZRF94TCEP455E4VT5G Accelerate resident TQ1_0 and TQ2_0 decode on M2 Metal
+kind: proposal
+state: draft
+created: 2026-08-22
+targets: go:gguf.dequantTQ1_0Into, go:gguf.dequantTQ2_0Into, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
+
+Add exact native Metal resident matvec paths for ggml TQ1_0 wire type 34 and TQ2_0 wire type 35 at M=1 transformer decode. Preserve TQ1_0 54-byte blocks, base-243 five-trit and four-trit tail order, trailing f16 scale, and TQ2_0 66-byte blocks, 32-lane two-bit plane order, raw code 3 mapping to plus 2, and trailing f16 scale. Use one 32-lane SIMD group per output row with fused decode and dot, independent per-format scalar/cooperative selectors, direct/resident/recorder paths, and explicit recorder-only Llama/Phi-3 admission. Gate each format independently on public GGUF cross-reference parity, input immutability, validation failures, three fresh-process count-seven campaigns over KV, square, gate, and down shapes against scalar Metal and fused ARM64 CPU controls, identical-token whole-model reachability, and unchanged-control drift. Keep direct host-bound execution on CPU unless every declared cell wins. Pin evidence and report generalized findings to perfscan.
