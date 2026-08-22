@@ -348,3 +348,6 @@ Rationale: Prevents a cache-only or noisy win from replacing the production geom
 
 ## METAL-Q6K-GEOMETRY-NUMERIC-001
 WHEN a specialized rows-per-SIMD Q6_K kernel processes a valid resident single-token projection, the Metal Q6_K kernel SHALL match the two-row control within 2e-5 relative error, preserve floating-point class, and mutate zero input bytes.
+
+## METAL-Q6K-GEOMETRY-SCOPE-001
+WHEN M exceeds one or the device lacks 32-lane SIMD groups with 64-thread threadgroups, the Metal Q6_K selector SHALL dispatch the existing scalar route and issue exactly zero rows-per-SIMD candidate threadgroups.
