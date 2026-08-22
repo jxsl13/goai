@@ -302,3 +302,6 @@ WHEN valid TQ1_0 or TQ2_0 matrix multiplication executes, the Metal TQ backend S
 
 ## METAL-TQ-DISPATCH-001
 WHEN direct, resident, or recorder TQ dispatch selects a pipeline, the Metal TQ backend SHALL select exactly 1 scalar or cooperative format-specific pipeline through 1 shared per-format predicate.
+
+## METAL-TQ-FALLBACK-001
+WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal TQ selector SHALL dispatch the matching scalar TQ pipeline and issue exactly 0 cooperative TQ threadgroups.
