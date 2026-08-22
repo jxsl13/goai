@@ -72,7 +72,7 @@ GPU-timestamp roofline measurements on Apple M2 Pro put the current Q6_K coopera
 
 ## T-01M0N51GZ1FC1B3VQETC8FDZMN Implement and gate Q6_K rows-per-SIMD variants
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0N4ZCJ1FRNT7FDZ03P1BN4W
 refs: R-01M0N4TXJQE4NTD97E585SHFTP
