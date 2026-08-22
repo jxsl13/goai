@@ -1,0 +1,96 @@
+//go:build arm64
+
+#include "textflag.h"
+
+// Expand sixteen unsigned nibbles from SRC, perform the decoded-value operation
+// q*d+m in float32, widen weights and activations, and accumulate eight float64
+// lanes. Multiple accumulators hide dependency latency without changing mapping.
+#define DOT_Q41(SRC) \
+	VTBL V24.B16, [SRC.B16], V8.B16; \
+	VTBL V25.B16, [SRC.B16], V9.B16; \
+	VTBL V26.B16, [SRC.B16], V10.B16; \
+	VTBL V27.B16, [SRC.B16], V11.B16; \
+	WORD $0x6F28E508; /* UCVTF V8.4S, V8.4S, #24 */ \
+	WORD $0x6F28E529; /* UCVTF V9.4S, V9.4S, #24 */ \
+	WORD $0x6F28E54A; /* UCVTF V10.4S, V10.4S, #24 */ \
+	WORD $0x6F28E56B; /* UCVTF V11.4S, V11.4S, #24 */ \
+	WORD $0x6E3CDD08; /* FMUL V8.4S, V8.4S, V28.4S */ \
+	WORD $0x6E3CDD29; /* FMUL V9.4S, V9.4S, V28.4S */ \
+	WORD $0x6E3CDD4A; /* FMUL V10.4S, V10.4S, V28.4S */ \
+	WORD $0x6E3CDD6B; /* FMUL V11.4S, V11.4S, V28.4S */ \
+	WORD $0x4E3DD508; /* FADD V8.4S, V8.4S, V29.4S */ \
+	WORD $0x4E3DD529; /* FADD V9.4S, V9.4S, V29.4S */ \
+	WORD $0x4E3DD54A; /* FADD V10.4S, V10.4S, V29.4S */ \
+	WORD $0x4E3DD56B; /* FADD V11.4S, V11.4S, V29.4S */ \
+	VLD1 (R6), [V12.S4, V13.S4, V14.S4, V15.S4]; \
+	WORD $0x0E617904; /* FCVTL  V4.2D, V8.2S */ \
+	WORD $0x4E617905; /* FCVTL2 V5.2D, V8.4S */ \
+	WORD $0x0E617986; /* FCVTL  V6.2D, V12.2S */ \
+	WORD $0x4E617987; /* FCVTL2 V7.2D, V12.4S */ \
+	VFMLA V4.D2, V6.D2, V16.D2; \
+	VFMLA V5.D2, V7.D2, V17.D2; \
+	WORD $0x0E617924; /* FCVTL  V4.2D, V9.2S */ \
+	WORD $0x4E617925; /* FCVTL2 V5.2D, V9.4S */ \
+	WORD $0x0E6179A6; /* FCVTL  V6.2D, V13.2S */ \
+	WORD $0x4E6179A7; /* FCVTL2 V7.2D, V13.4S */ \
+	VFMLA V4.D2, V6.D2, V18.D2; \
+	VFMLA V5.D2, V7.D2, V19.D2; \
+	WORD $0x0E617944; /* FCVTL  V4.2D, V10.2S */ \
+	WORD $0x4E617945; /* FCVTL2 V5.2D, V10.4S */ \
+	WORD $0x0E6179C6; /* FCVTL  V6.2D, V14.2S */ \
+	WORD $0x4E6179C7; /* FCVTL2 V7.2D, V14.4S */ \
+	VFMLA V4.D2, V6.D2, V16.D2; \
+	VFMLA V5.D2, V7.D2, V17.D2; \
+	WORD $0x0E617964; /* FCVTL  V4.2D, V11.2S */ \
+	WORD $0x4E617965; /* FCVTL2 V5.2D, V11.4S */ \
+	WORD $0x0E6179E6; /* FCVTL  V6.2D, V15.2S */ \
+	WORD $0x4E6179E7; /* FCVTL2 V7.2D, V15.4S */ \
+	VFMLA V4.D2, V6.D2, V18.D2; \
+	VFMLA V5.D2, V7.D2, V19.D2
+
+// func dotQ41RowNeon(x *float32, raw *byte, f16 *float32, indexes *byte, blocks int) float64
+TEXT ·dotQ41RowNeon(SB), NOSPLIT, $0-48
+	MOVD x+0(FP), R0
+	MOVD raw+8(FP), R1
+	MOVD f16+16(FP), R2
+	MOVD indexes+24(FP), R3
+	MOVD blocks+32(FP), R7
+
+	VLD1 (R3), [V24.B16, V25.B16, V26.B16, V27.B16]
+	VMOVI $0x0f, V30.B16
+	VEOR V16.B16, V16.B16, V16.B16
+	VEOR V17.B16, V17.B16, V17.B16
+	VEOR V18.B16, V18.B16, V18.B16
+	VEOR V19.B16, V19.B16, V19.B16
+
+block:
+	MOVHU (R1), R4
+	LSL $2, R4, R4
+	ADD R2, R4, R4
+	VLD1R (R4), [V28.S4]
+	MOVHU 2(R1), R5
+	LSL $2, R5, R5
+	ADD R2, R5, R5
+	VLD1R (R5), [V29.S4]
+	ADD $4, R1, R5
+	VLD1 (R5), [V0.B16]
+
+	VAND V30.B16, V0.B16, V1.B16
+	MOVD R0, R6
+	DOT_Q41(V1)
+
+	VUSHR $4, V0.B16, V1.B16
+	ADD $64, R0, R6
+	DOT_Q41(V1)
+
+	ADD $128, R0, R0
+	ADD $20, R1, R1
+	SUBS $1, R7, R7
+	BNE block
+
+	WORD $0x4E72D610 // FADD V16.2D, V16.2D, V18.2D
+	WORD $0x4E73D631 // FADD V17.2D, V17.2D, V19.2D
+	WORD $0x4E71D610 // FADD V16.2D, V16.2D, V17.2D
+	WORD $0x7E70DA10 // FADDP V16.2D, F16
+	FMOVD F16, ret+40(FP)
+	RET

@@ -30,8 +30,8 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 			for i := range ws {
 				ws[i] = float32(rng.NormFloat64() * math.Pow(2, float64(rng.Intn(9)-4)))
 			}
-			for _, qt := range []QuantType{Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K} {
-				if k%256 != 0 && qt != Q8_0 && qt != Q4_0 {
+			for _, qt := range []QuantType{Q8_0, Q4_0, Q4_1, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K} {
+				if k%256 != 0 && qt != Q8_0 && qt != Q4_0 && qt != Q4_1 {
 					continue // K-quants use a 256-element superblock
 				}
 				qb, err := Quantize(w, qt)
@@ -66,6 +66,7 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 				// registered (ARM64 or amd64+simd); every other format's fused path stays
 				// bit-identical to the general one.
 				q8Tol := qt == Q8_0 && q8FusedDecodeM1 != nil
+				q41Tol := qt == Q4_1 && q41DotIsAsm
 				for ni := range n {
 					if qkTol {
 						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 2e-3*math.Abs(float64(gf[ni]))+2e-3 {
@@ -76,6 +77,13 @@ func TestQMatMulFusedDecodeMatchesGeneralPathExactly(t *testing.T) {
 					if q8Tol {
 						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 5e-5*math.Abs(float64(gf[ni]))+1e-6 {
 							t.Fatalf("qt=Q8_0(simd) k=%d n=%d out[%d]: m==1 %v vs general %v (|Δ|=%g > tol)",
+								k, n, ni, ff[ni], gf[ni], d)
+						}
+						continue
+					}
+					if q41Tol {
+						if d := math.Abs(float64(ff[ni] - gf[ni])); d > 2e-5*math.Abs(float64(gf[ni]))+2e-5 {
+							t.Fatalf("qt=Q4_1(asm) k=%d n=%d out[%d]: m==1 %v vs general %v (|Δ|=%g > tol)",
 								k, n, ni, ff[ni], gf[ni], d)
 						}
 						continue

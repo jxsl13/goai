@@ -27,8 +27,8 @@ import (
 func Write(w io.Writer, f *File) error { return WriteQuantized(w, f, nil) }
 
 // WriteQuantized is Write with per-tensor quantization: a tensor named in quant is
-// encoded in that block-quantized format (Q8_0/Q4_0, §T122) instead of F32, producing a
-// real quantized model (~4×/7× smaller). Un-named tensors stay F32. On read the
+// encoded in that supported block-quantized format (including Q8_0/Q4_0/Q4_1, §T122)
+// instead of F32. Un-named tensors stay F32. On read the
 // quantized tensors are dequantized, so the round-trip is exact for F32 tensors and
 // within the quantization error for quantized ones (§V15).
 func WriteQuantized(w io.Writer, f *File, quant map[string]QuantType) error {

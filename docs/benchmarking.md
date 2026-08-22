@@ -2625,3 +2625,41 @@ shipping block-local kernel avoids the extra pass. This generalizable
 measurement hazard is tracked as perfscan issue 762. Complete samples, hashes,
 commands, and rejection evidence live in
 `internal/benchcompare/leadership/evidence/m2-gguf-kquant-neon-20260818`.
+
+## GGUF Q4_1 and M2 fused decode-dot (2026-08-22)
+
+Wire type 3 is now exact end to end: 32 weights occupy 20 bytes (`f16 d`,
+`f16 m`, and 16 low/high-nibble bytes), and decode uses `q*d+m`. Quantization,
+eager and raw GGUF loading, public dequantization, and QMatMul share the same
+format implementation. The Apple ARM64 M=1 path performs unpack, affine
+dequantization, activation multiply, and row reduction in a single Plan 9 NEON
+call; other architectures and M>1 use the portable implementation.
+
+Apple M2 Pro, Go 1.26.6, ten fresh processes per arm, alternating sub-benchmark
+order, 300 ms adaptive windows, no discarded samples:
+
+| path | scalar/control | ARM64 NEON | result |
+|---|---:|---:|---:|
+| row dot, K=4096 | 4,990.5 ns | **826.35 ns** | **6.04x** |
+| materialize then dot, K=4096 | 7,611 ns | **826.35 ns** | **9.21x** |
+| QMatMul M1/N64/K1024 | 78,553 ns | **13,811 ns** | **5.69x** |
+| QMatMul M1/N4096/K1024 | 815,000 ns | **195,197.5 ns** | **4.18x** |
+
+The fused leaf remains 0 B/op and 0 allocs/op. QMatMul allocation counts are
+unchanged. Maximum mixed error over 120 arbitrary raw rows was
+`6.294893722337496e-16`, below the `2e-5 absolute + 2e-5 relative` gate; the
+suite also covers cancellation, known-answer, wire-golden, round-trip,
+writer/reader, race, and portable cross-compilation gates.
+
+llama.cpp commit `3af988fabcf79fd81f8720505e684d2aa5bfc786` establishes a
+useful but deliberately separated boundary at K=4096. Its Q4_1 x pre-quantized
+Q8_1 dot has a 120.595 ns median, 6.85x faster than GoAI's direct-F32 kernel.
+Starting from F32 activations, llama.cpp's Q8_1 quantization plus dot has a
+1,096.090 ns median, so GoAI's direct-F32 kernel is 1.33x faster. This is not a
+matched leadership cell: activation precision, generated inputs, and
+accumulation contracts differ. Both numbers are retained to expose conversion
+cost and the next CPU microkernel target. Raw samples, pins, source harness,
+commands, hashes, and claim limits live under
+`internal/benchcompare/leadership/evidence/m2-arm64-q4-1-fused-dot-20260822`.
+The generalizable fused affine-nibble opportunity is tracked as
+[perfscan issue 819](https://github.com/jxsl13/perfscan/issues/819).

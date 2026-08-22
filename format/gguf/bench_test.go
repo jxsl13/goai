@@ -40,6 +40,7 @@ func benchDequant(b *testing.B, qt QuantType) {
 
 func BenchmarkDequantQ8_0(b *testing.B)  { benchDequant(b, Q8_0) }
 func BenchmarkDequantQ4_0(b *testing.B)  { benchDequant(b, Q4_0) }
+func BenchmarkDequantQ4_1(b *testing.B)  { benchDequant(b, Q4_1) }
 func BenchmarkDequantQ4_K(b *testing.B)  { benchDequant(b, Q4_K) }
 func BenchmarkDequantQ6_K(b *testing.B)  { benchDequant(b, Q6_K) }
 func BenchmarkDequantQ1_0(b *testing.B)  { benchDequant(b, Q1_0) }
@@ -94,6 +95,7 @@ func benchQuantize(b *testing.B, qt QuantType) {
 }
 
 func BenchmarkQuantizeQ8_0(b *testing.B)  { benchQuantize(b, Q8_0) }
+func BenchmarkQuantizeQ4_1(b *testing.B)  { benchQuantize(b, Q4_1) }
 func BenchmarkQuantizeQ4_K(b *testing.B)  { benchQuantize(b, Q4_K) }
 func BenchmarkQuantizeQ1_0(b *testing.B)  { benchQuantize(b, Q1_0) }
 func BenchmarkQuantizeTQ1_0(b *testing.B) { benchQuantize(b, TQ1_0) }
@@ -150,12 +152,14 @@ func benchQMatMul(b *testing.B, m int, qt QuantType) {
 }
 
 func BenchmarkQMatMulQ8_0_M1(b *testing.B)  { benchQMatMul(b, 1, Q8_0) }
+func BenchmarkQMatMulQ4_1_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_1) }
 func BenchmarkQMatMulQ2_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q2_K) }
 func BenchmarkQMatMulQ3_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q3_K) }
 func BenchmarkQMatMulQ4_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q4_K) }
 func BenchmarkQMatMulQ5_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q5_K) }
 func BenchmarkQMatMulQ6_K_M1(b *testing.B)  { benchQMatMul(b, 1, Q6_K) }
 func BenchmarkQMatMulQ4_K_M16(b *testing.B) { benchQMatMul(b, 16, Q4_K) }
+func BenchmarkQMatMulQ4_1_M16(b *testing.B) { benchQMatMul(b, 16, Q4_1) }
 
 // Write path: F64 tensor forced through the f32Data conversion.
 func BenchmarkWriteF32Tensor(b *testing.B) {
@@ -451,6 +455,8 @@ func BenchmarkQMatMulQ5_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 10
 func BenchmarkQMatMulQ6_K_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q6_K) }
 
 func BenchmarkQMatMulQ8_0_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q8_0) }
+
+func BenchmarkQMatMulQ4_1_M1_N4096(b *testing.B) { benchQMatMulNK(b, 1, 4096, 1024, Q4_1) }
 
 func BenchmarkQMatMulIQ4_NL_M1(b *testing.B) { benchQMatMulIQ4NLNK(b, 1, 64, 1024) }
 

@@ -502,6 +502,19 @@ CPU comparison and the original dim-256 whole-model rerun remain required for
 a leadership claim. Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q8-fused-dot-20260821`.
 
+**ARM64 Q4_1 progress (2026-08-22):** exact GGUF wire type 3 support now
+includes quantization, eager/raw reading, dequantization, and QMatMul. The M2
+single-token path fuses nibble unpack, affine `q*d+m` dequantization, and the
+f32 activation dot in one allocation-free NEON call. Ten fresh processes give
+**6.04×** over the portable fused row-dot, **5.69×** for M1/N64/K1024 QMatMul,
+and **4.18×** for M1/N4096/K1024. Against pinned llama.cpp, its already-Q8_1
+dot is faster (120.595 versus 826.35 ns), while GoAI's direct-F32 boundary is
+**1.33×** faster than llama.cpp activation quantization plus dot (826.35 versus
+1,096.090 ns). Because Q8_1 changes activation precision and inputs are not
+shared byte-for-byte, this remains an explicitly unmatched boundary, not a
+cross-library leadership claim. Evidence:
+`internal/benchcompare/leadership/evidence/m2-arm64-q4-1-fused-dot-20260822`.
+
 ### Tokenizer throughput — pure-Go BPE vs tiktoken
 
 *M2 Pro, GPT-2 / r50k_base vocab, one 1,000,116-byte corpus, single-threaded

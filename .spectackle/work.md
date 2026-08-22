@@ -3881,3 +3881,18 @@ option: Implement only portable decode and defer acceleration
 option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
 option: Adopt Q8_K activation conversion to mirror llama.cpp
 choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+
+## ADR-01M0M5SFB8ESSBR5PGTAK7PV07 How should GGUF Q4_1 be introduced without violating GoAI format and backend boundaries or conflating CPU and GPU performance claims?
+kind: adr
+state: done
+created: 2026-08-22
+context: The exact source of truth is llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786: GGML type 3 is a 32-value, 20-byte affine block containing FP16 scale, FP16 minimum, and 16 packed nibbles. GoAI architecture places wire fidelity in format/gguf, keeps quantized bytes opaque across the optional QuantMatMuler boundary (ADR-0016), requires portable ground truth plus build-tagged ARM64 kernels with scalar fallback and cross-validation (ADR-0005 and docs/research/00-landscape.md), and requires representative A/B evidence before GPU offload (ADR-0008). The llama.cpp ARM kernel multiplies Q4_1 by Q8_1 activations, whereas this tranche preserves raw F32 activation semantics.
+decision: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.
+consequences: format/gguf owns the exact type-3 wire layout and public quantize, dequantize, eager-read, raw-read, write, and QMatMul behavior. Quantized storage stays opaque at the existing uint32 QuantMatMuler boundary. A portable implementation remains the ground truth; Apple ARM64 acceleration is build-tagged, allocation-free, scalar-fallback-safe, and gated by cross-architecture, cancellation, race, and fresh-process evidence. Backend type 3 continues returning ErrQuantUnsupported in this tranche. Native Metal is an immediate separate proposal so its per-call and resident paths receive independent representative A/B validation. Vulkan follows its capability-tier roadmap. Performance claims distinguish exact raw-F32 semantics from the llama.cpp Q4_1-by-Q8_1 activation path.
+status: accepted
+
+kind: radio
+option: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.
+option: Add Q4_1 CPU, Metal, and Vulkan support together in one tranche.
+option: Expose Q4_1 only through eager dequantization without a fused CPU path.
+choice: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.

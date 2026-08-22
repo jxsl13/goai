@@ -47,9 +47,30 @@ LANDED: commit 621f4b68. Learning in PERF-FASTPATH-FAMILY-001 and NUM-ACCUM-NARR
 - ADR-01KYMWJ76AFA2BJ9R8ZE403KB1 May format/gguf QMatMul parallelize across output rows, and under what pooling policy?: compact
 - T-01M0KT35PPFRR82JRYRPP9PFMM Implement and statistically gate complete TQ1_0 support and M2 ARM64 fused row dot: Archived after verified implementation and evidence commit a3228e3f. The retained design uses exact mixed-radix arithmetic instead of a 1,280-byte package lookup table because that rejected table caused a 2.46% unrelated Q1_0 dequant control regression. Generalized findings are perfscan issues 816 and 817; a fixed-count VAC false positive is Spectackle issue 277.
 - P-01M0M13SZGFBNBZQ7FJDD13JV8 Correct GGUF IQ1_S and IQ2_S wire type IDs: Completed the strict GGUF wire-ID correction. GoAI now matches pinned ggml for IQ1_S=19, IQ2_S=22, and reserved I8=24; every supported read and QMatMul entry point agrees and unsupported type 24 can no longer be misidentified. Decoder and ARM64 performance remain statistically neutral. The evidence and ADR preserve the compatibility decision and migration consequence.
+- T-01M0M5XF2TFHWRHYJD8228X1NA Implement exact Q4_1 format and M2 fused decode: Completed exact Q4_1 interoperability and M2 ARM64 fused decode with retained evidence. Internal gains are 6.04x at the K4096 leaf, 5.69x at M1/N64/K1024, and 4.18x at M1/N4096/K1024. GPU type 3 remains explicitly unsupported for the separate native Metal proposal.
 
 ## SAFETENSORS-PARTIAL-LOAD-OWNERSHIP-001
 WHEN reading one tensor from a regular safetensors file, the safetensors.LoadTensor SHALL validate the selected byte range against os.File.Stat, return 1 independently owned tensor, materialize 0 other tensors, and retain 0 mapped bytes after LoadTensor returns.
 
 ## GGUF-RAW-MMAP-LIFETIME-001
 WHEN gguf.OpenRaw maps a regular GGUF file, the returned *gguf.RawFileHandle SHALL retain the mapping until RawFileHandle.Close, call munmapFile exactly once, invalidate every QuantTensor.Data view after RawFileHandle.Close, and make RawFileHandle.Close a no-op on the buffered fallback.
+
+## GGUF-Q4-1-WIRE-001
+WHEN a GGUF tensor with wire type 3 is sized, decoded, quantized, dequantized, read, or written, the format/gguf SHALL use 32-value, 20-byte Q4_1 blocks and reject every non-block-aligned length or dimension with a non-nil error.
+
+Rationale: The wire contract is pinned to llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786.
+
+## GGUF-Q4-1-BLOCK-001
+The Q4_1 block codec SHALL store FP16 scale at bytes 0..1, FP16 minimum at bytes 2..3, low nibbles for values 0..15, and high nibbles for values 16..31.
+
+Rationale: Exact nibble ordering and stored-FP16 arithmetic are required for cross-tool wire compatibility.
+
+## QMATMUL-Q4-1-ARM64-001
+WHEN F32 Q4_1 matrix-vector multiplication runs on Apple ARM64, the QMatMul SHALL dispatch an allocation-free fused row-dot and differ from the portable decoded-value result by at most 2e-5 absolute plus 2e-5 relative error on arbitrary raw and cancellation inputs.
+
+Rationale: The build-tagged fast path must preserve decoded-value semantics while avoiding materialized weights.
+
+## Q4-1-BACKEND-BOUNDARY-001
+WHEN wire type 3 reaches a GPU backend before its separate benchmarked proposal lands, the Metal and Vulkan quantized matmul dispatch SHALL return backend.ErrQuantUnsupported and perform zero implicit eager-dequantization fallbacks inside that backend.
+
+Rationale: ADR-01M0M5SFB8ESS separates format and CPU validation from independently measured GPU paths.
