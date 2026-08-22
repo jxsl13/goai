@@ -3878,7 +3878,7 @@ Add pinned ggml Q1_0 type 41 end to end: 18-byte/128-weight block sizing, eager 
 
 ## T-01M0KPVJQVFCS9TKR58HY2TKW7 Implement and statistically gate complete Q1_0 support and M2 ARM64 fused row dot
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0KPSF31FYVAEB7ZHPN5Y4AS
 targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, internal/benchcompare/leadership
