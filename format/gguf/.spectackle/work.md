@@ -17,3 +17,12 @@ option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K ker
 option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+
+## T-01M0KM5H42FBTR5N0G6SMNMB6V Implement and statistically gate exact IQ1_M QMatMul and M2 ARM64 fused row dot
+kind: task
+state: draft
+created: 2026-08-22
+parent: P-01M0KM3Z8YEMEA1BZ507FJAF62
+targets: go:gguf.dequantIQ1_M, go:gguf.QMatMul, format/gguf/iq1.go, format/gguf/quant_matmul.go
+
+Implement caller-owned IQ1_M decode, an exact portable scalar row dot, portable F32/F64 QMatMul coverage, and an ARM64-only contiguous-F32-M1 whole-row fused leaf. Add exact decoder parity, materialized-reference, invalid-input, scratch-allocation, selector-scope, split-scale known-value, arbitrary-packed-row, cancellation, input-immutability, and zero-allocation gates. Retain ten fresh-process 500ms samples for leaf and M1 N64/N4096 cells; retain exact merged-main IQ1_M dequant and unchanged IQ1_S controls with alternating process order and no final sample removal. Inspect assembly, run full/race/Linux cross-build/preflight/Metal/external-perfscan/Spectackle/CI gates, commit evidence and pins, report generalizable optimizer findings to perfscan, ship through a proper PR, merge only with exact head and all CI green, then delete the remote branch.
