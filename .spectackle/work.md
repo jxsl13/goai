@@ -3869,8 +3869,9 @@ choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 
 ## P-01M0KM3Z8YEMEA1BZ507FJAF62 M2-first exact IQ1_M fused row dot and portable QMatMul
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
+grilled: 2026-08-22 open=0
 targets: go:gguf.dequantIQ1_M, go:gguf.QMatMul, format/gguf/iq1.go, format/gguf/quant_matmul.go, docs/decisions/ADR-0016-quant-matmul-capability.md
 
 Context: merged main decodes IQ1_M tensors exactly but QMatMul rejects the type. Add caller-owned block decode and exact portable F32/F64 QMatMul, then specialize only contiguous F32 M1 on ARM64 with one zero-allocation native call per row that fuses split-f16 super-scale reconstruction, 2048x8 ternary-grid gathers, packed three-bit index highs, nibble sign deltas, paired 3-bit odd multipliers, and activation dot. Preserve float32 weight semantics before float64 accumulation. Hard gates: at least 2x retained speedup for K4096 leaf and M1 N64/N4096 K1024 cells, zero leaf allocations, non-scaling M>1 scratch allocations, no allocation regression, maximum scalar-relative error at most 1e-4 across arbitrary packed rows, exact portable parity, neutral existing IQ1_M tensor-dequant and unchanged IQ1_S control comparisons, full/race/Linux cross-build/preflight/Metal/external-perfscan/Spectackle/CI gates. Pin architecture research commit eb8b5a7f and llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786, blob b988abf9963a192e16177661a7d99596effc0d36. Do not claim llama.cpp leadership because its ARM kernel consumes Q8_K activations rather than GoAI direct F32. Risks are split-f16 nibble order, paired scale-field selection, qh nibble order and sign, gather offsets, float32 operation order, cancellation, and dispatch leakage.
