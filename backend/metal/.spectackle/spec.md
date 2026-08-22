@@ -210,3 +210,6 @@ WHEN a GGUF type-21 IQ3_S super-block is decoded, the Metal IQ3_S kernel SHALL r
 
 ## METAL-IQ3XXS-BLOCK-001
 WHEN a GGUF type-18 IQ3_XXS super-block is decoded, the Metal IQ3_XXS kernel SHALL read one f16 scale, 64 grid indices, and eight packed sign-and-scale words from exactly 98 bytes.
+
+## METAL-IQ3-GRID-RESIDENCY-001
+WHEN an IQ3 Metal pipeline initializes, the Metal backend SHALL reconstruct the matching 256-by-4 or 512-by-4 grid once from gguf.Dequantize and retain exactly one immutable Metal buffer.
