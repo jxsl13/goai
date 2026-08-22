@@ -168,3 +168,6 @@ Rationale: The retained leverage is SIMD-group occupancy inside a resident recor
 
 ## METAL-Q4-1-HOST-ROUTE-001
 WHEN M2 host input and output benchmarks do not beat ARM64 Q4_1 by at least 1.10 times, the generic Metal Q4_1 dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.
+
+## METAL-IQ4NL-BLOCK-001
+WHEN a GGUF type-20 block is decoded, the Metal IQ4_NL kernel SHALL read one f16 scale and sixteen split-half nibble bytes, applying the verified 16-entry nonlinear codebook to exactly 32 values.
