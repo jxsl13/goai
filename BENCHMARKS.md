@@ -433,6 +433,17 @@ leadership ratio**: GoAI uses f32 KV while this llama-bench accepts f16 KV, and
 the token streams differ. Evidence:
 `internal/benchcompare/leadership/evidence/m2-cpu-quant-decode-20260822`.
 
+**Production CPU allocation progress (2026-08-22):** eager QuantSwiGLU now
+reuses its private gate projection for the fused activation/product. Against
+merged main, ten retained alternating fresh-process medians reduce the same
+64-step boundary from 2.211 to **1.982 s** (`-10.35%`, `p=0.011`), allocated
+bytes by **25.04%**, and allocations by **5.22%**, with exact digest
+`ea3df5516f17df83` throughout. The 5,632-wide leaf middle is 10.18% faster and
+falls from 49,800 to 64 B/op. Recorded execution keeps the explicit graph.
+This is an internal gain, not a refreshed llama.cpp ratio; that comparison
+remains unmatched. Evidence:
+`internal/benchcompare/leadership/evidence/m2-cpu-swiglu-inplace-20260822`.
+
 **ARM64 Q4_K progress (2026-08-21):** the M2 single-token Q4_K path now fuses
 nibble unpack, affine dequantization and dot-product reduction in one NEON
 pass. Against the scalar mainline control, QMatMul improves **7.77×** at

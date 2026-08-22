@@ -425,6 +425,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - P-01M0N73GJ6E7S8JKQRSY1RJBH2 Fuse grouped M2 QKV RoPE with f16 KV append: Promoted the combined separate and grouped QKV RoPE/f16-KV append route on M2. The production profile falls from 54 RoPE/copy events to 22 fused events. Exact float32 and binary16 state, nonfinite behavior, sentinels, and both mutation probes passed. Final 22-boundary speedups were 1.7396x, 1.7312x, and 1.7479x; trained TinyLlama decode was 1.0574x, 1.0163x, and 1.0173x across three count-seven ca [body truncated at tombstone retention cap]
 - T-01M0N9C5ATEE18E7J23JVJKTSC Rerun M2 quantized decode and compare llama.cpp CPU: Archived after commit 7d793391: raw M2 evidence, the permanent hermetic-gated production harness, refreshed claims, and the rejected pool lesson are versioned.
 - P-01M0N996E4ETXTWFTDCTF17CWW Refresh M2 CPU quantized decode leadership: Archived after the M2 CPU quantized-decode matrix was refreshed: Q8_0 now beats float 1.256x in the original whole-model cell, while the production llama.cpp comparison remains explicitly unmatched and the failed pool candidate remains removed.
+- T-01M0ND3KXJFPZ91B0VM9BR6DK5 Attribute and eliminate dominant M2 CPU decode allocations: Archived after green full preflight, M2 Metal, race, cross-platform compile, exact-digest production A/B, and committed evidence.
+- P-01M0ND1PT6EMKSAX9S889TRKQ5 Profile and reduce M2 CPU quantized decode allocations: Archived after implementation commit 9e58e031 and complete M2-first validation. Durable learning lives in CPU-SWIGLU-INPLACE-FUSION-001, CPU-SWIGLU-INPLACE-FALLBACK-001, benchmark documentation, evidence bundle, and perfscan #828.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -643,3 +645,13 @@ WHEN a CPU quantized-decode comparison against llama.cpp is published, the GoAI 
 
 ## M2-CPU-QUANT-LOSS-001
 IF the matched llama.cpp CPU cell leads GoAI beyond measurement spread, THEN the GoAI performance roadmap SHALL publish the loss and profile GoAI before booking an implementation lever.
+
+## CPU-SWIGLU-INPLACE-FUSION-001
+WHEN an eager quantized SwiGLU executes on its projection backend and that backend advertises in-place fusion, the GoAI SHALL overwrite only the private gate projection with bit-identical SiLU(gate) multiplied by up and allocate zero activation or multiplication output tensors.
+
+Rationale: This removes two hidden-width buffers and dispatches without changing public ownership.
+
+## CPU-SWIGLU-INPLACE-FALLBACK-001
+WHEN quantized SwiGLU recording is active or its projection backend lacks in-place fusion, the GoAI SHALL execute backend.OpSiLU followed by backend.OpMul without mutating their inputs.
+
+Rationale: Autograd interception and unsupported backends must retain the established composition.

@@ -1,0 +1,25 @@
+Candidate seven-repetition production profile
+median: 2.003034416 s
+throughput: 31.952 tok/s
+digest: ea3df5516f17df83
+median allocated bytes: 209612176
+median allocations: 281015
+
+alloc_objects:
+github.com/jxsl13/goai/backend/cpu.qmatmulParallelChunks 1239746 (52.49%)
+
+alloc_space:
+github.com/jxsl13/goai/tensor.heapAllocator.allocF32 cumulative 1694.68 MB (67.06%)
+total profile space 2527.20 MB
+
+Baseline comparison:
+heapAllocator.allocF32 cumulative 2195.30 MB
+total profile space 3045.33 MB
+
+CPU samples:
+runtime/internal/syscall.Syscall6/cond_wait 89.99%
+runtime/internal/syscall.Syscall6/signal 6.57%
+
+Interpretation boundary: the CPU sample distribution is recorded for
+attribution only; worker-pool synchronization was previously tested and was
+neutral/worse, so this tranche makes no independent scheduler claim.

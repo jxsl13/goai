@@ -1,0 +1,38 @@
+{
+  "date": "2026-08-22",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "baseline_source": "7b3cf2c2a95bdfd5b450271402ab1d3e03fe3567",
+  "candidate_source": "containing commit",
+  "branch": "codex/m2-cpu-decode-allocations",
+  "spectackle": "v0.10.0",
+  "perfscan_module": "github.com/jxsl13/perfscan@v1.80.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/828",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline": "e5ca94c59793142edd9995ccf22b3aa831d8dac48508bdd64fab851abc3197a9",
+    "candidate_ab": "cbce73676b85b23701eff6049f7287b04e0d39d7aaf74d7986c57fd4d4e473f7",
+    "candidate_final_verification": "a450e5673c89224358836b19ebe7b49b96d28f250e90543fdbb07d518bffd58d"
+  },
+  "sampling": {
+    "threads": 8,
+    "production_steps": 64,
+    "measured_runs_per_process": 3,
+    "process_pairs": 11,
+    "discarded": "first baseline/candidate process pair only",
+    "retained_process_medians_per_side": 10,
+    "order": "alternating AB/BA",
+    "leaf_retained_samples_per_side": 10
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "leaf": "bit-exact to composed CPU SiLU then Mul",
+    "recorded_fallback": "bit-exact to eager fused QuantSwiGLU",
+    "final_candidate_median_ns": 1999063542,
+    "final_candidate_allocated_bytes": 209612192,
+    "final_candidate_allocations": 281015
+  }
+}

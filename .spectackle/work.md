@@ -3671,6 +3671,58 @@ targets: format/safetensors/partial.go, format/safetensors/bench_test.go, intern
 
 On Apple M2 Pro and the shared 64 MiB fixture selecting one 4 MiB F32 tensor, five 2-second samples measured direct ReadAt at 265,247 ns/op median and transient whole-file mmap plus copy plus unmap at 347,943 ns/op. Mmap was 31.18 percent slower with identical 4,200,892 B/op and 80 allocations. Per-call map/unmap overhead exceeds the saved read syscall after synthetic framing is removed. The mmap implementation was deleted; full-file GGUF mmap success must not be generalized to selected-range extraction. The winning direct path measures 614,468 to 280,561 ns/op against the old framed path and leads safetensors 0.8.0 by 1.48x at this contract and shape.
 
+## ADR-01M0G33EGWF9K8B5XBB9PPE7DC Which execution-side policy should govern the eight remaining synchronous Metal unary operations on Apple Silicon?
+kind: adr
+state: submitted
+created: 2026-08-20
+context: Three independent production-selector campaigns retained all 81 default-build and 153 SIMD routed medians above 1.10x. Crossovers differ materially by operation and build; the affected RGLRU workload improves 1.881x default and 2.337x SIMD with parity preserved.
+status: proposed
+
+kind: radio
+option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
+option: Keep every operation on direct Metal
+option: Use one universal CPU threshold for the whole unary family
+
+## P-01M0JG9TX8E73ATMBAQJKJYSGA Fuse ARM64 Q6_K decode unpack and dot on M2
+kind: proposal
+state: approved
+created: 2026-08-21
+targets: go:gguf.QMatMul, go:gguf.dotQ6_KRow, format/gguf/q6k.go, format/gguf/dequant_q6k_arm64.go, format/gguf/quant_matmul.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
+
+On Apple M2 Pro, the current Q6_K scalar eager dequant takes about 148.5 us while the existing NEON dequant takes about 25.2 us over the same benchmark, but QMatMul M=1 dispatches scalar dotQ6_KRow and bypasses that SIMD work. A fresh merged-main recurrent Mamba2 Q6_K baseline is about 360 us/op with 93 allocations. Implement a dedicated ARM64 fused Q6_K unpack-scale-dot kernel selected only for contiguous F32 M=1 QMatMul. Preserve portable, non-ARM64, and M>1 paths. Accumulate vector partials with a scalar-relative error gate at most 1e-4; retain only if same-binary repeated M2 benchmarks show at least 1.5x on representative QMatMul and a statistically significant end-to-end Mamba2 gain without allocation regression. The rejected Metal packed-load proposal is non-overlapping: it changed GPU load width and measured 0.891x to 1.053x, whereas this proposal removes scalar CPU unpack and f64 per-element accumulation from the ARM64 M1 route.
+
+## T-01M0JGCPFFEZZ9H3BAZG4X548H Implement and gate ARM64 Q6_K fused decode GEMV
+kind: task
+state: done
+created: 2026-08-21
+parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
+targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_asm_arm64.go, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, format/gguf/bench_test.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
+
+Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
+
+## ADR-01M0MMYANQFBNVT5BDZ667SCTC Share exact IQ2 Metal codebook infrastructure while gating formats independently
+kind: adr
+state: approved
+created: 2026-08-22
+grilled: 2026-08-22 open=0
+targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
+
+## Context
+IQ2_XXS and IQ2_XS are distinct GGUF wire formats, but both decode each 8-value group through a fixed E8-derived grid and the same seven-bit sign parity scheme. Their M2 decode kernels need persistent immutable lookup data, identical one-SIMD-group-per-output scheduling, and the same direct/resident/recorder lifecycle. Duplicating residency and initialization would enlarge the correctness surface and initialization cost.
+
+## Decision
+Use one IQ2-family Metal infrastructure with separate immutable codebook buffers, type-specific block parsers, independent cooperative toggles, and independent benchmark verdicts.
+
+The Go side reconstructs both codebooks from the public exact GGUF decoder rather than duplicating literal tables. The C/Objective-C bridge owns process-lifetime Metal buffers. Every direct, resident, and recorder path calls the same readiness guard and the same per-type cooperative predicate. The scalar kernel remains callable as an in-process control.
+
+Model-loader admission is additive for exact GGUF wire types 16 and 17. It does not imply generic synchronous host offload: the fused ARM64 CPU route remains the fallback unless every required host cell clears the 1.10x gate.
+
+## Consequences
+Shared algebra and lifecycle have one implementation, while a regression or weak result in either wire format cannot promote the other. Persistent lookup residency removes repeated uploads from the hot path. The design extends naturally to IQ2_S only after its different block structure receives its own measured proposal.
+
+## Alternatives rejected
+Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
+
 ## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
 kind: adr
 state: done
@@ -3718,18 +3770,6 @@ option: Introduce persistent device-resident embedding state in this slice
 blocks: P-01M0FNKC7DEJZBE5XQQ7MRF6VA
 choice: Typed deterministic host scatter at the current synchronous boundary
 
-## ADR-01M0G33EGWF9K8B5XBB9PPE7DC Which execution-side policy should govern the eight remaining synchronous Metal unary operations on Apple Silicon?
-kind: adr
-state: submitted
-created: 2026-08-20
-context: Three independent production-selector campaigns retained all 81 default-build and 153 SIMD routed medians above 1.10x. Crossovers differ materially by operation and build; the affected RGLRU workload improves 1.881x default and 2.337x SIMD with parity preserved.
-status: proposed
-
-kind: radio
-option: Use operation- and build-specific measured CPU ceilings with direct Metal outside each frozen winner zone
-option: Keep every operation on direct Metal
-option: Use one universal CPU threshold for the whole unary family
-
 ## ADR-01M0JANZ6FFEJT0D9T93J6JX2R Which M2 compute path should replace the near-ceiling NEON head GEMMs?
 kind: adr
 state: done
@@ -3745,23 +3785,6 @@ option: Retune the 4x16 NEON tile
 option: Continue copy elimination around NEON
 blocks: P-01M0JAMADPFG5R8S5TX1BDAB7F
 choice: Extend sanctioned Accelerate SGEMM from ADR-0027 to strides/transposed B and call whole heads outside parallelWork
-
-## P-01M0JG9TX8E73ATMBAQJKJYSGA Fuse ARM64 Q6_K decode unpack and dot on M2
-kind: proposal
-state: approved
-created: 2026-08-21
-targets: go:gguf.QMatMul, go:gguf.dotQ6_KRow, format/gguf/q6k.go, format/gguf/dequant_q6k_arm64.go, format/gguf/quant_matmul.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
-
-On Apple M2 Pro, the current Q6_K scalar eager dequant takes about 148.5 us while the existing NEON dequant takes about 25.2 us over the same benchmark, but QMatMul M=1 dispatches scalar dotQ6_KRow and bypasses that SIMD work. A fresh merged-main recurrent Mamba2 Q6_K baseline is about 360 us/op with 93 allocations. Implement a dedicated ARM64 fused Q6_K unpack-scale-dot kernel selected only for contiguous F32 M=1 QMatMul. Preserve portable, non-ARM64, and M>1 paths. Accumulate vector partials with a scalar-relative error gate at most 1e-4; retain only if same-binary repeated M2 benchmarks show at least 1.5x on representative QMatMul and a statistically significant end-to-end Mamba2 gain without allocation regression. The rejected Metal packed-load proposal is non-overlapping: it changed GPU load width and measured 0.891x to 1.053x, whereas this proposal removes scalar CPU unpack and f64 per-element accumulation from the ARM64 M1 route.
-
-## T-01M0JGCPFFEZZ9H3BAZG4X548H Implement and gate ARM64 Q6_K fused decode GEMV
-kind: task
-state: done
-created: 2026-08-21
-parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
-targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_asm_arm64.go, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, format/gguf/bench_test.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
-
-Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
 
 ## ADR-01M0JNC6MSFD4BV9Q95Y6J1H3P Which Q5_K ARM64 fusion boundary best balances first-tranche leverage, numerical auditability, and implementation risk?
 kind: adr
@@ -3928,29 +3951,6 @@ option: Implement IQ3_S first, then duplicate the framework for IQ3_XXS.
 option: Implement IQ3_XXS first, then duplicate the framework for IQ3_S.
 blocks: P-01M0MJ2RYQF4QR01T9CCYCBQSS
 choice: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.
-
-## ADR-01M0MMYANQFBNVT5BDZ667SCTC Share exact IQ2 Metal codebook infrastructure while gating formats independently
-kind: adr
-state: approved
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
-
-## Context
-IQ2_XXS and IQ2_XS are distinct GGUF wire formats, but both decode each 8-value group through a fixed E8-derived grid and the same seven-bit sign parity scheme. Their M2 decode kernels need persistent immutable lookup data, identical one-SIMD-group-per-output scheduling, and the same direct/resident/recorder lifecycle. Duplicating residency and initialization would enlarge the correctness surface and initialization cost.
-
-## Decision
-Use one IQ2-family Metal infrastructure with separate immutable codebook buffers, type-specific block parsers, independent cooperative toggles, and independent benchmark verdicts.
-
-The Go side reconstructs both codebooks from the public exact GGUF decoder rather than duplicating literal tables. The C/Objective-C bridge owns process-lifetime Metal buffers. Every direct, resident, and recorder path calls the same readiness guard and the same per-type cooperative predicate. The scalar kernel remains callable as an in-process control.
-
-Model-loader admission is additive for exact GGUF wire types 16 and 17. It does not imply generic synchronous host offload: the fused ARM64 CPU route remains the fallback unless every required host cell clears the 1.10x gate.
-
-## Consequences
-Shared algebra and lifecycle have one implementation, while a regression or weak result in either wire format cannot promote the other. Persistent lookup residency removes repeated uploads from the hot path. The design extends naturally to IQ2_S only after its different block structure receives its own measured proposal.
-
-## Alternatives rejected
-Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
 
 ## ADR-01M0MXBCD9EY2V25H7YY10EVWR How should native Metal TQ1_0 and TQ2_0 share compilation and dispatch infrastructure?
 kind: adr

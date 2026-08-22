@@ -2021,6 +2021,19 @@ retained samples produce a 1.9874 s median (**32.203 tok/s**), exact final-logit
 digest `ea3df5516f17df83`, 279,642,384 median allocation bytes, and 296,507
 median allocations.
 
+The 2026-08-22 allocation tranche then reuses QuantSwiGLU's private gate
+projection for `SiLU(gate) * up` in eager CPU execution. Ten retained
+fresh-process A/B medians, after one discarded pair and with order alternated,
+move the same 64-step production boundary from **2.211 to 1.982 s**
+(`-10.35%`, `p=0.011`), allocated bytes from 266.7 to 199.9 MiB (`-25.04%`),
+and allocations from 296.5k to 281.0k (`-5.22%`). Every baseline and candidate
+run retains digest `ea3df5516f17df83`. The 5,632-wide leaf middle improves
+44.01 to 39.53 us (`-10.18%`, `p=0.000`, n=10), 49,800 to 64 B/op, and 12 to
+one allocation/op. Recorded/autograd execution retains explicit `OpSiLU` and
+`OpMul`; public inputs and the `up` projection are never mutated. Evidence:
+`internal/benchcompare/leadership/evidence/m2-cpu-swiglu-inplace-20260822`;
+the reusable analysis opportunity is [perfscan #828](https://github.com/jxsl13/perfscan/issues/828).
+
 Pinned llama.cpp v0.2.0 (`bb4caa754`, build 10566, ggml 0.21.0) runs the same
 GGUF, eight threads, CPU-only execution, no KV offload, FlashAttention off,
 and 64 generation steps at 88.2–115.2 tok/s across two process medians. This

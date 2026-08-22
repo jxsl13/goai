@@ -1,0 +1,10 @@
+perfscan: github.com/jxsl13/perfscan@v1.80.0
+resolution: GOPROXY=direct
+
+backend/fusion.go: scan exits 0 with no findings.
+backend/cpu and nn package scans contain existing repository findings; no
+finding is attributed to a changed file after filtering the package output.
+
+The generalizable optimization pattern is filed as:
+https://github.com/jxsl13/perfscan/issues/828
+Detect last-use private intermediates eligible for in-place fusion
