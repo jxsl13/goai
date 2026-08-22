@@ -153,3 +153,6 @@ WHEN type-3 Q4_1 receives valid F32 activations and a valid quantized matrix, th
 
 ## METAL-Q4-1-NUMERIC-001
 WHEN a valid Q4_1 matmul executes, the Metal kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
+
+## METAL-Q4-1-FALLBACK-001
+WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal Q4_1 selector SHALL dispatch the scalar Q4_1 pipeline and issue zero cooperative Q4_1 threadgroups.
