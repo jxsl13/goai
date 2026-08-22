@@ -1,0 +1,19 @@
+External analyzer: github.com/jxsl13/perfscan/perfscan
+Module version: v1.71.0
+Dependency mode: GOPROXY=direct
+Scope: complete repository including tests
+Baseline: c3dad3dd7e8ab7646a73ffeb509e6f403616316d
+Candidate: containing commit
+
+Baseline raw findings: 3520
+Candidate raw findings: 3520
+Baseline normalized records: 2308
+Candidate normalized records: 2308
+Baseline normalized SHA-256: 75dee2747115c751e8debf3f8cfb999f350649a7afb8dfcc41d2e26ac54bdefe
+Candidate normalized SHA-256: 75dee2747115c751e8debf3f8cfb999f350649a7afb8dfcc41d2e26ac54bdefe
+New normalized diagnostics: 0
+Removed normalized diagnostics: 0
+
+Generalizable improvement:
+https://github.com/jxsl13/perfscan/issues/818
+ARM64 advisory: fuse interleaved 2-bit plane decode with direct-F32 row dot

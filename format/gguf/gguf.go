@@ -713,6 +713,8 @@ func decodeTensor(ti tensorInfo, data []byte) (*tensor.Tensor, error) {
 		return dequantQ6_K(ti.shape, raw)
 	case tTQ1_0:
 		return dequantTQ1_0(ti.shape, raw)
+	case tTQ2_0:
+		return dequantTQ2_0(ti.shape, raw)
 	case tQ1_0:
 		return dequantQ1_0(ti.shape, raw)
 	default:
@@ -743,6 +745,11 @@ func byteSize(ggType uint32, n int) (int, error) {
 			return 0, fmt.Errorf("TQ1_0 numel %d not multiple of %d", n, tq1BlockElems)
 		}
 		return n / tq1BlockElems * tq1BlockSize, nil
+	case tTQ2_0:
+		if n%tq2BlockElems != 0 {
+			return 0, fmt.Errorf("TQ2_0 numel %d not multiple of %d", n, tq2BlockElems)
+		}
+		return n / tq2BlockElems * tq2BlockSize, nil
 	case tQ1_0:
 		if n%q1BlockElems != 0 {
 			return 0, fmt.Errorf("Q1_0 numel %d not multiple of %d", n, q1BlockElems)

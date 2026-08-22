@@ -1,0 +1,31 @@
+                               │ /private/tmp/tq2-scalar.txt │      /private/tmp/tq2-neon.txt      │
+                               │           sec/op            │   sec/op     vs base                │
+DotTQ2Paths-12                                 4805.5n ±  1%   734.5n ± 1%  -84.71% (p=0.000 n=10)
+QMatMulTQ2Paths/N64_K1024-12                    76.28µ ±  1%   11.91µ ± 3%  -84.39% (p=0.000 n=10)
+QMatMulTQ2Paths/N4096_K1024-12                  716.4µ ± 19%   175.4µ ± 6%  -75.52% (p=0.000 n=10)
+geomean                                         64.04µ         11.53µ       -81.99%
+
+                               │ /private/tmp/tq2-scalar.txt │       /private/tmp/tq2-neon.txt        │
+                               │             B/s             │      B/s       vs base                 │
+DotTQ2Paths-12                                 3.175Gi ±  1%   20.773Gi ± 1%  +554.22% (p=0.000 n=10)
+QMatMulTQ2Paths/N64_K1024-12                   3.201Gi ±  1%   20.506Gi ± 3%  +540.68% (p=0.000 n=10)
+QMatMulTQ2Paths/N4096_K1024-12                 21.81Gi ± 16%    89.10Gi ± 6%  +308.52% (p=0.000 n=10)
+geomean                                        6.052Gi          33.61Gi       +455.30%
+
+                               │ /private/tmp/tq2-scalar.txt │       /private/tmp/tq2-neon.txt       │
+                               │            B/op             │     B/op      vs base                 │
+DotTQ2Paths-12                                  0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulTQ2Paths/N64_K1024-12                    592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulTQ2Paths/N4096_K1024-12                17.21Ki ± 1%     17.04Ki ± 0%       ~ (p=0.058 n=10)
+geomean                                                    ²                 -0.32%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                               │ /private/tmp/tq2-scalar.txt │      /private/tmp/tq2-neon.txt      │
+                               │          allocs/op          │ allocs/op   vs base                 │
+DotTQ2Paths-12                                  0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulTQ2Paths/N64_K1024-12                    4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulTQ2Paths/N4096_K1024-12                  29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                    ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

@@ -1,0 +1,19 @@
+Pinned reference: llama.cpp 3af988fabcf79fd81f8720505e684d2aa5bfc786
+Pinned reference quantizer golden:
+84114618618618618618618618618411461861861861861861841146186186186186186184114618618618618618618411461861861861861861841146186186003c
+
+PASS exact 66-byte block layout for 256 weights
+PASS raw code mapping 0,1,2,3 -> -1,0,+1,+2
+PASS pinned reference quantizer bytes
+PASS eager, raw-tensor, public encode, and public decode paths
+PASS portable F32 and F64 QMatMul
+PASS M1 and M3 QMatMul
+PASS selector scope: ARM64 contiguous F32 M1 only
+PASS 100 arbitrary raw-code trials
+PASS maximum relative fused-vs-materialized error: 1.3461880134962722e-16
+PASS cancellation-heavy input within 1e-4
+PASS ARM64 leaf allocations: 0
+PASS M>1 scratch allocations invariant with N
+PASS truncated inputs, invalid widths, and unsupported shapes return errors
+PASS separately built race-enabled GGUF test binary
+PASS CGO-disabled Linux ARM64 and AMD64 GGUF test binaries compile

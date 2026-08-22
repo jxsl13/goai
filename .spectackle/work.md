@@ -3866,3 +3866,18 @@ option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
 option: Bundle and accelerate both IQ3 formats in one tranche
 choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+
+## ADR-01M0KYBEDXFJW9WEXHRA8RF3P3 Which TQ2_0 execution boundary should lead the M2 tranche?
+kind: adr
+state: done
+created: 2026-08-22
+context: Pinned llama.cpp type 35 uses 256-weight 66-byte blocks and Q8_K activation dots, while GoAI QMatMul accepts direct F32 or F64 activations. The tranche must preserve direct-activation semantics and obtain measurable end-to-end decode leverage.
+decision: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+consequences: This keeps GoAI direct-activation semantics and avoids quantization-quality and conversion-cost changes. M1 decode receives the highest-leverage Apple ARM64 path; F64, M greater than one, and non-ARM64 remain portable. Cross-library results against llama.cpp must remain boundary studies because llama.cpp converts activations to Q8_K.
+status: accepted
+
+kind: radio
+option: Implement only portable decode and defer acceleration
+option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+option: Adopt Q8_K activation conversion to mirror llama.cpp
+choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks

@@ -27,6 +27,9 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 	if qt == TQ1_0 {
 		be = tq1BlockElems
 	}
+	if qt == TQ2_0 {
+		be = tq2BlockElems
+	}
 	if qt == Q6_K || qt == Q4_K || qt == Q5_K || qt == Q3_K || qt == Q2_K {
 		be = qkK // k-quant super-block is 256 elements
 	}
@@ -60,6 +63,8 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 		}
 	}
 	switch qt {
+	case TQ2_0:
+		return quantizeTQ2_0(x), nil
 	case TQ1_0:
 		return quantizeTQ1_0(x), nil
 	case Q1_0:
@@ -96,6 +101,8 @@ func Dequantize(data []byte, qt QuantType, n int) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: Dequantize %d bytes != %d for %d values", len(data), need, n)
 	}
 	switch qt {
+	case TQ2_0:
+		return dequantTQ2_0(tensor.Shape{n}, data)
 	case TQ1_0:
 		return dequantTQ1_0(tensor.Shape{n}, data)
 	case Q1_0:

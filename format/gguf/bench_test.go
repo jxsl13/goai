@@ -44,6 +44,7 @@ func BenchmarkDequantQ4_K(b *testing.B)  { benchDequant(b, Q4_K) }
 func BenchmarkDequantQ6_K(b *testing.B)  { benchDequant(b, Q6_K) }
 func BenchmarkDequantQ1_0(b *testing.B)  { benchDequant(b, Q1_0) }
 func BenchmarkDequantTQ1_0(b *testing.B) { benchDequant(b, TQ1_0) }
+func BenchmarkDequantTQ2_0(b *testing.B) { benchDequant(b, TQ2_0) }
 
 // benchDequantRaw drives the READ-only formats (no encoder exists) with
 // deterministic pseudo-random block bytes — decoding is total over any input.
@@ -96,6 +97,7 @@ func BenchmarkQuantizeQ8_0(b *testing.B)  { benchQuantize(b, Q8_0) }
 func BenchmarkQuantizeQ4_K(b *testing.B)  { benchQuantize(b, Q4_K) }
 func BenchmarkQuantizeQ1_0(b *testing.B)  { benchQuantize(b, Q1_0) }
 func BenchmarkQuantizeTQ1_0(b *testing.B) { benchQuantize(b, TQ1_0) }
+func BenchmarkQuantizeTQ2_0(b *testing.B) { benchQuantize(b, TQ2_0) }
 
 // decodeTensor F16 path: the per-element f16ToF32 conversion.
 func BenchmarkDecodeF32(b *testing.B) {

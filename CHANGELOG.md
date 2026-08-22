@@ -4,6 +4,29 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- complete TQ2_0 and M2 ARM64 fused row dot (T-01M0KYDJXBEK0, 2026-08-22)
+
+ggml type-35 `TQ2_0` now works end to end: exact 66-byte block handling,
+eager and raw-tensor decode, public reference-compatible encode/decode,
+portable F32/F64 `QMatMul`, reused prefill scratch, and an ARM64
+contiguous-F32 M1 leaf. The leaf unpacks all four two-bit planes, including
+raw code 3 as +2, applies the trailing f16 scale, and maintains four float64
+FMA chains without materializing weights. Other architectures, activation
+dtypes, and M>1 calls remain portable.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 4.8055 to 0.7345 microseconds (**6.54x**), M1/N64/K1024
+from 76.28 to 11.91 microseconds (**6.41x**), and M1/N4096/K1024 from 716.4
+to 175.4 microseconds (**4.09x**); all are `p=0.000`. Allocation counts are
+flat, while unchanged Q1_0 dequant, TQ1_0 dequant, and TQ1_0 M1/N4096
+controls are neutral. Maximum scalar-relative error over 100 arbitrary raw
+rows is `1.3461880134962722e-16`. Pinned llama.cpp boundary measurements are
+reported but not used for a same-semantics leadership claim because its
+native TQ2_0 kernel quantizes F32 activations to Q8_K. Reproducible streams,
+hashes, reference harness, specification bindings, and controls are committed;
+the generalized interleaved two-bit decode technique is tracked as perfscan
+issue #818.
+
 ### format/gguf -- complete TQ1_0 and M2 ARM64 fused row dot (T-01M0KT35PPFRR, 2026-08-22)
 
 ggml type-34 `TQ1_0` now works end to end: eager and raw-tensor decode,
