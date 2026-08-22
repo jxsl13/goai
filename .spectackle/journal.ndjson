@@ -654,3 +654,4 @@
 {"t":"2026-08-22T15:09:18Z","eid":"1ae8c7bbb6489c75","ag":"ag-9c5e","ev":"create","id":"ADR-01M0N09RJ3FEPSAQR8W4C8RMMD","k":"adr","ti":"Should Q1_0 and MXFP4 share a runtime qtype branch in one Metal hot loop or compile as independent specialized pipelines?"}
 {"t":"2026-08-22T15:09:18Z","eid":"a90f26658430af9b","ag":"ag-9c5e","ev":"move","id":"ADR-01M0N09RJ3FEPSAQR8W4C8RMMD","fr":"draft","to":"submitted"}
 {"t":"2026-08-22T15:09:37Z","eid":"ab28acb1e246213c","ag":"ag-4970","ev":"decide","id":"ADR-01M0N09RJ3FEPSAQR8W4C8RMMD","note":"Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family"}
+{"t":"2026-08-22T15:09:54Z","eid":"43cb410fe4e7ef23","ag":"ag-aa0f","ev":"create","id":"T-01M0N0AVG4EHQS8RNM42QXVNVY","k":"task","ti":"Implement and gate native M2 Metal Q1_0 and MXFP4 decode"}
