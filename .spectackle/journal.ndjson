@@ -422,3 +422,4 @@
 {"t":"2026-08-22T06:36:04Z","eid":"d348ca13b28eb563","ag":"ag-0015","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T06:36:11Z","eid":"0e1a777c5ea3bb96","ag":"ag-9c9d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T07:22:30Z","eid":"f5ac95864a6355aa","ag":"ag-5125","ev":"create","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","k":"proposal","ti":"Complete GGUF Q4_1 and M2 fused decode"}
+{"t":"2026-08-22T07:23:01Z","eid":"ecf7a1d605e15ec3","ag":"ag-13e1","ev":"revise","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","note":"body+targets revised"}
