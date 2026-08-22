@@ -30,7 +30,7 @@ Close the bottom-up IQ2_S CPU execution gap without weakening QMatMul semantics.
 
 ## T-01M0KEGBWFFG08YYQMEMZMQSXR Implement and statistically gate exact IQ2_S QMatMul and M2 ARM64 fused row dot
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0KEEGADEWBRSZJ2KTWCT4FX
 refs: ADR-01M0K6C6PEF4JT8435XC34X2GQ
