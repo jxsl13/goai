@@ -153,7 +153,7 @@ The IQ2_XXS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F
 
 Rationale: Architecture and dtype specialization must not leak into portable or prefill semantics.
 
-## IQ2XS-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_XSInto,go:gguf.dotIQ2XSRow,go:gguf.TestDotIQ2XSRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ2XSMatchesDequantizedReference}
+## IQ2XS-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_XSInto,go:gguf.dotIQ2XSRow,go:gguf.TestDotIQ2XSRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ2XSMatchesDequantizedReference,go:gguf.TestIQ2XSUnalignedCodePlaneMatchesAlignedExactly}
 WHEN IQ2_XS weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 512-entry eight-wide grid, 9-bit grid and 7-bit ksign indices, one 4-bit scale per 16 weights, float32 d*(0.5+s)*0.25 scaling, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ2_XS optimization.
