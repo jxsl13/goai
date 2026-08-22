@@ -4,6 +4,30 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- complete TQ1_0 and M2 ARM64 fused row dot (T-01M0KT35PPFRR, 2026-08-22)
+
+ggml type-34 `TQ1_0` now works end to end: eager and raw-tensor decode,
+public reference-compatible encode/decode, portable F32/F64 `QMatMul`, reused
+prefill scratch, and an ARM64 contiguous-F32 M1 leaf. The leaf expands the
+base-243 ternary streams in byte lanes, gathers exact -1/0/+1 float32 values,
+applies the trailing f16 scale, and accumulates four float64 FMA chains without
+materializing weights. Other architectures, activation dtypes, and M>1 calls
+remain portable.
+
+On Apple M2 Pro, ten alternating fresh-process 500 ms samples improve the
+K=4096 row dot from 4.8045 to 0.8479 microseconds (**5.67x**), M1/N64/K1024
+from 75.59 to 13.90 microseconds (**5.44x**), and M1/N4096/K1024 from 781.8
+to 199.5 microseconds (**3.92x**); all are `p=0.000`. Allocation counts are
+flat and both unchanged Q1_0 controls are neutral (`p=0.315`/`p=0.971`).
+Maximum scalar-relative error over 100 arbitrary raw rows is exactly zero. A
+rejected 1,280-byte package lookup table caused a 2.46% Q1_0 control regression;
+direct mixed-radix arithmetic removed it without slowing the portable path.
+Pinned llama.cpp boundary measurements are reported but not used for a
+same-semantics leadership claim because its kernel quantizes F32 activations
+to Q8_K. Reproducible streams, hashes, reference harness, specification
+bindings, and controls are committed; generalized findings are tracked as
+perfscan issues #816 and #817.
+
 ### format/gguf -- complete Q1_0 and M2 ARM64 fused row dot (T-01M0KPVJQVFCS, 2026-08-22)
 
 ggml type-41 `Q1_0` now works end to end: eager and raw-tensor decode, public

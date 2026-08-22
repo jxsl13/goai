@@ -13,6 +13,7 @@ import (
 type QuantType uint32
 
 const (
+	TQ1_0   QuantType = tTQ1_0   // 1.6875-bit: base-243 ternary 256-weight blocks
 	Q1_0    QuantType = tQ1_0    // 1.125-bit: f16 block scale + 128 sign bits
 	Q8_0    QuantType = tQ8_0    // 8-bit: f16 block scale + 32 int8 quants
 	Q4_0    QuantType = tQ4_0    // 4-bit: f16 block scale + 32 nibbles, offset −8
@@ -84,6 +85,10 @@ var dotIQ1MRowFn = dotIQ1MRow
 // dotQ1RowFn is dotQ1Row (scalar) on portable builds. ARM64 overrides it with
 // a fused sign expansion, f16 scale, and activation dot.
 var dotQ1RowFn = dotQ1Row
+
+// dotTQ1RowFn is dotTQ1Row (scalar) on portable builds. ARM64 overrides it
+// with a fused base-243 ternary expansion, f16 scale, and activation dot.
+var dotTQ1RowFn = dotTQ1Row
 
 // dotQ3KRowFn is dotQ3_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
@@ -315,9 +320,11 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// value into a later return. That would have made this function report a gap it no
 	// longer has, and silenced the check for whoever adds the next quant type.
 	if m == 1 && xf32 != nil &&
-		(qt == Q1_0 || qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == IQ2_XXS || qt == IQ2_XS || qt == IQ2_S || qt == IQ1_S || qt == IQ1_M || qt == MXFP4) {
+		(qt == TQ1_0 || qt == Q1_0 || qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == IQ2_XXS || qt == IQ2_XS || qt == IQ2_S || qt == IQ1_S || qt == IQ1_M || qt == MXFP4) {
 		var dot func([]float32, []byte, int) float64
 		switch qt {
+		case TQ1_0:
+			dot = dotTQ1RowFn
 		case Q1_0:
 			dot = dotQ1RowFn
 		case Q2_K:
@@ -367,7 +374,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
 	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
 	switch qt {
-	case Q1_0, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, IQ2_XXS, IQ2_XS, IQ2_S, IQ1_S, IQ1_M, MXFP4:
+	case TQ1_0, Q1_0, Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, IQ2_XXS, IQ2_XS, IQ2_S, IQ1_S, IQ1_M, MXFP4:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
@@ -378,6 +385,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	dequantInto := func(scratch []float32, ni int) {
 		rowBits := weight[ni*rowBytes : (ni+1)*rowBytes]
 		switch qt {
+		case TQ1_0:
+			dequantTQ1_0Into(scratch, rowBits)
 		case Q1_0:
 			dequantQ1_0Into(scratch, rowBits)
 		case Q8_0:
