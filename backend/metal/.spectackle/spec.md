@@ -328,3 +328,6 @@ WHEN an MXFP4 exponent byte e is decoded, the Metal MXFP4 kernel SHALL construct
 
 ## METAL-Q1-MXFP4-NUMERIC-001
 WHEN valid Q1_0 or MXFP4 matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and leave every activation and compressed-weight byte unchanged.
+
+## METAL-Q1-MXFP4-DISPATCH-001
+WHEN direct, resident, or recorder Q1_0 or MXFP4 dispatch selects a pipeline, the Metal backend SHALL select exactly one format-specific scalar or cooperative pipeline through a format-specific predicate with zero wire-type branches inside its decode hot loop.
