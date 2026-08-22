@@ -142,3 +142,8 @@ WHEN M exceeds one, support is unavailable, or the pair-load toggle is disabled,
 
 ## METAL-Q4-0-PAIR-LOAD-THRESHOLD-001
 WHEN it evaluates an M=1 Q4_0 decode shape, the Metal Q4_0 cooperative selector SHALL select pair loads only when K times N is at least 6291456; otherwise retain control.
+
+## METAL-Q4-1-BLOCK-001
+WHEN a valid GGUF type-3 Q4_1 block is decoded on Metal, the Metal Q4_1 kernel SHALL interpret each 20-byte block as little-endian f16 scale, little-endian f16 minimum, and sixteen split-half nibble bytes, producing weight d times q plus m for q in zero through fifteen.
+
+Rationale: This is the exact GGUF Q4_1 wire contract and prevents accidental reuse of Q4_0 signed-offset semantics.
