@@ -3881,3 +3881,8 @@ option: Implement only portable decode and defer acceleration
 option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
 option: Adopt Q8_K activation conversion to mirror llama.cpp
 choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+
+## P-01M0M5K15NFPX87P7G6KCGPSYN Complete GGUF Q4_1 and M2 fused decode
+kind: proposal
+state: draft
+created: 2026-08-22
