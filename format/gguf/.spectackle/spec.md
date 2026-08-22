@@ -185,7 +185,7 @@ The portable IQ2_S QMatMul SHALL use exactly 1 scratch-set allocation per worker
 
 Rationale: Worker-owned scratch prevents output-row fanout from turning decoding into allocation traffic.
 
-## ARM64-IQ2S-FUSED-DOT-001 {applies: go:gguf.QMatMul}
+## ARM64-IQ2S-FUSED-DOT-001 {applies: go:gguf.QMatMul,go:gguf.dotIQ2SRowASM,go:gguf.dotIQ2SBlockNeon,go:gguf.TestDotIQ2SBlockNeonKnownValue,go:gguf.TestDotIQ2SAsmRandomRaw,go:gguf.TestDotIQ2SAsmCancellationHeavy,go:gguf.TestDotIQ2SAsmAllocs}
 WHEN contiguous F32 M1 activations use IQ2_S weights, the Apple ARM64 IQ2_S selector SHALL dispatch 1 row-level fused NEON 10-bit-grid, direct-sign, explicit-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: Single-token decode is the M2 CPU latency cell where fused unpack and dot has measured leverage across the aggressive-quant family.
