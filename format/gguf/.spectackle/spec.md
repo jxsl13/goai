@@ -253,3 +253,8 @@ Rationale: The portable row dot is the semantic oracle for every architecture-sp
 The portable Q1_0 QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
 
 Rationale: Caller-owned decode scratch prevents output-row count from multiplying temporary allocations.
+
+## ARM64-Q1-FUSED-DOT-001 {applies: go:gguf.QMatMul}
+WHEN contiguous F32 M1 activations use Q1_0 weights, the Apple ARM64 Q1_0 selector SHALL dispatch 1 whole-row NEON sign-XOR and f16-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: Single-token direct-F32 decode is the M2 CPU hot path; sign-bit expansion can avoid materialized weights.
