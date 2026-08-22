@@ -3866,3 +3866,11 @@ option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
 option: Bundle and accelerate both IQ3 formats in one tranche
 choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+
+## P-01M0KY9HK0FH89MPABMZ0MWX99 M2-first complete TQ2_0 GGUF support and fused row dot
+kind: proposal
+state: active
+created: 2026-08-22
+targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md, go:gguf.QMatMul, go:gguf.decodeTensor, go:gguf.Quantize
+
+Context: GoAI rejects ggml type 35 TQ2_0. Pinned llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 defines a 66-byte block for 256 weights: 64 bytes packing four two-bit codes in 32-lane groups, followed by one f16 scale. Codes 0, 1, 2, and 3 decode to -1, 0, +1, and +2 times the scale; reference quantization emits only codes 0 through 2. Scope: add exact eager, raw, and public decode; reference-compatible public encode; portable F32 and F64 QMatMul with reusable worker scratch; and an Apple ARM64 direct-F32 M1 fused unpack-scale-dot leaf. Preserve non-ARM64, non-F32, and M greater than 1 fallbacks. Validation: pinned reference bytes and raw code-3 coverage, same-semantics numerical error at most 1e-4, zero leaf allocations, focused and full GGUF test binaries, race and cross-architecture compile gates, repository and Metal preflights, external perfscan with GOPROXY=direct, and fresh alternating-process benchmarks. Performance gate: at least 2.00x scalar-relative speedup with p below 0.01 across K4096 leaf and M1 N64 and N4096 K1024 boundaries, with neutral adjacent Q1_0 and TQ1_0 controls. Cross-library llama.cpp measurements remain separately labeled because its native dot consumes Q8_K activations.
