@@ -325,3 +325,6 @@ WHEN an MXFP4 nibble is decoded, the Metal MXFP4 kernel SHALL map codes 0 throug
 
 ## METAL-MXFP4-SCALE-001
 WHEN an MXFP4 exponent byte e is decoded, the Metal MXFP4 kernel SHALL construct scale bits as 0x00200000 shifted left by e when e is below 2, and as (e minus 1) shifted left by 23 otherwise.
+
+## METAL-Q1-MXFP4-NUMERIC-001
+WHEN valid Q1_0 or MXFP4 matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and leave every activation and compressed-weight byte unchanged.
