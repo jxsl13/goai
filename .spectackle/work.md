@@ -3951,19 +3951,3 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
-
-## ADR-01M0MTV0RYEXWR38M3PX8WHZ5A How should Metal IQ2_S share lookup and dispatch infrastructure with the existing IQ2_XXS and IQ2_XS family?
-kind: adr
-state: done
-created: 2026-08-22
-context: IQ2_S uses a distinct 1024-by-8 positive grid, 82-byte blocks, direct sign bytes, and explicit sub-scales, while the existing IQ2 lifecycle already owns exact process-lifetime grid buffers and per-format scalar/cooperative selectors.
-decision: Extend the IQ2 lifecycle with one exact 2 KiB packed IQ2_S grid buffer plus a type-specific parser and selector
-consequences: One family initialization boundary preserves process-lifetime ownership and recorder binding conventions without duplicating state. The packed grid cuts immutable lookup residency from 32 KiB of float32 values to 2 KiB while reconstructing the exact public decoder truth. IQ2_S retains its own wire parser, scalar/cooperative toggle, benchmark verdict, and host-route fallback so existing IQ2_XXS and IQ2_XS behavior cannot be masked.
-status: accepted
-
-kind: radio
-option: Extend the IQ2 lifecycle with one exact 2 KiB packed IQ2_S grid buffer plus a type-specific parser and selector
-option: Create an entirely separate IQ2_S lifecycle and duplicate family initialization state
-option: Embed the expanded IQ2_S grid as shader literals and use the existing family-wide selector
-blocks: P-01M0MTT417E27SQK7K6X6EM9E6
-choice: Extend the IQ2 lifecycle with one exact 2 KiB packed IQ2_S grid buffer plus a type-specific parser and selector
