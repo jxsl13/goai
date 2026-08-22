@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## T-01M0NSQZNEEYNR4G4AADP15281 Aggregate the RoPE F16-KV CI timing gate
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0NSPZ36FZKRC1N1CFER4XCG
 

@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M0NSPZ36FZKRC1N1CFER4XCG Stabilize the fused RoPE F16-KV performance gate
 kind: proposal
-state: active
+state: done
 created: 2026-08-22
 grilled: 2026-08-22 open=0
 targets: go:metal.TestRoPEF16KVAppendInterleavedCampaigns
