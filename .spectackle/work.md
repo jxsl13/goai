@@ -3952,15 +3952,6 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
 
-## P-01M0MTT417E27SQK7K6X6EM9E6 Accelerate resident IQ2_S decode on M2 Metal
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:gguf.dequantIQ2_SInto, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
-
-Add an exact native Metal IQ2_S resident matvec path for M=1 transformer decode. Reconstruct the 1024-by-8 grid through public gguf.Dequantize, encode each grid row in an exact 2 KiB packed representation, and keep one process-lifetime device buffer. Preserve the 82-byte type-22 wire format, direct sign bytes, 10-bit indices, explicit sub-scales, and independent scalar/cooperative controls. Gate promotion on cross-reference parity, input immutability, validation failures, fresh-process count-seven GPU and recorder-wall campaigns over KV, square, gate, and down shapes, fused ARM64 CPU controls, whole-token reachability with identical greedy tokens, and unchanged-control drift. Keep direct host-bound execution on CPU unless every declared cell wins. Admit Llama and Phi-3 GGUF routing only when the resident recorder path is complete. Pin benchmark evidence and report generalized optimization findings to perfscan.
-
 ## ADR-01M0MTV0RYEXWR38M3PX8WHZ5A How should Metal IQ2_S share lookup and dispatch infrastructure with the existing IQ2_XXS and IQ2_XS family?
 kind: adr
 state: done
