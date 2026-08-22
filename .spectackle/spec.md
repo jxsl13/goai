@@ -650,6 +650,6 @@ WHEN an eager quantized SwiGLU executes on its projection backend and that backe
 Rationale: This removes two hidden-width buffers and dispatches without changing public ownership.
 
 ## CPU-SWIGLU-INPLACE-FALLBACK-001
-WHEN quantized SwiGLU recording is active or its projection backend lacks in-place fusion, the GoAI SHALL uses the existing SiLU and multiply operations without mutating their inputs.
+WHEN quantized SwiGLU recording is active or its projection backend lacks in-place fusion, the GoAI SHALL use the existing SiLU and multiply operations without mutating their inputs.
 
 Rationale: Autograd interception and unsupported backends must retain the established composition.
