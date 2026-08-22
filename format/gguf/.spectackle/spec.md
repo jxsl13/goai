@@ -211,3 +211,8 @@ Rationale: M greater than one must reuse decoded-row storage instead of rebuildi
 WHEN contiguous F32 M1 activations use IQ1_S weights, the Apple ARM64 IQ1_S selector SHALL dispatch 1 row-level fused NEON 11-bit-grid, odd-scale, signed-delta dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: Single-token direct-F32 decode is the M2 CPU hot path; the portable scalar row dot remains its semantic oracle.
+
+## ARM64-IQ1S-FUSED-DOT-SCOPE-001
+The IQ1_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: The specialized leaf assumes contiguous F32 activations and must not alter portable or prefill semantics.
