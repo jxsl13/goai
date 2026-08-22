@@ -175,7 +175,7 @@ The IQ2_XS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F3
 
 Rationale: The selector test injects a counting oracle and proves only contiguous F32 M1 reaches the row leaf.
 
-## IQ2S-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_S}
+## IQ2S-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_S,go:gguf.dequantIQ2_SInto,go:gguf.dotIQ2SRow,go:gguf.TestDequantIQ2SIntoMatchesTensorDecoderExactly,go:gguf.TestDotIQ2SRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ2SMatchesDequantizedReference,go:gguf.TestQMatMulIQ2SRejectsInvalidInputs}
 WHEN IQ2_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve 1024 eight-wide grid rows, 10-bit byte-plus-qh indices, direct 8-weight sign bytes, 16-weight four-bit scales, float32 d*(0.5+s)*0.25, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ2_S optimization.
