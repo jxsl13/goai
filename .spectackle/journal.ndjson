@@ -738,3 +738,6 @@
 {"t":"2026-08-22T17:08:13Z","eid":"4fc02bb096b47664","ag":"ag-9e2b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T17:09:53Z","eid":"990be1a7903ec59f","ag":"ag-dca9","ev":"move","id":"P-01M0N73GJ6E7S8JKQRSY1RJBH2","fr":"draft","to":"active"}
 {"t":"2026-08-22T17:09:56Z","eid":"6c5007b5fc6a975f","ag":"ag-0c19","ev":"grill","id":"P-01M0N73GJ6E7S8JKQRSY1RJBH2","gr":"2026-08-22 open=0","hash":"2708fe75878c1f9e1c61f2bc8dd8aa3b456c4d3167091c74596b8e2c30ba6fc4"}
+{"t":"2026-08-22T17:10:05Z","eid":"2616c1b33adf3a4b","ag":"ag-d01a","ev":"create","id":"T-01M0N76XV8FB2TDN83KH0BHED6","k":"task","ti":"Implement and gate grouped-QKV RoPE-f16-KV append"}
+{"t":"2026-08-22T17:10:05Z","eid":"435a520b547f4c3e","ag":"ag-d01a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T17:10:18Z","eid":"9e59d443d8bbfe18","ag":"ag-c34f","ev":"move","id":"T-01M0N76XV8FB2TDN83KH0BHED6","fr":"draft","to":"active"}
