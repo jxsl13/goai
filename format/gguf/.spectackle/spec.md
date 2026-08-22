@@ -328,4 +328,4 @@ WHEN Read or QuantTensor.Dequantize receives wire type 16, 17, 18, 20, 21, 23, 2
 The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes, decoder arithmetic, QMatMul selectors, platform routes, and unsupported-type errors.
 
 ## GGUF-Q4K-PAIRED-M1-001
-WHEN 2 Q4_K weight matrices with equal N and K receive the same contiguous F32 M1 activation, the QMatMulPair SHALL allocate exactly 2 F32 outputs, invoke qmatmulParallelChunks exactly 1 time, and return every output bit equal to 2 independent QMatMul calls.
+WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation, the QMatMulPair SHALL allocate 2 F32 outputs, invoke qmatmulParallelChunks exactly once, and match 2 independent QMatMul outputs bit-for-bit.
