@@ -204,3 +204,24 @@ WHEN three count-seven M2 campaigns cover representative resident single-token I
 
 ## METAL-IQ4XS-HOST-ROUTE-001
 WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_XS by at least 1.10 times, the generic Metal IQ4_XS dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU path.
+
+## METAL-IQ3S-BLOCK-001
+WHEN a GGUF type-21 IQ3_S super-block is decoded, the Metal IQ3_S kernel SHALL read one f16 scale, 64 low grid indices, eight high-bit bytes, 32 direct-sign bytes, and four packed sub-scale bytes from exactly 110 bytes.
+
+## METAL-IQ3XXS-BLOCK-001
+WHEN a GGUF type-18 IQ3_XXS super-block is decoded, the Metal IQ3_XXS kernel SHALL read one f16 scale, 64 grid indices, and eight packed sign-and-scale words from exactly 98 bytes.
+
+## METAL-IQ3-GRID-RESIDENCY-001
+WHEN an IQ3 Metal pipeline initializes, the Metal backend SHALL reconstruct the matching 256-by-4 or 512-by-4 grid once from gguf.Dequantize and retain exactly one immutable Metal buffer.
+
+## METAL-IQ3-NUMERIC-001
+WHEN valid IQ3_S or IQ3_XXS matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error and mutate zero activation or compressed-weight bytes.
+
+## METAL-IQ3-DISPATCH-001
+WHEN direct, resident, or recorder IQ3 dispatch selects a pipeline, the Metal backend SHALL use one shared cooperative predicate per wire type and bind the matching persistent grid at buffer index 4.
+
+## METAL-IQ3-PERF-001
+WHEN three count-seven M2 campaigns cover four resident single-token geometries for one IQ3 type, the cooperative Metal route SHALL remain enabled only when every median is at least 1.10 times scalar control at GPU and host-command boundaries.
+
+## METAL-IQ3-HOST-ROUTE-001
+WHEN equal host-boundary M2 benchmarks do not beat fused ARM64 IQ3 by at least 1.10 times, the generic Metal IQ3 dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU route.

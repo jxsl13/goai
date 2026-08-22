@@ -137,6 +137,15 @@ int mtl_qmatmul_iq4_nl(const float* X, const unsigned char* W, float* O, int M, 
 // split-half nonlinear-codebook nibbles. K must be a multiple of 256.
 int mtl_qmatmul_iq4_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// mtl_iq3_grid_upload copies one exact reconstructed IQ3 codebook into a process-lifetime
+// immutable Metal buffer. qtype 18 expects 256x4 floats; qtype 21 expects 512x4 floats.
+int mtl_iq3_grid_upload(int qtype, const float* grid, int count);
+
+// Native exact-grid IQ3 matmuls over GGUF type-18 (98-byte IQ3_XXS blocks) and type-21
+// (110-byte IQ3_S blocks). K must be a positive multiple of 256.
+int mtl_qmatmul_iq3_xxs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+int mtl_qmatmul_iq3_s(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
 // mtl_qmatmul_q4k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q4_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 144 bytes, §R100) — the DOMINANT real-world
 // quant (the bulk of Q4_K_M models), dequantized IN-KERNEL: asymmetric affine
@@ -155,6 +164,8 @@ int mtl_q4_0_cooperative_set(int on);
 int mtl_q4_1_cooperative_set(int on);
 int mtl_iq4_nl_cooperative_set(int on);
 int mtl_iq4_xs_cooperative_set(int on);
+int mtl_iq3_xxs_cooperative_set(int on);
+int mtl_iq3_s_cooperative_set(int on);
 int mtl_q8_0_cooperative_set(int on);
 int mtl_q3k_cooperative_set(int on);
 int mtl_q4k_cooperative_set(int on);

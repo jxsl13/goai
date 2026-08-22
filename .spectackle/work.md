@@ -3912,3 +3912,19 @@ option: Enable both generic host-I/O and resident Metal paths only if each indep
 option: Defer Metal IQ4_XS if neither boundary produces repeatable end-to-end leverage.
 blocks: P-01M0MF818FE9XBQTDC8B3P8RN8
 choice: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.
+
+## ADR-01M0MJ4KTREPXRNG4NX30VMAF5 Should the M2 Metal IQ3 tranche implement IQ3_S and IQ3_XXS together behind shared codebook residency, or split them into separate changes?
+kind: adr
+state: done
+created: 2026-08-22
+context: Both wire formats already have exact portable and ARM64 row-dot contracts. Their new Metal paths share codebook reconstruction, bridge selectors, direct, resident, and recorder APIs, raw-GGUF admission, and identical benchmark geometry. Splitting duplicates most plumbing and delays admission; combining increases one pull request surface but preserves one auditable pipeline family.
+decision: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.
+consequences: One shared grid-residency and bridge framework is implemented once. IQ3_S and IQ3_XXS each retain separate oracle, scalar/cooperative, host-route, resident-recorder, and loader gates. Failure of either format blocks only that format from production routing; shared infrastructure may remain if independently useful.
+status: accepted
+
+kind: radio
+option: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.
+option: Implement IQ3_S first, then duplicate the framework for IQ3_XXS.
+option: Implement IQ3_XXS first, then duplicate the framework for IQ3_S.
+blocks: P-01M0MJ2RYQF4QR01T9CCYCBQSS
+choice: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.

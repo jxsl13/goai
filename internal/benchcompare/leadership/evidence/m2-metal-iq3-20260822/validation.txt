@@ -1,0 +1,16 @@
+GOTOOLCHAIN=go1.26.6 make preflight
+PASS: gofmt, CGO_ENABLED=0 build, vet, go.mod/go.sum drift, and all short-suite packages.
+
+GOTOOLCHAIN=go1.26.6 make preflight-metal
+PASS: github.com/jxsl13/goai/backend/metal (44.077s)
+PASS: github.com/jxsl13/goai/llamagpu (14.076s)
+
+Focused compiled-binary gates:
+PASS: TestMetalQMatMulIQ3CrossReference
+PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar
+PASS: TestMetalQMatMulIQ3FloatingPointClass
+PASS: TestMetalQMatMulIQ3DispatchAndValidation
+PASS: TestMetalQMatMulIQ3RecorderResident
+PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants
+PASS: TestMetalUploadIQ3UsesRecorderOnlyResidentPath
+PASS: TestMetalIQ3CooperativeEndToEnd

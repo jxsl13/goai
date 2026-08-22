@@ -2461,6 +2461,219 @@ int mtl_qmatmul_iq4_xs(const float* X, const unsigned char* W, float* O, int M, 
     }
 }
 
+// Shared exact-grid IQ3 family. The 256x4 IQ3_XXS and 512x4 IQ3_S codebooks are
+// reconstructed once through format/gguf and retained in immutable Metal buffers.
+// Both scalar controls and cooperative production kernels bind the matching grid
+// at buffer(4), so direct, resident, and recorder paths cannot drift.
+static NSString* const kQMatMulIQ3Source =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "inline uint iq3_signs(uint index) { return index | ((popcount(index)&1u)<<7); }\n"
+     "inline float iq3_signed(float value, uint signs, uint bit) { return ((signs>>bit)&1u) ? -value : value; }\n"
+     "kernel void qmatmul_iq3_xxs(device const float* X [[buffer(0)]],\n"
+     "                             device const uchar* W [[buffer(1)]],\n"
+     "                             device float* O [[buffer(2)]],\n"
+     "                             constant int* P [[buffer(3)]],\n"
+     "                             device const float* G [[buffer(4)]],\n"
+     "                             uint gid [[thread_position_in_grid]]) {\n"
+     "  int M=P[0], K=P[1], N=P[2]; if ((int)gid>=M*N) return;\n"
+     "  int mi=(int)gid/N, ni=(int)gid%N, nb=K/256, row=ni*nb*98; float acc=0.0f;\n"
+     "  for (int b=0;b<nb;b++){ int base=row+b*98;\n"
+     "    ushort rd=(ushort)W[base] | ((ushort)W[base+1]<<8); float d=float(as_type<half>(rd));\n"
+     "    for (int g=0;g<8;g++){ int so=base+66+g*4;\n"
+     "      uint sg=(uint)W[so] | ((uint)W[so+1]<<8) | ((uint)W[so+2]<<16) | ((uint)W[so+3]<<24);\n"
+     "      float db=d*(0.5f+(float)(sg>>28))*0.5f;\n"
+     "      for (int j=0;j<4;j++){ uint signs=iq3_signs((sg>>(7*j))&0x7fu);\n"
+     "        uint i0=(uint)W[base+2+g*8+j*2], i1=(uint)W[base+3+g*8+j*2];\n"
+     "        int xoff=mi*K+b*256+g*32+j*8;\n"
+     "        for (uint k=0;k<4;k++){ acc += X[xoff+(int)k]*iq3_signed(db*G[i0*4+k],signs,k);\n"
+     "          acc += X[xoff+4+(int)k]*iq3_signed(db*G[i1*4+k],signs,k+4); }\n"
+     "      }\n"
+     "    }\n"
+     "  } O[mi*N+ni]=acc;\n"
+     "}\n"
+     "kernel void qmatmul_iq3_xxs_cooperative(device const float* X [[buffer(0)]],\n"
+     "                                         device const uchar* W [[buffer(1)]],\n"
+     "                                         device float* O [[buffer(2)]],\n"
+     "                                         constant int* P [[buffer(3)]],\n"
+     "                                         device const float* G [[buffer(4)]],\n"
+     "                                         uint3 group [[threadgroup_position_in_grid]],\n"
+     "                                         ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                         ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     "  constexpr short groupsPerTG=2; int M=P[0],K=P[1],N=P[2],mi=(int)group.y,nb=K/256;\n"
+     "  int ni=(int)group.x*groupsPerTG+(int)simdgroup; if (mi>=M || ni>=N) return;\n"
+     "  int g=(int)lane/4, j=(int)lane&3, row=ni*nb*98; float acc=0.0f;\n"
+     "  for (int b=0;b<nb;b++){ int base=row+b*98, so=base+66+g*4;\n"
+     "    ushort rd=(ushort)W[base] | ((ushort)W[base+1]<<8); float d=float(as_type<half>(rd));\n"
+     "    uint sg=(uint)W[so] | ((uint)W[so+1]<<8) | ((uint)W[so+2]<<16) | ((uint)W[so+3]<<24);\n"
+     "    float db=d*(0.5f+(float)(sg>>28))*0.5f; uint signs=iq3_signs((sg>>(7*j))&0x7fu);\n"
+     "    uint i0=(uint)W[base+2+g*8+j*2], i1=(uint)W[base+3+g*8+j*2];\n"
+     "    int xoff=mi*K+b*256+g*32+j*8;\n"
+     "    for (uint k=0;k<4;k++){ acc += X[xoff+(int)k]*iq3_signed(db*G[i0*4+k],signs,k);\n"
+     "      acc += X[xoff+4+(int)k]*iq3_signed(db*G[i1*4+k],signs,k+4); }\n"
+     "  } float total=simd_sum(acc); if (lane==0) O[mi*N+ni]=total;\n"
+     "}\n"
+     "kernel void qmatmul_iq3_s(device const float* X [[buffer(0)]],\n"
+     "                           device const uchar* W [[buffer(1)]],\n"
+     "                           device float* O [[buffer(2)]],\n"
+     "                           constant int* P [[buffer(3)]],\n"
+     "                           device const float* G [[buffer(4)]],\n"
+     "                           uint gid [[thread_position_in_grid]]) {\n"
+     "  int M=P[0],K=P[1],N=P[2]; if ((int)gid>=M*N) return;\n"
+     "  int mi=(int)gid/N,ni=(int)gid%N,nb=K/256,row=ni*nb*110; float acc=0.0f;\n"
+     "  for (int b=0;b<nb;b++){ int base=row+b*110;\n"
+     "    ushort rd=(ushort)W[base] | ((ushort)W[base+1]<<8); float d=float(as_type<half>(rd));\n"
+     "    for (int g=0;g<8;g++){ uint packedScale=(uint)W[base+106+g/2];\n"
+     "      uint scale=(packedScale>>((g&1)*4))&0x0fu; float db=d*(1.0f+2.0f*(float)scale);\n"
+     "      uint qh=(uint)W[base+66+g];\n"
+     "      for (int j=0;j<4;j++){ uint i0=(uint)W[base+2+g*8+j*2] | (((qh>>(2*j))&1u)<<8);\n"
+     "        uint i1=(uint)W[base+3+g*8+j*2] | (((qh>>(2*j+1))&1u)<<8);\n"
+     "        uint signs=(uint)W[base+74+g*4+j]; int xoff=mi*K+b*256+g*32+j*8;\n"
+     "        for (uint k=0;k<4;k++){ acc += X[xoff+(int)k]*iq3_signed(db*G[i0*4+k],signs,k);\n"
+     "          acc += X[xoff+4+(int)k]*iq3_signed(db*G[i1*4+k],signs,k+4); }\n"
+     "      }\n"
+     "    }\n"
+     "  } O[mi*N+ni]=acc;\n"
+     "}\n"
+     "kernel void qmatmul_iq3_s_cooperative(device const float* X [[buffer(0)]],\n"
+     "                                       device const uchar* W [[buffer(1)]],\n"
+     "                                       device float* O [[buffer(2)]],\n"
+     "                                       constant int* P [[buffer(3)]],\n"
+     "                                       device const float* G [[buffer(4)]],\n"
+     "                                       uint3 group [[threadgroup_position_in_grid]],\n"
+     "                                       ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                       ushort simdgroup [[simdgroup_index_in_threadgroup]]) {\n"
+     "  constexpr short groupsPerTG=2; int M=P[0],K=P[1],N=P[2],mi=(int)group.y,nb=K/256;\n"
+     "  int ni=(int)group.x*groupsPerTG+(int)simdgroup; if (mi>=M || ni>=N) return;\n"
+     "  int g=(int)lane/4,j=(int)lane&3,row=ni*nb*110; float acc=0.0f;\n"
+     "  for (int b=0;b<nb;b++){ int base=row+b*110;\n"
+     "    ushort rd=(ushort)W[base] | ((ushort)W[base+1]<<8); float d=float(as_type<half>(rd));\n"
+     "    uint packedScale=(uint)W[base+106+g/2], scale=(packedScale>>((g&1)*4))&0x0fu;\n"
+     "    float db=d*(1.0f+2.0f*(float)scale); uint qh=(uint)W[base+66+g];\n"
+     "    uint i0=(uint)W[base+2+g*8+j*2] | (((qh>>(2*j))&1u)<<8);\n"
+     "    uint i1=(uint)W[base+3+g*8+j*2] | (((qh>>(2*j+1))&1u)<<8);\n"
+     "    uint signs=(uint)W[base+74+g*4+j]; int xoff=mi*K+b*256+g*32+j*8;\n"
+     "    for (uint k=0;k<4;k++){ acc += X[xoff+(int)k]*iq3_signed(db*G[i0*4+k],signs,k);\n"
+     "      acc += X[xoff+4+(int)k]*iq3_signed(db*G[i1*4+k],signs,k+4); }\n"
+     "  } float total=simd_sum(acc); if (lane==0) O[mi*N+ni]=total;\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gQMatMulIQ3XXS = nil;
+static id<MTLComputePipelineState> gQMatMulIQ3XXSCooperative = nil;
+static id<MTLComputePipelineState> gQMatMulIQ3S = nil;
+static id<MTLComputePipelineState> gQMatMulIQ3SCooperative = nil;
+static id<MTLBuffer> gIQ3XXSGrid = nil;
+static id<MTLBuffer> gIQ3SGrid = nil;
+static int gQMatMulIQ3XXSUseCooperative = 1;
+static int gQMatMulIQ3SUseCooperative = 1;
+static int gQMatMulIQ3XXSCooperativeSupported = 0;
+static int gQMatMulIQ3SCooperativeSupported = 0;
+
+int mtl_iq3_grid_upload(int qtype, const float* grid, int count) {
+    if (ensure_init() != 0) return -1;
+    const int expected = qtype == 18 ? 256*4 : (qtype == 21 ? 512*4 : 0);
+    if (grid == NULL || count != expected) return -2;
+    if ((qtype == 18 && gIQ3XXSGrid != nil) || (qtype == 21 && gIQ3SGrid != nil)) return 0;
+    @autoreleasepool {
+        id<MTLBuffer> buf = [gDevice newBufferWithBytes:grid length:(size_t)count*sizeof(float)
+                                                 options:MTLResourceStorageModeShared];
+        if (buf == nil) return -3;
+        if (qtype == 18) gIQ3XXSGrid = buf;
+        else gIQ3SGrid = buf;
+    }
+    return 0;
+}
+
+static int ensure_qmatmul_iq3(void) {
+    if (gQMatMulIQ3XXS != nil && gQMatMulIQ3S != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kQMatMulIQ3Source options:nil error:&err];
+    if (lib == nil) {
+        fprintf(stderr, "metal: IQ3 shader failed to build: %s\n", err ? [[err localizedDescription] UTF8String] : "?");
+        return -6;
+    }
+    id<MTLFunction> xxs = [lib newFunctionWithName:@"qmatmul_iq3_xxs"];
+    id<MTLFunction> xxsCoop = [lib newFunctionWithName:@"qmatmul_iq3_xxs_cooperative"];
+    id<MTLFunction> s = [lib newFunctionWithName:@"qmatmul_iq3_s"];
+    id<MTLFunction> sCoop = [lib newFunctionWithName:@"qmatmul_iq3_s_cooperative"];
+    if (xxs == nil || s == nil) return -6;
+    gQMatMulIQ3XXS = [gDevice newComputePipelineStateWithFunction:xxs error:&err];
+    gQMatMulIQ3S = [gDevice newComputePipelineStateWithFunction:s error:&err];
+    if (xxsCoop != nil) gQMatMulIQ3XXSCooperative = [gDevice newComputePipelineStateWithFunction:xxsCoop error:&err];
+    if (sCoop != nil) gQMatMulIQ3SCooperative = [gDevice newComputePipelineStateWithFunction:sCoop error:&err];
+    gQMatMulIQ3XXSCooperativeSupported = gQMatMulIQ3XXSCooperative != nil &&
+        gQMatMulIQ3XXSCooperative.threadExecutionWidth == 32 &&
+        gQMatMulIQ3XXSCooperative.maxTotalThreadsPerThreadgroup >= 64;
+    gQMatMulIQ3SCooperativeSupported = gQMatMulIQ3SCooperative != nil &&
+        gQMatMulIQ3SCooperative.threadExecutionWidth == 32 &&
+        gQMatMulIQ3SCooperative.maxTotalThreadsPerThreadgroup >= 64;
+    return gQMatMulIQ3XXS != nil && gQMatMulIQ3S != nil ? 0 : -6;
+}
+
+int mtl_iq3_xxs_cooperative_set(int on) {
+    int previous = gQMatMulIQ3XXSUseCooperative;
+    gQMatMulIQ3XXSUseCooperative = on ? 1 : 0;
+    return previous;
+}
+
+int mtl_iq3_s_cooperative_set(int on) {
+    int previous = gQMatMulIQ3SUseCooperative;
+    gQMatMulIQ3SUseCooperative = on ? 1 : 0;
+    return previous;
+}
+
+static int iq3_xxs_cooperative_enabled(void) {
+    return gQMatMulIQ3XXSUseCooperative && gQMatMulIQ3XXSCooperativeSupported;
+}
+
+static int iq3_s_cooperative_enabled(void) {
+    return gQMatMulIQ3SUseCooperative && gQMatMulIQ3SCooperativeSupported;
+}
+
+static int mtl_qmatmul_iq3(const float* X, const unsigned char* W, float* O,
+                           int M, int K, int N, int qtype) {
+    if (ensure_init() != 0) return -1;
+    if (ensure_qmatmul_iq3() != 0) return -6;
+    id<MTLBuffer> grid = qtype == 18 ? gIQ3XXSGrid : (qtype == 21 ? gIQ3SGrid : nil);
+    if (grid == nil) return -8;
+    OP_BEGIN;
+    @autoreleasepool {
+        int blocks = K/256, blockBytes = qtype == 18 ? 98 : 110;
+        size_t xLen = (size_t)M*K*sizeof(float), wLen = (size_t)N*blocks*blockBytes;
+        size_t oLen = (size_t)M*N*sizeof(float);
+        id<MTLBuffer> xb = pool_in(X, xLen), wb = pool_in(W, wLen), ob = pool_buf(oLen);
+        int P[3] = {M,K,N}; id<MTLBuffer> pb = pool_in(P, sizeof(P));
+        if (xb == nil || wb == nil || ob == nil || pb == nil) return -2;
+        int cooperative = M <= gCoopMaxM && (qtype == 18 ? iq3_xxs_cooperative_enabled() : iq3_s_cooperative_enabled());
+        id<MTLComputePipelineState> pipe = qtype == 18
+            ? (cooperative ? gQMatMulIQ3XXSCooperative : gQMatMulIQ3XXS)
+            : (cooperative ? gQMatMulIQ3SCooperative : gQMatMulIQ3S);
+        id<MTLCommandBuffer> cmd = [gQueue commandBuffer]; if (cmd == nil) return -3;
+        id<MTLComputeCommandEncoder> enc = [cmd computeCommandEncoder];
+        [enc setComputePipelineState:pipe]; [enc setBuffer:xb offset:0 atIndex:0];
+        [enc setBuffer:wb offset:0 atIndex:1]; [enc setBuffer:ob offset:0 atIndex:2];
+        [enc setBuffer:pb offset:0 atIndex:3]; [enc setBuffer:grid offset:0 atIndex:4];
+        if (cooperative) {
+            [enc dispatchThreadgroups:MTLSizeMake((N+1)/2,M,1) threadsPerThreadgroup:MTLSizeMake(64,1,1)];
+        } else {
+            int total=M*N; NSUInteger tg=pipe.maxTotalThreadsPerThreadgroup;
+            if ((NSUInteger)total<tg) tg=(NSUInteger)total;
+            [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+        }
+        [enc endEncoding]; [cmd commit]; [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        memcpy(O, ob.contents, oLen); return 0;
+    }
+}
+
+int mtl_qmatmul_iq3_xxs(const float* X, const unsigned char* W, float* O, int M, int K, int N) {
+    return mtl_qmatmul_iq3(X, W, O, M, K, N, 18);
+}
+
+int mtl_qmatmul_iq3_s(const float* X, const unsigned char* W, float* O, int M, int K, int N) {
+    return mtl_qmatmul_iq3(X, W, O, M, K, N, 21);
+}
+
 // Forward declarations so mtl_qmatmul_resident (below) can select any k-quant pipeline, whose
 // ensure_*/g* definitions appear later in this file (§T155). Tentative static definitions.
 static int ensure_qmatmul_q2k(void);
@@ -3490,6 +3703,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
     if (ensure_init() != 0) return -1;
     if (wbuf == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
+    id<MTLBuffer> iqGrid = nil;
     int cooperative = 0;
     // Rows an enabled cooperative threadgroup covers: Q4_K/Q6_K put 2 rows on each of
     // 2 simdgroups; the Q5_K kernel gives a whole simdgroup to one row, so 2.
@@ -3503,7 +3717,9 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
         case 12: if (ensure_qmatmul_q4k() != 0) return -6; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q5k_cooperative_pipeline(M, K, N) : gQMatMulQ5K; break;
         case 14: if (ensure_qmatmul_q6k() != 0) return -6; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 18: if (ensure_qmatmul_iq3() != 0 || gIQ3XXSGrid == nil) return -6; cooperative = M <= gCoopMaxM && iq3_xxs_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ3XXSCooperative : gQMatMulIQ3XXS; iqGrid = gIQ3XXSGrid; break;
         case 20: if (ensure_qmatmul_iq4_nl() != 0) return -6; cooperative = M <= gCoopMaxM && iq4_nl_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ4NLCooperative : gQMatMulIQ4NL; break;
+        case 21: if (ensure_qmatmul_iq3() != 0 || gIQ3SGrid == nil) return -6; cooperative = M <= gCoopMaxM && iq3_s_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ3SCooperative : gQMatMulIQ3S; iqGrid = gIQ3SGrid; break;
         case 23: if (ensure_qmatmul_iq4_xs() != 0) return -6; cooperative = M <= gCoopMaxM && iq4_xs_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ4XSCooperative : gQMatMulIQ4XS; break;
         default: return -7;
     }
@@ -3526,6 +3742,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
         [enc setBuffer:wb offset:0 atIndex:1];
         [enc setBuffer:ob offset:0 atIndex:2];
         [enc setBuffer:pb offset:0 atIndex:3];
+        if (iqGrid != nil) [enc setBuffer:iqGrid offset:0 atIndex:4];
         if (cooperative) {
             [enc dispatchThreadgroups:MTLSizeMake((N + coopRows - 1)/coopRows, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
         } else {
@@ -4518,6 +4735,7 @@ double mtl_probe_encoder_cost(int n, int per, int reps) {
 int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
     id<MTLComputePipelineState> pipe = nil;
+    id<MTLBuffer> iqGrid = nil;
     NSString* profileLabel = nil;
     int cooperative = 0;
     // Rows an enabled cooperative threadgroup covers: Q4_K/Q6_K put 2 rows on each of
@@ -4532,7 +4750,9 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         case 12: if (ensure_qmatmul_q4k() != 0) return -6; profileLabel = @"qmatmul.q4_k"; cooperative = M <= gCoopMaxM && q4k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ4KCooperative : gQMatMulQ4K; break;
         case 13: if (ensure_qmatmul_q5k() != 0) return -6; profileLabel = @"qmatmul.q5_k"; cooperative = M <= gCoopMaxM && q5k_cooperative_enabled(); coopRows = 2; pipe = cooperative ? q5k_cooperative_pipeline(M, K, N) : gQMatMulQ5K; break;
         case 14: if (ensure_qmatmul_q6k() != 0) return -6; profileLabel = @"qmatmul.q6_k"; cooperative = M <= gCoopMaxM && q6k_cooperative_enabled(); pipe = cooperative ? gQMatMulQ6KCooperative : gQMatMulQ6K; break;
+        case 18: if (ensure_qmatmul_iq3() != 0 || gIQ3XXSGrid == nil) return -6; profileLabel = @"qmatmul.iq3_xxs"; cooperative = M <= gCoopMaxM && iq3_xxs_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ3XXSCooperative : gQMatMulIQ3XXS; iqGrid = gIQ3XXSGrid; break;
         case 20: if (ensure_qmatmul_iq4_nl() != 0) return -6; profileLabel = @"qmatmul.iq4_nl"; cooperative = M <= gCoopMaxM && iq4_nl_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ4NLCooperative : gQMatMulIQ4NL; break;
+        case 21: if (ensure_qmatmul_iq3() != 0 || gIQ3SGrid == nil) return -6; profileLabel = @"qmatmul.iq3_s"; cooperative = M <= gCoopMaxM && iq3_s_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ3SCooperative : gQMatMulIQ3S; iqGrid = gIQ3SGrid; break;
         case 23: if (ensure_qmatmul_iq4_xs() != 0) return -6; profileLabel = @"qmatmul.iq4_xs"; cooperative = M <= gCoopMaxM && iq4_xs_cooperative_enabled(); coopRows = 2; pipe = cooperative ? gQMatMulIQ4XSCooperative : gQMatMulIQ4XS; break;
         default: return -7;
     }
@@ -4599,6 +4819,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
     [enc setBuffer:wb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
     [enc setBytes:P length:sizeof(P) atIndex:3];
+    if (iqGrid != nil) [enc setBuffer:iqGrid offset:0 atIndex:4];
     if (cooperative) {
         [enc dispatchThreadgroups:MTLSizeMake((N + coopRows - 1)/coopRows, M, 1) threadsPerThreadgroup:MTLSizeMake(64, 1, 1)];
     } else {
