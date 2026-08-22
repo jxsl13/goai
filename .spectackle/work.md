@@ -3912,3 +3912,12 @@ option: Enable both generic host-I/O and resident Metal paths only if each indep
 option: Defer Metal IQ4_XS if neither boundary produces repeatable end-to-end leverage.
 blocks: P-01M0MF818FE9XBQTDC8B3P8RN8
 choice: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.
+
+## P-01M0MJ2RYQF4QR01T9CCYCBQSS Add native M2 Metal IQ3_S and IQ3_XXS decode
+kind: proposal
+state: draft
+created: 2026-08-22
+refs: P-01M0MF818FE9XBQTDC8B3P8RN8, ADR-01M0K3K391ERQSKF6T8MH14J47
+targets: go:metal.QMatMulIQ4_XS, objc:metal_bridge.mtl_qmatmul_resident, go:gguf.dotIQ3SRowASM, go:nlp.quantMatMulSupported
+
+Implement exact GGUF type-21 IQ3_S and type-18 IQ3_XXS as one shared Apple M2 Metal pipeline family. Preserve compressed bytes, format-specific grids, signs, scales, and F32 activation semantics. Add scalar reference and two-SIMD-group cooperative kernels, explicit direct APIs, resident uploads, recorder dispatch, and raw-GGUF loader admission. Reconstruct each immutable grid once from the existing public GGUF oracle and retain it in a shared Metal buffer. Keep the generic host-input/output Backend route on the fused ARM64 implementation unless an interleaved multi-weight campaign wins by at least 1.10x. Promote the resident recorder path only if all four decode geometries beat scalar Metal by at least 1.05x at both GPU and host-command boundaries across three fresh-process campaigns, with numerical, mutation, allocation, loader, and whole-model gates. Pin evidence and external perfscan results.
