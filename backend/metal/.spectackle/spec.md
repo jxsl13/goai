@@ -340,5 +340,3 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-Q1-MXFP4-HOST-ROUTE-001
 IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported for that wire type and preserve the fused ARM64 CPU route.
-## METAL-Q6K-GEOMETRY-SCOPE-001
-WHEN M exceeds one or the device lacks 32-lane SIMD groups with 64-thread threadgroups, the Metal Q6_K selector SHALL dispatch the existing scalar route and issue exactly zero rows-per-SIMD candidate threadgroups.
