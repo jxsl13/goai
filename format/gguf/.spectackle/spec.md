@@ -196,8 +196,3 @@ Rationale: Single-token decode is the M2 CPU latency cell where fused unpack and
 The IQ2_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The ARM64 leaf must not narrow portable dtype, shape, or architecture semantics.
-
-## ARM64-IQ2S-FUSED-DOT-SCOPE-002
-WHEN IQ1_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve 2048 eight-wide ternary grid rows, packed 11-bit indices, odd qh multipliers, signed 0.125 deltas, float32 scaling, ascending mapping, and float64 accumulation.
-
-Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_S optimization.
