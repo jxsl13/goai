@@ -180,3 +180,6 @@ WHEN a valid IQ4_NL matmul executes, the Metal IQ4_NL kernel SHALL match gguf.QM
 
 ## METAL-IQ4NL-FALLBACK-001
 WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal IQ4_NL selector SHALL dispatch the scalar pipeline and issue zero cooperative IQ4_NL threadgroups.
+
+## METAL-IQ4NL-PERF-001
+WHEN three count-seven M2 campaigns cover representative resident single-token IQ4_NL shapes, the cooperative Metal route SHALL remain enabled only when every eligible median is at least 1.10 times scalar control with identical allocation semantics.
