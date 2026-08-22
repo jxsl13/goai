@@ -4006,12 +4006,3 @@ created: 2026-08-22
 targets: .gitignore
 
 The repository root contains a local .research-sources library with public papers, vendor manuals, and user-supplied commercial books. Its manifest explicitly forbids committing or redistributing those files, but the root .gitignore lacks the promised rule and git status exposes 327 MB as untracked. Add one root-anchored ignore entry so private research cannot be accidentally staged while leaving all files intact. Validate with git check-ignore and repository preflight.
-
-## T-01M0NWM91HF62V50EQ8X30Z6Q6 Ignore the private research-source library
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0NWKBGDFCQ9BQ3EF0N18N8Z
-targets: .gitignore
-
-Add a root-anchored /.research-sources/ entry to .gitignore. Preserve the existing local files. Verify the manifest is ignored, repository status no longer reports the directory, and the full preflight remains green.
