@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0NGMVFZFCWRVTT2WQRER49G Make the caller participate in QMatMul chunk fan-out
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:gguf.qmatmulParallelChunks
-
-Profile-backed work-first fan-out experiment. Post-SwiGLU allocation profile attributes 52.49% of allocation objects to qmatmulParallelChunks. Preserve the tuned worker count, threshold, chunk boundaries, and per-row arithmetic; launch only chunks 1..N-1 and execute chunk 0 on the caller before waiting. This is distinct from rejected persistent mailbox pool P-01M0NA415WF6XT701CATX8HB8W, which was exact but throughput-neutral-to-negative. Retain only if exact digest, leaf allocation reduction, and alternating production A/B show non-regression with useful leverage.
