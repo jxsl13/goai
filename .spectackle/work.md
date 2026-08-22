@@ -3890,12 +3890,3 @@ option: Implement only portable decode and defer acceleration
 option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
 option: Adopt Q8_K activation conversion to mirror llama.cpp
 choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
-
-## T-01M0KYDJXBEK088S0BM7PMNN28 Implement and gate complete TQ2_0 with M2 ARM64 fused dot
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0KY9HK0FH89MPABMZ0MWX99
-targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, internal/benchcompare/leadership/evidence, CHANGELOG.md
-
-Implement ggml type 35 TQ2_0 end to end at the pinned 66-byte by 256-weight layout. Add eager, raw, and public decode; reference-compatible encoding; portable F32 and F64 QMatMul with reusable worker scratch; and an Apple ARM64 direct-F32 M1 fused two-bit unpack-scale-dot selected only for the intended shape and dtype. Preserve code 3 as +2 times scale for arbitrary raw GGUF while the encoder emits ternary codes. Prove pinned bytes, numerical and dispatch scope, zero leaf allocation, fresh at least 10-sample alternating benchmarks with the proposal 2x and p below 0.01 gate, neutral adjacent controls, external perfscan, race, portable cross-compiles, repository and Metal preflights, and reproducible pinned llama.cpp boundary evidence. Report any generalizable performance finding to jxsl13/perfscan.
