@@ -160,4 +160,6 @@ WHEN a valid Q4_1 matmul executes, the Metal kernel SHALL match gguf.QMatMul wit
 WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal Q4_1 selector SHALL dispatch the scalar Q4_1 pipeline and issue zero cooperative Q4_1 threadgroups.
 
 ## METAL-Q4-1-PERF-001
-WHEN three count-seven M2 campaigns compare resident single-token Q4_1 against CPU fallback across representative shapes, the Metal Q4_1 route SHALL remain enabled only if every eligible median is at least 1.10 times faster with unchanged result allocation semantics.
+WHEN three count-seven M2 campaigns compare cooperative and scalar resident single-token Q4_1 across representative shapes, the cooperative Metal route SHALL remain enabled only if every eligible median is at least 1.10 times faster with identical allocation semantics.
+
+Rationale: The retained leverage is SIMD-group occupancy inside a resident recorder, not host-bound dispatch.
