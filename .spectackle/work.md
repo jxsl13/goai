@@ -3998,3 +3998,11 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0NWKBGDFCQ9BQ3EF0N18N8Z Keep private research sources out of Git
+kind: proposal
+state: draft
+created: 2026-08-22
+targets: .gitignore
+
+The repository root contains a local .research-sources library with public papers, vendor manuals, and user-supplied commercial books. Its manifest explicitly forbids committing or redistributing those files, but the root .gitignore lacks the promised rule and git status exposes 327 MB as untracked. Add one root-anchored ignore entry so private research cannot be accidentally staged while leaving all files intact. Validate with git check-ignore and repository preflight.
