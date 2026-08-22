@@ -174,3 +174,6 @@ WHEN a GGUF type-20 block is decoded, the Metal IQ4_NL kernel SHALL read one f16
 
 ## METAL-IQ4NL-DISPATCH-001
 WHEN host-bound QuantMatMul or UploadQuant receives type-20 IQ4_NL, the Metal backend SHALL return ErrQuantUnsupported while explicit IQ4_NL and llamagpu resident recorder APIs provide native dispatch.
+
+## METAL-IQ4NL-NUMERIC-001
+WHEN a valid IQ4_NL matmul executes, the Metal IQ4_NL kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
