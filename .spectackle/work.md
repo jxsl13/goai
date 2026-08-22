@@ -3985,7 +3985,7 @@ Duplicated per-format residency was rejected because it repeats initialization a
 
 ## T-01M0MN13H5FABT5D8NY04RSQ51 Implement and benchmark native Metal IQ2_XXS and IQ2_XS
 kind: task
-state: active
+state: done
 created: 2026-08-22
 refs: P-01M0MMVKG2FHST9M8AWFQJ213X, ADR-01M0MMYANQFBNVT5BDZ667SCTC
 grilled: 2026-08-22 open=8

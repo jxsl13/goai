@@ -559,3 +559,4 @@
 {"t":"2026-08-22T11:53:54Z","eid":"e8c67945248b92e5","ag":"ag-1884","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T11:54:14Z","eid":"97abfee80654c26a","ag":"ag-8261","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T11:54:16Z","eid":"bc4009e70660d44f","ag":"ag-cbd9","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T12:28:16Z","eid":"a7f2473c27ad1df6","ag":"ag-f0c5","ev":"move","id":"T-01M0MN13H5FABT5D8NY04RSQ51","fr":"active","to":"done","note":"Implemented exact IQ2_XXS and IQ2_XS Metal codebook residency, scalar/cooperative direct and recorder kernels, loader admission, three strict campaigns, token-identical whole-model validation, zero-addition perfscan ratchets, and green pure-Go, Metal, and race gates. Evidence: internal/benchcompare/leadership/evidence/m2-metal-iq2-20260822."}
