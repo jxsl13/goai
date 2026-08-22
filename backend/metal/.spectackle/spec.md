@@ -287,3 +287,27 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-IQ2S-HOST-ROUTE-001
 IF direct host-bound IQ2_S fails to beat fused ARM64 CPU by 1.10 times in any required cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve the fused ARM64 CPU route.
+
+## METAL-TQ1-BLOCK-001
+WHEN a GGUF wire type 34 TQ1_0 block is decoded, the Metal TQ1_0 kernel SHALL decode each 54-byte block as 48 five-trit base-243 bytes, 4 four-trit tail bytes, and 1 trailing f16 scale in the pinned 256-element order.
+
+## METAL-TQ2-BLOCK-001
+WHEN a GGUF wire type 35 TQ2_0 block is decoded, the Metal TQ2_0 kernel SHALL decode each 66-byte block as 64 two-bit code bytes in 32-lane plane order plus 1 trailing f16 scale, producing exactly 256 values.
+
+## METAL-TQ2-CODES-001
+WHEN arbitrary raw TQ2_0 codes execute on Metal, the Metal TQ2_0 kernel SHALL map codes 0, 1, 2, and 3 to minus 1, 0, plus 1, and plus 2 times the block scale.
+
+## METAL-TQ-NUMERIC-001
+WHEN valid TQ1_0 or TQ2_0 matrix multiplication executes, the Metal TQ backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and mutate 0 activation or compressed-weight bytes for both wire types.
+
+## METAL-TQ-DISPATCH-001
+WHEN direct, resident, or recorder TQ dispatch selects a pipeline, the Metal TQ backend SHALL select exactly 1 scalar or cooperative format-specific pipeline through 1 shared per-format predicate.
+
+## METAL-TQ-FALLBACK-001
+WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal TQ selector SHALL dispatch the matching scalar TQ pipeline and issue exactly 0 cooperative TQ threadgroups.
+
+## METAL-TQ-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one TQ format, the cooperative TQ route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-TQ-HOST-ROUTE-001
+IF direct host-bound TQ1_0 or TQ2_0 loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve ARM64 CPU for that wire type.

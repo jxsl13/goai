@@ -247,6 +247,12 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 29 { // GGUF IQ1_M: split-f16 ternary blocks, recorder-only on M2.
 		return metal.UploadQWeightIQ1_M(weight, n, k)
 	}
+	if qt == 34 { // GGUF TQ1_0: base-243 ternary blocks, recorder-only on M2.
+		return metal.UploadQWeightTQ1_0(weight, n, k)
+	}
+	if qt == 35 { // GGUF TQ2_0: two-bit ternary blocks, recorder-only on M2.
+		return metal.UploadQWeightTQ2_0(weight, n, k)
+	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
 		return nil, err

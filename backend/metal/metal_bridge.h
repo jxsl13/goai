@@ -152,6 +152,11 @@ int mtl_qmatmul_iq2_xxs(const float* X, const unsigned char* W, float* O, int M,
 int mtl_qmatmul_iq2_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 int mtl_qmatmul_iq2_s(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// Native ternary matmuls over GGUF type-34 (54-byte TQ1_0 blocks) and type-35
+// (66-byte TQ2_0 blocks). Both use 256-element blocks with a trailing f16 scale.
+int mtl_qmatmul_tq1_0(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+int mtl_qmatmul_tq2_0(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
 // mtl_iq1_grid_upload copies the shared exact 2048x8 ternary codebook into one
 // process-lifetime Metal buffer, packed as one uint16 per eight-value grid row.
 int mtl_iq1_grid_upload(const unsigned short* grid, int count);
@@ -191,6 +196,8 @@ int mtl_iq4_xs_cooperative_set(int on);
 int mtl_iq2_xxs_cooperative_set(int on);
 int mtl_iq2_xs_cooperative_set(int on);
 int mtl_iq2_s_cooperative_set(int on);
+int mtl_tq1_cooperative_set(int on);
+int mtl_tq2_cooperative_set(int on);
 int mtl_iq1_s_cooperative_set(int on);
 int mtl_iq1_m_cooperative_set(int on);
 int mtl_iq3_xxs_cooperative_set(int on);

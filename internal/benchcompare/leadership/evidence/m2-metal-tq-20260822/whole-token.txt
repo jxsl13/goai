@@ -1,0 +1,9 @@
+=== RUN   TestMetalTQCooperativeEndToEnd
+=== RUN   TestMetalTQCooperativeEndToEnd/TQ1_0
+    tq_e2e_test.go:124: TQ1_0 end-to-end: scalar 9.03 tok/s -> cooperative 273.53 tok/s = 30.288x
+=== RUN   TestMetalTQCooperativeEndToEnd/TQ2_0
+    tq_e2e_test.go:124: TQ2_0 end-to-end: scalar 33.71 tok/s -> cooperative 379.62 tok/s = 11.261x
+--- PASS: TestMetalTQCooperativeEndToEnd (36.02s)
+    --- PASS: TestMetalTQCooperativeEndToEnd/TQ1_0 (26.48s)
+    --- PASS: TestMetalTQCooperativeEndToEnd/TQ2_0 (9.54s)
+PASS

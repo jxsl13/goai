@@ -3951,3 +3951,19 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
+
+## ADR-01M0MXBCD9EY2V25H7YY10EVWR How should native Metal TQ1_0 and TQ2_0 share compilation and dispatch infrastructure?
+kind: adr
+state: done
+created: 2026-08-22
+context: TQ1_0 and TQ2_0 both store 256 weights with one trailing f16 scale and target the same direct, resident, and recorder boundaries, but their base-243 and two-bit plane parsers have different element permutations and raw-code semantics.
+decision: Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts
+consequences: One Metal source/library initialization boundary amortizes compilation and keeps direct, resident, and recorder binding conventions aligned. TQ1_0 and TQ2_0 retain branch-free hot loops, independent scalar/cooperative toggles, exact wire parsers, correctness gates, host-route decisions, and promotion thresholds. A compile failure affects the family boundary, so scalar pipeline creation for both formats is a hard initialization requirement while cooperative support remains capability-gated.
+status: accepted
+
+kind: radio
+option: Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts
+option: Build entirely separate TQ1_0 and TQ2_0 source and lifecycle boundaries
+option: Use one generic runtime-branching ternary kernel selected by qtype inside the hot loop
+blocks: P-01M0MXA8ZRF94TCEP455E4VT5G
+choice: Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts

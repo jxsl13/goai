@@ -39,12 +39,26 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 	} else if qt == gguf.IQ1_M {
 		blocks = shape.Numel() / 256
 		blockBytes = 56
+	} else if qt == gguf.TQ1_0 {
+		blocks = shape.Numel() / 256
+		blockBytes = 54
+	} else if qt == gguf.TQ2_0 {
+		blocks = shape.Numel() / 256
+		blockBytes = 66
 	} else if qt == gguf.Q4_1 {
 		blockBytes = 20
 	}
 	raw := make([]byte, blocks*blockBytes)
 	for block := range blocks {
 		base := block * blockBytes
+		if qt == gguf.TQ1_0 || qt == gguf.TQ2_0 {
+			for i := range blockBytes - 2 {
+				raw[base+i] = byte((block*17 + i*29 + seed) & 0xff)
+			}
+			//perfscan:ignore PS4001 TQ formats intentionally store their f16 scale at the block tail
+			binary.LittleEndian.PutUint16(raw[base+blockBytes-2:], 0x3000)
+			continue
+		}
 		if qt == gguf.IQ1_M {
 			for i := range 48 {
 				raw[base+i] = byte((block*17 + i*29 + seed) & 0xff)
@@ -107,7 +121,7 @@ func TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		qt   gguf.QuantType
-	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ1_S", gguf.IQ1_S}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ2_S", gguf.IQ2_S}, {"IQ4_XS", gguf.IQ4_XS}, {"IQ1_M", gguf.IQ1_M}} {
+	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ1_S", gguf.IQ1_S}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ2_S", gguf.IQ2_S}, {"IQ4_XS", gguf.IQ4_XS}, {"IQ1_M", gguf.IQ1_M}, {"TQ1_0", gguf.TQ1_0}, {"TQ2_0", gguf.TQ2_0}} {
 		t.Run(tc.name, func(t *testing.T) {
 			qt := tc.qt
 			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))

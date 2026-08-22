@@ -1,0 +1,18 @@
+perfscan version: github.com/jxsl13/perfscan/perfscan@v1.71.0
+module resolution: GOPROXY=direct
+scope: ./backend/metal ./nlp ./llamagpu
+base revision: 04838955aa12ce709c46f5a3cea22446534b7cb4
+
+production baseline: 778 findings
+candidate result: 778 baselined findings suppressed; 0 new findings; exit 0
+
+test-inclusive exact-base baseline: 1811 findings
+candidate result: 1810 inherited findings suppressed; 0 new findings; exit 0
+candidate suppression delta: one inherited test-only reference allocation was
+documented inline after the analyzer exposed it when the test graph grew.
+
+The exact-base baseline worktree prefix was normalized to the candidate
+worktree prefix before comparison because perfscan baseline file keys include
+the worktree directory name.
+
+Generalizable finding: https://github.com/jxsl13/perfscan/issues/822
