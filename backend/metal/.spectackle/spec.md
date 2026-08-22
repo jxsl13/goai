@@ -177,3 +177,6 @@ WHEN host-bound QuantMatMul or UploadQuant receives type-20 IQ4_NL, the Metal ba
 
 ## METAL-IQ4NL-NUMERIC-001
 WHEN a valid IQ4_NL matmul executes, the Metal IQ4_NL kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
+
+## METAL-IQ4NL-FALLBACK-001
+WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal IQ4_NL selector SHALL dispatch the scalar pipeline and issue zero cooperative IQ4_NL threadgroups.
