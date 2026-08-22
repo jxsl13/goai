@@ -479,6 +479,100 @@ static int ensure_rope(void) {
     return gRoPE != nil ? 0 : -6;
 }
 
+// One decode-only dispatch rotates Q/K and appends K/V into the binary16 cache row. K is also
+// written back as f32 so the complete buffer state remains identical to rope(K) followed by the
+// paired conversion kernel. The control toggle delegates to those exact three established calls.
+static NSString* const kRoPEF16KVAppendSource =
+    @"#include <metal_stdlib>\n"
+     "using namespace metal;\n"
+     "kernel void rope_f16kv_append(device float* Q [[buffer(0)]],\n"
+     "                                device float* K [[buffer(1)]],\n"
+     "                                device const float* V [[buffer(2)]],\n"
+     "                                device const float* INV [[buffer(3)]],\n"
+     "                                device half* KCache [[buffer(4)]],\n"
+     "                                device half* VCache [[buffer(5)]],\n"
+     "                                constant int* P [[buffer(6)]],\n"
+     "                                constant float* F [[buffer(7)]],\n"
+     "                                uint gid [[thread_position_in_grid]]) {\n"
+     "  int headsQ=P[0], headsK=P[1], hd=P[2], halfd=P[3], posOffset=P[4], cacheOff=P[5];\n"
+     "  int pairWork=(headsQ+headsK)*halfd, kvDim=headsK*hd;\n"
+     "  int vPairs=(kvDim+1)/2, total=pairWork+vPairs; if ((int)gid>=total) return;\n"
+     "  if ((int)gid<pairWork) {\n"
+     "    int h=(int)gid/halfd, i=(int)gid-h*halfd; bool isQ=h<headsQ;\n"
+     "    int localH=isQ?h:(h-headsQ), base=localH*hd+i;\n"
+     "    float pos=float(posOffset)/F[0];\n"
+     "    float theta=INV[i];\n"
+     "    float c=cos(pos*theta), s=sin(pos*theta);\n"
+     "    float x=isQ?Q[base]:K[base], xh=isQ?Q[base+halfd]:K[base+halfd];\n"
+     "    float y=x*c-xh*s, yh=xh*c+x*s;\n"
+     "    if (isQ) { Q[base]=y; Q[base+halfd]=yh; }\n"
+     "    else { K[base]=y; K[base+halfd]=yh; KCache[cacheOff+base]=half(y); KCache[cacheOff+base+halfd]=half(yh); }\n"
+     "    return;\n"
+     "  }\n"
+     "  int col=((int)gid-pairWork)*2, dst=cacheOff+col;\n"
+     "  if (col+1<kvDim) *((device half2*)(VCache+dst))=half2(V[col],V[col+1]);\n"
+     "  else VCache[dst]=half(V[col]);\n"
+     "}\n";
+
+static id<MTLComputePipelineState> gRoPEF16KVAppend = nil;
+static int gRoPEF16KVAppendEnabled = 0;
+
+int mtl_rope_f16kv_append_set(int on) {
+    int old = gRoPEF16KVAppendEnabled;
+    gRoPEF16KVAppendEnabled = on ? 1 : 0;
+    return old;
+}
+
+static int ensure_rope_f16kv_append(void) {
+    if (gRoPEF16KVAppend != nil) return 0;
+    NSError* err = nil;
+    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kRoPEF16KVAppendSource options:nil error:&err];
+    if (lib == nil) return -6;
+    id<MTLFunction> fn = [lib newFunctionWithName:@"rope_f16kv_append"];
+    if (fn == nil) return -6;
+    gRoPEF16KVAppend = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    return gRoPEF16KVAppend != nil ? 0 : -6;
+}
+
+int mtl_recorder_rope_f16kv_append(void* rec,
+                                   void* qh, void* kh, void* vh, void* invh,
+                                   void* kCacheH, void* vCacheH,
+                                   int headsQ, int headsK, int hd, int half,
+                                   int pos, int cacheOff, float posDiv) {
+    if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || invh == NULL ||
+        kCacheH == NULL || vCacheH == NULL || headsQ < 1 || headsK < 1 || hd != 64 ||
+        half != hd/2 || pos < 0 || cacheOff < 0 || posDiv == 0.0f) return -2;
+    int qDim = headsQ*hd, kvDim = headsK*hd;
+    if (!gRoPEF16KVAppendEnabled) {
+        int rc = mtl_recorder_rope(rec, qh, invh, qh, 1, qDim, headsQ, hd, half, pos, posDiv, 0);
+        if (rc != 0) return rc;
+        rc = mtl_recorder_rope(rec, kh, invh, kh, 1, kvDim, headsK, hd, half, pos, posDiv, 0);
+        if (rc != 0) return rc;
+        return mtl_recorder_f32_to_f16_kv_2d(
+            rec, kh, 0, kvDim, vh, 0, kvDim,
+            kCacheH, cacheOff, kvDim, vCacheH, cacheOff, kvDim, 1, kvDim);
+    }
+    if (ensure_rope_f16kv_append() != 0) return -6;
+    int P[6] = {headsQ, headsK, hd, half, pos, cacheOff};
+    float F[1] = {posDiv};
+    NSUInteger total = (NSUInteger)(headsQ+headsK)*half + ((NSUInteger)kvDim+1)/2;
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rope.f16kv.append");
+    [enc setComputePipelineState:gRoPEF16KVAppend];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qh offset:0 atIndex:0];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+    [enc setBuffer:(__bridge id<MTLBuffer>)invh offset:0 atIndex:3];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kCacheH offset:0 atIndex:4];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vCacheH offset:0 atIndex:5];
+    [enc setBytes:P length:sizeof(P) atIndex:6];
+    [enc setBytes:F length:sizeof(F) atIndex:7];
+    NSUInteger tg = gRoPEF16KVAppend.maxTotalThreadsPerThreadgroup;
+    if (total < tg) tg = total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
 // rope2 (SPEC T613): ONE dispatch rotates BOTH bands of a fused QKV row in place — the q band
 // (headsQ heads at element offset offQ) and the k band (headsK heads at offset offK), each row
 // `stride` floats wide. Thread t covers pair i of virtual head h over seq rows: h < headsQ is a

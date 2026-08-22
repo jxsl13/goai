@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -24,6 +25,344 @@ const (
 
 type f16KVFixture struct {
 	q, k32, v32, k16, v16, out32, out16 *DeviceBuffer
+}
+
+type ropeF16KVAppendResult struct {
+	q, k, v, inv []float32
+	kCache       []uint16
+	vCache       []uint16
+}
+
+func runRoPEF16KVAppend(t *testing.T, fused bool, pos int, q, k, v, inv []float32) ropeF16KVAppendResult {
+	t.Helper()
+	const (
+		headsQ = 32
+		headsK = 4
+		hd     = 64
+		half   = hd / 2
+		kvDim  = headsK * hd
+	)
+	if len(q) != headsQ*hd || len(k) != kvDim || len(v) != kvDim || len(inv) != half {
+		t.Fatal("invalid RoPE/f16-KV append fixture")
+	}
+	mustF32 := func(data []float32) *DeviceBuffer {
+		t.Helper()
+		b, err := NewDeviceBufferF32(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(b.Release)
+		return b
+	}
+	mustF16 := func(n int) *DeviceBuffer {
+		t.Helper()
+		b, err := NewDeviceBufferF16Zeros(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(b.Release)
+		return b
+	}
+	qb, kb, vb, ib := mustF32(q), mustF32(k), mustF32(v), mustF32(inv)
+	cacheLen := (pos + 2) * kvDim
+	kc, vc := mustF16(cacheLen), mustF16(cacheLen)
+
+	// Sentinels make an out-of-row cache write observable at the exact storage-bit boundary.
+	kSentinel, vSentinel := make([]float32, cacheLen), make([]float32, cacheLen)
+	for i := range cacheLen {
+		kSentinel[i], vSentinel[i] = 0.375, -0.625
+	}
+	ks, vs := mustF32(kSentinel), mustF32(vSentinel)
+	initRec, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = initRec.CopyF32ToF16(ks, 0, kc, 0, cacheLen); err == nil {
+		err = initRec.CopyF32ToF16(vs, 0, vc, 0, cacheLen)
+	}
+	if err == nil {
+		err = initRec.Finish()
+	}
+	initRec.Free()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	previous := SetRoPEF16KVAppend(fused)
+	t.Cleanup(func() { SetRoPEF16KVAppend(previous) })
+	r, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.RoPEF16KVAppend(qb, kb, vb, ib, kc, vc, headsQ, headsK, hd, half, pos, pos*kvDim, 1); err == nil {
+		err = r.Finish()
+	}
+	r.Free()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := ropeF16KVAppendResult{
+		q: make([]float32, len(q)), k: make([]float32, len(k)),
+		v: make([]float32, len(v)), inv: make([]float32, len(inv)),
+		kCache: make([]uint16, cacheLen), vCache: make([]uint16, cacheLen),
+	}
+	for _, download := range []func() error{
+		func() error { return qb.DownloadF32(got.q) },
+		func() error { return kb.DownloadF32(got.k) },
+		func() error { return vb.DownloadF32(got.v) },
+		func() error { return ib.DownloadF32(got.inv) },
+		func() error { return kc.downloadF16Bits(got.kCache) },
+		func() error { return vc.downloadF16Bits(got.vCache) },
+	} {
+		if err := download(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return got
+}
+
+func f32BitsEqual(a, b []float32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if math.Float32bits(a[i]) != math.Float32bits(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func TestRoPEF16KVAppendExactParityAndCacheBounds(t *testing.T) {
+	if !Available() {
+		t.Skip("Metal unavailable")
+	}
+	q := make([]float32, f16KVDim)
+	k, v := make([]float32, f16KVWidth), make([]float32, f16KVWidth)
+	inv := make([]float32, f16KVDK/2)
+	for i := range q {
+		q[i] = float32(math.Sin(float64(i+3) * 0.013))
+	}
+	for i := range k {
+		k[i] = float32(math.Cos(float64(i+5) * 0.019))
+		v[i] = float32(math.Sin(float64(i+7) * 0.023))
+	}
+	for i := range inv {
+		inv[i] = float32(math.Pow(10000, -2*float64(i)/f16KVDK))
+	}
+	// Exercise nonfinite propagation without reflect.DeepEqual's NaN semantics hiding bit drift.
+	q[17], k[41], v[73] = float32(math.Inf(1)), float32(math.Inf(-1)), math.Float32frombits(0x7fc12345)
+
+	for _, pos := range []int{0, 1, 127} {
+		t.Run(fmt.Sprintf("pos%d", pos), func(t *testing.T) {
+			control := runRoPEF16KVAppend(t, false, pos, q, k, v, inv)
+			candidate := runRoPEF16KVAppend(t, true, pos, q, k, v, inv)
+			if !f32BitsEqual(candidate.q, control.q) || !f32BitsEqual(candidate.k, control.k) {
+				t.Fatal("fused Q/K float32 state differs bitwise from the three-dispatch control")
+			}
+			if !reflect.DeepEqual(candidate.kCache, control.kCache) || !reflect.DeepEqual(candidate.vCache, control.vCache) {
+				t.Fatal("fused K/V binary16 cache differs bitwise from the three-dispatch control")
+			}
+			if !f32BitsEqual(candidate.v, v) || !f32BitsEqual(candidate.inv, inv) {
+				t.Fatal("fused append mutated V or inverse-frequency input")
+			}
+			lo, hi := pos*f16KVWidth, (pos+1)*f16KVWidth
+			for i := range candidate.kCache {
+				if i >= lo && i < hi {
+					continue
+				}
+				if candidate.kCache[i] != 0x3600 || candidate.vCache[i] != 0xb900 {
+					t.Fatalf("cache sentinel changed outside target row at %d: K=%#04x V=%#04x", i, candidate.kCache[i], candidate.vCache[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRoPEF16KVAppendProfileProvesDistinctToggleArms(t *testing.T) {
+	if !Available() || !RecorderProfilingAvailable() {
+		t.Skip("Metal timestamp profiling unavailable")
+	}
+	q, k, v, inv := make([]float32, f16KVDim), make([]float32, f16KVWidth), make([]float32, f16KVWidth), make([]float32, f16KVDK/2)
+	for i := range inv {
+		inv[i] = 1
+	}
+	for _, tc := range []struct {
+		name   string
+		fused  bool
+		labels []string
+	}{
+		{name: "control", labels: []string{"rope", "rope", "kv.f32_to_f16_pair"}},
+		{name: "candidate", fused: true, labels: []string{"rope.f16kv.append"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			qb, _ := NewDeviceBufferF32(q)
+			kb, _ := NewDeviceBufferF32(k)
+			vb, _ := NewDeviceBufferF32(v)
+			ib, _ := NewDeviceBufferF32(inv)
+			kc, _ := NewDeviceBufferF16Zeros(f16KVWidth)
+			vc, _ := NewDeviceBufferF16Zeros(f16KVWidth)
+			for _, b := range []*DeviceBuffer{qb, kb, vb, ib, kc, vc} {
+				defer b.Release()
+			}
+			previous := SetRoPEF16KVAppend(tc.fused)
+			defer SetRoPEF16KVAppend(previous)
+			r, err := NewProfilingRecorder(4)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Free()
+			if err := r.RoPEF16KVAppend(qb, kb, vb, ib, kc, vc, f16KVHeads, f16KVKVHeads, f16KVDK, f16KVDK/2, 0, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Finish(); err != nil {
+				t.Fatal(err)
+			}
+			profile, err := r.Profile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			labels := make([]string, len(profile.Events))
+			for i := range profile.Events {
+				labels[i] = profile.Events[i].Label
+			}
+			if !reflect.DeepEqual(labels, tc.labels) {
+				t.Fatalf("profile labels=%v want %v", labels, tc.labels)
+			}
+		})
+	}
+}
+
+func BenchmarkRoPEF16KVAppend(b *testing.B) {
+	if !Available() {
+		b.Skip("Metal unavailable")
+	}
+	q, k, v, inv := make([]float32, f16KVDim), make([]float32, f16KVWidth), make([]float32, f16KVWidth), make([]float32, f16KVDK/2)
+	for i := range inv {
+		inv[i] = 1
+	}
+	qb, _ := NewDeviceBufferF32(q)
+	kb, _ := NewDeviceBufferF32(k)
+	vb, _ := NewDeviceBufferF32(v)
+	ib, _ := NewDeviceBufferF32(inv)
+	kc, _ := NewDeviceBufferF16Zeros(1024 * f16KVWidth)
+	vc, _ := NewDeviceBufferF16Zeros(1024 * f16KVWidth)
+	for _, buf := range []*DeviceBuffer{qb, kb, vb, ib, kc, vc} {
+		defer buf.Release()
+	}
+	for _, tc := range []struct {
+		name  string
+		fused bool
+	}{{name: "control"}, {name: "candidate", fused: true}} {
+		b.Run(tc.name, func(b *testing.B) {
+			previous := SetRoPEF16KVAppend(tc.fused)
+			defer SetRoPEF16KVAppend(previous)
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				r, err := NewRecorder()
+				if err != nil {
+					b.Fatal(err)
+				}
+				for range 22 {
+					err = r.RoPEF16KVAppend(qb, kb, vb, ib, kc, vc, f16KVHeads, f16KVKVHeads, f16KVDK, f16KVDK/2, 511, 511*f16KVWidth, 1)
+					if err != nil {
+						break
+					}
+				}
+				if err == nil {
+					err = r.Finish()
+				}
+				r.Free()
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestRoPEF16KVAppendInterleavedCampaigns(t *testing.T) {
+	if !Available() {
+		t.Skip("Metal unavailable")
+	}
+	q, k, v, inv := make([]float32, f16KVDim), make([]float32, f16KVWidth), make([]float32, f16KVWidth), make([]float32, f16KVDK/2)
+	for i := range inv {
+		inv[i] = 1
+	}
+	mustF32 := func(data []float32) *DeviceBuffer {
+		buf, err := NewDeviceBufferF32(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(buf.Release)
+		return buf
+	}
+	qb, kb, vb, ib := mustF32(q), mustF32(k), mustF32(v), mustF32(inv)
+	kc, err := NewDeviceBufferF16Zeros(1024 * f16KVWidth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(kc.Release)
+	vc, err := NewDeviceBufferF16Zeros(1024 * f16KVWidth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(vc.Release)
+	measure := func(fused bool) time.Duration {
+		SetRoPEF16KVAppend(fused)
+		// A decoder records all 22 layer boundaries into one command buffer. Keeping that exact
+		// command-buffer shape removes unrelated per-command creation/commit time from the leaf gate.
+		const reps = 22
+		start := time.Now()
+		r, err := NewRecorder()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range reps {
+			err = r.RoPEF16KVAppend(qb, kb, vb, ib, kc, vc, f16KVHeads, f16KVKVHeads, f16KVDK, f16KVDK/2, 511, 511*f16KVWidth, 1)
+			if err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = r.Finish()
+		}
+		r.Free()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return time.Since(start) / reps
+	}
+	previous := SetRoPEF16KVAppend(false)
+	defer SetRoPEF16KVAppend(previous)
+	for range 8 {
+		measure(false)
+		measure(true)
+	}
+	medianDuration := func(v []time.Duration) time.Duration {
+		slices.Sort(v)
+		return v[len(v)/2]
+	}
+	for campaign := range 3 {
+		control, candidate := make([]time.Duration, 0, 7), make([]time.Duration, 0, 7)
+		for sample := range 7 {
+			if (campaign+sample)&1 == 0 {
+				control = append(control, measure(false))
+				candidate = append(candidate, measure(true))
+			} else {
+				candidate = append(candidate, measure(true))
+				control = append(control, measure(false))
+			}
+		}
+		base, got := medianDuration(control), medianDuration(candidate)
+		ratio := float64(base) / float64(got)
+		t.Logf("campaign=%d control=%s candidate=%s speedup=%.4fx control_samples=%v candidate_samples=%v", campaign+1, base, got, ratio, control, candidate)
+		if ratio < 1.25 {
+			t.Errorf("campaign %d isolated boundary speedup %.4fx is below 1.25x", campaign+1, ratio)
+		}
+	}
 }
 
 func TestF32ToF16CacheRoundingGolden(t *testing.T) {

@@ -13,4 +13,4 @@ The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at 
 WHEN the decoder path is not Metal f16-KV single-token separate-QKV full-RoPE with dk equal to 64, the decoder selector SHALL execute the established RoPE and paired cache-copy chain and issue zero fused append dispatches.
 
 ## METAL-ROPE-F16KV-COUNT-001
-WHEN a 22-layer eligible single-token decode is profiled with fusion enabled, the Metal decoder SHALL replace exactly 44 RoPE and 22 paired-copy events with exactly 22 fused append events.
+WHEN the trained 22-layer TinyLlama decode is profiled with fusion enabled, the Metal decoder SHALL replace 20 RoPE and 10 paired-copy events with 10 fused events while preserving 12 grouped-layer events.

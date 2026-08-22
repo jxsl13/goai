@@ -3426,6 +3426,42 @@ func (r *Recorder) Copy2DF32ToF16Pair(
 	return nil
 }
 
+// SetRoPEF16KVAppend selects the one-dispatch RoPE plus binary16 cache append candidate and
+// returns the previous setting. It is an A/B measurement hook; ineligible decoder routes never
+// call the fused boundary regardless of this setting.
+func SetRoPEF16KVAppend(on bool) bool {
+	return C.mtl_rope_f16kv_append_set(boolToCInt(on)) == 1
+}
+
+// RoPEF16KVAppend rotates one contiguous Q/K row in place and appends the rotated K plus V row to
+// binary16 caches. It is deliberately limited to the dk=64 full-RoPE decode geometry served by the
+// Metal f16-KV attention path.
+func (r *Recorder) RoPEF16KVAppend(
+	q, k, v, inv, kCache, vCache *DeviceBuffer,
+	headsQ, headsK, hd, half, pos, cacheOff int, posDiv float32,
+) error {
+	if q.bytes != 4 || k.bytes != 4 || v.bytes != 4 || inv.bytes != 4 ||
+		kCache.bytes != 2 || vCache.bytes != 2 {
+		return fmt.Errorf("metal: Recorder RoPE/f16-KV append requires f32 Q/K/V/inv and f16 caches, got %d/%d/%d/%d/%d/%d-byte elements",
+			q.bytes, k.bytes, v.bytes, inv.bytes, kCache.bytes, vCache.bytes)
+	}
+	qDim, kvDim := headsQ*hd, headsK*hd
+	if headsQ < 1 || headsK < 1 || headsQ%headsK != 0 || hd != 64 || half != hd/2 ||
+		pos < 0 || cacheOff < 0 || posDiv == 0 || q.n < qDim || k.n < kvDim || v.n < kvDim ||
+		inv.n < half || kCache.n < cacheOff+kvDim || vCache.n < cacheOff+kvDim {
+		return fmt.Errorf("metal: Recorder RoPE/f16-KV append shape mismatch: q/k/v=%d/%d/%d inv=%d caches=%d/%d heads=%d/%d hd=%d half=%d pos=%d off=%d",
+			q.n, k.n, v.n, inv.n, kCache.n, vCache.n, headsQ, headsK, hd, half, pos, cacheOff)
+	}
+	rc := C.mtl_recorder_rope_f16kv_append(
+		r.handle, q.handle, k.handle, v.handle, inv.handle, kCache.handle, vCache.handle,
+		C.int(headsQ), C.int(headsK), C.int(hd), C.int(half), C.int(pos), C.int(cacheOff), C.float(posDiv),
+	)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder RoPE/f16-KV append failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // Binary records O = a (op) b over n elements into the command buffer over device buffers
 // (op 0=add, 1=sub, 2=mul, 3=div, 4=max, 5=min).
 // BinaryN is Binary bounded to the FIRST n elements. Decoder buffers are allocated for the whole
