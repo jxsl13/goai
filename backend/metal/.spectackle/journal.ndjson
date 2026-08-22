@@ -220,3 +220,4 @@
 {"t":"2026-08-22T16:28:43Z","eid":"45af356350ed5874","ag":"ag-522f","ev":"move","id":"R-01M0N4TXJQE4NTD97E585SHFTP","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-22T16:31:01Z","eid":"a30f26e4814c9655","ag":"ag-578a","ev":"create","id":"P-01M0N4ZCJ1FRNT7FDZ03P1BN4W","k":"proposal","ti":"Increase M2 Q6_K memory-level parallelism with rows-per-SIMD specialization","dir":"backend/metal"}
 {"t":"2026-08-22T16:31:23Z","eid":"0266527b49a5c022","ag":"ag-a078","ev":"move","id":"P-01M0N4ZCJ1FRNT7FDZ03P1BN4W","dir":"backend/metal","fr":"draft","to":"active"}
+{"t":"2026-08-22T16:32:11Z","eid":"3dc42696cec2a706","ag":"ag-7462","ev":"create","id":"T-01M0N51GZ1FC1B3VQETC8FDZMN","k":"task","ti":"Implement and gate Q6_K rows-per-SIMD variants","dir":"backend/metal"}

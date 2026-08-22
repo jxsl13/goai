@@ -69,3 +69,13 @@ refs: R-01M0N4TXJQE4NTD97E585SHFTP
 targets: msl:qmatmul_q6k_cooperative, objc:metal_bridge.ensure_qmatmul_q6k, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/q6k_roofline_bench_test.go
 
 GPU-timestamp roofline measurements on Apple M2 Pro put the current Q6_K cooperative kernel at 191.3 GB/s for K2048 N2048, 214.6 GB/s for K2048 N5632, 208.0 GB/s for K5632 N2048, but only 157.0 GB/s for a cache-busting K2048 N131072 stream. The retained Q4_K cache-busting result is about 185 GB/s. The Q6_K kernel presently assigns two output rows to each SIMD group, retaining two accumulators and serially consuming two independent weight rows while reusing a small activation tile. Specialize otherwise identical one-, two-, and four-row variants and compare them in one binary. The candidate changes output-row parallelism and register pressure only; it must not repeat the rejected aligned ushort packed-load transform. Promote only a geometry that preserves exact route scope and 2e-5 numerical parity and reaches at least 1.10x control in every representative production cell across three count-seven alternating campaigns, with a cache-busting roofline improvement corroborating the mechanism.
+
+## T-01M0N51GZ1FC1B3VQETC8FDZMN Implement and gate Q6_K rows-per-SIMD variants
+kind: task
+state: draft
+created: 2026-08-22
+parent: P-01M0N4ZCJ1FRNT7FDZ03P1BN4W
+refs: R-01M0N4TXJQE4NTD97E585SHFTP
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q6k_roofline_bench_test.go, backend/metal/q6k_cooperative_test.go
+
+Refactor the existing Metal Q6_K cooperative body into compile-time one-, two-, and four-output-row specializations without changing byte decoding, arithmetic order within a row, M>1 fallback, or the rejected packed-load strategy. Add an unexported same-binary selector and a floor proving distinct route arms. Validate the specialized outputs against the retained two-row control and the GGUF reference through K=256 to 5632, including finite and nonfinite classification and input immutability. Run three independent count-seven alternating M2 campaigns over K2048 N2048, K2048 N5632, and K5632 N2048 using GPU command timestamps and recorder wall time; retain a new default only if every production cell is at least 1.10x control. Confirm the cache-busting K2048 N131072 roofline moves in the predicted direction and measure full TinyLlama decode before promotion.
