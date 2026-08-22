@@ -3875,12 +3875,3 @@ grilled: 2026-08-22 open=0
 targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md
 
 Add pinned ggml Q1_0 type 41 end to end: 18-byte/128-weight block sizing, eager and raw-tensor dequantization, public Quantize and Dequantize, portable F32/F64 QMatMul, and an M2 ARM64 contiguous-F32 M1 whole-row leaf. Preserve f16 scale, LSB-first sign bits, bit-one positive semantics, float32 weights, ascending mapping, and float64 accumulation. Benchmark every path with retained fresh-process samples and controls; require at least 2x in the accelerated leaf, N64, and N4096 cells with flat allocations and maximum scalar-relative error at most 1e-4. The pinned llama.cpp comparison is semantic only because its ARM kernel consumes Q8_0 activations. Research pins: llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786; ggml-common.h SHA-256 af255601767325f087313fa84b9435cb77aeec37df6b61b98d9ecc65f29fb4a0; ggml-quants.c SHA-256 07143d7068936ae46b3c528b2f3d4bbb666e74d88992165716174d243573965d; ARM quants.c SHA-256 9fccd3897db24c9df89b8431b588175894e5f54697cf45768d0c6e6c5544093e. Governing design references are repository ADR-0016, Spectackle ADR-01M0K6C6PEF4J, and architecture research commit eb8b5a7f blob a4b5ce34ce8db73f4b4c1ae01e7fcb0c1067755e.
-
-## T-01M0KPVJQVFCS9TKR58HY2TKW7 Implement and statistically gate complete Q1_0 support and M2 ARM64 fused row dot
-kind: task
-state: done
-created: 2026-08-22
-parent: P-01M0KPSF31FYVAEB7ZHPN5Y4AS
-targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, internal/benchcompare/leadership
-
-Implement Q1_0 type ID 41, 128-weight/18-byte validation, eager and QuantTensor dequantization, public encode/decode, exact portable F32/F64 QMatMul, caller-owned prefill scratch, and an ARM64 M1 row leaf. Add pinned-reference layout, hostile-input, bit parity, F32/F64, selector-scope, immutability, allocation, cancellation, race, cross-compile, disassembly, preflight, Metal, external perfscan, and ten-sample benchmark gates. Preserve all non-ARM64, M greater than 1, and non-F32 paths as portable fallbacks.
