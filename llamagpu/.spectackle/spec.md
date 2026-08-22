@@ -8,3 +8,9 @@ schema: v1
 
 ## METAL-F16-KV-CACHE-001
 The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at exactly 2 bytes per element while NewQuant retains f32 storage and all non-Metal constructors remain unchanged.
+
+## METAL-ROPE-F16KV-SCOPE-001
+WHEN the decoder path is not Metal f16-KV single-token separate-QKV full-RoPE with dk equal to 64, the decoder selector SHALL execute the established RoPE and paired cache-copy chain and issue zero fused append dispatches.
+
+## METAL-ROPE-F16KV-COUNT-001
+WHEN a 22-layer eligible single-token decode is profiled with fusion enabled, the Metal decoder SHALL replace exactly 44 RoPE and 22 paired-copy events with exactly 22 fused append events.

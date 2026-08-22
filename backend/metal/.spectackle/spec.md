@@ -341,3 +341,9 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-Q1-MXFP4-HOST-ROUTE-001
 IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported for that wire type and preserve the fused ARM64 CPU route.
+
+## METAL-ROPE-F16KV-NUMERIC-001
+WHEN the fused single-token RoPE and f16 KV append executes, the Metal fusion SHALL match control Q float32 bits and K/V binary16 bits, preserve nonfinite class, and mutate zero source or unrelated cache bytes.
+
+## METAL-ROPE-F16KV-PERF-001
+WHEN three count-seven M2 campaigns compare fused and control paths, the promotion gate SHALL retain fusion only when its boundary is at least 1.25 times faster and every TinyLlama decode campaign is at least 1.01 times faster.
