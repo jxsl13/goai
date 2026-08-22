@@ -51,6 +51,7 @@ kind: task
 state: draft
 created: 2026-08-22
 parent: P-01M0M9B6FRFCZA18408PMM2WGH
+grilled: 2026-08-22 open=1
 targets: go:metal.QMatMulQ4_0, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/qmatmul_test.go
 
 Add GGUF type-3 constants and dispatch, synchronous and resident/recorder execution, an exact 20-byte affine Q4_1 Metal decoder, SIMD-group cooperative M2 path, correctness and scope tests, and same-binary/per-process benchmark evidence. Validate full repository, external perfscan, and retain only measured leverage.
