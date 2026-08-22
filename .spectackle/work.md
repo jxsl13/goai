@@ -4009,7 +4009,7 @@ The repository root contains a local .research-sources library with public paper
 
 ## T-01M0NWM91HF62V50EQ8X30Z6Q6 Ignore the private research-source library
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0NWKBGDFCQ9BQ3EF0N18N8Z
 targets: .gitignore

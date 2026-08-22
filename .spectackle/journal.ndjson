@@ -434,3 +434,4 @@
 {"t":"2026-08-22T23:24:12Z","eid":"354a81e950e6d5b9","ag":"ag-5a4b","ev":"move","id":"P-01M0NWKBGDFCQ9BQ3EF0N18N8Z","fr":"draft","to":"active"}
 {"t":"2026-08-22T23:24:22Z","eid":"53d990320fc64368","ag":"ag-70e6","ev":"create","id":"T-01M0NWM91HF62V50EQ8X30Z6Q6","k":"task","ti":"Ignore the private research-source library"}
 {"t":"2026-08-22T23:24:41Z","eid":"821e676454b23ca7","ag":"ag-5800","ev":"rule","op":"add","rule":"PRIVATE-RESEARCH-SOURCES-ISOLATION-002","txt":"WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.","item":"T-01M0NWM91HF62"}
+{"t":"2026-08-22T23:24:50Z","eid":"bc4a893b2ed35148","ag":"ag-3dd2","ev":"move","id":"T-01M0NWM91HF62V50EQ8X30Z6Q6","fr":"draft","to":"active"}
