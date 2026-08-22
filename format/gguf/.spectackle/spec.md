@@ -39,6 +39,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0KEEGADEWBRSZJ2KTWCT4FX M2-first exact IQ2_S fused row dot and portable QMatMul: Completed and shipped through PR #1145, merge 46cf0883280379fa025e95b37f469870c9ca1784, after all 15 CI lanes succeeded. The proposal added exact portable IQ2_S QMatMul and a scoped M2 ARM64 fused F32 M1 row dot, with 4.27x to 5.44x retained speedups, flat allocations, neutral dequant and IQ2_XS controls, and maximum scalar-relative error 1.9996704013343956e-15. Four contracts now preserve portabl [body truncated at tombstone retention cap]
 - T-01M0KGWNMSF72T3J11M86A89G3 Implement and statistically gate exact IQ1_S QMatMul and M2 ARM64 fused row dot: Completed implementation and validation merged through PR #1146. Durable behavior is captured by the four IQ1_S rules, CHANGELOG entry, evidence bundle, governing ADR, and perfscan issues #808 through #811.
 - T-01M0KM5H42FBTR5N0G6SMNMB6V Implement and statistically gate exact IQ1_M QMatMul and M2 ARM64 fused row dot: Archived after verified PR 1147 merge. Standing semantics and selector constraints remain in IQ1M-PORTABLE-QMATMUL-001, IQ1M-PORTABLE-SCRATCH-001, ARM64-IQ1M-FUSED-DOT-001, and ARM64-IQ1M-FUSED-DOT-SCOPE-001; reproducible evidence is committed under m2-arm64-iq1m-fused-dot-20260822.
+- T-01M0M30EFGEN49ZG22VFTE4JSE Route every supported IQ and MXFP4 wire type through decodeTensor: Archived after implementation commit 36c2456a and complete local validation. The committed evidence directory contains raw benchmark streams, benchstat, manifest, correctness gates, and external perfscan null-delta results.
+- P-01M0M2XZRGFSWVT5G94ZXT61S8 Complete GGUF IQ and MXFP4 wire decode dispatch: Implemented by archived task T-01M0M30EFGEN4 under ADR-01M0M2ZMEDF86. Commit 36c2456a completes eager Read dispatch for every existing IQ/MXFP4 decoder, preserves unsupported-type behavior, and commits exhaustive tests plus reproducible neutral-overhead and external perfscan evidence.
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -318,3 +320,9 @@ The IQ1_S and IQ2_S identifier correction SHALL preserve each existing block siz
 
 ## GGUF-IQ-WIRE-DISPATCH-001
 WHEN Read or QuantTensor.Dequantize receives wire type 19 or 22, the GGUF decoder SHALL dispatch IQ1_S for type 19 and IQ2_S for type 22 with the same result as public Dequantize.
+
+## GGUF-IQ-MXFP4-WIRE-DISPATCH-001
+WHEN Read or QuantTensor.Dequantize receives wire type 16, 17, 18, 20, 21, 23, 29, or 39, the GGUF decoder SHALL dispatch 1 matching existing decoder and return F32 values exactly equal to public Dequantize.
+
+## GGUF-IQ-MXFP4-WIRE-SCOPE-001
+The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes, decoder arithmetic, QMatMul selectors, platform routes, and unsupported-type errors.

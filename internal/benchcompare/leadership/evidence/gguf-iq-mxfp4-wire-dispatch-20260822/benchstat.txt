@@ -1,0 +1,62 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                          │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-direct.txt │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-wire.txt │
+                          │                                               sec/op                                                │                                   sec/op                                    vs base               │
+QuantWireDispatch/IQ2_XXS                                                                                          342.8n ± 73%                                                                 341.1n ± 28%       ~ (p=0.971 n=10)
+QuantWireDispatch/IQ2_XS                                                                                           369.3n ± 30%                                                                 337.8n ± 58%       ~ (p=0.579 n=10)
+QuantWireDispatch/IQ3_XXS                                                                                          338.4n ± 56%                                                                 333.0n ± 27%       ~ (p=0.739 n=10)
+QuantWireDispatch/IQ1_S                                                                                            332.5n ± 58%                                                                 320.9n ± 26%       ~ (p=0.615 n=10)
+QuantWireDispatch/IQ4_NL                                                                                           251.3n ± 27%                                                                 246.0n ± 46%       ~ (p=0.955 n=10)
+QuantWireDispatch/IQ3_S                                                                                            342.8n ± 67%                                                                 342.9n ± 31%       ~ (p=0.631 n=10)
+QuantWireDispatch/IQ2_S                                                                                            344.2n ± 32%                                                                 346.5n ± 30%       ~ (p=0.579 n=10)
+QuantWireDispatch/IQ4_XS                                                                                           255.3n ± 45%                                                                 249.3n ± 45%       ~ (p=1.000 n=10)
+QuantWireDispatch/IQ1_M                                                                                            323.6n ± 22%                                                                 319.9n ± 46%       ~ (p=0.971 n=10)
+QuantWireDispatch/MXFP4                                                                                            241.7n ± 47%                                                                 248.3n ± 71%       ~ (p=0.315 n=10)
+geomean                                                                                                            310.9n                                                                       305.7n        -1.67%
+
+                          │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-direct.txt │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-wire.txt │
+                          │                                                 B/s                                                 │                                    B/s                                      vs base               │
+QuantWireDispatch/IQ2_XXS                                                                                         183.6Mi ± 42%                                                                184.6Mi ± 22%       ~ (p=0.971 n=10)
+QuantWireDispatch/IQ2_XS                                                                                          192.1Mi ± 24%                                                                209.0Mi ± 37%       ~ (p=0.579 n=10)
+QuantWireDispatch/IQ3_XXS                                                                                         276.1Mi ± 36%                                                                280.7Mi ± 21%       ~ (p=0.739 n=10)
+QuantWireDispatch/IQ1_S                                                                                           143.6Mi ± 37%                                                                148.6Mi ± 21%       ~ (p=0.615 n=10)
+QuantWireDispatch/IQ4_NL                                                                                          546.4Mi ± 21%                                                                558.3Mi ± 31%       ~ (p=0.971 n=10)
+QuantWireDispatch/IQ3_S                                                                                           306.1Mi ± 40%                                                                306.1Mi ± 24%       ~ (p=0.631 n=10)
+QuantWireDispatch/IQ2_S                                                                                           227.2Mi ± 24%                                                                225.7Mi ± 23%       ~ (p=0.579 n=10)
+QuantWireDispatch/IQ4_XS                                                                                          508.0Mi ± 31%                                                                520.3Mi ± 31%       ~ (p=1.000 n=10)
+QuantWireDispatch/IQ1_M                                                                                           165.0Mi ± 18%                                                                167.0Mi ± 31%       ~ (p=0.971 n=10)
+QuantWireDispatch/MXFP4                                                                                           536.7Mi ± 32%                                                                522.4Mi ± 41%       ~ (p=0.315 n=10)
+geomean                                                                                                           274.1Mi                                                                      278.6Mi        +1.65%
+
+                          │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-direct.txt │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-wire.txt │
+                          │                                                B/op                                                 │                                   B/op                                    vs base                 │
+QuantWireDispatch/IQ2_XXS                                                                                          1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ2_XS                                                                                           1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ3_XXS                                                                                          1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ1_S                                                                                            1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ4_NL                                                                                           1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ3_S                                                                                            1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ2_S                                                                                            1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ4_XS                                                                                           1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ1_M                                                                                            1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/MXFP4                                                                                            1.227Ki ± 0%                                                               1.227Ki ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                            1.227Ki                                                                    1.227Ki       +0.00%
+¹ all samples are equal
+
+                          │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-direct.txt │ internal/benchcompare/leadership/evidence/gguf-iq-mxfp4-wire-dispatch-20260822/benchmark-wire.txt │
+                          │                                              allocs/op                                              │                                allocs/op                                  vs base                 │
+QuantWireDispatch/IQ2_XXS                                                                                            4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ2_XS                                                                                             4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ3_XXS                                                                                            4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ1_S                                                                                              4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ4_NL                                                                                             4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ3_S                                                                                              4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ2_S                                                                                              4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ4_XS                                                                                             4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/IQ1_M                                                                                              4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QuantWireDispatch/MXFP4                                                                                              4.000 ± 0%                                                                 4.000 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                              4.000                                                                      4.000       +0.00%
+¹ all samples are equal
+

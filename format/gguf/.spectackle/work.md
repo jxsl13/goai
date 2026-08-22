@@ -17,3 +17,18 @@ option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K ker
 option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+
+## ADR-01M0M2ZMEDF86A4K2PP8HB176E Where should complete wire-format dispatch for already supported IQ and MXFP4 types live?
+kind: adr
+state: done
+created: 2026-08-22
+context: Read and QuantTensor.Dequantize already converge on decodeTensor, while public Dequantize separately proves each decoder and byteSize validates each layout.
+decision: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
+consequences: Read and QuantTensor.Dequantize gain identical coverage through one selector; public Dequantize remains an independent exact oracle; block layouts, decoder math, QMatMul routing, wire IDs, and unsupported-type behavior stay unchanged. Exhaustive synthetic-wire tests must cover every newly routed format.
+status: accepted
+
+kind: radio
+option: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
+option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
+blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
+choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors

@@ -1,0 +1,25 @@
+External perfscan validation, 2026-08-22
+
+Module: github.com/jxsl13/perfscan/perfscan@v1.71.0
+Resolution: GOPROXY=direct
+Baseline: e46f4a4321d0013049fcc175984499b0519ae97c
+Baseline findings: 5975
+Candidate findings: 5975
+New candidate findings: 0
+Normalized baseline/candidate SHA-256:
+3d595634fd3b38aad8eca3adacd2094df8f7553ce7387df297043b7cdf7ae0d5
+
+The exact merged-main and candidate scans used the same external analyzer and
+repository configuration. Worktree path prefixes were normalized before the
+streams were compared byte-for-byte.
+
+perfscan v1.71.0 warns that these newer repository configuration keys are not
+recognized by that published analyzer version: _comment, inputViewFuncs,
+kernelRegisterFuncs, layoutOpConstants, optimizedBackendPkgs, outputViewFuncs,
+pointerTypeNames, pureComputeFuncs, referenceBackendPkg, topKSelectorFuncs,
+and variadicDispatchWrappers. The zero-delta claim therefore covers the exact
+same supported v1.71.0 configuration surface on both trees; it is not a claim
+that unpublished configuration features were evaluated.
+
+No perfscan issue was opened because this tranche produces no generalizable
+performance gain.

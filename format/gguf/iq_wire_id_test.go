@@ -46,22 +46,44 @@ func TestIQWireTypeIDsMatchPinnedGGML(t *testing.T) {
 	}
 }
 
-func TestIQWireTypesDispatchEveryReadPath(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		ggType uint32
-		raw    []byte
-		decode func(tensor.Shape, []byte) (*tensor.Tensor, error)
-	}{
+type quantWireDecodeCase struct {
+	name   string
+	ggType uint32
+	raw    []byte
+	decode func(tensor.Shape, []byte) (*tensor.Tensor, error)
+}
+
+func quantWireDecodeCases() []quantWireDecodeCase {
+	return []quantWireDecodeCase{
+		{"IQ2_XXS", 16, makeIQ2XXSRaw(qkK), dequantIQ2_XXS},
+		{"IQ2_XS", 17, makeIQ2XSRaw(qkK), dequantIQ2_XS},
+		{"IQ3_XXS", 18, makeIQ3XXSRaw(qkK), dequantIQ3_XXS},
 		{"IQ1_S", 19, makeIQ1SRaw(qkK), dequantIQ1_S},
+		{"IQ4_NL", 20, makeIQ4NLRaw(qkK), dequantIQ4_NL},
+		{"IQ3_S", 21, makeIQ3SRaw(qkK), dequantIQ3_S},
 		{"IQ2_S", 22, makeIQ2SRaw(qkK), dequantIQ2_S},
-	} {
+		{"IQ4_XS", 23, makeIQ4XSRaw(qkK), dequantIQ4_XS},
+		{"IQ1_M", 29, makeIQ1MRaw(qkK), dequantIQ1_M},
+		{"MXFP4", 39, makeMXFP4Raw(qkK), dequantMXFP4},
+	}
+}
+
+func TestIQWireTypesDispatchEveryReadPath(t *testing.T) {
+	cases := quantWireDecodeCases()
+	if len(cases) != 10 {
+		t.Fatalf("wire decode cases = %d; want 10", len(cases))
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			want, err := tc.decode(tensor.Shape{qkK}, tc.raw)
 			if err != nil {
 				t.Fatal(err)
 			}
 			public, err := Dequantize(tc.raw, QuantType(tc.ggType), qkK)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dispatched, err := decodeTensor(tensorInfo{name: "w", shape: tensor.Shape{qkK}, ggType: tc.ggType}, tc.raw)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -83,14 +105,48 @@ func TestIQWireTypesDispatchEveryReadPath(t *testing.T) {
 			}
 			wantData := want.Storage().F32()
 			for name, got := range map[string]*tensor.Tensor{
-				"public": public,
-				"eager":  eager.Tensors["w"],
-				"raw":    rawDecoded,
+				"public":       public,
+				"decodeTensor": dispatched,
+				"eager":        eager.Tensors["w"],
+				"raw":          rawDecoded,
 			} {
 				if !slices.Equal(got.Storage().F32(), wantData) {
 					t.Fatalf("%s decoder differs from direct %s decode", name, tc.name)
 				}
 			}
+		})
+	}
+}
+
+var quantWireDispatchSink *tensor.Tensor
+
+func BenchmarkQuantWireDispatch(b *testing.B) {
+	for _, tc := range quantWireDecodeCases() {
+		b.Run(tc.name, func(b *testing.B) {
+			b.Run("direct", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(tc.raw)))
+				for b.Loop() {
+					var err error
+					quantWireDispatchSink, err = tc.decode(tensor.Shape{qkK}, tc.raw)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+			b.Run("wire", func(b *testing.B) {
+				b.ReportAllocs()
+				b.SetBytes(int64(len(tc.raw)))
+				for b.Loop() {
+					var err error
+					quantWireDispatchSink, err = decodeTensor(
+						tensorInfo{shape: tensor.Shape{qkK}, ggType: tc.ggType}, tc.raw,
+					)
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
 		})
 	}
 }
