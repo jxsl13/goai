@@ -52,11 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## R-01M0N4TXJQE4NTD97E585SHFTP Measure production-shape M2 Q6_K roofline and geometry leverage
-kind: research
-state: active
-created: 2026-08-22
-targets: backend/metal/q4k_roofline_bench_test.go, msl:qmatmul_q6k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul
-
-Q6_K accounts for about 16 percent of profiled TinyLlama decode GPU time while the current cooperative kernel uses two output rows per SIMD group and two SIMD groups per threadgroup. Establish GPUStartTime-to-GPUEndTime throughput at the production 2048x2048, 2048x5632, and 5632x2048 shapes plus a cache-busting shape. Compare current weight-byte bandwidth against the retained Q4_K roofline before nominating a distinct rows-per-SIMD or threadgroup-geometry experiment. This does not repeat the rejected aligned ushort packed-load candidate.
