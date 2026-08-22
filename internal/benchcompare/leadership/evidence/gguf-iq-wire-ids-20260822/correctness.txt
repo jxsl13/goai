@@ -1,0 +1,19 @@
+Pinned llama.cpp commit: 3af988fabcf79fd81f8720505e684d2aa5bfc786
+Pinned ggml.h SHA-256: 6fe9b62d3ea48c2de82cce6e9e06d3ae4f0de34f4b5831399c49c099badefb09
+
+PASS public and internal IQ1_S identifiers equal 19
+PASS public and internal IQ2_S identifiers equal 22
+PASS wire type 19 byte size is 50 bytes per 256 weights
+PASS wire type 22 byte size is 82 bytes per 256 weights
+PASS public, eager, raw-file, and QuantTensor IQ1_S outputs agree exactly
+PASS public, eager, raw-file, and QuantTensor IQ2_S outputs agree exactly
+PASS numeric type 19 selects only the IQ1_S QMatMul kernel
+PASS numeric type 22 selects only the IQ2_S QMatMul kernel
+PASS type 24 is rejected by byteSize
+PASS type 24 is rejected by public Dequantize
+PASS type 24 is rejected by Read and ReadRaw
+PASS type 24 is rejected by QuantTensor.Dequantize
+PASS type 24 is rejected by QMatMul
+PASS complete native GGUF short suite
+PASS complete race-enabled GGUF short suite
+PASS CGO-disabled Linux ARM64 and AMD64 GGUF binaries compile

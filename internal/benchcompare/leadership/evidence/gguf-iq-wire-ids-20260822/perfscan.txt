@@ -1,0 +1,18 @@
+External analyzer: github.com/jxsl13/perfscan/perfscan
+Module version: v1.71.0
+Dependency mode: GOPROXY=direct
+Scope: complete repository including tests
+Baseline: 7711444a1f7dd802c8bb27866e86fdb9e9e87b2e
+Candidate: containing commit
+
+Baseline raw findings: 3520
+Candidate raw findings: 3520
+Baseline normalized records: 2308
+Candidate normalized records: 2308
+Baseline normalized SHA-256: 75dee2747115c751e8debf3f8cfb999f350649a7afb8dfcc41d2e26ac54bdefe
+Candidate normalized SHA-256: 75dee2747115c751e8debf3f8cfb999f350649a7afb8dfcc41d2e26ac54bdefe
+New normalized diagnostics: 0
+Removed normalized diagnostics: 0
+
+No performance issue was filed: this tranche repairs wire-format correctness
+and produces statistically neutral kernel controls, not a generalizable gain.

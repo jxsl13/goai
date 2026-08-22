@@ -1,0 +1,40 @@
+{
+  "date": "2026-08-22",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.26.6",
+  "baseline_source": "7711444a1f7dd802c8bb27866e86fdb9e9e87b2e",
+  "baseline_binary_sha256": "eeb5b4facf84d0356466fccc8d11340c493af0ec1387223fcab2b60e1000a408",
+  "candidate_source": "containing commit",
+  "candidate_binary_sha256": "d52c570c746f61de44fba976c6697962b2d4e1d67089dd9d27c9a5b4fce0395a",
+  "candidate_race_binary_sha256": "03fd98ab51ee3c85c220aa29aaba6ec6a195f0dcf083a26f9534d9bfbf9b33fd",
+  "candidate_linux_arm64_binary_sha256": "143c6e6f5fe8a1edd6af78d437af5b62e8aed669f8f6e21b6178d6bda0c89578",
+  "candidate_linux_amd64_binary_sha256": "5a955f86ab5a8364732aae76e3848a571ca29a7c9594742cfd9973ec27e51eac",
+  "llama_cpp_commit": "3af988fabcf79fd81f8720505e684d2aa5bfc786",
+  "llama_cpp_ggml_h_sha256": "6fe9b62d3ea48c2de82cce6e9e06d3ae4f0de34f4b5831399c49c099badefb09",
+  "pinned_wire_ids": {
+    "IQ1_S": 19,
+    "IQ2_S": 22,
+    "I8": 24
+  },
+  "samples": 10,
+  "benchtime": "500ms",
+  "sample_policy": "fresh process, baseline/candidate order alternated, no samples removed",
+  "perfscan_module": "v1.71.0",
+  "perfscan_baseline_raw": 3520,
+  "perfscan_candidate_raw": 3520,
+  "perfscan_baseline_normalized": 2308,
+  "perfscan_candidate_normalized": 2308,
+  "perfscan_normalized_sha256": "75dee2747115c751e8debf3f8cfb999f350649a7afb8dfcc41d2e26ac54bdefe",
+  "perfscan_new_normalized_diagnostics": 0,
+  "spectackle_graph": {
+    "files": 2700,
+    "nodes": 18300,
+    "edges": 33764,
+    "typed_calls": 6759,
+    "skipped": 0
+  },
+  "spectackle_drift_records": 0,
+  "spectackle_lint_warnings": 133,
+  "spectackle_lint_errors": 0
+}

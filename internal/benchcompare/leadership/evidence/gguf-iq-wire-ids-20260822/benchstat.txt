@@ -1,0 +1,24 @@
+                         │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-base.txt │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-candidate.txt │
+                         │                                         sec/op                                         │                                sec/op                                 vs base               │
+QMatMulIQ2_S_M1_N4096-12                                                                              198.2µ ± 0%                                                            198.0µ ± 0%       ~ (p=0.481 n=10)
+QMatMulIQ1_S_M1_N4096-12                                                                              147.8µ ± 0%                                                            148.0µ ± 1%       ~ (p=0.218 n=10)
+geomean                                                                                               171.1µ                                                                 171.2µ       +0.05%
+
+                         │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-base.txt │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-candidate.txt │
+                         │                                          B/s                                           │                                 B/s                                   vs base               │
+QMatMulIQ2_S_M1_N4096-12                                                                             78.85Gi ± 0%                                                           78.91Gi ± 0%       ~ (p=0.481 n=10)
+QMatMulIQ1_S_M1_N4096-12                                                                             105.7Gi ± 0%                                                           105.5Gi ± 1%       ~ (p=0.218 n=10)
+geomean                                                                                              91.31Gi                                                                91.26Gi       -0.05%
+
+                         │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-base.txt │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-candidate.txt │
+                         │                                          B/op                                          │                                 B/op                                  vs base               │
+QMatMulIQ2_S_M1_N4096-12                                                                             17.09Ki ± 0%                                                           17.09Ki ± 0%       ~ (p=0.720 n=10)
+QMatMulIQ1_S_M1_N4096-12                                                                             17.00Ki ± 0%                                                           17.00Ki ± 0%       ~ (p=1.000 n=10)
+geomean                                                                                              17.05Ki                                                                17.05Ki       -0.00%
+
+                         │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-base.txt │ internal/benchcompare/leadership/evidence/gguf-iq-wire-ids-20260822/benchmark-candidate.txt │
+                         │                                       allocs/op                                        │                             allocs/op                               vs base                 │
+QMatMulIQ2_S_M1_N4096-12                                                                               29.00 ± 0%                                                           29.00 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1_S_M1_N4096-12                                                                               29.00 ± 0%                                                           29.00 ± 0%       ~ (p=1.000 n=10) ¹
+geomean                                                                                                29.00                                                                29.00       +0.00%
+¹ all samples are equal

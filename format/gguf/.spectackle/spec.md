@@ -306,3 +306,15 @@ WHEN contiguous F32 M1 activations use TQ2_0 weights, the Apple ARM64 TQ2_0 sele
 
 ## ARM64-TQ2-FUSED-DOT-SCOPE-001
 The TQ2_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+## GGUF-IQ-WIRE-ID-001
+The GGUF quant type registry SHALL assign IQ1_S to wire type 19 and IQ2_S to wire type 22 exactly as pinned ggml does.
+
+## GGUF-I8-UNSUPPORTED-001
+WHEN a caller supplies GGUF wire type 24 before I8 support exists, the format APIs SHALL return an unsupported-type error without dispatching an IQ decoder.
+
+## GGUF-IQ-ID-SEMANTICS-001
+The IQ1_S and IQ2_S identifier correction SHALL preserve each existing block size, decoder math, QMatMul selector scope, and numerical tolerance.
+
+## GGUF-IQ-WIRE-DISPATCH-001
+WHEN Read or QuantTensor.Dequantize receives wire type 19 or 22, the GGUF decoder SHALL dispatch IQ1_S for type 19 and IQ2_S for type 22 with the same result as public Dequantize.

@@ -17,7 +17,7 @@ import (
 // 8 scale bytes.
 
 const (
-	tIQ2_S        = 19 // ggml type id
+	tIQ2_S        = 22 // ggml type id
 	iq2sBlockSize = 82
 )
 

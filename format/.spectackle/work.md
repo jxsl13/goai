@@ -101,3 +101,19 @@ PRECEDENT CUTS BOTH WAYS: format/gguf ALREADY spawns a bounded worker pool in Re
 OPTIONS for the decision: (a) land as prototyped with the threshold, accepting nested oversubscription; (b) route through a bounded pool with an in-worker guard, as backend/cpu does, which means either lifting that pool somewhere both packages can use or duplicating it; (c) leave serial and let the caller parallelize, which forfeits the 1.70x for single-stream decode — the latency-sensitive case.
 
 Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
+
+## ADR-01M0M15D3HFHN8QZ8WQD932W4B How should GoAI correct the conflicting IQ1_S, IQ2_S, and I8 wire identifiers?
+kind: adr
+state: done
+created: 2026-08-22
+context: Pinned ggml assigns IQ1_S=19, IQ2_S=22, and I8=24. GoAI currently assigns IQ2_S=19 and IQ1_S=24, so compatibility aliases would keep accepting wire bytes with the wrong semantics.
+decision: Adopt the exact pinned wire IDs and reject unsupported type 24 until I8 is implemented
+consequences: This intentionally corrects the exported QuantType numeric values for IQ1_S and IQ2_S. Existing source code using names remains correct after recompilation; callers persisting the previous wrong numeric values must migrate. Wire type 24 returns unsupported instead of silently producing an IQ1_S tensor. Decoder math, block sizes, QMatMul selectors, and kernel performance remain unchanged.
+status: accepted
+
+kind: radio
+option: Adopt the exact pinned wire IDs and reject unsupported type 24 until I8 is implemented
+option: Keep legacy aliases for 19 and 24
+option: Introduce new names while retaining the wrong exported values
+blocks: P-01M0M13SZGFBNBZQ7FJDD13JV8
+choice: Adopt the exact pinned wire IDs and reject unsupported type 24 until I8 is implemented

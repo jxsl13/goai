@@ -15,7 +15,7 @@ import (
 // verbatim from gguf-py.
 
 const (
-	tIQ1_S        = 24 // ggml type id
+	tIQ1_S        = 19 // ggml type id
 	tIQ1_M        = 29
 	iq1sBlockSize = 50 // f16 d + 32 qs + 16 qh (8 u16) per 256 elements
 	iq1mBlockSize = 56 // 32 qs + 16 qh + 8 scales (4 u16, embed the f16 d)
