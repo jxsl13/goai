@@ -3931,7 +3931,7 @@ choice: Implement both as one shared IQ3 Metal family with independent numerical
 
 ## P-01M0MMVKG2FHST9M8AWFQJ213X Add native M2 Metal IQ2 family decode
 kind: proposal
-state: active
+state: done
 created: 2026-08-22
 refs: ADR-01M0MMYANQFBNVT5BDZ667SCTC
 grilled: 2026-08-22 open=0
