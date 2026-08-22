@@ -326,3 +326,6 @@ WHEN Read or QuantTensor.Dequantize receives wire type 16, 17, 18, 20, 21, 23, 2
 
 ## GGUF-IQ-MXFP4-WIRE-SCOPE-001
 The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes, decoder arithmetic, QMatMul selectors, platform routes, and unsupported-type errors.
+
+## QMATMUL-WORK-FIRST-FANOUT-001
+WHEN parallel QMatMul fan-out selects 2 or more chunks, the qmatmulParallelChunks SHALL execute exactly 1 existing chunk on the caller, launch at most worker-count minus 1 goroutines, and preserve qmatmulGrain, the serial threshold, worker count, chunk boundaries, and body arithmetic.
