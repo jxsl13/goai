@@ -645,7 +645,7 @@ WHEN a CPU quantized-decode comparison against llama.cpp is published, the GoAI 
 IF the matched llama.cpp CPU cell leads GoAI beyond measurement spread, THEN the GoAI performance roadmap SHALL publish the loss and profile GoAI before booking an implementation lever.
 
 ## CPU-SWIGLU-INPLACE-FUSION-001
-WHEN an eager quantized SwiGLU executes on its projection backend and that backend advertises in-place fusion, the GoAI SHALL overwrites only the private gate projection with bit-identical SiLU(gate) multiplied by up and allocates zero activation or multiplication output tensors.
+WHEN an eager quantized SwiGLU executes on its projection backend and that backend advertises in-place fusion, the GoAI SHALL overwrite only the private gate projection with bit-identical SiLU(gate) multiplied by up and allocate zero activation or multiplication output tensors.
 
 Rationale: This removes two hidden-width buffers and dispatches without changing public ownership.
 
