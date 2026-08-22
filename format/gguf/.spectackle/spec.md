@@ -202,7 +202,7 @@ WHEN IQ1_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL p
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_S optimization.
 
-## IQ1S-PORTABLE-SCRATCH-001
+## IQ1S-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.TestQMatMulIQ1SScratchAllocationsDoNotScaleWithOutputRows}
 The portable IQ1_S QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
 
 Rationale: M greater than one must reuse decoded-row storage instead of rebuilding a full tensor or allocating per output row.
