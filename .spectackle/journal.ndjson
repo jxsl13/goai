@@ -379,3 +379,6 @@
 {"t":"2026-08-22T20:06:30Z","eid":"f2e28c804d73c80b","ag":"ag-cf5e","ev":"grill","id":"P-01M0NH9R8RFQT9RXN9THYAJBBK","gr":"2026-08-22 open=0","hash":"d367b56d64c8432494c8d551f085304ce9343b3da633681d8587c8906c0422ec"}
 {"t":"2026-08-22T20:06:30Z","eid":"ae19b56126e7cc2c","ag":"ag-cf5e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T20:06:42Z","eid":"b4b09624733bb0bf","ag":"ag-5091","ev":"move","id":"P-01M0NH9R8RFQT9RXN9THYAJBBK","fr":"draft","to":"active","note":"Activate a bounded Q4_K M1 CPU prototype after rejection review. Preserve both independent row-dot semantics and retain only on exact production leverage."}
+{"t":"2026-08-22T20:06:52Z","eid":"d0b325e166d022ef","ag":"ag-5e1b","ev":"create","id":"T-01M0NHAMKMEDNRFHEGP8MKT2T4","k":"task","ti":"Implement and gate paired Q4_K M1 CPU projections"}
+{"t":"2026-08-22T20:06:53Z","eid":"b07c47e8cce5fd7a","ag":"ag-5e1b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T20:07:42Z","eid":"ee7752e7377caf6c","ag":"ag-c6b5","ev":"move","id":"T-01M0NHAMKMEDNRFHEGP8MKT2T4","fr":"draft","to":"active","note":"Begin bounded paired Q4_K M1 CPU prototype; no public routing or other quant types until production leverage is proven."}
