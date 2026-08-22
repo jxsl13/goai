@@ -248,3 +248,8 @@ Rationale: End-to-end support prevents a fast QMatMul path from accepting bytes 
 WHEN Q1_0 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve f16 scale, LSB-first signs, bit-one positive weights, ascending element mapping, and float64 accumulation.
 
 Rationale: The portable row dot is the semantic oracle for every architecture-specific Q1_0 path.
+
+## Q1-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul}
+The portable Q1_0 QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Caller-owned decode scratch prevents output-row count from multiplying temporary allocations.
