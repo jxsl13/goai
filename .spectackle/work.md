@@ -3908,7 +3908,7 @@ Implement exact ggml wire-type-20 IQ4_NL matmul in native Metal as the next bott
 
 ## T-01M0MCMHDAE2BBZV2WHG9FARE0 Implement and benchmark native Metal IQ4_NL
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0MCJGS5F459EZNA0QYG4H1K
 grilled: 2026-08-22 open=4
