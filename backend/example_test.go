@@ -70,6 +70,18 @@ func ExampleReduction() {
 	// none: (2)
 }
 
+// SwiGLUInPlaceFuser is an optional eager-inference capability. Callers must
+// own gate exclusively and retain the ordinary SiLU-plus-Mul path when the
+// selected backend does not expose it or rejects the tensor layout.
+func ExampleSwiGLUInPlaceFuser() {
+	gate := tensor.FromFloat32(tensor.Shape{1, 2}, []float32{0, 0})
+	up := tensor.FromFloat32(tensor.Shape{1, 2}, []float32{2, 3})
+	fuser, available := backend.Default().(backend.SwiGLUInPlaceFuser)
+	fused := available && fuser.FuseSwiGLUInPlace(gate, up)
+	fmt.Println(fused, gate.Storage().F32())
+	// Output: true [0 0]
+}
+
 // --- Level 3: embedded — a real matmul on the auto-selected backend ----------
 
 // End to end with zero configuration: build tensors and run a matmul. It executes

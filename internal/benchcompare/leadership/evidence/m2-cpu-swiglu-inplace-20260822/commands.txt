@@ -1,0 +1,19 @@
+GOTOOLCHAIN=go1.26.6 GOCACHE=/private/tmp/goai-gocache go test -c ./backend/cpu -o /private/tmp/goai-backend-cpu-swiglu.test
+GOMAXPROCS=8 /private/tmp/goai-backend-cpu-swiglu.test -test.run '^$' -test.bench '^BenchmarkSwiGLUInPlaceFusion$' -test.benchtime=500ms -test.count=11 -test.benchmem
+
+# Production binary at merged main 7b3cf2c2 and candidate binary at the worktree.
+GOTOOLCHAIN=go1.26.6 GOCACHE=/private/tmp/goai-gocache go test -c ./internal/benchcompare -o /private/tmp/goai-benchcompare-cpu-swiglu.test
+GOMAXPROCS=8 GOAI_CPU_TINYLLAMA_GGUF=/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf GOAI_CPU_DECODE_STEPS=64 GOAI_CPU_DECODE_REPS=3 /private/tmp/goai-benchcompare-cpu-swiglu.test -test.run '^TestProdCPUQuantDecodeGGUF$' -test.v
+
+# Exact final-source verification uses GOAI_CPU_DECODE_REPS=7 and the
+# /private/tmp/goai-benchcompare-cpu-swiglu-final.test binary.
+
+# Eleven fresh process pairs, alternating baseline/candidate order. The first
+# pair is discarded; each retained production benchfmt row is its process
+# median. The first leaf sample for each sub-benchmark is also discarded.
+# Normalize the composed/in_place sub-benchmark suffixes to one comparison key.
+/Users/john/go/bin/benchstat <(sed 's#SwiGLUInPlaceFusion/composed#SwiGLUMiddle#' leaf-composed-retained.txt) <(sed 's#SwiGLUInPlaceFusion/in_place#SwiGLUMiddle#' leaf-inplace-retained.txt)
+/Users/john/go/bin/benchstat production-base-retained.txt production-candidate-retained.txt
+
+GOPROXY=direct GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan@v1.80.0 ./backend/cpu
+GOPROXY=direct GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan@v1.80.0 ./nn

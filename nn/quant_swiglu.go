@@ -22,14 +22,35 @@ func (s *QuantSwiGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 	if err != nil {
 		return nil, err
 	}
+	// QuantLinear projections execute on the registered default backend. In
+	// eager mode that backend may consume the private gate projection in place:
+	// no public input aliases it, and the product is used exactly once by Down.
+	// Recording retains the explicit ops so autograd observes the established
+	// graph. A different context backend also retains the explicit route.
+	projectionBackend := backend.Default()
+	var up *tensor.Tensor
+	if ctx != nil && ctx.Recorder == nil && ctx.Backend != nil &&
+		ctx.Backend.Name() == projectionBackend.Name() {
+		if fuser, ok := projectionBackend.(backend.SwiGLUInPlaceFuser); ok {
+			up, err = s.Up.Forward(ctx, x)
+			if err != nil {
+				return nil, err
+			}
+			if fuser.FuseSwiGLUInPlace(gate, up) {
+				return s.Down.Forward(ctx, gate)
+			}
+		}
+	}
 	//perfscan:ignore PS3038 quant-matmul-dominated FFN; SiLU dispatch not loop
 	act, err := backend.Execute(ctx, backend.OpSiLU, []*tensor.Tensor{gate}, nil)
 	if err != nil {
 		return nil, err
 	}
-	up, err := s.Up.Forward(ctx, x)
-	if err != nil {
-		return nil, err
+	if up == nil {
+		up, err = s.Up.Forward(ctx, x)
+		if err != nil {
+			return nil, err
+		}
 	}
 	//perfscan:ignore PS3038 quant-matmul-dominated FFN; Mul dispatch not loop
 	h, err := backend.Execute(ctx, backend.OpMul, []*tensor.Tensor{act[0], up}, nil)

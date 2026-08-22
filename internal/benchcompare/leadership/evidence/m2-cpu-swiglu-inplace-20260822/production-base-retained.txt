@@ -1,0 +1,14 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/benchcompare
+cpu: Apple M2 Pro
+BenchmarkProdCPUQuantDecode-8 1 2340439750 ns/op 279641424 B/op 296505 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2000510208 ns/op 279640480 B/op 296503 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2268009917 ns/op 279639984 B/op 296502 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2015883667 ns/op 279639984 B/op 296502 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2344960500 ns/op 279640000 B/op 296502 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2154522916 ns/op 279641424 B/op 296505 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2078415791 ns/op 279640000 B/op 296502 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2333775667 ns/op 279640944 B/op 296504 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2538066417 ns/op 279644304 B/op 296511 allocs/op
+BenchmarkProdCPUQuantDecode-8 1 2002101125 ns/op 279642848 B/op 296508 allocs/op

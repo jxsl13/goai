@@ -1,0 +1,12 @@
+PASS: exact-bit CPU fusion vs composed OpSiLU + OpMul at widths 1, 3, 4, 31, 5632
+PASS: aliased gate/up storage is rejected
+PASS: eager QuantSwiGLU matches recorded fallback bit-for-bit
+PASS: recorder fallback observes OpSiLU and OpMul
+PASS: public QuantSwiGLU input remains unchanged
+PASS: go test ./backend ./backend/cpu ./nn ./internal/benchcompare
+PASS: compiled nlp binary, -test.run '^TestQuantLlama'
+PASS: make preflight-full (pure-Go preflight, all benchmark smoke cells, SIMD build, native M2 Metal tests)
+PASS: go test -race ./backend ./backend/cpu ./nn
+PASS: Linux AMD64 and ARM64 cross-compilation for backend/cpu and nn tests
+PASS: external perfscan v1.80.0 via GOPROXY=direct; no changed-file findings
+KNOWN PRE-EXISTING: TestDiffusionLMGrammarE2E nondeterministically generated an invalid grammar window; the same failure reproduced before this change.
