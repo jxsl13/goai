@@ -340,12 +340,6 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-Q1-MXFP4-HOST-ROUTE-001
 IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported for that wire type and preserve the fused ARM64 CPU route.
-
-## METAL-Q6K-GEOMETRY-PERF-001
-WHEN three count-seven M2 campaigns cover representative resident single-token Q6_K shapes, the Metal Q6_K selector SHALL select a new geometry only if every production cell reaches 1.10 times control at GPU and recorder-wall boundaries.
-
-Rationale: Prevents a cache-only or noisy win from replacing the production geometry.
-
 ## METAL-Q6K-GEOMETRY-NUMERIC-001
 WHEN a specialized rows-per-SIMD Q6_K kernel processes a valid resident single-token projection, the Metal Q6_K kernel SHALL match the two-row control within 2e-5 relative error, preserve floating-point class, and mutate zero input bytes.
 
