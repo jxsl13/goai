@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0N48W6AF54SY958QMSD4465 Pack resident Metal quant weights into an aligned model arena
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, llamagpu/llamagpu.go, llamagpu/decoder.go, docs/benchmarking.md
-
-Production M2 attribution shows quantized matmuls consume about 77.6% of explicit token work, while large Q4_K streams already reach about 92% of peak DRAM bandwidth. The decoder currently uploads every projection into a distinct MTLBuffer and rebinds 131 quant resources per TinyLlama Q4_K_M token. Test whether one model-scoped, 256-byte-aligned MTLBuffer arena with per-weight offsets improves whole-command GPU scheduling, resource tracking, and address translation without changing kernel arithmetic. First build a native production-geometry probe comparing identical bytes and dispatch order across separate buffers versus one arena; do not redesign ownership unless the probe clears 1.05x across three count-seven M2 campaigns. If it clears, introduce explicit arena lifetime, offset-aware resident views, exact close/error semantics, standalone-upload fallback, and whole-token trained-model validation. Preserve profiling labels, all quant formats, portable backends, and host-bound CPU routing.
