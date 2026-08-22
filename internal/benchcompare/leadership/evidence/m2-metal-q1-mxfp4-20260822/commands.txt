@@ -1,0 +1,9 @@
+GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-metal-q1-mxfp4.test ./backend/metal
+GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-llamagpu-q1-mxfp4.test ./llamagpu
+GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-nlp-q1-mxfp4.test ./nlp
+/private/tmp/goai-metal-q1-mxfp4.test -test.run '^(TestMetalCompactQuant|TestMetalMXFP4)' -test.v -test.timeout=10m
+/private/tmp/goai-nlp-q1-mxfp4.test -test.run '^(TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes|TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants)$' -test.v -test.timeout=10m
+/private/tmp/goai-llamagpu-q1-mxfp4.test -test.run '^(TestMetalUploadQ1MXFP4UsesRecorderOnlyResidentPath|TestMetalCompactQuantCooperativeEndToEnd)$' -test.v -test.timeout=10m
+/private/tmp/goai-metal-q1-mxfp4.test -test.run '^$' -test.bench '^BenchmarkMetalCompactQuant(Cooperative|HostRoute)Campaign$' -test.benchtime=1x -test.count=7
+GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan/perfscan@v1.71.0 -config internal/perfscan/perfscan.json -baseline BASELINE ./backend/metal ./nlp ./llamagpu
+GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan/perfscan@v1.71.0 -config internal/perfscan/perfscan.json -tests -baseline BASELINE ./backend/metal ./nlp ./llamagpu

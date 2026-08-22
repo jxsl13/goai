@@ -1,0 +1,97 @@
+## metal
+=== RUN   TestMetalCompactQuantCrossReference
+=== RUN   TestMetalCompactQuantCrossReference/Q1_0
+    q1_mxfp4_test.go:104: maximum relative difference 1.118e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.810e-07
+    q1_mxfp4_test.go:104: maximum relative difference 5.674e-07
+    q1_mxfp4_test.go:104: maximum relative difference 6.085e-07
+    q1_mxfp4_test.go:104: maximum relative difference 1.794e-06
+=== RUN   TestMetalCompactQuantCrossReference/MXFP4
+    q1_mxfp4_test.go:104: maximum relative difference 1.538e-07
+    q1_mxfp4_test.go:104: maximum relative difference 3.059e-07
+    q1_mxfp4_test.go:104: maximum relative difference 4.867e-06
+    q1_mxfp4_test.go:104: maximum relative difference 5.114e-06
+    q1_mxfp4_test.go:104: maximum relative difference 2.773e-06
+--- PASS: TestMetalCompactQuantCrossReference (0.01s)
+    --- PASS: TestMetalCompactQuantCrossReference/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCrossReference/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/Q1_0
+    q1_mxfp4_test.go:133: maximum relative difference 3.355e-07
+    q1_mxfp4_test.go:133: maximum relative difference 3.669e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.020e-06
+    q1_mxfp4_test.go:133: maximum relative difference 5.772e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.180e-05
+=== RUN   TestMetalCompactQuantCooperativeMatchesScalar/MXFP4
+    q1_mxfp4_test.go:133: maximum relative difference 7.691e-08
+    q1_mxfp4_test.go:133: maximum relative difference 4.589e-07
+    q1_mxfp4_test.go:133: maximum relative difference 2.619e-06
+    q1_mxfp4_test.go:133: maximum relative difference 7.026e-07
+    q1_mxfp4_test.go:133: maximum relative difference 1.345e-05
+--- PASS: TestMetalCompactQuantCooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantCooperativeMatchesScalar/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantFloatingPointClass
+=== RUN   TestMetalCompactQuantFloatingPointClass/Q1_0
+=== RUN   TestMetalCompactQuantFloatingPointClass/MXFP4
+--- PASS: TestMetalCompactQuantFloatingPointClass (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantFloatingPointClass/MXFP4 (0.00s)
+=== RUN   TestMetalMXFP4ExactNibbleCodebook
+--- PASS: TestMetalMXFP4ExactNibbleCodebook (0.00s)
+=== RUN   TestMetalCompactQuantDispatchAndValidation
+=== RUN   TestMetalCompactQuantDispatchAndValidation/Q1_0
+    q1_mxfp4_test.go:224: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantDispatchAndValidation/MXFP4
+    q1_mxfp4_test.go:224: maximum relative difference 6.552e-08
+--- PASS: TestMetalCompactQuantDispatchAndValidation (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantDispatchAndValidation/MXFP4 (0.00s)
+=== RUN   TestMetalCompactQuantRecorderResident
+=== RUN   TestMetalCompactQuantRecorderResident/Q1_0
+    q1_mxfp4_test.go:287: maximum relative difference 1.788e-07
+=== RUN   TestMetalCompactQuantRecorderResident/MXFP4
+    q1_mxfp4_test.go:287: maximum relative difference 1.241e-07
+--- PASS: TestMetalCompactQuantRecorderResident (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/Q1_0 (0.00s)
+    --- PASS: TestMetalCompactQuantRecorderResident/MXFP4 (0.00s)
+PASS
+
+## nlp
+=== RUN   TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes
+=== RUN   TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes/Q1_0
+=== RUN   TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes/MXFP4
+--- PASS: TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes (0.00s)
+    --- PASS: TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes/Q1_0 (0.00s)
+    --- PASS: TestPhi3Q1MXFP4RowSlicingPreservesCompressedBytes/MXFP4 (0.00s)
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q4_1
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_XXS
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_XS
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_XXS
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ1_S
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_NL
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_S
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_S
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_XS
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ1_M
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/TQ1_0
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/TQ2_0
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/MXFP4
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q1_0
+--- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants (0.03s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q4_1 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_XXS (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_XS (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_XXS (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ1_S (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_NL (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_S (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ2_S (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_XS (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ1_M (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/TQ1_0 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/TQ2_0 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/MXFP4 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q1_0 (0.00s)
+PASS
