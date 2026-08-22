@@ -454,3 +454,4 @@
 {"t":"2026-08-22T08:28:08Z","eid":"d0be57ae002ee0de","ag":"ag-173d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T08:28:21Z","eid":"5a696c569398ed07","ag":"ag-1b4a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T08:28:24Z","eid":"2abd303e9b776439","ag":"ag-5d5c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T09:24:33Z","eid":"d38cd3aa193c0fe0","ag":"ag-e884","ev":"create","id":"P-01M0MCJGS5F459EZNA0QYG4H1K","k":"proposal","ti":"Add native M2 Metal IQ4_NL quantized decode"}

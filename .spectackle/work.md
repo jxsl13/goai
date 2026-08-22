@@ -3896,3 +3896,11 @@ option: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validat
 option: Add Q4_1 CPU, Metal, and Vulkan support together in one tranche.
 option: Expose Q4_1 only through eager dequantization without a fused CPU path.
 choice: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.
+
+## P-01M0MCJGS5F459EZNA0QYG4H1K Add native M2 Metal IQ4_NL quantized decode
+kind: proposal
+state: draft
+created: 2026-08-22
+targets: go:nlp.quantMatMulSupported, go:gguf.dequantIQ4_NL, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go
+
+Implement exact ggml wire-type-20 IQ4_NL matmul in native Metal as the next bottom-up M2 quantized-decode tranche. Preserve 32-value, 18-byte blocks, f16 scale, low-half then high-half nibbles, and the verified nonlinear 16-entry codebook. Provide scalar and SIMD-group-cooperative resident pipelines, explicit llamagpu upload, and real quantized-GGUF admission. Keep generic host-bound execution on the ARM64 fused CPU path unless equal-boundary measurements prove Metal faster. Require cross-reference, floating-point class, validation, recorder, loader, and whole-model tests; retain only paths with at least 1.10x medians in three fresh-process count-seven campaigns. Run the pinned external perfscan subpackage with GOPROXY=direct and report generalizable findings.
