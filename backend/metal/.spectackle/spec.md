@@ -213,3 +213,6 @@ WHEN a GGUF type-18 IQ3_XXS super-block is decoded, the Metal IQ3_XXS kernel SHA
 
 ## METAL-IQ3-GRID-RESIDENCY-001
 WHEN an IQ3 Metal pipeline initializes, the Metal backend SHALL reconstruct the matching 256-by-4 or 512-by-4 grid once from gguf.Dequantize and retain exactly one immutable Metal buffer.
+
+## METAL-IQ3-NUMERIC-001
+WHEN valid IQ3_S or IQ3_XXS matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error and mutate zero activation or compressed-weight bytes.
