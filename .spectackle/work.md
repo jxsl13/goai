@@ -3982,3 +3982,19 @@ option: Independent scalar/cooperative pipelines per format under a shared lifec
 option: One shared kernel with a qtype branch in the decode hot loop
 blocks: P-01M0N04WSRFV7A6MC3TV25CE7X
 choice: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
+
+## ADR-01M0N3M3BGFPN8F0JPQ9D0H259 How should normal Metal recorder dispatches eliminate encoder boundaries while preserving dependency and profiler semantics?
+kind: adr
+state: done
+created: 2026-08-22
+context: The production command already batches one token per command buffer. Cross-dispatch buffer dependencies are common, profiling needs distinct encoder timestamps, and MPS/blit cannot encode while a compute encoder is active.
+decision: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+consequences: Normal recorders gain an internal wrapper and explicit lifecycle transitions; every dependent custom compute dispatch receives a buffer visibility barrier. Blit and MPS operations force an encoder close, and finish, commit, and free close any active encoder. Profiling recorders retain one encoder per labeled event, so current attribution remains comparable. If whole-token M2 evidence does not clear the promotion gate, the structure is removed rather than shipped.
+status: accepted
+
+kind: radio
+option: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+option: Retain one compute encoder without barriers and rely on implicit ordering
+option: Keep one encoder per operation and only optimize host recorder allocation
+blocks: P-01M0N3K92DE8VSC1V55JPA14K7
+choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries

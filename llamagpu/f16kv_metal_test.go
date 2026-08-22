@@ -138,13 +138,14 @@ func TestQuantF16KVDecoderStoragePathAndQuality(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundConvert, foundAttention := false, false
+	foundAppend, foundAttention := false, false
 	for _, event := range profile.Events {
-		foundConvert = foundConvert || event.Label == "kv.f32_to_f16_pair"
+		foundAppend = foundAppend || event.Label == "kv.f32_to_f16_pair" ||
+			event.Label == "rope.f16kv.append" || event.Label == "rope_pair.f16kv.append"
 		foundAttention = foundAttention || strings.HasPrefix(event.Label, "mha.f16kv.")
 	}
-	if !foundConvert || !foundAttention {
-		t.Fatalf("end-to-end profile did not prove f16 append+attention: convert=%v attention=%v events=%+v", foundConvert, foundAttention, profile.Events)
+	if !foundAppend || !foundAttention {
+		t.Fatalf("end-to-end profile did not prove f16 append+attention: append=%v attention=%v events=%+v", foundAppend, foundAttention, profile.Events)
 	}
 }
 

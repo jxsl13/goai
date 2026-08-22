@@ -106,12 +106,29 @@ type f16KVRecorder interface {
 	MHAF16KV(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error
 }
 
+// ropeF16KVAppendRecorder is the optional Metal single-token capability that rotates contiguous
+// Q/K projection rows while appending K/V directly to their binary16 cache row. Attention remains
+// a separate dispatch because Metal provides no grid-wide barrier between the append and MHA work.
+type ropeF16KVAppendRecorder interface {
+	RoPEF16KVAppend(q, k, v, inv, kCache, vCache buffer,
+		headsQ, headsK, hd, half, pos, cacheOff int, posDiv float32,
+	) error
+}
+
 // ropePairSplitRecorder is the Metal-only fused-QKV post-projection capability. It preserves the
 // ordinary recorder interface for every other backend while allowing a grouped projection to
 // rotate q/k and materialize contiguous q/k/v in one dispatch instead of rotate plus three copies.
 type ropePairSplitRecorder interface {
 	RoPEPairSplit(qkv, inv, q, k, v buffer,
 		seq, stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos int, posDiv float32,
+	) error
+}
+
+// ropePairF16KVAppendRecorder is the grouped-QKV counterpart of ropeF16KVAppendRecorder. It keeps
+// Q/K in the combined projection row while appending its K/V bands directly into half caches.
+type ropePairF16KVAppendRecorder interface {
+	RoPEPairF16KVAppend(qkv, inv, kCache, vCache buffer,
+		stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff int, posDiv float32,
 	) error
 }
 
@@ -3242,19 +3259,39 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				d.recordQKVProj(r, b, 1),
-				d.recordQKNorm(r, b, 1, D+2*kvDim),                // per-head QK-norm (Qwen3); no-op otherwise
-				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
-				d.recordKVPairBlit(r, d.qkv.b, D, d.qkv.b, D+kvDim, b.kC, b.vC, pos*kvDim, kvDim),
+				d.recordQKNorm(r, b, 1, D+2*kvDim), // per-head QK-norm (Qwen3); no-op otherwise
 			)
+			if fr, ok := r.(ropePairF16KVAppendRecorder); e == nil && ok && d.f16KV &&
+				!d.noRope && d.rotaryDim == dk && dk == 64 {
+				e = fr.RoPEPairF16KVAppend(
+					d.qkv.b, d.dinv.b, b.kC, b.vC, D+2*kvDim,
+					H, 0, KVH, D, dk, d.half, D+kvDim, kvDim, pos, pos*kvDim, d.posDiv,
+				)
+			} else if e == nil {
+				e = firstErr(
+					d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
+					d.recordKVPairBlit(r, d.qkv.b, D, d.qkv.b, D+kvDim, b.kC, b.vC, pos*kvDim, kvDim),
+				)
+			}
 		} else if e == nil {
 			e = firstErr(
 				b.wq.record(r, d.xn.b, d.q.b, 1),
 				b.wk.record(r, d.xn.b, d.k.b, 1),
 				b.wv.record(r, d.xn.b, d.v_.b, 1),
-				r.RoPE(d.q.b, d.dinv.b, d.q.b, 1, D, H, dk, d.half, pos, d.posDiv),
-				r.RoPE(d.k.b, d.dinv.b, d.k.b, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
-				d.recordKVPairBlit(r, d.k.b, 0, d.v_.b, 0, b.kC, b.vC, pos*kvDim, kvDim),
 			)
+			if fr, ok := r.(ropeF16KVAppendRecorder); e == nil && ok && d.f16KV &&
+				!d.noRope && d.rotaryDim == dk && dk == 64 {
+				e = fr.RoPEF16KVAppend(
+					d.q.b, d.k.b, d.v_.b, d.dinv.b, b.kC, b.vC,
+					H, KVH, dk, d.half, pos, pos*kvDim, d.posDiv,
+				)
+			} else if e == nil {
+				e = firstErr(
+					r.RoPE(d.q.b, d.dinv.b, d.q.b, 1, D, H, dk, d.half, pos, d.posDiv),
+					r.RoPE(d.k.b, d.dinv.b, d.k.b, 1, kvDim, KVH, dk, d.half, pos, d.posDiv),
+					d.recordKVPairBlit(r, d.k.b, 0, d.v_.b, 0, b.kC, b.vC, pos*kvDim, kvDim),
+				)
+			}
 		}
 		e = firstErr(
 			e,
