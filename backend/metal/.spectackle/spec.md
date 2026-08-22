@@ -163,3 +163,6 @@ WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable,
 WHEN three count-seven M2 campaigns compare cooperative and scalar resident single-token Q4_1 across representative shapes, the cooperative Metal route SHALL remain enabled only if every eligible median is at least 1.10 times faster with identical allocation semantics.
 
 Rationale: The retained leverage is SIMD-group occupancy inside a resident recorder, not host-bound dispatch.
+
+## METAL-Q4-1-HOST-ROUTE-001
+WHEN M2 host input and output benchmarks do not beat ARM64 Q4_1 by at least 1.10 times, the generic Metal Q4_1 dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.
