@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0NH9R8RFQT9RXN9THYAJBBK Fuse CPU QuantSwiGLU gate and up QMatMul fan-out
 kind: proposal
-state: active
+state: done
 created: 2026-08-22
 grilled: 2026-08-22 open=0
 targets: go:gguf.QMatMul, go:nn.QuantSwiGLU.Forward
