@@ -330,7 +330,7 @@ WHEN an MXFP4 exponent byte e is decoded, the Metal MXFP4 kernel SHALL construct
 WHEN valid Q1_0 or MXFP4 matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and leave every activation and compressed-weight byte unchanged.
 
 ## METAL-Q1-MXFP4-DISPATCH-001
-WHEN direct, resident, or recorder Q1_0 or MXFP4 dispatch selects a pipeline, the Metal backend SHALL select exactly one format-specific scalar or cooperative pipeline through a format-specific predicate with zero wire-type branches inside its decode hot loop.
+WHEN direct, resident, or recorder Q1_0 or MXFP4 dispatch selects a pipeline, the Metal backend SHALL select exactly 1 of qmatmul_q1_0_* or qmatmul_mxfp4_* with 0 wire-type branches inside its decode loop.
 
 ## METAL-Q1-MXFP4-FALLBACK-001
 WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal selector SHALL dispatch the matching scalar Q1_0 or MXFP4 pipeline and issue exactly zero cooperative threadgroups for that format.
