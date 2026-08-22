@@ -3915,7 +3915,7 @@ choice: Enable Metal only for compressed resident full-decoder execution and ret
 
 ## P-01M0MJ2RYQF4QR01T9CCYCBQSS Add native M2 Metal IQ3_S and IQ3_XXS decode
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 refs: P-01M0MF818FE9XBQTDC8B3P8RN8, ADR-01M0K3K391ERQSKF6T8MH14J47
 targets: go:metal.QMatMulIQ4_XS, objc:metal_bridge.mtl_qmatmul_resident, go:gguf.dotIQ3SRowASM, go:nlp.quantMatMulSupported
