@@ -316,3 +316,6 @@ IF direct host-bound TQ1_0 or TQ2_0 loses any required M2 cell or campaign, THEN
 WHEN a GGUF wire type 41 Q1_0 block is decoded, the Metal Q1_0 kernel SHALL decode each 18-byte block as a leading f16 scale plus sixteen LSB-first sign bytes, producing 128 values where set bits select positive scale and clear bits select negative scale.
 
 Rationale: Pin the Q1_0 wire layout independently of the implementation.
+
+## METAL-MXFP4-BLOCK-001
+WHEN a GGUF wire type 39 MXFP4 block is decoded, the Metal MXFP4 kernel SHALL decode each 17-byte block as one leading E8M0 exponent byte plus sixteen split-half nibble bytes, producing exactly 32 values.
