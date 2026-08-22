@@ -32,12 +32,3 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
-
-## T-01M0NGP0VGEVTR5SZ6YHWX7RB7 Implement and gate work-first QMatMul chunk fan-out
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0NGMVFZFCWRVTT2WQRER49G
-targets: go:gguf.qmatmulParallelChunks
-
-Add caller participation without changing qmatmulGrain, worker-count selection, parallel threshold, chunk boundaries, or body arithmetic. Add exact coverage and allocation benchmarks. Compare against merged main on M2 Pro with leaf and alternating production decode samples; reject on exact-digest drift, statistically meaningful latency regression, or no useful allocation leverage. Do not reintroduce the rejected persistent mailbox pool.
