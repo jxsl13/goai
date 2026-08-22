@@ -38,6 +38,7 @@ Rationale: Two applications of the same transform in one package, measured the s
 - T-01M0KEGBWFFG08YYQMEMZMQSXR Implement and statistically gate exact IQ2_S QMatMul and M2 ARM64 fused row dot: Shipped by PR #1145 and merged as 46cf0883280379fa025e95b37f469870c9ca1784. Exact portable IQ2_S F32/F64 QMatMul and the M2-first ARM64 fused row dot deliver 5.44x leaf, 5.20x M1/N64, and 4.27x M1/N4096 speedups across ten retained alternating fresh-process samples; allocation counts are flat. IQ2_S tensor decode and IQ2_XS negative controls remain neutral. Final source reproduces benchmark binary [body truncated at tombstone retention cap]
 - P-01M0KEEGADEWBRSZJ2KTWCT4FX M2-first exact IQ2_S fused row dot and portable QMatMul: Completed and shipped through PR #1145, merge 46cf0883280379fa025e95b37f469870c9ca1784, after all 15 CI lanes succeeded. The proposal added exact portable IQ2_S QMatMul and a scoped M2 ARM64 fused F32 M1 row dot, with 4.27x to 5.44x retained speedups, flat allocations, neutral dequant and IQ2_XS controls, and maximum scalar-relative error 1.9996704013343956e-15. Four contracts now preserve portabl [body truncated at tombstone retention cap]
 - T-01M0KGWNMSF72T3J11M86A89G3 Implement and statistically gate exact IQ1_S QMatMul and M2 ARM64 fused row dot: Completed implementation and validation merged through PR #1146. Durable behavior is captured by the four IQ1_S rules, CHANGELOG entry, evidence bundle, governing ADR, and perfscan issues #808 through #811.
+- T-01M0KM5H42FBTR5N0G6SMNMB6V Implement and statistically gate exact IQ1_M QMatMul and M2 ARM64 fused row dot: Archived after verified PR 1147 merge. Standing semantics and selector constraints remain in IQ1M-PORTABLE-QMATMUL-001, IQ1M-PORTABLE-SCRATCH-001, ARM64-IQ1M-FUSED-DOT-001, and ARM64-IQ1M-FUSED-DOT-SCOPE-001; reproducible evidence is committed under m2-arm64-iq1m-fused-dot-20260822.
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -237,3 +238,28 @@ Rationale: Single-token direct-F32 decode is the M2 CPU hot path; the portable s
 The IQ1_M QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The native leaf assumes Apple ARM64 F32 row layout and must not leak into portable or prefill semantics.
+
+## Q1-FORMAT-001 {applies: go:gguf.byteSize,go:gguf.decodeTensor,go:gguf.Quantize,go:gguf.Dequantize,go:gguf.dequantQ1_0Into,go:gguf.dequantQ1_0,go:gguf.quantizeQ1_0,go:gguf.TestQ1FormatAPIsMatchPinnedLayout,go:gguf.TestQuantizeQ1MatchesPinnedReferenceLayout,go:gguf.TestDequantQ1IntoMatchesTensorDecoderExactly,go:gguf.TestQ1RejectsInvalidInputs}
+WHEN ggml type 41 Q1_0 data is encoded or decoded, the format APIs SHALL preserve 18-byte blocks of 128 weights, f16 scale, LSB-first sign bits, and bit-one positive semantics.
+
+Rationale: End-to-end support prevents a fast QMatMul path from accepting bytes that Read, QuantTensor.Dequantize, Quantize, or Dequantize cannot reproduce.
+
+## Q1-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.Dequantize,go:gguf.dotQ1Row,go:gguf.dequantQ1_0Into,go:gguf.TestDotQ1RowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulQ1MatchesDequantizedReference,go:gguf.TestQMatMulQ1RejectsInvalidInputs}
+WHEN Q1_0 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve f16 scale, LSB-first signs, bit-one positive weights, ascending element mapping, and float64 accumulation.
+
+Rationale: The portable row dot is the semantic oracle for every architecture-specific Q1_0 path.
+
+## Q1-PORTABLE-SCRATCH-001 {applies: go:gguf.QMatMul,go:gguf.dequantQ1_0Into,go:gguf.TestQMatMulQ1ScratchAllocationsDoNotScaleWithOutputRows}
+The portable Q1_0 QMatMul SHALL use exactly 1 scratch-set allocation per worker and perform 0 per-output-row tensor allocations.
+
+Rationale: Caller-owned decode scratch prevents output-row count from multiplying temporary allocations.
+
+## ARM64-Q1-FUSED-DOT-001 {applies: go:gguf.QMatMul,go:gguf.dotQ1RowASM,go:gguf.dotQ1RowNeon,asm:gguf.dotQ1RowNeon,go:gguf.TestDotQ1RowNeonKnownSigns,go:gguf.TestDotQ1AsmRandomRaw,go:gguf.TestDotQ1AsmCancellationHeavy,go:gguf.TestDotQ1AsmAllocs}
+WHEN contiguous F32 M1 activations use Q1_0 weights, the Apple ARM64 Q1_0 selector SHALL dispatch 1 whole-row NEON sign-XOR and f16-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+Rationale: Single-token direct-F32 decode is the M2 CPU hot path; sign-bit expansion can avoid materialized weights.
+
+## ARM64-Q1-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul,go:gguf.dotQ1RowFn,go:gguf.dotQ1RowASM,go:gguf.TestQMatMulQ1SelectorScope}
+The Q1_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: The native leaf assumes ARM64 F32 row layout and must not leak into portable, F64, or prefill semantics.

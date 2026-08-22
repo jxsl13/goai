@@ -8,18 +8,22 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
-// Quantize encodes a tensor's values into the ggml block-quantized byte layout for qt
-// (Q8_0 or Q4_0, §R94), the inverse of the dequantization done on read. The element
-// count must be a multiple of the 32-element block size. The result is the raw weight
+// Quantize encodes a tensor's values into the ggml block-quantized byte layout for qt,
+// the inverse of the dequantization done on read. The element count must be a multiple
+// of the format's block size. The result is the raw weight
 // bytes accepted by QMatMul and produced by ggml — enabling GoAI to WRITE quantized
-// models, not just read them. Encoding follows ggml-quants.c exactly: per 32-block,
-// Q8_0 uses d=amax/127 with roundf quants; Q4_0 uses the signed max, d=max/−8 and
-// nibble=min(15,⌊x/d+8.5⌋). Values already on the quantization grid round-trip exactly.
+// models, not just read them. Encoding follows ggml-quants.c exactly: Q1_0 uses
+// 128-value mean-absolute f16 scaling and one sign bit; Q8_0 uses d=amax/127 with
+// roundf quants; Q4_0 uses the signed max, d=max/−8 and nibble=min(15,⌊x/d+8.5⌋).
+// Values already on the quantization grid round-trip exactly.
 //
 //perfscan:ignore PS6004 Quantize is one-time model-write path; resource-only
 func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 	n := t.Numel()
 	be := blockElems // 32 for Q8_0/Q4_0
+	if qt == Q1_0 {
+		be = q1BlockElems
+	}
 	if qt == Q6_K || qt == Q4_K || qt == Q5_K || qt == Q3_K || qt == Q2_K {
 		be = qkK // k-quant super-block is 256 elements
 	}
@@ -53,6 +57,8 @@ func Quantize(t *tensor.Tensor, qt QuantType) ([]byte, error) {
 		}
 	}
 	switch qt {
+	case Q1_0:
+		return quantizeQ1_0(x), nil
 	case Q8_0:
 		return quantizeQ8_0(x), nil
 	case Q4_0:
@@ -85,6 +91,8 @@ func Dequantize(data []byte, qt QuantType, n int) (*tensor.Tensor, error) {
 		return nil, fmt.Errorf("gguf: Dequantize %d bytes != %d for %d values", len(data), need, n)
 	}
 	switch qt {
+	case Q1_0:
+		return dequantQ1_0(tensor.Shape{n}, data)
 	case Q8_0:
 		return dequantQ8_0(tensor.Shape{n}, data)
 	case Q4_0:

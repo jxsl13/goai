@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                              │ q1-scalar.txt  │             q1-neon.txt              │
+                              │     sec/op     │    sec/op     vs base                │
+DotQ1Paths-12                   4889.5n ± 222%   615.3n ± 35%  -87.42% (p=0.000 n=10)
+QMatMulQ1Paths/N64_K1024-12      79.15µ ±  14%   10.16µ ±  5%  -87.17% (p=0.000 n=10)
+QMatMulQ1Paths/N4096_K1024-12    859.1µ ±  35%   163.3µ ± 63%  -80.99% (p=0.000 n=10)
+geomean                          69.28µ          10.07µ        -85.47%
+
+                              │ q1-scalar.txt │               q1-neon.txt               │
+                              │      B/s      │      B/s        vs base                 │
+DotQ1Paths-12                   3.121Gi ± 69%   24.800Gi ± 26%  +694.69% (p=0.000 n=10)
+QMatMulQ1Paths/N64_K1024-12     3.084Gi ± 12%   24.041Gi ±  5%  +679.44% (p=0.000 n=10)
+QMatMulQ1Paths/N4096_K1024-12   18.19Gi ± 26%    95.70Gi ± 39%  +426.13% (p=0.000 n=10)
+geomean                         5.594Gi          38.50Gi        +588.16%
+
+                              │ q1-scalar.txt  │              q1-neon.txt              │
+                              │      B/op      │     B/op      vs base                 │
+DotQ1Paths-12                     0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ1Paths/N64_K1024-12       592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ1Paths/N4096_K1024-12   17.23Ki ± 2%     17.03Ki ± 0%  -1.16% (p=0.001 n=10)
+geomean                                      ²                 -0.39%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                              │ q1-scalar.txt │             q1-neon.txt             │
+                              │   allocs/op   │ allocs/op   vs base                 │
+DotQ1Paths-12                    0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ1Paths/N64_K1024-12      4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulQ1Paths/N4096_K1024-12    29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10)
+geomean                                     ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
