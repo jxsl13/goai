@@ -3977,13 +3977,3 @@ option: Duplicate all lookup and lifecycle state per format
 option: Use literal shader lookup tables and one family-wide promotion flag
 blocks: P-01M0MQYAGFF3PRC2P0632PCDDB
 choice: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
-
-## T-01M0MR12RWF4182FZMHZXDZN7D Implement and gate native M2 Metal IQ1 decode
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0MQYAGFF3PRC2P0632PCDDB
-grilled: 2026-08-22 open=10
-targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, go:gguf.dequantIQ1_SInto, go:gguf.dequantIQ1_MInto
-
-Implement exact IQ1_S and IQ1_M scalar and cooperative Metal kernels; reconstruct and retain one shared exact ternary grid through gguf.Dequantize; wire direct, resident, and recorder paths with per-format controls; add explicit recorder-only uploads and loader admission; prove correctness, immutability, validation, routing, fresh-process count-seven performance against scalar and fused ARM64 CPU controls, and identical-token whole-model reachability. Preserve CPU fallback for losing host-bound routes and archive pinned evidence.
