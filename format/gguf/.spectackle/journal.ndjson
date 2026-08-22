@@ -394,3 +394,4 @@
 {"t":"2026-08-22T06:36:57Z","eid":"262c52956bcdc6d1","ag":"ag-cb04","ev":"create","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","k":"adr","ti":"Where should complete wire-format dispatch for already supported IQ and MXFP4 types live?","dir":"format/gguf"}
 {"t":"2026-08-22T06:36:57Z","eid":"fb906107a66d901a","ag":"ag-cb04","ev":"move","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","dir":"format/gguf","fr":"draft","to":"submitted"}
 {"t":"2026-08-22T06:37:10Z","eid":"b5057b49202bf533","ag":"ag-e8b2","ev":"decide","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","dir":"format/gguf","note":"Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors"}
+{"t":"2026-08-22T06:37:24Z","eid":"61165fb294a41a1f","ag":"ag-fb9b","ev":"create","id":"T-01M0M30EFGEN49ZG22VFTE4JSE","k":"task","ti":"Route every supported IQ and MXFP4 wire type through decodeTensor","dir":"format/gguf"}
