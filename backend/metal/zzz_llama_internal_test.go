@@ -160,6 +160,7 @@ func (m *llamaModel) hostLogits(x []float32, kC, vC [][]float32, L int) []float3
 		xn2 := rmsHost(cur, m.gFFN[l], m.eps)
 		gate := matvec(xn2, m.wGate[l], hidden)
 		up := matvec(xn2, m.wUp[l], hidden)
+		//perfscan:ignore PS2004 test-only host reference deliberately allocates independent per-layer scratch
 		hh := make([]float64, hidden)
 		for j := range hidden {
 			silu := gate[j] / (1.0 + math.Exp(-gate[j]))

@@ -1,0 +1,13 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalTQHostRouteCampaign/TQ1_0/kv-12      	       7	   2417506 ns/op	     78275 cpu-wall-ns/op	    223874 metal-direct-wall-ns/op	         0.3496 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ1_0/square-12  	       7	   3883851 ns/op	    187455 cpu-wall-ns/op	    297978 metal-direct-wall-ns/op	         0.6291 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ1_0/gate-12    	       7	   6372673 ns/op	    437910 cpu-wall-ns/op	    358615 metal-direct-wall-ns/op	         1.221 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ1_0/down-12    	       7	   6119214 ns/op	    432973 cpu-wall-ns/op	    331881 metal-direct-wall-ns/op	         1.305 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ2_0/kv-12      	       7	   2120750 ns/op	     70584 cpu-wall-ns/op	    194411 metal-direct-wall-ns/op	         0.3631 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ2_0/square-12  	       7	   3178000 ns/op	    164895 cpu-wall-ns/op	    232282 metal-direct-wall-ns/op	         0.7099 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ2_0/gate-12    	       7	   5797810 ns/op	    382506 cpu-wall-ns/op	    342171 metal-direct-wall-ns/op	         1.118 metal-vs-cpu-wall-x
+BenchmarkMetalTQHostRouteCampaign/TQ2_0/down-12    	       7	   5674280 ns/op	    381342 cpu-wall-ns/op	    327832 metal-direct-wall-ns/op	         1.163 metal-vs-cpu-wall-x
+PASS
