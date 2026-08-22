@@ -225,29 +225,24 @@ func dequantIQ1_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 	return out, nil
 }
 
-// dequantIQ1_M decodes IQ1_M blocks into an F32 tensor of the given shape.
-func dequantIQ1_M(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
-	n := shape.Numel()
-	if n%qkK != 0 {
-		return nil, fmt.Errorf("gguf: IQ1_M numel %d not multiple of %d", n, qkK)
-	}
-	nb := n / qkK
-	if len(data) != nb*iq1mBlockSize {
-		return nil, fmt.Errorf("gguf: IQ1_M data %dB, want %d", len(data), nb*iq1mBlockSize)
-	}
-	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+// dequantIQ1_MInto decodes complete IQ1_M blocks into caller-owned storage.
+// Shape and byte-length validation stay at the public tensor boundary below;
+// QMatMul validates one complete quantized row before reusing this allocation-free
+// block decoder across output rows.
+func dequantIQ1_MInto(dst []float32, data []byte) {
+	for b := 0; b*iq1mBlockSize < len(data); b++ {
 		blk := data[b*iq1mBlockSize : (b+1)*iq1mBlockSize]
 		qs, qh, scales := blk[0:32], blk[32:48], blk[48:56]
 		// the f16 super-scale lives in the top nibbles of the four scale words.
 		var dbits uint16
 		for i := range 4 {
+			//perfscan:ignore PS4001 four split f16 nibbles require per-word bit extraction, not a same-layout bulk copy
 			w := binary.LittleEndian.Uint16(scales[i*2:])
 			dbits |= (w & 0xF000) >> (12 - 4*i)
 		}
 		d := f16ToF32(dbits)
 		for i := range 32 { // one qs byte → one 8-wide grid row
+			//perfscan:ignore PS4001 paired 3-bit scales are interleaved with split f16 nibbles in four words
 			sw := binary.LittleEndian.Uint16(scales[(i/8)*2:])
 			sc := sw >> (3 * (i / 2 % 4)) & 0x07
 			dl := d * float32(2*sc+1)
@@ -265,5 +260,19 @@ func dequantIQ1_M(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
+}
+
+// dequantIQ1_M decodes IQ1_M blocks into an F32 tensor of the given shape.
+func dequantIQ1_M(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
+	n := shape.Numel()
+	if n%qkK != 0 {
+		return nil, fmt.Errorf("gguf: IQ1_M numel %d not multiple of %d", n, qkK)
+	}
+	nb := n / qkK
+	if len(data) != nb*iq1mBlockSize {
+		return nil, fmt.Errorf("gguf: IQ1_M data %dB, want %d", len(data), nb*iq1mBlockSize)
+	}
+	out := tensor.New(tensor.F32, shape)
+	dequantIQ1_MInto(out.Storage().F32(), data)
 	return out, nil
 }

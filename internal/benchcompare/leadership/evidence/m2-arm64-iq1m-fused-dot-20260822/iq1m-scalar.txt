@@ -1,0 +1,70 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  119760	      6144 ns/op	2666.47 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7542	     99512 ns/op	2634.28 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     412	   1396592 ns/op	12012.97 MB/s	   17421 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  102276	      5575 ns/op	2938.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7530	     86736 ns/op	3022.31 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     399	   1577153 ns/op	10637.66 MB/s	   18012 B/op	      30 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  108438	      6474 ns/op	2530.55 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7508	     99520 ns/op	2634.07 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     198	   2618046 ns/op	6408.30 MB/s	   17408 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  119463	      5787 ns/op	2831.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7546	     93902 ns/op	2791.69 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     375	   1617801 ns/op	10370.38 MB/s	   18035 B/op	      30 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  109399	      7085 ns/op	2312.39 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7497	     92869 ns/op	2822.73 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     339	   2193149 ns/op	7649.83 MB/s	   17423 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  119053	      5232 ns/op	3131.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7555	    100112 ns/op	2618.51 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     578	   1900343 ns/op	8828.52 MB/s	   17812 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  120271	      6186 ns/op	2648.56 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7534	    115819 ns/op	2263.40 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     243	   2431553 ns/op	6899.79 MB/s	   17409 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  114882	      6954 ns/op	2356.21 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7514	    178294 ns/op	1470.29 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     280	   3058643 ns/op	5485.18 MB/s	   18300 B/op	      30 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  108213	      6368 ns/op	2573.02 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7376	     96989 ns/op	2702.82 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     313	   1785659 ns/op	9395.53 MB/s	   17442 B/op	      29 allocs/op
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotIQ1MPaths/rowdot-12 	  109116	      5984 ns/op	2737.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulIQ1MPaths/N64_K1024/rowdot-12  	    7221	     95012 ns/op	2759.08 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulIQ1MPaths/N4096_K1024/rowdot-12         	     210	   2397247 ns/op	6998.53 MB/s	   18578 B/op	      31 allocs/op

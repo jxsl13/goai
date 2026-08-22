@@ -1,0 +1,18 @@
+PASS TestDotIQ1MRowNeonKnownValue: exact -224
+PASS TestDotIQ1MAsmRandomRaw: maximum scalar-relative error 6.617879878655745e-16
+PASS TestDotIQ1MAsmCancellationHeavy: relative error <= 1e-4
+PASS TestDotIQ1MAsmAllocs: 0 leaf allocations
+PASS TestIQ1MDequantMatchesGGUFPy
+PASS TestDequantIQ1MIntoMatchesTensorDecoderExactly
+PASS TestDotIQ1MRowMatchesMaterializedReferenceExactly
+PASS TestQMatMulIQ1MMatchesDequantizedReference: F32/F64, M1/M3
+PASS TestQMatMulIQ1MRejectsInvalidInputs
+PASS TestQMatMulIQ1MScratchAllocationsDoNotScaleWithOutputRows
+PASS TestQMatMulIQ1MSelectorScope
+PASS complete format/gguf test binary
+PASS complete race-enabled format/gguf test binary
+PASS CGO-disabled Linux ARM64 and AMD64 format/gguf test-binary builds
+PASS make preflight
+PASS make preflight-metal
+PASS external perfscan: 0 new normalized production diagnostics
+PASS Spectackle fully paged check: 0 drift records
