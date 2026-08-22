@@ -20,7 +20,7 @@ choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable de
 
 ## T-01M0KGWNMSF72T3J11M86A89G3 Implement and statistically gate exact IQ1_S QMatMul and M2 ARM64 fused row dot
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0KGTBCHF59VJBME52TDJ43A
 targets: go:gguf.dequantIQ1_S, go:gguf.QMatMul, format/gguf/iq1.go, format/gguf/quant_matmul.go
