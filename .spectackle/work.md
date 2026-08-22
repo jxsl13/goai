@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0NNS1C0FMETR9BVNZ6R7DJ2 Coalesce mixed-shape CPU QKV decode fan-out
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:gguf.qmatmulParallelChunks, go:nlp.QuantLlama.DecodeStep, go:nlp.QuantLlama.Forward
-
-Add an eager CPU single-token projection primitive that computes three unequal-row Q4_K or Q6_K matrices under one work-sized fan-out while preserving each independent row dot bit-for-bit. Route QuantLlama attention Q/K/V through it only for explicit eager CPU contexts with contiguous offset-zero F32 M1 input; recorder, accelerator, unsupported quant, and prefill paths retain the existing three QuantLinear calls. Gate promotion on the permanent mixed-shape leaf benchmark and fresh-process production TinyLlama Q4_K_M decode, requiring exact digest parity and a statistically credible wall-clock gain. This is distinct from the rejected Metal raw-QKV kernel: it coalesces Go CPU scheduling around the already accepted row kernels and does not change arithmetic or GPU dispatch.
