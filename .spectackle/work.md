@@ -3881,3 +3881,11 @@ option: Implement only portable decode and defer acceleration
 option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
 option: Adopt Q8_K activation conversion to mirror llama.cpp
 choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+
+## T-01M0M1625WFQGVRNDRZHCBR59E Correct and gate IQ1_S and IQ2_S GGUF type IDs
+kind: task
+state: done
+created: 2026-08-22
+parent: P-01M0M13SZGFBNBZQ7FJDD13JV8
+
+Change the internal and exported identifiers to IQ1_S=19 and IQ2_S=22, preserving every decoder layout and kernel path. Add independent regression tests over public constants, byteSize, eager dispatch, raw QuantTensor dispatch, QMatMul selection, and explicit type-24 rejection. Validate pinned-enum provenance, full GGUF/race/cross-arch tests, external perfscan, Spectackle drift, and preflight gates. Treat this as a correctness ABI repair; do not claim a speedup.

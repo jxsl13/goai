@@ -241,8 +241,8 @@ ARM64-IQ1M-FUSED-DOT-001	go:gguf.TestDotIQ1MAsmRandomRaw	format/gguf/dot_iq1m_as
 ARM64-IQ1M-FUSED-DOT-001	go:gguf.TestDotIQ1MAsmCancellationHeavy	format/gguf/dot_iq1m_asm_arm64_test.go	63-78	d9b34130951041dc	abba66ceb3d464b6
 ARM64-IQ1M-FUSED-DOT-001	go:gguf.TestDotIQ1MAsmAllocs	format/gguf/dot_iq1m_asm_arm64_test.go	80-88	da5d13daaa3563cb	abba66ceb3d464b6
 ARM64-IQ1M-FUSED-DOT-SCOPE-001	go:gguf.TestQMatMulIQ1MSelectorScope	format/gguf/iq1m_qmatmul_test.go	139-168	c8cb7e1670cf80e4	77bbdd061aa49c86
-Q1-FORMAT-001	go:gguf.byteSize	format/gguf/gguf.go	727-836	d25a831d34e7464b	d6e933070d6538ef
-Q1-FORMAT-001	go:gguf.decodeTensor	format/gguf/gguf.go	656-723	8f041674f794ee3a	d6e933070d6538ef
+Q1-FORMAT-001	go:gguf.byteSize	format/gguf/gguf.go	731-840	d25a831d34e7464b	d6e933070d6538ef
+Q1-FORMAT-001	go:gguf.decodeTensor	format/gguf/gguf.go	656-727	f14b4b8378a86141	d6e933070d6538ef
 Q1-FORMAT-001	go:gguf.Quantize	format/gguf/quant.go	21-91	791bca5890bfa44f	d6e933070d6538ef
 Q1-FORMAT-001	go:gguf.Dequantize	format/gguf/quant.go	95-147	7417a0f994176de7	d6e933070d6538ef
 Q1-PORTABLE-QMATMUL-001	go:gguf.QMatMul	format/gguf/quant_matmul.go	174-724	617b1ad011d0f96f	3635cad4da5e1b47
