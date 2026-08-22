@@ -243,3 +243,8 @@ Rationale: The native leaf assumes Apple ARM64 F32 row layout and must not leak 
 WHEN ggml type 41 Q1_0 data is encoded or decoded, the format APIs SHALL preserve 18-byte blocks of 128 weights, f16 scale, LSB-first sign bits, and bit-one positive semantics.
 
 Rationale: End-to-end support prevents a fast QMatMul path from accepting bytes that Read, QuantTensor.Dequantize, Quantize, or Dequantize cannot reproduce.
+
+## Q1-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.Dequantize}
+WHEN Q1_0 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve f16 scale, LSB-first signs, bit-one positive weights, ascending element mapping, and float64 accumulation.
+
+Rationale: The portable row dot is the semantic oracle for every architecture-specific Q1_0 path.
