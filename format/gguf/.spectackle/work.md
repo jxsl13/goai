@@ -17,3 +17,12 @@ option: Quantize activations to Q8_K and match the llama.cpp IQ3_XXS by Q8_K ker
 option: Implement only a tensor dequantization optimization and defer QMatMul
 blocks: P-01M0K6A4A6F0SAGEMT1937ZQQN
 choice: Preserve the GoAI direct-F32/F64 QMatMul semantics and add a portable decoder plus an Apple ARM64 exact row dot
+
+## P-01M0M2XZRGFSWVT5G94ZXT61S8 Complete GGUF IQ and MXFP4 wire decode dispatch
+kind: proposal
+state: active
+created: 2026-08-22
+grilled: 2026-08-22 open=0
+targets: go:gguf.decodeTensor, go:gguf.QuantTensor.Dequantize, go:gguf.Read, format/gguf/iq_wire_id_test.go
+
+Close the real-file decode gap for the already implemented IQ2_XXS, IQ2_XS, IQ3_XXS, IQ4_NL, IQ3_S, IQ4_XS, IQ1_M, and MXFP4 formats. Add exact decodeTensor dispatch so eager Read and QuantTensor.Dequantize agree with public Dequantize, validate every registered wire ID through synthetic GGUF Read and ReadRaw fixtures, retain clean rejection for unsupported wire types, and benchmark the affected decode boundary without changing decoder math, block layouts, QMatMul selection, or supported-platform scope.
