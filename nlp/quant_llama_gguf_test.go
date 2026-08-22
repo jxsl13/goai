@@ -2,6 +2,7 @@ package nlp_test
 
 import (
 	"bytes"
+	"encoding/binary"
 	"math"
 	"testing"
 
@@ -10,6 +11,92 @@ import (
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/tensor"
 )
+
+func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte {
+	blocks := shape.Numel() / 32
+	blockBytes := 18
+	if qt == gguf.Q4_1 {
+		blockBytes = 20
+	}
+	raw := make([]byte, blocks*blockBytes)
+	for block := range blocks {
+		base := block * blockBytes
+		binary.LittleEndian.PutUint16(raw[base:], 0x3000) // f16 d=0.125
+		start := 2
+		if qt == gguf.Q4_1 {
+			binary.LittleEndian.PutUint16(raw[base+2:], 0) // f16 m=0
+			start = 4
+		}
+		for i := start; i < blockBytes; i++ {
+			raw[base+i] = byte((block*17 + i*29 + seed) & 0xff)
+		}
+	}
+	return raw
+}
+
+// The real raw-GGUF loader admits modern 32-value read-only quant formats without eagerly
+// expanding their projection weights. Q4_1 is the affine type-3 path and IQ4_NL exercises the
+// type-20 nonlinear codebook path that native Metal consumes.
+func TestQuantLlamaFromGGUFAdmitsQ4_1AndIQ4NL(t *testing.T) {
+	m, err := nlp.NewLlama(nlp.LlamaConfig{
+		Vocab: 12, Ctx: 16, Dim: 32, Heads: 4, KVHeads: 2, Layers: 1, Hidden: 32, Eps: 1e-5, RopeBase: 10000,
+	}, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta, ts := nlp.LlamaToGGUF(m)
+	qm := map[string]gguf.QuantType{}
+	for name, tt := range ts {
+		if tt.Ndim() == 2 && name != "token_embd.weight" {
+			qm[name] = gguf.Q8_0
+		}
+	}
+	var buf bytes.Buffer
+	if err := gguf.WriteQuantized(&buf, &gguf.File{Version: 3, Metadata: meta, Tensors: ts}, qm); err != nil {
+		t.Fatal(err)
+	}
+	rf, err := gguf.ReadRaw(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		qt   gguf.QuantType
+	}{{"Q4_1", gguf.Q4_1}, {"IQ4_NL", gguf.IQ4_NL}} {
+		t.Run(tc.name, func(t *testing.T) {
+			qt := tc.qt
+			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))
+			for name, tt := range rf.Tensors {
+				if len(tt.Shape) == 2 && name != "token_embd.weight" {
+					tt.Data = readOnlyQuantBytes(tt.Shape, qt, len(name))
+					tt.GGType = uint32(qt)
+				}
+				tensors[name] = tt
+			}
+			loaded, err := nlp.QuantLlamaFromGGUF(rf.Metadata, tensors)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer loaded.Close()
+			want := tensors["blk.0.attn_output.weight"]
+			if loaded.Blocks[0].Wo.QT != qt {
+				t.Fatalf("Wo quant type = %v, want %v", loaded.Blocks[0].Wo.QT, qt)
+			}
+			if !bytes.Equal(loaded.Blocks[0].Wo.Weight, want.Data) {
+				t.Fatal("loader changed compressed attn_output bytes")
+			}
+			logits, err := loaded.Forward(backend.NewContext(), []int{2, 7, 0, 4})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, value := range logits.Storage().F32() {
+				if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
+					t.Fatalf("logit %d is non-finite: %g", i, value)
+				}
+			}
+		})
+	}
+}
 
 // §V15 / E2E (§T151): a float Llama written as a quantized GGUF (projections Q8_0, norms +
 // embedding F32) and loaded back with QuantLlamaFromGGUF — via ReadRaw, keeping the projections

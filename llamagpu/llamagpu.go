@@ -220,6 +220,9 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 3 { // GGUF Q4_1: recorder-only residency; host QuantLinear stays on faster ARM64.
 		return metal.UploadQWeightQ4_1(weight, n, k)
 	}
+	if qt == 20 { // GGUF IQ4_NL: same recorder-only boundary after the M2 host-route gate.
+		return metal.UploadQWeightIQ4_NL(weight, n, k)
+	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
 		return nil, err
