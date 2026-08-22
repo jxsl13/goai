@@ -3866,12 +3866,3 @@ option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
 option: Bundle and accelerate both IQ3 formats in one tranche
 choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
-
-## P-01M0KT0ECBEK5R2GZA7M6PJZ83 M2-first complete TQ1_0 GGUF support and fused row dot
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md
-
-Context: GoAI rejects ggml type 34 TQ1_0. The pinned llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 defines a 54-byte block for 256 ternary weights: 48 base-243 bytes, 4 high-tail base-243 bytes, and one f16 scale. Scope: add exact eager/raw/public decode, reference-compatible public encode, portable F32/F64 QMatMul with bounded caller-owned scratch for M>1, and an Apple ARM64 direct-F32 M1 fused row dot. Correctness: pin layout and reference bytes, reject non-aligned or truncated inputs, preserve input bytes, compare materialized and fused results across arbitrary and cancellation-heavy vectors, gate selector scope, and compile portable Linux arm64/amd64 paths. Performance gate: on Apple M2 Pro, ten retained fresh-process 500 ms samples with alternating order and benchstat; require at least 2.0x on the leaf and M1/N64/K1024, no allocation regression, and neutral existing Q1_0 controls. Record exact binaries, sources, hashes, sample order, raw streams, numerical gates, disassembly, and environment. Competition boundary: llama.cpp uses Q8_K activation quantization before its TQ1_0 dot, while GoAI accepts direct F32/F64; do not claim cross-library leadership without an equal-boundary harness. Generalizable performance techniques must be filed on jxsl13/perfscan before merge. Out of scope unless benchmark-required: Metal, Vulkan, CUDA, TQ2_0, or changing public QMatMul accumulation semantics.
