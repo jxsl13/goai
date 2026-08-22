@@ -293,3 +293,6 @@ WHEN a GGUF wire type 34 TQ1_0 block is decoded, the Metal TQ1_0 kernel SHALL de
 
 ## METAL-TQ2-BLOCK-001
 WHEN a GGUF wire type 35 TQ2_0 block is decoded, the Metal TQ2_0 kernel SHALL decode each 66-byte block as 64 two-bit code bytes in 32-lane plane order plus 1 trailing f16 scale, producing exactly 256 values.
+
+## METAL-TQ2-CODES-001
+WHEN arbitrary raw TQ2_0 codes execute on Metal, the Metal TQ2_0 kernel SHALL map codes 0, 1, 2, and 3 to minus 1, 0, plus 1, and plus 2 times the block scale.
