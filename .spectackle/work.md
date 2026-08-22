@@ -4007,11 +4007,3 @@ grilled: 2026-08-22 open=0
 targets: go:gguf.qmatmulParallelChunks, go:nlp.QuantLlama.DecodeStep, go:nlp.QuantLlama.Forward
 
 Add an eager CPU single-token projection primitive that computes three unequal-row Q4_K or Q6_K matrices under one work-sized fan-out while preserving each independent row dot bit-for-bit. Route QuantLlama attention Q/K/V through it only for explicit eager CPU contexts with contiguous offset-zero F32 M1 input; recorder, accelerator, unsupported quant, and prefill paths retain the existing three QuantLinear calls. Gate promotion on the permanent mixed-shape leaf benchmark and fresh-process production TinyLlama Q4_K_M decode, requiring exact digest parity and a statistically credible wall-clock gain. This is distinct from the rejected Metal raw-QKV kernel: it coalesces Go CPU scheduling around the already accepted row kernels and does not change arithmetic or GPU dispatch.
-
-## T-01M0NNSG1BFVM9ZBCY1C056216 Implement and gate mixed-shape CPU QKV fan-out
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0NNS1C0FMETR9BVNZ6R7DJ2
-
-Implement a bit-exact Q4_K/Q6_K M1 triple projection over one flattened work-sized fan-out. Add hostile-dimension and unsupported-input validation, exact mixed-shape parity tests, a permanent production-shape leaf benchmark, and an eager CPU QuantLlama routing helper shared by Forward M1 and DecodeStep. Preserve recorder, accelerator, prefill, and unsupported-quant behavior. Promote only after fresh-process M2 Pro TinyLlama Q4_K_M production evidence shows a statistically credible wall-clock gain with the exact established digest.
