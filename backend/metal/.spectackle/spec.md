@@ -222,3 +222,6 @@ WHEN direct, resident, or recorder IQ3 dispatch selects a pipeline, the Metal ba
 
 ## METAL-IQ3-PERF-001
 WHEN three count-seven M2 campaigns cover four resident single-token geometries for one IQ3 type, the cooperative Metal route SHALL remain enabled only when every median is at least 1.10 times scalar control at GPU and host-command boundaries.
+
+## METAL-IQ3-HOST-ROUTE-001
+WHEN equal host-boundary M2 benchmarks do not beat fused ARM64 IQ3 by at least 1.10 times, the generic Metal IQ3 dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU route.
