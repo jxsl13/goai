@@ -4010,7 +4010,7 @@ Profile-backed M2 CPU decode experiment: compute same-shape M1 F32 gate and up q
 
 ## T-01M0NHAMKMEDNRFHEGP8MKT2T4 Implement and gate paired Q4_K M1 CPU projections
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0NH9R8RFQT9RXN9THYAJBBK
 targets: go:gguf.QMatMul, go:nn.QuantSwiGLU.Forward
