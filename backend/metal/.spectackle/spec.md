@@ -308,3 +308,6 @@ WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the
 
 ## METAL-TQ-PERF-001
 WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one TQ format, the cooperative TQ route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-TQ-HOST-ROUTE-001
+IF direct host-bound TQ1_0 or TQ2_0 fails to beat fused ARM64 CPU by 1.10 times in any required cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve the fused ARM64 CPU route independently for that wire type.
