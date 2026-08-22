@@ -101,3 +101,13 @@ PRECEDENT CUTS BOTH WAYS: format/gguf ALREADY spawns a bounded worker pool in Re
 OPTIONS for the decision: (a) land as prototyped with the threshold, accepting nested oversubscription; (b) route through a bounded pool with an in-worker guard, as backend/cpu does, which means either lifting that pool somewhere both packages can use or duplicating it; (c) leave serial and let the caller parallelize, which forfeits the 1.70x for single-stream decode — the latency-sensitive case.
 
 Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
+
+## T-01M0KT35PPFRR82JRYRPP9PFMM Implement and statistically gate complete TQ1_0 support and M2 ARM64 fused row dot
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0KT0ECBEK5R2GZA7M6PJZ83
+grilled: 2026-08-22 open=0
+targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf/bench_test.go, format/gguf
+
+Implement the active proposal end to end. Preserve the pinned 54-byte/256-weight base-243 TQ1_0 layout, add exact eager/raw/public decode and reference-compatible encode, add portable F32/F64 QMatMul plus bounded reusable scratch, and select an Apple ARM64 direct-F32 M1 fused row dot only after correctness and allocation gates pass. Benchmark exact pre-change scalar and final candidate binaries using ten alternating fresh processes at 500 ms, retain every final sample, use benchstat, record controls and hashes, run external perfscan v1.71 with GOPROXY=direct, report any generalizable technique as a perfscan issue, and complete all repository preflight/CI gates. Reject or narrow the ARM64 design if the leaf or M1/N64/K1024 speedup is below 2.0x, numerical gates fail, allocations regress, or unchanged Q1_0 controls move significantly.
