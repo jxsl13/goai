@@ -18,7 +18,7 @@ func TestMetalUploadIQ2UsesRecorderOnlyResidentPath(t *testing.T) {
 		name       string
 		qt         gguf.QuantType
 		blockBytes int
-	}{{"IQ2_XXS", gguf.IQ2_XXS, 66}, {"IQ2_XS", gguf.IQ2_XS, 74}} {
+	}{{"IQ2_XXS", gguf.IQ2_XXS, 66}, {"IQ2_XS", gguf.IQ2_XS, 74}, {"IQ2_S", gguf.IQ2_S, 82}} {
 		t.Run(tc.name, func(t *testing.T) {
 			weight := make([]byte, n*(k/256)*tc.blockBytes)
 			for block := range len(weight) / tc.blockBytes {

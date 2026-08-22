@@ -21,6 +21,8 @@ var (
 	iq2XXSGridErr  error
 	iq2XSGridOnce  sync.Once
 	iq2XSGridErr   error
+	iq2SGridOnce   sync.Once
+	iq2SGridErr    error
 )
 
 // ensureIQ2Grid reconstructs an IQ2 eight-value codebook through the existing
@@ -35,6 +37,9 @@ func ensureIQ2Grid(qt uint32) error {
 	case qtIQ2_XS:
 		iq2XSGridOnce.Do(func() { iq2XSGridErr = uploadIQ2XSGrid() })
 		return iq2XSGridErr
+	case qtIQ2_S:
+		iq2SGridOnce.Do(func() { iq2SGridErr = uploadIQ2SGrid() })
+		return iq2SGridErr
 	default:
 		return backend.ErrQuantUnsupported
 	}
@@ -120,6 +125,59 @@ func uploadIQ2XSGrid() error {
 	}
 	if rc := C.mtl_iq2_grid_upload(C.int(qtIQ2_XS), (*C.float)(&grid[0]), C.int(len(grid))); rc != 0 {
 		return fmt.Errorf("metal: upload IQ2_XS grid failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func uploadIQ2SGrid() error {
+	const (
+		blocks    = 32
+		blockSize = 82
+		db        = float32(0.5) * 0.25
+	)
+	raw := make([]byte, blocks*blockSize)
+	for block := range blocks {
+		blk := raw[block*blockSize : (block+1)*blockSize]
+		//perfscan:ignore PS4001 one-time exact f16 fixture construction; avoid unsafe host-layout coupling
+		binary.LittleEndian.PutUint16(blk, 0x3c00) // f16(1)
+		for group := range 32 {
+			index := block*32 + group
+			blk[2+group] = byte(index)
+			blk[66+group/4] |= byte(index>>8) << (2 * (group % 4))
+		}
+	}
+	dequantized, err := gguf.Dequantize(raw, gguf.IQ2_S, blocks*256)
+	if err != nil {
+		return fmt.Errorf("metal: reconstruct IQ2_S grid: %w", err)
+	}
+	decoded := dequantized.Storage().F32()
+	packed := make([]uint16, 1024)
+	for block := range blocks {
+		for group := range 32 {
+			index := block*32 + group
+			base := block*256 + group*8
+			var word uint16
+			for lane := range 8 {
+				//perfscan:ignore PS5001 exact one-time oracle normalization must retain division semantics
+				gridValue := decoded[base+lane] / db
+				var code uint16
+				switch gridValue {
+				case 8:
+					code = 0
+				case 25:
+					code = 1
+				case 43:
+					code = 2
+				default:
+					return fmt.Errorf("metal: IQ2_S grid[%d][%d]=%g is outside {8,25,43}", index, lane, gridValue)
+				}
+				word |= code << (2 * lane)
+			}
+			packed[index] = word
+		}
+	}
+	if rc := C.mtl_iq2_s_grid_upload((*C.ushort)(&packed[0]), C.int(len(packed))); rc != 0 {
+		return fmt.Errorf("metal: upload IQ2_S grid failed (code %d)", int(rc))
 	}
 	return nil
 }

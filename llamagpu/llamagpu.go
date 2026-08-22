@@ -238,6 +238,9 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 21 { // GGUF IQ3_S: exact 9-bit grid blocks, recorder-only after the M2 host-route gate.
 		return metal.UploadQWeightIQ3_S(weight, n, k)
 	}
+	if qt == 22 { // GGUF IQ2_S: exact packed 10-bit grid blocks, recorder-only after the M2 host-route gate.
+		return metal.UploadQWeightIQ2_S(weight, n, k)
+	}
 	if qt == 23 { // GGUF IQ4_XS: exact 256-value nonlinear super-blocks, recorder-only on M2.
 		return metal.UploadQWeightIQ4_XS(weight, n, k)
 	}

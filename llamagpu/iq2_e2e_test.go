@@ -55,7 +55,7 @@ func llamaIQ2(m *nlp.Llama, format llamaIQ2Format) (*nlp.QuantLlama, error) {
 	return q, nil
 }
 
-// TestMetalIQ2CooperativeEndToEnd proves both IQ2 selectors are reachable from a
+// TestMetalIQ2CooperativeEndToEnd proves every IQ2 selector is reachable from a
 // complete resident decoder and measures whole-token leverage with identical output tokens.
 func TestMetalIQ2CooperativeEndToEnd(t *testing.T) {
 	if testing.Short() {
@@ -67,6 +67,7 @@ func TestMetalIQ2CooperativeEndToEnd(t *testing.T) {
 	formats := []llamaIQ2Format{
 		{"IQ2_XXS", gguf.IQ2_XXS, 66, metal.SetIQ2XXSCooperative},
 		{"IQ2_XS", gguf.IQ2_XS, 74, metal.SetIQ2XSCooperative},
+		{"IQ2_S", gguf.IQ2_S, 82, metal.SetIQ2SCooperative},
 	}
 	for _, format := range formats {
 		t.Run(format.name, func(t *testing.T) {

@@ -12,7 +12,7 @@ func TestPhi3IQ2RowSlicingPreservesCompressedBytes(t *testing.T) {
 		name       string
 		qt         gguf.QuantType
 		blockBytes int
-	}{{"IQ2_XXS", gguf.IQ2_XXS, 66}, {"IQ2_XS", gguf.IQ2_XS, 74}} {
+	}{{"IQ2_XXS", gguf.IQ2_XXS, 66}, {"IQ2_XS", gguf.IQ2_XS, 74}, {"IQ2_S", gguf.IQ2_S, 82}} {
 		t.Run(tc.name, func(t *testing.T) {
 			blockElems, err := ggBlockElems(uint32(tc.qt))
 			if err != nil {

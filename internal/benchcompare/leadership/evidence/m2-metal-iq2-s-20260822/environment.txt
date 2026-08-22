@@ -1,0 +1,17 @@
+go version go1.26.6 darwin/arm64
+ProductName:		macOS
+ProductVersion:		26.5.1
+BuildVersion:		25F80
+arm64
+spectackle v0.10.0
+sysctl: sysctl fmt -1 1024 1: Operation not permitted
+Graphics/Displays:
+
+    Apple M2 Pro:
+
+      Chipset Model: Apple M2 Pro
+      Type: GPU
+      Bus: Built-In
+      Total Number of Cores: 19
+      Vendor: Apple (0x106b)
+      Metal: Supported

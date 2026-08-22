@@ -24,6 +24,9 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 	} else if qt == gguf.IQ2_XS {
 		blocks = shape.Numel() / 256
 		blockBytes = 74
+	} else if qt == gguf.IQ2_S {
+		blocks = shape.Numel() / 256
+		blockBytes = 82
 	} else if qt == gguf.IQ3_XXS {
 		blocks = shape.Numel() / 256
 		blockBytes = 98
@@ -67,7 +70,7 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 		} else if qt == gguf.Q4_1 {
 			binary.LittleEndian.PutUint16(raw[base+2:], 0) // f16 m=0
 			start = 4
-		} else if qt == gguf.IQ2_XXS || qt == gguf.IQ2_XS || qt == gguf.IQ3_XXS || qt == gguf.IQ3_S || qt == gguf.IQ1_S {
+		} else if qt == gguf.IQ2_XXS || qt == gguf.IQ2_XS || qt == gguf.IQ2_S || qt == gguf.IQ3_XXS || qt == gguf.IQ3_S || qt == gguf.IQ1_S {
 			binary.LittleEndian.PutUint16(raw[base:], 0x1000) // small f16 d
 		}
 		for i := start; i < blockBytes; i++ {
@@ -104,7 +107,7 @@ func TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		qt   gguf.QuantType
-	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ1_S", gguf.IQ1_S}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ4_XS", gguf.IQ4_XS}, {"IQ1_M", gguf.IQ1_M}} {
+	}{{"Q4_1", gguf.Q4_1}, {"IQ2_XXS", gguf.IQ2_XXS}, {"IQ2_XS", gguf.IQ2_XS}, {"IQ3_XXS", gguf.IQ3_XXS}, {"IQ1_S", gguf.IQ1_S}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ3_S", gguf.IQ3_S}, {"IQ2_S", gguf.IQ2_S}, {"IQ4_XS", gguf.IQ4_XS}, {"IQ1_M", gguf.IQ1_M}} {
 		t.Run(tc.name, func(t *testing.T) {
 			qt := tc.qt
 			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))

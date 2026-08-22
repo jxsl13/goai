@@ -266,3 +266,24 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-IQ1-HOST-ROUTE-001
 IF either IQ1 format fails to beat fused ARM64 CPU by 1.10 times in any required host cell or campaign, THEN the generic synchronous Metal quant dispatcher SHALL retain CPU fallback for that format.
+
+## METAL-IQ2S-BLOCK-001
+WHEN a GGUF wire type 22 IQ2_S super-block is decoded, the Metal IQ2_S decoder SHALL decode each 82-byte block as one f16 scale, thirty-two 10-bit grid indices, thirty-two direct sign bytes, and sixteen four-bit sub-scales, producing exactly 256 values.
+
+## METAL-IQ2S-GRID-RESIDENCY-001
+WHEN wire type 22 is first used, the Metal IQ2 runtime SHALL reconstruct the exact 1024-by-8 grid once through gguf.Dequantize and retain one immutable 2 KiB process-lifetime buffer.
+
+## METAL-IQ2S-NUMERIC-001
+WHEN valid IQ2_S matrix multiplication executes, the Metal IQ2_S backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and mutate zero activation or compressed-weight bytes.
+
+## METAL-IQ2S-DISPATCH-001
+WHEN direct, resident, or recorder IQ2_S dispatch selects a pipeline, the Metal IQ2_S backend SHALL select exactly one scalar or cooperative pipeline through one shared predicate and bind the persistent grid at buffer index 4.
+
+## METAL-IQ2S-FALLBACK-001
+WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal IQ2_S selector SHALL dispatch the scalar pipeline and issue zero cooperative IQ2_S threadgroups.
+
+## METAL-IQ2S-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token IQ2_S shape, the cooperative IQ2_S route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-IQ2S-HOST-ROUTE-001
+IF direct host-bound IQ2_S fails to beat fused ARM64 CPU by 1.10 times in any required cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve the fused ARM64 CPU route.

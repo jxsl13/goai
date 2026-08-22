@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalIQ2CooperativeCampaign/IQ2_S/kv-12      	       7	  11420875 ns/op	     17807 cooperative-gpu-ns/op	         6.923 cooperative-vs-scalar-wall-x	        14.39 cooperative-vs-scalar-x	     40653 cooperative-wall-ns/op	    109209 cpu-wall-ns/op	         2.686 metal-vs-cpu-wall-x	    256222 scalar-gpu-ns/op	    281438 scalar-wall-ns/op	         1.091 unchanged-control-x
+BenchmarkMetalIQ2CooperativeCampaign/IQ2_S/square-12  	       7	  17093952 ns/op	     35140 cooperative-gpu-ns/op	         6.071 cooperative-vs-scalar-wall-x	        10.51 cooperative-vs-scalar-x	     66115 cooperative-wall-ns/op	    198889 cpu-wall-ns/op	         3.008 metal-vs-cpu-wall-x	    369465 scalar-gpu-ns/op	    401368 scalar-wall-ns/op	         1.001 unchanged-control-x
+BenchmarkMetalIQ2CooperativeCampaign/IQ2_S/gate-12    	       7	  21543863 ns/op	     83270 cooperative-gpu-ns/op	         3.605 cooperative-vs-scalar-wall-x	         4.488 cooperative-vs-scalar-x	    110771 cooperative-wall-ns/op	    436425 cpu-wall-ns/op	         3.940 metal-vs-cpu-wall-x	    373739 scalar-gpu-ns/op	    399293 scalar-wall-ns/op	         1.001 unchanged-control-x
+BenchmarkMetalIQ2CooperativeCampaign/IQ2_S/down-12    	       7	  42589191 ns/op	     88289 cooperative-gpu-ns/op	         9.157 cooperative-vs-scalar-wall-x	        11.59 cooperative-vs-scalar-x	    114316 cooperative-wall-ns/op	    453185 cpu-wall-ns/op	         3.964 metal-vs-cpu-wall-x	   1023060 scalar-gpu-ns/op	   1046758 scalar-wall-ns/op	         1.001 unchanged-control-x
+PASS

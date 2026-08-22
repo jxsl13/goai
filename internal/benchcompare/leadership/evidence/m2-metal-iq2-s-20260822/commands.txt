@@ -1,0 +1,11 @@
+GOTOOLCHAIN=go1.26.6 go test -tags metal -c -o /private/tmp/goai-metal-iq2-s-backend.test ./backend/metal
+GOTOOLCHAIN=go1.26.6 go test -tags metal -c -o /private/tmp/goai-metal-iq2-s-llamagpu.test ./llamagpu
+GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-metal-iq2-s-nlp.test ./nlp
+/private/tmp/goai-metal-iq2-s-backend.test -test.run '^TestMetalQMatMulIQ2' -test.v -test.timeout 10m
+/private/tmp/goai-metal-iq2-s-nlp.test -test.run '^(TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants|TestPhi3IQ2RowSlicingPreservesCompressedBytes)$' -test.v -test.timeout 10m
+/private/tmp/goai-metal-iq2-s-llamagpu.test -test.run '^TestMetalUploadIQ2UsesRecorderOnlyResidentPath/IQ2_S$' -test.v -test.timeout 10m
+/private/tmp/goai-metal-iq2-s-llamagpu.test -test.run '^TestMetalIQ2CooperativeEndToEnd/IQ2_S$' -test.v -test.timeout 20m
+/private/tmp/goai-metal-iq2-s-backend.test -test.run '^$' -test.bench '^BenchmarkMetalIQ2CooperativeCampaign/IQ2_S' -test.benchtime=7x -test.count=1 -test.timeout 20m
+/private/tmp/goai-metal-iq2-s-backend.test -test.run '^$' -test.bench '^BenchmarkMetalIQ2HostRouteCampaign/IQ2_S' -test.benchtime=7x -test.count=1 -test.timeout 20m
+GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan/perfscan@v1.71.0 -config internal/perfscan/perfscan.json -baseline /private/tmp/goai-iq2-s-affected-prod.yaml ./backend/metal ./nlp ./llamagpu
+GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan/perfscan@v1.71.0 -config internal/perfscan/perfscan.json -tests -baseline /private/tmp/goai-iq2-s-affected-tests.yaml ./backend/metal ./nlp ./llamagpu

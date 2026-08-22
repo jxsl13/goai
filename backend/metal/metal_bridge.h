@@ -141,10 +141,16 @@ int mtl_qmatmul_iq4_xs(const float* X, const unsigned char* W, float* O, int M, 
 // immutable Metal buffer. qtype 16 expects 256x8 floats; qtype 17 expects 512x8 floats.
 int mtl_iq2_grid_upload(int qtype, const float* grid, int count);
 
-// Native exact-grid IQ2 matmuls over GGUF type-16 (66-byte IQ2_XXS blocks) and type-17
-// (74-byte IQ2_XS blocks). K must be a positive multiple of 256.
+// mtl_iq2_s_grid_upload copies the exact 1024x8 IQ2_S codebook into one
+// process-lifetime Metal buffer, packed as one uint16 per eight-value row.
+int mtl_iq2_s_grid_upload(const unsigned short* grid, int count);
+
+// Native exact-grid IQ2 matmuls over GGUF type-16 (66-byte IQ2_XXS blocks), type-17
+// (74-byte IQ2_XS blocks), and type-22 (82-byte IQ2_S blocks). K must be a
+// positive multiple of 256.
 int mtl_qmatmul_iq2_xxs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 int mtl_qmatmul_iq2_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+int mtl_qmatmul_iq2_s(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
 // mtl_iq1_grid_upload copies the shared exact 2048x8 ternary codebook into one
 // process-lifetime Metal buffer, packed as one uint16 per eight-value grid row.
@@ -184,6 +190,7 @@ int mtl_iq4_nl_cooperative_set(int on);
 int mtl_iq4_xs_cooperative_set(int on);
 int mtl_iq2_xxs_cooperative_set(int on);
 int mtl_iq2_xs_cooperative_set(int on);
+int mtl_iq2_s_cooperative_set(int on);
 int mtl_iq1_s_cooperative_set(int on);
 int mtl_iq1_m_cooperative_set(int on);
 int mtl_iq3_xxs_cooperative_set(int on);
