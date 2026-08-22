@@ -3911,6 +3911,7 @@ kind: task
 state: draft
 created: 2026-08-22
 parent: P-01M0MCJGS5F459EZNA0QYG4H1K
+grilled: 2026-08-22 open=4
 targets: go:nlp.quantMatMulSupported, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go
 
 Add exact IQ4_NL direct and resident Metal dispatch, a scalar correctness control, and an M1 SIMD-group cooperative candidate. Admit wire types 3 and 20 through the real quantized-GGUF loader only where gguf.QMatMul semantics already exist. Route host-bound IQ4_NL to CPU unless equal-boundary M2 campaigns clear 1.10x. Add cross-reference, class, immutability, validation, recorder, loader, and whole-model tests. Run three fresh-process count-seven resident campaigns with multiple distinct weights, external perfscan from github.com/jxsl13/perfscan/perfscan@v1.71.0 via GOPROXY=direct, Go 1.26.6 preflights, and commit raw evidence.
