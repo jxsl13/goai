@@ -1,0 +1,28 @@
+External perfscan exact-base ratchet
+====================================
+
+Module: github.com/jxsl13/perfscan/perfscan@v1.71.0
+Origin: 034aa07bcafdbf8dd1e3e475680827804f5c62b1
+Resolution: GOPROXY=direct, GONOSUMDB=github.com/jxsl13/perfscan
+Base: a3a55ab7d087d5bbb063c5d06cca8b2f66fa1ded
+Packages: ./backend/metal ./nlp ./llamagpu
+
+Production scan:
+  base findings:      778
+  candidate findings: 778
+  per-rule multiset:  identical
+  IQ3 findings:       0
+
+Test-inclusive scan:
+  base findings:      1811
+  candidate findings: 1811
+  per-rule multiset:  identical
+  IQ3 findings:       0
+
+The external v1.71.0 parser warns about eleven keys introduced by GoAI's newer internal config
+schema. Those warnings are identical on base and candidate. This evidence is an exact ratchet for
+the external analyzer's supported rule set, not a claim that v1.71.0 understands the newer keys.
+
+Initial candidate-only advisory findings in one-time synthetic codebook construction were reviewed.
+Unsafe same-layout host copies and non-bit-identical reciprocal normalization were rejected. Narrow
+documented suppressions retain exact little-endian oracle construction; the final scans match base.

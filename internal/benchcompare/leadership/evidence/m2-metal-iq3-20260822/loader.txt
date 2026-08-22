@@ -1,0 +1,13 @@
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q4_1
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_XXS
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_NL
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_S
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_XS
+--- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants (0.02s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/Q4_1 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_XXS (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_NL (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ3_S (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernReadOnlyQuants/IQ4_XS (0.00s)
+PASS

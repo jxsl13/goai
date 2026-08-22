@@ -1,0 +1,11 @@
+date=2026-08-22
+hardware=Apple M2 Pro
+cpu_cores=12
+unified_memory_gib=32
+os=macOS 26.5.1 (25F80)
+arch=darwin/arm64
+go=go1.26.6
+spectackle=0.10.0
+base=a3a55ab7d087d5bbb063c5d06cca8b2f66fa1ded
+perfscan_module=github.com/jxsl13/perfscan/perfscan@v1.71.0
+perfscan_origin=034aa07bcafdbf8dd1e3e475680827804f5c62b1

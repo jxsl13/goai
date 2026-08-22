@@ -1,0 +1,55 @@
+=== RUN   TestMetalQMatMulIQ3CrossReference
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_XXS
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 6.998e-07
+    iq3_test.go:111: maximum relative difference 3.751e-06
+    iq3_test.go:111: maximum relative difference 1.150e-05
+    iq3_test.go:111: maximum relative difference 5.991e-06
+=== RUN   TestMetalQMatMulIQ3CrossReference/IQ3_S
+    iq3_test.go:111: maximum relative difference 0.000e+00
+    iq3_test.go:111: maximum relative difference 1.315e-07
+    iq3_test.go:111: maximum relative difference 1.566e-05
+    iq3_test.go:111: maximum relative difference 1.184e-06
+    iq3_test.go:111: maximum relative difference 1.725e-06
+--- PASS: TestMetalQMatMulIQ3CrossReference (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_XXS (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CrossReference/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS
+    iq3_test.go:140: maximum relative difference 1.076e-07
+    iq3_test.go:140: maximum relative difference 1.545e-06
+    iq3_test.go:140: maximum relative difference 7.106e-06
+    iq3_test.go:140: maximum relative difference 2.628e-07
+    iq3_test.go:140: maximum relative difference 2.373e-05
+=== RUN   TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S
+    iq3_test.go:140: maximum relative difference 0.000e+00
+    iq3_test.go:140: maximum relative difference 1.297e-06
+    iq3_test.go:140: maximum relative difference 3.113e-06
+    iq3_test.go:140: maximum relative difference 1.574e-06
+    iq3_test.go:140: maximum relative difference 5.682e-06
+--- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_XXS (0.01s)
+    --- PASS: TestMetalQMatMulIQ3CooperativeMatchesScalar/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS
+=== RUN   TestMetalQMatMulIQ3FloatingPointClass/IQ3_S
+--- PASS: TestMetalQMatMulIQ3FloatingPointClass (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3FloatingPointClass/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS
+    iq3_test.go:192: maximum relative difference 6.998e-07
+=== RUN   TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S
+    iq3_test.go:192: maximum relative difference 1.315e-07
+--- PASS: TestMetalQMatMulIQ3DispatchAndValidation (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3DispatchAndValidation/IQ3_S (0.00s)
+=== RUN   TestMetalQMatMulIQ3RecorderResident
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_XXS
+    iq3_test.go:254: maximum relative difference 8.326e-07
+=== RUN   TestMetalQMatMulIQ3RecorderResident/IQ3_S
+    iq3_test.go:254: maximum relative difference 2.866e-07
+--- PASS: TestMetalQMatMulIQ3RecorderResident (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_XXS (0.00s)
+    --- PASS: TestMetalQMatMulIQ3RecorderResident/IQ3_S (0.00s)
+PASS

@@ -1,0 +1,7 @@
+=== RUN   TestMetalUploadIQ3UsesRecorderOnlyResidentPath
+=== RUN   TestMetalUploadIQ3UsesRecorderOnlyResidentPath/IQ3_XXS
+=== RUN   TestMetalUploadIQ3UsesRecorderOnlyResidentPath/IQ3_S
+--- PASS: TestMetalUploadIQ3UsesRecorderOnlyResidentPath (0.00s)
+    --- PASS: TestMetalUploadIQ3UsesRecorderOnlyResidentPath/IQ3_XXS (0.00s)
+    --- PASS: TestMetalUploadIQ3UsesRecorderOnlyResidentPath/IQ3_S (0.00s)
+PASS
