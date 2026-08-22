@@ -52,3 +52,20 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0N4TXJQE4NTD97E585SHFTP Measure production-shape M2 Q6_K roofline and geometry leverage
+kind: research
+state: active
+created: 2026-08-22
+targets: backend/metal/q4k_roofline_bench_test.go, msl:qmatmul_q6k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul
+
+Q6_K accounts for about 16 percent of profiled TinyLlama decode GPU time while the current cooperative kernel uses two output rows per SIMD group and two SIMD groups per threadgroup. Establish GPUStartTime-to-GPUEndTime throughput at the production 2048x2048, 2048x5632, and 5632x2048 shapes plus a cache-busting shape. Compare current weight-byte bandwidth against the retained Q4_K roofline before nominating a distinct rows-per-SIMD or threadgroup-geometry experiment. This does not repeat the rejected aligned ushort packed-load candidate.
+
+## P-01M0N4ZCJ1FRNT7FDZ03P1BN4W Increase M2 Q6_K memory-level parallelism with rows-per-SIMD specialization
+kind: proposal
+state: active
+created: 2026-08-22
+refs: R-01M0N4TXJQE4NTD97E585SHFTP
+targets: msl:qmatmul_q6k_cooperative, objc:metal_bridge.ensure_qmatmul_q6k, objc:metal_bridge.mtl_recorder_qmatmul, backend/metal/q6k_roofline_bench_test.go
+
+GPU-timestamp roofline measurements on Apple M2 Pro put the current Q6_K cooperative kernel at 191.3 GB/s for K2048 N2048, 214.6 GB/s for K2048 N5632, 208.0 GB/s for K5632 N2048, but only 157.0 GB/s for a cache-busting K2048 N131072 stream. The retained Q4_K cache-busting result is about 185 GB/s. The Q6_K kernel presently assigns two output rows to each SIMD group, retaining two accumulators and serially consuming two independent weight rows while reusing a small activation tile. Specialize otherwise identical one-, two-, and four-row variants and compare them in one binary. The candidate changes output-row parallelism and register pressure only; it must not repeat the rejected aligned ushort packed-load transform. Promote only a geometry that preserves exact route scope and 2e-5 numerical parity and reaches at least 1.10x control in every representative production cell across three count-seven alternating campaigns, with a cache-busting roofline improvement corroborating the mechanism.
