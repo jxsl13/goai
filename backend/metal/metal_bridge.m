@@ -510,12 +510,44 @@ static NSString* const kRoPEF16KVAppendSource =
      "    return;\n"
      "  }\n"
      "  int col=((int)gid-pairWork)*2, dst=cacheOff+col;\n"
-     "  if (col+1<kvDim) *((device half2*)(VCache+dst))=half2(V[col],V[col+1]);\n"
+     "  if (col+1<kvDim && (dst&1)==0) *((device half2*)(VCache+dst))=half2(V[col],V[col+1]);\n"
+     "  else if (col+1<kvDim) { VCache[dst]=half(V[col]); VCache[dst+1]=half(V[col+1]); }\n"
      "  else VCache[dst]=half(V[col]);\n"
+     "}\n"
+     "kernel void rope_pair_f16kv_append(device float* QKV [[buffer(0)]],\n"
+     "                                     device const float* INV [[buffer(1)]],\n"
+     "                                     device half* KCache [[buffer(2)]],\n"
+     "                                     device half* VCache [[buffer(3)]],\n"
+     "                                     constant int* P [[buffer(4)]],\n"
+     "                                     constant float* F [[buffer(5)]],\n"
+     "                                     uint gid [[thread_position_in_grid]]) {\n"
+     "  int stride=P[0], headsQ=P[1], offQ=P[2], headsK=P[3], offK=P[4];\n"
+     "  int hd=P[5], halfd=P[6], vOff=P[7], vDim=P[8], posOffset=P[9], cacheOff=P[10];\n"
+     "  int pairWork=(headsQ+headsK)*halfd, vPairs=(vDim+1)/2;\n"
+     "  int total=pairWork+vPairs; if ((int)gid>=total) return;\n"
+     "  if ((int)gid<pairWork) {\n"
+     "    int h=(int)gid/halfd, i=(int)gid-h*halfd; bool isQ=h<headsQ;\n"
+     "    int localH=isQ?h:(h-headsQ);\n"
+     "    int base=(isQ?offQ:offK)+localH*hd+i;\n"
+     "    float pos=float(posOffset)/F[0];\n"
+     "    float theta=INV[i];\n"
+     "    float c=cos(pos*theta), s=sin(pos*theta);\n"
+     "    float x=QKV[base], xh=QKV[base+halfd];\n"
+     "    float y=x*c-xh*s, yh=xh*c+x*s;\n"
+     "    QKV[base]=y; QKV[base+halfd]=yh;\n"
+     "    if (!isQ) { int dst=cacheOff+localH*hd+i; KCache[dst]=half(y); KCache[dst+halfd]=half(yh); }\n"
+     "    return;\n"
+     "  }\n"
+     "  int col=((int)gid-pairWork)*2, src=vOff+col, dst=cacheOff+col;\n"
+     "  if (col+1<vDim && (dst&1)==0) *((device half2*)(VCache+dst))=half2(QKV[src],QKV[src+1]);\n"
+     "  else if (col+1<vDim) { VCache[dst]=half(QKV[src]); VCache[dst+1]=half(QKV[src+1]); }\n"
+     "  else VCache[dst]=half(QKV[src]);\n"
+     "  (void)stride;\n"
      "}\n";
 
 static id<MTLComputePipelineState> gRoPEF16KVAppend = nil;
-static int gRoPEF16KVAppendEnabled = 0;
+static id<MTLComputePipelineState> gRoPEPairF16KVAppend = nil;
+static int gRoPEF16KVAppendEnabled = 1;
 
 int mtl_rope_f16kv_append_set(int on) {
     int old = gRoPEF16KVAppendEnabled;
@@ -524,14 +556,16 @@ int mtl_rope_f16kv_append_set(int on) {
 }
 
 static int ensure_rope_f16kv_append(void) {
-    if (gRoPEF16KVAppend != nil) return 0;
+    if (gRoPEF16KVAppend != nil && gRoPEPairF16KVAppend != nil) return 0;
     NSError* err = nil;
     id<MTLLibrary> lib = [gDevice newLibraryWithSource:kRoPEF16KVAppendSource options:nil error:&err];
     if (lib == nil) return -6;
     id<MTLFunction> fn = [lib newFunctionWithName:@"rope_f16kv_append"];
-    if (fn == nil) return -6;
+    id<MTLFunction> pair = [lib newFunctionWithName:@"rope_pair_f16kv_append"];
+    if (fn == nil || pair == nil) return -6;
     gRoPEF16KVAppend = [gDevice newComputePipelineStateWithFunction:fn error:&err];
-    return gRoPEF16KVAppend != nil ? 0 : -6;
+    gRoPEPairF16KVAppend = [gDevice newComputePipelineStateWithFunction:pair error:&err];
+    return (gRoPEF16KVAppend != nil && gRoPEPairF16KVAppend != nil) ? 0 : -6;
 }
 
 int mtl_recorder_rope_f16kv_append(void* rec,
@@ -567,6 +601,42 @@ int mtl_recorder_rope_f16kv_append(void* rec,
     [enc setBytes:P length:sizeof(P) atIndex:6];
     [enc setBytes:F length:sizeof(F) atIndex:7];
     NSUInteger tg = gRoPEF16KVAppend.maxTotalThreadsPerThreadgroup;
+    if (total < tg) tg = total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    [enc endEncoding];
+    return 0;
+}
+
+int mtl_recorder_rope_pair_f16kv_append(void* rec,
+                                        void* qkvh, void* invh, void* kCacheH, void* vCacheH,
+                                        int stride, int headsQ, int offQ, int headsK, int offK,
+                                        int hd, int half, int vOff, int vDim,
+                                        int pos, int cacheOff, float posDiv) {
+    if (rec == NULL || qkvh == NULL || invh == NULL || kCacheH == NULL || vCacheH == NULL ||
+        stride < 1 || headsQ < 1 || headsK < 1 || hd != 64 || half != hd/2 ||
+        vDim != headsK*hd || offQ < 0 || offK < 0 || vOff < 0 ||
+        pos < 0 || cacheOff < 0 || posDiv == 0.0f) return -2;
+    if (!gRoPEF16KVAppendEnabled) {
+        int rc = mtl_recorder_rope2(
+            rec, qkvh, invh, 1, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv);
+        if (rc != 0) return rc;
+        return mtl_recorder_f32_to_f16_kv_2d(
+            rec, qkvh, offK, stride, qkvh, vOff, stride,
+            kCacheH, cacheOff, vDim, vCacheH, cacheOff, vDim, 1, vDim);
+    }
+    if (ensure_rope_f16kv_append() != 0) return -6;
+    int P[11] = {stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff};
+    float F[1] = {posDiv};
+    NSUInteger total = (NSUInteger)(headsQ+headsK)*half + ((NSUInteger)vDim+1)/2;
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rope_pair.f16kv.append");
+    [enc setComputePipelineState:gRoPEPairF16KVAppend];
+    [enc setBuffer:(__bridge id<MTLBuffer>)qkvh offset:0 atIndex:0];
+    [enc setBuffer:(__bridge id<MTLBuffer>)invh offset:0 atIndex:1];
+    [enc setBuffer:(__bridge id<MTLBuffer>)kCacheH offset:0 atIndex:2];
+    [enc setBuffer:(__bridge id<MTLBuffer>)vCacheH offset:0 atIndex:3];
+    [enc setBytes:P length:sizeof(P) atIndex:4];
+    [enc setBytes:F length:sizeof(F) atIndex:5];
+    NSUInteger tg = gRoPEPairF16KVAppend.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
     [enc endEncoding];

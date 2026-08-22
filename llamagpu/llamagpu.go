@@ -90,6 +90,14 @@ func (m mRec) RoPEF16KVAppend(q, k, v, inv, kCache, vCache buffer,
 		headsQ, headsK, hd, half, pos, cacheOff, posDiv,
 	)
 }
+func (m mRec) RoPEPairF16KVAppend(qkv, inv, kCache, vCache buffer,
+	stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff int, posDiv float32,
+) error {
+	return m.r.RoPEPairF16KVAppend(
+		mb(qkv), mb(inv), mb(kCache), mb(vCache),
+		stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff, posDiv,
+	)
+}
 func (m mRec) MHA(q, k, v, o buffer, sq, sk, dm, heads, kvHeads, dk, causal, window int, scale float32) error {
 	return m.r.MHA(mb(q), mb(k), mb(v), mb(o), sq, sk, dm, heads, kvHeads, dk, causal, window, scale)
 }

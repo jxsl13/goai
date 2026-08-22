@@ -130,19 +130,24 @@ func TestMetalRoPEF16KVAppendRealModelGate(t *testing.T) {
 	if got := count(candidateLabels, "rope.f16kv.append"); got != 10 {
 		t.Fatalf("candidate fused event count=%d want 10", got)
 	}
+	if got := count(candidateLabels, "rope_pair.f16kv.append"); got != 12 {
+		t.Fatalf("candidate grouped fused event count=%d want 12", got)
+	}
 	if got := count(candidateLabels, "rope"); got != 0 {
 		t.Fatalf("candidate separate-QKV RoPE event count=%d want 0", got)
 	}
-	if got := count(candidateLabels, "kv.f32_to_f16_pair"); got != 12 {
-		t.Fatalf("candidate grouped-layer paired-copy event count=%d want 12", got)
+	if got := count(candidateLabels, "kv.f32_to_f16_pair"); got != 0 {
+		t.Fatalf("candidate paired-copy event count=%d want 0", got)
 	}
-	if got := count(candidateLabels, "rope_pair"); got != 12 {
-		t.Fatalf("candidate grouped-QKV RoPE event count=%d want 12", got)
+	if got := count(candidateLabels, "rope_pair"); got != 0 {
+		t.Fatalf("candidate grouped-QKV RoPE event count=%d want 0", got)
 	}
-	if got := len(controlLabels) - len(candidateLabels); got != 20 {
-		t.Fatalf("profile event reduction=%d want exactly 20", got)
+	if got := len(controlLabels) - len(candidateLabels); got != 32 {
+		t.Fatalf("profile event reduction=%d want exactly 32", got)
 	}
-	if slices.Equal(controlLabels, candidateLabels) || !strings.Contains(strings.Join(candidateLabels, ","), "rope.f16kv.append") {
+	joinedCandidate := strings.Join(candidateLabels, ",")
+	if slices.Equal(controlLabels, candidateLabels) || !strings.Contains(joinedCandidate, "rope.f16kv.append") ||
+		!strings.Contains(joinedCandidate, "rope_pair.f16kv.append") {
 		t.Fatal("profile did not prove distinct candidate routing")
 	}
 

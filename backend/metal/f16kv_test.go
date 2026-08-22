@@ -180,6 +180,185 @@ func TestRoPEF16KVAppendExactParityAndCacheBounds(t *testing.T) {
 	}
 }
 
+func runRoPEPairF16KVAppend(t *testing.T, fused bool, pos int, qkv, inv []float32,
+	stride, offQ, offK, vOff int,
+) ropeF16KVAppendResult {
+	t.Helper()
+	const (
+		headsQ = f16KVHeads
+		headsK = f16KVKVHeads
+		hd     = f16KVDK
+		half   = hd / 2
+		kvDim  = f16KVWidth
+	)
+	mustF32 := func(data []float32) *DeviceBuffer {
+		b, err := NewDeviceBufferF32(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(b.Release)
+		return b
+	}
+	mustF16 := func(n int) *DeviceBuffer {
+		b, err := NewDeviceBufferF16Zeros(n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(b.Release)
+		return b
+	}
+	qkvb, ib := mustF32(qkv), mustF32(inv)
+	cacheLen := (pos + 2) * kvDim
+	kc, vc := mustF16(cacheLen), mustF16(cacheLen)
+	kSentinel, vSentinel := make([]float32, cacheLen), make([]float32, cacheLen)
+	for i := range cacheLen {
+		kSentinel[i], vSentinel[i] = 0.375, -0.625
+	}
+	ks, vs := mustF32(kSentinel), mustF32(vSentinel)
+	initRec, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = initRec.CopyF32ToF16(ks, 0, kc, 0, cacheLen); err == nil {
+		err = initRec.CopyF32ToF16(vs, 0, vc, 0, cacheLen)
+	}
+	if err == nil {
+		err = initRec.Finish()
+	}
+	initRec.Free()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := SetRoPEF16KVAppend(fused)
+	t.Cleanup(func() { SetRoPEF16KVAppend(previous) })
+	r, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.RoPEPairF16KVAppend(qkvb, ib, kc, vc, stride, headsQ, offQ, headsK, offK, hd, half, vOff, kvDim, pos, pos*kvDim, 1); err == nil {
+		err = r.Finish()
+	}
+	r.Free()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ropeF16KVAppendResult{
+		q: make([]float32, len(qkv)), inv: make([]float32, len(inv)),
+		kCache: make([]uint16, cacheLen), vCache: make([]uint16, cacheLen),
+	}
+	for _, download := range []func() error{
+		func() error { return qkvb.DownloadF32(got.q) },
+		func() error { return ib.DownloadF32(got.inv) },
+		func() error { return kc.downloadF16Bits(got.kCache) },
+		func() error { return vc.downloadF16Bits(got.vCache) },
+	} {
+		if err := download(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return got
+}
+
+func TestRoPEPairF16KVAppendExactParityAndCacheBounds(t *testing.T) {
+	if !Available() {
+		t.Skip("Metal unavailable")
+	}
+	const (
+		offQ   = 5
+		offK   = offQ + f16KVDim + 3
+		vOff   = offK + f16KVWidth + 5
+		stride = vOff + f16KVWidth + 7
+	)
+	qkv, inv := make([]float32, stride), make([]float32, f16KVDK/2)
+	for i := range qkv {
+		qkv[i] = float32(math.Sin(float64(i+11) * 0.017))
+	}
+	for i := range inv {
+		inv[i] = float32(math.Pow(10000, -2*float64(i)/f16KVDK))
+	}
+	qkv[offQ+17], qkv[offK+41], qkv[vOff+73] = float32(math.Inf(1)), float32(math.Inf(-1)), math.Float32frombits(0x7fc12345)
+	for _, pos := range []int{0, 1, 127} {
+		t.Run(fmt.Sprintf("pos%d", pos), func(t *testing.T) {
+			control := runRoPEPairF16KVAppend(t, false, pos, qkv, inv, stride, offQ, offK, vOff)
+			candidate := runRoPEPairF16KVAppend(t, true, pos, qkv, inv, stride, offQ, offK, vOff)
+			if !f32BitsEqual(candidate.q, control.q) {
+				t.Fatal("grouped fused QKV float32 state differs bitwise from control")
+			}
+			if !reflect.DeepEqual(candidate.kCache, control.kCache) || !reflect.DeepEqual(candidate.vCache, control.vCache) {
+				t.Fatal("grouped fused K/V cache differs bitwise from control")
+			}
+			if !f32BitsEqual(candidate.inv, inv) {
+				t.Fatal("grouped fusion mutated inverse-frequency input")
+			}
+			lo, hi := pos*f16KVWidth, (pos+1)*f16KVWidth
+			for i := range candidate.kCache {
+				if i >= lo && i < hi {
+					continue
+				}
+				if candidate.kCache[i] != 0x3600 || candidate.vCache[i] != 0xb900 {
+					t.Fatalf("grouped cache sentinel changed at %d: K=%#04x V=%#04x", i, candidate.kCache[i], candidate.vCache[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRoPEPairF16KVAppendProfileProvesDistinctToggleArms(t *testing.T) {
+	if !Available() || !RecorderProfilingAvailable() {
+		t.Skip("Metal timestamp profiling unavailable")
+	}
+	const stride = f16KVDim + 2*f16KVWidth
+	for _, tc := range []struct {
+		name   string
+		fused  bool
+		labels []string
+	}{
+		{name: "control", labels: []string{"rope_pair", "kv.f32_to_f16_pair"}},
+		{name: "candidate", fused: true, labels: []string{"rope_pair.f16kv.append"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			qkv, err := NewDeviceBufferF32(make([]float32, stride))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer qkv.Release()
+			inv, err := NewDeviceBufferF32(make([]float32, f16KVDK/2))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer inv.Release()
+			kc, _ := NewDeviceBufferF16Zeros(f16KVWidth)
+			vc, _ := NewDeviceBufferF16Zeros(f16KVWidth)
+			defer kc.Release()
+			defer vc.Release()
+			previous := SetRoPEF16KVAppend(tc.fused)
+			defer SetRoPEF16KVAppend(previous)
+			r, err := NewProfilingRecorder(3)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer r.Free()
+			if err := r.RoPEPairF16KVAppend(qkv, inv, kc, vc, stride, f16KVHeads, 0, f16KVKVHeads, f16KVDim, f16KVDK, f16KVDK/2, f16KVDim+f16KVWidth, f16KVWidth, 0, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Finish(); err != nil {
+				t.Fatal(err)
+			}
+			profile, err := r.Profile()
+			if err != nil {
+				t.Fatal(err)
+			}
+			labels := make([]string, len(profile.Events))
+			for i := range profile.Events {
+				labels[i] = profile.Events[i].Label
+			}
+			if !reflect.DeepEqual(labels, tc.labels) {
+				t.Fatalf("profile labels=%v want %v", labels, tc.labels)
+			}
+		})
+	}
+}
+
 func TestRoPEF16KVAppendProfileProvesDistinctToggleArms(t *testing.T) {
 	if !Available() || !RecorderProfilingAvailable() {
 		t.Skip("Metal timestamp profiling unavailable")

@@ -124,6 +124,14 @@ type ropePairSplitRecorder interface {
 	) error
 }
 
+// ropePairF16KVAppendRecorder is the grouped-QKV counterpart of ropeF16KVAppendRecorder. It keeps
+// Q/K in the combined projection row while appending its K/V bands directly into half caches.
+type ropePairF16KVAppendRecorder interface {
+	RoPEPairF16KVAppend(qkv, inv, kCache, vCache buffer,
+		stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff int, posDiv float32,
+	) error
+}
+
 // linear records o[m,N] = x[m,K]·W for one projection — either an f32 device weight (MatMul) or a
 // resident quantized weight (QMatMulResident). This is what lets ONE Decoder core serve both the
 // f32 and the quantized model (§T415).
@@ -3251,10 +3259,20 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 			qBuf = d.qkv.b
 			e = firstErr(
 				d.recordQKVProj(r, b, 1),
-				d.recordQKNorm(r, b, 1, D+2*kvDim),                // per-head QK-norm (Qwen3); no-op otherwise
-				d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
-				d.recordKVPairBlit(r, d.qkv.b, D, d.qkv.b, D+kvDim, b.kC, b.vC, pos*kvDim, kvDim),
+				d.recordQKNorm(r, b, 1, D+2*kvDim), // per-head QK-norm (Qwen3); no-op otherwise
 			)
+			if fr, ok := r.(ropePairF16KVAppendRecorder); e == nil && ok && d.f16KV &&
+				!d.noRope && d.rotaryDim == dk && dk == 64 {
+				e = fr.RoPEPairF16KVAppend(
+					d.qkv.b, d.dinv.b, b.kC, b.vC, D+2*kvDim,
+					H, 0, KVH, D, dk, d.half, D+kvDim, kvDim, pos, pos*kvDim, d.posDiv,
+				)
+			} else if e == nil {
+				e = firstErr(
+					d.ropeQK(r, d.qkv.b, d.dinv.b, 1, D+2*kvDim, pos), // q+k bands, ONE dispatch (§T613); full ∨ partial rotary
+					d.recordKVPairBlit(r, d.qkv.b, D, d.qkv.b, D+kvDim, b.kC, b.vC, pos*kvDim, kvDim),
+				)
+			}
 		} else if e == nil {
 			e = firstErr(
 				b.wq.record(r, d.xn.b, d.q.b, 1),

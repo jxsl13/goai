@@ -3426,9 +3426,9 @@ func (r *Recorder) Copy2DF32ToF16Pair(
 	return nil
 }
 
-// SetRoPEF16KVAppend selects the one-dispatch RoPE plus binary16 cache append candidate and
-// returns the previous setting. It is an A/B measurement hook; ineligible decoder routes never
-// call the fused boundary regardless of this setting.
+// SetRoPEF16KVAppend selects the one-dispatch RoPE plus binary16 cache append path (enabled by
+// default) and returns the previous setting. It is an A/B measurement hook; ineligible decoder
+// routes never call the fused boundary regardless of this setting.
 func SetRoPEF16KVAppend(on bool) bool {
 	return C.mtl_rope_f16kv_append_set(boolToCInt(on)) == 1
 }
@@ -3458,6 +3458,36 @@ func (r *Recorder) RoPEF16KVAppend(
 	)
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder RoPE/f16-KV append failed (%d)", int(rc))
+	}
+	return nil
+}
+
+// RoPEPairF16KVAppend is RoPEF16KVAppend for one grouped QKV projection row. Q and K remain
+// rotated in place at their band offsets; the K/V bands also land directly in binary16 cache.
+func (r *Recorder) RoPEPairF16KVAppend(
+	qkv, inv, kCache, vCache *DeviceBuffer,
+	stride, headsQ, offQ, headsK, offK, hd, half, vOff, vDim, pos, cacheOff int, posDiv float32,
+) error {
+	if qkv.bytes != 4 || inv.bytes != 4 || kCache.bytes != 2 || vCache.bytes != 2 {
+		return fmt.Errorf("metal: Recorder grouped RoPE/f16-KV append requires f32 QKV/inv and f16 caches, got %d/%d/%d/%d-byte elements",
+			qkv.bytes, inv.bytes, kCache.bytes, vCache.bytes)
+	}
+	qDim, kvDim := headsQ*hd, headsK*hd
+	if stride < 1 || headsQ < 1 || headsK < 1 || headsQ%headsK != 0 || hd != 64 ||
+		half != hd/2 || vDim != kvDim || offQ < 0 || offK < 0 || vOff < 0 || pos < 0 ||
+		cacheOff < 0 || posDiv == 0 || qkv.n < stride || inv.n < half ||
+		offQ+qDim > stride || offK+kvDim > stride || vOff+vDim > stride ||
+		kCache.n < cacheOff+kvDim || vCache.n < cacheOff+vDim {
+		return fmt.Errorf("metal: Recorder grouped RoPE/f16-KV append shape mismatch: qkv=%d stride=%d inv=%d caches=%d/%d heads=%d/%d offsets=%d/%d/%d dims=%d/%d hd=%d half=%d pos=%d cacheOff=%d",
+			qkv.n, stride, inv.n, kCache.n, vCache.n, headsQ, headsK, offQ, offK, vOff, qDim, kvDim, hd, half, pos, cacheOff)
+	}
+	rc := C.mtl_recorder_rope_pair_f16kv_append(
+		r.handle, qkv.handle, inv.handle, kCache.handle, vCache.handle,
+		C.int(stride), C.int(headsQ), C.int(offQ), C.int(headsK), C.int(offK),
+		C.int(hd), C.int(half), C.int(vOff), C.int(vDim), C.int(pos), C.int(cacheOff), C.float(posDiv),
+	)
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder grouped RoPE/f16-KV append failed (%d)", int(rc))
 	}
 	return nil
 }

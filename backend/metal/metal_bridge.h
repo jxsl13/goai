@@ -298,6 +298,11 @@ int mtl_recorder_rope_f16kv_append(void* rec,
                                    void* kCacheH, void* vCacheH,
                                    int headsQ, int headsK, int hd, int half,
                                    int pos, int cacheOff, float posDiv);
+int mtl_recorder_rope_pair_f16kv_append(void* rec,
+                                        void* qkvh, void* invh, void* kCacheH, void* vCacheH,
+                                        int stride, int headsQ, int offQ, int headsK, int offK,
+                                        int hd, int half, int vOff, int vDim,
+                                        int pos, int cacheOff, float posDiv);
 int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N,
                         int accumulate);
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps);
