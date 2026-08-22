@@ -4006,3 +4006,12 @@ created: 2026-08-22
 targets: go:nlp.QuantLlama.DecodeStep, go:gguf.QMatMul, internal/benchcompare/prod_cpu_quant_test.go
 
 Production TinyLlama Q4_K_M CPU decode on Apple M2 Pro currently reports a median 279,642,384 allocated bytes and 296,507 allocations for 64 timed DecodeStep calls while preserving digest ea3df5516f17df83. First attribute allocations with representative active-work profiles, then implement only a narrowly owned reuse or into-style boundary whose end-to-end gain survives alternating-order measurement. Preserve exact output digest, CPU fallback behavior, context/cache semantics, and supported quant formats. Reject candidates that only move allocation accounting, retain unbounded buffers, regress median decode latency, or repeat the rejected per-call QMatMul pool experiment.
+
+## T-01M0ND3KXJFPZ91B0VM9BR6DK5 Attribute and eliminate dominant M2 CPU decode allocations
+kind: task
+state: draft
+created: 2026-08-22
+parent: P-01M0ND1PT6EMKSAX9S889TRKQ5
+targets: go:nlp.QuantLlama.DecodeStep, go:gguf.QMatMul, internal/benchcompare/prod_cpu_quant_test.go
+
+Measure representative TinyLlama Q4_K_M CPU DecodeStep allocation and CPU profiles with Go 1.26.6 and GOMAXPROCS=8. Identify retained and cumulative allocation sites before changing code. Implement the smallest reusable-buffer or into-style boundary that removes a dominant allocation source without broad API churn. Validate exact digest parity, full relevant tests, external perfscan, alternating-order end-to-end medians, bytes and allocations per 64 steps. Accept only a statistically credible latency improvement or neutral latency with a material allocation reduction and no unbounded retention; otherwise reject with preserved evidence.

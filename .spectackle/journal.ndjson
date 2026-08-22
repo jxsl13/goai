@@ -350,3 +350,4 @@
 {"t":"2026-08-22T18:52:06Z","eid":"370fe35d8bf016f3","ag":"ag-b640","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T18:52:15Z","eid":"52e4e2e87c364431","ag":"ag-6bd6","ev":"move","id":"P-01M0ND1PT6EMKSAX9S889TRKQ5","fr":"draft","to":"active"}
 {"t":"2026-08-22T18:52:16Z","eid":"854355fc50a5bf24","ag":"ag-6bd6","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T18:53:08Z","eid":"232de55e57a136e0","ag":"ag-353f","ev":"create","id":"T-01M0ND3KXJFPZ91B0VM9BR6DK5","k":"task","ti":"Attribute and eliminate dominant M2 CPU decode allocations"}
