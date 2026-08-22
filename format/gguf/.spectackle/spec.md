@@ -174,3 +174,8 @@ Rationale: The assembly leaf, numerical gates, cancellation case, known block, a
 The IQ2_XS QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The selector test injects a counting oracle and proves only contiguous F32 M1 reaches the row leaf.
+
+## IQ2S-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ2_S}
+WHEN IQ2_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the 1024-entry eight-wide grid, 10-bit low-byte-plus-qh indices, 1 direct sign byte per 8 weights, 1 four-bit scale per 16 weights, float32 d*(0.5+s)*0.25 scaling, ascending mapping, and float64 accumulation.
+
+Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ2_S optimization.
