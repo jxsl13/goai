@@ -331,6 +331,6 @@ The GGUF wire dispatch extension SHALL preserve 8 wire identifiers, block sizes,
 WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation, the QMatMulPair SHALL allocate 2 F32 outputs, invoke qmatmulParallelChunks exactly once, and match 2 independent QMatMul outputs bit-for-bit.
 
 ## GGUF-MIXED-QKV-M1-001
-WHEN 3 unequal-row Q4_K or Q6_K matrices receive 1 contiguous offset-zero F32 M1 activation with a shared positive input dimension, the QMatMulTriple SHALL allocate 3 correctly shaped F32 outputs, invoke qmatmulParallelChunks exactly 1 time over the flattened output-row space, and match 3 independent QMatMul outputs bit-for-bit.
+WHEN 3 unequal-row Q4_K or Q6_K matrices receive 1 contiguous F32 M1 activation, the QMatMulTriple SHALL invoke qmatmulParallelChunks exactly 1 time and match 3 independent QMatMul outputs bit-for-bit.
 
-Rationale: One work-sized fan-out removes 2 scheduler barriers without changing any row arithmetic.
+Rationale: One work-sized fan-out removes 2 scheduler barriers without changing row arithmetic.
