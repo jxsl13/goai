@@ -736,3 +736,4 @@
 {"t":"2026-08-22T17:06:59Z","eid":"a708724801e0b420","ag":"ag-dd25","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T17:08:13Z","eid":"0beeb3ff9300c48f","ag":"ag-9e2b","ev":"create","id":"P-01M0N73GJ6E7S8JKQRSY1RJBH2","k":"proposal","ti":"Fuse grouped M2 QKV RoPE with f16 KV append"}
 {"t":"2026-08-22T17:08:13Z","eid":"4fc02bb096b47664","ag":"ag-9e2b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T17:09:53Z","eid":"990be1a7903ec59f","ag":"ag-dca9","ev":"move","id":"P-01M0N73GJ6E7S8JKQRSY1RJBH2","fr":"draft","to":"active"}

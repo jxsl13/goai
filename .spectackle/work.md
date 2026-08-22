@@ -4019,7 +4019,7 @@ Implement an optional recorder capability and a Metal kernel for the eligible si
 
 ## P-01M0N73GJ6E7S8JKQRSY1RJBH2 Fuse grouped M2 QKV RoPE with f16 KV append
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 targets: llamagpu/decoder.go, llamagpu/llamagpu.go, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/f16kv_test.go, llamagpu/rope_f16kv_append_realmodel_test.go
 
