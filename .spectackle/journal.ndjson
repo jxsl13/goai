@@ -517,3 +517,4 @@
 {"t":"2026-08-22T11:01:49Z","eid":"1cb608ec3ac4823c","ag":"ag-04c4","ev":"create","id":"ADR-01M0MJ4KTREPXRNG4NX30VMAF5","k":"adr","ti":"Should the M2 Metal IQ3 tranche implement IQ3_S and IQ3_XXS together behind shared codebook residency, or split them into separate changes?"}
 {"t":"2026-08-22T11:01:49Z","eid":"6e5f691ab5279f64","ag":"ag-04c4","ev":"move","id":"ADR-01M0MJ4KTREPXRNG4NX30VMAF5","fr":"draft","to":"submitted"}
 {"t":"2026-08-22T11:02:25Z","eid":"6ec9b37f63b6eaa5","ag":"ag-d010","ev":"decide","id":"ADR-01M0MJ4KTREPXRNG4NX30VMAF5","note":"Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type."}
+{"t":"2026-08-22T11:02:42Z","eid":"9d5afe4d4776e274","ag":"ag-87fd","ev":"grill","id":"P-01M0MJ2RYQF4QR01T9CCYCBQSS","gr":"2026-08-22 open=0","hash":"db31d49fd0cfcc6ba6c1b06671d29c094d76e4441c1163c0bedb485768f50829"}
