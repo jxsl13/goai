@@ -85,24 +85,19 @@ func init() {
 	}
 }
 
-// dequantIQ2_XS decodes IQ2_XS blocks into an F32 tensor of the given shape.
-func dequantIQ2_XS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
-	n := shape.Numel()
-	if n%qkK != 0 {
-		return nil, fmt.Errorf("gguf: IQ2_XS numel %d not multiple of %d", n, qkK)
-	}
-	nb := n / qkK
-	if len(data) != nb*iq2xsBlockSize {
-		return nil, fmt.Errorf("gguf: IQ2_XS data %dB, want %d", len(data), nb*iq2xsBlockSize)
-	}
-	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+// dequantIQ2_XSInto decodes complete IQ2_XS blocks into caller-owned storage.
+// Shape and byte-length validation stay at the public tensor boundary below;
+// QMatMul validates one complete quantized row before reusing this allocation-free
+// block decoder across output rows.
+func dequantIQ2_XSInto(dst []float32, data []byte) {
+	for b := 0; b*iq2xsBlockSize < len(data); b++ {
 		blk := data[b*iq2xsBlockSize : (b+1)*iq2xsBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 74-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		scales := blk[66:74]
-		for g := range 32 { // one uint16 → 8 elements
-			u := binary.LittleEndian.Uint16(blk[2+g*2:])
+		var codeScratch [32]uint16
+		codes := iq2xsCodeWords(blk, &codeScratch)
+		for g, u := range codes { // one uint16 → 8 elements
 			s := g / 2 // scale index: one nibble per 16 elements
 			sc := scales[s/2] >> (4 * (s % 2)) & 0x0F
 			db := d * (0.5 + float32(sc)) * 0.25
@@ -117,5 +112,19 @@ func dequantIQ2_XS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
+}
+
+// dequantIQ2_XS decodes IQ2_XS blocks into an F32 tensor of the given shape.
+func dequantIQ2_XS(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
+	n := shape.Numel()
+	if n%qkK != 0 {
+		return nil, fmt.Errorf("gguf: IQ2_XS numel %d not multiple of %d", n, qkK)
+	}
+	nb := n / qkK
+	if len(data) != nb*iq2xsBlockSize {
+		return nil, fmt.Errorf("gguf: IQ2_XS data %dB, want %d", len(data), nb*iq2xsBlockSize)
+	}
+	out := tensor.New(tensor.F32, shape)
+	dequantIQ2_XSInto(out.Storage().F32(), data)
 	return out, nil
 }
