@@ -1,0 +1,41 @@
+{
+  "date": "2026-08-22",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "baseline_source": "2383ccff946e451798ba7c095d8995e7972b9f9c",
+  "candidate_source": "containing commit",
+  "branch": "codex/m2-cpu-decode-next",
+  "spectackle": "v0.10.0",
+  "spectackle_proposal": "P-01M0NNS1C0FME",
+  "spectackle_task": "T-01M0NNSG1BFVM",
+  "perfscan_module": "github.com/jxsl13/perfscan@v1.80.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/831",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline": "70a23ea0f4fc3b39f18b1a2b36a01531e9b0e71aba4e036bb4df8f3ddeea487c",
+    "candidate_ab": "6a365a0ba23cffc5ec13b8524eef2cb63e59226a732c61e9aea49e46133b1ab7",
+    "candidate_final_verification": "c60a312a81eb03b61062ac794d99d09f95f71ff0d1c41c5051a7ee205ba90b42"
+  },
+  "sampling": {
+    "threads": 8,
+    "production_steps": 64,
+    "measured_runs_per_process": 1,
+    "warmups_per_process": 1,
+    "retained_process_pairs": 12,
+    "discarded_process_pairs": 0,
+    "order": "alternating AB/BA",
+    "leaf_benchtime": "500ms",
+    "leaf_samples_per_side": 10
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "leaf": "bit-exact to three independent QMatMul calls",
+    "recorded_fallback": "bit-exact to eager grouped QuantLlama Forward M1 and DecodeStep",
+    "final_candidate_median_ns": 2974713083,
+    "final_candidate_allocated_bytes": 207360864,
+    "final_candidate_allocations": 204988
+  }
+}

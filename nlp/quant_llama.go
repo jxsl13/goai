@@ -140,15 +140,7 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		if err != nil {
 			return nil, err
 		}
-		q, err := b.Wq.Forward(ctx, xb)
-		if err != nil {
-			return nil, err
-		}
-		k, err := b.Wk.Forward(ctx, xb)
-		if err != nil {
-			return nil, err
-		}
-		v, err := b.Wv.Forward(ctx, xb)
+		q, k, v, err := quantAttentionProjections(ctx, b, xb)
 		if err != nil {
 			return nil, err
 		}
@@ -205,6 +197,47 @@ func (m *QuantLlama) Forward(ctx *backend.Context, tokens []int) (*tensor.Tensor
 		return nil, err
 	}
 	return divLogits(ctx, logits, cfg.LogitsScale)
+}
+
+// quantAttentionProjections keeps the accelerator and recorded QuantLinear
+// routes intact, but coalesces eager CPU M1 Q/K/V row work behind one fan-out.
+func quantAttentionProjections(ctx *backend.Context, b *QuantBlock, x *tensor.Tensor) (_, _, _ *tensor.Tensor, err error) {
+	projectionBackend := backend.Default()
+	if ctx != nil && ctx.Recorder == nil && ctx.Backend != nil &&
+		ctx.Backend.Name() == backend.CPU && projectionBackend.Name() == backend.CPU &&
+		x.Ndim() == 2 && x.Shape()[0] == 1 && x.Shape()[1] == b.Wq.In &&
+		x.Dtype() == tensor.F32 && x.IsContiguous() && x.Offset() == 0 &&
+		b.Wq.In == b.Wk.In && b.Wq.In == b.Wv.In &&
+		groupedQKVQuant(b.Wq.QT) && groupedQKVQuant(b.Wk.QT) && groupedQKVQuant(b.Wv.QT) {
+		outs, groupedErr := gguf.QMatMulTriple(
+			x,
+			[3][]byte{b.Wq.Weight, b.Wk.Weight, b.Wv.Weight},
+			[3]gguf.QuantType{b.Wq.QT, b.Wk.QT, b.Wv.QT},
+			[3]int{b.Wq.Out, b.Wk.Out, b.Wv.Out},
+			b.Wq.In,
+		)
+		if groupedErr != nil {
+			return nil, nil, nil, groupedErr
+		}
+		return outs[0], outs[1], outs[2], nil
+	}
+	q, err := b.Wq.Forward(ctx, x)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	k, err := b.Wk.Forward(ctx, x)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	v, err := b.Wv.Forward(ctx, x)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return q, k, v, nil
+}
+
+func groupedQKVQuant(qt gguf.QuantType) bool {
+	return qt == gguf.Q4_K || qt == gguf.Q6_K
 }
 
 // Close frees every device-resident weight buffer held by the model's quantized projections

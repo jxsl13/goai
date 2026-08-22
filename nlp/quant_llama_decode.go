@@ -54,15 +54,7 @@ func (m *QuantLlama) DecodeStep(ctx *backend.Context, cache *LlamaCache, token, 
 		if err != nil {
 			return nil, err
 		}
-		q, err := b.Wq.Forward(ctx, xb)
-		if err != nil {
-			return nil, err
-		}
-		k, err := b.Wk.Forward(ctx, xb)
-		if err != nil {
-			return nil, err
-		}
-		v, err := b.Wv.Forward(ctx, xb)
+		q, k, v, err := quantAttentionProjections(ctx, b, xb)
 		if err != nil {
 			return nil, err
 		}
