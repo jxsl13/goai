@@ -197,7 +197,7 @@ The IQ2_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32
 
 Rationale: The ARM64 leaf must not narrow portable dtype, shape, or architecture semantics.
 
-## IQ1S-PORTABLE-QMATMUL-001
+## IQ1S-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ1_S,go:gguf.dequantIQ1_SInto,go:gguf.dotIQ1SRow,go:gguf.TestDequantIQ1SIntoMatchesTensorDecoderExactly,go:gguf.TestDotIQ1SRowMatchesMaterializedReferenceExactly,go:gguf.TestQMatMulIQ1SMatchesDequantizedReference,go:gguf.TestQMatMulIQ1SRejectsInvalidInputs}
 WHEN IQ1_S weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve 2048 eight-wide ternary grid rows, packed 11-bit indices, odd qh multipliers, signed 0.125 deltas, float32 scaling, ascending mapping, and float64 accumulation.
 
 Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_S optimization.
