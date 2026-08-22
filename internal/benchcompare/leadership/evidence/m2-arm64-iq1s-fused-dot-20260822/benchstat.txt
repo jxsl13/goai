@@ -1,0 +1,65 @@
+                                │ iq1s-scalar.txt │      iq1s-neon.txt      │
+                                │            sec/op            │    sec/op     vs base                │
+DotIQ1SPaths-12                                  5183.5n ± 18%   669.1n ± 25%  -87.09% (p=0.000 n=10)
+QMatMulIQ1SPaths/N64_K1024-12                     87.94µ ± 29%   11.27µ ±  9%  -87.19% (p=0.000 n=10)
+QMatMulIQ1SPaths/N4096_K1024-12                  1685.9µ ± 67%   300.2µ ± 77%  -82.20% (p=0.000 n=10)
+geomean                                           91.60µ         13.13µ        -85.67%
+
+                                │ iq1s-scalar.txt │       iq1s-neon.txt        │
+                                │             B/s              │      B/s        vs base                 │
+DotIQ1SPaths-12                                  2.944Gi ± 16%   22.809Gi ± 20%  +674.70% (p=0.000 n=10)
+QMatMulIQ1SPaths/N64_K1024-12                    2.776Gi ± 23%   21.692Gi ±  9%  +681.31% (p=0.000 n=10)
+QMatMulIQ1SPaths/N4096_K1024-12                  9.336Gi ± 80%   52.081Gi ± 46%  +457.83% (p=0.000 n=10)
+geomean                                          4.242Gi          29.54Gi        +596.34%
+
+                                │ iq1s-scalar.txt │      iq1s-neon.txt       │
+                                │             B/op             │     B/op      vs base                 │
+DotIQ1SPaths-12                                   0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1SPaths/N64_K1024-12                     592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1SPaths/N4096_K1024-12                 17.22Ki ± 2%     17.06Ki ± 1%       ~ (p=0.404 n=10)
+geomean                                                      ²                 -0.32%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                │ iq1s-scalar.txt │     iq1s-neon.txt      │
+                                │          allocs/op           │ allocs/op   vs base                 │
+DotIQ1SPaths-12                                   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1SPaths/N64_K1024-12                     4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ1SPaths/N4096_K1024-12                   29.00 ± 3%     29.00 ± 0%       ~ (p=0.474 n=10)
+geomean                                                      ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                │ iq1s-dequant-base.txt │ iq1s-dequant-candidate.txt │
+                │               sec/op               │        sec/op          vs base          │
+DequantIQ1_S-12                          480.2µ ± 8%            473.7µ ± 12%  ~ (p=0.631 n=10)
+
+                │ iq1s-dequant-base.txt │ iq1s-dequant-candidate.txt │
+                │                B/s                 │          B/s           vs base          │
+DequantIQ1_S-12                         101.7Mi ± 8%           103.3Mi ± 14%  ~ (p=0.631 n=10)
+
+                │ iq1s-dequant-base.txt │ iq1s-dequant-candidate.txt │
+                │                B/op                │         B/op           vs base          │
+DequantIQ1_S-12                         1.000Mi ± 0%            1.000Mi ± 0%  ~ (p=0.642 n=10)
+
+                │ iq1s-dequant-base.txt │ iq1s-dequant-candidate.txt │
+                │             allocs/op              │      allocs/op       vs base            │
+DequantIQ1_S-12                           3.000 ± 0%            3.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                         │ iq1s-control-base.txt │ iq1s-control-candidate.txt │
+                         │               sec/op               │        sec/op          vs base          │
+QMatMulIQ2_S_M1_N4096-12                         657.5µ ± 60%            649.6µ ± 13%  ~ (p=0.481 n=10)
+
+                         │ iq1s-control-base.txt │ iq1s-control-candidate.txt │
+                         │                B/s                 │          B/s           vs base          │
+QMatMulIQ2_S_M1_N4096-12                        23.77Gi ± 38%           24.07Gi ± 15%  ~ (p=0.481 n=10)
+
+                         │ iq1s-control-base.txt │ iq1s-control-candidate.txt │
+                         │                B/op                │         B/op           vs base          │
+QMatMulIQ2_S_M1_N4096-12                         17.19Ki ± 1%            17.18Ki ± 0%  ~ (p=0.796 n=10)
+
+                         │ iq1s-control-base.txt │ iq1s-control-candidate.txt │
+                         │             allocs/op              │      allocs/op       vs base            │
+QMatMulIQ2_S_M1_N4096-12                           29.00 ± 0%            29.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

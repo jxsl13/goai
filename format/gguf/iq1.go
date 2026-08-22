@@ -180,24 +180,18 @@ func init() {
 	}
 }
 
-// dequantIQ1_S decodes IQ1_S blocks into an F32 tensor of the given shape.
-func dequantIQ1_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
-	n := shape.Numel()
-	if n%qkK != 0 {
-		return nil, fmt.Errorf("gguf: IQ1_S numel %d not multiple of %d", n, qkK)
-	}
-	nb := n / qkK
-	if len(data) != nb*iq1sBlockSize {
-		return nil, fmt.Errorf("gguf: IQ1_S data %dB, want %d", len(data), nb*iq1sBlockSize)
-	}
-	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+// dequantIQ1_SInto decodes complete IQ1_S blocks into caller-owned storage.
+// Shape and byte-length validation stay at the public tensor boundary below;
+// QMatMul validates one complete quantized row before reusing this allocation-free
+// block decoder across output rows.
+func dequantIQ1_SInto(dst []float32, data []byte) {
+	for b := 0; b*iq1sBlockSize < len(data); b++ {
 		blk := data[b*iq1sBlockSize : (b+1)*iq1sBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 50-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		qs := blk[2:34]
 		for g := range 8 { // one qh u16 → 32 elements (4 grid rows)
-			qh := binary.LittleEndian.Uint16(blk[34+g*2:])
+			qh := binary.LittleEndian.Uint16(blk[34+g*2:]) //perfscan:ignore PS4001 alignment/endian-safe fallback; architecture bulk view tracked in perfscan#811
 			dl := d * float32(2*(qh>>12&7)+1)
 			delta := float32(iq1Delta)
 			if qh&0x8000 != 0 {
@@ -214,6 +208,20 @@ func dequantIQ1_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
+}
+
+// dequantIQ1_S decodes IQ1_S blocks into an F32 tensor of the given shape.
+func dequantIQ1_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
+	n := shape.Numel()
+	if n%qkK != 0 {
+		return nil, fmt.Errorf("gguf: IQ1_S numel %d not multiple of %d", n, qkK)
+	}
+	nb := n / qkK
+	if len(data) != nb*iq1sBlockSize {
+		return nil, fmt.Errorf("gguf: IQ1_S data %dB, want %d", len(data), nb*iq1sBlockSize)
+	}
+	out := tensor.New(tensor.F32, shape)
+	dequantIQ1_SInto(out.Storage().F32(), data)
 	return out, nil
 }
 
