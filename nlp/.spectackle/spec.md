@@ -68,3 +68,8 @@ WHEN a supported projection uses wire type 41 Q1_0 or wire type 39 MXFP4, the qu
 WHEN QuantLlama attention receives 1 contiguous F32 row in an explicit eager CPU context with a CPU default backend and supported Q4_K or Q6_K projections, the QuantLlama SHALL route Q, K, and V through exactly 1 QMatMulTriple call.
 
 Rationale: One grouped CPU fan-out removes 2 projection scheduler barriers.
+
+## CPU-QUANT-ATTN-QKV-GROUP-SCOPE-001
+The grouped QuantLlama QKV route SHALL exclude recorder, accelerator, multi-row, noncontiguous, offset, mismatched-input, and unsupported-quant inputs, preserving 3 independent QuantLinear calls.
+
+Rationale: CPU scheduling coalescing must not bypass graph, device, or fallback semantics.
