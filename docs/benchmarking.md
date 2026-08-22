@@ -2034,6 +2034,18 @@ one allocation/op. Recorded/autograd execution retains explicit `OpSiLU` and
 `internal/benchcompare/leadership/evidence/m2-cpu-swiglu-inplace-20260822`;
 the reusable analysis opportunity is [perfscan #828](https://github.com/jxsl13/perfscan/issues/828).
 
+The next 2026-08-22 CPU tranche combines the sibling Q4_K gate and up
+projections under one row-parallel fan-out while preserving each existing row
+dot unchanged. Ten retained alternating fresh-process pairs move the same
+64-step production boundary from **2.029 to 1.948 s** (`-3.99%`, `p=0.043`),
+allocated bytes from 199.9 to 199.2 MiB (`-0.36%`), and allocations from 281.0k
+to 255.7k (`-9.02%`). Every run retains digest `ea3df5516f17df83`. The permanent
+Q4_K M1/N4096/K1024 leaf improves 301.3 to 245.5 us (`-18.52%`, `p=0.029`,
+n=10), with 42 to 24 allocations/op. Recorded/autograd and unsupported routes
+keep independent projections. Evidence:
+`internal/benchcompare/leadership/evidence/m2-cpu-q4k-paired-projections-20260822`;
+the reusable shared-fan-out opportunity is [perfscan #830](https://github.com/jxsl13/perfscan/issues/830).
+
 Pinned llama.cpp v0.2.0 (`bb4caa754`, build 10566, ggml 0.21.0) runs the same
 GGUF, eight threads, CPU-only execution, no KV offload, FlashAttention off,
 and 64 generation steps at 88.2–115.2 tok/s across two process medians. This

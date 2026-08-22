@@ -1,0 +1,8 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+                          | independent     | paired           | vs base
+sec/op                    | 301.3us +/- 17% | 245.5us +/- 27%  | -18.52% (p=0.029 n=10)
+B/op                     | 33.56Ki +/- 0%  | 33.03Ki +/- 0%   | -1.58% (p=0.000 n=10)
+allocs/op                | 42.00 +/- 0%    | 24.00 +/- 0%     | -42.86% (p=0.000 n=10)
