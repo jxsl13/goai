@@ -44,7 +44,7 @@ choice: Extend the shared decodeTensor switch with the exact existing decoder fu
 
 ## T-01M0M30EFGEN49ZG22VFTE4JSE Route every supported IQ and MXFP4 wire type through decodeTensor
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0M2XZRGFSWVT5G94ZXT61S8
 targets: go:gguf.decodeTensor, go:gguf.QuantTensor.Dequantize, go:gguf.Read, format/gguf/iq_wire_id_test.go
