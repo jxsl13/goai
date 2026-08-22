@@ -305,3 +305,6 @@ WHEN direct, resident, or recorder TQ dispatch selects a pipeline, the Metal TQ 
 
 ## METAL-TQ-FALLBACK-001
 WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal TQ selector SHALL dispatch the matching scalar TQ pipeline and issue exactly 0 cooperative TQ threadgroups.
+
+## METAL-TQ-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one TQ format, the cooperative TQ route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
