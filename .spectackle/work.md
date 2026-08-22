@@ -3951,20 +3951,3 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
-
-## ADR-01M0MR09H9ERTTFKQGTM705Z2Z How should Metal IQ1_S and IQ1_M share lookup and dispatch infrastructure while retaining independent performance gates?
-kind: adr
-state: done
-created: 2026-08-22
-rounds: 1
-context: Both formats use the same 2048-by-8 ternary grid and delta algebra but have distinct 50-byte and 56-byte block layouts, scale encoding, and potential crossover behavior.
-decision: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
-consequences: One exact lookup truth source and one initialization path reduce lifecycle and parity risk. Independent parsers and selectors prevent one format from masking a losing benchmark cell in the other. Host-bound promotion remains separately measured, and scalar kernels remain callable controls.
-status: accepted
-
-kind: radio
-option: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
-option: Duplicate all lookup and lifecycle state per format
-option: Use literal shader lookup tables and one family-wide promotion flag
-blocks: P-01M0MQYAGFF3PRC2P0632PCDDB
-choice: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
