@@ -1,0 +1,6 @@
+=== RUN   TestMetalUploadIQ4XSUsesRecorderOnlyResidentPath
+--- PASS: TestMetalUploadIQ4XSUsesRecorderOnlyResidentPath (0.00s)
+=== RUN   TestMetalIQ4XSCooperativeEndToEnd
+    iq4_xs_e2e_test.go:115: IQ4_XS end-to-end: scalar 50.17 tok/s -> cooperative 250.42 tok/s = 4.991x
+--- PASS: TestMetalIQ4XSCooperativeEndToEnd (9.29s)
+PASS

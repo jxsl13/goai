@@ -101,7 +101,7 @@ func ggBlockElems(gg uint32) (int, error) {
 	switch gguf.QuantType(gg) {
 	case gguf.Q8_0, gguf.Q4_0, gguf.Q4_1, gguf.IQ4_NL:
 		return 32, nil
-	case gguf.Q2_K, gguf.Q3_K, gguf.Q4_K, gguf.Q5_K, gguf.Q6_K:
+	case gguf.Q2_K, gguf.Q3_K, gguf.Q4_K, gguf.Q5_K, gguf.Q6_K, gguf.IQ4_XS:
 		return 256, nil
 	}
 	return 0, fmt.Errorf("row-slicing unsupported for ggml type %d", gg)

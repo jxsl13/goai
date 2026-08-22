@@ -12,7 +12,7 @@ import (
 // QuantLinear can run (gguf.QMatMul + the GPU kernels) — i.e. a genuine quantized projection.
 func quantMatMulSupported(gg uint32) bool {
 	switch gguf.QuantType(gg) {
-	case gguf.Q8_0, gguf.Q4_0, gguf.Q4_1, gguf.Q2_K, gguf.Q3_K, gguf.Q4_K, gguf.Q5_K, gguf.Q6_K, gguf.IQ4_NL:
+	case gguf.Q8_0, gguf.Q4_0, gguf.Q4_1, gguf.Q2_K, gguf.Q3_K, gguf.Q4_K, gguf.Q5_K, gguf.Q6_K, gguf.IQ4_NL, gguf.IQ4_XS:
 		return true
 	}
 	return false

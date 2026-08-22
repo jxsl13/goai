@@ -1,0 +1,23 @@
+=== RUN   TestMetalQMatMulIQ4XSCrossReference
+    iq4_xs_test.go:90: IQ4_XS max relative difference 0.000e+00
+    iq4_xs_test.go:90: IQ4_XS max relative difference 3.404e-07
+    iq4_xs_test.go:90: IQ4_XS max relative difference 2.723e-06
+    iq4_xs_test.go:90: IQ4_XS max relative difference 1.086e-05
+    iq4_xs_test.go:90: IQ4_XS max relative difference 4.837e-07
+--- PASS: TestMetalQMatMulIQ4XSCrossReference (0.01s)
+=== RUN   TestMetalQMatMulIQ4XSCooperativeMatchesScalar
+    iq4_xs_test.go:118: IQ4_XS max relative difference 8.707e-08
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.882e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 3.971e-07
+    iq4_xs_test.go:118: IQ4_XS max relative difference 2.349e-06
+    iq4_xs_test.go:118: IQ4_XS max relative difference 1.976e-05
+--- PASS: TestMetalQMatMulIQ4XSCooperativeMatchesScalar (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSFloatingPointClass
+--- PASS: TestMetalQMatMulIQ4XSFloatingPointClass (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSDispatchAndValidation
+    iq4_xs_test.go:184: IQ4_XS max relative difference 9.963e-08
+--- PASS: TestMetalQMatMulIQ4XSDispatchAndValidation (0.00s)
+=== RUN   TestMetalQMatMulIQ4XSRecorderResident
+    iq4_xs_test.go:236: IQ4_XS max relative difference 6.156e-07
+--- PASS: TestMetalQMatMulIQ4XSRecorderResident (0.00s)
+PASS

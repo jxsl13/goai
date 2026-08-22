@@ -98,6 +98,7 @@ const (
 	qtQ4_K   = 12
 	qtQ6_K   = 14
 	qtIQ4_NL = 20
+	qtIQ4_XS = 23
 )
 
 // UploadQuant implements backend.ResidentQuantMatMuler (§T154): it uploads a supported quantized
@@ -105,10 +106,11 @@ const (
 // It returns backend.ErrQuantUnsupported when the generic host-bound route is not accelerated so
 // the caller falls back to its faster CPU path.
 func (Backend) UploadQuant(weight []byte, quantType uint32, n, k int) (backend.ResidentWeight, error) {
-	// The fused Q4_1 and IQ4_NL ARM64 host kernels beat standalone Metal submissions on M2.
+	// The fused Q4_1, IQ4_NL, and IQ4_XS ARM64 host kernels beat standalone Metal submissions
+	// for the latency-sensitive small/medium shapes on M2.
 	// Keep generic QuantLinear on those CPU routes; llamagpu opts into explicit compressed
 	// device residency, where a whole decode step amortizes submission overhead.
-	if quantType == qtQ4_1 || quantType == qtIQ4_NL {
+	if quantType == qtQ4_1 || quantType == qtIQ4_NL || quantType == qtIQ4_XS {
 		return nil, backend.ErrQuantUnsupported
 	}
 	rw, err := uploadResident(weight, quantType, n, k)
@@ -293,11 +295,46 @@ func QMatMulIQ4_NL(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, e
 	return out, nil
 }
 
+// QMatMulIQ4_XS computes y[M,N] = x[M,K] · dequant(weight)ᵀ on the GPU from exact
+// GGUF type-23 super-blocks. Each 136-byte block stores f16 d, eight packed signed
+// six-bit sub-scales, and eight 32-value split-nibble IQ4_NL codebook groups.
+func QMatMulIQ4_XS(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, error) {
+	if x.Ndim() != 2 || x.Shape()[1] != k {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_XS x must be [M,%d], got %v", k, x.Shape())
+	}
+	if x.Dtype() != tensor.F32 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_XS is f32-only, got %v", x.Dtype())
+	}
+	if k <= 0 || k%256 != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_XS K=%d must be a positive multiple of 256", k)
+	}
+	nb := k / 256
+	if len(weight) != n*nb*136 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_XS weight %d bytes != %d (N·K/256·136)", len(weight), n*nb*136)
+	}
+	m := x.Shape()[0]
+	out := tensor.New(tensor.F32, tensor.Shape{m, n})
+	if m == 0 || n == 0 {
+		return out, nil
+	}
+	xc := x.Contiguous()
+	rc := C.mtl_qmatmul_iq4_xs(
+		(*C.float)(&xc.Storage().F32()[0]),
+		(*C.uchar)(unsafe.Pointer(&weight[0])),
+		(*C.float)(&out.Storage().F32()[0]),
+		C.int(m), C.int(k), C.int(n),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_XS failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
 // ResidentQWeight is a quantized weight uploaded ONCE to a device-resident GPU buffer and reused
 // across many QMatMul calls (§T153/§T155) — so a decode loop, which reuses every weight for every
 // token, uploads each weight a single time instead of per step. Supported k-quant, Q4_0, Q4_1,
-// IQ4_NL, and Q8_0 formats are represented; resident dispatch selects by quant type. Call Close
-// to free the GPU buffer (it is not reclaimed automatically).
+// IQ4_NL, IQ4_XS, and Q8_0 formats are represented; resident dispatch selects by quant type.
+// Call Close to free the GPU buffer (it is not reclaimed automatically).
 type ResidentQWeight struct {
 	handle  unsafe.Pointer // retained MTLBuffer (nil after Close)
 	n, k    int
@@ -406,6 +443,8 @@ func residentRowBytes(qt uint32, k int) (rowBytes, align int, ok bool) {
 		return (k / 256) * 210, 256, true
 	case qtIQ4_NL:
 		return (k / 32) * 18, 32, true
+	case qtIQ4_XS:
+		return (k / 256) * 136, 256, true
 	}
 	return 0, 0, false
 }
@@ -451,6 +490,12 @@ func UploadQWeightQ4_1(weight []byte, n, k int) (*ResidentQWeight, error) {
 // calls lose to the M2 ARM64 kernel; llamagpu uses this opt-in API for a full decode command.
 func UploadQWeightIQ4_NL(weight []byte, n, k int) (*ResidentQWeight, error) {
 	return uploadResident(weight, qtIQ4_NL, n, k)
+}
+
+// UploadQWeightIQ4_XS uploads exact GGUF type-23 super-blocks for the resident recorder path.
+// The generic host-I/O route remains on ARM64 unless its independent benchmark gate wins.
+func UploadQWeightIQ4_XS(weight []byte, n, k int) (*ResidentQWeight, error) {
+	return uploadResident(weight, qtIQ4_XS, n, k)
 }
 
 // QMatMul computes y[M,N] = x[M,K] · dequant(W)ᵀ using the resident weight — only x is uploaded.
@@ -1796,6 +1841,16 @@ func SetIQ4NLCooperative(on bool) bool {
 		v = 1
 	}
 	return C.mtl_iq4_nl_cooperative_set(C.int(v)) == 1
+}
+
+// SetIQ4XSCooperative selects the two-SIMD-group nonlinear IQ4_XS kernel and returns the
+// previous setting. It is exposed for same-binary correctness and performance controls.
+func SetIQ4XSCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_iq4_xs_cooperative_set(C.int(v)) == 1
 }
 
 // SetQ8_0Cooperative selects the SIMD-group-cooperative resident Q8_0 M=1 matvec and
