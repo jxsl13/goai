@@ -1,0 +1,9 @@
+Darwin MacBook-Pro-von-John-5.local 25.5.0 Darwin Kernel Version 25.5.0: Mon Apr 27 20:39:09 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6020 arm64
+ProductName:		macOS
+ProductVersion:		26.5.1
+BuildVersion:		25F80
+sysctl: sysctl fmt -1 1024 1: Operation not permitted
+go version go1.26.6 darwin/arm64
+spectackle v0.10.0
+5627d48d78f9c232987c96492a8cf2ebf73dbf60
+cpu: Apple M2 Pro (Go benchmark identity)

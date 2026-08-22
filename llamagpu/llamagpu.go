@@ -253,6 +253,12 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 35 { // GGUF TQ2_0: two-bit ternary blocks, recorder-only on M2.
 		return metal.UploadQWeightTQ2_0(weight, n, k)
 	}
+	if qt == 39 { // GGUF MXFP4: OCP E8M0/E2M1 blocks, recorder-only on M2.
+		return metal.UploadQWeightMXFP4(weight, n, k)
+	}
+	if qt == 41 { // GGUF Q1_0: packed binary blocks, recorder-only on M2.
+		return metal.UploadQWeightQ1_0(weight, n, k)
+	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
 		return nil, err

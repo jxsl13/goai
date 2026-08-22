@@ -157,6 +157,11 @@ int mtl_qmatmul_iq2_s(const float* X, const unsigned char* W, float* O, int M, i
 int mtl_qmatmul_tq1_0(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 int mtl_qmatmul_tq2_0(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// Native compact-quant matmuls over GGUF type-39 MXFP4 (17 bytes/32 values)
+// and type-41 Q1_0 (18 bytes/128 values).
+int mtl_qmatmul_mxfp4(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+int mtl_qmatmul_q1_0(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
 // mtl_iq1_grid_upload copies the shared exact 2048x8 ternary codebook into one
 // process-lifetime Metal buffer, packed as one uint16 per eight-value grid row.
 int mtl_iq1_grid_upload(const unsigned short* grid, int count);
@@ -198,6 +203,8 @@ int mtl_iq2_xs_cooperative_set(int on);
 int mtl_iq2_s_cooperative_set(int on);
 int mtl_tq1_cooperative_set(int on);
 int mtl_tq2_cooperative_set(int on);
+int mtl_mxfp4_cooperative_set(int on);
+int mtl_q1_cooperative_set(int on);
 int mtl_iq1_s_cooperative_set(int on);
 int mtl_iq1_m_cooperative_set(int on);
 int mtl_iq3_xxs_cooperative_set(int on);
@@ -365,8 +372,8 @@ void mtl_devbuf_free(void* handle);
 
 // mtl_qmatmul_resident is a quantized matmul whose weight is the already-resident buffer `wbuf`
 // (from mtl_qweight_upload) instead of per-call bytes — only X is uploaded each call. qtype is the
-// ggml code (8=Q8_0, 10=Q2_K, 11=Q3_K, 12=Q4_K, 13=Q5_K, 14=Q6_K); it selects the matching cached
-// pipeline (§T155). Returns 0 on success, -7 for an unknown qtype, nonzero otherwise.
+// ggml code, including 39=MXFP4 and 41=Q1_0; it selects the matching cached pipeline (§T155).
+// Returns 0 on success, -7 for an unknown qtype, nonzero otherwise.
 int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int N, int qtype);
 
 // mtl_recorder_qmatmul (§T413): record-mode quantized matmul over a DeviceBuffer X/O and a resident

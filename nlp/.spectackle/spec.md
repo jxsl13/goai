@@ -60,3 +60,6 @@ WHEN a supported projection uses wire type 22 IQ2_S, the quantized GGUF model lo
 
 ## QUANT-GGUF-TQ-ADMISSION-001
 WHEN a supported projection uses wire type 34 TQ1_0 or type 35 TQ2_0, the quantized GGUF model loader SHALL preserve compressed bytes in QuantLinear and perform exactly 0 eager weight dequantizations.
+
+## QUANT-GGUF-Q1-MXFP4-ADMISSION-001
+WHEN a supported projection uses wire type 41 Q1_0 or wire type 39 MXFP4, the quantized GGUF model loader SHALL preserve compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.

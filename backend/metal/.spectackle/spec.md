@@ -311,3 +311,32 @@ WHEN three fresh-process count-seven M2 campaigns cover every representative res
 
 ## METAL-TQ-HOST-ROUTE-001
 IF direct host-bound TQ1_0 or TQ2_0 loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported and preserve ARM64 CPU for that wire type.
+
+## METAL-Q1-BLOCK-001
+WHEN a GGUF wire type 41 Q1_0 block is decoded, the Metal Q1_0 kernel SHALL decode 18 bytes into 128 values using one f16 scale and sixteen LSB-first sign bytes where set selects positive scale and clear selects negative scale.
+
+Rationale: Pin the Q1_0 wire layout independently of the implementation.
+
+## METAL-MXFP4-BLOCK-001
+WHEN a GGUF wire type 39 MXFP4 block is decoded, the Metal MXFP4 kernel SHALL decode each 17-byte block as one leading E8M0 exponent byte plus sixteen split-half nibble bytes, producing exactly 32 values.
+
+## METAL-MXFP4-CODES-001
+WHEN an MXFP4 nibble is decoded, the Metal MXFP4 kernel SHALL map codes 0 through 7 to 0,1,2,3,4,6,8,12 and codes 8 through 15 to 0,-1,-2,-3,-4,-6,-8,-12 respectively.
+
+## METAL-MXFP4-SCALE-001
+WHEN an MXFP4 exponent byte e is decoded, the Metal MXFP4 kernel SHALL construct scale bits as 0x00200000 shifted left by e when e is below 2, and as (e minus 1) shifted left by 23 otherwise.
+
+## METAL-Q1-MXFP4-NUMERIC-001
+WHEN valid Q1_0 or MXFP4 matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and leave every activation and compressed-weight byte unchanged.
+
+## METAL-Q1-MXFP4-DISPATCH-001
+WHEN direct, resident, or recorder Q1_0 or MXFP4 dispatch selects a pipeline, the Metal backend SHALL select exactly 1 of qmatmul_q1_0_* or qmatmul_mxfp4_* with 0 wire-type branches inside its decode loop.
+
+## METAL-Q1-MXFP4-FALLBACK-001
+WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal selector SHALL dispatch the matching scalar Q1_0 or MXFP4 pipeline and issue exactly zero cooperative threadgroups for that format.
+
+## METAL-Q1-MXFP4-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one format, the cooperative Q1_0 or MXFP4 route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-Q1-MXFP4-HOST-ROUTE-001
+IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, THEN the generic Metal quant dispatcher SHALL return backend.ErrQuantUnsupported for that wire type and preserve the fused ARM64 CPU route.

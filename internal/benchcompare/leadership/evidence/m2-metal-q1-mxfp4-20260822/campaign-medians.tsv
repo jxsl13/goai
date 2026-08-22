@@ -1,0 +1,49 @@
+campaign	route	format	cell	cooperative-vs-scalar-gpu-x	cooperative-vs-scalar-wall-x	metal-vs-cpu-wall-x	unchanged-control-x
+1	host	Q1_0	kv			0.2746	
+1	host	Q1_0	square			0.5384	
+1	host	Q1_0	gate			1.037	
+1	host	Q1_0	down			1.022	
+1	host	MXFP4	kv			0.2869	
+1	host	MXFP4	square			0.5412	
+1	host	MXFP4	gate			0.781	
+1	host	MXFP4	down			0.8257	
+1	coop	Q1_0	kv	10.08	6.151	3.43	1.005
+1	coop	Q1_0	square	6.326	3.193	2.217	1.004
+1	coop	Q1_0	gate	2.643	2.042	2.941	1.001
+1	coop	Q1_0	down	7.12	6.318	4.02	1.001
+1	coop	MXFP4	kv	19.31	7.247	1.28	1.001
+1	coop	MXFP4	square	16.26	13.24	3.08	1.002
+1	coop	MXFP4	gate	6.415	5.921	2.836	1.001
+1	coop	MXFP4	down	16.12	14.7	2.753	1.001
+2	host	Q1_0	kv			0.3058	
+2	host	Q1_0	square			0.5381	
+2	host	Q1_0	gate			0.9818	
+2	host	Q1_0	down			0.9754	
+2	host	MXFP4	kv			0.268	
+2	host	MXFP4	square			0.4475	
+2	host	MXFP4	gate			0.5041	
+2	host	MXFP4	down			0.5309	
+2	coop	Q1_0	kv	9.274	5.589	1.574	1.01
+2	coop	Q1_0	square	5.948	4.311	1.992	1.034
+2	coop	Q1_0	gate	2.643	2.027	3.211	1.002
+2	coop	Q1_0	down	6.936	4.828	3.214	1.001
+2	coop	MXFP4	kv	18.03	6.844	1.209	1.001
+2	coop	MXFP4	square	16.33	13.11	3.106	1.003
+2	coop	MXFP4	gate	6.526	6.068	3.447	1.002
+2	coop	MXFP4	down	16.1	14.64	3.011	1.001
+3	host	Q1_0	kv			0.2641	
+3	host	Q1_0	square			0.527	
+3	host	Q1_0	gate			1.022	
+3	host	Q1_0	down			0.983	
+3	host	MXFP4	kv			0.2618	
+3	host	MXFP4	square			0.5081	
+3	host	MXFP4	gate			0.7477	
+3	host	MXFP4	down			0.8339	
+3	coop	Q1_0	kv	9.975	5.649	3.131	1.004
+3	coop	Q1_0	square	6.249	3.152	2.251	1.002
+3	coop	Q1_0	gate	2.643	2.017	3.162	1.001
+3	coop	Q1_0	down	6.954	4.96	3.235	1.001
+3	coop	MXFP4	kv	18.11	7.169	1.27	1.001
+3	coop	MXFP4	square	15.68	12.63	2.85	1.002
+3	coop	MXFP4	gate	6.504	6.061	3.485	1.001
+3	coop	MXFP4	down	16.19	14.87	3.04	1.001

@@ -3967,3 +3967,18 @@ option: Build entirely separate TQ1_0 and TQ2_0 source and lifecycle boundaries
 option: Use one generic runtime-branching ternary kernel selected by qtype inside the hot loop
 blocks: P-01M0MXA8ZRF94TCEP455E4VT5G
 choice: Use one TQ compile and initialization boundary with specialized per-format kernels, parsers, selectors, and benchmark verdicts
+
+## ADR-01M0N09RJ3FEPSAQR8W4C8RMMD Should Q1_0 and MXFP4 share a runtime qtype branch in one Metal hot loop or compile as independent specialized pipelines?
+kind: adr
+state: done
+created: 2026-08-22
+context: The formats have unrelated block layouts. A runtime branch would couple hot loops, weaken compiler specialization, and obscure per-format promotion gates.
+decision: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
+consequences: Shared APIs, validation helpers, tests, and campaign harness only; separate compiled hot loops, selectors, capability predicates, and per-format promotion verdicts.
+status: accepted
+
+kind: radio
+option: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
+option: One shared kernel with a qtype branch in the decode hot loop
+blocks: P-01M0N04WSRFV7A6MC3TV25CE7X
+choice: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
