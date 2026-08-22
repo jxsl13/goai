@@ -721,3 +721,8 @@
 {"t":"2026-08-22T16:54:02Z","eid":"71fc3062800d9f92","ag":"ag-8fb5","ev":"revise","id":"P-01M0N68Z0KFF79CDKT21KC4F26","note":"body+targets revised"}
 {"t":"2026-08-22T16:54:02Z","eid":"9aea7f4b0a47d1d9","ag":"ag-8fb5","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T16:54:24Z","eid":"ce2c7872039b0d37","ag":"ag-1040","ev":"move","id":"P-01M0N68Z0KFF79CDKT21KC4F26","fr":"draft","to":"active"}
+{"t":"2026-08-22T16:54:32Z","eid":"62e230d4a990375b","ag":"ag-00f1","ev":"grill","id":"P-01M0N68Z0KFF79CDKT21KC4F26","gr":"2026-08-22 open=0","hash":"0f6431c8561862baf4e185687bf8c2cd06a22da1f0be18409bfe91791afbbc54"}
+{"t":"2026-08-22T16:54:33Z","eid":"1559d28a65c1a5da","ag":"ag-00f1","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T16:54:47Z","eid":"07586619234f528c","ag":"ag-394b","ev":"create","id":"T-01M0N6AX4VFGERG5BTYVHQAFF5","k":"task","ti":"Implement and gate Metal RoPE-f16-KV append fusion"}
+{"t":"2026-08-22T16:54:47Z","eid":"0a11f251e4047ec3","ag":"ag-394b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T16:55:01Z","eid":"00b8b8df01557129","ag":"ag-b295","ev":"move","id":"T-01M0N6AX4VFGERG5BTYVHQAFF5","fr":"draft","to":"active"}

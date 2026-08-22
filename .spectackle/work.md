@@ -4003,6 +4003,16 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: active
 created: 2026-08-22
+grilled: 2026-08-22 open=0
 targets: llamagpu/decoder.go, llamagpu/llamagpu.go, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/f16kv_test.go, llamagpu/f16kv_metal_test.go
 
 Context: the shipping Metal NewQuantF16KV single-token decoder records two RoPE dispatches plus one paired f32-to-f16 KV append per layer after separate Q/K/V projections. TinyLlama has 22 layers, so this boundary costs 66 events per token although Q rotation, K rotation+conversion, and V conversion are independent per element. Proposal: add one Metal-only fused full-RoPE/f16-KV-append recorder operation that rotates Q in place, rotates K with the established float expression order before binary16 conversion, and converts V directly into the current cache row. The existing f16 attention remains a separate dispatch; no grid-wide synchronization is assumed. Scope is deliberately narrow: single token, separate contiguous Q/K/V buffers, full RoPE, f16 KV cache, dk=64. Fused-QKV, prefill, partial/no-RoPE, f32 KV, CUDA, and Vulkan retain the established route. Validation: exact Q float32 bits and K/V binary16 bits against the control chain; nonfinite-class and untouched-region/input checks; a mutation probe proving the exact oracle; route/profile proof that 22 eligible layers replace exactly 66 old RoPE/copy events with 22 fused events; trained TinyLlama logit/greedy parity; same-binary control/candidate benchmarks. Retain only if the isolated boundary reaches at least 1.25x and every one of three count-seven M2 end-to-end decode campaigns improves, with at least 1.01x median speedup as the promotion floor. Otherwise remove all candidate code and preserve only reusable evidence.
+
+## T-01M0N6AX4VFGERG5BTYVHQAFF5 Implement and gate Metal RoPE-f16-KV append fusion
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0N68Z0KFF79CDKT21KC4F26
+targets: llamagpu/decoder.go, llamagpu/llamagpu.go, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/f16kv_test.go, llamagpu/f16kv_metal_test.go
+
+Implement an optional recorder capability and a Metal kernel for the eligible single-token full-RoPE f16-KV path. Add a process-local same-binary toggle whose two arms provably dispatch different paths. Preserve the existing route as fallback for every ineligible shape and backend. Add exact boundary parity over Q float32 bits and K/V binary16 bytes, cache sentinels and source immutability, representative positions and nonfinite inputs; perform and revert a one-bit mutation that the new oracle catches. Add selector/count tests and a trained-model profile proving 22 fused events replace 44 RoPE plus 22 paired-copy events. Benchmark the isolated boundary and TinyLlama Q4_K_M f16-KV decode in three independent count-seven control/candidate campaigns. Retain only if the proposal gates pass; otherwise delete the implementation and retire candidate-only rules with a measured rejection note.
