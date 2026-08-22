@@ -229,6 +229,9 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 18 { // GGUF IQ3_XXS: exact grid blocks, recorder-only after the M2 host-route gate.
 		return metal.UploadQWeightIQ3_XXS(weight, n, k)
 	}
+	if qt == 19 { // GGUF IQ1_S: shared exact packed ternary grid, recorder-only on M2.
+		return metal.UploadQWeightIQ1_S(weight, n, k)
+	}
 	if qt == 20 { // GGUF IQ4_NL: same recorder-only boundary after the M2 host-route gate.
 		return metal.UploadQWeightIQ4_NL(weight, n, k)
 	}
@@ -237,6 +240,9 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	}
 	if qt == 23 { // GGUF IQ4_XS: exact 256-value nonlinear super-blocks, recorder-only on M2.
 		return metal.UploadQWeightIQ4_XS(weight, n, k)
+	}
+	if qt == 29 { // GGUF IQ1_M: split-f16 ternary blocks, recorder-only on M2.
+		return metal.UploadQWeightIQ1_M(weight, n, k)
 	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
