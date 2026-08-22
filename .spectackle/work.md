@@ -3976,3 +3976,12 @@ option: Create an entirely separate IQ2_S lifecycle and duplicate family initial
 option: Embed the expanded IQ2_S grid as shader literals and use the existing family-wide selector
 blocks: P-01M0MTT417E27SQK7K6X6EM9E6
 choice: Extend the IQ2 lifecycle with one exact 2 KiB packed IQ2_S grid buffer plus a type-specific parser and selector
+
+## T-01M0MTWC7GF978HFX19KW2WE6N Implement and gate native M2 Metal IQ2_S decode
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0MTT417E27SQK7K6X6EM9E6
+targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, go:gguf.dequantIQ2_SInto
+
+Implement exact IQ2_S scalar and cooperative Metal kernels; reconstruct and retain one exact 2 KiB packed 1024-by-8 grid through gguf.Dequantize inside the existing IQ2 lifecycle; wire direct, resident, and recorder paths with an independent selector; add explicit recorder-only upload and Llama/Phi-3 loader admission; prove numerical parity, floating-point class, immutability, validation, routing, three fresh-process count-seven campaigns against scalar and fused ARM64 CPU controls, and identical-token whole-model reachability. Preserve CPU fallback for any losing direct host-bound route and archive pinned evidence.

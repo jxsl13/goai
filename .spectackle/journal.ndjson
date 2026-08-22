@@ -618,3 +618,14 @@
 {"t":"2026-08-22T13:34:04Z","eid":"a09f5b1717ee0ade","ag":"ag-a0fc","ev":"decide","id":"ADR-01M0MTV0RYEXWR38M3PX8WHZ5A","note":"Extend the IQ2 lifecycle with one exact 2 KiB packed IQ2_S grid buffer plus a type-specific parser and selector"}
 {"t":"2026-08-22T13:34:04Z","eid":"423e2b66d9475714","ag":"ag-a0fc","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T13:34:24Z","eid":"6b8c8aff3ef970e8","ag":"ag-db04","ev":"move","id":"P-01M0MTT417E27SQK7K6X6EM9E6","fr":"draft","to":"active"}
+{"t":"2026-08-22T13:34:36Z","eid":"3f0c53265326a043","ag":"ag-b72e","ev":"create","id":"T-01M0MTWC7GF978HFX19KW2WE6N","k":"task","ti":"Implement and gate native M2 Metal IQ2_S decode"}
+{"t":"2026-08-22T13:34:37Z","eid":"e70d5fa8622e12dd","ag":"ag-b72e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:06Z","eid":"3d6955346bb3efd2","ag":"ag-dff6","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:23Z","eid":"2bf58da8c2f16162","ag":"ag-914e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:26Z","eid":"f9cc009b51823806","ag":"ag-4f64","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:30Z","eid":"d48a095d5bcc773e","ag":"ag-543e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:33Z","eid":"f80f6a231c88a556","ag":"ag-9cf7","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:36Z","eid":"a7422f0182ee6746","ag":"ag-d613","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:39Z","eid":"e738925c760aa202","ag":"ag-d8a8","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:42Z","eid":"c6f21528846c5a2f","ag":"ag-5b0a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T13:35:56Z","eid":"55b59cd50382a089","ag":"ag-3f51","ev":"move","id":"T-01M0MTWC7GF978HFX19KW2WE6N","fr":"draft","to":"active"}
