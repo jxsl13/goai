@@ -216,3 +216,6 @@ WHEN an IQ3 Metal pipeline initializes, the Metal backend SHALL reconstruct the 
 
 ## METAL-IQ3-NUMERIC-001
 WHEN valid IQ3_S or IQ3_XXS matrix multiplication executes, the Metal backend SHALL match gguf.QMatMul within 1e-4 relative error and mutate zero activation or compressed-weight bytes.
+
+## METAL-IQ3-DISPATCH-001
+WHEN direct, resident, or recorder IQ3 dispatch selects a pipeline, the Metal backend SHALL use one shared cooperative predicate per wire type and bind the matching persistent grid at buffer index 4.
