@@ -344,3 +344,6 @@ Rationale: Unequal grouped projections retain every matrix output shape.
 WHEN 1 grouped fan-out combines Q4_K and Q6_K matrices with unequal row counts, the QMatMulTriple SHALL partition every matrix proportionally across every scheduler chunk, creating 0 quant-type-only tail chunks.
 
 Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial production pairs; proportional distribution produced the retained gain.
+
+## GGUF-Q4K-PAIRED-APPLY-001
+WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation and a nonnil eight-lane chunk consumer, the QMatMulPairApply SHALL invoke qmatmulParallelChunks 1 time, return 1 F32 output, invoke the consumer once per aligned chunk, and match QMatMulPair followed by that consumer bit-for-bit.
