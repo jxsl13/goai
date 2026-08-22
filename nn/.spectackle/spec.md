@@ -76,3 +76,6 @@ WHEN a CPU OpSigmoidFocalCore implementation is promoted, the benchmark gate SHA
 
 ## CPU-QUANT-SWIGLU-PAIRED-ROUTE-001
 WHEN eager CPU execution has matching Q4_K Gate and Up geometry, a contiguous F32 M1 input, and an aligned chunk fuser, the QuantSwiGLU.Forward SHALL use exactly 1 QMatMulPairApply call and pass its sole fused output to Down, while every unsupported route retains the established paired or 2-QuantLinear fallback.
+
+## CPU-QUANT-SWIGLU-PAIR-APPLY-PERF-001
+WHEN order-alternating fresh-process Apple M2 Pro campaigns measure the production Q4_K leaf and 64-step TinyLlama decode, the fused pair-to-SwiGLU route SHALL retain only with at least 1.10x leaf speedup, at least 1.03x whole-decode speedup, lower allocated bytes, and 1 exact final-logit digest.
