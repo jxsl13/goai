@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: active
 created: 2026-08-22
+grilled: 2026-08-22 open=0
 targets: go:gguf.qmatmulParallelChunks
 
 Profile-backed work-first fan-out experiment. Post-SwiGLU allocation profile attributes 52.49% of allocation objects to qmatmulParallelChunks. Preserve the tuned worker count, threshold, chunk boundaries, and per-row arithmetic; launch only chunks 1..N-1 and execute chunk 0 on the caller before waiting. This is distinct from rejected persistent mailbox pool P-01M0NA415WF6XT701CATX8HB8W, which was exact but throughput-neutral-to-negative. Retain only if exact digest, leaf allocation reduction, and alternating production A/B show non-regression with useful leverage.

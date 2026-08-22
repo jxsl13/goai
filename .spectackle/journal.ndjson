@@ -369,3 +369,6 @@
 {"t":"2026-08-22T19:55:08Z","eid":"107d2a6b4f1cb6a9","ag":"ag-be16","ev":"revise","id":"P-01M0NGMVFZFCWRVTT2WQRER49G","note":"body+targets revised"}
 {"t":"2026-08-22T19:55:08Z","eid":"dfe6c8493a0529ec","ag":"ag-be16","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T19:55:21Z","eid":"9769dfd4a933c95d","ag":"ag-9f8a","ev":"move","id":"P-01M0NGMVFZFCWRVTT2WQRER49G","fr":"draft","to":"active","note":"User-directed continuous M2-first performance work authorizes this measured, reversible experiment. Prior persistent-pool rejection is explicitly preserved; this tranche tests caller participation only."}
+{"t":"2026-08-22T19:55:29Z","eid":"e6146b4c04a117f6","ag":"ag-8282","ev":"grill","id":"P-01M0NGMVFZFCWRVTT2WQRER49G","gr":"2026-08-22 open=0","hash":"de026e41fd02d3903619abe770be9ba7d5f25cec37464baf0eacb789da43a136"}
+{"t":"2026-08-22T19:55:29Z","eid":"a63cf80befa1496a","ag":"ag-8282","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T19:55:37Z","eid":"c4945d1c2a5e0726","ag":"ag-a48e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
