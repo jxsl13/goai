@@ -150,3 +150,6 @@ Rationale: This is the exact GGUF Q4_1 wire contract.
 
 ## METAL-Q4-1-DISPATCH-001
 WHEN type-3 Q4_1 receives valid F32 activations and a valid quantized matrix, the Metal backend SHALL support synchronous, resident, and recorder matmul dispatch with K divisible by 32 and exactly 20 bytes per weight block.
+
+## METAL-Q4-1-NUMERIC-001
+WHEN a valid Q4_1 matmul executes, the Metal kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
