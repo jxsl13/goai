@@ -3882,16 +3882,6 @@ option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining 
 option: Adopt Q8_K activation conversion to mirror llama.cpp
 choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
 
-## P-01M0M5K15NFPX87P7G6KCGPSYN Complete GGUF Q4_1 and M2 fused decode
-kind: proposal
-state: done
-created: 2026-08-22
-refs: ADR-01M0M5SFB8ESSBR5PGTAK7PV07
-grilled: 2026-08-22 open=0
-targets: format/gguf, go:gguf.Quantize, go:gguf.Dequantize, go:gguf.decodeTensor, go:gguf.QMatMul
-
-Add pinned ggml wire type 3 Q4_1 as an exact 32-value, 20-byte affine block across byte sizing, public quantize/dequantize, eager Read, ReadRaw plus QuantTensor.Dequantize, WriteQuantized, and portable F32/F64 QMatMul. Add a zero-allocation Apple ARM64 fused M1 row-dot path that preserves the portable decoded-value semantics and validate it against arbitrary raw blocks, cancellation-heavy inputs, cross-architecture builds, race, external perfscan, and retained fresh-process benchmarks. ADR-01M0M5SFB8ESS fixes the architecture boundary: the native Metal per-call and resident kernels remain a separate immediate follow-up proposal after the format and CPU contract lands; Metal and Vulkan type 3 must continue returning backend.ErrQuantUnsupported until their separately benchmarked backend changes are validated. Wire and reference semantics are pinned to llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786.
-
 ## ADR-01M0M5SFB8ESSBR5PGTAK7PV07 How should GGUF Q4_1 be introduced without violating GoAI format and backend boundaries or conflating CPU and GPU performance claims?
 kind: adr
 state: done
