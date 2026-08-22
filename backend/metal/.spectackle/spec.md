@@ -299,3 +299,6 @@ WHEN arbitrary raw TQ2_0 codes execute on Metal, the Metal TQ2_0 kernel SHALL ma
 
 ## METAL-TQ-NUMERIC-001
 WHEN valid TQ1_0 or TQ2_0 matrix multiplication executes, the Metal TQ backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and mutate 0 activation or compressed-weight bytes for both wire types.
+
+## METAL-TQ-DISPATCH-001
+WHEN direct, resident, or recorder TQ dispatch selects a pipeline, the Metal TQ backend SHALL select exactly 1 scalar or cooperative format-specific pipeline through 1 shared per-format predicate.
