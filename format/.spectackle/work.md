@@ -104,7 +104,7 @@ Prototype is reproducible: fusedRows helper over the existing per-row dot functi
 
 ## T-01M0KT35PPFRR82JRYRPP9PFMM Implement and statistically gate complete TQ1_0 support and M2 ARM64 fused row dot
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0KT0ECBEK5R2GZA7M6PJZ83
 grilled: 2026-08-22 open=0
