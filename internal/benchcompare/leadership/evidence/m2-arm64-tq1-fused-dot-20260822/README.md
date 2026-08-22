@@ -112,9 +112,12 @@ change. Their rules are `TQ1-FORMAT-001`, `TQ1-PORTABLE-QMATMUL-001`,
 
 Final reindex records 2,692 files, 18,249 nodes, 33,654 edges, and 6,756
 typed calls. The fully paged check has zero drift; lint retains 133 existing
-warnings and zero errors. One additional VAC warning incorrectly treats
-`range 100` as possibly empty; the isolated Go 1.22 integer-range defect is
-reported as [Spectackle issue #277](https://github.com/jxsl13/spectackle/issues/277).
+warnings and zero errors. The pre-archive task check additionally exposed a
+VAC warning that incorrectly treats `range 100` as possibly empty; the
+isolated Go 1.22 integer-range defect is reported as
+[Spectackle issue #277](https://github.com/jxsl13/spectackle/issues/277).
+After archival, the final fully paged check returns only the repository's 133
+existing warnings and still reports zero drift.
 
 ## Final validation
 
