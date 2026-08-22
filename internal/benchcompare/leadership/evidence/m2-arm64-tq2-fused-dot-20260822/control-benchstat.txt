@@ -1,0 +1,22 @@
+                         │ /private/tmp/tq2-control-base.txt │ /private/tmp/tq2-control-candidate.txt │
+                         │              sec/op               │     sec/op       vs base               │
+DequantQ1_0-12                                   258.5µ ± 1%       257.3µ ± 2%       ~ (p=1.000 n=10)
+DequantTQ1_0-12                                  270.5µ ± 3%       269.9µ ± 2%       ~ (p=1.000 n=10)
+QMatMulTQ1_0_M1_N4096-12                         200.1µ ± 5%       200.1µ ± 2%       ~ (p=0.579 n=10)
+geomean                                          241.0µ            240.4µ       -0.24%
+
+                         │ /private/tmp/tq2-control-base.txt │ /private/tmp/tq2-control-candidate.txt │
+                         │                B/s                │       B/s        vs base               │
+DequantQ1_0-12                                  136.0Mi ± 1%      136.6Mi ± 2%       ~ (p=1.000 n=10)
+DequantTQ1_0-12                                 195.0Mi ± 3%      195.4Mi ± 2%       ~ (p=1.000 n=10)
+QMatMulTQ1_0_M1_N4096-12                        78.07Gi ± 5%      78.10Gi ± 2%       ~ (p=0.579 n=10)
+geomean                                         1.254Gi           1.257Gi       +0.24%
+
+                         │ /private/tmp/tq2-control-base.txt │ /private/tmp/tq2-control-candidate.txt │
+                         │               B/op                │         B/op          vs base          │
+QMatMulTQ1_0_M1_N4096-12                        17.09Ki ± 0%           17.09Ki ± 0%  ~ (p=0.586 n=10)
+
+                         │ /private/tmp/tq2-control-base.txt │ /private/tmp/tq2-control-candidate.txt │
+                         │             allocs/op             │     allocs/op       vs base            │
+QMatMulTQ1_0_M1_N4096-12                          29.00 ± 0%           29.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal

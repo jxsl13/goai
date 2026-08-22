@@ -1,0 +1,19 @@
+Pinned llama.cpp commit: 3af988fabcf79fd81f8720505e684d2aa5bfc786
+Build: Release static CPU; Metal, BLAS, and Accelerate disabled
+Samples: 10 fresh processes; no samples removed
+
+Median f32 caller boundary, K=4096: 5497.518 ns/op
+Median f32 caller boundary, N=64, K=1024: 2311.625 ns/op
+Median dot-only, K=4096: 57.862 ns/op
+Median Q8_K activation quantization, K=4096: 5447.206 ns/op
+
+GoAI direct-F32 median, K=4096: 734.5 ns/op
+GoAI direct-F32 median, N=64, K=1024: 11910 ns/op
+
+The K=4096 GoAI boundary is approximately 7.48x faster. At N=64/K=1024,
+llama.cpp is approximately 5.15x faster. These are boundary observations, not
+leadership claims: llama.cpp quantizes the F32 activation to Q8_K and reuses
+that lower-precision activation across rows, whereas GoAI preserves a direct
+F32 activation boundary and exact decoded-weight semantics. The llama.cpp
+dot-only number excludes the required activation conversion and is not
+compared with the GoAI leaf.

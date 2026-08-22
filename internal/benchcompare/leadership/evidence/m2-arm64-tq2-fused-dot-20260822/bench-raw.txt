@@ -1,0 +1,129 @@
+=== sample 1 order=scalar-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/scalar-12 	  125839	      4714 ns/op	3475.54 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/neon-12   	  839091	       715.0 ns/op	22915.28 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7705	     75094 ns/op	3490.87 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   51049	     11724 ns/op	22359.97 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     864	    697620 ns/op	24049.23 MB/s	   17797 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12           	    3404	    172997 ns/op	96979.66 MB/s	   17410 B/op	      29 allocs/op
+PASS
+
+=== sample 2 order=neon-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/neon-12   	  775076	       734.5 ns/op	22307.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/scalar-12 	  126616	      4797 ns/op	3415.75 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50600	     11876 ns/op	22072.81 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    8000	     76085 ns/op	3445.39 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12  	    3333	    173849 ns/op	96504.46 MB/s	   17491 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     836	    705275 ns/op	23788.21 MB/s	   17442 B/op	      29 allocs/op
+PASS
+
+=== sample 3 order=scalar-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/scalar-12 	  124497	      4807 ns/op	3408.63 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/neon-12   	  830220	       727.0 ns/op	22535.07 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7954	     76181 ns/op	3441.05 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50082	     11871 ns/op	22081.96 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     862	    706162 ns/op	23758.31 MB/s	   17758 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12           	    3075	    178458 ns/op	94012.21 MB/s	   17410 B/op	      29 allocs/op
+PASS
+
+=== sample 4 order=neon-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/neon-12   	  827818	       730.3 ns/op	22434.70 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/scalar-12 	  125020	      4771 ns/op	3433.92 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50455	     11872 ns/op	22080.95 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    8049	     75556 ns/op	3469.51 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12  	    3322	    173988 ns/op	96427.64 MB/s	   17493 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     848	    721459 ns/op	23254.58 MB/s	   17426 B/op	      29 allocs/op
+PASS
+
+=== sample 5 order=scalar-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/scalar-12 	  124303	      4806 ns/op	3409.30 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/neon-12   	  834768	       736.7 ns/op	22239.58 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7720	     75968 ns/op	3450.73 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50343	     11939 ns/op	21956.05 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     860	    707468 ns/op	23714.44 MB/s	   17760 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12           	    3223	    175825 ns/op	95419.87 MB/s	   17410 B/op	      29 allocs/op
+PASS
+
+=== sample 6 order=neon-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/neon-12   	  782680	       734.6 ns/op	22302.71 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/scalar-12 	  127002	      4798 ns/op	3414.74 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50384	     11855 ns/op	22112.27 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7947	     76393 ns/op	3431.50 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12  	    3126	    174390 ns/op	96205.34 MB/s	   17499 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     868	    717912 ns/op	23369.46 MB/s	   17440 B/op	      29 allocs/op
+PASS
+
+=== sample 7 order=scalar-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/scalar-12 	  124468	      4811 ns/op	3405.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/neon-12   	  795122	       730.0 ns/op	22442.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7639	     76468 ns/op	3428.14 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   48379	     12267 ns/op	21370.47 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     704	    849607 ns/op	19747.03 MB/s	   17900 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12           	    3231	    185655 ns/op	90367.54 MB/s	   17410 B/op	      29 allocs/op
+PASS
+
+=== sample 8 order=neon-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/neon-12   	  797571	       743.4 ns/op	22039.72 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/scalar-12 	  125437	      4805 ns/op	3409.59 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   49836	     11935 ns/op	21963.96 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    8001	     76373 ns/op	3432.41 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12  	    3274	    175196 ns/op	95762.29 MB/s	   17494 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     834	    757266 ns/op	22154.98 MB/s	   17479 B/op	      29 allocs/op
+PASS
+
+=== sample 9 order=scalar-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/scalar-12 	  122730	      4873 ns/op	3362.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/neon-12   	  803019	       745.2 ns/op	21987.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7680	     78147 ns/op	3354.50 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   47613	     12343 ns/op	21238.74 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     699	    853936 ns/op	19646.92 MB/s	   17877 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12           	    3230	    186365 ns/op	90023.60 MB/s	   17410 B/op	      29 allocs/op
+PASS
+
+=== sample 10 order=neon-first ===
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkDotTQ2Paths/neon-12   	  776434	       735.7 ns/op	22270.19 MB/s	       0 B/op	       0 allocs/op
+BenchmarkDotTQ2Paths/scalar-12 	  121333	      4815 ns/op	3402.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/neon-12    	   50289	     12042 ns/op	21768.84 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N64_K1024/scalar-12  	    7752	     76382 ns/op	3432.03 MB/s	     592 B/op	       4 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/neon-12  	    3270	    175517 ns/op	95587.16 MB/s	   17493 B/op	      29 allocs/op
+BenchmarkQMatMulTQ2Paths/N4096_K1024/scalar-12         	     867	    714825 ns/op	23470.38 MB/s	   17441 B/op	      29 allocs/op
+PASS

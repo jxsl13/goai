@@ -1,0 +1,18 @@
+Candidate benchmark binary:
+eeb5b4facf84d0356466fccc8d11340c493af0ec1387223fcab2b60e1000a408
+
+Symbol sizes:
+dotTQ2RowARM64 wrapper: 176 bytes
+dotTQ2RowNeon.abi0 leaf: 2752 bytes
+
+Inspected operations:
+- 16 packed bytes loaded per plane segment
+- VAND and VUSHR extract shifts 0, 2, 4, and 6
+- VSUB maps raw two-bit codes from 0..3 to signed -1..+2
+- existing VTBL signed-byte expansion feeds SCVTF conversion
+- FMUL applies the per-block f16 scale in F32
+- FCVTL widens weights and activations
+- four float64 VFMLA partial accumulators persist across the row
+- final float64 vector and lane reduction
+- no call inside the assembly leaf
+- zero stack and zero allocation
