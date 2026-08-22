@@ -1,0 +1,9 @@
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernIQ4
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernIQ4/Q4_1
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernIQ4/IQ4_NL
+=== RUN   TestQuantLlamaFromGGUFAdmitsModernIQ4/IQ4_XS
+--- PASS: TestQuantLlamaFromGGUFAdmitsModernIQ4 (0.01s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernIQ4/Q4_1 (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernIQ4/IQ4_NL (0.00s)
+    --- PASS: TestQuantLlamaFromGGUFAdmitsModernIQ4/IQ4_XS (0.00s)
+PASS

@@ -186,3 +186,21 @@ WHEN three count-seven M2 campaigns cover representative resident single-token I
 
 ## METAL-IQ4NL-HOST-ROUTE-001
 WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_NL by at least 1.10 times, the generic Metal IQ4_NL dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.
+
+## METAL-IQ4XS-BLOCK-001
+WHEN a GGUF type-23 IQ4_XS super-block is decoded, the Metal IQ4_XS kernel SHALL read one f16 super-scale, eight packed signed six-bit sub-scales, and eight split-half nonlinear nibble groups from exactly 136 bytes.
+
+## METAL-IQ4XS-DISPATCH-001
+WHEN host-bound QuantMatMul or UploadQuant receives type-23 IQ4_XS, the Metal backend SHALL return backend.ErrQuantUnsupported while explicit IQ4_XS and llamagpu resident recorder APIs provide native dispatch.
+
+## METAL-IQ4XS-NUMERIC-001
+WHEN a valid IQ4_XS matmul executes, the Metal IQ4_XS kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
+
+## METAL-IQ4XS-FALLBACK-001
+WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal IQ4_XS selector SHALL dispatch the scalar IQ4_XS pipeline and issue zero cooperative IQ4_XS threadgroups.
+
+## METAL-IQ4XS-PERF-001
+WHEN three count-seven M2 campaigns cover representative resident single-token IQ4_XS shapes, the cooperative Metal route SHALL remain enabled only when every eligible median is at least 1.10 times scalar control with identical allocation semantics.
+
+## METAL-IQ4XS-HOST-ROUTE-001
+WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_XS by at least 1.10 times, the generic Metal IQ4_XS dispatch SHALL return backend.ErrQuantUnsupported so QuantLinear executes the faster CPU path.

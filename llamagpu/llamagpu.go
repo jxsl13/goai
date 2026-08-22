@@ -223,6 +223,9 @@ func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {
 	if qt == 20 { // GGUF IQ4_NL: same recorder-only boundary after the M2 host-route gate.
 		return metal.UploadQWeightIQ4_NL(weight, n, k)
 	}
+	if qt == 23 { // GGUF IQ4_XS: exact 256-value nonlinear super-blocks, recorder-only on M2.
+		return metal.UploadQWeightIQ4_XS(weight, n, k)
+	}
 	rw, err := metal.Backend{}.UploadQuant(weight, qt, n, k)
 	if err != nil {
 		return nil, err

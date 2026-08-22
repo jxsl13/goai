@@ -15,7 +15,10 @@ import (
 func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte {
 	blocks := shape.Numel() / 32
 	blockBytes := 18
-	if qt == gguf.Q4_1 {
+	if qt == gguf.IQ4_XS {
+		blocks = shape.Numel() / 256
+		blockBytes = 136
+	} else if qt == gguf.Q4_1 {
 		blockBytes = 20
 	}
 	raw := make([]byte, blocks*blockBytes)
@@ -23,7 +26,14 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 		base := block * blockBytes
 		binary.LittleEndian.PutUint16(raw[base:], 0x3000) // f16 d=0.125
 		start := 2
-		if qt == gguf.Q4_1 {
+		if qt == gguf.IQ4_XS {
+			binary.LittleEndian.PutUint16(raw[base:], 0x1000) // small f16 d
+			binary.LittleEndian.PutUint16(raw[base+2:], 0xaaaa)
+			for i := 4; i < 8; i++ {
+				raw[base+i] = 0x11 // every signed 6-bit sub-scale is one
+			}
+			start = 8
+		} else if qt == gguf.Q4_1 {
 			binary.LittleEndian.PutUint16(raw[base+2:], 0) // f16 m=0
 			start = 4
 		}
@@ -34,12 +44,11 @@ func readOnlyQuantBytes(shape tensor.Shape, qt gguf.QuantType, seed int) []byte 
 	return raw
 }
 
-// The real raw-GGUF loader admits modern 32-value read-only quant formats without eagerly
-// expanding their projection weights. Q4_1 is the affine type-3 path and IQ4_NL exercises the
-// type-20 nonlinear codebook path that native Metal consumes.
-func TestQuantLlamaFromGGUFAdmitsQ4_1AndIQ4NL(t *testing.T) {
+// The real raw-GGUF loader admits modern read-only quant formats without eagerly expanding their
+// projection weights, including IQ4_XS's 256-value nonlinear super-blocks.
+func TestQuantLlamaFromGGUFAdmitsModernIQ4(t *testing.T) {
 	m, err := nlp.NewLlama(nlp.LlamaConfig{
-		Vocab: 12, Ctx: 16, Dim: 32, Heads: 4, KVHeads: 2, Layers: 1, Hidden: 32, Eps: 1e-5, RopeBase: 10000,
+		Vocab: 12, Ctx: 16, Dim: 256, Heads: 8, KVHeads: 2, Layers: 1, Hidden: 256, Eps: 1e-5, RopeBase: 10000,
 	}, 17)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +71,7 @@ func TestQuantLlamaFromGGUFAdmitsQ4_1AndIQ4NL(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		qt   gguf.QuantType
-	}{{"Q4_1", gguf.Q4_1}, {"IQ4_NL", gguf.IQ4_NL}} {
+	}{{"Q4_1", gguf.Q4_1}, {"IQ4_NL", gguf.IQ4_NL}, {"IQ4_XS", gguf.IQ4_XS}} {
 		t.Run(tc.name, func(t *testing.T) {
 			qt := tc.qt
 			tensors := make(map[string]gguf.QuantTensor, len(rf.Tensors))

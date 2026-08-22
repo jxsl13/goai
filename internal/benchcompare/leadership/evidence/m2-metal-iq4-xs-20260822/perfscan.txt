@@ -1,0 +1,47 @@
+External perfscan differential
+================================
+
+Binary module:
+  github.com/jxsl13/perfscan v1.80.0
+  h1:mTlw3TBV6zeFDQ6IbAONPoBVdd/+o3S28U8G/TgW/8c=
+  release commit 1bc90de7cfc5cdcf1f53a8a19e0b7e1bf9359c66
+  built with Go 1.26.6
+  GOPROXY=direct for remote version resolution
+
+Exact base:
+  0d18e097a5f293cb5750d181a922c53a63b8c989
+
+Scopes:
+  ./backend/metal ./llamagpu ./nlp
+  production scan plus -tests scan
+
+Production differential:
+  Findings were normalized by file + rule + message because the inserted Metal
+  API shifts existing line numbers.
+  candidate unique findings in changed production Go files: 7
+  base unique findings in changed production Go files:      7
+  added normalized findings:                                0
+  removed normalized findings:                              0
+
+New/changed test differential:
+  PS6023 required an asynchronous host/device evidence manifest. The benchmark
+  now records hardware, geometry, storage policies, eight warmups, interleaved
+  sampling, seven samples in each of three campaigns, device and host-boundary
+  ratios, unchanged controls, working-set sweep, 1% noise, 1.05x promotion,
+  exactness, and finite-output status.
+
+  Declined PS4001 at five IQ4_XS constructors with explicit suppressions. Each
+  write is a strided two-byte f16 field inside a heterogeneous 136-byte block;
+  a same-layout bulk copy cannot replace it. These are test setup, outside the
+  measured region.
+
+  candidate unique findings in changed/new test Go files: 7
+  base unique findings in changed test Go files:          7
+  added normalized findings:                              0
+  removed normalized findings:                            0
+
+Result:
+  zero actionable new perfscan findings.
+
+Generalizable report:
+  https://github.com/jxsl13/perfscan/issues/820#issuecomment-5379800507

@@ -132,6 +132,11 @@ int mtl_qmatmul_q4_1(const float* X, const unsigned char* W, float* O, int M, in
 // K must be a multiple of 32. Returns 0 on success.
 int mtl_qmatmul_iq4_nl(const float* X, const unsigned char* W, float* O, int M, int K, int N);
 
+// mtl_qmatmul_iq4_xs computes O[M,N] = X[M,K] · dequant(W)ᵀ where each type-23
+// 256-element super-block stores f16 d, eight signed 6-bit sub-scales, and 128
+// split-half nonlinear-codebook nibbles. K must be a multiple of 256.
+int mtl_qmatmul_iq4_xs(const float* X, const unsigned char* W, float* O, int M, int K, int N);
+
 // mtl_qmatmul_q4k computes O[M,N] = X[M,K] · dequant(W)ᵀ where W is a Q4_K-quantized [N,K]
 // weight (row-major, K/256 super-blocks per row of 144 bytes, §R100) — the DOMINANT real-world
 // quant (the bulk of Q4_K_M models), dequantized IN-KERNEL: asymmetric affine
@@ -149,6 +154,7 @@ void mtl_set_coop_max_m(int m);
 int mtl_q4_0_cooperative_set(int on);
 int mtl_q4_1_cooperative_set(int on);
 int mtl_iq4_nl_cooperative_set(int on);
+int mtl_iq4_xs_cooperative_set(int on);
 int mtl_q8_0_cooperative_set(int on);
 int mtl_q3k_cooperative_set(int on);
 int mtl_q4k_cooperative_set(int on);

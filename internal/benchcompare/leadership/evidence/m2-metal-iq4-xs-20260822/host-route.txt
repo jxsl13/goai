@@ -1,0 +1,33 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2486608 ns/op	     84058 cpu-wall-ns/op	    226679 metal-direct-wall-ns/op	         0.3708 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2455250 ns/op	     83599 cpu-wall-ns/op	    223213 metal-direct-wall-ns/op	         0.3745 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2376942 ns/op	     83920 cpu-wall-ns/op	    213119 metal-direct-wall-ns/op	         0.3938 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2324125 ns/op	     82697 cpu-wall-ns/op	    207753 metal-direct-wall-ns/op	         0.3981 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2257967 ns/op	     82740 cpu-wall-ns/op	    199429 metal-direct-wall-ns/op	         0.4149 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2232983 ns/op	     82699 cpu-wall-ns/op	    196366 metal-direct-wall-ns/op	         0.4211 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/kv-12 	       5	   2324175 ns/op	     80319 cpu-wall-ns/op	    210112 metal-direct-wall-ns/op	         0.3823 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3667650 ns/op	    188978 cpu-wall-ns/op	    269352 metal-direct-wall-ns/op	         0.7016 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3580842 ns/op	    188898 cpu-wall-ns/op	    258643 metal-direct-wall-ns/op	         0.7303 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3680942 ns/op	    188354 cpu-wall-ns/op	    271703 metal-direct-wall-ns/op	         0.6932 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3744008 ns/op	    189870 cpu-wall-ns/op	    277991 metal-direct-wall-ns/op	         0.6830 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3651517 ns/op	    190182 cpu-wall-ns/op	    266173 metal-direct-wall-ns/op	         0.7145 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3562458 ns/op	    188365 cpu-wall-ns/op	    256811 metal-direct-wall-ns/op	         0.7335 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/square-12         	       5	   3593950 ns/op	    191791 cpu-wall-ns/op	    257384 metal-direct-wall-ns/op	         0.7452 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   6884700 ns/op	    420657 cpu-wall-ns/op	    439834 metal-direct-wall-ns/op	         0.9564 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   6691200 ns/op	    431237 cpu-wall-ns/op	    405070 metal-direct-wall-ns/op	         1.065 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   6729083 ns/op	    433019 cpu-wall-ns/op	    408024 metal-direct-wall-ns/op	         1.061 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   7233975 ns/op	    432369 cpu-wall-ns/op	    471793 metal-direct-wall-ns/op	         0.9164 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   6980075 ns/op	    431271 cpu-wall-ns/op	    441150 metal-direct-wall-ns/op	         0.9776 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   7305350 ns/op	    432785 cpu-wall-ns/op	    480269 metal-direct-wall-ns/op	         0.9011 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/gate-12           	       5	   7378017 ns/op	    451305 cpu-wall-ns/op	    470846 metal-direct-wall-ns/op	         0.9585 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   7336758 ns/op	    444186 cpu-wall-ns/op	    472817 metal-direct-wall-ns/op	         0.9394 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   7007092 ns/op	    445132 cpu-wall-ns/op	    430657 metal-direct-wall-ns/op	         1.034 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   7270033 ns/op	    443948 cpu-wall-ns/op	    464719 metal-direct-wall-ns/op	         0.9553 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   7238483 ns/op	    444561 cpu-wall-ns/op	    460167 metal-direct-wall-ns/op	         0.9661 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   6901625 ns/op	    444431 cpu-wall-ns/op	    418170 metal-direct-wall-ns/op	         1.063 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   7550392 ns/op	    445054 cpu-wall-ns/op	    498638 metal-direct-wall-ns/op	         0.8925 metal-vs-cpu-wall-x
+BenchmarkMetalIQ4XSHostRouteCampaign/down-12           	       5	   6839175 ns/op	    445080 cpu-wall-ns/op	    409647 metal-direct-wall-ns/op	         1.086 metal-vs-cpu-wall-x
+PASS

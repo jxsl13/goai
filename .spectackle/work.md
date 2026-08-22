@@ -3896,3 +3896,19 @@ option: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validat
 option: Add Q4_1 CPU, Metal, and Vulkan support together in one tranche.
 option: Expose Q4_1 only through eager dequantization without a fused CPU path.
 choice: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.
+
+## ADR-01M0MF9FBXEM4BRKZ9AYYVEADW Which Apple M2 execution boundary should own IQ4_XS after the existing fused ARM64 M1 path?
+kind: adr
+state: done
+created: 2026-08-22
+context: IQ4_XS adds packed signed sub-scales on top of the IQ4_NL nonlinear codebook. The prior IQ4_NL tranche proved that leaf GPU speed and host-bound routing can diverge, so route ownership must follow matched-boundary measurements rather than format similarity.
+decision: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.
+consequences: Implement direct IQ4_XS only as an explicit test/control API, keep Backend.QMatMul and Backend.UploadQuant on ErrQuantUnsupported for type 23 unless the host-bound campaign overturns the assumption, and opt llamagpu into an exact resident recorder path. Reject or redesign the tranche if rotating-weight and whole-decoder gates do not show repeatable leverage.
+status: accepted
+
+kind: radio
+option: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.
+option: Enable both generic host-I/O and resident Metal paths only if each independently beats the fused ARM64 control.
+option: Defer Metal IQ4_XS if neither boundary produces repeatable end-to-end leverage.
+blocks: P-01M0MF818FE9XBQTDC8B3P8RN8
+choice: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.

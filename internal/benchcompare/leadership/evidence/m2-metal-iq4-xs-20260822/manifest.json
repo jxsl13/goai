@@ -1,0 +1,32 @@
+{
+  "schema": "goai.leadership-evidence.v1",
+  "date": "2026-08-22",
+  "base_commit": "0d18e097a5f293cb5750d181a922c53a63b8c989",
+  "hardware": {
+    "model": "Mac14,10",
+    "soc": "Apple M2 Pro",
+    "memory_bytes": 34359738368,
+    "os": "macOS 26.5.1 (25F80)",
+    "arch": "arm64"
+  },
+  "toolchain": {
+    "go": "go1.26.6 darwin/arm64",
+    "perfscan": "github.com/jxsl13/perfscan v1.80.0",
+    "perfscan_commit": "1bc90de7cfc5cdcf1f53a8a19e0b7e1bf9359c66"
+  },
+  "binaries": {
+    "metal_test_sha256": "b2e1158968652e1efefa35cc4a9a46b5ddb63f04561b456f48f88b11adf68cf4",
+    "llamagpu_test_sha256": "f247013654284cb4f99133a278a9ad7d0cb47827502754c12e8b64e577f0799a",
+    "nlp_test_sha256": "d4217d8da59f2bd36ad8711ef670e138d3e8615b1614d306be5ceeb886832546"
+  },
+  "campaign": {
+    "fresh_processes": 3,
+    "samples_per_shape_per_process": 7,
+    "iterations_per_sample": 3,
+    "warmups": 8,
+    "resident_weights_per_shape": 16,
+    "outlier_removal": false,
+    "promotion_ratio": 1.05,
+    "host_noise_band": 0.01
+  }
+}
