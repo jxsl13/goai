@@ -238,3 +238,8 @@ Rationale: Single-token direct-F32 decode is the M2 CPU hot path; the portable s
 The IQ1_M QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The native leaf assumes Apple ARM64 F32 row layout and must not leak into portable or prefill semantics.
+
+## Q1-FORMAT-001 {applies: go:gguf.byteSize,go:gguf.decodeTensor,go:gguf.Quantize,go:gguf.Dequantize}
+WHEN ggml type 41 Q1_0 data is encoded or decoded, the format APIs SHALL preserve 18-byte blocks of 128 weights, f16 scale, LSB-first sign bits, and bit-one positive semantics.
+
+Rationale: End-to-end support prevents a fast QMatMul path from accepting bytes that Read, QuantTensor.Dequantize, Quantize, or Dequantize cannot reproduce.
