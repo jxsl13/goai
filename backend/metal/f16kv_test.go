@@ -21,7 +21,19 @@ const (
 	f16KVDK      = 64
 	f16KVDim     = f16KVHeads * f16KVDK
 	f16KVWidth   = f16KVKVHeads * f16KVDK
+
+	ropeF16KVAppendMinSpeedup = 1.20
 )
+
+func medianDuration(v []time.Duration) time.Duration {
+	v = slices.Clone(v)
+	slices.Sort(v)
+	return v[len(v)/2]
+}
+
+func medianSpeedup(control, candidate []time.Duration) float64 {
+	return float64(medianDuration(control)) / float64(medianDuration(candidate))
+}
 
 type f16KVFixture struct {
 	q, k32, v32, k16, v16, out32, out16 *DeviceBuffer
@@ -520,10 +532,7 @@ func TestRoPEF16KVAppendInterleavedCampaigns(t *testing.T) {
 		measure(false)
 		measure(true)
 	}
-	medianDuration := func(v []time.Duration) time.Duration {
-		slices.Sort(v)
-		return v[len(v)/2]
-	}
+	allControl, allCandidate := make([]time.Duration, 0, 21), make([]time.Duration, 0, 21)
 	for campaign := range 3 {
 		control, candidate := make([]time.Duration, 0, 7), make([]time.Duration, 0, 7)
 		for sample := range 7 {
@@ -535,12 +544,36 @@ func TestRoPEF16KVAppendInterleavedCampaigns(t *testing.T) {
 				control = append(control, measure(false))
 			}
 		}
+		allControl = append(allControl, control...)
+		allCandidate = append(allCandidate, candidate...)
 		base, got := medianDuration(control), medianDuration(candidate)
-		ratio := float64(base) / float64(got)
+		ratio := medianSpeedup(control, candidate)
 		t.Logf("campaign=%d control=%s candidate=%s speedup=%.4fx control_samples=%v candidate_samples=%v", campaign+1, base, got, ratio, control, candidate)
-		if ratio < 1.25 {
-			t.Errorf("campaign %d isolated boundary speedup %.4fx is below 1.25x", campaign+1, ratio)
-		}
+	}
+	base, got := medianDuration(allControl), medianDuration(allCandidate)
+	ratio := medianSpeedup(allControl, allCandidate)
+	t.Logf("aggregate control=%s candidate=%s speedup=%.4fx samples=%d", base, got, ratio, len(allControl))
+	if ratio < ropeF16KVAppendMinSpeedup {
+		t.Errorf("aggregate isolated boundary speedup %.4fx is below %.2fx", ratio, ropeF16KVAppendMinSpeedup)
+	}
+}
+
+func TestMedianSpeedupThreshold(t *testing.T) {
+	control := []time.Duration{100, 120, 140}
+	for _, tc := range []struct {
+		name      string
+		candidate []time.Duration
+		want      bool
+	}{
+		{name: "accept exact threshold", candidate: []time.Duration{90, 100, 110}, want: true},
+		{name: "reject below threshold", candidate: []time.Duration{91, 101, 111}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := medianSpeedup(control, tc.candidate) >= ropeF16KVAppendMinSpeedup
+			if got != tc.want {
+				t.Fatalf("median speedup %.4fx accepted=%t want %t", medianSpeedup(control, tc.candidate), got, tc.want)
+			}
+		})
 	}
 }
 

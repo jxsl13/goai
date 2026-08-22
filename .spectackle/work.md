@@ -3998,3 +3998,11 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## T-01M0NSQZNEEYNR4G4AADP15281 Aggregate the RoPE F16-KV CI timing gate
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0NSPZ36FZKRC1N1CFER4XCG
+
+Keep the exact 22-layer command-buffer shape, warmups, three count-seven order-alternated campaigns, and per-campaign logs. Accumulate all 21 control and candidate timings, compare their aggregate medians, require at least 1.20x speedup, and add deterministic unit coverage proving the threshold accepts 1.20x and rejects any smaller ratio. Validate repeated fresh native Metal test-binary runs before PR.
