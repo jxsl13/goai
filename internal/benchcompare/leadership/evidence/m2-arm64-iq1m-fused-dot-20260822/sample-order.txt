@@ -1,0 +1,25 @@
+Final path comparison, one fresh candidate process per sample, 500ms:
+1 neon-first
+2 scalar-first
+3 neon-first
+4 scalar-first
+5 neon-first
+6 scalar-first
+7 neon-first
+8 scalar-first
+9 neon-first
+10 scalar-first
+
+Baseline/candidate controls, one fresh process per binary, 500ms:
+1 baseline then candidate
+2 candidate then baseline
+3 baseline then candidate
+4 candidate then baseline
+5 baseline then candidate
+6 candidate then baseline
+7 baseline then candidate
+8 candidate then baseline
+9 baseline then candidate
+10 candidate then baseline
+
+No final sample was removed.

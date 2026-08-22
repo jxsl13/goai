@@ -76,6 +76,10 @@ var dotIQ2SRowFn = dotIQ2SRow
 // with a tolerance-gated fused ternary-grid/odd-scale/signed-delta dot.
 var dotIQ1SRowFn = dotIQ1SRow
 
+// dotIQ1MRowFn is dotIQ1MRow (scalar) on portable builds. ARM64 overrides it
+// with a tolerance-gated fused split-scale/ternary-grid/paired-odd-scale dot.
+var dotIQ1MRowFn = dotIQ1MRow
+
 // dotQ3KRowFn is dotQ3_KRow (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated vector unpack-scale-dot kernel.
 var dotQ3KRowFn = dotQ3_KRow
@@ -305,7 +309,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// value into a later return. That would have made this function report a gap it no
 	// longer has, and silenced the check for whoever adds the next quant type.
 	if m == 1 && xf32 != nil &&
-		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == IQ2_XXS || qt == IQ2_XS || qt == IQ2_S || qt == IQ1_S || qt == MXFP4) {
+		(qt == Q2_K || qt == Q3_K || qt == Q4_K || qt == Q5_K || qt == Q6_K || qt == IQ4_NL || qt == IQ4_XS || qt == IQ3_S || qt == IQ3_XXS || qt == IQ2_XXS || qt == IQ2_XS || qt == IQ2_S || qt == IQ1_S || qt == IQ1_M || qt == MXFP4) {
 		var dot func([]float32, []byte, int) float64
 		switch qt {
 		case Q2_K:
@@ -334,6 +338,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dot = dotIQ2SRowFn
 		case IQ1_S:
 			dot = dotIQ1SRowFn
+		case IQ1_M:
+			dot = dotIQ1MRowFn
 		case MXFP4:
 			dot = dotMXFP4RowFn
 		}
@@ -353,7 +359,7 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 	// aggressive quants — complete the set). Fill + dot are byte-for-byte the per-row form.
 	// qt is validated once here (loop-invariant), so the per-ni body below cannot error.
 	switch qt {
-	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, IQ2_XXS, IQ2_XS, IQ2_S, IQ1_S, MXFP4:
+	case Q8_0, Q4_0, Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, IQ4_NL, IQ4_XS, IQ3_S, IQ3_XXS, IQ2_XXS, IQ2_XS, IQ2_S, IQ1_S, IQ1_M, MXFP4:
 	default:
 		return nil, fmt.Errorf("gguf: QMatMul unsupported quant type %d", qt)
 	}
@@ -394,6 +400,8 @@ func QMatMul(x *tensor.Tensor, weight []byte, qt QuantType, n, k int) (*tensor.T
 			dequantIQ2_SInto(scratch, rowBits)
 		case IQ1_S:
 			dequantIQ1_SInto(scratch, rowBits)
+		case IQ1_M:
+			dequantIQ1_MInto(scratch, rowBits)
 		case MXFP4:
 			dequantMXFP4Into(scratch, rowBits)
 		}
