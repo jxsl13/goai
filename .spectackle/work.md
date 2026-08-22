@@ -3925,7 +3925,7 @@ choice: Enable Metal only for compressed resident full-decoder execution and ret
 
 ## T-01M0MFBC0WFSXT8GYGN5CC5PAZ Implement and benchmark native Metal IQ4_XS
 kind: task
-state: active
+state: done
 created: 2026-08-22
 parent: P-01M0MF818FE9XBQTDC8B3P8RN8
 refs: ADR-01M0MF9FBXEM4BRKZ9AYYVEADW
