@@ -183,3 +183,6 @@ WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable,
 
 ## METAL-IQ4NL-PERF-001
 WHEN three count-seven M2 campaigns cover representative resident single-token IQ4_NL shapes, the cooperative Metal route SHALL remain enabled only when every eligible median is at least 1.10 times scalar control with identical allocation semantics.
+
+## METAL-IQ4NL-HOST-ROUTE-001
+WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_NL by at least 1.10 times, the generic Metal IQ4_NL dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.
