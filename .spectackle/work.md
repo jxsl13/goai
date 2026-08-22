@@ -4010,7 +4010,7 @@ Add an eager CPU single-token projection primitive that computes three unequal-r
 
 ## T-01M0NNSG1BFVM9ZBCY1C056216 Implement and gate mixed-shape CPU QKV fan-out
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0NNS1C0FMETR9BVNZ6R7DJ2
 

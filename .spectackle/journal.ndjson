@@ -400,3 +400,4 @@
 {"t":"2026-08-22T21:24:53Z","eid":"73904c84ab2a3ef7","ag":"ag-1c79","ev":"create","id":"T-01M0NNSG1BFVM9ZBCY1C056216","k":"task","ti":"Implement and gate mixed-shape CPU QKV fan-out"}
 {"t":"2026-08-22T21:24:54Z","eid":"fc5eb9cb7ad059bd","ag":"ag-1c79","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T21:25:09Z","eid":"4c23882531e200dc","ag":"ag-f420","ev":"grill","id":"P-01M0NNS1C0FMETR9BVNZ6R7DJ2","gr":"2026-08-22 open=0","hash":"8d1e601a49fa913134fa539bf558cc59419e59936a0385576ccf7fcf2f61749c"}
+{"t":"2026-08-22T21:25:41Z","eid":"6c99cd49b2b72c8f","ag":"ag-4a5b","ev":"move","id":"T-01M0NNSG1BFVM9ZBCY1C056216","fr":"draft","to":"active","note":"Begin bounded implementation after proposal grill passed with no open questions."}
