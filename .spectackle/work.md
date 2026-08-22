@@ -3897,16 +3897,6 @@ option: Add Q4_1 CPU, Metal, and Vulkan support together in one tranche.
 option: Expose Q4_1 only through eager dequantization without a fused CPU path.
 choice: Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes.
 
-## P-01M0MF818FE9XBQTDC8B3P8RN8 Add native M2 Metal IQ4_XS quantized decode
-kind: proposal
-state: active
-created: 2026-08-22
-refs: ADR-01M0MF9FBXEM4BRKZ9AYYVEADW
-grilled: 2026-08-22 open=1
-targets: go:gguf.dequantIQ4_XS, go:gguf.QMatMul, go:nlp.quantMatMulSupported, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go, nlp/quant_phi3_gguf.go
-
-Extend the merged IQ4_NL Metal foundation to exact GGUF type 23 IQ4_XS on Apple M2. Preserve each 136-byte, 256-weight super-block: f16 super-scale, packed 6-bit signed sub-scales, eight 32-weight nonlinear-codebook groups, and low-half/high-half nibble order. Add direct and resident recorder kernels, real raw-GGUF admission, and a measured host-versus-resident routing split. Require reference exactness within a stated tolerance, malformed-layout rejection, three independent rotating-weight campaigns, whole-decoder reachability, external perfscan differential, and versioned raw evidence. Keep CPU fallback wherever equal-boundary Metal loses.
-
 ## ADR-01M0MF9FBXEM4BRKZ9AYYVEADW Which Apple M2 execution boundary should own IQ4_XS after the existing fused ARM64 M1 path?
 kind: adr
 state: done
