@@ -347,3 +347,6 @@ WHEN the fused single-token RoPE and f16 KV append executes, the Metal fusion SH
 
 ## METAL-ROPE-F16KV-PERF-001
 WHEN three count-seven M2 campaigns compare fused and control paths, the promotion gate SHALL retain fusion only when its boundary is at least 1.25 times faster and every TinyLlama decode campaign is at least 1.01 times faster.
+
+## METAL-ROPE-PAIR-F16KV-NUMERIC-001
+WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.

@@ -14,3 +14,9 @@ WHEN the decoder path is not Metal f16-KV single-token separate-QKV full-RoPE wi
 
 ## METAL-ROPE-F16KV-COUNT-001
 WHEN the trained 22-layer TinyLlama decode is profiled with fusion enabled, the Metal decoder SHALL replace 20 RoPE and 10 paired-copy events with 10 fused events while preserving 12 grouped-layer events.
+
+## METAL-ROPE-PAIR-F16KV-SCOPE-001
+WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equal to 64, the decoder selector SHALL execute rope_pair plus paired append and issue 0 grouped fused dispatches.
+
+## METAL-ROPE-F16KV-COMBINED-COUNT-001
+WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.

@@ -741,3 +741,7 @@
 {"t":"2026-08-22T17:10:05Z","eid":"2616c1b33adf3a4b","ag":"ag-d01a","ev":"create","id":"T-01M0N76XV8FB2TDN83KH0BHED6","k":"task","ti":"Implement and gate grouped-QKV RoPE-f16-KV append"}
 {"t":"2026-08-22T17:10:05Z","eid":"435a520b547f4c3e","ag":"ag-d01a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T17:10:18Z","eid":"9e59d443d8bbfe18","ag":"ag-c34f","ev":"move","id":"T-01M0N76XV8FB2TDN83KH0BHED6","fr":"draft","to":"active"}
+{"t":"2026-08-22T17:10:31Z","eid":"1c87e0ba00817787","ag":"ag-e8dd","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T17:10:34Z","eid":"a2e47a34160810ca","ag":"ag-5bb8","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T17:10:36Z","eid":"910124d2936b0497","ag":"ag-a397","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T17:10:44Z","eid":"3252e77e5e2b78ef","ag":"ag-21cb","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
