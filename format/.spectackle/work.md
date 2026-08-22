@@ -102,15 +102,6 @@ OPTIONS for the decision: (a) land as prototyped with the threshold, accepting n
 
 Prototype is reproducible: fusedRows helper over the existing per-row dot functions, guarded by workers>1 and n*k >= 1<<15.
 
-## P-01M0M13SZGFBNBZQ7FJDD13JV8 Correct GGUF IQ1_S and IQ2_S wire type IDs
-kind: proposal
-state: active
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: go:gguf.tIQ1_S, go:gguf.tIQ2_S, format/gguf
-
-Correct the public and internal GGUF wire identifiers to the pinned ggml enum: IQ1_S is type 19 and IQ2_S is type 22. Reserve type 24 for I8 instead of silently decoding it as IQ1_S. Add file-level and API regression tests that prove type-19 and type-22 dispatch, type-24 rejection until I8 is implemented, unchanged block sizes, and unchanged QMatMul kernel selection. This is a correctness prerequisite for credible performance work because current real GGUF files route to the wrong decoder or accept a distinct scalar type.
-
 ## ADR-01M0M15D3HFHN8QZ8WQD932W4B How should GoAI correct the conflicting IQ1_S, IQ2_S, and I8 wire identifiers?
 kind: adr
 state: done

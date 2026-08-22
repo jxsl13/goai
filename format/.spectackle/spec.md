@@ -46,6 +46,7 @@ LANDED: commit 621f4b68. Learning in PERF-FASTPATH-FAMILY-001 and NUM-ACCUM-NARR
 - T-01KYJPSGQMFGER0YD90EG3PGRK Eliminate the bounds checks and unhoisted scale products in the Q4_K and Q6_K dequant loops: compact
 - ADR-01KYMWJ76AFA2BJ9R8ZE403KB1 May format/gguf QMatMul parallelize across output rows, and under what pooling policy?: compact
 - T-01M0KT35PPFRR82JRYRPP9PFMM Implement and statistically gate complete TQ1_0 support and M2 ARM64 fused row dot: Archived after verified implementation and evidence commit a3228e3f. The retained design uses exact mixed-radix arithmetic instead of a 1,280-byte package lookup table because that rejected table caused a 2.46% unrelated Q1_0 dequant control regression. Generalized findings are perfscan issues 816 and 817; a fixed-count VAC false positive is Spectackle issue 277.
+- P-01M0M13SZGFBNBZQ7FJDD13JV8 Correct GGUF IQ1_S and IQ2_S wire type IDs: Completed the strict GGUF wire-ID correction. GoAI now matches pinned ggml for IQ1_S=19, IQ2_S=22, and reserved I8=24; every supported read and QMatMul entry point agrees and unsupported type 24 can no longer be misidentified. Decoder and ARM64 performance remain statistically neutral. The evidence and ADR preserve the compatibility decision and migration consequence.
 
 ## SAFETENSORS-PARTIAL-LOAD-OWNERSHIP-001
 WHEN reading one tensor from a regular safetensors file, the safetensors.LoadTensor SHALL validate the selected byte range against os.File.Stat, return 1 independently owned tensor, materialize 0 other tensors, and retain 0 mapped bytes after LoadTensor returns.
