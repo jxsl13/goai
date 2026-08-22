@@ -3998,11 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0ND1PT6EMKSAX9S889TRKQ5 Profile and reduce M2 CPU quantized decode allocations
-kind: proposal
-state: done
-created: 2026-08-22
-targets: go:nlp.QuantLlama.DecodeStep, go:gguf.QMatMul, internal/benchcompare/prod_cpu_quant_test.go
-
-Production TinyLlama Q4_K_M CPU decode on Apple M2 Pro currently reports a median 279,642,384 allocated bytes and 296,507 allocations for 64 timed DecodeStep calls while preserving digest ea3df5516f17df83. First attribute allocations with representative active-work profiles, then implement only a narrowly owned reuse or into-style boundary whose end-to-end gain survives alternating-order measurement. Preserve exact output digest, CPU fallback behavior, context/cache semantics, and supported quant formats. Reject candidates that only move allocation accounting, retain unbounded buffers, regress median decode latency, or repeat the rejected per-call QMatMul pool experiment.
