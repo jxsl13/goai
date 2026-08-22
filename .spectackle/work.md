@@ -3994,7 +3994,7 @@ choice: Independent scalar/cooperative pipelines per format under a shared lifec
 
 ## T-01M0N0AVG4EHQS8RNM42QXVNVY Implement and gate native M2 Metal Q1_0 and MXFP4 decode
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0N04WSRFV7A6MC3TV25CE7X
 targets: go:gguf.dequantQ1_0, go:gguf.dequantMXFP4, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.m, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
