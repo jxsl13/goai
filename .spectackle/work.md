@@ -3922,14 +3922,3 @@ option: Enable both generic host-I/O and resident Metal paths only if each indep
 option: Defer Metal IQ4_XS if neither boundary produces repeatable end-to-end leverage.
 blocks: P-01M0MF818FE9XBQTDC8B3P8RN8
 choice: Enable Metal only for compressed resident full-decoder execution and retain ARM64 for generic host-I/O calls when equal-boundary benchmarks show that split.
-
-## T-01M0MFBC0WFSXT8GYGN5CC5PAZ Implement and benchmark native Metal IQ4_XS
-kind: task
-state: done
-created: 2026-08-22
-parent: P-01M0MF818FE9XBQTDC8B3P8RN8
-refs: ADR-01M0MF9FBXEM4BRKZ9AYYVEADW
-grilled: 2026-08-22 open=4
-targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, llamagpu/llamagpu.go, go:nlp.quantMatMulSupported, nlp/quant_phi3_gguf.go
-
-Implement exact GGUF type-23 IQ4_XS MSL scalar and cooperative kernels, compressed resident upload, recorder dispatch, and full-decoder routing. Add real raw-GGUF admission and 256-element row geometry without eager dequantization. Validate against gguf.QMatMul across direct and recorder paths, floating-point classes, malformed buffers, input immutability, and full-decoder token parity. Benchmark equal host boundaries and three independent 16-weight resident campaigns; retain CPU generic fallback unless Metal wins that exact cell. Run repository/Metal preflight, Spectackle zero-drift, and external perfscan v1.71.0 with GOPROXY=direct; commit raw evidence and report generalizable findings.
