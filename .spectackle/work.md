@@ -3982,3 +3982,25 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
+
+## T-01M0MN13H5FABT5D8NY04RSQ51 Implement and benchmark native Metal IQ2_XXS and IQ2_XS
+kind: task
+state: active
+created: 2026-08-22
+refs: P-01M0MMVKG2FHST9M8AWFQJ213X, ADR-01M0MMYANQFBNVT5BDZ667SCTC
+grilled: 2026-08-22 open=8
+targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, internal/benchcompare/leadership
+
+Implement the approved IQ2-family vertical slice.
+
+Acceptance:
+1. Exact persistent codebooks for wire types 16 and 17 are reconstructed through GGUF public truth and uploaded once.
+2. Scalar and M=1 SIMD-group cooperative Metal kernels pass adversarial/random cross-backend tests.
+3. Direct, resident, and recorder selectors share readiness and per-type predicates.
+4. Quantized Llama-family and Phi-3 loaders preserve IQ2 compressed bytes.
+5. Three fresh-process resident campaigns clear 1.10x for GPU and wall time in every required cell before cooperative defaults are promoted.
+6. Resident Metal clears 1.10x over fused ARM64 CPU in every required cell/campaign.
+7. Generic synchronous host Metal remains unselected unless it independently clears 1.10x.
+8. Whole-token generation is token-identical and clears 1.02x.
+9. Exact base/candidate perfscan ratchets and durable evidence are committed.
+10. Full Go, Metal, race-relevant, CUDA compile, Vulkan compile/test, and repository policy checks are green before merge.
