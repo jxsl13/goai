@@ -243,3 +243,26 @@ WHEN the route is promoted on M2, the Metal IQ2 cooperative route SHALL exceed s
 
 ## METAL-IQ2-HOST-ROUTE-001
 IF either IQ2 format fails to beat the fused ARM64 CPU route by at least 1.10x in every required host cell and campaign, THEN the generic synchronous Metal quant dispatcher SHALL retain CPU fallback for that format.
+
+## METAL-IQ1S-BLOCK-001
+WHEN a GGUF wire type 19 IQ1_S super-block is decoded, the Metal IQ1_S decoder SHALL decode each 50-byte block as one f16 scale, thirty-two 11-bit indices, thirty-two sign or delta bits, and eight packed multipliers, producing exactly 256 values.
+
+Rationale: Exact wire compatibility is required before performance promotion.
+
+## METAL-IQ1M-BLOCK-001
+WHEN a GGUF wire type 29 IQ1_M super-block is decoded, the Metal IQ1_M decoder SHALL decode each 56-byte block as four split-f16 scale words, thirty-two 11-bit indices, four high-bit bytes, and sixteen packed sub-scales, producing exactly 256 values.
+
+## METAL-IQ1-GRID-RESIDENCY-001
+WHEN wire type 19 or 29 is first used, the Metal IQ1 runtime SHALL reconstruct the shared 2048-by-8 ternary grid through gguf.Dequantize exactly once and retain one immutable process-lifetime Metal buffer.
+
+## METAL-IQ1-NUMERIC-001
+WHEN valid IQ1_S or IQ1_M matrix multiplication executes, the Metal IQ1 backend SHALL match gguf.QMatMul within 1e-4 relative error, preserve floating-point class, and mutate zero activation or compressed-weight bytes.
+
+## METAL-IQ1-DISPATCH-001
+WHEN direct, resident, or recorder IQ1 dispatch selects a pipeline, the Metal IQ1 backend SHALL select exactly one scalar or cooperative pipeline through a format-specific predicate and bind the persistent grid at buffer index 4.
+
+## METAL-IQ1-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token IQ1 shape, the cooperative route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
+
+## METAL-IQ1-HOST-ROUTE-001
+IF either IQ1 format fails to beat fused ARM64 CPU by 1.10 times in any required host cell or campaign, THEN the generic synchronous Metal quant dispatcher SHALL retain CPU fallback for that format.

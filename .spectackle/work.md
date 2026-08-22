@@ -3951,3 +3951,39 @@ Shared algebra and lifecycle have one implementation, while a regression or weak
 
 ## Alternatives rejected
 Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
+
+## P-01M0MQYAGFF3PRC2P0632PCDDB Accelerate resident IQ1 decode on M2 Metal
+kind: proposal
+state: active
+created: 2026-08-22
+grilled: 2026-08-22 open=0
+targets: go:gguf.dequantIQ1_SInto, go:gguf.dequantIQ1_MInto, go:metal.uploadResident, go:llamagpu.metalUploadQWeight, backend/metal/metal_bridge.c, nlp/quant_llama_gguf.go
+
+Add exact native Metal IQ1_S and IQ1_M resident matvec paths for M=1 transformer decode, sharing a one-time device-resident ternary codebook while preserving each wire format independently. Gate promotion on cross-reference parity, immutable inputs, validation failures, fresh-process count-seven GPU and wall-time campaigns, a fused ARM64 CPU baseline, whole-token reachability with identical tokens, and unchanged-control drift. Keep host-bound synchronous execution on CPU unless measurements prove Metal wins. Admit GGUF loader formats only where the recorder path is complete. Pin benchmark evidence and report any generalizable optimization to perfscan.
+
+## ADR-01M0MR09H9ERTTFKQGTM705Z2Z How should Metal IQ1_S and IQ1_M share lookup and dispatch infrastructure while retaining independent performance gates?
+kind: adr
+state: done
+created: 2026-08-22
+rounds: 1
+context: Both formats use the same 2048-by-8 ternary grid and delta algebra but have distinct 50-byte and 56-byte block layouts, scale encoding, and potential crossover behavior.
+decision: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
+consequences: One exact lookup truth source and one initialization path reduce lifecycle and parity risk. Independent parsers and selectors prevent one format from masking a losing benchmark cell in the other. Host-bound promotion remains separately measured, and scalar kernels remain callable controls.
+status: accepted
+
+kind: radio
+option: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
+option: Duplicate all lookup and lifecycle state per format
+option: Use literal shader lookup tables and one family-wide promotion flag
+blocks: P-01M0MQYAGFF3PRC2P0632PCDDB
+choice: Share one exact process-lifetime grid buffer and lifecycle, with type-specific parsers, toggles, and benchmark verdicts
+
+## T-01M0MR12RWF4182FZMHZXDZN7D Implement and gate native M2 Metal IQ1 decode
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0MQYAGFF3PRC2P0632PCDDB
+grilled: 2026-08-22 open=10
+targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, go:gguf.dequantIQ1_SInto, go:gguf.dequantIQ1_MInto
+
+Implement exact IQ1_S and IQ1_M scalar and cooperative Metal kernels; reconstruct and retain one shared exact ternary grid through gguf.Dequantize; wire direct, resident, and recorder paths with per-format controls; add explicit recorder-only uploads and loader admission; prove correctness, immutability, validation, routing, fresh-process count-seven performance against scalar and fused ARM64 CPU controls, and identical-token whole-model reachability. Preserve CPU fallback for losing host-bound routes and archive pinned evidence.
