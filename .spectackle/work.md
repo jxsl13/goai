@@ -3982,3 +3982,36 @@ option: Independent scalar/cooperative pipelines per format under a shared lifec
 option: One shared kernel with a qtype branch in the decode hot loop
 blocks: P-01M0N04WSRFV7A6MC3TV25CE7X
 choice: Independent scalar/cooperative pipelines per format under a shared lifecycle and benchmark family
+
+## ADR-01M0N3M3BGFPN8F0JPQ9D0H259 How should normal Metal recorder dispatches eliminate encoder boundaries while preserving dependency and profiler semantics?
+kind: adr
+state: done
+created: 2026-08-22
+context: The production command already batches one token per command buffer. Cross-dispatch buffer dependencies are common, profiling needs distinct encoder timestamps, and MPS/blit cannot encode while a compute encoder is active.
+decision: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+consequences: Normal recorders gain an internal wrapper and explicit lifecycle transitions; every dependent custom compute dispatch receives a buffer visibility barrier. Blit and MPS operations force an encoder close, and finish, commit, and free close any active encoder. Profiling recorders retain one encoder per labeled event, so current attribution remains comparable. If whole-token M2 evidence does not clear the promotion gate, the structure is removed rather than shipped.
+status: accepted
+
+kind: radio
+option: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+option: Retain one compute encoder without barriers and rely on implicit ordering
+option: Keep one encoder per operation and only optimize host recorder allocation
+blocks: P-01M0N3K92DE8VSC1V55JPA14K7
+choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0N48W6AF54SY958QMSD4465 Pack resident Metal quant weights into an aligned model arena
+kind: proposal
+state: active
+created: 2026-08-22
+grilled: 2026-08-22 open=0
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, llamagpu/llamagpu.go, llamagpu/decoder.go, docs/benchmarking.md
+
+Production M2 attribution shows quantized matmuls consume about 77.6% of explicit token work, while large Q4_K streams already reach about 92% of peak DRAM bandwidth. The decoder currently uploads every projection into a distinct MTLBuffer and rebinds 131 quant resources per TinyLlama Q4_K_M token. Test whether one model-scoped, 256-byte-aligned MTLBuffer arena with per-weight offsets improves whole-command GPU scheduling, resource tracking, and address translation without changing kernel arithmetic. First build a native production-geometry probe comparing identical bytes and dispatch order across separate buffers versus one arena; do not redesign ownership unless the probe clears 1.05x across three count-seven M2 campaigns. If it clears, introduce explicit arena lifetime, offset-aware resident views, exact close/error semantics, standalone-upload fallback, and whole-token trained-model validation. Preserve profiling labels, all quant formats, portable backends, and host-bound CPU routing.
+
+## T-01M0N49976EVYTJ08QW1KTVW1K Measure separate buffers against one aligned Metal weight arena
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0N48W6AF54SY958QMSD4465
+
+Build a test-only native probe with the production Q4_K projection geometry, identical 256-byte-aligned bytes, identical dispatch and encoder order, one complete command buffer per sample, and separate-buffer versus single-arena arms. Run three fresh-process count-seven AB/BA campaigns using GPU command duration. Promote the model-scoped arena redesign only if every campaign median reaches 1.05x; otherwise remove the probe and reject the proposal.
