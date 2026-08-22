@@ -3929,37 +3929,6 @@ option: Implement IQ3_XXS first, then duplicate the framework for IQ3_S.
 blocks: P-01M0MJ2RYQF4QR01T9CCYCBQSS
 choice: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.
 
-## P-01M0MMVKG2FHST9M8AWFQJ213X Add native M2 Metal IQ2 family decode
-kind: proposal
-state: done
-created: 2026-08-22
-refs: ADR-01M0MMYANQFBNVT5BDZ667SCTC
-grilled: 2026-08-22 open=0
-targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go, internal/benchcompare/leadership
-
-## Problem
-GGUF IQ2_XXS (type 16) and IQ2_XS (type 17) already have exact decoders and zero-allocation ARM64 fused CPU dot products, but quantized model admission and the native Metal direct, resident, and recorder paths stop at IQ3/IQ4. On M2 this forces repeated CPU execution for the most compressed two-bit model weights.
-
-## Decision
-Add one shared IQ2 Metal-family tranche with independent type selectors and promotion gates.
-
-- Reconstruct each fixed 8-value codebook exactly once through the public GGUF decoder and upload it to an immutable process-lifetime Metal buffer.
-- Add scalar reference kernels and M=1 SIMD-group cooperative kernels for IQ2_XXS and IQ2_XS.
-- Use one SIMD group per output row and two groups per 64-thread threadgroup.
-- Add direct, resident, and recorder dispatch using the same shape predicate and codebook readiness invariant.
-- Admit types 16 and 17 in quantized Llama-family and Phi-3 loaders.
-- Keep generic host-dispatch on CPU unless synchronous Metal beats the fused ARM64 CPU path by at least 1.10x in every required shape and campaign.
-- Promote recorder residency only after three fresh-process scalar/cooperative/scalar campaigns clear both GPU-time and wall-time gates.
-
-## Correctness
-For deterministic adversarial and random blocks, direct, resident, and recorder output must match gguf.QMatMul within the existing cross-backend tolerance. The scalar and cooperative Metal kernels must agree within tolerance. Whole-token generation must produce identical tokens.
-
-## Performance matrix
-On the M2 host, measure M=1 at N/K cells 512/2048, 2048/2048, 5632/2048, and 2048/5632. Resident campaigns use 16 distinct weights; host campaigns use 8. Run three fresh processes, count 7, in AB and BA order. A promotion requires at least 1.10x in every cell/campaign for both GPU duration and recorder wall time, plus at least 1.10x resident Metal over the existing fused ARM64 CPU path. Whole-token reachability requires identical tokens and at least 1.02x.
-
-## Scope boundary
-Do not generalize speculative packed-load changes. This tranche adds missing native capability and reuses the established IQ3 residency architecture. Vulkan/CUDA parity is follow-up work after the M2-first leadership matrix is proven.
-
 ## ADR-01M0MMYANQFBNVT5BDZ667SCTC Share exact IQ2 Metal codebook infrastructure while gating formats independently
 kind: adr
 state: approved
