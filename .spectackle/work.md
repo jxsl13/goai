@@ -3869,7 +3869,7 @@ choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 
 ## P-01M0KPSF31FYVAEB7ZHPN5Y4AS M2-first complete Q1_0 GGUF support and fused row dot
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 grilled: 2026-08-22 open=0
 targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md

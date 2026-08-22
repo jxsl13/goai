@@ -321,3 +321,6 @@
 {"t":"2026-08-22T03:04:01Z","eid":"c1f14834c7f7dccc","ag":"ag-26d6","ev":"grill","id":"P-01M0KPSF31FYVAEB7ZHPN5Y4AS","gr":"2026-08-22 open=0","hash":"dfbc0db3a568d3318efaa7259a17755080404ef431e665932b16e267f8adf56c"}
 {"t":"2026-08-22T03:04:02Z","eid":"0d53a54e39efbb83","ag":"ag-26d6","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T03:04:26Z","eid":"44133f9e48f291bd","ag":"ag-71ea","ev":"revise","id":"P-01M0KPSF31FYVAEB7ZHPN5Y4AS","note":"body revised"}
+{"t":"2026-08-22T03:04:36Z","eid":"36bb2c9315c3b1e5","ag":"ag-9ab1","ev":"grill","id":"P-01M0KPSF31FYVAEB7ZHPN5Y4AS","gr":"2026-08-22 open=0","hash":"1b11f897c6492f2c05401e6a8dc5c93746aa0281052288bb3100ebd678b44840"}
+{"t":"2026-08-22T03:04:37Z","eid":"f925967a482d4b42","ag":"ag-9ab1","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T03:04:47Z","eid":"695de15be24fc068","ag":"ag-dcaa","ev":"move","id":"P-01M0KPSF31FYVAEB7ZHPN5Y4AS","fr":"draft","to":"active","note":"Approved under the standing bottom-up M2-first goal after confirming Q1_0 at 1.125 bpw precedes TQ1_0 and has no prior rejection. Exact source pins and the 2x statistical gate are recorded in the proposal."}
