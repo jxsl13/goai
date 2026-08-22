@@ -190,7 +190,7 @@ WHEN contiguous F32 M1 activations use IQ2_S weights, the Apple ARM64 IQ2_S sele
 
 Rationale: Single-token decode is the M2 CPU latency cell where fused unpack and dot has measured leverage across the aggressive-quant family.
 
-## ARM64-IQ2S-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul}
+## ARM64-IQ2S-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul,go:gguf.TestQMatMulIQ2SSelectorScope}
 The IQ2_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The ARM64 leaf must not narrow portable dtype, shape, or architecture semantics.
