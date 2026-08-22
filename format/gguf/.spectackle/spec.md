@@ -347,3 +347,6 @@ Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial 
 
 ## GGUF-Q4K-PAIRED-APPLY-001
 WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation and a nonnil eight-lane chunk consumer, the QMatMulPairApply SHALL invoke qmatmulParallelChunks 1 time, return 1 F32 output, invoke the consumer once per aligned chunk, and match QMatMulPair followed by that consumer bit-for-bit.
+
+## GGUF-Q4K-PAIRED-SCRATCH-001
+The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the final chunk, retain capacities no larger than 65,536 F32 values, and expose 0 scratch aliases to callers.
