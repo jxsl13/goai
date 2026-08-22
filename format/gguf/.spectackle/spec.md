@@ -217,3 +217,8 @@ Rationale: Single-token direct-F32 decode is the M2 CPU hot path; the portable s
 The IQ1_S QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The specialized leaf assumes contiguous F32 activations and must not alter portable or prefill semantics.
+
+## IQ1M-PORTABLE-QMATMUL-001 {applies: go:gguf.QMatMul,go:gguf.dequantIQ1_M}
+WHEN IQ1_M weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve split-f16 super-scale reconstruction, 2048 ternary grid rows, packed 11-bit indices, paired odd multipliers, signed 0.125 deltas, float32 scaling, ascending mapping, and float64 accumulation.
+
+Rationale: The portable path is the semantic oracle and direct-F32/F64 boundary for every architecture-specific IQ1_M optimization.
