@@ -424,3 +424,24 @@
 {"t":"2026-08-22T07:22:30Z","eid":"f5ac95864a6355aa","ag":"ag-5125","ev":"create","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","k":"proposal","ti":"Complete GGUF Q4_1 and M2 fused decode"}
 {"t":"2026-08-22T07:23:01Z","eid":"ecf7a1d605e15ec3","ag":"ag-13e1","ev":"revise","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","note":"body+targets revised"}
 {"t":"2026-08-22T07:23:23Z","eid":"94d07d23b4b1b400","ag":"ag-db2f","ev":"grill","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","gr":"2026-08-22 open=0","hash":"b640d3073d9e6fbfbfa8b9cc2cafae629001edd6648a37264dc7557fa81106b7"}
+{"t":"2026-08-22T07:26:01Z","eid":"280b3806b8ac5f3c","ag":"ag-2d20","ev":"create","id":"ADR-01M0M5SFB8ESSBR5PGTAK7PV07","k":"adr","ti":"How should GGUF Q4_1 be introduced without violating GoAI format and backend boundaries or conflating CPU and GPU performance claims?"}
+{"t":"2026-08-22T07:26:01Z","eid":"ba9b3c3b6aef27cc","ag":"ag-2d20","ev":"move","id":"ADR-01M0M5SFB8ESSBR5PGTAK7PV07","fr":"draft","to":"submitted"}
+{"t":"2026-08-22T07:26:02Z","eid":"8add47514fb912d8","ag":"ag-2d20","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:26:21Z","eid":"b6b6ee038e54a866","ag":"ag-a13d","ev":"decide","id":"ADR-01M0M5SFB8ESSBR5PGTAK7PV07","note":"Stage Q4_1 format fidelity, public APIs, portable QMatMul, and a validated Apple ARM64 fused M=1 row-dot first; keep Metal and Vulkan type 3 unsupported until separately benchmarked backend changes."}
+{"t":"2026-08-22T07:26:22Z","eid":"0e6b03dbde48c2a4","ag":"ag-a13d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:27:06Z","eid":"dc346c7b6838e13f","ag":"ag-0b95","ev":"revise","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","note":"body+targets+refs revised"}
+{"t":"2026-08-22T07:27:06Z","eid":"81ab55f926281a31","ag":"ag-0b95","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:27:14Z","eid":"0e03faa98b21fcf7","ag":"ag-bbc0","ev":"grill","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","gr":"2026-08-22 open=0","hash":"907327dcb2ae9e5a408afc17b7b034b965fcf911e5c03905bdde7215d0907ead"}
+{"t":"2026-08-22T07:27:15Z","eid":"82fc23ff11c401a7","ag":"ag-bbc0","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:27:54Z","eid":"cd549dc3c0e38243","ag":"ag-bbbd","ev":"move","id":"P-01M0M5K15NFPX87P7G6KCGPSYN","fr":"draft","to":"active","note":"Approved by the standing user mandate to continue the bottom-up M2-first performance roadmap; architecture and source pin are recorded in ADR-01M0M5SFB8ESS."}
+{"t":"2026-08-22T07:27:54Z","eid":"3db44cff9c31f723","ag":"ag-bbbd","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:28:12Z","eid":"8d799b116af84b08","ag":"ag-0e26","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:01Z","eid":"522866e48e75001c","ag":"ag-c93b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:14Z","eid":"9fc537518728f9ca","ag":"ag-5d70","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:27Z","eid":"de01eb7a73ad6bf5","ag":"ag-722c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:38Z","eid":"e75e170b9e39fb4b","ag":"ag-f0b9","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:47Z","eid":"4f1e280992bf4b43","ag":"ag-72c2","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:29:59Z","eid":"9fcd4768821e9b7f","ag":"ag-7442","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:30:58Z","eid":"de970b40165991d8","ag":"ag-b2c5","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:31:12Z","eid":"17350f44d5170282","ag":"ag-f8a1","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T07:31:21Z","eid":"92ff67ba285410bc","ag":"ag-ebcc","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

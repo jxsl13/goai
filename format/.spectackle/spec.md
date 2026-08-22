@@ -53,3 +53,23 @@ WHEN reading one tensor from a regular safetensors file, the safetensors.LoadTen
 
 ## GGUF-RAW-MMAP-LIFETIME-001
 WHEN gguf.OpenRaw maps a regular GGUF file, the returned *gguf.RawFileHandle SHALL retain the mapping until RawFileHandle.Close, call munmapFile exactly once, invalidate every QuantTensor.Data view after RawFileHandle.Close, and make RawFileHandle.Close a no-op on the buffered fallback.
+
+## GGUF-Q4-1-WIRE-001
+WHEN a GGUF tensor with wire type 3 is sized, decoded, quantized, dequantized, read, or written, the format/gguf SHALL use 32-value, 20-byte Q4_1 blocks and reject every non-block-aligned length or dimension with a non-nil error.
+
+Rationale: The wire contract is pinned to llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786.
+
+## GGUF-Q4-1-BLOCK-001
+The Q4_1 block codec SHALL store FP16 scale at bytes 0..1, FP16 minimum at bytes 2..3, low nibbles for values 0..15, and high nibbles for values 16..31.
+
+Rationale: Exact nibble ordering and stored-FP16 arithmetic are required for cross-tool wire compatibility.
+
+## QMATMUL-Q4-1-ARM64-001
+WHEN F32 Q4_1 matrix-vector multiplication runs on Apple ARM64, the QMatMul SHALL dispatch an allocation-free fused row-dot and differ from the portable decoded-value result by at most 2e-5 absolute plus 2e-5 relative error on arbitrary raw and cancellation inputs.
+
+Rationale: The build-tagged fast path must preserve decoded-value semantics while avoiding materialized weights.
+
+## Q4-1-BACKEND-BOUNDARY-001
+WHEN wire type 3 reaches a GPU backend before its separate benchmarked proposal lands, the Metal and Vulkan quantized matmul dispatch SHALL return backend.ErrQuantUnsupported and perform zero implicit eager-dequantization fallbacks inside that backend.
+
+Rationale: ADR-01M0M5SFB8ESS separates format and CPU validation from independently measured GPU paths.
