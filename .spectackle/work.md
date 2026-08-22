@@ -3866,3 +3866,11 @@ option: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 option: Bundle IQ3_S and IQ3_XXS portable support but accelerate only IQ3_S
 option: Bundle and accelerate both IQ3 formats in one tranche
 choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; defer IQ3_XXS to its own tranche
+
+## P-01M0KPSF31FYVAEB7ZHPN5Y4AS M2-first complete Q1_0 GGUF support and fused row dot
+kind: proposal
+state: draft
+created: 2026-08-22
+targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md
+
+Add pinned ggml Q1_0 type 41 end to end: 18-byte/128-weight block sizing, eager and raw-tensor dequantization, public Quantize and Dequantize, portable F32/F64 QMatMul, and an M2 ARM64 contiguous-F32 M1 whole-row leaf. Preserve f16 scale, LSB-first sign bits, bit-one positive semantics, float32 weights, ascending mapping, and float64 accumulation. Benchmark every path with retained fresh-process samples and controls; require at least 2x in the accelerated leaf, N64, and N4096 cells with flat allocations and maximum scalar-relative error at most 1e-4. The pinned llama.cpp comparison is semantic only because its ARM kernel consumes Q8_0 activations.
