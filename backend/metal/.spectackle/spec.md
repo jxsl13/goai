@@ -334,3 +334,6 @@ WHEN direct, resident, or recorder Q1_0 or MXFP4 dispatch selects a pipeline, th
 
 ## METAL-Q1-MXFP4-FALLBACK-001
 WHEN M exceeds the cooperative limit or 32-lane SIMD groups are unavailable, the Metal selector SHALL dispatch the matching scalar Q1_0 or MXFP4 pipeline and issue exactly zero cooperative threadgroups for that format.
+
+## METAL-Q1-MXFP4-PERF-001
+WHEN three fresh-process count-seven M2 campaigns cover every representative resident single-token cell for one format, the cooperative Q1_0 or MXFP4 route SHALL exceed scalar control by at least 1.10 times for GPU and recorder wall time in every required cell.
