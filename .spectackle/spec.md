@@ -659,3 +659,8 @@ Rationale: This removes two hidden-width buffers and dispatches without changing
 WHEN quantized SwiGLU recording is active or its projection backend lacks in-place fusion, the GoAI SHALL execute backend.OpSiLU followed by backend.OpMul without mutating their inputs.
 
 Rationale: Autograd interception and unsupported backends must retain the established composition.
+
+## PRIVATE-RESEARCH-SOURCES-ISOLATION-002
+WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
+
+Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
