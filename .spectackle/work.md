@@ -3938,13 +3938,3 @@ option: Implement IQ3_S first, then duplicate the framework for IQ3_XXS.
 option: Implement IQ3_XXS first, then duplicate the framework for IQ3_S.
 blocks: P-01M0MJ2RYQF4QR01T9CCYCBQSS
 choice: Implement both as one shared IQ3 Metal family with independent numerical and performance gates per wire type.
-
-## T-01M0MJ7CE3FFPRYDZ9R1G83K72 Implement and benchmark the native M2 Metal IQ3 family
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0MJ2RYQF4QR01T9CCYCBQSS
-refs: ADR-01M0MJ4KTREPXRNG4NX30VMAF5
-targets: go:metal.QMatMulIQ4_XS, objc:metal_bridge.mtl_qmatmul_resident, go:nlp.quantMatMulSupported
-
-Implement shared one-time IQ3 codebook reconstruction and Metal residency; exact scalar and cooperative IQ3_S and IQ3_XXS kernels; direct, resident, and recorder dispatch; independent toggles; strict shape and byte validation; raw-GGUF loader admission and tests. Validate reference parity, scalar/cooperative parity, special floating-point classes, input immutability, zero per-kernel allocation, and exact compressed-byte retention. Run three fresh-process count-seven interleaved campaigns over M=1 (N,K) 512x2048, 2048x2048, 5632x2048, and 2048x5632 with sixteen distinct weights per format. Keep generic host dispatch on ARM64 unless it wins by 1.10x. Record whole-model or architecture-level admission evidence, external perfscan results, and a reproducible evidence manifest before PR.
