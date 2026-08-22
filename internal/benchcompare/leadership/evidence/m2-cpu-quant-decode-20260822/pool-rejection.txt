@@ -1,0 +1,23 @@
+Candidate: preserve qmatmulGrain and the current work-derived width, but route
+qmatmulParallelChunks through a bounded internal/parallel RowsN worker pool.
+
+Pair A:
+control 2.070013375s, 30.918 tok/s, digest ea3df5516f17df83
+pool    2.071182083s, 30.900 tok/s, digest ea3df5516f17df83
+
+Reversed pair B:
+pool    2.515566333s, 25.442 tok/s, digest ea3df5516f17df83
+control 2.156431458s, 29.679 tok/s, digest ea3df5516f17df83
+
+Base profile top:
+pthread_cond_wait 84.92%; pthread_cond_signal 9.44%; dotQ4KBlockNeon 1.19%;
+dotQ6KBlockNeon 0.84%; QMatMul.func3 2.92% cumulative.
+
+Pool profile top:
+pthread_cond_wait 86.90%; pthread_cond_signal 8.49%; dotQ4KBlockNeon 1.44%;
+internal/parallel worker QMatMul work 1.89% cumulative.
+
+Verdict: exact but neutral-to-negative; failed the 1.10x end-to-end gate.
+The implementation was removed. perfscan issue #827 correction:
+https://github.com/jxsl13/perfscan/issues/827#issuecomment-5381844361
+

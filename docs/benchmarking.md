@@ -1995,28 +1995,46 @@ norm-into-matmul) is ~1.8% of decode time, below run-to-run bench noise, so elem
 fusion was **rejected on measurement** rather than built. The data instead points any future
 CPU decode work at the GEMV kernel itself (the `[1,dim]` f64 matmul is ~66% of everything).
 
-### Quantized decode vs float (T819, the Q8_0 gap is not yet closed)
+### Quantized decode vs float (T819, refreshed 2026-08-22)
 
 `BenchmarkQuantLlamaGenerate500` puts a permanent number on Q8_0 quantized decode over the
-same geometry as the float benchmark (dim 256, 4 layers). Measured on the M2 Pro:
+same geometry as the float benchmark (dim 256, 4 layers). The original result
+was an 8.8× Q8_0 loss before fused ARM64 row-dot kernels. The fresh M2 Pro
+campaign uses one Go 1.26.6 binary, `GOMAXPROCS=8`, three generations per
+sample, and ten retained process samples after discarding only the first:
 
 | decode, 500 tokens | ns/op |
 |---|---|
-| float `BenchmarkLlamaGenerate500RowBuf` | ≈348 ms |
-| Q8_0 `BenchmarkQuantLlamaGenerate500` | ≈3075 ms (**8.8× slower**) |
+| float `BenchmarkLlamaGenerate500RowBuf` | 316.2 ms ±7% |
+| Q8_0 `BenchmarkQuantLlamaGenerate500` | **251.8 ms ±7% (1.256× faster)** |
 
-The gap is entirely the CPU quantized matmul: `nn.QuantLinear.Forward` dispatches to
-`format/gguf`'s `QMatMul`, which dequantizes the ggml blocks on the fly for every
-projection at every step. Quantized decode's *purpose* is weight-memory savings (4–8× less),
-which it delivers — but the CPU decode-time regression is real, and the fix is a
-block-native quantized GEMV kernel (dequantize into the dot product, SIMD over the block
-layout) in `format/gguf` / the CPU backend, not in `nlp`. Flagged there; the benchmark here
-is the baseline any such kernel must beat. On GPU the quantized decoders already run
-block-native (see the `llamagpu` numbers above), so this gap is CPU-specific.
+Benchstat reports `-20.38%` time (`p=0.002`, n=10) and `-38.69%` bytes/op for
+Q8_0. Its allocations/op increase 22.04%, so allocator pressure remains a
+separate target, but the historical wall-clock regression is closed. The full
+raw set retains a 414.2 ms Q8_0 outlier; no post-warmup sample was removed.
+
+The production-size harness `TestProdCPUQuantDecodeGGUF` then times 64 public
+`QuantLlama.DecodeStep` calls on TinyLlama-1.1B Q4_K_M. Model loading, cache
+construction, and one process-local warmup are excluded; prior caches remain
+live to prevent their collection from contaminating later samples. Seven
+retained samples produce a 1.9874 s median (**32.203 tok/s**), exact final-logit
+digest `ea3df5516f17df83`, 279,642,384 median allocation bytes, and 296,507
+median allocations.
+
+Pinned llama.cpp v0.2.0 (`bb4caa754`, build 10566, ggml 0.21.0) runs the same
+GGUF, eight threads, CPU-only execution, no KV offload, FlashAttention off,
+and 64 generation steps at 88.2–115.2 tok/s across two process medians. This
+is deliberately **not** reported as a matched ratio: GoAI's KV cache is f32,
+this llama-bench build uses f16 and rejects f32, and their token streams and
+starting positions differ. It is an attribution signal that books a matched
+shared-dtype harness and whole-step CPU work as the next front, not a
+cross-library leadership claim. Full commands, hashes, raw samples, and the
+rejected persistent-pool probe are in
+`internal/benchcompare/leadership/evidence/m2-cpu-quant-decode-20260822`.
 
 The 2026-08-21 ARM64 Q4_K fused unpack-and-dot kernel closes this mechanism for
-the dominant Q4_K single-token projection path, but not for the Q8_0 benchmark
-above. On M2 Pro it reduces Q4_K M1/N4096/K1024 from 689.5 to 145.9 µs
+the dominant Q4_K single-token projection path. On M2 Pro it reduces Q4_K
+M1/N4096/K1024 from 689.5 to 145.9 µs
 (4.73×) and a quantized Mamba2 recurrent step from 349.2 to 118.8 µs (2.94×),
 with unchanged allocations (`p=0.000`, n=10 after first-sample removal). In
 that Q4_K-only campaign Q6_K was the unchanged negative control. See
@@ -2032,8 +2050,8 @@ at 118.9 µs (`p=0.853`). All Q6_K time deltas have `p=0.000`, n=10 after
 first-sample removal, and unchanged allocations. The QMatMul benchmark's B/s
 field counts logical `M*N*K*4` f32 work and is not a physical memory-bandwidth
 claim. This remains an internal ARM64 leadership cell rather than a matched
-llama.cpp CPU comparison; the separate Q8_0 whole-model gap above remains
-open. See
+llama.cpp CPU comparison; the refreshed Q8_0 whole-model cell above is now
+faster than float. See
 `internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
 
 ## Further reading

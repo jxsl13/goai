@@ -418,12 +418,20 @@ DeepSeek's absorbed-latent attention cache at 6.7× less KV memory, O(1)
 recurrent decode for RWKV/Mamba/Jamba, and a latency-aware thread pool for
 1.68× end-to-end decode.
 
-**Historical open gap:** CPU *quantized* decode ran ≈8.8× slower than f32
-decode (Q8_0, dim-256 model) because its scalar quantized matmul decoded ggml
-blocks inside the hot dot. The ARM64 Q8_0 kernel below closes that primitive
-defect and nearly halves a recurrent model's measured step, but the original
-whole-model comparison has not yet been rerun and is therefore not restated as
-closed. On GPU the quantized decoders already run block-native.
+**Q8_0 whole-model gap closed (2026-08-22):** the original dim-256,
+500-step cell has now been rerun from one Go 1.26.6 binary at eight threads.
+After discarding only the first sample, Q8_0 measures **251.8 ms** versus
+**316.2 ms** for float: Q8_0 is **1.256× faster** (`p=0.002`, n=10), reversing
+the stale 8.8× loss. Encoded weights reduce allocation bytes by 38.69%, though
+allocations rise 22.04%, so allocator work remains an independent front.
+
+A new production CPU harness measures 64 forward-only steps on the identical
+TinyLlama-1.1B Q4_K_M GGUF. GoAI records 32.203 tok/s with exact digest
+`ea3df5516f17df83`; pinned llama.cpp v0.2.0 records 88.2–115.2 tok/s across
+two process medians. This is a directional loss signal, **not a matched
+leadership ratio**: GoAI uses f32 KV while this llama-bench accepts f16 KV, and
+the token streams differ. Evidence:
+`internal/benchcompare/leadership/evidence/m2-cpu-quant-decode-20260822`.
 
 **ARM64 Q4_K progress (2026-08-21):** the M2 single-token Q4_K path now fuses
 nibble unpack, affine dequantization and dot-product reduction in one NEON
@@ -497,9 +505,9 @@ time cell has `p=0.000`, n=10 after first-sample removal, and unchanged
 allocation counts; the untouched Q6_K recurrent cell is flat (`p=0.579`). The
 maximum scalar-relative error over 100 arbitrary raw rows is 2.93e-5, below
 the 1e-4 contract. Reported leaf and QMatMul B/s is logical f32 work, not
-physical memory bandwidth. This is an internal ARM64 win; a matched llama.cpp
-CPU comparison and the original dim-256 whole-model rerun remain required for
-a leadership claim. Evidence:
+physical memory bandwidth. This is an internal ARM64 win; the refreshed
+dim-256 whole-model cell above now retains the gain, while a semantically
+matched llama.cpp CPU comparison remains required for a leadership claim. Evidence:
 `internal/benchcompare/leadership/evidence/m2-arm64-q8-fused-dot-20260821`.
 
 **ARM64 Q4_1 progress (2026-08-22):** exact GGUF wire type 3 support now
@@ -783,7 +791,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | ViT training vs torch-mps (Apple GPU) | ≈40× | `vision.ViT.Forward` runs the batch as 8 separate per-image encoders → each op pays the Metal dispatch floor ×8; torch batches attention in one pass (on CPU the same defect is only 2.6–4.2×) | batch the ViT encoder → **T908** (vision) |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
-| CPU Q8_0 quantized decode vs own f32 | historical 8.8×; rerun pending after the 2026-08-21 kernel | scalar block-dot defect is closed on ARM64; the published whole-model cell predates the 1.93× Mamba2 / 2.50–4.09× QMatMul gain | rerun the original dim-256 whole-model cell and add a matched llama.cpp CPU comparison |
+| Production CPU Q4_K decode vs llama.cpp | llama.cpp is 2.74–3.60× ahead in the closest available diagnostic; **not a matched claim** | identical GGUF/threads/step count, but GoAI uses f32 KV while llama.cpp uses f16 KV and token streams differ; GoAI's active whole-step work remains larger | first add a shared-dtype/token-stream harness, then profile attributed active work and test whole-step scheduling/fusion |
 | Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
 
 ## Not yet measured — booked benchmark tasks

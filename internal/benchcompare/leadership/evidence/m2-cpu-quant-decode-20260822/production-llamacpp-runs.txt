@@ -1,0 +1,12 @@
+Run 1, generation-only ns samples:
+[725901083 691542167 730923000 713003334 691764667 727124584 782137375]
+median=725901083 ns, 88.166 tok/s
+
+Run 2, generation-only ns samples:
+[594342334 553415208 561592541 564180750 547966333 555783250 550297000]
+median=555783250 ns, 115.153 tok/s
+
+Both runs: llama.cpp v0.2.0 commit bb4caa754, build 10566; ggml 0.21.0;
+TinyLlama-1.1B Q4_K_M; 8 CPU threads; f16 K/V; 0 GPU layers; no KV
+offload; FlashAttention off; device none; 1 prompt token plus 64 generated.
+

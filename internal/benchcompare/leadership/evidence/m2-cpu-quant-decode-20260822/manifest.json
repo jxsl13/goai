@@ -1,0 +1,32 @@
+{
+  "date": "2026-08-22",
+  "hardware": "Apple M2 Pro, 12 cores, 34359738368 bytes RAM",
+  "os": "macOS 26.5.1 (25F80), darwin/arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "base_commit": "26e3e3caf8104029504214f09c1d130b37a1c97b",
+  "branch": "codex/m2-cpu-quant-refresh",
+  "spectackle": "v0.10.0",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan@v1.80.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "llama_cpp": {
+    "release": "v0.2.0",
+    "commit": "bb4caa7540188872173c44d161602d9271386413",
+    "build": 10566,
+    "ggml": "v0.21.0",
+    "binary_sha256": "ba8e89c2d69e90eb5ea36f6a9e4a6a6aaf47a342169a86e52edf3097d3e83c3a"
+  },
+  "binary_sha256": {
+    "nlp_q8_float": "f3693290621e7f82e0a1dc6cf2b982f63db898cac14d6bd1fa03c160cef1e2a0",
+    "production_goai": "e5ca94c59793142edd9995ccf22b3aa831d8dac48508bdd64fab851abc3197a9"
+  },
+  "sampling": {
+    "threads": 8,
+    "q8_float_benchtime": "3x",
+    "q8_float_process_samples": 11,
+    "q8_float_discarded": "first sample only",
+    "production_steps": 64,
+    "production_repetitions": 7
+  }
+}
+

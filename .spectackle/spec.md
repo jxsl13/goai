@@ -423,6 +423,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - T-01M0N76XV8FB2TDN83KH0BHED6 Implement and gate grouped-QKV RoPE-f16-KV append: Implemented the grouped-QKV Metal RoPE/f16-KV append boundary and enabled the shared fusion selector by default. Exact complete-QKV float32 and cache binary16 parity passed at positions 0, 1, and 127; a one-ULP grouped mutation failed all cases and was reverted. The combined profile replaces 20 rope, 12 rope_pair, and 22 paired-copy events with 10 separate and 12 grouped fused events, a 32-event r [body truncated at tombstone retention cap]
 - P-01M0N68Z0KFF79CDKT21KC4F26 Fuse M2 single-token RoPE with f16 KV append: Promoted as one half of the combined Metal RoPE/f16-KV append design. The original 22-layer eligibility assumption was corrected by trained profiling: Q4_K_M has 10 separate-QKV and 12 grouped-QKV layers. The separate path is bit-exact and removes 20 events but alone measured only 1.0081x to 1.0087x end to end, so its frozen 1.01x gate was not weakened. The grouped sibling covered the remaining to [body truncated at tombstone retention cap]
 - P-01M0N73GJ6E7S8JKQRSY1RJBH2 Fuse grouped M2 QKV RoPE with f16 KV append: Promoted the combined separate and grouped QKV RoPE/f16-KV append route on M2. The production profile falls from 54 RoPE/copy events to 22 fused events. Exact float32 and binary16 state, nonfinite behavior, sentinels, and both mutation probes passed. Final 22-boundary speedups were 1.7396x, 1.7312x, and 1.7479x; trained TinyLlama decode was 1.0574x, 1.0163x, and 1.0173x across three count-seven ca [body truncated at tombstone retention cap]
+- T-01M0N9C5ATEE18E7J23JVJKTSC Rerun M2 quantized decode and compare llama.cpp CPU: Archived after commit 7d793391: raw M2 evidence, the permanent hermetic-gated production harness, refreshed claims, and the rejected pool lesson are versioned.
+- P-01M0N996E4ETXTWFTDCTF17CWW Refresh M2 CPU quantized decode leadership: Archived after the M2 CPU quantized-decode matrix was refreshed: Q8_0 now beats float 1.256x in the original whole-model cell, while the production llama.cpp comparison remains explicitly unmatched and the failed pool candidate remains removed.
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -632,3 +634,12 @@ Rationale: Ten TinyLlama mixed layers improve 1.7378x at M64 and 1.2198x at M512
 WHEN contiguous offset-zero F32 GELU or SiLU forward or backward executes on a darwin/arm64 SIMD build, the Metal SHALL use optimized CPU through 4,194,304 elements, with direct Metal retained elsewhere.
 
 Rationale: ADR-01M0FYKCJMFRE: all 84 production-selector medians cleared 1.10x across three isolated count-7 campaigns, and full SIMD GPT training improved 1.038x.
+
+## M2-CPU-QUANT-WHOLEMODEL-001
+WHEN a post-kernel Q8_0 whole-model result is published, the GoAI CPU decode benchmark SHALL run BenchmarkQuantLlamaGenerate500 and BenchmarkLlamaGenerate500RowBuf from the same Go 1.26.6 binary, discard warmup, retain 10 samples, and report medians plus allocations.
+
+## M2-CPU-QUANT-INCUMBENT-001
+WHEN a CPU quantized-decode comparison against llama.cpp is published, the GoAI leadership matrix SHALL use the identical GGUF, hardware, thread count, prompt and generation lengths, batch, and forward-only boundary, and record model hash plus exact commits.
+
+## M2-CPU-QUANT-LOSS-001
+IF the matched llama.cpp CPU cell leads GoAI beyond measurement spread, THEN the GoAI performance roadmap SHALL publish the loss and profile GoAI before booking an implementation lever.

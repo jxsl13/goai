@@ -1,0 +1,11 @@
+perfscan module: github.com/jxsl13/perfscan@v1.80.0
+resolution: GOPROXY=direct
+target: internal/benchcompare/prod_cpu_quant_test.go
+exit: 0
+findings: none
+
+The current v1.80.0 command is at the module root. The historical
+github.com/jxsl13/perfscan/perfscan command path is absent from this release.
+A full-repository scan also ran and returned the repository's existing finding
+set; the scoped new-file scan above is the admission result for this change.
+
