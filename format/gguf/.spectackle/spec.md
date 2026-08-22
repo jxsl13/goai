@@ -343,4 +343,4 @@ Rationale: Unequal grouped projections retain every matrix output shape.
 ## GGUF-MIXED-QKV-BALANCE-001
 WHEN 1 grouped fan-out combines Q4_K and Q6_K matrices with unequal row counts, the QMatMulTriple SHALL partition every matrix proportionally across every scheduler chunk, creating 0 quant-type-only tail chunks.
 
-Rationale: Contiguous concatenation reduced allocations but regressed 7 of 8 initial production pairs; proportional distribution produced the retained gain.
+Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial production pairs; proportional distribution produced the retained gain.
