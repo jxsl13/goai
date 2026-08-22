@@ -3998,3 +3998,11 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0N68Z0KFF79CDKT21KC4F26 Fuse M2 single-token RoPE with f16 KV append
+kind: proposal
+state: active
+created: 2026-08-22
+targets: llamagpu/decoder.go, llamagpu/llamagpu.go, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/f16kv_test.go, llamagpu/f16kv_metal_test.go
+
+Context: the shipping Metal NewQuantF16KV single-token decoder records two RoPE dispatches plus one paired f32-to-f16 KV append per layer after separate Q/K/V projections. TinyLlama has 22 layers, so this boundary costs 66 events per token although Q rotation, K rotation+conversion, and V conversion are independent per element. Proposal: add one Metal-only fused full-RoPE/f16-KV-append recorder operation that rotates Q in place, rotates K with the established float expression order before binary16 conversion, and converts V directly into the current cache row. The existing f16 attention remains a separate dispatch; no grid-wide synchronization is assumed. Scope is deliberately narrow: single token, separate contiguous Q/K/V buffers, full RoPE, f16 KV cache, dk=64. Fused-QKV, prefill, partial/no-RoPE, f32 KV, CUDA, and Vulkan retain the established route. Validation: exact Q float32 bits and K/V binary16 bits against the control chain; nonfinite-class and untouched-region/input checks; a mutation probe proving the exact oracle; route/profile proof that 22 eligible layers replace exactly 66 old RoPE/copy events with 22 fused events; trained TinyLlama logit/greedy parity; same-binary control/candidate benchmarks. Retain only if the isolated boundary reaches at least 1.25x and every one of three count-seven M2 end-to-end decode campaigns improves, with at least 1.01x median speedup as the promotion floor. Otherwise remove all candidate code and preserve only reusable evidence.

@@ -716,3 +716,8 @@
 {"t":"2026-08-22T16:28:35Z","eid":"02d6bcd133858a09","ag":"ag-5604","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T16:28:44Z","eid":"c405b8986a118811","ag":"ag-522f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T16:31:01Z","eid":"14e311cf23760334","ag":"ag-578a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T16:53:43Z","eid":"080a790e824b1731","ag":"ag-7405","ev":"create","id":"P-01M0N68Z0KFF79CDKT21KC4F26","k":"proposal","ti":"Fuse M2 single-token RoPE with f16 KV append"}
+{"t":"2026-08-22T16:53:43Z","eid":"b90ab72114f99c0b","ag":"ag-7405","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T16:54:02Z","eid":"71fc3062800d9f92","ag":"ag-8fb5","ev":"revise","id":"P-01M0N68Z0KFF79CDKT21KC4F26","note":"body+targets revised"}
+{"t":"2026-08-22T16:54:02Z","eid":"9aea7f4b0a47d1d9","ag":"ag-8fb5","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T16:54:24Z","eid":"ce2c7872039b0d37","ag":"ag-1040","ev":"move","id":"P-01M0N68Z0KFF79CDKT21KC4F26","fr":"draft","to":"active"}
