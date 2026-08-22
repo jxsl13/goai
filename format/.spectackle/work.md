@@ -117,14 +117,3 @@ option: Keep legacy aliases for 19 and 24
 option: Introduce new names while retaining the wrong exported values
 blocks: P-01M0M13SZGFBNBZQ7FJDD13JV8
 choice: Adopt the exact pinned wire IDs and reject unsupported type 24 until I8 is implemented
-
-## T-01M0M5XF2TFHWRHYJD8228X1NA Implement exact Q4_1 format and M2 fused decode
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0M5K15NFPX87P7G6KCGPSYN
-refs: ADR-01M0M5SFB8ESSBR5PGTAK7PV07
-grilled: 2026-08-22 open=0
-targets: format/gguf, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q4-1-fused-dot-20260822, .spectackle
-
-Implement exact GGML Q4_1 type-3 wire fidelity pinned to llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786: 32 values per 20-byte affine block with FP16 scale and minimum followed by low/high packed nibbles. Cover byte sizing, eager and raw reads, public quantize/dequantize, WriteQuantized, F32/F64 QMatMul, and an allocation-free Apple ARM64 M=1 fused row-dot with portable fallback. Validate arbitrary raw blocks, stored-FP16 rounding, zero-scale and cancellation cases, dimensions and errors, race, Linux cross-builds, external perfscan, retained in-repo benchmarks, and fresh-process M2 comparisons. Benchmark and evidence documentation are explicit task targets. Keep Metal and Vulkan type 3 unsupported in this task; record their implementation as the next separately benchmarked proposal.
