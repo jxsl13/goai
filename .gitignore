@@ -28,6 +28,9 @@ __pycache__/
 # graphify code knowledge graph (local, rebuildable: .venv/bin/graphify update . --no-cluster)
 graphify-out/
 
+# Local architecture-research library (may contain licensed publications).
+/.research-sources/
+
 # Editor/OS
 .DS_Store
 .idea/
