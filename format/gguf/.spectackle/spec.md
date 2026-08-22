@@ -232,3 +232,8 @@ Rationale: Caller-owned decode scratch prevents output-row count from multiplyin
 WHEN contiguous F32 M1 activations use IQ1_M weights, the Apple ARM64 IQ1_M selector SHALL dispatch 1 whole-row fused NEON split-scale, 11-bit-grid, paired-odd-scale, signed-delta dot with 0 leaf allocations and scalar-relative error at most 1e-4.
 
 Rationale: Single-token direct-F32 decode is the M2 CPU hot path; the portable scalar row dot remains its semantic oracle.
+
+## ARM64-IQ1M-FUSED-DOT-SCOPE-001 {applies: go:gguf.QMatMul}
+The IQ1_M QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
+
+Rationale: The native leaf assumes Apple ARM64 F32 row layout and must not leak into portable or prefill semantics.
