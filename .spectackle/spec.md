@@ -648,3 +648,8 @@ IF the matched llama.cpp CPU cell leads GoAI beyond measurement spread, THEN the
 WHEN an eager quantized SwiGLU executes on its projection backend and that backend advertises in-place fusion, the GoAI SHALL overwrites only the private gate projection with bit-identical SiLU(gate) multiplied by up and allocates zero activation or multiplication output tensors.
 
 Rationale: This removes two hidden-width buffers and dispatches without changing public ownership.
+
+## CPU-SWIGLU-INPLACE-FALLBACK-001
+WHEN quantized SwiGLU recording is active or its projection backend lacks in-place fusion, the GoAI SHALL uses the existing SiLU and multiply operations without mutating their inputs.
+
+Rationale: Autograd interception and unsupported backends must retain the established composition.
