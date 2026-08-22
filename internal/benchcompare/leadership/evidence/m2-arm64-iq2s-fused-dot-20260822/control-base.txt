@@ -1,0 +1,10 @@
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2713	    221451 ns/op	75760.42 MB/s	   17502 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2734	    220054 ns/op	76241.37 MB/s	   17499 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2482	    238150 ns/op	70448.01 MB/s	   17504 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2220	    239928 ns/op	69926.18 MB/s	   17519 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2394	    281901 ns/op	59514.49 MB/s	   17513 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2182	    275889 ns/op	60811.48 MB/s	   17526 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2014	    305714 ns/op	54878.81 MB/s	   17536 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    1392	    368826 ns/op	45488.12 MB/s	   17596 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    1918	    275033 ns/op	61000.68 MB/s	   17536 B/op	      29 allocs/op
+BenchmarkQMatMulIQ2_XS_M1_N4096-12   	    2116	    255624 ns/op	65632.51 MB/s	   17527 B/op	      29 allocs/op

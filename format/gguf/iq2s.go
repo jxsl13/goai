@@ -115,20 +115,14 @@ func init() {
 	}
 }
 
-// dequantIQ2_S decodes IQ2_S blocks into an F32 tensor of the given shape.
-func dequantIQ2_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
-	n := shape.Numel()
-	if n%qkK != 0 {
-		return nil, fmt.Errorf("gguf: IQ2_S numel %d not multiple of %d", n, qkK)
-	}
-	nb := n / qkK
-	if len(data) != nb*iq2sBlockSize {
-		return nil, fmt.Errorf("gguf: IQ2_S data %dB, want %d", len(data), nb*iq2sBlockSize)
-	}
-	out := tensor.New(tensor.F32, shape)
-	dst := out.Storage().F32()
-	for b := range nb {
+// dequantIQ2_SInto decodes complete IQ2_S blocks into caller-owned storage.
+// Shape and byte-length validation stay at the public tensor boundary below;
+// QMatMul validates one complete quantized row before reusing this allocation-free
+// block decoder across output rows.
+func dequantIQ2_SInto(dst []float32, data []byte) {
+	for b := 0; b*iq2sBlockSize < len(data); b++ {
 		blk := data[b*iq2sBlockSize : (b+1)*iq2sBlockSize]
+		//perfscan:ignore PS4001 one strided f16 scale per 82-byte quant block cannot use a same-layout bulk copy
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		qs, signs, qh, scales := blk[2:34], blk[34:66], blk[66:74], blk[74:82]
 		for i := range 32 { // one qs byte → one 8-wide grid row
@@ -146,5 +140,19 @@ func dequantIQ2_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
 			}
 		}
 	}
+}
+
+// dequantIQ2_S decodes IQ2_S blocks into an F32 tensor of the given shape.
+func dequantIQ2_S(shape tensor.Shape, data []byte) (*tensor.Tensor, error) {
+	n := shape.Numel()
+	if n%qkK != 0 {
+		return nil, fmt.Errorf("gguf: IQ2_S numel %d not multiple of %d", n, qkK)
+	}
+	nb := n / qkK
+	if len(data) != nb*iq2sBlockSize {
+		return nil, fmt.Errorf("gguf: IQ2_S data %dB, want %d", len(data), nb*iq2sBlockSize)
+	}
+	out := tensor.New(tensor.F32, shape)
+	dequantIQ2_SInto(out.Storage().F32(), data)
 	return out, nil
 }

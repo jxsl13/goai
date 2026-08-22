@@ -1,0 +1,10 @@
+BenchmarkDequantIQ2_S-12              	    2404	    242593 ns/op	 346.13 MB/s	 1048804 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2421	    247435 ns/op	 339.35 MB/s	 1048804 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2392	    243778 ns/op	 344.45 MB/s	 1048802 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2350	    248339 ns/op	 338.12 MB/s	 1048802 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2416	    282482 ns/op	 297.25 MB/s	 1048806 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2340	    330369 ns/op	 254.16 MB/s	 1048807 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2253	    323869 ns/op	 259.27 MB/s	 1048808 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2296	    294893 ns/op	 284.74 MB/s	 1048803 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    1810	    297070 ns/op	 282.65 MB/s	 1048809 B/op	       3 allocs/op
+BenchmarkDequantIQ2_S-12              	    2412	    322363 ns/op	 260.48 MB/s	 1048807 B/op	       3 allocs/op

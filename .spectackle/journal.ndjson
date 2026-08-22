@@ -288,3 +288,9 @@
 {"t":"2026-08-21T23:02:49Z","eid":"0a85209ecf16ecd1","ag":"ag-648c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-21T23:19:47Z","eid":"52fc94e3906d26d0","ag":"ag-ae0e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T00:16:47Z","eid":"398ffad63e8d165e","ag":"ag-0c1e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T00:37:33Z","eid":"eb855ddbe0831716","ag":"ag-45fe","ev":"create","id":"P-01M0KEDHR8FYPBPHNX0SQNK2TG","k":"proposal","ti":"probe"}
+{"t":"2026-08-22T00:37:33Z","eid":"cc020364afd36835","ag":"ag-45fe","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T00:37:45Z","eid":"8a5799a4ad0eb6d0","ag":"ag-e189","ev":"move","id":"P-01M0KEDHR8FYPBPHNX0SQNK2TG","fr":"draft","to":"rejected","note":"Accidental schema probe with no targets or substance; superseded immediately by the real IQ2_S proposal draft."}
+{"t":"2026-08-22T00:37:45Z","eid":"50370812054c5d28","ag":"ag-e189","ev":"reject","id":"P-01M0KEDHR8FYPBPHNX0SQNK2TG","k":"proposal","ti":"probe","note":"Accidental schema probe with no targets or substance; superseded immediately by the real IQ2_S proposal draft.","sum":"proposal probe"}
+{"t":"2026-08-22T00:38:12Z","eid":"c273cc95edb11c33","ag":"ag-bb91","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T01:02:45Z","eid":"1beaccbe3d0377a8","ag":"ag-cc05","ev":"gitskip","note":"edge commit skipped: index contention after retries"}

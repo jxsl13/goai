@@ -1,0 +1,65 @@
+                                │ iq2s-scalar.txt │             iq2s-neon.txt             │
+                                │     sec/op      │    sec/op      vs base                │
+DotIQ2SPaths-12                     5092.5n ± 23%   936.2n ±   9%  -81.62% (p=0.000 n=10)
+QMatMulIQ2SPaths/N64_K1024-12        82.26µ ± 15%   15.82µ ±  26%  -80.77% (p=0.000 n=10)
+QMatMulIQ2SPaths/N4096_K1024-12      962.4µ ± 22%   225.6µ ± 201%  -76.55% (p=0.001 n=10)
+geomean                              73.87µ         14.95µ         -79.76%
+
+                                │ iq2s-scalar.txt │              iq2s-neon.txt              │
+                                │       B/s       │      B/s        vs base                 │
+DotIQ2SPaths-12                     2.996Gi ± 19%   16.300Gi ±  8%  +443.97% (p=0.000 n=10)
+QMatMulIQ2SPaths/N64_K1024-12       2.968Gi ± 13%   15.433Gi ± 21%  +419.99% (p=0.000 n=10)
+QMatMulIQ2SPaths/N4096_K1024-12     16.26Gi ± 18%    69.31Gi ± 67%  +326.35% (p=0.001 n=10)
+geomean                             5.249Gi          25.93Gi        +394.06%
+
+                                │ iq2s-scalar.txt │             iq2s-neon.txt             │
+                                │      B/op       │     B/op      vs base                 │
+DotIQ2SPaths-12                      0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2SPaths/N64_K1024-12        592.0 ± 0%       592.0 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2SPaths/N4096_K1024-12    17.26Ki ± 1%     17.04Ki ± 0%  -1.27% (p=0.028 n=10)
+geomean                                         ²                 -0.43%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                │ iq2s-scalar.txt │            iq2s-neon.txt            │
+                                │    allocs/op    │ allocs/op   vs base                 │
+DotIQ2SPaths-12                      0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2SPaths/N64_K1024-12        4.000 ± 0%     4.000 ± 0%       ~ (p=1.000 n=10) ¹
+QMatMulIQ2SPaths/N4096_K1024-12      29.00 ± 0%     29.00 ± 0%       ~ (p=1.000 n=10)
+geomean                                         ²               +0.00%                ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                │ dequant-base.txt │     dequant-candidate.txt      │
+                │      sec/op      │    sec/op     vs base          │
+DequantIQ2_S-12       295.8µ ± 18%   288.7µ ± 16%  ~ (p=0.796 n=10)
+
+                │ dequant-base.txt │      dequant-candidate.txt      │
+                │       B/s        │      B/s       vs base          │
+DequantIQ2_S-12      271.0Mi ± 21%   277.5Mi ± 18%  ~ (p=0.796 n=10)
+
+                │ dequant-base.txt │     dequant-candidate.txt      │
+                │       B/op       │     B/op      vs base          │
+DequantIQ2_S-12       1.000Mi ± 0%   1.000Mi ± 0%  ~ (p=0.727 n=10)
+
+                │ dequant-base.txt │     dequant-candidate.txt      │
+                │    allocs/op     │ allocs/op   vs base            │
+DequantIQ2_S-12         3.000 ± 0%   3.000 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
+
+                          │ control-base.txt │     control-candidate.txt      │
+                          │      sec/op      │    sec/op     vs base          │
+QMatMulIQ2_XS_M1_N4096-12       265.3µ ± 17%   274.3µ ± 20%  ~ (p=1.000 n=10)
+
+                          │ control-base.txt │      control-candidate.txt      │
+                          │       B/s        │      B/s       vs base          │
+QMatMulIQ2_XS_M1_N4096-12      58.97Gi ± 20%   57.19Gi ± 24%  ~ (p=1.000 n=10)
+
+                          │ control-base.txt │        control-candidate.txt        │
+                          │       B/op       │     B/op      vs base               │
+QMatMulIQ2_XS_M1_N4096-12       17.11Ki ± 0%   17.09Ki ± 0%  -0.12% (p=0.027 n=10)
+
+                          │ control-base.txt │     control-candidate.txt      │
+                          │    allocs/op     │ allocs/op   vs base            │
+QMatMulIQ2_XS_M1_N4096-12         29.00 ± 0%   29.00 ± 0%  ~ (p=1.000 n=10) ¹
+¹ all samples are equal
