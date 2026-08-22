@@ -45,3 +45,6 @@ WHEN a registered Q8_0 SIMD selector changes summation order, the model-level Q8
 
 ## QUANT-GGUF-MODERN-ADMISSION-001
 WHEN a real GGUF projection uses type 3 Q4_1, type 20 IQ4_NL, or type 23 IQ4_XS, the quantized model loader SHALL preserve its compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.
+
+## QUANT-GGUF-IQ3-ADMISSION-001
+WHEN a real GGUF projection uses type 18 IQ3_XXS or type 21 IQ3_S, the quantized model loader SHALL retain its compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.
