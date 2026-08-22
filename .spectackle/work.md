@@ -3871,6 +3871,31 @@ choice: IQ3_S portable QMatMul plus an exact Apple ARM64 fused row dot first; de
 kind: proposal
 state: active
 created: 2026-08-22
+grilled: 2026-08-22 open=1
 targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, docs/decisions/ADR-0016-quant-matmul-capability.md, go:gguf.QMatMul, go:gguf.decodeTensor, go:gguf.Quantize
 
 Context: GoAI rejects ggml type 35 TQ2_0. Pinned llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786 defines a 66-byte block for 256 weights: 64 bytes packing four two-bit codes in 32-lane groups, followed by one f16 scale. Codes 0, 1, 2, and 3 decode to -1, 0, +1, and +2 times the scale; reference quantization emits only codes 0 through 2. Scope: add exact eager, raw, and public decode; reference-compatible public encode; portable F32 and F64 QMatMul with reusable worker scratch; and an Apple ARM64 direct-F32 M1 fused unpack-scale-dot leaf. Preserve non-ARM64, non-F32, and M greater than 1 fallbacks. Validation: pinned reference bytes and raw code-3 coverage, same-semantics numerical error at most 1e-4, zero leaf allocations, focused and full GGUF test binaries, race and cross-architecture compile gates, repository and Metal preflights, external perfscan with GOPROXY=direct, and fresh alternating-process benchmarks. Performance gate: at least 2.00x scalar-relative speedup with p below 0.01 across K4096 leaf and M1 N64 and N4096 K1024 boundaries, with neutral adjacent Q1_0 and TQ1_0 controls. Cross-library llama.cpp measurements remain separately labeled because its native dot consumes Q8_K activations.
+
+## ADR-01M0KYBEDXFJW9WEXHRA8RF3P3 Which TQ2_0 execution boundary should lead the M2 tranche?
+kind: adr
+state: done
+created: 2026-08-22
+context: Pinned llama.cpp type 35 uses 256-weight 66-byte blocks and Q8_K activation dots, while GoAI QMatMul accepts direct F32 or F64 activations. The tranche must preserve direct-activation semantics and obtain measurable end-to-end decode leverage.
+decision: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+consequences: This keeps GoAI direct-activation semantics and avoids quantization-quality and conversion-cost changes. M1 decode receives the highest-leverage Apple ARM64 path; F64, M greater than one, and non-ARM64 remain portable. Cross-library results against llama.cpp must remain boundary studies because llama.cpp converts activations to Q8_K.
+status: accepted
+
+kind: radio
+option: Implement only portable decode and defer acceleration
+option: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+option: Adopt Q8_K activation conversion to mirror llama.cpp
+choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks
+
+## T-01M0KYDJXBEK088S0BM7PMNN28 Implement and gate complete TQ2_0 with M2 ARM64 fused dot
+kind: task
+state: active
+created: 2026-08-22
+parent: P-01M0KY9HK0FH89MPABMZ0MWX99
+targets: format/gguf/gguf.go, format/gguf/quant.go, format/gguf/quant_matmul.go, format/gguf, internal/benchcompare/leadership/evidence, CHANGELOG.md
+
+Implement ggml type 35 TQ2_0 end to end at the pinned 66-byte by 256-weight layout. Add eager, raw, and public decode; reference-compatible encoding; portable F32 and F64 QMatMul with reusable worker scratch; and an Apple ARM64 direct-F32 M1 fused two-bit unpack-scale-dot selected only for the intended shape and dtype. Preserve code 3 as +2 times scale for arbitrary raw GGUF while the encoder emits ternary codes. Prove pinned bytes, numerical and dispatch scope, zero leaf allocation, fresh at least 10-sample alternating benchmarks with the proposal 2x and p below 0.01 gate, neutral adjacent controls, external perfscan, race, portable cross-compiles, repository and Metal preflights, and reproducible pinned llama.cpp boundary evidence. Report any generalizable performance finding to jxsl13/perfscan.

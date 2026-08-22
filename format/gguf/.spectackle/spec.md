@@ -288,3 +288,21 @@ Rationale: Direct-F32 decode is the primary M2 single-token performance path.
 The TQ1_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.
 
 Rationale: The architecture-specific leaf is valid only for the benchmarked contiguous F32 M1 boundary.
+
+## TQ2-FORMAT-001
+WHEN ggml type 35 TQ2_0 data is encoded or decoded, the format APIs SHALL preserve 66-byte blocks of 256 weights, 64 bytes packing four two-bit codes in 32-lane groups, one trailing f16 scale, and the pinned ggml element order.
+
+## TQ2-CODES-001
+WHEN arbitrary raw TQ2_0 codes are decoded, the format APIs SHALL map codes 0, 1, 2, and 3 to minus 1, 0, plus 1, and plus 2 times the block scale, while reference encoding emits codes 0 through 2.
+
+## TQ2-PORTABLE-QMATMUL-001
+WHEN TQ2_0 weights are multiplied by F32 or F64 activations, the QMatMul SHALL preserve the trailing f16 scale, code-minus-one mapping, pinned 32-lane group order, ascending activation mapping, and float64 accumulation.
+
+## TQ2-PORTABLE-SCRATCH-001
+The portable TQ2_0 QMatMul SHALL use exactly 1 reusable scratch set per worker for M greater than 1 and perform 0 per-output-row tensor allocations.
+
+## ARM64-TQ2-FUSED-DOT-001
+WHEN contiguous F32 M1 activations use TQ2_0 weights, the Apple ARM64 TQ2_0 selector SHALL dispatch 1 whole-row fused NEON two-bit unpack and f16-scale dot with 0 leaf allocations and scalar-relative error at most 1e-4.
+
+## ARM64-TQ2-FUSED-DOT-SCOPE-001
+The TQ2_0 QMatMul dispatcher SHALL keep non-ARM64, M greater than 1, and non-F32 paths portable and dispatch 0 Apple ARM64 M1 kernel calls.

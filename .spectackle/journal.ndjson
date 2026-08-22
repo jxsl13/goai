@@ -369,3 +369,25 @@
 {"t":"2026-08-22T05:14:59Z","eid":"a63e7b7f008cf878","ag":"ag-0352","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-22T05:15:09Z","eid":"f9f34d95841cd834","ag":"ag-79eb","ev":"move","id":"P-01M0KY9HK0FH89MPABMZ0MWX99","fr":"draft","to":"active","note":"Activated under the standing M2-first bottom-up mandate after confirming no TQ2_0 rejection, pinning llama.cpp commit 3af988fabcf79fd81f8720505e684d2aa5bfc786, and defining exact format, numerical, fallback, performance, and evidence gates."}
 {"t":"2026-08-22T05:15:10Z","eid":"29b9f6cdaede348b","ag":"ag-79eb","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:15:44Z","eid":"31221a8ad092acd6","ag":"ag-92ae","ev":"grill","id":"P-01M0KY9HK0FH89MPABMZ0MWX99","gr":"2026-08-22 open=1","hash":"bd11b3dc21226f74f2ecca9246873a442cbf39e72db5e25158037e8c538402a7","open":1,"keys":["blast:8"]}
+{"t":"2026-08-22T05:15:44Z","eid":"3dff15e8c072eab7","ag":"ag-92ae","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:16:01Z","eid":"59391c3bf9628ea4","ag":"ag-a8fe","ev":"create","id":"ADR-01M0KYBEDXFJW9WEXHRA8RF3P3","k":"adr","ti":"Which TQ2_0 execution boundary should lead the M2 tranche?"}
+{"t":"2026-08-22T05:16:01Z","eid":"7160ded02edb7d7c","ag":"ag-a8fe","ev":"move","id":"ADR-01M0KYBEDXFJW9WEXHRA8RF3P3","fr":"draft","to":"submitted"}
+{"t":"2026-08-22T05:16:02Z","eid":"8b0a6983e000c135","ag":"ag-a8fe","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:16:12Z","eid":"8e5d74631c427213","ag":"ag-7b14","ev":"decide","id":"ADR-01M0KYBEDXFJW9WEXHRA8RF3P3","note":"Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining portable F32/F64 fallbacks"}
+{"t":"2026-08-22T05:16:12Z","eid":"507580081e6bd962","ag":"ag-7b14","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:16:19Z","eid":"c2330c7b225372bf","ag":"ag-676f","ev":"grill","id":"P-01M0KY9HK0FH89MPABMZ0MWX99","gr":"2026-08-22 open=1","hash":"bd11b3dc21226f74f2ecca9246873a442cbf39e72db5e25158037e8c538402a7","open":1,"keys":["blast:8"]}
+{"t":"2026-08-22T05:16:19Z","eid":"9e0aec367ac1ca04","ag":"ag-676f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:17:00Z","eid":"15654c01c282e5aa","ag":"ag-90ab","ev":"grill","id":"P-01M0KY9HK0FH89MPABMZ0MWX99","gr":"2026-08-22 open=1","hash":"bd11b3dc21226f74f2ecca9246873a442cbf39e72db5e25158037e8c538402a7","open":1,"keys":["blast:8"]}
+{"t":"2026-08-22T05:17:00Z","eid":"59de4822ab8c1f41","ag":"ag-90ab","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:17:11Z","eid":"7118d72272c56ef7","ag":"ag-5523","ev":"create","id":"T-01M0KYDJXBEK088S0BM7PMNN28","k":"task","ti":"Implement and gate complete TQ2_0 with M2 ARM64 fused dot"}
+{"t":"2026-08-22T05:17:12Z","eid":"735bffc8a15ee655","ag":"ag-5523","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:17:21Z","eid":"a83f3a4fc1bf8417","ag":"ag-8a53","ev":"move","id":"T-01M0KYDJXBEK088S0BM7PMNN28","fr":"draft","to":"active","note":"Activated under the standing M2-first mandate after proposal P-01M0KY9HK0FH8, the pinned llama.cpp type-35 audit, and ADR-01M0KYBEDXFJW fixed the direct-F32 M1 execution boundary and validation gates."}
+{"t":"2026-08-22T05:17:21Z","eid":"7fc6426291ab0c98","ag":"ag-8a53","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:17:43Z","eid":"44a06c4e3905caba","ag":"ag-467c","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:17:55Z","eid":"78249e3b01357a9d","ag":"ag-80fb","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:18:10Z","eid":"78b70b30031c660e","ag":"ag-1757","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:18:13Z","eid":"82ee215848ab2920","ag":"ag-2786","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:18:15Z","eid":"5de1e82eeff17494","ag":"ag-f0ce","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:18:18Z","eid":"c7fcb0bc1b567eda","ag":"ag-da49","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-22T05:18:20Z","eid":"fef09932ece2936f","ag":"ag-3f5f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
