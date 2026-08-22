@@ -3884,7 +3884,7 @@ choice: Lead with an ARM64 direct-F32 M1 fused unpack-scale-dot while retaining 
 
 ## P-01M0M5K15NFPX87P7G6KCGPSYN Complete GGUF Q4_1 and M2 fused decode
 kind: proposal
-state: active
+state: done
 created: 2026-08-22
 refs: ADR-01M0M5SFB8ESSBR5PGTAK7PV07
 grilled: 2026-08-22 open=0
