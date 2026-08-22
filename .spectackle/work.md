@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0NY3846EDBT6GMMC5BCM0CE Fuse paired Q4_K production into CPU SwiGLU consumption
 kind: proposal
-state: draft
+state: active
 created: 2026-08-22
 targets: format/gguf/quant_matmul_pair.go, format/gguf/quant_matmul_pair_test.go, backend/fusion.go, backend/cpu/swiglu_fusion.go, backend/cpu/swiglu_fusion_test.go, nn/quant_swiglu.go, nn/quant_swiglu_test.go, internal/benchcompare/leadership/evidence, BENCHMARKS.md, docs/benchmarking.md
 
