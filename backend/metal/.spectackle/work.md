@@ -46,16 +46,6 @@ targets: go:metal.QMatMulQ4_0, backend/metal/metal_bridge.m, backend/metal/metal
 
 Complete the bottom-up Q4_1 path by adding exact GGUF type-3 dispatch to the Metal backend. Reuse the proven Q4_0 scalar and SIMD-group shapes but decode each 20-byte block as f16 d, f16 m, and 16 split-half nibbles with value d*q+m. Cover per-call, resident, and recorder dispatch; preserve explicit unsupported boundaries elsewhere. Validate against gguf.QMatMul, forced scalar/cooperative parity, invalid-input rejection, and M2 warm/cold benchmarks. Keep the change only if it beats CPU fallback end to end in a declared leadership cell without weakening semantics.
 
-## T-01M0M9BPF2FW68JAGG2XZ8F917 Implement and benchmark native Metal Q4_1
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0M9B6FRFCZA18408PMM2WGH
-grilled: 2026-08-22 open=1
-targets: go:metal.QMatMulQ4_0, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/qmatmul_test.go
-
-Add GGUF type-3 constants and dispatch, synchronous and resident/recorder execution, an exact 20-byte affine Q4_1 Metal decoder, SIMD-group cooperative M2 path, correctness and scope tests, and same-binary/per-process benchmark evidence. Validate full repository, external perfscan, and retain only measured leverage.
-
 ## ADR-01M0M9MPAGFM9T4AMA7D97HWJD Which native Metal Q4_1 kernel shape should be the production baseline on M2?
 kind: adr
 state: done
