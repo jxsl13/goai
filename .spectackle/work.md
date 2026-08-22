@@ -4007,11 +4007,3 @@ grilled: 2026-08-22 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, llamagpu/llamagpu.go, llamagpu/decoder.go, docs/benchmarking.md
 
 Production M2 attribution shows quantized matmuls consume about 77.6% of explicit token work, while large Q4_K streams already reach about 92% of peak DRAM bandwidth. The decoder currently uploads every projection into a distinct MTLBuffer and rebinds 131 quant resources per TinyLlama Q4_K_M token. Test whether one model-scoped, 256-byte-aligned MTLBuffer arena with per-weight offsets improves whole-command GPU scheduling, resource tracking, and address translation without changing kernel arithmetic. First build a native production-geometry probe comparing identical bytes and dispatch order across separate buffers versus one arena; do not redesign ownership unless the probe clears 1.05x across three count-seven M2 campaigns. If it clears, introduce explicit arena lifetime, offset-aware resident views, exact close/error semantics, standalone-upload fallback, and whole-token trained-model validation. Preserve profiling labels, all quant formats, portable backends, and host-bound CPU routing.
-
-## T-01M0N49976EVYTJ08QW1KTVW1K Measure separate buffers against one aligned Metal weight arena
-kind: task
-state: active
-created: 2026-08-22
-parent: P-01M0N48W6AF54SY958QMSD4465
-
-Build a test-only native probe with the production Q4_K projection geometry, identical 256-byte-aligned bytes, identical dispatch and encoder order, one complete command buffer per sample, and separate-buffer versus single-arena arms. Run three fresh-process count-seven AB/BA campaigns using GPU command duration. Promote the model-scoped arena redesign only if every campaign median reaches 1.05x; otherwise remove the probe and reject the proposal.
