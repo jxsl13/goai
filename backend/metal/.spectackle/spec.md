@@ -10,6 +10,8 @@ schema: v1
 - T-01M0FVGM88EWMRQCHFN4B748AV Gate Metal bias-gradient routing against the optimized CPU kernel: Add a mutation-proven direct-Metal benchmark control and production selector over the frozen F32 shape matrix. Run three independent count-7 campaigns, reject unstable timing before routing, pin both selector arms, strengthen contiguous and noncontiguous reference parity, run an end-to-end GPT training-step no-regression gate, and retain only a measured winner zone. Record reproducible evidence an [body truncated at tombstone retention cap]
 - T-01M0GZFS4DFY08YRAND3TRHB5N Implement and gate Q2_K scalar-word loads: Implemented and validated default-on M2 Metal Q2_K scalar-word quant loads for eligible M=1 decode shapes. Replaced eight indexed uchar reads per lane with two aligned scalar uint loads while preserving byte order and accumulation semantics; uint2/ulong were excluded because the 84-byte block stride guarantees only 4-byte alignment. Production routing requires K*N >= 6291456 and preserves the hist [body truncated at tombstone retention cap]
 - P-01M0GZESBAFGS8J03YXK0YS5YF Pack Q2_K quant bytes into aligned uint loads: Delivered the M2-first Q2_K word-load optimization through task T-01M0GZFS4DFY0. The aligned scalar-uint design is numerically equivalent within 2.068e-6 max scalar relative error, guarded by an explicit K*N >= 6291456 decode threshold, and measured 1.300x-1.788x faster across five eligible production shapes in each of three independent AB/BA campaigns; fallback routing stayed within 0.983x-1.016x [body truncated at tombstone retention cap]
+- T-01M0M9BPF2FW68JAGG2XZ8F917 Implement and benchmark native Metal Q4_1: Implemented exact GGUF type-3 Q4_1 Metal support with scalar and two-SIMD-group cooperative kernels, resident recorder dispatch, and explicit llamagpu upload. Three fresh-process campaigns across four production shapes retained the cooperative route at minimum 2.745x GPU and 1.462x Metal/CPU wall; whole-model decode improved 72.00 to 182.52 token/s (2.535x). Generic host-bound dispatch deliberatel [body truncated at tombstone retention cap]
+- P-01M0M9B6FRFCZA18408PMM2WGH Add native M2 Metal Q4_1 quantized matmul: Delivered native resident Q4_1 as the next M2 bottom-up quantized decode tranche. The exact affine wire format and cooperative decoder path are production-reachable through llamagpu, while generic host-I/O execution remains on the measured-faster ARM64 kernel. Minimum campaign medians were 2.745x cooperative/scalar GPU and 1.462x Metal/CPU wall across four production shapes; TinyLlama-shaped end-t [body truncated at tombstone retention cap]
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -142,3 +144,27 @@ WHEN M exceeds one, support is unavailable, or the pair-load toggle is disabled,
 
 ## METAL-Q4-0-PAIR-LOAD-THRESHOLD-001
 WHEN it evaluates an M=1 Q4_0 decode shape, the Metal Q4_0 cooperative selector SHALL select pair loads only when K times N is at least 6291456; otherwise retain control.
+
+## METAL-Q4-1-BLOCK-001
+WHEN a GGUF type-3 Q4_1 block is decoded, the Metal kernel SHALL decode each 20-byte block as f16 d and m plus sixteen split-half nibble bytes, reconstructing d times q plus m for q from zero through fifteen.
+
+Rationale: This is the exact GGUF Q4_1 wire contract.
+
+## METAL-Q4-1-DISPATCH-001
+WHEN host-bound QuantMatMul or UploadQuant receives type-3 Q4_1, the Metal backend SHALL return ErrQuantUnsupported while explicit Q4_1 and llamagpu resident recorder APIs provide native dispatch.
+
+Rationale: M2 measurements show standalone Metal submissions lose to the ARM64 fused CPU kernel; recorder residency amortizes submission boundaries.
+
+## METAL-Q4-1-NUMERIC-001
+WHEN a valid Q4_1 matmul executes, the Metal kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
+
+## METAL-Q4-1-FALLBACK-001
+WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal Q4_1 selector SHALL dispatch the scalar Q4_1 pipeline and issue zero cooperative Q4_1 threadgroups.
+
+## METAL-Q4-1-PERF-001
+WHEN three count-seven M2 campaigns compare cooperative and scalar resident single-token Q4_1 across representative shapes, the cooperative Metal route SHALL remain enabled only if every eligible median is at least 1.10 times faster with identical allocation semantics.
+
+Rationale: The retained leverage is SIMD-group occupancy inside a resident recorder, not host-bound dispatch.
+
+## METAL-Q4-1-HOST-ROUTE-001
+WHEN M2 host input and output benchmarks do not beat ARM64 Q4_1 by at least 1.10 times, the generic Metal Q4_1 dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.

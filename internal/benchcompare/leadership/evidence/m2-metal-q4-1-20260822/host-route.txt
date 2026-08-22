@@ -1,0 +1,47 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4687	     48474 ns/op	    3094 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4980	     48394 ns/op	    3073 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4932	     48359 ns/op	    3076 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4953	     47524 ns/op	    3072 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4976	     48855 ns/op	    3078 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4941	     48579 ns/op	    3072 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/CPU-12     	    4914	     48652 ns/op	    3072 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1202	    170059 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1660	    146765 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1334	    168837 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1496	    158012 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1504	    157115 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1514	    154789 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N512_K1024/MetalResidentHostIO-12         	    1516	    158840 ns/op	    2272 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1281	    180074 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1348	    179983 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1338	    179801 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1342	    179620 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1347	    181201 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1353	    179475 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/CPU-12                        	    1344	    179634 ns/op	    9216 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1093	    221421 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1078	    223022 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1118	    216041 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1087	    222635 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1096	    222860 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1202	    215463 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N2048_K2048/MetalResidentHostIO-12        	    1142	    214194 ns/op	    8416 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1299	    181058 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1347	    180217 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1346	    179918 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1347	    180082 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1342	    180609 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1345	    180378 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/CPU-12                        	    1339	    180070 ns/op	   17408 B/op	      29 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1072	    217024 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1134	    187511 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1366	    176391 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1378	    186540 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1272	    193611 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1141	    210458 ns/op	   16608 B/op	       3 allocs/op
+BenchmarkMetalQ4_1Leadership/N4096_K1024/MetalResidentHostIO-12        	    1120	    213814 ns/op	   16608 B/op	       3 allocs/op
+PASS

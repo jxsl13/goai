@@ -98,9 +98,10 @@ func TestMetalBackendResidentQuantMatMuler(t *testing.T) {
 		}
 		_ = rw.Close()
 	}
-	// a type without a resident kernel (Q4_1, code 3) → ErrQuantUnsupported → CPU fallback.
+	// Generic host-bound Q4_1 residency is deliberately declined: its ARM64 fused path is faster
+	// than standalone Metal on M2. llamagpu uses the explicit recorder-only upload API instead.
 	if _, err := rb.UploadQuant(make([]byte, 100), 3, n, k); !errors.Is(err, backend.ErrQuantUnsupported) {
-		t.Errorf("Q4_1 resident: got %v, want ErrQuantUnsupported", err)
+		t.Errorf("host-bound Q4_1 resident route: got %v, want ErrQuantUnsupported", err)
 	}
 }
 

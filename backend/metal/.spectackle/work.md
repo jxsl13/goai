@@ -36,3 +36,19 @@ option: Retain direct Metal for all shapes
 option: Remove the direct Metal implementation
 blocks: T-01M0FVGM88EWMRQCHFN4B748AV
 choice: Route measured shapes through CPU and preserve direct Metal above the bound
+
+## ADR-01M0M9MPAGFM9T4AMA7D97HWJD Which native Metal Q4_1 kernel shape should be the production baseline on M2?
+kind: adr
+state: done
+created: 2026-08-22
+context: Q4_1 uses a 20-byte affine block with d and m. Direct decoding preserves compressed residency and avoids transformation traffic. Q4_0 already proves the scalar and cooperative occupancy shapes.
+decision: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+consequences: The kernel decodes Q4_1 directly from 20-byte resident blocks. Synchronous, resident, and recorder paths share the same cached pipelines. Scalar is the capability fallback; cooperative is the M2 path. No dense expansion or transient Q4_0 transformation is allowed.
+status: accepted
+
+kind: radio
+option: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+option: Reuse Q4_0 after transforming Q4_1 weights or activations
+option: Materialize dense F32 weights before Metal GEMM
+blocks: P-01M0M9B6FRFCZA18408PMM2WGH
+choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
