@@ -89,14 +89,15 @@ func (Backend) AvailableMemory() (bytes int64, ok bool) {
 
 // ggml quant type codes accelerated by the in-kernel quantized matmuls (§R94/§R100/§R99).
 const (
-	qtQ4_0 = 2
-	qtQ4_1 = 3
-	qtQ8_0 = 8
-	qtQ2_K = 10
-	qtQ3_K = 11
-	qtQ5_K = 13
-	qtQ4_K = 12
-	qtQ6_K = 14
+	qtQ4_0   = 2
+	qtQ4_1   = 3
+	qtQ8_0   = 8
+	qtQ2_K   = 10
+	qtQ3_K   = 11
+	qtQ5_K   = 13
+	qtQ4_K   = 12
+	qtQ6_K   = 14
+	qtIQ4_NL = 20
 )
 
 // UploadQuant implements backend.ResidentQuantMatMuler (§T154): it uploads a supported quantized
@@ -104,10 +105,10 @@ const (
 // It returns backend.ErrQuantUnsupported when the generic host-bound route is not accelerated so
 // the caller falls back to its faster CPU path.
 func (Backend) UploadQuant(weight []byte, quantType uint32, n, k int) (backend.ResidentWeight, error) {
-	// Q4_1's fused ARM64 host kernel beats a standalone Metal submission on M2. Keep generic
-	// QuantLinear on that CPU route; llamagpu opts into compressed device residency through
-	// UploadQWeightQ4_1, where a whole decode step amortizes submission overhead.
-	if quantType == qtQ4_1 {
+	// The fused Q4_1 and IQ4_NL ARM64 host kernels beat standalone Metal submissions on M2.
+	// Keep generic QuantLinear on those CPU routes; llamagpu opts into explicit compressed
+	// device residency, where a whole decode step amortizes submission overhead.
+	if quantType == qtQ4_1 || quantType == qtIQ4_NL {
 		return nil, backend.ErrQuantUnsupported
 	}
 	rw, err := uploadResident(weight, quantType, n, k)
@@ -119,8 +120,8 @@ func (Backend) UploadQuant(weight []byte, quantType uint32, n, k int) (backend.R
 }
 
 // QMatMul implements backend.QuantMatMuler (§T142): it dispatches a quantized linear layer to
-// the matching in-kernel Metal matmul (Q8_0/Q4_K/Q6_K), returning backend.ErrQuantUnsupported
-// for a ggml type without a GPU kernel so the caller falls back to the CPU path.
+// the matching generic host-bound in-kernel Metal matmul, returning backend.ErrQuantUnsupported
+// when the type lacks a kernel or its measured CPU route is faster.
 func (Backend) QMatMul(x *tensor.Tensor, weight []byte, quantType uint32, n, k int) (*tensor.Tensor, error) {
 	switch quantType {
 	case qtQ4_0:
@@ -255,11 +256,48 @@ func QMatMulQ4_1(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, err
 	return out, nil
 }
 
+// QMatMulIQ4_NL computes y[M,N] = x[M,K] · dequant(weight)ᵀ on the GPU, where weight is
+// an IQ4_NL [N,K] matrix. Each 18-byte block stores f16 d followed by 16 split-half nibble
+// bytes; the nibbles index ggml's fixed nonlinear 16-value codebook. The compressed matrix is
+// decoded in-kernel and accumulation is f32, so results match the f64 gguf.QMatMul reference
+// within crossTol.
+func QMatMulIQ4_NL(x *tensor.Tensor, weight []byte, n, k int) (*tensor.Tensor, error) {
+	if x.Ndim() != 2 || x.Shape()[1] != k {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_NL x must be [M,%d], got %v", k, x.Shape())
+	}
+	if x.Dtype() != tensor.F32 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_NL is f32-only, got %v", x.Dtype())
+	}
+	if k <= 0 || k%32 != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_NL K=%d must be a positive multiple of 32", k)
+	}
+	nb := k / 32
+	if len(weight) != n*nb*18 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_NL weight %d bytes != %d (N·K/32·18)", len(weight), n*nb*18)
+	}
+	m := x.Shape()[0]
+	out := tensor.New(tensor.F32, tensor.Shape{m, n})
+	if m == 0 || n == 0 {
+		return out, nil
+	}
+	xc := x.Contiguous()
+	rc := C.mtl_qmatmul_iq4_nl(
+		(*C.float)(&xc.Storage().F32()[0]),
+		(*C.uchar)(unsafe.Pointer(&weight[0])),
+		(*C.float)(&out.Storage().F32()[0]),
+		C.int(m), C.int(k), C.int(n),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: QMatMulIQ4_NL failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
 // ResidentQWeight is a quantized weight uploaded ONCE to a device-resident GPU buffer and reused
 // across many QMatMul calls (§T153/§T155) — so a decode loop, which reuses every weight for every
 // token, uploads each weight a single time instead of per step. Supported k-quant, Q4_0, Q4_1,
-// and Q8_0 formats are represented; the resident dispatch selects by quant type. Call Close to
-// free the GPU buffer (it is not reclaimed automatically).
+// IQ4_NL, and Q8_0 formats are represented; resident dispatch selects by quant type. Call Close
+// to free the GPU buffer (it is not reclaimed automatically).
 type ResidentQWeight struct {
 	handle  unsafe.Pointer // retained MTLBuffer (nil after Close)
 	n, k    int
@@ -366,6 +404,8 @@ func residentRowBytes(qt uint32, k int) (rowBytes, align int, ok bool) {
 		return (k / 256) * 176, 256, true
 	case qtQ6_K:
 		return (k / 256) * 210, 256, true
+	case qtIQ4_NL:
+		return (k / 32) * 18, 32, true
 	}
 	return 0, 0, false
 }
@@ -404,6 +444,13 @@ func UploadQWeightQ8_0(weight []byte, n, k int) (*ResidentQWeight, error) {
 // lose to the M2 ARM64 kernel; llamagpu uses this opt-in API to amortize a full decode command.
 func UploadQWeightQ4_1(weight []byte, n, k int) (*ResidentQWeight, error) {
 	return uploadResident(weight, qtQ4_1, n, k)
+}
+
+// UploadQWeightIQ4_NL uploads exact GGUF type-20 blocks for the device-resident recorder path.
+// Generic Backend.UploadQuant deliberately declines IQ4_NL because standalone host-I/O Metal
+// calls lose to the M2 ARM64 kernel; llamagpu uses this opt-in API for a full decode command.
+func UploadQWeightIQ4_NL(weight []byte, n, k int) (*ResidentQWeight, error) {
+	return uploadResident(weight, qtIQ4_NL, n, k)
 }
 
 // QMatMul computes y[M,N] = x[M,K] · dequant(W)ᵀ using the resident weight — only x is uploaded.
@@ -1739,6 +1786,16 @@ func SetQ4_1Cooperative(on bool) bool {
 		v = 1
 	}
 	return C.mtl_q4_1_cooperative_set(C.int(v)) == 1
+}
+
+// SetIQ4NLCooperative selects the two-SIMD-group nonlinear IQ4_NL kernel and returns the
+// previous setting. It is exposed for same-binary correctness and performance controls.
+func SetIQ4NLCooperative(on bool) bool {
+	v := 0
+	if on {
+		v = 1
+	}
+	return C.mtl_iq4_nl_cooperative_set(C.int(v)) == 1
 }
 
 // SetQ8_0Cooperative selects the SIMD-group-cooperative resident Q8_0 M=1 matvec and

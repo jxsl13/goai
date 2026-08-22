@@ -168,3 +168,21 @@ Rationale: The retained leverage is SIMD-group occupancy inside a resident recor
 
 ## METAL-Q4-1-HOST-ROUTE-001
 WHEN M2 host input and output benchmarks do not beat ARM64 Q4_1 by at least 1.10 times, the generic Metal Q4_1 dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.
+
+## METAL-IQ4NL-BLOCK-001
+WHEN a GGUF type-20 block is decoded, the Metal IQ4_NL kernel SHALL read one f16 scale and sixteen split-half nibble bytes, applying the verified 16-entry nonlinear codebook to exactly 32 values.
+
+## METAL-IQ4NL-DISPATCH-001
+WHEN host-bound QuantMatMul or UploadQuant receives type-20 IQ4_NL, the Metal backend SHALL return ErrQuantUnsupported while explicit IQ4_NL and llamagpu resident recorder APIs provide native dispatch.
+
+## METAL-IQ4NL-NUMERIC-001
+WHEN a valid IQ4_NL matmul executes, the Metal IQ4_NL kernel SHALL match gguf.QMatMul within 2e-5 relative error, preserve floating-point class, and mutate zero activation or weight bytes.
+
+## METAL-IQ4NL-FALLBACK-001
+WHEN M exceeds the cooperative limit or SIMD-group requirements are unavailable, the Metal IQ4_NL selector SHALL dispatch the scalar pipeline and issue zero cooperative IQ4_NL threadgroups.
+
+## METAL-IQ4NL-PERF-001
+WHEN three count-seven M2 campaigns cover representative resident single-token IQ4_NL shapes, the cooperative Metal route SHALL remain enabled only when every eligible median is at least 1.10 times scalar control with identical allocation semantics.
+
+## METAL-IQ4NL-HOST-ROUTE-001
+WHEN M2 equal host-boundary benchmarks do not beat ARM64 IQ4_NL by at least 1.10 times, the generic Metal IQ4_NL dispatch SHALL return ErrQuantUnsupported so QuantLinear executes the faster CPU path.

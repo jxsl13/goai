@@ -99,7 +99,7 @@ func ggBlockElems(gg uint32) (int, error) {
 		return 1, nil
 	}
 	switch gguf.QuantType(gg) {
-	case gguf.Q8_0, gguf.Q4_0:
+	case gguf.Q8_0, gguf.Q4_0, gguf.Q4_1, gguf.IQ4_NL:
 		return 32, nil
 	case gguf.Q2_K, gguf.Q3_K, gguf.Q4_K, gguf.Q5_K, gguf.Q6_K:
 		return 256, nil

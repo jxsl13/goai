@@ -42,3 +42,6 @@ Rationale: A CPU-only fused kernel is an M2-first training optimization. Backend
 
 ## Q8-SIMD-MODEL-PARITY-001
 WHEN a registered Q8_0 SIMD selector changes summation order, the model-level Q8_0 decode-vs-Forward gates SHALL require exact equality on portable builds and absolute error at most 5e-5*abs(reference)+1e-6 on SIMD builds.
+
+## QUANT-GGUF-MODERN-ADMISSION-001
+WHEN a real GGUF projection uses type 3 Q4_1 or type 20 IQ4_NL, the quantized model loader SHALL preserve its compressed bytes in QuantLinear and perform exactly zero eager weight dequantizations.

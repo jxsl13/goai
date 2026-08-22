@@ -103,6 +103,9 @@ func TestMetalBackendResidentQuantMatMuler(t *testing.T) {
 	if _, err := rb.UploadQuant(make([]byte, 100), 3, n, k); !errors.Is(err, backend.ErrQuantUnsupported) {
 		t.Errorf("host-bound Q4_1 resident route: got %v, want ErrQuantUnsupported", err)
 	}
+	if _, err := rb.UploadQuant(make([]byte, n*(k/32)*18), 20, n, k); !errors.Is(err, backend.ErrQuantUnsupported) {
+		t.Errorf("host-bound IQ4_NL resident route: got %v, want ErrQuantUnsupported", err)
+	}
 }
 
 // §V3/§V11 (§T153): a device-resident Q8_0 weight gives the SAME result as the per-call

@@ -1,0 +1,39 @@
+External perfscan differential
+================================
+
+Binary module:
+  github.com/jxsl13/perfscan/perfscan v1.71.0
+  h1:AANkdAxPTGrflL5Y20l36oynrxXks0bYN0W9N2A60+Q=
+  built with Go 1.26.6
+  GOPROXY=direct
+
+Exact base:
+  cbd1ab2448150bfb8d6119deb7fa92f8d08a0df5
+
+Scopes:
+  ./backend/metal ./llamagpu ./nlp
+  production scan plus -tests scan
+
+Production differential:
+  Findings were normalized by file + rule + message because the inserted Metal
+  implementation shifts existing line numbers.
+  candidate unique findings in changed production Go files: 6
+  base unique findings in changed production Go files:      6
+  added normalized findings:                                0
+  removed normalized findings:                              0
+
+New/changed test differential:
+  Applied PS5055 twice:
+    - backend/metal/iq4_nl_test.go: slices.Equal([]byte) -> bytes.Equal
+    - nlp/quant_llama_gguf_test.go: slices.Equal([]byte) -> bytes.Equal
+
+  Declined PS4001 at five synthetic IQ4_NL block constructors. Each write is a
+  strided two-byte f16 field inside a heterogeneous 18-byte (or 20-byte Q4_1)
+  block, and some constructors vary the scale by block. A same-layout bulk copy
+  cannot replace these writes; they are test setup, outside measured regions.
+
+Result:
+  zero actionable new perfscan findings.
+
+Generalizable report:
+  https://github.com/jxsl13/perfscan/issues/820#issuecomment-5379634196
