@@ -391,3 +391,5 @@
 {"t":"2026-08-22T06:36:03Z","eid":"d9809e4906a78695","ag":"ag-0015","ev":"create","id":"P-01M0M2XZRGFSWVT5G94ZXT61S8","k":"proposal","ti":"Complete GGUF IQ and MXFP4 wire decode dispatch","dir":"format/gguf"}
 {"t":"2026-08-22T06:36:11Z","eid":"ef1b18704a9b5ad4","ag":"ag-9c9d","ev":"move","id":"P-01M0M2XZRGFSWVT5G94ZXT61S8","dir":"format/gguf","fr":"draft","to":"active","note":"Approved under the standing directive to continue bottom-up GGUF correctness and performance work through validated PRs."}
 {"t":"2026-08-22T06:36:30Z","eid":"c142560b29c76d9d","ag":"ag-c3e6","ev":"grill","id":"P-01M0M2XZRGFSWVT5G94ZXT61S8","dir":"format/gguf","gr":"2026-08-22 open=0","hash":"952990446c2d0e54b4a90a0916b575697829ebaea7e48116e512cb798a47160f"}
+{"t":"2026-08-22T06:36:57Z","eid":"262c52956bcdc6d1","ag":"ag-cb04","ev":"create","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","k":"adr","ti":"Where should complete wire-format dispatch for already supported IQ and MXFP4 types live?","dir":"format/gguf"}
+{"t":"2026-08-22T06:36:57Z","eid":"fb906107a66d901a","ag":"ag-cb04","ev":"move","id":"ADR-01M0M2ZMEDF86A4K2PP8HB176E","dir":"format/gguf","fr":"draft","to":"submitted"}
