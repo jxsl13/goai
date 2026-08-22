@@ -48,7 +48,7 @@ Complete the bottom-up Q4_1 path by adding exact GGUF type-3 dispatch to the Met
 
 ## T-01M0M9BPF2FW68JAGG2XZ8F917 Implement and benchmark native Metal Q4_1
 kind: task
-state: draft
+state: active
 created: 2026-08-22
 parent: P-01M0M9B6FRFCZA18408PMM2WGH
 grilled: 2026-08-22 open=1

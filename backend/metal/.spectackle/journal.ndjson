@@ -125,3 +125,4 @@
 {"t":"2026-08-22T08:28:24Z","eid":"4701fe7c35c36ab1","ag":"ag-5d5c","ev":"create","id":"T-01M0M9BPF2FW68JAGG2XZ8F917","k":"task","ti":"Implement and benchmark native Metal Q4_1","dir":"backend/metal"}
 {"t":"2026-08-22T08:28:51Z","eid":"6664ae23b2ca667e","ag":"ag-5b45","ev":"grill","id":"P-01M0M9B6FRFCZA18408PMM2WGH","dir":"backend/metal","gr":"2026-08-22 open=0","hash":"684b3f7d42aa029283217b47c594e4a37ce13834a03680de67c517c95b3dafd6"}
 {"t":"2026-08-22T08:29:22Z","eid":"6dff56f84c640f5b","ag":"ag-ff47","ev":"grill","id":"T-01M0M9BPF2FW68JAGG2XZ8F917","dir":"backend/metal","gr":"2026-08-22 open=1","hash":"4939626d4050f234306f7ba5b7fd8a4d6144ea06cc4b2e3b9707bba68b371187","open":1,"keys":["amb-thin:body"]}
+{"t":"2026-08-22T08:29:31Z","eid":"4589398ccce25869","ag":"ag-ee6f","ev":"move","id":"T-01M0M9BPF2FW68JAGG2XZ8F917","dir":"backend/metal","fr":"draft","to":"active","note":"Begin the approved native Metal Q4_1 implementation and M2 validation tranche."}
