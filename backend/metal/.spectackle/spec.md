@@ -171,3 +171,6 @@ WHEN M2 host input and output benchmarks do not beat ARM64 Q4_1 by at least 1.10
 
 ## METAL-IQ4NL-BLOCK-001
 WHEN a GGUF type-20 block is decoded, the Metal IQ4_NL kernel SHALL read one f16 scale and sixteen split-half nibble bytes, applying the verified 16-entry nonlinear codebook to exactly 32 values.
+
+## METAL-IQ4NL-DISPATCH-001
+WHEN host-bound QuantMatMul or UploadQuant receives type-20 IQ4_NL, the Metal backend SHALL return ErrQuantUnsupported while explicit IQ4_NL and llamagpu resident recorder APIs provide native dispatch.
