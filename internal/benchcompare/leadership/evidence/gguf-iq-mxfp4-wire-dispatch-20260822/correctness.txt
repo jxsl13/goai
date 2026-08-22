@@ -1,0 +1,25 @@
+GGUF IQ/MXFP4 dispatch validation, 2026-08-22
+
+Focused exhaustive dispatch and unsupported-type tests: PASS
+Complete native GGUF short suite: PASS
+Complete race-enabled GGUF short suite: PASS
+CGO-disabled Linux ARM64 test-binary compilation: PASS
+CGO-disabled Linux AMD64 test-binary compilation: PASS
+make preflight: PASS
+make preflight-metal: PASS
+
+Native test binary SHA-256:
+5ba031e0513ba641f5b6f3f090d6263993087a71990d157a153813e9f787efbd
+
+Race test binary SHA-256:
+919dd6b2c1c01d47d8746cc2a0a0ef97959f4ca79b98784bae8a3e5801fe838e
+
+Linux ARM64 test binary SHA-256:
+41ed97fded720c18747b7ac2827b75d287d45c6845913036a332b0d58dac62c3
+
+Linux AMD64 test binary SHA-256:
+dd94bbde1a38822005269031cf5de48459c8dc8290fb0469c52aa24feef18745
+
+Every supported wire path matched its direct decoder bit-for-bit. Wire type
+24 remained unsupported across byte-size, public, eager, raw, and QMatMul
+entry points.

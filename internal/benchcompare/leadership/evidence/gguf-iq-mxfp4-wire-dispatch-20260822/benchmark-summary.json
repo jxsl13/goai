@@ -1,0 +1,143 @@
+[
+  {
+    "name": "IQ2_XXS",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 342.75,
+    "wireMedianNs": 341.05,
+    "wireOverDirect": 0.9950401167031364,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ2_XS",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 369.3,
+    "wireMedianNs": 337.75,
+    "wireOverDirect": 0.9145681018142431,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ3_XXS",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 338.45,
+    "wireMedianNs": 333,
+    "wireOverDirect": 0.983897178312897,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ1_S",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 332.5,
+    "wireMedianNs": 320.95,
+    "wireOverDirect": 0.9652631578947368,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ4_NL",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 251.3,
+    "wireMedianNs": 246,
+    "wireOverDirect": 0.9789096697174691,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ3_S",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 342.75,
+    "wireMedianNs": 342.9,
+    "wireOverDirect": 1.000437636761488,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ2_S",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 344.25,
+    "wireMedianNs": 346.5,
+    "wireOverDirect": 1.0065359477124183,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ4_XS",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 255.29999999999998,
+    "wireMedianNs": 249.35000000000002,
+    "wireOverDirect": 0.9766940853897377,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "IQ1_M",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 323.65,
+    "wireMedianNs": 319.85,
+    "wireOverDirect": 0.9882589216746487,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  },
+  {
+    "name": "MXFP4",
+    "samplesDirect": 10,
+    "samplesWire": 10,
+    "directMedianNs": 241.7,
+    "wireMedianNs": 248.3,
+    "wireOverDirect": 1.027306578402979,
+    "bytes": [
+      1256
+    ],
+    "allocs": [
+      4
+    ]
+  }
+]
+

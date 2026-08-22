@@ -4,6 +4,20 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- complete IQ and MXFP4 wire dispatch (T-01M0M30EFGEN4, 2026-08-22)
+
+Eager `Read` now routes every already-supported IQ and MXFP4 GGUF wire type
+through its exact decoder. `Read`, `ReadRaw` plus `QuantTensor.Dequantize`,
+public `Dequantize`, and direct decoder calls now agree bit-for-bit for
+IQ2_XXS, IQ2_XS, IQ3_XXS, IQ1_S, IQ4_NL, IQ3_S, IQ2_S, IQ4_XS, IQ1_M,
+and MXFP4. Unsupported wire type 24 remains rejected across all entry points.
+
+Ten retained fresh-process 500 ms direct/wire pairs show every dispatch path
+neutral (`p>=0.315`), with a -1.67% time geomean and unchanged 1,256 bytes and
+four allocations per operation. This closes a file-loading correctness gap;
+it is not a performance claim. Native and race-enabled GGUF suites, Linux
+ARM64/AMD64 cross-compilation, external perfscan, and both preflight gates pass.
+
 ### format/gguf -- correct IQ1_S and IQ2_S wire IDs (T-01M0M1625WFQG, 2026-08-22)
 
 The GGUF registry now matches the pinned ggml enum: `IQ1_S` is wire type 19

@@ -1,0 +1,160 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	  871362	       594.1 ns/op	 111.10 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1000000	       614.0 ns/op	 120.52 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1005037	       527.1 ns/op	 185.92 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1000000	       753.3 ns/op	  66.38 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2070838	       364.3 ns/op	 395.27 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	  738079	       710.6 ns/op	 154.81 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1000000	       612.2 ns/op	 133.94 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 1283127	       441.9 ns/op	 307.78 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1000000	       604.2 ns/op	  92.69 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 1396196	       476.8 ns/op	 285.25 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1000000	      1071 ns/op	  61.61 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1635864	       427.1 ns/op	 173.25 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	  810420	       640.2 ns/op	 153.07 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1000000	       526.4 ns/op	  94.98 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 1690494	       317.9 ns/op	 452.93 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1000000	       572.1 ns/op	 192.28 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1254081	       454.0 ns/op	 180.63 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 1678036	       370.4 ns/op	 367.16 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1676834	       395.5 ns/op	 141.59 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 1485542	       354.2 ns/op	 383.99 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1000000	       502.0 ns/op	 131.47 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1408760	       407.5 ns/op	 181.61 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1000000	       521.0 ns/op	 188.09 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1760222	       347.2 ns/op	 144.02 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 1825411	       296.9 ns/op	 484.94 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1700972	       361.1 ns/op	 304.65 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1732096	       345.2 ns/op	 237.57 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2418656	       258.5 ns/op	 526.05 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1684504	       363.2 ns/op	 154.19 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2428651	       245.2 ns/op	 554.67 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1729852	       346.9 ns/op	 190.26 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1756536	       341.0 ns/op	 217.04 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1751948	       341.7 ns/op	 286.79 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1820258	       342.9 ns/op	 145.83 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2356290	       255.0 ns/op	 564.77 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1733769	       346.4 ns/op	 317.56 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1691080	       354.8 ns/op	 231.13 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2326724	       267.9 ns/op	 507.57 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1810332	       330.8 ns/op	 169.26 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2398105	       250.8 ns/op	 542.28 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1740471	       344.0 ns/op	 191.87 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1202899	       481.8 ns/op	 153.60 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1753192	       338.7 ns/op	 289.31 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1574822	       362.0 ns/op	 138.13 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2381143	       253.0 ns/op	 569.08 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1742301	       344.8 ns/op	 319.03 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1702821	       352.6 ns/op	 232.56 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2224490	       256.4 ns/op	 530.41 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1816009	       326.5 ns/op	 171.53 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2518048	       239.1 ns/op	 568.86 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1810296	       341.5 ns/op	 193.27 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1429084	       396.1 ns/op	 186.84 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1792058	       336.6 ns/op	 291.14 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1872324	       319.5 ns/op	 156.47 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2442412	       247.0 ns/op	 582.95 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1768753	       340.7 ns/op	 322.86 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1719076	       343.3 ns/op	 238.82 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2486863	       241.3 ns/op	 563.52 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1911370	       310.6 ns/op	 180.29 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2500819	       239.4 ns/op	 568.17 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1799802	       329.2 ns/op	 200.48 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1846333	       324.7 ns/op	 227.94 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1840801	       328.9 ns/op	 297.96 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1885092	       316.7 ns/op	 157.87 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2489800	       239.7 ns/op	 600.70 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1855177	       323.1 ns/op	 340.45 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1804782	       340.8 ns/op	 240.61 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2365040	       254.2 ns/op	 534.98 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1874036	       320.8 ns/op	 174.58 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2464276	       244.0 ns/op	 557.43 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1785086	       335.2 ns/op	 196.89 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1760460	       342.5 ns/op	 216.06 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1734154	       338.2 ns/op	 289.75 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1899268	       315.3 ns/op	 158.58 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2317158	       249.6 ns/op	 576.83 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1794050	       330.9 ns/op	 332.45 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1808956	       331.9 ns/op	 247.03 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2474157	       244.9 ns/op	 555.31 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1877922	       316.3 ns/op	 177.07 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2531947	       236.5 ns/op	 574.98 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1796600	       331.6 ns/op	 199.02 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1859079	       331.9 ns/op	 222.97 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1831413	       323.3 ns/op	 303.10 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1848468	       322.1 ns/op	 155.22 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2534829	       236.6 ns/op	 608.67 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1856242	       323.6 ns/op	 339.96 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1824153	       330.4 ns/op	 248.15 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2329278	       246.6 ns/op	 551.52 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1954003	       309.2 ns/op	 181.11 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2571766	       232.2 ns/op	 585.63 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/format/gguf
+cpu: Apple M2 Pro
+BenchmarkQuantWireDispatch/IQ2_XXS  	 1813080	       328.8 ns/op	 200.74 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_XS   	 1886722	       317.2 ns/op	 233.32 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_XXS  	 1885434	       317.6 ns/op	 308.53 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_S    	 1936285	       311.5 ns/op	 160.53 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_NL   	 2471700	       237.4 ns/op	 606.68 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ3_S    	 1845775	       324.3 ns/op	 339.14 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ2_S    	 1817678	       329.3 ns/op	 248.98 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ4_XS   	 2533471	       236.5 ns/op	 575.05 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/IQ1_M    	 1880850	       317.4 ns/op	 176.46 MB/s	    1256 B/op	       4 allocs/op
+BenchmarkQuantWireDispatch/MXFP4    	 2535194	       234.6 ns/op	 579.67 MB/s	    1256 B/op	       4 allocs/op
+PASS
+
