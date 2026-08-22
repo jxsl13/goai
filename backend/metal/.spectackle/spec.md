@@ -219,3 +219,6 @@ WHEN valid IQ3_S or IQ3_XXS matrix multiplication executes, the Metal backend SH
 
 ## METAL-IQ3-DISPATCH-001
 WHEN direct, resident, or recorder IQ3 dispatch selects a pipeline, the Metal backend SHALL use one shared cooperative predicate per wire type and bind the matching persistent grid at buffer index 4.
+
+## METAL-IQ3-PERF-001
+WHEN three count-seven M2 campaigns cover four resident single-token geometries for one IQ3 type, the cooperative Metal route SHALL remain enabled only when every median is at least 1.10 times scalar control at GPU and host-command boundaries.
