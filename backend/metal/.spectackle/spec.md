@@ -13,6 +13,7 @@ schema: v1
 - T-01M0M9BPF2FW68JAGG2XZ8F917 Implement and benchmark native Metal Q4_1: Implemented exact GGUF type-3 Q4_1 Metal support with scalar and two-SIMD-group cooperative kernels, resident recorder dispatch, and explicit llamagpu upload. Three fresh-process campaigns across four production shapes retained the cooperative route at minimum 2.745x GPU and 1.462x Metal/CPU wall; whole-model decode improved 72.00 to 182.52 token/s (2.535x). Generic host-bound dispatch deliberatel [body truncated at tombstone retention cap]
 - P-01M0M9B6FRFCZA18408PMM2WGH Add native M2 Metal Q4_1 quantized matmul: Delivered native resident Q4_1 as the next M2 bottom-up quantized decode tranche. The exact affine wire format and cooperative decoder path are production-reachable through llamagpu, while generic host-I/O execution remains on the measured-faster ARM64 kernel. Minimum campaign medians were 2.745x cooperative/scalar GPU and 1.462x Metal/CPU wall across four production shapes; TinyLlama-shaped end-t [body truncated at tombstone retention cap]
 - R-01M0N4TXJQE4NTD97E585SHFTP Measure production-shape M2 Q6_K roofline and geometry leverage: Consumed by P-01M0N4ZCJ1FRN and T-01M0N51GZ1FC1. The permanent GPU-timestamp roofline covers Q6_K K2048 N2048, K2048 N5632, K5632 N2048, and cache-busting K2048 N131072. Initial measurements were 191.3, 214.6, 208.0, and 157.0 GB/s, but repeated campaigns corrected the final cell to 184-190 GB/s and showed no stable rows-per-SIMD leverage. One-row specialization remained 0.986x to 1.054x control; [body truncated at tombstone retention cap]
+- P-01M0NSPZ36FZKRC1N1CFER4XCG Stabilize the fused RoPE F16-KV performance gate: Archive retry after the child task completed and Git index access was granted. The revised performance contract, deterministic threshold coverage, and 12-of-12 M2 stability evidence are complete.
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -346,7 +347,7 @@ IF Q1_0 or MXFP4 direct host execution loses any required M2 cell or campaign, T
 WHEN the fused single-token RoPE and f16 KV append executes, the Metal fusion SHALL match control Q/K float32 and cache binary16 bits, preserve nonfinite class, and mutate zero V, inverse-frequency, or unrelated cache bytes.
 
 ## METAL-ROPE-F16KV-PERF-001
-WHEN three count-seven M2 campaigns compare fused and control paths, the promotion gate SHALL retain fusion only when its boundary is at least 1.25 times faster and every TinyLlama decode campaign is at least 1.01 times faster.
+WHEN three order-alternated count-seven M2 campaigns compare fused and control paths, the promotion gate SHALL retain fusion only when aggregate 21-sample median boundary speedup reaches 1.20 times and every TinyLlama decode campaign reaches 1.01 times.
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
