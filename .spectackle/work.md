@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0PXZ8JWEMD9W5P2W2X47JN6 Interleave Q4_K activation loads with M2 FMLA
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
 targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KRowNeon, go:gguf.dotQ4KBlockNeon, asm:gguf.dotQ4KPairRowNeon, asm:gguf.dotQ4KRowNeon, asm:gguf.dotQ4KBlockNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
