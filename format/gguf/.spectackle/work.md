@@ -44,7 +44,7 @@ Profile the exact post-PR-1178 Apple M2 TinyLlama CPU decode with pinned model h
 
 ## T-01M0PMKX4RESV85HT2FFP17TJN Vectorize paired Q4_K header coefficients in NEON
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowNeon

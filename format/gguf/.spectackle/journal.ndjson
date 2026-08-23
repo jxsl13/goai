@@ -194,3 +194,4 @@
 {"t":"2026-08-23T06:19:07Z","eid":"973ddaa1c08d8c4f","ag":"ag-e594","ev":"create","id":"R-01M0PMBPMQE15902DPQHMN33FF","k":"research","ti":"Re-profile merged M2 Q4_K row assembly","dir":"format/gguf"}
 {"t":"2026-08-23T06:19:19Z","eid":"6dd2988c8769d0dd","ag":"ag-6a91","ev":"move","id":"R-01M0PMBPMQE15902DPQHMN33FF","dir":"format/gguf","fr":"draft","to":"active"}
 {"t":"2026-08-23T06:23:36Z","eid":"66a011393de0947f","ag":"ag-e1e8","ev":"create","id":"T-01M0PMKX4RESV85HT2FFP17TJN","k":"task","ti":"Vectorize paired Q4_K header coefficients in NEON","dir":"format/gguf"}
+{"t":"2026-08-23T06:23:54Z","eid":"cff884e1935085f1","ag":"ag-3918","ev":"move","id":"T-01M0PMKX4RESV85HT2FFP17TJN","dir":"format/gguf","fr":"draft","to":"active"}
