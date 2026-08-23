@@ -4006,11 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0R29CN1FD79BAX15W8RMK81 Batch Metal attention backward into one native submission
-kind: research
-state: active
-created: 2026-08-23
-targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.m, internal/benchcompare/vision_train_test.go
-
-Investigate the M2 ViT B=8 training bottleneck after batch-axis forward landed. Production go:metal.mhaBackwardF32 currently loops over Batch and invokes c:mtl_mha_backward_mps once per sequence; each invocation allocates host-backed Metal buffers, creates a command buffer, commits, waits, and copies gradients. This is distinct from the rejected residual ViT boundary rewrite, which reduced unrelated patchify/class-row operations without repeatable gains. Freeze exact batch isolation and batch-one compatibility. Measure a disposable one-call prototype against merged main with at least three count-seven alternating end-to-end ViT campaigns; retain only if every aligned train pair is at least 1.05x and campaign train medians are at least 1.10x, with gradient parity. Treat native GPU timestamps only as supporting evidence and prefer wall-clock training throughput.
