@@ -99,4 +99,10 @@ func init() {
 			in[0], in[1], in[2], in[3], in[4], in[5], in[6], g,
 		}, attrs)
 	})
+
+	RegisterVJP(backend.OpPreNormAttention, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx, backend.OpPreNormAttentionBackward, []*tensor.Tensor{
+			in[0], in[1], in[2], in[3], in[4], in[5], in[6], g,
+		}, attrs)
+	})
 }

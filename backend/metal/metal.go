@@ -1268,6 +1268,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return preNormFFNF32, true
 		case backend.OpPreNormFFNBackward:
 			return preNormFFNBackwardF32, true
+		case backend.OpPreNormAttention:
+			return preNormAttentionF32, true
+		case backend.OpPreNormAttentionBackward:
+			return preNormAttentionBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -1827,6 +1831,93 @@ func preNormFFNBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs back
 		return nil, fmt.Errorf("metal: prenorm-ffn-backward failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{dx, dgamma, dbeta, dw1, db1, dw2, db2}, nil
+}
+
+func preNormAttentionMetalGeometry(in []*tensor.Tensor, attrs backend.PreNormAttentionAttrs, backward bool) (rows, dim, batch, seq, heads int, ok bool) {
+	want := 7
+	if backward {
+		want = 8
+	}
+	if len(in) != want {
+		return 0, 0, 0, 0, 0, false
+	}
+	for _, t := range in {
+		if t == nil || t.Dtype() != tensor.F32 || !t.IsContiguous() || t.Offset() != 0 {
+			return 0, 0, 0, 0, 0, false
+		}
+	}
+	x, gamma, beta := in[0], in[1], in[2]
+	if x.Ndim() != 2 || x.Shape()[0] == 0 || x.Shape()[1] == 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	rows, dim = x.Shape()[0], x.Shape()[1]
+	attrs = attrs.WithDefaults()
+	batch, heads = attrs.Batch, attrs.Heads
+	if batch <= 0 || rows%batch != 0 || heads <= 0 || dim%heads != 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	seq = rows / batch
+	if gamma.Ndim() != 1 || gamma.Shape()[0] != dim || beta.Ndim() != 1 || beta.Shape()[0] != dim {
+		return 0, 0, 0, 0, 0, false
+	}
+	for _, w := range in[3:7] {
+		if w.Ndim() != 2 || w.Shape()[0] != dim || w.Shape()[1] != dim {
+			return 0, 0, 0, 0, 0, false
+		}
+	}
+	if backward && !in[7].Shape().Equal(x.Shape()) {
+		return 0, 0, 0, 0, 0, false
+	}
+	return rows, dim, batch, seq, heads, true
+}
+
+func preNormAttentionF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	pa, _ := attrs.(backend.PreNormAttentionAttrs)
+	rows, dim, batch, seq, heads, ok := preNormAttentionMetalGeometry(in, pa, false)
+	if !ok {
+		return nil, errors.New("metal: unsupported prenorm-attention geometry")
+	}
+	pa = pa.WithDefaults()
+	out := tensor.New(tensor.F32, in[0].Shape())
+	rc := C.mtl_prenorm_attention_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]), (*C.float)(&out.Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(batch), C.int(seq), C.int(heads), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-attention failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func preNormAttentionBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	pa, _ := attrs.(backend.PreNormAttentionAttrs)
+	rows, dim, batch, seq, heads, ok := preNormAttentionMetalGeometry(in, pa, true)
+	if !ok {
+		return nil, errors.New("metal: unsupported prenorm-attention backward geometry")
+	}
+	pa = pa.WithDefaults()
+	out := make([]*tensor.Tensor, 7)
+	for i := range out {
+		out[i] = tensor.New(tensor.F32, in[i].Shape())
+	}
+	rc := C.mtl_prenorm_attention_backward_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]), (*C.float)(&in[7].Storage().F32()[0]),
+		(*C.float)(&out[0].Storage().F32()[0]), (*C.float)(&out[1].Storage().F32()[0]),
+		(*C.float)(&out[2].Storage().F32()[0]), (*C.float)(&out[3].Storage().F32()[0]),
+		(*C.float)(&out[4].Storage().F32()[0]), (*C.float)(&out[5].Storage().F32()[0]),
+		(*C.float)(&out[6].Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(batch), C.int(seq), C.int(heads), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-attention-backward failed (code %d)", int(rc))
+	}
+	return out, nil
 }
 
 // rmsnormBackwardF32 computes the RMSNorm gradient on the GPU (§R29/§R35): (x,gamma,g) →
