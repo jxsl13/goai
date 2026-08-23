@@ -8,8 +8,8 @@ import "math"
 // complete-operation crossover on M2 Pro.
 const absF32ParallelThreshold = 1 << 18
 
-// absF32BlocksNeon clears every sign bit and quiets signaling NaNs for
-// 16*blocks values. It preserves all remaining payload bits.
+// absF32BlocksNeon clears every sign bit for 16*blocks values. It preserves
+// all remaining bits, including signaling-NaN payloads.
 //
 //go:noescape
 func absF32BlocksNeon(dst, src *float32, blocks int)

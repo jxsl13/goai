@@ -38,3 +38,23 @@ func BenchmarkAbsF32CPU(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkAbsF32Leaf isolates the preallocated kernel from output allocation,
+// dispatch, and the production parallel policy measured by BenchmarkAbsF32CPU.
+func BenchmarkAbsF32Leaf(b *testing.B) {
+	for _, n := range []int{2048, 65536, 349440, 8388608} {
+		b.Run("n"+strconv.Itoa(n), func(b *testing.B) {
+			src := make([]float32, n)
+			dst := make([]float32, n)
+			for i := range src {
+				src[i] = float32(i&1023) - 512
+			}
+			b.SetBytes(int64(2 * n * 4))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				absF32(dst, src)
+			}
+		})
+	}
+}
