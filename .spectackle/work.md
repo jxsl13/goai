@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: draft
 created: 2026-08-23
+refs: R-01M0Q2EGE0E60T5H3P35XSCX77
 grilled: 2026-08-23 open=1
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/decoder.go, llamagpu/llamagpu.go
 
