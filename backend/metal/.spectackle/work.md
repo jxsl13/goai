@@ -62,13 +62,3 @@ grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile
 
 Recorder.Profile currently allocates a 96-byte label buffer once per event before a synchronous native call that always overwrites and terminates the buffer. Hoist one scratch buffer outside the event loop without changing the C ABI, returned profile values, label ownership, or error behavior. Benchmark completed recorders with one and 340 events. Require the 340-event path to remove at least 300 allocations and 30000 allocation bytes per call, improve median latency by at least 1.10x, and keep the one-event path at least 0.97x. Consider label interning or bulk cgo only under separate evidence after this exact baseline.
-
-## T-01M0Q6C2RAF6EB35Y0HFNVFKS7 Benchmark and hoist Recorder.Profile label scratch
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0Q6B7A3E1SS7VWHGS37WPDE
-refs: R-01M0Q69J1CEDCBKG8VDVB580GS
-targets: go:metal.Recorder.Profile
-
-Add a physical-Metal benchmark that completes profiling recorders with one and 340 explicit unary events, then repeatedly resolves Profile with ReportAllocs. Compile the control binary before changing production code. Hoist exactly one 96-byte label scratch outside the event loop, compile a candidate binary, verify profiles are identical including labels/ticks/durations/omission counts, and run three count-seven campaigns. Retain only if the large profile clears the frozen latency and allocation gates and the one-event control does not regress.
