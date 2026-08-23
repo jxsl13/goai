@@ -496,7 +496,7 @@ WHEN a concurrent Metal recorder reaches a blit, MPS, commit, finish, or free bo
 WHEN three count-seven M2 ViT B=8 campaigns run, the batch-axis attention promotion SHALL retain the candidate only if forward median is at least 1.15x, train median at least 1.10x, every pair at least 1.05x, and parity passes.
 
 ## METAL-BATCHED-ATTENTION-BACKWARD-STRUCTURE-001
-WHEN AttnAttrs.Batch exceeds 1 and Window equals 0 for supported F32 attention backward, the Metal batched attention backward SHALL execute exactly 1 cached batch-axis MPSGraph and return packed dQ, dK, and dV with exactly 0 per-sequence native backward submissions.
+WHEN AttnAttrs.Batch exceeds 1 and Window equals 0 for supported F32 backward, the Metal batched attention backward SHALL execute 1 cached batch-axis MPSGraph returning packed dQ/dK/dV with 0 per-sequence native submissions.
 
 ## M2-VIT-BATCHED-ATTENTION-BACKWARD-PERF-001
 WHEN 3 alternating count-7 M2 ViT B=8 campaigns compare batched backward with merged main, the Metal backward promotion SHALL require each median at least 1.10 times control, each aligned pair at least 1.05 times control, and gradient parity.
