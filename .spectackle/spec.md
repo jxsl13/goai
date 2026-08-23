@@ -668,12 +668,6 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
-
-## PRIVATE-RESEARCH-SOURCES-ISOLATION-003
-WHEN an eager QuantLlama DecodeStep owns contiguous offset-zero residual storage and the effective OpAdd backend advertises exact in-place addition, the GoAI SHALL overwrite only that private residual storage with the bit-identical sum and allocate zero residual output tensors.
-
-Rationale: The residual stream is private to one decode step; eliminating two materialized outputs per layer reduces allocation and memory traffic.
-
 ## PRIVATE-RESEARCH-SOURCES-ISOLATION-004
 WHEN recording is active, OpAdd is routed to another backend, or residual inputs have unsupported device, dtype, shape, offset, contiguity, or aliasing, the GoAI SHALL execute the ordinary backend.OpAdd path without mutating either input.
 
