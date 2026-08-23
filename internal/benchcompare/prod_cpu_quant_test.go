@@ -28,6 +28,9 @@ func TestProdCPUQuantDecodeGGUF(t *testing.T) {
 	if path == "" {
 		t.Skip("set GOAI_CPU_TINYLLAMA_GGUF to a quantized Llama GGUF")
 	}
+	preference := backend.Preference()
+	backend.SetPreference(backend.CPU)
+	defer backend.SetPreference(preference...)
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatal(err)
