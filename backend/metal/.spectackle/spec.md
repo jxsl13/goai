@@ -387,3 +387,6 @@ WHEN a Recorder.Profile result outlives Recorder.Free and garbage collection chu
 
 ## RECORDER-PROFILE-LABEL-ALLOCATION-001
 WHEN a completed profile contains repeated native event labels, the Recorder.Profile SHALL clone each distinct label at most once per recorder and allocate 0 Go strings for cache hits.
+
+## RECORDER-PROFILE-LABEL-PERF-001
+WHEN three order-alternated count-seven M2 campaigns compare warm repeated-label events340 extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.25 times median speedup, 300 fewer allocations per operation, and 4000 fewer bytes per operation.
