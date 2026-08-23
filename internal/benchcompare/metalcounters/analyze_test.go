@@ -3,12 +3,60 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestValidatedCaptureResultRequiresArtifactValidation(t *testing.T) {
+	recorderErr := errors.New("xctrace exit status 54")
+	validationErr := errors.New("missing Performance Limiters")
+
+	if err := validatedCaptureResult(nil, nil, io.Discard); err != nil {
+		t.Fatalf("exit-zero validated capture: %v", err)
+	}
+	if err := validatedCaptureResult(nil, validationErr, io.Discard); !errors.Is(err, validationErr) {
+		t.Fatalf("validation error=%v, want %v", err, validationErr)
+	}
+	if err := validatedCaptureResult(recorderErr, validationErr, io.Discard); !errors.Is(err, recorderErr) || !errors.Is(err, validationErr) {
+		t.Fatalf("joined error=%v, want recorder and validation errors", err)
+	}
+
+	var warning strings.Builder
+	if err := validatedCaptureResult(recorderErr, nil, &warning); err != nil {
+		t.Fatalf("fully validated timeout capture: %v", err)
+	}
+	if got := warning.String(); !strings.Contains(got, "exit status 54") || !strings.Contains(got, "fully validated") {
+		t.Fatalf("warning=%q, want recorder status and validation disposition", got)
+	}
+}
+
+type fakeExitError int
+
+func (e fakeExitError) Error() string { return "exit status " + stringInt(int(e)) }
+
+func (e fakeExitError) ExitCode() int { return int(e) }
+
+func TestRecoverableTimedRecorderErrorRequiresExactDisposition(t *testing.T) {
+	complete := "Reached specified time limit, ending recording...\n" +
+		"Recording completed. Saving output file...\n" +
+		"Output file saved as: capture.trace\n"
+	if !recoverableTimedRecorderError(fakeExitError(54), complete) {
+		t.Fatal("status 54 with complete time-limit disposition was not recoverable")
+	}
+	if recoverableTimedRecorderError(fakeExitError(1), complete) {
+		t.Fatal("arbitrary recorder failure was recoverable")
+	}
+	if recoverableTimedRecorderError(fakeExitError(54), "Output file saved as: capture.trace") {
+		t.Fatal("status 54 without time-limit completion markers was recoverable")
+	}
+	if recoverableTimedRecorderError(errors.New("exit status 54"), complete) {
+		t.Fatal("untyped error text was treated as an exit disposition")
+	}
+}
 
 func TestParseCounterInfoResolvesReferences(t *testing.T) {
 	var rows strings.Builder
