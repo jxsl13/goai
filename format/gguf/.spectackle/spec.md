@@ -367,3 +367,6 @@ The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min v
 
 ## Q4K-SINGLE-BULK-HEADER-PERF-001
 WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independent Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
+
+## Q4K-PAIR-ROW-ASM-EXACT-001
+WHEN decodes headers inside assembly, the ARM64 paired Q4_K row path SHALL preserve all 16 GGUF six-bit scale and minimum values per row, f16 lookup conversion, per-block f32 reduction, ordered f64 accumulation, and pair-row output bits for arbitrary raw headers.
