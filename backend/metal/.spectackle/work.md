@@ -62,7 +62,7 @@ Correlate a pinned TinyLlama f16-KV decode command buffer with Xcode Metal Perfo
 
 ## T-01M0QPN0EKE94V0PFZ1DH2QEMD Benchmark exact reusable Q4_K activation correction sums on M2
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QPJK6BEXNT8MSW19E4R5KW
 targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul
