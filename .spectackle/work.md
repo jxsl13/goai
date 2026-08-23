@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=1
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep
 
 Profile merged post-QKV and pair-to-SwiGLU TinyLlama Q4_K_M decode on Apple M2 Pro, rank serial and parallel stretches against wall clock, and implement only a candidate with exact digest preservation and statistically validated end-to-end leverage. Do not revisit the rejected persistent worker-pool or Q8_K activation-leaf designs unchanged.
