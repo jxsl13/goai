@@ -22,11 +22,3 @@ EXPECTED: 2-5x on the substitution phase for n >= 256; about 1.6-3x on Inverse e
 BIT-IDENTITY BAR: bit-identical, and this is the point worth stressing — the fix reads THE SAME VALUES IN THE SAME ORDER into the same accumulator, changing only where those values live in memory. The numeric-parity tests in linalg_test.go / cholesky_test.go / qr_test.go hold unchanged and no RNG is involved anywhere. Still add a tolerance-0 golden comparison for one fixed matrix per site.
 
 PERFSCAN RULE REQUIRED: major-axis-innermost traversal of a flat row-major buffer. AST shape: inside the innermost ForStmt, an IndexExpr on a []T whose index is a BinaryExpr of the form i*S + c where i is the INNERMOST loop's induction variable and c is an OUTER loop's, with S loop-invariant and not equal to the innermost trip count. Emit when the same buffer is also written at c*S + i order elsewhere, confirming row-major intent. Cheap, syntactic, high precision. A second shape belongs to the same class: an IndexExpr chain m[i][j] on a [][]T where i resolves to the innermost loop and j to an enclosing one — the loop nest order is the transpose of the storage order (live at linalg/qr.go:150-156 and :173-182, and svd.go:43-47/:68-72). Attach a warning to the suggested rewrite that any a*b*c reassociation must preserve the original grouping.
-
-## P-01M0PA5B5KF92R60R8M2A6WSKE Preserve SVD bit-identity gates across supported Go releases
-kind: proposal
-state: active
-created: 2026-08-23
-targets: go:linalg_test.svdDigest, go:linalg_test.TestSVDIsBitIdentical, go:linalg.SVD
-
-Go 1.27.0 changes deterministic SVD test digests while Go 1.26.6 retains the existing goldens. Classify input-generation versus kernel-arithmetic drift, preserve numerical correctness, and make the bit-identity contract compiler-release aware without weakening it. Validate both supported toolchains and the full linalg suite.
