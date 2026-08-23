@@ -3998,13 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0Q3A75AERNBPGPVFJK4N7NW Fuse M2 Q4_K gate and up into non-materializing SwiGLU
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0Q39HPCECA80SSE3NVC5TSK
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
-
-Add an M=1-only Metal Q4_K paired projection kernel that preserves total cooperative SIMD work, reduces each matching gate/up pair plus SwiGLU from three dispatches to one, and writes only the hidden-width activation. Keep every non-Q4_K, mismatched shape, non-Metal backend, and M>1 call on the established path. Promote only after isolated exactness, a same-binary leaf campaign, exact trained-model outputs, quant events fall from 131 to 109 with 22 split SwiGLU events removed, and seven alternating M2 campaigns prove at least 1.03x tg64 with at least five wins and no pp64 or pp512 regression.
