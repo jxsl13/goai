@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## R-01M0Q39HPCECA80SSE3NVC5TSK Map non-materializing Metal Q4_K gate/up SwiGLU fusion
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
 
