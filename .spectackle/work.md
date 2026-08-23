@@ -4011,3 +4011,6 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 kind: research
 state: draft
 created: 2026-08-23
+targets: go:vision.vitBlock.forwardBatched, go:nlp.MHA.ForwardPreNorm, go:nn.ForwardPreNormFFN, backend/metal/metal_bridge.m
+
+Measure whether composing the merged cached pre-norm attention and exact-GELU FFN graphs into one shape-keyed native Metal graph creates new end-to-end M2 training leverage. The control must retain both independently fused boundaries from PR 1194 and PR 1193; candidate changes only the complete transformer-block boundary. Start at F32 batch 8, sequence 65, dimension 128, four heads, hidden 256, and depth-four ViT. Require exact composite fallback, output and all 13 input-gradient parity, input and parameter immutability, runtime epsilon correctness, one submission per direction, a bounded cache, at least 1.15x boundary median, at least 1.08x full train-step median, and every aligned full-step pair at least 1.03x across three order-alternated campaigns. This differs from rejected host-side ViT dispatch flattening P-01M0FMNNMKFRXR0FDEYZ8GXX7S because it fuses both compute graphs and removes the intermediate host round trip rather than only collapsing view and residual dispatch.
