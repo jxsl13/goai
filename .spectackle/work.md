@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## R-01M0Q1ZKV6FGXAFE5VH3PD5RW8 Quantify warm M2 Metal indirect-command replay leverage
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:llamagpu.Decoder.encodeStep, llamagpu/decoder.go, backend/metal/metal_bridge.m
 
