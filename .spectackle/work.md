@@ -4017,7 +4017,7 @@ Measure whether a persistent shape-keyed Metal graph for the compute-heavy ViT p
 
 ## P-01M0R8Z9RPFAFV5FYZ0VN01KNP Fuse pre-norm attention training boundaries on Metal
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0R8JTW6E1AVVRZ6YJSHFVME
 grilled: 2026-08-23 open=1
