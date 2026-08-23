@@ -110,7 +110,9 @@ func SVD(a *tensor.Tensor) (u, s, v *tensor.Tensor, err error) {
 				for k := range n {
 					a, b := vi[k], vj[k]
 					vi[k] = c*a - sn*b
-					vj[k] = sn*a + c*b
+					// Pin the contraction order. Go 1.27/arm64 otherwise fuses sn*a
+					// while Go 1.26/arm64 fuses c*b, changing iterative SVD bits.
+					vj[k] = svdRotateVSecond(c, b, sn, a)
 				}
 			}
 		}
