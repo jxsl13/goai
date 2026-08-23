@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0P2CFT6FWCVWK3JNWYC9X2V Eliminate eager CPU QuantLlama residual materializations
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:nlp.QuantLlama.DecodeStep, go:backend.OpAdd, go:cpu.Backend.FuseSwiGLUInPlace
 
