@@ -414,3 +414,8 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN consuming coefficient scratch through vector lanes, the paired ARM64 Q4_K row kernel SHALL preserve all 16 coefficients per row, 2 arbitrary-header output bit patterns, reduction order, and 0 allocations.
 
 Rationale: Vector loads, by-element FMUL, and minimum-lane DUP must preserve the existing scratch sequence and f32 operations exactly.
+
+## Q4K-PAIR-COEFFICIENT-LANE-PERFORMANCE-001
+WHEN the K2048 paired-row benchmark runs on Apple M2, the paired Q4_K coefficient-lane path SHALL reach 1.03x median speedup across 7 alternating pairs, win 5 pairs, retain 0 allocations, and regress 0 pinned production shapes.
+
+Rationale: Load-unit reductions are retained only when repeatable and visible across pair, apply, and production boundaries.
