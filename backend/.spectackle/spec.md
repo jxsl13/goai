@@ -53,3 +53,6 @@ Rationale: Backend names identify registry entries but wrappers and custom backe
 
 ## BATCHED-ATTENTION-ISOLATION-001
 WHEN AttnAttrs.Batch is greater than 1 for packed rank-2 Q, K, and V, the OpMHA and OpMHABackward SHALL partition query and key rows into exactly Batch equal independent sequences, reset causal and window coordinates at every sequence boundary, and produce 0 cross-sequence values or gradients.
+
+## BATCHED-ATTENTION-COMPATIBILITY-001
+WHEN AttnAttrs.Batch is 0 or 1, the every attention backend SHALL preserve the existing single-sequence forward and backward route, shapes, and numerical tolerances with 0 added batch dispatches.
