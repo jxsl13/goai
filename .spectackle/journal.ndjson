@@ -652,3 +652,4 @@
 {"t":"2026-08-23T10:40:17Z","eid":"06716b431bde2e5a","ag":"ag-c835","ev":"move","id":"R-01M0Q39HPCECA80SSE3NVC5TSK","fr":"draft","to":"active"}
 {"t":"2026-08-23T10:40:27Z","eid":"2ef1e767d0c36b40","ag":"ag-e9a3","ev":"create","id":"P-01M0Q3A75AERNBPGPVFJK4N7NW","k":"proposal","ti":"Fuse M2 Q4_K gate and up into non-materializing SwiGLU"}
 {"t":"2026-08-23T10:40:42Z","eid":"54a6ee736dcffd17","ag":"ag-6720","ev":"grill","id":"P-01M0Q3A75AERNBPGPVFJK4N7NW","gr":"2026-08-23 open=0","hash":"0d5d79ebc4ac5ff68c611c2cc73807da0819cf161bd3b09aa9ca2efca67449be"}
+{"t":"2026-08-23T10:40:44Z","eid":"8c8635d36b3cf965","ag":"ag-7ce2","ev":"move","id":"P-01M0Q3A75AERNBPGPVFJK4N7NW","fr":"draft","to":"active"}
