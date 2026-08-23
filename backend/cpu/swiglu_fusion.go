@@ -9,6 +9,30 @@ import (
 )
 
 var _ backend.SwiGLUInPlaceFuser = (*Backend)(nil)
+var _ backend.SwiGLUF32ChunkFuser = (*Backend)(nil)
+
+func fuseSwiGLUF32(gate, up []float32) {
+	if vexpF32Fast {
+		vsiluF32(gate, gate)
+	} else {
+		for i := range gate {
+			x := float64(gate[i])
+			//perfscan:ignore PS4002 portable exact scalar-f64 fallback; SIMD builds take vsiluF32 above
+			gate[i] = float32(x / (1 + math.Exp(-x)))
+		}
+	}
+	simd.MulF32(gate, gate, up)
+}
+
+// FuseSwiGLUF32Chunk overwrites one raw producer chunk with SiLU(gate)*up.
+// The fused Q4_K producer gives each concurrent call disjoint, equal-length
+// slices and aligns non-final chunks to the widest supported SIMD lane count.
+func (b *Backend) FuseSwiGLUF32Chunk(gate, up []float32) {
+	if len(gate) != len(up) {
+		panic("cpu: SwiGLU chunk lengths differ")
+	}
+	fuseSwiGLUF32(gate, up)
+}
 
 // FuseSwiGLUInPlace overwrites the private gate projection with
 // SiLU(gate)*up. Quantized decode owns both projection outputs and immediately
@@ -22,16 +46,7 @@ func (b *Backend) FuseSwiGLUInPlace(gate, up *tensor.Tensor) bool {
 	}
 	g, u := gate.Storage().F32(), up.Storage().F32()
 	parallel(len(g), func(lo, hi int) {
-		gd := g[lo:hi]
-		if vexpF32Fast {
-			vsiluF32(gd, gd)
-		} else {
-			for i := range gd {
-				x := float64(gd[i])
-				gd[i] = float32(x / (1 + math.Exp(-x)))
-			}
-		}
-		simd.MulF32(gd, gd, u[lo:hi])
+		fuseSwiGLUF32(g[lo:hi], u[lo:hi])
 	})
 	return true
 }

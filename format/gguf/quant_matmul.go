@@ -40,6 +40,15 @@ const (
 // override it with tolerance-gated vector unpack-and-dot kernels.
 var dotQ4KRowFn = dotQ4_KRow
 
+func dotQ4KPairRow(row []float32, raw0, raw1 []byte, k int) (float64, float64) {
+	return dotQ4KRowFn(row, raw0, k), dotQ4KRowFn(row, raw1, k)
+}
+
+// dotQ4KPairRowFn shares activation work between paired Q4_K row dots on
+// architectures with a dual-output kernel. Portable builds retain two calls
+// through the selected single-row implementation.
+var dotQ4KPairRowFn = dotQ4KPairRow
+
 // dotQ41RowFn is dotQ41Row (scalar) on portable builds. ARM64 overrides it
 // with a tolerance-gated fused affine-decode row dot.
 var dotQ41RowFn = dotQ41Row
@@ -129,6 +138,13 @@ var q8FusedDecodeM1 func(row []float32, weight []byte, n, k, rowBytes int, outf 
 const qmatmulGrain = 1 << 15
 
 func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
+	qmatmulParallelChunksAligned(n, workPerRow, 1, body)
+}
+
+// qmatmulParallelChunksAligned is qmatmulParallelChunks with every non-final
+// chunk boundary rounded to alignment. Producers that immediately consume
+// vector-width chunks use this to preserve the full-slice SIMD/tail split.
+func qmatmulParallelChunksAligned(n, workPerRow, alignment int, body func(lo, hi int)) {
 	nw := runtime.GOMAXPROCS(0)
 	if nw > n {
 		nw = n
@@ -148,12 +164,11 @@ func qmatmulParallelChunks(n, workPerRow int, body func(lo, hi int)) {
 	}
 	//perfscan:ignore PS3011 comment line in already-fused Q8_0 decode kernel; no loop
 	csz := (n + nw - 1) / nw
+	if alignment > 1 {
+		csz = (csz + alignment - 1) / alignment * alignment
+	}
 	var wg sync.WaitGroup
-	for c := 0; c < nw; c++ {
-		lo := c * csz
-		if lo >= n {
-			break
-		}
+	for lo := 0; lo < n; lo += csz {
 		hi := lo + csz
 		if hi > n {
 			hi = n

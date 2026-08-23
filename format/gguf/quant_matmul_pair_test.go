@@ -2,6 +2,8 @@ package gguf
 
 import (
 	"math"
+	"runtime"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jxsl13/goai/tensor"
@@ -46,6 +48,72 @@ func TestQMatMulPairMatchesIndependentQ4K(t *testing.T) {
 	}
 }
 
+func TestQMatMulPairApplyMatchesComposedAndAlignsChunks(t *testing.T) {
+	const n, k = 5633, 256
+	previous := runtime.GOMAXPROCS(4)
+	defer runtime.GOMAXPROCS(previous)
+	x := tensor.FromFloat32(tensor.Shape{1, k}, benchF32(k))
+	w := tensor.FromFloat32(tensor.Shape{n * k}, benchF32(n*k))
+	raw0, err := Quantize(w, Q4_K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range w.Storage().F32() {
+		w.Storage().F32()[i] += 0.03125
+	}
+	raw1, err := Quantize(w, Q4_K)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, up, err := QMatMulPair(x, raw0, raw1, Q4_K, n, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range n {
+		want.Storage().F32()[i] += up.Storage().F32()[i]
+	}
+	var calls, unaligned atomic.Int64
+	got, err := QMatMulPairApply(x, raw0, raw1, Q4_K, n, k, func(gate, up []float32) {
+		calls.Add(1)
+		if len(gate)%8 != 0 {
+			unaligned.Add(1)
+		}
+		for i := range gate {
+			gate[i] += up[i]
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("consumer calls = %d, want parallel chunks", calls.Load())
+	}
+	if unaligned.Load() > 1 {
+		t.Fatalf("unaligned consumer chunks = %d, want final chunk only", unaligned.Load())
+	}
+	for i := range n {
+		if math.Float32bits(got.Storage().F32()[i]) != math.Float32bits(want.Storage().F32()[i]) {
+			t.Fatalf("output %d = %08x, want %08x", i, math.Float32bits(got.Storage().F32()[i]), math.Float32bits(want.Storage().F32()[i]))
+		}
+	}
+}
+
+func TestQMatMulPairApplyScratchPoolSteadyState(t *testing.T) {
+	values, holder := borrowQMatMulPairScratch(5632)
+	releaseQMatMulPairScratch(values, holder)
+	allocs := testing.AllocsPerRun(100, func() {
+		values, holder := borrowQMatMulPairScratch(5632)
+		releaseQMatMulPairScratch(values, holder)
+	})
+	if allocs != 0 {
+		t.Fatalf("steady-state scratch allocs = %g, want 0", allocs)
+	}
+	values, holder = borrowQMatMulPairScratch(qmatmulPairScratchMaxF32 + 1)
+	if holder != nil || cap(values) <= qmatmulPairScratchMaxF32 {
+		t.Fatalf("oversize scratch holder=%p cap=%d, want unpooled", holder, cap(values))
+	}
+}
+
 func TestQMatMulPairRejectsUnsupportedInputs(t *testing.T) {
 	const n, k = 1, 256
 	raw := make([]byte, k/qkK*q4kBlockSize)
@@ -66,6 +134,16 @@ func TestQMatMulPairRejectsUnsupportedInputs(t *testing.T) {
 	}
 	if _, _, err := QMatMulPair(tensor.New(tensor.F32, tensor.Shape{1, k}), raw, raw, Q4_K, n, 0); err == nil {
 		t.Fatal("QMatMulPair accepted zero input columns")
+	}
+	called := false
+	if _, err := QMatMulPairApply(tensor.New(tensor.F32, tensor.Shape{1, k}), raw, raw, Q4_K, n, k, nil); err == nil {
+		t.Fatal("QMatMulPairApply accepted a nil consumer")
+	}
+	if _, err := QMatMulPairApply(tensor.New(tensor.F64, tensor.Shape{1, k}), raw, raw, Q4_K, n, k, func(_, _ []float32) { called = true }); err == nil {
+		t.Fatal("QMatMulPairApply accepted F64 activations")
+	}
+	if called {
+		t.Fatal("QMatMulPairApply invoked consumer after validation failure")
 	}
 }
 

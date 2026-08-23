@@ -22,12 +22,20 @@ func (s *QuantSwiGLU) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.T
 	projectionBackend := backend.Default()
 	var gate, up *tensor.Tensor
 	var err error
-	if ctx != nil && ctx.Recorder == nil && ctx.Backend != nil &&
+	pairedQ4K := ctx != nil && ctx.Recorder == nil && ctx.Backend != nil &&
 		ctx.Backend.Name() == backend.CPU && projectionBackend.Name() == backend.CPU &&
 		x.Ndim() == 2 && x.Shape()[0] == 1 && x.Dtype() == tensor.F32 &&
 		x.IsContiguous() && x.Offset() == 0 &&
 		s.Gate.QT == gguf.Q4_K && s.Up.QT == gguf.Q4_K &&
-		s.Gate.In == s.Up.In && s.Gate.Out == s.Up.Out {
+		s.Gate.In == s.Up.In && s.Gate.Out == s.Up.Out
+	if pairedQ4K {
+		if fuser, ok := projectionBackend.(backend.SwiGLUF32ChunkFuser); ok {
+			gate, err = gguf.QMatMulPairApply(x, s.Gate.Weight, s.Up.Weight, gguf.Q4_K, s.Gate.Out, s.Gate.In, fuser.FuseSwiGLUF32Chunk)
+			if err != nil {
+				return nil, err
+			}
+			return s.Down.Forward(ctx, gate)
+		}
 		gate, up, err = gguf.QMatMulPair(x, s.Gate.Weight, s.Up.Weight, gguf.Q4_K, s.Gate.Out, s.Gate.In)
 	} else {
 		gate, err = s.Gate.Forward(ctx, x)
