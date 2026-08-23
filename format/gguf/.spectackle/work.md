@@ -41,12 +41,3 @@ parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon
 
 Profile merge 9f1801c8 on Apple M2 Pro after the table-indexed header decode. Attribute current-main CPU samples and fresh-process leaf timing before selecting another assembly change. Reuse exact K2048 and 64-step production boundaries, preserve digests, and reject ideas already disproven by the batching, pointer-update, and LD2R experiments.
-
-## T-01M0PTS7PDF7EVCR9CM3F2WDTP Move independent Q4_K rows into one ARM64 assembly call
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
-targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4_KRowASM~2
-
-Add a whole-row dotQ4KRowNeon path that keeps table-indexed Q4_K header decode, all super-block dots, per-block F32 reduction, and ordered F64 row accumulation inside one assembly call. Replace the Go per-block header loop on Apple ARM64 only. Preserve current independent-row bits on arbitrary headers, Go 1.26 compatibility, non-ARM64 behavior, and zero allocations. Gate at 1.03x retained K2048 median with 5/7 wins plus pinned production no-regression.
