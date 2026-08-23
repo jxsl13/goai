@@ -52,13 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0QRX6E0FC1S4XNAWGQK8900 Autotune M2 Q4_K output rows per SIMD group
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0QRNR7FF1TT618GVH65BMHS
-grilled: 2026-08-23 open=0
-targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.mtl_qmatmul_resident
-
-The production stage profile attributes 4.856 ms across 110 Q4_K events, and the retained cooperative kernel uses two output rows per SIMD group. Pinned llama.cpp 4a08fa29705b8177e332b134306566c2c4b95902 retains the same N_R0_Q4_K=2 default, while its issue 19303 reports output-row sensitivity on M5. Prior GoAI M2 work swept Q6_K rows, Q4_K threadgroup widths, and alternative Q4_K kernels, but not the retained float-activation Q4_K rows-per-SIMD parameter. Add diagnostic-only 4-row and 8-row pipelines without altering the exact 2-row control, select them through a same-binary test toggle, and preserve identical per-row arithmetic. Freeze gates: exact candidate/control bits and input immutability across odd and production shapes; control pipeline within 2 percent of the unmodified baseline; each retained candidate at least 1.05x on K2048/N2048, K2048/N5632, and K5632/N2048 in every one of three alternating count-seven campaigns; production TinyLlama decode at least 1.02x with identical token/logit digests and no stage regression outside Q4_K. Reject and remove all executable changes if no variant clears every gate.
