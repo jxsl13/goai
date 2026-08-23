@@ -4015,3 +4015,12 @@ refs: R-01M0RCPZNJF75SZJ766JXXPX6H
 targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go
 
 Measure whether a bounded depth-aware Metal graph can compose the promoted complete pre-norm transformer-block operation across a ViT encoder stack. The control must loop over the independently promoted OpPreNormTransformerBlock boundary from PR 1195; the candidate may only remove inter-block host round trips and synchronous submissions. Prototype a generic flattened stack contract with uniform heads, packed batch, hidden width, and two runtime epsilon values, bounded to depth 2 through 8, while the production fixture is F32 batch 8, sequence 65, dimension 128, four heads, hidden 512, and depth 4. Require exact fallback through the existing complete-block helper, one bounded shape-and-depth-keyed MPSGraph submission per direction, output plus all 49 depth-four differentiable gradients within established tolerance, zero input or parameter mutations, at least 1.12x stack-boundary median, at least 1.05x full ViT training-step median, and every aligned pair at least 1.03x across three GOMAXPROCS=1 order-alternated count-seven campaigns. Fully revert executable code if any frozen gate fails. This differs from rejected P-01M0FMNNMKFRXR0FDEYZ8GXX7S because every block is now a compute-heavy native graph and the candidate keeps all four block intermediates device-local rather than flattening movement-heavy host dispatch.
+
+## P-01M0RGMQF1ENNBTT2DFFC3P0A2 Compose pre-norm transformer stacks in one Metal graph
+kind: proposal
+state: draft
+created: 2026-08-23
+refs: R-01M0RGHTRTE3CSGT21HN59B9QY
+targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go
+
+Add a generic depth-aware pre-norm transformer-stack operation whose exact portable fallback loops over the promoted complete-block helper. On Metal, eligible contiguous F32 depth-2-through-8 stacks use a bounded shape-and-depth-keyed cached MPSGraph that keeps intermediate activations device-local and submits once per forward or backward direction. Promote only if the frozen M2 depth-four gates in R-01M0RGHTRTE3CSGT21HN59B9QY pass; otherwise fully revert executable code.
