@@ -500,3 +500,12 @@ WHEN AttnAttrs.Batch exceeds 1 and Window equals 0 for supported F32 backward, t
 
 ## M2-VIT-BATCHED-ATTENTION-BACKWARD-PERF-001
 WHEN 3 alternating count-7 M2 ViT B=8 campaigns compare batched backward with merged main, the Metal backward promotion SHALL require median speedup of 1.10x, every aligned pair at 1.05x, and gradient parity.
+
+## M2-PRENORM-FFN-PERF-001
+WHEN 3 order-alternated count-7 M2 Pro ViT batch-8 campaigns evaluate fusion, the promotion gate SHALL retain fusion only at 1.20 times boundary median, 1.10 times end-to-end median, and 1.05 times every aligned pair.
+
+## METAL-PRENORM-FFN-GRAPH-STRUCTURE-001
+WHERE contiguous offset-zero F32 fusion, the Metal pre-norm FFN implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with pooled buffers and Go-owned outputs.
+
+## METAL-PRENORM-FFN-NUMERIC-001
+WHEN forward or backward executes, the fused Metal route SHALL match the composite output and all 7 input gradients within the established F32 tolerance and mutate exactly 0 input elements.

@@ -79,3 +79,6 @@ WHEN eager CPU Q4_K Gate and Up share geometry and receive contiguous F32 M1 inp
 
 ## CPU-QUANT-SWIGLU-PAIR-APPLY-PERF-001
 WHEN fresh-process Apple M2 Pro campaigns measure the Q4_K leaf and 64-step TinyLlama decode, the fused pair-to-SwiGLU route SHALL retain fusion only at 1.10x leaf or faster, 1.03x decode or faster, lower allocated bytes, and 1 exact final-logit digest.
+
+## PRENORM-FFN-FUSION-FALLBACK-001
+IF the active backend lacks either fused direction for the dtype or layout, THEN the pre-norm FFN helper SHALL execute the incumbent 7-operation composite with exactly 0 implicit backend migrations.

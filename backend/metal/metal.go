@@ -1264,6 +1264,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return layernormF32, true
 		case backend.OpLayerNormBackward:
 			return layernormBackwardF32, true
+		case backend.OpPreNormFFN:
+			return preNormFFNF32, true
+		case backend.OpPreNormFFNBackward:
+			return preNormFFNBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -1720,6 +1724,109 @@ func layernormBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 		return nil, fmt.Errorf("metal: layernorm-backward failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{dx, dgamma, dbeta}, nil
+}
+
+func preNormFFNMetalGeometry(in []*tensor.Tensor, backward bool) (rows, dim, hidden int, ok bool) {
+	want := 7
+	if backward {
+		want = 8
+	}
+	if len(in) != want {
+		return 0, 0, 0, false
+	}
+	for _, t := range in {
+		if t == nil || t.Dtype() != tensor.F32 || !t.IsContiguous() || t.Offset() != 0 {
+			return 0, 0, 0, false
+		}
+	}
+	x, gamma, beta, w1, b1, w2, b2 := in[0], in[1], in[2], in[3], in[4], in[5], in[6]
+	if x.Ndim() != 2 || x.Shape()[0] == 0 || x.Shape()[1] == 0 {
+		return 0, 0, 0, false
+	}
+	rows, dim = x.Shape()[0], x.Shape()[1]
+	if gamma.Ndim() != 1 || gamma.Shape()[0] != dim || beta.Ndim() != 1 || beta.Shape()[0] != dim ||
+		w1.Ndim() != 2 || w1.Shape()[0] != dim || w1.Shape()[1] == 0 {
+		return 0, 0, 0, false
+	}
+	hidden = w1.Shape()[1]
+	if b1.Ndim() != 1 || b1.Shape()[0] != hidden || w2.Ndim() != 2 || w2.Shape()[0] != hidden || w2.Shape()[1] != dim ||
+		b2.Ndim() != 1 || b2.Shape()[0] != dim || backward && !in[7].Shape().Equal(x.Shape()) {
+		return 0, 0, 0, false
+	}
+	return rows, dim, hidden, true
+}
+
+// preNormFFNF32 executes the complete pre-LayerNorm exact-GELU FFN residual in one
+// cached MPSGraph submission. Unsupported layouts retain the reference contract.
+func preNormFFNF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormFFN, in, attrs)
+	}
+	rows, dim, hidden, ok := preNormFFNMetalGeometry(in, false)
+	if !ok {
+		return refFallback()
+	}
+	pa, _ := attrs.(backend.NormAttrs)
+	pa = pa.WithDefaults()
+	out := tensor.New(tensor.F32, in[0].Shape())
+	rc := C.mtl_prenorm_ffn_f32(
+		(*C.float)(&in[0].Storage().F32()[0]),
+		(*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]),
+		(*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]),
+		(*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]),
+		(*C.float)(&out.Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(hidden), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-ffn failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+// preNormFFNBackwardF32 recomputes the boundary inside one cached MPSGraph and
+// returns gradients for all seven differentiable inputs in one submission.
+func preNormFFNBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormFFNBackward, in, attrs)
+	}
+	rows, dim, hidden, ok := preNormFFNMetalGeometry(in, true)
+	if !ok {
+		return refFallback()
+	}
+	pa, _ := attrs.(backend.NormAttrs)
+	pa = pa.WithDefaults()
+	dx := tensor.New(tensor.F32, in[0].Shape())
+	dgamma := tensor.New(tensor.F32, in[1].Shape())
+	dbeta := tensor.New(tensor.F32, in[2].Shape())
+	dw1 := tensor.New(tensor.F32, in[3].Shape())
+	db1 := tensor.New(tensor.F32, in[4].Shape())
+	dw2 := tensor.New(tensor.F32, in[5].Shape())
+	db2 := tensor.New(tensor.F32, in[6].Shape())
+	rc := C.mtl_prenorm_ffn_backward_f32(
+		(*C.float)(&in[0].Storage().F32()[0]),
+		(*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]),
+		(*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]),
+		(*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]),
+		(*C.float)(&in[7].Storage().F32()[0]),
+		(*C.float)(&dx.Storage().F32()[0]),
+		(*C.float)(&dgamma.Storage().F32()[0]),
+		(*C.float)(&dbeta.Storage().F32()[0]),
+		(*C.float)(&dw1.Storage().F32()[0]),
+		(*C.float)(&db1.Storage().F32()[0]),
+		(*C.float)(&dw2.Storage().F32()[0]),
+		(*C.float)(&db2.Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(hidden), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-ffn-backward failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{dx, dgamma, dbeta, dw1, db1, dw2, db2}, nil
 }
 
 // rmsnormBackwardF32 computes the RMSNorm gradient on the GPU (§R29/§R35): (x,gamma,g) →

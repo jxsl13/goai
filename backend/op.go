@@ -163,6 +163,9 @@ const (
 	OpSigmoidFocalCore         // per-element stable sigmoid focal term; reduction stays explicit
 	OpSigmoidFocalCoreBackward // fused focal backward (logits,targets,g)→dlogits; targets stay detached
 
+	OpPreNormFFN         // pre-LN exact-GELU FFN residual: (x,gamma,beta,w1,b1,w2,b2)→x+gelu(LN(x)·w1+b1)·w2+b2
+	OpPreNormFFNBackward // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dW1,dB1,dW2,dB2)
+
 	numOps
 )
 
@@ -264,6 +267,8 @@ var opName = [...]string{
 
 	OpSigmoidFocalCore:         "sigmoid_focal_core",
 	OpSigmoidFocalCoreBackward: "sigmoid_focal_core_backward",
+	OpPreNormFFN:               "prenorm_ffn",
+	OpPreNormFFNBackward:       "prenorm_ffn_backward",
 }
 
 // String implements fmt.Stringer.

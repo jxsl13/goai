@@ -660,6 +660,8 @@ var opAttrsSpec = [numOps]attrsSpec{
 	OpCrossEntropyBackward: attrsOf(CrossEntropyAttrs{}),
 	OpLayerNorm:            attrsOf(NormAttrs{}),
 	OpLayerNormBackward:    attrsOf(NormAttrs{}),
+	OpPreNormFFN:           attrsOf(NormAttrs{}),
+	OpPreNormFFNBackward:   attrsOf(NormAttrs{}),
 	OpRMSNorm:              attrsOf(NormAttrs{}),
 	OpRMSNormBackward:      attrsOf(NormAttrs{}),
 	OpRoPE:                 attrsOf(RoPEAttrs{}),

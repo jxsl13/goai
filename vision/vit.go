@@ -404,24 +404,7 @@ func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch 
 		return nil, err
 	}
 	x = sum
-	if h, err = b.ln2.Forward(ctx, x); err != nil {
-		return nil, err
-	}
-	if h, err = b.fc1.Forward(ctx, h); err != nil {
-		return nil, err
-	}
-	g, err := visExec1(ctx, backend.OpGELU, nil, h)
-	if err != nil {
-		return nil, err
-	}
-	if h, err = b.fc2.Forward(ctx, g); err != nil {
-		return nil, err
-	}
-	sum, err = visExec2(ctx, backend.OpAdd, nil, x, h)
-	if err != nil {
-		return nil, err
-	}
-	return sum, nil
+	return nn.ForwardPreNormFFN(ctx, x, b.ln2, b.fc1, b.fc2)
 }
 
 func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
@@ -438,22 +421,5 @@ func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tens
 		return nil, err
 	}
 	x = sum
-	if h, err = b.ln2.Forward(ctx, x); err != nil {
-		return nil, err
-	}
-	if h, err = b.fc1.Forward(ctx, h); err != nil {
-		return nil, err
-	}
-	g, err := visExec1(ctx, backend.OpGELU, nil, h)
-	if err != nil {
-		return nil, err
-	}
-	if h, err = b.fc2.Forward(ctx, g); err != nil {
-		return nil, err
-	}
-	sum, err = visExec2(ctx, backend.OpAdd, nil, x, h)
-	if err != nil {
-		return nil, err
-	}
-	return sum, nil
+	return nn.ForwardPreNormFFN(ctx, x, b.ln2, b.fc1, b.fc2)
 }

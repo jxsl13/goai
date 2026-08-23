@@ -93,4 +93,10 @@ func init() {
 	RegisterVJP(backend.OpLayerNorm, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx, backend.OpLayerNormBackward, []*tensor.Tensor{in[0], in[1], g}, attrs)
 	})
+
+	RegisterVJP(backend.OpPreNormFFN, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx, backend.OpPreNormFFNBackward, []*tensor.Tensor{
+			in[0], in[1], in[2], in[3], in[4], in[5], in[6], g,
+		}, attrs)
+	})
 }
