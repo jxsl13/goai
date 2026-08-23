@@ -5,7 +5,7 @@
 // func absF32BlocksNeon(dst, src *float32, blocks int)
 //
 // Sixteen F32 lanes per iteration. Integer masking clears only bit 31, which
-// matches Go 1.26's float32(math.Abs(float64(x))) lowering and preserves every
+// matches Go 1.27's float32(math.Abs(float64(x))) lowering and preserves every
 // finite, infinity, and NaN payload bit.
 TEXT ·absF32BlocksNeon(SB), NOSPLIT, $0-24
 	MOVD dst+0(FP), R0
