@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QM7PDVED19SWH09DSGZYPW Autotune Q4_K cooperative SIMD groups per M2 threadgroup
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 
 Production M=1 Q4_K maps two independent SIMD groups to four output rows in each 64-thread threadgroup. Investigate 128- and 256-thread launches that derive row mapping from physical threadgroup width while preserving every lane operation and total SIMD-group count. Freeze TinyLlama shapes K2048N2048, K2048N5632, and K5632N2048. Promote only a bit-exact width reaching 1.05x in every same-command leaf campaign and 1.01x in every frozen f16-KV decode context.
