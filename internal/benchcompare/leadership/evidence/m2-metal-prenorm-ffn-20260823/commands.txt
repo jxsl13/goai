@@ -1,0 +1,31 @@
+go test -c -o /private/tmp/goai-metal-prenorm.test ./backend/metal
+
+/private/tmp/goai-metal-prenorm.test \
+  -test.run '^TestPreNormFFN(MetalParity|ViTMetalParity)$' \
+  -test.count 1 -test.v
+
+/private/tmp/goai-metal-prenorm.test \
+  -test.run '^$' \
+  -test.bench '^BenchmarkPreNormFFNTrainingBoundary/(control|candidate)$' \
+  -test.count 7 -test.benchtime 20x
+
+/private/tmp/goai-metal-prenorm.test \
+  -test.run '^$' \
+  -test.bench '^BenchmarkPreNormFFNViTTrainStep/(control|candidate)$' \
+  -test.count 7 -test.benchtime 10x
+
+Campaign order for both benchmarks:
+1. control, candidate
+2. candidate, control
+3. control, candidate
+
+go test -short ./...
+go vet ./...
+
+GOPROXY=direct go install github.com/jxsl13/perfscan@main
+GOPROXY=direct perfscan -config internal/perfscan/perfscan.json \
+  -baseline /private/tmp/goai-prenorm-perfscan-candidate-prod.yaml \
+  -write-baseline ./...
+GOPROXY=direct perfscan -tests -config internal/perfscan/perfscan.json \
+  -baseline /private/tmp/goai-prenorm-perfscan-candidate-tests.yaml \
+  -write-baseline ./...

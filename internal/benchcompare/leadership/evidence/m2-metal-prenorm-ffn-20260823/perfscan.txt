@@ -1,0 +1,16 @@
+tool: perfscan v1.81.1-0.20260823112112-5af3350190e4
+source: github.com/jxsl13/perfscan@main, commit 5af3350190e4
+resolution: GOPROXY=direct
+config: internal/perfscan/perfscan.json
+
+production findings:
+  merged main: 1959
+  candidate:   1959
+
+findings including tests:
+  merged main: 6079
+  candidate:   6079
+
+changed production files: zero findings added
+changed test files: zero findings added
+generalized finding: https://github.com/jxsl13/perfscan/issues/870

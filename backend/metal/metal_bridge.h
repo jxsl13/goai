@@ -508,6 +508,15 @@ int mtl_mha_backward_mpsgraph_batched(const float* Q, const float* K, const floa
                                       int batch, int seq, int dm, int heads, int dk,
                                       int causal, int kvHeads, float scale);
 
+int mtl_prenorm_ffn_f32(const float* X, const float* Gamma, const float* Beta,
+                        const float* W1, const float* B1, const float* W2, const float* B2,
+                        float* Y, int rows, int dim, int hidden, float eps);
+int mtl_prenorm_ffn_backward_f32(const float* X, const float* Gamma, const float* Beta,
+                                 const float* W1, const float* B1, const float* W2, const float* B2,
+                                 const float* dO, float* dX, float* dGamma, float* dBeta,
+                                 float* dW1, float* dB1, float* dW2, float* dB2,
+                                 int rows, int dim, int hidden, float eps);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA

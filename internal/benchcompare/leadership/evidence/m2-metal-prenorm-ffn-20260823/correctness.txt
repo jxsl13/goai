@@ -1,0 +1,25 @@
+PASS TestPreNormFFNReferenceMatchesComposite
+PASS TestForwardPreNormFFNFallsBackToComposite
+PASS TestPreNormFFNMetalParity
+PASS TestPreNormFFNViTMetalParity
+PASS go test -short ./...
+PASS go vet ./...
+PASS git diff --check
+PASS linux/amd64 CGO_ENABLED=0 compile: backend/ref, autograd, nn, vision
+PASS race: reference parity, composite fallback, Metal boundary and ViT parity
+PASS isolated TestSpeculativeWithTrainedModels (13.4s)
+
+QUALIFIED go test ./...
+- All changed and target packages passed, including backend/metal, backend/ref,
+  autograd, nn, and vision.
+- The llamagpu package reached its pre-existing 10-minute package timeout only
+  seconds after TestSpeculativeWithTrainedModels started; the exact test passes
+  in isolation in 13.4 seconds.
+- TestDiffusionLMGrammarE2E deterministically generated the invalid sample
+  "a sra s ee s a s" after CE improved from 2.924 to 0.085. The frozen
+  origin/main control produces the identical loss, sample, and failure, so this
+  is a pre-existing baseline failure rather than a branch regression.
+
+Metal parity covers output, dX, dGamma, dBeta, dW1, dB1, dW2, dB2,
+and byte-for-byte input immutability at rows=520, dim=128, hidden=512.
+ViT parity covers logits and every parameter gradient at B=8 and depth=4.

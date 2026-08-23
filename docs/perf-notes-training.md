@@ -342,3 +342,26 @@ The two shapes sit in one loop nest and only one of them is a shared accumulator
 fixing that one and stopping would have left most of the win. `dot` still takes
 the keys in ascending order and every `dvC` element is written exactly once,
 which is what keeps the jam bit-identical.
+
+## Fuse synchronized pre-norm FFN training boundaries on Metal
+
+The batched ViT still paid seven synchronous host-visible Metal boundaries per
+block for its pre-norm FFN: LayerNorm, two MatMuls, two bias adds, exact GELU,
+and the residual Add. A shape-keyed MPSGraph now executes the whole forward in
+one submission, while a second graph recomputes the boundary and returns the
+explicit gradients for all seven inputs. Keeping forward and backward separate
+is required by the tape: the upstream gradient does not exist during forward.
+
+At the production rows=520, dim=128, hidden=512 F32 shape, three alternating
+count-seven campaigns improve the complete forward-plus-backward boundary by
+3.2850x, 2.8993x, and 2.8817x. The pinned B=8, depth-4 ViT training step improves
+by 1.3443x, 1.3670x, and 1.3587x; all 21 aligned pairs exceed 1.15x. Output,
+every input and parameter gradient, and input immutability match the unfused
+path. Unsupported backends, dtypes, layouts, or missing biases retain the
+original seven-operation composite.
+
+The rejected ViT preparation flattening is the useful contrast: lowering an op
+count from 51 to 5 was neutral when the work was movement-heavy. This win comes
+from crossing a compute-heavy forward/backward region that otherwise commits,
+waits, and rematerializes host-visible tensors at every stage. Full evidence is
+in `internal/benchcompare/leadership/evidence/m2-metal-prenorm-ffn-20260823`.
