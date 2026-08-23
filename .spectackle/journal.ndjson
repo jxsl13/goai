@@ -616,3 +616,4 @@
 {"t":"2026-08-23T10:04:19Z","eid":"0c103fbe2ff5b84f","ag":"ag-48de","ev":"create","id":"P-01M0Q18189FNG8Y4RQ0H6NQ4PN","k":"proposal","ti":"Pair adjacent Q4_K output rows in M2 decode"}
 {"t":"2026-08-23T10:04:27Z","eid":"0572dee92c266ee1","ag":"ag-a541","ev":"grill","id":"P-01M0Q18189FNG8Y4RQ0H6NQ4PN","gr":"2026-08-23 open=0","hash":"e881e6221e2201344c49ca82badfbb630ac720114adc58ef40fa44ebc2597fca"}
 {"t":"2026-08-23T10:04:42Z","eid":"907a6f91019d1030","ag":"ag-550a","ev":"move","id":"P-01M0Q18189FNG8Y4RQ0H6NQ4PN","fr":"draft","to":"active","note":"Standing user authorization covers continued spec-driven, benchmark-gated M2 performance work. Grill is open=0; the proposal reuses a proven exact dual-output leaf and introduces no new assembly semantics."}
+{"t":"2026-08-23T10:04:52Z","eid":"641919ee06dc4d1a","ag":"ag-b759","ev":"create","id":"T-01M0Q191TJF299603RR4W9KJDJ","k":"task","ti":"Route M2 Q4_K QMatMul through adjacent row pairs"}
