@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## T-01M0PXR2W9FJB9BPBKTQMKZRJH Interleave paired Q6_K activation loads with FMLA
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
 refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
