@@ -73,7 +73,7 @@ Pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702 matches GoAI Q6_K lane
 
 ## T-01M0Q5DGB6FMBANNJHZQMNSDWA Benchmark explicit full unrolling in the M2 Q6_K cooperative kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q5CKW6FH8VAGPFFC95458H
 refs: R-01M0Q59EV4EKSTBJACTNCBQK42
