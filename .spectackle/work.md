@@ -4009,7 +4009,7 @@ Add a backend-routed eager-only in-place addition capability and use it only for
 
 ## T-01M0P2DF4SESBBASAW98DBG2VJ Implement and gate eager CPU residual accumulation
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P2CFT6FWCVWK3JNWYC9X2V
 targets: go:nlp.QuantLlama.DecodeStep, go:backend.OpAdd, go:cpu.binOp
