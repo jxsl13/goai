@@ -1,0 +1,2 @@
+journal.ndjson merge=union
+bench.ndjson merge=union
