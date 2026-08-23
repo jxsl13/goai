@@ -23,3 +23,6 @@ WHEN a supported Go release changes floating-point lowering, the SVD bit-identit
 
 ## SVD-RELEASE-GOLDEN-VALIDATION-001
 IF SVD output digests differ between 2 supported Go releases, THEN the SVD release-golden change SHALL prove 0 fixture-input bit differences and pass reconstruction and numerical-correctness tests under both Go releases before accepting a new golden.
+
+## SVD-ARM64-FMA-ORDER-001
+The ARM64 SVD V-rotation second component SHALL compute math.FMA(c, b, sn*a), inline with 0 helper calls, and preserve the Go 1.26 bit-exact digest under Go 1.27.
