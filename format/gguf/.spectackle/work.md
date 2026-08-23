@@ -32,12 +32,3 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
-
-## R-01M0PTMRHAEKM8KF9CZF9ETXPM Re-profile merged post-USHL M2 Q4_K kernel
-kind: research
-state: active
-created: 2026-08-23
-parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
-targets: asm:gguf.dotQ4KPairRowNeon
-
-Profile merge 9f1801c8 on Apple M2 Pro after the table-indexed header decode. Attribute current-main CPU samples and fresh-process leaf timing before selecting another assembly change. Reuse exact K2048 and 64-step production boundaries, preserve digests, and reject ideas already disproven by the batching, pointer-update, and LD2R experiments.
