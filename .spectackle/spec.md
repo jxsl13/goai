@@ -678,3 +678,8 @@ Rationale: Combining the producer store and residual add eliminates two material
 WHEN recording, an accelerator, nonidentity ResidualMult, batch, alias, view, dtype, shape, device, quant type, or weight layout makes residual accumulation unsupported, the GoAI SHALL execute QuantLinear.Forward, scalar scaling, and backend.OpAdd without mutating the residual input.
 
 Rationale: Every unsupported or observable graph retains established semantics.
+
+## CPU-QUANT-RESIDUAL-EPILOGUE-003
+WHEN the CPU Q4_K and Q6_K residual epilogue candidate is considered for retention, the GoAI SHALL require digest ea3df5516f17df83, at least 20 percent fewer allocation bytes, and at least 1.03x median speedup in independent interleaved 64-step campaigns.
+
+Rationale: The prior allocation-only design reached only 1.014x and was rejected.
