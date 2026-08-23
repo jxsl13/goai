@@ -69,12 +69,3 @@ grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
 
 Add recorder-only same-binary pipelines for leader-only summation of the eight threadgroup partials and for leader summation plus dim-2048 input retention. Each SIMD-group leader must add red slots 0 through 7 in control order and distribute the exact total with simd_broadcast_first, preserving one barrier and 256 threads. Prove bit-exact output, input immutability, and fallback isolation. Promote only a variant reaching 1.10x in every count-seven leaf campaign and 1.01x in every frozen TinyLlama f16-KV decode cell.
-
-## T-01M0QKY30HF9687SFQZAH92RCK Implement and gate RMSNorm SIMD leader broadcast
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0QKXHR7ED1ASFH56SNHAGKK
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
-
-Add opt-in recorder pipelines for leader-only partial summation and the dim-2048 leader-plus-input-retention composition. Add bit-exact route tests and paired GPU profiling. Reject all variants if no leaf candidate reaches 1.10x before running end-to-end campaigns.
