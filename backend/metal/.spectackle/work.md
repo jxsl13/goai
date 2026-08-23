@@ -60,3 +60,12 @@ created: 2026-08-23
 targets: go:metal.Recorder.Profile
 
 External perfscan at github.com/jxsl13/perfscan/perfscan@latest reports PS2004 on Recorder.Profile: the 96-byte label scratch is allocated inside the pointer-method event loop even though the native call overwrites it synchronously and it does not escape. A production TinyLlama profile contains 340 explicit events, so the shape creates hundreds of avoidable Go heap objects per profile. Establish a completed-recorder benchmark and allocation count, then separate the guaranteed scratch-hoist gain from optional repeated-label interning.
+
+## P-01M0Q6B7A3E1SS7VWHGS37WPDE Reuse Recorder.Profile label scratch across Metal events
+kind: proposal
+state: draft
+created: 2026-08-23
+refs: R-01M0Q69J1CEDCBKG8VDVB580GS
+targets: go:metal.Recorder.Profile
+
+Recorder.Profile currently allocates a 96-byte label buffer once per event before a synchronous native call that always overwrites and terminates the buffer. Hoist one scratch buffer outside the event loop without changing the C ABI, returned profile values, label ownership, or error behavior. Benchmark completed recorders with one and 340 events. Require the 340-event path to remove at least 300 allocations and 30000 allocation bytes per call, improve median latency by at least 1.10x, and keep the one-event path at least 0.97x. Consider label interning or bulk cgo only under separate evidence after this exact baseline.
