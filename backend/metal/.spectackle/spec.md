@@ -526,4 +526,4 @@ WHERE contiguous offset-zero F32 complete-block fusion, the Metal pre-norm trans
 WHEN supported parity is checked against the two-boundary incumbent, the Metal pre-norm transformer-block implementation SHALL match 1 output and exactly 13 gradients within established F32 tolerance while mutating exactly 0 inputs.
 
 ## M2-PRENORM-TRANSFORMER-BLOCK-PERF-001
-WHERE 3 count-7 alternating M2 campaigns at B8 S65 D128 H4 F256, the M2 complete-block gate SHALL require boundary median at least 1.15 times, depth-4 ViT train median at least 1.08 times, and every aligned full pair at least 1.03 times control.
+WHERE 3 count-7 alternating M2 campaigns at B8 S65 D128 H4 F256, the promotion gate SHALL require boundary median at least 1.15 times, depth-4 ViT train median at least 1.08 times, and every aligned pair at least 1.03 times control.
