@@ -62,7 +62,7 @@ Production M=1 Q4_K maps two independent SIMD groups to four output rows in each
 
 ## P-01M0QM9JXCEEMA9C6H146CX31H Autotune Q4_K cooperative threadgroup width on M2
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 parent: R-01M0QM7PDVED19SWH09DSGZYPW
 grilled: 2026-08-23 open=0
