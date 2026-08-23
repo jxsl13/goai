@@ -4007,12 +4007,3 @@ grilled: 2026-08-23 open=0
 targets: go:gguf.QMatMul, go:gguf.dotQ4KPairRowFn, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, internal/benchcompare/leadership/evidence
 
 Profile-guided M2 composition: QMatMul currently dispatches one independent ARM64 Q4_K row dot per output row even though the proven dual-output row kernel preserves each independent output bit-for-bit while loading every activation vector once for two rows. Route contiguous F32 M1 Q4_K QMatMul through aligned pairs of adjacent weight rows, retain the independent tail for odd N, and keep non-ARM64 and M>1 behavior unchanged. This changes no assembly leaf and directly composes the verified Q4K paired-row contract. Gate at exact equality to the independent route for even and odd N, zero added allocations, at least 1.02x median speedup across seven alternating N4096/K1024 campaigns with five wins, and no pinned TinyLlama production regression.
-
-## T-01M0Q191TJF299603RR4W9KJDJ Route M2 Q4_K QMatMul through adjacent row pairs
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0Q18189FNG8Y4RQ0H6NQ4PN
-targets: go:gguf.QMatMul, go:gguf.dotQ4KPairRowFn, format/gguf/quant_matmul.go, format/gguf/dot_q4k_asm_arm64.go, format/gguf/dot_q4k_asm_amd64.go, format/gguf/dot_q4k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, internal/benchcompare/leadership/evidence
-
-Add an ARM64-only fast capability for the existing exact dotQ4KPairRowFn leaf. In contiguous F32 M1 Q4_K QMatMul, align worker chunk boundaries to two rows, process adjacent row byte ranges through one paired row call, and preserve an independent final row for odd N. Add even/odd exact route coverage and a representative N4096/K1024 benchmark. Validate zero allocation increase, at least 1.02x median speedup across seven alternating campaigns with five wins, and no regression in exact 64-step TinyLlama production decode.
