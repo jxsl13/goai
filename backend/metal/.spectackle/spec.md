@@ -370,3 +370,6 @@ WHEN the bulk extraction candidate is measured, the warm Recorder.Profile events
 
 ## recorder-profile-snapshot-small-perf-001
 WHEN each frozen campaign compares control and bulk extraction, the warm Recorder.Profile events1 on Apple M2 SHALL run at least 1.10 times faster by median.
+
+## recorder-profile-snapshot-cold-perf-001
+WHEN each frozen campaign measures events340 and events1, the first Recorder.Profile extraction on Apple M2 SHALL make events340 at least 1.10 times faster and retain 0.97 times events1 throughput.
