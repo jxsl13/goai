@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QJ1DQZE8W87CD3GS5DR9M0 Tune the M2 decode RMSNorm threadgroup width after attention fusion
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu
 
