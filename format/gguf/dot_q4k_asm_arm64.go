@@ -23,7 +23,7 @@ func dotQ4KPairBlockNeon(x *float32, qs0, qs1 *byte, coeff0, coeff1 *float32, in
 // accumulation, matching the former Go-orchestrated path bit-for-bit.
 //
 //go:noescape
-func dotQ4KRowNeon(x *float32, raw *byte, f16 *float32, indexes *byte, blocks int) float64
+func dotQ4KRowNeon(x *float32, raw *byte, f16 *float32, indexes *byte, blocks int) (out float64)
 
 // dotQ4KPairRowNeon keeps paired Q4_K header decode, coefficient staging, and
 // all super-block dots inside one assembly call. Each block still reduces to
