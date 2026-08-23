@@ -4014,3 +4014,12 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, objc:metal_bridge.ensure_mha_decode, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu_test.TestMetalF16KVRealModelQualityAndSpeed
 
 Consume R-01M0QE170PE70. Compile a default-off mha_dec_splitk_p2_dim candidate. Each of 32 lanes owns exactly two output dimensions and performs the incumbent sequential chunk merge only for those dimensions; every lane retains the identical m/l chunk order. Keep the partial layout, one-SIMDgroup-per-head dispatch, pass-1 kernels, f32/f16-KV routes, buffers, labels, split-K threshold, and fallback routes unchanged. Add a narrow A/B selector and exact f32/f16 parity tests across sk 128, 129, 512, 1024, 1536, and 2048 with GQA and full MHA. Promotion requires three independent order-alternated count-seven M2 campaigns: the complete split-K attention boundary must improve by at least 1.05x at sk 512, 1024, 1536, and 2048 in every campaign; trained TinyLlama f32 and f16-KV decode at contexts 512 and 1536 must each retain at least 1.01x throughput in every valid campaign; short-context and non-dk64 routes must retain 0.97x. Reject the candidate if a leaf win reverses at the production boundary, as prior lane-octet pass-1 work did.
+
+## T-01M0QE2PMWFKZ8VS07HAMCP9XG Implement and gate lane-owned split-K pass-2 merge
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0QE1VX8FKNRRK350A6GNNHG
+targets: msl:mha_dec_splitk_p2, objc:metal_bridge.ensure_mha_decode, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu_test.TestMetalF16KVRealModelQualityAndSpeed
+
+Add the default-off dimension-parallel pass-2 kernel and A/B selector without changing pass 1 or routing. Prove exact f32 and f16-KV output parity, fallback isolation, and mutation reachability. Add complete-attention benchmarks across the frozen context grid, then run three order-alternated count-seven M2 campaigns and trained TinyLlama f32/f16-KV context 512/1536 campaigns. Promote only if every leaf and production gate passes; otherwise reject and remove the candidate. Report the generalizable redundant-SIMD-lane output-work finding to perfscan.

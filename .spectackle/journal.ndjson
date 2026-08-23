@@ -674,3 +674,4 @@
 {"t":"2026-08-23T13:47:47Z","eid":"eb12d53d47c99d7b","ag":"ag-c6f2","ev":"create","id":"R-01M0QE170PE70RM9XQDZ4SGWXW","k":"research","ti":"Parallelize the M2 split-K attention merge across output dimensions"}
 {"t":"2026-08-23T13:48:08Z","eid":"85d072a21748a2af","ag":"ag-8893","ev":"create","id":"P-01M0QE1VX8FKNRRK350A6GNNHG","k":"proposal","ti":"Replace redundant M2 split-K pass-2 merges with lane-owned dimensions"}
 {"t":"2026-08-23T13:48:19Z","eid":"b709667d0e7b2b42","ag":"ag-ce2b","ev":"move","id":"P-01M0QE1VX8FKNRRK350A6GNNHG","fr":"draft","to":"active"}
+{"t":"2026-08-23T13:48:35Z","eid":"814cf4ca653e9921","ag":"ag-f1dd","ev":"create","id":"T-01M0QE2PMWFKZ8VS07HAMCP9XG","k":"task","ti":"Implement and gate lane-owned split-K pass-2 merge"}
