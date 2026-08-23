@@ -3998,3 +3998,11 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0P2CFT6FWCVWK3JNWYC9X2V Eliminate eager CPU QuantLlama residual materializations
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: go:nlp.QuantLlama.DecodeStep, go:backend.OpAdd, go:cpu.Backend.FuseSwiGLUInPlace
+
+Add a backend-routed eager-only in-place addition capability and use it only for QuantLlama DecodeStep private residual storage. Preserve recorder, per-op routing, unsupported dtype/shape/device, alias, view, and accelerator behavior through the ordinary OpAdd fallback. The earlier exact Metal residual-epilogue prototype removed 44 command encoders but failed its whole-model gate at roughly 1.01-1.02x; this CPU experiment differs by eliminating two full output allocations and writes per layer. Retain only if independent 64-step TinyLlama Q4_K campaigns preserve the exact production digest, reduce allocation bytes by at least 10%, and improve median wall time by at least 1.03x without regressions in full validation.
