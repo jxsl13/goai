@@ -1,0 +1,8 @@
+pair	order	baseline_ns_op	candidate_ns_op	baseline_bytes_op	candidate_bytes_op	baseline_allocs_op	candidate_allocs_op
+1	baseline-candidate	324.6	297.2	0	0	0	0
+2	candidate-baseline	315.9	299.5	0	0	0	0
+3	baseline-candidate	312.1	288.6	0	0	0	0
+4	candidate-baseline	312.0	287.2	0	0	0	0
+5	baseline-candidate	308.1	289.0	0	0	0	0
+6	candidate-baseline	310.8	286.7	0	0	0	0
+7	baseline-candidate	311.5	285.8	0	0	0	0

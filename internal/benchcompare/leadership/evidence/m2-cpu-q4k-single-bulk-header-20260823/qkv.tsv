@@ -1,0 +1,8 @@
+pair	order	baseline_ns_op	candidate_ns_op	baseline_bytes_op	candidate_bytes_op	baseline_allocs_op	candidate_allocs_op
+1	baseline-candidate	189678	182325	11845	11840	35	35
+2	candidate-baseline	189948	182176	11842	11841	35	35
+3	baseline-candidate	190126	188302	11845	11836	35	35
+4	candidate-baseline	190255	182085	11848	11843	35	35
+5	baseline-candidate	189940	173853	11844	11843	35	35
+6	candidate-baseline	228239	245340	11831	11832	35	35
+7	baseline-candidate	513241	534542	11822	11910	35	35

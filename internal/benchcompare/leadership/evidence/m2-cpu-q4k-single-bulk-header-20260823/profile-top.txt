@@ -1,0 +1,24 @@
+Profile source: origin/main 052a4821983ebdb917e1012560fb0ac324325438
+Command boundary: 15 retained 64-step decodes, GOMAXPROCS=12, Go 1.26.6
+Profiled median: 2.974518917 s
+Digest: ea3df5516f17df83
+
+CPU flat/cumulative highlights:
+runtime.pthread_cond_wait              53.98% flat
+dotQ4KPairBlockNeon                   16.40% flat
+dotQ4KBlockNeon                        7.52% flat
+runtime.pthread_cond_signal             7.16% flat
+dotQ4KPairRowASM                        4.25% flat, 20.73% cumulative
+dotQ6KBlockNeon                         4.10% flat
+dotQ4_KRowASM                           2.40% flat, 10.74% cumulative
+getScaleMinK4                           0.76% flat (1.39 CPU-seconds)
+
+Allocation-object highlights:
+qmatmulParallelChunksAligned           53.25%
+tensor.heapAllocator.allocF32            7.27%
+tensor.NewOn                             7.27%
+tensor.newStorageWith                    6.70%
+QuantLlama.DecodeStep                    3.97% flat, 92.71% cumulative
+
+The QMatMul fan-out allocation target is closed by prior measured regressions.
+The independent Q4_K header helper was selected as a bounded compute target.

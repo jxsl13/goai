@@ -1,0 +1,12 @@
+# Invalidated: unrelated perfscan/checks race suites consumed 4-6 CPU cores.
+pair	order	variant	median_s	throughput_tok_s	alloc_bytes	allocs	digest
+1	baseline-candidate	baseline	1.824406958	35.080	173739296	246358	ea3df5516f17df83
+1	baseline-candidate	candidate	1.876569833	34.105	173734464	246360	ea3df5516f17df83
+2	candidate-baseline	candidate	2.759478541	23.193	173691976	246352	ea3df5516f17df83
+2	candidate-baseline	baseline	1.898787584	33.706	173741984	246370	ea3df5516f17df83
+3	baseline-candidate	baseline	2.123920209	30.133	173695848	246358	ea3df5516f17df83
+3	baseline-candidate	candidate	1.867760667	34.266	173709144	246377	ea3df5516f17df83
+4	candidate-baseline	candidate	2.731224292	23.433	173688432	246356	ea3df5516f17df83
+4	candidate-baseline	baseline	2.683016250	23.854	173733888	246358	ea3df5516f17df83
+5	baseline-candidate	baseline	3.073763875	20.821	173741128	246359	ea3df5516f17df83
+5	baseline-candidate	candidate	2.907794666	22.010	173714008	246362	ea3df5516f17df83

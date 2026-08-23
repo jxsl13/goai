@@ -1,0 +1,44 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "baseline_source": "052a4821983ebdb917e1012560fb0ac324325438",
+  "candidate_source": "25b7938da9be53e216fc00826a1fad58f5d0fb6f",
+  "branch": "codex/m2-q4k-next-profile-20260823",
+  "spectackle": "v0.10.0 source rebuilt with go1.27.0",
+  "spectackle_proposal": "P-01M0PEGTNPFYB",
+  "spectackle_research": "R-01M0PEHGT7FY2",
+  "spectackle_task": "T-01M0PEP367F7W",
+  "perfscan": "v1.81.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/838#issuecomment-5384272037",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline_production": "674d7a1f66ab1ae70b786ffaaf013034163ce3ae37b19f05059bfcd67f07d217",
+    "candidate_production": "2edf2236a9ca582a9650f8cbdd54e9cfbadfaafe7d4603e5949404301bfc1ded",
+    "baseline_gguf": "91fd019728a3bddf4771219f4c580658e9ae4d318d75105d23aaad36ee543dfa",
+    "candidate_gguf": "f15b9e1afeadea1286498e84e4238ad8131424933f063019a820dee48efc33b5",
+    "candidate_gguf_go127": "722ae2d1922d79260a06c5ef8777239c2ab669eaaa12423d88fbd5cd58fabba1"
+  },
+  "sampling": {
+    "leaf_threads": 12,
+    "leaf_process_pairs": 7,
+    "leaf_benchtime": "500ms",
+    "qkv_threads": 12,
+    "qkv_process_pairs": 7,
+    "qkv_benchtime": "500ms",
+    "production_threads": 8,
+    "production_steps": 64,
+    "measured_runs_per_process": 3,
+    "warmups_per_process": 1,
+    "production_process_pairs": 5,
+    "order": "alternating baseline-candidate/candidate-baseline"
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "arbitrary_headers": "bit-identical to frozen getScaleMinK4-based ARM64 row path",
+    "arithmetic_order": "coefficient operands, block dot products, and F64 row reduction unchanged"
+  }
+}
