@@ -668,7 +668,3 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
-## CPU-QUANT-RESIDUAL-INPLACE-003
-WHEN the CPU QuantLlama in-place residual candidate is considered for retention, the GoAI SHALL require an exact digest, at least 10 percent fewer allocation bytes, and at least 1.03x median speedup in independent interleaved 64-step Q4_K campaigns.
-
-Rationale: The prior exact Metal residual fusion failed its whole-model leverage gate.
