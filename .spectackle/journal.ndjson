@@ -737,3 +737,4 @@
 {"t":"2026-08-23T18:29:28Z","eid":"4f5afe6e6d1e806d","ag":"ag-c966","ev":"revise","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","note":"targets revised"}
 {"t":"2026-08-23T18:29:32Z","eid":"6f32c7db83377ead","ag":"ag-43ad","ev":"grill","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","gr":"2026-08-23 open=1","hash":"d634da25800f852d85f8a99391b8c76afc7159b8d16f60167a108e1d9a6d9103","open":1,"keys":["blast:9"]}
 {"t":"2026-08-23T18:29:36Z","eid":"8770be274a46eb27","ag":"ag-c587","ev":"move","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","fr":"draft","to":"active","note":"Approved by the standing performance mandate; corrected gates are satisfied by measured implementation evidence."}
+{"t":"2026-08-23T18:29:40Z","eid":"ec8362ce8fef64e4","ag":"ag-c5d9","ev":"create","id":"T-01M0QY5BRFFQMAJ0XHWHNP2JK4","k":"task","ti":"Validate and ship concurrent Metal decode recording"}
