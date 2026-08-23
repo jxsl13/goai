@@ -52,13 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0Q5CKW6FH8VAGPFFC95458H Force full unrolling of the M2 Q6_K dequant dot loop
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0Q59EV4EKSTBJACTNCBQK42
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.QMatMulResident
-
-Pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702 matches GoAI Q6_K lane ownership and arithmetic but forces full unrolling of the four-iteration 6-bit reconstruction and FMA loop. Q4_K did not transfer this directive, but Q6_K has distinct four-plane integer reconstruction and represents 17.00 percent of measured TinyLlama explicit decode time. Isolate the pragma with no other source delta, preserve exact behavior and immutable inputs, and retain it only if both actual Q6_K production shapes clear a frozen M2 leaf gate before full-model testing.
