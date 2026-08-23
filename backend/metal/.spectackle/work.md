@@ -72,7 +72,7 @@ Add an opt-in recorder-only dim-2048 kernel whose 256 lanes each load and retain
 
 ## T-01M0QKJ4PHESN8HGQZ6SC3KJ14 Implement and gate register-retained M2 RMSNorm
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QKHBQ9E8493F49H436R6CJ
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
