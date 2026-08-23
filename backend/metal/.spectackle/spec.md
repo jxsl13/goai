@@ -356,3 +356,6 @@ WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL 
 
 ## METAL-Q6K-LONGK-UNROLL-NUMERIC-001
 WHEN it executes any valid resident M=1 projection, the long-K Metal Q6_K unrolled pipeline SHALL match the historical cooperative pipeline within 2e-5 relative error, preserve floating-point class, and mutate exactly zero input bytes.
+
+## METAL-Q6K-LONGK-UNROLL-SELECTOR-001
+WHEN M equals 1, K is at least 4096, cooperative support is present, and the unrolled toggle is enabled, the Metal Q6_K selector SHALL select qmatmul_q6k_cooperative_unrolled; every other Q6_K case shall select the historical cooperative or scalar pipeline.
