@@ -42,12 +42,3 @@ created: 2026-08-23
 targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
 
 Cross-toolchain probing proves Go 1.26.6 quiets an F32 signaling NaN during float32(math.Abs(float64(x))), while Go 1.27.0 preserves the quiet bit. Split the ARM64 assembly with Go release build tags: retain the incumbent exact Go 1.26 kernel unchanged and select the simpler sign-clear kernel only for Go 1.27 and newer. Restore tests to the scalar oracle and validate both toolchains before publishing the measured Go 1.27 gain.
-
-## T-01M0P8NQ57E4JSBEDA31381MD7 Split exact ARM64 Abs kernels by Go release
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0P8N6D6EEWAEKVACVNS21M6
-targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths, go:cpu.TestAbsF32Arm64ExactInPlace
-
-Tag the sign-clear assembly for Go 1.27 and newer, add an unchanged quieting implementation for Go 1.26, restore direct tests to the scalar math.Abs oracle, validate all edge, tail, and in-place cases under Go 1.26.6 and Go 1.27.0, cross-compile non-ARM64, and correct the evidence and perfscan report.
