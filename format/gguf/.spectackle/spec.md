@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q6K-LD1X4-EXACT-001 {applies: go:gguf.dotQ6KBlockNeon,asm:gguf.dotQ6KBlockNeon}
+WHEN DOT_Q6 loads 16 consecutive F32 activations, the dotQ6KBlockNeon SHALL load exactly 64 bytes into four ordered vectors and pass TestDotQ6KBlockNeonKnownValue plus 100 TestDotQ6KAsmRandomRaw trials within 1e-4 relative error.
+
+Rationale: A structured load may change only load grouping, not activation order or arithmetic.
