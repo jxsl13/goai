@@ -353,9 +353,6 @@ The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the 
 
 ## GGUF-Q4K-PAIR-DUAL-DOT-001
 WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through dotQ4KPairBlockNeon while preserving the independent accumulation and reduction orders bit-for-bit.
-## Q8K-ACTIVATION-EXACT-SCOPE-001
-The format/gguf QMatMul SHALL retain the exact F32 activation route as default and dispatch 0 Q8_K activation blocks unless a caller selects the separate approximate API.
-
 ## ARM64-Q8K-CROSS-DOT-001
 WHEN Q4_K or Q6_K weights use explicit Q8_K activation on ARM64, the format/gguf SHALL encode each activation block once, allocate 0 heap objects, dispatch SDOT, and match portable cross-dot within 1e-5 absolute plus 1e-5 relative error.
 
