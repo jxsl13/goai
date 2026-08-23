@@ -404,3 +404,6 @@ WHEN M2 compares table-indexed paired Q4_K headers, the retained leaf and produc
 
 ## Q4K-SINGLE-ROW-ASM-EXACT-001
 WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match prior per-block output bits for arbitrary headers, preserve f16 coefficient conversion, F32 block reduction, and ordered F64 accumulation.
+
+## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
+WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
