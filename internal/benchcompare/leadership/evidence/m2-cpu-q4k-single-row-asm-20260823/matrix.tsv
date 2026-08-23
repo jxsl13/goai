@@ -1,0 +1,9 @@
+campaign	order	baseline_ns_op	candidate_ns_op	baseline_allocs_op	candidate_allocs_op	retained
+0	baseline-candidate	149431	164161	29	29	false
+1	candidate-baseline	143991	164329	29	29	true
+2	baseline-candidate	149516	129207	29	29	true
+3	candidate-baseline	157548	126822	29	29	true
+4	baseline-candidate	156945	145774	29	29	true
+5	candidate-baseline	165621	150871	29	29	true
+6	baseline-candidate	166059	167229	29	29	true
+7	candidate-baseline	159063	147343	29	29	true

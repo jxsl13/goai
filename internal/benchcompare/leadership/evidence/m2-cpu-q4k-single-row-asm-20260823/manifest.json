@@ -1,0 +1,52 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.27.0 darwin/arm64",
+  "baseline_source": "9f1801c82f91330c79c4d02ab9e4755f635a4ada",
+  "candidate_source": "68f4018355d7de48c6e2b0fb5fbe1bef51044ca1",
+  "validation_source": "3495dc74764ee7e54ff2d29b2bfe45bdb2731298",
+  "validation_note": "named the assembly result for vet ABI metadata; dotQ4KRowNeon machine text is byte-identical to the benchmarked source",
+  "branch": "codex/m2-q4k-postushl-profile-20260823",
+  "spectackle": "v0.10.0 source rebuilt with go1.27.0",
+  "spectackle_proposal": "P-01M0PGHM4TE7Y",
+  "spectackle_research": "R-01M0PTMRHAEKM",
+  "spectackle_task": "T-01M0PTS7PDF7E",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan v1.71.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/843",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline_gguf": "9ed0bb6a88ed76a6e91cdb3bcb6b67a44c7bfdf4e7749eb36abc792b49f51983",
+    "candidate_gguf": "493665eff005274bd674a55fa74600a9e28ff498e5b8992f11098690b48d1a7c",
+    "baseline_production": "06a7b7b59bc5dc105856d2ccea41e398a9fb355849781b51dd1b20fa45bf7b04",
+    "candidate_production": "97beef1e17d9aeb4e8be89b1efccc71a0e34e66bb9c51f080809d8abd2774e4d"
+  },
+  "profile": {
+    "production_reps": 15,
+    "dot_q4k_block_flat_percent": 4.08,
+    "dot_q4k_row_go_flat_percent": 1.16,
+    "dot_q4k_row_cumulative_percent": 5.26
+  },
+  "sampling": {
+    "threads": 12,
+    "leaf_process_pairs": 8,
+    "leaf_discarded_warmup_pairs": 1,
+    "leaf_benchtime": "500ms",
+    "matrix_process_pairs": 8,
+    "matrix_discarded_warmup_pairs": 1,
+    "matrix_benchtime": "500ms",
+    "production_process_pairs": 8,
+    "production_discarded_warmup_pairs": 1,
+    "production_steps": 64,
+    "production_measured_runs_per_process": 5,
+    "production_warmups_per_process": 1,
+    "order": "alternating baseline-candidate/candidate-baseline"
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "arbitrary_headers": "whole-row output bit-identical to the former Go header loop plus ARM64 block kernel",
+    "arithmetic_order": "per-block f32 reductions and ordered f64 row accumulation preserved"
+  }
+}
