@@ -65,6 +65,7 @@ The merged bulk snapshot leaves 344 allocations and 19,816 B per warm 340-event 
 kind: proposal
 state: draft
 created: 2026-08-23
+refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ
 grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
 
