@@ -488,3 +488,4 @@
 {"t":"2026-08-23T01:49:02Z","eid":"46b60baf510e3393","ag":"ag-1e4a","ev":"create","id":"P-01M0P4X4QCF0XTB87P5M888AAP","k":"proposal","ti":"Pin CPU quant benchmark routing and model identity"}
 {"t":"2026-08-23T01:49:04Z","eid":"821e694fbe436395","ag":"ag-fcb0","ev":"grill","id":"P-01M0P4X4QCF0XTB87P5M888AAP","gr":"2026-08-23 open=0","hash":"d694d22461ec4b24dbe1148e41fb15d07314067d185a2d18c446800ad5dd6de0"}
 {"t":"2026-08-23T01:49:23Z","eid":"60072dd10ed8de36","ag":"ag-9174","ev":"move","id":"P-01M0P4X4QCF0XTB87P5M888AAP","fr":"draft","to":"active","note":"Activated after impact review and grill; this is a correctness prerequisite discovered by the rejected performance experiment."}
+{"t":"2026-08-23T01:49:26Z","eid":"33e9ad1e65cb2672","ag":"ag-fd8d","ev":"create","id":"T-01M0P4XWWWEQ09N23GXSN59Q46","k":"task","ti":"Make the CPU production gate backend- and artifact-pinned"}
