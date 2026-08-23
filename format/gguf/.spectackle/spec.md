@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q4K-PAIR-ACTIVATION-HOIST-EXACT-001
+WHEN hoisting each structured activation load before row-zero dequantization, the paired ARM64 Q4_K row kernel SHALL preserve 2 arbitrary-header F64 output bit patterns, row-one activation reuse, reduction order, and 0 allocations.
+
+Rationale: Only load placement changes; all addresses, vector registers, arithmetic, and accumulation order remain fixed.
