@@ -76,3 +76,6 @@ Rationale: CPU scheduling coalescing must not bypass graph, device, or fallback 
 
 ## MHA-FORWARD-BATCHED-CORE-001
 WHEN an unmasked packed batch with Batch greater than 1 is executed, the MHA.ForwardBatched SHALL issue exactly 1 OpMHA for the packed attention core and 0 per-sequence Slice or Concat operations while preserving projection, bias, LoRA, and causal behavior.
+
+## PRENORM-ATTENTION-FUSION-FALLBACK-001
+IF dtype, layout, shape, backend capability, bias, LoRA, mask, or causal mode excludes fusion, THEN the pre-norm attention helper SHALL execute the incumbent 7-operation composite with exactly 0 implicit reference-backend migrations.
