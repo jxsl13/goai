@@ -4022,11 +4022,3 @@ created: 2026-08-23
 targets: go:nlp.MHA.ForwardBatched, c:mtl_mha_mpsgraph, go:backend.OpMHABackward, backend/attrs.go, backend/ref, backend/cpu, backend/metal, backend/vulkan
 
 Add optional batch cardinality to AttnAttrs for packed rank-2 Q/K/V. Batch zero or one retains current semantics. Batch greater than one partitions Q and K/V rows into equal independent sequences, resets causal/window coordinates per sequence, and forbids cross-batch attention or gradient flow. Replace the unmasked per-sequence Slice, OpMHA, and Concat loop in nlp.MHA.ForwardBatched with one OpMHA call. Metal shall use one cached batch-axis MPSGraph for equal-length no-window prefill; reference and CPU shall preserve exact semantics; unsupported accelerators may use a correct portable fallback. Backward must preserve independent batches and existing batch-one accumulation order. Promotion gates after leaf proof: M2 ViT B=8 forward median at least 1.15x, training median at least 1.10x, every benchmark pair at least 1.05x, inference/logit and gradient parity within existing tolerances, and no batch-one regression. The research probe is removed before merge.
-
-## T-01M0R08R1XFV0BYT5AGW3M8NPJ Implement and gate batch-aware independent SDPA
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0R089YBE008K6PJQ009SGJV
-
-Add the batch contract to AttnAttrs, reference and CPU forward/backward, Metal forward/backward, and portable fallback behavior. Route unmasked nlp.MHA.ForwardBatched through one OpMHA. Replace the disposable native probe with production cache and tests. Validate batch-one compatibility, cross-batch isolation, inference parity, gradient parity, full short tests, vet, direct external perfscan, then run three count-seven alternating M2 ViT B=8 forward and train campaigns. Retain only if the frozen proposal gates pass.
