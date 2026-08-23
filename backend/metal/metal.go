@@ -10,6 +10,7 @@ package metal
 import "C"
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -3405,7 +3406,7 @@ func NewConcurrentRecorder() (*Recorder, error) {
 	}
 	h := C.mtl_recorder_begin_concurrent()
 	if h == nil {
-		return nil, fmt.Errorf("metal: concurrent Recorder begin failed")
+		return nil, errors.New("metal: concurrent Recorder begin failed")
 	}
 	return &Recorder{handle: h, concurrent: true}, nil
 }
@@ -3418,7 +3419,7 @@ func SetConcurrentDecodeRecorder(on bool) bool { return concurrentDecodeRecorder
 // native buffer-scope barrier only for a concurrent recorder and an intentional no-op otherwise.
 func (r *Recorder) Barrier() error {
 	if r == nil || r.handle == nil {
-		return fmt.Errorf("metal: Recorder barrier after Free")
+		return errors.New("metal: Recorder barrier after Free")
 	}
 	r.pendingBarrier = true
 	return nil

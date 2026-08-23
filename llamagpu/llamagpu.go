@@ -375,7 +375,7 @@ func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decode
 
 // concurrentMetalDecodeEligible deliberately starts with the dense pre-norm Llama graph whose
 // dependencies are explicit in encodeStep. Architectures with biased, parallel, post-norm, MoE,
-// state-space, partial-RoPE, or fused projection graphs retain the established recorder.
+// state-space, partial-RoPE, or fused FFN projection graphs retain the established recorder.
 func concurrentMetalDecodeEligible(d *Decoder) bool {
 	if d == nil || !d.f16KV || d.rwkv || d.mamba || d.mamba2 || d.jamba || d.mla ||
 		d.postNorm || d.sandwich || d.parallelRes || d.parallelTwoNorm || d.qkNorm || d.noRope ||
@@ -383,7 +383,8 @@ func concurrentMetalDecodeEligible(d *Decoder) bool {
 		d.attnCap != 0 || d.aliBiSlopes != nil || d.outBias != nil {
 		return false
 	}
-	for _, b := range d.blocks {
+	for i := range d.blocks {
+		b := &d.blocks[i]
 		if b.moeRouter != nil || b.wGU != nil || b.qkvBias != nil ||
 			b.oBias != nil || b.fcBias != nil || b.projBias != nil {
 			return false

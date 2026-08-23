@@ -119,7 +119,7 @@ func TestProdMetalConcurrentDecodeCampaign(t *testing.T) {
 	if err != nil && os.Getenv("GOAI_CONCURRENT_GATE") != "" {
 		t.Fatalf("GOAI_CONCURRENT_GATE must be a boolean: %v", err)
 	}
-	if gate && (gpuMedian < 1.03 || gpuSpread > 1.05 || wallMedian < 1.0) {
+	if gate && (gpuMedian < 1.03 || gpuSpread > 1.05 || wallMedian < 1.02) {
 		t.Fatalf("concurrent recorder missed promotion gate: GPU median %.4fx spread %.4fx wall median %.4fx", gpuMedian, gpuSpread, wallMedian)
 	}
 	fmt.Printf("GOAI_CONCURRENT pairs=%d gpu_median=%.4fx gpu_spread=%.4fx wall_median=%.4fx digest=%x\n",

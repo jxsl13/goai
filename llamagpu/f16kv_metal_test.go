@@ -179,12 +179,13 @@ func TestConcurrentMetalDecodeMatchesEstablishedRecorderBitwise(t *testing.T) {
 	defer metal.SetConcurrentDecodeRecorder(previous)
 	const steps = 24
 	want := make([][]uint32, steps)
+	wantBits := make([]uint32, steps*cfg.Vocab)
 	for pos := range steps {
 		logits, err := control.Step(1+(pos*17)%100, pos)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want[pos] = make([]uint32, len(logits))
+		want[pos] = wantBits[pos*cfg.Vocab : (pos+1)*cfg.Vocab : (pos+1)*cfg.Vocab]
 		for i, value := range logits {
 			want[pos][i] = math.Float32bits(value)
 		}
