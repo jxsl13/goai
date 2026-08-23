@@ -4023,12 +4023,3 @@ grilled: 2026-08-23 open=0
 targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go
 
 Consume R-01M0R29CN1FD7. Add a shape-keyed Metal MPSGraph backward entry point for Batch greater than 1 and Window equal to 0. Build the same batch, kv-head, repetition, sequence, and head-dimension layout as the proven forward graph; add a dO placeholder, form sum(O multiplied by dO), and use MPSGraph automatic differentiation to produce dQ, dK, and dV, including broadcast reduction for GQA. Feed all packed sequences once, encode one graph, wait once, and copy each packed gradient once. Preserve the existing batch-one MPSMatrix route and the per-sequence sliding-window kernel. Retain only after gradient parity and three alternating count-seven M2 ViT B=8 campaigns satisfy at least 1.10x train median in every campaign and at least 1.05x in every aligned pair.
-
-## T-01M0R2DG90FERAHM5ZTTY67SGF Implement and gate batch-axis Metal attention backward
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0R2CV3WFZCAMFD24BJSQZDD
-targets: go:metal.mhaBackwardF32, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go
-
-Add the cached batched backward MPSGraph bridge, route only Batch greater than 1 with Window equal to 0 through it, preserve existing batch-one and sliding-window paths, add causal/noncausal MHA and GQA gradient cross-reference coverage, run the full validation matrix, and retain only if the frozen three-campaign M2 ViT training gate passes. Version raw commands, outputs, and ratios; report the reusable dispatch-batching finding to perfscan without duplicating an existing issue.
