@@ -736,3 +736,4 @@
 {"t":"2026-08-23T18:29:11Z","eid":"058d6c52a78900f9","ag":"ag-4558","ev":"grill","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","gr":"2026-08-23 open=0","hash":"c76544ecefdc4c834dd78f5480387d1312f3b181eb20415a3d80ce7f71453e01"}
 {"t":"2026-08-23T18:29:28Z","eid":"4f5afe6e6d1e806d","ag":"ag-c966","ev":"revise","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","note":"targets revised"}
 {"t":"2026-08-23T18:29:32Z","eid":"6f32c7db83377ead","ag":"ag-43ad","ev":"grill","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","gr":"2026-08-23 open=1","hash":"d634da25800f852d85f8a99391b8c76afc7159b8d16f60167a108e1d9a6d9103","open":1,"keys":["blast:9"]}
+{"t":"2026-08-23T18:29:36Z","eid":"8770be274a46eb27","ag":"ag-c587","ev":"move","id":"P-01M0QY46T8ED9TMCHR3FAQPZS8","fr":"draft","to":"active","note":"Approved by the standing performance mandate; corrected gates are satisfied by measured implementation evidence."}

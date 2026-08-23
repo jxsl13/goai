@@ -4017,7 +4017,7 @@ Pinned llama.cpp v0.2.0 commit bb4caa7540188872173c44d161602d9271386413 encodes 
 
 ## P-01M0QY46T8ED9TMCHR3FAQPZS8 Ship dependency-tracked concurrent Metal decode recording
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=1
 targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/concurrent_recorder_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/f16kv_metal_test.go, internal/benchcompare/prod_decode_external_test.go, internal/benchcompare/metal_concurrent_decode_external_test.go
