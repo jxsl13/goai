@@ -488,3 +488,6 @@ WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the M
 
 ## METAL-CONCURRENT-DECODE-DEPENDENCY-001
 WHEN a production dense quantized f16-KV Llama-style single-token decode uses a concurrent Metal recorder, the Metal recorder SHALL keep Q/K/V and gate/up dispatches barrier-free and insert one buffer-scope barrier before every consumer stage.
+
+## METAL-CONCURRENT-ENCODER-BOUNDARY-001
+WHEN a concurrent Metal recorder reaches a blit, MPS, commit, finish, or free boundary, the Metal recorder SHALL end exactly one active shared compute encoder before crossing the boundary.
