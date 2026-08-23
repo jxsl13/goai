@@ -4011,7 +4011,7 @@ Keep the measured winning four-register 64-byte activation load, but schedule it
 
 ## T-01M0PYPH7GF068JDZA6TWGW0A9 Hoist paired Q4_K structured activation loads before dequantization
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PYN8ZYE7Z91PBKDBTBXR5Y
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
