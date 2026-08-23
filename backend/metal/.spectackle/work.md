@@ -63,7 +63,7 @@ Merged baseline on Apple M2 Pro: warm Profile extraction for 340 repeated-label 
 
 ## P-01M0QCN4C8ECWANK89M5CWF4P0 Add caller-reused Metal Recorder.ProfileInto extraction
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.Recorder.Profile, go:metal.fillRecorderProfileEvents, c:mtl_recorder_profile_snapshot, backend/metal/metal_bridge.m, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
 
