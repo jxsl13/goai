@@ -59,13 +59,3 @@ state: active
 created: 2026-08-23
 
 Evaluate the one remaining production Q4_K launch geometry: 32 physical threads and one SIMD group per threadgroup, covering two output rows. Preserve every lane operation and total SIMD-group count relative to the 64-thread incumbent. Freeze K2048xN2048, K2048xN5632, and K5632xN2048; require bit-exact output, three 22-pair count-seven campaigns, at least 1.05x in every leaf cell, then at least 1.01x in every TinyLlama f16-KV context 8, 512, and 1536 before promotion.
-
-## P-01M0QMTYCMEWSBXMDBVWK64YSE Dispatch M2 Q4_K with one SIMD group per threadgroup
-kind: proposal
-state: active
-created: 2026-08-23
-parent: R-01M0QMTHHQFQMBFB6YNF00QF7M
-grilled: 2026-08-23 open=1
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
-
-Add a diagnostic 32-thread resident M=1 Q4_K cooperative route. Derive output rows from the physical width so the kernel performs the exact incumbent two-row SIMD calculation, but dispatch twice as many independent threadgroups. Compare against the 64-thread incumbent in the three frozen shapes and promote only after all leaf and end-to-end gates pass.
