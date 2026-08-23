@@ -4016,3 +4016,13 @@ refs: P-01M0PGHM4TE7YAXSJT0Q56SSZ2, R-01M0PEHGT7FY285ZWC1JQ05SWB
 targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
 
 Compile the merged-main GGUF and exact TinyLlama CPU production harnesses once, retain fresh-process profile evidence, and measure single-row, paired-row, paired apply, mixed QKV, and production shapes without concurrent load. Inspect the two ARM64 Plan 9 assembly leaves for redundant loads, shuffles, dependency chains, and spills. Evaluate only one bounded variant at a time against the pinned d43cdb4b control; consume this research into a task only when a repeatable leaf gain survives correctness and production gates, otherwise close it no-action with the rejected variant and measurements.
+
+## T-01M0PH6R41F6TSNAYP8AV4XMSG Batch adjacent paired Q4_K blocks under one NEON call
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+refs: R-01M0PGJAMGEKCT53EG9E4QMM4S
+targets: format/gguf/dot_q4k_asm_arm64.go, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, format/gguf/quant_matmul_pair_test.go, format/gguf/quant_matmul_triple_test.go, internal/benchcompare/leadership/evidence
+
+Prebuild coefficient tables for bounded groups of adjacent Q4_K super-blocks, execute their existing paired NEON inner schedule under one ARM64 call, load the byte-expansion table once per group, and emit one F32 subtotal per row and block. Accumulate those subtotals in Go in the original ascending block order so pair-versus-independent outputs remain bit-identical. Keep the old single-block leaf until the batched path passes arbitrary-header, selector, zero-allocation, non-ARM64, and complete GGUF gates. Retain only with at least seven interleaved 500 ms K=2048 pair-row campaigns meeting 1.02x, plus neutral-or-better paired apply, mixed QKV, and exact-digest production evidence; otherwise fully revert and record the rejected call-amortization boundary.
