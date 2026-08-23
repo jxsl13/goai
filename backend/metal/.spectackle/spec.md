@@ -483,3 +483,6 @@ WHEN a resident M=1 Q4_K projection uses 128 or 256 physical threads, the Metal 
 
 ## METAL-Q4K-THREADGROUP-WIDTH-SCOPE-001
 WHEN M differs from one or the requested width is unsupported by the device, the Metal Q4_K cooperative selector SHALL dispatch the 64-thread route exactly and issue zero wider candidate threadgroups.
+
+## METAL-Q4K-THREADGROUP-WIDTH-PERF-001
+WHEN three order-alternated count-seven M2 campaigns measure the three frozen resident shapes, the Q4_K threadgroup-width promotion gate SHALL retain a wider candidate only when every shape and campaign reaches at least 1.05 times 64-thread throughput.
