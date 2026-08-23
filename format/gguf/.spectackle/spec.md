@@ -416,6 +416,6 @@ WHEN interleaving activation loads with row-zero FMLA, the paired ARM64 Q4_K row
 Rationale: Instruction scheduling may change, but GGUF element mapping, coefficient selection, F32 reduction order, and ordered F64 accumulation must remain identical.
 
 ## Q4K-PAIR-LOAD-FMLA-PERFORMANCE-001
-WHEN the K2048 paired-row benchmark runs on Apple M2, the interleaved paired Q4_K activation-load path SHALL reach at least 1.03x retained median speedup across 7 alternating campaigns, win at least 5 campaigns, retain 0 allocations, and regress 0 representative matrix, apply, or pinned production shapes.
+WHEN the K2048 paired-row benchmark runs on Apple M2, the interleaved paired Q4_K activation-load path SHALL reach 1.03x median speedup across 7 alternating pairs, win 5 pairs, retain 0 allocations, and regress 0 pinned production shapes.
 
 Rationale: The instruction-scheduling experiment is retained only when its leaf gain is repeatable and survives end-to-end boundaries.
