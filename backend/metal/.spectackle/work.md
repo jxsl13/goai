@@ -59,3 +59,12 @@ state: active
 created: 2026-08-23
 
 Production RMSNorm makes all 256 threads read and add the same eight threadgroup partials after its sole barrier. Investigate an exact one-barrier variant where only lane zero of each SIMD group sums red slots 0 through 7 in control order and simd_broadcast_first distributes that total. Measure leader broadcast alone and combined with the bit-exact dim-2048 input-retention candidate. Reject unless a variant clears 1.10x at the leaf and 1.01x in every frozen f16-KV decode cell.
+
+## P-01M0QKXHR7ED1ASFH56SNHAGKK Replace redundant RMSNorm partial summation with SIMD leader broadcast
+kind: proposal
+state: draft
+created: 2026-08-23
+parent: R-01M0QKX4XEEWPTXC6TWP0PK6TA
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
+
+Add recorder-only same-binary pipelines for leader-only summation of the eight threadgroup partials and for leader summation plus dim-2048 input retention. Each SIMD-group leader must add red slots 0 through 7 in control order and distribute the exact total with simd_broadcast_first, preserving one barrier and 256 threads. Prove bit-exact output, input immutability, and fallback isolation. Promote only a variant reaching 1.10x in every count-seven leaf campaign and 1.01x in every frozen TinyLlama f16-KV decode cell.
