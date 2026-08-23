@@ -58,8 +58,8 @@ unsigned long long mtl_available_memory(void) {
     return limit > used ? (unsigned long long)(limit - used) : 0;
 }
 
-// Profiling recorders use the low pointer bit as a tag while the default recorder remains the
-// exact retained raw MTLCommandBuffer fast path. NSObject allocations are pointer-aligned.
+// Tagged recorder wrappers leave the default recorder as the exact retained raw MTLCommandBuffer
+// fast path. NSObject allocations are at least four-byte aligned.
 @interface GOAIMetalProfilingRecorder : NSObject {
 @public
     NSUInteger _inlineValidEventIndex;
@@ -89,21 +89,41 @@ unsigned long long mtl_available_memory(void) {
 @implementation GOAIMetalProfilingRecorder
 @end
 
+@interface GOAIMetalConcurrentRecorder : NSObject
+@property(nonatomic, strong) id<MTLCommandBuffer> commandBuffer;
+@property(nonatomic, strong) id<MTLComputeCommandEncoder> computeEncoder;
+@end
+
+@implementation GOAIMetalConcurrentRecorder
+@end
+
 static const uintptr_t kProfilingRecorderTag = 1;
+static const uintptr_t kConcurrentRecorderTag = 2;
+static const uintptr_t kRecorderTagMask = 3;
 
 static inline __attribute__((always_inline)) BOOL recorder_is_profiled(void* rec) {
     return rec != NULL && (((uintptr_t)rec & kProfilingRecorderTag) != 0);
 }
 
 static inline __attribute__((always_inline)) GOAIMetalProfilingRecorder* recorder_profile(void* rec) {
-    uintptr_t raw = (uintptr_t)rec & ~kProfilingRecorderTag;
+    uintptr_t raw = (uintptr_t)rec & ~kRecorderTagMask;
     return (__bridge GOAIMetalProfilingRecorder*)((void*)raw);
 }
 
+static inline __attribute__((always_inline)) BOOL recorder_is_concurrent(void* rec) {
+    return rec != NULL && (((uintptr_t)rec & kConcurrentRecorderTag) != 0);
+}
+
+static inline __attribute__((always_inline)) GOAIMetalConcurrentRecorder* recorder_concurrent(void* rec) {
+    uintptr_t raw = (uintptr_t)rec & ~kRecorderTagMask;
+    return (__bridge GOAIMetalConcurrentRecorder*)((void*)raw);
+}
+
 static inline __attribute__((always_inline)) id<MTLCommandBuffer> recorder_command_buffer(void* rec) {
-    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+    if (__builtin_expect((((uintptr_t)rec & kRecorderTagMask) == 0), 1)) {
         return (__bridge id<MTLCommandBuffer>)rec;
     }
+    if (recorder_is_concurrent(rec)) return recorder_concurrent(rec).commandBuffer;
     return recorder_profile(rec).commandBuffer;
 }
 
@@ -149,15 +169,42 @@ recorder_profiled_compute_encoder(GOAIMetalProfilingRecorder* p, NSString* label
 
 static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
 recorder_compute_encoder(void* rec, NSString* label) {
-    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+    if (__builtin_expect((((uintptr_t)rec & kRecorderTagMask) == 0), 1)) {
         return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
+    }
+    if (recorder_is_concurrent(rec)) {
+        GOAIMetalConcurrentRecorder* c = recorder_concurrent(rec);
+        if (c.computeEncoder == nil) {
+            c.computeEncoder = [c.commandBuffer computeCommandEncoderWithDispatchType:MTLDispatchTypeConcurrent];
+        }
+        return c.computeEncoder;
     }
     return recorder_profiled_compute_encoder(recorder_profile(rec), label);
 }
 
+static inline __attribute__((always_inline)) void
+recorder_end_compute_encoder(void* rec, id<MTLComputeCommandEncoder> enc) {
+    if (!recorder_is_concurrent(rec)) [enc endEncoding];
+}
+
+static inline __attribute__((always_inline)) void recorder_end_active_compute_encoder(void* rec) {
+    if (!recorder_is_concurrent(rec)) return;
+    GOAIMetalConcurrentRecorder* c = recorder_concurrent(rec);
+    if (c.computeEncoder != nil) {
+        [c.computeEncoder endEncoding];
+        c.computeEncoder = nil;
+    }
+}
+
+static inline __attribute__((always_inline)) void recorder_memory_barrier(void* rec) {
+    if (!recorder_is_concurrent(rec)) return;
+    id<MTLComputeCommandEncoder> enc = recorder_concurrent(rec).computeEncoder;
+    if (enc != nil) [enc memoryBarrierWithScope:MTLBarrierScopeBuffers];
+}
+
 static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
 recorder_unary_encoder(void* rec, int op) {
-    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+    if (__builtin_expect((((uintptr_t)rec & kRecorderTagMask) == 0), 1)) {
         return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
     }
     NSString* label = @"unary.unknown";
@@ -178,7 +225,7 @@ recorder_unary_encoder(void* rec, int op) {
 
 static inline __attribute__((always_inline)) id<MTLComputeCommandEncoder>
 recorder_binary_encoder(void* rec, int op) {
-    if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
+    if (__builtin_expect((((uintptr_t)rec & kRecorderTagMask) == 0), 1)) {
         return [(__bridge id<MTLCommandBuffer>)rec computeCommandEncoder];
     }
     NSString* label = @"binary.unknown";
@@ -196,8 +243,9 @@ recorder_binary_encoder(void* rec, int op) {
 
 static inline __attribute__((always_inline)) id<MTLBlitCommandEncoder>
 recorder_blit_encoder(void* rec, NSString* label) {
+    recorder_end_active_compute_encoder(rec);
     if (__builtin_expect(!recorder_is_profiled(rec), 1)) {
-        return [(__bridge id<MTLCommandBuffer>)rec blitCommandEncoder];
+        return [recorder_command_buffer(rec) blitCommandEncoder];
     }
     GOAIMetalProfilingRecorder* p = recorder_profile(rec);
     id<MTLCommandBuffer> cmd = p.commandBuffer;
@@ -599,16 +647,18 @@ int mtl_recorder_rope_f16kv_append(void* rec,
                                    void* qh, void* kh, void* vh, void* invh,
                                    void* kCacheH, void* vCacheH,
                                    int headsQ, int headsK, int hd, int half,
-                                   int pos, int cacheOff, float posDiv) {
+                                   int pos, int cacheOff, float posDiv, int barrierBefore) {
     if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || invh == NULL ||
         kCacheH == NULL || vCacheH == NULL || headsQ < 1 || headsK < 1 || hd != 64 ||
         half != hd/2 || pos < 0 || cacheOff < 0 || posDiv == 0.0f) return -2;
+    if (barrierBefore) recorder_memory_barrier(rec);
     int qDim = headsQ*hd, kvDim = headsK*hd;
     if (!gRoPEF16KVAppendEnabled) {
         int rc = mtl_recorder_rope(rec, qh, invh, qh, 1, qDim, headsQ, hd, half, pos, posDiv, 0);
         if (rc != 0) return rc;
         rc = mtl_recorder_rope(rec, kh, invh, kh, 1, kvDim, headsK, hd, half, pos, posDiv, 0);
         if (rc != 0) return rc;
+        recorder_memory_barrier(rec);
         return mtl_recorder_f32_to_f16_kv_2d(
             rec, kh, 0, kvDim, vh, 0, kvDim,
             kCacheH, cacheOff, kvDim, vCacheH, cacheOff, kvDim, 1, kvDim);
@@ -630,7 +680,7 @@ int mtl_recorder_rope_f16kv_append(void* rec,
     NSUInteger tg = gRoPEF16KVAppend.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -638,15 +688,17 @@ int mtl_recorder_rope_pair_f16kv_append(void* rec,
                                         void* qkvh, void* invh, void* kCacheH, void* vCacheH,
                                         int stride, int headsQ, int offQ, int headsK, int offK,
                                         int hd, int half, int vOff, int vDim,
-                                        int pos, int cacheOff, float posDiv) {
+                                        int pos, int cacheOff, float posDiv, int barrierBefore) {
     if (rec == NULL || qkvh == NULL || invh == NULL || kCacheH == NULL || vCacheH == NULL ||
         stride < 1 || headsQ < 1 || headsK < 1 || hd != 64 || half != hd/2 ||
         vDim != headsK*hd || offQ < 0 || offK < 0 || vOff < 0 ||
         pos < 0 || cacheOff < 0 || posDiv == 0.0f) return -2;
+    if (barrierBefore) recorder_memory_barrier(rec);
     if (!gRoPEF16KVAppendEnabled) {
         int rc = mtl_recorder_rope2(
             rec, qkvh, invh, 1, stride, headsQ, offQ, headsK, offK, hd, half, pos, posDiv);
         if (rc != 0) return rc;
+        recorder_memory_barrier(rec);
         return mtl_recorder_f32_to_f16_kv_2d(
             rec, qkvh, offK, stride, qkvh, vOff, stride,
             kCacheH, cacheOff, vDim, vCacheH, cacheOff, vDim, 1, vDim);
@@ -666,7 +718,7 @@ int mtl_recorder_rope_pair_f16kv_append(void* rec,
     NSUInteger tg = gRoPEPairF16KVAppend.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -759,7 +811,7 @@ int mtl_recorder_rope2(void* rec, void* qh, void* invh,
     NSUInteger tg = gRoPE2.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -3807,6 +3859,21 @@ void* mtl_recorder_begin(void) {
     return (__bridge_retained void*)cmd; // retained until finish/free
 }
 
+void* mtl_recorder_begin_concurrent(void) {
+    if (ensure_init() != 0) return NULL;
+    id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
+    if (cmd == nil) return NULL;
+    GOAIMetalConcurrentRecorder* c = [[GOAIMetalConcurrentRecorder alloc] init];
+    c.commandBuffer = cmd;
+    void* raw = (__bridge_retained void*)c;
+    if (((uintptr_t)raw & kRecorderTagMask) != 0) {
+        GOAIMetalConcurrentRecorder* release = (__bridge_transfer GOAIMetalConcurrentRecorder*)raw;
+        (void)release;
+        return NULL;
+    }
+    return (void*)((uintptr_t)raw | kConcurrentRecorderTag);
+}
+
 void* mtl_recorder_begin_profile(int maxEvents) {
     if (maxEvents < 1 || maxEvents > 2048 || mtl_recorder_profile_support() != 0) return NULL;
     id<MTLCommandBuffer> cmd = [gQueue commandBuffer];
@@ -4004,9 +4071,10 @@ mtl_recorder_profile_snapshot_view mtl_recorder_profile_view(void* rec) {
 
 // mtl_recorder_unary encodes O = f(op, X) over n f32 elements of the device buffers
 // xh, oh (may alias) into the recorder's command buffer. No commit.
-int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
+int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op, int barrierBefore) {
     if (rec == NULL || xh == NULL || oh == NULL) return -2;
     if (ensure_unary() != 0) return -6;
+    if (barrierBefore) recorder_memory_barrier(rec);
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {n, op};
@@ -4018,7 +4086,7 @@ int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {
     NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4127,7 +4195,7 @@ int mtl_recorder_f32_to_f16_2d(void* rec, void* srcH, int srcOff, int srcStride,
     NSUInteger tg = gF32ToF16Copy.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4164,15 +4232,16 @@ int mtl_recorder_f32_to_f16_kv_2d(void* rec,
     NSUInteger tg = gF32ToF16KVCopy.maxTotalThreadsPerThreadgroup;
     if (total < tg) tg = total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
 // mtl_recorder_binary encodes O = A (op) B over n f32 elements of device buffers into the
 // recorder's command buffer (op 0=add,1=sub,2=mul,3=div,4=max,5=min). No commit.
-int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) {
+int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op, int barrierBefore) {
     if (rec == NULL || ah == NULL || bh == NULL || oh == NULL) return -2;
     if (ensure_binary() != 0) return -6;
+    if (barrierBefore) recorder_memory_barrier(rec);
     id<MTLBuffer> ab = (__bridge id<MTLBuffer>)ah;
     id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
@@ -4189,7 +4258,7 @@ int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op) 
     NSUInteger tg = gBinary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4200,6 +4269,7 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
                         int accumulate) {
     if (rec == NULL || ah == NULL || bh == NULL || ch == NULL) return -2;
     if (ensure_init() != 0) return -1;
+    recorder_end_active_compute_encoder(rec);
     id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     id<MTLBuffer> aBuf = (__bridge id<MTLBuffer>)ah;
     id<MTLBuffer> bBuf = (__bridge id<MTLBuffer>)bh;
@@ -4505,9 +4575,10 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps) {
 // mtl_recorder_rmsnorm encodes O = rmsnorm(X)·gamma over device buffers xh (rows×dim),
 // gh (dim gamma weights), oh (rows×dim) into the recorder's command buffer. Cooperative
 // kernel: one 256-thread threadgroup per row (§T345). No commit.
-int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps) {
+int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps, int barrierBefore) {
     if (rec == NULL || xh == NULL || gh == NULL || oh == NULL) return -2;
     if (ensure_rmsnorm() != 0) return -6;
+    if (barrierBefore) recorder_memory_barrier(rec);
     id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
     id<MTLBuffer> gb = (__bridge id<MTLBuffer>)gh;
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
@@ -4521,7 +4592,7 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
     [enc setBytes:P length:sizeof(P) atIndex:3];
     [enc setBytes:E length:sizeof(E) atIndex:4];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4546,7 +4617,7 @@ int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, in
     [enc setBytes:P length:sizeof(P) atIndex:4];
     [enc setBytes:E length:sizeof(E) atIndex:5];
     [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4570,7 +4641,7 @@ int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int 
     NSUInteger tg = gAddBias.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4600,7 +4671,7 @@ int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
     NSUInteger tg = gRoPE.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)total < tg) tg = (NSUInteger)total;
     [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -4608,6 +4679,7 @@ static double gLastGPUSeconds = 0.0;
 
 int mtl_recorder_finish(void* rec) {
     if (rec == NULL) return -2;
+    recorder_end_active_compute_encoder(rec);
     id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     [cmd commit];
     [cmd waitUntilCompleted];
@@ -4623,6 +4695,7 @@ int mtl_recorder_finish(void* rec) {
 // encodes the NEXT step's command buffer while this one executes. Pair with mtl_recorder_wait.
 int mtl_recorder_commit(void* rec) {
     if (rec == NULL) return -2;
+    recorder_end_active_compute_encoder(rec);
     id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     [cmd commit];
     return 0;
@@ -4643,10 +4716,17 @@ int mtl_recorder_wait(void* rec) {
 
 void mtl_recorder_free(void* rec) {
     if (rec == NULL) return;
+    recorder_end_active_compute_encoder(rec);
     if (recorder_is_profiled(rec)) {
-        void* raw = (void*)((uintptr_t)rec & ~kProfilingRecorderTag);
+        void* raw = (void*)((uintptr_t)rec & ~kRecorderTagMask);
         GOAIMetalProfilingRecorder* p = (__bridge_transfer GOAIMetalProfilingRecorder*)raw;
         (void)p;
+        return;
+    }
+    if (recorder_is_concurrent(rec)) {
+        void* raw = (void*)((uintptr_t)rec & ~kRecorderTagMask);
+        GOAIMetalConcurrentRecorder* c = (__bridge_transfer GOAIMetalConcurrentRecorder*)raw;
+        (void)c;
         return;
     }
     id<MTLCommandBuffer> cmd = (__bridge_transfer id<MTLCommandBuffer>)rec;
@@ -5553,6 +5633,7 @@ static int recorder_dequant_f16_segment(void* rec, id<MTLBuffer> weight,
 // result converted out by the caller.
 static int recorder_matmul_f16(void* rec, id<MTLBuffer> aBuf, id<MTLBuffer> bBuf,
                                id<MTLBuffer> cBuf, int M, int K, int N) {
+    recorder_end_active_compute_encoder(rec);
     id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
     size_t es = sizeof(uint16_t);
     MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*es dataType:MPSDataTypeFloat16];
@@ -5883,8 +5964,9 @@ double mtl_probe_encoder_cost(int n, int per, int reps) {
     }
 }
 
-int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype) {
+int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype, int barrierBefore) {
     if (rec == NULL || xh == NULL || wbuf == NULL || oh == NULL) return -2;
+    if (barrierBefore) recorder_memory_barrier(rec);
     id<MTLComputePipelineState> pipe = nil;
     id<MTLBuffer> iqGrid = nil;
     NSString* profileLabel = nil;
@@ -5988,7 +6070,7 @@ int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K
         if ((NSUInteger)total < tg) tg = (NSUInteger)total;
         [enc dispatchThreads:MTLSizeMake(total, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg, 1, 1)];
     }
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 
@@ -7749,11 +7831,12 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
 // storage or routing through an f32 kernel.
 int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
                            int sq, int sk, int dm, int heads, int kvHeads, int dk,
-                           int causal, int window, float scale, int qElemOff) {
+                           int causal, int window, float scale, int qElemOff, int barrierBefore) {
     if (rec == NULL || qh == NULL || kh == NULL || vh == NULL || oh == NULL ||
         qElemOff < 0 || sq < 1 || sk < 1 || dm < 1 || heads < 1 || kvHeads < 1 ||
         heads % kvHeads != 0 || dk != 64 || dm != heads*dk || window != 0) return -2;
     if (ensure_mha_decode() != 0 || gMHADecode64F16KV == nil) return -5;
+    if (barrierBefore) recorder_memory_barrier(rec);
 
     id<MTLBuffer> qb = (__bridge id<MTLBuffer>)qh;
     id<MTLBuffer> kb = (__bridge id<MTLBuffer>)kh;
@@ -7786,7 +7869,7 @@ int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
             [fused setBytes:SFP length:sizeof(SFP) atIndex:5];
             [fused setThreadgroupMemoryLength:fusedMemory atIndex:0];
             [fused dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(fusedThreads,1,1)];
-            [fused endEncoding];
+            recorder_end_compute_encoder(rec, fused);
             return 0;
         }
         size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
@@ -7806,7 +7889,8 @@ int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
             [e1 setBytes:SP length:sizeof(SP) atIndex:4];
             [e1 setBytes:SFP length:sizeof(SFP) atIndex:5];
             [e1 dispatchThreadgroups:MTLSizeMake(heads,nchunk,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-            [e1 endEncoding];
+            recorder_end_compute_encoder(rec, e1);
+            recorder_memory_barrier(rec);
 
             id<MTLComputeCommandEncoder> e2 = recorder_compute_encoder(rec, @"mha.f16kv.decode.splitk.pass2");
             [e2 setComputePipelineState:gSplitKP2];
@@ -7814,7 +7898,7 @@ int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
             [e2 setBuffer:ob offset:0 atIndex:1];
             [e2 setBytes:SP length:sizeof(SP) atIndex:2];
             [e2 dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-            [e2 endEncoding];
+            recorder_end_compute_encoder(rec, e2);
             return 0;
         }
     }
@@ -7830,7 +7914,7 @@ int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
     [enc setBytes:P length:sizeof(P) atIndex:4];
     [enc setBytes:FP length:sizeof(FP) atIndex:5];
     [enc dispatchThreadgroups:MTLSizeMake(heads,sq,1) threadsPerThreadgroup:MTLSizeMake(32,1,1)];
-    [enc endEncoding];
+    recorder_end_compute_encoder(rec, enc);
     return 0;
 }
 

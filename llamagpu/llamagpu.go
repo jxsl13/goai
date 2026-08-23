@@ -20,6 +20,8 @@ type mBuf struct{ *metal.DeviceBuffer }
 
 type mRec struct{ r *metal.Recorder }
 
+func (m mRec) Barrier() error { return m.r.Barrier() }
+
 // mProfileRec is used only by ProfileMetalStep. It captures the completed recorder before the
 // normal Step lifecycle frees it; embedding mRec keeps the production adapter and operation set
 // identical.
@@ -355,7 +357,39 @@ func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decode
 			return mBuf{b}, nil
 		}
 	}
-	return newQuantDecoder(m, ops)
+	d, err := newQuantDecoder(m, ops)
+	if err != nil {
+		return nil, err
+	}
+	if concurrentMetalDecodeEligible(d) {
+		d.ops.newDecodeRecorder = func() (recorder, error) {
+			r, err := metal.NewConcurrentRecorder()
+			if err != nil {
+				return nil, err
+			}
+			return mRec{r}, nil
+		}
+	}
+	return d, nil
+}
+
+// concurrentMetalDecodeEligible deliberately starts with the dense pre-norm Llama graph whose
+// dependencies are explicit in encodeStep. Architectures with biased, parallel, post-norm, MoE,
+// state-space, partial-RoPE, or fused projection graphs retain the established recorder.
+func concurrentMetalDecodeEligible(d *Decoder) bool {
+	if d == nil || !d.f16KV || d.rwkv || d.mamba || d.mamba2 || d.jamba || d.mla ||
+		d.postNorm || d.sandwich || d.parallelRes || d.parallelTwoNorm || d.qkNorm || d.noRope ||
+		d.lnBias || d.ffnGELU || d.ffnReLU2 || d.ffnGEGLU || d.rotaryDim != d.dk ||
+		d.attnCap != 0 || d.aliBiSlopes != nil || d.outBias != nil {
+		return false
+	}
+	for _, b := range d.blocks {
+		if b.moeRouter != nil || b.wGU != nil || b.qkvBias != nil ||
+			b.oBias != nil || b.fcBias != nil || b.projBias != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // ProfileMetalStep runs one ordinary Decoder.Step through an opt-in Metal timestamp recorder and
@@ -377,9 +411,10 @@ func (d *Decoder) ProfileMetalStep(token, pos, maxEvents int) ([]float32, metal.
 		return nil, metal.RecorderProfile{}, fmt.Errorf("llamagpu: ProfileMetalStep maxEvents=%d outside [1,2048]", maxEvents)
 	}
 	d.dropPending()
-	oldNewRecorder, oldAsyncEncode := d.ops.newRecorder, d.ops.asyncEncode
+	oldNewRecorder, oldNewDecodeRecorder, oldAsyncEncode := d.ops.newRecorder, d.ops.newDecodeRecorder, d.ops.asyncEncode
 	defer func() {
 		d.ops.newRecorder = oldNewRecorder
+		d.ops.newDecodeRecorder = oldNewDecodeRecorder
 		d.ops.asyncEncode = oldAsyncEncode
 	}()
 	var profile metal.RecorderProfile
@@ -390,6 +425,7 @@ func (d *Decoder) ProfileMetalStep(token, pos, maxEvents int) ([]float32, metal.
 		}
 		return mProfileRec{mRec: mRec{r: r}, profile: &profile}, nil
 	}
+	d.ops.newDecodeRecorder = d.ops.newRecorder
 	d.ops.asyncEncode = false
 	logits, err := d.Step(token, pos)
 	if err != nil {

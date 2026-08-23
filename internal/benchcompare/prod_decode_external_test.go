@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jxsl13/goai/backend/metal"
 	"github.com/jxsl13/goai/format/gguf"
 	"github.com/jxsl13/goai/llamagpu"
 	"github.com/jxsl13/goai/nlp"
@@ -43,6 +44,16 @@ func TestProdDecodeGGUF(t *testing.T) {
 	kv := os.Getenv("GOAI_PROD_KV")
 	if kv == "" {
 		kv = "f32"
+	}
+	concurrent := "default"
+	if value := os.Getenv("GOAI_METAL_CONCURRENT"); value != "" {
+		on, parseErr := strconv.ParseBool(value)
+		if parseErr != nil {
+			t.Fatalf("GOAI_METAL_CONCURRENT=%q must be a boolean", value)
+		}
+		previous := metal.SetConcurrentDecodeRecorder(on)
+		defer metal.SetConcurrentDecodeRecorder(previous)
+		concurrent = strconv.FormatBool(on)
 	}
 	var dec *llamagpu.Decoder
 	switch kv {
@@ -81,15 +92,21 @@ func TestProdDecodeGGUF(t *testing.T) {
 
 	// tg (decode): best-of-reps over nGen single-token steps at growing position.
 	bestTg := time.Hour
+	bestTgGPU := time.Hour
 	for range reps {
 		s := time.Now()
+		gpu := time.Duration(0)
 		for i := range nGen {
 			if _, err := dec.Step((i*7+1)%c.Vocab, i); err != nil {
 				t.Fatal(err)
 			}
+			gpu += time.Duration(metal.LastGPUSeconds() * float64(time.Second))
 		}
 		if d := time.Since(s); d < bestTg {
 			bestTg = d
+		}
+		if gpu < bestTgGPU {
+			bestTgGPU = gpu
 		}
 	}
 
@@ -112,7 +129,7 @@ func TestProdDecodeGGUF(t *testing.T) {
 		}
 	}
 
-	fmt.Printf("GOAI_PROD metal kv=%s context=0..63 reps=%d: decode(tg%d) %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
-		kv, reps, nGen, float64(nGen)/bestTg.Seconds(),
+	fmt.Printf("GOAI_PROD metal kv=%s concurrent=%s context=0..63 reps=%d: decode(tg%d) %.1f tok/s GPU %.1f tok/s | prefill(pp%d) %.1f tok/s\n",
+		kv, concurrent, reps, nGen, float64(nGen)/bestTg.Seconds(), float64(nGen)/bestTgGPU.Seconds(),
 		nProm, float64(nProm)/bestPp.Seconds())
 }

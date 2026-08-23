@@ -27,6 +27,8 @@ import (
 // for the A/B benchmark. Applies to the sq==sk, window==0, non-ALiBi, dk≤128 prefill fast path only.
 var mhaUseMPSGraph atomic.Bool
 
+var concurrentDecodeRecorder atomic.Bool
+
 // SetMHAUseMPSGraph selects the MPSGraph attention prefill path (true) or the default per-head MPS
 // path (false), returning the previous value. Experiment toggle (§T621) — the custom path is the
 // live default. Not goroutine-safe against a concurrent OpMHA on a different backend instance.
@@ -3206,8 +3208,10 @@ func flashAttnHost(q, k, v []float32, seq, dm, heads, dk, causal, kvHeads int, s
 // so intermediates stay device-resident across a whole decode step (§T370, ADR-0019 Phase 2 — the
 // batched-decode engine that is ~3× faster than per-op dispatch at realistic decode sizes, §T379).
 type Recorder struct {
-	handle        unsafe.Pointer
-	pendingGroups []*ResidentQGroup
+	handle         unsafe.Pointer
+	concurrent     bool
+	pendingBarrier bool
+	pendingGroups  []*ResidentQGroup
 }
 
 // RecorderProfileEvent is one explicit custom Metal compute/blit encoder measured at its GPU
@@ -3392,6 +3396,42 @@ func NewRecorder() (*Recorder, error) {
 	return &Recorder{handle: h}, nil
 }
 
+// NewConcurrentRecorder opens the dependency-tracked production recorder used by eligible
+// single-token decode graphs. SetConcurrentDecodeRecorder(false) keeps the same Go scheduling and
+// barriers but opens the established per-dispatch recorder, providing an honest in-process A/B.
+func NewConcurrentRecorder() (*Recorder, error) {
+	if !concurrentDecodeRecorder.Load() {
+		return NewRecorder()
+	}
+	h := C.mtl_recorder_begin_concurrent()
+	if h == nil {
+		return nil, fmt.Errorf("metal: concurrent Recorder begin failed")
+	}
+	return &Recorder{handle: h, concurrent: true}, nil
+}
+
+// SetConcurrentDecodeRecorder selects the dependency-tracked concurrent encoder for newly opened
+// eligible decode recorders and returns the previous setting. Existing recorders are unchanged.
+func SetConcurrentDecodeRecorder(on bool) bool { return concurrentDecodeRecorder.Swap(on) }
+
+// Barrier orders every custom dispatch recorded before it before later custom dispatches. It is a
+// native buffer-scope barrier only for a concurrent recorder and an intentional no-op otherwise.
+func (r *Recorder) Barrier() error {
+	if r == nil || r.handle == nil {
+		return fmt.Errorf("metal: Recorder barrier after Free")
+	}
+	r.pendingBarrier = true
+	return nil
+}
+
+func (r *Recorder) takeBarrier() C.int {
+	if !r.pendingBarrier {
+		return 0
+	}
+	r.pendingBarrier = false
+	return 1
+}
+
 // NewProfilingRecorder opens a Recorder that measures explicit custom compute/blit encoder GPU
 // time. maxEvents bounds the counter buffer (two timestamp samples per encoder); Apple GPU Family
 // 8 permits 2048 timestamp event pairs in its 32 KiB counter-sample limit. Profiling is opt-in so
@@ -3526,7 +3566,7 @@ func (r *Recorder) Unary(x, o *DeviceBuffer, op int) error {
 	if x.n != o.n {
 		return fmt.Errorf("metal: Recorder unary size %d != %d", x.n, o.n)
 	}
-	rc := C.mtl_recorder_unary(r.handle, x.handle, o.handle, C.int(x.n), C.int(op))
+	rc := C.mtl_recorder_unary(r.handle, x.handle, o.handle, C.int(x.n), C.int(op), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder unary failed (%d)", int(rc))
 	}
@@ -3664,7 +3704,7 @@ func (r *Recorder) RoPEF16KVAppend(
 	}
 	rc := C.mtl_recorder_rope_f16kv_append(
 		r.handle, q.handle, k.handle, v.handle, inv.handle, kCache.handle, vCache.handle,
-		C.int(headsQ), C.int(headsK), C.int(hd), C.int(half), C.int(pos), C.int(cacheOff), C.float(posDiv),
+		C.int(headsQ), C.int(headsK), C.int(hd), C.int(half), C.int(pos), C.int(cacheOff), C.float(posDiv), r.takeBarrier(),
 	)
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder RoPE/f16-KV append failed (%d)", int(rc))
@@ -3694,7 +3734,7 @@ func (r *Recorder) RoPEPairF16KVAppend(
 	rc := C.mtl_recorder_rope_pair_f16kv_append(
 		r.handle, qkv.handle, inv.handle, kCache.handle, vCache.handle,
 		C.int(stride), C.int(headsQ), C.int(offQ), C.int(headsK), C.int(offK),
-		C.int(hd), C.int(half), C.int(vOff), C.int(vDim), C.int(pos), C.int(cacheOff), C.float(posDiv),
+		C.int(hd), C.int(half), C.int(vOff), C.int(vDim), C.int(pos), C.int(cacheOff), C.float(posDiv), r.takeBarrier(),
 	)
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder grouped RoPE/f16-KV append failed (%d)", int(rc))
@@ -3716,7 +3756,7 @@ func (r *Recorder) BinaryN(a, b, o *DeviceBuffer, op, n int) error {
 	if n == 0 {
 		return nil
 	}
-	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(n), C.int(op))
+	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(n), C.int(op), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder binaryN failed (%d)", int(rc))
 	}
@@ -3727,7 +3767,7 @@ func (r *Recorder) Binary(a, b, o *DeviceBuffer, op int) error {
 	if a.n != o.n || b.n != o.n {
 		return fmt.Errorf("metal: Recorder binary size %d/%d != %d", a.n, b.n, o.n)
 	}
-	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(o.n), C.int(op))
+	rc := C.mtl_recorder_binary(r.handle, a.handle, b.handle, o.handle, C.int(o.n), C.int(op), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder binary failed (%d)", int(rc))
 	}
@@ -3766,7 +3806,7 @@ func (r *Recorder) RMSNorm(x, g, o *DeviceBuffer, rows, dim int, eps float32) er
 	if x.n < rows*dim || o.n < rows*dim || g.n < dim {
 		return fmt.Errorf("metal: Recorder rmsnorm shape mismatch: x=%d o=%d (want %d) g=%d (want %d)", x.n, o.n, rows*dim, g.n, dim)
 	}
-	rc := C.mtl_recorder_rmsnorm(r.handle, x.handle, g.handle, o.handle, C.int(rows), C.int(dim), C.float(eps))
+	rc := C.mtl_recorder_rmsnorm(r.handle, x.handle, g.handle, o.handle, C.int(rows), C.int(dim), C.float(eps), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder rmsnorm failed (%d)", int(rc))
 	}
@@ -3836,7 +3876,7 @@ func (r *Recorder) MHAF16KVAt(q, k, v, o *DeviceBuffer, qOff, sq, sk, dm, heads,
 			q.n, qOff, o.n, sq*dm, k.n, v.n, sk*kvHeads*dk, dm, heads, kvHeads, dk)
 	}
 	rc := C.mtl_recorder_mha_f16kv(r.handle, q.handle, k.handle, v.handle, o.handle,
-		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff))
+		C.int(sq), C.int(sk), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk), C.int(causal), C.int(window), C.float(scale), C.int(qOff), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder f16-KV mha failed (%d)", int(rc))
 	}
@@ -3928,7 +3968,7 @@ func (r *Recorder) QMatMulResident(x *DeviceBuffer, w *ResidentQWeight, o *Devic
 		return fmt.Errorf("metal: Recorder qmatmul shape mismatch: x=%d (want %d) o=%d (want %d)", x.n, m*w.k, o.n, m*w.n)
 	}
 	rc := C.mtl_recorder_qmatmul(r.handle, x.handle, w.handle, o.handle,
-		C.int(m), C.int(w.k), C.int(w.n), C.int(w.qt))
+		C.int(m), C.int(w.k), C.int(w.n), C.int(w.qt), r.takeBarrier())
 	if rc != 0 {
 		return fmt.Errorf("metal: Recorder qmatmul failed (%d)", int(rc))
 	}
@@ -4289,6 +4329,7 @@ func chainMatMulReLU(a, b []float32, m, k, n int) ([]float32, error) {
 }
 
 func init() {
+	concurrentDecodeRecorder.Store(true)
 	if Available() {
 		backend.Register(Backend{})
 	}
