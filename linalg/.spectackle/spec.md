@@ -20,3 +20,6 @@ Rationale: A GPTQ quantization of a 128 by 512 weight allocates 11215 objects pe
 
 ## SVD-GOLDENS-BIND-GO-RELEASE-001
 WHEN a supported Go release changes deterministic SVD floating-point lowering on an architecture, the SVD bit-identity gate SHALL select 1 separately measured exact golden for each affected Go-release and architecture pair without weakening the bit assertion.
+
+## SVD-RELEASE-GOLDEN-VALIDATION-001
+IF SVD output digests differ between 2 supported Go releases, THEN the SVD release-golden change SHALL prove 0 fixture-input bit differences and pass reconstruction and numerical-correctness tests under both Go releases before accepting a new golden.
