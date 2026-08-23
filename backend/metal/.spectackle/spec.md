@@ -428,4 +428,6 @@ WHEN capacity-sufficient ProfileInto repeats an unchanged mixed-label snapshot, 
 Rationale: State pointer identity and zero-allocation evidence.
 
 ## RECORDER-PROFILE-INTO-NONREGRESSION-001
-WHEN each frozen Apple M2 campaign measures Profile events1 and events340 plus disabled recorder construction after adding ProfileInto, the profile extraction change SHALL retain at least 0.97 times baseline Profile throughput in every cell, preserve disabled-recorder allocations, and keep existing native profile entry points ABI-compatible.
+WHEN each frozen M2 campaign measures Profile events1 and events340 after adding ProfileInto, the extraction change SHALL retain 0.97 times baseline Profile throughput in every cell and preserve disabled-recorder allocations.
+
+Rationale: Separate source ABI compatibility into its own rule.
