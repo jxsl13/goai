@@ -4006,10 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0QZKD21EZR9CYMPSM900YW3 Measure resource-scoped barriers inside concurrent M2 Metal decode
-kind: research
-state: active
-created: 2026-08-23
-
-Test whether replacing MTLBarrierScopeBuffers with memoryBarrierWithResources for exact producer buffers reduces the concurrent-encoder critical path. The macOS 26.5 SDK contract states that resource barriers make side effects on specified resources visible to subsequent dispatches and are ignored on serial encoders. First require a concurrent-encoder microbenchmark with 264 dependent dispatches to show at least 1.05x GPU leverage and exact outputs; only then prototype full graph resource sets. A full-graph candidate must preserve bitwise logits and clear 1.02x median GPU and wall speedup with pp64 at least 0.99x. Prior P-01M0N3K92DE8VSC1V55JPA14K7 measured broad buffer-scope coalescing before the production concurrent recorder and does not test resource arrays.
