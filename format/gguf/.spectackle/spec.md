@@ -353,10 +353,6 @@ The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the 
 
 ## GGUF-Q4K-PAIR-DUAL-DOT-001
 WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through dotQ4KPairBlockNeon while preserving the independent accumulation and reduction orders bit-for-bit.
-
-## Q8K-ACTIVATION-BLOCK-001
-WHEN an F32 activation row with length divisible by 256 is encoded for Q8_K cross-dot, the format/gguf SHALL emit 292 bytes per block as float32 d, 256 int8 quants, and 16 int16 group sums matching pinned llama.cpp bb4caa754018 finite-input semantics.
-
 ## Q8K-ACTIVATION-EXACT-SCOPE-001
 The format/gguf QMatMul SHALL retain the exact F32 activation route as default and dispatch 0 Q8_K activation blocks unless a caller selects the separate approximate API.
 
