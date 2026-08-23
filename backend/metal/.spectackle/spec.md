@@ -418,7 +418,9 @@ WHEN ProfileInto receives nil or native extraction fails, the Recorder.ProfileIn
 Rationale: Separate failure atomicity from successful-result ownership.
 
 ## RECORDER-PROFILE-INTO-PERF-001
-WHEN three independent order-alternated count-seven Apple M2 campaigns compare warmed capacity-sufficient events340 ProfileInto with Profile, the ProfileInto promotion gate SHALL require at least 1.25 times throughput in every campaign with at least 10000 fewer Go bytes and 2 fewer allocations per operation.
+WHEN 3 order-alternated count-7 M2 campaigns compare warm events340 ProfileInto with Profile, the promotion gate SHALL require 1.25 times throughput in every campaign and remove at least 10000 B/op and 2 allocs/op.
+
+Rationale: Preserve the frozen numeric gate in a concise verifiable rule.
 
 ## RECORDER-PROFILE-INTO-LABEL-REUSE-001
 WHEN capacity-sufficient ProfileInto repeatedly extracts unchanged repeated-label or mixed-label snapshots, the ProfileInto label owner SHALL reuse exact matching Go-owned destination strings and allocate zero new label strings after the first successful extraction.
