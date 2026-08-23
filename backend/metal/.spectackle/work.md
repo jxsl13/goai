@@ -69,3 +69,12 @@ grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
 
 Add an opt-in recorder-only dim-2048 kernel whose 256 lanes each load and retain exactly eight X values, accumulate their squares in the same order as production, execute the existing simd_sum and one-barrier reduction, then emit X times inverse RMS times gamma from the retained values. Keep the production selector off by default. Prove bit-exact output and zero input mutation, isolate all other rows and dimensions, and promote only after three same-command count-seven M2 campaigns reach at least 1.10x in every leaf cell plus three token-interleaved f16-KV decode campaigns reach at least 1.01x at contexts 8, 512, and 1536 with unchanged logits.
+
+## T-01M0QKJ4PHESN8HGQZ6SC3KJ14 Implement and gate register-retained M2 RMSNorm
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0QKHBQ9E8493F49H436R6CJ
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
+
+Add a same-binary opt-in dim-2048 recorder kernel, exactness and route tests, and a paired profiling benchmark. Run the frozen leaf campaigns first. Remove the candidate and reject the task if any leaf cell misses 1.10x; only a leaf winner proceeds to full f16-KV decode campaigns.
