@@ -3998,3 +3998,13 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## T-01M0PXC53YEYYRJZ0C6TA7VS2C Fuse Q6_K high-bit mask and merge with VBIT
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
+refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
+targets: go:gguf.dotQ6KBlockNeon, asm:gguf.dotQ6KBlockNeon, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, internal/benchcompare/leadership/evidence
+
+Replace each Q6_K high-bit AND plus OR pair in EXTRACT_Q6 with one ARM64 VBIT using the existing 0x30 mask. Preserve the exact six-bit byte streams, q-minus-32 conversion, scale application, reduction order, callers, and non-ARM64 behavior. Gate with known-answer and randomized raw-block parity, disassembly, at least seven alternating fresh-process K4096 leaf campaigns, representative Q6_K matrix cells, and production digest; reject below 1.04x leaf median or five campaign wins.
