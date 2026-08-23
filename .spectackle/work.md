@@ -4010,7 +4010,7 @@ Add an exact M=1 CPU quantized projection epilogue that stores residual plus the
 
 ## T-01M0P42HDAF7K9HTHB7RFKQ9YK Implement and gate exact CPU quant residual epilogues
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P40Z35E28SNW83F3JVQPNN
 targets: go:gguf.QMatMul, go:nn.QuantLinear.Forward, go:nn.QuantSwiGLU.Forward, go:nlp.QuantLlama.DecodeStep
