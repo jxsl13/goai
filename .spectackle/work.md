@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0QZKD21EZR9CYMPSM900YW3 Measure resource-scoped barriers inside concurrent M2 Metal decode
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 
 Test whether replacing MTLBarrierScopeBuffers with memoryBarrierWithResources for exact producer buffers reduces the concurrent-encoder critical path. The macOS 26.5 SDK contract states that resource barriers make side effects on specified resources visible to subsequent dispatches and are ignored on serial encoders. First require a concurrent-encoder microbenchmark with 264 dependent dispatches to show at least 1.05x GPU leverage and exact outputs; only then prototype full graph resource sets. A full-graph candidate must preserve bitwise logits and clear 1.02x median GPU and wall speedup with pp64 at least 0.99x. Prior P-01M0N3K92DE8VSC1V55JPA14K7 measured broad buffer-scope coalescing before the production concurrent recorder and does not test resource arrays.
