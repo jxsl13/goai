@@ -41,3 +41,12 @@ parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM
 
 Profile the exact post-PR-1178 Apple M2 TinyLlama CPU decode with pinned model hash, Go 1.27, 12 threads, 64 steps, and repeated warm execution. Attribute the remaining paired Q4_K row cost between assembly header construction, the dual NEON dot schedule, scheduler synchronization, single-row quant kernels, and surrounding graph work. Select the next task only from measured production and leaf evidence, respecting the post-index and Go-batch rejections.
+
+## T-01M0PMKX4RESV85HT2FFP17TJN Vectorize paired Q4_K header coefficients in NEON
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowNeon
+
+Replace the scalar per-coefficient header expansion inside dotQ4KPairRowNeon with a vector decoder. Form the exact [scale0,min0,...,scale7,min7] byte layout from each 12-byte GGUF Q4_K header, convert through the established unsigned fixed-point UCVTF path, multiply by the exact f16-table d/dmin lanes, and store the same 16 F32 coefficients. Preserve the dual-dot and reduction schedule. Gate against merged PR 1178 on clean Apple M2 leaf, TinyLlama FFN pair-apply, and production boundaries; reject below 1.02x leaf or on any bit mismatch.
