@@ -409,9 +409,3 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
-
-## Q4K-QMATMUL-ADJACENT-PAIR-EXACT-001
-WHEN contiguous F32 M1 Q4_K QMatMul runs on Apple ARM64, the QMatMul dispatcher SHALL process adjacent output-row pairs through 1 paired NEON call, preserve independent output bits, and use the independent kernel for an odd final row.
-
-## Q4K-QMATMUL-ADJACENT-PAIR-PERFORMANCE-001
-WHEN Apple M2 benchmarks adjacent-row Q4_K M1 decode at N4096 and K1024, the paired QMatMul route SHALL reach 1.02x median speedup across 7 alternating campaigns, win 5 campaigns, add 0 allocations, and regress 0 pinned production shapes.
