@@ -431,3 +431,6 @@ Rationale: State pointer identity and zero-allocation evidence.
 WHEN each frozen M2 campaign measures Profile events1 and events340 after adding ProfileInto, the extraction change SHALL retain 0.97 times baseline Profile throughput in every cell and preserve disabled-recorder allocations.
 
 Rationale: Separate source ABI compatibility into its own rule.
+
+## RECORDER-PROFILE-INTO-OWNERSHIP-001
+WHEN a successful ProfileInto result outlives Recorder.Free and garbage collection churn, the Recorder.ProfileInto SHALL preserve 100 percent of event-label bytes in Go-owned memory.
