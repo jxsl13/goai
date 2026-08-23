@@ -363,3 +363,6 @@ WHEN a 340-event completed profiling recorder is measured in each of three indep
 
 ## recorder-profile-small-nonregression-001
 WHEN a one-event completed profiling recorder is measured in each frozen campaign, the Recorder.Profile performance validation on Apple M2 SHALL the candidate median throughput shall be at least 0.97 times the control and shall not increase allocations per operation.
+
+## recorder-profile-scope-001
+WHEN the event-label scratch storage is changed, the Recorder.Profile scratch reuse SHALL preserve the native C ABI and default recorder behavior.
