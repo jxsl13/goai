@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0R43YYWE2TTJMX2PJ09GN5S Screen a cached Metal pre-norm FFN training graph on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: vision/vit.go, backend/metal/metal.go, backend/metal/metal_bridge.m, autograd/vjp.go, internal/benchcompare/vision_train_test.go, docs/decisions/ADR-0006-autograd-tape.md, docs/decisions/ADR-0008-gpu-strategy.md, docs/decisions/ADR-0019-device-resident-tensors.md
 
