@@ -4018,7 +4018,7 @@ Narrow the rejected dual-dtype fusion to the production f16-KV lane that cleared
 
 ## T-01M0QG4H36FC7B2P48XC15SM5E Ship and gate f16-KV fused split-K decode
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QG3MFAEQ1BVB13SKB1CN5F
 

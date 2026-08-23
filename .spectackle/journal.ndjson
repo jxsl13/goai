@@ -688,3 +688,4 @@
 {"t":"2026-08-23T14:24:20Z","eid":"b9b0f05e5674428e","ag":"ag-f66f","ev":"move","id":"P-01M0QG3MFAEQ1BVB13SKB1CN5F","fr":"draft","to":"active"}
 {"t":"2026-08-23T14:24:23Z","eid":"1c57d4b8574f358d","ag":"ag-f330","ev":"grill","id":"P-01M0QG3MFAEQ1BVB13SKB1CN5F","gr":"2026-08-23 open=0","hash":"393fb5d2f5dd965523aad643fc0c0d5d3555d4a1a7348ad1b11dd06cccea8572"}
 {"t":"2026-08-23T14:24:32Z","eid":"9de3469f3d6e2496","ag":"ag-4163","ev":"create","id":"T-01M0QG4H36FC7B2P48XC15SM5E","k":"task","ti":"Ship and gate f16-KV fused split-K decode"}
+{"t":"2026-08-23T14:24:58Z","eid":"823434fa7bb65e24","ag":"ag-3d4e","ev":"move","id":"T-01M0QG4H36FC7B2P48XC15SM5E","fr":"draft","to":"active"}
