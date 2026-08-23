@@ -1,0 +1,19 @@
+profile=GoAI TinyLlama Q4_K_M f16-KV decode context=512
+command_duration_us=7752.249
+event_span_us=7752.250
+attributed_duration_us=6314.999
+coverage=0.814619
+label=qmatmul.q4_k count=110 total_us=4000.959 event_share=0.633565 command_share=0.516105
+label=qmatmul.q6_k count=21 total_us=1249.667 event_share=0.197889 command_share=0.161201
+label=rmsnorm count=45 total_us=401.916 event_share=0.063645 command_share=0.051845
+label=mha.f16kv.decode.splitk.fused count=22 total_us=352.748 event_share=0.055858 command_share=0.045501
+label=binary.add count=44 total_us=137.460 event_share=0.021767 command_share=0.017732
+label=binary.swiglu count=22 total_us=73.583 event_share=0.011652 command_share=0.009492
+label=rope_pair.f16kv.append count=12 total_us=53.291 event_share=0.008439 command_share=0.006874
+label=rope.f16kv.append count=20 total_us=45.375 event_share=0.007185 command_share=0.005853
+omitted_mps=0
+omitted_overflow=0
+omitted_unsupported=0
+quality_greedy_tokens=76/76
+quality_logit_nrmse=0.000170697
+quality_logit_max_abs=0.00239384

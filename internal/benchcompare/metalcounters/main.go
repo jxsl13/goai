@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -227,43 +228,52 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	}
 	deadline, cancel := context.WithTimeout(ctx, opts.timeLimit+2*time.Minute)
 	defer cancel()
-	if err := command(deadline, repo, stderr, "xcrun", testArgs...); err != nil {
-		return err
+	// Xcode 26.6 can save a complete time-limited trace and then return status 54.
+	// Keep the recorder error until the workload marker, exported schemas, counter
+	// tables, and analyzed report have all validated. A recorder error is therefore
+	// accepted only when the same fail-closed pipeline as an exit-zero capture succeeds.
+	var recorderLog bytes.Buffer
+	recorderErr := command(deadline, repo, io.MultiWriter(stderr, &recorderLog), "xcrun", testArgs...)
+	if recorderErr != nil && !recoverableTimedRecorderError(recorderErr, recorderLog.String()) {
+		return recorderErr
+	}
+	validated := func(err error) error {
+		return validatedCaptureResult(recorderErr, err, stderr)
 	}
 	benchmarkOutput, err := os.ReadFile(targetOutput)
 	if err != nil {
-		return fmt.Errorf("read benchmark output: %w", err)
+		return validated(fmt.Errorf("read benchmark output: %w", err))
 	}
 	if external && !strings.Contains(string(benchmarkOutput), opts.launchRequire) {
-		return fmt.Errorf("external target output lacks required marker %q: %s", opts.launchRequire, strings.TrimSpace(string(benchmarkOutput)))
+		return validated(fmt.Errorf("external target output lacks required marker %q: %s", opts.launchRequire, strings.TrimSpace(string(benchmarkOutput))))
 	}
 	if !external && !completedFixedBenchmark(string(benchmarkOutput), opts.iterations) {
-		return fmt.Errorf("target output has no completed %d-iteration benchmark: %s", opts.iterations, strings.TrimSpace(string(benchmarkOutput)))
+		return validated(fmt.Errorf("target output has no completed %d-iteration benchmark: %s", opts.iterations, strings.TrimSpace(string(benchmarkOutput))))
 	}
 
 	paths := exportPaths(tmp)
 	tocPath := filepath.Join(tmp, "toc.xml")
 	if err := command(deadline, repo, stderr, "xcrun", "xctrace", "export", "--input", tracePath, "--toc", "--output", tocPath); err != nil {
-		return err
+		return validated(err)
 	}
 	tocFile, err := os.Open(tocPath)
 	if err != nil {
-		return err
+		return validated(err)
 	}
 	infoXPaths, err := counterInfoTableXPaths(tocFile)
 	tocFile.Close()
 	if err != nil {
-		return err
+		return validated(err)
 	}
 	var infoErrors []string
 	for i, xpath := range infoXPaths {
 		candidate := filepath.Join(tmp, fmt.Sprintf("counter-info-%d.xml", i))
 		if err := command(deadline, repo, stderr, "xcrun", "xctrace", "export", "--input", tracePath, "--xpath", xpath, "--output", candidate); err != nil {
-			return err
+			return validated(err)
 		}
 		file, err := os.Open(candidate)
 		if err != nil {
-			return err
+			return validated(err)
 		}
 		_, parseErr := parseCounterInfo(file)
 		file.Close()
@@ -272,12 +282,12 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 			continue
 		}
 		if paths["counter-info"] != filepath.Join(tmp, "counter-info.xml") {
-			return errors.New("multiple GPU counter-info tables contain Performance Limiters")
+			return validated(errors.New("multiple GPU counter-info tables contain Performance Limiters"))
 		}
 		paths["counter-info"] = candidate
 	}
 	if paths["counter-info"] == filepath.Join(tmp, "counter-info.xml") {
-		return fmt.Errorf("no GPU counter-info table contains Performance Limiters: %s", strings.Join(infoErrors, "; "))
+		return validated(fmt.Errorf("no GPU counter-info table contains Performance Limiters: %s", strings.Join(infoErrors, "; ")))
 	}
 	queries := map[string]string{
 		"counter-value":    counterValueXPath,
@@ -295,18 +305,50 @@ func run(ctx context.Context, opts options, stdout, stderr io.Writer) error {
 	}
 	for _, name := range exports {
 		if err := command(deadline, repo, stderr, "xcrun", "xctrace", "export", "--input", tracePath, "--xpath", queries[name], "--output", paths[name]); err != nil {
-			return err
+			return validated(err)
 		}
 	}
 
 	result, err := analyzeFiles(paths, opts, policy)
 	if err != nil {
-		return err
+		return validated(err)
 	}
 	if err := validateCounterCeilings(result, ceilings); err != nil {
-		return err
+		return validated(err)
 	}
-	return emitReport(stdout, stderr, opts.output, result)
+	return validated(emitReport(stdout, stderr, opts.output, result))
+}
+
+func validatedCaptureResult(recorderErr, validationErr error, stderr io.Writer) error {
+	if validationErr != nil {
+		return errors.Join(recorderErr, validationErr)
+	}
+	if recorderErr != nil {
+		fmt.Fprintf(stderr, "metalcounters: recorder returned %v; accepted fully validated capture artifacts\n", recorderErr)
+	}
+	return nil
+}
+
+type processExitError interface {
+	error
+	ExitCode() int
+}
+
+func recoverableTimedRecorderError(err error, log string) bool {
+	var exit processExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 54 {
+		return false
+	}
+	for _, marker := range [...]string{
+		"Reached specified time limit",
+		"Recording completed",
+		"Output file saved as:",
+	} {
+		if !strings.Contains(log, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeLaunchCommand(value string) ([]string, error) {

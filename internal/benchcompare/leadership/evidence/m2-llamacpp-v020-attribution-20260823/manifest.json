@@ -1,0 +1,34 @@
+{
+  "captured_at": "2026-08-23",
+  "host": {
+    "model": "MacBook Pro Mac14,10",
+    "chip": "Apple M2 Pro",
+    "memory_bytes": 34359738368,
+    "logical_cpus": 12,
+    "os": "macOS 26.5.1 (25F80)",
+    "kernel": "Darwin 25.5.0",
+    "go": "go1.27.0 darwin/arm64",
+    "xcode": "26.6 (17F113)"
+  },
+  "goai": {
+    "base_commit": "d838664bab1570d22b3faae92d3582657b7da302",
+    "spectackle": "0.10.0"
+  },
+  "model": {
+    "filename": "tinyllama-1.1b-q4km.gguf",
+    "file_bytes": 668788096,
+    "payload_bytes_reported_by_llama_bench": 667078656,
+    "parameters": 1100048384,
+    "sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0"
+  },
+  "llama_cpp": {
+    "formula_version": "0.2.0",
+    "build_number": 10566,
+    "upstream_commit": "bb4caa7540188872173c44d161602d9271386413",
+    "ggml": "0.21.0",
+    "executable": "/opt/homebrew/Cellar/llama.cpp/0.2.0/bin/llama-bench",
+    "executable_bytes": 33616,
+    "executable_sha256": "ba8e89c2d69e90eb5ea36f6a9e4a6a6aaf47a342169a86e52edf3097d3e83c3a",
+    "homebrew_core_revision": "b1220ef247478d225b01ae6c4e126bbab151a365"
+  }
+}

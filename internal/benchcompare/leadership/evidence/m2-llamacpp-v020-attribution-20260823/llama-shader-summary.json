@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "engine": "llama.cpp",
+  "engine_version": "v0.2.0",
+  "upstream_commit": "bb4caa7540188872173c44d161602d9271386413",
+  "build_number": 10566,
+  "ggml_version": "0.21.0",
+  "configuration": {
+    "kv_k": "f16",
+    "kv_v": "f16",
+    "flash_attention": "auto",
+    "gpu_layers": -1,
+    "warmup": false,
+    "residency_sets": false,
+    "residency_note": "Diagnostic-only Xcode compatibility switch; throughput used the shipping enabled setting."
+  },
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "selected_command_buffer": {
+    "observed_buffers": 6,
+    "skipped_final_buffers": 1,
+    "gpu_span_ns": 5498000,
+    "foreign_gpu_overlap_intervals": 0,
+    "foreign_gpu_overlap_ns": 0
+  },
+  "counter_window": {
+    "duration_ns": 6747917,
+    "samples": 152,
+    "alu_limiter_mean": 64.81500727298025,
+    "buffer_read_limiter_mean": 73.74434454979605,
+    "compute_occupancy_mean": 18.60965990701316,
+    "f32_utilization_mean": 14.428191082013152
+  },
+  "shader_profile": {
+    "sample_count": 23,
+    "sample_duration_ns": 1963334,
+    "sampled_span_ratio": 0.3570996726082212,
+    "kernels": [
+      {
+        "name": "kernel_mul_mv_q4_K_f32",
+        "samples": 10,
+        "sample_duration_ns": 1756417,
+        "median_ns": 155000,
+        "p90_ns": 309917,
+        "max_ns": 361542
+      },
+      {
+        "name": "kernel_mul_mv_q6_K_f32",
+        "samples": 4,
+        "sample_duration_ns": 206626,
+        "median_ns": 51625,
+        "p90_ns": 51709,
+        "max_ns": 51709
+      },
+      {
+        "name": "all_other_sampled_kernels",
+        "samples": 9,
+        "sample_duration_ns": 291
+      }
+    ]
+  }
+}
