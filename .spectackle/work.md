@@ -4026,7 +4026,7 @@ Introduce a production-only MTLDispatchTypeConcurrent recorder for dense quantiz
 
 ## T-01M0QY5BRFFQMAJ0XHWHNP2JK4 Validate and ship concurrent Metal decode recording
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QY46T8ED9TMCHR3FAQPZS8
 
