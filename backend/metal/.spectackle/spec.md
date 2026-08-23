@@ -413,7 +413,9 @@ WHEN ProfileInto succeeds for a nonnil destination, the Recorder.ProfileInto SHA
 Rationale: Make capacity and complete overwrite behavior directly verifiable.
 
 ## RECORDER-PROFILE-INTO-ATOMIC-OWNERSHIP-001
-WHEN ProfileInto receives nil, an invalid recorder, an incomplete recorder, or native extraction failure, or its successful result outlives Recorder.Free, the Metal recorder profile boundary SHALL return an explicit error without mutating a nonnil destination on failure and preserve all successful event-label bytes in Go-owned memory after Free.
+WHEN ProfileInto receives nil or native extraction fails, the Recorder.ProfileInto SHALL return a nonnil error and leave every field and event byte in a nonnil destination unchanged.
+
+Rationale: Separate failure atomicity from successful-result ownership.
 
 ## RECORDER-PROFILE-INTO-PERF-001
 WHEN three independent order-alternated count-seven Apple M2 campaigns compare warmed capacity-sufficient events340 ProfileInto with Profile, the ProfileInto promotion gate SHALL require at least 1.25 times throughput in every campaign with at least 10000 fewer Go bytes and 2 fewer allocations per operation.
