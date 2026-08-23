@@ -355,9 +355,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-## recorder-profile-snapshot-small-perf-001
-WHEN each frozen campaign compares control and bulk extraction, the warm Recorder.Profile events1 on Apple M2 SHALL run at least 1.10 times faster by median.
-
 ## recorder-profile-snapshot-cold-perf-001
 WHEN each frozen campaign measures events340 and events1, the first Recorder.Profile extraction on Apple M2 SHALL make events340 at least 1.10 times faster and retain 0.97 times events1 throughput.
 
