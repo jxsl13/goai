@@ -629,3 +629,4 @@
 {"t":"2026-08-23T10:24:30Z","eid":"536b5268ebd2b07c","ag":"ag-4b6c","ev":"create","id":"P-01M0Q2CZXBEXKV41BCXYX7G5FQ","k":"proposal","ti":"Fuse raw quantized Metal gate and up projections"}
 {"t":"2026-08-23T10:24:45Z","eid":"ac98ef2953b6e02d","ag":"ag-6f8c","ev":"move","id":"P-01M0Q2CZXBEXKV41BCXYX7G5FQ","fr":"draft","to":"active"}
 {"t":"2026-08-23T10:24:59Z","eid":"43a732de8b14ee56","ag":"ag-fc0a","ev":"grill","id":"P-01M0Q2CZXBEXKV41BCXYX7G5FQ","gr":"2026-08-23 open=1","hash":"10ec2b2d36306e8a4f6e7938a370292b27429cd6950dc71ab0218879ad098e7a","open":1,"keys":["blast:8"]}
+{"t":"2026-08-23T10:25:19Z","eid":"1f2c74c528030c7d","ag":"ag-49f3","ev":"create","id":"R-01M0Q2EGE0E60T5H3P35XSCX77","k":"research","ti":"Assess raw Metal M1 gate and up fusion boundary"}
