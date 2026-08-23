@@ -65,6 +65,7 @@ kind: proposal
 state: draft
 created: 2026-08-23
 parent: R-01M0QM7PDVED19SWH09DSGZYPW
+grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
 
 Add a diagnostic 64/128/256-thread selector for the production recorder Q4_K cooperative kernel. Derive SIMD groups and output rows from physical threadgroup width while preserving the existing two-rows-per-SIMD lane mapping. Benchmark resident same-command GPU work at K2048xN2048, K2048xN5632, and K5632xN2048. Promote only a bit-exact width that clears every leaf and end-to-end gate; otherwise remove the implementation.
