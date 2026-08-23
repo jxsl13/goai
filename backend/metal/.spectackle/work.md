@@ -73,7 +73,7 @@ Pinned llama.cpp at b0539c43ed13b16bf0d8a0840646faea65469702 uses the same two-s
 
 ## T-01M0Q4V43GEB3BF5F9NNFJ3G4M Benchmark explicit full unrolling in the M2 Q4_K cooperative kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q4TE2ZE52T6G4PHY89H06C
 refs: R-01M0Q4QAP0ESS9GBF2ERVRBHAM
