@@ -4026,7 +4026,7 @@ Consume R-01M0R29CN1FD7. Add a shape-keyed Metal MPSGraph backward entry point f
 
 ## T-01M0R2DG90FERAHM5ZTTY67SGF Implement and gate batch-axis Metal attention backward
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0R2CV3WFZCAMFD24BJSQZDD
 targets: go:metal.mhaBackwardF32, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go

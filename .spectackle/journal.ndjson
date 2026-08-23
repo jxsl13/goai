@@ -772,3 +772,4 @@
 {"t":"2026-08-23T19:43:58Z","eid":"83dfd4b229ff8c04","ag":"ag-b164","ev":"move","id":"P-01M0R2CV3WFZCAMFD24BJSQZDD","fr":"draft","to":"active"}
 {"t":"2026-08-23T19:44:01Z","eid":"8512d692cb88ab67","ag":"ag-0ff5","ev":"create","id":"T-01M0R2DG90FERAHM5ZTTY67SGF","k":"task","ti":"Implement and gate batch-axis Metal attention backward"}
 {"t":"2026-08-23T19:44:11Z","eid":"1bd3bc13a379848c","ag":"ag-0bdb","ev":"grill","id":"P-01M0R2CV3WFZCAMFD24BJSQZDD","gr":"2026-08-23 open=0","hash":"3ec978516d09cf762eccc3c6a26e35e60714039e95a6cd5b297a7e0fdd3e3bf0"}
+{"t":"2026-08-23T19:44:14Z","eid":"44cb0b0d70a87a02","ag":"ag-1c40","ev":"move","id":"T-01M0R2DG90FERAHM5ZTTY67SGF","fr":"draft","to":"active"}
