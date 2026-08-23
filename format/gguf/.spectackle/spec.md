@@ -397,7 +397,7 @@ WHEN coefficient broadcasts are coalesced with structured replicate loads, the p
 WHEN the K=2048 paired-row benchmark runs on Apple M2, the LD2R coefficient broadcast path SHALL reach at least 1.02x retained median speedup across 7 alternating campaigns, win at least 5 campaigns, retain 0 allocations, and show 0 pinned production regressions.
 
 ## Q4K-PAIR-HEADER-USHL-EXACT-001
-WHEN the paired Q4_K coefficient-header path uses table-indexed per-lane shifts, the dotQ4KPairRowNeon coefficient decoding SHALL Produce the same 16 coefficient bytes per row as the scalar Q4_K layout and preserve both output accumulator bits exactly.
+WHEN paired Q4_K headers use table-indexed shifts, the dotQ4KPairRowNeon coefficient decoding SHALL Produce the scalar layout’s 16 coefficient bytes per row and preserve both output accumulator bits exactly.
 
 ## Q4K-PAIR-HEADER-USHL-PERFORMANCE-001
 WHEN the table-indexed USHL paired-header optimization is benchmarked on Apple M2, the retained Q4_K row, pair-apply, and production matrix benchmarks SHALL Reach at least 1.02x retained leaf median with at least 5 of 7 campaign wins, zero leaf allocations, exact outputs, and zero pinned production-shape regressions.
