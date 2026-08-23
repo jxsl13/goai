@@ -673,3 +673,8 @@ Rationale: The directory contains local research material, including commercial 
 WHEN TestProdCPUQuantDecodeGGUF runs while accelerator backends are registered, the GoAI SHALL make TestProdCPUQuantDecodeGGUF set backend.Preference to CPU before model construction and restore the prior preference on exit.
 
 Rationale: QuantLinear selects backend.Default, so Context.WithBackend alone cannot prove CPU attribution.
+
+## CPU-QUANT-BENCHMARK-PINNING-002
+WHEN TestProdCPUQuantDecodeGGUF accepts an external GGUF leadership fixture, the GoAI SHALL report SHA-256 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0 or the actual fixture hash plus runtime.Version outside timed decode.
+
+Rationale: A performance result without artifact and toolchain identity is not reproducible.
