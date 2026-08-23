@@ -52,10 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## R-01M0QKGQ0CE0XVYJ4XED6VYBF6 Retain M2 RMSNorm input lanes across the reduction barrier
-kind: research
-state: active
-created: 2026-08-23
-
-Production TinyLlama decode records 45 single-row RMSNorm kernels at dimension 2048. The kernel reads X once for sum-of-squares and again after the sole threadgroup barrier to scale by gamma. Investigate a frozen dim-2048 Metal variant that retains the eight values owned by each lane in registers, preserves the control accumulation and simdgroup reduction order, and removes exactly 2048 device X reloads per dispatch. Reject unless same-command GPU timestamps show at least 1.10x in every campaign and the full f16-KV decode reaches at least 1.01x at contexts 8, 512, and 1536 with unchanged logits.
