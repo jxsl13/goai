@@ -390,3 +390,6 @@ WHEN a completed profile contains repeated native event labels, the Recorder.Pro
 
 ## RECORDER-PROFILE-LABEL-PERF-001
 WHEN three order-alternated count-seven M2 campaigns compare warm repeated-label events340 extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.25 times median speedup, 300 fewer allocations per operation, and 4000 fewer bytes per operation.
+
+## RECORDER-PROFILE-LABEL-NONREGRESSION-001
+WHEN each frozen M2 campaign measures warm events1, first events1, and disabled recorder construction, the Recorder.Profile label-cache promotion gate SHALL retain at least 0.97 times control throughput in every cell with unchanged disabled-recorder allocations.
