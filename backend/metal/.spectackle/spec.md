@@ -485,3 +485,6 @@ WHEN the leader-broadcast reduction publishes 8 partials, the each Metal SIMD-gr
 
 ## METAL-RMSNORM-LEADER-BROADCAST-SCOPE-001
 WHEN RMSNorm has more than 1 row or the combined candidate has dimension other than 2048, the Metal RMSNorm selector SHALL dispatch the existing kernel and issue exactly 0 unsupported candidate threadgroups.
+
+## METAL-RMSNORM-LEADER-BROADCAST-PERF-001
+WHEN 3 same-command count-7 M2 campaigns compare each candidate with control, the RMSNorm promotion gate SHALL retain only a candidate reaching 1.10 times throughput in every campaign.
