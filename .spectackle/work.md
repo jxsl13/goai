@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
 
 Profile the exact production TinyLlama Q4_K_M decode boundary on Apple M2 Pro after PR 1176. Attribute CPU, synchronization, and allocation cost against wall clock; select only a new bottom-up candidate with bit-exact digest preservation, a permanent production-shape benchmark, and statistically validated leverage. Do not retry persistent worker pools, caller-participation fan-out, unchanged Q8_K activation leaves, or rejected direct residual epilogues.
