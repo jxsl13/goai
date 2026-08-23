@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0Q6SJ8CF6R9984KYGJ8AQ8M Attribute bulk Metal profile extraction leverage
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
 
