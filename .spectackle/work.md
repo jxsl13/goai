@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nn.QuantLinear.Forward
 
 Make TestProdCPUQuantDecodeGGUF a valid reproducible CPU leadership gate even when its test binary links Metal through llamagpu. Scope backend.Preference to CPU before QuantLlama construction and restore it afterward because QuantLinear uses backend.Default rather than the explicit Context backend. Hash the external GGUF before parsing and report its SHA-256 plus Go runtime in the result line. Preserve timing boundaries: routing setup and hashing remain outside measured decode. This independently retained prerequisite was discovered while rejecting the residual-epilogue experiment; perfscan issue #834 records the generalizable detector opportunity.
