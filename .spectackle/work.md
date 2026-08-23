@@ -4031,6 +4031,7 @@ state: draft
 created: 2026-08-23
 parent: P-01M0RCQZESFTASGRCF6MVGEAE8
 refs: R-01M0RCPZNJF75SZJ766JXXPX6H
+grilled: 2026-08-23 open=11
 targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref/prenorm_transformer_block.go, backend/ref/prenorm_transformer_block_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_block_test.go, nlp/prenorm_transformer_block.go, nlp/prenorm_transformer_block_test.go, vision/vit.go, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence/m2-metal-prenorm-transformer-block-20260824
 
 Implement the generic forward and explicit 13-gradient backward operations, typed attributes, portable F32/F64 reference oracle, VJP, narrow NLP helper, ViT routing, bounded Metal cached forward/backward graphs with runtime epsilons and pooled buffers, structure/numerical/fallback/mutation tests, durable boundary and depth-four ViT benchmarks, three fresh-process order-alternated campaigns, and external perfscan comparison. Control must disable only the new complete-block operation while retaining merged pre-norm attention and FFN fusions. Fully revert implementation code if any frozen performance or correctness gate fails.
