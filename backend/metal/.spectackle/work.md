@@ -73,7 +73,7 @@ Recorder.Profile currently allocates a 96-byte label buffer once per event befor
 
 ## T-01M0Q6C2RAF6EB35Y0HFNVFKS7 Benchmark and hoist Recorder.Profile label scratch
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q6B7A3E1SS7VWHGS37WPDE
 refs: R-01M0Q69J1CEDCBKG8VDVB580GS

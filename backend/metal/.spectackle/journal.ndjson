@@ -336,3 +336,4 @@
 {"t":"2026-08-23T11:33:35Z","eid":"2569cac1d6ef08e0","ag":"ag-8cb7","ev":"grill","id":"P-01M0Q6B7A3E1SS7VWHGS37WPDE","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"44e1faabcb56aa1d973f420fe3695bb0532c647dedc98a3f6cea89064c99ac75"}
 {"t":"2026-08-23T11:33:42Z","eid":"f6a62f1274fb46a7","ag":"ag-0fe9","ev":"move","id":"P-01M0Q6B7A3E1SS7VWHGS37WPDE","dir":"backend/metal","fr":"draft","to":"active","note":"Standing goal authorizes an exact allocation-hoist optimization with frozen latency, allocation, and semantic gates."}
 {"t":"2026-08-23T11:33:54Z","eid":"0fd70889e718ab4c","ag":"ag-a756","ev":"create","id":"T-01M0Q6C2RAF6EB35Y0HFNVFKS7","k":"task","ti":"Benchmark and hoist Recorder.Profile label scratch","dir":"backend/metal"}
+{"t":"2026-08-23T11:35:03Z","eid":"99f3bc246860e4c5","ag":"ag-686d","ev":"move","id":"T-01M0Q6C2RAF6EB35Y0HFNVFKS7","dir":"backend/metal","fr":"draft","to":"active"}
