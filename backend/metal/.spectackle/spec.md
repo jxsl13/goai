@@ -20,6 +20,9 @@ schema: v1
 - R-01M0Q6SJ8CF6R9984KYGJ8AQ8M Attribute bulk Metal profile extraction leverage: Consumed by proposal P-01M0Q6T9RZEV9. The scratch-only result isolated repeated cgo crossings as the remaining warm extraction cost; the successor must benchmark native snapshot construction on first extraction as well as cached repeat extraction.
 - T-01M0Q6VRADE45AJWQRNNN3JZNC Implement and gate bulk Metal profile snapshots: Implemented additive mtl_recorder_profile_snapshot with a recorder-owned immutable event snapshot, inline one-event storage, compact unboxed valid indices, and one cgo extraction in Recorder.Profile. Existing profile semantics and legacy C entry points pass. Three order-alternated count-seven M2 campaigns measured warm speedups of 2.44-2.55x at 1 event and 17.91-18.23x at 340 events; first extract [body truncated at tombstone retention cap]
 - P-01M0Q6T9RZEV9RWA9ZS5V8KGYC Bulk-extract Metal recorder profile events in one cgo call: Promoted bulk Metal profile extraction after every frozen semantic, warm, cold, and allocation gate passed in three order-alternated Apple M2 Pro campaigns. The final design combines one cgo snapshot call, immutable recorder-lifetime native event storage, an inline single-event fast path, and zero-NSNumber compact valid indices while preserving legacy C ABI functions. Durable contracts are RECORDE [body truncated at tombstone retention cap]
+- T-01M0Q9H5G2FP38JV8VMPSFP297 Implement and gate extraction-scoped profile label deduplication: Implemented a contiguous native label-token sidecar, 16-entry native label-copy reuse, extraction-scoped Go ownership with content fallback, and an explicit count-one fast path. Three final independent-process count-seven AB/BA-alternated M2 campaigns measured warm repeated-label speedups of 2.23x, 2.06x, and 2.53x; mixed-ten-label speedups of 1.86x, 1.67x, and 1.75x; cold repeated-label speedups [body truncated at tombstone retention cap]
+- R-01M0Q913MDFQSTD3ME8MTRCGRZ Recorder profile label ownership and allocation scaling: Consumed by P-01M0Q9EZJ8ENC. The initial recorder-scoped cache was rejected because it enlarged the production Recorder; extraction-scoped deduplication plus a native identity-token sidecar preserved default and one-event paths while eliminating per-event Go string ownership.
+- P-01M0Q9EZJ8ENCSJ4YR1J41MDGD Deduplicate labels within each Recorder.Profile extraction: Promoted after T-01M0Q9H5G2FP3 passed every frozen M2 gate. Multi-event labels now use native identity tokens plus exact-content fallback and one Go-owned clone per distinct label; native snapshot materialization reuses up to 16 labels. The one-event ABI remains unchanged. Final campaign and allocation results are recorded on the archived task and perfscan issue 855.
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -381,3 +384,25 @@ WHEN the additive snapshot entry point is used, the Metal profile bulk snapshot 
 
 ## RECORDER-PROFILE-VALID-INDEX-STORAGE-001
 WHEN valid event indices are materialized, the native profile resolver SHALL store at most 1 index inline and all larger sets contiguously with 0 NSNumber boxes.
+
+## RECORDER-PROFILE-LABEL-OWNERSHIP-001
+WHEN a Recorder.Profile result outlives Recorder.Free and garbage collection churn, the Metal recorder profile boundary SHALL preserve 100 percent of returned event-label bytes in Go-owned memory.
+
+## RECORDER-PROFILE-LABEL-ALLOCATION-001
+WHEN one completed profile extraction contains repeated native event labels, the Recorder.Profile SHALL clone each distinct label at most once in that extraction and allocate 0 Go strings for repeated-label cache hits.
+
+Rationale: Per-extraction deduplication avoids increasing the production Recorder footprint while preserving returned-string ownership.
+
+## RECORDER-PROFILE-LABEL-PERF-001
+WHEN three order-alternated count-seven M2 campaigns compare warm repeated-label events340 extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.25 times median speedup, 300 fewer allocations per operation, and 4000 fewer bytes per operation.
+
+## RECORDER-PROFILE-LABEL-NONREGRESSION-001
+WHEN each frozen M2 campaign measures warm events1, first events1, and disabled recorder construction, the Recorder.Profile label-cache promotion gate SHALL retain at least 0.97 times control throughput in every cell with unchanged disabled-recorder allocations.
+
+## RECORDER-PROFILE-LABEL-COLD-PERF-001
+WHEN each frozen M2 campaign compares the first events340 profile extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.10 times control throughput while preserving exact profile fields.
+
+## RECORDER-PROFILE-LABEL-TOKEN-SIDECAR-001
+WHEN a multi-event native profile snapshot materializes labels, the Metal recorder profile bridge SHALL return one recorder-owned uintptr_t token per event and reuse up to 16 full 96-byte labels by identity until Recorder.Free.
+
+Rationale: Keep the token sidecar and native label-copy reuse durable without changing the one-event ABI.

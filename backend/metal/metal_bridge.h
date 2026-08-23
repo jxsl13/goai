@@ -4,6 +4,8 @@
 #ifndef GOAI_METAL_BRIDGE_H
 #define GOAI_METAL_BRIDGE_H
 
+#include <stdint.h>
+
 // mtl_available returns 1 if a Metal device with MPS support exists.
 int mtl_available(void);
 
@@ -295,6 +297,9 @@ int mtl_recorder_profile_snapshot(void* rec,
                                   int* omittedOverflow, int* omittedUnsupported,
                                   unsigned long long* timestampFrequency,
                                   unsigned long long* commandDurationNS);
+// mtl_recorder_profile_label_tokens returns recorder-owned NSString identity tokens for the
+// already-built multi-event snapshot. Tokens remain valid until mtl_recorder_free.
+int mtl_recorder_profile_label_tokens(void* rec, uintptr_t** tokens);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
