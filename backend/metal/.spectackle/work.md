@@ -52,11 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## R-01M0QJ1DQZE8W87CD3GS5DR9M0 Tune the M2 decode RMSNorm threadgroup width after attention fusion
-kind: research
-state: active
-created: 2026-08-23
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu
-
-Merged-main TinyLlama f16-KV profiling at context 512 records 45 RMSNorm encoders totaling 0.94 ms in a 12.05 ms profiled command, while fused attention is 0.37 ms. The current dynamic kernel always launches 256 threads although dim=2048 needs only 64 lanes for a coalesced 32-element lane strip. Measure 64, 128, and 256 threads in one command with identical arithmetic and three independent paired campaigns. Reject widths that fail bit-exact output or do not improve every representative one-row dim=2048 campaign by at least 1.10x. Only if a leaf width clears that gate, test paired full-token TinyLlama contexts 8, 512, and 1536 and require at least 1.01x without prefill regression.
