@@ -1,0 +1,8 @@
+pair	baseline_ns_op	candidate_ns_op	baseline_bytes_op	candidate_bytes_op	baseline_allocs_op	candidate_allocs_op
+1	571.1	532.4	0	0	0	0
+2	581.4	545.1	0	0	0	0
+3	580.8	537.4	0	0	0	0
+4	568.0	536.9	0	0	0	0
+5	571.9	536.4	0	0	0	0
+6	571.4	533.4	0	0	0	0
+7	566.7	526.2	0	0	0	0
