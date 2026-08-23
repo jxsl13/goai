@@ -4027,7 +4027,7 @@ Add a generic differentiable pre-norm attention residual operation for seven inp
 
 ## T-01M0R91C3KECY8XGNX30NBTX49 Implement and gate fused pre-norm attention training
 kind: task
-state: active
+state: done
 created: 2026-08-23
 parent: P-01M0R8Z9RPFAFV5FYZ0VN01KNP
 targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref/prenorm_attention.go, backend/ref/prenorm_attention_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_attention_test.go, nlp/prenorm_attention.go, nlp/prenorm_attention_test.go, vision/vit.go, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence/m2-metal-prenorm-attention-20260823
