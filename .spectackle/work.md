@@ -4003,6 +4003,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:gguf.QMatMul, go:nn.QuantLinear.Forward, go:nlp.QuantLlama.DecodeStep
 
 Add an exact M=1 CPU quantized projection epilogue that stores residual plus the final rounded Q4_K or Q6_K dot directly into private QuantLlama residual storage. Cover all 22 TinyLlama attention-output Q4_K projections and its 12 Q4_K plus 10 Q6_K FFN-down projections. Unlike the rejected allocation-only in-place add, this removes each projection output tensor, each add output tensor, and the standalone residual pass. Preserve ordinary behavior for recording, accelerators, nonidentity ResidualMult, batch, dtype, shape, views, aliases, and unsupported quant types. Retain only if independent interleaved 64-step TinyLlama campaigns preserve digest ea3df5516f17df83, reduce allocation bytes by at least 20 percent, and improve median wall time by at least 1.03x.
