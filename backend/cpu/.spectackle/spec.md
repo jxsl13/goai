@@ -16,6 +16,10 @@ Rationale: This path accumulates in f32, so it amends the general f64-accumulati
 - T-01M0J2XM0TF8HSNP6JBFT68C3Y Route the GEMM band oracle across amd64 SIMD build tags: validated pass by codex-root-ci-validator diff 671dcfe7a86c — Validated pass by codex-root-ci-validator. Archived after PR #1129 first corrected CI matrix passed 15/15 at exact head 42d26b68f20991336c7eded0016653eefa151d86. Commit 45e1ada5 adds mutually exclusive test-only GEMM band oracle adapters: default builds call gemmF64Band and gemmF32Band, while amd64 goexperiment.simd calls the existing [body truncated at tombstone retention cap]
 - T-01M0J5KPW5EFY8TM91JY3WZFD2 Sweep ARM64 four-row-aligned MHA forward bands: validated pass by codex-root-mha-evidence-validator diff 2088c3a48efe :: PASS: exact ARM64 SIMD and default binaries pass; full SIMD race passes; vet and cross-builds pass; the digest is exact and non-vacuous; three alternating campaigns show 23.90-40.88% gains with p<0.001 and neutral decode; pprof removes the scalar remainder; steady-state allocations remain nine; build tags isolate the implemen [body truncated at tombstone retention cap]
 - P-01M0J5GFQJET5VFRAN479DTRES Align ARM64 F32 MHA forward bands to the four-row NEON tile: Completed by archived task T-01M0J5KPW5EFY and benchmark ledger M-01M0J76R3QECK. PR #1130 first matrix run 32486219596 passed 15/15 at head dcfe37bc89e1dd92e780fb2f998636ca2c6b675e. Apple ARM64 SIMD now uses a 32-row NEON-aligned MHA forward grain with 23.90-40.88% measured gains, neutral decode, exact semantics, stable steady-state allocations, and default 30-row preservation elsewhere.
+- T-01M0P7SGJ9E3V9RKHJ1ESXH857 Simplify and gate the exact ARM64 F32 Abs kernel: Go 1.27.0 changed the scalar F32 Abs oracle observed by the ARM64 exactness test: signaling-NaN payloads now retain the quiet bit instead of being forced quiet. Replaced the NEON NaN compare/mask/OR sequence with sign-bit clearing only, added explicit all-length and in-place bit tests, and added a preallocated leaf benchmark. The complete backend/cpu test binary and Linux AMD64 cross-compile pass. [body truncated at tombstone retention cap]
+- P-01M0P7RV5HFDSSRMC0MDQQJTJ2 Restore Go 1.26 exact ARM64 F32 Abs semantics: Shipped the Go 1.27 ARM64 F32 Abs semantic correction and kernel simplification. The exact output is inputBits AND 0x7fffffff for finite values, infinities, signaling NaNs, and quiet NaNs. The M2 leaf wins 1.518x at 2048 elements, larger controls remain at least 0.993x, allocations stay zero, and the changed backend/cpu package is green. Reproducible evidence and the perfscan follow-up are recorde [body truncated at tombstone retention cap]
+- T-01M0P8NQ57E4JSBEDA31381MD7 Split exact ARM64 Abs kernels by Go release: Cross-toolchain probes proved Go 1.26.6 maps signaling NaN 0x7f800001 to 0x7fc00001 while Go 1.27.0 preserves 0x7f800001. Added release-tagged ARM64 assembly: Go 1.26 retains the incumbent 32-line NaN-quieting kernel unchanged; Go 1.27 and newer select the measured 16-line sign-clear kernel. Restored tests to the scalar math.Abs oracle. Edge, tail, unaligned, and in-place tests plus the complete b [body truncated at tombstone retention cap]
+- P-01M0P8N6D6EEWAEKVACVNS21M6 Preserve version-specific ARM64 F32 Abs semantics: Published a release-aware ARM64 Abs design: preserve Go 1.26 exact signaling-NaN quieting and apply the 1.518x Go 1.27 sign-clear leaf only where the scalar oracle changed. Both supported toolchains pass full backend/cpu validation and AMD64 cross-compilation. The exact behavior, assembly attribution, statistical controls, and perfscan follow-up are durable in internal/benchcompare/leadership/evid [body truncated at tombstone retention cap]
 
 ## FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001
 IF a fan-out helper serves large operations called a few times rather than small ones called thousands of times, THEN the work-sizing transform of SIZE-THE-FANOUT-TO-THE-WORK-001 SHALL not be applied, because it measures neutral there and neutral is not a reason to add a knob.
@@ -45,8 +49,8 @@ Rationale: Found while working the PS3070 candidate list. mhaGemmMinSeq is 16 an
 ## ARM64-EXACT-RELU-001 {applies: backend/cpu/elementwise.go,backend/cpu/relu_f32_arm64.go,backend/cpu/relu_f32_arm64.s}
 WHEN F32 ReLU executes on arm64, the CPU backend SHALL use ordered comparison and select so positive values retain bits while negatives, NaNs, and both zero signs become +0.
 
-## ARM64-EXACT-ABS-001 {applies: backend/cpu/elementwise.go,backend/cpu/abs_f32_arm64.go,backend/cpu/abs_f32_arm64.s}
-WHEN F32 Abs executes on arm64, the CPU backend SHALL clear the sign bit, preserve finite, infinity, and NaN payload bits, and set the F32 quiet bit on every NaN so the result is bit-identical to float32(math.Abs(float64(x))).
+## ARM64-EXACT-ABS-001 {applies: go:cpu.absF32,asm:cpu.absF32BlocksNeon,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs executes on arm64, the CPU backend SHALL match every output bit from float32(math.Abs(float64(x))) under the active supported Go toolchain.
 
 Rationale: M2 emits FCVT F32-to-F64, FABS, then FCVT F64-to-F32 for the incumbent expression. Raw-bit probes show that this clears signs and quiets signaling NaNs while preserving payloads; a plain vector FABS or sign mask would change the contract.
 
@@ -131,3 +135,18 @@ WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM6
 
 ## ARM64-F32-MHA-BAND-CONTROLS-001
 WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.
+
+## ARM64-EXACT-ABS-PERF-001 {applies: go:cpu.absF32,asm:cpu.absF32BlocksNeon,go:cpu.BenchmarkAbsF32Leaf}
+WHEN seven interleaved M2 Pro Go 1.27 campaigns measure preallocated F32 Abs at 2048 and three larger sizes, the ARM64 sign-clear kernel SHALL retain 1.25x median speedup at 2048, at least 0.97x for larger cells, and zero allocations.
+
+Rationale: The small leaf is instruction-bound while larger cells become memory-bound; both the gain and neutral controls must remain explicit.
+
+## ARM64-EXACT-ABS-GO127-001 {applies: go:cpu.absF32,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs compiles on arm64 with Go 1.27 or newer, the CPU backend SHALL select the sign-clear assembly so outputBits equals inputBits AND 0x7fffffff for every input.
+
+Rationale: Go 1.27 preserves signaling-NaN payload bits in the scalar conversion oracle.
+
+## ARM64-EXACT-ABS-GO126-001 {applies: go:cpu.absF32,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs compiles on arm64 with Go 1.26, the CPU backend SHALL select the NaN-quieting assembly so signaling NaNs set bit 22 while all other magnitude bits remain unchanged.
+
+Rationale: Go 1.26 quiets signaling NaNs in the scalar conversion oracle.

@@ -1,0 +1,8 @@
+tool: github.com/jxsl13/perfscan/perfscan@v1.81.0
+resolution: GOPROXY=direct, GONOSUMDB=github.com/jxsl13/perfscan
+scope:
+  backend/cpu/abs_f32_arm64.go
+  backend/cpu/abs_bench_test.go
+  backend/cpu/abs_f32_arm64_test.go
+result: no findings in changed Go files
+generalizable improvement: https://github.com/jxsl13/perfscan/issues/836

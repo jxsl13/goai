@@ -1,0 +1,17 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro",
+  "logical_cpus": 12,
+  "memory_bytes": 34359738368,
+  "go_version": "go1.27.0",
+  "spectackle_version": "0.10.0",
+  "baseline_commit": "8c6552877260a371cf94a02e05f2332d959d3226",
+  "candidate_source_commit": "bd76b0a101eb605ecd21e8acaef1489f7e9b50b3",
+  "perfscan_module": "github.com/jxsl13/perfscan v1.81.0",
+  "perfscan_command": "github.com/jxsl13/perfscan/perfscan@latest",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/836",
+  "leaf_campaigns": 7,
+  "leaf_benchtime": "300ms",
+  "semantic_result": "bit-identical to each toolchain oracle: Go 1.26.6 quiets signaling NaNs and Go 1.27.0 preserves them",
+  "allocation_result": "zero allocations in every leaf cell"
+}
