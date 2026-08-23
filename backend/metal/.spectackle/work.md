@@ -72,7 +72,7 @@ Diagnostic phase: compile the existing scalar and cooperative Q4_K MSL into one 
 
 ## T-01M0QQGJ5JEE3RWADEMQ3RJGJ5 Benchmark file-loaded Q4_K metallib against runtime MSL compilation
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QQG05VFSN83HQ7JTG43PVY
 targets: objc:metal_bridge.ensure_qmatmul_q4k
