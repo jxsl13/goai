@@ -368,3 +368,6 @@ WHEN three independent count-seven same-binary M2 campaigns cover K2048N256 with
 
 ## METAL-Q6K-LONGK-COLD-PERF-001
 WHEN seven fresh control and candidate processes measure first K5632N2048 use, the long-K Q6_K cold-start gate SHALL limit candidate median first-use latency to at most 1.10 times control while preserving second-use performance.
+
+## METAL-Q6K-LONGK-PRODUCTION-PERF-001
+WHEN three order-alternated M2 campaigns cover TinyLlama Q4_K_M tg64 and pp512, the long-K Q6_K production gate SHALL retain the selector only when every tg64 median reaches 1.01 times control and every pp512 median reaches at least 0.99 times control.
