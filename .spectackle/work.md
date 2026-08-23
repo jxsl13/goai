@@ -4006,21 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0R8JTW6E1AVVRZ6YJSHFVME Screen a cached Metal pre-norm attention training graph on M2
-kind: research
-state: active
-created: 2026-08-23
-targets: go:vision.vitBlock.forwardBatched, go:nlp.MHA.ForwardBatched, backend/metal/metal.go, backend/metal/metal_bridge.m
-
-Measure whether a persistent shape-keyed Metal graph for the compute-heavy ViT pre-norm attention boundary produces repeatable training leverage. The candidate boundary is biased LayerNorm, Q/K/V projections, batched noncausal scaled dot-product attention, output projection, and residual, with a separate explicit backward graph because dOut arrives after forward. Start at B=8, seq=65, dim=128, heads=4 and preserve exact composite fallback, F32 semantics, gradients, and input immutability. Require at least 1.25x boundary median and 1.15x full B=8 depth=4 ViT train-step median across order-alternated campaigns. This is distinct from rejected host-side ViT preparation flattening P-01M0FMNNMKFRXR0FDEYZ8GXX7S and rejected quant residual epilogues P-01M09HZ85PF84B4N1642KEMCET; both removed dispatches without fusing the attention compute graph.
-
-## P-01M0R8Z9RPFAFV5FYZ0VN01KNP Fuse pre-norm attention training boundaries on Metal
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0R8JTW6E1AVVRZ6YJSHFVME
-grilled: 2026-08-23 open=1
-targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_attention_test.go, nlp/prenorm_attention.go, vision/vit.go
-
-Add a generic differentiable pre-norm attention residual operation for seven inputs: x, gamma, beta, Wq, Wk, Wv, and Wo. Define portable F32/F64 reference semantics and an explicit seven-gradient VJP. Select the fused route only for nonempty contiguous offset-zero F32, unbiased noncausal MHA without masks or LoRA, valid packed batch geometry, and a backend exposing both forward and backward kernels; otherwise execute the exact incumbent LayerNorm, four projections, batched MHA, and residual composite. Implement Metal forward and backward as one bounded shape-keyed cached MPSGraph submission per direction, feed epsilon at runtime, use pooled buffers, return Go-owned outputs, and preserve all input bytes. Preliminary M2 Pro same-binary screens at B=8, seq=65, dim=128, heads=4 measured 3.16x boundary median and 2.07x full depth-4 ViT train-step median. Promotion requires three order-alternated count-seven campaigns with at least 1.25x boundary median, 1.15x full-step median, every full-step aligned pair at least 1.05x, and logits plus every gradient within the established F32 tolerance.
