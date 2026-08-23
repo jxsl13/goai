@@ -782,3 +782,4 @@
 {"t":"2026-08-23T20:13:45Z","eid":"157c5ec3fe2368c4","ag":"ag-5c46","ev":"create","id":"R-01M0R43YYWE2TTJMX2PJ09GN5S","k":"research","ti":"Screen a cached Metal pre-norm FFN training graph on M2"}
 {"t":"2026-08-23T20:13:56Z","eid":"55d27790e4877835","ag":"ag-0d06","ev":"move","id":"R-01M0R43YYWE2TTJMX2PJ09GN5S","fr":"draft","to":"active","note":"Standing user authorization covers continued M2-first, high-risk measured performance research. The screen is read-only or disposable until a proposal passes its leverage gate."}
 {"t":"2026-08-23T20:21:58Z","eid":"f18ce606dd8af7ce","ag":"ag-51ed","ev":"create","id":"P-01M0R4K081FDDTQMBYZWCRRZ55","k":"proposal","ti":"Fuse pre-norm FFN training boundaries on Metal"}
+{"t":"2026-08-23T20:22:10Z","eid":"727ee99ed3e74b1f","ag":"ag-388f","ev":"grill","id":"P-01M0R4K081FDDTQMBYZWCRRZ55","gr":"2026-08-23 open=1","hash":"c38c8a2bcd8ebf284b15425a47ddb722af96452228dc8fcc214f22dd186d6bdf","open":1,"keys":["blast:8"]}
