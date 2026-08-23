@@ -4026,7 +4026,7 @@ Introduce a production-only MTLDispatchTypeConcurrent recorder for dense quantiz
 
 ## T-01M0QX3KC4EY8RMMP547YWHPTR Implement and gate dependency-tracked concurrent Metal decode
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QX30DKEW79R732B222H2S3
 

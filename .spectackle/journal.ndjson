@@ -727,3 +727,4 @@
 {"t":"2026-08-23T18:11:09Z","eid":"1f0d90b73853d37a","ag":"ag-9e5c","ev":"move","id":"P-01M0QX30DKEW79R732B222H2S3","fr":"draft","to":"active","note":"Approved by the standing high-risk/high-impact performance mandate and explicit instruction to continue."}
 {"t":"2026-08-23T18:11:13Z","eid":"078277975de911b1","ag":"ag-fc73","ev":"create","id":"T-01M0QX3KC4EY8RMMP547YWHPTR","k":"task","ti":"Implement and gate dependency-tracked concurrent Metal decode"}
 {"t":"2026-08-23T18:11:23Z","eid":"62256eb82168ce5a","ag":"ag-0176","ev":"grill","id":"P-01M0QX30DKEW79R732B222H2S3","gr":"2026-08-23 open=0","hash":"b6c0ed0b263550a9e3766c2a06e455afc289c306197afc31f1f770917d379041"}
+{"t":"2026-08-23T18:12:09Z","eid":"12ccc6bd21dac6cb","ag":"ag-3db5","ev":"move","id":"T-01M0QX3KC4EY8RMMP547YWHPTR","fr":"draft","to":"active","note":"Implementation authorized by the active proposal."}
