@@ -73,7 +73,7 @@ Supersedes rejected P-01M0Q9837XE0Y. Replace one C.GoString allocation per event
 
 ## T-01M0Q9H5G2FP38JV8VMPSFP297 Implement and gate extraction-scoped profile label deduplication
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q9EZJ8ENCSJ4YR1J41MDGD
 refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ
