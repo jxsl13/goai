@@ -4006,3 +4006,11 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
+
+## P-01M0QG3MFAEQ1BVB13SKB1CN5F Fuse the M2 f16-KV split-K decode path into one threadgroup
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/splitk_fused_test.go, llamagpu/splitk_fused_realmodel_test.go
+
+Narrow the rejected dual-dtype fusion to the production f16-KV lane that cleared the real-model gate. Retain one fused kernel: one SIMD group per key chunk executes incumbent lane-quad arithmetic, exchanges 66-float partials through threadgroup memory, and SIMD group 0 merges in ascending order. Remove the failed f32 fused kernel, pipeline, routing, and f32 benchmark cells. Keep the historical two-pass f16-KV route behind a diagnostic toggle until three same-command leaf campaigns and three valid token-interleaved TinyLlama campaigns clear the frozen gates. On promotion, make fusion the default only for eligible f16-KV decode and retain two-pass fallback for device/thread limits. This consumes R-01M0QF5B7EE31 and the measured rejection P-01M0QF5QXRF21.
