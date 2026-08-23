@@ -53,14 +53,6 @@ option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
 
-## R-01M0Q913MDFQSTD3ME8MTRCGRZ Recorder profile label ownership and allocation scaling
-kind: research
-state: active
-created: 2026-08-23
-targets: go:metal.Recorder.Profile, backend/metal/recorder_profile_bench_test.go
-
-The merged bulk snapshot leaves 344 allocations and 19,816 B per warm 340-event extraction on M2 Pro. Code inspection attributes 340 allocations to C.GoString, one per event, although repeated kernels share labels. Investigate recorder-scoped owned label reuse: compare native labels without retaining C memory, clone each distinct label once, reuse the Go-owned value across Profile calls, preserve returned labels after Recorder.Free, and leave default recorders allocation-neutral. Freeze repeated-label, one-event, first-extraction, mixed-label, ownership, and disabled-recorder gates before implementation.
-
 ## P-01M0Q9EZJ8ENCSJ4YR1J41MDGD Deduplicate labels within each Recorder.Profile extraction
 kind: proposal
 state: active
