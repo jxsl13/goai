@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M0Q5KRTFE96TDAJGGH2APKN2 Specialize long-K M2 Q6_K decode with an unrolled pipeline
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q59EV4EKSTBJACTNCBQK42
 grilled: 2026-08-23 open=0
