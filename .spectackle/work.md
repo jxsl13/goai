@@ -4027,7 +4027,7 @@ Introduce a generic differentiable pre-norm transformer-block operation that com
 
 ## T-01M0RCS0J9FTDANR9DMPW7GA54 Implement and gate fused pre-norm transformer blocks
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0RCQZESFTASGRCF6MVGEAE8
 refs: R-01M0RCPZNJF75SZJ766JXXPX6H
