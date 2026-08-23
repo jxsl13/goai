@@ -272,3 +272,4 @@
 {"t":"2026-08-23T11:06:47Z","eid":"121093cadedecb93","ag":"ag-121b","ev":"create","id":"P-01M0Q4TE2ZE52T6G4PHY89H06C","k":"proposal","ti":"Force full unrolling of the M2 Q4_K nibble/FMA loop","dir":"backend/metal"}
 {"t":"2026-08-23T11:06:54Z","eid":"84ec72b717e2308e","ag":"ag-0b00","ev":"grill","id":"P-01M0Q4TE2ZE52T6G4PHY89H06C","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"0b823d096af3959e143caee857bfae5e7a755b9b0ef3d4cf5b23deab75c183e7"}
 {"t":"2026-08-23T11:07:01Z","eid":"740732a037cdf4db","ag":"ag-81c3","ev":"move","id":"P-01M0Q4TE2ZE52T6G4PHY89H06C","dir":"backend/metal","fr":"draft","to":"active","note":"Standing goal explicitly authorizes benchmark-gated M2 performance experiments and promotion only after valid gains."}
+{"t":"2026-08-23T11:07:10Z","eid":"fa54a1e9a1419065","ag":"ag-2f3f","ev":"create","id":"T-01M0Q4V43GEB3BF5F9NNFJ3G4M","k":"task","ti":"Benchmark explicit full unrolling in the M2 Q4_K cooperative kernel","dir":"backend/metal"}
