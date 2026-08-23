@@ -66,6 +66,7 @@ kind: proposal
 state: draft
 created: 2026-08-23
 refs: R-01M0Q4QAP0ESS9GBF2ERVRBHAM
+grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.QMatMulResident
 
 Pinned llama.cpp at b0539c43ed13b16bf0d8a0840646faea65469702 uses the same two-simdgroup Q4_K decode arithmetic as GoAI but explicitly forces full compiler unrolling of the four-iteration nibble/FMA loop. MLX at d9077d8316ad7305497a3ecf2296bd0e0e99a627 uses a different affine quantization format and offers no directly transferable GGUF Q4_K M1 kernel. Isolate the compiler directive, preserve bit-identical results and immutable inputs, and accept it only if frozen leaf and production gates show reproducible M2 leverage.
