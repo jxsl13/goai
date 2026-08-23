@@ -479,3 +479,6 @@ WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the M
 
 ## METAL-RMSNORM-LEADER-BROADCAST-NUMERIC-001
 WHEN a leader-broadcast RMSNorm candidate executes, the Metal RMSNorm candidate SHALL produce bit-exact control output and mutate exactly 0 input or gamma bytes.
+
+## METAL-RMSNORM-LEADER-BROADCAST-STRUCTURE-001
+WHEN the leader-broadcast reduction publishes 8 partials, the each Metal SIMD-group leader SHALL sum slots 0 through 7 in order and broadcast the total with 0 extra barriers.
