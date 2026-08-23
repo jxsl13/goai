@@ -1,0 +1,16 @@
+go test -c -o /private/tmp/goai-abs-base-leaf.test ./backend/cpu
+go test -c -o /private/tmp/goai-abs-candidate-leaf.test ./backend/cpu
+
+/private/tmp/goai-abs-base-leaf.test -test.run '^$' -test.bench '^BenchmarkAbsF32Leaf$' -test.benchmem -test.benchtime=300ms -test.count=1
+/private/tmp/goai-abs-candidate-leaf.test -test.run '^$' -test.bench '^BenchmarkAbsF32Leaf$' -test.benchmem -test.benchtime=300ms -test.count=1
+
+/private/tmp/goai-abs-base.test -test.run '^$' -test.bench '^BenchmarkAbsF32CPU/n(2048|65536|349440|8388608)$' -test.benchmem -test.benchtime=300ms -test.count=1
+/private/tmp/goai-abs-candidate.test -test.run '^$' -test.bench '^BenchmarkAbsF32CPU/n(2048|65536|349440|8388608)$' -test.benchmem -test.benchtime=300ms -test.count=1
+
+/private/tmp/goai-abs-candidate-leaf.test -test.count=1
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go test -c -o /private/tmp/goai-cpu-linux-amd64.test ./backend/cpu
+
+go tool objdump -s 'absF32BlocksNeon' /private/tmp/goai-abs-base-leaf.test
+go tool objdump -s 'absF32BlocksNeon' /private/tmp/goai-abs-candidate-leaf.test
+
+GOPROXY=direct GONOSUMDB=github.com/jxsl13/perfscan GOTOOLCHAIN=go1.26.6 go run github.com/jxsl13/perfscan/perfscan@latest -config internal/perfscan/perfscan.json -exit-zero ./backend/cpu/abs_f32_arm64.go ./backend/cpu/abs_bench_test.go ./backend/cpu/abs_f32_arm64_test.go
