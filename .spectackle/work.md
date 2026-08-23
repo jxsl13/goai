@@ -4011,3 +4011,5 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 kind: research
 state: draft
 created: 2026-08-23
+
+Revisit the rejected exact M2 quant residual epilogue after PR 1190 changed the production execution schedule. Measure a decode-only M=1 epilogue that accumulates projection output directly into the residual, preserving prefill unchanged. Compare the established concurrent recorder against candidate in one trained-model binary with exact logits, GPU duration, wall throughput, and pp64 non-regression. Proceed to a proposal only if median tg64 GPU and wall speedup each reach 1.02x with stable paired results and pp64 remains at least 0.99x. Prior proposal P-01M09HZ85PF84B4N1642KEMCET measured 1.0140x to 1.0235x before concurrent scheduling but regressed pp64 when not isolated.
