@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0PCH446FH695VH9692WFSV8 Eliminate the next M2 CPU quant-decode wall-clock bottleneck
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=1
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep
