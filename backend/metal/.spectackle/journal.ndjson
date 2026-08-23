@@ -607,3 +607,4 @@
 {"t":"2026-08-23T16:57:49Z","eid":"902b1e486eba1dde","ag":"ag-c637","ev":"create","id":"P-01M0QRX6E0FC1S4XNAWGQK8900","k":"proposal","ti":"Autotune M2 Q4_K output rows per SIMD group","dir":"backend/metal"}
 {"t":"2026-08-23T16:58:01Z","eid":"973d27226646bd73","ag":"ag-3668","ev":"grill","id":"P-01M0QRX6E0FC1S4XNAWGQK8900","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"600a82adeb9d2564ab77fe24b6b32212cda30eaa359518b50343441b11b4c415"}
 {"t":"2026-08-23T16:58:10Z","eid":"4a742e03c71595bd","ag":"ag-075d","ev":"move","id":"P-01M0QRX6E0FC1S4XNAWGQK8900","dir":"backend/metal","fr":"draft","to":"active"}
+{"t":"2026-08-23T16:58:23Z","eid":"d5d3d92e60c7d321","ag":"ag-4ead","ev":"create","id":"T-01M0QRY7EBEA99HWV2A0NKWTY1","k":"task","ti":"Implement and gate Q4_K rows-per-SIMD variants","dir":"backend/metal"}
