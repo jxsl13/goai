@@ -384,3 +384,6 @@ WHEN valid event indices are materialized, the native profile resolver SHALL sto
 
 ## RECORDER-PROFILE-LABEL-OWNERSHIP-001
 WHEN a Recorder.Profile result outlives Recorder.Free and garbage collection churn, the Metal recorder profile boundary SHALL preserve 100 percent of returned event-label bytes in Go-owned memory.
+
+## RECORDER-PROFILE-LABEL-ALLOCATION-001
+WHEN a completed profile contains repeated native event labels, the Recorder.Profile SHALL clone each distinct label at most once per recorder and allocate 0 Go strings for cache hits.
