@@ -20,6 +20,13 @@ func dotQ4KBlockNeon(x *float32, qs *byte, coeff *float32, indexes *byte) float3
 //go:noescape
 func dotQ4KPairBlockNeon(x *float32, qs0, qs1 *byte, coeff0, coeff1 *float32, indexes *byte) (out0, out1 float32)
 
+// dotQ4KPairRowNeon keeps paired Q4_K header decode, coefficient staging, and
+// all super-block dots inside one assembly call. Each block still reduces to
+// f32 before the row accumulators widen and add it in order as f64.
+//
+//go:noescape
+func dotQ4KPairRowNeon(x *float32, raw0, raw1 *byte, f16 *float32, indexes *byte, blocks int) (out0, out1 float64)
+
 func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 	var coeff [16]float32
 	var acc float64
@@ -45,37 +52,12 @@ func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 }
 
 func dotQ4KPairRowASM(row []float32, raw0, raw1 []byte, k int) (float64, float64) {
-	var coeff0, coeff1 [16]float32
-	var acc0, acc1 float64
-	for sb := 0; sb*qkK < k; sb++ {
-		blk0 := raw0[sb*q4kBlockSize : (sb+1)*q4kBlockSize]
-		blk1 := raw1[sb*q4kBlockSize : (sb+1)*q4kBlockSize]
-		//perfscan:ignore PS4001 four f16 scalars per paired 256-weight block are coefficient metadata, not a bulk-copy loop
-		d0 := f16ToF32(binary.LittleEndian.Uint16(blk0[0:]))
-		dmin0 := f16ToF32(binary.LittleEndian.Uint16(blk0[2:]))
-		d1 := f16ToF32(binary.LittleEndian.Uint16(blk1[0:]))
-		dmin1 := f16ToF32(binary.LittleEndian.Uint16(blk1[2:]))
-		scales0, scales1 := blk0[4:16], blk1[4:16]
-		for j := range 4 {
-			s0, m0, hi0 := scales0[j], scales0[j+4], scales0[j+8]
-			s1, m1, hi1 := scales1[j], scales1[j+4], scales1[j+8]
-			lo, hi := j*2, (j+4)*2
-			coeff0[lo+0] = d0 * float32(s0&63)
-			coeff0[lo+1] = dmin0 * float32(m0&63)
-			coeff0[hi+0] = d0 * float32((hi0&0xF)|((s0>>6)<<4))
-			coeff0[hi+1] = dmin0 * float32((hi0>>4)|((m0>>6)<<4))
-			coeff1[lo+0] = d1 * float32(s1&63)
-			coeff1[lo+1] = dmin1 * float32(m1&63)
-			coeff1[hi+0] = d1 * float32((hi1&0xF)|((s1>>6)<<4))
-			coeff1[hi+1] = dmin1 * float32((hi1>>4)|((m1>>6)<<4))
-		}
-		dot0, dot1 := dotQ4KPairBlockNeon(
-			&row[sb*qkK], &blk0[16], &blk1[16], &coeff0[0], &coeff1[0], &qKByteToF32Indexes[0],
-		)
-		acc0 += float64(dot0)
-		acc1 += float64(dot1)
+	if k == 0 {
+		return 0, 0
 	}
-	return acc0, acc1
+	return dotQ4KPairRowNeon(
+		&row[0], &raw0[0], &raw1[0], &f16Table[0], &qKByteToF32Indexes[0], k/qkK,
+	)
 }
 
 func init() {

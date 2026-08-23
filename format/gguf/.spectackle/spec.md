@@ -43,6 +43,8 @@ Rationale: Two applications of the same transform in one package, measured the s
 - P-01M0M2XZRGFSWVT5G94ZXT61S8 Complete GGUF IQ and MXFP4 wire decode dispatch: Implemented by archived task T-01M0M30EFGEN4 under ADR-01M0M2ZMEDF86. Commit 36c2456a completes eager Read dispatch for every existing IQ/MXFP4 decoder, preserves unsupported-type behavior, and commits exhaustive tests plus reproducible neutral-overhead and external perfscan evidence.
 - T-01M0PCYV52EF48DMJCJ79D1WEN Bulk-unpack paired Q4_K coefficient headers: Bulk-decoded paired Q4_K headers while preserving coefficient and reduction order. Go 1.26.6 M2 Pro measurements: K=2048 paired row 571.4 ns to 536.4 ns (1.065x, 7/7 wins, U=49, p=0.0005828); TinyLlama FFN pair-apply 555.135 us to 528.617 us (1.050x, 7/7 wins); production digest exact with 3/5 wins, 1.017x median paired ratio, and neutral aggregate median. Full preflight, Go 1.27 GGUF tests, and D [body truncated at tombstone retention cap]
 - T-01M0PEP367F7WBD4RTC87J8VG9 Bulk-unpack independent Q4_K coefficient headers: Bulk-decoded independent ARM64 Q4_K headers while preserving coefficient values, block-dot operands, and F64 row reduction. M2 Pro Go 1.26.6 K=2048 row improved 312.0 ns to 288.6 ns median (1.081x, 7/7 wins, U=49, p=0.0005828, zero allocations). Mixed TinyLlama QKV improved 190.126 us to 182.325 us median (1.043x, 5/7 wins; supporting only because p=0.1649 under late host contention). Clean 8-thre [body truncated at tombstone retention cap]
+- T-01M0PHKGVZEWN8C72EH0GMG3SA Fuse paired Q4_K header decode into the ARM64 row kernel: Implemented one coarse-grained Apple ARM64 paired Q4_K row call that decodes exact f16/header coefficients into uninitialized assembly stack scratch, preserves each block f32 reduction and ordered f64 accumulation, and eliminates repeated Go staging and leaf crossings. Arbitrary packed-header outputs are bit-identical; complete GGUF tests pass on Go 1.26.6 and 1.27.0; Darwin/AMD64 and Linux/ARM64 [body truncated at tombstone retention cap]
+- T-01M0PKDX1FF0DARF9FTEKXN3EM Restore the measured block-aligned Q4_K row wrapper: Removed the unmeasured ceil-division guard added after the clean campaign and restored the block-aligned internal wrapper to k==0 plus k/qkK. Q4_K callers already enforce positive block alignment. The rebuilt production test binary SHA-256 is 436fd8632ac93be2c1f7a679f22c0b5a06d8f01c50823edcba6a80bdb14cf975, byte-identical to the original clean-campaign candidate binary. Complete GGUF tests pass.
 
 ## ARM64-Q4K-FUSED-DOT-001
 WHEN QMatMul receives contiguous F32 M1 activations with Q4_K weights, the ARM64 Q4_K selector SHALL dispatch to fused NEON unpack-affine-dot with zero leaf allocations and scalar-relative error at most 1e-4.
@@ -354,7 +356,7 @@ WHEN 2 Q4_K matrices receive 1 contiguous F32 M1 activation and an 8-lane consum
 The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the final chunk, retain capacities no larger than 65,536 F32 values, and expose 0 scratch aliases to callers.
 
 ## GGUF-Q4K-PAIR-DUAL-DOT-001
-WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through dotQ4KPairBlockNeon while preserving the independent accumulation and reduction orders bit-for-bit.
+WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through 1 paired NEON row call while preserving independent accumulation and reduction orders bit-for-bit.
 
 ## Q4K-PAIR-BULK-HEADER-EXACT-001
 The paired Q4_K coefficient builder SHALL decode all 16 six-bit scale/min values per row exactly as 8 getScaleMinK4 calls and preserve pair-row output bits.
@@ -367,3 +369,9 @@ The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min v
 
 ## Q4K-SINGLE-BULK-HEADER-PERF-001
 WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independent Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
+
+## Q4K-PAIR-ROW-ASM-EXACT-001
+WHEN decodes headers inside assembly, the ARM64 paired Q4_K row path SHALL preserve all 16 GGUF six-bit scale and minimum values per row, f16 lookup conversion, per-block f32 reduction, ordered f64 accumulation, and pair-row output bits for arbitrary raw headers.
+
+## Q4K-PAIR-ROW-ASM-PERF-001
+WHEN the K=2048 paired-row benchmark runs on Apple M2, the assembly-resident Q4_K header path SHALL reach at least 1.03x median speedup across 7 alternating campaigns, win 5 campaigns, retain 0 allocations, and show 0 pinned production regressions.

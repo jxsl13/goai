@@ -1,0 +1,44 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.27.0 darwin/arm64",
+  "baseline_source": "d43cdb4bb92d292792bf0d6146588385244523fe",
+  "candidate_source": "2568dbbd0ab68809dc861cb9e24bb3cc8f01e49d",
+  "branch": "codex/m2-q4k-block-profile-20260823",
+  "spectackle": "v0.10.0 source rebuilt with go1.27.0",
+  "spectackle_proposal": "P-01M0PGHM4TE7Y",
+  "spectackle_research": "R-01M0PGJAMGEKC",
+  "spectackle_task": "T-01M0PHKGVZEWN",
+  "spectackle_measurement_integrity_task": "T-01M0PKDX1FF0D",
+  "perfscan_module": "github.com/jxsl13/perfscan/perfscan v1.71.0",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/839",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline_gguf": "320c3ef85b83a69b6624011957c90fb68ec9b2f5e10b57f4017e21ae8a7fbe9f",
+    "candidate_gguf": "0c3ae8d2e04f16f21bf6b23205456d98e15d0e2d7a5c9b7882906e084b8f5771",
+    "baseline_production": "133c4ba1f846b33aee2b069cc56ee2fd0cf4c41d590e99d90b570d3fb4186139",
+    "candidate_production": "436fd8632ac93be2c1f7a679f22c0b5a06d8f01c50823edcba6a80bdb14cf975"
+  },
+  "sampling": {
+    "threads": 12,
+    "leaf_process_pairs": 8,
+    "leaf_discarded_warmup_pairs": 1,
+    "leaf_benchtime": "500ms",
+    "pair_apply_process_pairs": 8,
+    "pair_apply_discarded_warmup_pairs": 1,
+    "pair_apply_benchtime": "500ms",
+    "production_process_pairs": 5,
+    "production_steps": 64,
+    "production_measured_runs_per_process": 3,
+    "production_warmups_per_process": 1,
+    "order": "alternating baseline-candidate/candidate-baseline"
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "arbitrary_headers": "both paired rows bit-identical to independent ARM64 Q4_K rows",
+    "arithmetic_order": "per-block f32 reductions and ordered f64 row accumulation preserved"
+  }
+}

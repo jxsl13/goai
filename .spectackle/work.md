@@ -3998,3 +3998,12 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0PGHM4TE7YAXSJT0Q56SSZ2 Optimize the next Apple M2 Q4_K fused block hotspot
+kind: proposal
+state: active
+created: 2026-08-23
+refs: P-01M0PEGTNPFYBR11H1K7RDM36Q, R-01M0PEHGT7FY285ZWC1JQ05SWB, T-01M0PEP367F7WBD4RTC87J8VG9
+targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
+
+Reprofile merged main after the paired and independent Q4_K coefficient-header accelerations, attribute the single and paired ARM64 NEON block leaves, and implement only a bounded low-level change that preserves packed Q4_K element mapping, coefficient application, independent accumulation/reduction order, zero allocations, and non-ARM64 behavior. Gate any retained implementation with permanent leaf coverage, at least seven interleaved precompiled baseline/candidate campaigns, exact or tolerance-appropriate correctness, and representative TinyLlama Q4_K_M production measurements. Reject variants that do not produce a repeatable material leaf gain or that regress production behavior; archive the profiling evidence even if no implementation survives.

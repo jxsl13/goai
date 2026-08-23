@@ -1,0 +1,19 @@
+Install/update command:
+  GOPROXY=direct go install github.com/jxsl13/perfscan/perfscan@latest
+
+Resolved binary:
+  /Users/john/go/bin/perfscan
+  github.com/jxsl13/perfscan/perfscan v1.71.0
+  built with go1.27.0
+
+Scan command:
+  GOPROXY=direct perfscan -exit-zero ./format/gguf
+
+Result:
+  exit 0
+  no new finding in dot_q4k_asm_arm64.go
+  existing package findings retained for separate scoped work
+
+Generalized performance report:
+  https://github.com/jxsl13/perfscan/issues/839
+  Detect fully overwritten Go staging arrays around repeated assembly leaf calls
