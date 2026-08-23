@@ -353,3 +353,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
+
+## METAL-Q6K-FULL-UNROLL-NUMERIC-001
+WHEN it processes a valid resident M=1 Q6_K projection, the Metal Q6_K explicit-unroll candidate SHALL match current cooperative output within 2e-5 relative error, preserve floating-point class, and mutate exactly zero input bytes.
