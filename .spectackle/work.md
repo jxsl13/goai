@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## T-01M0QF6N9ZFNKA0SJHCNNKSABM Implement and gate fused M2 split-K decode attention
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QF5QXRF21BMTQ7ZF9BAB3B
 
