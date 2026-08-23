@@ -1,0 +1,22 @@
+External perfscan changed-code audit (2026-08-23)
+
+Invocation:
+  GOPROXY=direct GOSUMDB=off go run github.com/jxsl13/perfscan/perfscan@latest \
+    -json -tests -exit-zero ./backend/metal ./llamagpu ./internal/benchcompare
+
+Candidate findings introduced in this tranche and fixed before promotion:
+  - PS2126: constant fmt.Errorf in NewConcurrentRecorder and Recorder.Barrier
+  - PS3103: 1328-byte block copy in concurrentMetalDecodeEligible
+  - PS2008: per-step row allocation in the bitwise-parity test
+
+Post-fix targeted result:
+  No new finding remains in added code or added lines.
+
+One PS3103 finding remains at candidate llamagpu/decoder.go:3232 in encodeStep. The detached
+origin/main baseline at 8f81c7bd reports the same finding at llamagpu/decoder.go:3210; it is not a
+regression from this tranche. A broad pointer-based block API redesign is intentionally separate
+from the concurrent-recorder promotion because it crosses every decoder architecture and requires
+its own correctness and benchmark campaign.
+
+Generalizable synchronization/FFI result:
+  https://github.com/jxsl13/perfscan/issues/869

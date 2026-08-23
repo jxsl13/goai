@@ -269,6 +269,10 @@ void mtl_qweight_free(void* handle);
 int mtl_batch_dispatch_bench(int iters, int oneBuffer);
 int mtl_chain_matmul_relu(const float* A, const float* B, float* Out, int M, int K, int N);
 void* mtl_recorder_begin(void);
+// mtl_recorder_begin_concurrent opens a production recorder whose custom kernels share one
+// MTLDispatchTypeConcurrent compute encoder. Recorder operations accept a barrier-before bit;
+// blit/MPS/submission boundaries close the encoder automatically.
+void* mtl_recorder_begin_concurrent(void);
 // mtl_recorder_begin_profile opens an opt-in recorder that samples GPU timestamps at the
 // boundaries of at most maxEvents explicit compute/blit encoders. The default recorder stays
 // allocation- and sampling-free. Profiling requires Apple stage-boundary timestamp counters.
@@ -314,8 +318,8 @@ typedef struct {
     int status;
 } mtl_recorder_profile_snapshot_view;
 mtl_recorder_profile_snapshot_view mtl_recorder_profile_view(void* rec);
-int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
-int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
+int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op, int barrierBefore);
+int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op, int barrierBefore);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
 int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
                         void* dstH, int dstOff, int dstStride, int rows, int rowFloats);
@@ -332,15 +336,15 @@ int mtl_recorder_rope_f16kv_append(void* rec,
                                    void* qh, void* kh, void* vh, void* invh,
                                    void* kCacheH, void* vCacheH,
                                    int headsQ, int headsK, int hd, int half,
-                                   int pos, int cacheOff, float posDiv);
+                                   int pos, int cacheOff, float posDiv, int barrierBefore);
 int mtl_recorder_rope_pair_f16kv_append(void* rec,
                                         void* qkvh, void* invh, void* kCacheH, void* vCacheH,
                                         int stride, int headsQ, int offQ, int headsK, int offK,
                                         int hd, int half, int vOff, int vDim,
-                                        int pos, int cacheOff, float posDiv);
+                                        int pos, int cacheOff, float posDiv, int barrierBefore);
 int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N,
                         int accumulate);
-int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps);
+int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps, int barrierBefore);
 int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);
 int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int n);
 int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
@@ -360,7 +364,7 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
                      int causal, int window, float scale, int qElemOff);
 int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
                            int sq, int sk, int dm, int heads, int kvHeads, int dk,
-                           int causal, int window, float scale, int qElemOff);
+                           int causal, int window, float scale, int qElemOff, int barrierBefore);
 int mtl_recorder_finish(void* rec);
 int mtl_recorder_commit(void* rec);
 int mtl_recorder_wait(void* rec);
@@ -425,7 +429,7 @@ int mtl_qmatmul_resident(const float* X, void* wbuf, float* O, int M, int K, int
 
 // mtl_recorder_qmatmul (§T413): record-mode quantized matmul over a DeviceBuffer X/O and a resident
 // quantized weight — the quantized batched-decode building block. Same qtype codes as above.
-int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype);
+int mtl_recorder_qmatmul(void* rec, void* xh, void* wbuf, void* oh, int M, int K, int N, int qtype, int barrierBefore);
 
 // Heterogeneous QKV prefill group: q/k/v retain their original resident quantized buffers and
 // types, while one budgeted f16 [K,Nq+Nk+Nv] expansion feeds a single MPS matmul. The caller passes

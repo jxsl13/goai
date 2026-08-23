@@ -1,0 +1,4 @@
+pair	order	control_tg64_tok_s	candidate_tg64_tok_s	wall_speedup	control_gpu_tok_s	candidate_gpu_tok_s	gpu_speedup	control_pp64_tok_s	candidate_pp64_tok_s	pp_speedup
+1	control-candidate	187.8	198.0	1.0543	200.7	208.1	1.0369	1631.3	1650.0	1.0115
+2	candidate-control	192.3	198.5	1.0322	201.2	208.9	1.0383	1653.2	1667.4	1.0086
+3	control-candidate	192.3	197.3	1.0260	201.1	207.5	1.0318	1634.0	1644.6	1.0065

@@ -63,6 +63,9 @@ func TestQuantF16KVDecoderStoragePathAndQuality(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f16.Release()
+	if f16.ops.newDecodeRecorder == nil {
+		t.Fatal("dense quantized f16-KV Llama did not select the concurrent decode recorder")
+	}
 
 	if f32.f16KV || !f16.f16KV {
 		t.Fatalf("cache mode default=%v opt-in=%v, want false/true", f32.f16KV, f16.f16KV)
@@ -146,6 +149,59 @@ func TestQuantF16KVDecoderStoragePathAndQuality(t *testing.T) {
 	}
 	if !foundAppend || !foundAttention {
 		t.Fatalf("end-to-end profile did not prove f16 append+attention: append=%v attention=%v events=%+v", foundAppend, foundAttention, profile.Events)
+	}
+}
+
+func TestConcurrentMetalDecodeMatchesEstablishedRecorderBitwise(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("Metal unavailable")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 128, Ctx: 64, Dim: 256, Heads: 4, KVHeads: 1, Layers: 2,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	qm := f16KVTestModel(t, cfg)
+	control, err := NewQuantF16KV(qm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Release()
+	candidate, err := NewQuantF16KV(qm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	if control.ops.newDecodeRecorder == nil || candidate.ops.newDecodeRecorder == nil {
+		t.Fatal("eligible decoder did not retain the concurrent-recorder factory")
+	}
+
+	previous := metal.SetConcurrentDecodeRecorder(false)
+	defer metal.SetConcurrentDecodeRecorder(previous)
+	const steps = 24
+	want := make([][]uint32, steps)
+	wantBits := make([]uint32, steps*cfg.Vocab)
+	for pos := range steps {
+		logits, err := control.Step(1+(pos*17)%100, pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want[pos] = wantBits[pos*cfg.Vocab : (pos+1)*cfg.Vocab : (pos+1)*cfg.Vocab]
+		for i, value := range logits {
+			want[pos][i] = math.Float32bits(value)
+		}
+	}
+
+	metal.SetConcurrentDecodeRecorder(true)
+	for pos := range steps {
+		logits, err := candidate.Step(1+(pos*17)%100, pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, value := range logits {
+			if got := math.Float32bits(value); got != want[pos][i] {
+				t.Fatalf("pos=%d logit=%d bits=%08x want %08x", pos, i, got, want[pos][i])
+			}
+		}
 	}
 }
 

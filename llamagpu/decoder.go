@@ -161,6 +161,20 @@ type quantAccRecorder interface {
 	QMatMulResidentAcc(x buffer, w qweight, dst buffer, m int) error
 }
 
+// dependencyBarrierRecorder is implemented by the Metal adapter. Ordinary/profiling Metal
+// recorders make Barrier a no-op; the decode-only concurrent recorder emits a buffer-scope fence.
+// Other backends preserve their established command ordering without implementing this extension.
+type dependencyBarrierRecorder interface {
+	Barrier() error
+}
+
+func recordBarrier(r recorder) error {
+	if br, ok := r.(dependencyBarrierRecorder); ok {
+		return br.Barrier()
+	}
+	return nil
+}
+
 // errQuantAccUnsupported signals a weight format with no fused residual-add GEMV — recordAdd then uses
 // the GEMV-into-scratch + Binary-add path.
 var errQuantAccUnsupported = errors.New("llamagpu: no fused quant residual-add for this weight format")
@@ -219,15 +233,13 @@ func (l quantLinear) recordAdd(r recorder, x, scratch, dst buffer, m, width int)
 	// Bound the add to the m rows actually written. Without this it runs over the whole
 	// context-sized buffer — 1024x the traffic at ctx=1024, and it dominated decode.
 	if bn, ok := r.(binaryNRecorder); ok && width > 0 {
-		return firstErr(
-			r.QMatMulResident(x, l.w, scratch, m),
-			bn.BinaryN(dst, scratch, dst, binaryAdd, m*width),
-		)
+		e := r.QMatMulResident(x, l.w, scratch, m)
+		e = firstErr(e, recordBarrier(r))
+		return firstErr(e, bn.BinaryN(dst, scratch, dst, binaryAdd, m*width))
 	}
-	return firstErr(
-		r.QMatMulResident(x, l.w, scratch, m),
-		r.Binary(dst, scratch, dst, binaryAdd),
-	)
+	e := r.QMatMulResident(x, l.w, scratch, m)
+	e = firstErr(e, recordBarrier(r))
+	return firstErr(e, r.Binary(dst, scratch, dst, binaryAdd))
 }
 
 func (l f32Linear) recordMoE(r recorder, x, o buffer, m int, _ buffer, _, _ int) error {
@@ -318,8 +330,11 @@ type backendOps struct {
 	newBuffer      func([]float32) (buffer, error)
 	newF16KVBuffer func(int) (buffer, error) // nil unless this constructor opts into binary16 K/V storage
 	newRecorder    func() (recorder, error)
-	uploadQWeight  func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
-	groupQWeights  func(weights []qweight) (qweight, error)                  // optional heterogeneous prefill group
+	// newDecodeRecorder optionally specializes only the single-token Step graph. Prefill and every
+	// other recorder consumer retain newRecorder; nil falls back to newRecorder.
+	newDecodeRecorder func() (recorder, error)
+	uploadQWeight     func(weight []byte, qt uint32, n, k int) (qweight, error) // resident quantized upload
+	groupQWeights     func(weights []qweight) (qweight, error)                  // optional heterogeneous prefill group
 	// quantizeF32 quantizes a host f32 weight [in,out] to a resident Q8_0 device weight in one call
 	// (no pre-quantized ggml bytes needed). Set only by the cuda Q8 recurrent-decode constructors —
 	// nil elsewhere, so the caller keeps the f32 path. Lets a decoder trade the f32 weight's bandwidth
@@ -684,6 +699,9 @@ func (d *Decoder) recordFFNSublayer(r recorder, b block, rows int) error {
 		return d.recordFFN(r, b, d.xn2.b, rows) // two-norm parallel: xn2 = norm2(x0), computed pre-attn-add
 	}
 	if e := d.norm(r, d.dx.b, b.gFFN, b.bFFN, d.xn2.b, rows); e != nil {
+		return e
+	}
+	if e := recordBarrier(r); e != nil {
 		return e
 	}
 	return d.recordFFN(r, b, d.xn2.b, rows)
@@ -1128,12 +1146,12 @@ func (d *Decoder) recordFFN(r recorder, b block, in buffer, rows int) error {
 		}
 		return firstErr(e, d.recordDownProj(r, b, rows)) // dx += swiglu·Wdown
 	}
-	return firstErr(
-		b.wG.record(r, in, d.gate.b, rows),
-		b.wU.record(r, in, d.up.b, rows),
-		d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden),
-		d.recordDownProj(r, b, rows), // dx += swiglu·Wdown
-	)
+	e := b.wG.record(r, in, d.gate.b, rows)
+	e = firstErr(e, b.wU.record(r, in, d.up.b, rows))
+	e = firstErr(e, recordBarrier(r))
+	e = firstErr(e, d.binElem(r, d.gate.b, d.up.b, d.gate.b, binarySwiGLU, rows, d.hidden))
+	e = firstErr(e, recordBarrier(r))
+	return firstErr(e, d.recordDownProj(r, b, rows)) // dx += swiglu·Wdown
 }
 
 // binElem records an elementwise op bounded to the rows*width elements actually in play. Decoder
@@ -3196,7 +3214,11 @@ func newQuantDecoder(m *nlp.QuantLlama, ops backendOps) (*Decoder, error) {
 // what makes the §T614 encode-overlap legal: while the GPU executes step pos, the host
 // pre-encodes step pos+1, and the next Step only uploads dx and commits.
 func (d *Decoder) encodeStep(pos int) (recorder, error) {
-	r, err := d.ops.newRecorder()
+	newRecorder := d.ops.newRecorder
+	if d.ops.newDecodeRecorder != nil {
+		newRecorder = d.ops.newDecodeRecorder
+	}
+	r, err := newRecorder()
 	if err != nil {
 		return nil, err
 	}
@@ -3254,6 +3276,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 		// from their bands, attention reads q at band offset 0), else the unfused three.
 		// Recording order is execution order: norm FIRST, then the projection branch.
 		e := d.recordAttnNorm(r, b, 1)
+		e = firstErr(e, recordBarrier(r))
 		qBuf := d.q.b
 		if e == nil && b.wqkv != nil {
 			qBuf = d.qkv.b
@@ -3261,6 +3284,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 				d.recordQKVProj(r, b, 1),
 				d.recordQKNorm(r, b, 1, D+2*kvDim), // per-head QK-norm (Qwen3); no-op otherwise
 			)
+			e = firstErr(e, recordBarrier(r))
 			if fr, ok := r.(ropePairF16KVAppendRecorder); e == nil && ok && d.f16KV &&
 				!d.noRope && d.rotaryDim == dk && dk == 64 {
 				e = fr.RoPEPairF16KVAppend(
@@ -3279,6 +3303,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 				b.wk.record(r, d.xn.b, d.k.b, 1),
 				b.wv.record(r, d.xn.b, d.v_.b, 1),
 			)
+			e = firstErr(e, recordBarrier(r))
 			if fr, ok := r.(ropeF16KVAppendRecorder); e == nil && ok && d.f16KV &&
 				!d.noRope && d.rotaryDim == dk && dk == 64 {
 				e = fr.RoPEF16KVAppend(
@@ -3293,21 +3318,22 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 				)
 			}
 		}
-		e = firstErr(
-			e,
-			d.recordMHA(r, qBuf, b.kC, b.vC, d.attn.b, 1, pos+1),
-			d.recordOProj(r, b, 1), // dx += attn·Wo (+ optional o-bias)
-			d.recordFFNSublayer(r, b, 1),
-		)
+		e = firstErr(e, recordBarrier(r))
+		e = firstErr(e, d.recordMHA(r, qBuf, b.kC, b.vC, d.attn.b, 1, pos+1))
+		e = firstErr(e, recordBarrier(r))
+		e = firstErr(e, d.recordOProj(r, b, 1)) // dx += attn·Wo (+ optional o-bias)
+		e = firstErr(e, recordBarrier(r))
+		e = firstErr(e, d.recordFFNSublayer(r, b, 1))
+		e = firstErr(e, recordBarrier(r))
 		if e != nil {
 			r.Free()
 			return nil, e
 		}
 	}
-	if e := firstErr(
-		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1),
-		d.recordLogits(r, 1),
-	); e != nil {
+	e := d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1)
+	e = firstErr(e, recordBarrier(r))
+	e = firstErr(e, d.recordLogits(r, 1))
+	if e != nil {
 		r.Free()
 		return nil, e
 	}
