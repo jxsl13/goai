@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0Q2CZXBEXKV41BCXYX7G5FQ Fuse raw quantized Metal gate and up projections
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/decoder.go, llamagpu/llamagpu.go
 
