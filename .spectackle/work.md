@@ -4006,11 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0QWRMAQF5GT3M25J1QMSTPP Measure dependency-tracked whole-graph Metal concurrency on M2
-kind: research
-state: active
-created: 2026-08-23
-targets: go:llamagpu.Decoder.encodeStep, go:metal.NewRecorder, objc:metal_bridge.mtl_recorder_begin, go:metal.Recorder.QMatMulResident, go:metal.Recorder.Blit
-
-Pinned llama.cpp v0.2.0 commit bb4caa7540188872173c44d161602d9271386413 encodes its optimized graph through one MTLDispatchTypeConcurrent encoder, reorders safe nodes within a 64-node lookahead, tracks source and destination memory ranges, and inserts buffer-scope barriers only at hazards. This is structurally broader than rejected incident-pair concurrency P-01M07F21FDFEPTG3NJAZ0EZ00T and distinct from rejected serial coalescing P-01M0N3K92DE8VSC1V55JPA14K7. First screen the incumbent through GGML_METAL_CONCURRENCY_DISABLE under valid low-interference AB/BA campaigns. If and only if concurrency supplies repeatable leverage, design a GoAI recorder contract that keeps dependency semantics explicit, preserves profiler behavior and blit or MPS boundaries, and gates the complete TinyLlama f16-KV command graph rather than isolated pairs.
