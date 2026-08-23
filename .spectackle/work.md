@@ -4014,3 +4014,12 @@ created: 2026-08-23
 targets: go:vision.vitBlock.forwardBatched, go:nlp.MHA.ForwardPreNorm, go:nn.ForwardPreNormFFN, backend/metal/metal_bridge.m
 
 Measure whether composing the merged cached pre-norm attention and exact-GELU FFN graphs into one shape-keyed native Metal graph creates new end-to-end M2 training leverage. The control must retain both independently fused boundaries from PR 1194 and PR 1193; candidate changes only the complete transformer-block boundary. Start at F32 batch 8, sequence 65, dimension 128, four heads, hidden 256, and depth-four ViT. Require exact composite fallback, output and all 13 input-gradient parity, input and parameter immutability, runtime epsilon correctness, one submission per direction, a bounded cache, at least 1.15x boundary median, at least 1.08x full train-step median, and every aligned full-step pair at least 1.03x across three order-alternated campaigns. This differs from rejected host-side ViT dispatch flattening P-01M0FMNNMKFRXR0FDEYZ8GXX7S because it fuses both compute graphs and removes the intermediate host round trip rather than only collapsing view and residual dispatch.
+
+## P-01M0RCQZESFTASGRCF6MVGEAE8 Fuse complete pre-norm transformer blocks on Metal
+kind: proposal
+state: draft
+created: 2026-08-23
+refs: R-01M0RCPZNJF75SZJ766JXXPX6H
+targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp, vision/vit.go, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence
+
+Introduce a generic differentiable pre-norm transformer-block operation that composes noncausal unbiased MHA and biased exact-GELU FFN residuals. Provide portable reference forward/backward oracles, an explicit VJP returning all 13 gradients, a narrow NLP helper whose fallback remains the two already-fused boundaries, native Metal cached forward/backward graphs with runtime epsilon feeds, and ViT routing. The Metal graph must execute each complete block in exactly one command submission per direction and use a bounded shape-keyed cache. Keep the implementation only if research R-01M0RCPZNJF75 passes frozen boundary and full depth-four ViT gates against current merged main; otherwise fully revert code and record the rejection.

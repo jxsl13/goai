@@ -816,3 +816,4 @@
 {"t":"2026-08-23T22:43:57Z","eid":"fb891bdab34d09c0","ag":"ag-4ba8","ev":"create","id":"R-01M0RCPZNJF75SZJ766JXXPX6H","k":"research","ti":"Screen a one-submission Metal pre-norm transformer block on M2"}
 {"t":"2026-08-23T22:44:10Z","eid":"4624fc1afdc5989c","ag":"ag-2b2b","ev":"revise","id":"R-01M0RCPZNJF75SZJ766JXXPX6H","note":"body+targets revised"}
 {"t":"2026-08-23T22:44:18Z","eid":"03b90050e6277dae","ag":"ag-554b","ev":"move","id":"R-01M0RCPZNJF75SZJ766JXXPX6H","fr":"draft","to":"active","note":"User authorized continued M2-first, benchmark-gated high-leverage work. Prior rejection and merged attention/FFN graph contracts were reviewed; begin a reversible complete-block screen against the independently fused baseline."}
+{"t":"2026-08-23T22:44:30Z","eid":"94598ce36b72cf35","ag":"ag-e749","ev":"create","id":"P-01M0RCQZESFTASGRCF6MVGEAE8","k":"proposal","ti":"Fuse complete pre-norm transformer blocks on Metal"}
