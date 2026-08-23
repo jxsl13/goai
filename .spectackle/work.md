@@ -4011,6 +4011,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 kind: proposal
 state: active
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/splitk_fused_test.go, llamagpu/splitk_fused_realmodel_test.go
 
 Narrow the rejected dual-dtype fusion to the production f16-KV lane that cleared the real-model gate. Retain one fused kernel: one SIMD group per key chunk executes incumbent lane-quad arithmetic, exchanges 66-float partials through threadgroup memory, and SIMD group 0 merges in ascending order. Remove the failed f32 fused kernel, pipeline, routing, and f32 benchmark cells. Keep the historical two-pass f16-KV route behind a diagnostic toggle until three same-command leaf campaigns and three valid token-interleaved TinyLlama campaigns clear the frozen gates. On promotion, make fusion the default only for eligible f16-KV decode and retain two-pass fallback for device/thread limits. This consumes R-01M0QF5B7EE31 and the measured rejection P-01M0QF5QXRF21.
