@@ -366,3 +366,6 @@ WHEN a one-event recorder is measured in each frozen campaign, the Recorder.Prof
 
 ## recorder-profile-scope-001
 WHEN the event-label scratch storage is changed, the Recorder.Profile scratch reuse SHALL preserve the native C ABI and default recorder behavior.
+
+## recorder-profile-allocation-reduction-001
+WHEN a 340-event recorder is measured in three independent count-seven control/candidate campaigns, the Recorder.Profile on Apple M2 SHALL allocate at least 300 fewer objects and 30000 fewer bytes per operation.
