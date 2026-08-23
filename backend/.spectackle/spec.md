@@ -68,3 +68,6 @@ WHEN OpPreNormTransformerBlock or OpPreNormTransformerBlockBackward executes, th
 
 ## PRENORM-TRANSFORMER-STACK-FUSION-SEMANTICS-001
 WHEN OpPreNormTransformerStack or OpPreNormTransformerStackBackward executes, the pre-norm transformer-stack operation SHALL preserve Depth sequential complete pre-norm transformer blocks and gradients for exactly 1 plus 12 times Depth differentiable inputs.
+
+## PRENORM-TRANSFORMER-STACK-FALLBACK-001
+WHEN the stack is ineligible for a fused backend operation, the pre-norm transformer-stack helper SHALL execute the existing complete-block helper exactly Depth times with 0 implicit backend migrations.
