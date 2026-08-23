@@ -3907,23 +3907,56 @@ int mtl_recorder_profile_snapshot(void* rec,
     NSUInteger count = recorder_profile_event_count(p);
     const NSUInteger* indices = recorder_profile_event_indices(p);
     if (!p.eventSnapshotReady) {
+        size_t eventBytes = count * sizeof(mtl_recorder_profile_event_snapshot);
         NSMutableData* data = count > 1 ? [[NSMutableData alloc]
-            initWithLength:count * sizeof(mtl_recorder_profile_event_snapshot)] : nil;
+            initWithLength:eventBytes + count * sizeof(uintptr_t)] : nil;
         mtl_recorder_profile_event_snapshot* snapshot = count == 1 ?
             &p->_inlineEventSnapshot : data.mutableBytes;
+        uintptr_t* labelTokens = count > 1 ? (uintptr_t*)((unsigned char*)data.mutableBytes + eventBytes) : NULL;
         if (count > 0 && snapshot == NULL) return -3;
+        if (count > 1 && labelTokens == NULL) return -3;
         const MTLCounterResultTimestamp* samples = p.resolvedData.bytes;
         NSUInteger firstPhysical = count > 0 ? indices[0] : 0;
         uint64_t origin = count > 0 ? samples[2*firstPhysical].timestamp : 0;
+        uintptr_t inlineLabelTokens[16];
+        NSUInteger inlineLabelIndices[16];
+        NSUInteger inlineLabelCount = 0;
         for (NSUInteger i = 0; i < count; i++) {
             NSUInteger physical = indices[i];
             uint64_t start = samples[2*physical].timestamp;
             uint64_t end = samples[2*physical+1].timestamp;
             uint64_t delta = end - start;
-            const char* utf8 = [p.labels[physical] UTF8String];
-            if (utf8 == NULL) utf8 = "";
-            strncpy(snapshot[i].label, utf8, MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1);
-            snapshot[i].label[MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1] = '\0';
+            NSString* eventLabel = p.labels[physical];
+            if (count == 1) {
+                const char* utf8 = [eventLabel UTF8String];
+                if (utf8 == NULL) utf8 = "";
+                strncpy(snapshot[i].label, utf8, MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1);
+                snapshot[i].label[MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1] = '\0';
+            } else {
+                uintptr_t labelToken = (uintptr_t)(__bridge const void*)eventLabel;
+                labelTokens[i] = labelToken;
+                NSUInteger cachedLabelIndex = NSNotFound;
+                for (NSUInteger j = 0; j < inlineLabelCount; j++) {
+                    if (inlineLabelTokens[j] == labelToken) {
+                        cachedLabelIndex = inlineLabelIndices[j];
+                        break;
+                    }
+                }
+                if (cachedLabelIndex != NSNotFound) {
+                    memcpy(snapshot[i].label, snapshot[cachedLabelIndex].label,
+                           MTL_RECORDER_PROFILE_LABEL_CAPACITY);
+                } else {
+                    const char* utf8 = [eventLabel UTF8String];
+                    if (utf8 == NULL) utf8 = "";
+                    strncpy(snapshot[i].label, utf8, MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1);
+                    snapshot[i].label[MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1] = '\0';
+                    if (inlineLabelCount < 16) {
+                        inlineLabelTokens[inlineLabelCount] = labelToken;
+                        inlineLabelIndices[inlineLabelCount] = i;
+                        inlineLabelCount++;
+                    }
+                }
+            }
             snapshot[i].startOffsetNS = (unsigned long long)
                 (((__uint128_t)(start - origin) * p.cpuTimestampSpan) / p.gpuTimestampSpan);
             snapshot[i].ticks = (unsigned long long)delta;
@@ -3945,6 +3978,17 @@ int mtl_recorder_profile_snapshot(void* rec,
     *commandDurationNS = commandSeconds > 0 ?
         (unsigned long long)(commandSeconds * 1000000000.0) : 0;
     return 0;
+}
+
+int mtl_recorder_profile_label_tokens(void* rec, uintptr_t** tokens) {
+    if (!recorder_is_profiled(rec)) return -8;
+    if (tokens == NULL) return -2;
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    NSUInteger count = recorder_profile_event_count(p);
+    if (!p.eventSnapshotReady || count < 2 || p.eventSnapshot == nil) return -9;
+    *tokens = (uintptr_t*)((const unsigned char*)p.eventSnapshot.bytes +
+                          count * sizeof(mtl_recorder_profile_event_snapshot));
+    return *tokens == NULL ? -3 : 0;
 }
 
 // mtl_recorder_unary encodes O = f(op, X) over n f32 elements of the device buffers

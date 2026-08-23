@@ -9,7 +9,7 @@ import (
 	"github.com/jxsl13/goai/backend/metal"
 )
 
-func benchmarkCompletedProfileRecorder(b *testing.B, events int, warm bool) (*metal.Recorder, func()) {
+func benchmarkCompletedProfileRecorderOps(b *testing.B, events int, warm bool, ops []int) (*metal.Recorder, func()) {
 	b.Helper()
 	if !metal.Available() {
 		b.Skip("metal device unavailable")
@@ -37,8 +37,12 @@ func benchmarkCompletedProfileRecorder(b *testing.B, events int, warm bool) (*me
 		o.Release()
 		x.Release()
 	}
-	for range events {
-		if err := r.Unary(x, o, 4); err != nil {
+	for i := range events {
+		op := 4
+		if len(ops) > 0 {
+			op = ops[i%len(ops)]
+		}
+		if err := r.Unary(x, o, op); err != nil {
 			cleanup()
 			b.Fatal(err)
 		}
@@ -61,6 +65,11 @@ func benchmarkCompletedProfileRecorder(b *testing.B, events int, warm bool) (*me
 	return r, cleanup
 }
 
+func benchmarkCompletedProfileRecorder(b *testing.B, events int, warm bool) (*metal.Recorder, func()) {
+	b.Helper()
+	return benchmarkCompletedProfileRecorderOps(b, events, warm, nil)
+}
+
 // BenchmarkMetalRecorderProfile isolates repeat extraction of an already
 // completed profile, including native event queries and Go result ownership.
 func BenchmarkMetalRecorderProfile(b *testing.B) {
@@ -80,6 +89,26 @@ func BenchmarkMetalRecorderProfile(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+// BenchmarkMetalRecorderProfileMixedLabels exercises production-like label reuse without
+// conflating the number of events with the number of distinct kernel names.
+func BenchmarkMetalRecorderProfileMixedLabels(b *testing.B) {
+	const events = 340
+	ops := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	r, cleanup := benchmarkCompletedProfileRecorderOps(b, events, true, ops)
+	b.Cleanup(cleanup)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		p, err := r.Profile()
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(p.Events) != events {
+			b.Fatalf("profile events=%d want %d", len(p.Events), events)
+		}
 	}
 }
 

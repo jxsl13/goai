@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -3233,6 +3234,80 @@ type RecorderProfile struct {
 	EventSpan          time.Duration
 }
 
+const recorderProfileInlineLabels = 16
+
+type recorderProfileLabelEntry struct {
+	token uintptr
+	owned string
+}
+
+type recorderProfileLabels struct {
+	inline [recorderProfileInlineLabels]recorderProfileLabelEntry
+	count  int
+	rest   map[uintptr]string
+	byText map[string]string
+}
+
+func (labels *recorderProfileLabels) own(token uintptr, native *C.char) string {
+	for i := range labels.count {
+		if token == labels.inline[i].token {
+			return labels.inline[i].owned
+		}
+	}
+	if owned, ok := labels.rest[token]; ok {
+		return owned
+	}
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(native)), int(C.MTL_RECORDER_PROFILE_LABEL_CAPACITY))
+	n := 0
+	for n < len(bytes) && bytes[n] != 0 {
+		n++
+	}
+	view := unsafe.String(unsafe.SliceData(bytes), n)
+	for i := range labels.count {
+		if view == labels.inline[i].owned {
+			if labels.count < len(labels.inline) {
+				labels.inline[labels.count] = recorderProfileLabelEntry{token: token, owned: labels.inline[i].owned}
+				labels.count++
+			}
+			return labels.inline[i].owned
+		}
+	}
+	if owned, ok := labels.byText[view]; ok {
+		labels.rest[token] = owned
+		return owned
+	}
+	owned := strings.Clone(view)
+	if labels.count < len(labels.inline) {
+		labels.inline[labels.count] = recorderProfileLabelEntry{token: token, owned: owned}
+		labels.count++
+		return owned
+	}
+	if labels.rest == nil {
+		labels.rest = make(map[uintptr]string)
+		labels.byText = make(map[string]string)
+	}
+	labels.rest[token] = owned
+	labels.byText[owned] = owned
+	return owned
+}
+
+func fillRecorderProfileEvents(p *RecorderProfile, nativeEvents []C.mtl_recorder_profile_event_snapshot, tokens []C.uintptr_t) {
+	var labels recorderProfileLabels
+	for i := range p.Events {
+		event := &nativeEvents[i]
+		p.Events[i] = RecorderProfileEvent{
+			Label:       labels.own(uintptr(tokens[i]), &event.label[0]),
+			StartOffset: time.Duration(uint64(event.startOffsetNS)),
+			Ticks:       uint64(event.ticks),
+			Duration:    time.Duration(uint64(event.durationNS)),
+		}
+		end := p.Events[i].StartOffset + p.Events[i].Duration
+		if end > p.EventSpan {
+			p.EventSpan = end
+		}
+	}
+}
+
 // NewRecorder opens a Recorder (a fresh command buffer). Record ops into it, then Finish to submit
 // and wait, and Free to release it. Not safe for concurrent use; drive one Recorder per goroutine.
 func NewRecorder() (*Recorder, error) {
@@ -3280,6 +3355,24 @@ func (r *Recorder) Profile() (RecorderProfile, error) {
 	if count < 0 || count > 0 && events == nil {
 		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile returned invalid event storage")
 	}
+	if count == 1 {
+		event := events
+		profileEvent := RecorderProfileEvent{
+			Label:       C.GoString(&event.label[0]),
+			StartOffset: time.Duration(uint64(event.startOffsetNS)),
+			Ticks:       uint64(event.ticks),
+			Duration:    time.Duration(uint64(event.durationNS)),
+		}
+		return RecorderProfile{
+			Events:             []RecorderProfileEvent{profileEvent},
+			OmittedMPS:         int(omittedMPS),
+			OmittedOverflow:    int(omittedOverflow),
+			OmittedUnsupported: int(omittedUnsupported),
+			TimestampFrequency: uint64(frequency),
+			CommandDuration:    time.Duration(uint64(commandDurationNS)),
+			EventSpan:          profileEvent.StartOffset + profileEvent.Duration,
+		}, nil
+	}
 	p := RecorderProfile{
 		Events:             make([]RecorderProfileEvent, int(count)),
 		OmittedMPS:         int(omittedMPS),
@@ -3289,18 +3382,12 @@ func (r *Recorder) Profile() (RecorderProfile, error) {
 		CommandDuration:    time.Duration(uint64(commandDurationNS)),
 	}
 	nativeEvents := unsafe.Slice(events, int(count))
-	for i := range p.Events {
-		event := &nativeEvents[i]
-		p.Events[i] = RecorderProfileEvent{
-			Label:       C.GoString(&event.label[0]),
-			StartOffset: time.Duration(uint64(event.startOffsetNS)),
-			Ticks:       uint64(event.ticks),
-			Duration:    time.Duration(uint64(event.durationNS)),
+	if len(p.Events) > 1 {
+		var tokenStorage *C.uintptr_t
+		if rc := C.mtl_recorder_profile_label_tokens(r.handle, &tokenStorage); rc != 0 || tokenStorage == nil {
+			return RecorderProfile{}, fmt.Errorf("metal: Recorder profile labels unavailable (code %d)", int(rc))
 		}
-		end := p.Events[i].StartOffset + p.Events[i].Duration
-		if end > p.EventSpan {
-			p.EventSpan = end
-		}
+		fillRecorderProfileEvents(&p, nativeEvents, unsafe.Slice(tokenStorage, len(p.Events)))
 	}
 	return p, nil
 }

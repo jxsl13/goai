@@ -133,6 +133,43 @@ func TestRecorderProfileLabelsDurationsAndParity(t *testing.T) {
 	}
 }
 
+func TestRecorderProfileLabelsRemainOwnedAfterFree(t *testing.T) {
+	requireMetalProfile(t)
+
+	x := profileBuffer(t, []float32{1})
+	o := profileBuffer(t, []float32{0})
+	r, err := metal.NewProfilingRecorder(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := r.Unary(x, o, 4); err != nil {
+			r.Free()
+			t.Fatal(err)
+		}
+	}
+	if err := r.Finish(); err != nil {
+		r.Free()
+		t.Fatal(err)
+	}
+	p, err := r.Profile()
+	if err != nil {
+		r.Free()
+		t.Fatal(err)
+	}
+	r.Free()
+
+	for i := range 8 {
+		churn := make([]byte, 1<<20)
+		churn[i] = byte(i)
+		runtime.GC()
+		runtime.KeepAlive(churn)
+	}
+	if len(p.Events) != 2 || p.Events[0].Label != "unary.relu" || p.Events[1].Label != "unary.relu" {
+		t.Fatalf("profile labels after Free = %+v", p.Events)
+	}
+}
+
 func TestRecorderProfileCommitWaitOverflowAndMPSOmission(t *testing.T) {
 	requireMetalProfile(t)
 
