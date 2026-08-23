@@ -63,7 +63,7 @@ The rejected lane-owned pass-2 candidate proved that pass-2 redundancy exists bu
 
 ## P-01M0QF5QXRF21BMTQ7ZF9BAB3B Collapse M2 split-K decode attention into one fused threadgroup kernel
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/mha_decode_bench_test.go, llamagpu
 
