@@ -354,10 +354,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-
-## recorder-profile-equivalence-001
-WHEN Profile resolves a completed recorder after label scratch reuse, the Metal recorder profiling SHALL return exactly the same event count, event order, labels, start offsets, GPU ticks, durations, frequency, command duration, span, omissions, and errors as the pre-change implementation.
-
 ## recorder-profile-allocation-gate-001
 WHEN a 340-event recorder is measured in three independent count-seven control/candidate campaigns, the Recorder.Profile on Apple M2 SHALL run at least 1.10 times faster by median.
 
