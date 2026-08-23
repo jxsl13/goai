@@ -4016,3 +4016,12 @@ parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM, internal/benchcompare/leadership/evidence
 
 Profile merged PR 1179 on Apple M2 Pro after the packed-header NEON decode. Attribute remaining compute versus scheduler synchronization at the production boundary, inspect the paired row instruction schedule without revisiting rejected multi-block Go staging, and select only a bounded exact candidate with a plausible retained leaf gain of at least 1.02x and no production regression. Pin every baseline to merge 71cee6d2 and preserve matched model bytes, digest, thread count, warm-up, process ordering, and measurement boundaries.
+
+## T-01M0PQA6P4FW4TZTP85GCBPX5V Coalesce paired Q4_K coefficient broadcasts with LD2R
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.TestDotQ4KPairRowASMArbitraryHeaders, go:gguf.BenchmarkDotQ4KPairRowASM_K2048, internal/benchcompare/leadership/evidence
+
+Replace adjacent VLD1R coefficient broadcasts in dotQ4KPairRowNeon with post-indexed ARM64 LD2R structured replicate loads. Preserve the coefficient scratch layout, low/high pair sequence, q-value mapping, dual accumulation schedule, reduction order, output bits, zero allocations, Go 1.26 compiler floor, and non-ARM64 behavior. Gate against merge 71cee6d2 with arbitrary-header exactness, at least seven retained alternating Apple M2 K=2048 row campaigns, TinyLlama FFN pair-apply, and pinned 64-token production decode. Reject below 1.02x retained leaf speedup, below 5/7 leaf wins, or on any production regression.
