@@ -478,8 +478,5 @@ WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at
 
 ## METAL-F16KV-SPLITK-FUSED-DEFAULT-001
 WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the Metal attention selector SHALL dispatch exactly 1 fused kernel by default and retain two-pass execution when SetSplitKFused receives false.
-## METAL-Q4K-SINGLE-SIMD-SCOPE-001
-WHEN M differs from one or the pipeline lacks a 32-lane SIMD width, the Metal Q4_K single-SIMD selector SHALL dispatch the incumbent 64-thread route and issue zero single-SIMD candidate groups.
-
 ## METAL-Q4K-SINGLE-SIMD-PERF-001
 WHEN three order-alternated count-seven M2 campaigns measure all three frozen resident shapes, the Q4_K single-SIMD promotion gate SHALL retain the candidate only when every shape and campaign reaches at least 1.05 times incumbent throughput.
