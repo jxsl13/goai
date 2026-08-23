@@ -101,7 +101,7 @@ func TestSplitKFusedNumericParity(t *testing.T) {
 	if !Available() {
 		t.Skip("Metal unavailable")
 	}
-	defer SetSplitKFused(false)
+	defer SetSplitKFused(true)
 	SetSplitKQuadDK(true)
 	for _, geometry := range []struct {
 		name           string
@@ -110,23 +110,21 @@ func TestSplitKFusedNumericParity(t *testing.T) {
 		for _, sk := range []int{128, 129, 512, 1024, 1536, 2048} {
 			t.Run(fmt.Sprintf("%s/sk%d", geometry.name, sk), func(t *testing.T) {
 				f := newSplitKFusedFixture(t, geometry.heads, geometry.kvHeads, sk)
-				for _, f16 := range []bool{false, true} {
-					control := f.run(t, f16, false)
-					candidate := f.run(t, f16, true)
-					maxRelative := 0.0
-					for i := range control {
-						got, want := float64(candidate[i]), float64(control[i])
-						if math.IsNaN(got) != math.IsNaN(want) || math.IsInf(got, 0) != math.IsInf(want, 0) {
-							t.Fatalf("f16=%v output[%d] class differs: got=%g want=%g", f16, i, got, want)
-						}
-						relative := math.Abs(got-want) / math.Max(1, math.Abs(want))
-						maxRelative = max(maxRelative, relative)
+				control := f.run(t, true, false)
+				candidate := f.run(t, true, true)
+				maxRelative := 0.0
+				for i := range control {
+					got, want := float64(candidate[i]), float64(control[i])
+					if math.IsNaN(got) != math.IsNaN(want) || math.IsInf(got, 0) != math.IsInf(want, 0) {
+						t.Fatalf("output[%d] class differs: got=%g want=%g", i, got, want)
 					}
-					if maxRelative > 2e-6 {
-						t.Fatalf("f16=%v maximum relative difference %.3e exceeds 2e-6", f16, maxRelative)
-					}
-					t.Logf("f16=%v maximum relative difference %.3e", f16, maxRelative)
+					relative := math.Abs(got-want) / math.Max(1, math.Abs(want))
+					maxRelative = max(maxRelative, relative)
 				}
+				if maxRelative > 2e-6 {
+					t.Fatalf("maximum relative difference %.3e exceeds 2e-6", maxRelative)
+				}
+				t.Logf("maximum relative difference %.3e", maxRelative)
 			})
 		}
 	}
@@ -160,39 +158,38 @@ func TestSplitKFusedProfileRoutingAndFallback(t *testing.T) {
 		t.Skip("Metal profiling unavailable")
 	}
 	defer func() {
-		SetSplitKFused(false)
+		SetSplitKFused(true)
 		SetSplitKChunks(16)
 		SetSplitKPerChunk(128)
 		SetSplitKQuadDK(true)
 	}()
 	SetSplitKQuadDK(true)
-	for _, f16 := range []bool{false, true} {
-		f := newSplitKFusedFixture(t, 32, 4, 512)
-		f.run(t, f16, false)
-		f.run(t, f16, true)
-		control := splitKFusedProfileLabels(t, f, f16, false)
-		candidate := splitKFusedProfileLabels(t, f, f16, true)
-		wantCandidate := "mha.decode.splitk.fused"
-		if f16 {
-			wantCandidate = "mha.f16kv.decode.splitk.fused"
-		}
-		if len(control) != 2 || len(candidate) != 1 || candidate[0] != wantCandidate {
-			t.Fatalf("f16=%v labels control=%v candidate=%v", f16, control, candidate)
-		}
+	f := newSplitKFusedFixture(t, 32, 4, 512)
+	f.run(t, true, false)
+	f.run(t, true, true)
+	control := splitKFusedProfileLabels(t, f, true, false)
+	candidate := splitKFusedProfileLabels(t, f, true, true)
+	if len(control) != 2 || len(candidate) != 1 || candidate[0] != "mha.f16kv.decode.splitk.fused" {
+		t.Fatalf("labels control=%v candidate=%v", control, candidate)
+	}
+	f32 := newSplitKFusedFixture(t, 32, 4, 512)
+	labels := splitKFusedProfileLabels(t, f32, false, true)
+	if len(labels) != 2 || labels[0] != "mha.decode.splitk.pass1" || labels[1] != "mha.decode.splitk.pass2" {
+		t.Fatalf("f32 labels=%v, want established two-pass route", labels)
 	}
 
 	outOfScope := newSplitKFusedFixture(t, 32, 4, 127)
-	labels := splitKFusedProfileLabels(t, outOfScope, false, true)
-	if len(labels) != 1 || labels[0] == "mha.decode.splitk.fused" {
+	labels = splitKFusedProfileLabels(t, outOfScope, true, true)
+	if len(labels) != 1 || labels[0] == "mha.f16kv.decode.splitk.fused" {
 		t.Fatalf("sk127 candidate labels=%v, want non-fused route", labels)
 	}
 
 	SetSplitKChunks(512)
 	SetSplitKPerChunk(16)
 	overLimit := newSplitKFusedFixture(t, 32, 4, 2048)
-	labels = splitKFusedProfileLabels(t, overLimit, false, true)
+	labels = splitKFusedProfileLabels(t, overLimit, true, true)
 	for _, label := range labels {
-		if label == "mha.decode.splitk.fused" {
+		if label == "mha.f16kv.decode.splitk.fused" {
 			t.Fatalf("over-limit candidate unexpectedly fused: %v", labels)
 		}
 	}
@@ -202,87 +199,80 @@ func BenchmarkMetalSplitKFusedPaired(b *testing.B) {
 	if !Available() || !RecorderProfilingAvailable() {
 		b.Skip("Metal profiling unavailable")
 	}
-	defer SetSplitKFused(false)
+	defer SetSplitKFused(true)
 	SetSplitKQuadDK(true)
-	for _, f16 := range []bool{false, true} {
-		for _, sk := range []int{512, 1024, 1536, 2048} {
-			f := newSplitKFusedFixture(b, 32, 4, sk)
-			b.Run(fmt.Sprintf("f16=%v/sk=%d", f16, sk), func(b *testing.B) {
-				f.run(b, f16, false)
-				f.run(b, f16, true)
-				const repeats = 22
-				fusedLabel := "mha.decode.splitk.fused"
-				pass1Label := "mha.decode.splitk.pass1"
-				pass2Label := "mha.decode.splitk.pass2"
-				if f16 {
-					fusedLabel = "mha.f16kv.decode.splitk.fused"
-					pass1Label = "mha.f16kv.decode.splitk.pass1"
-					pass2Label = "mha.f16kv.decode.splitk.pass2"
+	for _, sk := range []int{512, 1024, 1536, 2048} {
+		f := newSplitKFusedFixture(b, 32, 4, sk)
+		b.Run(fmt.Sprintf("f16=true/sk=%d", sk), func(b *testing.B) {
+			f.run(b, true, false)
+			f.run(b, true, true)
+			const repeats = 22
+			const fusedLabel = "mha.f16kv.decode.splitk.fused"
+			const pass1Label = "mha.f16kv.decode.splitk.pass1"
+			const pass2Label = "mha.f16kv.decode.splitk.pass2"
+			profile := RecorderProfile{Events: make([]RecorderProfileEvent, 0, repeats*3)}
+			measurePair := func(reverse bool) (time.Duration, time.Duration) {
+				r, err := NewProfilingRecorder(repeats * 3)
+				if err != nil {
+					b.Fatal(err)
 				}
-				profile := RecorderProfile{Events: make([]RecorderProfileEvent, 0, repeats*3)}
-				measurePair := func(reverse bool) (time.Duration, time.Duration) {
-					r, err := NewProfilingRecorder(repeats * 3)
-					if err != nil {
-						b.Fatal(err)
+				for i := range repeats {
+					firstFused := (i&1 == 1) != reverse
+					for _, fused := range [...]bool{firstFused, !firstFused} {
+						SetSplitKFused(fused)
+						f.encode(b, r, true)
 					}
-					for i := range repeats {
-						firstFused := (i&1 == 1) != reverse
-						for _, fused := range [...]bool{firstFused, !firstFused} {
-							SetSplitKFused(fused)
-							f.encode(b, r, f16)
-						}
-					}
-					if err := r.Finish(); err != nil {
-						r.Free()
-						b.Fatal(err)
-					}
-					if err := r.ProfileInto(&profile); err != nil {
-						r.Free()
-						b.Fatal(err)
-					}
+				}
+				if err := r.Finish(); err != nil {
 					r.Free()
-					if len(profile.Events) != repeats*3 || profile.OmittedMPS != 0 || profile.OmittedOverflow != 0 || profile.OmittedUnsupported != 0 {
-						b.Fatalf("incomplete split-K profile: %+v", profile)
-					}
-					var control, candidate time.Duration
-					eventIndex := 0
-					for i := range repeats {
-						firstFused := (i&1 == 1) != reverse
-						for _, fused := range [...]bool{firstFused, !firstFused} {
-							if fused {
-								event := profile.Events[eventIndex]
-								eventIndex++
-								if event.Label != fusedLabel {
-									b.Fatalf("fused event label=%q want=%q", event.Label, fusedLabel)
-								}
-								candidate += event.Duration
-								continue
-							}
-							pass1, pass2 := profile.Events[eventIndex], profile.Events[eventIndex+1]
-							eventIndex += 2
-							if pass1.Label != pass1Label || pass2.Label != pass2Label {
-								b.Fatalf("control labels=(%q,%q), want=(%q,%q)", pass1.Label, pass2.Label, pass1Label, pass2Label)
-							}
-							control += pass1.Duration + pass2.Duration
-						}
-					}
-					return control / repeats, candidate / repeats
+					b.Fatal(err)
 				}
-
+				if err := r.ProfileInto(&profile); err != nil {
+					r.Free()
+					b.Fatal(err)
+				}
+				r.Free()
+				if len(profile.Events) != repeats*3 || profile.OmittedMPS != 0 || profile.OmittedOverflow != 0 || profile.OmittedUnsupported != 0 {
+					b.Fatalf("incomplete split-K profile: %+v", profile)
+				}
 				var control, candidate time.Duration
-				b.ResetTimer()
-				for i := range b.N {
-					controlPair, candidatePair := measurePair(i&1 == 1)
-					control += controlPair
-					candidate += candidatePair
+				eventIndex := 0
+				for i := range repeats {
+					firstFused := (i&1 == 1) != reverse
+					for _, fused := range [...]bool{firstFused, !firstFused} {
+						if fused {
+							event := profile.Events[eventIndex]
+							eventIndex++
+							if event.Label != fusedLabel {
+								b.Fatalf("fused event label=%q want=%q", event.Label, fusedLabel)
+							}
+							candidate += event.Duration
+							continue
+						}
+						pass1, pass2 := profile.Events[eventIndex], profile.Events[eventIndex+1]
+						eventIndex += 2
+						if pass1.Label != pass1Label || pass2.Label != pass2Label {
+							b.Fatalf("control labels=(%q,%q), want=(%q,%q)", pass1.Label, pass2.Label, pass1Label, pass2Label)
+						}
+						control += pass1.Duration + pass2.Duration
+					}
 				}
-				b.StopTimer()
-				controlNS := float64(control.Nanoseconds()) / float64(b.N)
-				candidateNS := float64(candidate.Nanoseconds()) / float64(b.N)
-				b.ReportMetric(controlNS, "control-ns/op")
-				b.ReportMetric(candidateNS, "candidate-ns/op")
-				b.ReportMetric(controlNS/candidateNS, "speedup")
-			})
-		}
+				return control / repeats, candidate / repeats
+			}
+
+			var control, candidate time.Duration
+			b.ResetTimer()
+			for i := range b.N {
+				controlPair, candidatePair := measurePair(i&1 == 1)
+				control += controlPair
+				candidate += candidatePair
+			}
+			b.StopTimer()
+			controlNS := float64(control.Nanoseconds()) / float64(b.N)
+			candidateNS := float64(candidate.Nanoseconds()) / float64(b.N)
+			b.ReportMetric(controlNS, "control-ns/op")
+			b.ReportMetric(candidateNS, "candidate-ns/op")
+			b.ReportMetric(controlNS/candidateNS, "speedup")
+		})
 	}
 }

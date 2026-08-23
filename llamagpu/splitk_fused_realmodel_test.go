@@ -48,7 +48,7 @@ func TestMetalSplitKFusedRealModelGate(t *testing.T) {
 		t.Fatalf("fixture head dimension=%d, want 64", model.Config.Dim/model.Config.Heads)
 	}
 
-	defer metal.SetSplitKFused(false)
+	defer metal.SetSplitKFused(true)
 
 	const (
 		steps  = 32
@@ -66,8 +66,7 @@ func TestMetalSplitKFusedRealModelGate(t *testing.T) {
 	for _, dtype := range []struct {
 		name string
 		new  func() (*llamagpu.Decoder, error)
-	}{{"f32", func() (*llamagpu.Decoder, error) { return llamagpu.NewQuant(model) }},
-		{"f16kv", func() (*llamagpu.Decoder, error) { return llamagpu.NewQuantF16KV(model) }}} {
+	}{{"f16kv", func() (*llamagpu.Decoder, error) { return llamagpu.NewQuantF16KV(model) }}} {
 		t.Run(dtype.name, func(t *testing.T) {
 			controlDecoder, err := dtype.new()
 			if err != nil {

@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"slices"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -800,13 +799,8 @@ func TestF16KVAttentionProfileProvesSpecializedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(profile.Events) != 2 {
-		t.Fatalf("f16-KV profile events=%+v, want split-K pass1/pass2", profile.Events)
-	}
-	for _, event := range profile.Events {
-		if !strings.HasPrefix(event.Label, "mha.f16kv.") {
-			t.Fatalf("profile label=%q does not prove the f16-KV path", event.Label)
-		}
+	if len(profile.Events) != 1 || profile.Events[0].Label != "mha.f16kv.decode.splitk.fused" {
+		t.Fatalf("f16-KV profile events=%+v, want one fused split-K dispatch", profile.Events)
 	}
 }
 

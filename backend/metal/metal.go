@@ -4090,8 +4090,9 @@ func SetSplitKQuadDK(on bool) {
 	C.mtl_set_splitk_quad(v)
 }
 
-// SetSplitKFused selects the experimental one-dispatch dk-64 decode path that keeps split-K
-// partials in threadgroup memory. Unsupported shapes and device limits retain the two-pass path.
+// SetSplitKFused controls the default one-dispatch f16-KV dk-64 decode path that keeps split-K
+// partials in threadgroup memory. False selects two-pass execution for diagnostics; F32 and
+// unsupported shapes always retain their established paths.
 func SetSplitKFused(on bool) {
 	var v C.int
 	if on {
