@@ -4010,7 +4010,7 @@ TinyLlama Metal decode currently records separate ffn_gate and ffn_up quant proj
 
 ## R-01M0Q2EGE0E60T5H3P35XSCX77 Assess raw Metal M1 gate and up fusion boundary
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q2CZXBEXKV41BCXYX7G5FQ
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m
