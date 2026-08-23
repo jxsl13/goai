@@ -4006,3 +4006,12 @@ created: 2026-08-23
 targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
 
 The current M2 Q4_K cooperative kernel maps two SIMD groups to four output rows per threadgroup. A paired gate/up kernel can preserve identical total thread and weight work by assigning one SIMD group to two gate rows and one to the matching two up rows, exchanging only four reduced scalars through threadgroup memory, and writing SwiGLU outputs directly. This differs from rejected raw-row concatenation: it never materializes a 2*hidden projection and keeps M>1 on the established path. Prior seven-campaign evidence showed graph-only fusion regressed tg64 to 0.9866x, so this hypothesis requires isolated same-binary proof before decoder integration.
+
+## P-01M0Q3A75AERNBPGPVFJK4N7NW Fuse M2 Q4_K gate and up into non-materializing SwiGLU
+kind: proposal
+state: draft
+created: 2026-08-23
+refs: R-01M0Q39HPCECA80SSE3NVC5TSK
+targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
+
+Add an M=1-only Metal Q4_K paired projection kernel that preserves total cooperative SIMD work, reduces each matching gate/up pair plus SwiGLU from three dispatches to one, and writes only the hidden-width activation. Keep every non-Q4_K, mismatched shape, non-Metal backend, and M>1 call on the established path. Promote only after isolated exactness, a same-binary leaf campaign, exact trained-model outputs, the intended 131-to-87 quant-plus-SwiGLU event reduction, and seven alternating M2 campaigns prove at least 1.03x tg64 with at least five wins and no pp64 or pp512 regression.
