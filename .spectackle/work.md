@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0P40Z35E28SNW83F3JVQPNN Fuse CPU Q4_K and Q6_K projection stores into QuantLlama residuals
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:gguf.QMatMul, go:nn.QuantLinear.Forward, go:nlp.QuantLlama.DecodeStep
