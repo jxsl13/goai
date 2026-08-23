@@ -1,0 +1,43 @@
+## boundary — candidate first
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   3068817 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   3037821 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   3001104 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   2993967 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   2989671 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   2988583 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/candidate         	      10	   2976596 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3488221 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3464204 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3460638 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3452250 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3418500 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3446208 ns/op
+BenchmarkPreNormTransformerBlockTrainingBoundary/control           	      10	   3455033 ns/op
+PASS
+
+## full ViT train step — candidate first
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15273021 ns/op	       523.8 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15258808 ns/op	       524.3 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15242667 ns/op	       524.8 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15283950 ns/op	       523.4 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15272671 ns/op	       523.8 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15277217 ns/op	       523.7 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/candidate         	      10	  15454079 ns/op	       517.7 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17024862 ns/op	       469.9 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17179067 ns/op	       465.7 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17313162 ns/op	       462.1 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17108379 ns/op	       467.6 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17144938 ns/op	       466.6 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17075321 ns/op	       468.5 img/s
+BenchmarkPreNormTransformerBlockViTTrainStep/control           	      10	  17177867 ns/op	       465.7 img/s
+PASS

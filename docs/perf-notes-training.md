@@ -391,3 +391,27 @@ composite with no implicit reference migration.
 
 Full protocol and raw output are in
 `internal/benchcompare/leadership/evidence/m2-metal-prenorm-attention-20260823`.
+
+## Compose complete pre-norm transformer blocks on Metal
+
+The promoted attention and FFN graph boundaries still synchronized through Go
+between the two residual sublayers. The complete-block route now composes both
+existing graph builders into one cached MPSGraph forward and one explicit
+13-input VJP. The intermediate attention residual remains on the GPU, while
+both LayerNorm epsilon values remain runtime feeds.
+
+At batch=8, sequence=65, dimension=128, heads=4, hidden=512, and F32, three
+same-binary `GOMAXPROCS=1` count-seven campaigns improve the complete training
+boundary by 1.157x, 1.154x, and 1.163x. The depth-4 ViT training step improves
+by 1.147x, 1.123x, and 1.117x. The weakest of all 42 aligned pairs is 1.096x.
+The control retains both independently fused boundaries, so these ratios are
+the incremental gain from composing already-optimized operations.
+
+The fused output, all 13 gradients, input immutability, full-model logits, and
+every ViT parameter gradient match the two-boundary route. Unsupported
+features, shapes, dtypes, layouts, or a backend missing either fused direction
+continue through pre-norm attention followed by pre-norm FFN without an
+implicit reference migration.
+
+Full protocol and raw output are in
+`internal/benchcompare/leadership/evidence/m2-metal-prenorm-transformer-block-20260824`.
