@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0PEGTNPFYBR11H1K7RDM36Q Reprofile merged M2 CPU quant decode after paired-header acceleration
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
-
-Profile the exact production TinyLlama Q4_K_M decode boundary on Apple M2 Pro after PR 1176. Attribute CPU, synchronization, and allocation cost against wall clock; select only a new bottom-up candidate with bit-exact digest preservation, a permanent production-shape benchmark, and statistically validated leverage. Do not retry persistent worker pools, caller-participation fan-out, unchanged Q8_K activation leaves, or rejected direct residual epilogues.
