@@ -480,3 +480,6 @@ WHEN a one-row F32 RMSNorm candidate executes with 64, 128, or 256 threads, the 
 
 ## METAL-RMSNORM-TG-PERF-001
 WHEN 3 independent same-command count-7 campaigns compare a candidate width with 256 threads at the 5 frozen one-row dimensions, the M2 RMSNorm threadgroup promotion gate SHALL retain the candidate only when every campaign and dimension reaches at least 1.10 times control throughput.
+
+## METAL-RMSNORM-TG-SCOPE-001
+WHEN RMSNorm has more than 1 row, an unsupported dimension, or a threadgroup width below the device execution width, the Metal RMSNorm threadgroup selector SHALL dispatch exactly 256 threads and issue 0 candidate-width threadgroups.
