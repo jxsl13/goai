@@ -464,3 +464,4 @@
 {"t":"2026-08-23T14:07:31Z","eid":"ce881c5018211d6f","ag":"ag-6d97","ev":"create","id":"R-01M0QF5B7EE31TSGZKGEMY4YEZ","k":"research","ti":"Fuse M2 split-K chunk processing and merge inside one threadgroup","dir":"backend/metal"}
 {"t":"2026-08-23T14:07:44Z","eid":"1fddd62aac8b04af","ag":"ag-c84c","ev":"create","id":"P-01M0QF5QXRF21BMTQ7ZF9BAB3B","k":"proposal","ti":"Collapse M2 split-K decode attention into one fused threadgroup kernel","dir":"backend/metal"}
 {"t":"2026-08-23T14:07:51Z","eid":"ad074dec89ff6df7","ag":"ag-93fb","ev":"move","id":"P-01M0QF5QXRF21BMTQ7ZF9BAB3B","dir":"backend/metal","fr":"draft","to":"active"}
+{"t":"2026-08-23T14:08:02Z","eid":"d9068f6b57ce7d83","ag":"ag-bb02","ev":"grill","id":"P-01M0QF5QXRF21BMTQ7ZF9BAB3B","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"28a2f99d7a1a12017902d071a89f86db8fff1bc70909942aac6aaf86524fa182"}

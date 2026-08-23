@@ -65,6 +65,7 @@ The rejected lane-owned pass-2 candidate proved that pass-2 redundancy exists bu
 kind: proposal
 state: active
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/mha_decode_bench_test.go, llamagpu
 
 Replace the default lane-quad two-pass split-K implementation for eligible dk=64 decode with opt-in f32 and f16-KV fused kernels. One threadgroup is assigned per head and contains one 32-lane SIMD group per key chunk. Each SIMD group executes the incumbent lane-quad chunk arithmetic, stores m/l/64 accumulators into dynamically sized threadgroup memory, and synchronizes. SIMD group 0 merges chunks in incumbent order with dimension-owned lanes and writes the output. The candidate removes global PART traffic, process-global scratch allocation, and the second encoder while preserving a correct two-pass fallback when the toggle is off, shapes are out of scope, or nchunk*32 exceeds the pipeline limit. Promotion requires deterministic numeric parity, distinct profile routing, three same-command count-7 M2 campaigns over f32/f16-KV sk 512/1024/1536/2048, and three valid paired TinyLlama campaigns at context 512/1536. This consumes R-01M0QF5B7EE31 and supersedes the rejected isolated pass-2 proposal P-01M0QE1VX8FKN.
