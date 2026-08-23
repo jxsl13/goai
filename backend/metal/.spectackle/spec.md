@@ -518,3 +518,6 @@ WHEN supported output and gradient parity is validated against the incumbent com
 
 ## M2-PRENORM-ATTENTION-PERF-001
 WHERE three fresh-process order-alternated count-7 campaigns at B8 S65 D128 H4, the M2 performance gate SHALL require medians of at least 1.25x boundary and 1.15x full-step, with every aligned full-step pair at least 1.05x.
+
+## METAL-PRENORM-TRANSFORMER-BLOCK-GRAPH-STRUCTURE-001
+WHERE contiguous offset-zero F32 complete-block fusion, the Metal pre-norm transformer-block implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with 2 runtime epsilon feeds, pooled buffers, and Go-owned outputs.
