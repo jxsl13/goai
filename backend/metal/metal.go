@@ -3291,12 +3291,86 @@ func (labels *recorderProfileLabels) own(token uintptr, native *C.char) string {
 	return owned
 }
 
+type recorderProfileIntoLabels recorderProfileLabels
+
+func recorderProfileLabelView(native *C.char) string {
+	bytes := unsafe.Slice((*byte)(unsafe.Pointer(native)), int(C.MTL_RECORDER_PROFILE_LABEL_CAPACITY))
+	n := 0
+	for n < len(bytes) && bytes[n] != 0 {
+		n++
+	}
+	return unsafe.String(unsafe.SliceData(bytes), n)
+}
+
+func (labels *recorderProfileIntoLabels) remember(token uintptr, owned string) {
+	if labels.count < len(labels.inline) {
+		labels.inline[labels.count] = recorderProfileLabelEntry{token: token, owned: owned}
+		labels.count++
+		return
+	}
+	if labels.rest == nil {
+		labels.rest = make(map[uintptr]string)
+		labels.byText = make(map[string]string)
+	}
+	labels.rest[token] = owned
+	labels.byText[owned] = owned
+}
+
+func (labels *recorderProfileIntoLabels) ownExisting(existing string, token uintptr, native *C.char) string {
+	for i := range labels.count {
+		if token == labels.inline[i].token {
+			return labels.inline[i].owned
+		}
+	}
+	if owned, ok := labels.rest[token]; ok {
+		return owned
+	}
+	view := recorderProfileLabelView(native)
+	if existing != "" && view == existing {
+		if labels.count < len(labels.inline) {
+			labels.remember(token, existing)
+		}
+		return existing
+	}
+	for i := range labels.count {
+		if view == labels.inline[i].owned {
+			labels.remember(token, labels.inline[i].owned)
+			return labels.inline[i].owned
+		}
+	}
+	if owned, ok := labels.byText[view]; ok {
+		labels.remember(token, owned)
+		return owned
+	}
+	owned := strings.Clone(view)
+	labels.remember(token, owned)
+	return owned
+}
+
 func fillRecorderProfileEvents(p *RecorderProfile, nativeEvents []C.mtl_recorder_profile_event_snapshot, tokens []C.uintptr_t) {
 	var labels recorderProfileLabels
 	for i := range p.Events {
 		event := &nativeEvents[i]
 		p.Events[i] = RecorderProfileEvent{
 			Label:       labels.own(uintptr(tokens[i]), &event.label[0]),
+			StartOffset: time.Duration(uint64(event.startOffsetNS)),
+			Ticks:       uint64(event.ticks),
+			Duration:    time.Duration(uint64(event.durationNS)),
+		}
+		end := p.Events[i].StartOffset + p.Events[i].Duration
+		if end > p.EventSpan {
+			p.EventSpan = end
+		}
+	}
+}
+
+func fillRecorderProfileEventsInto(p *RecorderProfile, nativeEvents []C.mtl_recorder_profile_event_snapshot, tokens []C.uintptr_t) {
+	var labels recorderProfileIntoLabels
+	for i := range p.Events {
+		event := &nativeEvents[i]
+		label := labels.ownExisting(p.Events[i].Label, uintptr(tokens[i]), &event.label[0])
+		p.Events[i] = RecorderProfileEvent{
+			Label:       label,
 			StartOffset: time.Duration(uint64(event.startOffsetNS)),
 			Ticks:       uint64(event.ticks),
 			Duration:    time.Duration(uint64(event.durationNS)),
@@ -3390,6 +3464,61 @@ func (r *Recorder) Profile() (RecorderProfile, error) {
 		fillRecorderProfileEvents(&p, nativeEvents, unsafe.Slice(tokenStorage, len(p.Events)))
 	}
 	return p, nil
+}
+
+// ProfileInto resolves a completed profiling recorder into dst, reusing dst.Events capacity and
+// matching Go-owned label strings. Call it after Finish, or after Commit followed by Wait, and
+// before Free. On error, dst is unchanged.
+func (r *Recorder) ProfileInto(dst *RecorderProfile) error {
+	if dst == nil {
+		return fmt.Errorf("metal: Recorder profile destination is nil")
+	}
+	if r == nil || r.handle == nil {
+		return fmt.Errorf("metal: Recorder profile after Free")
+	}
+	view := C.mtl_recorder_profile_view(r.handle)
+	if view.status != 0 {
+		return fmt.Errorf("metal: Recorder profile unavailable (code %d)", int(view.status))
+	}
+	count := int(view.eventCount)
+	if count < 0 || count > 0 && view.events == nil || count > 1 && view.labelTokens == nil {
+		return fmt.Errorf("metal: Recorder profile returned invalid event storage")
+	}
+
+	events := dst.Events
+	if cap(events) < count {
+		events = make([]RecorderProfileEvent, count)
+	} else {
+		events = events[:count]
+	}
+	p := RecorderProfile{
+		Events:             events,
+		OmittedMPS:         int(view.omittedMPS),
+		OmittedOverflow:    int(view.omittedOverflow),
+		OmittedUnsupported: int(view.omittedUnsupported),
+		TimestampFrequency: uint64(view.timestampFrequency),
+		CommandDuration:    time.Duration(uint64(view.commandDurationNS)),
+	}
+	if count == 1 {
+		event := view.events
+		label := recorderProfileLabelView(&event.label[0])
+		if p.Events[0].Label != label {
+			label = strings.Clone(label)
+		} else {
+			label = p.Events[0].Label
+		}
+		p.Events[0] = RecorderProfileEvent{
+			Label:       label,
+			StartOffset: time.Duration(uint64(event.startOffsetNS)),
+			Ticks:       uint64(event.ticks),
+			Duration:    time.Duration(uint64(event.durationNS)),
+		}
+		p.EventSpan = p.Events[0].StartOffset + p.Events[0].Duration
+	} else if count > 1 {
+		fillRecorderProfileEventsInto(&p, unsafe.Slice(view.events, count), unsafe.Slice(view.labelTokens, count))
+	}
+	*dst = p
+	return nil
 }
 
 // Unary encodes o = f(op, x) over x's elements into the Recorder (no commit).

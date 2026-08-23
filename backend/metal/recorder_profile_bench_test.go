@@ -92,6 +92,31 @@ func BenchmarkMetalRecorderProfile(b *testing.B) {
 	}
 }
 
+// BenchmarkMetalRecorderProfileInto measures repeated extraction into caller-owned storage after
+// both the native snapshot and destination labels have been warmed.
+func BenchmarkMetalRecorderProfileInto(b *testing.B) {
+	for _, events := range []int{1, 340} {
+		b.Run("events"+strconv.Itoa(events), func(b *testing.B) {
+			r, cleanup := benchmarkCompletedProfileRecorder(b, events, true)
+			b.Cleanup(cleanup)
+			var p metal.RecorderProfile
+			if err := r.ProfileInto(&p); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if err := r.ProfileInto(&p); err != nil {
+					b.Fatal(err)
+				}
+				if len(p.Events) != events {
+					b.Fatalf("profile events=%d want %d", len(p.Events), events)
+				}
+			}
+		})
+	}
+}
+
 // BenchmarkMetalRecorderProfileMixedLabels exercises production-like label reuse without
 // conflating the number of events with the number of distinct kernel names.
 func BenchmarkMetalRecorderProfileMixedLabels(b *testing.B) {
@@ -104,6 +129,29 @@ func BenchmarkMetalRecorderProfileMixedLabels(b *testing.B) {
 	for range b.N {
 		p, err := r.Profile()
 		if err != nil {
+			b.Fatal(err)
+		}
+		if len(p.Events) != events {
+			b.Fatalf("profile events=%d want %d", len(p.Events), events)
+		}
+	}
+}
+
+// BenchmarkMetalRecorderProfileIntoMixedLabels verifies that caller-owned storage also removes
+// repeated extraction allocations when a snapshot contains several distinct kernel names.
+func BenchmarkMetalRecorderProfileIntoMixedLabels(b *testing.B) {
+	const events = 340
+	ops := []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	r, cleanup := benchmarkCompletedProfileRecorderOps(b, events, true, ops)
+	b.Cleanup(cleanup)
+	var p metal.RecorderProfile
+	if err := r.ProfileInto(&p); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := r.ProfileInto(&p); err != nil {
 			b.Fatal(err)
 		}
 		if len(p.Events) != events {

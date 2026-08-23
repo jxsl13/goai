@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"testing"
+	"unsafe"
 
 	"github.com/jxsl13/goai/backend/metal"
 	"github.com/jxsl13/goai/format/gguf"
@@ -131,6 +132,26 @@ func TestRecorderProfileLabelsDurationsAndParity(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(again, p) {
 		t.Fatalf("second Profile = (%+v, %v), want stable %+v", again, err, p)
 	}
+	into := metal.RecorderProfile{Events: make([]metal.RecorderProfileEvent, 0, len(p.Events))}
+	if err := r.ProfileInto(&into); err != nil || !reflect.DeepEqual(into, p) {
+		t.Fatalf("ProfileInto = (%+v, %v), want %+v", into, err, p)
+	}
+	eventsData := unsafe.SliceData(into.Events)
+	labelData := make([]*byte, len(into.Events))
+	for i := range into.Events {
+		labelData[i] = unsafe.StringData(into.Events[i].Label)
+	}
+	if err := r.ProfileInto(&into); err != nil || !reflect.DeepEqual(into, p) {
+		t.Fatalf("second ProfileInto = (%+v, %v), want %+v", into, err, p)
+	}
+	if unsafe.SliceData(into.Events) != eventsData {
+		t.Fatal("ProfileInto did not reuse destination event capacity")
+	}
+	for i := range into.Events {
+		if unsafe.StringData(into.Events[i].Label) != labelData[i] {
+			t.Fatalf("ProfileInto event %d did not reuse owned label", i)
+		}
+	}
 }
 
 func TestRecorderProfileLabelsRemainOwnedAfterFree(t *testing.T) {
@@ -157,6 +178,11 @@ func TestRecorderProfileLabelsRemainOwnedAfterFree(t *testing.T) {
 		r.Free()
 		t.Fatal(err)
 	}
+	var into metal.RecorderProfile
+	if err := r.ProfileInto(&into); err != nil {
+		r.Free()
+		t.Fatal(err)
+	}
 	r.Free()
 
 	for i := range 8 {
@@ -167,6 +193,9 @@ func TestRecorderProfileLabelsRemainOwnedAfterFree(t *testing.T) {
 	}
 	if len(p.Events) != 2 || p.Events[0].Label != "unary.relu" || p.Events[1].Label != "unary.relu" {
 		t.Fatalf("profile labels after Free = %+v", p.Events)
+	}
+	if len(into.Events) != 2 || into.Events[0].Label != "unary.relu" || into.Events[1].Label != "unary.relu" {
+		t.Fatalf("ProfileInto labels after Free = %+v", into.Events)
 	}
 }
 
@@ -453,8 +482,33 @@ func TestRecorderProfileErrorsAreExplicit(t *testing.T) {
 	if _, err := r.Profile(); err == nil {
 		t.Fatal("default Recorder Profile unexpectedly succeeded")
 	}
+	if err := r.ProfileInto(nil); err == nil {
+		t.Fatal("default Recorder ProfileInto(nil) unexpectedly succeeded")
+	}
+	sentinel := metal.RecorderProfile{
+		Events:             []metal.RecorderProfileEvent{{Label: "keep", Ticks: 9}},
+		OmittedMPS:         7,
+		TimestampFrequency: 11,
+	}
+	wantSentinel := metal.RecorderProfile{
+		Events:             append([]metal.RecorderProfileEvent(nil), sentinel.Events...),
+		OmittedMPS:         sentinel.OmittedMPS,
+		TimestampFrequency: sentinel.TimestampFrequency,
+	}
+	if err := r.ProfileInto(&sentinel); err == nil {
+		t.Fatal("default Recorder ProfileInto unexpectedly succeeded")
+	}
+	if !reflect.DeepEqual(sentinel, wantSentinel) {
+		t.Fatalf("failed ProfileInto mutated destination: got %+v want %+v", sentinel, wantSentinel)
+	}
 	r.Free()
 	if _, err := r.Profile(); err == nil {
 		t.Fatal("Profile after Free unexpectedly succeeded")
+	}
+	if err := r.ProfileInto(&sentinel); err == nil {
+		t.Fatal("ProfileInto after Free unexpectedly succeeded")
+	}
+	if !reflect.DeepEqual(sentinel, wantSentinel) {
+		t.Fatalf("ProfileInto after Free mutated destination: got %+v want %+v", sentinel, wantSentinel)
 	}
 }
