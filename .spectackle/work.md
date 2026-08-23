@@ -4007,12 +4007,3 @@ grilled: 2026-08-23 open=1
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/decoder.go, llamagpu/llamagpu.go
 
 TinyLlama Metal decode currently records separate ffn_gate and ffn_up quant projections in every one of 22 layers because only CUDA implements SwiGLUHalves and the Metal constructor leaves fusedGateUp disabled. For same-type GGUF weights, row concatenation is exact and the existing decoder builder already supports one gate|up weight. Add the Metal halves activation and enable the established builder so one combined raw Q4_K or Q6_K projection replaces two projections without changing quant arithmetic. This is distinct from the rejected M>=24 cached-f16 prefill grouping: the primary gate is M=1 raw-quant decode. Retain only if exact leaf and trained-model behavior hold, aggregate M2 tg64 median improves at least 1.03x with at least 5 of 7 alternating campaigns won, and pp64 plus pp512 remain at least 0.99x. Require profiler proof that qmatmul event count drops by 22 and every candidate arm differs from control.
-
-## R-01M0Q2EGE0E60T5H3P35XSCX77 Assess raw Metal M1 gate and up fusion boundary
-kind: research
-state: active
-created: 2026-08-23
-parent: P-01M0Q2CZXBEXKV41BCXYX7G5FQ
-targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m
-
-Current trained TinyLlama f16-KV decode records 131 quant projections: 42 QKV, 44 separate gate/up, 22 output, 22 down, and one LM head. Enabling the established same-type raw-weight concatenation can reduce gate/up from 44 to 22 without changing encoded row bytes or per-output reduction order. The prior M>=24 cached-f16 proposal is not this boundary and was rejected at only 1.021x leaf improvement; the prior raw mixed-QKV M1 leaf gained 1.3815x but its ten-layer slice missed the trained-model gate. This candidate covers all 22 FFN layers and therefore receives a bounded prototype, exact parity, profiler event-count proof, seven alternating decode campaigns, and prefill controls before retention.
