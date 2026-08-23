@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## P-01M0QV7XJ3EW6AP5G1M48XSSVB Honor short mode in the RoPE F16-KV timing gate
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: go:metal.TestRoPEF16KVAppendInterleavedCampaigns, TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001, METAL-ROPE-F16KV-PERF-001
+
+The macOS cgo lane invokes selected tests with -short, but TestRoPEF16KVAppendInterleavedCampaigns still enforced its 21-sample 1.20x wall-clock threshold and failed an otherwise green PR at 1.0755x on shared hosted Metal. The same gate has a recorded history of three unrelated CI failures. Add only the required testing.Short skip at the timing-only campaign boundary. Preserve METAL-ROPE-F16KV-PERF-001 unchanged for explicit full local runs and leave all f16-KV correctness, parity, routing, and deterministic threshold tests unconditional. Report the missing-guard detector opportunity as perfscan issue 868.
