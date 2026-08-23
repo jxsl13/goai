@@ -4017,7 +4017,7 @@ Pin the current Homebrew llama.cpp v0.2.0 revision bb4caa7540188872173c44d161602
 
 ## P-01M0QSQ4YHEY7BYWNKV1YBGBYV Preserve validated Xcode timeout Metal captures
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001

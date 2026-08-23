@@ -712,3 +712,4 @@
 {"t":"2026-08-23T17:06:24Z","eid":"e946d0a46e495a47","ag":"ag-4d29","ev":"move","id":"R-01M0QSCP1NEQ9TZMYJGNWXCCMR","fr":"draft","to":"active"}
 {"t":"2026-08-23T17:12:00Z","eid":"2860c50fad2ced4d","ag":"ag-33b2","ev":"create","id":"P-01M0QSQ4YHEY7BYWNKV1YBGBYV","k":"proposal","ti":"Preserve validated Xcode timeout Metal captures"}
 {"t":"2026-08-23T17:12:07Z","eid":"8d4897c5baab6dbe","ag":"ag-83d6","ev":"grill","id":"P-01M0QSQ4YHEY7BYWNKV1YBGBYV","gr":"2026-08-23 open=0","hash":"f1f79dcfc9963f03c2d9b1a7badc273b86c2db402406e9ac433297ad4d57abf4"}
+{"t":"2026-08-23T17:12:16Z","eid":"ef6e757f732d8502","ag":"ag-ab56","ev":"move","id":"P-01M0QSQ4YHEY7BYWNKV1YBGBYV","fr":"draft","to":"active"}
