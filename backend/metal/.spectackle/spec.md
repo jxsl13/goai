@@ -521,3 +521,6 @@ WHERE three fresh-process order-alternated count-7 campaigns at B8 S65 D128 H4, 
 
 ## METAL-PRENORM-TRANSFORMER-BLOCK-GRAPH-STRUCTURE-001
 WHERE contiguous offset-zero F32 complete-block fusion, the Metal pre-norm transformer-block implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with 2 runtime epsilon feeds, pooled buffers, and Go-owned outputs.
+
+## METAL-PRENORM-TRANSFORMER-BLOCK-NUMERIC-001
+WHEN supported parity is checked against the two-boundary incumbent, the Metal pre-norm transformer-block implementation SHALL match 1 output and exactly 13 gradients within established F32 tolerance while mutating exactly 0 inputs.
