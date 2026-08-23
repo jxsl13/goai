@@ -518,3 +518,4 @@
 {"t":"2026-08-23T15:30:53Z","eid":"cb1870fa448951ea","ag":"ag-d12d","ev":"move","id":"P-01M0QKXHR7ED1ASFH56SNHAGKK","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T15:30:56Z","eid":"1cfa47a28ad62a6a","ag":"ag-2f35","ev":"create","id":"T-01M0QKY30HF9687SFQZAH92RCK","k":"task","ti":"Implement and gate RMSNorm SIMD leader broadcast","dir":"backend/metal"}
 {"t":"2026-08-23T15:31:11Z","eid":"a4c21fb63bdccdf8","ag":"ag-f59c","ev":"move","id":"T-01M0QKY30HF9687SFQZAH92RCK","dir":"backend/metal","fr":"draft","to":"active"}
+{"t":"2026-08-23T15:31:14Z","eid":"0dee9f34e1f9e175","ag":"ag-9767","ev":"rule","dir":"backend/metal","op":"add","rule":"METAL-RMSNORM-LEADER-BROADCAST-NUMERIC-001","txt":"WHEN a leader-broadcast RMSNorm candidate executes, the Metal RMSNorm candidate SHALL produce bit-exact control output and mutate exactly 0 input or gamma bytes."}
