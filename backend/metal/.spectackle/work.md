@@ -59,3 +59,12 @@ state: active
 created: 2026-08-23
 
 Correlate a pinned TinyLlama f16-KV decode command buffer with Xcode Metal Performance Limiters and the recorder stage sidecar. Compare Q4_K production-stage occupancy, buffer-read, LLC, MMU, ALU, and GPU-read-bandwidth signals against the retained 185 GB/s large-projection roofline. Nominate a new implementation only when the counters identify a limiter consistent across dominant Q4_K stages and materially different from rejected launch-width, wide-load, unrolling, matrix-unit, row-pair, and dispatch-fusion variants.
+
+## T-01M0QPN0EKE94V0PFZ1DH2QEMD Benchmark exact reusable Q4_K activation correction sums on M2
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0QPJK6BEXNT8MSW19E4R5KW
+targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul
+
+Implement a diagnostic-only Metal sum producer and Q4_K cooperative consumer for M=1 and K divisible by 256. The producer writes four sequential eight-value float sums per lane once per 256-element block. Benchmark the total one-producer plus two-consumer command against two established Q4_K consumers with identical inputs and weights. Validate exact sum construction, output bits, input and weight immutability, fallback behavior, and the three-campaign paired gate. Do not wire Decoder or public APIs unless the amortized leaf gate passes.
