@@ -443,3 +443,6 @@ WHEN the by-value native snapshot view is added, the Metal bridge SHALL retain a
 
 ## METAL-SPLITK-DIM-MERGE-NUMERIC-001
 WHEN the lane-owned split-K pass-2 kernel processes finite f32 or f16-KV partials, the mha_dec_splitk_p2_dim SHALL match control output bits for all 64 dimensions at sk 128, 129, 512, 1024, 1536, and 2048.
+
+## METAL-SPLITK-DIM-MERGE-OWNERSHIP-001
+WHEN mha_dec_splitk_p2_dim runs one 32-lane SIMD group, the each lane i SHALL merge dimensions 2i and 2i+1 in incumbent chunk order and write exactly those 2 outputs.
