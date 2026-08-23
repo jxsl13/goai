@@ -32,3 +32,12 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
+
+## T-01M0PCYV52EF48DMJCJ79D1WEN Bulk-unpack paired Q4_K coefficient headers
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PCH446FH695VH9692WFSV8
+targets: go:gguf.dotQ4KPairRowASM, go:gguf.dotQ4KPairBlockNeon, go:gguf.getScaleMinK4
+
+Replace eight branch-selecting getScaleMinK4 calls per Q4_K super-block with four branchless j-and-j+4 decodes for both paired rows. Preserve every decoded 6-bit scale/min, coefficient multiplication order, block subtotal, and final pair-row bits. Add a permanent K=2048 pair-row benchmark; require at least 1.03x leaf speedup without production regression before integration.
