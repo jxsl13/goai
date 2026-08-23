@@ -60,12 +60,3 @@ created: 2026-08-23
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
 Apple documents that MSL source strings compile first to GPU-independent Metal IR and then to a device pipeline, while an offline metallib removes the runtime source-to-IR stage. Sources pinned on 2026-08-23: https://developer.apple.com/documentation/metal/metal-libraries and https://developer.apple.com/documentation/metal/building-a-shader-library-by-precompiling-source-files. Seven fresh incumbent Q4_K processes measured first-call durations 18.643, 3.466, 3.714, 3.680, 14.473, 4.125, and 3.705 ms; median 3.714 ms. Their second-call median was 0.468 ms. Research whether loading an exact offline-compiled Q4_K metallib through newLibraryWithURL removes at least half of first-call latency without changing warm output or throughput. The diagnostic uses an environment-selected artifact path and retains source compilation as fallback. Any production proposal must define reproducible artifact generation, source/hash coupling, deployment target, architecture compatibility, fallback behavior, and repository size impact.
-
-## P-01M0QQQ3NFE0XATH1N2JGG8QYT Pair Q4_K Metal IR with an M2 binary archive for cold startup
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: objc:metal_bridge.ensure_qmatmul_q4k
-
-Continue research R-01M0QQFB4CE6C with the compilation stage that the rejected IR-only route left behind. Generate an M2 Pro MTLBinaryArchive from the exact ce6249c5d11f8248fb327e204086e7076a906f4fb587f2fe742b9ffc402d78c1 IR metallib and both Q4_K compute descriptors. In fresh candidate processes, load the IR library and archive, require archive hits while constructing both pipeline states, and fall back to ordinary pipeline creation and source compilation on any miss or incompatibility. Frozen gates: exact Q4_K tests unchanged; three independent campaigns with seven fresh processes per arm; every combined IR-plus-archive first-call median is at least 2.00x faster than runtime source control; warm second-call throughput retains at least 0.97x; archive miss, missing file, wrong device, and unsupported OS preserve correct source fallback. Production must key artifacts by MSL hash, pipeline descriptor, compiler and SDK, deployment target, GPU family, and OS compatibility, with no user-writable cache trusted as executable input.
