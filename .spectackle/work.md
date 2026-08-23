@@ -4023,12 +4023,3 @@ grilled: 2026-08-23 open=0
 targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
 
 Current Xcode 26.6 records a structurally valid Metal trace and workload output, prints that recording completed and the trace was saved, then returns exit status 54 at the requested time limit. metalcounters currently returns immediately on any recorder error, so it discards a valid expensive capture before target-marker, TOC, counter-schema, and workload validation. Change the capture boundary to retain the recorder error temporarily, validate the target output and trace through the existing export and analysis pipeline, and succeed only when every downstream invariant passes. A failed workload, absent artifact, failed export, missing required counters, or invalid sample must still fail closed. Report the generalizable finding through perfscan issue 866 and use the repaired path to finish the current pinned llama.cpp attribution.
-
-## T-01M0QSQXQNFPGBSNYW904VETG2 Validate xctrace artifacts after recorder termination
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0QSQ4YHEY7BYWNKV1YBGBYV
-targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
-
-Refactor the Metal counter capture so a recorder error is retained while target output, workload completion, TOC export, Performance Limiters metadata, counter tables, command-buffer selection, and report analysis run. Return success only when the complete existing validation pipeline succeeds; otherwise join or preserve the recorder error so real target and artifact failures remain diagnosable. Add deterministic unit coverage using injected command execution rather than invoking Instruments in ordinary tests. Re-run the real Xcode 26.6 llama.cpp capture and retain the exact attribution result.
