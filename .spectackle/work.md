@@ -3998,13 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0PZDCGXE14RSRRFMZ82XGTM Consume Q4_K coefficient scratch through vector lanes
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
-grilled: 2026-08-23 open=0
-targets: asm:gguf.dotQ4KPairRowNeon, asm:gguf.dotQ4KRowNeon, go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KRowNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
-
-Replace repeated scalar-replicating coefficient loads with one 128-bit coefficient-vector load per row and consume its scale lanes through ARM64 by-element FMUL. Broadcast only each minimum lane with VDUP before the unchanged FSUB. One loaded vector covers two adjacent 32-weight groups, reducing paired coefficient setup from eight LD1R instructions to two vector loads plus four register-only DUPs per inner iteration while preserving the scratch layout, f32 operation order, accumulators, and outputs. Gate the paired hotspot first, then the independent row, at 1.03x retained K2048 speedup, five of seven alternating wins, zero allocations, and no production regression. This is distinct from rejected LD2R memory-replicate forms because scale lanes never broadcast through the load unit.
