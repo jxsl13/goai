@@ -3998,13 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## T-01M0PWXWFGFJDSSQ127Y0Z3F8T Move Q6_K row orchestration into one ARM64 assembly call
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
-refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
-targets: go:gguf.dotQ6_KRowASM, go:gguf.dotQ6KBlockNeon, asm:gguf.dotQ6KBlockNeon, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, internal/benchcompare/leadership/evidence
-
-Replace the ARM64 Q6_K per-super-block Go loop with one allocation-free whole-row assembly entry. Reuse the proven six-bit unpack and F32 block reduction schedule; preserve ordered F64 accumulation, arbitrary raw-header semantics, zero-length behavior, non-ARM64 routing, and inputs. Hoist invariant table loads and masks across blocks. Gate with exact comparison to the former Go-orchestrated block path, at least seven alternating fresh-process leaf campaigns, representative Q6_K matrix measurements, exact TinyLlama production digest, and no allocation regression. Reject unless the leaf improvement is repeatable and production is non-regressing.
