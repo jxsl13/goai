@@ -372,3 +372,8 @@ WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independ
 WHEN one call processes multiple adjacent 256-weight super-blocks, the batched Apple ARM64 paired Q4_K row leaf SHALL emit 2 F32 subtotals per block in ascending order so Go returns pair-row bits identical to d43cdb4b with 0 leaf allocations.
 
 Rationale: Call amortization must not group or reorder the established per-block F32 reduction and F64 accumulation semantics.
+
+## Q4K-PAIR-BATCH-PERF-001 {applies: go:gguf.dotQ4KPairRowASM}
+WHEN the K=2048 paired-row benchmark runs on Apple ARM64, the batched paired Q4_K row path SHALL reach at least 1.02x median speedup across 7 interleaved campaigns, retain 0 allocations, and show no paired-apply, mixed-QKV, or production regression.
+
+Rationale: The exact production profile attributes the remaining paired-row overhead to per-super-block boundaries and repeated expansion-table setup.
