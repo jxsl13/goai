@@ -3998,3 +3998,11 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## R-01M0Q39HPCECA80SSE3NVC5TSK Map non-materializing Metal Q4_K gate/up SwiGLU fusion
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
+
+The current M2 Q4_K cooperative kernel maps two SIMD groups to four output rows per threadgroup. A paired gate/up kernel can preserve identical total thread and weight work by assigning one SIMD group to two gate rows and one to the matching two up rows, exchanging only four reduced scalars through threadgroup memory, and writing SwiGLU outputs directly. This differs from rejected raw-row concatenation: it never materializes a 2*hidden projection and keeps M>1 on the established path. Prior seven-campaign evidence showed graph-only fusion regressed tg64 to 0.9866x, so this hypothesis requires isolated same-binary proof before decoder integration.
