@@ -143,3 +143,8 @@ Rationale: The small leaf is instruction-bound while larger cells become memory-
 WHEN F32 Abs compiles on arm64 with Go 1.27 or newer, the CPU backend SHALL select the sign-clear assembly so outputBits equals inputBits AND 0x7fffffff for every input.
 
 Rationale: Go 1.27 preserves signaling-NaN payload bits in the scalar conversion oracle.
+
+## ARM64-EXACT-ABS-GO126-001 {applies: go:cpu.absF32,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs compiles on arm64 with Go 1.26, the CPU backend SHALL select the NaN-quieting assembly so signaling NaNs set bit 22 while all other magnitude bits remain unchanged.
+
+Rationale: Go 1.26 quiets signaling NaNs in the scalar conversion oracle.
