@@ -78,4 +78,4 @@ WHEN a CPU OpSigmoidFocalCore implementation is promoted, the benchmark gate SHA
 WHEN eager CPU Q4_K Gate and Up share geometry and receive contiguous F32 M1 input with a chunk fuser, the QuantSwiGLU.Forward SHALL call QMatMulPairApply once, pass its fused output to Down, and keep existing fallbacks for unsupported routes.
 
 ## CPU-QUANT-SWIGLU-PAIR-APPLY-PERF-001
-WHEN order-alternating fresh-process Apple M2 Pro campaigns measure the production Q4_K leaf and 64-step TinyLlama decode, the fused pair-to-SwiGLU route SHALL retain only with at least 1.10x leaf speedup, at least 1.03x whole-decode speedup, lower allocated bytes, and 1 exact final-logit digest.
+WHEN fresh-process Apple M2 Pro campaigns measure the Q4_K leaf and 64-step TinyLlama decode, the fused pair-to-SwiGLU route SHALL retain fusion only at 1.10x leaf or faster, 1.03x decode or faster, lower allocated bytes, and 1 exact final-logit digest.
