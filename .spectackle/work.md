@@ -4027,7 +4027,7 @@ Promote the successful M2 screen into a generic backend operation and explicit V
 
 ## T-01M0R4T3BYESY843XEF6FA60D2 Implement and gate fused pre-norm FFN training
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0R4K081FDDTQMBYZWCRRZ55
 refs: R-01M0R43YYWE2TTJMX2PJ09GN5S
