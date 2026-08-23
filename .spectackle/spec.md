@@ -673,3 +673,8 @@ Rationale: The directory contains local research material, including commercial 
 WHEN QMatMulAddInPlace receives separate whole-storage contiguous offset-zero CPU F32 M=1 operands and Q4_K or Q6_K weights, the GoAI SHALL store residual plus each final rounded dot bit-identically in the destination with zero projection output tensors.
 
 Rationale: Combining the producer store and residual add eliminates two materializations and one extra tensor pass.
+
+## CPU-QUANT-RESIDUAL-EPILOGUE-002
+WHEN recording, an accelerator, nonidentity ResidualMult, batch, alias, view, dtype, shape, device, quant type, or weight layout makes residual accumulation unsupported, the GoAI SHALL execute QuantLinear.Forward, scalar scaling, and backend.OpAdd without mutating the residual input.
+
+Rationale: Every unsupported or observable graph retains established semantics.
