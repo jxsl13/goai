@@ -20,5 +20,3 @@ WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equ
 
 ## METAL-ROPE-F16KV-COMBINED-COUNT-001
 WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.
-## METAL-Q4K-SWIGLU-PAIR-PERF-001
-WHEN seven alternating fresh-decoder M2 TinyLlama campaigns compare candidate and control, the Metal quant decoder SHALL reach at least 1.03x tg64 median with 5 of 7 wins and preserve pp64 and pp512 at 0.99x.
