@@ -477,3 +477,6 @@ WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the M
 
 ## METAL-RMSNORM-TG-NUMERIC-001
 WHEN a one-row F32 RMSNorm candidate executes with 64, 128, or 256 threads, the Metal RMSNorm threadgroup selector SHALL produce output bit-exact to the 256-thread control for dimensions 256, 1024, 2048, 4096, and 5632 while mutating 0 input bytes.
+
+## METAL-RMSNORM-TG-PERF-001
+WHEN 3 independent same-command count-7 campaigns compare a candidate width with 256 threads at the 5 frozen one-row dimensions, the M2 RMSNorm threadgroup promotion gate SHALL retain the candidate only when every campaign and dimension reaches at least 1.10 times control throughput.
