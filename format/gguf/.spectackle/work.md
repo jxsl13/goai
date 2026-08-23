@@ -44,7 +44,7 @@ Profile merge 9f1801c8 on Apple M2 Pro after the table-indexed header decode. At
 
 ## T-01M0PTS7PDF7EVCR9CM3F2WDTP Move independent Q4_K rows into one ARM64 assembly call
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4_KRowASM~2

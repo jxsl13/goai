@@ -212,3 +212,4 @@
 {"t":"2026-08-23T08:08:56Z","eid":"0ac42caaeab4b4e0","ag":"ag-2e48","ev":"create","id":"R-01M0PTMRHAEKM8KF9CZF9ETXPM","k":"research","ti":"Re-profile merged post-USHL M2 Q4_K kernel","dir":"format/gguf"}
 {"t":"2026-08-23T08:09:06Z","eid":"c0d8b26d51c39a3c","ag":"ag-a212","ev":"move","id":"R-01M0PTMRHAEKM8KF9CZF9ETXPM","dir":"format/gguf","fr":"draft","to":"active"}
 {"t":"2026-08-23T08:11:22Z","eid":"93d9be5424823bf3","ag":"ag-b23a","ev":"create","id":"T-01M0PTS7PDF7EVCR9CM3F2WDTP","k":"task","ti":"Move independent Q4_K rows into one ARM64 assembly call","dir":"format/gguf"}
+{"t":"2026-08-23T08:11:33Z","eid":"da1ae0aefa532062","ag":"ag-5b7c","ev":"move","id":"T-01M0PTS7PDF7EVCR9CM3F2WDTP","dir":"format/gguf","fr":"draft","to":"active"}
