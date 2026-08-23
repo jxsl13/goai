@@ -678,3 +678,8 @@ Rationale: The private residual becomes dead at the next residual update.
 WHEN backend.TryAddInPlace receives recording, routed, aliased, viewed, shape-mismatched, dtype-mismatched, or non-CPU operands, the GoAI SHALL return false without input mutation so the caller executes backend.OpAdd.
 
 Rationale: Unsupported semantics retain the ordinary pure operation.
+
+## CPU-QUANT-RESIDUAL-INPLACE-003
+WHEN the CPU QuantLlama in-place residual candidate is considered for retention, the GoAI SHALL require an exact digest, at least 10 percent fewer allocation bytes, and at least 1.03x median speedup in independent interleaved 64-step Q4_K campaigns.
+
+Rationale: The prior exact Metal residual fusion failed its whole-model leverage gate.
