@@ -32,3 +32,12 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
+
+## T-01M0PEP367F7WBD4RTC87J8VG9 Bulk-unpack independent Q4_K coefficient headers
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PEGTNPFYBR11H1K7RDM36Q
+targets: go:gguf.dotQ4_KRowASM~2, go:gguf.getScaleMinK4, go:gguf.dotQ4KBlockNeon
+
+Replace eight branch-selecting getScaleMinK4 calls per independent ARM64 Q4_K super-block with four direct j-and-j+4 decodes. Preserve all 6-bit scale/min values, coefficient slot placement, floating-point multiplication order, NEON block kernel, super-block subtotal, and f64 row reduction. Add a frozen helper-based arbitrary-header oracle and a permanent K=2048 row benchmark. Require at least 1.03x leaf speedup with no production decode regression before integration.
