@@ -351,6 +351,3 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-
-## METAL-SWIGLU-HALVES-NUMERIC-001
-WHEN Recorder.SwiGLUHalves receives valid rows and hidden dimensions, the Metal Recorder.SwiGLUHalves SHALL match separate BinaryN SwiGLU bit-for-bit for finite elements, preserve nonfinite class, mutate 0 inputs, and leave output sentinels outside rows times hidden unchanged.
