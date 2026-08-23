@@ -478,3 +478,6 @@ WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the M
 
 ## METAL-RMSNORM-REGISTER-CACHE-NUMERIC-001
 WHEN the register-retained dim-2048 RMSNorm kernel executes, the Metal RMSNorm candidate SHALL produce bit-exact control output and mutate exactly 0 input or gamma bytes.
+
+## METAL-RMSNORM-REGISTER-CACHE-SCOPE-001
+WHEN RMSNorm has rows other than 1 or dimension other than 2048, the Metal RMSNorm selector SHALL dispatch the existing kernel and issue exactly 0 register-retained candidate threadgroups.
