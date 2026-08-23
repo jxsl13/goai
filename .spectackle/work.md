@@ -4019,7 +4019,7 @@ Compile the merged-main GGUF and exact TinyLlama CPU production harnesses once, 
 
 ## T-01M0PGW1SBE30AWY7TCF9E06SE Fold Q4_K leaf pointer updates into post-index loads
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 refs: R-01M0PGJAMGEKCT53EG9E4QMM4S
