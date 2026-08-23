@@ -41,7 +41,7 @@ func TestAbsF32Arm64ExactAllLengths(t *testing.T) {
 
 		absF32(dst, src)
 		for i, value := range src {
-			want := math.Float32bits(value) & 0x7fffffff
+			want := math.Float32bits(float32(math.Abs(float64(value))))
 			if got := math.Float32bits(dst[i]); got != want {
 				t.Fatalf("n=%d i=%d input=%08x: got %08x, want %08x", n, i, math.Float32bits(value), got, want)
 			}
@@ -58,7 +58,7 @@ func TestAbsF32Arm64ExactInPlace(t *testing.T) {
 		state ^= state >> 17
 		state ^= state << 5
 		values[i] = math.Float32frombits(state)
-		want[i] = state & 0x7fffffff
+		want[i] = math.Float32bits(float32(math.Abs(float64(values[i]))))
 	}
 
 	absF32(values, values)
