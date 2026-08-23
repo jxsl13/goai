@@ -1,0 +1,12 @@
+PASS format/gguf compiled test binary under Go 1.26.6.
+PASS format/gguf compiled test binary under Go 1.27.0.
+PASS deterministic arbitrary packed-header exactness against independent ARM64 rows.
+PASS existing paired-row exactness at K=256, 512, 2048, and 4096.
+PASS Darwin/AMD64 package cross-compilation under Go 1.26.6.
+PASS internal/mdlint and internal/benchcompare under Go 1.26.6.
+PASS five production process pairs with digest ea3df5516f17df83 in every sample.
+PASS git diff --check.
+
+The initial full-binary invocation from the repository root could not locate
+format/gguf/testdata. Re-running the identical binary from format/gguf passed;
+this was an invocation-directory error, not a code failure.

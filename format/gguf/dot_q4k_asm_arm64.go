@@ -58,21 +58,18 @@ func dotQ4KPairRowASM(row []float32, raw0, raw1 []byte, k int) (float64, float64
 		d1 := f16ToF32(binary.LittleEndian.Uint16(blk1[0:]))
 		dmin1 := f16ToF32(binary.LittleEndian.Uint16(blk1[2:]))
 		scales0, scales1 := blk0[4:16], blk1[4:16]
-		for pair := range 4 {
-			is := pair * 2
-			sc00, m00 := getScaleMinK4(is, scales0)
-			sc01, m01 := getScaleMinK4(is+1, scales0)
-			sc10, m10 := getScaleMinK4(is, scales1)
-			sc11, m11 := getScaleMinK4(is+1, scales1)
-			ci := pair * 4
-			coeff0[ci+0] = d0 * float32(sc00)
-			coeff0[ci+1] = dmin0 * float32(m00)
-			coeff0[ci+2] = d0 * float32(sc01)
-			coeff0[ci+3] = dmin0 * float32(m01)
-			coeff1[ci+0] = d1 * float32(sc10)
-			coeff1[ci+1] = dmin1 * float32(m10)
-			coeff1[ci+2] = d1 * float32(sc11)
-			coeff1[ci+3] = dmin1 * float32(m11)
+		for j := range 4 {
+			s0, m0, hi0 := scales0[j], scales0[j+4], scales0[j+8]
+			s1, m1, hi1 := scales1[j], scales1[j+4], scales1[j+8]
+			lo, hi := j*2, (j+4)*2
+			coeff0[lo+0] = d0 * float32(s0&63)
+			coeff0[lo+1] = dmin0 * float32(m0&63)
+			coeff0[hi+0] = d0 * float32((hi0&0xF)|((s0>>6)<<4))
+			coeff0[hi+1] = dmin0 * float32((hi0>>4)|((m0>>6)<<4))
+			coeff1[lo+0] = d1 * float32(s1&63)
+			coeff1[lo+1] = dmin1 * float32(m1&63)
+			coeff1[hi+0] = d1 * float32((hi1&0xF)|((s1>>6)<<4))
+			coeff1[hi+1] = dmin1 * float32((hi1>>4)|((m1>>6)<<4))
 		}
 		dot0, dot1 := dotQ4KPairBlockNeon(
 			&row[sb*qkK], &blk0[16], &blk1[16], &coeff0[0], &coeff1[0], &qKByteToF32Indexes[0],
