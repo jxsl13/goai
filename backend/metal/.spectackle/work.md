@@ -52,12 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0Q6T9RZEV9RWA9ZS5V8KGYC Bulk-extract Metal recorder profile events in one cgo call
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
-
-Research R-01M0Q6SJ8CF6R and rejected scratch proposal P-01M0Q6B7A3E1S show that 340 synchronous cgo event crossings are the remaining leverage. Add an immutable recorder-lifetime native snapshot containing fixed 96-byte labels and three uint64 timing fields per valid event. A new additive C ABI shall resolve and return summary fields plus the snapshot pointer in one cgo call; existing summary/event entry points remain unchanged. Go shall own its returned RecorderProfile and strings exactly as before. Benchmark warm repeat and first extraction for 1 and 340 events. Across three order-alternated count-seven M2 campaigns, warm events340 must be at least 1.50x with at least 1000 fewer allocations and 40000 fewer Go allocation bytes per operation; warm events1 must be at least 1.10x. First-extraction events340 must be at least 1.10x and events1 at least 0.97x. Reject and fully revert if any gate or exact parity fails.
