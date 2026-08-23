@@ -70,13 +70,3 @@ grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
 
 Replace one C.GoString allocation per event with recorder-scoped Go-owned label reuse. A temporary bounded view of each 96-byte native label is used only for lookup; each distinct label is cloned once and cached, so returned profiles own their strings across Recorder.Free. Preserve one-event latency with an inline first-label fast path, lazily allocate a map only after a second distinct label, clear cache references on Free, and make no default-recorder allocation. Frozen M2 gates: warm repeated-label events340 median speedup at least 1.25x with at least 300 fewer objects and 4,000 fewer bytes; every warm events1 campaign retains at least 0.97x; first events340 at least 1.10x and first events1 at least 0.97x; mixed-label allocations scale with distinct labels rather than event count; disabled-recorder throughput at least 0.97x with unchanged allocations. Require three order-alternated count-seven campaigns, exact profile parity, bounded-label handling, and label validity after Free plus GC churn.
-
-## T-01M0Q9942YFYAR4JH7M763B9F5 Implement and gate recorder-owned profile labels
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0Q9837XE0Y8YTH47J1HR5K9
-refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ, P-01M0Q6T9RZEV9RWA9ZS5V8KGYC
-targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
-
-Add bounded temporary native-label views and a lazy recorder-owned intern cache; clone each distinct native label once, retain the inline first-label fast path, clear recorder references on Free, and preserve already returned labels. Add ownership/parity tests and repeated, mixed-label, first-extraction, and disabled-recorder benchmarks. Compare frozen control and candidate binaries in three order-alternated count-seven M2 campaigns. Promote only if every proposal gate passes; otherwise fully revert code and archive the measured rejection.
