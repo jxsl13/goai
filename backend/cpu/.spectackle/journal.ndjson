@@ -168,3 +168,4 @@
 {"t":"2026-08-23T02:39:19Z","eid":"f3ed047b4d752f62","ag":"ag-4db1","ev":"move","id":"P-01M0P7RV5HFDSSRMC0MDQQJTJ2","dir":"backend/cpu","fr":"draft","to":"active"}
 {"t":"2026-08-23T02:39:28Z","eid":"8367554b1b27982c","ag":"ag-e606","ev":"create","id":"T-01M0P7SGJ9E3V9RKHJ1ESXH857","k":"task","ti":"Simplify and gate the exact ARM64 F32 Abs kernel","dir":"backend/cpu"}
 {"t":"2026-08-23T02:39:37Z","eid":"b529debe14f56e10","ag":"ag-8a4e","ev":"move","id":"T-01M0P7SGJ9E3V9RKHJ1ESXH857","dir":"backend/cpu","fr":"draft","to":"active"}
+{"t":"2026-08-23T02:40:04Z","eid":"4057bbc14206b3e1","ag":"ag-c631","ev":"rule","dir":"backend/cpu","op":"edit","rule":"ARM64-EXACT-ABS-001","txt":"WHEN F32 Abs executes on arm64 with Go 1.26 or newer, the CPU backend SHALL clear only bit 31 so every output bit pattern equals inputBits AND 0x7fffffff, including signaling and quiet NaNs.","ap":["go:cpu.absF32","asm:cpu.absF32BlocksNeon","go:cpu.TestAbsF32Arm64ExactAllLengths"]}
