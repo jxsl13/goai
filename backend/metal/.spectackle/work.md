@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0Q913MDFQSTD3ME8MTRCGRZ Recorder profile label ownership and allocation scaling
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.Recorder.Profile, backend/metal/recorder_profile_bench_test.go
 
