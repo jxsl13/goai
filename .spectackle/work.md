@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0P5YEXPFMVVPC5H5FPS0NRG Add an explicit Q8_K activation path for M2 CPU quant decode
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:gguf.QMatMul, go:nn.QuantLinear.Forward, go:nlp.QuantLlama.DecodeStep, format/gguf/quant_matmul_pair.go, format/gguf/quant_matmul_triple.go, internal/benchcompare/prod_cpu_quant_test.go
