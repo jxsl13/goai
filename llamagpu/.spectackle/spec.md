@@ -20,3 +20,6 @@ WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equ
 
 ## METAL-ROPE-F16KV-COMBINED-COUNT-001
 WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.
+
+## METAL-Q4K-SWIGLU-PAIR-GRAPH-001
+WHEN trained 22-layer TinyLlama decode is profiled with the candidate enabled, the Metal quant decoder graph SHALL contain 109 quant events, 22 qmatmul.q4_k.swiglu_pair events, and 0 binary.swiglu events.
