@@ -484,3 +484,6 @@ WHEN a resident M=1 Q4_K projection uses a 32-thread cooperative group, the Meta
 
 ## METAL-Q4K-SINGLE-SIMD-SCOPE-001
 WHEN M differs from one or the pipeline lacks a 32-lane SIMD width, the Metal Q4_K single-SIMD selector SHALL dispatch the incumbent 64-thread route and issue zero single-SIMD candidate groups.
+
+## METAL-Q4K-SINGLE-SIMD-PERF-001
+WHEN three order-alternated count-seven M2 campaigns measure all three frozen resident shapes, the Q4_K single-SIMD promotion gate SHALL retain the candidate only when every shape and campaign reaches at least 1.05 times incumbent throughput.
