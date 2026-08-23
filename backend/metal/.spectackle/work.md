@@ -65,7 +65,7 @@ The production stage profile attributes 4.856 ms across 110 Q4_K events, and the
 
 ## T-01M0QRY7EBEA99HWV2A0NKWTY1 Implement and gate Q4_K rows-per-SIMD variants
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QRX6E0FC1S4XNAWGQK8900
 targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.mtl_qmatmul_resident
