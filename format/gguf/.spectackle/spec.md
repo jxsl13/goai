@@ -359,3 +359,6 @@ WHEN an F32 activation row with length divisible by 256 is encoded for Q8_K cros
 
 ## Q8K-ACTIVATION-EXACT-SCOPE-001
 The format/gguf QMatMul SHALL retain the exact F32 activation route as default and dispatch 0 Q8_K activation blocks unless a caller selects the separate approximate API.
+
+## ARM64-Q8K-CROSS-DOT-001
+WHEN contiguous F32 M1 input and Q4_K or Q6_K weights use the explicit Q8_K activation route on ARM64, the format/gguf SHALL encode each activation block once, dispatch an SDOT cross-dot with 0 leaf heap allocations, and match the portable Q8_K cross-dot within 1e-5 absolute plus 1e-5 relative error.
