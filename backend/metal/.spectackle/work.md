@@ -63,7 +63,7 @@ The rejected scratch-only experiment proved that 339 label allocations account f
 
 ## P-01M0Q6T9RZEV9RWA9ZS5V8KGYC Bulk-extract Metal recorder profile events in one cgo call
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
