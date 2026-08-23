@@ -4010,7 +4010,7 @@ Reprofile merged main after the paired and independent Q4_K coefficient-header a
 
 ## R-01M0PQ6CJPFMMAP21B11H6BC9B Re-profile merged M2 Q4_K vector-header kernel
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM, internal/benchcompare/leadership/evidence
