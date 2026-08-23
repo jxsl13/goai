@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RGHTRTE3CSGT21HN59B9QY Measure a depth-composed Metal pre-norm transformer stack on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0RCPZNJF75SZJ766JXXPX6H
 targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go
