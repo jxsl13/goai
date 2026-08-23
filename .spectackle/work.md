@@ -4010,7 +4010,7 @@ The corrected CPU-only TinyLlama Q4_K_M gate on merged PR #1172 measures 33.201 
 
 ## T-01M0P610ZBF4CVWCJSA7F2S9SB Implement and gate the Q8_K activation leaf primitives
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P5YEXPFMVVPC5H5FPS0NRG
 
