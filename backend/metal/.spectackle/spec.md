@@ -423,7 +423,9 @@ WHEN 3 order-alternated count-7 M2 campaigns compare warm events340 ProfileInto 
 Rationale: Preserve the frozen numeric gate in a concise verifiable rule.
 
 ## RECORDER-PROFILE-INTO-LABEL-REUSE-001
-WHEN capacity-sufficient ProfileInto repeatedly extracts unchanged repeated-label or mixed-label snapshots, the ProfileInto label owner SHALL reuse exact matching Go-owned destination strings and allocate zero new label strings after the first successful extraction.
+WHEN capacity-sufficient ProfileInto repeats an unchanged mixed-label snapshot, the label owner SHALL reuse exact matching Go string data pointers and allocate 0 new label strings after the first extraction.
+
+Rationale: State pointer identity and zero-allocation evidence.
 
 ## RECORDER-PROFILE-INTO-NONREGRESSION-001
 WHEN each frozen Apple M2 campaign measures Profile events1 and events340 plus disabled recorder construction after adding ProfileInto, the profile extraction change SHALL retain at least 0.97 times baseline Profile throughput in every cell, preserve disabled-recorder allocations, and keep existing native profile entry points ABI-compatible.
