@@ -23,3 +23,6 @@ WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal d
 
 ## METAL-Q4K-SWIGLU-PAIR-GRAPH-001
 WHEN trained 22-layer TinyLlama decode is profiled with the candidate enabled, the Metal quant decoder graph SHALL contain 109 quant events, 22 qmatmul.q4_k.swiglu_pair events, and 0 binary.swiglu events.
+
+## METAL-Q4K-SWIGLU-PAIR-PERF-001
+WHEN seven alternating fresh-decoder M2 TinyLlama campaigns compare candidate and control, the Metal quant decoder SHALL reach at least 1.03x tg64 median with 5 of 7 wins and preserve pp64 and pp512 at 0.99x.
