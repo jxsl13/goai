@@ -530,3 +530,6 @@ WHERE 3 count-7 alternating M2 campaigns at B8 S65 D128 H4 F512, the promotion g
 
 ## METAL-PRENORM-TRANSFORMER-STACK-NUMERIC-001
 WHEN depth-four output and backward parity is checked against the complete-block loop, the Metal pre-norm transformer-stack implementation SHALL match 1 output and exactly 49 gradients within established F32 tolerance while mutating exactly 0 inputs.
+
+## METAL-PRENORM-TRANSFORMER-STACK-GRAPH-STRUCTURE-001
+WHERE contiguous offset-zero F32 inputs with uniform geometry and Depth from 2 through 8, the Metal pre-norm transformer-stack implementation SHALL execute forward and backward as exactly 1 bounded shape-and-depth-keyed cached MPSGraph submission per direction with 2 runtime epsilon feeds per block, pooled buffers, and Go-owned outputs.
