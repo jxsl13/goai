@@ -675,3 +675,4 @@
 {"t":"2026-08-23T13:48:08Z","eid":"85d072a21748a2af","ag":"ag-8893","ev":"create","id":"P-01M0QE1VX8FKNRRK350A6GNNHG","k":"proposal","ti":"Replace redundant M2 split-K pass-2 merges with lane-owned dimensions"}
 {"t":"2026-08-23T13:48:19Z","eid":"b709667d0e7b2b42","ag":"ag-ce2b","ev":"move","id":"P-01M0QE1VX8FKNRRK350A6GNNHG","fr":"draft","to":"active"}
 {"t":"2026-08-23T13:48:35Z","eid":"814cf4ca653e9921","ag":"ag-f1dd","ev":"create","id":"T-01M0QE2PMWFKZ8VS07HAMCP9XG","k":"task","ti":"Implement and gate lane-owned split-K pass-2 merge"}
+{"t":"2026-08-23T13:48:49Z","eid":"c599092df6f10ba8","ag":"ag-477b","ev":"move","id":"T-01M0QE2PMWFKZ8VS07HAMCP9XG","fr":"draft","to":"active"}

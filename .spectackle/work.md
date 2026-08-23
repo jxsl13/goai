@@ -4017,7 +4017,7 @@ Consume R-01M0QE170PE70. Compile a default-off mha_dec_splitk_p2_dim candidate. 
 
 ## T-01M0QE2PMWFKZ8VS07HAMCP9XG Implement and gate lane-owned split-K pass-2 merge
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QE1VX8FKNRRK350A6GNNHG
 targets: msl:mha_dec_splitk_p2, objc:metal_bridge.ensure_mha_decode, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu_test.TestMetalF16KVRealModelQualityAndSpeed
