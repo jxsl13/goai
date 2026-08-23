@@ -45,7 +45,7 @@ Go 1.26.6 compiles the public scalar Abs oracle to sign-bit clearing and preserv
 
 ## T-01M0P7SGJ9E3V9RKHJ1ESXH857 Simplify and gate the exact ARM64 F32 Abs kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P7RV5HFDSSRMC0MDQQJTJ2
 targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths

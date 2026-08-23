@@ -167,3 +167,4 @@
 {"t":"2026-08-23T02:39:06Z","eid":"ea89e6ec233d770b","ag":"ag-3891","ev":"create","id":"P-01M0P7RV5HFDSSRMC0MDQQJTJ2","k":"proposal","ti":"Restore Go 1.26 exact ARM64 F32 Abs semantics","dir":"backend/cpu"}
 {"t":"2026-08-23T02:39:19Z","eid":"f3ed047b4d752f62","ag":"ag-4db1","ev":"move","id":"P-01M0P7RV5HFDSSRMC0MDQQJTJ2","dir":"backend/cpu","fr":"draft","to":"active"}
 {"t":"2026-08-23T02:39:28Z","eid":"8367554b1b27982c","ag":"ag-e606","ev":"create","id":"T-01M0P7SGJ9E3V9RKHJ1ESXH857","k":"task","ti":"Simplify and gate the exact ARM64 F32 Abs kernel","dir":"backend/cpu"}
+{"t":"2026-08-23T02:39:37Z","eid":"b529debe14f56e10","ag":"ag-8a4e","ev":"move","id":"T-01M0P7SGJ9E3V9RKHJ1ESXH857","dir":"backend/cpu","fr":"draft","to":"active"}
