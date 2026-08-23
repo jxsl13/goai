@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q6K-ROW-ASM-EXACT-001 {applies: go:gguf.dotQ6_KRowASM,go:gguf.dotQ6KBlockNeon,asm:gguf.dotQ6KBlockNeon}
+WHEN an Apple ARM64 Q6_K row uses one assembly call, the dotQ6_KRowASM SHALL preserve every raw six-bit value, signed subscale, f16 lookup result, per-block F32 reduction, ordered F64 accumulation, and prior row output bits.
+
+Rationale: Whole-row native orchestration must change only boundary and invariant setup costs, not the accepted Q6_K arithmetic schedule.
