@@ -4014,13 +4014,3 @@ created: 2026-08-23
 targets: vision/vit.go, backend/metal/metal.go, backend/metal/metal_bridge.m, autograd/vjp.go, internal/benchcompare/vision_train_test.go, docs/decisions/ADR-0006-autograd-tape.md, docs/decisions/ADR-0008-gpu-strategy.md, docs/decisions/ADR-0019-device-resident-tensors.md
 
 Determine whether one cached MPSGraph for the pre-norm FFN residual boundary can materially reduce M2 ViT training time before introducing a fused backend API. Current steady-state GOAI_TIME_OPS attribution over 8 Metal-only steps totals 47.397 ms of Metal work: MatMul 27.016 ms, MHA forward/backward 10.852 ms, LayerNorm forward/backward 5.413 ms, GELU forward/backward 2.644 ms, and remaining routed ops 1.472 ms. Screen the exact B=8, rows=520, dim=128, hidden=512 F32 shape. Compare the incumbent LayerNorm, MatMul, AddBias, GELU, MatMul, AddBias, residual sequence plus its VJP against a cached graph with equivalent outputs and gradients. Respect ADR-0006, ADR-0008, and ADR-0019. Distinguish this from rejected ViT preparation flattening P-01M0FMNNMKFRXR0FDEYZ8GXX7S and rejected broad encoder coalescing P-01M0N3K92DE8VSC1V55JPA14K7: this experiment must remove host materialization across a compute-heavy forward/backward boundary, not merely lower operation or encoder counts. Reject unless the isolated boundary is at least 1.20x faster with reference parity and the projected end-to-end step gain is at least 1.10x.
-
-## P-01M0R4K081FDDTQMBYZWCRRZ55 Fuse pre-norm FFN training boundaries on Metal
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0R43YYWE2TTJMX2PJ09GN5S
-grilled: 2026-08-23 open=1
-targets: go:vision.NewViT, go:nn.LayerNorm.Forward, go:backend.OpGELU, go:autograd.RegisterVJP, backend/op.go, backend/metal/metal.go, backend/metal/metal_bridge.m, internal/benchcompare/vision_train_test.go
-
-Promote the successful M2 screen into a generic backend operation and explicit VJP for the pre-norm FFN residual boundary. At rows=520, dim=128, hidden=512, F32, the cached MPSGraph matches the incumbent output and all parameter/input gradients. Ten count-20 samples show median incumbent 3.652 ms versus candidate 1.086 ms (3.36x). Replacing four boundaries conservatively projects the measured 47.397 ms Metal-dispatch budget to about 37.13 ms (1.28x). Implement a portable reference fallback, a Metal cached-graph fast path, autograd registration, and ViT integration without exposing a Metal-only public API. Preserve exact GELU, biased LayerNorm variance with epsilon, residual semantics, tensor ownership, and existing unsupported-route fallbacks. Require parity, isolated >=1.20x, projected and measured end-to-end >=1.10x, external perfscan ratchets, and durable benchmark evidence.
