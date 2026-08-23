@@ -447,7 +447,9 @@ WHEN the lane-owned split-K pass-2 kernel processes f32 or f16-KV partials, the 
 Rationale: Metal fast-math changed one finite f32 result by 24 ULP at sk=128 despite preserved source operation order; all other measured cells were bit exact.
 
 ## METAL-SPLITK-DIM-MERGE-OWNERSHIP-001
-WHEN mha_dec_splitk_p2_dim runs one 32-lane SIMD group, the each lane i SHALL merge dimensions 2i and 2i+1 in incumbent chunk order and write exactly those 2 outputs.
+WHEN mha_dec_splitk_p2_dim runs one 32-lane SIMD group, the lane i SHALL merge dimensions 2i and 2i+1 in incumbent chunk order and write exactly those 2 outputs.
+
+Rationale: Correct EARS grammar while retaining lane ownership.
 
 ## METAL-SPLITK-DIM-MERGE-SCOPE-001
 WHEN attention is not sq=1 dk=64 unwindowed causal split-K with sk at least 128, the Metal attention selector SHALL dispatch 0 lane-owned pass-2 kernels and preserve the incumbent route.
