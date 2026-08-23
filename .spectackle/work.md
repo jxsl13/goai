@@ -4006,13 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## P-01M0QJ3RN0FYPBEE9J3JZ6344R Autotune the M2 single-row RMSNorm threadgroup width
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0QJ1DQZE8W87CD3GS5DR9M0
-grilled: 2026-08-23 open=0
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu/rmsnorm_threadgroup_realmodel_test.go
-
-Consume R-01M0QJ1DQZE8W by adding a diagnostic selector for 64, 128, and 256 threads to the existing dynamic-size RMSNorm kernel. Preserve the exact MSL arithmetic, dispatch one threadgroup per row, and leave non-decode or unsupported shapes on the established 256-thread width. First require bit-exact candidate/control output and three same-command count-seven Apple M2 campaigns across dim 2048 and representative one-row dimensions, with every promoted cell at least 1.10x. Only a leaf winner advances to three interleaved TinyLlama f16-KV campaigns at contexts 8, 512, and 1536; require median paired speedup at least 1.01x in every campaign and no prefill regression. Reject and remove the selector if no width clears the leaf gate.
