@@ -59,13 +59,3 @@ state: active
 created: 2026-08-23
 
 Production M=1 Q4_K maps two independent SIMD groups to four output rows in each 64-thread threadgroup. Investigate 128- and 256-thread launches that derive row mapping from physical threadgroup width while preserving every lane operation and total SIMD-group count. Freeze TinyLlama shapes K2048N2048, K2048N5632, and K5632N2048. Promote only a bit-exact width reaching 1.05x in every same-command leaf campaign and 1.01x in every frozen f16-KV decode context.
-
-## P-01M0QM9JXCEEMA9C6H146CX31H Autotune Q4_K cooperative threadgroup width on M2
-kind: proposal
-state: active
-created: 2026-08-23
-parent: R-01M0QM7PDVED19SWH09DSGZYPW
-grilled: 2026-08-23 open=0
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
-
-Add a diagnostic 64/128/256-thread selector for the production recorder Q4_K cooperative kernel. Derive SIMD groups and output rows from physical threadgroup width while preserving the existing two-rows-per-SIMD lane mapping. Benchmark resident same-command GPU work at K2048xN2048, K2048xN5632, and K5632xN2048. Promote only a bit-exact width that clears every leaf and end-to-end gate; otherwise remove the implementation.
