@@ -26,6 +26,7 @@ schema: v1
 - T-01M0QCNME5FE0VKFK7MPF9F0G6 Implement and gate caller-owned Metal ProfileInto: Implemented additive Recorder.ProfileInto with caller-owned event-capacity and exact Go-string reuse plus one by-value native snapshot view. Existing Profile and 4 native profile entry points remain unchanged. Three order-alternated count-7 M2 campaigns measured events340 Profile/Into medians 2713/1697 ns, 2735/1691 ns, and 2786/1827 ns: 1.60x, 1.62x, and 1.52x with 14400 B and 6 allocs removed to [body truncated at tombstone retention cap]
 - R-01M0QCMRDYEBCAT35BDCB8678D Eliminate reusable Metal recorder profile extraction allocations: Consumed by P-01M0QCN4C8ECW and T-01M0QCNME5FE0. The caller-owned destination plus by-value cgo view removed the dominant result-slice and pointer-out-parameter costs; durable API, atomicity, ownership, ABI, label reuse, performance, and non-regression contracts are in backend/metal spec rules. perfscan issue 856 records the reusable analysis.
 - P-01M0QCN4C8ECWANK89M5CWF4P0 Add caller-reused Metal Recorder.ProfileInto extraction: Delivered by T-01M0QCNME5FE0. ProfileInto reuses caller-owned events and matching Go-owned labels, leaves destinations unchanged on errors, and preserves results after Recorder.Free. The by-value native snapshot view is additive and old APIs remain. All frozen M2 gates passed with 1.52x-1.62x events340 speedup and zero steady-state allocations; validation and perfscan reporting completed.
+- R-01M0QF5B7EE31TSGZKGEMY4YEZ Fuse M2 split-K chunk processing and merge inside one threadgroup: Consumed by P-01M0QG3MFAEQ1 and perfscan issue #858. Research correctly identified two-dispatch split-K fusion as the higher-leverage boundary. The f16-KV lane achieved 1.251x-1.456x median leaf speedups and 1.0232x-1.0539x paired TinyLlama speedups; the f32 lane failed end-to-end leverage and was not shipped.
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -440,3 +441,36 @@ WHEN a successful ProfileInto result outlives Recorder.Free and garbage collecti
 
 ## RECORDER-PROFILE-INTO-ABI-001
 WHEN the by-value native snapshot view is added, the Metal bridge SHALL retain all 4 existing profile entry points with source-compatible declarations.
+
+## METAL-SPLITK-DIM-MERGE-NUMERIC-001
+WHEN the lane-owned split-K pass-2 kernel processes f32 or f16-KV partials, the mha_dec_splitk_p2_dim SHALL match control within 2e-6 normalized relative error and preserve floating-point class across the 6 frozen context lengths.
+
+Rationale: Metal fast-math changed one finite f32 result by 24 ULP at sk=128 despite preserved source operation order; all other measured cells were bit exact.
+
+## METAL-SPLITK-DIM-MERGE-OWNERSHIP-001
+WHEN mha_dec_splitk_p2_dim runs one 32-lane SIMD group, the lane i SHALL merge dimensions 2i and 2i+1 in incumbent chunk order and write exactly those 2 outputs.
+
+Rationale: Correct EARS grammar while retaining lane ownership.
+
+## METAL-SPLITK-DIM-MERGE-SCOPE-001
+WHEN attention is not sq=1 dk=64 unwindowed causal split-K with sk at least 128, the Metal attention selector SHALL dispatch 0 lane-owned pass-2 kernels and preserve the incumbent route.
+
+## METAL-SPLITK-DIM-MERGE-PERF-001
+WHEN 3 order-alternated count-7 M2 campaigns measure full split-K attention at sk 512, 1024, 1536, and 2048, the promotion gate SHALL require at least 1.05 times control throughput in every cell and campaign.
+
+## METAL-SPLITK-FUSED-NUMERIC-001
+WHEN the fused split-K kernel processes a frozen f32 or f16-KV dk-64 GQA or MHA cell, the fused Metal attention output SHALL match incumbent within 2e-6 normalized relative error and preserve floating-point class.
+
+## METAL-SPLITK-FUSED-STRUCTURE-001
+WHEN the fused split-K route executes, the fused Metal kernel SHALL assign one SIMD group per chunk, exchange exactly 66 floats per chunk through threadgroup memory, synchronize once, and merge chunks in ascending order.
+
+## METAL-SPLITK-FUSED-SCOPE-001
+WHEN attention is outside sq=1, dk=64, unwindowed causal split-K or the fused pipeline cannot host nchunk times 32 threads, the Metal attention selector SHALL dispatch 0 fused kernels and preserve the incumbent route.
+## METAL-SPLITK-FUSED-PAIRING-001
+WHEN a paired TinyLlama campaign evaluates one dtype and context cell, the campaign statistic SHALL use the median of 3 per-round candidate-to-control ratios and invalidate ratio spread above 1.15 times.
+
+## METAL-F16KV-SPLITK-FUSED-PERF-001
+WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at sk 512, 1024, 1536, and 2048, the f16-KV fused split-K promotion gate SHALL require at least 1.20 times two-pass throughput in every cell and campaign.
+
+## METAL-F16KV-SPLITK-FUSED-DEFAULT-001
+WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the Metal attention selector SHALL dispatch exactly 1 fused kernel by default and retain two-pass execution when SetSplitKFused receives false.

@@ -20,3 +20,6 @@ WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equ
 
 ## METAL-ROPE-F16KV-COMBINED-COUNT-001
 WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.
+
+## METAL-F16KV-SPLITK-FUSED-E2E-001
+WHEN 3 valid token-interleaved M2 TinyLlama campaigns measure f16-KV decode at contexts 512 and 1536, the f16-KV fused split-K promotion gate SHALL require a median paired speedup of at least 1.01 times in every cell and campaign.
