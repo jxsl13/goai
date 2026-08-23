@@ -4024,3 +4024,13 @@ grilled: 2026-08-23 open=1
 targets: go:vision.NewViT, go:nn.LayerNorm.Forward, go:backend.OpGELU, go:autograd.RegisterVJP, backend/op.go, backend/metal/metal.go, backend/metal/metal_bridge.m, internal/benchcompare/vision_train_test.go
 
 Promote the successful M2 screen into a generic backend operation and explicit VJP for the pre-norm FFN residual boundary. At rows=520, dim=128, hidden=512, F32, the cached MPSGraph matches the incumbent output and all parameter/input gradients. Ten count-20 samples show median incumbent 3.652 ms versus candidate 1.086 ms (3.36x). Replacing four boundaries conservatively projects the measured 47.397 ms Metal-dispatch budget to about 37.13 ms (1.28x). Implement a portable reference fallback, a Metal cached-graph fast path, autograd registration, and ViT integration without exposing a Metal-only public API. Preserve exact GELU, biased LayerNorm variance with epsilon, residual semantics, tensor ownership, and existing unsupported-route fallbacks. Require parity, isolated >=1.20x, projected and measured end-to-end >=1.10x, external perfscan ratchets, and durable benchmark evidence.
+
+## T-01M0R4T3BYESY843XEF6FA60D2 Implement and gate fused pre-norm FFN training
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0R4K081FDDTQMBYZWCRRZ55
+refs: R-01M0R43YYWE2TTJMX2PJ09GN5S
+targets: backend/op.go, backend/attrs.go, backend/ref/prenorm_ffn.go, backend/ref/prenorm_ffn_test.go, autograd/vjp_transformer.go, autograd/vjp_transformer_test.go, nn/prenorm_ffn.go, nn/prenorm_ffn_test.go, vision/vit.go, vision/vit_parity_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_ffn_test.go, internal/benchcompare/vision_train_test.go, internal/benchcompare/leadership/evidence, docs/perf-notes-training.md
+
+Add OpPreNormFFN and OpPreNormFFNBackward with NormAttrs. Provide F32/F64 reference truth, explicit VJP registration, and an nn helper that selects fusion only when the active backend implements the forward and backward pair; otherwise retain the incumbent composite path. Add bounded shape-keyed cached MPSGraph forward and backward implementations for contiguous offset-zero F32 tensors, with one submission per direction and pooled buffers. Route ViT block FFNs through the helper. Validate direct reference and Metal parity for output plus all seven input gradients, unsupported-route fallback, single-image and batched ViT parity, exact trainability, isolated production-boundary performance, three alternating count-seven B=8 end-to-end campaigns, external perfscan with GOPROXY=direct, and durable evidence. Delete all disposable screen APIs and files before commit.
