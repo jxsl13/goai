@@ -1,24 +1,29 @@
 # M2 ARM64 exact F32 Abs, Go 1.27
 
 This evidence record compares merged main `8c655287` with candidate source
-`1b6cf130` on an Apple M2 Pro (12 logical CPUs, 32 GiB) using Go 1.27.0.
+`bd76b0a1` on an Apple M2 Pro (12 logical CPUs, 32 GiB) using Go 1.27.0.
 
 Go 1.27 lowers `float32(math.Abs(float64(x)))` to sign-bit clearing. The old
 NEON kernel also detected NaNs and set the quiet bit, so signaling-NaN payloads
-did not match the scalar oracle. The candidate removes four unsigned compares,
-four quiet-bit masks, and four ORs per 16 values. Its objdump span falls from 32
-to 16 source instruction lines.
+did not match the scalar oracle. The Go 1.27 candidate removes four unsigned
+compares, four quiet-bit masks, and four ORs per 16 values. Its objdump span
+falls from 32 to 16 source instruction lines.
+
+Go 1.26.6 still quiets the same signaling NaN. The final implementation uses
+Go release build tags: Go 1.26 retains the original 32-line exact kernel, while
+Go 1.27 and newer select the 16-line sign-clear kernel.
 
 `TestAbsF32Arm64ExactAllLengths` now passes for lengths 0 through 257, including
 unaligned slices, every F32 edge class, and random bit patterns. A new in-place
-test covers 257 random bit patterns. The complete `backend/cpu` test binary and
-the Linux AMD64 cross-compile pass.
+test covers 257 random bit patterns. Both tests pass under Go 1.26.6 and Go
+1.27.0. The complete `backend/cpu` test binary and Linux AMD64 cross-compile
+also pass.
 
 ## Preallocated leaf gate
 
-Seven interleaved count-one campaigns used 300 ms per cell. Speedup is baseline
-ns/op divided by candidate ns/op. Exact two-sided p-values use a Mann-Whitney
-permutation over the seven observations per side.
+Seven interleaved Go 1.27 count-one campaigns used 300 ms per cell. Speedup is
+baseline ns/op divided by candidate ns/op. Exact two-sided p-values use a
+Mann-Whitney permutation over the seven observations per side.
 
 | Elements | Baseline median ns/op | Candidate median ns/op | Speedup | p | Allocs/op |
 | ---: | ---: | ---: | ---: | ---: | ---: |
