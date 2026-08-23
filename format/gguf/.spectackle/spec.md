@@ -367,7 +367,3 @@ The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min v
 
 ## Q4K-SINGLE-BULK-HEADER-PERF-001
 WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independent Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
-## Q4K-PAIR-BATCH-PERF-001 {applies: go:gguf.dotQ4KPairRowASM}
-WHEN the K=2048 paired-row benchmark runs on Apple ARM64, the batched paired Q4_K row path SHALL reach at least 1.02x median speedup across 7 interleaved campaigns, retain 0 allocations, and show no paired-apply, mixed-QKV, or production regression.
-
-Rationale: The exact production profile attributes the remaining paired-row overhead to per-super-block boundaries and repeated expansion-table setup.
