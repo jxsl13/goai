@@ -4006,10 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0QZ7AVMFF0S0G1ZEM5DY8RX Re-measure decode-only quant residual epilogues after concurrent Metal scheduling
-kind: research
-state: active
-created: 2026-08-23
-
-Revisit the rejected exact M2 quant residual epilogue after PR 1190 changed the production execution schedule. Measure a decode-only M=1 epilogue that accumulates projection output directly into the residual, preserving prefill unchanged. Compare the established concurrent recorder against candidate in one trained-model binary with exact logits, GPU duration, wall throughput, and pp64 non-regression. Proceed to a proposal only if median tg64 GPU and wall speedup each reach 1.02x with stable paired results and pp64 remains at least 0.99x. Prior proposal P-01M09HZ85PF84B4N1642KEMCET measured 1.0140x to 1.0235x before concurrent scheduling but regressed pp64 when not isolated.
