@@ -415,3 +415,6 @@ WHEN ProfileInto receives nil, an invalid recorder, an incomplete recorder, or n
 
 ## RECORDER-PROFILE-INTO-PERF-001
 WHEN three independent order-alternated count-seven Apple M2 campaigns compare warmed capacity-sufficient events340 ProfileInto with Profile, the ProfileInto promotion gate SHALL require at least 1.25 times throughput in every campaign with at least 10000 fewer Go bytes and 2 fewer allocations per operation.
+
+## RECORDER-PROFILE-INTO-LABEL-REUSE-001
+WHEN capacity-sufficient ProfileInto repeatedly extracts unchanged repeated-label or mixed-label snapshots, the ProfileInto label owner SHALL reuse exact matching Go-owned destination strings and allocate zero new label strings after the first successful extraction.
