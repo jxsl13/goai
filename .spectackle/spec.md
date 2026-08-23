@@ -668,11 +668,6 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
-## CPU-QUANT-RESIDUAL-EPILOGUE-003
-WHEN the CPU Q4_K and Q6_K residual epilogue candidate is considered for retention, the GoAI SHALL require digest ea3df5516f17df83, at least 20 percent fewer allocation bytes, and at least 1.03x median speedup in independent interleaved 64-step campaigns.
-
-Rationale: The prior allocation-only design reached only 1.014x and was rejected.
-
 ## CPU-QUANT-RESIDUAL-EPILOGUE-004
 WHEN TestProdCPUQuantDecodeGGUF runs in a binary that also registers accelerator backends, the GoAI SHALL make TestProdCPUQuantDecodeGGUF pin backend.Preference to CPU for model construction and restore the prior preference afterward.
 
