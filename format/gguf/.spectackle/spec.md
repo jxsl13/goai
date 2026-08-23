@@ -362,3 +362,6 @@ The format/gguf QMatMul SHALL retain the exact F32 activation route as default a
 
 ## ARM64-Q8K-CROSS-DOT-001
 WHEN contiguous F32 M1 input and Q4_K or Q6_K weights use the explicit Q8_K activation route on ARM64, the format/gguf SHALL encode each activation block once, dispatch an SDOT cross-dot with 0 leaf heap allocations, and match the portable Q8_K cross-dot within 1e-5 absolute plus 1e-5 relative error.
+
+## Q8K-ACTIVATION-PERFORMANCE-GATE-001
+WHEN the Q8_K activation leaf primitive is considered for retention on Apple M2, the benchmark gate SHALL require at least 1.5x Q4_K N4096 K1024 speedup including encoding, 0 Q6_K regression, cosine at least 0.999, and 0 added allocations across 10 retained samples.
