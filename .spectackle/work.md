@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## T-01M0PXJ8CWFEB9ANNDEQ2GHPCK Load each Q6_K activation group with one ARM64 LD1
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
 refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
