@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0Q4QAP0ESS9GBF2ERVRBHAM Compare pinned upstream M2 quant dot instruction shapes
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.QMatMulResident
+
+Pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702 and MLX d9077d8316ad7305497a3ecf2296bd0e0e99a627. llama.cpp uses the same Q4_K M1 geometry as GoAI: two rows per SIMD group and two SIMD groups, with matching nibble arithmetic. Its one actionable delta is an explicit clang loop unroll(full) directive on the four-step nibble/FMA loop that GoAI leaves implicit in runtime Metal compilation. MLX uses a different affine quant format and provides no directly transferable GGUF Q4_K M1 kernel. Test the directive as a compiler-control leaf before any wider redesign.
