@@ -65,6 +65,7 @@ kind: proposal
 state: draft
 created: 2026-08-23
 parent: R-01M0QKGQ0CE0XVYJ4XED6VYBF6
+grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
 
 Add an opt-in recorder-only dim-2048 kernel whose 256 lanes each load and retain exactly eight X values, accumulate their squares in the same order as production, execute the existing simd_sum and one-barrier reduction, then emit X times inverse RMS times gamma from the retained values. Keep the production selector off by default. Prove bit-exact output and zero input mutation, isolate all other rows and dimensions, and promote only after three same-command count-seven M2 campaigns reach at least 1.10x in every leaf cell plus three token-interleaved f16-KV decode campaigns reach at least 1.01x at contexts 8, 512, and 1536 with unchanged logits.
