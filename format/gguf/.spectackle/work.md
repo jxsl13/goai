@@ -35,7 +35,7 @@ choice: Extend the shared decodeTensor switch with the exact existing decoder fu
 
 ## R-01M0PTMRHAEKM8KF9CZF9ETXPM Re-profile merged post-USHL M2 Q4_K kernel
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon
