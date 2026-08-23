@@ -4006,3 +4006,11 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
+
+## R-01M0QSCP1NEQ9TZMYJGNWXCCMR Refresh matched M2 llama.cpp Metal leadership cell
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:llamagpu_test.TestTinyLlamaVsLlamaCpp, go:llamagpu.NewQuantF16KV, internal/benchcompare/leadership, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
+
+Pin the current Homebrew llama.cpp v0.2.0 revision bb4caa7540188872173c44d161602d9271386413 and ggml v0.21.0 incumbent, then measure GoAI and llama.cpp on the identical TinyLlama Q4_K_M model hash 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0. Use matched f16 KV, decode-only boundaries, five alternating fresh-process samples, and record both engines per-kernel Metal GPU distributions before selecting another leaf-kernel successor. Treat leadership as a scoped matrix cell, not a universal claim.
