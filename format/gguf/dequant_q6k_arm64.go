@@ -4,15 +4,17 @@ package gguf
 
 import "encoding/binary"
 
-// qKByteToF32Indexes expands one vector of sixteen byte-sized integers into
-// four vectors whose signed integer lives in bits 31:24 of each lane. A fixed-
-// point SCVTF #24 then produces the exact float32 integer without the eight
-// widening instructions that a conventional int8→int16→int32 path needs.
-var qKByteToF32Indexes = [64]byte{
+// qKByteToF32Indexes starts with four byte-to-f32 expansion indexes. The
+// trailing vectors describe the packed Q4_K scale/minimum shuffle: per-lane
+// shifts, paired low-field indexes, and duplicated high-field indexes.
+var qKByteToF32Indexes = [112]byte{
 	16, 16, 16, 0, 16, 16, 16, 1, 16, 16, 16, 2, 16, 16, 16, 3,
 	16, 16, 16, 4, 16, 16, 16, 5, 16, 16, 16, 6, 16, 16, 16, 7,
 	16, 16, 16, 8, 16, 16, 16, 9, 16, 16, 16, 10, 16, 16, 16, 11,
 	16, 16, 16, 12, 16, 16, 16, 13, 16, 16, 16, 14, 16, 16, 16, 15,
+	0, 0xfc, 0, 0xfc, 0, 0xfc, 0, 0xfc, 0, 0xfc, 0, 0xfc, 0, 0xfc, 0, 0xfc,
+	0, 4, 1, 5, 2, 6, 3, 7, 0, 4, 1, 5, 2, 6, 3, 7,
+	8, 8, 9, 9, 10, 10, 11, 11, 8, 8, 9, 9, 10, 10, 11, 11,
 }
 
 // dequantQ6KBlockNeon decodes one 210-byte Q6_K super-block into 256 f32
