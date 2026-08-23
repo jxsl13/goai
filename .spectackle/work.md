@@ -3998,3 +3998,12 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## P-01M0PYN8ZYE7Z91PBKDBTBXR5Y Hoist structured Q4_K activation loads across dequantization
+kind: proposal
+state: draft
+created: 2026-08-23
+refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
+targets: asm:gguf.dotQ4KPairRowNeon, asm:gguf.dotQ4KRowNeon, go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KRowNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
+
+Keep the measured winning four-register 64-byte activation load, but schedule it before the 16-instruction Q4 table, integer-to-float, multiply, and subtract pipeline instead of immediately before FMLA. This increases load-to-use distance without adding instructions, changing address generation, or splitting structured loads. Begin with the 16.98% paired-row hotspot, then independently gate the 5.43% single-row hotspot. Preserve arbitrary-header output bits, coefficient and reduction order, zero allocations, and portable fallbacks. Retain each family only with at least 1.03x K2048 median speedup, five wins across seven alternating pairs, and no representative matrix/apply or exact 64-step production regression.
