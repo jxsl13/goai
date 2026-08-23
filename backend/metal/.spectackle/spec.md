@@ -409,3 +409,6 @@ Rationale: Keep the token sidecar and native label-copy reuse durable without ch
 
 ## RECORDER-PROFILE-INTO-API-001
 WHEN a completed profiling recorder is extracted into a nonnil RecorderProfile destination, the Recorder.ProfileInto API SHALL reuse destination event capacity when sufficient, overwrite every scalar field, truncate Events to the native count, and return exact Profile-equivalent values.
+
+## RECORDER-PROFILE-INTO-ATOMIC-OWNERSHIP-001
+WHEN ProfileInto receives nil, an invalid recorder, an incomplete recorder, or native extraction failure, or its successful result outlives Recorder.Free, the Metal recorder profile boundary SHALL return an explicit error without mutating a nonnil destination on failure and preserve all successful event-label bytes in Go-owned memory after Free.
