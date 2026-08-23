@@ -50,3 +50,6 @@ WHEN the backend registry generation changes or Context opBackends is nonnil, th
 WHEN a Context uses an unregistered backend or wrapper that shares a registered backend name, the Execute resolution cache SHALL make go:backend.TestRegisteredDispatchTableRequiresExactBackendIdentity observe 2 Kernel lookups across 2 Execute calls.
 
 Rationale: Backend names identify registry entries but wrappers and custom backends may change Kernel resolution dynamically; live dispatch preserves historical cold and mutation semantics.
+
+## BATCHED-ATTENTION-ISOLATION-001
+WHEN AttnAttrs.Batch is greater than 1 for packed rank-2 Q, K, and V, the OpMHA and OpMHABackward SHALL partition query and key rows into exactly Batch equal independent sequences, reset causal and window coordinates at every sequence boundary, and produce 0 cross-sequence values or gradients.
