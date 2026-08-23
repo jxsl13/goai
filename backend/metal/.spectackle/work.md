@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0Q69J1CEDCBKG8VDVB580GS Attribute Metal Recorder.Profile event-label allocations
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.Recorder.Profile
 
