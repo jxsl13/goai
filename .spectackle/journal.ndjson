@@ -520,3 +520,4 @@
 {"t":"2026-08-23T04:37:04Z","eid":"fb0b758e5f92c63b","ag":"ag-acaf","ev":"create","id":"P-01M0PEGTNPFYBR11H1K7RDM36Q","k":"proposal","ti":"Reprofile merged M2 CPU quant decode after paired-header acceleration"}
 {"t":"2026-08-23T04:37:14Z","eid":"e974d381ee941b36","ag":"ag-57f0","ev":"grill","id":"P-01M0PEGTNPFYBR11H1K7RDM36Q","gr":"2026-08-23 open=0","hash":"fd3d43953dd0f8e6df4b29e06a3fe2e9bd30a002ab9c6e96fd441b3a1e49449b"}
 {"t":"2026-08-23T04:37:25Z","eid":"5b7e743cab3043b2","ag":"ag-3543","ev":"move","id":"P-01M0PEGTNPFYBR11H1K7RDM36Q","fr":"draft","to":"active"}
+{"t":"2026-08-23T04:37:26Z","eid":"7553cda32e902786","ag":"ag-815b","ev":"create","id":"R-01M0PEHGT7FY285ZWC1JQ05SWB","k":"research","ti":"Attribute merged-main M2 CPU quant decode after Q4_K header bulk decode"}
