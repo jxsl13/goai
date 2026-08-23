@@ -378,3 +378,6 @@ WHEN the K=2048 paired-row benchmark runs on Apple M2, the assembly-resident Q4_
 
 ## Q4K-PAIR-HEADER-VECTOR-EXACT-001
 WHEN the packed coefficient header is vector-decoded, the paired ARM64 Q4_K row kernel SHALL produce all 16 scale and minimum coefficients per row bit-identically to the scalar header expansion and preserve both row output bits.
+
+## Q4K-PAIR-HEADER-VECTOR-PERF-001
+WHEN the K=2048 paired-row benchmark runs on Apple M2, the vector Q4_K header decoder SHALL reach 1.02x median speedup across 7 alternating campaigns, win 5 campaigns, retain 0 allocations, and show 0 pinned production regressions.
