@@ -4006,12 +4006,3 @@ created: 2026-08-23
 targets: go:nlp.QuantLlama.DecodeStep, go:backend.OpAdd, go:cpu.Backend.FuseSwiGLUInPlace
 
 Add a backend-routed eager-only in-place addition capability and use it only for QuantLlama DecodeStep private residual storage. Preserve recorder, per-op routing, unsupported dtype/shape/device, alias, view, and accelerator behavior through the ordinary OpAdd fallback. The earlier exact Metal residual-epilogue prototype removed 44 command encoders but failed its whole-model gate at roughly 1.01-1.02x; this CPU experiment differs by eliminating two full output allocations and writes per layer. Retain only if independent 64-step TinyLlama Q4_K campaigns preserve the exact production digest, reduce allocation bytes by at least 10%, and improve median wall time by at least 1.03x without regressions in full validation.
-
-## T-01M0P2DF4SESBBASAW98DBG2VJ Implement and gate eager CPU residual accumulation
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0P2CFT6FWCVWK3JNWYC9X2V
-targets: go:nlp.QuantLlama.DecodeStep, go:backend.OpAdd, go:cpu.binOp
-
-Add the backend-owned optional in-place add capability, implement exact contiguous offset-zero non-aliasing CPU F32/F64 addition, and use it only for private QuantLlama DecodeStep residuals. Add capability, recorder, routing, alias, view, dtype, and fallback tests. Compare clean merged-main and candidate binaries in interleaved independent 64-step Q4_K campaigns; remove the prototype if any gate fails.
