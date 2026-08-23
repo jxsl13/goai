@@ -42,12 +42,3 @@ created: 2026-08-23
 targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
 
 Go 1.26.6 compiles the public scalar Abs oracle to sign-bit clearing and preserves signaling-NaN payload bits, while the current ARM64 NEON kernel sets the quiet bit. Replace the vector kernel with sign-bit clearing only, update the exact contract, validate every F32 bit class and aliasing/tail behavior, and retain only if complete-operation M2 benchmarks do not regress.
-
-## T-01M0P7SGJ9E3V9RKHJ1ESXH857 Simplify and gate the exact ARM64 F32 Abs kernel
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0P7RV5HFDSSRMC0MDQQJTJ2
-targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
-
-Capture a same-toolchain M2 baseline, change the NEON block kernel to clear only bit 31, update the Go 1.26 exact contract and comments, compile test binaries and run exact edge/tail/in-place tests, then retain only with non-regressing complete-operation medians and zero added allocations.
