@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0PEGTNPFYBR11H1K7RDM36Q Reprofile merged M2 CPU quant decode after paired-header acceleration
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
