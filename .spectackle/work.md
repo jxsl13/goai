@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0R8JTW6E1AVVRZ6YJSHFVME Screen a cached Metal pre-norm attention training graph on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:vision.vitBlock.forwardBatched, go:nlp.MHA.ForwardBatched, backend/metal/metal.go, backend/metal/metal_bridge.m
 
