@@ -4019,7 +4019,7 @@ Add an M=1-only Metal Q4_K paired projection kernel that preserves total coopera
 
 ## T-01M0Q3ASFSF25B4NGWVZYNXVKP Implement and gate non-materializing M2 Q4_K SwiGLU pair
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q3A75AERNBPGPVFJK4N7NW
 targets: go:metal.Recorder.QMatMulResident, go:llamagpu.Decoder.recordFFN
