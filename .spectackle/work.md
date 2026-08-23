@@ -4017,7 +4017,7 @@ T908 already packs ViT projection GEMMs, but nlp.MHA.ForwardBatched still execut
 
 ## P-01M0R089YBE008K6PJQ009SGJV Execute independent vision attention batches in one backend operation
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:nlp.MHA.ForwardBatched, c:mtl_mha_mpsgraph, go:backend.OpMHABackward, backend/attrs.go, backend/ref, backend/cpu, backend/metal, backend/vulkan
 
