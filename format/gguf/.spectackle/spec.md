@@ -346,7 +346,7 @@ WHEN 1 grouped fan-out combines Q4_K and Q6_K matrices with unequal row counts, 
 Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial production pairs; proportional distribution produced the retained gain.
 
 ## GGUF-Q4K-PAIRED-APPLY-001
-WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation and a nonnil eight-lane chunk consumer, the QMatMulPairApply SHALL invoke qmatmulParallelChunks 1 time, return 1 F32 output, invoke the consumer once per aligned chunk, and match QMatMulPair followed by that consumer bit-for-bit.
+WHEN 2 Q4_K matrices receive 1 contiguous F32 M1 activation and an 8-lane consumer, the QMatMulPairApply SHALL invoke qmatmulParallelChunks once, return 1 F32 output, call the consumer per aligned chunk, and bit-match QMatMulPair plus that consumer.
 
 ## GGUF-Q4K-PAIRED-SCRATCH-001
 The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the final chunk, retain capacities no larger than 65,536 F32 values, and expose 0 scratch aliases to callers.
