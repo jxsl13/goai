@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## P-01M0QG3MFAEQ1BVB13SKB1CN5F Fuse the M2 f16-KV split-K decode path into one threadgroup
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/splitk_fused_test.go, llamagpu/splitk_fused_realmodel_test.go
 
