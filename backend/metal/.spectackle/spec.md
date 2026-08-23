@@ -361,3 +361,6 @@ WHEN a completed profile is extracted, the Recorder.Profile bulk snapshot SHALL 
 
 ## RECORDER-PROFILE-SNAPSHOT-OWNERSHIP-001
 WHEN a completed recorder is resolved, the native profile snapshot SHALL retain exactly one immutable 96-byte-label event array until Recorder.Free.
+
+## RECORDER-PROFILE-SNAPSHOT-WARM-PERF-001
+WHEN three order-alternated count-seven campaigns compare control and bulk extraction, the warm Recorder.Profile events340 on Apple M2 SHALL run at least 1.50 times faster by median.
