@@ -435,6 +435,8 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - P-01M0NWKBGDFCQ9BQ3EF0N18N8Z Keep private research sources out of Git: Implemented PRIVATE-RESEARCH-SOURCES-ISOLATION-002 through the validated root ignore rule. The private research library is no longer a Git tracking candidate, no files were deleted, and repository preflight-full remains green.
 - T-01M0NY5H7EEDRSP7BHBHQSN0QQ Implement and gate fused Q4_K pair-to-SwiGLU chunks: Implemented QMatMulPairApply with one retained gate tensor, bounded pooled up scratch, aligned concurrent consumption, and an ARM64 dual-output Q4_K row dot. The allocation-only prototype reached about 1.08x leaf and was extended rather than retained alone. Final M2 Pro medians: 1.148x leaf, 1.059x 64-step decode, 16.85% fewer decode bytes, exact digest ea3df5516f17df83. Race and preflight passed; [body truncated at tombstone retention cap]
 - P-01M0NY3846EDBT6GMMC5BCM0CE Fuse paired Q4_K production into CPU SwiGLU consumption: Accepted the fused Q4_K pair-to-SwiGLU design after it cleared the declared M2 gates: 1.148x leaf, 1.059x whole decode, lower bytes, exact output. Unsupported and recorded routes retain established fallbacks. Source commit ee55a6fb; evidence commit d01a52ca; reusable analysis recorded in perfscan #833.
+- T-01M0P4XWWWEQ09N23GXSN59Q46 Make the CPU production gate backend- and artifact-pinned: Implemented by daa68e8b. TestProdCPUQuantDecodeGGUF now pins backend.Preference to CPU before GGUF model construction, restores the previous preference, hashes the external fixture outside the timed decode boundary, and reports backend, SHA-256, and Go runtime. The M2 validation produced backend=cpu, digest ea3df5516f17df83, model SHA-256 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2 [body truncated at tombstone retention cap]
+- P-01M0P4X4QCF0XTB87P5M888AAP Pin CPU quant benchmark routing and model identity: Shipped the focused benchmark-attribution correction in daa68e8b. The production CPU gate now prevents linked Metal registration from silently rerouting QuantLinear, restores the caller preference, and emits the concrete backend, external GGUF SHA-256, and Go runtime outside the timed decode boundary. M2 exact output returned to digest ea3df5516f17df83 with the pinned TinyLlama artifact hash 9fecc [body truncated at tombstone retention cap]
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -668,3 +670,13 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
+
+## CPU-QUANT-BENCHMARK-PINNING-001
+WHEN TestProdCPUQuantDecodeGGUF runs while accelerator backends are registered, the GoAI SHALL make TestProdCPUQuantDecodeGGUF set backend.Preference to CPU before model construction and restore the prior preference on exit.
+
+Rationale: QuantLinear selects backend.Default, so Context.WithBackend alone cannot prove CPU attribution.
+
+## CPU-QUANT-BENCHMARK-PINNING-002
+WHEN TestProdCPUQuantDecodeGGUF accepts an external GGUF leadership fixture, the GoAI SHALL report SHA-256 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0 or the actual fixture hash plus runtime.Version outside timed decode.
+
+Rationale: A performance result without artifact and toolchain identity is not reproducible.
