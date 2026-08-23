@@ -359,3 +359,4 @@
 {"t":"2026-08-23T11:41:40Z","eid":"70999dbd2484fe17","ag":"ag-a572","ev":"create","id":"P-01M0Q6T9RZEV9RWA9ZS5V8KGYC","k":"proposal","ti":"Bulk-extract Metal recorder profile events in one cgo call","dir":"backend/metal"}
 {"t":"2026-08-23T11:41:57Z","eid":"c1cc1355b6200151","ag":"ag-ad73","ev":"move","id":"R-01M0Q6SJ8CF6R9984KYGJ8AQ8M","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T11:41:59Z","eid":"fe9a79023a9d4b37","ag":"ag-a603","ev":"grill","id":"P-01M0Q6T9RZEV9RWA9ZS5V8KGYC","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"a088934c1aef3edfa1c613d3e0677ac3a2f356344524296a164e473388edafec"}
+{"t":"2026-08-23T11:42:09Z","eid":"a044b8feb5e30fe3","ag":"ag-d14f","ev":"revise","id":"P-01M0Q6T9RZEV9RWA9ZS5V8KGYC","dir":"backend/metal","note":"body+targets revised"}
