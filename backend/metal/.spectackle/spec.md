@@ -353,3 +353,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
+
+## METAL-Q6K-LONGK-UNROLL-NUMERIC-001
+WHEN it executes any valid resident M=1 projection, the long-K Metal Q6_K unrolled pipeline SHALL match the historical cooperative pipeline within 2e-5 relative error, preserve floating-point class, and mutate exactly zero input bytes.
