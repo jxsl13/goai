@@ -5,6 +5,8 @@
   "go": "go1.27.0 darwin/arm64",
   "baseline_source": "9f1801c82f91330c79c4d02ab9e4755f635a4ada",
   "candidate_source": "68f4018355d7de48c6e2b0fb5fbe1bef51044ca1",
+  "validation_source": "3495dc74764ee7e54ff2d29b2bfe45bdb2731298",
+  "validation_note": "named the assembly result for vet ABI metadata; dotQ4KRowNeon machine text is byte-identical to the benchmarked source",
   "branch": "codex/m2-q4k-postushl-profile-20260823",
   "spectackle": "v0.10.0 source rebuilt with go1.27.0",
   "spectackle_proposal": "P-01M0PGHM4TE7Y",

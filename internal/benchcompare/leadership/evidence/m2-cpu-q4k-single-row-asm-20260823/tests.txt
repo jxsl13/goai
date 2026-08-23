@@ -5,6 +5,7 @@ PASS Go 1.27.0 Linux/ARM64 format/gguf cross-compile
 PASS arbitrary packed-header whole rows bit-identical to the prior per-block path
 PASS paired rows bit-identical to two independent whole-row calls
 PASS Go 1.27 disassembly verifies one whole-row entry, table-indexed VUSHL header decode, per-block F32 reduction, and ordered F64 accumulation
+PASS Go 1.27 vet after naming the assembly result; dotQ4KRowNeon machine text remains byte-identical to the benchmarked artifact
 PASS production digest ea3df5516f17df83 in every baseline and candidate process
 PASS spectackle reindex: 2762 files, 18791 nodes, 34699 edges, 6881 typed calls, 0 skipped
 PASS spectackle lint: 24 spec files, 489 rules, 0 errors
