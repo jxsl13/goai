@@ -4006,11 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0R02V7FFWKAG3EKXCMGD9TP Measure one-graph batched M2 Metal attention for vision encoders
-kind: research
-state: active
-created: 2026-08-23
-targets: go:nlp.MHA.ForwardBatched, c:mtl_mha_mpsgraph, go:backend.OpMHABackward
-
-T908 already packs ViT projection GEMMs, but nlp.MHA.ForwardBatched still executes Slice×3 plus OpMHA once per image and concatenates the results. Prototype a native MPSGraph forward over independent batch, head, sequence, and feature axes before changing AttnAttrs or portable backends. Compare B=8, S=65, D=128, H=4 against eight warmed calls to the current exact MPSGraph path in one alternating same-binary campaign. Promotion gates: candidate/control median GPU and wall speedup at least 1.50x; every paired sample at least 1.25x; output parity within existing Metal attention tolerances with no cross-image mixing; warmed graphs and identical host transfers. If leaf gates pass, assess ViT B=8 end-to-end forward at at least 1.15x and train step at at least 1.10x with gradient parity. A forward-only result may be proposed only if training is non-regressing and the execution contract explicitly preserves the old backward route. Reject and remove prototype code if the leaf gate fails.
