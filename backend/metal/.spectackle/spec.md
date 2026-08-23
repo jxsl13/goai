@@ -362,7 +362,7 @@ WHEN Profile resolves a completed recorder after label scratch reuse, the Metal 
 WHEN a 340-event recorder is measured in three independent count-seven control/candidate campaigns, the Recorder.Profile on Apple M2 SHALL run at least 1.10 times faster by median.
 
 ## recorder-profile-small-nonregression-001
-WHEN a one-event completed profiling recorder is measured in each frozen campaign, the Recorder.Profile performance validation on Apple M2 SHALL the candidate median throughput shall be at least 0.97 times the control and shall not increase allocations per operation.
+WHEN a one-event recorder is measured in each frozen campaign, the Recorder.Profile on Apple M2 SHALL retain at least 0.97 times control throughput without increasing allocations.
 
 ## recorder-profile-scope-001
 WHEN the event-label scratch storage is changed, the Recorder.Profile scratch reuse SHALL preserve the native C ABI and default recorder behavior.
