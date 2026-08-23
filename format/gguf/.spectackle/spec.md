@@ -367,3 +367,8 @@ The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min v
 
 ## Q4K-SINGLE-BULK-HEADER-PERF-001
 WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independent Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
+
+## Q4K-PAIR-BATCH-EXACT-001 {applies: go:gguf.dotQ4KPairRowASM,go:gguf.dotQ4KPairBlockNeon}
+WHEN one call processes multiple adjacent 256-weight super-blocks, the batched Apple ARM64 paired Q4_K row leaf SHALL emit 2 F32 subtotals per block in ascending order so Go returns pair-row bits identical to d43cdb4b with 0 leaf allocations.
+
+Rationale: Call amortization must not group or reorder the established per-block F32 reduction and F64 accumulation semantics.
