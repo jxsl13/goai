@@ -4004,6 +4004,7 @@ kind: proposal
 state: active
 created: 2026-08-23
 refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
+grilled: 2026-08-23 open=1
 targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KRowNeon, go:gguf.dotQ4KBlockNeon, asm:gguf.dotQ4KPairRowNeon, asm:gguf.dotQ4KRowNeon, asm:gguf.dotQ4KBlockNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
 
 The exact merged PR 1181 profile attributes 16.98% flat CPU samples to paired Q4_K and 5.43% to independent Q4_K. Q6_K experiments showed that Apple M2 consistently favors four narrow activation loads interleaved with dependent FMLAs over equivalent two- or four-register structured LD1 forms. Apply that measured scheduling lesson to Q4_K: split 64-byte activation loads into four ordered 16-byte loads, interleave row-0 or independent FMLAs, retain all four activation vectors for paired row 1, and preserve every dequantization and reduction bit. Gate paired and independent K2048 leaves, representative matrix/apply boundaries, exact 64-step production digest, allocations, and complete cross-platform compatibility; reject any site family that misses repeatable leverage.
