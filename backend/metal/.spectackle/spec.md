@@ -408,9 +408,9 @@ WHEN a multi-event native profile snapshot materializes labels, the Metal record
 Rationale: Keep the token sidecar and native label-copy reuse durable without changing the one-event ABI.
 
 ## RECORDER-PROFILE-INTO-API-001
-WHEN ProfileInto succeeds for a nonnil destination, the Recorder.ProfileInto SHALL set len(dst.Events) to native eventCount, reuse cap(dst.Events) when sufficient, and overwrite all 7 RecorderProfile scalar fields with Profile-equivalent values.
+WHEN ProfileInto succeeds for a nonnil destination, the Recorder.ProfileInto SHALL set len(dst.Events) to native eventCount, reuse cap(dst.Events) when sufficient, and overwrite all 6 RecorderProfile scalar fields with Profile-equivalent values.
 
-Rationale: Make capacity and complete overwrite behavior directly verifiable.
+Rationale: Correct RecorderProfile scalar-field count.
 
 ## RECORDER-PROFILE-INTO-ATOMIC-OWNERSHIP-001
 WHEN ProfileInto receives nil or native extraction fails, the Recorder.ProfileInto SHALL return a nonnil error while keeping dst.Events, dst.OmittedMPS, and all other destination fields unchanged.
