@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0Q2CZXBEXKV41BCXYX7G5FQ Fuse raw quantized Metal gate and up projections
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q2EGE0E60T5H3P35XSCX77
 grilled: 2026-08-23 open=1
