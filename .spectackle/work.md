@@ -4008,3 +4008,12 @@ grilled: 2026-08-23 open=1
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/decoder.go, llamagpu/llamagpu.go
 
 Research R-01M0Q2EGE0E60 established that TinyLlama Metal decode currently records 131 quant projections, including 44 separate gate/up projections across 22 layers. For same-type GGUF weights, row concatenation is exact and the existing decoder builder already supports one gate|up weight. Add the Metal halves activation and enable the established builder so one combined raw Q4_K or Q6_K projection replaces two projections without changing quant arithmetic. This is distinct from the rejected M>=24 cached-f16 prefill grouping: the primary gate is M=1 raw-quant decode. Retain only if exact leaf and trained-model behavior hold, aggregate M2 tg64 median improves at least 1.03x with at least 5 of 7 alternating campaigns won, and pp64 plus pp512 remain at least 0.99x. Require profiler proof that qmatmul event count drops by 22 and every candidate arm differs from control.
+
+## T-01M0Q2KA0DEF5SHJYV7KJ96PAN Implement and gate Metal raw gate-up fusion
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0Q2CZXBEXKV41BCXYX7G5FQ
+targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/llamagpu.go, backend/metal/metal.go
+
+Implement Metal Recorder.SwiGLUHalves with exact row-major gate|up semantics, expose it through mRec, and enable fusedGateUp in the Metal quant constructor so same-type raw quant gate/up weights use the existing combined builder. Add exact finite, nonfinite-class, input-immutability, shape, profiler-count, and distinct-control tests. Run a quick leaf screen before the seven alternating trained-model M2 campaigns. Retain only at tg64 aggregate median >=1.03x with at least 5/7 campaign wins and pp64/pp512 >=0.99x; otherwise fully revert executable changes and reject.
