@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q6K-VBIT-EXACT-001 {applies: go:gguf.dotQ6KBlockNeon,asm:gguf.dotQ6KBlockNeon}
+WHEN Q6_K high-bit planes are merged with ARM64 VBIT, the dotQ6KBlockNeon SHALL produce the same four signed six-bit byte streams and preserve every block and row output bit.
+
+Rationale: VBIT may replace only the mask-and-OR instruction pair; the existing 0x30 selection mask fixes the element mapping.
