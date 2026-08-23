@@ -357,3 +357,6 @@ WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL 
 
 ## recorder-profile-equivalence-001
 WHEN Profile resolves a completed recorder after label scratch reuse, the Metal recorder profiling SHALL return exactly the same event count, event order, labels, start offsets, GPU ticks, durations, frequency, command duration, span, omissions, and errors as the pre-change implementation.
+
+## recorder-profile-allocation-gate-001
+WHEN a 340-event completed profiling recorder is measured in each of three independent count-seven control/candidate campaigns, the Recorder.Profile performance validation on Apple M2 SHALL the candidate median shall be at least 1.10 times faster while allocating at least 300 fewer objects and 30000 fewer bytes per operation.
