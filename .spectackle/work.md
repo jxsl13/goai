@@ -4007,12 +4007,3 @@ grilled: 2026-08-23 open=1
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep
 
 Profile merged post-QKV and pair-to-SwiGLU TinyLlama Q4_K_M decode on Apple M2 Pro, rank serial and parallel stretches against wall clock, and implement only a candidate with exact digest preservation and statistically validated end-to-end leverage. Do not revisit the rejected persistent worker-pool or Q8_K activation-leaf designs unchanged.
-
-## R-01M0PCJ7TSEFCTCZ45YBJ6SFVX Profile merged M2 CPU quant decode after producer-consumer fusion
-kind: research
-state: active
-created: 2026-08-23
-parent: P-01M0PCH446FH695VH9692WFSV8
-targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep
-
-Capture current-main CPU and allocation profiles for the pinned TinyLlama-1.1B Q4_K_M 64-step DecodeStep boundary at GOMAXPROCS=8. Dilute one-time model loading, preserve exact final-logit digest, measure wall time and scaling, and rank serial stretches separately from summed parallel CPU. Compare against rejected persistent-pool, caller-participation, residual-epilogue, and Q8_K activation directions before selecting an implementation target.
