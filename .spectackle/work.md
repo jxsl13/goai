@@ -4019,7 +4019,7 @@ Pinned llama.cpp v0.2.0 commit bb4caa7540188872173c44d161602d9271386413 encodes 
 kind: proposal
 state: draft
 created: 2026-08-23
-grilled: 2026-08-23 open=0
+grilled: 2026-08-23 open=1
 targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/concurrent_recorder_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/f16kv_metal_test.go, internal/benchcompare/prod_decode_external_test.go, internal/benchcompare/metal_concurrent_decode_external_test.go
 
 Introduce a production-only MTLDispatchTypeConcurrent recorder for dense quantized f16-KV Llama-style single-token decode. Preserve ordinary and profiling recorders, prefill, f32-KV, MPS, and non-Metal backends. Keep Q/K/V and gate/up projections barrier-free; insert buffer-scope barriers at exact producer-consumer boundaries; close the shared encoder at commit, finish, free, blit, and MPS boundaries. Piggyback each pending Go barrier on the next existing native operation so the graph adds no standalone CGo crossings. Retain an in-process A/B toggle with identical Go-side scheduling. Promotion requires bit-exact logits; lifecycle, fallback, and boundary tests; seven order-alternated M2 pairs with at least 1.03x median GPU and 1.02x wall tg64 speedup and ratio spread at most 1.05; and three fresh-process pairs with pp64 at least 0.99x. This consumes R-01M0QWRMAQF5G and differs from serial coalescing at 0.9882x and pair-only concurrency at 1.001x.
