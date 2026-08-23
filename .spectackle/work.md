@@ -4017,7 +4017,7 @@ Pinned llama.cpp v0.2.0 commit bb4caa7540188872173c44d161602d9271386413 encodes 
 
 ## P-01M0QX30DKEW79R732B222H2S3 Dependency-tracked concurrent Metal decode recorder
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.NewRecorder, go:llamagpu.Decoder.encodeStep, go:metal.Recorder.QMatMulResident, go:metal.Recorder.Blit, objc:metal_bridge.mtl_recorder_begin
 
