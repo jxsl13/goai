@@ -23,3 +23,6 @@ WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal d
 
 ## METAL-F16KV-SPLITK-FUSED-E2E-001
 WHEN 3 valid token-interleaved M2 TinyLlama campaigns measure f16-KV decode at contexts 512 and 1536, the f16-KV fused split-K promotion gate SHALL require a median paired speedup of at least 1.01 times in every cell and campaign.
+
+## METAL-RMSNORM-TG-E2E-001
+WHEN 3 valid token-interleaved TinyLlama f16-KV campaigns compare the leaf-winning width with 256 threads at contexts 8, 512, and 1536, the M2 RMSNorm threadgroup promotion gate SHALL require median paired speedup of at least 1.01 times in every context and campaign with unchanged logits.
