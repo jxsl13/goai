@@ -4010,7 +4010,7 @@ Reprofile merged main after the paired and independent Q4_K coefficient-header a
 
 ## R-01M0PWQJZWFF9AEG1KB39ZB15Y Re-profile merged Q4_K whole-row M2 decode
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 refs: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KRowNeon, internal/benchcompare/leadership/evidence
