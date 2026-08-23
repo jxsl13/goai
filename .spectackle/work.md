@@ -4019,6 +4019,7 @@ Pin the current Homebrew llama.cpp v0.2.0 revision bb4caa7540188872173c44d161602
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
 
 Current Xcode 26.6 records a structurally valid Metal trace and workload output, prints that recording completed and the trace was saved, then returns exit status 54 at the requested time limit. metalcounters currently returns immediately on any recorder error, so it discards a valid expensive capture before target-marker, TOC, counter-schema, and workload validation. Change the capture boundary to retain the recorder error temporarily, validate the target output and trace through the existing export and analysis pipeline, and succeed only when every downstream invariant passes. A failed workload, absent artifact, failed export, missing required counters, or invalid sample must still fail closed. Report the generalizable finding through perfscan issue 866 and use the repaired path to finish the current pinned llama.cpp attribution.
