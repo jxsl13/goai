@@ -1,0 +1,7 @@
+$ perfscan -version
+perfscan v1.81.0
+
+$ env GOPROXY=direct perfscan -exit-zero ./linalg
+linalg/svd.go:79:5: innermost loop of this nest is a serial scalar dot accumulator running at FMA latency, not throughput; an ikj/axpy order or an accumulator block breaks the chain (reassociation is not bit-identical — gate with a tolerance oracle) (PS4008 L3)
+
+No finding covers the changed V-rotation expression or either new helper.

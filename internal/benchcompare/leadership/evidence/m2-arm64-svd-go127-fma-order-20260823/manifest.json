@@ -1,0 +1,20 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro",
+  "os": "darwin/arm64",
+  "baseline_commit": "7360079abf05eeb883aa7031e539e24bfc3ff492",
+  "source_commit": "86add846",
+  "toolchains": ["go1.26.6", "go1.27.0"],
+  "spectackle_proposal": "P-01M0PA5B5KF92",
+  "spectackle_task": "T-01M0PA5YVYEM6",
+  "input_digest_differences": 0,
+  "arm64_helper_calls": 0,
+  "arm64_rotation_instructions": 2,
+  "perfscan": {
+    "module": "github.com/jxsl13/perfscan/perfscan",
+    "version": "v1.81.0",
+    "goproxy": "direct",
+    "changed_path_findings": 0,
+    "issue": "https://github.com/jxsl13/perfscan/issues/837"
+  }
+}
