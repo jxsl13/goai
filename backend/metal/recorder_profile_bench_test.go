@@ -3,13 +3,13 @@
 package metal_test
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/jxsl13/goai/backend/metal"
 )
 
-func benchmarkCompletedProfileRecorder(b *testing.B, events int) *metal.Recorder {
+func benchmarkCompletedProfileRecorder(b *testing.B, events int, warm bool) (*metal.Recorder, func()) {
 	b.Helper()
 	if !metal.Available() {
 		b.Skip("metal device unavailable")
@@ -21,41 +21,53 @@ func benchmarkCompletedProfileRecorder(b *testing.B, events int) *metal.Recorder
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(x.Release)
 	o, err := metal.NewDeviceBufferF32([]float32{0})
 	if err != nil {
+		x.Release()
 		b.Fatal(err)
 	}
-	b.Cleanup(o.Release)
 	r, err := metal.NewProfilingRecorder(events)
 	if err != nil {
+		o.Release()
+		x.Release()
 		b.Fatal(err)
 	}
-	b.Cleanup(r.Free)
+	cleanup := func() {
+		r.Free()
+		o.Release()
+		x.Release()
+	}
 	for range events {
 		if err := r.Unary(x, o, 4); err != nil {
+			cleanup()
 			b.Fatal(err)
 		}
 	}
 	if err := r.Finish(); err != nil {
+		cleanup()
 		b.Fatal(err)
 	}
-	p, err := r.Profile()
-	if err != nil {
-		b.Fatal(err)
+	if warm {
+		p, err := r.Profile()
+		if err != nil {
+			cleanup()
+			b.Fatal(err)
+		}
+		if len(p.Events) != events {
+			cleanup()
+			b.Fatalf("profile events=%d want %d", len(p.Events), events)
+		}
 	}
-	if len(p.Events) != events {
-		b.Fatalf("profile events=%d want %d", len(p.Events), events)
-	}
-	return r
+	return r, cleanup
 }
 
 // BenchmarkMetalRecorderProfile isolates repeat extraction of an already
 // completed profile, including native event queries and Go result ownership.
 func BenchmarkMetalRecorderProfile(b *testing.B) {
 	for _, events := range []int{1, 340} {
-		b.Run(fmt.Sprintf("events%d", events), func(b *testing.B) {
-			r := benchmarkCompletedProfileRecorder(b, events)
+		b.Run("events"+strconv.Itoa(events), func(b *testing.B) {
+			r, cleanup := benchmarkCompletedProfileRecorder(b, events, true)
+			b.Cleanup(cleanup)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {
@@ -66,6 +78,53 @@ func BenchmarkMetalRecorderProfile(b *testing.B) {
 				if len(p.Events) != events {
 					b.Fatalf("profile events=%d want %d", len(p.Events), events)
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkMetalRecorderProfileFirst isolates the first extraction, including
+// native timestamp resolution and snapshot construction. Recorder encoding,
+// GPU execution, and cleanup are outside the measured interval.
+func BenchmarkMetalRecorderProfileFirst(b *testing.B) {
+	for _, events := range []int{1, 340} {
+		b.Run("events"+strconv.Itoa(events), func(b *testing.B) {
+			type pendingProfile struct {
+				recorder *metal.Recorder
+				cleanup  func()
+			}
+			b.ReportAllocs()
+			b.StopTimer()
+			for completed := 0; completed < b.N; {
+				batch := min(8, b.N-completed)
+				pending := make([]pendingProfile, batch)
+				for i := range pending {
+					r, cleanup := benchmarkCompletedProfileRecorder(b, events, false)
+					pending[i] = pendingProfile{recorder: r, cleanup: cleanup}
+				}
+				b.StartTimer()
+				for _, item := range pending {
+					p, err := item.recorder.Profile()
+					if err != nil {
+						b.StopTimer()
+						for _, cleanupItem := range pending {
+							cleanupItem.cleanup()
+						}
+						b.Fatal(err)
+					}
+					if len(p.Events) != events {
+						b.StopTimer()
+						for _, cleanupItem := range pending {
+							cleanupItem.cleanup()
+						}
+						b.Fatalf("profile events=%d want %d", len(p.Events), events)
+					}
+				}
+				b.StopTimer()
+				for _, item := range pending {
+					item.cleanup()
+				}
+				completed += batch
 			}
 		})
 	}

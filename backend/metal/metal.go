@@ -3269,12 +3269,16 @@ func (r *Recorder) Profile() (RecorderProfile, error) {
 	if r == nil || r.handle == nil {
 		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile after Free")
 	}
+	var events *C.mtl_recorder_profile_event_snapshot
 	var count, omittedMPS, omittedOverflow, omittedUnsupported C.int
 	var frequency, commandDurationNS C.ulonglong
-	rc := C.mtl_recorder_profile_summary(r.handle, &count, &omittedMPS, &omittedOverflow,
-		&omittedUnsupported, &frequency, &commandDurationNS)
+	rc := C.mtl_recorder_profile_snapshot(r.handle, &events, &count, &omittedMPS,
+		&omittedOverflow, &omittedUnsupported, &frequency, &commandDurationNS)
 	if rc != 0 {
 		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile unavailable (code %d)", int(rc))
+	}
+	if count < 0 || count > 0 && events == nil {
+		return RecorderProfile{}, fmt.Errorf("metal: Recorder profile returned invalid event storage")
 	}
 	p := RecorderProfile{
 		Events:             make([]RecorderProfileEvent, int(count)),
@@ -3284,24 +3288,14 @@ func (r *Recorder) Profile() (RecorderProfile, error) {
 		TimestampFrequency: uint64(frequency),
 		CommandDuration:    time.Duration(uint64(commandDurationNS)),
 	}
-	const labelCapacity = 96
+	nativeEvents := unsafe.Slice(events, int(count))
 	for i := range p.Events {
-		label := make([]byte, labelCapacity)
-		var startOffsetNS, ticks, durationNS C.ulonglong
-		rc = C.mtl_recorder_profile_event(r.handle, C.int(i), (*C.char)(unsafe.Pointer(&label[0])),
-			C.int(len(label)), &startOffsetNS, &ticks, &durationNS)
-		if rc != 0 {
-			return RecorderProfile{}, fmt.Errorf("metal: Recorder profile event %d failed (code %d)", i, int(rc))
-		}
-		n := 0
-		for n < len(label) && label[n] != 0 {
-			n++
-		}
+		event := &nativeEvents[i]
 		p.Events[i] = RecorderProfileEvent{
-			Label:       string(label[:n]),
-			StartOffset: time.Duration(uint64(startOffsetNS)),
-			Ticks:       uint64(ticks),
-			Duration:    time.Duration(uint64(durationNS)),
+			Label:       C.GoString(&event.label[0]),
+			StartOffset: time.Duration(uint64(event.startOffsetNS)),
+			Ticks:       uint64(event.ticks),
+			Duration:    time.Duration(uint64(event.durationNS)),
 		}
 		end := p.Events[i].StartOffset + p.Events[i].Duration
 		if end > p.EventSpan {
