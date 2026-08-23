@@ -17,3 +17,16 @@ Rationale: TestSVDIsBitIdentical, added to gate a one-sided Jacobi SVD change, h
 WHEN an allocation profile attributes most objects to a fan-out helper, the reader SHALL assume the goroutines it spawns, not any buffer inside the worker body, and confirm before optimizing either.
 
 Rationale: A GPTQ quantization of a 128 by 512 weight allocates 11215 objects per call and an alloc_objects profile put 74 percent of them in linalg.parallelCols. The obvious reading is the per-worker substitution scratch, which perfscan also flags as allocated once per DISPATCH. Pooling that scratch changed NOTHING: 11218 to 11230 objects, time flat. The objects are the goroutines the helper spawns, and pprof attributes a goroutines allocation to the function that started it. The real lever is fewer or smaller dispatches. Sizing the worker count to the work, the transform that won on decode, cut allocations 11216 to 6627 on GPTQ and 12365 to 7778 on SparseGPT - minus 41 and minus 37 percent - with NO time win and a small possible cost, so it was NOT shipped, consistent with FANOUT-SIZING-PAYS-ONLY-AT-HIGH-CALL-FREQUENCY-001. That is now the third measurement of that transform outside the decode regime and the third time it failed to pay.
+
+## SVD-GOLDENS-BIND-GO-RELEASE-001
+WHEN a supported Go release changes floating-point lowering, the SVD bit-identity gate SHALL pin 1 explicit contraction when object code retains its instruction count; otherwise use 1 measured exact golden per affected release-and-architecture pair.
+
+## SVD-RELEASE-GOLDEN-VALIDATION-001
+IF SVD output digests differ between 2 supported Go releases, THEN the SVD release-golden change SHALL prove 0 fixture-input bit differences and pass reconstruction and numerical-correctness tests under both Go releases before accepting a new golden.
+
+## SVD-ARM64-FMA-ORDER-001
+The ARM64 SVD V-rotation second component SHALL compute math.FMA(c, b, sn*a), inline with 0 helper calls, and preserve the Go 1.26 bit-exact digest under Go 1.27.
+
+## intent
+- T-01M0PA5YVYEM6VGFJYQ5PQXMBT Classify and gate Go 1.27 SVD digest drift: Pinned the Go 1.26 ARM64 Jacobi SVD V-rotation contraction with an inline architecture helper. Go 1.26.6 and Go 1.27.0 now retain all existing ARM64 digests; Rosetta AMD64 retains its architecture goldens. Objdump proves zero helper calls and the same two arithmetic instructions. Seven interleaved M2 campaigns on both toolchains show no meaningful regression; evidence is under m2-arm64-svd-go127-f [body truncated at tombstone retention cap]
+- P-01M0PA5B5KF92R60R8M2A6WSKE Preserve SVD bit-identity gates across supported Go releases: Resolved Go 1.27 ARM64 SVD digest drift by eliminating compiler-dependent FMA addend selection instead of weakening or re-freezing the golden. Fixture inputs match across releases, all architecture/release bit gates pass, object code retains one multiply plus one FMADD, and M2 performance is neutral.

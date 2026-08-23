@@ -1,0 +1,16 @@
+env GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-linalg-go126-svd-candidate.test ./linalg
+env GOTOOLCHAIN=go1.27.0 go test -c -o /private/tmp/goai-linalg-go127-svd-candidate.test ./linalg
+env GOTOOLCHAIN=go1.26.6 GOARCH=amd64 go test -c -o /private/tmp/goai-linalg-go126-amd64-svd-candidate.test ./linalg
+env GOTOOLCHAIN=go1.27.0 GOARCH=amd64 go test -c -o /private/tmp/goai-linalg-go127-amd64-svd-candidate.test ./linalg
+
+/private/tmp/goai-linalg-go126-svd-candidate.test -test.run '^TestSVDIsBitIdentical$' -test.count=1 -test.v
+/private/tmp/goai-linalg-go127-svd-candidate.test -test.run '^TestSVDIsBitIdentical$' -test.count=1 -test.v
+arch -x86_64 /private/tmp/goai-linalg-go126-amd64-svd-candidate.test -test.run '^TestSVDIsBitIdentical$' -test.count=1 -test.v
+arch -x86_64 /private/tmp/goai-linalg-go127-amd64-svd-candidate.test -test.run '^TestSVDIsBitIdentical$' -test.count=1 -test.v
+
+go tool objdump -s 'github.com/jxsl13/goai/linalg.SVD' /private/tmp/goai-linalg-go127-svd-candidate.test
+
+/private/tmp/goai-linalg-go127-svd-candidate.test -test.run '^$' -test.bench '^BenchmarkSVD' -test.benchtime=300ms -test.count=1
+/private/tmp/goai-linalg-go126-svd-candidate.test -test.run '^$' -test.bench '^BenchmarkSVD' -test.benchtime=300ms -test.count=1
+
+env GOPROXY=direct perfscan -exit-zero ./linalg
