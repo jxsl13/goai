@@ -4016,3 +4016,13 @@ grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu/rmsnorm_threadgroup_realmodel_test.go
 
 Consume R-01M0QJ1DQZE8W by adding a diagnostic selector for 64, 128, and 256 threads to the existing dynamic-size RMSNorm kernel. Preserve the exact MSL arithmetic, dispatch one threadgroup per row, and leave non-decode or unsupported shapes on the established 256-thread width. First require bit-exact candidate/control output and three same-command count-seven Apple M2 campaigns across dim 2048 and representative one-row dimensions, with every promoted cell at least 1.10x. Only a leaf winner advances to three interleaved TinyLlama f16-KV campaigns at contexts 8, 512, and 1536; require median paired speedup at least 1.01x in every campaign and no prefill regression. Reject and remove the selector if no width clears the leaf gate.
+
+## T-01M0QJ5VNQF9NT678P084ETYKN Implement and gate M2 RMSNorm threadgroup widths
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0QJ3RN0FYPBEE9J3JZ6344R
+refs: R-01M0QJ1DQZE8W87CD3GS5DR9M0
+targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu/rmsnorm_threadgroup_realmodel_test.go
+
+Add a diagnostic Metal RMSNorm threadgroup-width selector for 64, 128, and 256 threads without changing kernel arithmetic. Add deterministic numeric and profile-route coverage plus a same-command AB/BA benchmark at one-row dimensions 256, 1024, 2048, 4096, and 5632. Run three independent count-seven M2 campaigns. Advance only a width that is bit-exact and reaches at least 1.10x in every required leaf cell; then run three paired TinyLlama f16-KV campaigns at contexts 8, 512, and 1536 and require at least 1.01x in every cell. Otherwise remove the prototype and reject with the measured evidence.
