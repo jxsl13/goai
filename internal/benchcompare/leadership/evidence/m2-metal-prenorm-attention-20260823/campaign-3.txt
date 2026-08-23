@@ -1,0 +1,59 @@
+## c3_boundary_control
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6287846 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6088877 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6029694 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6131171 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6077477 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   5966831 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/control-12         	      20	   6147879 ns/op
+PASS
+
+## c3_boundary_candidate
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1515765 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1574194 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1857369 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   2003988 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1992085 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1990310 ns/op
+BenchmarkPreNormAttentionTrainingBoundary/candidate-12         	      20	   1995458 ns/op
+PASS
+
+## c3_full_control
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35544942 ns/op	       225.1 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35512046 ns/op	       225.3 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35888592 ns/op	       222.9 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35691775 ns/op	       224.1 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35664804 ns/op	       224.3 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35545592 ns/op	       225.1 img/s
+BenchmarkPreNormAttentionViTTrainStep/control-12         	      10	  35596225 ns/op	       224.7 img/s
+PASS
+
+## c3_full_candidate
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17109517 ns/op	       467.6 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17056242 ns/op	       469.0 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17262188 ns/op	       463.4 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17442833 ns/op	       458.6 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17103358 ns/op	       467.7 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17270929 ns/op	       463.2 img/s
+BenchmarkPreNormAttentionViTTrainStep/candidate-12         	      10	  17358296 ns/op	       460.9 img/s
+PASS

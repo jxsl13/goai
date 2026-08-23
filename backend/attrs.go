@@ -168,9 +168,9 @@ func (a NormAttrs) WithDefaults() NormAttrs {
 // PreNormAttentionAttrs parameterises the fused pre-LayerNorm MHA residual.
 // The zero value preserves one sequence, one head, and the LayerNorm epsilon.
 type PreNormAttentionAttrs struct {
-	Heads int
-	Batch int
-	Eps   float64
+	Heads int     // number of attention heads; 0 → 1
+	Batch int     // independent packed sequences along axis 0; 0 → 1
+	Eps   float64 // LayerNorm variance floor; 0 → 1e-5
 }
 
 func (PreNormAttentionAttrs) opAttrs() {}

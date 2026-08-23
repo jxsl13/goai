@@ -108,7 +108,10 @@ func fusedPreNormAttention(t testing.TB, be backend.Backend, f preNormAttentionF
 
 func closePreNormAttentionTensor(t *testing.T, name string, got, want *tensor.Tensor) {
 	t.Helper()
-	var maxRatio, maxDiff float64
+	if got == nil || want == nil || !got.Shape().Equal(want.Shape()) || got.Dtype() != tensor.F32 || want.Dtype() != tensor.F32 {
+		t.Fatalf("%s tensor mismatch: got=%v want=%v", name, got, want)
+	}
+	var maxRatio float64
 	var maxIndex int
 	var maxGot, maxWant float64
 	for i := range got.Numel() {
@@ -116,11 +119,11 @@ func closePreNormAttentionTensor(t *testing.T, name string, got, want *tensor.Te
 		diff := math.Abs(g - w)
 		ratio := diff / math.Max(1, math.Abs(w))
 		if ratio > maxRatio {
-			maxRatio, maxDiff, maxIndex, maxGot, maxWant = ratio, diff, i, g, w
+			maxRatio, maxIndex, maxGot, maxWant = ratio, i, g, w
 		}
 	}
-	t.Logf("%s maximum normalized difference %.3e (abs %.3e at %d)", name, maxRatio, maxDiff, maxIndex)
-	if maxRatio > 2e-2 {
+	const tolerance = 2e-3
+	if maxRatio > tolerance {
 		t.Fatalf("%s[%d]: fused=%g composite=%g normalized-diff=%g", name, maxIndex, maxGot, maxWant, maxRatio)
 	}
 }
@@ -151,6 +154,44 @@ func TestPreNormAttentionMetalParity(t *testing.T) {
 	for i, in := range inputs {
 		if !slices.Equal(in.Storage().F32(), before[i]) {
 			t.Fatalf("input %d mutated", i)
+		}
+	}
+}
+
+func TestPreNormAttentionMetalRuntimeEpsilon(t *testing.T) {
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		t.Skip("Metal unavailable")
+	}
+	f := newPreNormAttentionFixture()
+	ctx := backend.NewContext().WithBackend(be)
+	var first []float32
+	for _, eps := range []float64{1e-5, 2e-2} {
+		h, err := (&nn.LayerNorm{Gamma: f.gamma, Beta: f.beta, Eps: eps}).Forward(ctx, f.x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, err = newFixtureMHA(t, f).ForwardBatched(ctx, h, preNormAttentionBatch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := backend.Execute(ctx, backend.OpAdd, []*tensor.Tensor{f.x, h}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := backend.Execute(ctx, backend.OpPreNormAttention, []*tensor.Tensor{
+			f.x, f.gamma, f.beta, f.wq, f.wk, f.wv, f.wo,
+		}, backend.PreNormAttentionAttrs{
+			Heads: preNormAttentionHeads, Batch: preNormAttentionBatch, Eps: eps,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		closePreNormAttentionTensor(t, "runtime-epsilon", got[0], want[0])
+		if first == nil {
+			first = slices.Clone(got[0].Storage().F32())
+		} else if slices.Equal(first, got[0].Storage().F32()) {
+			t.Fatal("changing runtime epsilon did not change the fused output")
 		}
 	}
 }

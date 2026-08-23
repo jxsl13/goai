@@ -365,3 +365,29 @@ count from 51 to 5 was neutral when the work was movement-heavy. This win comes
 from crossing a compute-heavy forward/backward region that otherwise commits,
 waits, and rematerializes host-visible tensors at every stage. Full evidence is
 in `internal/benchcompare/leadership/evidence/m2-metal-prenorm-ffn-20260823`.
+
+## Fuse synchronized pre-norm attention training boundaries on Metal
+
+The same ViT block paid seven synchronous boundaries around attention:
+LayerNorm, Q/K/V projections, batched noncausal SDPA, output projection, and
+the residual Add. The Metal fast path now performs the complete forward in one
+shape-keyed cached MPSGraph. Its backward graph recomputes the boundary and
+returns gradients for x, gamma, beta, Wq, Wk, Wv, and Wo in one submission.
+Epsilon remains a runtime feed, so it does not fragment the graph cache.
+
+At batch=8, sequence=65, dimension=128, heads=4, and F32, three fresh-process
+order-alternated count-seven campaigns improve the full forward-plus-backward
+boundary by 2.968x, 2.986x, and 3.059x. The depth-4 ViT training step improves
+by 2.110x, 2.062x, and 2.062x. The weakest of all 21 aligned full-step pairs is
+still 1.793x. Both full-model arms retain the already-merged FFN fusion, so the
+measurement isolates the incremental attention leverage.
+
+The fused output, all seven gradients, and input immutability match the
+incumbent composite; the full ViT logits and every parameter gradient are also
+covered. A portable F32/F64 reference kernel defines the operation's numeric
+contract. Bias, LoRA, mask, causal mode, unsupported dtype/layout/shape, or a
+backend missing either fused direction continue through the exact incumbent
+composite with no implicit reference migration.
+
+Full protocol and raw output are in
+`internal/benchcompare/leadership/evidence/m2-metal-prenorm-attention-20260823`.

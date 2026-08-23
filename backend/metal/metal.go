@@ -1872,10 +1872,13 @@ func preNormAttentionMetalGeometry(in []*tensor.Tensor, attrs backend.PreNormAtt
 }
 
 func preNormAttentionF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormAttention, in, attrs)
+	}
 	pa, _ := attrs.(backend.PreNormAttentionAttrs)
 	rows, dim, batch, seq, heads, ok := preNormAttentionMetalGeometry(in, pa, false)
 	if !ok {
-		return nil, errors.New("metal: unsupported prenorm-attention geometry")
+		return refFallback()
 	}
 	pa = pa.WithDefaults()
 	out := tensor.New(tensor.F32, in[0].Shape())
@@ -1893,10 +1896,13 @@ func preNormAttentionF32(ctx *backend.Context, in []*tensor.Tensor, attrs backen
 }
 
 func preNormAttentionBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormAttentionBackward, in, attrs)
+	}
 	pa, _ := attrs.(backend.PreNormAttentionAttrs)
 	rows, dim, batch, seq, heads, ok := preNormAttentionMetalGeometry(in, pa, true)
 	if !ok {
-		return nil, errors.New("metal: unsupported prenorm-attention backward geometry")
+		return refFallback()
 	}
 	pa = pa.WithDefaults()
 	out := make([]*tensor.Tensor, 7)
