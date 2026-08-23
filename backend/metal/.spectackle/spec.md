@@ -464,7 +464,7 @@ WHEN the fused split-K kernel processes a frozen f32 or f16-KV dk-64 GQA or MHA 
 WHEN the fused split-K route executes, the fused Metal kernel SHALL assign one SIMD group per chunk, exchange exactly 66 floats per chunk through threadgroup memory, synchronize once, and merge chunks in ascending order.
 
 ## METAL-SPLITK-FUSED-SCOPE-001
-WHEN attention is outside sq=1, dk=64, unwindowed causal split-K or the fused pipeline cannot host nchunk times 32 threads, the Metal attention selector SHALL dispatch zero fused kernels and preserve the incumbent route.
+WHEN attention is outside sq=1, dk=64, unwindowed causal split-K or the fused pipeline cannot host nchunk times 32 threads, the Metal attention selector SHALL dispatch 0 fused kernels and preserve the incumbent route.
 
 ## METAL-SPLITK-FUSED-PERF-001
 WHEN three independent same-command order-alternated count-7 M2 campaigns measure f32 and f16-KV attention at sk 512, 1024, 1536, and 2048, the fused split-K promotion gate SHALL require at least 1.05 times incumbent throughput in every cell and campaign.
