@@ -1,0 +1,5 @@
+campaign	order	baseline_seconds	candidate_seconds	baseline_digest	candidate_digest	excluded_reason
+0	baseline-candidate	2.515351834	1.951980167	ea3df5516f17df83	ea3df5516f17df83	competing-perfscan-restarted-during-run
+1	candidate-baseline	1.807895625	1.804650959	ea3df5516f17df83	ea3df5516f17df83	competing-perfscan-restarted-during-run
+2	baseline-candidate	1.858423042	1.980314375	ea3df5516f17df83	ea3df5516f17df83	competing-perfscan-restarted-during-run
+3	candidate-baseline	3.067736083	2.189516334	ea3df5516f17df83	ea3df5516f17df83	competing-perfscan-restarted-during-run
