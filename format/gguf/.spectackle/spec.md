@@ -372,4 +372,4 @@ WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independ
 WHEN decodes headers inside assembly, the ARM64 paired Q4_K row path SHALL preserve all 16 GGUF six-bit scale and minimum values per row, f16 lookup conversion, per-block f32 reduction, ordered f64 accumulation, and pair-row output bits for arbitrary raw headers.
 
 ## Q4K-PAIR-ROW-ASM-PERF-001
-WHEN the K=2048 paired-row benchmark runs on Apple M2, the assembly-resident Q4_K header path SHALL reach at least 1.03x retained-median speedup across 7 clean alternating campaigns, win at least 5 campaigns, retain 0 allocations per operation, and show 0 pinned production-shape regressions.
+WHEN the K=2048 paired-row benchmark runs on Apple M2, the assembly-resident Q4_K header path SHALL reach at least 1.03x median speedup across 7 alternating campaigns, win 5 campaigns, retain 0 allocations, and show 0 pinned production regressions.
