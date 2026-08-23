@@ -471,3 +471,6 @@ WHEN three independent same-command order-alternated count-7 M2 campaigns measur
 
 ## METAL-SPLITK-FUSED-E2E-001
 WHEN three valid paired M2 TinyLlama campaigns measure f32 and f16-KV decode at contexts 512 and 1536, the fused split-K promotion gate SHALL require at least 1.01 times incumbent throughput in every cell and campaign.
+
+## METAL-SPLITK-FUSED-PAIRING-001
+WHEN a paired TinyLlama campaign evaluates one dtype and context cell, the campaign statistic SHALL use the median of 3 per-round candidate-to-control ratios and invalidate ratio spread above 1.15 times.
