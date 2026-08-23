@@ -4024,12 +4024,3 @@ grilled: 2026-08-23 open=1
 targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_attention_test.go, nlp/prenorm_attention.go, vision/vit.go
 
 Add a generic differentiable pre-norm attention residual operation for seven inputs: x, gamma, beta, Wq, Wk, Wv, and Wo. Define portable F32/F64 reference semantics and an explicit seven-gradient VJP. Select the fused route only for nonempty contiguous offset-zero F32, unbiased noncausal MHA without masks or LoRA, valid packed batch geometry, and a backend exposing both forward and backward kernels; otherwise execute the exact incumbent LayerNorm, four projections, batched MHA, and residual composite. Implement Metal forward and backward as one bounded shape-keyed cached MPSGraph submission per direction, feed epsilon at runtime, use pooled buffers, return Go-owned outputs, and preserve all input bytes. Preliminary M2 Pro same-binary screens at B=8, seq=65, dim=128, heads=4 measured 3.16x boundary median and 2.07x full depth-4 ViT train-step median. Promotion requires three order-alternated count-seven campaigns with at least 1.25x boundary median, 1.15x full-step median, every full-step aligned pair at least 1.05x, and logits plus every gradient within the established F32 tolerance.
-
-## T-01M0R91C3KECY8XGNX30NBTX49 Implement and gate fused pre-norm attention training
-kind: task
-state: done
-created: 2026-08-23
-parent: P-01M0R8Z9RPFAFV5FYZ0VN01KNP
-targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref/prenorm_attention.go, backend/ref/prenorm_attention_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/prenorm_attention_test.go, nlp/prenorm_attention.go, nlp/prenorm_attention_test.go, vision/vit.go, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence/m2-metal-prenorm-attention-20260823
-
-Complete the generic operation, portable reference oracle, explicit VJP, narrow MHA helper, Metal cached forward/backward graphs, ViT routing, fallback coverage, mutation and numerical parity, durable benchmarks, three campaign evidence, external perfscan scan, and generalized perfscan issue. Preserve the merged pre-norm FFN fusion in both benchmark arms and reject if any frozen performance or correctness gate fails.
