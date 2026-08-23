@@ -52,13 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0Q5KRTFE96TDAJGGH2APKN2 Specialize long-K M2 Q6_K decode with an unrolled pipeline
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0Q59EV4EKSTBJACTNCBQK42
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.QMatMulResident
-
-T-01M0Q5DGB6FMB rejected the universal Q6_K pragma, but its frozen count-seven gate separated by shape: K2048N256 was flat at 1.008x while the actual K5632N2048 down projection improved 1.050x. Compile historical and explicitly unrolled cooperative pipelines in one binary, expose a test selector toggle, and evaluate a predeclared K at least 4096 zone with same-binary order-alternated campaigns. Preserve the historical pipeline for shorter K and all noncooperative cases. Promote only if every long-K representative shape clears 1.03x, fallback stays within 0.97x to 1.03x, cold-start cost is bounded, and TinyLlama production clears frozen decode and prefill gates.
