@@ -8233,6 +8233,18 @@ static int gAttnValid[ATTN_CACHE_CAP] = {0};
 static int gAttnNext = 0; // FIFO insertion cursor
 static int gAttnCacheCap = ATTN_CACHE_CAP; // effective cap (§T622 A/B: 1 == old last-shape cache)
 
+// Batch-axis attention keeps a separate shape-keyed cache so batch=1 retains its established graph,
+// compilation behavior, and numerical route without an added branch inside it.
+static MPSGraph*       gBatchAttnGraphs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnQs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnKs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnVs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnScs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnOs[ATTN_CACHE_CAP] = {nil};
+static int gBatchAttnSigs[ATTN_CACHE_CAP][6]; // batch, seq, kvHeads, rep, dk, causal
+static int gBatchAttnValid[ATTN_CACHE_CAP] = {0};
+static int gBatchAttnNext = 0;
+
 // mtl_attn_cache_cap_set clamps the effective attention-graph cache cap to [1,ATTN_CACHE_CAP],
 // clears all resident graphs (ARC releases them), resets the FIFO cursor, and returns the previous
 // cap. cap==1 reproduces the pre-§T622 single last-shape cache for variable-length prefill A/B.
@@ -8243,8 +8255,11 @@ int mtl_attn_cache_cap_set(int cap) {
     for (int i = 0; i < ATTN_CACHE_CAP; i++) {
         gAttnGraphs[i] = nil; gAttnQs[i] = nil; gAttnKs[i] = nil;
         gAttnVs[i] = nil; gAttnScs[i] = nil; gAttnOs[i] = nil; gAttnValid[i] = 0;
+        gBatchAttnGraphs[i] = nil; gBatchAttnQs[i] = nil; gBatchAttnKs[i] = nil;
+        gBatchAttnVs[i] = nil; gBatchAttnScs[i] = nil; gBatchAttnOs[i] = nil;
+        gBatchAttnValid[i] = 0;
     }
-    gAttnNext = 0;
+    gAttnNext = 0; gBatchAttnNext = 0;
     gAttnCacheCap = cap;
     return prev;
 }
@@ -8318,6 +8333,69 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
     }
 }
 
+static int ensure_batch_attn_graph(int batch, int seq, int kvHeads, int rep, int dk, int causal) {
+    int sig[6] = {batch, seq, kvHeads, rep, dk, causal};
+    for (int i = 0; i < gAttnCacheCap; i++)
+        if (gBatchAttnValid[i] && memcmp(sig, gBatchAttnSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        int heads = kvHeads * rep;
+        int dm = heads * dk;
+        int kvDim = kvHeads * dk;
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* Q = [g placeholderWithShape:@[@(batch), @(seq), @(dm)]
+                                               dataType:MPSDataTypeFloat32 name:@"Q_batch"];
+        MPSGraphTensor* K = [g placeholderWithShape:@[@(batch), @(seq), @(kvDim)]
+                                               dataType:MPSDataTypeFloat32 name:@"K_batch"];
+        MPSGraphTensor* V = [g placeholderWithShape:@[@(batch), @(seq), @(kvDim)]
+                                               dataType:MPSDataTypeFloat32 name:@"V_batch"];
+        MPSGraphTensor* Sc = [g placeholderWithShape:@[@1]
+                                                dataType:MPSDataTypeFloat32 name:@"scale_batch"];
+        MPSGraphTensor* Qsc = [g multiplicationWithPrimaryTensor:Q secondaryTensor:Sc name:nil];
+
+        MPSGraphTensor* Qr = [g reshapeTensor:Qsc
+                                    withShape:@[@(batch), @(seq), @(kvHeads), @(rep), @(dk)] name:nil];
+        MPSGraphTensor* Qt = [g transposeTensor:Qr permutation:@[@0,@2,@3,@1,@4] name:nil];
+        MPSGraphTensor* Kr = [g reshapeTensor:K
+                                    withShape:@[@(batch), @(seq), @(kvHeads), @1, @(dk)] name:nil];
+        MPSGraphTensor* Kt = [g transposeTensor:Kr permutation:@[@0,@2,@3,@1,@4] name:nil];
+        MPSGraphTensor* Kb = [g broadcastTensor:Kt
+                                       toShape:@[@(batch), @(kvHeads), @(rep), @(seq), @(dk)] name:nil];
+        MPSGraphTensor* Vr = [g reshapeTensor:V
+                                    withShape:@[@(batch), @(seq), @(kvHeads), @1, @(dk)] name:nil];
+        MPSGraphTensor* Vt = [g transposeTensor:Vr permutation:@[@0,@2,@3,@1,@4] name:nil];
+        MPSGraphTensor* Vb = [g broadcastTensor:Vt
+                                       toShape:@[@(batch), @(kvHeads), @(rep), @(seq), @(dk)] name:nil];
+        MPSGraphTensor* KbT = [g transposeTensor:Kb dimension:3 withDimension:4 name:nil];
+        MPSGraphTensor* S = [g matrixMultiplicationWithPrimaryTensor:Qt secondaryTensor:KbT name:nil];
+        MPSGraphTensor* Sm = S;
+        if (causal) {
+            size_t n = (size_t)seq * seq;
+            float* mask = (float*)malloc(n * sizeof(float));
+            for (int i = 0; i < seq; i++)
+                for (int j = 0; j < seq; j++)
+                    mask[(size_t)i*seq + j] = (j <= i) ? 0.0f : -1.0e30f;
+            NSData* md = [NSData dataWithBytes:mask length:n*sizeof(float)];
+            free(mask);
+            MPSGraphTensor* M = [g constantWithData:md shape:@[@(seq), @(seq)]
+                                             dataType:MPSDataTypeFloat32];
+            Sm = [g additionWithPrimaryTensor:S secondaryTensor:M name:nil];
+        }
+        MPSGraphTensor* P = [g softMaxWithTensor:Sm axis:4 name:nil];
+        MPSGraphTensor* O5 = [g matrixMultiplicationWithPrimaryTensor:P secondaryTensor:Vb name:nil];
+        MPSGraphTensor* Ot = [g transposeTensor:O5 permutation:@[@0,@3,@1,@2,@4] name:nil];
+        MPSGraphTensor* O = [g reshapeTensor:Ot withShape:@[@(batch), @(seq), @(dm)] name:nil];
+
+        int slot = gBatchAttnNext;
+        gBatchAttnGraphs[slot] = g;
+        gBatchAttnQs[slot] = Q; gBatchAttnKs[slot] = K; gBatchAttnVs[slot] = V;
+        gBatchAttnScs[slot] = Sc; gBatchAttnOs[slot] = O;
+        memcpy(gBatchAttnSigs[slot], sig, sizeof(sig));
+        gBatchAttnValid[slot] = 1;
+        gBatchAttnNext = (slot + 1) % gAttnCacheCap;
+        return g != nil ? slot : -20;
+    }
+}
+
 int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
                      int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale) {
     if (ensure_init() != 0) return -1;
@@ -8361,6 +8439,57 @@ int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
 
+        memcpy(O, ob.contents, qN*sizeof(float));
+        return 0;
+    }
+}
+
+int mtl_mha_mpsgraph_batched(const float* Q, const float* K, const float* V, float* O,
+                             int batch, int seq, int dm, int heads, int dk,
+                             int causal, int kvHeads, float scale) {
+    if (ensure_init() != 0) return -1;
+    int rep = heads / kvHeads;
+    int kvDim = kvHeads * dk;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_batch_attn_graph(batch, seq, kvHeads, rep, dk, causal);
+        if (slot < 0) return slot;
+
+        size_t qN = (size_t)batch * seq * dm;
+        size_t kvN = (size_t)batch * seq * kvDim;
+        id<MTLBuffer> qb = pool_in(Q, qN*sizeof(float));
+        id<MTLBuffer> kb = pool_in(K, kvN*sizeof(float));
+        id<MTLBuffer> vb = pool_in(V, kvN*sizeof(float));
+        id<MTLBuffer> sb = pool_in(&scale, sizeof(float));
+        id<MTLBuffer> ob = pool_buf(qN*sizeof(float));
+        if (qb == nil || kb == nil || vb == nil || sb == nil || ob == nil) return -2;
+
+        NSArray<NSNumber*>* qShape = @[@(batch), @(seq), @(dm)];
+        NSArray<NSNumber*>* kvShape = @[@(batch), @(seq), @(kvDim)];
+        MPSGraphTensorData* qd = [[MPSGraphTensorData alloc] initWithMTLBuffer:qb shape:qShape
+                                                                      dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* kd = [[MPSGraphTensorData alloc] initWithMTLBuffer:kb shape:kvShape
+                                                                      dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* vd = [[MPSGraphTensorData alloc] initWithMTLBuffer:vb shape:kvShape
+                                                                      dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* sd = [[MPSGraphTensorData alloc] initWithMTLBuffer:sb shape:@[@1]
+                                                                      dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* od = [[MPSGraphTensorData alloc] initWithMTLBuffer:ob shape:qShape
+                                                                      dataType:MPSDataTypeFloat32];
+        if (qd == nil || kd == nil || vd == nil || sd == nil || od == nil) return -2;
+
+        NSDictionary* feeds = @{gBatchAttnQs[slot]:qd, gBatchAttnKs[slot]:kd,
+                                gBatchAttnVs[slot]:vd, gBatchAttnScs[slot]:sd};
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (cmd == nil) return -3;
+        [gBatchAttnGraphs[slot] encodeToCommandBuffer:cmd
+                                         feeds:feeds
+                              targetOperations:nil
+                             resultsDictionary:@{gBatchAttnOs[slot]:od}
+                           executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
         memcpy(O, ob.contents, qN*sizeof(float));
         return 0;
     }

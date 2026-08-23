@@ -36,6 +36,38 @@ func mhaBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.
 	}
 	pa, _ := attrs.(backend.AttnAttrs)
 	pa = pa.WithDefaults()
+	batch := pa.Batch
+	if batch < 1 || seq%batch != 0 || k.Shape()[0]%batch != 0 {
+		return nil, fmt.Errorf("ref: mha-backward batch %d must divide Q/K rows %d/%d", batch, seq, k.Shape()[0])
+	}
+	if batch > 1 {
+		dQ := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+		dK := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
+		dV := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
+		qRows, kvRows := seq/batch, k.Shape()[0]/batch
+		one := pa
+		one.Batch = 1
+		for b := range batch {
+			qb, _ := q.Slice(0, b*qRows, (b+1)*qRows)
+			kb, _ := k.Slice(0, b*kvRows, (b+1)*kvRows)
+			vb, _ := v.Slice(0, b*kvRows, (b+1)*kvRows)
+			gb, _ := g.Slice(0, b*qRows, (b+1)*qRows)
+			part, err := mhaBackwardKernel(ctx, []*tensor.Tensor{qb, kb, vb, gb}, one)
+			if err != nil {
+				return nil, err
+			}
+			for i, dst := range []*tensor.Tensor{dQ, dK, dV} {
+				n := part[i].Numel()
+				switch q.Dtype() {
+				case tensor.F32:
+					copy(dst.Storage().F32()[b*n:(b+1)*n], part[i].Contiguous().Storage().F32()[:n])
+				case tensor.F64:
+					copy(dst.Storage().F64()[b*n:(b+1)*n], part[i].Contiguous().Storage().F64()[:n])
+				}
+			}
+		}
+		return []*tensor.Tensor{dQ, dK, dV}, nil
+	}
 	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("ref: mha-backward dmodel %d not divisible by heads %d", dm, heads)

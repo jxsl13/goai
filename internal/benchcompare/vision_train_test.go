@@ -14,13 +14,11 @@
 // batch of `visBatch` images, so this is the images-classified-per-second a caller
 // selecting that backend gets. Rows read Benchmark<Model><Phase>/<backend>.
 //
-// NOTE on ViT batching: vision.ViT.Forward loops over the batch INTERNALLY
-// (slice → per-image encode → concat), i.e. it runs `visBatch` separate
-// length-(N+1) sequences rather than one batched attention. The torch companion
-// batches them ([B,N+1,D] in one pass). Both classify the same `visBatch` images
-// per step — the img/s unit is identical — so the comparison is honest; torch's
-// batched attention is simply the throughput a batched implementation reaches, and
-// exposing that gap is the point. The CNN path is natively batched on both sides.
+// ViT batching is end to end: vision.ViT.Forward packs [B,N+1,D], projection GEMMs
+// consume B·(N+1) rows, and the attention backend treats B as an independent graph
+// axis. The torch companion uses the same batch semantics. Both classify visBatch
+// images per step, so img/s compares equivalent work. The CNN path is also natively
+// batched on both sides.
 package benchcompare
 
 import (

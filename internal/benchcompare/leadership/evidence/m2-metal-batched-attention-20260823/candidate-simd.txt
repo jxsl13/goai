@@ -1,0 +1,32 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/benchcompare
+cpu: Apple M2 Pro
+BenchmarkViTForward/cpu-12            5   5579450 ns/op  1434 img/s
+BenchmarkViTForward/cpu-12            5   5764617 ns/op  1388 img/s
+BenchmarkViTForward/cpu-12            5   5486833 ns/op  1458 img/s
+BenchmarkViTForward/cpu-12            5   7558450 ns/op  1058 img/s
+BenchmarkViTForward/cpu-12            5  15086025 ns/op   530.3 img/s
+BenchmarkViTForward/cpu-12            5   5972958 ns/op  1339 img/s
+BenchmarkViTForward/cpu-12            5   5833992 ns/op  1371 img/s
+BenchmarkViTForward/metal-12          5  13065125 ns/op   612.3 img/s
+BenchmarkViTForward/metal-12          5  13033358 ns/op   613.8 img/s
+BenchmarkViTForward/metal-12          5  15025658 ns/op   532.4 img/s
+BenchmarkViTForward/metal-12          5  12635317 ns/op   633.2 img/s
+BenchmarkViTForward/metal-12          5  13294358 ns/op   601.8 img/s
+BenchmarkViTForward/metal-12          5  13563108 ns/op   589.8 img/s
+BenchmarkViTForward/metal-12          5  15014692 ns/op   532.8 img/s
+BenchmarkViTTrainStep/cpu-12          5  16698700 ns/op   479.1 img/s
+BenchmarkViTTrainStep/cpu-12          5  16730767 ns/op   478.2 img/s
+BenchmarkViTTrainStep/cpu-12          5  18829117 ns/op   424.9 img/s
+BenchmarkViTTrainStep/cpu-12          5  16577867 ns/op   482.6 img/s
+BenchmarkViTTrainStep/cpu-12          5  17141300 ns/op   466.7 img/s
+BenchmarkViTTrainStep/cpu-12          5  16941608 ns/op   472.2 img/s
+BenchmarkViTTrainStep/cpu-12          5  18803925 ns/op   425.4 img/s
+BenchmarkViTTrainStep/metal-12        5  86042583 ns/op    92.98 img/s
+BenchmarkViTTrainStep/metal-12        5  76996217 ns/op   103.9 img/s
+BenchmarkViTTrainStep/metal-12        5  76847925 ns/op   104.1 img/s
+BenchmarkViTTrainStep/metal-12        5  76314450 ns/op   104.8 img/s
+BenchmarkViTTrainStep/metal-12        5  93629633 ns/op    85.44 img/s
+BenchmarkViTTrainStep/metal-12        5  67982467 ns/op   117.7 img/s
+BenchmarkViTTrainStep/metal-12        5  80180342 ns/op    99.78 img/s

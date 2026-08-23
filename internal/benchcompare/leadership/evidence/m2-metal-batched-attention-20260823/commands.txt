@@ -1,0 +1,11 @@
+git worktree add --detach /private/tmp/goai-vit-attn-control-20260823 origin/main
+go test -c -tags=vulkan ./internal/benchcompare -o /private/tmp/goai-vit-attn-control.test
+go test -c -tags=vulkan ./internal/benchcompare -o /private/tmp/goai-vit-attn-candidate.test
+/private/tmp/goai-vit-attn-control.test -test.bench '^BenchmarkViT(Forward|TrainStep)/metal$' -test.run '^$' -test.benchtime=10x -test.count=7 -test.timeout=15m
+/private/tmp/goai-vit-attn-candidate.test -test.bench '^BenchmarkViT(Forward|TrainStep)/metal$' -test.run '^$' -test.benchtime=10x -test.count=7 -test.timeout=15m
+benchstat campaign1-control.txt campaign1-candidate.txt
+benchstat campaign2-control.txt campaign2-candidate.txt
+benchstat campaign3-control.txt campaign3-candidate.txt
+GOPROXY=direct GOSUMDB=off go run github.com/jxsl13/perfscan/perfscan@latest -baseline /private/tmp/goai-perfscan-candidate.yaml ./...
+GOEXPERIMENT=simd go test -c -tags=vulkan ./internal/benchcompare -o /private/tmp/goai-vit-attn-candidate-simd.test
+/private/tmp/goai-vit-attn-candidate-simd.test -test.bench '^BenchmarkViT(Forward|TrainStep)/(cpu|metal)$' -test.run '^$' -test.benchtime=5x -test.count=7 -test.timeout=15m

@@ -73,3 +73,6 @@ Rationale: One grouped CPU fan-out removes 2 projection scheduler barriers.
 The grouped QuantLlama QKV route SHALL exclude recorder, accelerator, multi-row, noncontiguous, offset, mismatched-input, and unsupported-quant inputs, preserving 3 independent QuantLinear calls.
 
 Rationale: CPU scheduling coalescing must not bypass graph, device, or fallback semantics.
+
+## MHA-FORWARD-BATCHED-CORE-001
+WHEN an unmasked packed batch with Batch greater than 1 is executed, the MHA.ForwardBatched SHALL issue exactly 1 OpMHA for the packed attention core and 0 per-sequence Slice or Concat operations while preserving projection, bias, LoRA, and causal behavior.

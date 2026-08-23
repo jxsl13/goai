@@ -52,6 +52,7 @@ const ReduceAll = math.MinInt
 type AttnAttrs struct {
 	Heads   int     // number of query heads; 0 → 1
 	KVHeads int     // key/value heads for GQA/MQA; 0 → Heads (standard MHA)
+	Batch   int     // independent packed sequences along axis 0; 0 → 1
 	Causal  bool    // apply the autoregressive j>i mask
 	Scale   float64 // extra pre-softmax score multiplier (YaRN attention temperature, see YaRNAttnScale); 0 → 1
 	ALiBi   bool    // add the static ALiBi per-head linear distance bias
@@ -69,6 +70,9 @@ func (a AttnAttrs) WithDefaults() AttnAttrs {
 	}
 	if a.KVHeads == 0 {
 		a.KVHeads = a.Heads
+	}
+	if a.Batch == 0 {
+		a.Batch = 1
 	}
 	if a.Scale == 0 {
 		a.Scale = 1
