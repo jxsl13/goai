@@ -35,7 +35,7 @@ choice: Extend the shared decodeTensor switch with the exact existing decoder fu
 
 ## T-01M0PHKGVZEWN8C72EH0GMG3SA Fuse paired Q4_K header decode into the ARM64 row kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: go:gguf.dotQ4KPairRowASM, asm:gguf.dotQ4KPairBlockNeon
