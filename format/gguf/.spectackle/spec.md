@@ -367,8 +367,3 @@ The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min v
 
 ## Q4K-SINGLE-BULK-HEADER-PERF-001
 WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independent Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
-
-## Q4K-POSTINDEX-EXACT-001 {applies: go:gguf.dotQ4KBlockNeon,go:gguf.dotQ4KPairBlockNeon}
-WHEN single or paired 256-weight leaf pointer arithmetic is folded into load addressing, the Apple ARM64 Q4_K block kernels SHALL return bits identical to the d43cdb4b leaf for every input and perform 0 leaf allocations.
-
-Rationale: Post-index addressing must remain a pure integer-address-generation optimization around the established numerical kernel.
