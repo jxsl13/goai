@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0Q69J1CEDCBKG8VDVB580GS Attribute Metal Recorder.Profile event-label allocations
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.Profile
+
+External perfscan at github.com/jxsl13/perfscan/perfscan@latest reports PS2004 on Recorder.Profile: the 96-byte label scratch is allocated inside the pointer-method event loop even though the native call overwrites it synchronously and it does not escape. A production TinyLlama profile contains 340 explicit events, so the shape creates hundreds of avoidable Go heap objects per profile. Establish a completed-recorder benchmark and allocation count, then separate the guaranteed scratch-hoist gain from optional repeated-label interning.
