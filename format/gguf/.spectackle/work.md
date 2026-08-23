@@ -35,7 +35,7 @@ choice: Extend the shared decodeTensor switch with the exact existing decoder fu
 
 ## T-01M0PCYV52EF48DMJCJ79D1WEN Bulk-unpack paired Q4_K coefficient headers
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PCH446FH695VH9692WFSV8
 targets: go:gguf.dotQ4KPairRowASM, go:gguf.dotQ4KPairBlockNeon, go:gguf.getScaleMinK4
