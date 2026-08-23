@@ -8233,16 +8233,17 @@ static int gAttnValid[ATTN_CACHE_CAP] = {0};
 static int gAttnNext = 0; // FIFO insertion cursor
 static int gAttnCacheCap = ATTN_CACHE_CAP; // effective cap (§T622 A/B: 1 == old last-shape cache)
 
-// Research-only single-entry cache for the batch-axis attention probe. Keeping it separate from
-// gAttnGraphs makes the incumbent batch=1 graph and its cache behavior an untouched control.
-static MPSGraph*       gBatchAttnGraph = nil;
-static MPSGraphTensor* gBatchAttnQ = nil;
-static MPSGraphTensor* gBatchAttnK = nil;
-static MPSGraphTensor* gBatchAttnV = nil;
-static MPSGraphTensor* gBatchAttnSc = nil;
-static MPSGraphTensor* gBatchAttnO = nil;
-static int gBatchAttnSig[6] = {0}; // batch, seq, kvHeads, rep, dk, causal
-static int gBatchAttnValid = 0;
+// Batch-axis attention keeps a separate shape-keyed cache so batch=1 retains its established graph,
+// compilation behavior, and numerical route without an added branch inside it.
+static MPSGraph*       gBatchAttnGraphs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnQs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnKs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnVs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnScs[ATTN_CACHE_CAP] = {nil};
+static MPSGraphTensor* gBatchAttnOs[ATTN_CACHE_CAP] = {nil};
+static int gBatchAttnSigs[ATTN_CACHE_CAP][6]; // batch, seq, kvHeads, rep, dk, causal
+static int gBatchAttnValid[ATTN_CACHE_CAP] = {0};
+static int gBatchAttnNext = 0;
 
 // mtl_attn_cache_cap_set clamps the effective attention-graph cache cap to [1,ATTN_CACHE_CAP],
 // clears all resident graphs (ARC releases them), resets the FIFO cursor, and returns the previous
@@ -8254,8 +8255,11 @@ int mtl_attn_cache_cap_set(int cap) {
     for (int i = 0; i < ATTN_CACHE_CAP; i++) {
         gAttnGraphs[i] = nil; gAttnQs[i] = nil; gAttnKs[i] = nil;
         gAttnVs[i] = nil; gAttnScs[i] = nil; gAttnOs[i] = nil; gAttnValid[i] = 0;
+        gBatchAttnGraphs[i] = nil; gBatchAttnQs[i] = nil; gBatchAttnKs[i] = nil;
+        gBatchAttnVs[i] = nil; gBatchAttnScs[i] = nil; gBatchAttnOs[i] = nil;
+        gBatchAttnValid[i] = 0;
     }
-    gAttnNext = 0;
+    gAttnNext = 0; gBatchAttnNext = 0;
     gAttnCacheCap = cap;
     return prev;
 }
@@ -8331,7 +8335,8 @@ static int ensure_attn_graph(int seq, int kvHeads, int rep, int dk, int causal) 
 
 static int ensure_batch_attn_graph(int batch, int seq, int kvHeads, int rep, int dk, int causal) {
     int sig[6] = {batch, seq, kvHeads, rep, dk, causal};
-    if (gBatchAttnValid && memcmp(sig, gBatchAttnSig, sizeof(sig)) == 0) return 0;
+    for (int i = 0; i < gAttnCacheCap; i++)
+        if (gBatchAttnValid[i] && memcmp(sig, gBatchAttnSigs[i], sizeof(sig)) == 0) return i;
     @autoreleasepool {
         int heads = kvHeads * rep;
         int dm = heads * dk;
@@ -8380,12 +8385,14 @@ static int ensure_batch_attn_graph(int batch, int seq, int kvHeads, int rep, int
         MPSGraphTensor* Ot = [g transposeTensor:O5 permutation:@[@0,@3,@1,@2,@4] name:nil];
         MPSGraphTensor* O = [g reshapeTensor:Ot withShape:@[@(batch), @(seq), @(dm)] name:nil];
 
-        gBatchAttnGraph = g;
-        gBatchAttnQ = Q; gBatchAttnK = K; gBatchAttnV = V;
-        gBatchAttnSc = Sc; gBatchAttnO = O;
-        memcpy(gBatchAttnSig, sig, sizeof(sig));
-        gBatchAttnValid = 1;
-        return g != nil ? 0 : -20;
+        int slot = gBatchAttnNext;
+        gBatchAttnGraphs[slot] = g;
+        gBatchAttnQs[slot] = Q; gBatchAttnKs[slot] = K; gBatchAttnVs[slot] = V;
+        gBatchAttnScs[slot] = Sc; gBatchAttnOs[slot] = O;
+        memcpy(gBatchAttnSigs[slot], sig, sizeof(sig));
+        gBatchAttnValid[slot] = 1;
+        gBatchAttnNext = (slot + 1) % gAttnCacheCap;
+        return g != nil ? slot : -20;
     }
 }
 
@@ -8432,23 +8439,21 @@ int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
 
-        gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
-
         memcpy(O, ob.contents, qN*sizeof(float));
         return 0;
     }
 }
 
-int mtl_mha_mpsgraph_batched_probe(const float* Q, const float* K, const float* V, float* O,
-                                   int batch, int seq, int dm, int heads, int dk,
-                                   int causal, int kvHeads, float scale) {
+int mtl_mha_mpsgraph_batched(const float* Q, const float* K, const float* V, float* O,
+                             int batch, int seq, int dm, int heads, int dk,
+                             int causal, int kvHeads, float scale) {
     if (ensure_init() != 0) return -1;
     int rep = heads / kvHeads;
     int kvDim = kvHeads * dk;
     OP_BEGIN;
     @autoreleasepool {
-        int rc = ensure_batch_attn_graph(batch, seq, kvHeads, rep, dk, causal);
-        if (rc != 0) return rc;
+        int slot = ensure_batch_attn_graph(batch, seq, kvHeads, rep, dk, causal);
+        if (slot < 0) return slot;
 
         size_t qN = (size_t)batch * seq * dm;
         size_t kvN = (size_t)batch * seq * kvDim;
@@ -8473,19 +8478,18 @@ int mtl_mha_mpsgraph_batched_probe(const float* Q, const float* K, const float* 
                                                                       dataType:MPSDataTypeFloat32];
         if (qd == nil || kd == nil || vd == nil || sd == nil || od == nil) return -2;
 
-        NSDictionary* feeds = @{gBatchAttnQ:qd, gBatchAttnK:kd, gBatchAttnV:vd, gBatchAttnSc:sd};
+        NSDictionary* feeds = @{gBatchAttnQs[slot]:qd, gBatchAttnKs[slot]:kd,
+                                gBatchAttnVs[slot]:vd, gBatchAttnScs[slot]:sd};
         MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
         if (cmd == nil) return -3;
-        [gBatchAttnGraph encodeToCommandBuffer:cmd
+        [gBatchAttnGraphs[slot] encodeToCommandBuffer:cmd
                                          feeds:feeds
                               targetOperations:nil
-                             resultsDictionary:@{gBatchAttnO:od}
+                             resultsDictionary:@{gBatchAttnOs[slot]:od}
                            executionDescriptor:nil];
         [cmd commit];
         [cmd waitUntilCompleted];
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
-        gLastGPUSeconds = (double)(cmd.GPUEndTime - cmd.GPUStartTime);
-
         memcpy(O, ob.contents, qN*sizeof(float));
         return 0;
     }

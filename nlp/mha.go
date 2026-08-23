@@ -93,10 +93,10 @@ func (m *MHA) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 // ForwardBatched runs MHA over B independent sequences packed row-major as x[batch*seq, dmodel]
 // (sequence b occupies rows [b*seq, (b+1)*seq)). It batches the four projection GEMMs (q,k,v,o) into
 // single [batch*seq, ·] matmuls — the layout batched vision encoders (ViT/Swin/VLM) want, so B images
-// share one large GEMM instead of B tiny ones — while the core softmax(QKᵀ)V still runs PER sequence
-// (OpMHA is rank-2). Because every projection is row-wise and each sequence's attention is computed on
-// its own slice, the result is identical to concatenating Forward over each [seq,dmodel] block; Bias,
-// LoRA and Mask all apply exactly as in Forward. batch must divide the row count.
+// share one large GEMM instead of B tiny ones. Unmasked attention carries the packed batch through one
+// batch-aware OpMHA; masked attention retains per-sequence slices because its explicit mask has no batch
+// axis. The result is identical to concatenating Forward over each [seq,dmodel] block; Bias, LoRA and
+// Mask all apply exactly as in Forward. batch must divide the row count.
 func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
 	if x.Ndim() != 2 || x.Shape()[1] != m.Wq.Shape()[0] {
 		return nil, fmt.Errorf("nlp: MHA.ForwardBatched expects x[batch*seq,%d], got %v", m.Wq.Shape()[0], x.Shape())
@@ -118,8 +118,14 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 	if err != nil {
 		return nil, err
 	}
+	if m.Mask == nil {
+		attn, err := exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Batch: batch, Causal: m.Causal}, q, k, v)
+		if err != nil {
+			return nil, err
+		}
+		return m.proj(ctx, attn, m.Wo, "o")
+	}
 	parts := make([]*tensor.Tensor, batch)
-	//perfscan:ignore PS4011 per-batch attention dispatch, matmul-dominated false-positive
 	for b := range batch {
 		sl := func(t *tensor.Tensor) (*tensor.Tensor, error) {
 			return exec1a(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: (b + 1) * seq}, t)
@@ -136,14 +142,9 @@ func (m *MHA) ForwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) 
 		if err != nil {
 			return nil, err
 		}
-		var ab *tensor.Tensor
-		if m.Mask != nil { // §T508: mask expresses the structure; Causal is NOT also applied
-			//perfscan:ignore PS6016 per-batch slice closure alloc, attention-dominated
-			ab, err = exec4(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
-		} else {
-			//perfscan:ignore PS6016 per-batch slice closure alloc, attention-dominated
-			ab, err = exec3(ctx, backend.OpMHA, backend.AttnAttrs{Heads: m.Heads, Causal: m.Causal}, qb, kb, vb)
-		}
+		// §T508: mask expresses the structure; Causal is NOT also applied.
+		//perfscan:ignore PS6016 per-batch slice closure alloc, masked attention-dominated
+		ab, err := exec4(ctx, backend.OpMHAMasked, backend.AttnAttrs{Heads: m.Heads}, qb, kb, vb, m.Mask)
 		if err != nil {
 			return nil, err
 		}

@@ -259,7 +259,7 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 		sk := k.Shape()[0]
 		heads, kvHeads := pa.Heads, pa.KVHeads
 		// Only the plain (no-ALiBi) GQA-causal path is on device; everything else → ref.
-		if !pa.ALiBi && heads > 0 && dm%heads == 0 && kvHeads > 0 && heads%kvHeads == 0 {
+		if pa.Batch == 1 && !pa.ALiBi && heads > 0 && dm%heads == 0 && kvHeads > 0 && heads%kvHeads == 0 {
 			dk := dm / heads
 			if k.Shape()[1] == kvHeads*dk && v.Shape().Equal(k.Shape()) && sq <= sk &&
 				!(pa.Window > 0 && pa.Window < sk) {

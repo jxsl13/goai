@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/benchcompare
+cpu: Apple M2 Pro
+BenchmarkViTForward/metal-12          10  21388483 ns/op  374.0 img/s
+BenchmarkViTForward/metal-12          10  21148129 ns/op  378.3 img/s
+BenchmarkViTForward/metal-12          10  21418925 ns/op  373.5 img/s
+BenchmarkViTForward/metal-12          10  21285188 ns/op  375.8 img/s
+BenchmarkViTForward/metal-12          10  21459854 ns/op  372.8 img/s
+BenchmarkViTForward/metal-12          10  21707400 ns/op  368.5 img/s
+BenchmarkViTForward/metal-12          10  21358908 ns/op  374.6 img/s
+BenchmarkViTTrainStep/metal-12        10  83815838 ns/op  95.45 img/s
+BenchmarkViTTrainStep/metal-12        10  84358233 ns/op  94.83 img/s
+BenchmarkViTTrainStep/metal-12        10  86276117 ns/op  92.73 img/s
+BenchmarkViTTrainStep/metal-12        10  87093879 ns/op  91.85 img/s
+BenchmarkViTTrainStep/metal-12        10  85731008 ns/op  93.32 img/s
+BenchmarkViTTrainStep/metal-12        10  83917925 ns/op  95.33 img/s
+BenchmarkViTTrainStep/metal-12        10  87803867 ns/op  91.11 img/s

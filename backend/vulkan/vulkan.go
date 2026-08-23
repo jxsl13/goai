@@ -2540,7 +2540,7 @@ func mhaBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Att
 	if k.Shape()[1] != dkv || !v.Shape().Equal(k.Shape()) || !dO.Shape().Equal(q.Shape()) {
 		return nil, fmt.Errorf("vulkan: mha-backward shape mismatch")
 	}
-	if p.ALiBi || dk > 128 || seq == 0 || C.vk_atomic_float() != 1 {
+	if p.Batch > 1 || p.ALiBi || dk > 128 || seq == 0 || C.vk_atomic_float() != 1 {
 		return refFallback()
 	}
 
@@ -2652,7 +2652,7 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 		return nil, fmt.Errorf("vulkan: mha query len %d exceeds key len %d", sq, sk)
 	}
 	// Unsupported feature or shape → reference backend, same result (§I4).
-	if p.ALiBi || dk > 128 || sq == 0 || sk == 0 {
+	if p.Batch > 1 || p.ALiBi || dk > 128 || sq == 0 || sk == 0 {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpMHA, in, attrs)
 	}
 	if len(mhaSpirv) == 0 {

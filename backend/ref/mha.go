@@ -31,6 +31,33 @@ func mhaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	sk := k.Shape()[0]
 	pa, _ := attrs.(backend.AttnAttrs)
 	pa = pa.WithDefaults()
+	batch := pa.Batch
+	if batch < 1 || sq%batch != 0 || sk%batch != 0 {
+		return nil, fmt.Errorf("ref: mha batch %d must divide Q/K rows %d/%d", batch, sq, sk)
+	}
+	if batch > 1 {
+		out := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+		qRows, kvRows := sq/batch, sk/batch
+		one := pa
+		one.Batch = 1
+		for b := range batch {
+			qb, _ := q.Slice(0, b*qRows, (b+1)*qRows)
+			kb, _ := k.Slice(0, b*kvRows, (b+1)*kvRows)
+			vb, _ := v.Slice(0, b*kvRows, (b+1)*kvRows)
+			part, err := mhaKernel(ctx, []*tensor.Tensor{qb, kb, vb}, one)
+			if err != nil {
+				return nil, err
+			}
+			n := part[0].Numel()
+			switch q.Dtype() {
+			case tensor.F32:
+				copy(out.Storage().F32()[b*n:(b+1)*n], part[0].Contiguous().Storage().F32()[:n])
+			case tensor.F64:
+				copy(out.Storage().F64()[b*n:(b+1)*n], part[0].Contiguous().Storage().F64()[:n])
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	}
 	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("ref: mha dmodel %d not divisible by heads %d", dm, heads)

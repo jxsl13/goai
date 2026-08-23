@@ -33,6 +33,33 @@ func mhaKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs
 	sk := k.Shape()[0]
 	pa, _ := attrs.(backend.AttnAttrs)
 	pa = pa.WithDefaults()
+	batch := pa.Batch
+	if batch < 1 || sq%batch != 0 || sk%batch != 0 {
+		return nil, fmt.Errorf("cpu: mha batch %d must divide Q/K rows %d/%d", batch, sq, sk)
+	}
+	if batch > 1 {
+		out := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+		qRows, kvRows := sq/batch, sk/batch
+		one := pa
+		one.Batch = 1
+		for b := range batch {
+			qb, _ := q.Slice(0, b*qRows, (b+1)*qRows)
+			kb, _ := k.Slice(0, b*kvRows, (b+1)*kvRows)
+			vb, _ := v.Slice(0, b*kvRows, (b+1)*kvRows)
+			part, err := mhaKernelCPU(ctx, []*tensor.Tensor{qb, kb, vb}, one)
+			if err != nil {
+				return nil, err
+			}
+			n := part[0].Numel()
+			switch q.Dtype() {
+			case tensor.F32:
+				copy(out.Storage().F32()[b*n:(b+1)*n], part[0].Contiguous().Storage().F32()[:n])
+			case tensor.F64:
+				copy(out.Storage().F64()[b*n:(b+1)*n], part[0].Contiguous().Storage().F64()[:n])
+			}
+		}
+		return []*tensor.Tensor{out}, nil
+	}
 	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("cpu: mha dmodel %d not divisible by heads %d", dm, heads)
@@ -579,6 +606,38 @@ func mhaBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 	}
 	pa, _ := attrs.(backend.AttnAttrs)
 	pa = pa.WithDefaults()
+	batch := pa.Batch
+	if batch < 1 || seq%batch != 0 || k.Shape()[0]%batch != 0 {
+		return nil, fmt.Errorf("cpu: mha-backward batch %d must divide Q/K rows %d/%d", batch, seq, k.Shape()[0])
+	}
+	if batch > 1 {
+		dQ := tensor.NewOn(ctx.Device(), q.Dtype(), q.Shape())
+		dK := tensor.NewOn(ctx.Device(), k.Dtype(), k.Shape())
+		dV := tensor.NewOn(ctx.Device(), v.Dtype(), v.Shape())
+		qRows, kvRows := seq/batch, k.Shape()[0]/batch
+		one := pa
+		one.Batch = 1
+		for b := range batch {
+			qb, _ := q.Slice(0, b*qRows, (b+1)*qRows)
+			kb, _ := k.Slice(0, b*kvRows, (b+1)*kvRows)
+			vb, _ := v.Slice(0, b*kvRows, (b+1)*kvRows)
+			gb, _ := g.Slice(0, b*qRows, (b+1)*qRows)
+			part, err := mhaBackwardKernelCPU(ctx, []*tensor.Tensor{qb, kb, vb, gb}, one)
+			if err != nil {
+				return nil, err
+			}
+			for i, dst := range []*tensor.Tensor{dQ, dK, dV} {
+				n := part[i].Numel()
+				switch q.Dtype() {
+				case tensor.F32:
+					copy(dst.Storage().F32()[b*n:(b+1)*n], part[i].Contiguous().Storage().F32()[:n])
+				case tensor.F64:
+					copy(dst.Storage().F64()[b*n:(b+1)*n], part[i].Contiguous().Storage().F64()[:n])
+				}
+			}
+		}
+		return []*tensor.Tensor{dQ, dK, dV}, nil
+	}
 	heads := pa.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("cpu: mha-backward dmodel %d not divisible by heads %d", dm, heads)

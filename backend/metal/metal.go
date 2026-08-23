@@ -2593,6 +2593,10 @@ func mhaBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Att
 
 	seq, dm := q.Shape()[0], q.Shape()[1]
 	sk := k.Shape()[0]
+	batch := p.Batch
+	if batch < 1 || seq%batch != 0 || sk%batch != 0 {
+		return nil, fmt.Errorf("metal: mha-backward batch %d must divide Q/K rows %d/%d", batch, seq, sk)
+	}
 	if sk != seq {
 		return refFallback() // KV-cache is inference-only; ref returns the clear error
 	}
@@ -2622,6 +2626,37 @@ func mhaBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Att
 	dQ := tensor.New(tensor.F32, q.Shape())
 	dK := tensor.New(tensor.F32, k.Shape())
 	dV := tensor.New(tensor.F32, v.Shape())
+	if batch > 1 {
+		perSeq := seq / batch
+		qs, ks, vs, ds := qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), dc.Storage().F32()
+		dqs, dks, dvs := dQ.Storage().F32(), dK.Storage().F32(), dV.Storage().F32()
+		for b := range batch {
+			q0 := b * perSeq * dm
+			kv0 := b * perSeq * dkv
+			var rc C.int
+			if p.Window == 0 {
+				rc = C.mtl_mha_backward_mps(
+					(*C.float)(&qs[q0]), (*C.float)(&ks[kv0]), (*C.float)(&vs[kv0]), (*C.float)(&ds[q0]),
+					(*C.float)(&dqs[q0]), (*C.float)(&dks[kv0]), (*C.float)(&dvs[kv0]),
+					C.int(perSeq), C.int(dm), C.int(heads), C.int(dk), C.int(causal), C.int(kvHeads), C.float(scale),
+				)
+			} else {
+				rc = C.mtl_mha_backward_f32(
+					(*C.float)(&qs[q0]), (*C.float)(&ks[kv0]), (*C.float)(&vs[kv0]), (*C.float)(&ds[q0]),
+					(*C.float)(&dqs[q0]), (*C.float)(&dks[kv0]), (*C.float)(&dvs[kv0]),
+					C.int(perSeq), C.int(perSeq), C.int(dm), C.int(heads), C.int(kvHeads), C.int(dk),
+					C.int(causal), C.int(p.Window), C.float(scale),
+				)
+			}
+			if int(rc) == -5 {
+				return refFallback()
+			}
+			if rc != 0 {
+				return nil, fmt.Errorf("metal: batched mha-backward failed at sequence %d (code %d)", b, int(rc))
+			}
+		}
+		return []*tensor.Tensor{dQ, dK, dV}, nil
+	}
 	if p.Window == 0 {
 		// MPS-matmul backward (§T399, GQA §T400): dV=Pᵀ·dO, dP=dO·Vᵀ, dS=softmax-jacobian(P,dP),
 		// dQ=scale·dS·K, dK=scale·dSᵀ·Q — the backward analog of the §T394 forward. Measured 27.3× over
@@ -2686,6 +2721,11 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 
 	sq, dm := q.Shape()[0], q.Shape()[1]
 	sk := k.Shape()[0]
+	batch := p.Batch
+	if batch < 1 || sq%batch != 0 || sk%batch != 0 {
+		return nil, fmt.Errorf("metal: mha batch %d must divide Q/K rows %d/%d", batch, sq, sk)
+	}
+	qSeq, kvSeq := sq/batch, sk/batch
 	heads := p.Heads
 	if heads <= 0 || dm%heads != 0 {
 		return nil, fmt.Errorf("metal: mha dmodel %d not divisible by heads %d", dm, heads)
@@ -2699,8 +2739,8 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 	if k.Shape()[1] != dkv || !v.Shape().Equal(k.Shape()) {
 		return nil, fmt.Errorf("metal: mha K/V must be [sk,%d], got %v/%v", dkv, k.Shape(), v.Shape())
 	}
-	if sq > sk {
-		return nil, fmt.Errorf("metal: mha query len %d exceeds key len %d", sq, sk)
+	if qSeq > kvSeq {
+		return nil, fmt.Errorf("metal: mha per-batch query len %d exceeds key len %d", qSeq, kvSeq)
 	}
 	// Unsupported feature or shape → reference backend, same result (§I4).
 	if p.ALiBi || dk > 128 || sq == 0 || sk == 0 {
@@ -2714,6 +2754,22 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 	}
 	qc, kc, vc := q.Contiguous(), k.Contiguous(), v.Contiguous()
 	out := tensor.New(tensor.F32, tensor.Shape{sq, dm})
+	if batch > 1 {
+		if qSeq != kvSeq || p.Window != 0 {
+			return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpMHA, in, attrs)
+		}
+		rc := C.mtl_mha_mpsgraph_batched(
+			(*C.float)(&qc.Storage().F32()[0]),
+			(*C.float)(&kc.Storage().F32()[0]),
+			(*C.float)(&vc.Storage().F32()[0]),
+			(*C.float)(&out.Storage().F32()[0]),
+			C.int(batch), C.int(qSeq), C.int(dm), C.int(heads), C.int(dk), C.int(causal), C.int(kvHeads), C.float(scale),
+		)
+		if rc != 0 {
+			return nil, fmt.Errorf("metal: batched mha (MPSGraph path) failed (code %d)", int(rc))
+		}
+		return []*tensor.Tensor{out}, nil
+	}
 	if sq == sk && p.Window == 0 {
 		// Training/prefill fast path: all heads batched in ONE MPSGraph run (Q·Kᵀ → causal
 		// softmax → P·V). Same scale/causal/kvHeads, so YaRN attn-scale and GQA carry over.
@@ -2767,40 +2823,6 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 		return nil, fmt.Errorf("metal: mha failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{out}, nil
-}
-
-// probeMHAMPSGraphBatch is a disposable research boundary for comparing B incumbent MPSGraph
-// executions with one graph carrying an independent batch axis. It deliberately works on caller-
-// owned flat storage so the same-binary leaf probe excludes Go tensor construction from both arms.
-func probeMHAMPSGraphBatch(q, k, v, out []float32, batch, seq, dm, heads, dk, kvHeads int, scale float32, batched bool) (float64, error) {
-	causal := C.int(0)
-	if batched {
-		rc := C.mtl_mha_mpsgraph_batched_probe(
-			(*C.float)(&q[0]), (*C.float)(&k[0]), (*C.float)(&v[0]), (*C.float)(&out[0]),
-			C.int(batch), C.int(seq), C.int(dm), C.int(heads), C.int(dk), causal, C.int(kvHeads), C.float(scale),
-		)
-		if rc != 0 {
-			return 0, fmt.Errorf("metal: batched MPSGraph attention probe failed (code %d)", int(rc))
-		}
-		return LastGPUSeconds(), nil
-	}
-	kvDim := kvHeads * dk
-	var gpu float64
-	for b := range batch {
-		q0, q1 := b*seq*dm, (b+1)*seq*dm
-		k0, k1 := b*seq*kvDim, (b+1)*seq*kvDim
-		rc := C.mtl_mha_mpsgraph(
-			(*C.float)(&q[q0]), (*C.float)(&k[k0]), (*C.float)(&v[k0]), (*C.float)(&out[q0]),
-			C.int(seq), C.int(dm), C.int(heads), C.int(dk), causal, C.int(kvHeads), C.float(scale),
-		)
-		if rc != 0 {
-			return 0, fmt.Errorf("metal: incumbent MPSGraph attention probe failed (code %d)", int(rc))
-		}
-		gpu += LastGPUSeconds()
-		_ = q1
-		_ = k1
-	}
-	return gpu, nil
 }
 
 // flashAttnF32 is FlashAttention-2 forward on the GPU (§T109, the GPU backend of the

@@ -28,6 +28,7 @@ func TestMHAKernelsMatchRefWithinUlps(t *testing.T) {
 		{"window", 16, 16, 32, backend.AttnAttrs{Heads: 4, Causal: true, Window: 5}},
 		{"scale", 16, 16, 32, backend.AttnAttrs{Heads: 4, Scale: 0.7}},
 		{"parallel", 96, 96, 128, backend.AttnAttrs{Heads: 8, Causal: true}},
+		{"batched", 48, 48, 32, backend.AttnAttrs{Heads: 4, Batch: 3, Causal: true}},
 		{"kv-decode", 1, 24, 32, backend.AttnAttrs{Heads: 4, Causal: true}}, // forward only
 	}
 	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
