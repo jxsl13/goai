@@ -72,7 +72,7 @@ Add recorder-only same-binary pipelines for leader-only summation of the eight t
 
 ## T-01M0QKY30HF9687SFQZAH92RCK Implement and gate RMSNorm SIMD leader broadcast
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QKXHR7ED1ASFH56SNHAGKK
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
