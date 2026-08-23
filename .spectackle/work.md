@@ -3998,12 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## P-01M0Q18189FNG8Y4RQ0H6NQ4PN Pair adjacent Q4_K output rows in M2 decode
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: go:gguf.QMatMul, go:gguf.dotQ4KPairRowFn, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, internal/benchcompare/leadership/evidence
-
-Profile-guided M2 composition: QMatMul currently dispatches one independent ARM64 Q4_K row dot per output row even though the proven dual-output row kernel preserves each independent output bit-for-bit while loading every activation vector once for two rows. Route contiguous F32 M1 Q4_K QMatMul through aligned pairs of adjacent weight rows, retain the independent tail for odd N, and keep non-ARM64 and M>1 behavior unchanged. This changes no assembly leaf and directly composes the verified Q4K paired-row contract. Gate at exact equality to the independent route for even and odd N, zero added allocations, at least 1.02x median speedup across seven alternating N4096/K1024 campaigns with five wins, and no pinned TinyLlama production regression.
