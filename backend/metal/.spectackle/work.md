@@ -52,13 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0Q9EZJ8ENCSJ4YR1J41MDGD Deduplicate labels within each Recorder.Profile extraction
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
-
-Supersedes rejected P-01M0Q9837XE0Y. Replace one C.GoString allocation per event with extraction-scoped Go-owned label deduplication. For multi-event profiles, use a temporary bounded view of each 96-byte native label only for lookup and clone each distinct label once into the returned profile; results remain valid across Recorder.Free. Keep the existing C.GoString one-event path unchanged and add zero fields or allocations to default recorders. Frozen M2 gates: warm repeated-label events340 median speedup at least 1.25x with at least 300 fewer objects and 4,000 fewer bytes; every warm events1 campaign retains at least 0.97x; first events340 at least 1.10x and first events1 at least 0.97x; mixed-label allocations scale with distinct labels rather than event count; disabled-recorder throughput at least 0.97x with unchanged allocations. Require three order-alternated count-seven campaigns, exact profile parity, bounded-label handling, and label validity after Free plus GC churn.
