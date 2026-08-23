@@ -65,6 +65,7 @@ kind: proposal
 state: draft
 created: 2026-08-23
 parent: R-01M0QMTHHQFQMBFB6YNF00QF7M
+grilled: 2026-08-23 open=1
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
 
 Add a diagnostic 32-thread resident M=1 Q4_K cooperative route. Derive output rows from the physical width so the kernel performs the exact incumbent two-row SIMD calculation, but dispatch twice as many independent threadgroups. Compare against the 64-thread incumbent in the three frozen shapes and promote only after all leaf and end-to-end gates pass.
