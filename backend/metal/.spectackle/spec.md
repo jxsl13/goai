@@ -393,3 +393,6 @@ WHEN three order-alternated count-seven M2 campaigns compare warm repeated-label
 
 ## RECORDER-PROFILE-LABEL-NONREGRESSION-001
 WHEN each frozen M2 campaign measures warm events1, first events1, and disabled recorder construction, the Recorder.Profile label-cache promotion gate SHALL retain at least 0.97 times control throughput in every cell with unchanged disabled-recorder allocations.
+
+## RECORDER-PROFILE-LABEL-COLD-PERF-001
+WHEN each frozen M2 campaign compares the first events340 profile extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.10 times control throughput while preserving exact profile fields.
