@@ -1,0 +1,6 @@
+pair	order	baseline_seconds	candidate_seconds	baseline_digest	candidate_digest	excluded_reason
+0	baseline-candidate	1.886894750	1.782005583	ea3df5516f17df83	ea3df5516f17df83	competing-level3-perfscan
+1	candidate-baseline	2.024537083	1.905680042	ea3df5516f17df83	ea3df5516f17df83	competing-level3-perfscan
+2	baseline-candidate	2.094935792	2.009269917	ea3df5516f17df83	ea3df5516f17df83	competing-level3-perfscan
+3	candidate-baseline	1.881103667	1.805584333	ea3df5516f17df83	ea3df5516f17df83	competing-level3-perfscan
+4	baseline-candidate	1.863559875	1.956989167	ea3df5516f17df83	ea3df5516f17df83	competing-level3-perfscan
