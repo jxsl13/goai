@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0QWRMAQF5GT3M25J1QMSTPP Measure dependency-tracked whole-graph Metal concurrency on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:llamagpu.Decoder.encodeStep, go:metal.NewRecorder, objc:metal_bridge.mtl_recorder_begin, go:metal.Recorder.QMatMulResident, go:metal.Recorder.Blit
 
