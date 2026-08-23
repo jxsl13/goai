@@ -4014,3 +4014,11 @@ created: 2026-08-23
 targets: go:llamagpu.Decoder.encodeStep, go:metal.NewRecorder, objc:metal_bridge.mtl_recorder_begin, go:metal.Recorder.QMatMulResident, go:metal.Recorder.Blit
 
 Pinned llama.cpp v0.2.0 commit bb4caa7540188872173c44d161602d9271386413 encodes its optimized graph through one MTLDispatchTypeConcurrent encoder, reorders safe nodes within a 64-node lookahead, tracks source and destination memory ranges, and inserts buffer-scope barriers only at hazards. This is structurally broader than rejected incident-pair concurrency P-01M07F21FDFEPTG3NJAZ0EZ00T and distinct from rejected serial coalescing P-01M0N3K92DE8VSC1V55JPA14K7. First screen the incumbent through GGML_METAL_CONCURRENCY_DISABLE under valid low-interference AB/BA campaigns. If and only if concurrency supplies repeatable leverage, design a GoAI recorder contract that keeps dependency semantics explicit, preserves profiler behavior and blit or MPS boundaries, and gates the complete TinyLlama f16-KV command graph rather than isolated pairs.
+
+## P-01M0QX30DKEW79R732B222H2S3 Dependency-tracked concurrent Metal decode recorder
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: go:metal.NewRecorder, go:llamagpu.Decoder.encodeStep, go:metal.Recorder.QMatMulResident, go:metal.Recorder.Blit, objc:metal_bridge.mtl_recorder_begin
+
+Introduce a production-only MTLDispatchTypeConcurrent recorder for dense quantized f16-KV Llama-style single-token decode. Preserve ordinary and profiling recorders, prefill, f32-KV, MPS, and non-Metal backends. Keep Q/K/V and gate/up projections barrier-free as independent dispatch groups; insert buffer-scope barriers at exact producer-consumer boundaries; close the shared compute encoder at commit, finish, free, blit, and MPS boundaries. Retain an in-process A/B toggle whose arms execute identical Go-side scheduling. Promotion requires exact logits/token parity, lifecycle and boundary tests, and order-alternated M2 campaigns showing at least 1.03x median tg64 and 1.05x median pp64 with paired-ratio spread at most 1.05. This differs from rejected serial coalescing, which fenced every dispatch and measured 0.9882x, and from rejected pair-only concurrency, which collapsed to 1.001x.
