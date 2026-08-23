@@ -4019,6 +4019,7 @@ Measure whether a persistent shape-keyed Metal graph for the compute-heavy ViT p
 kind: proposal
 state: draft
 created: 2026-08-23
+refs: R-01M0R8JTW6E1AVVRZ6YJSHFVME
 grilled: 2026-08-23 open=1
 targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.m, nlp/prenorm_attention.go, vision/vit.go
 
