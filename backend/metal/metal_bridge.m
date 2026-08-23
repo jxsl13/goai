@@ -7344,6 +7344,108 @@ static NSString* const kMHADecodeSource =
      "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
      "  }\n"
      "}\n"
+     "kernel void mha_dec_splitk_fused_q(device const float* Q [[buffer(0)]],\n"
+     "                                      device const float* K [[buffer(1)]],\n"
+     "                                      device const float* V [[buffer(2)]],\n"
+     "                                      device float* O [[buffer(3)]],\n"
+     "                                      constant int* P [[buffer(4)]],\n"
+     "                                      constant float* FP [[buffer(5)]],\n"
+     "                                      threadgroup float* PART [[threadgroup(0)]],\n"
+     "                                      uint h [[threadgroup_position_in_grid]],\n"
+     "                                      ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                      ushort chunk [[simdgroup_index_in_threadgroup]]) {\n"
+     "  const int DK=64, H=16;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7], c=(int)chunk;\n"
+     "  if ((int)h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK, kvOff=((int)h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk, j0=c*per, j1=min(sk,j0+per);\n"
+     "  int slot=(int)(lane>>2), qrt=(int)(lane&3), off=qrt*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[(int)h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=8){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*K[j*dkv+kvOff+off+d];\n"
+     "    sp+=simd_shuffle_xor(sp,1); sp+=simd_shuffle_xor(sp,2);\n"
+     "    float sdot=sp*FP[0], mNew=max(m,sdot), corr=exp(m-mNew), pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*V[j*dkv+kvOff+off+d]; m=mNew;\n"
+     "  }\n"
+     "  for (uint w=4; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w), M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<4){\n"
+     "    int base=c*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  if (c!=0) return;\n"
+     "  int d0=(int)lane*2, d1=d0+1; float a0=0.0f, a1=0.0f; m=-INFINITY; l=0.0f;\n"
+     "  for (int k=0; k<nchunk; k++){\n"
+     "    int base=k*(DK+2); float c1=0.0f, c2=0.0f; int valid=0;\n"
+     "    if (lane==0){\n"
+     "      float mc=PART[base], lc=PART[base+1], M=max(m,mc);\n"
+     "      if (M!=-INFINITY){ c1=exp(m-M); c2=exp(mc-M); l=c1*l+c2*lc; m=M; valid=1; }\n"
+     "    }\n"
+     "    valid=simd_broadcast_first(valid); c1=simd_broadcast_first(c1); c2=simd_broadcast_first(c2);\n"
+     "    if (valid){ a0=c1*a0+c2*PART[base+2+d0]; a1=c1*a1+c2*PART[base+2+d1]; }\n"
+     "  }\n"
+     "  float mergedL=simd_broadcast_first(l);\n"
+     "  O[(int)h*DK+d0]=a0/mergedL; O[(int)h*DK+d1]=a1/mergedL;\n"
+     "}\n"
+     "kernel void mha_dec_splitk_fused_q_f16kv(device const float* Q [[buffer(0)]],\n"
+     "                                            device const half* K [[buffer(1)]],\n"
+     "                                            device const half* V [[buffer(2)]],\n"
+     "                                            device float* O [[buffer(3)]],\n"
+     "                                            constant int* P [[buffer(4)]],\n"
+     "                                            constant float* FP [[buffer(5)]],\n"
+     "                                            threadgroup float* PART [[threadgroup(0)]],\n"
+     "                                            uint h [[threadgroup_position_in_grid]],\n"
+     "                                            ushort lane [[thread_index_in_simdgroup]],\n"
+     "                                            ushort chunk [[simdgroup_index_in_threadgroup]]) {\n"
+     "  const int DK=64, H=16;\n"
+     "  int sk=P[1], heads=P[3], kvHeads=P[4], nchunk=P[7], c=(int)chunk;\n"
+     "  if ((int)h>=heads || c>=nchunk) return;\n"
+     "  int rep=heads/kvHeads, dkv=kvHeads*DK, kvOff=((int)h/rep)*DK;\n"
+     "  int per=(sk+nchunk-1)/nchunk, j0=c*per, j1=min(sk,j0+per);\n"
+     "  int slot=(int)(lane>>2), qrt=(int)(lane&3), off=qrt*H;\n"
+     "  float q[H]; for (int d=0; d<H; d++) q[d]=Q[(int)h*DK+off+d];\n"
+     "  float m=-INFINITY, l=0.0f, acc[H];\n"
+     "  for (int d=0; d<H; d++) acc[d]=0.0f;\n"
+     "  for (int j=j0+slot; j<j1; j+=8){\n"
+     "    float sp=0.0f; for (int d=0; d<H; d++) sp+=q[d]*float(K[j*dkv+kvOff+off+d]);\n"
+     "    sp+=simd_shuffle_xor(sp,1); sp+=simd_shuffle_xor(sp,2);\n"
+     "    float sdot=sp*FP[0], mNew=max(m,sdot), corr=exp(m-mNew), pw=exp(sdot-mNew);\n"
+     "    l=corr*l+pw; for (int d=0; d<H; d++) acc[d]=corr*acc[d]+pw*float(V[j*dkv+kvOff+off+d]); m=mNew;\n"
+     "  }\n"
+     "  for (uint w=4; w<32; w<<=1){\n"
+     "    float mo=simd_shuffle_xor(m,w), lo=simd_shuffle_xor(l,w), M=max(m,mo);\n"
+     "    float c1=(M==-INFINITY)?0.0f:exp(m-M), c2=(M==-INFINITY)?0.0f:exp(mo-M);\n"
+     "    for (int d=0; d<H; d++){ float ao=simd_shuffle_xor(acc[d],w); acc[d]=c1*acc[d]+c2*ao; }\n"
+     "    l=c1*l+c2*lo; m=M;\n"
+     "  }\n"
+     "  if (lane<4){\n"
+     "    int base=c*(DK+2);\n"
+     "    if (lane==0){ PART[base]=m; PART[base+1]=l; }\n"
+     "    for (int d=0; d<H; d++) PART[base+2+off+d]=acc[d];\n"
+     "  }\n"
+     "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+     "  if (c!=0) return;\n"
+     "  int d0=(int)lane*2, d1=d0+1; float a0=0.0f, a1=0.0f; m=-INFINITY; l=0.0f;\n"
+     "  for (int k=0; k<nchunk; k++){\n"
+     "    int base=k*(DK+2); float c1=0.0f, c2=0.0f; int valid=0;\n"
+     "    if (lane==0){\n"
+     "      float mc=PART[base], lc=PART[base+1], M=max(m,mc);\n"
+     "      if (M!=-INFINITY){ c1=exp(m-M); c2=exp(mc-M); l=c1*l+c2*lc; m=M; valid=1; }\n"
+     "    }\n"
+     "    valid=simd_broadcast_first(valid); c1=simd_broadcast_first(c1); c2=simd_broadcast_first(c2);\n"
+     "    if (valid){ a0=c1*a0+c2*PART[base+2+d0]; a1=c1*a1+c2*PART[base+2+d1]; }\n"
+     "  }\n"
+     "  float mergedL=simd_broadcast_first(l);\n"
+     "  O[(int)h*DK+d0]=a0/mergedL; O[(int)h*DK+d1]=a1/mergedL;\n"
+     "}\n"
      "kernel void mha_dec_splitk_p2(device const float* PART [[buffer(0)]],\n"
      "                              device float* O [[buffer(1)]],\n"
      "                              constant int* P [[buffer(2)]],\n"
@@ -7481,9 +7583,13 @@ static id<MTLComputePipelineState> gSplitKP1Q = nil;
 static id<MTLComputePipelineState> gSplitKP1QF16KV = nil;
 static int gSplitKQuad = 1;  // quad supersedes the pair variant: 1.05-1.18x on the kernel
 void mtl_set_splitk_quad(int on) { gSplitKQuad = on ? 1 : 0; }
+static int gSplitKFused = 0;
+void mtl_set_splitk_fused(int on) { gSplitKFused = on ? 1 : 0; }
 static int gSplitKHalf = 1;  // measured 2.9x on the kernel, 1.31x on long-context decode
 void mtl_set_splitk_half(int on) { gSplitKHalf = on ? 1 : 0; }
 static id<MTLComputePipelineState> gSplitKP2 = nil;
+static id<MTLComputePipelineState> gSplitKFusedQ = nil;
+static id<MTLComputePipelineState> gSplitKFusedQF16KV = nil;
 static id<MTLBuffer> gSplitKPart = nil; static size_t gSplitKPartLen = 0;
 static int gSplitKEnabled = 1;
 static int gSplitKMaxChunks = 16;
@@ -7513,6 +7619,10 @@ static int ensure_mha_decode(void) {
     if (sp1q != nil) gSplitKP1Q = [gDevice newComputePipelineStateWithFunction:sp1q error:&err];
     id<MTLFunction> sp1qf16kv = [lib newFunctionWithName:@"mha_dec_splitk_p1q_f16kv"];
     if (sp1qf16kv != nil) gSplitKP1QF16KV = [gDevice newComputePipelineStateWithFunction:sp1qf16kv error:&err];
+    id<MTLFunction> sfq = [lib newFunctionWithName:@"mha_dec_splitk_fused_q"];
+    if (sfq != nil) gSplitKFusedQ = [gDevice newComputePipelineStateWithFunction:sfq error:&err];
+    id<MTLFunction> sfqf16kv = [lib newFunctionWithName:@"mha_dec_splitk_fused_q_f16kv"];
+    if (sfqf16kv != nil) gSplitKFusedQF16KV = [gDevice newComputePipelineStateWithFunction:sfqf16kv error:&err];
     id<MTLFunction> sp1h = [lib newFunctionWithName:@"mha_dec_splitk_p1h"];
     if (sp1h != nil) gSplitKP1H = [gDevice newComputePipelineStateWithFunction:sp1h error:&err];
     else fprintf(stderr, "metal: mha_dec_splitk_p1h unavailable: %s\n", err?[[err localizedDescription] UTF8String]:"?");
@@ -7609,6 +7719,26 @@ int mtl_recorder_mha(void* rec, void* qh, void* kh, void* vh, void* oh,
         int nchunk = (sk + gSplitKPerChunk - 1) / gSplitKPerChunk;
         if (nchunk > gSplitKMaxChunks) nchunk = gSplitKMaxChunks;
         if (nchunk < 2) nchunk = 2;
+        NSUInteger fusedThreads = (NSUInteger)nchunk * 32;
+        NSUInteger fusedMemory = (NSUInteger)nchunk * (NSUInteger)(dk + 2) * sizeof(float);
+        if (gSplitKFused && gSplitKQuad && gSplitKFusedQ != nil &&
+            fusedThreads <= gSplitKFusedQ.maxTotalThreadsPerThreadgroup &&
+            fusedMemory <= gDevice.maxThreadgroupMemoryLength) {
+            int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
+            float SFP[1] = {scale};
+            id<MTLComputeCommandEncoder> fused = recorder_compute_encoder(rec, @"mha.decode.splitk.fused");
+            [fused setComputePipelineState:gSplitKFusedQ];
+            [fused setBuffer:(__bridge id<MTLBuffer>)qh offset:(NSUInteger)qElemOff*4 atIndex:0];
+            [fused setBuffer:(__bridge id<MTLBuffer>)kh offset:0 atIndex:1];
+            [fused setBuffer:(__bridge id<MTLBuffer>)vh offset:0 atIndex:2];
+            [fused setBuffer:(__bridge id<MTLBuffer>)oh offset:0 atIndex:3];
+            [fused setBytes:SP length:sizeof(SP) atIndex:4];
+            [fused setBytes:SFP length:sizeof(SFP) atIndex:5];
+            [fused setThreadgroupMemoryLength:fusedMemory atIndex:0];
+            [fused dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(fusedThreads,1,1)];
+            [fused endEncoding];
+            return 0;
+        }
         size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
         if (gSplitKPart == nil || gSplitKPartLen < need) {
             gSplitKPart = [gDevice newBufferWithLength:need options:MTLResourceStorageModePrivate];
@@ -7711,6 +7841,26 @@ int mtl_recorder_mha_f16kv(void* rec, void* qh, void* kh, void* vh, void* oh,
         int nchunk = (sk + gSplitKPerChunk - 1) / gSplitKPerChunk;
         if (nchunk > gSplitKMaxChunks) nchunk = gSplitKMaxChunks;
         if (nchunk < 2) nchunk = 2;
+        NSUInteger fusedThreads = (NSUInteger)nchunk * 32;
+        NSUInteger fusedMemory = (NSUInteger)nchunk * (NSUInteger)(dk + 2) * sizeof(float);
+        if (gSplitKFused && gSplitKFusedQF16KV != nil &&
+            fusedThreads <= gSplitKFusedQF16KV.maxTotalThreadsPerThreadgroup &&
+            fusedMemory <= gDevice.maxThreadgroupMemoryLength) {
+            int SP[8] = {sq, sk, dm, heads, kvHeads, dk, causal, nchunk};
+            float SFP[1] = {scale};
+            id<MTLComputeCommandEncoder> fused = recorder_compute_encoder(rec, @"mha.f16kv.decode.splitk.fused");
+            [fused setComputePipelineState:gSplitKFusedQF16KV];
+            [fused setBuffer:qb offset:(NSUInteger)qElemOff*4 atIndex:0];
+            [fused setBuffer:kb offset:0 atIndex:1];
+            [fused setBuffer:vb offset:0 atIndex:2];
+            [fused setBuffer:ob offset:0 atIndex:3];
+            [fused setBytes:SP length:sizeof(SP) atIndex:4];
+            [fused setBytes:SFP length:sizeof(SFP) atIndex:5];
+            [fused setThreadgroupMemoryLength:fusedMemory atIndex:0];
+            [fused dispatchThreadgroups:MTLSizeMake(heads,1,1) threadsPerThreadgroup:MTLSizeMake(fusedThreads,1,1)];
+            [fused endEncoding];
+            return 0;
+        }
         size_t need = (size_t)heads * (size_t)nchunk * (size_t)(dk + 2) * sizeof(float);
         if (gSplitKPart == nil || gSplitKPartLen < need) {
             gSplitKPart = [gDevice newBufferWithLength:need options:MTLResourceStorageModePrivate];
