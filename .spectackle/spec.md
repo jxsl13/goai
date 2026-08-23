@@ -668,12 +668,6 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
-
-## CPU-QUANT-RESIDUAL-INPLACE-001
-WHEN backend.TryAddInPlace receives eager QuantLlama private contiguous offset-zero F32 residual operands on CPU, the GoAI SHALL overwrite only the destination with exact backend.OpAdd results and allocate zero output tensors.
-
-Rationale: The private residual becomes dead at the next residual update.
-
 ## CPU-QUANT-RESIDUAL-INPLACE-002
 WHEN backend.TryAddInPlace receives recording, routed, aliased, viewed, shape-mismatched, dtype-mismatched, or non-CPU operands, the GoAI SHALL return false without input mutation so the caller executes backend.OpAdd.
 
