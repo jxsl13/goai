@@ -65,6 +65,7 @@ The rejected scratch-only experiment proved that 339 label allocations account f
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
 
 Add an immutable recorder-lifetime native snapshot containing fixed 96-byte labels and three uint64 timing fields per valid event. A new additive C ABI shall resolve and return summary fields plus the snapshot pointer in one cgo call; existing summary/event entry points remain unchanged. Go shall own its returned RecorderProfile and strings exactly as before. Benchmark warm repeat and first extraction for 1 and 340 events. Across three order-alternated count-seven M2 campaigns, warm events340 must be at least 1.50x with at least 1000 fewer allocations and 40000 fewer Go allocation bytes per operation; warm events1 must be at least 1.10x. First-extraction events340 must be at least 1.10x and events1 at least 0.97x. Reject and fully revert if any gate or exact parity fails.
