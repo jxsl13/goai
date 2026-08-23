@@ -69,12 +69,3 @@ grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go
 
 Add a diagnostic 64/128/256-thread selector for the production recorder Q4_K cooperative kernel. Derive SIMD groups and output rows from physical threadgroup width while preserving the existing two-rows-per-SIMD lane mapping. Benchmark resident same-command GPU work at K2048xN2048, K2048xN5632, and K5632xN2048. Promote only a bit-exact width that clears every leaf and end-to-end gate; otherwise remove the implementation.
-
-## T-01M0QMA08MFHAADSQB61P0729G Implement and gate M2 Q4_K cooperative threadgroup widths
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0QM9JXCEEMA9C6H146CX31H
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
-
-Implement a diagnostic recorder selector for 64, 128, and 256 physical threads per Q4_K cooperative threadgroup. Preserve the two-row-per-SIMD mapping and total SIMD work, add route and bit-exact tests, then run three order-alternated count-seven same-command campaigns at the three frozen shapes. Only a candidate clearing 1.05x in every leaf cell proceeds to token-interleaved TinyLlama f16-KV contexts 8, 512, and 1536, which must each clear 1.01x with unchanged logits. Remove and document any rejected candidate.
