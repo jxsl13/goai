@@ -4007,3 +4007,12 @@ refs: P-01M0PEGTNPFYBR11H1K7RDM36Q, R-01M0PEHGT7FY285ZWC1JQ05SWB, T-01M0PEP367F7
 targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
 
 Reprofile merged main after the paired and independent Q4_K coefficient-header accelerations, attribute the single and paired ARM64 NEON block leaves, and implement only a bounded low-level change that preserves packed Q4_K element mapping, coefficient application, independent accumulation/reduction order, zero allocations, and non-ARM64 behavior. Gate any retained implementation with permanent leaf coverage, at least seven interleaved precompiled baseline/candidate campaigns, exact or tolerance-appropriate correctness, and representative TinyLlama Q4_K_M production measurements. Reject variants that do not produce a repeatable material leaf gain or that regress production behavior; archive the profiling evidence even if no implementation survives.
+
+## R-01M0PQ6CJPFMMAP21B11H6BC9B Re-profile merged M2 Q4_K vector-header kernel
+kind: research
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM, internal/benchcompare/leadership/evidence
+
+Profile merged PR 1179 on Apple M2 Pro after the packed-header NEON decode. Attribute remaining compute versus scheduler synchronization at the production boundary, inspect the paired row instruction schedule without revisiting rejected multi-block Go staging, and select only a bounded exact candidate with a plausible retained leaf gain of at least 1.02x and no production regression. Pin every baseline to merge 71cee6d2 and preserve matched model bytes, digest, thread count, warm-up, process ordering, and measurement boundaries.
