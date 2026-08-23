@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## P-01M0QJ3RN0FYPBEE9J3JZ6344R Autotune the M2 single-row RMSNorm threadgroup width
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0QJ1DQZE8W87CD3GS5DR9M0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/rmsnorm_threadgroup_test.go, llamagpu/rmsnorm_threadgroup_realmodel_test.go
