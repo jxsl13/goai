@@ -515,3 +515,6 @@ WHERE contiguous offset-zero F32 fusion, the Metal pre-norm attention implementa
 
 ## METAL-PRENORM-ATTENTION-NUMERIC-001
 WHEN supported output and gradient parity is validated against the incumbent composite, the Metal pre-norm attention implementation SHALL match 1 output and exactly 7 gradients within the established Metal tolerance while mutating exactly 0 inputs.
+
+## M2-PRENORM-ATTENTION-PERF-001
+WHERE three fresh-process order-alternated count-7 campaigns at batch 8, sequence 65, dimension 128, and 4 heads, the M2 performance gate SHALL require a boundary median speedup of at least 1.25x, a full ViT training-step median speedup of at least 1.15x, and every aligned full-step pair at least 1.05x.
