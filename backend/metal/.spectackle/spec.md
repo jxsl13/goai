@@ -358,3 +358,6 @@ WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL 
 
 ## recorder-profile-snapshot-parity-001
 WHEN a completed profile is extracted, the Recorder.Profile bulk snapshot SHALL return identical events, labels, offsets, ticks, durations, frequency, command duration, span, omissions, and errors.
+
+## recorder-profile-snapshot-ownership-001
+WHEN a completed recorder is resolved, the native profile snapshot SHALL retain exactly one immutable 96-byte-label event array until Recorder.Free.
