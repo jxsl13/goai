@@ -364,3 +364,6 @@ WHEN a completed recorder is resolved, the native profile snapshot SHALL retain 
 
 ## recorder-profile-snapshot-warm-perf-001
 WHEN three order-alternated count-seven campaigns compare control and bulk extraction, the warm Recorder.Profile events340 on Apple M2 SHALL run at least 1.50 times faster by median.
+
+## recorder-profile-snapshot-warm-alloc-001
+WHEN the bulk extraction candidate is measured, the warm Recorder.Profile events340 on Apple M2 SHALL allocate at least 1000 fewer objects and 40000 fewer Go bytes per operation.
