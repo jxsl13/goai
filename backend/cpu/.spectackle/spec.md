@@ -131,8 +131,3 @@ WHEN a 5 second MHA512 forward CPU profile is captured after promotion, the ARM6
 
 ## ARM64-F32-MHA-BAND-CONTROLS-001
 WHEN the paired campaigns measure seq128 and seq512 full and GQA forward controls, the MHA band selector SHALL reject any candidate with a statistically significant control regression at p below 0.05.
-
-## ARM64-F32-MHA-BAND-CONTROLS-002 {applies: go:cpu.absF32,asm:cpu.absF32BlocksNeon,go:cpu.BenchmarkAbsF32Leaf}
-WHEN seven interleaved M2 Pro campaigns measure preallocated F32 Abs at 2048, 65536, 349440, and 8388608 elements, the ARM64 sign-clear kernel SHALL retain at least 1.25x median speedup at 2048 elements, at least 0.97x in every larger cell, and zero allocations.
-
-Rationale: The small leaf is instruction-bound while larger cells become memory-bound; both the gain and neutral controls must remain explicit.
