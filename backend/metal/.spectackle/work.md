@@ -60,12 +60,3 @@ created: 2026-08-23
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
 Apple documents that MSL source strings compile first to GPU-independent Metal IR and then to a device pipeline, while an offline metallib removes the runtime source-to-IR stage. Sources pinned on 2026-08-23: https://developer.apple.com/documentation/metal/metal-libraries and https://developer.apple.com/documentation/metal/building-a-shader-library-by-precompiling-source-files. Seven fresh incumbent Q4_K processes measured first-call durations 18.643, 3.466, 3.714, 3.680, 14.473, 4.125, and 3.705 ms; median 3.714 ms. Their second-call median was 0.468 ms. Research whether loading an exact offline-compiled Q4_K metallib through newLibraryWithURL removes at least half of first-call latency without changing warm output or throughput. The diagnostic uses an environment-selected artifact path and retains source compilation as fallback. Any production proposal must define reproducible artifact generation, source/hash coupling, deployment target, architecture compatibility, fallback behavior, and repository size impact.
-
-## P-01M0QQG05VFSN83HQ7JTG43PVY Load an exact precompiled Q4_K metallib for cold Metal startup
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: objc:metal_bridge.ensure_qmatmul_q4k
-
-Diagnostic phase: compile the existing scalar and cooperative Q4_K MSL into one macOS Metal-IR library with a pinned deployment target, then let ensure_qmatmul_q4k load that file only when GOAI_METAL_Q4K_METALLIB names it. The incumbent source-string path remains the default and fallback. Compare fresh processes from one binary, alternating control and artifact arms. Frozen gates: existing Q4_K cross-reference and cooperative parity tests remain unchanged; metallib functions expose the same names and pipeline width; three independent campaigns each contain seven fresh processes per arm; median first-call control divided by candidate is at least 2.00x in every campaign; candidate second-call median retains at least 0.97x incumbent warm throughput; missing, malformed, and incompatible artifact paths fall back to source compilation and return correct output. No artifact, environment seam, or source duplication may enter production unless the diagnostic passes. Production requires one canonical MSL source, deterministic generation, recorded compiler and SDK versions, a source hash, and portable fallback.
