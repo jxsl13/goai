@@ -459,3 +459,6 @@ WHEN 3 order-alternated count-7 M2 campaigns measure full split-K attention at s
 
 ## METAL-SPLITK-FUSED-NUMERIC-001
 WHEN the fused split-K kernel processes a frozen f32 or f16-KV dk-64 GQA or MHA cell, the fused Metal attention output SHALL match incumbent within 2e-6 normalized relative error and preserve floating-point class.
+
+## METAL-SPLITK-FUSED-STRUCTURE-001
+WHEN the fused split-K route executes, the fused Metal kernel SHALL assign one SIMD group per chunk, exchange exactly 66 floats per chunk through threadgroup memory, synchronize once, and merge chunks in ascending order.
