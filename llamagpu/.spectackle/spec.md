@@ -20,5 +20,3 @@ WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equ
 
 ## METAL-ROPE-F16KV-COMBINED-COUNT-001
 WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.
-## METAL-QUANT-GATE-UP-PERF-001
-WHEN 7 alternating M2 campaigns gate raw Metal gate-up fusion, the promotion selector SHALL retain only when aggregate tg64 median speedup reaches 1.03 times, at least 5 campaigns win, and pp64 plus pp512 ratios remain at least 0.99 times.
