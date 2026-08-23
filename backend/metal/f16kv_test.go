@@ -474,6 +474,9 @@ func BenchmarkRoPEF16KVAppend(b *testing.B) {
 }
 
 func TestRoPEF16KVAppendInterleavedCampaigns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing-only Metal promotion campaign; skipped in -short")
+	}
 	if !Available() {
 		t.Skip("Metal unavailable")
 	}
