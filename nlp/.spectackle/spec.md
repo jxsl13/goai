@@ -79,3 +79,6 @@ WHEN an unmasked packed batch with Batch greater than 1 is executed, the MHA.For
 
 ## PRENORM-ATTENTION-FUSION-FALLBACK-001
 IF dtype, layout, shape, backend capability, bias, LoRA, mask, or causal mode excludes fusion, THEN the pre-norm attention helper SHALL execute the incumbent 7-operation composite with exactly 0 implicit reference-backend migrations.
+
+## PRENORM-TRANSFORMER-BLOCK-FUSION-FALLBACK-001
+WHEN complete-block fusion eligibility fails, the pre-norm transformer-block helper SHALL execute the pre-norm attention helper followed by the pre-norm FFN helper with exactly 0 implicit backend migrations.

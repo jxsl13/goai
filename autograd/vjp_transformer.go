@@ -105,4 +105,11 @@ func init() {
 			in[0], in[1], in[2], in[3], in[4], in[5], in[6], g,
 		}, attrs)
 	})
+
+	RegisterVJP(backend.OpPreNormTransformerBlock, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx, backend.OpPreNormTransformerBlockBackward, []*tensor.Tensor{
+			in[0], in[1], in[2], in[3], in[4], in[5], in[6],
+			in[7], in[8], in[9], in[10], in[11], in[12], g,
+		}, attrs)
+	})
 }

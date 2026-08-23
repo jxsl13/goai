@@ -62,3 +62,6 @@ WHEN OpPreNormFFN or OpPreNormFFNBackward executes, the fused backend operation 
 
 ## PRENORM-ATTENTION-FUSION-SEMANTICS-001
 WHEN the fused forward or backward operation executes, the pre-norm attention fusion SHALL preserve biased layer normalization with 1 runtime epsilon, packed-batch isolation, noncausal scaled dot-product attention, output projection, residual addition, and gradients for exactly 7 inputs.
+
+## PRENORM-TRANSFORMER-BLOCK-FUSION-SEMANTICS-001
+WHEN OpPreNormTransformerBlock or OpPreNormTransformerBlockBackward executes, the pre-norm transformer-block operation SHALL preserve 2 biased runtime-epsilon layer normalizations, packed-batch noncausal scaled dot-product attention, exact GELU, 2 residual additions, and gradients for exactly all 13 differentiable inputs.

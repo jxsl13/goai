@@ -8729,6 +8729,72 @@ static prenorm_ffn_nodes build_prenorm_ffn_nodes(
     return n;
 }
 
+typedef struct {
+    __unsafe_unretained MPSGraphTensor* dX;
+    __unsafe_unretained MPSGraphTensor* dGamma;
+    __unsafe_unretained MPSGraphTensor* dBeta;
+    __unsafe_unretained MPSGraphTensor* dW1;
+    __unsafe_unretained MPSGraphTensor* dB1;
+    __unsafe_unretained MPSGraphTensor* dW2;
+    __unsafe_unretained MPSGraphTensor* dB2;
+} prenorm_ffn_backward_nodes;
+
+static prenorm_ffn_backward_nodes build_prenorm_ffn_backward_nodes(
+    MPSGraph* g, prenorm_ffn_nodes n, MPSGraphTensor* Gamma,
+    MPSGraphTensor* W1, MPSGraphTensor* W2, MPSGraphTensor* dO,
+    int dim, int hidden) {
+    MPSGraphTensor* actT = [g transposeTensor:n.act dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dW2 = [g matrixMultiplicationWithPrimaryTensor:actT secondaryTensor:dO name:nil];
+    MPSGraphTensor* dB2 = [g reshapeTensor:[g reductionSumWithTensor:dO axis:0 name:nil]
+                                withShape:@[@(dim)] name:nil];
+    MPSGraphTensor* W2T = [g transposeTensor:W2 dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dAct = [g matrixMultiplicationWithPrimaryTensor:dO secondaryTensor:W2T name:nil];
+    MPSGraphTensor* negHalf = [g constantWithScalar:-0.5 dataType:MPSDataTypeFloat32];
+    MPSGraphTensor* invSqrt2Pi = [g constantWithScalar:0.39894228040143267794
+                                             dataType:MPSDataTypeFloat32];
+    MPSGraphTensor* pdf = [g multiplicationWithPrimaryTensor:
+                             [g exponentWithTensor:
+                                [g multiplicationWithPrimaryTensor:
+                                   [g squareWithTensor:n.z name:nil] secondaryTensor:negHalf name:nil]
+                                                  name:nil]
+                                         secondaryTensor:invSqrt2Pi name:nil];
+    MPSGraphTensor* geluGrad = [g additionWithPrimaryTensor:n.cdf secondaryTensor:
+                                  [g multiplicationWithPrimaryTensor:n.z secondaryTensor:pdf name:nil]
+                                                       name:nil];
+    MPSGraphTensor* dZ = [g multiplicationWithPrimaryTensor:dAct secondaryTensor:geluGrad name:nil];
+    MPSGraphTensor* normT = [g transposeTensor:n.norm dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dW1 = [g matrixMultiplicationWithPrimaryTensor:normT secondaryTensor:dZ name:nil];
+    MPSGraphTensor* dB1 = [g reshapeTensor:[g reductionSumWithTensor:dZ axis:0 name:nil]
+                                withShape:@[@(hidden)] name:nil];
+    MPSGraphTensor* W1T = [g transposeTensor:W1 dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dNorm = [g matrixMultiplicationWithPrimaryTensor:dZ secondaryTensor:W1T name:nil];
+    MPSGraphTensor* dGamma = [g reshapeTensor:
+                                [g reductionSumWithTensor:
+                                   [g multiplicationWithPrimaryTensor:dNorm secondaryTensor:n.xhat name:nil]
+                                                         axis:0 name:nil]
+                                           withShape:@[@(dim)] name:nil];
+    MPSGraphTensor* dBeta = [g reshapeTensor:[g reductionSumWithTensor:dNorm axis:0 name:nil]
+                                  withShape:@[@(dim)] name:nil];
+    MPSGraphTensor* dXhat = [g multiplicationWithPrimaryTensor:dNorm secondaryTensor:Gamma name:nil];
+    MPSGraphTensor* meanDXhat = [g meanOfTensor:dXhat axes:@[@1] name:nil];
+    MPSGraphTensor* meanDXhatXhat = [g meanOfTensor:
+                                      [g multiplicationWithPrimaryTensor:dXhat secondaryTensor:n.xhat name:nil]
+                                                           axes:@[@1] name:nil];
+    MPSGraphTensor* dXNorm = [g multiplicationWithPrimaryTensor:n.inv secondaryTensor:
+                                [g subtractionWithPrimaryTensor:
+                                   [g subtractionWithPrimaryTensor:dXhat secondaryTensor:meanDXhat name:nil]
+                                               secondaryTensor:
+                                   [g multiplicationWithPrimaryTensor:n.xhat secondaryTensor:meanDXhatXhat name:nil]
+                                                          name:nil]
+                                                           name:nil];
+    prenorm_ffn_backward_nodes result = {
+        .dX = [g additionWithPrimaryTensor:dO secondaryTensor:dXNorm name:nil],
+        .dGamma = dGamma, .dBeta = dBeta, .dW1 = dW1, .dB1 = dB1,
+        .dW2 = dW2, .dB2 = dB2,
+    };
+    return result;
+}
+
 static MPSGraph* gFFNFwdGraphs[FFN_CACHE_CAP] = {nil};
 static MPSGraphTensor* gFFNFwdInputs[FFN_CACHE_CAP][8] = {{nil}};
 static MPSGraphTensor* gFFNFwdOutputs[FFN_CACHE_CAP] = {nil};
@@ -9063,6 +9129,98 @@ static prenorm_attention_nodes build_prenorm_attention_nodes(
     return n;
 }
 
+typedef struct {
+    __unsafe_unretained MPSGraphTensor* dX;
+    __unsafe_unretained MPSGraphTensor* dGamma;
+    __unsafe_unretained MPSGraphTensor* dBeta;
+    __unsafe_unretained MPSGraphTensor* dWq;
+    __unsafe_unretained MPSGraphTensor* dWk;
+    __unsafe_unretained MPSGraphTensor* dWv;
+    __unsafe_unretained MPSGraphTensor* dWo;
+} prenorm_attention_backward_nodes;
+
+static prenorm_attention_backward_nodes build_prenorm_attention_backward_nodes(
+    MPSGraph* g, prenorm_attention_nodes n, MPSGraphTensor* Gamma,
+    MPSGraphTensor* Wq, MPSGraphTensor* Wk, MPSGraphTensor* Wv, MPSGraphTensor* Wo,
+    MPSGraphTensor* dO, int rows, int dim, int batch, int seq, int heads) {
+    int dk = dim / heads;
+    MPSGraphTensor* attnT = [g transposeTensor:n.attn2 dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dWo = [g matrixMultiplicationWithPrimaryTensor:attnT secondaryTensor:dO name:nil];
+    MPSGraphTensor* woT = [g transposeTensor:Wo dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dAttn2 = [g matrixMultiplicationWithPrimaryTensor:dO secondaryTensor:woT name:nil];
+    MPSGraphTensor* dAttnR = [g reshapeTensor:dAttn2
+                                     withShape:@[@(batch), @(seq), @(heads), @(dk)] name:nil];
+    MPSGraphTensor* dAttn4 = [g transposeTensor:dAttnR permutation:@[@0,@2,@1,@3] name:nil];
+    MPSGraphTensor* pt = [g transposeTensor:n.p dimension:2 withDimension:3 name:nil];
+    MPSGraphTensor* vT = [g transposeTensor:n.v4 dimension:2 withDimension:3 name:nil];
+    MPSGraphTensor* dV4 = [g matrixMultiplicationWithPrimaryTensor:pt secondaryTensor:dAttn4 name:nil];
+    MPSGraphTensor* dP = [g matrixMultiplicationWithPrimaryTensor:dAttn4 secondaryTensor:vT name:nil];
+    MPSGraphTensor* pdP = [g multiplicationWithPrimaryTensor:n.p secondaryTensor:dP name:nil];
+    MPSGraphTensor* delta3 = [g reductionSumWithTensor:pdP axis:3 name:nil];
+    MPSGraphTensor* delta4 = [g reshapeTensor:delta3
+                                    withShape:@[@(batch), @(heads), @(seq), @1] name:nil];
+    MPSGraphTensor* dS = [g multiplicationWithPrimaryTensor:n.p secondaryTensor:
+                            [g subtractionWithPrimaryTensor:dP secondaryTensor:delta4 name:nil]
+                                                 name:nil];
+    MPSGraphTensor* dQsc = [g matrixMultiplicationWithPrimaryTensor:dS secondaryTensor:n.k4 name:nil];
+    MPSGraphTensor* scale = [g constantWithScalar:1.0 / sqrt((double)dk)
+                                         dataType:MPSDataTypeFloat32];
+    MPSGraphTensor* dQ4 = [g multiplicationWithPrimaryTensor:dQsc secondaryTensor:scale name:nil];
+    MPSGraphTensor* dSt = [g transposeTensor:dS dimension:2 withDimension:3 name:nil];
+    MPSGraphTensor* dK4 = [g matrixMultiplicationWithPrimaryTensor:dSt secondaryTensor:n.qsc name:nil];
+    NSArray<NSNumber*>* matrixShape = @[@(rows), @(dim)];
+    MPSGraphTensor* dQ2 = [g reshapeTensor:
+                             [g transposeTensor:dQ4 permutation:@[@0,@2,@1,@3] name:nil]
+                                       withShape:matrixShape name:nil];
+    MPSGraphTensor* dK2 = [g reshapeTensor:
+                             [g transposeTensor:dK4 permutation:@[@0,@2,@1,@3] name:nil]
+                                       withShape:matrixShape name:nil];
+    MPSGraphTensor* dV2 = [g reshapeTensor:
+                             [g transposeTensor:dV4 permutation:@[@0,@2,@1,@3] name:nil]
+                                       withShape:matrixShape name:nil];
+    MPSGraphTensor* normT = [g transposeTensor:n.norm dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dWq = [g matrixMultiplicationWithPrimaryTensor:normT secondaryTensor:dQ2 name:nil];
+    MPSGraphTensor* dWk = [g matrixMultiplicationWithPrimaryTensor:normT secondaryTensor:dK2 name:nil];
+    MPSGraphTensor* dWv = [g matrixMultiplicationWithPrimaryTensor:normT secondaryTensor:dV2 name:nil];
+    MPSGraphTensor* wqT = [g transposeTensor:Wq dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* wkT = [g transposeTensor:Wk dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* wvT = [g transposeTensor:Wv dimension:0 withDimension:1 name:nil];
+    MPSGraphTensor* dNorm = [g additionWithPrimaryTensor:
+                               [g additionWithPrimaryTensor:
+                                  [g matrixMultiplicationWithPrimaryTensor:dQ2 secondaryTensor:wqT name:nil]
+                                              secondaryTensor:
+                                  [g matrixMultiplicationWithPrimaryTensor:dK2 secondaryTensor:wkT name:nil]
+                                                         name:nil]
+                                           secondaryTensor:
+                               [g matrixMultiplicationWithPrimaryTensor:dV2 secondaryTensor:wvT name:nil]
+                                                      name:nil];
+    MPSGraphTensor* dGamma = [g reshapeTensor:
+                                [g reductionSumWithTensor:
+                                   [g multiplicationWithPrimaryTensor:dNorm secondaryTensor:n.xhat name:nil]
+                                                         axis:0 name:nil]
+                                           withShape:@[@(dim)] name:nil];
+    MPSGraphTensor* dBeta = [g reshapeTensor:[g reductionSumWithTensor:dNorm axis:0 name:nil]
+                                  withShape:@[@(dim)] name:nil];
+    MPSGraphTensor* dXhat = [g multiplicationWithPrimaryTensor:dNorm secondaryTensor:Gamma name:nil];
+    MPSGraphTensor* meanDXhat = [g meanOfTensor:dXhat axes:@[@1] name:nil];
+    MPSGraphTensor* meanDXhatXhat = [g meanOfTensor:
+                                      [g multiplicationWithPrimaryTensor:dXhat secondaryTensor:n.xhat name:nil]
+                                                           axes:@[@1] name:nil];
+    MPSGraphTensor* dXNorm = [g multiplicationWithPrimaryTensor:n.inv secondaryTensor:
+                                [g subtractionWithPrimaryTensor:
+                                   [g subtractionWithPrimaryTensor:dXhat secondaryTensor:meanDXhat name:nil]
+                                               secondaryTensor:
+                                   [g multiplicationWithPrimaryTensor:n.xhat secondaryTensor:meanDXhatXhat name:nil]
+                                                          name:nil]
+                                                           name:nil];
+    prenorm_attention_backward_nodes result = {
+        .dX = [g additionWithPrimaryTensor:dO secondaryTensor:dXNorm name:nil],
+        .dGamma = dGamma, .dBeta = dBeta,
+        .dWq = dWq, .dWk = dWk, .dWv = dWv, .dWo = dWo,
+    };
+    return result;
+}
+
 static MPSGraph* gPreAttnFwdGraphs[PRENORM_ATTN_CACHE_CAP] = {nil};
 static MPSGraphTensor* gPreAttnFwdInputs[PRENORM_ATTN_CACHE_CAP][8] = {{nil}};
 static MPSGraphTensor* gPreAttnFwdOutputs[PRENORM_ATTN_CACHE_CAP] = {nil};
@@ -9322,6 +9480,273 @@ int mtl_prenorm_attention_backward_f32(
         if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
         float* hostOut[7] = {dX, dGamma, dBeta, dWq, dWk, dWv, dWo};
         for (int i = 0; i < 7; i++) memcpy(hostOut[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
+// ---- Cached complete pre-norm transformer-block graphs ---------------------
+// This composes the independently promoted attention and FFN graph builders so
+// the intermediate residual never returns to Go. Epsilon values remain runtime
+// feeds and both direction caches are bounded by the complete shape signature.
+#define PRENORM_BLOCK_CACHE_CAP 16
+
+static MPSGraph* gPreBlockFwdGraphs[PRENORM_BLOCK_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPreBlockFwdInputs[PRENORM_BLOCK_CACHE_CAP][15] = {{nil}};
+static MPSGraphTensor* gPreBlockFwdOutputs[PRENORM_BLOCK_CACHE_CAP] = {nil};
+static int gPreBlockFwdSigs[PRENORM_BLOCK_CACHE_CAP][5] = {{0}};
+static int gPreBlockFwdValid[PRENORM_BLOCK_CACHE_CAP] = {0};
+static int gPreBlockFwdNext = 0;
+
+static MPSGraph* gPreBlockBwdGraphs[PRENORM_BLOCK_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPreBlockBwdInputs[PRENORM_BLOCK_CACHE_CAP][16] = {{nil}};
+static MPSGraphTensor* gPreBlockBwdOutputs[PRENORM_BLOCK_CACHE_CAP][13] = {{nil}};
+static int gPreBlockBwdSigs[PRENORM_BLOCK_CACHE_CAP][5] = {{0}};
+static int gPreBlockBwdValid[PRENORM_BLOCK_CACHE_CAP] = {0};
+static int gPreBlockBwdNext = 0;
+
+static int ensure_prenorm_transformer_block_forward_graph(
+    int rows, int dim, int hidden, int batch, int seq, int heads) {
+    int sig[5] = {batch, seq, dim, heads, hidden};
+    for (int i = 0; i < PRENORM_BLOCK_CACHE_CAP; i++)
+        if (gPreBlockFwdValid[i] && memcmp(sig, gPreBlockFwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* X = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_x"];
+        MPSGraphTensor* Gamma1 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_gamma1"];
+        MPSGraphTensor* Beta1 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_beta1"];
+        MPSGraphTensor* Wq = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_wq"];
+        MPSGraphTensor* Wk = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_wk"];
+        MPSGraphTensor* Wv = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_wv"];
+        MPSGraphTensor* Wo = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_wo"];
+        MPSGraphTensor* Gamma2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_gamma2"];
+        MPSGraphTensor* Beta2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_beta2"];
+        MPSGraphTensor* W1 = [g placeholderWithShape:@[@(dim), @(hidden)] dataType:MPSDataTypeFloat32 name:@"pre_block_w1"];
+        MPSGraphTensor* B1 = [g placeholderWithShape:@[@(hidden)] dataType:MPSDataTypeFloat32 name:@"pre_block_b1"];
+        MPSGraphTensor* W2 = [g placeholderWithShape:@[@(hidden), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_w2"];
+        MPSGraphTensor* B2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_b2"];
+        MPSGraphTensor* Eps1 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_eps1"];
+        MPSGraphTensor* Eps2 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_eps2"];
+        prenorm_attention_nodes attention = build_prenorm_attention_nodes(
+            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads);
+        prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
+            g, attention.y, Gamma2, Beta2, W1, B1, W2, B2, Eps2);
+        if (!g || !attention.y || !ffn.y) return -20;
+        int slot = gPreBlockFwdNext;
+        gPreBlockFwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[15] = {
+            X, Gamma1, Beta1, Wq, Wk, Wv, Wo,
+            Gamma2, Beta2, W1, B1, W2, B2, Eps1, Eps2,
+        };
+        for (int i = 0; i < 15; i++) gPreBlockFwdInputs[slot][i] = inputs[i];
+        gPreBlockFwdOutputs[slot] = ffn.y;
+        memcpy(gPreBlockFwdSigs[slot], sig, sizeof(sig));
+        gPreBlockFwdValid[slot] = 1;
+        gPreBlockFwdNext = (slot + 1) % PRENORM_BLOCK_CACHE_CAP;
+        return slot;
+    }
+}
+
+static int ensure_prenorm_transformer_block_backward_graph(
+    int rows, int dim, int hidden, int batch, int seq, int heads) {
+    int sig[5] = {batch, seq, dim, heads, hidden};
+    for (int i = 0; i < PRENORM_BLOCK_CACHE_CAP; i++)
+        if (gPreBlockBwdValid[i] && memcmp(sig, gPreBlockBwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* X = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_x"];
+        MPSGraphTensor* Gamma1 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_gamma1"];
+        MPSGraphTensor* Beta1 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_beta1"];
+        MPSGraphTensor* Wq = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_wq"];
+        MPSGraphTensor* Wk = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_wk"];
+        MPSGraphTensor* Wv = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_wv"];
+        MPSGraphTensor* Wo = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_wo"];
+        MPSGraphTensor* Gamma2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_gamma2"];
+        MPSGraphTensor* Beta2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_beta2"];
+        MPSGraphTensor* W1 = [g placeholderWithShape:@[@(dim), @(hidden)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_w1"];
+        MPSGraphTensor* B1 = [g placeholderWithShape:@[@(hidden)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_b1"];
+        MPSGraphTensor* W2 = [g placeholderWithShape:@[@(hidden), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_w2"];
+        MPSGraphTensor* B2 = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_b2"];
+        MPSGraphTensor* dO = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_do"];
+        MPSGraphTensor* Eps1 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_eps1"];
+        MPSGraphTensor* Eps2 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_eps2"];
+        prenorm_attention_nodes attention = build_prenorm_attention_nodes(
+            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads);
+        prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
+            g, attention.y, Gamma2, Beta2, W1, B1, W2, B2, Eps2);
+        prenorm_ffn_backward_nodes ffnBackward = build_prenorm_ffn_backward_nodes(
+            g, ffn, Gamma2, W1, W2, dO, dim, hidden);
+        prenorm_attention_backward_nodes attentionBackward = build_prenorm_attention_backward_nodes(
+            g, attention, Gamma1, Wq, Wk, Wv, Wo, ffnBackward.dX,
+            rows, dim, batch, seq, heads);
+        MPSGraphTensor* outputs[13] = {
+            attentionBackward.dX, attentionBackward.dGamma, attentionBackward.dBeta,
+            attentionBackward.dWq, attentionBackward.dWk, attentionBackward.dWv, attentionBackward.dWo,
+            ffnBackward.dGamma, ffnBackward.dBeta,
+            ffnBackward.dW1, ffnBackward.dB1, ffnBackward.dW2, ffnBackward.dB2,
+        };
+        if (!g || !attention.y || !ffn.y) return -20;
+        for (int i = 0; i < 13; i++) if (!outputs[i]) return -20;
+        int slot = gPreBlockBwdNext;
+        gPreBlockBwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[16] = {
+            X, Gamma1, Beta1, Wq, Wk, Wv, Wo,
+            Gamma2, Beta2, W1, B1, W2, B2, dO, Eps1, Eps2,
+        };
+        for (int i = 0; i < 16; i++) gPreBlockBwdInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 13; i++) gPreBlockBwdOutputs[slot][i] = outputs[i];
+        memcpy(gPreBlockBwdSigs[slot], sig, sizeof(sig));
+        gPreBlockBwdValid[slot] = 1;
+        gPreBlockBwdNext = (slot + 1) % PRENORM_BLOCK_CACHE_CAP;
+        return slot;
+    }
+}
+
+int mtl_prenorm_transformer_block_f32(
+    const float* X, const float* Gamma1, const float* Beta1,
+    const float* Wq, const float* Wk, const float* Wv, const float* Wo,
+    const float* Gamma2, const float* Beta2,
+    const float* W1, const float* B1, const float* W2, const float* B2,
+    float* Y, int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2) {
+    if (ensure_init() != 0) return -1;
+    if (rows != batch * seq || heads <= 0 || dim % heads != 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_prenorm_transformer_block_forward_graph(rows, dim, hidden, batch, seq, heads);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        const float* hostIn[15] = {
+            X, Gamma1, Beta1, Wq, Wk, Wv, Wo,
+            Gamma2, Beta2, W1, B1, W2, B2, &eps1, &eps2,
+        };
+        size_t lengths[15] = {
+            xLen, dLen, dLen, aWLen, aWLen, aWLen, aWLen,
+            dLen, dLen, fWLen, hLen, fWLen, dLen, sizeof(float), sizeof(float),
+        };
+        NSArray<NSNumber*>* shapes[15] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)],
+            @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)],
+            @[@(dim)], @[@(dim)], @[@(dim), @(hidden)], @[@(hidden)],
+            @[@(hidden), @(dim)], @[@(dim)], @[@1], @[@1],
+        };
+        id<MTLBuffer> in[15];
+        MPSGraphTensorData* data[15];
+        for (int i = 0; i < 15; i++) {
+            in[i] = pool_in(hostIn[i], lengths[i]);
+            if (!in[i]) return -2;
+            data[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                             shape:shapes[i]
+                                                          dataType:MPSDataTypeFloat32];
+            if (!data[i]) return -2;
+        }
+        id<MTLBuffer> out = pool_buf(xLen);
+        if (!out) return -2;
+        MPSGraphTensorData* yd = [[MPSGraphTensorData alloc] initWithMTLBuffer:out
+                                                                        shape:@[@(rows), @(dim)]
+                                                                     dataType:MPSDataTypeFloat32];
+        if (!yd) return -2;
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:15];
+        for (int i = 0; i < 15; i++) feeds[gPreBlockFwdInputs[slot][i]] = data[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPreBlockFwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                    resultsDictionary:@{gPreBlockFwdOutputs[slot]:yd}
+                                  executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        memcpy(Y, out.contents, xLen);
+        return 0;
+    }
+}
+
+int mtl_prenorm_transformer_block_backward_f32(
+    const float* X, const float* Gamma1, const float* Beta1,
+    const float* Wq, const float* Wk, const float* Wv, const float* Wo,
+    const float* Gamma2, const float* Beta2,
+    const float* W1, const float* B1, const float* W2, const float* B2,
+    const float* dO,
+    float* dX, float* dGamma1, float* dBeta1,
+    float* dWq, float* dWk, float* dWv, float* dWo,
+    float* dGamma2, float* dBeta2,
+    float* dW1, float* dB1, float* dW2, float* dB2,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2) {
+    if (ensure_init() != 0) return -1;
+    if (rows != batch * seq || heads <= 0 || dim % heads != 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_prenorm_transformer_block_backward_graph(rows, dim, hidden, batch, seq, heads);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        const float* hostIn[16] = {
+            X, Gamma1, Beta1, Wq, Wk, Wv, Wo,
+            Gamma2, Beta2, W1, B1, W2, B2, dO, &eps1, &eps2,
+        };
+        size_t inputLengths[16] = {
+            xLen, dLen, dLen, aWLen, aWLen, aWLen, aWLen,
+            dLen, dLen, fWLen, hLen, fWLen, dLen, xLen, sizeof(float), sizeof(float),
+        };
+        NSArray<NSNumber*>* inputShapes[16] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)],
+            @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)],
+            @[@(dim)], @[@(dim)], @[@(dim), @(hidden)], @[@(hidden)],
+            @[@(hidden), @(dim)], @[@(dim)], @[@(rows), @(dim)], @[@1], @[@1],
+        };
+        id<MTLBuffer> in[16];
+        MPSGraphTensorData* inputData[16];
+        for (int i = 0; i < 16; i++) {
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                                  shape:inputShapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+        size_t outputLengths[13] = {
+            xLen, dLen, dLen, aWLen, aWLen, aWLen, aWLen,
+            dLen, dLen, fWLen, hLen, fWLen, dLen,
+        };
+        NSArray<NSNumber*>* outputShapes[13] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)],
+            @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)], @[@(dim), @(dim)],
+            @[@(dim)], @[@(dim)], @[@(dim), @(hidden)], @[@(hidden)],
+            @[@(hidden), @(dim)], @[@(dim)],
+        };
+        id<MTLBuffer> out[13];
+        MPSGraphTensorData* outputData[13];
+        for (int i = 0; i < 13; i++) {
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i]
+                                                                   shape:outputShapes[i]
+                                                                dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:16];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:13];
+        for (int i = 0; i < 16; i++) feeds[gPreBlockBwdInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < 13; i++) results[gPreBlockBwdOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPreBlockBwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                     resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        float* hostOut[13] = {
+            dX, dGamma1, dBeta1, dWq, dWk, dWv, dWo,
+            dGamma2, dBeta2, dW1, dB1, dW2, dB2,
+        };
+        for (int i = 0; i < 13; i++) memcpy(hostOut[i], out[i].contents, outputLengths[i]);
         return 0;
     }
 }
