@@ -496,3 +496,4 @@
 {"t":"2026-08-23T15:23:56Z","eid":"04abd3dd4aedd863","ag":"ag-eb0f","ev":"move","id":"R-01M0QKGQ0CE0XVYJ4XED6VYBF6","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T15:23:59Z","eid":"8f481433580a8d69","ag":"ag-23ee","ev":"create","id":"P-01M0QKHBQ9E8493F49H436R6CJ","k":"proposal","ti":"Cache dim-2048 RMSNorm lane values through the Metal reduction","dir":"backend/metal"}
 {"t":"2026-08-23T15:24:08Z","eid":"8d9694085a242428","ag":"ag-b367","ev":"grill","id":"P-01M0QKHBQ9E8493F49H436R6CJ","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"f2a127cc19c21350e7a503362e699d2b8c19bd2148ce17326cf41fb6ce5fe468"}
+{"t":"2026-08-23T15:24:21Z","eid":"7fad7dca37407764","ag":"ag-d59c","ev":"move","id":"P-01M0QKHBQ9E8493F49H436R6CJ","dir":"backend/metal","fr":"draft","to":"active"}

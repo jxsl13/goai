@@ -62,7 +62,7 @@ Production TinyLlama decode records 45 single-row RMSNorm kernels at dimension 2
 
 ## P-01M0QKHBQ9E8493F49H436R6CJ Cache dim-2048 RMSNorm lane values through the Metal reduction
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 parent: R-01M0QKGQ0CE0XVYJ4XED6VYBF6
 grilled: 2026-08-23 open=0
