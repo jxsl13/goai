@@ -499,4 +499,4 @@ WHEN three count-seven M2 ViT B=8 campaigns run, the batch-axis attention promot
 WHEN AttnAttrs.Batch exceeds 1 and Window equals 0 for supported F32 backward, the Metal batched attention backward SHALL execute 1 cached batch-axis MPSGraph returning packed dQ/dK/dV with 0 per-sequence native submissions.
 
 ## M2-VIT-BATCHED-ATTENTION-BACKWARD-PERF-001
-WHEN 3 alternating count-7 M2 ViT B=8 campaigns compare batched backward with merged main, the Metal backward promotion SHALL require each median at least 1.10 times control, each aligned pair at least 1.05 times control, and gradient parity.
+WHEN 3 alternating count-7 M2 ViT B=8 campaigns compare batched backward with merged main, the Metal backward promotion SHALL require median speedup of 1.10x, every aligned pair at 1.05x, and gradient parity.
