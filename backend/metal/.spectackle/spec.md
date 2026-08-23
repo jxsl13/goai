@@ -462,3 +462,6 @@ WHEN the fused split-K kernel processes a frozen f32 or f16-KV dk-64 GQA or MHA 
 
 ## METAL-SPLITK-FUSED-STRUCTURE-001
 WHEN the fused split-K route executes, the fused Metal kernel SHALL assign one SIMD group per chunk, exchange exactly 66 floats per chunk through threadgroup memory, synchronize once, and merge chunks in ascending order.
+
+## METAL-SPLITK-FUSED-SCOPE-001
+WHEN attention is outside sq=1, dk=64, unwindowed causal split-K or the fused pipeline cannot host nchunk times 32 threads, the Metal attention selector SHALL dispatch zero fused kernels and preserve the incumbent route.
