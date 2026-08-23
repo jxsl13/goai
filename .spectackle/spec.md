@@ -678,3 +678,8 @@ Rationale: The residual stream is private to one decode step; eliminating two ma
 WHEN recording is active, OpAdd is routed to another backend, or residual inputs have unsupported device, dtype, shape, offset, contiguity, or aliasing, the GoAI SHALL execute the ordinary backend.OpAdd path without mutating either input.
 
 Rationale: Training, routing, views, aliases, and accelerators must retain existing functional semantics.
+
+## PRIVATE-RESEARCH-SOURCES-ISOLATION-005
+WHEN the eager CPU QuantLlama residual candidate is evaluated for retention, the GoAI SHALL retain it only when independent interleaved TinyLlama Q4_K 64-step campaigns preserve the exact digest, reduce allocation bytes by at least 10 percent, and improve median wall time by at least 1.03x.
+
+Rationale: A prior exact residual-fusion design removed all add encoders but was rejected at only about 1.01-1.02x whole-model improvement.
