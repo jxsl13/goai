@@ -350,3 +350,6 @@ WHEN 2 equal-shape Q4_K matrices receive 1 contiguous F32 M1 activation and a no
 
 ## GGUF-Q4K-PAIRED-SCRATCH-001
 The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the final chunk, retain capacities no larger than 65,536 F32 values, and expose 0 scratch aliases to callers.
+
+## GGUF-Q4K-PAIR-DUAL-DOT-001
+WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load each activation vector once for both weight rows and preserve each independent kernel accumulation and reduction order bit-for-bit.
