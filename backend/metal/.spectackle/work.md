@@ -66,6 +66,7 @@ kind: proposal
 state: draft
 created: 2026-08-23
 refs: R-01M0Q59EV4EKSTBJACTNCBQK42
+grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.QMatMulResident
 
 Pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702 matches GoAI Q6_K lane ownership and arithmetic but forces full unrolling of the four-iteration 6-bit reconstruction and FMA loop. Q4_K did not transfer this directive, but Q6_K has distinct four-plane integer reconstruction and represents 17.00 percent of measured TinyLlama explicit decode time. Isolate the pragma with no other source delta, preserve exact behavior and immutable inputs, and retain it only if both actual Q6_K production shapes clear a frozen M2 leaf gate before full-model testing.
