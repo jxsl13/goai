@@ -1,0 +1,23 @@
+# Build each binary from the revision pinned in manifest.json.
+GOPROXY=direct go test -c -o BINARY ./format/gguf
+GOPROXY=direct go test -c -o BINARY ./internal/benchcompare
+
+# Run from format/gguf so package testdata is available.
+BINARY
+GOMAXPROCS=12 BINARY -test.run '^$' -test.bench '^BenchmarkDotQ4KRowASM_K2048$' -test.benchmem -test.benchtime=500ms -test.count=1
+GOMAXPROCS=12 BINARY -test.run '^$' -test.bench '^BenchmarkQMatMulQ4_K_M1_N4096$' -test.benchmem -test.benchtime=500ms -test.count=1
+
+# Run from internal/benchcompare. Each process performs one excluded warm-up.
+GOMAXPROCS=12 GOAI_CPU_TINYLLAMA_GGUF=/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf GOAI_CPU_DECODE_STEPS=64 GOAI_CPU_DECODE_REPS=5 BINARY -test.run '^TestProdCPUQuantDecodeGGUF$' -test.v
+
+# Profile merged main with 15 measured production runs.
+GOMAXPROCS=12 GOAI_CPU_TINYLLAMA_GGUF=/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf GOAI_CPU_DECODE_STEPS=64 GOAI_CPU_DECODE_REPS=15 BINARY -test.run '^TestProdCPUQuantDecodeGGUF$' -test.v -test.cpuprofile=cpu.pprof -test.memprofile=mem.pprof
+
+# Compatibility and static gates.
+GOTOOLCHAIN=go1.26.6 GOPROXY=direct go test -c -o BINARY ./format/gguf
+GOOS=darwin GOARCH=amd64 GOPROXY=direct go test -c -o BINARY ./format/gguf
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 GOPROXY=direct go test -c -o BINARY ./format/gguf
+GOPROXY=direct perfscan -exit-zero ./format/gguf
+spectackle reindex -root .
+spectackle lint .
+GOPROXY=direct go test ./...

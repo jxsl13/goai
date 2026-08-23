@@ -1,0 +1,19 @@
+PASS Go 1.27.0 complete format/gguf test binary
+PASS Go 1.26.6 complete format/gguf test binary
+PASS Go 1.27.0 Darwin/AMD64 format/gguf cross-compile
+PASS Go 1.27.0 Linux/ARM64 format/gguf cross-compile
+PASS arbitrary packed-header whole rows bit-identical to the prior per-block path
+PASS paired rows bit-identical to two independent whole-row calls
+PASS Go 1.27 disassembly verifies one whole-row entry, table-indexed VUSHL header decode, per-block F32 reduction, and ordered F64 accumulation
+PASS production digest ea3df5516f17df83 in every baseline and candidate process
+PASS spectackle reindex: 2762 files, 18791 nodes, 34699 edges, 6881 typed calls, 0 skipped
+PASS spectackle lint: 24 spec files, 489 rules, 0 errors
+PASS external perfscan v1.71.0 completed with pre-existing findings and issue 843 filed
+
+Full repository command: GOPROXY=direct go test ./...
+PASS changed-path packages including format/gguf and internal/benchcompare, plus every reported non-GPU package except the pre-existing nlp entry below.
+
+ENVIRONMENTAL backend/metal/TestMeasurementNoiseFloor failed with GPU timestamp CV 24.4% on the shared local host.
+ENVIRONMENTAL llamagpu timed out after 10 minutes inside backend/metal mtl_matmul_f32 while TestOptimizerWrappersTrainGPT was running.
+PRE-EXISTING/UNRELATED nlp/TestDiffusionLMGrammarE2E reproduced masked-diffusion CE 2.924 -> 0.085 and generated "a sra s ee s a s".
+The branch changes only format/gguf ARM64 CPU files; required isolated CI remains authoritative before merge.
