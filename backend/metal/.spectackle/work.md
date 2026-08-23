@@ -62,7 +62,7 @@ Production RMSNorm makes all 256 threads read and add the same eight threadgroup
 
 ## P-01M0QKXHR7ED1ASFH56SNHAGKK Replace redundant RMSNorm partial summation with SIMD leader broadcast
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 parent: R-01M0QKX4XEEWPTXC6TWP0PK6TA
 grilled: 2026-08-23 open=0

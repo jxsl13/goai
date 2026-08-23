@@ -515,3 +515,4 @@
 {"t":"2026-08-23T15:30:35Z","eid":"ca03d5bbba76ae98","ag":"ag-9cf8","ev":"move","id":"R-01M0QKX4XEEWPTXC6TWP0PK6TA","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T15:30:38Z","eid":"665538e9518fa7fd","ag":"ag-17b2","ev":"create","id":"P-01M0QKXHR7ED1ASFH56SNHAGKK","k":"proposal","ti":"Replace redundant RMSNorm partial summation with SIMD leader broadcast","dir":"backend/metal"}
 {"t":"2026-08-23T15:30:50Z","eid":"7f26d4b3651d946b","ag":"ag-8d21","ev":"grill","id":"P-01M0QKXHR7ED1ASFH56SNHAGKK","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"dd279953fa6a8df408b2a451777b61bf2c164f3519687923a48c535eba4ec2d1"}
+{"t":"2026-08-23T15:30:53Z","eid":"cb1870fa448951ea","ag":"ag-d12d","ev":"move","id":"P-01M0QKXHR7ED1ASFH56SNHAGKK","dir":"backend/metal","fr":"draft","to":"active"}
