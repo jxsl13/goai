@@ -25,7 +25,7 @@ PERFSCAN RULE REQUIRED: major-axis-innermost traversal of a flat row-major buffe
 
 ## P-01M0PA5B5KF92R60R8M2A6WSKE Preserve SVD bit-identity gates across supported Go releases
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:linalg_test.svdDigest, go:linalg_test.TestSVDIsBitIdentical, go:linalg.SVD
 
