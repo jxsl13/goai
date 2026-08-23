@@ -3773,6 +3773,13 @@ func (r *Recorder) RMSNorm(x, g, o *DeviceBuffer, rows, dim int, eps float32) er
 	return nil
 }
 
+// SetRecorderRMSNormThreads selects the physical threadgroup width for frozen one-row RMSNorm
+// shapes and returns the previous width. Unsupported widths are ignored. This is a diagnostic
+// selector for same-binary M2 promotion campaigns; production defaults to 256 threads.
+func SetRecorderRMSNormThreads(threads int) int {
+	return int(C.mtl_recorder_rmsnorm_threads_set(C.int(threads)))
+}
+
 // flashattn records O = flash-attention(Q,K,V) into the command buffer over device buffers.
 // q, o are [seq,dm]; k, v are [seq,kvHeads*dk]. causal!=0 masks future positions.
 func (r *Recorder) flashattn(q, k, v, o *DeviceBuffer, seq, dm, heads, dk, causal, kvHeads int, scale float32) error {

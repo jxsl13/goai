@@ -399,24 +399,42 @@ static NSString* const kRMSNormSource =
      "  if ((int)row >= rows) return;\n"
      "  int base=(int)row*dim;\n"
      "  threadgroup float red[32];\n"
-     "  float part=0.0f;\n"
-     "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ float v=X[base+j]; part+=v*v; }\n"
      "  // The tree reduction this replaces ran a threadgroup_barrier on EVERY level — eight of them\n"
      "  // for a 256-thread group. At decode (one row, 2048 wide) that barrier latency was the whole\n"
      "  // kernel: 14.96us to move 8 KB, ~0.5 GB/s. simd_sum reduces inside a simdgroup with no\n"
      "  // barrier at all, leaving ONE barrier to publish the per-simdgroup partials; every thread\n"
      "  // then sums those few values itself, which is cheaper than a second barrier to broadcast.\n"
-     "  part = simd_sum(part);\n"
-     "  uint nsg = (tgsize + 31u) / 32u;\n"
-     "  if ((lane & 31u) == 0u) red[lane >> 5] = part;\n"
+     "  // Preserve the 256-logical-lane reduction tree at every physical width. A 64- or 128-thread\n"
+     "  // group emulates multiple logical lanes, so tuning occupancy cannot perturb model numerics.\n"
+     "  for (uint logical=lane; logical<256u; logical+=tgsize){\n"
+     "    float part=0.0f;\n"
+     "    for (int j=(int)logical;j<dim;j+=256){ float v=X[base+j]; part+=v*v; }\n"
+     "    part=simd_sum(part);\n"
+     "    if ((lane & 31u) == 0u) red[logical >> 5] = part;\n"
+     "  }\n"
      "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
      "  float tot = 0.0f;\n"
-     "  for (uint i = 0u; i < nsg; i++) tot += red[i];\n"
+     "  for (uint i = 0u; i < 8u; i++) tot += red[i];\n"
      "  float inv=rsqrt(tot/float(dim)+E[0]);\n"
      "  for (int j=(int)lane;j<dim;j+=(int)tgsize){ O[base+j]=X[base+j]*inv*G[j]; }\n"
      "}\n";
 
 static id<MTLComputePipelineState> gRMSNorm = nil;
+static int gRecorderRMSNormThreads = 256;
+
+int mtl_recorder_rmsnorm_threads_set(int threads) {
+    int previous = gRecorderRMSNormThreads;
+    if (threads == 64 || threads == 128 || threads == 256) gRecorderRMSNormThreads = threads;
+    return previous;
+}
+
+static NSUInteger recorder_rmsnorm_threads(int rows, int dim) {
+    if (rows != 1 || (dim != 256 && dim != 1024 && dim != 2048 && dim != 4096 && dim != 5632)) return 256;
+    NSUInteger threads = (NSUInteger)gRecorderRMSNormThreads;
+    if (gRMSNorm == nil || gRMSNorm.threadExecutionWidth != 32 ||
+        threads > gRMSNorm.maxTotalThreadsPerThreadgroup) return 256;
+    return threads;
+}
 
 static int ensure_rmsnorm(void) {
     if (gRMSNorm != nil) return 0;
@@ -4504,7 +4522,7 @@ double mtl_probe_gemm_dtype(int M, int K, int N, int f16, int reps) {
 
 // mtl_recorder_rmsnorm encodes O = rmsnorm(X)·gamma over device buffers xh (rows×dim),
 // gh (dim gamma weights), oh (rows×dim) into the recorder's command buffer. Cooperative
-// kernel: one 256-thread threadgroup per row (§T345). No commit.
+// kernel: one threadgroup per row (§T345). No commit.
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps) {
     if (rec == NULL || xh == NULL || gh == NULL || oh == NULL) return -2;
     if (ensure_rmsnorm() != 0) return -6;
@@ -4513,14 +4531,17 @@ int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int 
     id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
     int P[2] = {rows, dim};
     float E[1] = {eps};
-    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"rmsnorm");
+    NSUInteger threads = recorder_rmsnorm_threads(rows, dim);
+    NSString* profileLabel = threads == 64 ? @"rmsnorm.tg64" :
+                             (threads == 128 ? @"rmsnorm.tg128" : @"rmsnorm");
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, profileLabel);
     [enc setComputePipelineState:gRMSNorm];
     [enc setBuffer:xb offset:0 atIndex:0];
     [enc setBuffer:gb offset:0 atIndex:1];
     [enc setBuffer:ob offset:0 atIndex:2];
     [enc setBytes:P length:sizeof(P) atIndex:3];
     [enc setBytes:E length:sizeof(E) atIndex:4];
-    [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(256, 1, 1)];
+    [enc dispatchThreadgroups:MTLSizeMake(rows, 1, 1) threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
     [enc endEncoding];
     return 0;
 }

@@ -341,6 +341,8 @@ int mtl_recorder_rope_pair_f16kv_append(void* rec,
 int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, int N,
                         int accumulate);
 int mtl_recorder_rmsnorm(void* rec, void* xh, void* gh, void* oh, int rows, int dim, float eps);
+// Selects recorder RMSNorm threadgroup width for frozen one-row shapes. Returns previous width.
+int mtl_recorder_rmsnorm_threads_set(int threads);
 int mtl_recorder_layernorm(void* rec, void* xh, void* gh, void* bh, void* oh, int rows, int dim, float eps);
 int mtl_recorder_addbias(void* rec, void* xh, void* bh, void* oh, int rows, int n);
 int mtl_recorder_rope(void* rec, void* qh, void* invh, void* oh,
