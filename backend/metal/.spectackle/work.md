@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QVYV9PENARM7SS0FTXZ5CZ Audit pinned llama.cpp v0.2.0 Q4_K and Q6_K Metal dispatch against GoAI
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.ensure_qmatmul_q4k, objc:metal_bridge.ensure_qmatmul_q6k, msl:qmatmul_q4k_cooperative, msl:qmatmul_q6k_cooperative
 
