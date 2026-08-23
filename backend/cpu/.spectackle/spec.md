@@ -47,8 +47,8 @@ Rationale: Found while working the PS3070 candidate list. mhaGemmMinSeq is 16 an
 ## ARM64-EXACT-RELU-001 {applies: backend/cpu/elementwise.go,backend/cpu/relu_f32_arm64.go,backend/cpu/relu_f32_arm64.s}
 WHEN F32 ReLU executes on arm64, the CPU backend SHALL use ordered comparison and select so positive values retain bits while negatives, NaNs, and both zero signs become +0.
 
-## ARM64-EXACT-ABS-001 {applies: go:cpu.absF32,asm:cpu.absF32BlocksNeon,go:cpu.TestAbsF32Arm64ExactAllLengths}
-WHEN F32 Abs executes on arm64 with Go 1.27, the CPU backend SHALL clear only bit 31 so every output bit pattern equals inputBits AND 0x7fffffff, including signaling and quiet NaNs.
+## ARM64-EXACT-ABS-001 {applies: go:cpu.absF32,asm:cpu.absF32BlocksNeon,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs executes on arm64, the CPU backend SHALL match every output bit from float32(math.Abs(float64(x))) under the active supported Go toolchain.
 
 Rationale: M2 emits FCVT F32-to-F64, FABS, then FCVT F64-to-F32 for the incumbent expression. Raw-bit probes show that this clears signs and quiets signaling NaNs while preserving payloads; a plain vector FABS or sign mask would change the contract.
 
