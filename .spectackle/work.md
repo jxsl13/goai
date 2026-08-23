@@ -4015,3 +4015,11 @@ grilled: 2026-08-23 open=0
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/splitk_fused_test.go, llamagpu/splitk_fused_realmodel_test.go
 
 Narrow the rejected dual-dtype fusion to the production f16-KV lane that cleared the real-model gate. Retain one fused kernel: one SIMD group per key chunk executes incumbent lane-quad arithmetic, exchanges 66-float partials through threadgroup memory, and SIMD group 0 merges in ascending order. Remove the failed f32 fused kernel, pipeline, routing, and f32 benchmark cells. Keep the historical two-pass f16-KV route behind a diagnostic toggle until three same-command leaf campaigns and three valid token-interleaved TinyLlama campaigns clear the frozen gates. On promotion, make fusion the default only for eligible f16-KV decode and retain two-pass fallback for device/thread limits. This consumes R-01M0QF5B7EE31 and the measured rejection P-01M0QF5QXRF21.
+
+## T-01M0QG4H36FC7B2P48XC15SM5E Ship and gate f16-KV fused split-K decode
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0QG3MFAEQ1BVB13SKB1CN5F
+
+Remove the failed f32 fused kernel and all f32 candidate routing/tests. Retain the f16-KV fused kernel behind the toggle, rerun numeric and route tests, complete three f16-only count-7 leaf campaigns and three valid token-interleaved TinyLlama campaigns, then promote f16-KV fusion by default with two-pass fallback and complete repository validation.
