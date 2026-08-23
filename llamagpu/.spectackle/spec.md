@@ -20,3 +20,6 @@ WHEN the path is not Metal f16-KV single-token grouped-QKV full-RoPE with dk equ
 
 ## METAL-ROPE-F16KV-COMBINED-COUNT-001
 WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal decoder SHALL replace 54 RoPE and copy events with 10 separate and 12 grouped fused events.
+
+## METAL-QUANT-GATE-UP-GRAPH-001
+WHEN a trained 22-layer TinyLlama single-token Metal quant command buffer is profiled, the raw gate-up fusion selector SHALL record exactly 109 quant-matmul events and 22 halves-SwiGLU events while the unfused control records exactly 131 quant-matmul events.
