@@ -434,3 +434,4 @@
 {"t":"2026-08-23T13:23:42Z","eid":"c089aef440a3af1c","ag":"ag-acc5","ev":"create","id":"P-01M0QCN4C8ECWANK89M5CWF4P0","k":"proposal","ti":"Add caller-reused Metal Recorder.ProfileInto extraction","dir":"backend/metal"}
 {"t":"2026-08-23T13:23:50Z","eid":"531c58346dc3f4a0","ag":"ag-6984","ev":"move","id":"P-01M0QCN4C8ECWANK89M5CWF4P0","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T13:23:59Z","eid":"82f820905a8dea9f","ag":"ag-14e6","ev":"create","id":"T-01M0QCNME5FE0VKFK7MPF9F0G6","k":"task","ti":"Implement and gate caller-owned Metal ProfileInto","dir":"backend/metal"}
+{"t":"2026-08-23T13:24:05Z","eid":"ce92fe0a18c0a91d","ag":"ag-a58d","ev":"move","id":"T-01M0QCNME5FE0VKFK7MPF9F0G6","dir":"backend/metal","fr":"draft","to":"active"}

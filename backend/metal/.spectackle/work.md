@@ -71,7 +71,7 @@ Consume R-01M0QCMRDYEBC. Add Recorder.ProfileInto(dst *RecorderProfile) error as
 
 ## T-01M0QCNME5FE0VKFK7MPF9F0G6 Implement and gate caller-owned Metal ProfileInto
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QCN4C8ECWANK89M5CWF4P0
 targets: go:metal.Recorder.Profile, go:metal.fillRecorderProfileEvents, c:mtl_recorder_profile_snapshot, backend/metal/metal_bridge.m, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
