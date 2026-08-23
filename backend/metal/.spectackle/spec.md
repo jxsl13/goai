@@ -367,3 +367,6 @@ WHEN three order-alternated count-seven campaigns compare control and bulk extra
 
 ## recorder-profile-snapshot-warm-alloc-001
 WHEN the bulk extraction candidate is measured, the warm Recorder.Profile events340 on Apple M2 SHALL allocate at least 1000 fewer objects and 40000 fewer Go bytes per operation.
+
+## recorder-profile-snapshot-small-perf-001
+WHEN each frozen campaign compares control and bulk extraction, the warm Recorder.Profile events1 on Apple M2 SHALL run at least 1.10 times faster by median.
