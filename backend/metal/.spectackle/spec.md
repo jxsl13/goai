@@ -355,5 +355,3 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-## recorder-profile-valid-index-storage-001
-WHEN valid event indices are materialized, the native profile resolver SHALL store at most 1 index inline and all larger sets contiguously with 0 NSNumber boxes.
