@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0P4X4QCF0XTB87P5M888AAP Pin CPU quant benchmark routing and model identity
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nn.QuantLinear.Forward
