@@ -65,7 +65,7 @@ T-01M0Q5DGB6FMB rejected the universal Q6_K pragma, but its frozen count-seven g
 
 ## T-01M0Q5MMDZE2QR3V30FQF6XBAT Implement and gate a same-binary long-K Q6_K unrolled pipeline
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q5KRTFE96TDAJGGH2APKN2
 refs: R-01M0Q59EV4EKSTBJACTNCBQK42
