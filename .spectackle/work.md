@@ -4017,7 +4017,7 @@ Determine whether one cached MPSGraph for the pre-norm FFN residual boundary can
 
 ## P-01M0R4K081FDDTQMBYZWCRRZ55 Fuse pre-norm FFN training boundaries on Metal
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0R43YYWE2TTJMX2PJ09GN5S
 grilled: 2026-08-23 open=1
