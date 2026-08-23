@@ -487,4 +487,4 @@ WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at
 WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the Metal attention selector SHALL dispatch exactly 1 fused kernel by default and retain two-pass execution when SetSplitKFused receives false.
 
 ## METAL-CONCURRENT-DECODE-DEPENDENCY-001
-WHEN a production dense quantized f16-KV Llama-style single-token decode uses a concurrent Metal recorder, the Metal recorder SHALL keep Q/K/V and gate/up dispatches barrier-free, insert one buffer-scope barrier before every consumer stage, and end exactly one shared compute encoder before each blit, MPS, commit, finish, or free boundary.
+WHEN a production dense quantized f16-KV Llama-style single-token decode uses a concurrent Metal recorder, the Metal recorder SHALL keep Q/K/V and gate/up dispatches barrier-free and insert one buffer-scope barrier before every consumer stage.
