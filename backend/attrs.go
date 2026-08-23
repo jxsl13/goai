@@ -165,6 +165,30 @@ func (a NormAttrs) WithDefaults() NormAttrs {
 	return a
 }
 
+// PreNormAttentionAttrs parameterises the fused pre-LayerNorm MHA residual.
+// The zero value preserves one sequence, one head, and the LayerNorm epsilon.
+type PreNormAttentionAttrs struct {
+	Heads int     // number of attention heads; 0 → 1
+	Batch int     // independent packed sequences along axis 0; 0 → 1
+	Eps   float64 // LayerNorm variance floor; 0 → 1e-5
+}
+
+func (PreNormAttentionAttrs) opAttrs() {}
+
+// WithDefaults fills the documented one-head, one-sequence, and epsilon defaults.
+func (a PreNormAttentionAttrs) WithDefaults() PreNormAttentionAttrs {
+	if a.Heads == 0 {
+		a.Heads = 1
+	}
+	if a.Batch == 0 {
+		a.Batch = 1
+	}
+	if a.Eps == 0 {
+		a.Eps = 1e-5
+	}
+	return a
+}
+
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*
 // fields). Leaving the YaRN fields zero disables YaRN.
@@ -656,16 +680,18 @@ var opAttrsSpec = [numOps]attrsSpec{
 	OpAXPY: attrsOf(AXPYAttrs{}),
 
 	// nn
-	OpCrossEntropy:         attrsOf(CrossEntropyAttrs{}),
-	OpCrossEntropyBackward: attrsOf(CrossEntropyAttrs{}),
-	OpLayerNorm:            attrsOf(NormAttrs{}),
-	OpLayerNormBackward:    attrsOf(NormAttrs{}),
-	OpPreNormFFN:           attrsOf(NormAttrs{}),
-	OpPreNormFFNBackward:   attrsOf(NormAttrs{}),
-	OpRMSNorm:              attrsOf(NormAttrs{}),
-	OpRMSNormBackward:      attrsOf(NormAttrs{}),
-	OpRoPE:                 attrsOf(RoPEAttrs{}),
-	OpRoPEBackward:         attrsOf(RoPEAttrs{}),
+	OpCrossEntropy:             attrsOf(CrossEntropyAttrs{}),
+	OpCrossEntropyBackward:     attrsOf(CrossEntropyAttrs{}),
+	OpLayerNorm:                attrsOf(NormAttrs{}),
+	OpLayerNormBackward:        attrsOf(NormAttrs{}),
+	OpPreNormFFN:               attrsOf(NormAttrs{}),
+	OpPreNormFFNBackward:       attrsOf(NormAttrs{}),
+	OpPreNormAttention:         attrsOf(PreNormAttentionAttrs{}),
+	OpPreNormAttentionBackward: attrsOf(PreNormAttentionAttrs{}),
+	OpRMSNorm:                  attrsOf(NormAttrs{}),
+	OpRMSNormBackward:          attrsOf(NormAttrs{}),
+	OpRoPE:                     attrsOf(RoPEAttrs{}),
+	OpRoPEBackward:             attrsOf(RoPEAttrs{}),
 
 	// cv
 	OpConv2D:         attrsOf(ConvAttrs{}),

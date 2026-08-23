@@ -391,15 +391,7 @@ func (m *ViT) forwardOne(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tens
 // the attention runs through MHA.ForwardBatched (batched projections, per-sequence SDPA). LN, the MLP
 // GEMMs, GELU and the residual adds are all row-wise, so they operate on the packed matrix unchanged.
 func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
-	h, err := b.ln1.Forward(ctx, x)
-	if err != nil {
-		return nil, err
-	}
-	a, err := b.attn.ForwardBatched(ctx, h, batch)
-	if err != nil {
-		return nil, err
-	}
-	sum, err := visExec2(ctx, backend.OpAdd, nil, x, a)
+	sum, err := b.attn.ForwardPreNorm(ctx, x, b.ln1, batch)
 	if err != nil {
 		return nil, err
 	}
@@ -408,15 +400,7 @@ func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch 
 }
 
 func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
-	h, err := b.ln1.Forward(ctx, x)
-	if err != nil {
-		return nil, err
-	}
-	a, err := b.attn.Forward(ctx, h)
-	if err != nil {
-		return nil, err
-	}
-	sum, err := visExec2(ctx, backend.OpAdd, nil, x, a)
+	sum, err := b.attn.ForwardPreNorm(ctx, x, b.ln1, 1)
 	if err != nil {
 		return nil, err
 	}

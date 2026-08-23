@@ -59,3 +59,6 @@ WHEN AttnAttrs.Batch is 0 or 1, the attention backend SHALL preserve the existin
 
 ## PRENORM-FFN-FUSION-SEMANTICS-001
 WHEN OpPreNormFFN or OpPreNormFFNBackward executes, the fused backend operation SHALL preserve exact GELU, biased last-axis LayerNorm with NormAttrs epsilon, 1 residual addition, and gradients for all 7 differentiable inputs.
+
+## PRENORM-ATTENTION-FUSION-SEMANTICS-001
+WHEN the fused forward or backward operation executes, the pre-norm attention fusion SHALL preserve biased layer normalization with 1 runtime epsilon, packed-batch isolation, noncausal scaled dot-product attention, output projection, residual addition, and gradients for exactly 7 inputs.

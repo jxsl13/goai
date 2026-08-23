@@ -509,3 +509,12 @@ WHERE contiguous offset-zero F32 fusion, the Metal pre-norm FFN implementation S
 
 ## METAL-PRENORM-FFN-NUMERIC-001
 WHEN forward or backward executes, the fused Metal route SHALL match the composite output and all 7 input gradients within the established F32 tolerance and mutate exactly 0 input elements.
+
+## METAL-PRENORM-ATTENTION-GRAPH-STRUCTURE-001
+WHERE contiguous offset-zero F32 fusion, the Metal pre-norm attention implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with runtime epsilon, pooled buffers, and Go-owned outputs.
+
+## METAL-PRENORM-ATTENTION-NUMERIC-001
+WHEN supported output and gradient parity is validated against the incumbent composite, the Metal pre-norm attention implementation SHALL match 1 output and exactly 7 gradients within the established Metal tolerance while mutating exactly 0 inputs.
+
+## M2-PRENORM-ATTENTION-PERF-001
+WHERE three fresh-process order-alternated count-7 campaigns at B8 S65 D128 H4, the M2 performance gate SHALL require medians of at least 1.25x boundary and 1.15x full-step, with every aligned full-step pair at least 1.05x.
