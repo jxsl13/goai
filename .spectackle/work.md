@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## P-01M0QE1VX8FKNRRK350A6GNNHG Replace redundant M2 split-K pass-2 merges with lane-owned dimensions
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, objc:metal_bridge.ensure_mha_decode, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu_test.TestMetalF16KVRealModelQualityAndSpeed
 
