@@ -1,0 +1,21 @@
+go test -c -tags=vulkan -o /private/tmp/goai-vit-attn-bwd-control.test ./internal/benchcompare
+go test -c -tags=vulkan -o /private/tmp/goai-vit-attn-bwd-candidate.test ./internal/benchcompare
+
+/private/tmp/goai-vit-attn-bwd-{control,candidate}.test \
+  -test.run '^$' \
+  -test.bench '^BenchmarkViTTrainStep/metal$' \
+  -test.count 7 \
+  -test.benchtime 10x
+
+Campaign order:
+1. control, candidate
+2. candidate, control
+3. control, candidate
+
+GOEXPERIMENT=simd go test -c -tags=vulkan \
+  -o /private/tmp/goai-vit-attn-bwd-candidate-simd.test ./internal/benchcompare
+/private/tmp/goai-vit-attn-bwd-candidate-simd.test \
+  -test.run '^$' \
+  -test.bench '^BenchmarkViT(Forward|TrainStep)$' \
+  -test.count 7 \
+  -test.benchtime 5x

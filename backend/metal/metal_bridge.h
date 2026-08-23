@@ -501,6 +501,13 @@ int mtl_mha_backward_mps(const float* Q, const float* K, const float* V, const f
                          float* dQ, float* dK, float* dV,
                          int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 
+// Execute the window-free backward of B independent, equally sized sequences in one cached
+// MPSGraph. Q/dQ/dO are [batch,seq,dm]; K/V/dK/dV are [batch,seq,kvHeads*dk].
+int mtl_mha_backward_mpsgraph_batched(const float* Q, const float* K, const float* V, const float* dO,
+                                      float* dQ, float* dK, float* dV,
+                                      int batch, int seq, int dm, int heads, int dk,
+                                      int causal, int kvHeads, float scale);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA

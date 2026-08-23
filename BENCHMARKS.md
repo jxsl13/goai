@@ -124,7 +124,7 @@ figure on file to pair).
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
 | Apple-GPU LLM decode (production, forward-only) | TinyLlama-1.1B Q4_K_M, M2 Pro | 178.5 tok/s (f16 KV) | llama.cpp b10450 193.3 (f16 KV, FA auto) | llama.cpp 1.083× (§2) |
 | Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
-| Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 1.4–15× behind; ViT batch dispatch gap closed |
+| Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 1.4–9.4× behind; ViT attention dispatch gaps closed |
 
 Losses are listed with the same care as wins — each has a diagnosed cause and,
 where one exists, a booked lever (see
@@ -675,21 +675,23 @@ companion `testdata/bench_vision_torch.py`; both models carry the identical
 | img/s | GoAI cpu | GoAI Metal | torch-cpu | torch-mps |
 |---|---:|---:|---:|---:|
 | ViT forward | 1,371 | 602 | 2,034 | **4,352** |
-| ViT train | 472 | 104 | 652 | **1,592** |
+| ViT train | 472 | 169 | 652 | **1,592** |
 | CNN forward | 8,701 | 7,375 | 25,744 | 17,832 |
 | CNN train | 2,618 | 1,083 | 9,453 | 6,017 |
 
 torch is ahead everywhere, but the two models fail differently:
 
-- **ViT batch dispatch is closed; backward fusion is now the dominant gap.** T908
+- **ViT attention batch dispatch is closed; encoder/tape fusion is now the dominant gap.** T908
   packed the projection GEMMs, and the 2026-08-23 batch-axis `OpMHA` change removed
   the remaining 3B Slice + B attention + Concat core. Three count-seven M2
   campaigns improve forward 49.6–60.8% and train-step 14.6–20.1%, with exact leaf
-  output and Metal gradient parity. Forward is now 7.2× and training 15.3× behind
-  the pinned torch-mps result, not ≈40×. The Metal backward deliberately retains B
-  native sequence calls inside one autograd op; a batch-axis backward graph plus
-  wider encoder/tape fusion is the next measured boundary. Raw evidence:
-  `internal/benchcompare/leadership/evidence/m2-metal-batched-attention-20260823/`.
+  output and Metal gradient parity. The follow-up cached backward graph replaces B
+  synchronous native backward submissions with one packed graph; three additional
+  count-seven campaigns improve training throughput by 69.1–71.4%, with every
+  aligned pair at least 1.508×. Forward is 7.2× and training 9.4× behind the pinned
+  torch-mps result, not ≈40×. The remaining target is wider encoder/tape graph
+  fusion. Raw evidence: `internal/benchcompare/leadership/evidence/m2-metal-batched-attention-20260823/`
+  and `internal/benchcompare/leadership/evidence/m2-metal-batched-attention-backward-20260823/`.
 - **CNN is a normal fusion gap (2.4× fwd / 5.6× train on the GPU).** The CNN is
   natively batched on both sides, so this is the same fused-conv + fused-backward
   story as the training-step section (§6): torch's fused kernels vs GoAI's separate
@@ -800,7 +802,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
 | Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
-| ViT training vs torch-mps (Apple GPU) | ≈15.3× | forward projections and attention are batch-axis operations; backward still submits B native attention calls and the surrounding tape remains op-by-op | batch-axis Metal attention backward graph, then encoder/tape fusion |
+| ViT training vs torch-mps (Apple GPU) | ≈9.4× | attention forward and backward are batch-axis graphs, but the surrounding encoder tape remains op-by-op and torch uses more heavily fused MPS kernels | encoder/tape graph fusion, then profile the remaining MPS-kernel ceiling |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | Production CPU Q4_K decode vs llama.cpp | llama.cpp is 2.74–3.60× ahead in the closest available diagnostic; **not a matched claim** | identical GGUF/threads/step count, but GoAI uses f32 KV while llama.cpp uses f16 KV and token streams differ; GoAI's active whole-step work remains larger | first add a shared-dtype/token-stream harness, then profile attributed active work and test whole-step scheduling/fusion |
 | Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
