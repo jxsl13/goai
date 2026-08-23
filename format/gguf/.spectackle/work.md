@@ -35,7 +35,7 @@ choice: Extend the shared decodeTensor switch with the exact existing decoder fu
 
 ## R-01M0PMBPMQE15902DPQHMN33FF Re-profile merged M2 Q4_K row assembly
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM
