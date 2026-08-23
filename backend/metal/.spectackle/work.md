@@ -61,12 +61,3 @@ grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
 
 Research R-01M0Q6SJ8CF6R and rejected scratch proposal P-01M0Q6B7A3E1S show that 340 synchronous cgo event crossings are the remaining leverage. Add an immutable recorder-lifetime native snapshot containing fixed 96-byte labels and three uint64 timing fields per valid event. A new additive C ABI shall resolve and return summary fields plus the snapshot pointer in one cgo call; existing summary/event entry points remain unchanged. Go shall own its returned RecorderProfile and strings exactly as before. Benchmark warm repeat and first extraction for 1 and 340 events. Across three order-alternated count-seven M2 campaigns, warm events340 must be at least 1.50x with at least 1000 fewer allocations and 40000 fewer Go allocation bytes per operation; warm events1 must be at least 1.10x. First-extraction events340 must be at least 1.10x and events1 at least 0.97x. Reject and fully revert if any gate or exact parity fails.
-
-## T-01M0Q6VRADE45AJWQRNNN3JZNC Implement and gate bulk Metal profile snapshots
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0Q6T9RZEV9RWA9ZS5V8KGYC
-targets: backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
-
-Extend the physical-Metal benchmark with first-extraction events1/events340 cells and compile the control binary before implementation. Add a recorder-owned immutable C event snapshot and one additive bulk snapshot function; switch Recorder.Profile to one cgo call and copy into Go-owned values. Verify exact existing profile tests, repeat equality, pre-Finish/default/freed error behavior, overflow and MPS omissions. Run three order-alternated count-seven M2 campaigns for frozen warm and first-extraction gates. Run full tests, direct perfscan, and revert all implementation changes if any gate fails.
