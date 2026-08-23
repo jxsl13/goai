@@ -406,3 +406,6 @@ WHEN each frozen M2 campaign compares the first events340 profile extraction, th
 WHEN a multi-event native profile snapshot materializes labels, the Metal recorder profile bridge SHALL return one recorder-owned uintptr_t token per event and reuse up to 16 full 96-byte labels by identity until Recorder.Free.
 
 Rationale: Keep the token sidecar and native label-copy reuse durable without changing the one-event ABI.
+
+## RECORDER-PROFILE-INTO-API-001
+WHEN a completed profiling recorder is extracted into a nonnil RecorderProfile destination, the Recorder.ProfileInto API SHALL reuse destination event capacity when sufficient, overwrite every scalar field, truncate Events to the native count, and return exact Profile-equivalent values.
