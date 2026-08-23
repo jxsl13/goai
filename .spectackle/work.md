@@ -4011,7 +4011,7 @@ Research R-01M0Q2EGE0E60 established that TinyLlama Metal decode currently recor
 
 ## T-01M0Q2KA0DEF5SHJYV7KJ96PAN Implement and gate Metal raw gate-up fusion
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q2CZXBEXKV41BCXYX7G5FQ
 targets: go:llamagpu.newQuantMetalWithMixedQKV, go:llamagpu.Decoder.recordFFN, go:llamagpu.mRec.BinaryN, go:metal.Recorder.BinaryN, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, llamagpu/llamagpu.go, backend/metal/metal.go
