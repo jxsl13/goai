@@ -1,7 +1,9 @@
 package benchcompare
 
 import (
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"runtime"
@@ -36,6 +38,13 @@ func TestProdCPUQuantDecodeGGUF(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer f.Close()
+	modelHash := sha256.New()
+	if _, err := io.Copy(modelHash, f); err != nil {
+		t.Fatalf("hash GGUF: %v", err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatalf("rewind GGUF after hashing: %v", err)
+	}
 	raw, err := gguf.ReadRaw(f)
 	if err != nil {
 		t.Fatalf("gguf.ReadRaw: %v", err)
@@ -106,9 +115,10 @@ func TestProdCPUQuantDecodeGGUF(t *testing.T) {
 	sort.Slice(byteSamples, func(i, j int) bool { return byteSamples[i] < byteSamples[j] })
 	sort.Slice(allocSamples, func(i, j int) bool { return allocSamples[i] < allocSamples[j] })
 	median := samples[len(samples)/2]
-	fmt.Printf("GOAI_CPU_PROD threads=%d steps=%d reps=%d median=%s throughput=%.3f tok/s digest=%016x alloc_bytes_median=%d allocs_median=%d samples=%v\n",
+	fmt.Printf("GOAI_CPU_PROD threads=%d steps=%d reps=%d median=%s throughput=%.3f tok/s digest=%016x alloc_bytes_median=%d allocs_median=%d samples=%v backend=%s model_sha256=%x go=%s\n",
 		runtime.GOMAXPROCS(0), steps, reps, median, float64(steps)/median.Seconds(), wantDigest,
-		byteSamples[len(byteSamples)/2], allocSamples[len(allocSamples)/2], samples)
+		byteSamples[len(byteSamples)/2], allocSamples[len(allocSamples)/2], samples,
+		backend.Default().Name(), modelHash.Sum(nil), runtime.Version())
 	runtime.KeepAlive(heldCaches)
 }
 
