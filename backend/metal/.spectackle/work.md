@@ -63,7 +63,7 @@ The production Metal profile attributes 17.00 percent of explicit TinyLlama deco
 
 ## P-01M0Q5CKW6FH8VAGPFFC95458H Force full unrolling of the M2 Q6_K dequant dot loop
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q59EV4EKSTBJACTNCBQK42
 grilled: 2026-08-23 open=0
