@@ -365,3 +365,6 @@ WHEN three independent count-seven same-binary M2 campaigns cover K4096N2048, K5
 
 ## METAL-Q6K-LONGK-FALLBACK-PERF-001
 WHEN three independent count-seven same-binary M2 campaigns cover K2048N256 with both toggle states, the long-K Q6_K selector fallback SHALL keep the ratio between 0.97 and 1.03 and issue exactly zero unrolled pipeline dispatches.
+
+## METAL-Q6K-LONGK-COLD-PERF-001
+WHEN seven fresh control and candidate processes measure first K5632N2048 use, the long-K Q6_K cold-start gate SHALL limit candidate median first-use latency to at most 1.10 times control while preserving second-use performance.
