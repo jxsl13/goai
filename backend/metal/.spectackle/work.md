@@ -52,11 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0QCN4C8ECWANK89M5CWF4P0 Add caller-reused Metal Recorder.ProfileInto extraction
-kind: proposal
-state: active
-created: 2026-08-23
-targets: go:metal.Recorder.Profile, go:metal.fillRecorderProfileEvents, c:mtl_recorder_profile_snapshot, backend/metal/metal_bridge.m, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
-
-Consume R-01M0QCMRDYEBC. Add Recorder.ProfileInto(dst *RecorderProfile) error as an additive API. A valid call reuses dst.Events capacity, overwrites all scalar fields, truncates to the native count, and preserves Go-owned labels after Recorder.Free. A nil destination is an explicit error. On native extraction failure, dst remains unchanged. Reuse exact existing destination label strings where the native label content matches, allowing warmed repeated-label calls to avoid label allocation without recorder-owned Go state. Add one native by-value snapshot-view entry point carrying events, label tokens, counts, omissions, calibration, duration, and status; retain existing native entry points for ABI compatibility. Profile remains the convenience ownership API and must retain its one-event and 340-event performance. Promotion gates: three independent order-alternated count-seven Apple M2 campaigns; warmed capacity-sufficient ProfileInto events340 must use at least 10,000 fewer B/op, at least 2 fewer allocs/op, and run at least 1.25x faster than Profile in every campaign; mixed-label warmed reuse must allocate zero new label strings; capacity-insufficient first call may allocate then must stabilize; Profile events1 and events340 must retain at least 0.97x baseline throughput; default recorder allocations remain unchanged; parity, error atomicity, repeated destination reuse, and post-Free ownership must pass.
