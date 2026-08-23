@@ -62,7 +62,7 @@ Evaluate the one remaining production Q4_K launch geometry: 32 physical threads 
 
 ## P-01M0QMTYCMEWSBXMDBVWK64YSE Dispatch M2 Q4_K with one SIMD group per threadgroup
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 parent: R-01M0QMTHHQFQMBFB6YNF00QF7M
 grilled: 2026-08-23 open=1
