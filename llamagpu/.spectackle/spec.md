@@ -25,4 +25,4 @@ WHEN trained TinyLlama decode is profiled with both fusions enabled, the Metal d
 WHEN a trained 22-layer TinyLlama single-token Metal quant command buffer is profiled, the raw gate-up fusion selector SHALL record exactly 109 quant-matmul events and 22 halves-SwiGLU events while the unfused control records exactly 131 quant-matmul events.
 
 ## METAL-QUANT-GATE-UP-PERF-001
-WHEN 7 alternating M2 campaigns gate raw Metal gate-up fusion, the promotion selector SHALL retain the candidate only when aggregate tg64 median speedup reaches 1.03 times, at least 5 campaigns win, and pp64 plus pp512 ratios remain at least 0.99 times.
+WHEN 7 alternating M2 campaigns gate raw Metal gate-up fusion, the promotion selector SHALL retain only when aggregate tg64 median speedup reaches 1.03 times, at least 5 campaigns win, and pp64 plus pp512 ratios remain at least 0.99 times.
