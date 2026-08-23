@@ -434,3 +434,6 @@ Rationale: Separate source ABI compatibility into its own rule.
 
 ## RECORDER-PROFILE-INTO-OWNERSHIP-001
 WHEN a successful ProfileInto result outlives Recorder.Free and garbage collection churn, the Recorder.ProfileInto SHALL preserve 100 percent of event-label bytes in Go-owned memory.
+
+## RECORDER-PROFILE-INTO-ABI-001
+WHEN the by-value native snapshot view is added, the Metal bridge SHALL retain all 4 existing profile entry points with source-compatible declarations.
