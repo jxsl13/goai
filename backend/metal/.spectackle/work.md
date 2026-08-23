@@ -73,7 +73,7 @@ Replace one C.GoString allocation per event with recorder-scoped Go-owned label 
 
 ## T-01M0Q9942YFYAR4JH7M763B9F5 Implement and gate recorder-owned profile labels
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q9837XE0Y8YTH47J1HR5K9
 refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ, P-01M0Q6T9RZEV9RWA9ZS5V8KGYC
