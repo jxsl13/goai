@@ -398,3 +398,6 @@ WHEN each frozen M2 campaign measures warm events1, first events1, and disabled 
 
 ## RECORDER-PROFILE-LABEL-COLD-PERF-001
 WHEN each frozen M2 campaign compares the first events340 profile extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.10 times control throughput while preserving exact profile fields.
+
+## RECORDER-PROFILE-LABEL-TOKEN-SIDECAR-001
+WHEN a multi-event native profile snapshot materializes labels, the Metal recorder profile bridge SHALL store one contiguous recorder-owned uintptr_t token per event beside the immutable snapshot, reuse up to 16 materialized 96-byte labels by identity, and preserve every event label byte until Recorder.Free.
