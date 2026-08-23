@@ -12,3 +12,12 @@ import "github.com/jxsl13/goai/tensor"
 type SwiGLUInPlaceFuser interface {
 	FuseSwiGLUInPlace(gate, up *tensor.Tensor) bool
 }
+
+// SwiGLUF32ChunkFuser is the raw-slice form of SwiGLUInPlaceFuser for fused
+// producers. Implementations overwrite gate with SiLU(gate)*up, leave up
+// unchanged, and support every pair of equal-length slices. Calls may run
+// concurrently on disjoint chunks. Implementations must not retain either
+// slice after the call returns.
+type SwiGLUF32ChunkFuser interface {
+	FuseSwiGLUF32Chunk(gate, up []float32)
+}

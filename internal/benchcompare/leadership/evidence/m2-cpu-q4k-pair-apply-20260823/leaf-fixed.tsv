@@ -1,0 +1,17 @@
+pair	iterations	variant	ns_op	bytes_op	allocs_op
+1	200	composed	574895	51115	26
+1	200	producer_apply	508499	26550	23
+2	200	composed	572365	51154	26
+2	200	producer_apply	526465	26501	23
+3	200	composed	576572	51171	26
+3	200	producer_apply	512544	26504	23
+4	200	composed	602766	51193	26
+4	200	producer_apply	517369	26464	23
+5	200	composed	631177	51145	26
+5	200	producer_apply	508896	26449	23
+6	200	composed	665354	51168	26
+6	200	producer_apply	528552	26423	23
+7	200	composed	605837	51169	26
+7	200	producer_apply	515215	26468	23
+8	200	composed	569144	51173	26
+8	200	producer_apply	510492	26497	23

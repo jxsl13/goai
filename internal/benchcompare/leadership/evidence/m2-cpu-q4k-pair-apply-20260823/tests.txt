@@ -1,0 +1,18 @@
+PASS focused compiled-binary exactness:
+- QMatMulPairApply matches composed output and covers aligned disjoint chunks.
+- scratch pool has zero steady-state allocations and rejects oversize retention.
+- ARM64 dual Q4_K row dot bit-matches independent assembly rows.
+- raw chunk SwiGLU bit-matches whole-tensor fusion through 65,537 elements.
+- eager Q4_K QuantSwiGLU bit-matches recorded fallback.
+
+PASS race:
+ok github.com/jxsl13/goai/backend/cpu 112.508s
+ok github.com/jxsl13/goai/format/gguf 3.498s
+ok github.com/jxsl13/goai/nn 506.541s
+
+PASS make preflight under Go 1.26.6.
+
+KNOWN PRE-EXISTING non-short failure:
+TestDiffusionLMGrammarE2E produces "a sra s ee s a s" and fails the 16-character grammar window on both candidate and clean origin/main binaries. Both report masked-diffusion eval CE 2.924 to 0.085.
+
+PASS external perfscan v1.81.0: zero findings on changed files after documented exact-fallback exceptions. Repository-wide external scan still reports pre-existing unsuppressed debt.

@@ -344,3 +344,12 @@ Rationale: Unequal grouped projections retain every matrix output shape.
 WHEN 1 grouped fan-out combines Q4_K and Q6_K matrices with unequal row counts, the QMatMulTriple SHALL partition every matrix proportionally across every scheduler chunk, creating 0 quant-type-only tail chunks.
 
 Rationale: Contiguous concatenation reduced allocations but lost 6 of 8 initial production pairs; proportional distribution produced the retained gain.
+
+## GGUF-Q4K-PAIRED-APPLY-001
+WHEN 2 Q4_K matrices receive 1 contiguous F32 M1 activation and an 8-lane consumer, the QMatMulPairApply SHALL invoke qmatmulParallelChunks once, return 1 F32 output, call the consumer per aligned chunk, and bit-match QMatMulPair plus that consumer.
+
+## GGUF-Q4K-PAIRED-SCRATCH-001
+The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the final chunk, retain capacities no larger than 65,536 F32 values, and expose 0 scratch aliases to callers.
+
+## GGUF-Q4K-PAIR-DUAL-DOT-001
+WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through dotQ4KPairBlockNeon while preserving the independent accumulation and reduction orders bit-for-bit.

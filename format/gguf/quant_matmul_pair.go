@@ -1,10 +1,70 @@
 package gguf
 
 import (
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/jxsl13/goai/tensor"
 )
+
+const qmatmulPairScratchMaxF32 = 65_536
+
+type qmatmulPairScratch struct {
+	values []float32
+}
+
+var qmatmulPairScratchPool = sync.Pool{
+	New: func() any { return new(qmatmulPairScratch) },
+}
+
+func borrowQMatMulPairScratch(n int) ([]float32, *qmatmulPairScratch) {
+	if n > qmatmulPairScratchMaxF32 {
+		return make([]float32, n), nil
+	}
+	holder := qmatmulPairScratchPool.Get().(*qmatmulPairScratch)
+	if cap(holder.values) < n {
+		holder.values = make([]float32, n)
+	}
+	return holder.values[:n], holder
+}
+
+func releaseQMatMulPairScratch(values []float32, holder *qmatmulPairScratch) {
+	if holder == nil || cap(values) > qmatmulPairScratchMaxF32 {
+		return
+	}
+	holder.values = values[:0]
+	qmatmulPairScratchPool.Put(holder)
+}
+
+func validateQMatMulPair(x *tensor.Tensor, weight0, weight1 []byte, qt QuantType, n, k int) (int, error) {
+	if qt != Q4_K {
+		return 0, fmt.Errorf("gguf: QMatMulPair requires Q4_K, got %d", qt)
+	}
+	if n <= 0 || k <= 0 {
+		return 0, fmt.Errorf("gguf: QMatMulPair dimensions must be positive, got n=%d k=%d", n, k)
+	}
+	maxInt := int(^uint(0) >> 1)
+	if k > maxInt/2 {
+		return 0, fmt.Errorf("gguf: QMatMulPair input dimension overflows paired work: k=%d", k)
+	}
+	if x.Ndim() != 2 || x.Shape()[0] != 1 || x.Shape()[1] != k ||
+		x.Dtype() != tensor.F32 || !x.IsContiguous() || x.Offset() != 0 {
+		return 0, fmt.Errorf("gguf: QMatMulPair x must be contiguous offset-zero F32 [1,%d], got %s %v", k, x.Dtype(), x.Shape())
+	}
+	rowBytes, err := byteSize(uint32(qt), k)
+	if err != nil {
+		return 0, err
+	}
+	if n > maxInt/rowBytes {
+		return 0, fmt.Errorf("gguf: QMatMulPair dimensions overflow weight size: n=%d rowBytes=%d", n, rowBytes)
+	}
+	wantBytes := n * rowBytes
+	if len(weight0) != wantBytes || len(weight1) != wantBytes {
+		return 0, fmt.Errorf("gguf: QMatMulPair weights must each be %d bytes, got %d and %d", wantBytes, len(weight0), len(weight1))
+	}
+	return rowBytes, nil
+}
 
 // QMatMulPair computes two same-shape Q4_K matrix-vector products under one
 // output-row fan-out. It is the eager CPU projection primitive for paired
@@ -12,30 +72,9 @@ import (
 // so both returned tensors are bit-identical to independent QMatMul calls.
 // Other quant types, activation dtypes, and batch sizes return an error.
 func QMatMulPair(x *tensor.Tensor, weight0, weight1 []byte, qt QuantType, n, k int) (*tensor.Tensor, *tensor.Tensor, error) {
-	if qt != Q4_K {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair requires Q4_K, got %d", qt)
-	}
-	if n <= 0 || k <= 0 {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair dimensions must be positive, got n=%d k=%d", n, k)
-	}
-	maxInt := int(^uint(0) >> 1)
-	if k > maxInt/2 {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair input dimension overflows paired work: k=%d", k)
-	}
-	if x.Ndim() != 2 || x.Shape()[0] != 1 || x.Shape()[1] != k ||
-		x.Dtype() != tensor.F32 || !x.IsContiguous() || x.Offset() != 0 {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair x must be contiguous offset-zero F32 [1,%d], got %s %v", k, x.Dtype(), x.Shape())
-	}
-	rowBytes, err := byteSize(uint32(qt), k)
+	rowBytes, err := validateQMatMulPair(x, weight0, weight1, qt, n, k)
 	if err != nil {
 		return nil, nil, err
-	}
-	if n > maxInt/rowBytes {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair dimensions overflow weight size: n=%d rowBytes=%d", n, rowBytes)
-	}
-	wantBytes := n * rowBytes
-	if len(weight0) != wantBytes || len(weight1) != wantBytes {
-		return nil, nil, fmt.Errorf("gguf: QMatMulPair weights must each be %d bytes, got %d and %d", wantBytes, len(weight0), len(weight1))
 	}
 
 	out0 := tensor.New(tensor.F32, tensor.Shape{1, n})
@@ -51,4 +90,34 @@ func QMatMulPair(x *tensor.Tensor, weight0, weight1 []byte, qt QuantType, n, k i
 		}
 	})
 	return out0, out1, nil
+}
+
+// QMatMulPairApply computes paired Q4_K matrix-vector products and immediately
+// applies consume to aligned, disjoint output chunks. Only the consumed gate
+// tensor is retained; the up projection uses bounded pooled raw scratch.
+// consume may overwrite gate but must not retain either callback slice.
+func QMatMulPairApply(x *tensor.Tensor, weight0, weight1 []byte, qt QuantType, n, k int, consume func(gate, up []float32)) (*tensor.Tensor, error) {
+	if consume == nil {
+		return nil, errors.New("gguf: QMatMulPairApply requires a consumer")
+	}
+	rowBytes, err := validateQMatMulPair(x, weight0, weight1, qt, n, k)
+	if err != nil {
+		return nil, err
+	}
+
+	out := tensor.New(tensor.F32, tensor.Shape{1, n})
+	gate := out.Storage().F32()
+	up, scratch := borrowQMatMulPairScratch(n)
+	defer releaseQMatMulPairScratch(up, scratch)
+	row := x.Storage().F32()[:k]
+	qmatmulParallelChunksAligned(n, 2*k, 8, func(lo, hi int) {
+		for ni := lo; ni < hi; ni++ {
+			off := ni * rowBytes
+			dot0, dot1 := dotQ4KPairRowFn(row, weight0[off:off+rowBytes], weight1[off:off+rowBytes], k)
+			gate[ni] = float32(dot0)
+			up[ni] = float32(dot1)
+		}
+		consume(gate[lo:hi], up[lo:hi])
+	})
+	return out, nil
 }

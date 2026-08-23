@@ -59,6 +59,38 @@ func TestSwiGLUInPlaceFusionMatchesComposedCPU(t *testing.T) {
 	}
 }
 
+func TestSwiGLUF32ChunksMatchWholeTensor(t *testing.T) {
+	be, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("CPU backend is not registered")
+	}
+	whole := be.(backend.SwiGLUInPlaceFuser)
+	chunked := be.(backend.SwiGLUF32ChunkFuser)
+	for _, n := range []int{1, 3, 4, 7, 8, 31, 5632, 5633, 65_537} {
+		gateData := make([]float32, n)
+		upData := make([]float32, n)
+		for i := range n {
+			gateData[i] = float32(math.Sin(float64(i)*0.17)*9 - 2)
+			upData[i] = float32(math.Cos(float64(i)*0.11)*3 + 0.25)
+		}
+		want := tensor.FromFloat32(tensor.Shape{1, n}, gateData)
+		up := tensor.FromFloat32(tensor.Shape{1, n}, upData)
+		if !whole.FuseSwiGLUInPlace(want, up) {
+			t.Fatal("whole-tensor fuser rejected input")
+		}
+		got := append([]float32(nil), gateData...)
+		for lo := 0; lo < n; lo += 704 {
+			hi := min(lo+704, n)
+			chunked.FuseSwiGLUF32Chunk(got[lo:hi], upData[lo:hi])
+		}
+		for i := range n {
+			if math.Float32bits(got[i]) != math.Float32bits(want.Storage().F32()[i]) {
+				t.Fatalf("n=%d element %d = %08x, want %08x", n, i, math.Float32bits(got[i]), math.Float32bits(want.Storage().F32()[i]))
+			}
+		}
+	}
+}
+
 func BenchmarkSwiGLUInPlaceFusion(b *testing.B) {
 	const hidden = 5632
 	be, ok := backend.Get(backend.CPU)

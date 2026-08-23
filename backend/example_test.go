@@ -82,6 +82,20 @@ func ExampleSwiGLUInPlaceFuser() {
 	// Output: true [0 0]
 }
 
+// SwiGLUF32ChunkFuser lets a fused producer apply SwiGLU before its temporary
+// sibling output leaves the current chunk. The slices are disjoint from other
+// concurrent chunks and remain valid only for the duration of the call.
+func ExampleSwiGLUF32ChunkFuser() {
+	gate := []float32{0, 0}
+	up := []float32{2, 3}
+	fuser, available := backend.Default().(backend.SwiGLUF32ChunkFuser)
+	if available {
+		fuser.FuseSwiGLUF32Chunk(gate, up)
+	}
+	fmt.Println(available, gate)
+	// Output: true [0 0]
+}
+
 // --- Level 3: embedded — a real matmul on the auto-selected backend ----------
 
 // End to end with zero configuration: build tensors and run a matmul. It executes
