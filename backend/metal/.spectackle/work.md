@@ -69,12 +69,3 @@ grilled: 2026-08-23 open=0
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
 Diagnostic phase: compile the existing scalar and cooperative Q4_K MSL into one macOS Metal-IR library with a pinned deployment target, then let ensure_qmatmul_q4k load that file only when GOAI_METAL_Q4K_METALLIB names it. The incumbent source-string path remains the default and fallback. Compare fresh processes from one binary, alternating control and artifact arms. Frozen gates: existing Q4_K cross-reference and cooperative parity tests remain unchanged; metallib functions expose the same names and pipeline width; three independent campaigns each contain seven fresh processes per arm; median first-call control divided by candidate is at least 2.00x in every campaign; candidate second-call median retains at least 0.97x incumbent warm throughput; missing, malformed, and incompatible artifact paths fall back to source compilation and return correct output. No artifact, environment seam, or source duplication may enter production unless the diagnostic passes. Production requires one canonical MSL source, deterministic generation, recorded compiler and SDK versions, a source hash, and portable fallback.
-
-## T-01M0QQGJ5JEE3RWADEMQ3RJGJ5 Benchmark file-loaded Q4_K metallib against runtime MSL compilation
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0QQG05VFSN83HQ7JTG43PVY
-targets: objc:metal_bridge.ensure_qmatmul_q4k
-
-Create a diagnostic exact Q4_K Metal source artifact, compile it with the local xcrun Metal toolchain and a pinned macOS deployment target, and add an environment-selected newLibraryWithURL attempt before the unchanged source-string fallback. Validate function availability, scalar and cooperative correctness, missing and malformed file fallback, and three fresh-process count-seven cold and warm campaigns. Remove every diagnostic source and artifact if the two-times cold gate or warm nonregression gate fails.
