@@ -52,11 +52,11 @@ func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 }
 
 func dotQ4KPairRowASM(row []float32, raw0, raw1 []byte, k int) (float64, float64) {
-	if k <= 0 {
+	if k == 0 {
 		return 0, 0
 	}
 	return dotQ4KPairRowNeon(
-		&row[0], &raw0[0], &raw1[0], &f16Table[0], &qKByteToF32Indexes[0], (k+qkK-1)/qkK,
+		&row[0], &raw0[0], &raw1[0], &f16Table[0], &qKByteToF32Indexes[0], k/qkK,
 	)
 }
 
