@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0Q6SJ8CF6R9984KYGJ8AQ8M Attribute bulk Metal profile extraction leverage
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.Profile, c:mtl_recorder_profile_event, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h
+
+The rejected scratch-only experiment proved that 339 label allocations account for 32544 B/op but only 1.083x latency at 340 events. The remaining loop performs 340 synchronous cgo crossings plus Objective-C array and timestamp conversions. Study a single snapshot ABI that resolves once, owns a recorder-lifetime native event array, and lets Go copy all labels and numeric fields after one cgo call. Measure warm repeat extraction and first extraction separately so native snapshot construction is not hidden.
