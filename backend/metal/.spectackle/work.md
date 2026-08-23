@@ -64,7 +64,7 @@ Research R-01M0Q6SJ8CF6R and rejected scratch proposal P-01M0Q6B7A3E1S show that
 
 ## T-01M0Q6VRADE45AJWQRNNN3JZNC Implement and gate bulk Metal profile snapshots
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q6T9RZEV9RWA9ZS5V8KGYC
 targets: backend/metal/metal.go, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
