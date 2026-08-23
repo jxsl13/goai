@@ -4014,3 +4014,11 @@ created: 2026-08-23
 targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.m, internal/benchcompare/vision_train_test.go
 
 Investigate the M2 ViT B=8 training bottleneck after batch-axis forward landed. Production go:metal.mhaBackwardF32 currently loops over Batch and invokes c:mtl_mha_backward_mps once per sequence; each invocation allocates host-backed Metal buffers, creates a command buffer, commits, waits, and copies gradients. This is distinct from the rejected residual ViT boundary rewrite, which reduced unrelated patchify/class-row operations without repeatable gains. Freeze exact batch isolation and batch-one compatibility. Measure a disposable one-call prototype against merged main with at least three count-seven alternating end-to-end ViT campaigns; retain only if every aligned train pair is at least 1.05x and campaign train medians are at least 1.10x, with gradient parity. Treat native GPU timestamps only as supporting evidence and prefer wall-clock training throughput.
+
+## P-01M0R2CV3WFZCAMFD24BJSQZDD Execute batched Metal attention backward as one cached MPSGraph
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go
+
+Consume R-01M0R29CN1FD7. Add a shape-keyed Metal MPSGraph backward entry point for Batch greater than 1 and Window equal to 0. Build the same batch, kv-head, repetition, sequence, and head-dimension layout as the proven forward graph; add a dO placeholder, form sum(O multiplied by dO), and use MPSGraph automatic differentiation to produce dQ, dK, and dV, including broadcast reduction for GQA. Feed all packed sequences once, encode one graph, wait once, and copy each packed gradient once. Preserve the existing batch-one MPSMatrix route and the per-sequence sliding-window kernel. Retain only after gradient parity and three alternating count-seven M2 ViT B=8 campaigns satisfy at least 1.10x train median in every campaign and at least 1.05x in every aligned pair.
