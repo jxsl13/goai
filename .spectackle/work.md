@@ -4007,12 +4007,3 @@ grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
 
 Profile the exact production TinyLlama Q4_K_M decode boundary on Apple M2 Pro after PR 1176. Attribute CPU, synchronization, and allocation cost against wall clock; select only a new bottom-up candidate with bit-exact digest preservation, a permanent production-shape benchmark, and statistically validated leverage. Do not retry persistent worker pools, caller-participation fan-out, unchanged Q8_K activation leaves, or rejected direct residual epilogues.
-
-## R-01M0PEHGT7FY285ZWC1JQ05SWB Attribute merged-main M2 CPU quant decode after Q4_K header bulk decode
-kind: research
-state: active
-created: 2026-08-23
-parent: P-01M0PEGTNPFYBR11H1K7RDM36Q
-targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
-
-Compile the exact merged-main production harness with pinned Go 1.26.6. Capture CPU and allocation profiles at the measured host thread optimum, retain an exact digest, and rank compute, synchronization, dispatch, and allocation costs. Compare against archived rejection evidence before recommending one bounded candidate and benchmark gate.
