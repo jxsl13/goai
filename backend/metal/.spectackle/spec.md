@@ -23,6 +23,9 @@ schema: v1
 - T-01M0Q9H5G2FP38JV8VMPSFP297 Implement and gate extraction-scoped profile label deduplication: Implemented a contiguous native label-token sidecar, 16-entry native label-copy reuse, extraction-scoped Go ownership with content fallback, and an explicit count-one fast path. Three final independent-process count-seven AB/BA-alternated M2 campaigns measured warm repeated-label speedups of 2.23x, 2.06x, and 2.53x; mixed-ten-label speedups of 1.86x, 1.67x, and 1.75x; cold repeated-label speedups [body truncated at tombstone retention cap]
 - R-01M0Q913MDFQSTD3ME8MTRCGRZ Recorder profile label ownership and allocation scaling: Consumed by P-01M0Q9EZJ8ENC. The initial recorder-scoped cache was rejected because it enlarged the production Recorder; extraction-scoped deduplication plus a native identity-token sidecar preserved default and one-event paths while eliminating per-event Go string ownership.
 - P-01M0Q9EZJ8ENCSJ4YR1J41MDGD Deduplicate labels within each Recorder.Profile extraction: Promoted after T-01M0Q9H5G2FP3 passed every frozen M2 gate. Multi-event labels now use native identity tokens plus exact-content fallback and one Go-owned clone per distinct label; native snapshot materialization reuses up to 16 labels. The one-event ABI remains unchanged. Final campaign and allocation results are recorded on the archived task and perfscan issue 855.
+- T-01M0QCNME5FE0VKFK7MPF9F0G6 Implement and gate caller-owned Metal ProfileInto: Implemented additive Recorder.ProfileInto with caller-owned event-capacity and exact Go-string reuse plus one by-value native snapshot view. Existing Profile and 4 native profile entry points remain unchanged. Three order-alternated count-7 M2 campaigns measured events340 Profile/Into medians 2713/1697 ns, 2735/1691 ns, and 2786/1827 ns: 1.60x, 1.62x, and 1.52x with 14400 B and 6 allocs removed to [body truncated at tombstone retention cap]
+- R-01M0QCMRDYEBCAT35BDCB8678D Eliminate reusable Metal recorder profile extraction allocations: Consumed by P-01M0QCN4C8ECW and T-01M0QCNME5FE0. The caller-owned destination plus by-value cgo view removed the dominant result-slice and pointer-out-parameter costs; durable API, atomicity, ownership, ABI, label reuse, performance, and non-regression contracts are in backend/metal spec rules. perfscan issue 856 records the reusable analysis.
+- P-01M0QCN4C8ECWANK89M5CWF4P0 Add caller-reused Metal Recorder.ProfileInto extraction: Delivered by T-01M0QCNME5FE0. ProfileInto reuses caller-owned events and matching Go-owned labels, leaves destinations unchanged on errors, and preserves results after Recorder.Free. The by-value native snapshot view is additive and old APIs remain. All frozen M2 gates passed with 1.52x-1.62x events340 speedup and zero steady-state allocations; validation and perfscan reporting completed.
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -406,3 +409,34 @@ WHEN each frozen M2 campaign compares the first events340 profile extraction, th
 WHEN a multi-event native profile snapshot materializes labels, the Metal recorder profile bridge SHALL return one recorder-owned uintptr_t token per event and reuse up to 16 full 96-byte labels by identity until Recorder.Free.
 
 Rationale: Keep the token sidecar and native label-copy reuse durable without changing the one-event ABI.
+
+## RECORDER-PROFILE-INTO-API-001
+WHEN ProfileInto succeeds for a nonnil destination, the Recorder.ProfileInto SHALL set len(dst.Events) to native eventCount, reuse cap(dst.Events) when sufficient, and overwrite all 6 RecorderProfile scalar fields with Profile-equivalent values.
+
+Rationale: Correct RecorderProfile scalar-field count.
+
+## RECORDER-PROFILE-INTO-ATOMIC-OWNERSHIP-001
+WHEN ProfileInto receives nil or native extraction fails, the Recorder.ProfileInto SHALL return a nonnil error while keeping dst.Events, dst.OmittedMPS, and all other destination fields unchanged.
+
+Rationale: Name observable destination fields explicitly.
+
+## RECORDER-PROFILE-INTO-PERF-001
+WHEN 3 order-alternated count-7 M2 campaigns compare warm events340 ProfileInto with Profile, the promotion gate SHALL require 1.25 times throughput in every campaign and remove at least 10000 B/op and 2 allocs/op.
+
+Rationale: Preserve the frozen numeric gate in a concise verifiable rule.
+
+## RECORDER-PROFILE-INTO-LABEL-REUSE-001
+WHEN capacity-sufficient ProfileInto repeats an unchanged mixed-label snapshot, the label owner SHALL reuse exact matching Go string data pointers and allocate 0 new label strings after the first extraction.
+
+Rationale: State pointer identity and zero-allocation evidence.
+
+## RECORDER-PROFILE-INTO-NONREGRESSION-001
+WHEN each frozen M2 campaign measures Profile events1 and events340 after adding ProfileInto, the extraction change SHALL retain 0.97 times baseline Profile throughput in every cell and preserve disabled-recorder allocations.
+
+Rationale: Separate source ABI compatibility into its own rule.
+
+## RECORDER-PROFILE-INTO-OWNERSHIP-001
+WHEN a successful ProfileInto result outlives Recorder.Free and garbage collection churn, the Recorder.ProfileInto SHALL preserve 100 percent of event-label bytes in Go-owned memory.
+
+## RECORDER-PROFILE-INTO-ABI-001
+WHEN the by-value native snapshot view is added, the Metal bridge SHALL retain all 4 existing profile entry points with source-compatible declarations.

@@ -3991,6 +3991,17 @@ int mtl_recorder_profile_label_tokens(void* rec, uintptr_t** tokens) {
     return *tokens == NULL ? -3 : 0;
 }
 
+mtl_recorder_profile_snapshot_view mtl_recorder_profile_view(void* rec) {
+    mtl_recorder_profile_snapshot_view view = {0};
+    view.status = mtl_recorder_profile_snapshot(
+        rec, &view.events, &view.eventCount, &view.omittedMPS, &view.omittedOverflow,
+        &view.omittedUnsupported, &view.timestampFrequency, &view.commandDurationNS);
+    if (view.status == 0 && view.eventCount > 1) {
+        view.status = mtl_recorder_profile_label_tokens(rec, &view.labelTokens);
+    }
+    return view;
+}
+
 // mtl_recorder_unary encodes O = f(op, X) over n f32 elements of the device buffers
 // xh, oh (may alias) into the recorder's command buffer. No commit.
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op) {

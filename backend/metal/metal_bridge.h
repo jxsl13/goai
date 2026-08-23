@@ -300,6 +300,20 @@ int mtl_recorder_profile_snapshot(void* rec,
 // mtl_recorder_profile_label_tokens returns recorder-owned NSString identity tokens for the
 // already-built multi-event snapshot. Tokens remain valid until mtl_recorder_free.
 int mtl_recorder_profile_label_tokens(void* rec, uintptr_t** tokens);
+// mtl_recorder_profile_view returns the complete immutable snapshot boundary by value so callers
+// that reuse output storage need only one native transition and no pointer out-parameters.
+typedef struct {
+    mtl_recorder_profile_event_snapshot* events;
+    uintptr_t* labelTokens;
+    int eventCount;
+    int omittedMPS;
+    int omittedOverflow;
+    int omittedUnsupported;
+    unsigned long long timestampFrequency;
+    unsigned long long commandDurationNS;
+    int status;
+} mtl_recorder_profile_snapshot_view;
+mtl_recorder_profile_snapshot_view mtl_recorder_profile_view(void* rec);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
