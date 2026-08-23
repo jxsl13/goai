@@ -4016,13 +4016,3 @@ refs: P-01M0PGHM4TE7YAXSJT0Q56SSZ2, R-01M0PEHGT7FY285ZWC1JQ05SWB
 targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
 
 Compile the merged-main GGUF and exact TinyLlama CPU production harnesses once, retain fresh-process profile evidence, and measure single-row, paired-row, paired apply, mixed QKV, and production shapes without concurrent load. Inspect the two ARM64 Plan 9 assembly leaves for redundant loads, shuffles, dependency chains, and spills. Evaluate only one bounded variant at a time against the pinned d43cdb4b control; consume this research into a task only when a repeatable leaf gain survives correctness and production gates, otherwise close it no-action with the rejected variant and measurements.
-
-## T-01M0PGW1SBE30AWY7TCF9E06SE Fold Q4_K leaf pointer updates into post-index loads
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
-refs: R-01M0PGJAMGEKCT53EG9E4QMM4S
-targets: format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64.go, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
-
-Replace separate ARM64 quant-byte and activation-pointer arithmetic inside the fixed 256-weight single and paired Q4_K block loops with VLD1 post-index addressing. Preserve all nibble extraction, table expansion, coefficient loads, floating-point operands, FMLA order, reduction order, outputs, ABI, and non-ARM64 code. Add a frozen pre-change leaf oracle if existing row exactness does not cover the block directly. Compile pinned baseline and candidate binaries once; retain only paths that win at least seven interleaved 500 ms K=2048 campaigns with zero allocation change, and require representative paired apply, mixed QKV, and exact-digest production runs to remain neutral or better. Record invalidated/noisy runs separately and report any reusable post-index win to perfscan.
