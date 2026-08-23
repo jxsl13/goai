@@ -30,3 +30,12 @@ created: 2026-08-23
 targets: go:linalg_test.svdDigest, go:linalg_test.TestSVDIsBitIdentical, go:linalg.SVD
 
 Go 1.27.0 changes deterministic SVD test digests while Go 1.26.6 retains the existing goldens. Classify input-generation versus kernel-arithmetic drift, preserve numerical correctness, and make the bit-identity contract compiler-release aware without weakening it. Validate both supported toolchains and the full linalg suite.
+
+## T-01M0PA5YVYEM6VGFJYQ5PQXMBT Classify and gate Go 1.27 SVD digest drift
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PA5B5KF92R60R8M2A6WSKE
+targets: go:linalg_test.svdDigest, go:linalg_test.TestSVDIsBitIdentical, go:linalg.SVD
+
+Determine whether deterministic input construction or SVD arithmetic changes under Go 1.27. Preserve strong per-release, per-architecture bit-exact goldens; keep reconstruction and numerical correctness gates active; validate Go 1.26.6 and Go 1.27.0 without changing production semantics unless evidence demands it.
