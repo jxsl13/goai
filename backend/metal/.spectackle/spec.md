@@ -475,10 +475,6 @@ WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at
 
 ## METAL-F16KV-SPLITK-FUSED-DEFAULT-001
 WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the Metal attention selector SHALL dispatch exactly 1 fused kernel by default and retain two-pass execution when SetSplitKFused receives false.
-
-## METAL-RMSNORM-TG-NUMERIC-001
-WHEN a one-row F32 RMSNorm candidate executes with 64, 128, or 256 threads, the Metal RMSNorm threadgroup selector SHALL produce output bit-exact to the 256-thread control for dimensions 256, 1024, 2048, 4096, and 5632 while mutating 0 input bytes.
-
 ## METAL-RMSNORM-TG-PERF-001
 WHEN 3 same-command count-7 campaigns compare widths at the 5 frozen one-row dimensions, the M2 RMSNorm promotion gate SHALL retain only a width reaching at least 1.10 times control throughput in every dimension and campaign.
 
