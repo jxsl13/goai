@@ -129,34 +129,49 @@ pair:
 	VFMLA V10.S4, V14.S4, V30.S4; \
 	VFMLA V11.S4, V15.S4, V31.S4
 
-// Decode one Q4_K scale/min triplet into the same four f32 coefficients that
-// the Go header builder produces. D and DMIN are exact f16-table values.
-#define BUILD_Q4K_COEFF(SPTR, D, DMIN, SOFF, MOFF, HOFF, LOS, LOM, HIS, HIM) \
-	MOVBU SOFF(SPTR), R6; \
-	MOVBU MOFF(SPTR), R7; \
-	MOVBU HOFF(SPTR), R8; \
-	AND $0x3f, R6, R9; \
-	SCVTFWS R9, F4; \
-	FMULS D, F4, F4; \
-	FMOVS F4, LOS(RSP); \
-	AND $0x3f, R7, R9; \
-	SCVTFWS R9, F4; \
-	FMULS DMIN, F4, F4; \
-	FMOVS F4, LOM(RSP); \
-	AND $0x0f, R8, R9; \
-	LSR $6, R6, R10; \
-	LSL $4, R10, R10; \
-	ORR R10, R9, R9; \
-	SCVTFWS R9, F4; \
-	FMULS D, F4, F4; \
-	FMOVS F4, HIS(RSP); \
-	LSR $4, R8, R9; \
-	LSR $6, R7, R10; \
-	LSL $4, R10, R10; \
-	ORR R10, R9, R9; \
-	SCVTFWS R9, F4; \
-	FMULS DMIN, F4, F4; \
-	FMOVS F4, HIM(RSP)
+#define MUL_Q4K_COEFF_V20 \
+	WORD $0x6E34DD08; /* FMUL V8.4S, V8.4S, V20.4S */ \
+	WORD $0x6E34DD29; \
+	WORD $0x6E34DD4A; \
+	WORD $0x6E34DD6B
+
+#define MUL_Q4K_COEFF_V22 \
+	WORD $0x6E36DD08; /* FMUL V8.4S, V8.4S, V22.4S */ \
+	WORD $0x6E36DD29; \
+	WORD $0x6E36DD4A; \
+	WORD $0x6E36DD6B
+
+// Decode all eight Q4_K scale/min pairs for one row. Its multiply macro uses
+// alternating exact f16-table d/dmin lanes, so the vector result is bit-identical
+// to the scalar coefficient builder while amortizing extraction and conversion.
+#define BUILD_Q4K_COEFF_VECTOR(SPTR, MUL, DST) \
+	ADD $4, SPTR, R6; \
+	VLD1 (R6), [V0.B16]; \
+	VAND V16.B16, V0.B16, V1.B16; \
+	VEXT $4, V1.B16, V1.B16, V5.B16; \
+	VZIP1 V5.B16, V1.B16, V6.B16; \
+	VUSHR $6, V0.B16, V2.B16; \
+	VSHL $4, V2.B16, V2.B16; \
+	VAND V17.B16, V0.B16, V3.B16; \
+	VUSHR $4, V0.B16, V4.B16; \
+	VEXT $8, V3.B16, V3.B16, V3.B16; \
+	VEXT $8, V4.B16, V4.B16, V4.B16; \
+	VORR V2.B16, V3.B16, V3.B16; \
+	VEXT $4, V2.B16, V2.B16, V5.B16; \
+	VORR V5.B16, V4.B16, V4.B16; \
+	VZIP1 V4.B16, V3.B16, V10.B16; \
+	VEXT $8, V6.B16, V6.B16, V6.B16; \
+	VEXT $8, V10.B16, V6.B16, V11.B16; \
+	VTBL V24.B16, [V11.B16], V8.B16; \
+	VTBL V25.B16, [V11.B16], V9.B16; \
+	VTBL V26.B16, [V11.B16], V10.B16; \
+	VTBL V27.B16, [V11.B16], V11.B16; \
+	WORD $0x6F28E508; /* UCVTF V8.4S, V8.4S, #0 */ \
+	WORD $0x6F28E529; \
+	WORD $0x6F28E54A; \
+	WORD $0x6F28E56B; \
+	MUL; \
+	VST1 [V8.S4, V9.S4, V10.S4, V11.S4], (DST)
 
 // func dotQ4KPairBlockNeon(x *float32, qs0, qs1 *byte, coeff0, coeff1 *float32, indexes *byte) (out0, out1 float32)
 TEXT ·dotQ4KPairBlockNeon(SB), NOSPLIT, $0-56
@@ -260,27 +275,29 @@ TEXT ·dotQ4KPairRowNeon(SB), NOSPLIT, $144-64
 
 pair_row_block:
 	MOVHU (R1), R6
-	FMOVS (R3)(R6<<2), F0
+	FMOVS (R3)(R6<<2), F20
 	MOVHU 2(R1), R6
-	FMOVS (R3)(R6<<2), F1
+	FMOVS (R3)(R6<<2), F21
 	MOVHU (R2), R6
-	FMOVS (R3)(R6<<2), F2
+	FMOVS (R3)(R6<<2), F22
 	MOVHU 2(R2), R6
-	FMOVS (R3)(R6<<2), F3
+	FMOVS (R3)(R6<<2), F23
 
-	BUILD_Q4K_COEFF(R1, F0, F1, 4, 8, 12, 0, 4, 32, 36)
-	BUILD_Q4K_COEFF(R1, F0, F1, 5, 9, 13, 8, 12, 40, 44)
-	BUILD_Q4K_COEFF(R1, F0, F1, 6, 10, 14, 16, 20, 48, 52)
-	BUILD_Q4K_COEFF(R1, F0, F1, 7, 11, 15, 24, 28, 56, 60)
-	BUILD_Q4K_COEFF(R2, F2, F3, 4, 8, 12, 64, 68, 96, 100)
-	BUILD_Q4K_COEFF(R2, F2, F3, 5, 9, 13, 72, 76, 104, 108)
-	BUILD_Q4K_COEFF(R2, F2, F3, 6, 10, 14, 80, 84, 112, 116)
-	BUILD_Q4K_COEFF(R2, F2, F3, 7, 11, 15, 88, 92, 120, 124)
+	VDUP V20.S[0], V20.S4
+	VDUP V21.S[0], V21.S4
+	VZIP1 V21.S4, V20.S4, V20.S4
+	VDUP V22.S[0], V22.S4
+	VDUP V23.S[0], V23.S4
+	VZIP1 V23.S4, V22.S4, V22.S4
+	VMOVI $0x3f, V16.B16
+	VMOVI $0x0f, V17.B16
+	MOVD RSP, R13
+	ADD $64, RSP, R14
+	BUILD_Q4K_COEFF_VECTOR(R1, MUL_Q4K_COEFF_V20, R13)
+	BUILD_Q4K_COEFF_VECTOR(R2, MUL_Q4K_COEFF_V22, R14)
 
 	ADD $16, R1, R11
 	ADD $16, R2, R12
-	MOVD RSP, R13
-	ADD $64, RSP, R14
 	VEOR V16.B16, V16.B16, V16.B16
 	VEOR V17.B16, V17.B16, V17.B16
 	VEOR V18.B16, V18.B16, V18.B16
