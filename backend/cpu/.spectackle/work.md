@@ -34,11 +34,3 @@ grilled: 2026-08-21 open=0
 targets: backend/cpu/gemm_amx_bench_test.go
 
 Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output shapes 128x128x64 and 512x512x64 to the existing ADR-0027 path harness. Measure NEON and Accelerate in alternating count-seven physical-M2 campaigns from one exact binary. Advance to stride-aware binding and full MHA only if Accelerate is at least 1.35x faster in every head GEMM cell, providing margin for per-head cgo calls and causal overcompute; otherwise reject the proposal without production changes.
-
-## P-01M0P8N6D6EEWAEKVACVNS21M6 Preserve version-specific ARM64 F32 Abs semantics
-kind: proposal
-state: active
-created: 2026-08-23
-targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
-
-Cross-toolchain probing proves Go 1.26.6 quiets an F32 signaling NaN during float32(math.Abs(float64(x))), while Go 1.27.0 preserves the quiet bit. Split the ARM64 assembly with Go release build tags: retain the incumbent exact Go 1.26 kernel unchanged and select the simpler sign-clear kernel only for Go 1.27 and newer. Restore tests to the scalar oracle and validate both toolchains before publishing the measured Go 1.27 gain.
