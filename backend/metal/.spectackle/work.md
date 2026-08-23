@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QQFB4CE6C9Q5EXBWC3SFNB Measure precompiled Q4_K metallib cold-start leverage
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
