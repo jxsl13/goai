@@ -400,4 +400,4 @@ WHEN the K=2048 paired-row benchmark runs on Apple M2, the LD2R coefficient broa
 WHEN paired Q4_K headers use table-indexed shifts, the dotQ4KPairRowNeon coefficient decoding SHALL Produce the scalar layout’s 16 coefficient bytes per row and preserve both output accumulator bits exactly.
 
 ## Q4K-PAIR-HEADER-USHL-PERFORMANCE-001
-WHEN the table-indexed USHL paired-header optimization is benchmarked on Apple M2, the retained Q4_K row, pair-apply, and production matrix benchmarks SHALL Reach at least 1.02x retained leaf median with at least 5 of 7 campaign wins, zero leaf allocations, exact outputs, and zero pinned production-shape regressions.
+WHEN M2 compares table-indexed paired Q4_K headers, the retained leaf and production benchmarks SHALL Reach 1.02x leaf median, win 5/7 campaigns, allocate 0 bytes, match exact outputs, and regress 0 pinned shapes.
