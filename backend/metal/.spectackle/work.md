@@ -52,3 +52,10 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0QKX4XEEWPTXC6TWP0PK6TA Broadcast the M2 RMSNorm reduction total from SIMD leaders
+kind: research
+state: draft
+created: 2026-08-23
+
+Production RMSNorm makes all 256 threads read and add the same eight threadgroup partials after its sole barrier. Investigate an exact one-barrier variant where only lane zero of each SIMD group sums red slots 0 through 7 in control order and simd_broadcast_first distributes that total. Measure leader broadcast alone and combined with the bit-exact dim-2048 input-retention candidate. Reject unless a variant clears 1.10x at the leaf and 1.01x in every frozen f16-KV decode cell.
