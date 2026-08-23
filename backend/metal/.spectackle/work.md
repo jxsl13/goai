@@ -64,7 +64,7 @@ The macOS cgo lane invokes selected tests with -short, but TestRoPEF16KVAppendIn
 
 ## T-01M0QVAJ1MF0AS6BYZSA76182E Skip the RoPE F16-KV wall-clock campaign in short mode
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QV7XJ3EW6AP5G1M48XSSVB
 targets: go:metal.TestRoPEF16KVAppendInterleavedCampaigns, TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001, METAL-ROPE-F16KV-PERF-001
