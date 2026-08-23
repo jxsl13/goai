@@ -386,7 +386,9 @@ WHEN valid event indices are materialized, the native profile resolver SHALL sto
 WHEN a Recorder.Profile result outlives Recorder.Free and garbage collection churn, the Metal recorder profile boundary SHALL preserve 100 percent of returned event-label bytes in Go-owned memory.
 
 ## RECORDER-PROFILE-LABEL-ALLOCATION-001
-WHEN a completed profile contains repeated native event labels, the Recorder.Profile SHALL clone each distinct label at most once per recorder and allocate 0 Go strings for cache hits.
+WHEN one completed profile extraction contains repeated native event labels, the Recorder.Profile SHALL clone each distinct label at most once in that extraction and allocate 0 Go strings for repeated-label cache hits.
+
+Rationale: Per-extraction deduplication avoids increasing the production Recorder footprint while preserving returned-string ownership.
 
 ## RECORDER-PROFILE-LABEL-PERF-001
 WHEN three order-alternated count-seven M2 campaigns compare warm repeated-label events340 extraction, the Recorder.Profile label-cache promotion gate SHALL require at least 1.25 times median speedup, 300 fewer allocations per operation, and 4000 fewer bytes per operation.
