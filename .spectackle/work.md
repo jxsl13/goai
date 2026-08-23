@@ -4010,7 +4010,7 @@ Make TestProdCPUQuantDecodeGGUF a valid reproducible CPU leadership gate even wh
 
 ## T-01M0P4XWWWEQ09N23GXSN59Q46 Make the CPU production gate backend- and artifact-pinned
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P4X4QCF0XTB87P5M888AAP
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:backend.Preference, go:backend.SetPreference, go:nn.QuantLinear.Forward
