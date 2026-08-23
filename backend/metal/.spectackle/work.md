@@ -52,10 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## R-01M0QNMD0FEZFSKDJDDV22E7FE Attribute production M2 Q4_K underutilization with Metal counters
-kind: research
-state: active
-created: 2026-08-23
-
-Correlate a pinned TinyLlama f16-KV decode command buffer with Xcode Metal Performance Limiters and the recorder stage sidecar. Compare Q4_K production-stage occupancy, buffer-read, LLC, MMU, ALU, and GPU-read-bandwidth signals against the retained 185 GB/s large-projection roofline. Nominate a new implementation only when the counters identify a limiter consistent across dominant Q4_K stages and materially different from rejected launch-width, wide-load, unrolling, matrix-unit, row-pair, and dispatch-fusion variants.
