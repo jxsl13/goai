@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M0QRX6E0FC1S4XNAWGQK8900 Autotune M2 Q4_K output rows per SIMD group
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0QRNR7FF1TT618GVH65BMHS
 grilled: 2026-08-23 open=0
