@@ -32,12 +32,3 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
-
-## R-01M0PMBPMQE15902DPQHMN33FF Re-profile merged M2 Q4_K row assembly
-kind: research
-state: active
-created: 2026-08-23
-parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
-targets: go:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM
-
-Profile the exact post-PR-1178 Apple M2 TinyLlama CPU decode with pinned model hash, Go 1.27, 12 threads, 64 steps, and repeated warm execution. Attribute the remaining paired Q4_K row cost between assembly header construction, the dual NEON dot schedule, scheduler synchronization, single-row quant kernels, and surrounding graph work. Select the next task only from measured production and leaf evidence, respecting the post-index and Go-batch rejections.
