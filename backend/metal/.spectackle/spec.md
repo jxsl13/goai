@@ -470,3 +470,6 @@ WHEN a paired TinyLlama campaign evaluates one dtype and context cell, the campa
 
 ## METAL-F16KV-SPLITK-FUSED-PERF-001
 WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at sk 512, 1024, 1536, and 2048, the f16-KV fused split-K promotion gate SHALL require at least 1.20 times two-pass throughput in every cell and campaign.
+
+## METAL-F16KV-SPLITK-FUSED-DEFAULT-001
+WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the Metal attention selector SHALL dispatch exactly 1 fused kernel by default and retain two-pass execution when SetSplitKFused receives false.
