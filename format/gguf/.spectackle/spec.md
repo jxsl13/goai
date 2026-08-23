@@ -353,8 +353,5 @@ The QMatMulPairApply SHALL borrow exactly 1 raw up scratch, return it after the 
 
 ## GGUF-Q4K-PAIR-DUAL-DOT-001
 WHEN QMatMulPairApply computes paired Q4_K rows, the ARM64 paired Q4_K row dot SHALL load every activation vector exactly once for 2 weight rows through dotQ4KPairBlockNeon while preserving the independent accumulation and reduction orders bit-for-bit.
-## ARM64-Q8K-CROSS-DOT-001
-WHEN Q4_K or Q6_K weights use explicit Q8_K activation on ARM64, the format/gguf SHALL encode each activation block once, allocate 0 heap objects, dispatch SDOT, and match portable cross-dot within 1e-5 absolute plus 1e-5 relative error.
-
 ## Q8K-ACTIVATION-PERFORMANCE-GATE-001
 WHEN the Q8_K leaf is retained on Apple M2, the benchmark gate SHALL require 1.5x Q4_K N4096/K1024 speedup including encoding, 0 Q6_K regression, 0 added allocations, and cosine at least 0.999 across 10 samples.
