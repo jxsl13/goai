@@ -414,3 +414,8 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN DOT_Q6 loads 16 consecutive F32 activations, the dotQ6KBlockNeon SHALL load exactly 64 bytes into four ordered vectors and pass TestDotQ6KBlockNeonKnownValue plus 100 TestDotQ6KAsmRandomRaw trials within 1e-4 relative error.
 
 Rationale: A structured load may change only load grouping, not activation order or arithmetic.
+
+## Q6K-LD1X4-PERFORMANCE-001 {applies: go:gguf.dotQ6KBlockNeon,go:gguf.BenchmarkDotQ6KAsm}
+WHEN Apple M2 benchmarks the Q6_K four-register activation load, the retained implementation SHALL reach 1.04x K4096 leaf median across 7 alternating campaigns, win at least 5 campaigns, retain 0 leaf allocations, and regress 0 pinned Q6_K matrix or production shapes.
+
+Rationale: Removing 48 dynamic load instructions per block must yield repeatable bottom-up and consumer leverage.
