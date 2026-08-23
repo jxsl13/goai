@@ -63,7 +63,7 @@ Apple documents that MSL source strings compile first to GPU-independent Metal I
 
 ## P-01M0QQQ3NFE0XATH1N2JGG8QYT Pair Q4_K Metal IR with an M2 binary archive for cold startup
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: objc:metal_bridge.ensure_qmatmul_q4k
