@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0QVYV9PENARM7SS0FTXZ5CZ Audit pinned llama.cpp v0.2.0 Q4_K and Q6_K Metal dispatch against GoAI
+kind: research
+state: draft
+created: 2026-08-23
+targets: objc:metal_bridge.mtl_recorder_qmatmul, objc:metal_bridge.ensure_qmatmul_q4k, objc:metal_bridge.ensure_qmatmul_q6k, msl:qmatmul_q4k_cooperative, msl:qmatmul_q6k_cooperative
+
+Pin ggml-org/llama.cpp commit bb4caa7540188872173c44d161602d9271386413 and audit its exact Apple Metal Q4_K and Q6_K single-token projection selection, launch geometry, activation access, quant-block decode, reduction structure, and command-boundary behavior against GoAI. Use the existing M2 attribution evidence: GoAI quant projections consume 5.251 ms of a 7.752 ms f16-KV decode buffer, while llama.cpp sampled shaders are 99.985 percent Q4_K/Q6_K. Exclude previously rejected mixed-QKV fusion, residual epilogues, simple unrolling, rows-per-SIMD, threadgroup-width, wide-load, and correction-sum leaf variants unless the pinned source reveals a materially distinct structure. Produce a source-pinned leverage decision and a benchmarkable proposal only if the mechanism is distinct.
