@@ -4019,7 +4019,7 @@ Profile merged PR 1179 on Apple M2 Pro after the packed-header NEON decode. Attr
 
 ## T-01M0PQCPYEFXERPWB4SJBD3QPT Coalesce paired Q4_K coefficient broadcasts with LD2R
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.TestDotQ4KPairRowASMArbitraryHeaders, go:gguf.BenchmarkDotQ4KPairRowASM_K2048, internal/benchcompare/leadership/evidence
