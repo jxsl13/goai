@@ -769,3 +769,4 @@
 {"t":"2026-08-23T19:41:46Z","eid":"15b746afb5870793","ag":"ag-a57a","ev":"create","id":"R-01M0R29CN1FD79BAX15W8RMK81","k":"research","ti":"Batch Metal attention backward into one native submission"}
 {"t":"2026-08-23T19:41:56Z","eid":"615d32c164a898fb","ag":"ag-eb71","ev":"move","id":"R-01M0R29CN1FD79BAX15W8RMK81","fr":"draft","to":"active"}
 {"t":"2026-08-23T19:43:39Z","eid":"091cde847c46c22d","ag":"ag-e7e8","ev":"create","id":"P-01M0R2CV3WFZCAMFD24BJSQZDD","k":"proposal","ti":"Execute batched Metal attention backward as one cached MPSGraph"}
+{"t":"2026-08-23T19:43:58Z","eid":"83dfd4b229ff8c04","ag":"ag-b164","ev":"move","id":"P-01M0R2CV3WFZCAMFD24BJSQZDD","fr":"draft","to":"active"}

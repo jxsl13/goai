@@ -4017,7 +4017,7 @@ Investigate the M2 ViT B=8 training bottleneck after batch-axis forward landed. 
 
 ## P-01M0R2CV3WFZCAMFD24BJSQZDD Execute batched Metal attention backward as one cached MPSGraph
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go
 
