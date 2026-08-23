@@ -72,7 +72,7 @@ Add a diagnostic 64/128/256-thread selector for the production recorder Q4_K coo
 
 ## T-01M0QMA08MFHAADSQB61P0729G Implement and gate M2 Q4_K cooperative threadgroup widths
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QM9JXCEEMA9C6H146CX31H
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
