@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0QQFB4CE6C9Q5EXBWC3SFNB Measure precompiled Q4_K metallib cold-start leverage
+kind: research
+state: draft
+created: 2026-08-23
+targets: objc:metal_bridge.ensure_qmatmul_q4k
+
+Apple documents that MSL source strings compile first to GPU-independent Metal IR and then to a device pipeline, while an offline metallib removes the runtime source-to-IR stage. Sources pinned on 2026-08-23: https://developer.apple.com/documentation/metal/metal-libraries and https://developer.apple.com/documentation/metal/building-a-shader-library-by-precompiling-source-files. Seven fresh incumbent Q4_K processes measured first-call durations 18.643, 3.466, 3.714, 3.680, 14.473, 4.125, and 3.705 ms; median 3.714 ms. Their second-call median was 0.468 ms. Research whether loading an exact offline-compiled Q4_K metallib through newLibraryWithURL removes at least half of first-call latency without changing warm output or throughput. The diagnostic uses an environment-selected artifact path and retains source compilation as fallback. Any production proposal must define reproducible artifact generation, source/hash coupling, deployment target, architecture compatibility, fallback behavior, and repository size impact.
