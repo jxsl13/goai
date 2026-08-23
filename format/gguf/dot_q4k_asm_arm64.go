@@ -29,15 +29,13 @@ func dotQ4_KRowASM(row []float32, raw []byte, k int) float64 {
 		d := f16ToF32(binary.LittleEndian.Uint16(blk[0:]))
 		dmin := f16ToF32(binary.LittleEndian.Uint16(blk[2:]))
 		scales := blk[4:16]
-		for pair := range 4 {
-			is := pair * 2
-			sc1, m1 := getScaleMinK4(is, scales)
-			sc2, m2 := getScaleMinK4(is+1, scales)
-			ci := pair * 4
-			coeff[ci+0] = d * float32(sc1)
-			coeff[ci+1] = dmin * float32(m1)
-			coeff[ci+2] = d * float32(sc2)
-			coeff[ci+3] = dmin * float32(m2)
+		for j := range 4 {
+			s, m, hiBits := scales[j], scales[j+4], scales[j+8]
+			lo, hi := j*2, (j+4)*2
+			coeff[lo+0] = d * float32(s&63)
+			coeff[lo+1] = dmin * float32(m&63)
+			coeff[hi+0] = d * float32((hiBits&0xF)|((s>>6)<<4))
+			coeff[hi+1] = dmin * float32((hiBits>>4)|((m>>6)<<4))
 		}
 		acc += float64(dotQ4KBlockNeon(
 			&row[sb*qkK], &blk[16], &coeff[0], &qKByteToF32Indexes[0],
