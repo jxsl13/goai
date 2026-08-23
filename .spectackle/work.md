@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0PGHM4TE7YAXSJT0Q56SSZ2 Optimize the next Apple M2 Q4_K fused block hotspot
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: P-01M0PEGTNPFYBR11H1K7RDM36Q, R-01M0PEHGT7FY285ZWC1JQ05SWB, T-01M0PEP367F7WBD4RTC87J8VG9
 targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
