@@ -4010,7 +4010,7 @@ Profile the exact production TinyLlama Q4_K_M decode boundary on Apple M2 Pro af
 
 ## R-01M0PEHGT7FY285ZWC1JQ05SWB Attribute merged-main M2 CPU quant decode after Q4_K header bulk decode
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PEGTNPFYBR11H1K7RDM36Q
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep, go:gguf.dotQ4KPairRowASM
