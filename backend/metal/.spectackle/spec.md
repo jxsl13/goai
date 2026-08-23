@@ -381,3 +381,6 @@ WHEN the additive snapshot entry point is used, the Metal profile bulk snapshot 
 
 ## RECORDER-PROFILE-VALID-INDEX-STORAGE-001
 WHEN valid event indices are materialized, the native profile resolver SHALL store at most 1 index inline and all larger sets contiguously with 0 NSNumber boxes.
+
+## RECORDER-PROFILE-LABEL-OWNERSHIP-001
+WHEN a Recorder.Profile result outlives Recorder.Free and garbage collection churn, the Metal recorder profile boundary SHALL preserve 100 percent of returned event-label bytes in Go-owned memory.
