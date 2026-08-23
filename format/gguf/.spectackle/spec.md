@@ -414,3 +414,8 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN hoisting each structured activation load before row-zero dequantization, the paired ARM64 Q4_K row kernel SHALL preserve 2 arbitrary-header F64 output bit patterns, row-one activation reuse, reduction order, and 0 allocations.
 
 Rationale: Only load placement changes; all addresses, vector registers, arithmetic, and accumulation order remain fixed.
+
+## Q4K-PAIR-ACTIVATION-HOIST-PERFORMANCE-001
+WHEN the K2048 paired-row benchmark runs on Apple M2, the paired Q4_K activation-load hoist SHALL reach 1.03x median speedup across 7 alternating pairs, win 5 pairs, retain 0 allocations, and regress 0 pinned production shapes.
+
+Rationale: A latency-hiding schedule is retained only when the leaf gain is repeatable and survives matrix, apply, and production boundaries.
