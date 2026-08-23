@@ -3998,11 +3998,3 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
-
-## R-01M0Q1ZKV6FGXAFE5VH3PD5RW8 Quantify warm M2 Metal indirect-command replay leverage
-kind: research
-state: active
-created: 2026-08-23
-targets: go:llamagpu.Decoder.encodeStep, llamagpu/decoder.go, backend/metal/metal_bridge.m
-
-Measure the complete steady-state host encoding boundary for the production TinyLlama Q4_K_M f16-KV decode command graph and compare it with Metal GPU duration and wall time. Determine whether a reusable MTLIndirectCommandBuffer can expose at least 3% warm-decode leverage after the shipped one-token-ahead encode overlap. Treat cold first-encode latency separately. Apple documentation confirms compute ICB commands are reusable on Apple GPU Family 8, but the proposal is viable only if encoding remains on the critical path.
