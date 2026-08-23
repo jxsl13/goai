@@ -705,3 +705,4 @@
 {"t":"2026-08-23T16:17:05Z","eid":"749a1aca658d84f6","ag":"ag-5b49","ev":"create","id":"P-01M0QPJK6BEXNT8MSW19E4R5KW","k":"proposal","ti":"Reuse exact Q4_K activation correction sums across M2 decode projections"}
 {"t":"2026-08-23T16:17:23Z","eid":"c249f71dc04015f8","ag":"ag-8365","ev":"revise","id":"P-01M0QPJK6BEXNT8MSW19E4R5KW","note":"body+targets revised"}
 {"t":"2026-08-23T16:17:42Z","eid":"a5f4eb7a936ef09c","ag":"ag-4b93","ev":"grill","id":"P-01M0QPJK6BEXNT8MSW19E4R5KW","gr":"2026-08-23 open=0","hash":"1f46556c1fc31b248ce30d3b99438133defc333333f4f5af840ffe9437ac2306"}
+{"t":"2026-08-23T16:17:54Z","eid":"946934ba416eeb3a","ag":"ag-10ed","ev":"move","id":"P-01M0QPJK6BEXNT8MSW19E4R5KW","fr":"draft","to":"active","note":"User-authorized ongoing M2-first performance goal; implement only the frozen amortized diagnostic before any production integration."}

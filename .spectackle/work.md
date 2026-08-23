@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## P-01M0QPJK6BEXNT8MSW19E4R5KW Reuse exact Q4_K activation correction sums across M2 decode projections
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: msl:qmatmul_q4k_cooperative, objc:metal_bridge.mtl_recorder_qmatmul, go:llamagpu.Decoder.recordFFN
