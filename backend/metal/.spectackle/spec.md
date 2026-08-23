@@ -373,3 +373,6 @@ WHEN each frozen campaign compares control and bulk extraction, the warm Recorde
 
 ## RECORDER-PROFILE-SNAPSHOT-COLD-PERF-001
 WHEN each frozen campaign measures events340 and events1, the first Recorder.Profile extraction on Apple M2 SHALL make events340 at least 1.10 times faster and retain 0.97 times events1 throughput.
+
+## RECORDER-PROFILE-SNAPSHOT-ABI-001
+WHEN the additive snapshot entry point is used, the Metal profile bulk snapshot ABI SHALL keep mtl_recorder_profile_summary and mtl_recorder_profile_event compatible while NewRecorder performs 0 snapshot allocations.
