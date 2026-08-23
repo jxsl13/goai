@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QRNR7FF1TT618GVH65BMHS Assess Q8_K activation staging for M2 Metal quant decode
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 
 Determine whether Apple M2 Metal can amortize one exact or bounded-error F32-to-Q8_K activation encoding across the Q4_K and Q6_K projections that share each decode activation, then use integer-domain dot products to reduce the measured ALU-limited quant stages. Pin current llama.cpp/MLX and Apple compiler references, identify available integer dot instructions and numeric semantics, model staging and buffer traffic, and define a small diagnostic gate before any production proposal. This is distinct from the rejected CPU Q8_K activation path and prior Metal float-load rearrangements.
