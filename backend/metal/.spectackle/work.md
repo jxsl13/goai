@@ -65,6 +65,7 @@ Apple documents that MSL source strings compile first to GPU-independent Metal I
 kind: proposal
 state: draft
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
 Diagnostic phase: compile the existing scalar and cooperative Q4_K MSL into one macOS Metal-IR library with a pinned deployment target, then let ensure_qmatmul_q4k load that file only when GOAI_METAL_Q4K_METALLIB names it. The incumbent source-string path remains the default and fallback. Compare fresh processes from one binary, alternating control and artifact arms. Frozen gates: existing Q4_K cross-reference and cooperative parity tests remain unchanged; metallib functions expose the same names and pipeline width; three independent campaigns each contain seven fresh processes per arm; median first-call control divided by candidate is at least 2.00x in every campaign; candidate second-call median retains at least 0.97x incumbent warm throughput; missing, malformed, and incompatible artifact paths fall back to source compilation and return correct output. No artifact, environment seam, or source duplication may enter production unless the diagnostic passes. Production requires one canonical MSL source, deterministic generation, recorded compiler and SDK versions, a source hash, and portable fallback.
