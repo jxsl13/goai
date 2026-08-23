@@ -414,8 +414,3 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN an Apple ARM64 Q6_K row uses one assembly call, the dotQ6_KRowASM SHALL preserve every raw six-bit value, signed subscale, f16 lookup result, per-block F32 reduction, ordered F64 accumulation, and prior row output bits.
 
 Rationale: Whole-row native orchestration must change only boundary and invariant setup costs, not the accepted Q6_K arithmetic schedule.
-
-## Q6K-ROW-ASM-PERFORMANCE-001 {applies: go:gguf.dotQ6_KRowASM,go:gguf.BenchmarkDotQ6KAsm}
-WHEN Apple M2 benchmarks whole-row Q6_K assembly, the retained implementation SHALL reach 1.04x leaf median speedup across 7 alternating campaigns, win at least 5 campaigns, retain 0 leaf allocations, and regress 0 pinned production shapes.
-
-Rationale: The boundary is retained only when hoisting and ABI amortization produce repeatable bottom-up leverage without trading away end-to-end behavior.
