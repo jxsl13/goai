@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0QCMRDYEBCAT35BDCB8678D Eliminate reusable Metal recorder profile extraction allocations
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.Profile, go:metal.fillRecorderProfileEvents, c:mtl_recorder_profile_snapshot, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
+
+Merged baseline on Apple M2 Pro: warm Profile extraction for 340 repeated-label events costs 2.61-2.84 us, 14,400 B/op, and 6 allocs/op; one event costs about 179 ns, 104 B/op, and 5 allocs/op; 340 events with ten labels costs 3.38-3.52 us, 14,544 B/op, and 15 allocs/op. The dominant bytes are the fresh []RecorderProfileEvent result. Earlier recorder-owned label scratch designs were rejected because they couple result lifetime to Recorder and grow the opt-out path. Investigate an additive caller-owned ProfileInto destination and one compact native snapshot view, preserving Profile ownership, ABI entry points, default-recorder cost, and post-Free label safety. Promotion requires three independent count-seven order-controlled M2 campaigns, exact semantic tests, and existing-path non-regression.
