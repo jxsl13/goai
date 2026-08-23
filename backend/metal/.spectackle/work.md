@@ -70,13 +70,3 @@ grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
 
 Supersedes rejected P-01M0Q9837XE0Y. Replace one C.GoString allocation per event with extraction-scoped Go-owned label deduplication. For multi-event profiles, use a temporary bounded view of each 96-byte native label only for lookup and clone each distinct label once into the returned profile; results remain valid across Recorder.Free. Keep the existing C.GoString one-event path unchanged and add zero fields or allocations to default recorders. Frozen M2 gates: warm repeated-label events340 median speedup at least 1.25x with at least 300 fewer objects and 4,000 fewer bytes; every warm events1 campaign retains at least 0.97x; first events340 at least 1.10x and first events1 at least 0.97x; mixed-label allocations scale with distinct labels rather than event count; disabled-recorder throughput at least 0.97x with unchanged allocations. Require three order-alternated count-seven campaigns, exact profile parity, bounded-label handling, and label validity after Free plus GC churn.
-
-## T-01M0Q9H5G2FP38JV8VMPSFP297 Implement and gate extraction-scoped profile label deduplication
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0Q9EZJ8ENCSJ4YR1J41MDGD
-refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ
-targets: go:metal.Recorder.Profile, backend/metal/recorder_profile_bench_test.go, backend/metal/recorder_profile_test.go
-
-First add a mixed-ten-label benchmark and post-Free ownership test, then compile the frozen control binary. For multi-event profiles, scan each fixed native label within 96 bytes, use temporary unsafe string views only for content lookup, and clone every distinct label once into returned Go memory. Keep count-one C.GoString unchanged. Run parity and ownership tests plus three order-alternated count-seven M2 campaigns for warm repeated/mixed labels, fixed-count first extraction, and disabled recorder overhead. Promote only if every frozen gate passes; otherwise revert code and archive the rejection.
