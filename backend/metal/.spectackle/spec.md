@@ -493,4 +493,4 @@ WHEN a production dense quantized f16-KV Llama-style single-token decode uses a 
 WHEN a concurrent Metal recorder reaches a blit, MPS, commit, finish, or free boundary, the Metal recorder SHALL invoke endEncoding exactly once on the active shared compute encoder before crossing the boundary.
 
 ## M2-VIT-BATCHED-ATTENTION-PERF-001
-WHEN three count-seven M2 ViT B=8 campaigns compare the candidate with origin/main, the batch-axis attention promotion SHALL retain the candidate only when forward median speedup is at least 1.15x, train-step is at least 1.10x, every pair is at least 1.05x, and parity passes.
+WHEN three count-seven M2 ViT B=8 campaigns run, the batch-axis attention promotion SHALL retain the candidate only if forward median is at least 1.15x, train median at least 1.10x, every pair at least 1.05x, and parity passes.
