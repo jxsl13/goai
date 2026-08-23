@@ -4010,7 +4010,7 @@ Profile merged post-QKV and pair-to-SwiGLU TinyLlama Q4_K_M decode on Apple M2 P
 
 ## R-01M0PCJ7TSEFCTCZ45YBJ6SFVX Profile merged M2 CPU quant decode after producer-consumer fusion
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PCH446FH695VH9692WFSV8
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nlp.QuantLlama.DecodeStep
