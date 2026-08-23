@@ -37,7 +37,7 @@ Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output 
 
 ## P-01M0P7RV5HFDSSRMC0MDQQJTJ2 Restore Go 1.26 exact ARM64 F32 Abs semantics
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
 
