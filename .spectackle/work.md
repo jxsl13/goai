@@ -4010,7 +4010,7 @@ Profile-guided M2 composition: QMatMul currently dispatches one independent ARM6
 
 ## T-01M0Q191TJF299603RR4W9KJDJ Route M2 Q4_K QMatMul through adjacent row pairs
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0Q18189FNG8Y4RQ0H6NQ4PN
 targets: go:gguf.QMatMul, go:gguf.dotQ4KPairRowFn, format/gguf/quant_matmul.go, format/gguf/dot_q4k_asm_arm64.go, format/gguf/dot_q4k_asm_amd64.go, format/gguf/dot_q4k_scalar.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, internal/benchcompare/leadership/evidence
