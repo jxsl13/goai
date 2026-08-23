@@ -4007,12 +4007,3 @@ grilled: 2026-08-23 open=0
 targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:nn.QuantLinear.Forward
 
 Make TestProdCPUQuantDecodeGGUF a valid reproducible CPU leadership gate even when its test binary links Metal through llamagpu. Scope backend.Preference to CPU before QuantLlama construction and restore it afterward because QuantLinear uses backend.Default rather than the explicit Context backend. Hash the external GGUF before parsing and report its SHA-256 plus Go runtime in the result line. Preserve timing boundaries: routing setup and hashing remain outside measured decode. This independently retained prerequisite was discovered while rejecting the residual-epilogue experiment; perfscan issue #834 records the generalizable detector opportunity.
-
-## T-01M0P4XWWWEQ09N23GXSN59Q46 Make the CPU production gate backend- and artifact-pinned
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0P4X4QCF0XTB87P5M888AAP
-targets: go:benchcompare.TestProdCPUQuantDecodeGGUF, go:backend.Preference, go:backend.SetPreference, go:nn.QuantLinear.Forward
-
-Scope backend.Preference to CPU before QuantLlama construction, restore it on every exit, SHA-256 the external GGUF before parsing, and report backend, model hash, Go runtime, base/candidate commit evidence outside timed decode. Validate that the pinned harness restores digest ea3df5516f17df83 and the prior 172 MB control allocation regime even when Metal is registered. File the generalizable detector finding on perfscan.
