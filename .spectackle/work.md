@@ -4011,7 +4011,7 @@ The exact merged PR 1181 profile attributes 16.98% flat CPU samples to paired Q4
 
 ## T-01M0PY2K8PEQEVYKGF1BVDCW2K Interleave paired Q4_K activation loads with row-zero FMLA
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PXZ8JWEMD9W5P2W2X47JN6
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence
