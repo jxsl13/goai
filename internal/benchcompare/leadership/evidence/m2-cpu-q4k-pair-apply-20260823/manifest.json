@@ -1,0 +1,39 @@
+{
+  "date": "2026-08-23",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.26.6 darwin/arm64",
+  "baseline_source": "27e1a52b511be5f7d75f74fd8ab01dcbf5aee161",
+  "candidate_source": "ee55a6fb64c6f34325bb9c08cea9ea13cfc73648",
+  "branch": "codex/m2-cpu-decode-frontier",
+  "spectackle": "v0.10.0",
+  "spectackle_proposal": "P-01M0NY3846EDB",
+  "spectackle_task": "T-01M0NY5H7EEDR",
+  "perfscan_module": "github.com/jxsl13/perfscan@v1.81.0",
+  "perfscan_origin": "3370d5c0c308d697cc3a19b9719c466b0678b5c4",
+  "perfscan_resolution": "GOPROXY=direct",
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/833",
+  "model_sha256": "9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0",
+  "binary_sha256": {
+    "baseline_production": "446f5486a719b4777be5558261454ee47e5aa15db66bff3684b1c77c9a368b9c",
+    "candidate_production": "76ab5b5523d478a91c3f19b83d2adb450241626ca902df82bef4cc947b7b7abe",
+    "candidate_leaf": "808f7b61ff11cacbade4a0a23ffc73336821104c887b72395bc4eeba1e6c3af1"
+  },
+  "sampling": {
+    "threads": 8,
+    "production_steps": 64,
+    "measured_runs_per_process": 3,
+    "warmups_per_process": 1,
+    "retained_process_pairs": 5,
+    "order": "alternating candidate-control/control-candidate",
+    "leaf_iterations_per_process": 200,
+    "leaf_process_pairs": 8
+  },
+  "correctness": {
+    "baseline_digest": "ea3df5516f17df83",
+    "candidate_digest": "ea3df5516f17df83",
+    "dual_dot": "bit-identical to two independent ARM64 Q4_K row dots",
+    "recorded_fallback": "bit-identical to eager QuantSwiGLU output",
+    "scratch_steady_state_allocations": 0
+  }
+}

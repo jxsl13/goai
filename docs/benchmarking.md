@@ -2046,6 +2046,17 @@ keep independent projections. Evidence:
 `internal/benchcompare/leadership/evidence/m2-cpu-q4k-paired-projections-20260822`;
 the reusable shared-fan-out opportunity is [perfscan #830](https://github.com/jxsl13/perfscan/issues/830).
 
+The 2026-08-23 producer-consumer tranche then removes the materialized `up`
+tensor and applies SwiGLU inside aligned paired-projection chunks. Its ARM64
+dual row-dot loads each activation vector once for both Q4_K weights while
+preserving both independent accumulation orders. Eight fixed-iteration leaf
+pairs move N5632/K2048 projection-plus-SwiGLU from 589.7 to 513.9 us
+(**1.148x**) and halve temporary bytes. Five alternating fresh-process pairs
+move 64-step production decode from 1.808 to 1.707 s (**1.059x**), with median
+allocated bytes down 16.85% and the exact digest retained. Evidence:
+`internal/benchcompare/leadership/evidence/m2-cpu-q4k-pair-apply-20260823`;
+the general pattern is [perfscan #833](https://github.com/jxsl13/perfscan/issues/833).
+
 Pinned llama.cpp v0.2.0 (`bb4caa754`, build 10566, ggml 0.21.0) runs the same
 GGUF, eight threads, CPU-only execution, no KV offload, FlashAttention off,
 and 64 generation steps at 88.2–115.2 tok/s across two process medians. This
