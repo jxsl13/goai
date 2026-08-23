@@ -4006,11 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0RCPZNJF75SZJ766JXXPX6H Screen a one-submission Metal pre-norm transformer block on M2
-kind: research
-state: active
-created: 2026-08-23
-targets: go:vision.vitBlock.forwardBatched, go:nlp.MHA.ForwardPreNorm, go:nn.ForwardPreNormFFN, backend/metal/metal_bridge.m
-
-Measure whether composing the merged cached pre-norm attention and exact-GELU FFN graphs into one shape-keyed native Metal graph creates new end-to-end M2 training leverage. The control must retain both independently fused boundaries from PR 1194 and PR 1193; candidate changes only the complete transformer-block boundary. Start at F32 batch 8, sequence 65, dimension 128, four heads, hidden 256, and depth-four ViT. Require exact composite fallback, output and all 13 input-gradient parity, input and parameter immutability, runtime epsilon correctness, one submission per direction, a bounded cache, at least 1.15x boundary median, at least 1.08x full train-step median, and every aligned full-step pair at least 1.03x across three order-alternated campaigns. This differs from rejected host-side ViT dispatch flattening P-01M0FMNNMKFRXR0FDEYZ8GXX7S because it fuses both compute graphs and removes the intermediate host round trip rather than only collapsing view and residual dispatch.
