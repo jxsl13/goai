@@ -4026,7 +4026,7 @@ Current Xcode 26.6 records a structurally valid Metal trace and workload output,
 
 ## T-01M0QSQXQNFPGBSNYW904VETG2 Validate xctrace artifacts after recorder termination
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QSQ4YHEY7BYWNKV1YBGBYV
 targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
