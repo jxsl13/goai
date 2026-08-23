@@ -512,3 +512,6 @@ WHEN forward or backward executes, the fused Metal route SHALL match the composi
 
 ## METAL-PRENORM-ATTENTION-GRAPH-STRUCTURE-001
 WHERE contiguous offset-zero F32 fusion, the Metal pre-norm attention implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with runtime epsilon, pooled buffers, and Go-owned outputs.
+
+## METAL-PRENORM-ATTENTION-NUMERIC-001
+WHEN supported output and gradient parity is validated against the incumbent composite, the Metal pre-norm attention implementation SHALL match 1 output and exactly 7 gradients within the established Metal tolerance while mutating exactly 0 inputs.
