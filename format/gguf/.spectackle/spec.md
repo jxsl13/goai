@@ -360,3 +360,6 @@ The paired Q4_K coefficient builder SHALL decode all 16 six-bit scale/min values
 
 ## Q4K-PAIR-BULK-HEADER-PERF-001
 WHEN the K=2048 paired-row benchmark runs on Apple ARM64, the bulk Q4_K header path SHALL reach at least 1.03x median speedup across 7 interleaved campaigns with 0 allocation increase and no production-shape regression.
+
+## Q4K-SINGLE-BULK-HEADER-EXACT-001
+The independent Q4_K coefficient builder SHALL decode all 16 six-bit scale/min values exactly as 8 getScaleMinK4 calls and preserve row output bits.
