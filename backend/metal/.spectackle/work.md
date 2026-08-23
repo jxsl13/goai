@@ -63,7 +63,7 @@ Pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702 and MLX d9077d8316ad73
 
 ## P-01M0Q4TE2ZE52T6G4PHY89H06C Force full unrolling of the M2 Q4_K nibble/FMA loop
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q4QAP0ESS9GBF2ERVRBHAM
 grilled: 2026-08-23 open=0
