@@ -138,3 +138,8 @@ WHEN the paired campaigns measure seq128 and seq512 full and GQA forward control
 WHEN seven interleaved M2 Pro campaigns measure preallocated F32 Abs at 2048 and three larger representative sizes, the ARM64 sign-clear kernel SHALL retain 1.25x median speedup at 2048, at least 0.97x for larger cells, and zero allocations.
 
 Rationale: The small leaf is instruction-bound while larger cells become memory-bound; both the gain and neutral controls must remain explicit.
+
+## ARM64-EXACT-ABS-GO127-001 {applies: go:cpu.absF32,go:cpu.TestAbsF32Arm64ExactAllLengths,go:cpu.TestAbsF32Arm64ExactInPlace}
+WHEN F32 Abs compiles on arm64 with Go 1.27 or newer, the CPU backend SHALL select the sign-clear assembly so outputBits equals inputBits AND 0x7fffffff for every input.
+
+Rationale: Go 1.27 preserves signaling-NaN payload bits in the scalar conversion oracle.
