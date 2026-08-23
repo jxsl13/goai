@@ -279,6 +279,22 @@ int mtl_recorder_profile_summary(void* rec, int* eventCount, int* omittedMPS,
 int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapacity,
                                unsigned long long* startOffsetNS,
                                unsigned long long* ticks, unsigned long long* durationNS);
+#define MTL_RECORDER_PROFILE_LABEL_CAPACITY 96
+typedef struct {
+    char label[MTL_RECORDER_PROFILE_LABEL_CAPACITY];
+    unsigned long long startOffsetNS;
+    unsigned long long ticks;
+    unsigned long long durationNS;
+} mtl_recorder_profile_event_snapshot;
+// mtl_recorder_profile_snapshot resolves a completed profile and returns a recorder-owned,
+// immutable event array. The array remains valid until mtl_recorder_free; callers must copy any
+// values they retain. Existing summary/event entry points remain available for ABI compatibility.
+int mtl_recorder_profile_snapshot(void* rec,
+                                  mtl_recorder_profile_event_snapshot** events,
+                                  int* eventCount, int* omittedMPS,
+                                  int* omittedOverflow, int* omittedUnsupported,
+                                  unsigned long long* timestampFrequency,
+                                  unsigned long long* commandDurationNS);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);

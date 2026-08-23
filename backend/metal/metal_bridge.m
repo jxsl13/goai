@@ -60,12 +60,18 @@ unsigned long long mtl_available_memory(void) {
 
 // Profiling recorders use the low pointer bit as a tag while the default recorder remains the
 // exact retained raw MTLCommandBuffer fast path. NSObject allocations are pointer-aligned.
-@interface GOAIMetalProfilingRecorder : NSObject
+@interface GOAIMetalProfilingRecorder : NSObject {
+@public
+    NSUInteger _inlineValidEventIndex;
+    mtl_recorder_profile_event_snapshot _inlineEventSnapshot;
+}
 @property(nonatomic, strong) id<MTLCommandBuffer> commandBuffer;
 @property(nonatomic, strong) id<MTLCounterSampleBuffer> sampleBuffer;
 @property(nonatomic, strong) NSMutableArray<NSString*>* labels;
 @property(nonatomic, strong) NSData* resolvedData;
-@property(nonatomic, strong) NSArray<NSNumber*>* validEventIndices;
+@property(nonatomic, strong) NSData* validEventIndices;
+@property(nonatomic) NSUInteger validEventCount;
+@property(nonatomic, strong) NSData* eventSnapshot;
 @property(nonatomic) NSUInteger maxEvents;
 @property(nonatomic) NSUInteger nextEvent;
 @property(nonatomic) NSUInteger omittedMPS;
@@ -77,6 +83,7 @@ unsigned long long mtl_available_memory(void) {
 @property(nonatomic) uint64_t gpuTimestampSpan;
 @property(nonatomic) BOOL completed;
 @property(nonatomic) BOOL resolved;
+@property(nonatomic) BOOL eventSnapshotReady;
 @end
 
 @implementation GOAIMetalProfilingRecorder
@@ -239,30 +246,50 @@ static int recorder_resolve_profile(GOAIMetalProfilingRecorder* p) {
     p.resolved = YES;
     if (p.nextEvent == 0) {
         p.resolvedData = [NSData data];
-        p.validEventIndices = @[];
+        p.validEventCount = 0;
         return 0;
     }
     NSData* data = [p.sampleBuffer resolveCounterRange:NSMakeRange(0, p.nextEvent * 2)];
     if (data == nil || data.length < p.nextEvent * 2 * sizeof(MTLCounterResultTimestamp)) {
         p.omittedUnsupported += p.nextEvent;
         p.resolvedData = [NSData data];
-        p.validEventIndices = @[];
+        p.validEventCount = 0;
         return 0;
     }
     const MTLCounterResultTimestamp* samples = data.bytes;
-    NSMutableArray<NSNumber*>* valid = [NSMutableArray arrayWithCapacity:p.nextEvent];
+    NSMutableData* valid = p.nextEvent > 1 ? [[NSMutableData alloc]
+        initWithLength:p.nextEvent * sizeof(NSUInteger)] : nil;
+    NSUInteger* indices = p.nextEvent == 1 ? &p->_inlineValidEventIndex : valid.mutableBytes;
+    NSUInteger validCount = 0;
     for (NSUInteger i = 0; i < p.nextEvent; i++) {
         uint64_t start = samples[2*i].timestamp;
         uint64_t end = samples[2*i+1].timestamp;
         if (start == MTLCounterErrorValue || end == MTLCounterErrorValue || end < start) {
             p.omittedUnsupported++;
         } else {
-            [valid addObject:@(i)];
+            indices[validCount++] = i;
         }
+    }
+    if (validCount <= 1) {
+        if (validCount == 1 && valid != nil) p->_inlineValidEventIndex = indices[0];
+        valid = nil;
+    } else {
+        valid.length = validCount * sizeof(NSUInteger);
     }
     p.resolvedData = data;
     p.validEventIndices = valid;
+    p.validEventCount = validCount;
     return 0;
+}
+
+static inline __attribute__((always_inline)) NSUInteger recorder_profile_event_count(
+    GOAIMetalProfilingRecorder* p) {
+    return p.validEventCount;
+}
+
+static inline __attribute__((always_inline)) const NSUInteger* recorder_profile_event_indices(
+    GOAIMetalProfilingRecorder* p) {
+    return p.validEventCount <= 1 ? &p->_inlineValidEventIndex : p.validEventIndices.bytes;
 }
 
 // ---- process-wide buffer pool (§T336, twin of the Vulkan pool §T335) --------
@@ -3822,7 +3849,7 @@ int mtl_recorder_profile_summary(void* rec, int* eventCount, int* omittedMPS,
     GOAIMetalProfilingRecorder* p = recorder_profile(rec);
     int rc = recorder_resolve_profile(p);
     if (rc != 0) return rc;
-    *eventCount = (int)p.validEventIndices.count;
+    *eventCount = (int)recorder_profile_event_count(p);
     *omittedMPS = (int)p.omittedMPS;
     *omittedOverflow = (int)p.omittedOverflow;
     *omittedUnsupported = (int)p.omittedUnsupported;
@@ -3842,9 +3869,11 @@ int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapac
     GOAIMetalProfilingRecorder* p = recorder_profile(rec);
     int rc = recorder_resolve_profile(p);
     if (rc != 0) return rc;
-    if ((NSUInteger)index >= p.validEventIndices.count) return -2;
-    NSUInteger physical = p.validEventIndices[(NSUInteger)index].unsignedIntegerValue;
-    NSUInteger firstPhysical = p.validEventIndices[0].unsignedIntegerValue;
+    NSUInteger count = recorder_profile_event_count(p);
+    if ((NSUInteger)index >= count) return -2;
+    const NSUInteger* indices = recorder_profile_event_indices(p);
+    NSUInteger physical = indices[(NSUInteger)index];
+    NSUInteger firstPhysical = indices[0];
     const MTLCounterResultTimestamp* samples = p.resolvedData.bytes;
     uint64_t origin = samples[2*firstPhysical].timestamp;
     uint64_t start = samples[2*physical].timestamp;
@@ -3860,6 +3889,61 @@ int mtl_recorder_profile_event(void* rec, int index, char* label, int labelCapac
     *ticks = (unsigned long long)delta;
     *durationNS = (unsigned long long)(((__uint128_t)delta * p.cpuTimestampSpan) /
                                        p.gpuTimestampSpan);
+    return 0;
+}
+
+int mtl_recorder_profile_snapshot(void* rec,
+                                  mtl_recorder_profile_event_snapshot** events,
+                                  int* eventCount, int* omittedMPS,
+                                  int* omittedOverflow, int* omittedUnsupported,
+                                  unsigned long long* timestampFrequency,
+                                  unsigned long long* commandDurationNS) {
+    if (!recorder_is_profiled(rec)) return -8;
+    if (events == NULL || eventCount == NULL || omittedMPS == NULL || omittedOverflow == NULL ||
+        omittedUnsupported == NULL || timestampFrequency == NULL || commandDurationNS == NULL) return -2;
+    GOAIMetalProfilingRecorder* p = recorder_profile(rec);
+    int rc = recorder_resolve_profile(p);
+    if (rc != 0) return rc;
+    NSUInteger count = recorder_profile_event_count(p);
+    const NSUInteger* indices = recorder_profile_event_indices(p);
+    if (!p.eventSnapshotReady) {
+        NSMutableData* data = count > 1 ? [[NSMutableData alloc]
+            initWithLength:count * sizeof(mtl_recorder_profile_event_snapshot)] : nil;
+        mtl_recorder_profile_event_snapshot* snapshot = count == 1 ?
+            &p->_inlineEventSnapshot : data.mutableBytes;
+        if (count > 0 && snapshot == NULL) return -3;
+        const MTLCounterResultTimestamp* samples = p.resolvedData.bytes;
+        NSUInteger firstPhysical = count > 0 ? indices[0] : 0;
+        uint64_t origin = count > 0 ? samples[2*firstPhysical].timestamp : 0;
+        for (NSUInteger i = 0; i < count; i++) {
+            NSUInteger physical = indices[i];
+            uint64_t start = samples[2*physical].timestamp;
+            uint64_t end = samples[2*physical+1].timestamp;
+            uint64_t delta = end - start;
+            const char* utf8 = [p.labels[physical] UTF8String];
+            if (utf8 == NULL) utf8 = "";
+            strncpy(snapshot[i].label, utf8, MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1);
+            snapshot[i].label[MTL_RECORDER_PROFILE_LABEL_CAPACITY - 1] = '\0';
+            snapshot[i].startOffsetNS = (unsigned long long)
+                (((__uint128_t)(start - origin) * p.cpuTimestampSpan) / p.gpuTimestampSpan);
+            snapshot[i].ticks = (unsigned long long)delta;
+            snapshot[i].durationNS = (unsigned long long)
+                (((__uint128_t)delta * p.cpuTimestampSpan) / p.gpuTimestampSpan);
+        }
+        p.eventSnapshot = data;
+        p.eventSnapshotReady = YES;
+    }
+    *events = count == 1 ? &p->_inlineEventSnapshot :
+        (mtl_recorder_profile_event_snapshot*)p.eventSnapshot.bytes;
+    *eventCount = (int)count;
+    *omittedMPS = (int)p.omittedMPS;
+    *omittedOverflow = (int)p.omittedOverflow;
+    *omittedUnsupported = (int)p.omittedUnsupported;
+    *timestampFrequency = (unsigned long long)
+        (((__uint128_t)p.gpuTimestampSpan * 1000000000ULL) / p.cpuTimestampSpan);
+    CFTimeInterval commandSeconds = p.commandBuffer.GPUEndTime - p.commandBuffer.GPUStartTime;
+    *commandDurationNS = commandSeconds > 0 ?
+        (unsigned long long)(commandSeconds * 1000000000.0) : 0;
     return 0;
 }
 

@@ -14,6 +14,12 @@ schema: v1
 - P-01M0M9B6FRFCZA18408PMM2WGH Add native M2 Metal Q4_1 quantized matmul: Delivered native resident Q4_1 as the next M2 bottom-up quantized decode tranche. The exact affine wire format and cooperative decoder path are production-reachable through llamagpu, while generic host-I/O execution remains on the measured-faster ARM64 kernel. Minimum campaign medians were 2.745x cooperative/scalar GPU and 1.462x Metal/CPU wall across four production shapes; TinyLlama-shaped end-t [body truncated at tombstone retention cap]
 - R-01M0N4TXJQE4NTD97E585SHFTP Measure production-shape M2 Q6_K roofline and geometry leverage: Consumed by P-01M0N4ZCJ1FRN and T-01M0N51GZ1FC1. The permanent GPU-timestamp roofline covers Q6_K K2048 N2048, K2048 N5632, K5632 N2048, and cache-busting K2048 N131072. Initial measurements were 191.3, 214.6, 208.0, and 157.0 GB/s, but repeated campaigns corrected the final cell to 184-190 GB/s and showed no stable rows-per-SIMD leverage. One-row specialization remained 0.986x to 1.054x control; [body truncated at tombstone retention cap]
 - P-01M0NSPZ36FZKRC1N1CFER4XCG Stabilize the fused RoPE F16-KV performance gate: Archive retry after the child task completed and Git index access was granted. The revised performance contract, deterministic threshold coverage, and 12-of-12 M2 stability evidence are complete.
+- R-01M0Q4QAP0ESS9GBF2ERVRBHAM Compare pinned upstream M2 quant dot instruction shapes: Consumed by P-01M0Q4TE2ZE52 and T-01M0Q4V43GEB3. The pinned comparison isolated explicit full unrolling as the only untested Q4_K instruction-shape delta; MLX affine quantization was not transferable.
+- R-01M0Q59EV4EKSTBJACTNCBQK42 Compare pinned upstream M2 Q6_K instruction shapes: Consumed by P-01M0Q5CKW6FH8 and T-01M0Q5DGB6FMB. At pinned llama.cpp b0539c43ed13b16bf0d8a0840646faea65469702, Q6_K matches GoAI lane ownership, loads, four-plane reconstruction, scaling, row stepping, and SIMD reduction; only forced full unrolling differs. Its int8 cast is value-equivalent for codes 0 through 63. Pinned MLX d9077d8316ad7305497a3ecf2296bd0e0e99a627 has no transferable GGUF Q6_K ke [body truncated at tombstone retention cap]
+- R-01M0Q69J1CEDCBKG8VDVB580GS Attribute Metal Recorder.Profile event-label allocations: Consumed by proposal P-01M0Q6B7A3E1S and task T-01M0Q6C2RAF6E. External perfscan PS2004 attributed 340 per-event 96-byte scratch allocations in Recorder.Profile; benchmark gates separate the scratch-hoist experiment from any later bulk-cgo or label-interning work.
+- R-01M0Q6SJ8CF6R9984KYGJ8AQ8M Attribute bulk Metal profile extraction leverage: Consumed by proposal P-01M0Q6T9RZEV9. The scratch-only result isolated repeated cgo crossings as the remaining warm extraction cost; the successor must benchmark native snapshot construction on first extraction as well as cached repeat extraction.
+- T-01M0Q6VRADE45AJWQRNNN3JZNC Implement and gate bulk Metal profile snapshots: Implemented additive mtl_recorder_profile_snapshot with a recorder-owned immutable event snapshot, inline one-event storage, compact unboxed valid indices, and one cgo extraction in Recorder.Profile. Existing profile semantics and legacy C entry points pass. Three order-alternated count-seven M2 campaigns measured warm speedups of 2.44-2.55x at 1 event and 17.91-18.23x at 340 events; first extract [body truncated at tombstone retention cap]
+- P-01M0Q6T9RZEV9RWA9ZS5V8KGYC Bulk-extract Metal recorder profile events in one cgo call: Promoted bulk Metal profile extraction after every frozen semantic, warm, cold, and allocation gate passed in three order-alternated Apple M2 Pro campaigns. The final design combines one cgo snapshot call, immutable recorder-lifetime native event storage, an inline single-event fast path, and zero-NSNumber compact valid indices while preserving legacy C ABI functions. Durable contracts are RECORDE [body truncated at tombstone retention cap]
 
 ## METAL-RESIDENT-TOPK-001
 WHEN TopKN is called with valid n and k on a live f32 DeviceBuffer, the Metal resident selection boundary SHALL return k distinct first-n index/value pairs matching the host top k, ordered by descending value then ascending index.
@@ -351,3 +357,27 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
+
+## RECORDER-PROFILE-SNAPSHOT-PARITY-001
+WHEN a completed profile is extracted, the Recorder.Profile bulk snapshot SHALL make TestRecorderProfileLabelsDurationsAndParity pass with identical RecorderProfile fields and errors.
+
+## RECORDER-PROFILE-SNAPSHOT-OWNERSHIP-001
+WHEN a completed recorder is resolved, the native profile snapshot SHALL retain exactly one immutable 96-byte-label event array until Recorder.Free.
+
+## RECORDER-PROFILE-SNAPSHOT-WARM-PERF-001
+WHEN three order-alternated count-seven campaigns compare control and bulk extraction, the warm Recorder.Profile events340 on Apple M2 SHALL run at least 1.50 times faster by median.
+
+## RECORDER-PROFILE-SNAPSHOT-WARM-ALLOC-001
+WHEN the bulk extraction candidate is measured, the warm Recorder.Profile events340 on Apple M2 SHALL allocate at least 1000 fewer objects and 40000 fewer Go bytes per operation.
+
+## RECORDER-PROFILE-SNAPSHOT-SMALL-PERF-001
+WHEN each frozen campaign compares control and bulk extraction, the warm Recorder.Profile events1 on Apple M2 SHALL run at least 1.10 times faster by median.
+
+## RECORDER-PROFILE-SNAPSHOT-COLD-PERF-001
+WHEN each frozen campaign measures events340 and events1, the first Recorder.Profile extraction on Apple M2 SHALL make events340 at least 1.10 times faster and retain 0.97 times events1 throughput.
+
+## RECORDER-PROFILE-SNAPSHOT-ABI-001
+WHEN the additive snapshot entry point is used, the Metal profile bulk snapshot ABI SHALL keep mtl_recorder_profile_summary and mtl_recorder_profile_event compatible while NewRecorder performs 0 snapshot allocations.
+
+## RECORDER-PROFILE-VALID-INDEX-STORAGE-001
+WHEN valid event indices are materialized, the native profile resolver SHALL store at most 1 index inline and all larger sets contiguously with 0 NSNumber boxes.
