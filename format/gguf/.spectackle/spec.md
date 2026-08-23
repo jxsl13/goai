@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q4K-PAIR-LOAD-FMLA-EXACT-001
+WHEN interleaving activation loads with row-zero FMLA, the paired ARM64 Q4_K row kernel SHALL preserve 4 activation vectors for row one and produce 2 F64 outputs bit-for-bit for arbitrary raw headers and randomized activation values.
+
+Rationale: Instruction scheduling may change, but GGUF element mapping, coefficient selection, F32 reduction order, and ordered F64 accumulation must remain identical.
