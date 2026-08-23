@@ -401,3 +401,6 @@ WHEN paired Q4_K headers use table-indexed shifts, the dotQ4KPairRowNeon coeffic
 
 ## Q4K-PAIR-HEADER-USHL-PERFORMANCE-001
 WHEN M2 compares table-indexed paired Q4_K headers, the retained leaf and production benchmarks SHALL Reach 1.02x leaf median, win 5/7 campaigns, allocate 0 bytes, match exact outputs, and regress 0 pinned shapes.
+
+## Q4K-SINGLE-ROW-ASM-EXACT-001
+WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match prior per-block output bits for arbitrary headers, preserve f16 coefficient conversion, F32 block reduction, and ordered F64 accumulation.
