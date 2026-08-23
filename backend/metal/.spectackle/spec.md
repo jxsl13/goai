@@ -481,3 +481,6 @@ WHEN the register-retained dim-2048 RMSNorm kernel executes, the Metal RMSNorm c
 
 ## METAL-RMSNORM-REGISTER-CACHE-SCOPE-001
 WHEN RMSNorm has rows other than 1 or dimension other than 2048, the Metal RMSNorm selector SHALL dispatch the existing kernel and issue exactly 0 register-retained candidate threadgroups.
+
+## METAL-RMSNORM-REGISTER-CACHE-PERF-001
+WHEN 3 same-command count-7 M2 campaigns compare candidate and control, the RMSNorm promotion gate SHALL require at least 1.10 times candidate throughput in every campaign.
