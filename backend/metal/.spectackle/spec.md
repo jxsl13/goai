@@ -480,3 +480,6 @@ WHEN eligible f16-KV sq=1 dk=64 causal decode has fused pipeline capacity, the M
 
 ## METAL-Q4K-THREADGROUP-WIDTH-NUMERIC-001
 WHEN a resident M=1 Q4_K projection uses 128 or 256 physical threads, the Metal Q4_K cooperative selector SHALL match the 64-thread output bit-exactly at the three frozen shapes and mutate zero input or weight bytes.
+
+## METAL-Q4K-THREADGROUP-WIDTH-SCOPE-001
+WHEN M differs from one or the requested width is unsupported by the device, the Metal Q4_K cooperative selector SHALL dispatch the 64-thread route exactly and issue zero wider candidate threadgroups.
