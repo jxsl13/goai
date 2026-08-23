@@ -4019,7 +4019,7 @@ Compile the merged-main GGUF and exact TinyLlama CPU production harnesses once, 
 
 ## T-01M0PH6R41F6TSNAYP8AV4XMSG Batch adjacent paired Q4_K blocks under one NEON call
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 refs: R-01M0PGJAMGEKCT53EG9E4QMM4S
