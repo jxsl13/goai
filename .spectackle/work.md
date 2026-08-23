@@ -4018,7 +4018,7 @@ Measure whether a bounded depth-aware Metal graph can compose the promoted compl
 
 ## P-01M0RGMQF1ENNBTT2DFFC3P0A2 Compose pre-norm transformer stacks in one Metal graph
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0RGHTRTE3CSGT21HN59B9QY
 targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go

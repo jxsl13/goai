@@ -831,3 +831,4 @@
 {"t":"2026-08-23T23:51:03Z","eid":"c1093b539e5a973a","ag":"ag-9397","ev":"create","id":"R-01M0RGHTRTE3CSGT21HN59B9QY","k":"research","ti":"Measure a depth-composed Metal pre-norm transformer stack on M2"}
 {"t":"2026-08-23T23:52:25Z","eid":"cde5032be6714274","ag":"ag-1dbf","ev":"move","id":"R-01M0RGHTRTE3CSGT21HN59B9QY","fr":"draft","to":"active","note":"Begin the frozen-gate M2 feasibility measurement before implementation."}
 {"t":"2026-08-23T23:52:38Z","eid":"c36648cd4d708017","ag":"ag-82ed","ev":"create","id":"P-01M0RGMQF1ENNBTT2DFFC3P0A2","k":"proposal","ti":"Compose pre-norm transformer stacks in one Metal graph"}
+{"t":"2026-08-23T23:52:47Z","eid":"cf3b1cfba3ddff68","ag":"ag-9c01","ev":"move","id":"P-01M0RGMQF1ENNBTT2DFFC3P0A2","fr":"draft","to":"active","note":"User authorized continuous M2-first performance work; begin implementation only under the frozen research gates."}
