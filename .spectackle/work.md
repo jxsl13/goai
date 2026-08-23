@@ -4014,12 +4014,3 @@ created: 2026-08-23
 targets: go:llamagpu_test.TestTinyLlamaVsLlamaCpp, go:llamagpu.NewQuantF16KV, internal/benchcompare/leadership, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
 
 Pin the current Homebrew llama.cpp v0.2.0 revision bb4caa7540188872173c44d161602d9271386413 and ggml v0.21.0 incumbent, then measure GoAI and llama.cpp on the identical TinyLlama Q4_K_M model hash 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0. Use matched f16 KV, decode-only boundaries, five alternating fresh-process samples, and record both engines per-kernel Metal GPU distributions before selecting another leaf-kernel successor. Treat leadership as a scoped matrix cell, not a universal claim.
-
-## P-01M0QSQ4YHEY7BYWNKV1YBGBYV Preserve validated Xcode timeout Metal captures
-kind: proposal
-state: active
-created: 2026-08-23
-grilled: 2026-08-23 open=0
-targets: go:main.run, go:main.command, internal/benchcompare/metalcounters/analyze_test.go, R-01M0QSCP1NEQ9, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
-
-Current Xcode 26.6 records a structurally valid Metal trace and workload output, prints that recording completed and the trace was saved, then returns exit status 54 at the requested time limit. metalcounters currently returns immediately on any recorder error, so it discards a valid expensive capture before target-marker, TOC, counter-schema, and workload validation. Change the capture boundary to retain the recorder error temporarily, validate the target output and trace through the existing export and analysis pipeline, and succeed only when every downstream invariant passes. A failed workload, absent artifact, failed export, missing required counters, or invalid sample must still fail closed. Report the generalizable finding through perfscan issue 866 and use the repaired path to finish the current pinned llama.cpp attribution.
