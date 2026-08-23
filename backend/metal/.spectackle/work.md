@@ -72,7 +72,7 @@ Add a diagnostic 32-thread resident M=1 Q4_K cooperative route. Derive output ro
 
 ## T-01M0QMVCB7EA4AX2MTYJQDZ1QH Implement and gate 32-thread M2 Q4_K groups
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QMTYCMEWSBXMDBVWK64YSE
 targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/q4k_bench_test.go
