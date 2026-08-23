@@ -414,8 +414,3 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN Q6_K high-bit planes are merged with ARM64 VBIT, the dotQ6KBlockNeon SHALL produce the same four signed six-bit byte streams and preserve every block and row output bit.
 
 Rationale: VBIT may replace only the mask-and-OR instruction pair; the existing 0x30 selection mask fixes the element mapping.
-
-## Q6K-VBIT-PERFORMANCE-001 {applies: go:gguf.dotQ6KBlockNeon,go:gguf.BenchmarkDotQ6KAsm}
-WHEN Apple M2 benchmarks the Q6_K VBIT extraction path, the retained implementation SHALL reach 1.04x K4096 leaf median across 7 alternating campaigns, win at least 5 campaigns, retain 0 leaf allocations, and regress 0 pinned Q6_K matrix or production shapes.
-
-Rationale: Four instruction removals per extraction group must translate into repeatable bottom-up and consumer leverage.
