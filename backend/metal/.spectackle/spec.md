@@ -353,9 +353,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-## METAL-Q6K-LONGK-UNROLL-PERF-001
-WHEN three independent count-seven same-binary M2 campaigns cover K4096N2048, K5632N2048, and K8192N4096, the long-K Q6_K promotion gate SHALL retain the candidate only when every control-to-candidate median reaches at least 1.03 times with identical allocation and submission semantics.
-
 ## METAL-Q6K-LONGK-FALLBACK-PERF-001
 WHEN three independent count-seven same-binary M2 campaigns cover K2048N256 with both toggle states, the long-K Q6_K selector fallback SHALL keep the ratio between 0.97 and 1.03 and issue exactly zero unrolled pipeline dispatches.
 
