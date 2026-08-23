@@ -4010,7 +4010,7 @@ Reprofile merged main after the paired and independent Q4_K coefficient-header a
 
 ## R-01M0PGJAMGEKCT53EG9E4QMM4S Attribute post-header Apple M2 Q4_K block costs
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 refs: P-01M0PGHM4TE7YAXSJT0Q56SSZ2, R-01M0PEHGT7FY285ZWC1JQ05SWB
 targets: go:gguf.dotQ4KPairBlockNeon, go:gguf.dotQ4KBlockNeon, go:gguf.dotQ4KPairRowASM, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence

@@ -529,3 +529,4 @@
 {"t":"2026-08-23T05:12:27Z","eid":"cd0a1f139e8a2c47","ag":"ag-fd2e","ev":"create","id":"P-01M0PGHM4TE7YAXSJT0Q56SSZ2","k":"proposal","ti":"Optimize the next Apple M2 Q4_K fused block hotspot"}
 {"t":"2026-08-23T05:12:39Z","eid":"4a0722f3efed3679","ag":"ag-5726","ev":"move","id":"P-01M0PGHM4TE7YAXSJT0Q56SSZ2","fr":"draft","to":"active","note":"Standing user approval directs uninterrupted M2-first bottom-up performance work with benchmark-gated implementation."}
 {"t":"2026-08-23T05:12:50Z","eid":"4512e98dcf88a1ec","ag":"ag-281a","ev":"create","id":"R-01M0PGJAMGEKCT53EG9E4QMM4S","k":"research","ti":"Attribute post-header Apple M2 Q4_K block costs"}
+{"t":"2026-08-23T05:12:58Z","eid":"096056a493fda04d","ag":"ag-39c5","ev":"move","id":"R-01M0PGJAMGEKCT53EG9E4QMM4S","fr":"draft","to":"active","note":"Begun under the active proposal to collect merged-main leaf and production evidence before selecting an implementation."}
