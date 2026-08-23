@@ -543,3 +543,4 @@
 {"t":"2026-08-23T07:08:39Z","eid":"436cb68c76c444fb","ag":"ag-3082","ev":"create","id":"R-01M0PQ6CJPFMMAP21B11H6BC9B","k":"research","ti":"Re-profile merged M2 Q4_K vector-header kernel"}
 {"t":"2026-08-23T07:08:46Z","eid":"894543ad50491389","ag":"ag-e047","ev":"move","id":"R-01M0PQ6CJPFMMAP21B11H6BC9B","fr":"draft","to":"active"}
 {"t":"2026-08-23T07:10:44Z","eid":"d05ebca733c53af3","ag":"ag-b1f8","ev":"create","id":"T-01M0PQA6P4FW4TZTP85GCBPX5V","k":"task","ti":"Coalesce paired Q4_K coefficient broadcasts with LD2R"}
+{"t":"2026-08-23T07:11:10Z","eid":"9a15aaafb8a514e6","ag":"ag-dd5d","ev":"move","id":"T-01M0PQA6P4FW4TZTP85GCBPX5V","fr":"draft","to":"active"}
