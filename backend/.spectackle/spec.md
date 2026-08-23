@@ -56,3 +56,6 @@ WHEN AttnAttrs.Batch exceeds 1, the OpMHA and OpMHABackward SHALL partition rows
 
 ## BATCHED-ATTENTION-COMPATIBILITY-001
 WHEN AttnAttrs.Batch is 0 or 1, the attention backend SHALL preserve the existing single-sequence forward and backward route, shapes, and numerical tolerances with 0 added batch dispatches.
+
+## PRENORM-FFN-FUSION-SEMANTICS-001
+WHEN OpPreNormFFN or OpPreNormFFNBackward executes, the fused backend operation SHALL preserve exact GELU, biased last-axis LayerNorm with NormAttrs epsilon, 1 residual addition, and gradients for all 7 differentiable inputs.
