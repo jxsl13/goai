@@ -499,3 +499,4 @@
 {"t":"2026-08-23T15:24:21Z","eid":"7fad7dca37407764","ag":"ag-d59c","ev":"move","id":"P-01M0QKHBQ9E8493F49H436R6CJ","dir":"backend/metal","fr":"draft","to":"active"}
 {"t":"2026-08-23T15:24:24Z","eid":"db79cffa557ff11b","ag":"ag-d6f0","ev":"create","id":"T-01M0QKJ4PHESN8HGQZ6SC3KJ14","k":"task","ti":"Implement and gate register-retained M2 RMSNorm","dir":"backend/metal"}
 {"t":"2026-08-23T15:24:40Z","eid":"3cce42bb124ac5d1","ag":"ag-68ff","ev":"move","id":"T-01M0QKJ4PHESN8HGQZ6SC3KJ14","dir":"backend/metal","fr":"draft","to":"active"}
+{"t":"2026-08-23T15:25:25Z","eid":"b770d8c04b20d1e7","ag":"ag-9ee5","ev":"rule","dir":"backend/metal","op":"add","rule":"METAL-RMSNORM-REGISTER-CACHE-NUMERIC-001","txt":"WHEN the register-retained dim-2048 RMSNorm kernel executes, the Metal RMSNorm candidate SHALL produce bit-exact control output and mutate exactly 0 input or gamma bytes."}
