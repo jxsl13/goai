@@ -3998,3 +3998,13 @@ option: Retain one compute encoder without barriers and rely on implicit orderin
 option: Keep one encoder per operation and only optimize host recorder allocation
 blocks: P-01M0N3K92DE8VSC1V55JPA14K7
 choice: Retain one normal compute encoder, insert buffer-scope barriers between dispatches, and close at blit, MPS, and submission boundaries
+
+## T-01M0PXJ8CWFEB9ANNDEQ2GHPCK Load each Q6_K activation group with one ARM64 LD1
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
+refs: R-01M0PWQJZWFF9AEG1KB39ZB15Y
+targets: go:gguf.dotQ6KBlockNeon, asm:gguf.dotQ6KBlockNeon, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, internal/benchcompare/leadership/evidence
+
+Replace four consecutive 16-byte activation loads in DOT_Q6 with one 64-byte four-register LD1 into V28 through V31 after coefficient multiplication. Preserve activation order, q extraction, by-element coefficient multiplication, four independent FMLA accumulators, reduction order, pointers, and all non-ARM64 behavior. Gate with known-answer and randomized raw parity, disassembly, at least seven alternating fresh-process K4096 leaf campaigns, Q6_K matrix cells, and exact production digest; reject below 1.04x leaf median or five campaign wins.
