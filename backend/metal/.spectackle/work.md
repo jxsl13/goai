@@ -63,7 +63,7 @@ The merged bulk snapshot leaves 344 allocations and 19,816 B per warm 340-event 
 
 ## P-01M0Q9837XE0Y8YTH47J1HR5K9 Intern recorder profile labels by native content
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ, P-01M0Q6T9RZEV9RWA9ZS5V8KGYC
 targets: go:metal.Recorder.Profile, go:metal.Recorder.Free, backend/metal/recorder_profile_bench_test.go
