@@ -4011,7 +4011,7 @@ Replace repeated scalar-replicating coefficient loads with one 128-bit coefficie
 
 ## T-01M0PZEC8AETSSAKFDE8EBGMYD Use vector-lane coefficients in paired Q4_K rows
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0PZDCGXE14RSRRFMZ82XGTM
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowNeon, format/gguf/dot_q4k_asm_arm64.s, format/gguf/dot_q4k_asm_arm64_test.go, internal/benchcompare/leadership/evidence

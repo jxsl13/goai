@@ -608,3 +608,4 @@
 {"t":"2026-08-23T09:32:25Z","eid":"ac7b10b51ea9ea7a","ag":"ag-a116","ev":"grill","id":"P-01M0PZDCGXE14RSRRFMZ82XGTM","gr":"2026-08-23 open=0","hash":"5bea95d5f10a60c426c92428a5c5fa7bef1e33e7b1a7311b5e0d21e1fbb5b5c1"}
 {"t":"2026-08-23T09:32:36Z","eid":"815b008d0d30ac66","ag":"ag-2402","ev":"move","id":"P-01M0PZDCGXE14RSRRFMZ82XGTM","fr":"draft","to":"active"}
 {"t":"2026-08-23T09:32:49Z","eid":"a79b43f6cdd1db37","ag":"ag-987a","ev":"create","id":"T-01M0PZEC8AETSSAKFDE8EBGMYD","k":"task","ti":"Use vector-lane coefficients in paired Q4_K rows"}
+{"t":"2026-08-23T09:33:00Z","eid":"7a24a8b36e34b4ad","ag":"ag-fdd2","ev":"move","id":"T-01M0PZEC8AETSSAKFDE8EBGMYD","fr":"draft","to":"active"}
