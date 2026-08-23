@@ -4016,3 +4016,12 @@ parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
 targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.dotQ4KPairRowASM, internal/benchcompare/leadership/evidence
 
 Profile merged PR 1179 on Apple M2 Pro after the packed-header NEON decode. Attribute remaining compute versus scheduler synchronization at the production boundary, inspect the paired row instruction schedule without revisiting rejected multi-block Go staging, and select only a bounded exact candidate with a plausible retained leaf gain of at least 1.02x and no production regression. Pin every baseline to merge 71cee6d2 and preserve matched model bytes, digest, thread count, warm-up, process ordering, and measurement boundaries.
+
+## T-01M0PQYE4TFZ9S3SPMTJ3K8RW6 Shuffle paired Q4_K headers with table-indexed USHL
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+targets: asm:gguf.dotQ4KPairRowNeon, go:gguf.qKByteToF32Indexes, go:gguf.TestDotQ4KPairRowASMArbitraryHeaders, go:gguf.BenchmarkDotQ4KPairRowASM_K2048, internal/benchcompare/leadership/evidence
+
+Replace the VEXT/VZIP-heavy packed Q4_K header field construction with three preloaded byte vectors: a per-lane right-shift vector, a repeated scale/min index vector, and a repeated high-nibble index vector. Use VTBL, VUSHL, masks, and one final VEXT to produce the identical 16 coefficient bytes for each paired row while leaving the conversion, multiplication, coefficient layout, dual-dot schedule, reduction order, and non-ARM64 paths unchanged. Gate against merge 71cee6d2 with arbitrary-header output bits, Go 1.26.6 compatibility, at least seven retained alternating M2 row campaigns, FFN pair-apply, and pinned production decode. Reject below 1.02x leaf speedup, below 5/7 wins, or on any production regression.
