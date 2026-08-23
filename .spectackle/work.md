@@ -4019,6 +4019,7 @@ Investigate the M2 ViT B=8 training bottleneck after batch-axis forward landed. 
 kind: proposal
 state: active
 created: 2026-08-23
+grilled: 2026-08-23 open=0
 targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/metal_test.go, internal/benchcompare/vision_train_test.go
 
 Consume R-01M0R29CN1FD7. Add a shape-keyed Metal MPSGraph backward entry point for Batch greater than 1 and Window equal to 0. Build the same batch, kv-head, repetition, sequence, and head-dimension layout as the proven forward graph; add a dO placeholder, form sum(O multiplied by dO), and use MPSGraph automatic differentiation to produce dQ, dK, and dV, including broadcast reduction for GQA. Feed all packed sequences once, encode one graph, wait once, and copy each packed gradient once. Preserve the existing batch-one MPSMatrix route and the per-sequence sliding-window kernel. Retain only after gradient parity and three alternating count-seven M2 ViT B=8 campaigns satisfy at least 1.10x train median in every campaign and at least 1.05x in every aligned pair.
