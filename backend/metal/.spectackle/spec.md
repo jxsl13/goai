@@ -467,3 +467,6 @@ WHEN the fused split-K route executes, the fused Metal kernel SHALL assign one S
 WHEN attention is outside sq=1, dk=64, unwindowed causal split-K or the fused pipeline cannot host nchunk times 32 threads, the Metal attention selector SHALL dispatch 0 fused kernels and preserve the incumbent route.
 ## METAL-SPLITK-FUSED-PAIRING-001
 WHEN a paired TinyLlama campaign evaluates one dtype and context cell, the campaign statistic SHALL use the median of 3 per-round candidate-to-control ratios and invalidate ratio spread above 1.15 times.
+
+## METAL-F16KV-SPLITK-FUSED-PERF-001
+WHEN 3 independent same-command count-7 M2 campaigns measure f16-KV attention at sk 512, 1024, 1536, and 2048, the f16-KV fused split-K promotion gate SHALL require at least 1.20 times two-pass throughput in every cell and campaign.
