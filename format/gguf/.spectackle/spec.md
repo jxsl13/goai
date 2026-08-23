@@ -414,3 +414,8 @@ WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and p
 WHEN interleaving activation loads with row-zero FMLA, the paired ARM64 Q4_K row kernel SHALL preserve 4 activation vectors for row one and produce 2 F64 outputs bit-for-bit for arbitrary raw headers and randomized activation values.
 
 Rationale: Instruction scheduling may change, but GGUF element mapping, coefficient selection, F32 reduction order, and ordered F64 accumulation must remain identical.
+
+## Q4K-PAIR-LOAD-FMLA-PERFORMANCE-001
+WHEN the K2048 paired-row benchmark runs on Apple M2, the interleaved paired Q4_K activation-load path SHALL reach at least 1.03x retained median speedup across 7 alternating campaigns, win at least 5 campaigns, retain 0 allocations, and regress 0 representative matrix, apply, or pinned production shapes.
+
+Rationale: The instruction-scheduling experiment is retained only when its leaf gain is repeatable and survives end-to-end boundaries.
