@@ -683,3 +683,8 @@ Rationale: Every unsupported or observable graph retains established semantics.
 WHEN the CPU Q4_K and Q6_K residual epilogue candidate is considered for retention, the GoAI SHALL require digest ea3df5516f17df83, at least 20 percent fewer allocation bytes, and at least 1.03x median speedup in independent interleaved 64-step campaigns.
 
 Rationale: The prior allocation-only design reached only 1.014x and was rejected.
+
+## CPU-QUANT-RESIDUAL-EPILOGUE-004
+WHEN TestProdCPUQuantDecodeGGUF runs in a binary that also registers accelerator backends, the GoAI SHALL make TestProdCPUQuantDecodeGGUF pin backend.Preference to CPU for model construction and restore the prior preference afterward.
+
+Rationale: QuantLinear uses backend.Default, so a CPU context alone does not establish CPU projection attribution.
