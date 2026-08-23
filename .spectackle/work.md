@@ -4001,7 +4001,7 @@ choice: Retain one normal compute encoder, insert buffer-scope barriers between 
 
 ## P-01M0Q18189FNG8Y4RQ0H6NQ4PN Pair adjacent Q4_K output rows in M2 decode
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:gguf.QMatMul, go:gguf.dotQ4KPairRowFn, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, format/gguf/bench_test.go, internal/benchcompare/leadership/evidence
