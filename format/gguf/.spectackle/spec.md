@@ -372,3 +372,8 @@ WHEN the K=2048 independent-row benchmark runs on Apple ARM64, the bulk independ
 WHEN single or paired 256-weight leaf pointer arithmetic is folded into load addressing, the Apple ARM64 Q4_K block kernels SHALL return bits identical to the d43cdb4b leaf for every input and perform 0 leaf allocations.
 
 Rationale: Post-index addressing must remain a pure integer-address-generation optimization around the established numerical kernel.
+
+## Q4K-POSTINDEX-PERF-001 {applies: go:gguf.dotQ4KPairBlockNeon,go:gguf.dotQ4KPairRowASM}
+WHEN the K=2048 paired-row benchmark runs on Apple ARM64, the post-index Q4_K paired leaf SHALL reach at least 1.02x median speedup across 7 interleaved campaigns, retain 0 allocations, and show no production-shape regression.
+
+Rationale: The paired leaf is the dominant remaining Q4_K compute hotspot in the exact TinyLlama CPU profile.
