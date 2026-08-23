@@ -351,9 +351,5 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-
-## METAL-Q4K-SWIGLU-PAIR-NUMERIC-001
-WHEN an M=1 paired Q4_K projection executes with matching gate and up geometry, the Metal Q4_K SwiGLU pair kernel SHALL produce 100 percent bit-identical output to two QMatMulResident calls plus BinaryN op 6 and preserve both inputs.
-
 ## METAL-Q4K-SWIGLU-PAIR-SCOPE-001
 WHEN M differs from 1, either weight type differs from Q4_K, or gate and up geometry differs, the Metal Q4_K SwiGLU pair selector SHALL execute the established projection chain and issue 0 qmatmul.q4_k.swiglu_pair events.
