@@ -63,7 +63,7 @@ The merged bulk snapshot leaves 344 allocations and 19,816 B per warm 340-event 
 
 ## P-01M0Q9EZJ8ENCSJ4YR1J41MDGD Deduplicate labels within each Recorder.Profile extraction
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q913MDFQSTD3ME8MTRCGRZ
 grilled: 2026-08-23 open=0
