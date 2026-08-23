@@ -72,7 +72,7 @@ Continue research R-01M0QQFB4CE6C with the compilation stage that the rejected I
 
 ## T-01M0QQQQKNFDG88NTH0EGK6KSS Generate and benchmark an M2 Q4_K binary archive
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QQQ3NFE0XATH1N2JGG8QYT
 targets: objc:metal_bridge.ensure_qmatmul_q4k

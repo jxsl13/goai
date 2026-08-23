@@ -593,3 +593,4 @@
 {"t":"2026-08-23T16:37:18Z","eid":"7e3381041823ef23","ag":"ag-2132","ev":"grill","id":"P-01M0QQQ3NFE0XATH1N2JGG8QYT","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"8560da771a1f776250edf25d72f25dae2e71adfe7daae572d0f663f99f2b65f9"}
 {"t":"2026-08-23T16:37:20Z","eid":"c5b36875993f8d2b","ag":"ag-59fb","ev":"move","id":"P-01M0QQQ3NFE0XATH1N2JGG8QYT","dir":"backend/metal","fr":"draft","to":"active","note":"User-authorized ongoing M2-first performance goal; GPU-specific archive diagnostic follows the rejected IR-only stage."}
 {"t":"2026-08-23T16:37:22Z","eid":"deaf66aa3f7c7174","ag":"ag-c7c5","ev":"create","id":"T-01M0QQQQKNFDG88NTH0EGK6KSS","k":"task","ti":"Generate and benchmark an M2 Q4_K binary archive","dir":"backend/metal"}
+{"t":"2026-08-23T16:38:11Z","eid":"e06e2b01532b9a8e","ag":"ag-0016","ev":"move","id":"T-01M0QQQQKNFDG88NTH0EGK6KSS","dir":"backend/metal","fr":"draft","to":"active"}
