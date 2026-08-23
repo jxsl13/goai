@@ -52,13 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## P-01M0Q6B7A3E1SS7VWHGS37WPDE Reuse Recorder.Profile label scratch across Metal events
-kind: proposal
-state: active
-created: 2026-08-23
-refs: R-01M0Q69J1CEDCBKG8VDVB580GS
-grilled: 2026-08-23 open=0
-targets: go:metal.Recorder.Profile
-
-Recorder.Profile currently allocates a 96-byte label buffer once per event before a synchronous native call that always overwrites and terminates the buffer. Hoist one scratch buffer outside the event loop without changing the C ABI, returned profile values, label ownership, or error behavior. Benchmark completed recorders with one and 340 events. Require the 340-event path to remove at least 300 allocations and 30000 allocation bytes per call, improve median latency by at least 1.10x, and keep the one-event path at least 0.97x. Consider label interning or bulk cgo only under separate evidence after this exact baseline.
