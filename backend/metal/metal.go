@@ -1272,6 +1272,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return preNormAttentionF32, true
 		case backend.OpPreNormAttentionBackward:
 			return preNormAttentionBackwardF32, true
+		case backend.OpPreNormTransformerBlock:
+			return preNormTransformerBlockF32, true
+		case backend.OpPreNormTransformerBlockBackward:
+			return preNormTransformerBlockBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -1922,6 +1926,98 @@ func preNormAttentionBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attr
 	)
 	if rc != 0 {
 		return nil, fmt.Errorf("metal: prenorm-attention-backward failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
+func preNormTransformerBlockMetalGeometry(in []*tensor.Tensor, attrs backend.PreNormTransformerBlockAttrs, backward bool) (rows, dim, hidden, batch, seq, heads int, ok bool) {
+	want := 13
+	if backward {
+		want = 14
+	}
+	if len(in) != want {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	attrs = attrs.WithDefaults()
+	rows, dim, batch, seq, heads, ok = preNormAttentionMetalGeometry(in[:7], backend.PreNormAttentionAttrs{
+		Heads: attrs.Heads, Batch: attrs.Batch, Eps: attrs.Eps1,
+	}, false)
+	if !ok {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	ffnInputs := []*tensor.Tensor{in[0], in[7], in[8], in[9], in[10], in[11], in[12]}
+	if backward {
+		ffnInputs = append(ffnInputs, in[13])
+	}
+	ffnRows, ffnDim, hidden, ok := preNormFFNMetalGeometry(ffnInputs, backward)
+	if !ok || ffnRows != rows || ffnDim != dim {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	return rows, dim, hidden, batch, seq, heads, true
+}
+
+func preNormTransformerBlockF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormTransformerBlock, in, attrs)
+	}
+	pa, _ := attrs.(backend.PreNormTransformerBlockAttrs)
+	rows, dim, hidden, batch, seq, heads, ok := preNormTransformerBlockMetalGeometry(in, pa, false)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	out := tensor.New(tensor.F32, in[0].Shape())
+	rc := C.mtl_prenorm_transformer_block_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]), (*C.float)(&in[7].Storage().F32()[0]),
+		(*C.float)(&in[8].Storage().F32()[0]), (*C.float)(&in[9].Storage().F32()[0]),
+		(*C.float)(&in[10].Storage().F32()[0]), (*C.float)(&in[11].Storage().F32()[0]),
+		(*C.float)(&in[12].Storage().F32()[0]), (*C.float)(&out.Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(hidden), C.int(batch), C.int(seq), C.int(heads),
+		C.float(pa.Eps1), C.float(pa.Eps2),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-transformer-block failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func preNormTransformerBlockBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormTransformerBlockBackward, in, attrs)
+	}
+	pa, _ := attrs.(backend.PreNormTransformerBlockAttrs)
+	rows, dim, hidden, batch, seq, heads, ok := preNormTransformerBlockMetalGeometry(in, pa, true)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	out := make([]*tensor.Tensor, 13)
+	for i := range out {
+		out[i] = tensor.New(tensor.F32, in[i].Shape())
+	}
+	rc := C.mtl_prenorm_transformer_block_backward_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&in[6].Storage().F32()[0]), (*C.float)(&in[7].Storage().F32()[0]),
+		(*C.float)(&in[8].Storage().F32()[0]), (*C.float)(&in[9].Storage().F32()[0]),
+		(*C.float)(&in[10].Storage().F32()[0]), (*C.float)(&in[11].Storage().F32()[0]),
+		(*C.float)(&in[12].Storage().F32()[0]), (*C.float)(&in[13].Storage().F32()[0]),
+		(*C.float)(&out[0].Storage().F32()[0]), (*C.float)(&out[1].Storage().F32()[0]),
+		(*C.float)(&out[2].Storage().F32()[0]), (*C.float)(&out[3].Storage().F32()[0]),
+		(*C.float)(&out[4].Storage().F32()[0]), (*C.float)(&out[5].Storage().F32()[0]),
+		(*C.float)(&out[6].Storage().F32()[0]), (*C.float)(&out[7].Storage().F32()[0]),
+		(*C.float)(&out[8].Storage().F32()[0]), (*C.float)(&out[9].Storage().F32()[0]),
+		(*C.float)(&out[10].Storage().F32()[0]), (*C.float)(&out[11].Storage().F32()[0]),
+		(*C.float)(&out[12].Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(hidden), C.int(batch), C.int(seq), C.int(heads),
+		C.float(pa.Eps1), C.float(pa.Eps2),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-transformer-block-backward failed (code %d)", int(rc))
 	}
 	return out, nil
 }

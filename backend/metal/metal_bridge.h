@@ -526,6 +526,26 @@ int mtl_prenorm_attention_backward_f32(
     float* dX, float* dGamma, float* dBeta, float* dWq, float* dWk, float* dWv, float* dWo,
     int rows, int dim, int batch, int seq, int heads, float eps);
 
+int mtl_prenorm_transformer_block_f32(
+    const float* X, const float* Gamma1, const float* Beta1,
+    const float* Wq, const float* Wk, const float* Wv, const float* Wo,
+    const float* Gamma2, const float* Beta2,
+    const float* W1, const float* B1, const float* W2, const float* B2,
+    float* Y, int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2);
+int mtl_prenorm_transformer_block_backward_f32(
+    const float* X, const float* Gamma1, const float* Beta1,
+    const float* Wq, const float* Wk, const float* Wv, const float* Wo,
+    const float* Gamma2, const float* Beta2,
+    const float* W1, const float* B1, const float* W2, const float* B2,
+    const float* dO,
+    float* dX, float* dGamma1, float* dBeta1,
+    float* dWq, float* dWk, float* dWv, float* dWo,
+    float* dGamma2, float* dBeta2,
+    float* dW1, float* dB1, float* dW2, float* dB2,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA
