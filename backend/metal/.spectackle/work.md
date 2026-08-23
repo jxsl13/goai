@@ -52,11 +52,3 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
-
-## R-01M0QF5B7EE31TSGZKGEMY4YEZ Fuse M2 split-K chunk processing and merge inside one threadgroup
-kind: research
-state: draft
-created: 2026-08-23
-targets: backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/metal.go, backend/metal/mha_decode_bench_test.go, llamagpu
-
-The rejected lane-owned pass-2 candidate proved that pass-2 redundancy exists but is too small in isolation: only 2 of 8 full-attention cells cleared the frozen 1.05x median gate. The higher-leverage boundary is the two-dispatch architecture itself. For dk=64 decode, launch one threadgroup per head with nchunk SIMD groups. Each SIMD group preserves the production lane-quad pass-1 arithmetic for one key chunk, writes its 66-float partial to threadgroup memory, and synchronizes. SIMD group 0 then merges chunk partials in ascending chunk order with lane-owned output dimensions and writes O. This removes the global PART write/read round trip, the second command encoder, and the process-global scratch dependency while retaining the current split-K parallelism within each head. Support the default nchunk <= 16 and fall back when pipeline thread limits reject nchunk*32 threads. Validate both f32 and f16-KV production lanes with same-command GPU timestamps and paired TinyLlama decode.
