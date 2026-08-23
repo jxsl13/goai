@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0R29CN1FD79BAX15W8RMK81 Batch Metal attention backward into one native submission
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:metal.mhaBackwardF32, c:mtl_mha_backward_mps, backend/metal/metal_bridge.m, internal/benchcompare/vision_train_test.go
 
