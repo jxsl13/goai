@@ -63,7 +63,7 @@ External perfscan at github.com/jxsl13/perfscan/perfscan@latest reports PS2004 o
 
 ## P-01M0Q6B7A3E1SS7VWHGS37WPDE Reuse Recorder.Profile label scratch across Metal events
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0Q69J1CEDCBKG8VDVB580GS
 grilled: 2026-08-23 open=0
