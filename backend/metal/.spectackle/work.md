@@ -69,12 +69,3 @@ grilled: 2026-08-23 open=0
 targets: objc:metal_bridge.ensure_qmatmul_q4k
 
 Continue research R-01M0QQFB4CE6C with the compilation stage that the rejected IR-only route left behind. Generate an M2 Pro MTLBinaryArchive from the exact ce6249c5d11f8248fb327e204086e7076a906f4fb587f2fe742b9ffc402d78c1 IR metallib and both Q4_K compute descriptors. In fresh candidate processes, load the IR library and archive, require archive hits while constructing both pipeline states, and fall back to ordinary pipeline creation and source compilation on any miss or incompatibility. Frozen gates: exact Q4_K tests unchanged; three independent campaigns with seven fresh processes per arm; every combined IR-plus-archive first-call median is at least 2.00x faster than runtime source control; warm second-call throughput retains at least 0.97x; archive miss, missing file, wrong device, and unsupported OS preserve correct source fallback. Production must key artifacts by MSL hash, pipeline descriptor, compiler and SDK, deployment target, GPU family, and OS compatibility, with no user-writable cache trusted as executable input.
-
-## T-01M0QQQQKNFDG88NTH0EGK6KSS Generate and benchmark an M2 Q4_K binary archive
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0QQQ3NFE0XATH1N2JGG8QYT
-targets: objc:metal_bridge.ensure_qmatmul_q4k
-
-Add diagnostic environment seams that serialize both exact Q4_K compute descriptors into an MTLBinaryArchive and load that archive with the exact precompiled IR metallib in fresh processes. Require binary archive hits when building both pipeline states, retain normal creation and source compilation on any failure, validate parity and fallbacks, and run the frozen three count-seven campaigns. Remove all diagnostics and artifacts if the combined route misses any gate.
