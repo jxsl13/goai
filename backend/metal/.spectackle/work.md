@@ -52,3 +52,11 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## R-01M0Q59EV4EKSTBJACTNCBQK42 Compare pinned upstream M2 Q6_K instruction shapes
+kind: research
+state: draft
+created: 2026-08-23
+targets: go:metal.Recorder.QMatMulResident
+
+The production Metal profile attributes 17.00 percent of explicit TinyLlama decode time to 21 Q6_K projections, second only to Q4_K. Compare GoAI cooperative Q6_K decode against pinned llama.cpp Metal at commit b0539c43ed13b16bf0d8a0840646faea65469702 and MLX at d9077d8316ad7305497a3ecf2296bd0e0e99a627. Identify only structurally distinct M2-relevant arithmetic, load, ownership, or scheduling choices not already rejected by Q6_K packed loads or rows-per-SIMD experiments.
