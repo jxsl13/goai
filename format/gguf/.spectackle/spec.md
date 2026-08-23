@@ -383,3 +383,6 @@ WHEN the packed coefficient header is vector-decoded, the paired ARM64 Q4_K row 
 
 ## Q4K-PAIR-HEADER-VECTOR-PERF-001
 WHEN the K=2048 paired-row benchmark runs on Apple M2, the vector Q4_K header decoder SHALL reach 1.02x median speedup across 7 alternating campaigns, win 5 campaigns, retain 0 allocations, and show 0 pinned production regressions.
+
+## Q4K PAIR COEFFICIENT LD2R EXACT-001
+WHEN coefficient broadcasts are coalesced with structured replicate loads, the paired ARM64 Q4_K row kernel SHALL read the same 16 consecutive F32 coefficients per row in the same low/high sequence and preserve both F64 output bit patterns.
