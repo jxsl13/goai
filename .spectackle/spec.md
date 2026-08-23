@@ -668,11 +668,6 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
-## PRIVATE-RESEARCH-SOURCES-ISOLATION-004
-WHEN recording is active, OpAdd is routed to another backend, or residual inputs have unsupported device, dtype, shape, offset, contiguity, or aliasing, the GoAI SHALL execute the ordinary backend.OpAdd path without mutating either input.
-
-Rationale: Training, routing, views, aliases, and accelerators must retain existing functional semantics.
-
 ## PRIVATE-RESEARCH-SOURCES-ISOLATION-005
 WHEN the eager CPU QuantLlama residual candidate is evaluated for retention, the GoAI SHALL retain it only when independent interleaved TinyLlama Q4_K 64-step campaigns preserve the exact digest, reduce allocation bytes by at least 10 percent, and improve median wall time by at least 1.03x.
 
