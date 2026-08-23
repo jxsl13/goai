@@ -506,3 +506,6 @@ WHEN 3 order-alternated count-7 M2 Pro ViT batch-8 campaigns evaluate fusion, th
 
 ## METAL-PRENORM-FFN-GRAPH-STRUCTURE-001
 WHERE contiguous offset-zero F32 fusion, the Metal pre-norm FFN implementation SHALL execute forward and backward as exactly 1 bounded shape-keyed cached MPSGraph submission per direction with pooled buffers and Go-owned outputs.
+
+## METAL-PRENORM-FFN-NUMERIC-001
+WHEN forward or backward executes, the fused Metal route SHALL match the composite output and all 7 input gradients within the established F32 tolerance and mutate exactly 0 input elements.
