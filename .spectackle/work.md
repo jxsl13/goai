@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0R02V7FFWKAG3EKXCMGD9TP Measure one-graph batched M2 Metal attention for vision encoders
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:nlp.MHA.ForwardBatched, c:mtl_mha_mpsgraph, go:backend.OpMHABackward
 
