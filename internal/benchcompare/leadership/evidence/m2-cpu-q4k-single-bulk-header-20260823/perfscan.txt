@@ -1,0 +1,7 @@
+tool: perfscan v1.81.0
+resolution: GOPROXY=direct
+command: perfscan -exit-zero ./format/gguf
+exit: 0
+changed-file findings: none
+repository findings: pre-existing PS4001, PS2126, PS5001, and PS3104 diagnostics
+generalized finding: https://github.com/jxsl13/perfscan/issues/838#issuecomment-5384272037

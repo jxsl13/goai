@@ -1,0 +1,10 @@
+PASS format/gguf compiled test binary under Go 1.26.6.
+PASS format/gguf compiled test binary under Go 1.27.0.
+PASS deterministic arbitrary packed-header exactness against frozen helper path.
+PASS existing ARM64 Q4_K scalar-relative tests at K=256, 512, and 4096.
+PASS Darwin/AMD64 package cross-compilation under Go 1.26.6.
+PASS internal/mdlint and internal/benchcompare under Go 1.26.6.
+PASS make preflight under pinned Go 1.26.6.
+PASS five retained 8-thread production pairs with digest ea3df5516f17df83.
+PASS external perfscan v1.81.0 via GOPROXY=direct.
+PASS git diff --check and Spectackle drift check.

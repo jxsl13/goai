@@ -1,0 +1,16 @@
+# Compile each binary at the source revision recorded in manifest.json.
+GOTOOLCHAIN=go1.26.6 go test -c -o BINARY ./format/gguf
+GOTOOLCHAIN=go1.26.6 go test -c -o BINARY ./internal/benchcompare
+
+# Run from format/gguf so package testdata is available.
+BINARY
+GOMAXPROCS=12 BINARY -test.run '^$' -test.bench '^BenchmarkDotQ4KRowASM_K2048$' -test.benchmem -test.benchtime=500ms -test.count=1
+GOMAXPROCS=12 BINARY -test.run '^$' -test.bench '^BenchmarkQMatMulTripleMixedQKV_M1/triple$' -test.benchmem -test.benchtime=500ms -test.count=1
+
+GOMAXPROCS=8 GOAI_CPU_TINYLLAMA_GGUF=/Users/john/Desktop/goai/models/tinyllama-1.1b-q4km.gguf GOAI_CPU_DECODE_STEPS=64 GOAI_CPU_DECODE_REPS=3 BINARY -test.run '^TestProdCPUQuantDecodeGGUF$' -test.v
+
+GOTOOLCHAIN=go1.27.0 go test -c -o /private/tmp/goai-gguf-q4k-single-go127.test ./format/gguf
+GOOS=darwin GOARCH=amd64 GOTOOLCHAIN=go1.26.6 go test -c -o /private/tmp/goai-gguf-q4k-single-amd64.test ./format/gguf
+GOTOOLCHAIN=go1.26.6 go test ./internal/mdlint ./internal/benchcompare
+GOTOOLCHAIN=go1.26.6 make preflight
+GOPROXY=direct perfscan -exit-zero ./format/gguf
