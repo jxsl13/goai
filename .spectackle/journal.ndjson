@@ -594,3 +594,4 @@
 {"t":"2026-08-23T09:19:07Z","eid":"6d65a62cb1aac9aa","ag":"ag-09df","ev":"create","id":"P-01M0PYN8ZYE7Z91PBKDBTBXR5Y","k":"proposal","ti":"Hoist structured Q4_K activation loads across dequantization"}
 {"t":"2026-08-23T09:19:20Z","eid":"a308b3ce52087ce0","ag":"ag-ee63","ev":"grill","id":"P-01M0PYN8ZYE7Z91PBKDBTBXR5Y","gr":"2026-08-23 open=0","hash":"56dd9a2289fe629f6c7a8e50bee575f8ccef25c9ceb13c4692a80374767489c2"}
 {"t":"2026-08-23T09:19:36Z","eid":"590f20472d58c28b","ag":"ag-9340","ev":"move","id":"P-01M0PYN8ZYE7Z91PBKDBTBXR5Y","fr":"draft","to":"active"}
+{"t":"2026-08-23T09:19:48Z","eid":"f4a1381ed41accfa","ag":"ag-37e8","ev":"create","id":"T-01M0PYPH7GF068JDZA6TWGW0A9","k":"task","ti":"Hoist paired Q4_K structured activation loads before dequantization"}
