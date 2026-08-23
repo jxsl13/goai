@@ -668,3 +668,8 @@ Rationale: Autograd interception and unsupported backends must retain the establ
 WHEN Git discovers files inside the repository-root .research-sources directory, the repository ignore configuration SHALL exclude 1 root-anchored .research-sources directory from tracking candidates while preserving every local file.
 
 Rationale: The directory contains local research material, including commercial publications that must not be redistributed.
+
+## CPU-QUANT-BENCHMARK-PINNING-001
+WHEN TestProdCPUQuantDecodeGGUF runs while accelerator backends are registered, the GoAI SHALL make TestProdCPUQuantDecodeGGUF set backend.Preference to CPU before model construction and restore the prior preference on exit.
+
+Rationale: QuantLinear selects backend.Default, so Context.WithBackend alone cannot prove CPU attribution.
