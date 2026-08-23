@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## R-01M0QMTHHQFQMBFB6YNF00QF7M Measure single-SIMD Q4_K threadgroups on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 
 Evaluate the one remaining production Q4_K launch geometry: 32 physical threads and one SIMD group per threadgroup, covering two output rows. Preserve every lane operation and total SIMD-group count relative to the 64-thread incumbent. Freeze K2048xN2048, K2048xN5632, and K5632xN2048; require bit-exact output, three 22-pair count-seven campaigns, at least 1.05x in every leaf cell, then at least 1.01x in every TinyLlama f16-KV context 8, 512, and 1536 before promotion.
