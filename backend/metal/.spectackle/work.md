@@ -62,3 +62,13 @@ grilled: 2026-08-23 open=0
 targets: go:metal.Recorder.QMatMulResident
 
 T-01M0Q5DGB6FMB rejected the universal Q6_K pragma, but its frozen count-seven gate separated by shape: K2048N256 was flat at 1.008x while the actual K5632N2048 down projection improved 1.050x. Compile historical and explicitly unrolled cooperative pipelines in one binary, expose a test selector toggle, and evaluate a predeclared K at least 4096 zone with same-binary order-alternated campaigns. Preserve the historical pipeline for shorter K and all noncooperative cases. Promote only if every long-K representative shape clears 1.03x, fallback stays within 0.97x to 1.03x, cold-start cost is bounded, and TinyLlama production clears frozen decode and prefill gates.
+
+## T-01M0Q5MMDZE2QR3V30FQF6XBAT Implement and gate a same-binary long-K Q6_K unrolled pipeline
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0Q5KRTFE96TDAJGGH2APKN2
+refs: R-01M0Q59EV4EKSTBJACTNCBQK42
+targets: go:metal.Recorder.QMatMulResident
+
+Compile historical and full-unroll cooperative Q6_K functions in one Metal library and expose a Go toggle for controlled measurement. Select the unrolled pipeline only for cooperative M=1 with K at least 4096 when enabled; preserve historical Q6_K for shorter K and all scalar or unsupported paths. Add selector-arm and parity tests plus an order-alternated same-binary benchmark covering K4096N2048, K5632N2048, K8192N4096, and fallback K2048N256. Measure cold overhead. Promote the selector only after three count-seven campaigns and TinyLlama tg64/pp512 gates.
