@@ -34,3 +34,11 @@ grilled: 2026-08-21 open=0
 targets: backend/cpu/gemm_amx_bench_test.go
 
 Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output shapes 128x128x64 and 512x512x64 to the existing ADR-0027 path harness. Measure NEON and Accelerate in alternating count-seven physical-M2 campaigns from one exact binary. Advance to stride-aware binding and full MHA only if Accelerate is at least 1.35x faster in every head GEMM cell, providing margin for per-head cgo calls and causal overcompute; otherwise reject the proposal without production changes.
+
+## P-01M0P7RV5HFDSSRMC0MDQQJTJ2 Restore Go 1.26 exact ARM64 F32 Abs semantics
+kind: proposal
+state: draft
+created: 2026-08-23
+targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths
+
+Go 1.26.6 compiles the public scalar Abs oracle to sign-bit clearing and preserves signaling-NaN payload bits, while the current ARM64 NEON kernel sets the quiet bit. Replace the vector kernel with sign-bit clearing only, update the exact contract, validate every F32 bit class and aliasing/tail behavior, and retain only if complete-operation M2 benchmarks do not regress.
