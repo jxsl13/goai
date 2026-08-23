@@ -449,3 +449,6 @@ WHEN mha_dec_splitk_p2_dim runs one 32-lane SIMD group, the each lane i SHALL me
 
 ## METAL-SPLITK-DIM-MERGE-SCOPE-001
 WHEN attention is not sq=1 dk=64 unwindowed causal split-K with sk at least 128, the Metal attention selector SHALL dispatch 0 lane-owned pass-2 kernels and preserve the incumbent route.
+
+## METAL-SPLITK-DIM-MERGE-PERF-001
+WHEN 3 order-alternated count-7 M2 campaigns measure full split-K attention at sk 512, 1024, 1536, and 2048, the promotion gate SHALL require at least 1.05 times control throughput in every cell and campaign.
