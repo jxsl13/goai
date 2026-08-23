@@ -477,6 +477,12 @@ int mtl_mha_mps(const float* Q, const float* K, const float* V, float* O,
 int mtl_mha_mpsgraph(const float* Q, const float* K, const float* V, float* O,
                      int seq, int dm, int heads, int dk, int causal, int kvHeads, float scale);
 
+// Research probe: execute B independent, equally sized sequences in one cached MPSGraph.
+// Q/O are [batch,seq,dm]; K/V are [batch,seq,kvHeads*dk].
+int mtl_mha_mpsgraph_batched_probe(const float* Q, const float* K, const float* V, float* O,
+                                   int batch, int seq, int dm, int heads, int dk,
+                                   int causal, int kvHeads, float scale);
+
 // mtl_attn_cache_cap_set (§T622) sets the effective MPSGraph attention cache cap (clamped to
 // [1,16]), clears all resident graphs, and returns the previous cap. cap==1 reproduces the old
 // single last-shape cache (per-length recompile) for the variable-length prefill A/B. Test-only.

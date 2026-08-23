@@ -2769,6 +2769,40 @@ func mhaF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*
 	return []*tensor.Tensor{out}, nil
 }
 
+// probeMHAMPSGraphBatch is a disposable research boundary for comparing B incumbent MPSGraph
+// executions with one graph carrying an independent batch axis. It deliberately works on caller-
+// owned flat storage so the same-binary leaf probe excludes Go tensor construction from both arms.
+func probeMHAMPSGraphBatch(q, k, v, out []float32, batch, seq, dm, heads, dk, kvHeads int, scale float32, batched bool) (float64, error) {
+	causal := C.int(0)
+	if batched {
+		rc := C.mtl_mha_mpsgraph_batched_probe(
+			(*C.float)(&q[0]), (*C.float)(&k[0]), (*C.float)(&v[0]), (*C.float)(&out[0]),
+			C.int(batch), C.int(seq), C.int(dm), C.int(heads), C.int(dk), causal, C.int(kvHeads), C.float(scale),
+		)
+		if rc != 0 {
+			return 0, fmt.Errorf("metal: batched MPSGraph attention probe failed (code %d)", int(rc))
+		}
+		return LastGPUSeconds(), nil
+	}
+	kvDim := kvHeads * dk
+	var gpu float64
+	for b := range batch {
+		q0, q1 := b*seq*dm, (b+1)*seq*dm
+		k0, k1 := b*seq*kvDim, (b+1)*seq*kvDim
+		rc := C.mtl_mha_mpsgraph(
+			(*C.float)(&q[q0]), (*C.float)(&k[k0]), (*C.float)(&v[k0]), (*C.float)(&out[q0]),
+			C.int(seq), C.int(dm), C.int(heads), C.int(dk), causal, C.int(kvHeads), C.float(scale),
+		)
+		if rc != 0 {
+			return 0, fmt.Errorf("metal: incumbent MPSGraph attention probe failed (code %d)", int(rc))
+		}
+		gpu += LastGPUSeconds()
+		_ = q1
+		_ = k1
+	}
+	return gpu, nil
+}
+
 // flashAttnF32 is FlashAttention-2 forward on the GPU (§T109, the GPU backend of the
 // reference §T71 / §R72). One thread per (head, query row) streams the keys with the
 // online-softmax recurrence, so — unlike mhaF32's two-pass softmax — no [seq,seq]
