@@ -697,3 +697,4 @@
 {"t":"2026-08-23T14:59:30Z","eid":"f6782055eeee046a","ag":"ag-81d4","ev":"move","id":"P-01M0QJ3RN0FYPBEE9J3JZ6344R","fr":"draft","to":"active"}
 {"t":"2026-08-23T14:59:52Z","eid":"462693718f7fe09b","ag":"ag-ba01","ev":"grill","id":"P-01M0QJ3RN0FYPBEE9J3JZ6344R","gr":"2026-08-23 open=0","hash":"681090f59e222b7a2a7c6e578b7ff7de746c379793d6cc86144d544ef300d8d5"}
 {"t":"2026-08-23T15:00:13Z","eid":"7f58db14fe716a17","ag":"ag-804c","ev":"create","id":"T-01M0QJ5VNQF9NT678P084ETYKN","k":"task","ti":"Implement and gate M2 RMSNorm threadgroup widths"}
+{"t":"2026-08-23T15:00:30Z","eid":"3c600ea413594763","ag":"ag-b727","ev":"move","id":"T-01M0QJ5VNQF9NT678P084ETYKN","fr":"draft","to":"active"}

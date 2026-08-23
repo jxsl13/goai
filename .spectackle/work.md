@@ -4019,7 +4019,7 @@ Consume R-01M0QJ1DQZE8W by adding a diagnostic selector for 64, 128, and 256 thr
 
 ## T-01M0QJ5VNQF9NT678P084ETYKN Implement and gate M2 RMSNorm threadgroup widths
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0QJ3RN0FYPBEE9J3JZ6344R
 refs: R-01M0QJ1DQZE8W87CD3GS5DR9M0
