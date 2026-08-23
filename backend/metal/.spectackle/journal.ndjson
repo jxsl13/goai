@@ -420,3 +420,4 @@
 {"t":"2026-08-23T12:28:42Z","eid":"02030c917df4e2a3","ag":"ag-896c","ev":"revise","id":"P-01M0Q9EZJ8ENCSJ4YR1J41MDGD","dir":"backend/metal","note":"refs revised"}
 {"t":"2026-08-23T12:28:49Z","eid":"ceb7f04c82026885","ag":"ag-c265","ev":"grill","id":"P-01M0Q9EZJ8ENCSJ4YR1J41MDGD","dir":"backend/metal","gr":"2026-08-23 open=0","hash":"ede831b9b263ba606767569532345349d52f8630ceda5a8875461ba13dc410da"}
 {"t":"2026-08-23T12:28:55Z","eid":"d8511f84f9283b46","ag":"ag-3d1b","ev":"move","id":"P-01M0Q9EZJ8ENCSJ4YR1J41MDGD","dir":"backend/metal","fr":"draft","to":"active","note":"Standing authorization permits the grilled measured implementation; the production Recorder footprint remains unchanged."}
+{"t":"2026-08-23T12:29:06Z","eid":"b8c22a22a039f2cd","ag":"ag-f5da","ev":"create","id":"T-01M0Q9H5G2FP38JV8VMPSFP297","k":"task","ti":"Implement and gate extraction-scoped profile label deduplication","dir":"backend/metal"}
