@@ -26,3 +26,6 @@ IF SVD output digests differ between 2 supported Go releases, THEN the SVD relea
 
 ## SVD-ARM64-FMA-ORDER-001
 The ARM64 SVD V-rotation second component SHALL compute math.FMA(c, b, sn*a), inline with 0 helper calls, and preserve the Go 1.26 bit-exact digest under Go 1.27.
+
+## intent
+- T-01M0PA5YVYEM6VGFJYQ5PQXMBT Classify and gate Go 1.27 SVD digest drift: Pinned the Go 1.26 ARM64 Jacobi SVD V-rotation contraction with an inline architecture helper. Go 1.26.6 and Go 1.27.0 now retain all existing ARM64 digests; Rosetta AMD64 retains its architecture goldens. Objdump proves zero helper calls and the same two arithmetic instructions. Seven interleaved M2 campaigns on both toolchains show no meaningful regression; evidence is under m2-arm64-svd-go127-f [body truncated at tombstone retention cap]
