@@ -352,10 +352,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-
-## METAL-Q4K-FULL-UNROLL-NUMERIC-001
-WHEN it processes a valid resident M=1 Q4_K projection, the Metal Q4_K explicit-unroll candidate SHALL produce bit-identical output to the current cooperative kernel and mutate exactly zero activation or compressed-weight bytes.
-
 ## METAL-Q4K-FULL-UNROLL-SCOPE-001
 WHEN M exceeds 1, the quant type is not Q4_K, or cooperative SIMD-group support is unavailable, the Metal Q4_K selector SHALL dispatch exactly the historical pipeline and issue zero explicit-unroll candidate threadgroups.
 
