@@ -45,7 +45,7 @@ Cross-toolchain probing proves Go 1.26.6 quiets an F32 signaling NaN during floa
 
 ## T-01M0P8NQ57E4JSBEDA31381MD7 Split exact ARM64 Abs kernels by Go release
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0P8N6D6EEWAEKVACVNS21M6
 targets: go:cpu.absF32, asm:cpu.absF32BlocksNeon, go:cpu.TestAbsF32Arm64ExactAllLengths, go:cpu.TestAbsF32Arm64ExactInPlace
