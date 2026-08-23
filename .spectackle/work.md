@@ -4025,7 +4025,7 @@ Add optional batch cardinality to AttnAttrs for packed rank-2 Q/K/V. Batch zero 
 
 ## T-01M0R08R1XFV0BYT5AGW3M8NPJ Implement and gate batch-aware independent SDPA
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0R089YBE008K6PJQ009SGJV
 

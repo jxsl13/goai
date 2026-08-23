@@ -759,3 +759,4 @@
 {"t":"2026-08-23T19:06:13Z","eid":"3910976d3fb0e48b","ag":"ag-d843","ev":"create","id":"P-01M0R089YBE008K6PJQ009SGJV","k":"proposal","ti":"Execute independent vision attention batches in one backend operation"}
 {"t":"2026-08-23T19:06:25Z","eid":"c4f041331018018c","ag":"ag-8b58","ev":"move","id":"P-01M0R089YBE008K6PJQ009SGJV","fr":"draft","to":"active"}
 {"t":"2026-08-23T19:06:28Z","eid":"837277b636d0edc5","ag":"ag-e168","ev":"create","id":"T-01M0R08R1XFV0BYT5AGW3M8NPJ","k":"task","ti":"Implement and gate batch-aware independent SDPA"}
+{"t":"2026-08-23T19:06:41Z","eid":"b5d3f9b7deeb3436","ag":"ag-fe41","ev":"move","id":"T-01M0R08R1XFV0BYT5AGW3M8NPJ","fr":"draft","to":"active"}
