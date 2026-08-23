@@ -409,7 +409,3 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
-## Q4K-PAIR-ACTIVATION-HOIST-PERFORMANCE-001
-WHEN the K2048 paired-row benchmark runs on Apple M2, the paired Q4_K activation-load hoist SHALL reach 1.03x median speedup across 7 alternating pairs, win 5 pairs, retain 0 allocations, and regress 0 pinned production shapes.
-
-Rationale: A latency-hiding schedule is retained only when the leaf gain is repeatable and survives matrix, apply, and production boundaries.
