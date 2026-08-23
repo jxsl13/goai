@@ -355,3 +355,6 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
+
+## recorder-profile-snapshot-parity-001
+WHEN a completed profile is extracted, the Recorder.Profile bulk snapshot SHALL return identical events, labels, offsets, ticks, durations, frequency, command duration, span, omissions, and errors.
