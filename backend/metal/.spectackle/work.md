@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## P-01M0QV7XJ3EW6AP5G1M48XSSVB Honor short mode in the RoPE F16-KV timing gate
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 grilled: 2026-08-23 open=0
 targets: go:metal.TestRoPEF16KVAppendInterleavedCampaigns, TIMING-ASSERTIONS-SKIP-ON-RUNNERS-001, METAL-ROPE-F16KV-PERF-001
