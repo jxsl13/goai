@@ -409,3 +409,8 @@ WHEN independent Q4_K rows use one assembly call, the dotQ4_KRowASM SHALL Match 
 
 ## Q4K-SINGLE-ROW-ASM-PERFORMANCE-001
 WHEN M2 benchmarks whole-row independent Q4_K assembly, the retained K2048 and production benchmarks SHALL Reach 1.03x leaf median, win 5/7 campaigns, allocate 0 bytes, and regress 0 pinned production shapes.
+
+## Q4K-PAIR-COEFFICIENT-LANE-EXACT-001
+WHEN consuming coefficient scratch through vector lanes, the paired ARM64 Q4_K row kernel SHALL preserve all 16 coefficients per row, 2 arbitrary-header output bit patterns, reduction order, and 0 allocations.
+
+Rationale: Vector loads, by-element FMUL, and minimum-lane DUP must preserve the existing scratch sequence and f32 operations exactly.
