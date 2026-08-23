@@ -354,5 +354,3 @@ WHEN three order-alternated count-seven M2 campaigns compare fused and control p
 
 ## METAL-ROPE-PAIR-F16KV-NUMERIC-001
 WHEN grouped-QKV RoPE and f16 KV append fusion executes, the Metal fusion SHALL match control QKV float32 and cache binary16 bits while mutating zero inverse-frequency or unrelated cache bytes.
-## recorder-profile-scope-001
-WHEN the event-label scratch storage is changed, the Recorder.Profile scratch reuse SHALL preserve the native C ABI and default recorder behavior.
