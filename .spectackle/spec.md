@@ -673,3 +673,8 @@ Rationale: The directory contains local research material, including commercial 
 WHEN an eager QuantLlama DecodeStep owns contiguous offset-zero residual storage and the effective OpAdd backend advertises exact in-place addition, the GoAI SHALL overwrite only that private residual storage with the bit-identical sum and allocate zero residual output tensors.
 
 Rationale: The residual stream is private to one decode step; eliminating two materialized outputs per layer reduces allocation and memory traffic.
+
+## PRIVATE-RESEARCH-SOURCES-ISOLATION-004
+WHEN recording is active, OpAdd is routed to another backend, or residual inputs have unsupported device, dtype, shape, offset, contiguity, or aliasing, the GoAI SHALL execute the ordinary backend.OpAdd path without mutating either input.
+
+Rationale: Training, routing, views, aliases, and accelerators must retain existing functional semantics.
