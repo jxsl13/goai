@@ -32,3 +32,12 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
+
+## T-01M0PHKGVZEWN8C72EH0GMG3SA Fuse paired Q4_K header decode into the ARM64 row kernel
+kind: task
+state: draft
+created: 2026-08-23
+parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
+targets: go:gguf.dotQ4KPairRowASM, asm:gguf.dotQ4KPairBlockNeon
+
+Replace per-super-block Go coefficient construction and leaf-call crossings with one paired ARM64 row kernel. The kernel must decode the exact GGUF Q4_K header layout using the existing f16 lookup semantics, preserve per-block f32 reduction followed by ordered f64 row accumulation, allocate nothing, retain a correct fallback boundary, and clear a clean alternating Apple M2 performance gate. This directly responds to the rejected batch staging result: eliminate staging rather than enlarging it.
