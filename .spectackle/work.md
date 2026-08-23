@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0QSCP1NEQ9TZMYJGNWXCCMR Refresh matched M2 llama.cpp Metal leadership cell
 kind: research
-state: draft
+state: active
 created: 2026-08-23
 targets: go:llamagpu_test.TestTinyLlamaVsLlamaCpp, go:llamagpu.NewQuantF16KV, internal/benchcompare/leadership, M2-INCUMBENT-ATTRIBUTION-HARNESS-001
 
