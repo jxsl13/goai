@@ -4017,7 +4017,7 @@ Measure whether composing the merged cached pre-norm attention and exact-GELU FF
 
 ## P-01M0RCQZESFTASGRCF6MVGEAE8 Fuse complete pre-norm transformer blocks on Metal
 kind: proposal
-state: draft
+state: active
 created: 2026-08-23
 refs: R-01M0RCPZNJF75SZJ766JXXPX6H
 targets: backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp, vision/vit.go, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence
