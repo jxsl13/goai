@@ -1,0 +1,47 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/internal/benchcompare
+cpu: Apple M2 Pro
+BenchmarkViTForward/cpu-12            5   7159367 ns/op  1117 img/s
+BenchmarkViTForward/cpu-12            5   5275450 ns/op  1517 img/s
+BenchmarkViTForward/cpu-12            5   5359475 ns/op  1493 img/s
+BenchmarkViTForward/cpu-12            5   7040467 ns/op  1136 img/s
+BenchmarkViTForward/cpu-12            5   5773367 ns/op  1386 img/s
+BenchmarkViTForward/cpu-12            5   7972325 ns/op  1003 img/s
+BenchmarkViTForward/cpu-12            5   6139058 ns/op  1303 img/s
+BenchmarkViTForward/metal-12          5  18669842 ns/op   428.5 img/s
+BenchmarkViTForward/metal-12          5  21654508 ns/op   369.4 img/s
+BenchmarkViTForward/metal-12          5  19246858 ns/op   415.7 img/s
+BenchmarkViTForward/metal-12          5  17190192 ns/op   465.4 img/s
+BenchmarkViTForward/metal-12          5  13910117 ns/op   575.1 img/s
+BenchmarkViTForward/metal-12          5  13836858 ns/op   578.2 img/s
+BenchmarkViTForward/metal-12          5  15090892 ns/op   530.1 img/s
+BenchmarkViTForward/vulkan-12         5  48671167 ns/op   164.4 img/s
+BenchmarkViTForward/vulkan-12         5  47025233 ns/op   170.1 img/s
+BenchmarkViTForward/vulkan-12         5  58327117 ns/op   137.2 img/s
+BenchmarkViTForward/vulkan-12         5  44641642 ns/op   179.2 img/s
+BenchmarkViTForward/vulkan-12         5  51319450 ns/op   155.9 img/s
+BenchmarkViTForward/vulkan-12         5  51368050 ns/op   155.7 img/s
+BenchmarkViTForward/vulkan-12         5  50403400 ns/op   158.7 img/s
+BenchmarkViTTrainStep/cpu-12          5  18590300 ns/op   430.3 img/s
+BenchmarkViTTrainStep/cpu-12          5  17864192 ns/op   447.8 img/s
+BenchmarkViTTrainStep/cpu-12          5  19831725 ns/op   403.4 img/s
+BenchmarkViTTrainStep/cpu-12          5  24870467 ns/op   321.7 img/s
+BenchmarkViTTrainStep/cpu-12          5  28502517 ns/op   280.7 img/s
+BenchmarkViTTrainStep/cpu-12          5  21567375 ns/op   370.9 img/s
+BenchmarkViTTrainStep/cpu-12          5  17281775 ns/op   462.9 img/s
+BenchmarkViTTrainStep/metal-12        5  47342733 ns/op   169.0 img/s
+BenchmarkViTTrainStep/metal-12        5  56822583 ns/op   140.8 img/s
+BenchmarkViTTrainStep/metal-12        5  47709517 ns/op   167.7 img/s
+BenchmarkViTTrainStep/metal-12        5  47209925 ns/op   169.5 img/s
+BenchmarkViTTrainStep/metal-12        5  46271975 ns/op   172.9 img/s
+BenchmarkViTTrainStep/metal-12        5  46542367 ns/op   171.9 img/s
+BenchmarkViTTrainStep/metal-12        5  47989867 ns/op   166.7 img/s
+BenchmarkViTTrainStep/vulkan-12       5 117867942 ns/op    67.87 img/s
+BenchmarkViTTrainStep/vulkan-12       5 116737325 ns/op    68.53 img/s
+BenchmarkViTTrainStep/vulkan-12       5 118319775 ns/op    67.61 img/s
+BenchmarkViTTrainStep/vulkan-12       5 113693017 ns/op    70.37 img/s
+BenchmarkViTTrainStep/vulkan-12       5 131843892 ns/op    60.68 img/s
+BenchmarkViTTrainStep/vulkan-12       5 122535867 ns/op    65.29 img/s
+BenchmarkViTTrainStep/vulkan-12       5 117987650 ns/op    67.80 img/s
+PASS

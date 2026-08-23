@@ -2626,6 +2626,24 @@ func mhaBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Att
 	dQ := tensor.New(tensor.F32, q.Shape())
 	dK := tensor.New(tensor.F32, k.Shape())
 	dV := tensor.New(tensor.F32, v.Shape())
+	if batch > 1 && p.Window == 0 {
+		perSeq := seq / batch
+		rc := C.mtl_mha_backward_mpsgraph_batched(
+			(*C.float)(&qc.Storage().F32()[0]),
+			(*C.float)(&kc.Storage().F32()[0]),
+			(*C.float)(&vc.Storage().F32()[0]),
+			(*C.float)(&dc.Storage().F32()[0]),
+			(*C.float)(&dQ.Storage().F32()[0]),
+			(*C.float)(&dK.Storage().F32()[0]),
+			(*C.float)(&dV.Storage().F32()[0]),
+			C.int(batch), C.int(perSeq), C.int(dm), C.int(heads), C.int(dk),
+			C.int(causal), C.int(kvHeads), C.float(scale),
+		)
+		if rc == 0 {
+			return []*tensor.Tensor{dQ, dK, dV}, nil
+		}
+		// Preserve the established per-sequence route if graph creation or execution is unavailable.
+	}
 	if batch > 1 {
 		perSeq := seq / batch
 		qs, ks, vs, ds := qc.Storage().F32(), kc.Storage().F32(), vc.Storage().F32(), dc.Storage().F32()
