@@ -4027,7 +4027,7 @@ Add a generic depth-aware pre-norm transformer-stack operation whose exact porta
 
 ## T-01M0RGNBBDEF7RQWNFM2MJ2HYY Implement and gate a depth-composed Metal transformer stack
 kind: task
-state: draft
+state: active
 created: 2026-08-23
 parent: P-01M0RGMQF1ENNBTT2DFFC3P0A2
 refs: R-01M0RGHTRTE3CSGT21HN59B9QY
