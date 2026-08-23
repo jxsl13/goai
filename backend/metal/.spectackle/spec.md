@@ -376,3 +376,6 @@ WHEN each frozen campaign measures events340 and events1, the first Recorder.Pro
 
 ## RECORDER-PROFILE-SNAPSHOT-ABI-001
 WHEN the additive snapshot entry point is used, the Metal profile bulk snapshot ABI SHALL keep mtl_recorder_profile_summary and mtl_recorder_profile_event compatible while NewRecorder performs 0 snapshot allocations.
+
+## RECORDER-PROFILE-VALID-INDEX-STORAGE-001
+WHEN valid event indices are materialized, the native profile resolver SHALL store at most 1 index inline and all larger sets contiguously with 0 NSNumber boxes.
