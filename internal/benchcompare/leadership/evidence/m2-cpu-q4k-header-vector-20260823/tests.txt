@@ -1,0 +1,17 @@
+PASS Go 1.27.0 complete format/gguf test binary
+PASS Go 1.26.6 format/gguf compile
+PASS Go 1.27.0 Darwin/AMD64 format/gguf cross-compile
+PASS Go 1.27.0 Linux/ARM64 format/gguf cross-compile
+PASS arbitrary packed-header paired rows bit-identical to independent ARM64 rows
+PASS final Go 1.27 disassembly decodes raw opcodes as FMUL V20/V22 vector operations
+PASS production digest ea3df5516f17df83 in every retained baseline and candidate process
+PASS spectackle lint: 24 spec files, 483 rules, 0 errors
+PASS external perfscan v1.71.0 completed with pre-existing findings and issue 841 filed
+
+Full repository command: GOPROXY=direct go test ./...
+PASS every reported package except the unrelated nlp entry below, including format/gguf, backend/cpu, backend/metal, internal/benchcompare, llamagpu, nn, ops, rl, tensor, and vision.
+
+PRE-EXISTING/UNRELATED TestDiffusionLMGrammarE2E failed identically in the repository-wide run and an isolated package-wide retry:
+  masked-diffusion eval CE 2.924 -> 0.085
+  generated "a sra s ee s a s" is not a valid 16-character grammar window
+The branch has no changes under nlp/; required CI remains authoritative before merge.

@@ -1,0 +1,9 @@
+campaign	order	baseline_ns_op	candidate_ns_op	baseline_allocs_op	candidate_allocs_op	retained
+0	baseline-candidate	509.8	478.0	0	0	false
+1	candidate-baseline	511.7	478.1	0	0	true
+2	baseline-candidate	521.4	496.8	0	0	true
+3	candidate-baseline	510.3	480.9	0	0	true
+4	baseline-candidate	510.4	479.2	0	0	true
+5	candidate-baseline	522.7	490.3	0	0	true
+6	baseline-candidate	523.7	490.1	0	0	true
+7	candidate-baseline	510.1	478.1	0	0	true
