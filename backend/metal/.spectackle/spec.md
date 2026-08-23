@@ -456,3 +456,6 @@ WHEN attention is not sq=1 dk=64 unwindowed causal split-K with sk at least 128,
 
 ## METAL-SPLITK-DIM-MERGE-PERF-001
 WHEN 3 order-alternated count-7 M2 campaigns measure full split-K attention at sk 512, 1024, 1536, and 2048, the promotion gate SHALL require at least 1.05 times control throughput in every cell and campaign.
+
+## METAL-SPLITK-FUSED-NUMERIC-001
+WHEN the fused split-K kernel processes f32 or f16-KV dk-64 decode attention, the fused Metal attention output SHALL match the incumbent two-pass output within 2e-6 normalized relative error and preserve floating-point class across GQA and MHA at sk 128, 129, 512, 1024, 1536, and 2048.
