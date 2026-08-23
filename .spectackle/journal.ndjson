@@ -797,3 +797,4 @@
 {"t":"2026-08-23T21:38:35Z","eid":"047a4b570cbee912","ag":"ag-2763","ev":"create","id":"P-01M0R8Z9RPFAFV5FYZ0VN01KNP","k":"proposal","ti":"Fuse pre-norm attention training boundaries on Metal"}
 {"t":"2026-08-23T21:38:44Z","eid":"d4ebeb734941c791","ag":"ag-e6d5","ev":"grill","id":"P-01M0R8Z9RPFAFV5FYZ0VN01KNP","gr":"2026-08-23 open=1","hash":"f29068f3be5eac736e499dab48c24e02b9ec16a3aaeff3e868334b2761e3fa8a","open":1,"keys":["blast:8"]}
 {"t":"2026-08-23T21:38:52Z","eid":"46c99d8b9703e01e","ag":"ag-2bc1","ev":"revise","id":"P-01M0R8Z9RPFAFV5FYZ0VN01KNP","note":"refs revised"}
+{"t":"2026-08-23T21:39:01Z","eid":"66ffc5fec4046383","ag":"ag-7475","ev":"grill","id":"P-01M0R8Z9RPFAFV5FYZ0VN01KNP","gr":"2026-08-23 open=1","hash":"f29068f3be5eac736e499dab48c24e02b9ec16a3aaeff3e868334b2761e3fa8a","open":1,"keys":["blast:8"]}
