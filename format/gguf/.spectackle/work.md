@@ -32,12 +32,3 @@ option: Extend the shared decodeTensor switch with the exact existing decoder fu
 option: Add format-specific entry-point wrappers or compatibility aliases outside decodeTensor
 blocks: P-01M0M2XZRGFSWVT5G94ZXT61S8
 choice: Extend the shared decodeTensor switch with the exact existing decoder functions and preserve unsupported-type errors
-
-## T-01M0PKDX1FF0DARF9FTEKXN3EM Restore the measured block-aligned Q4_K row wrapper
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0PGHM4TE7YAXSJT0Q56SSZ2
-targets: go:gguf.dotQ4KPairRowASM
-
-Remove the post-benchmark ceil-division guard from the internal paired ARM64 Q4_K wrapper. Q4_K callers already validate positive block-aligned K, so the additional add and rounding do not protect a valid input. Restore the exact k==0 and k/qkK wrapper used by the clean 7-of-7 leaf, FFN, and production campaigns; then rebuild and hash-compare the production binary to the recorded measured binary.
