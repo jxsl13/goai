@@ -90,3 +90,8 @@ Rationale: Make dominant decode residency scale with active rows instead of maxi
 WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the GPTDecoder SHALL allocate one grouped workspace at requested rows, reuse it for smaller requests, and grow only for larger requests.
 
 Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
+
+## GPT2-LOGITS-RESIDENCY-PERF-004
+WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecoder SHALL release each prior or partial buffer exactly once and retain 0 stale grouped-workspace references.
+
+Rationale: Keep grouped workspace ownership transactional and backend-independent.
