@@ -46,11 +46,11 @@ type GPTConfig struct {
 // GPTAdamWConfig configures a stateful GPT training session whose parameters,
 // gradients, and AdamW moments all use F32 precision.
 type GPTAdamWConfig struct {
-	LR          float64
-	Beta1       float64
-	Beta2       float64
-	Eps         float64
-	WeightDecay float64
+	LR          float64 // learning rate applied to the adaptive update and decay
+	Beta1       float64 // first-moment exponential decay in [0,1)
+	Beta2       float64 // second-moment exponential decay in [0,1)
+	Eps         float64 // positive denominator floor outside the square root
+	WeightDecay float64 // non-negative decoupled AdamW decay coefficient
 }
 
 // DefaultGPTAdamWConfig returns the canonical AdamW beta and epsilon values.

@@ -323,11 +323,11 @@ type GPTLossAndGradAttrs struct {
 // gradients, and both moment tensors use F32. It is kept separate from Attrs
 // because a training session is a stateful model boundary, not an Execute op.
 type GPTAdamWAttrs struct {
-	LR          float64
-	Beta1       float64
-	Beta2       float64
-	Eps         float64
-	WeightDecay float64
+	LR          float64 // learning rate applied to the adaptive update and decay
+	Beta1       float64 // first-moment exponential decay in [0,1)
+	Beta2       float64 // second-moment exponential decay in [0,1)
+	Eps         float64 // positive denominator floor outside the square root
+	WeightDecay float64 // non-negative decoupled AdamW decay coefficient
 }
 
 // GPTAdamWSession is the backend-owned half of a stateful GPT training

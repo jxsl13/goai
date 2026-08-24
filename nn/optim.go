@@ -287,13 +287,13 @@ func (a *Adam) Step(grad GradFn) error {
 // higher-precision default. AdamF32 accepts only contiguous F32 parameters and
 // gradients so every backend can implement the same arithmetic contract.
 type AdamF32 struct {
-	Params []*tensor.Tensor
+	Params []*tensor.Tensor // contiguous F32 parameters updated by Step
 
-	LR          float64
-	Beta1       float64
-	Beta2       float64
-	Eps         float64
-	WeightDecay float64
+	LR          float64 // learning rate applied to the adaptive update and decay
+	Beta1       float64 // first-moment exponential decay in [0,1)
+	Beta2       float64 // second-moment exponential decay in [0,1)
+	Eps         float64 // positive denominator floor outside the square root
+	WeightDecay float64 // non-negative decoupled AdamW decay coefficient
 
 	m, v [][]float32
 	t    int

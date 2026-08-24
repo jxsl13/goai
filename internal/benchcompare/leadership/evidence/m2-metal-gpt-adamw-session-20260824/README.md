@@ -76,6 +76,27 @@ checkpoint synchronization without re-uploading state, compares all 77
 parameters, observes stale host parameters before the first sync, closes twice,
 and rejects a post-close step.
 
+Final repository validation also passed:
+
+```text
+go test -short ./...
+go test ./nn ./internal/apicheck ./internal/benchcompare
+make perfscan-check
+make perfscan
+make perfscan-compat
+```
+
+The hard external perfscan integration gate reported zero findings; the
+whole-tree and compatibility modes remained advisory, as configured. Race
+binaries compiled with `go test -race -c` and passed the new backend, nlp, nn,
+scheduler, example, and Metal-session tests through direct binary filters.
+
+An unshortened concurrent `go test ./...` run reproduced the known host-local
+`TestDiffusionLMGrammarE2E` grammar-window failure already observed from
+pristine main, and its simultaneous resource-heavy `llamagpu` process was
+killed. The complete short suite and all affected full package suites pass;
+remote CI remains the final clean-machine authority.
+
 ## Internal paired campaigns
 
 Commands:
