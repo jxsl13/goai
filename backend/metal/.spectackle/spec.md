@@ -599,3 +599,8 @@ Rationale: One command buffer preserves dependency ordering and removes the obje
 WHEN the resident session is compared with portable F32 AdamW for 3 steps, the Metal ViT session SHALL match every loss and synchronized parameter within established F32 tolerance and preserve checkpoint continuation.
 
 Rationale: Resident execution must preserve the portable optimizer recurrence and explicit checkpoint semantics.
+
+## METAL-VIT-ADAMW-SESSION-LIFETIME-001
+The Metal backend SHALL accept Steps and Sync, reject use after Close, and permit repeated Close.
+
+Rationale: The native resource owner needs deterministic lifetime behavior without double-free risk.
