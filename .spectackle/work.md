@@ -4009,5 +4009,5 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0S05JDTENNRZD2EQNZ2FSTW Map the external perfscan migration surface
 kind: research
-state: draft
+state: active
 created: 2026-08-24
