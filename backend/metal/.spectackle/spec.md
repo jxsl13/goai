@@ -548,9 +548,6 @@ WHEN 3 order-alternated count-7 M2 Pro campaigns measure F32 B8 S65 D128 C10, th
 
 ## M2-LAYERNORM-SEQUENCE-CLASSIFIER-HOST-ROUTE-001-001
 WHEN F32 B8 S65 D128 C10 executes on Darwin arm64, the Metal classifier selector SHALL execute the fused reference boundary with exactly 0 Metal submissions while preserving logits and 5 gradients.
-## M2-CROSSENTROPY-HOST-SCOPE-001
-WHEN CrossEntropy geometry, dtype, architecture, reduction, or options differ from the measured host route, the Metal CrossEntropy selector SHALL preserve the existing Metal or reference route with exactly 0 measured-host substitutions.
-
 ## M2-CROSSENTROPY-HOST-NUMERIC-001
 WHEN the measured host route is compared with direct Metal, the CrossEntropy implementation SHALL match loss and logits gradient within established F32 tolerance and mutate exactly 0 input elements.
 
