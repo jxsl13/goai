@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/metal -- accept shared exact IQ2 codebook lifecycle (ADR-01M0MMYANQFBN, 2026-08-24)
+
+The accepted Metal architecture keeps IQ2_XXS, IQ2_XS, and the subsequently
+added IQ2_S on one process-lifetime readiness and residency boundary while
+retaining separate decoder-derived immutable codebooks, block parsers,
+cooperative controls, and benchmark verdicts. Direct, resident, and recorder
+paths therefore share initialization without allowing one format to promote a
+losing sibling. Scalar controls and fused ARM64 CPU fallback remain available.
+
+Current main already implements the decision through `ensureIQ2Grid`, the
+format-specific upload routines, shared resident upload dispatch, and separate
+cooperative selectors. This entry closes the architecture record and changes
+no executable behavior; the format-specific numerical and performance evidence
+remains in the committed IQ2 leadership artifacts.
+
 ### classic -- batch RBF SVC exponentials through ARM64 SIMD (T-01M0TFXRWJEZE, 2026-08-24)
 
 On ARM64 SIMD builds, RBF SVC kernel columns now preserve scalar distance
