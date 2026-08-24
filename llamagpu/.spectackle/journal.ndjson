@@ -156,3 +156,4 @@
 {"t":"2026-08-24T11:14:20Z","eid":"88c5c5485ce894a1","ag":"ag-8f3f","ev":"create","id":"ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF","k":"adr","ti":"Gate residual projection scratch by reachable consumers","dir":"llamagpu"}
 {"t":"2026-08-24T11:14:33Z","eid":"4ee5c1d71aa0051e","ag":"ag-618a","ev":"decide","id":"ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF","dir":"llamagpu","note":"Allocate ao/mo only for reachable scratch consumers"}
 {"t":"2026-08-24T11:14:36Z","eid":"1330a337cfeb0aa9","ag":"ag-82e3","ev":"revise","id":"P-01M0SQMKR8FEBV8REH5J4G8N4B","dir":"llamagpu","note":"refs revised"}
+{"t":"2026-08-24T11:14:39Z","eid":"8f1392ab367d53d0","ag":"ag-3a22","ev":"grill","id":"P-01M0SQMKR8FEBV8REH5J4G8N4B","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"fae0860df740e08b43f590379a46ef8c78473641fd104f6e4421aef3028a69db"}
