@@ -735,3 +735,6 @@ WHEN GoAI invokes perfscan from Make, CI, or an automation workflow, the GoAI to
 
 ## PERFSCAN-COVERAGE-PARITY-001
 WHILE the external registry lacks at least one stable ID present in the legacy registry, the GoAI tooling SHALL retain a compatibility selector equal to the registry difference and reject legacy retirement until that difference contains zero IDs.
+
+## PERFSCAN-CI-WHOLE-TREE-001
+WHEN CI evaluates a non-documentation change, the GoAI CI SHALL execute one external perfscan scan over ./..., fail on tool or configuration errors, and publish the advisory finding count.
