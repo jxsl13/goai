@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RX17A7E9890D8DQTYKRXST Validate one-submission ViT objective gradients on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 parent: R-01M0RVG598FZABSSGTGDVG203A
 targets: vision/vit.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
