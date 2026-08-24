@@ -198,12 +198,3 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.
-
-## P-01M0T2VE58FN89Y5S53G5P51MP Reuse one shared-decoder generation logits buffer across host-sampled tokens
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepInto, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go
-
-Eliminate repeated Vocab-sized result allocation in Decoder.Generate while preserving host sampling semantics, resident device sampling, final cache advancement, and backend portability.
