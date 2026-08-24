@@ -184,7 +184,7 @@ WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water emb
 ## M2-DECODER-STEPN-INTO-PERF-001-001 {applies: go:llamagpu.BenchmarkLlamaPrefillLastIntoMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingPairedMetal}
 WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 StepNLastInto allocations, 32768 fewer StepNLast bytes, and at least 0.97 times baseline throughput.
 
-## GPT-STEP-INTO-SEMANTICS-001-001
+## GPT-STEP-INTO-SEMANTICS-001-001 {applies: go:llamagpu.GPTDecoder.StepInto,go:llamagpu.GPTDecoder.stepInto}
 WHEN the destination length equals Vocab, the GPTDecoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
 
 ## GPT-STEPN-INTO-SEMANTICS-001-001
