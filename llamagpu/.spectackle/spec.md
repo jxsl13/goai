@@ -126,7 +126,7 @@ WHEN the same-binary TinyLlama residual-scratch benchmark compares lazy and eage
 
 Rationale: Validate retained-memory leverage without moving work into inference.
 
-## DECODER-ACTIVATION-RESIDENCY-001
+## DECODER-ACTIVATION-RESIDENCY-001 {applies: go:llamagpu.Decoder.allocScratch,go:llamagpu.Decoder.makeScratch,go:llamagpu.TestDecoderScratchResidencyGrowthAndRelease}
 WHEN constructed with standard backend operations, the shared Decoder SHALL retain exactly 1 row of every common activation workspace buffer and 0 multi-row common activation workspace buffers.
 
 Rationale: Single-token decode is the steady-state path; context-sized transient storage has no live consumer before prefill.
