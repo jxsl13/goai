@@ -97,3 +97,4 @@
 {"t":"2026-08-24T10:52:15Z","eid":"3168c25a289c53e7","ag":"ag-d963","ev":"create","id":"ADR-01M0SPCGWTFB08X22KNMW0DDV6","k":"adr","ti":"Use one-row resident GPT workspace plus lazy grouped high-water storage","dir":"llamagpu"}
 {"t":"2026-08-24T10:52:37Z","eid":"374a5019da4f2c83","ag":"ag-32f1","ev":"decide","id":"ADR-01M0SPCGWTFB08X22KNMW0DDV6","dir":"llamagpu","note":"One-row resident workspace plus lazy grouped high-water storage"}
 {"t":"2026-08-24T10:52:49Z","eid":"94a0aae17cb28ed6","ag":"ag-7836","ev":"grill","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6e48de2eb0cfe63093dbbb3092a6ef08bcef476c0b68230a10575c0a5824f7d6"}
+{"t":"2026-08-24T10:52:59Z","eid":"05620c28ce12f70c","ag":"ag-f8da","ev":"revise","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","note":"refs revised"}

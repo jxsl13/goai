@@ -86,6 +86,7 @@ Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exa
 kind: proposal
 state: draft
 created: 2026-08-24
+refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
 grilled: 2026-08-24 open=0
 targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
