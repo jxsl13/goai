@@ -4900,6 +4900,24 @@ func (r *Recorder) MatMulAcc(a, b, c *DeviceBuffer, m, k, n int) error {
 	return r.matmulRec(a, b, c, m, k, n, 1)
 }
 
+// MatMulStridedB records C = A·B where B is an N-column band beginning at bOffset
+// inside rows of bStride elements. It creates an MPSMatrix view and copies no weights.
+func (r *Recorder) MatMulStridedB(a, b, c *DeviceBuffer, m, k, n, bStride, bOffset int) error {
+	if m <= 0 || k <= 0 || n <= 0 || bOffset < 0 || bStride < bOffset+n {
+		return fmt.Errorf("metal: Recorder strided matmul invalid shape m=%d k=%d n=%d stride=%d offset=%d", m, k, n, bStride, bOffset)
+	}
+	bNeed := (k-1)*bStride + bOffset + n
+	if a.n < m*k || b.n < bNeed || c.n < m*n {
+		return fmt.Errorf("metal: Recorder strided matmul shape mismatch: a=%d(want ≥%d) b=%d(want ≥%d) c=%d(want ≥%d)", a.n, m*k, b.n, bNeed, c.n, m*n)
+	}
+	rc := C.mtl_recorder_matmul_strided_b(r.handle, a.handle, b.handle, c.handle,
+		C.int(m), C.int(k), C.int(n), C.int(bStride), C.int(bOffset))
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder strided matmul failed (%d)", int(rc))
+	}
+	return nil
+}
+
 func (r *Recorder) matmulRec(a, b, c *DeviceBuffer, m, k, n, accumulate int) error {
 	// >= not ==: operands may be over-allocated scratch (§T418 StepN); the kernel reads/writes
 	// only the leading m*k/k*n/m*n elements.

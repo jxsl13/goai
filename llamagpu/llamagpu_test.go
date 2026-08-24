@@ -202,7 +202,7 @@ func TestQuantDecoderMatchesReference(t *testing.T) {
 		}
 		for j := range got {
 			want := refT.AtF64(0, j)
-			if math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
+			if math.Abs(float64(got[j])-want) > 2e-3*math.Max(1, math.Abs(want)) {
 				t.Fatalf("pos %d logit[%d]: quant decoder %v vs reference %v", pos, j, got[j], want)
 			}
 		}

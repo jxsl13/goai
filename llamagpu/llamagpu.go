@@ -45,6 +45,14 @@ func (m mRec) MatMul(a, b, c buffer, mm, k, n int) error {
 func (m mRec) MatMulAcc(a, b, c buffer, mm, k, n int) error {
 	return m.r.MatMulAcc(mb(a), mb(b), mb(c), mm, k, n)
 }
+func (m mRec) F32QKVBands(x, w, q, k, v buffer, rows, dim int) error {
+	stride := 3 * dim
+	return firstErr(
+		m.r.MatMulStridedB(mb(x), mb(w), mb(q), rows, dim, dim, stride, 0),
+		m.r.MatMulStridedB(mb(x), mb(w), mb(k), rows, dim, dim, stride, dim),
+		m.r.MatMulStridedB(mb(x), mb(w), mb(v), rows, dim, dim, stride, 2*dim),
+	)
+}
 func (m mRec) RoPE(q, inv, o buffer, seq, width, heads, hd, half, pos int, posDiv float32) error {
 	return m.r.RoPE(mb(q), mb(inv), mb(o), seq, width, heads, hd, half, pos, posDiv)
 }
@@ -216,7 +224,8 @@ func NewGPT(m *nlp.GPT) (*GPTDecoder, error) {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
 	return newGPTDecoder(m, backendOps{
-		name: string(backend.Metal),
+		name:        string(backend.Metal),
+		fusedF32QKV: true,
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := metal.NewDeviceBufferF32(data)
 			if err != nil {

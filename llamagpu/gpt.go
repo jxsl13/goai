@@ -11,11 +11,13 @@ import (
 // gptBlock is one pre-LN GPT transformer block on the device: LayerNorm gains/biases, the four
 // attention projections, the biased GELU MLP, and the block's KV cache.
 type gptBlock struct {
-	g1, b1, g2, b2 buffer // LN1/LN2 gamma+beta [d]
-	wq, wk, wv, wo linear // attention projections [d,d], no bias
-	w1, w2         linear // FFN up [d,4d] / down [4d,d]
-	fb1, fb2       buffer // FFN biases [4d] / [d]
-	kC, vC         buffer // KV caches [maxLen*d]
+	g1, b1, g2, b2 buffer    // LN1/LN2 gamma+beta [d]
+	wq, wk, wv, wo linear    // attention projections [d,d], no bias
+	wqkv           f32Linear // fused attention projection [d,3d]
+	w1, w2         linear    // FFN up [d,4d] / down [4d,d]
+	fb1, fb2       buffer    // FFN biases [4d] / [d]
+	kC, vC         buffer    // KV caches [maxLen*d]
+	ffn            int       // FFN width, fixed when the block is uploaded
 }
 
 // GPTDecoder is the batched-decode engine for nlp.GPT models (§T422) — the GPT-2-style sibling of
@@ -27,15 +29,30 @@ type GPTDecoder struct {
 	d, h, dk, v, maxLen int
 	eps, scale          float32
 
-	blocks            []gptBlock
-	lnfG, lnfB        *bufSlot
-	head              linear
-	dx, xn, xn2       *bufSlot
-	q, k, v_          *bufSlot
-	attn, ao, hid, mo *bufSlot
-	logits            *bufSlot
-	tokEmb, posEmb    *tensor.Tensor // host gather sources
-	all               []buffer
+	blocks         []gptBlock
+	lnfG, lnfB     *bufSlot
+	head           linear
+	dx, xn, xn2    *bufSlot
+	q, k, v_, qkv  *bufSlot
+	attn, hid      *bufSlot
+	logits         *bufSlot
+	tokEmb, posEmb *tensor.Tensor // host gather sources
+	all            []buffer
+}
+
+type f32QKVBandsRecorder interface {
+	F32QKVBands(x, w, q, k, v buffer, rows, dim int) error
+}
+
+func (d *GPTDecoder) recordAttentionResidual(r recorder, b gptBlock, rows int) error {
+	return b.wo.recordAdd(r, d.attn.b, nil, d.dx.b, rows, d.d)
+}
+
+func (d *GPTDecoder) recordFFNResidual(r recorder, b gptBlock, rows int) error {
+	return firstErr(
+		b.w2.recordAdd(r, d.hid.b, nil, d.dx.b, rows, d.d),
+		r.AddBias(d.dx.b, b.fb2, d.dx.b, rows, d.d),
+	)
 }
 
 // newGPTDecoder uploads m's weights via ops and prepares per-block KV caches up to Ctx.
@@ -69,14 +86,33 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 		in, out := w.Shape()[0], w.Shape()[1]
 		return f32Linear{w: mk(flat2D(w)).b, k: in, n: out}
 	}
+	fusedQKV := func(wq, wk, wv *tensor.Tensor) f32Linear {
+		in := wq.Shape()[0]
+		nq, nk, nv := wq.Shape()[1], wk.Shape()[1], wv.Shape()[1]
+		fq, fk, fv := flat2D(wq), flat2D(wk), flat2D(wv)
+		stride := nq + nk + nv
+		weight := make([]float32, in*stride)
+		for row := range in {
+			dst := weight[row*stride : (row+1)*stride]
+			copy(dst[:nq], fq[row*nq:(row+1)*nq])
+			copy(dst[nq:nq+nk], fk[row*nk:(row+1)*nk])
+			copy(dst[nq+nk:], fv[row*nv:(row+1)*nv])
+		}
+		return f32Linear{w: mk(weight).b, k: in, n: stride}
+	}
 	for _, b := range m.Blocks {
 		gb := gptBlock{
 			g1: mk(flat1D(b.LN1.Gamma)).b, b1: mk(flat1D(b.LN1.Beta)).b,
 			g2: mk(flat1D(b.LN2.Gamma)).b, b2: mk(flat1D(b.LN2.Beta)).b,
-			wq: lin(b.Attn.Wq), wk: lin(b.Attn.Wk), wv: lin(b.Attn.Wv), wo: lin(b.Attn.Wo),
-			w1: lin(b.W1), w2: lin(b.W2),
+			wo: lin(b.Attn.Wo), w1: lin(b.W1), w2: lin(b.W2),
 			fb1: mk(flat1D(b.B1)).b, fb2: mk(flat1D(b.B2)).b,
 			kC: mk(make([]float32, d.maxLen*d.d)).b, vC: mk(make([]float32, d.maxLen*d.d)).b,
+			ffn: b.W1.Shape()[1],
+		}
+		if ops.fusedF32QKV {
+			gb.wqkv = fusedQKV(b.Attn.Wq, b.Attn.Wk, b.Attn.Wv)
+		} else {
+			gb.wq, gb.wk, gb.wv = lin(b.Attn.Wq), lin(b.Attn.Wk), lin(b.Attn.Wv)
 		}
 		d.blocks = append(d.blocks, gb)
 	}
@@ -94,10 +130,13 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 	d.q = mk(make([]float32, c*d.d))
 	d.k = mk(make([]float32, c*d.d))
 	d.v_ = mk(make([]float32, c*d.d))
+	if ops.fusedF32QKV {
+		// Large prefills address bands of the single fused weight directly. Only rows below the
+		// strided-band crossover need a grouped-output scratch, bounding it to 63 rows.
+		d.qkv = mk(make([]float32, min(c, 63)*3*d.d))
+	}
 	d.attn = mk(make([]float32, c*d.d))
-	d.ao = mk(make([]float32, c*d.d))
 	d.hid = mk(make([]float32, c*ffn))
-	d.mo = mk(make([]float32, c*d.d))
 	d.logits = mk(make([]float32, c*d.v))
 	if err != nil {
 		d.Release()
@@ -130,23 +169,32 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
-		e := firstErr(
-			r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, 1, D, d.eps),
-			b.wq.record(r, d.xn.b, d.q.b, 1),
-			b.wk.record(r, d.xn.b, d.k.b, 1),
-			b.wv.record(r, d.xn.b, d.v_.b, 1),
-			r.Blit(d.k.b, 0, b.kC, pos*D, D),
-			r.Blit(d.v_.b, 0, b.vC, pos*D, D),
-			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, H, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, 1),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+		e := r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, 1, D, d.eps)
+		qBuf := d.q.b
+		if d.ops.fusedF32QKV {
+			qBuf = d.qkv.b
+			e = firstErr(e,
+				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
+				r.Blit(d.qkv.b, D, b.kC, pos*D, D),
+				r.Blit(d.qkv.b, 2*D, b.vC, pos*D, D),
+			)
+		} else {
+			e = firstErr(e,
+				b.wq.record(r, d.xn.b, d.q.b, 1),
+				b.wk.record(r, d.xn.b, d.k.b, 1),
+				b.wv.record(r, d.xn.b, d.v_.b, 1),
+				r.Blit(d.k.b, 0, b.kC, pos*D, D),
+				r.Blit(d.v_.b, 0, b.vC, pos*D, D),
+			)
+		}
+		e = firstErr(e,
+			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, H, dk, 1, 0, d.scale),
+			d.recordAttentionResidual(r, b, 1),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, 1, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, 1),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, d.ffnDim(b)),
+			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
-			b.w2.record(r, d.hid.b, d.mo.b, 1),
-			r.AddBias(d.mo.b, b.fb2, d.mo.b, 1, D),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			d.recordFFNResidual(r, b, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -214,23 +262,35 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
-		e := firstErr(
-			r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, k, D, d.eps),
-			b.wq.record(r, d.xn.b, d.q.b, k),
-			b.wk.record(r, d.xn.b, d.k.b, k),
-			b.wv.record(r, d.xn.b, d.v_.b, k),
+		e := r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, k, D, d.eps)
+		if d.ops.fusedF32QKV {
+			if bands, ok := r.(f32QKVBandsRecorder); ok && k >= 64 {
+				e = firstErr(e, bands.F32QKVBands(d.xn.b, b.wqkv.w, d.q.b, d.k.b, d.v_.b, k, D))
+			} else {
+				e = firstErr(e,
+					b.wqkv.record(r, d.xn.b, d.qkv.b, k),
+					r.Copy2D(d.qkv.b, 0, 3*D, d.q.b, 0, D, k, D),
+					r.Copy2D(d.qkv.b, D, 3*D, d.k.b, 0, D, k, D),
+					r.Copy2D(d.qkv.b, 2*D, 3*D, d.v_.b, 0, D, k, D),
+				)
+			}
+		} else {
+			e = firstErr(e,
+				b.wq.record(r, d.xn.b, d.q.b, k),
+				b.wk.record(r, d.xn.b, d.k.b, k),
+				b.wv.record(r, d.xn.b, d.v_.b, k),
+			)
+		}
+		e = firstErr(e,
 			r.Blit(d.k.b, 0, b.kC, pos*D, k*D),
 			r.Blit(d.v_.b, 0, b.vC, pos*D, k*D),
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, H, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, k),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			d.recordAttentionResidual(r, b, k),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, k, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, k),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, d.ffnDim(b)),
+			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
-			b.w2.record(r, d.hid.b, d.mo.b, k),
-			r.AddBias(d.mo.b, b.fb2, d.mo.b, k, D),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			d.recordFFNResidual(r, b, k),
 		)
 		if e != nil {
 			r.Free()
@@ -262,14 +322,6 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		return nil, err
 	}
 	return out, nil
-}
-
-// ffnDim returns the block's FFN width from its up-projection.
-func (d *GPTDecoder) ffnDim(b gptBlock) int {
-	if l, ok := b.w1.(f32Linear); ok {
-		return l.n
-	}
-	return 4 * d.d
 }
 
 // Generate prefills the whole prompt in ONE recorded StepN (§T423), then samples up to maxNew
