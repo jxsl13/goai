@@ -3691,15 +3691,6 @@ targets: go:gguf.QMatMul, go:gguf.dotQ6_KRow, format/gguf/q6k.go, format/gguf/de
 
 On Apple M2 Pro, the current Q6_K scalar eager dequant takes about 148.5 us while the existing NEON dequant takes about 25.2 us over the same benchmark, but QMatMul M=1 dispatches scalar dotQ6_KRow and bypasses that SIMD work. A fresh merged-main recurrent Mamba2 Q6_K baseline is about 360 us/op with 93 allocations. Implement a dedicated ARM64 fused Q6_K unpack-scale-dot kernel selected only for contiguous F32 M=1 QMatMul. Preserve portable, non-ARM64, and M>1 paths. Accumulate vector partials with a scalar-relative error gate at most 1e-4; retain only if same-binary repeated M2 benchmarks show at least 1.5x on representative QMatMul and a statistically significant end-to-end Mamba2 gain without allocation regression. The rejected Metal packed-load proposal is non-overlapping: it changed GPU load width and measured 0.891x to 1.053x, whereas this proposal removes scalar CPU unpack and f64 per-element accumulation from the ARM64 M1 route.
 
-## T-01M0JGCPFFEZZ9H3BAZG4X548H Implement and gate ARM64 Q6_K fused decode GEMV
-kind: task
-state: done
-created: 2026-08-21
-parent: P-01M0JG9TX8E73ATMBAQJKJYSGA
-targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_asm_arm64.go, format/gguf/dot_q6k_asm_arm64.s, format/gguf/dot_q6k_asm_arm64_test.go, format/gguf/dot_q6k_asm_test.go, format/gguf/bench_test.go, format/gguf/quant_matmul.go, format/gguf/quant_matmul_fused_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
-
-Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
-
 ## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
 kind: adr
 state: done
