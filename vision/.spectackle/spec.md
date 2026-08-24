@@ -10,3 +10,8 @@ WHEN the active backend lacks either patch-embed-sequence direction, the ViT bat
 
 ## VIT-LOSS-GRAD-FALLBACK-001-001
 WHEN the active backend lacks the ViT loss-and-gradient capability, the ViT.LossAndGrad SHALL execute Forward plus mean basic CrossEntropy on a private tape and return gradients aligned exactly with ViT.Params.
+
+## VIT-ADAMW-SESSION-FALLBACK-001
+IF resident ViT AdamW acceleration is unavailable, THEN the ViT F32 AdamW session SHALL execute LossAndGrad followed by host F32-moment AdamW and expose explicit Sync plus idempotent Close.
+
+Rationale: Unsupported devices retain correct behavior and the same public lifecycle while Metal remains an optional acceleration capability.
