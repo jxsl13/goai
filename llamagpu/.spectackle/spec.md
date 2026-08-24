@@ -106,7 +106,7 @@ WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download
 
 Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.
 
-## DECODER-F32-RESIDUAL-SCRATCH-001
+## DECODER-F32-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
 WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the constructor SHALL retain exactly 0 ao elements and 0 mo elements.
 
 Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
