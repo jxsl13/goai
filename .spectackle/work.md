@@ -4020,6 +4020,7 @@ kind: proposal
 state: active
 created: 2026-08-24
 parent: R-01M0RVG598FZABSSGTGDVG203A
+grilled: 2026-08-24 open=0
 targets: go:nlp.ForwardPreNormTransformerStack, go:metal.preNormTransformerStackF32, go:metal.preNormTransformerStackBackwardF32, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_stack_test.go
 
 Research R-01M0RVG598FZA measured the fused depth-4 ViT stack at roughly 4.05 ms forward and 8.9 ms backward; backward rebuilds the full forward graph and dominates the approximately 9.7 ms complete training step. A correct Q/K/V grouping prototype reached only about 1.032x at the boundary and reversed in paired complete-step samples, so it is rejected. For recording-mode F32 Metal stacks only, materialize the expensive attention state and FFN pre-activations into a bounded two-slot native cache keyed by the forward output address. Backward consumes a matching entry once and uses a graph that reconstructs only cheap LayerNorm/GELU elementwise state; cache miss, eviction, repeated backward, unsupported shape, and eager inference use the existing recomputing path. Cap each retained state, serialize access under the existing Metal operation lock, retain no Go pointer, preserve exact logits/loss/all gradients/input immutability, and require at least 1.05x complete-step median with a 1.03x paired floor on the pinned M2 ViT workload.
