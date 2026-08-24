@@ -63,3 +63,9 @@ Rationale: The existing SIMD exponential leaf can amortize transcendental cost w
 WHEN a candidate changes values consumed by SVC SMO, the acceptance gate SHALL match 1 merged-control iteration count, pass existing parity tests, add 0 allocations, and achieve at least 1.03x median speedup across 7 order-alternated M2 pairs.
 
 Rationale: SMO trajectory damage is non-monotonic in kernel error, so tolerance alone cannot validate the optimization.
+
+## SVC-SMO-STATUS-CACHE-EXACT-001
+WHEN active-set membership is cached, the SVC SMO solver SHALL encode exactly the current I_up and I_low predicates, preserve ascending scan order and tie behavior, and refresh only variables whose alpha value changed.
+
+## SVC-SMO-STATUS-CACHE-GATE-001
+WHEN the SVC status-cache candidate is evaluated, the SVC status-cache candidate SHALL be retained only if 7 order-alternated M2 binary pairs show at least 1.03x median end-to-end n4000_rbf speedup, the exact merged-control iteration count remains 79, and allocations per operation do not increase.

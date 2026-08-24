@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### classic -- cache exact SVC SMO active-set membership (T-01M0TMY9SGFS7, 2026-08-24)
+
+The two ascending SMO working-set scans now load exact cached `I_up` and
+`I_low` bits instead of recomputing label and alpha-bound predicates for every
+variable. Each accepted step refreshes only its two changed entries. Scan
+order, tie rules, arithmetic, kernel routing, and the public API are unchanged;
+combining alpha and error storage keeps median allocations at 1,038/op.
+
+Fourteen frozen-binary Apple M2 Pro runs with balanced process order improve
+the 4,000x20 RBF fit from 6.701902 to 6.230004 ms at the medians (**1.0757x**),
+with 10/14 paired wins. The exactness gate retains 79 steps, 42 support vectors,
+matching decision signs, and the existing `3.3306690738754696e-15` maximum
+scalar/SIMD decision delta. Status storage adds about 4 KiB/op. Raw evidence is
+committed under the SVC SMO status-cache leadership artifact; the generalized
+finite-state cache detector is perfscan issue #901.
+
 ### format/gguf -- fuse ARM64 Q6_K decode unpack and dot (T-01M0JGCPFFEZZ, 2026-08-21)
 
 Single-token contiguous-F32 Q6_K `QMatMul` now selects an ARM64 NEON row
