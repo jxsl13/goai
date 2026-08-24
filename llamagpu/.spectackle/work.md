@@ -207,13 +207,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go, llamagpu/decoder_generate_metal_test.go, go:llamagpu.fastTopKSampler, go:llamagpu.fastTopPSampler
 
 Eligible device Top-K and pure Top-P generation currently downloads one full Vocab prefill row, allocates F32 and F64 host staging, and performs CPU sampling for token 1 before switching to resident sampling for token 2. Execute last-row prefill into the existing resident logits buffer without a host download, then use the established device sampler for token 1. Preserve all host-sampler fallbacks, pure Top-P overflow behavior, recurrent-model state progression, exact token/RNG semantics, final cache advancement, and public StepNLastInto behavior. Promote only with exact parity plus measured maxNew 1 allocation and latency leverage on M2.
-
-## ADR-01M0T458A9EW2BJ08S8YQMBA1J Expose an internal no-download last-row prefill boundary
-kind: adr
-state: active
-created: 2026-08-24
-parent: P-01M0T44EDPE42TNZEPAR566ZGW
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go
-
-Let the existing internal stepNInto execution accept a nil destination only from Decoder.Generate, meaning execute and leave the final logits in the resident buffer without DownloadF32. Public StepNInto and StepNLastInto retain strict destination-length validation and identical downloads. Recurrent decoders execute each prompt token through internal stepInto and leave only the final logits resident. Generate selects this path only after both sampler eligibility and device capability are known; all other paths keep caller-owned host logits. This confines the optimization to an already non-concurrent decoder without adding buffers or changing public API.
