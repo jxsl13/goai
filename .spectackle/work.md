@@ -4021,6 +4021,7 @@ kind: proposal
 state: draft
 created: 2026-08-24
 parent: R-01M0RX17A7E9890D8DQTYKRXST
+grilled: 2026-08-24 open=0
 targets: vision/vit.go, backend/attrs.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
 
 Introduce ViT.LossAndGrad(ctx, images, targets) returning mean basic cross-entropy and gradients aligned exactly with ViT.Params without mutating inputs or parameters. The portable path records Forward plus CrossEntropy on a private tape. An optional backend capability may consume packed detached patches, targets, and parameters directly. Metal implements the capability for contiguous offset-zero F32 uniform-depth ViTs by composing the already exact patch-sequence, pre-norm attention/FFN, first-token classifier, one-hot mean cross-entropy, and MPSGraph automatic parameter gradients into one bounded geometry-keyed graph and one synchronous submission. Unsupported dtype, shape, backend, recorder use, or capability falls back portably. Promote only with all-gradient/loss parity and the R-01M0RX17A7E98 M2 gates.

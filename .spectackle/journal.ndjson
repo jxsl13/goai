@@ -897,3 +897,4 @@
 {"t":"2026-08-24T03:29:10Z","eid":"6b6243a7c84f89f7","ag":"ag-1da3","ev":"create","id":"R-01M0RX17A7E9890D8DQTYKRXST","k":"research","ti":"Validate one-submission ViT objective gradients on M2"}
 {"t":"2026-08-24T03:29:27Z","eid":"475bd1fece57988d","ag":"ag-a113","ev":"move","id":"R-01M0RX17A7E9890D8DQTYKRXST","fr":"draft","to":"active","note":"Use the pinned local macOS SDK headers and existing MPSGraph gradient implementation as the primary executable design source."}
 {"t":"2026-08-24T03:29:32Z","eid":"ac7892c92430ea8f","ag":"ag-d7f9","ev":"create","id":"P-01M0RX1WNKETXSZDBWJ22NK76F","k":"proposal","ti":"Add portable ViT LossAndGrad with one-graph Metal execution"}
+{"t":"2026-08-24T03:30:39Z","eid":"e4b35a23e0578736","ag":"ag-3813","ev":"grill","id":"P-01M0RX1WNKETXSZDBWJ22NK76F","gr":"2026-08-24 open=0","hash":"e00a7f00a8980b84ba951d15a79d07181c0421b1e3555ae73051a670f97aec93"}
