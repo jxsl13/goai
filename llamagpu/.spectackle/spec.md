@@ -208,5 +208,5 @@ WHEN a pooled recorder is freed, the Metal GPT decoder adapter SHALL release exa
 ## M2-GPT-INTO-PERF-001-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepIntoMetal,go:llamagpu_test.BenchmarkGPTPrefillLastIntoMetal,go:llamagpu.BenchmarkGPTDecodeBoundaryPairedMetal,go:llamagpu.BenchmarkGPTPrefillBoundaryPairedMetal}
 WHEN GPT-2-small StepInto and 16-token StepNLastInto are benchmarked on M2, the GPT caller-buffer promotion gate SHALL require 0 allocations and at least 210000 and 352000 fewer bytes respectively.
 
-## M2-GPT-WRAPPER-THROUGHPUT-001-001
+## M2-GPT-WRAPPER-THROUGHPUT-001-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal,go:llamagpu_test.BenchmarkGPTPrefillLastMetal,go:llamagpu.BenchmarkGPTDecodeBoundaryPairedMetal,go:llamagpu.BenchmarkGPTPrefillBoundaryPairedMetal}
 WHEN GPT-2-small Step and 16-token StepNLast are benchmarked on M2, the GPT compatibility-wrapper promotion gate SHALL require at most 204804 B/op, exactly 1 allocation, and at least 0.97 times baseline throughput for both boundaries.
