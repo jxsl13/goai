@@ -794,6 +794,39 @@ the definitive gap-finder. (2) Re-running that audit measures *coverage* (which 
 route to ref), not speed — the speed win is per-op-typed, so verify it with the op's
 own parity/gradcheck, not a fallback-count diff.
 
+### Bit-identical reference MLA RoPE score interchange (T-01KYMDP9EMFTB, 2026-08-24)
+
+The reference MLA score previously completed one scalar RoPE dot per key. The
+new path transposes the shared RoPE keys once, keeps the reduction dimension
+ascending, and updates independent key scores in the inner loop. Every score
+therefore observes the same floating-point operation order; this is an exact
+output-axis interchange, not multi-accumulator reassociation.
+
+Seven process-order-alternated Apple M2 Pro pairs run ten complete F64 reference
+MLA calls per fresh `GOMAXPROCS=1` process at seq=512, heads=8, content width=64,
+RoPE width=32, causal:
+
+| reference `OpMLA` | baseline | interchanged | result |
+|---|---:|---:|---:|
+| median time | 245.062725 ms | 222.883521 ms | **1.0995x faster** |
+| paired wins | 2/7 | 5/7 | candidate |
+| median bytes/op | 3,282,433 | 3,413,504 | +131,071 B/op |
+| median allocations/op | 15 | 14 | one removed |
+
+A frozen-loop tolerance-zero test detects reversed reduction order, and CPU/ref
+MLA remains bit-identical for F32/F64, three geometries, and both causal modes.
+The trade is explicit: the transposed key view costs 128 KiB at this shape, while
+one combined RoPE backing buffer removes an allocation. This claim covers only
+explicit reference `OpMLA`; the optimized CPU backend and model-level path are
+unchanged.
+
+The same assessment found that current KDA already has no PS4008 site: its hot
+state row uses AXpy-style updates and existing `dot4`, so no KDA source changed.
+Raw samples, executable hashes, profile attribution, and claim boundaries are in
+[`m2-ps4008-kda-mla-20260824`](../internal/benchcompare/leadership/evidence/m2-ps4008-kda-mla-20260824/README.md).
+The generalized exact-interchange opportunity is
+[perfscan issue #902](https://github.com/jxsl13/perfscan/issues/902).
+
 ### Head-to-head: llama.cpp on the SAME weights (§T607)
 
 The decode benchmark's llama (17.7 M parameters, dim 512, 6 layers, GQA 8/2,
