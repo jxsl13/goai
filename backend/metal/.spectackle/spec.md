@@ -611,6 +611,6 @@ WHERE 3 order-alternated count-7 M2 campaigns measure the pinned ViT cell, the p
 Rationale: The gate compares the exact resident session with LossAndGrad plus host F32-moment AdamW and the measured PyTorch 2.12.1 MPS cell.
 
 ## GPT-DECODE-BENCHMARK-CACHE-LIFETIME-001
-WHEN BenchmarkGPTDecode begins a CPU or Metal calibration, the benchmark harness SHALL create exactly 1 private KV cache, prefill 8 rows outside timing, and derive every decoded position from KVCache.NextPos.
+WHEN BenchmarkGPTDecode begins a CPU or Metal calibration, the benchmark harness SHALL create a private KV cache, prefill 8 rows outside timing, and derive every decoded position from KVCache.NextPos.
 
 Rationale: Go benchmark calibration may invoke the sub-benchmark repeatedly; closure-owned cache state made the local position stale and invalidated the measuring instrument.
