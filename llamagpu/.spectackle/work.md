@@ -115,3 +115,13 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 Add a one-row resident GPT activation workspace, grouped exact-row lazy high-water allocation for StepN and StepNLast, release-safe growth and teardown, and an internal eager max-context control. Test fused and portable shapes, reuse, growth, failure cleanup, final release, and full StepN parity. Benchmark GPT-2-small activation residency and require at least 34000000 fewer B/op, at least 10x lower constructor ns/op, and at least 0.97x M2 Step and StepNLast throughput with unchanged allocations.
+
+## T-01M0SPRH8NEV49Q636WM7Y1PQA Route GPT hidden-state readback through selected activation workspace
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
+targets: llamagpu/medusa.go, llamagpu/medusa_test.go, llamagpu/example_test.go
+
+Update GPT StepHidden and StepNHidden so hidden-state downloads read the resident or lazy workspace selected by the completed Step call. Preserve Llama hidden readback unchanged and validate Medusa all-reject, accept-all, and GPT examples.
