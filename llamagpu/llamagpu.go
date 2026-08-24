@@ -289,7 +289,12 @@ func NewGPT(m *nlp.GPT) (*GPTDecoder, error) {
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
-	return newGPTDecoder(m, backendOps{
+	return newGPTDecoder(m, metalGPTOps())
+}
+
+func metalGPTOps() backendOps {
+	pool := new(mRecPool)
+	return backendOps{
 		name:          string(backend.Metal),
 		fusedF32QKV:   true,
 		fusedBiasGELU: os.Getenv("GOAI_METAL_GPT_BIAS_GELU") != "0",
@@ -300,14 +305,8 @@ func NewGPT(m *nlp.GPT) (*GPTDecoder, error) {
 			}
 			return mBuf{b}, nil
 		},
-		newRecorder: func() (recorder, error) {
-			r, err := metal.NewRecorder()
-			if err != nil {
-				return nil, err
-			}
-			return mRec{r}, nil
-		},
-	})
+		newRecorder: func() (recorder, error) { return pool.acquire(false) },
+	}
 }
 
 func metalUploadQWeight(weight []byte, qt uint32, n, k int) (qweight, error) {

@@ -11,6 +11,9 @@ schema: v1
 - P-01M0ST9BK2FGYTT3D762HHYHVB Add zero-allocation shared Decoder stepping: Delivered the zero-allocation shared Decoder host boundary. StepInto is public, documented, example-covered, bit-identical to Step, and allocation-free after warmup at the tracked M2 boundary. The original seven allocations and 8576-8578 B/op fell to zero with median paired throughput at 1.029 times baseline. Spectackle rules and symbol anchors cover semantics, length guards, embedding staging, re [body truncated at tombstone retention cap]
 - T-01M0SWB40KF9GR1EZHGRTDD4AA Implement and benchmark zero-allocation Decoder prefill: Implemented StepNInto and StepNLastInto with exact pre-mutation length guards, direct downloads, recurrent StepInto routing, and a Decoder-owned exact high-water embedding staging slice cleared by Release. M2 D512/L6/V1024 at 16 tokens: historical StepNLast 36864 B/op and 2 allocs/op; retained wrapper 4096 B/op and 1 alloc/op; warmed StepNLastInto 0 allocs/op and 0-1 B/op. Seven in-process order-r [body truncated at tombstone retention cap]
 - ADR-01M0SW7XPYFV69M6PYKDM7EHNR Use caller buffers and retained high-water embedding staging for Decoder prefill: Decision validated and implemented: caller buffers plus receiver-owned exact high-water host staging preserve allocating wrappers and exact semantics while removing 32768 staging bytes per 16x512 prefill. Rejected eager Ctx-sized residency, sync.Pool, and duplicated execution graphs remain rejected. M2 paired median throughput ratio 1.001x.
+- T-01M0SXVBXBFWQB2XB30NCJC88B Implement and gate allocation-free GPT decode and prefill: Implemented GPTDecoder StepInto, StepNInto, and StepNLastInto over shared execution graphs; exact destination guards precede cache mutation; token and learned-position embeddings gather into one reusable row or exact high-water batch slice; Release clears staging; NewGPT uses the bounded mRecPool with fresh native command buffers. GPT-2-small M2: Step 210992-210994 B/op and 4 allocs became 204800- [body truncated at tombstone retention cap]
+- ADR-01M0SXS636FJBA7HAYV1199C07 Use caller buffers, reusable embedding staging, and bounded recorder wrappers for GPT: Decision implemented and validated. GPT caller buffers, receiver-owned embedding staging, and decoder-local recorder-wrapper reuse remove all warmed boundary allocations without duplicating execution graphs. Eager Ctx-sized host storage and sync.Pool remain rejected. Compatibility wrappers preserve result ownership and M2 paired medians remain at 1.000x decode and 1.027x prefill.
+- P-01M0SXR7C3E2MRKNF1YVZ48G65 Eliminate GPT decode and prefill boundary allocations: Proposal delivered. GPT StepInto and StepNLastInto reach 0 allocations at GPT-2-small geometry; Step and pp16 StepNLast retain only one 204800-byte result allocation; exact logits and cross-backend API behavior are preserved; M2 throughput clears the 0.97 floor; all local preflight lanes pass.
 
 ## METAL-F16-KV-CACHE-001
 The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at exactly 2 bytes per element while NewQuant retains f32 storage and all non-Metal constructors remain unchanged.
@@ -183,3 +186,30 @@ WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water emb
 
 ## M2-DECODER-STEPN-INTO-PERF-001-001 {applies: go:llamagpu.BenchmarkLlamaPrefillLastIntoMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingPairedMetal}
 WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 StepNLastInto allocations, 32768 fewer StepNLast bytes, and at least 0.97 times baseline throughput.
+
+## GPT-STEP-INTO-SEMANTICS-001-001 {applies: go:llamagpu.GPTDecoder.StepInto,go:llamagpu.GPTDecoder.stepInto}
+WHEN the destination length equals Vocab, the GPTDecoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
+
+## GPT-STEPN-INTO-SEMANTICS-001-001 {applies: go:llamagpu.GPTDecoder.StepNInto,go:llamagpu.GPTDecoder.gptStepNInto}
+WHEN the destination length equals len(tokens) times Vocab, the GPTDecoder.StepNInto SHALL advance exactly len(tokens) tokens and write exactly len(tokens) times Vocab logits matching StepN.
+
+## GPT-STEPN-LAST-INTO-SEMANTICS-001-001 {applies: go:llamagpu.GPTDecoder.StepNLastInto,go:llamagpu.GPTDecoder.gptStepNInto}
+WHEN the destination length equals Vocab, the GPTDecoder.StepNLastInto SHALL advance exactly len(tokens) tokens and write exactly Vocab logits matching StepNLast.
+
+## GPT-INTO-LENGTH-GUARD-001-001 {applies: go:llamagpu.GPTDecoder.StepInto,go:llamagpu.GPTDecoder.StepNInto,go:llamagpu.GPTDecoder.StepNLastInto}
+WHEN a destination length differs from its method requirement, the GPTDecoder Into methods SHALL return an error and mutate exactly 0 cache rows.
+
+## GPT-EMBED-STAGING-001-001 {applies: go:llamagpu.GPTDecoder.gatherEmbedInto,go:llamagpu.GPTDecoder.batchEmbedHost,go:llamagpu.addEmbedRowInto,go:llamagpu.GPTDecoder.stepInto,go:llamagpu.GPTDecoder.gptStepNInto}
+WHEN Step or prefill gathers token and positional embeddings, the GPTDecoder SHALL reuse exactly 1 Dim host row or 1 exact high-water batch slice and allocate 0 embedding objects.
+
+## GPT-EMBED-STAGING-LIFETIME-001-001 {applies: go:llamagpu.GPTDecoder.Release,go:llamagpu.GPTDecoder.batchEmbedHost}
+WHEN Release completes, the GPTDecoder SHALL retain exactly 0 host embedding staging elements.
+
+## GPT-METAL-RECORDER-POOL-SAFETY-001-001 {applies: go:llamagpu.NewGPT,go:llamagpu.metalGPTOps,go:llamagpu.pooledMRec.Free}
+WHEN a pooled recorder is freed, the Metal GPT decoder adapter SHALL release exactly 1 native command buffer before returning its Go wrapper to the 2-slot pool.
+
+## M2-GPT-INTO-PERF-001-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepIntoMetal,go:llamagpu_test.BenchmarkGPTPrefillLastIntoMetal,go:llamagpu.BenchmarkGPTDecodeBoundaryPairedMetal,go:llamagpu.BenchmarkGPTPrefillBoundaryPairedMetal}
+WHEN GPT-2-small StepInto and 16-token StepNLastInto are benchmarked on M2, the GPT caller-buffer promotion gate SHALL require 0 allocations and at least 210000 and 352000 fewer bytes respectively.
+
+## M2-GPT-WRAPPER-THROUGHPUT-001-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal,go:llamagpu_test.BenchmarkGPTPrefillLastMetal,go:llamagpu.BenchmarkGPTDecodeBoundaryPairedMetal,go:llamagpu.BenchmarkGPTPrefillBoundaryPairedMetal}
+WHEN GPT-2-small Step and 16-token StepNLast are benchmarked on M2, the GPT compatibility-wrapper promotion gate SHALL require at most 204804 B/op, exactly 1 allocation, and at least 0.97 times baseline throughput for both boundaries.

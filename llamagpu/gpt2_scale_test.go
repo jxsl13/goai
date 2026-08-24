@@ -176,3 +176,78 @@ func BenchmarkGPTPrefillLastMetal(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGPTDecodeStepIntoMetal measures allocation-free GPT decode with caller-owned logits.
+func BenchmarkGPTDecodeStepIntoMetal(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no gpu")
+	}
+	const vocab, ctxLen, d, layers, heads = 50257, 1024, 768, 12, 12
+	g, err := nlp.GPT2FromHF(synthGPT2HF(vocab, ctxLen, d, layers), heads)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dec, err := llamagpu.NewGPT(g)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(dec.Release)
+	prompt := make([]int, 16)
+	for i := range prompt {
+		prompt[i] = (i*97 + 11) % vocab
+	}
+	if _, err := dec.StepNLast(prompt, 0); err != nil {
+		b.Fatal(err)
+	}
+	out := make([]float32, vocab)
+	pos := len(prompt)
+	if err := dec.StepInto((pos*97+11)%vocab, pos, out); err != nil {
+		b.Fatal(err)
+	}
+	pos++
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if pos >= ctxLen {
+			pos = len(prompt) + 1
+		}
+		if err := dec.StepInto((pos*97+11)%vocab, pos, out); err != nil {
+			b.Fatal(err)
+		}
+		pos++
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
+// BenchmarkGPTPrefillLastIntoMetal measures allocation-free 16-token GPT prefill.
+func BenchmarkGPTPrefillLastIntoMetal(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no gpu")
+	}
+	const vocab, ctxLen, d, layers, heads = 50257, 1024, 768, 12, 12
+	g, err := nlp.GPT2FromHF(synthGPT2HF(vocab, ctxLen, d, layers), heads)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dec, err := llamagpu.NewGPT(g)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(dec.Release)
+	prompt := make([]int, 16)
+	for i := range prompt {
+		prompt[i] = (i*97 + 11) % vocab
+	}
+	out := make([]float32, vocab)
+	if err := dec.StepNLastInto(prompt, 0, out); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := dec.StepNLastInto(prompt, 0, out); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.ReportMetric(float64(len(prompt)*b.N)/b.Elapsed().Seconds(), "tok/s")
+}

@@ -42,7 +42,11 @@ type GPTDecoder struct {
 	scratchRows    int
 	fullScratch    gptScratch
 	tokEmb, posEmb *tensor.Tensor // host gather sources
-	all            []buffer
+	embedHost      []float32      // reusable single-token token+position embedding row [d]
+	embedBatchHost []float32      // reusable batched embedding rows, retained at the exact high-water size
+	// eagerBoundaryControl retains the historical per-call host allocations for same-binary benchmarks.
+	eagerBoundaryControl bool
+	all                  []buffer
 }
 
 type f32QKVBandsRecorder interface {
@@ -168,6 +172,7 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 		ops: ops,
 		d:   cfg.Dim, h: cfg.Heads, v: cfg.Vocab, maxLen: cfg.Ctx,
 		eps: float32(cfg.Eps), tokEmb: m.TokEmb, posEmb: m.PosEmb,
+		embedHost: make([]float32, cfg.Dim),
 	}
 	if d.h <= 0 || d.d%d.h != 0 {
 		return nil, fmt.Errorf("llamagpu(%s): gpt dim %d not divisible by heads %d", ops.name, d.d, d.h)
@@ -258,28 +263,65 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 	return d, nil
 }
 
-// Step advances the decoder by one token at absolute position pos (== cache length before the
-// call), recording the whole layer stack + head into one command buffer, and returns the [vocab]
-// logits. The token embedding and learned positional embedding are summed host-side.
-func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
+func addEmbedRowInto(dst []float32, table *tensor.Tensor, row, cols int) {
+	if table.IsContiguous() {
+		off := table.Offset() + row*cols
+		switch table.Dtype() {
+		case tensor.F32:
+			for j, v := range table.Storage().F32()[off : off+cols] {
+				dst[j] += v
+			}
+			return
+		case tensor.F64:
+			for j, v := range table.Storage().F64()[off : off+cols] {
+				dst[j] += float32(v)
+			}
+			return
+		}
+	}
+	for j := range cols {
+		dst[j] += float32(table.AtF64(row, j))
+	}
+}
+
+func (d *GPTDecoder) gatherEmbedInto(dst []float32, token, pos int) {
+	embedRowInto(dst, d.tokEmb, token, d.d)
+	addEmbedRowInto(dst, d.posEmb, pos, d.d)
+}
+
+func (d *GPTDecoder) batchEmbedHost(rows int) []float32 {
+	need := rows * d.d
+	if len(d.embedBatchHost) < need {
+		d.embedBatchHost = make([]float32, need)
+	}
+	return d.embedBatchHost[:need]
+}
+
+// stepInto records one token at absolute position pos and leaves its logits resident.
+func (d *GPTDecoder) stepInto(token, pos int) error {
 	if pos < 0 || pos >= d.maxLen {
-		return nil, fmt.Errorf("llamagpu(%s): gpt pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
+		return fmt.Errorf("llamagpu(%s): gpt pos %d out of [0,%d)", d.ops.name, pos, d.maxLen)
 	}
 	if token < 0 || token >= d.v {
-		return nil, fmt.Errorf("llamagpu(%s): gpt token %d out of vocab %d", d.ops.name, token, d.v)
+		return fmt.Errorf("llamagpu(%s): gpt token %d out of vocab %d", d.ops.name, token, d.v)
 	}
-	x := embedRow(d.tokEmb, token, d.d)
-	pe := embedRow(d.posEmb, pos, d.d)
-	for i := range x {
-		x[i] += pe[i]
+	x := d.embedHost
+	if d.eagerBoundaryControl {
+		x = embedRow(d.tokEmb, token, d.d)
+		pe := embedRow(d.posEmb, pos, d.d)
+		for i := range x {
+			x[i] += pe[i]
+		}
+	} else {
+		d.gatherEmbedInto(x, token, pos)
 	}
 	s := d.residentScratch()
 	if err := s.dx.UploadF32(x); err != nil {
-		return nil, err
+		return err
 	}
 	r, err := d.ops.newRecorder()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
@@ -311,7 +353,7 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 		)
 		if e != nil {
 			r.Free()
-			return nil, e
+			return e
 		}
 	}
 	if e := firstErr(
@@ -320,9 +362,29 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 		r.Finish(),
 	); e != nil {
 		r.Free()
-		return nil, e
+		return e
 	}
 	r.Free()
+	return nil
+}
+
+// StepInto advances the decoder by one token and writes exactly Vocab logits into caller-owned out.
+// Its length is validated before any cache mutation.
+func (d *GPTDecoder) StepInto(token, pos int, out []float32) error {
+	if len(out) != d.v {
+		return fmt.Errorf("llamagpu(%s): gpt StepInto output length %d != vocab %d", d.ops.name, len(out), d.v)
+	}
+	if err := d.stepInto(token, pos); err != nil {
+		return err
+	}
+	return d.logits.b.DownloadF32(out)
+}
+
+// Step advances the decoder by one token at absolute position pos and returns newly allocated logits.
+func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
+	if err := d.stepInto(token, pos); err != nil {
+		return nil, err
+	}
 	out := make([]float32, d.v)
 	if err := d.logits.b.DownloadF32(out); err != nil {
 		return nil, err
@@ -338,6 +400,15 @@ func (d *GPTDecoder) StepN(tokens []int, pos int) ([]float32, error) {
 	return d.gptStepN(tokens, pos, false)
 }
 
+// StepNInto is StepN with exactly len(tokens)*Vocab caller-owned output elements.
+func (d *GPTDecoder) StepNInto(tokens []int, pos int, out []float32) error {
+	want := len(tokens) * d.v
+	if len(out) != want {
+		return fmt.Errorf("llamagpu(%s): gpt StepNInto output length %d != tokens*vocab %d", d.ops.name, len(out), want)
+	}
+	return d.gptStepNInto(tokens, pos, false, out)
+}
+
 // StepNLast is StepN projecting only the FINAL prompt row's logits (LM head over 1 row, download of
 // vocab not k·vocab); the transformer body still runs all k rows so the KV cache and the returned
 // [vocab] row are bit-identical to StepN's last row. For generation/KV-seeding prefills that read at
@@ -346,44 +417,84 @@ func (d *GPTDecoder) StepNLast(tokens []int, pos int) ([]float32, error) {
 	return d.gptStepN(tokens, pos, true)
 }
 
+// StepNLastInto is StepNLast with exactly Vocab caller-owned output elements.
+func (d *GPTDecoder) StepNLastInto(tokens []int, pos int, out []float32) error {
+	if len(out) != d.v {
+		return fmt.Errorf("llamagpu(%s): gpt StepNLastInto output length %d != vocab %d", d.ops.name, len(out), d.v)
+	}
+	return d.gptStepNInto(tokens, pos, true, out)
+}
+
 func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, error) {
+	if err := d.validateStepN(tokens, pos); err != nil {
+		return nil, err
+	}
+	rows := len(tokens)
+	if lastOnly {
+		rows = 1
+	}
+	out := make([]float32, rows*d.v)
+	if err := d.gptStepNInto(tokens, pos, lastOnly, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (d *GPTDecoder) validateStepN(tokens []int, pos int) error {
 	k := len(tokens)
 	if k == 0 {
-		return nil, fmt.Errorf("llamagpu(%s): gpt StepN needs ≥1 token", d.ops.name)
+		return fmt.Errorf("llamagpu(%s): gpt StepN needs ≥1 token", d.ops.name)
 	}
 	if pos < 0 || pos+k > d.maxLen {
-		return nil, fmt.Errorf("llamagpu(%s): gpt StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
+		return fmt.Errorf("llamagpu(%s): gpt StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
+	}
+	for _, tok := range tokens {
+		if tok < 0 || tok >= d.v {
+			return fmt.Errorf("llamagpu(%s): gpt token %d out of vocab %d", d.ops.name, tok, d.v)
+		}
+	}
+	return nil
+}
+
+func (d *GPTDecoder) gptStepNInto(tokens []int, pos int, lastOnly bool, out []float32) error {
+	k := len(tokens)
+	if err := d.validateStepN(tokens, pos); err != nil {
+		return err
 	}
 	logits := d.logits.b
 	if !lastOnly {
 		var err error
 		logits, err = logitsForRows(d.ops, d.logits.b, d.logitsRows, &d.fullLogits, k, d.v)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	s, err := d.scratchForRows(k)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	host := make([]float32, k*d.d)
-	for i, tok := range tokens {
-		if tok < 0 || tok >= d.v {
-			return nil, fmt.Errorf("llamagpu(%s): gpt token %d out of vocab %d", d.ops.name, tok, d.v)
+	host := d.batchEmbedHost(k)
+	if d.eagerBoundaryControl {
+		host = make([]float32, k*d.d)
+		for i, tok := range tokens {
+			row := host[i*d.d : (i+1)*d.d]
+			copy(row, embedRow(d.tokEmb, tok, d.d))
+			pe := embedRow(d.posEmb, pos+i, d.d)
+			for j := range row {
+				row[j] += pe[j]
+			}
 		}
-		row := host[i*d.d : (i+1)*d.d]
-		copy(row, embedRow(d.tokEmb, tok, d.d))
-		pe := embedRow(d.posEmb, pos+i, d.d)
-		for j := range row {
-			row[j] += pe[j]
+	} else {
+		for i, tok := range tokens {
+			d.gatherEmbedInto(host[i*d.d:(i+1)*d.d], tok, pos+i)
 		}
 	}
 	if err := s.dx.UploadF32(host); err != nil {
-		return nil, err
+		return err
 	}
 	r, err := d.ops.newRecorder()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
@@ -418,7 +529,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		)
 		if e != nil {
 			r.Free()
-			return nil, e
+			return e
 		}
 	}
 	rows := k
@@ -428,7 +539,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		// holds exactly what row k-1 would have produced; a no-op when k==1).
 		if e := r.Blit(s.dx, (k-1)*D, s.dx, 0, D); e != nil {
 			r.Free()
-			return nil, e
+			return e
 		}
 		rows = 1
 	}
@@ -438,14 +549,13 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		r.Finish(),
 	); e != nil {
 		r.Free()
-		return nil, e
+		return e
 	}
 	r.Free()
-	out := make([]float32, rows*d.v)
 	if err := logits.DownloadF32(out); err != nil {
-		return nil, err
+		return err
 	}
-	return out, nil
+	return nil
 }
 
 // Generate prefills the whole prompt in ONE recorded StepN (§T423), then samples up to maxNew
@@ -492,6 +602,8 @@ func (d *GPTDecoder) Ctx() int { return d.maxLen }
 func (d *GPTDecoder) Release() {
 	d.fullScratch.release()
 	d.fullLogits.release()
+	d.embedHost = nil
+	d.embedBatchHost = nil
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()
