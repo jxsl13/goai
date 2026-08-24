@@ -4017,7 +4017,7 @@ On current merged main, measure the pinned M2 Pro F32 GPT training workload (voc
 
 ## P-01M0S2E3VVF8WSZW64D46VEWEZ Add portable GPT LossAndGrad with one-graph causal Metal execution
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.Backend.ViTLossAndGradF32, nlp/gpt.go, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_test.go, internal/benchcompare/compare_test.go
 
