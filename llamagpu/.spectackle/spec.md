@@ -225,3 +225,15 @@ WHEN optimized Generate returns N tokens after a prompt of P tokens, the GPTDeco
 
 ## M2-GPT-GENERATE-ALLOCATION-PERF-001-001 {applies: go:llamagpu.BenchmarkGPTGenerateAllocationsMetal,go:llamagpu.BenchmarkGPTGeneratePairedMetal}
 WHEN the generation reuse slice is promoted, the GPT-2-small M2 maxNew 8 benchmark gate SHALL require 1638400 fewer B/op, 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
+
+## DECODER-GENERATE-LOGITS-REUSE-001
+WHEN Decoder.Generate emits N tokens through host sampling, the shared Decoder SHALL allocate exactly 1 Vocab F32 logits slice and reuse it for prefill and every decode step.
+
+## DECODER-GENERATE-CACHE-PARITY-001
+WHEN optimized Decoder.Generate returns N tokens after a prompt of P tokens, the shared Decoder SHALL retain exactly 1 populated cache row per prompt or generated token including 1 row for the final generated token.
+
+## DECODER-GENERATE-DEVICE-SAMPLING-001
+WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab decode-logit host downloads after the first sampled token.
+
+## M2-DECODER-GENERATE-ALLOCATION-PERF-001
+WHEN the generation reuse slice is promoted on M2 at Vocab 32000 and maxNew 8, the shared Decoder benchmark gate SHALL require at least 1048576 fewer B/op, at least 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
