@@ -220,7 +220,7 @@ Let the existing internal stepNInto execution accept a nil destination only from
 
 ## T-01M0T45AR8FEV9FAGQSYKN700B Implement and gate resident first-token sampling
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0T44EDPE42TNZEPAR566ZGW
 grilled: 2026-08-24 open=0
