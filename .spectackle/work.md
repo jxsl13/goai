@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJNDQJZEW0SMH58S84Z23PM Add an SGLang datapoint beside vLLM in the serving comparison
 kind: task
-state: approved
+state: active
 created: 2026-07-27
 targets: docs/benchmarking.md
 
