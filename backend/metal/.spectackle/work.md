@@ -58,6 +58,7 @@ kind: task
 state: active
 created: 2026-08-24
 parent: P-01M0RQAB74FFSA32RRCTPRK54H
+grilled: 2026-08-24 open=0
 targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32
 
 Add an exact Darwin ARM64 F32 basic-mean B8/C10 selector in Metal CrossEntropy forward and backward. It must execute the existing reference implementation with a nil nested recorder and zero Metal submissions, preserve direct Metal for all unmeasured shapes/options, match loss and logits gradient without input mutation, and pass three order-alternated M2 campaigns plus full repository gates. Replace the temporary wrapper attribution control with a production-selector control toggle. Record accepted and rejected evidence and perfscan issue 875.
