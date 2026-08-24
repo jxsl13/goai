@@ -4014,13 +4014,3 @@ created: 2026-08-24
 targets: go:nn.CrossEntropy, go:metal_test.BenchmarkLayerNormSequenceClassifierViTTrainStep
 
 Measure the post-classifier CrossEntropy forward/backward boundary and its contribution to the exact B8/S65/D128/C10 depth-four ViT training step after PR 1197. Respect the archived rejection of replacing scalar math.Log with vlogF32: CrossEntropy is already a fused operation, so this research targets end-to-end execution placement, synchronization, allocation, and possible composition with the new LayerNorm-sequence-classifier boundary. Screen host, existing Metal, and graph-composed routes with exact logits/loss/all-gradient parity. Retain work only when three order-alternated count-seven M2 campaigns pass predeclared boundary and full-step gates; record rejected variants and report generalizable findings to perfscan.
-
-## P-01M0RQAB74FFSA32RRCTPRK54H Keep the tiny ViT loss boundary on host memory
-kind: proposal
-state: active
-created: 2026-08-24
-parent: R-01M0RQ3BTBEDGTR3YTW6RJJRCM
-grilled: 2026-08-24 open=0
-targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32, go:nn.CrossEntropy
-
-For the exact post-PR-1197 M2 ViT B8/C10 basic mean CrossEntropy boundary, avoid two synchronous Metal submissions and execute the existing exact host implementation over unified memory. Preserve direct Metal for every unmeasured geometry or option set. Initial order-reversed count-seven screens show about 106x-116x boundary speedup and 1.18x-1.25x complete-step speedup. The change is execution routing only; the archived scalar math.Log vectorization rejection remains binding. Require exact loss/logits-gradient parity, zero input mutation, a zero-submission structural gate, three campaigns, and external perfscan issue 875.
