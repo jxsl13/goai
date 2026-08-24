@@ -221,3 +221,4 @@
 {"t":"2026-08-24T12:00:38Z","eid":"bd362aa5f5b3c08e","ag":"ag-07b7","ev":"grill","id":"P-01M0ST9BK2FGYTT3D762HHYHVB","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6309e60fd6f16573593fd4f73ca31a3ba268faa36bf1b9e3e8e73dfdcbf4e4bd"}
 {"t":"2026-08-24T12:00:51Z","eid":"87fd0e21d7ffd2b0","ag":"ag-935f","ev":"create","id":"ADR-01M0STA4CNESSRA8MS30X6VDFY","k":"adr","ti":"Preserve Step as a wrapper over caller-buffer StepInto","dir":"llamagpu"}
 {"t":"2026-08-24T12:00:54Z","eid":"4101ed9cabddadc8","ag":"ag-c3bb","ev":"create","id":"T-01M0STA78PF4PABXVY1FBKZ98J","k":"task","ti":"Implement and benchmark Decoder StepInto","dir":"llamagpu"}
+{"t":"2026-08-24T12:01:08Z","eid":"8beff02837840851","ag":"ag-697c","ev":"move","id":"ADR-01M0STA4CNESSRA8MS30X6VDFY","dir":"llamagpu","fr":"draft","to":"active","note":"Adopted after allocation attribution: wrapper compatibility and one decoder-owned staging row minimize semantic and API risk."}

@@ -210,7 +210,7 @@ Add a caller-buffer StepInto boundary and one reusable host embedding row to rem
 
 ## ADR-01M0STA4CNESSRA8MS30X6VDFY Preserve Step as a wrapper over caller-buffer StepInto
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0ST9BK2FGYTT3D762HHYHVB
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
