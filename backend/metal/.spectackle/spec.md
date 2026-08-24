@@ -578,3 +578,6 @@ WHERE 3 order-alternated count-7 M2 campaigns measure F32 V4096 S256 D512 H8 F20
 
 ## METAL-GPT-ADAMW-SESSION-STRUCTURE-001
 WHERE supported contiguous F32 causal GPT geometry, the Metal GPT AdamW session SHALL upload parameters once, retain parameter, gradient, and moment buffers, encode 1 objective-plus-update command buffer per Step, return 1 scalar loss, and copy parameters only on Sync or Close.
+
+## METAL-GPT-ADAMW-SESSION-NUMERIC-001
+WHEN the resident session is compared with portable F32 AdamW for at least 3 steps, the Metal GPT AdamW session SHALL match every loss and synchronized parameter within F32 tolerance, preserve checkpoint state, reject use after Close, and permit repeated Close.
