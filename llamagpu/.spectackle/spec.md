@@ -95,3 +95,8 @@ Rationale: Preserve batched semantics without per-call churn or maximum-context 
 WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecoder SHALL release each prior or partial buffer exactly once and retain 0 stale grouped-workspace references.
 
 Rationale: Keep grouped workspace ownership transactional and backend-independent.
+
+## GPT2-LOGITS-RESIDENCY-PERF-005
+WHEN the same-binary GPT-2-small activation-residency benchmark compares lazy and eager controls, the promotion gate SHALL require 34000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times Step and StepNLast throughput.
+
+Rationale: Validate retained-memory leverage without moving cost into dominant inference paths.
