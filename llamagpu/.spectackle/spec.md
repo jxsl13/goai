@@ -56,7 +56,7 @@ WHEN the enabled Metal GPT FFN activation executes, the decoder SHALL record exa
 
 Rationale: Remove one dispatch and context-capacity work amplification from Metal GPT.
 
-## GPT-BIAS-GELU-FALLBACK-002
+## GPT-BIAS-GELU-FALLBACK-002 {applies: go:llamagpu.GPTDecoder.recordBiasGELU,go:llamagpu.TestMetalGPTBiasGELUStepAndStepNMatchSplitControl}
 WHILE the bounded BiasGELU capability is unavailable or disabled, the decoder SHALL retain the established AddBias followed by exact unary GELU activation chain.
 
 Rationale: Preserve portable CUDA, Vulkan, CPU, and same-binary control behavior.
