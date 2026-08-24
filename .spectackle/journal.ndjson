@@ -989,3 +989,5 @@
 {"t":"2026-08-24T06:57:27Z","eid":"d77c191138180594","ag":"ag-a145","ev":"grill","id":"ADR-01M0S8XZMEFC98ZF81GACDFEGE","gr":"2026-08-24 open=0","hash":"f18ae0b8da61f8b6d4ab86c74442de80bb0424e0701b0ed55998a1fcafd4cd26"}
 {"t":"2026-08-24T06:57:27Z","eid":"ba05d752c9fdde5e","ag":"ag-62ce","ev":"grill","id":"P-01M0S8XJF9F5HTNGTQXZ3R9YMZ","gr":"2026-08-24 open=1","hash":"3c8ac7d5d590cb7e87eb25cdbbbf9855df4542bfac41c3fd4e9cc9f3f4d3b0f0","open":1,"keys":["blast:15"]}
 {"t":"2026-08-24T06:57:44Z","eid":"9a6aecf3814e67e1","ag":"ag-4dee","ev":"grill","id":"R-01M0S8MAAVFDSSRJKQKZ2AYBSV","gr":"2026-08-24 open=0","hash":"89163719d3d564359a4f6b6c124d0f62114e3810a28e96fd38cc41c2606bbd86"}
+{"t":"2026-08-24T06:58:18Z","eid":"a5b4647184569e49","ag":"ag-81f3","ev":"create","id":"ADR-01M0S9054HEP395N4TJ5MHKFYN","k":"adr","ti":"Which boundary should generalize resident AdamW across GPT and ViT?"}
+{"t":"2026-08-24T06:58:18Z","eid":"04a504688410ddae","ag":"ag-81f3","ev":"move","id":"ADR-01M0S9054HEP395N4TJ5MHKFYN","fr":"draft","to":"submitted"}
