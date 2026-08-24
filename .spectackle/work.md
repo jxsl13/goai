@@ -4032,15 +4032,6 @@ targets: go:vision.ViT.LossAndGrad, go:metal.Backend.ViTLossAndGradF32, backend/
 
 Measure the fixed F32 B8 S65 D128 H4 F512 Depth4 C10 ViT objective plus incumbent AdamW update as separate upload, graph execution, gradient materialization, host optimizer, and synchronization phases. Compare a resident objective-plus-update candidate only if the complete step preserves exact declared semantics and clears a predeclared paired M2 gate. Account for prior rejections: retained activations lost to materialization, constant-dispatch restructuring failed repeatability, and host-only tiny loss was rejected after full-objective evidence. Reuse the merged GPT resident-state semantics only where the ViT parameter order and graph geometry prove compatible.
 
-## P-01M0S8XJF9F5HTNGTQXZ3R9YMZ Keep M2 ViT AdamW training state resident
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=1
-targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, backend/metal/vit_adamw_session_test.go, backend/metal/vit_adamw_attribution_test.go, vision/vit.go, vision/vit_adamw_session_test.go, vision/example_vit_adamw_session_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/README.md
-
-Consume R-01M0S8MAAVFDS by introducing a fixed-batch F32 ViT AdamW session. Preserve the portable LossAndGrad plus nn.AdamF32 path on unsupported backends. On Metal, upload all 56 parameters once, retain parameter, gradient, and F32 moment buffers, reuse the existing complete ViT objective graph, encode the objective plus all in-place AdamW updates in one command buffer per Step, return only scalar loss, and materialize parameters only on Sync or Close. Generalize the backend optimizer attrs/session names through source-compatible aliases and share the native AdamW update encoder without changing GPT semantics. Correctness gate: three-step loss and synchronized-parameter parity versus portable F32 AdamW, checkpoint Sync, stale host parameters before Sync, input immutability, idempotent Close, and use-after-close rejection. Performance gate: three order-alternated count-seven same-binary M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4 C10 must reach at least 1.20x aggregate paired median, at least 1.10x in every aligned pair versus exact LossAndGrad plus host AdamF32, and candidate median below the measured PyTorch MPS full-step median of 9.138 ms. Reuse perfscan issue 879 for the already-reported generalized cross-step materialization pattern; file a new issue only for an additional distinct generalizable detector finding.
-
 ## ADR-01M0S8XZMEFC98ZF81GACDFEGE Which boundary should generalize resident AdamW across GPT and ViT?
 kind: adr
 state: active
