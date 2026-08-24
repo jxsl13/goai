@@ -122,6 +122,7 @@ state: draft
 created: 2026-08-24
 parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
 refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
+grilled: 2026-08-24 open=0
 targets: llamagpu/medusa.go, llamagpu/medusa_test.go, llamagpu/example_test.go
 
 Update GPT StepHidden and StepNHidden so hidden-state downloads read the resident or lazy workspace selected by the completed Step call. Preserve Llama hidden readback unchanged and validate Medusa all-reject, accept-all, and GPT examples.
