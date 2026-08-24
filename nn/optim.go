@@ -11,7 +11,8 @@ import (
 // tape.Grad directly (the method value fits) — and updates parameters in place.
 // Optimizer state (momentum/moments) is kept in float64 regardless of parameter
 // dtype: the master-state analog of §V10, so f32 training does not lose update
-// precision to state rounding.
+// precision to state rounding. AdamF32 is the explicit incumbent-precision
+// exception for accelerator parity and reduced state bandwidth.
 
 // GradFn maps a parameter tensor to its gradient (nil = no gradient this step).
 type GradFn func(*tensor.Tensor) *tensor.Tensor
@@ -276,6 +277,78 @@ func (a *Adam) Step(grad GradFn) error {
 			vh := v[i] * ic2
 			p.SetF64(p.AtF64(idx...)*decay-a.LR*mh/(math.Sqrt(vh)+a.Eps), idx...)
 		}
+	}
+	return nil
+}
+
+// AdamF32 is AdamW with F32 moment state and F32 update arithmetic, matching
+// the precision used by accelerator-native optimizers in major ML runtimes.
+// It is deliberately distinct from Adam, whose F64 master state remains the
+// higher-precision default. AdamF32 accepts only contiguous F32 parameters and
+// gradients so every backend can implement the same arithmetic contract.
+type AdamF32 struct {
+	Params []*tensor.Tensor
+
+	LR          float64
+	Beta1       float64
+	Beta2       float64
+	Eps         float64
+	WeightDecay float64
+
+	m, v [][]float32
+	t    int
+}
+
+// NewAdamF32 builds an F32-state Adam optimizer with canonical Adam defaults.
+func NewAdamF32(params []*tensor.Tensor, lr float64) *AdamF32 {
+	a := &AdamF32{Params: params, LR: lr, Beta1: 0.9, Beta2: 0.999, Eps: 1e-8}
+	a.m = make([][]float32, len(params))
+	a.v = make([][]float32, len(params))
+	for i, p := range params {
+		a.m[i] = make([]float32, p.Numel())
+		a.v[i] = make([]float32, p.Numel())
+	}
+	return a
+}
+
+// NewAdamWF32 builds an F32-state AdamW optimizer with decoupled weight decay.
+func NewAdamWF32(params []*tensor.Tensor, lr, wd float64) *AdamF32 {
+	a := NewAdamF32(params, lr)
+	a.WeightDecay = wd
+	return a
+}
+
+// Step applies one F32 Adam/AdamW update. The scalar configuration is narrowed
+// once per step, then all state and arithmetic remain F32.
+func (a *AdamF32) Step(grad GradFn) error {
+	a.t++
+	b1, b2 := float32(a.Beta1), float32(a.Beta2)
+	lr, eps := float32(a.LR), float32(a.Eps)
+	ic1 := float32(1) / (float32(1) - float32(math.Pow(float64(b1), float64(a.t))))
+	ic2 := float32(1) / (float32(1) - float32(math.Pow(float64(b2), float64(a.t))))
+	decay := float32(1) - lr*float32(a.WeightDecay)
+	for pi, p := range a.Params {
+		g := grad(p)
+		if g == nil {
+			continue
+		}
+		if !g.Shape().Equal(p.Shape()) {
+			return fmt.Errorf("nn: AdamF32 grad shape %v != param %v", g.Shape(), p.Shape())
+		}
+		pf, gf := flatF32(p), flatF32(g)
+		if pf == nil || gf == nil {
+			return fmt.Errorf("nn: AdamF32 parameter %d requires contiguous F32 parameter and gradient", pi)
+		}
+		m, v := a.m[pi], a.v[pi]
+		parStep(len(gf), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				gv := gf[i]
+				m[i] = b1*m[i] + (float32(1)-b1)*gv
+				v[i] = b2*v[i] + (float32(1)-b2)*gv*gv
+				mh, vh := m[i]*ic1, v[i]*ic2
+				pf[i] = pf[i]*decay - lr*mh/(float32(math.Sqrt(float64(vh)))+eps)
+			}
+		})
 	}
 	return nil
 }

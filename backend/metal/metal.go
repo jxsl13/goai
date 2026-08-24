@@ -15,6 +15,7 @@ import (
 	"math"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -2453,6 +2454,126 @@ func (Backend) GPTLossAndGradF32(in []*tensor.Tensor, attrs backend.GPTLossAndGr
 		return nil, nil, true, fmt.Errorf("metal: GPT loss-and-gradient failed (code %d)", int(rc))
 	}
 	return loss, grads, true, nil
+}
+
+type gptAdamWMetalSession struct {
+	mu     sync.Mutex
+	handle C.uintptr_t
+	attrs  backend.GPTLossAndGradAttrs
+	shapes []tensor.Shape
+	closed bool
+}
+
+// NewGPTAdamWSessionF32 implements nlp's optional resident training-session
+// capability. Valid Metal geometries retain their parameters and optimizer
+// state in native buffers; unsupported geometries ask nlp to use its portable
+// F32 AdamW implementation.
+func (Backend) NewGPTAdamWSessionF32(
+	params []*tensor.Tensor,
+	attrs backend.GPTLossAndGradAttrs,
+	optim backend.GPTAdamWAttrs,
+) (backend.GPTAdamWSession, bool, error) {
+	dummy := []*tensor.Tensor{
+		tensor.New(tensor.F32, tensor.Shape{attrs.Seq}),
+		tensor.New(tensor.F32, tensor.Shape{attrs.Seq}),
+	}
+	dummy = append(dummy, params...)
+	if !gptLossAndGradMetalGeometry(dummy, attrs) {
+		return nil, false, nil
+	}
+	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+	if !finite(optim.LR) || optim.LR <= 0 || !finite(optim.Beta1) || optim.Beta1 < 0 || optim.Beta1 >= 1 ||
+		!finite(optim.Beta2) || optim.Beta2 < 0 || optim.Beta2 >= 1 || !finite(optim.Eps) || optim.Eps <= 0 ||
+		!finite(optim.WeightDecay) || optim.WeightDecay < 0 {
+		return nil, true, fmt.Errorf("metal: invalid GPT AdamW configuration")
+	}
+	paramPtrs := make([]C.uintptr_t, len(params))
+	shapes := make([]tensor.Shape, len(params))
+	for i, parameter := range params {
+		paramPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&parameter.Storage().F32()[0])))
+		shapes[i] = parameter.Shape().Clone()
+	}
+	var status C.int
+	handle := C.mtl_gpt_adamw_session_new(
+		(*C.uintptr_t)(unsafe.Pointer(&paramPtrs[0])),
+		C.int(attrs.Depth), C.int(attrs.Seq), C.int(attrs.Ctx), C.int(attrs.Vocab),
+		C.int(attrs.Dim), C.int(attrs.Hidden), C.int(attrs.Heads),
+		C.float(attrs.Eps1), C.float(attrs.Eps2), C.float(attrs.FinalEps),
+		C.float(optim.LR), C.float(optim.Beta1), C.float(optim.Beta2),
+		C.float(optim.Eps), C.float(optim.WeightDecay), &status,
+	)
+	runtime.KeepAlive(params)
+	if handle == 0 || status != 0 {
+		return nil, true, fmt.Errorf("metal: GPT AdamW session construction failed (code %d)", int(status))
+	}
+	return &gptAdamWMetalSession{handle: handle, attrs: attrs, shapes: shapes}, true, nil
+}
+
+func (s *gptAdamWMetalSession) Step(tokenIndices, targets *tensor.Tensor) (*tensor.Tensor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, fmt.Errorf("metal: GPT AdamW session is closed")
+	}
+	if tokenIndices == nil || targets == nil || tokenIndices.Dtype() != tensor.F32 || targets.Dtype() != tensor.F32 ||
+		!tokenIndices.IsContiguous() || !targets.IsContiguous() || tokenIndices.Offset() != 0 || targets.Offset() != 0 ||
+		!tokenIndices.Shape().Equal(tensor.Shape{s.attrs.Seq}) || !targets.Shape().Equal(tensor.Shape{s.attrs.Seq}) {
+		return nil, fmt.Errorf("metal: GPT AdamW step needs contiguous offset-zero F32 token and target vectors of length %d", s.attrs.Seq)
+	}
+	loss := tensor.New(tensor.F32, tensor.Shape{})
+	rc := C.mtl_gpt_adamw_session_step(
+		s.handle,
+		(*C.float)(&tokenIndices.Storage().F32()[0]),
+		(*C.float)(&targets.Storage().F32()[0]),
+		(*C.float)(&loss.Storage().F32()[0]),
+	)
+	runtime.KeepAlive(tokenIndices)
+	runtime.KeepAlive(targets)
+	runtime.KeepAlive(loss)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: GPT AdamW step failed (code %d)", int(rc))
+	}
+	return loss, nil
+}
+
+func (s *gptAdamWMetalSession) Sync(params []*tensor.Tensor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("metal: GPT AdamW session is closed")
+	}
+	if len(params) != len(s.shapes) {
+		return fmt.Errorf("metal: GPT AdamW sync got %d parameters, want %d", len(params), len(s.shapes))
+	}
+	paramPtrs := make([]C.uintptr_t, len(params))
+	for i, parameter := range params {
+		if parameter == nil || parameter.Dtype() != tensor.F32 || !parameter.IsContiguous() || parameter.Offset() != 0 ||
+			!parameter.Shape().Equal(s.shapes[i]) {
+			return fmt.Errorf("metal: GPT AdamW sync parameter %d does not match its construction tensor", i)
+		}
+		paramPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&parameter.Storage().F32()[0])))
+	}
+	rc := C.mtl_gpt_adamw_session_sync(s.handle, (*C.uintptr_t)(unsafe.Pointer(&paramPtrs[0])))
+	runtime.KeepAlive(params)
+	if rc != 0 {
+		return fmt.Errorf("metal: GPT AdamW sync failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func (s *gptAdamWMetalSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	rc := C.mtl_gpt_adamw_session_close(s.handle)
+	s.handle = 0
+	if rc != 0 {
+		return fmt.Errorf("metal: GPT AdamW close failed (code %d)", int(rc))
+	}
+	return nil
 }
 
 func gptLossAndGradMetalGeometry(in []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs) bool {

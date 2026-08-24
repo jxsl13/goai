@@ -123,7 +123,7 @@ figure on file to pair).
 | GPU matmul (Apple) | f32 1024³, M2 Pro | 1,376 GFLOP/s (Metal) | torch-mps 4,171 | 3.0× behind (MPS-kernel ceiling) |
 | Apple-GPU LLM decode | 17.7 M-param toy, M2 Pro | 236 tok/s | llama.cpp Metal 723 | ≈3.1× behind at toy size (see caveat) |
 | Apple-GPU LLM decode (production, forward-only) | TinyLlama-1.1B Q4_K_M, M2 Pro | 178.5 tok/s (f16 KV) | llama.cpp b10450 193.3 (f16 KV, FA auto) | llama.cpp 1.083× (§2) |
-| Training step (fwd+bwd) | GPT dim512/6L seq256, M2 Pro | Metal 3,263 / cpu 2,257 tok/s | torch-mps 12,904; torch-cpu 5,058 | 2–4× behind (fusion + MPS ceiling, §6) |
+| AdamW training step | GPT dim512/6L seq256, M2 Pro | **Metal 16,485 tok/s** | torch-mps 9,889 | **GoAI 1.67×** via resident objective + optimizer state (§6) |
 | Vision fwd/train (toy) | ViT+CNN 32²/batch-8, M2 Pro | see §7 | torch-mps | 1.4–9.4× behind; ViT attention dispatch gaps closed |
 
 Losses are listed with the same care as wins — each has a diagnosed cause and,
@@ -628,38 +628,47 @@ the scorecard rot-proof from here.
 
 ## 6. End-to-end training step — vs PyTorch
 
-*M2 Pro, one GPT training step = forward + cross-entropy + backward (no optimizer
-update), identical geometry (vocab 4096, ctx 256, dim 512, 8 heads, 6 layers,
-seq 256, batch 1, f32). tok/s = seq / step time. GoAI's eager rows use
-`BenchmarkGPTTrainingStep`; the objective row uses `BenchmarkGPTLossAndGrad` and
-returns the same mean loss plus gradients in `GPT.Params` order. torch 2.12.1,
-companion `testdata/bench_gpt_train_torch.py` (torch-cpu 8 threads, torch-mps),
-median of 12.*
+*M2 Pro, identical GPT geometry (vocab 4096, ctx 256, dim 512, 8 heads, 6
+layers, seq 256, batch 1, f32). The objective is forward + mean cross-entropy +
+backward. The full step adds F32 AdamW with lr=1e-3, betas=(0.9,0.999), eps=1e-8,
+and weight decay 0.1. tok/s = seq / step time. torch 2.12.1 / Python 3.14.7;
+companion `testdata/bench_gpt_train_torch.py`; torch median of 12.*
 
-| Training step | GoAI eager | GoAI `LossAndGrad` | PyTorch | Best gap |
+| Objective only | GoAI eager | GoAI `LossAndGrad` | PyTorch | Best gap |
 |---|---:|---:|---:|---|
-| CPU | 2,257 tok/s (simd) | portable fallback | torch-cpu 5,058 | torch 2.24× ahead |
-| Apple GPU | 3,263 tok/s | **12,338 tok/s** | torch-mps 12,904 | torch-mps 1.046× ahead |
+| CPU | 2,257 tok/s (simd) | portable fallback | torch-cpu 5,464 | torch 2.42× ahead |
+| Apple GPU | 3,263 tok/s | **12,338 tok/s** | torch-mps 13,958 | torch-mps 1.131× ahead |
 | Vulkan | 1,966 tok/s | portable fallback | — | MoltenVK; no torch Vulkan path |
 
-The Metal objective closes the measured PyTorch gap from 3.95× to 1.046×. It
-captures token/position embedding, six causal transformer blocks, final norm,
-mean cross-entropy, and every parameter gradient in one cached MPSGraph and one
-command-buffer submission. The public method retains the portable private-tape
-fallback for every unsupported model, dtype, layout, backend, or recorder state.
-The frozen M2 campaign recorded a 3.689× median improvement over the same eager
-GoAI semantics, with all 21 aligned samples winning and a 2.822× floor. Evidence:
-`internal/benchcompare/leadership/evidence/m2-metal-gpt-loss-grad-20260824/`.
+| Objective + F32 AdamW | GoAI host-state control | GoAI resident session | PyTorch | Verdict |
+|---|---:|---:|---:|---|
+| Apple GPU | 9,081 tok/s | **16,485 tok/s** (15.530 ms) | torch-mps 9,889 tok/s (25.888 ms) | **GoAI 1.667×** |
 
-The remaining gaps are specific rather than architectural hand-waving:
+The original Metal objective captures token/position embedding, six causal
+transformer blocks, final norm, mean cross-entropy, and every parameter gradient
+in one cached MPSGraph. Its public `LossAndGrad` API still materializes all 77
+gradients, by contract. `GPT.NewAdamWSession` adds the stateful boundary: Metal
+uploads parameters once, retains parameters, gradients, and F32 AdamW moments,
+encodes the objective and 77 in-place updates into one command buffer per step,
+and returns only the scalar loss until explicit `Sync` or `Close`.
 
-- **Apple GPU (4.6%):** the graph still copies a dense gradient tensor for every
-  parameter back to host memory because that is the public API contract. The next
-  fair comparison must either include optimizer/update placement on both sides or
-  add an explicit device-resident training state API.
-- **CPU (2.24×):** GoAI's f32 GEMM matches torch's Accelerate/AMX (§4), but a
-  training step is not all GEMM. PyTorch fuses scaled-dot-product attention and
-  its autograd backward, while GoAI's portable path runs separate kernels.
+Three order-alternated count-seven M2 campaigns measured 1.819× paired median
+speedup over the exact fused-objective + host-F32-AdamW control, with all 21
+aligned pairs winning and a 1.783× floor. Multi-step parity, checkpoint sync,
+stale-host isolation, idempotent close, and use-after-close rejection pass. Raw
+evidence is in
+`internal/benchcompare/leadership/evidence/m2-metal-gpt-adamw-session-20260824/`.
+
+This section also corrects the prior torch companion: it had enabled attention
+bias and evaluated the same pre-attention LayerNorm three times for Q/K/V, while
+GoAI has no attention bias and shares one normalized input. The old 12,904 tok/s
+torch-mps row was therefore not the same model. The corrected objective is
+13,958 tok/s; the materialized-gradient API remains 1.131× behind, while the
+matched full AdamW step now leads.
+
+The remaining CPU gap is specific: GoAI's f32 GEMM matches torch's
+Accelerate/AMX (§4), but the portable objective runs separate attention and
+backward kernels while PyTorch fuses scaled-dot-product attention and autograd.
 
 ## 7. Vision models — forward and training vs PyTorch
 
@@ -799,7 +808,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Serving decode throughput vs vLLM (matched precision) | 1.1–1.4× | ≈18× CAPABILITY gap CLOSED (paged KV + admit/evict continuous batching + graph-captured f16-KV GQA decode), but at matched f32-accumulate precision vLLM's decode kernels are still 1.1–1.4× faster on this RTX 3060 (FlashAttention + GEMM scheduling); GoAI only reaches parity via its GeForce f16-accumulate trade (§1) | fused FlashAttention/FlashDecoding kernel (shared with the prefill lever) |
 | Same-class Q4 decode vs llama.cpp Q4_K_M | 1.19–1.27× | their iterative quant encoder + fused attention | Q4_K encoder quality + attention fusion |
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
-| Training step vs torch-mps (Apple GPU) | 3.95× | op-by-op autograd dispatch (≈0.27 ms/op × hundreds) + MPS-kernel ceiling; torch dispatches one fused graph | tape recorder (≈1.4× at seq 256, §T411) + fusion |
+| Materialized GPT objective vs torch-mps (Apple GPU) | 1.131× | `LossAndGrad` intentionally returns 77 host-visible gradients; torch keeps them in MPS tensors | resident `GPTAdamWSession` closes this boundary for full steps and leads 1.667×; retain the objective row as the honest API-specific deficit |
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
 | ViT training vs torch-mps (Apple GPU) | ≈9.4× | attention forward and backward are batch-axis graphs, but the surrounding encoder tape remains op-by-op and torch uses more heavily fused MPS kernels | encoder/tape graph fusion, then profile the remaining MPS-kernel ceiling |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
@@ -854,7 +863,7 @@ non-negotiables (§V22, §C3):
 | Apple production head-to-head and external shader attribution | commands and immutable pins in `internal/benchcompare/leadership/evidence/m2-llamacpp-attribution-20260817/README.md` |
 | Classical ML vs scikit-learn | `make bench-classic-python` (GoAI + scikit-learn 1.9.0 on the same CSV; §5, T881) |
 | BPE tokenizer vs tiktoken | `go test ./nlp -run '^$' -bench BenchmarkGPT2` + `.venv/bin/python internal/benchcompare/tokenizer_compare.py` (§3, T882) |
-| GPT training step vs torch | `make bench-gpt-train-python` + `GOEXPERIMENT=simd VK_ICD_FILENAMES=$VK_MOLTENVK_ICD go test -tags vulkan ./internal/benchcompare -run '^$' -bench BenchmarkGPTTrainingStep` (§6, T883) |
+| GPT training step vs torch | `make bench-gpt-train-python` (add `--adamw` for the full step) + `BenchmarkGPTTrainingStep`, `BenchmarkGPTLossAndGrad`, and `BenchmarkGPTAdamWSession` (§6, T883) |
 | GEMM AMX head-to-head | `GOEXPERIMENT=simd go test ./backend/cpu -run '^$' -bench GEMM -benchtime 10x` |
 
 ## Further reading

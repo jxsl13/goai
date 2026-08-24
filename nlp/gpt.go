@@ -1,6 +1,7 @@
 package nlp
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -40,6 +41,39 @@ type GPTConfig struct {
 	Heads  int     // number of attention heads
 	Layers int     // number of transformer blocks
 	Eps    float64 // LayerNorm epsilon
+}
+
+// GPTAdamWConfig configures a stateful GPT training session whose parameters,
+// gradients, and AdamW moments all use F32 precision.
+type GPTAdamWConfig struct {
+	LR          float64
+	Beta1       float64
+	Beta2       float64
+	Eps         float64
+	WeightDecay float64
+}
+
+// DefaultGPTAdamWConfig returns the canonical AdamW beta and epsilon values.
+func DefaultGPTAdamWConfig(lr, weightDecay float64) GPTAdamWConfig {
+	return GPTAdamWConfig{
+		LR: lr, Beta1: 0.9, Beta2: 0.999, Eps: 1e-8, WeightDecay: weightDecay,
+	}
+}
+
+// GPTAdamWSession owns optimizer state across fixed-sequence GPT training
+// steps. Accelerator implementations may keep parameters and moments resident;
+// call Sync before reading model parameters and Close when the session is done.
+type GPTAdamWSession struct {
+	mu           sync.Mutex
+	model        *GPT
+	ctx          *backend.Context
+	seq          int
+	tokenIndices *tensor.Tensor
+	resident     backend.GPTAdamWSession
+	portable     *nn.AdamF32
+	paramIndex   map[*tensor.Tensor]int
+	grads        []*tensor.Tensor
+	closed       bool
 }
 
 // Block is one pre-LN transformer block.
@@ -273,6 +307,183 @@ func (g *GPT) Params() []*tensor.Tensor {
 type gptLossAndGradBackend interface {
 	GPTLossAndGradF32(inputs []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs) (
 		loss *tensor.Tensor, grads []*tensor.Tensor, supported bool, err error)
+}
+
+type gptAdamWSessionBackend interface {
+	NewGPTAdamWSessionF32(params []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs, optim backend.GPTAdamWAttrs) (
+		session backend.GPTAdamWSession, supported bool, err error)
+}
+
+// NewAdamWSession creates a fixed-sequence F32 AdamW training session. The
+// portable implementation evaluates LossAndGrad then updates F32 moment state;
+// capable backends may retain every large tensor across calls. A session owns
+// exclusive mutation of model parameters until Close returns.
+func (g *GPT) NewAdamWSession(ctx *backend.Context, seq int, config GPTAdamWConfig) (*GPTAdamWSession, error) {
+	if g == nil {
+		return nil, fmt.Errorf("nlp: GPT.NewAdamWSession called on nil model")
+	}
+	if seq <= 0 || seq > g.Config.Ctx {
+		return nil, fmt.Errorf("nlp: GPT AdamW sequence length %d outside (0,%d]", seq, g.Config.Ctx)
+	}
+	if err := validateGPTAdamWConfig(config); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if ctx.Backend == nil {
+		return nil, fmt.Errorf("nlp: GPT AdamW session needs a context backend")
+	}
+	params := g.Params()
+	for i, parameter := range params {
+		if parameter == nil || parameter.Dtype() != tensor.F32 || !parameter.IsContiguous() || parameter.Offset() != 0 {
+			return nil, fmt.Errorf("nlp: GPT AdamW parameter %d requires contiguous offset-zero F32 storage", i)
+		}
+	}
+	s := &GPTAdamWSession{
+		model: g, ctx: ctx, seq: seq,
+		tokenIndices: tensor.New(tensor.F32, tensor.Shape{seq}),
+		paramIndex:   make(map[*tensor.Tensor]int, len(params)),
+		grads:        make([]*tensor.Tensor, len(params)),
+	}
+	for i, parameter := range params {
+		s.paramIndex[parameter] = i
+	}
+	optim := backend.GPTAdamWAttrs{
+		LR: config.LR, Beta1: config.Beta1, Beta2: config.Beta2,
+		Eps: config.Eps, WeightDecay: config.WeightDecay,
+	}
+	if accelerated, ok := ctx.Backend.(gptAdamWSessionBackend); ok && ctx.Recorder == nil {
+		targets := tensor.New(tensor.F32, tensor.Shape{seq})
+		if attrs, eligible := g.lossAndGradAttrs(make([]int, seq), targets); eligible {
+			resident, supported, err := accelerated.NewGPTAdamWSessionF32(params, attrs, optim)
+			if supported {
+				if err != nil {
+					return nil, err
+				}
+				if resident == nil {
+					return nil, fmt.Errorf("nlp: GPT AdamW backend returned a nil resident session")
+				}
+				s.resident = resident
+				return s, nil
+			}
+		}
+	}
+	s.portable = nn.NewAdamWF32(params, config.LR, config.WeightDecay)
+	s.portable.Beta1, s.portable.Beta2, s.portable.Eps = config.Beta1, config.Beta2, config.Eps
+	return s, nil
+}
+
+func validateGPTAdamWConfig(config GPTAdamWConfig) error {
+	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+	if !finite(config.LR) || config.LR <= 0 {
+		return fmt.Errorf("nlp: GPT AdamW learning rate must be finite and positive")
+	}
+	if !finite(config.Beta1) || config.Beta1 < 0 || config.Beta1 >= 1 ||
+		!finite(config.Beta2) || config.Beta2 < 0 || config.Beta2 >= 1 {
+		return fmt.Errorf("nlp: GPT AdamW betas must be finite and in [0,1)")
+	}
+	if !finite(config.Eps) || config.Eps <= 0 {
+		return fmt.Errorf("nlp: GPT AdamW epsilon must be finite and positive")
+	}
+	if !finite(config.WeightDecay) || config.WeightDecay < 0 {
+		return fmt.Errorf("nlp: GPT AdamW weight decay must be finite and non-negative")
+	}
+	return nil
+}
+
+// Step evaluates one mean-cross-entropy objective and applies one AdamW update.
+// Its returned scalar loss is materialized on the host; resident parameters are
+// not copied back until Sync or Close.
+func (s *GPTAdamWSession) Step(tokens []int, targets *tensor.Tensor) (*tensor.Tensor, error) {
+	if s == nil {
+		return nil, fmt.Errorf("nlp: nil GPT AdamW session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, fmt.Errorf("nlp: GPT AdamW session is closed")
+	}
+	if err := s.validateInputs(tokens, targets); err != nil {
+		return nil, err
+	}
+	if s.resident != nil {
+		values := s.tokenIndices.Storage().F32()
+		for i, token := range tokens {
+			values[i] = float32(token)
+		}
+		return s.resident.Step(s.tokenIndices, targets)
+	}
+	loss, grads, err := s.model.LossAndGrad(s.ctx, tokens, targets)
+	if err != nil {
+		return nil, err
+	}
+	copy(s.grads, grads)
+	if err := s.portable.Step(func(parameter *tensor.Tensor) *tensor.Tensor {
+		return s.grads[s.paramIndex[parameter]]
+	}); err != nil {
+		return nil, err
+	}
+	return loss, nil
+}
+
+func (s *GPTAdamWSession) validateInputs(tokens []int, targets *tensor.Tensor) error {
+	if len(tokens) != s.seq {
+		return fmt.Errorf("nlp: GPT AdamW session needs %d tokens, got %d", s.seq, len(tokens))
+	}
+	for _, token := range tokens {
+		if token < 0 || token >= s.model.Config.Vocab {
+			return fmt.Errorf("nlp: GPT AdamW token %d outside vocab %d", token, s.model.Config.Vocab)
+		}
+	}
+	if targets == nil || targets.Dtype() != tensor.F32 || targets.Ndim() != 1 ||
+		targets.Shape()[0] != s.seq || !targets.IsContiguous() || targets.Offset() != 0 {
+		return fmt.Errorf("nlp: GPT AdamW targets must be contiguous offset-zero F32 [%d]", s.seq)
+	}
+	for _, value := range targets.Storage().F32() {
+		target := int(value)
+		if value != float32(target) || target < 0 || target >= s.model.Config.Vocab {
+			return fmt.Errorf("nlp: GPT AdamW target %v outside vocab %d", value, s.model.Config.Vocab)
+		}
+	}
+	return nil
+}
+
+// Sync copies resident parameters into the model. It is a no-op for the
+// portable session, whose parameters are already host-visible and current.
+func (s *GPTAdamWSession) Sync() error {
+	if s == nil {
+		return fmt.Errorf("nlp: nil GPT AdamW session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("nlp: GPT AdamW session is closed")
+	}
+	if s.resident == nil {
+		return nil
+	}
+	return s.resident.Sync(s.model.Params())
+}
+
+// Close synchronizes the final parameter state and releases backend resources.
+// It is safe to call more than once.
+func (s *GPTAdamWSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.resident == nil {
+		return nil
+	}
+	syncErr := s.resident.Sync(s.model.Params())
+	closeErr := s.resident.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 // LossAndGrad evaluates mean hard-label cross-entropy and returns gradients in

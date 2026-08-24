@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Cross-language performance reference: time a full GPT TRAINING STEP
-(forward + cross-entropy + backward, NO optimizer update) in PyTorch at the
+"""Cross-language performance reference: time a full GPT TRAINING OBJECTIVE
+(forward + cross-entropy + backward), optionally followed by AdamW, in PyTorch at the
 IDENTICAL geometry as internal/benchcompare/compare_test.go's
 BenchmarkGPTTrainingStep, so GoAI's cpu-simd / Metal / Vulkan training step can be
 compared head-to-head with torch-cpu and torch-mps on the same box (BENCHMARKS.md).
@@ -8,9 +8,10 @@ compared head-to-head with torch-cpu and torch-mps on the same box (BENCHMARKS.m
 Geometry (matches nlp.GPTConfig{Vocab:4096, Ctx:256, Dim:512, Heads:8, Layers:6}):
 GPT-2 pre-LN -- token + learned-positional embedding, per block
 LN -> causal MHA -> residual -> LN -> GELU MLP(4x) -> residual, final LN, LM head.
-batch=1, seq=256, f32. The GoAI benchmark times forward + CrossEntropy + backward
-and does NOT step the optimizer, so neither does this (fair A/B). Throughput is
-tok/s = seq / step_time. Warm-up excluded; we report the median and the min.
+batch=1, seq=256, f32. The default measures only the objective; --adamw adds the
+same F32 AdamW update as GPT.NewAdamWSession (lr=1e-3, betas=(0.9,0.999),
+eps=1e-8, weight_decay=0.1). Throughput is tok/s = seq / step_time. Warm-up is
+excluded; we report the median and the min.
 
 Fairness notes: single sequence (batch 1) exactly as the Go side; MPS is
 synchronized before the timer stops (dispatch is async); CPU thread count is
@@ -18,6 +19,7 @@ printed (torch's default) so the core budget is on the record.
 
 Usage:
     .venv/bin/python testdata/bench_gpt_train_torch.py
+    .venv/bin/python testdata/bench_gpt_train_torch.py --adamw
     .venv/bin/python testdata/bench_gpt_train_torch.py --json
 """
 import json
@@ -36,12 +38,13 @@ class Block(nn.Module):
     def __init__(self):
         super().__init__()
         self.ln1 = nn.LayerNorm(DIM, eps=1e-5)
-        self.attn = nn.MultiheadAttention(DIM, HEADS, batch_first=True, bias=True)
+        self.attn = nn.MultiheadAttention(DIM, HEADS, batch_first=True, bias=False)
         self.ln2 = nn.LayerNorm(DIM, eps=1e-5)
         self.mlp = nn.Sequential(nn.Linear(DIM, 4 * DIM), nn.GELU(), nn.Linear(4 * DIM, DIM))
 
     def forward(self, x, mask):
-        a, _ = self.attn(self.ln1(x), self.ln1(x), self.ln1(x), attn_mask=mask, need_weights=False)
+        normalized = self.ln1(x)
+        a, _ = self.attn(normalized, normalized, normalized, attn_mask=mask, need_weights=False)
         x = x + a
         return x + self.mlp(self.ln2(x))
 
@@ -64,16 +67,23 @@ class GPT(nn.Module):
         return self.head(self.lnf(x))
 
 
-def bench(device: str, reps: int = 12) -> tuple[float, float]:
+def bench(device: str, adamw: bool, reps: int = 12) -> tuple[float, float]:
     torch.manual_seed(0)
     model = GPT().to(device).train()
     idx = (torch.arange(SEQ, device=device) % VOCAB).unsqueeze(0)
     tgt = torch.arange(SEQ, device=device) % VOCAB
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, betas=(0.9, 0.999),
+                                  eps=1e-8, weight_decay=0.1) if adamw else None
 
     def step():
-        model.zero_grad(set_to_none=True)
+        if optimizer is None:
+            model.zero_grad(set_to_none=True)
+        else:
+            optimizer.zero_grad(set_to_none=True)
         loss = F.cross_entropy(model(idx).view(-1, VOCAB), tgt)
         loss.backward()
+        if optimizer is not None:
+            optimizer.step()
         if device == "mps":
             torch.mps.synchronize()
 
@@ -88,13 +98,14 @@ def bench(device: str, reps: int = 12) -> tuple[float, float]:
 
 
 def main() -> None:
+    adamw = "--adamw" in sys.argv
     devices = ["cpu"]
     if torch.backends.mps.is_available():
         devices.append("mps")
 
     out = {}
     for dev in devices:
-        med, best = bench(dev)
+        med, best = bench(dev, adamw)
         out[dev] = {"median_ms": med * 1e3, "min_ms": best * 1e3,
                     "tok_s_median": SEQ / med, "tok_s_best": SEQ / best}
 
@@ -102,7 +113,10 @@ def main() -> None:
         "torch": torch.__version__, "python": sys.version.split()[0],
         "cpu_threads": torch.get_num_threads(),
         "geometry": f"vocab={VOCAB} ctx={CTX} dim={DIM} heads={HEADS} layers={LAYERS} seq={SEQ} batch=1 f32",
-        "timed": "forward + cross_entropy + backward (no optimizer step)",
+        "attention_bias": False,
+        "shared_pre_attention_norm": True,
+        "timed": "forward + cross_entropy + backward + AdamW" if adamw
+                 else "forward + cross_entropy + backward (no optimizer step)",
     }
     if "--json" in sys.argv:
         print(json.dumps({"meta": meta, "results": out}, indent=2))

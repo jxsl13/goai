@@ -433,3 +433,46 @@ func BenchmarkGPTLossAndGrad(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGPTAdamWSession measures the full objective-plus-update boundary.
+// Backends with a resident capability keep parameters, gradients, and F32
+// moments device-side; other backends execute the identical portable session.
+func BenchmarkGPTAdamWSession(b *testing.B) {
+	cfg := nlp.GPTConfig{Vocab: 4096, Ctx: 256, Dim: 512, Heads: 8, Layers: 6, Eps: 1e-5}
+	const seq = 256
+	tokens := make([]int, seq)
+	targets := tensor.New(tensor.F32, tensor.Shape{seq})
+	for i := range tokens {
+		tokens[i] = i % cfg.Vocab
+		targets.SetF64(float64(i%cfg.Vocab), i)
+	}
+	for _, name := range gptBackends {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		b.Run(string(name), func(b *testing.B) {
+			model := randGPT(b, cfg, 4*cfg.Dim)
+			session, err := model.NewAdamWSession(
+				backend.NewContext().WithBackend(be), seq,
+				nlp.DefaultGPTAdamWConfig(1e-3, 0.1))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := session.Step(tokens, targets); err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			for range b.N {
+				if _, err := session.Step(tokens, targets); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			if err := session.Close(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}
