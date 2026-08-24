@@ -93,3 +93,9 @@ Rationale: Repeated optimizer products must not recreate shape-invariant buffers
 WHEN 7 alternating M2 Pro 30-iteration BenchmarkMuonStepOnly campaigns compare the merged baseline, the Muon SHALL retain the candidate only at 3.00x median speed, 99 percent lower B/op, and exact 3-step F64 and F32 digests.
 
 Rationale: The architectural seam is justified only by large end-to-end optimizer leverage without trajectory drift.
+
+## SPECTRAL-NORM-SCRATCH-REUSE-001
+WHEN power iteration runs after construction, the SpectralNorm.powerIterate SHALL reuse exactly 2 fixed-shape float64 scratch buffers, overwrite every live element before reading it, and preserve exact repeated-call F64 and F32 estimates.
+
+## SPECTRAL-NORM-SCRATCH-PERF-001
+WHEN interleaved Apple M2 Pro campaigns compare BenchmarkSpectralNormPowerIterate against merged main 93325988, the reusable SpectralNorm scratch path SHALL retain the candidate only with 0 scratch B/op, 0 scratch allocs/op, and a candidate-to-baseline median ns/op ratio no greater than 1.02.

@@ -45,3 +45,22 @@ METHOD, established over three rounds: (1) benchmark the site end to end, with a
 TRAPS, all three hit in practice: do NOT carry over a zero-skip (if av == 0 continue), which drops 0*(+-Inf) NaNs and is not order-preserving; destinations that are freshly make()d are already zero and need no clearing, but POOLED scratch does; and if a site is deliberately left as a dot, verify the //perfscan:ignore actually suppresses it by re-running the scan — a directive that does not apply is silently inert.
 
 A site may legitimately be DECLINED as A.Bt: when both operands already walk the summation index contiguously, the ikj form buys nothing but costs a transposed copy per call. Two sites were declined on exactly that ground (soap.go rotateBackInto second product, galore.go projectDown right). Record a decline with its reason rather than leaving the finding unexplained.
+
+## P-01M0TDSJZEFWX9M7KQJ0XZHSS2 Reuse SpectralNorm power-iteration scratch across forwards
+kind: proposal
+state: approved
+created: 2026-08-24
+grilled: 2026-08-24 open=0
+targets: go:nn.SpectralNorm.powerIterate
+
+Baseline on Apple M2 Pro at merged main 93325988: BenchmarkSpectralNormPowerIterate (F64 512x512, 10 rounds) allocates 8192 B/op in exactly 2 allocations on every call. SpectralNorm already owns mutable u/v state and is not concurrent-safe across Forward calls, so retaining two fixed-shape float64 work buffers does not weaken an existing concurrency guarantee. Reuse the buffers across powerIterate calls, fully clear/overwrite them before every read, preserve exact F64/F32 estimates and outputs across repeated forwards, and retain the generic dtype fallback. Gate on zero post-warmup scratch allocations and no statistically meaningful wall-time regression in interleaved M2 campaigns.
+
+## T-01M0TDV28SFWBB03DM1NGJGNMF Implement and gate reusable SpectralNorm power-iteration scratch
+kind: task
+state: active
+created: 2026-08-24
+parent: P-01M0TDSJZEFWX9M7KQJ0XZHSS2
+grilled: 2026-08-24 open=0
+targets: go:nn.SpectralNorm.powerIterate
+
+Add fixed-shape float64 scratch buffers owned by SpectralNorm and reuse them in both the contiguous F64 and generic dtype power-iteration paths. Every call and iteration must clear or overwrite all live scratch before reading it. Add repeated-call poison coverage for F64 and F32, preserve the existing spectral estimate/output semantics, and require zero scratch allocations after construction. Benchmark against merged main on Apple M2 Pro with interleaved same-binary or frozen-binary campaigns; retain only with 100 percent removal of the 8192 B/op and 2 allocs/op baseline and no material median time regression.
