@@ -70,3 +70,8 @@ Rationale: Make dominant decoder residency scale with active output rows rather 
 WHEN full StepN requests more logits rows than the resident buffer holds, the decoder SHALL allocate exactly requested rows times Vocab F32 overflow elements, reuse that buffer for every smaller request, and grow only for a larger request.
 
 Rationale: Preserve full StepN semantics without per-call allocation churn or lifetime maximum-context residency.
+
+## DECODER-FULL-LOGITS-LIFETIME-001
+WHEN the full-StepN overflow buffer grows or its decoder is released, the decoder SHALL release the previously owned overflow buffer exactly once and retain 0 stale overflow buffer references.
+
+Rationale: Keep lazy residency bounded and release-safe on every backend.
