@@ -210,7 +210,7 @@ Eligible device Top-K and pure Top-P generation currently downloads one full Voc
 
 ## ADR-01M0T458A9EW2BJ08S8YQMBA1J Expose an internal no-download last-row prefill boundary
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0T44EDPE42TNZEPAR566ZGW
 grilled: 2026-08-24 open=0
