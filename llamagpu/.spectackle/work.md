@@ -180,3 +180,12 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Replace max-context resident transient activation storage in the shared Decoder with one decode row plus one reusable exact high-water StepN generation. Preserve command semantics, special residual scratch requirements within the selected generation, hidden-state readback, cache mutation, and eager same-binary controls. Benchmark constructor memory/time and public Step/StepNLast throughput on M2 before promotion.
+
+## ADR-01M0SRN9PVFRMRJC6NNCAHZBNY Use generation-swapped Decoder activation workspaces
+kind: adr
+state: draft
+created: 2026-08-24
+parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
+targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
+
+Decision: retain one complete activation generation for single-token decode and lazily allocate one exact-row high-water generation for batched StepN. StepN temporarily selects that generation, restores the resident generation on every exit, and StepNHidden reads from the selected high-water generation. Each generation preserves optional quantized, post-norm, sandwich, fused gate-up, and MoE buffers. Rejected: resize individual fields in place because partial failure creates mixed generations; keep max-context allocation because it wastes hundreds of MiB at common contexts; thread scratch through every recorder helper because it creates broad high-risk signature churn without added performance.

@@ -187,3 +187,4 @@
 {"t":"2026-08-24T11:31:07Z","eid":"ae20d142604297ac","ag":"ag-8c23","ev":"create","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","k":"proposal","ti":"Make Decoder activation workspaces demand-resident","dir":"llamagpu"}
 {"t":"2026-08-24T11:31:22Z","eid":"6389cff3aaa351b4","ag":"ag-87d5","ev":"move","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","dir":"llamagpu","fr":"draft","to":"active","note":"Standing user authorization directs continuous spec-driven performance work; activate after impact and rejection audit."}
 {"t":"2026-08-24T11:31:41Z","eid":"8dfbf2a4e9ae626b","ag":"ag-a6ae","ev":"grill","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"e64af6649679bb476a681ad849e1a7827c01d7577c6a22dcf40428530bbb35a6"}
+{"t":"2026-08-24T11:31:59Z","eid":"5c87ccfcd21eb38e","ag":"ag-313a","ev":"create","id":"ADR-01M0SRN9PVFRMRJC6NNCAHZBNY","k":"adr","ti":"Use generation-swapped Decoder activation workspaces","dir":"llamagpu"}
