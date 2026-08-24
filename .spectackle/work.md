@@ -4039,3 +4039,8 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## P-01M0SW6KB4FSERYN7Y0CRXS0DJ Add allocation-free shared Decoder prefill boundaries
+kind: proposal
+state: draft
+created: 2026-08-24
