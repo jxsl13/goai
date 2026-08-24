@@ -729,3 +729,6 @@ Rationale: QuantLinear selects backend.Default, so Context.WithBackend alone can
 WHEN TestProdCPUQuantDecodeGGUF accepts an external GGUF leadership fixture, the GoAI SHALL report SHA-256 9fecc3b3cd76bba89d504f29b616eedf7da85b96540e490ca5824d3f7d2776a0 or the actual fixture hash plus runtime.Version outside timed decode.
 
 Rationale: A performance result without artifact and toolchain identity is not reproducible.
+
+## PERFSCAN-EXTERNAL-DIRECT-PIN-001
+WHEN GoAI invokes perfscan from Make, CI, or an automation workflow, the GoAI tooling SHALL shall run github.com/jxsl13/perfscan@v1.81.0 with GOPROXY=direct and repository-root perfscan.yaml.
