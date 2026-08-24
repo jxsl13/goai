@@ -554,3 +554,6 @@ WHEN F32 basic mean CrossEntropy with batch 8 and classes 10 executes on Darwin 
 
 ## M2-CROSSENTROPY-HOST-SCOPE-001
 WHEN CrossEntropy geometry, dtype, architecture, reduction, or options differ from the measured host route, the Metal CrossEntropy selector SHALL preserve the existing Metal or reference route with exactly 0 measured-host substitutions.
+
+## M2-CROSSENTROPY-HOST-NUMERIC-001
+WHEN the measured host route is compared with direct Metal, the CrossEntropy implementation SHALL match loss and logits gradient within established F32 tolerance and mutate exactly 0 input elements.
