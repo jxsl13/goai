@@ -1,0 +1,37 @@
+Environment
+  Go: go1.27.0 darwin/arm64
+  OS: macOS 26.5.1, build 25F80
+  CPU: Apple M2 Pro
+  Memory: 34359738368 bytes
+  Spectackle: 0.10.0
+
+Portable API
+  PASS TestViTLossAndGradPortableParity
+    - F64 loss and every gradient match explicit Forward + CrossEntropy + Backward.
+    - Returned gradients follow the exact ViT.Params order.
+  PASS TestViTLossAndGradRejectsNilInputs
+  PASS TestViTLossAndGradCapabilityFallbackAndRecorderIsolation
+    - Unsupported capability falls back to the private tape.
+    - An ambient recorder cannot capture or alter the objective.
+
+Metal capability
+  PASS TestViTLossAndGradMetalParityAndImmutability
+    - F32 scalar loss and all 56 parameter gradients match the portable control.
+    - Inputs and parameters remain unchanged.
+    - The supported path performs exactly one model-level capability call.
+  PASS complete compiled backend/metal package test binary
+
+Package and repository gates
+  PASS complete compiled vision package test binary
+  PASS make preflight
+  PASS make preflight-metal on the final source head
+    backend/metal: 49.296s
+    llamagpu: 15.186s
+
+Full-suite disclosure
+  go test ./... passed every affected package and the long llamagpu package.
+  The only failure was the pre-existing, out-of-scope nlp.TestDiffusionLMGrammarE2E
+  generated-text assertion; it reproduced when its compiled package test was run
+  alone and has no source overlap with this change. The required short/preflight
+  and Metal lanes pass.
+
