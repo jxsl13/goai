@@ -198,3 +198,12 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.
+
+## ADR-01M0SW7XPYFV69M6PYKDM7EHNR Use caller buffers and retained high-water embedding staging for Decoder prefill
+kind: adr
+state: draft
+created: 2026-08-24
+parent: P-01M0SW6KB4FSERYN7Y0CRXS0DJ
+targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.Release
+
+Decision: expose StepNInto and StepNLastInto with exact destination-size validation before state mutation. Keep StepN and StepNLast as allocating wrappers. Reuse one Decoder-owned k times Dim host embedding slice at its observed high-water mark and clear it on Release. Recurrent decoders write sequential StepInto results directly into the caller buffer, reusing the final-row destination for last-only mode. Rejected: sync.Pool because ownership and retention become nondeterministic; constructor-sized Ctx times Dim staging because it restores eager memory amplification; duplicate prefill graphs because it risks semantic drift.
