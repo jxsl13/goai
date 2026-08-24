@@ -37,3 +37,6 @@ WHEN GPT prefill executes on Metal with 64 or more rows, the decoder recorder SH
 
 ## PORTABLE-GPT-QKV-STORAGE-001 {applies: go:llamagpu.newGPTDecoder}
 WHILE a backend has not opted into fused F32 QKV recording, the GPT decoder SHALL retain 3 split QKV weights, allocate 0 grouped QKV weights, and allocate 0 grouped-output scratch floats.
+
+## GPT-RESIDUAL-EPILOGUE-001 {applies: go:llamagpu.GPTDecoder.recordAttentionResidual,go:llamagpu.GPTDecoder.recordFFNResidual}
+WHEN a GPT attention-output or FFN-down projection updates the running residual, the decoder recorder SHALL use the projection recordAdd epilogue and issue 0 standalone residual Binary-add dispatches.
