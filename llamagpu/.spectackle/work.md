@@ -207,12 +207,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
 
 Add a caller-buffer StepInto boundary and one reusable host embedding row to remove the seven per-token Go allocations from shared Decoder inference. Keep Step as the compatible allocating wrapper, validate destination length before cache mutation, preserve exact logits and cache semantics, and gate on M2 allocation elimination plus non-regressing throughput.
-
-## ADR-01M0STA4CNESSRA8MS30X6VDFY Preserve Step as a wrapper over caller-buffer StepInto
-kind: adr
-state: active
-created: 2026-08-24
-parent: P-01M0ST9BK2FGYTT3D762HHYHVB
-targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
-
-Decision: add StepInto with exact destination-size validation before any cache mutation, keep Step as make(Vocab) plus StepInto, and store one Dim-sized host embedding row per non-concurrent Decoder. Fill contiguous F32/F64 embedding storage directly and use dtype-safe scalar fallback for strided or half storage. Rejected: change Step signature because it breaks API compatibility; retain Slice/Cast because it creates six per-token objects; duplicate the full step pipeline because it risks semantic drift.
