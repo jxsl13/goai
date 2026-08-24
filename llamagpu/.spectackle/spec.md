@@ -115,3 +115,8 @@ Rationale: F32 recordAdd writes directly into the residual and ignores projectio
 WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain exactly Ctx times Dim ao elements and Ctx times Dim mo elements.
 
 Rationale: These paths use projection scratch for fallback accumulation or output normalization.
+
+## DECODER-MOE-RESIDUAL-SCRATCH-001
+WHEN an F32 pre-norm Decoder enables MoE without another scratch requirement, the constructor SHALL retain exactly 0 ao elements and Ctx times Dim mo elements.
+
+Rationale: MoE accumulates each expert output through mo while F32 attention residuals need no ao scratch.
