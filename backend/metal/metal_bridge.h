@@ -587,6 +587,16 @@ int mtl_vit_loss_and_grad_f32(
     int dim, int hidden, int heads, int classes,
     float eps1, float eps2, float finalEps);
 
+// Whole-objective causal GPT training boundary. inputs contains token indices,
+// targets, and parameters in GPT.Params order; outputs contains scalar loss
+// followed by one gradient per parameter. All addresses are consumed
+// synchronously and retained nowhere.
+int mtl_gpt_loss_and_grad_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs,
+    int depth, int seq, int ctx, int vocab,
+    int dim, int hidden, int heads,
+    float eps1, float eps2, float finalEps);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA

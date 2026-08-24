@@ -2417,6 +2417,99 @@ func vitMetalShape2(value *tensor.Tensor, rows, cols int) bool {
 	return value.Ndim() == 2 && value.Shape()[0] == rows && value.Shape()[1] == cols
 }
 
+// GPTLossAndGradF32 implements nlp's optional whole-objective capability.
+// Invalid or unsupported geometry returns supported=false so the caller can
+// preserve portable tape semantics without coupling nlp to this package.
+func (Backend) GPTLossAndGradF32(in []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs) (
+	*tensor.Tensor, []*tensor.Tensor, bool, error) {
+	if !gptLossAndGradMetalGeometry(in, attrs) {
+		return nil, nil, false, nil
+	}
+	params := in[2:]
+	loss := tensor.New(tensor.F32, tensor.Shape{})
+	grads := make([]*tensor.Tensor, len(params))
+	inputPtrs := make([]C.uintptr_t, len(in))
+	outputPtrs := make([]C.uintptr_t, 1+len(params))
+	for i, value := range in {
+		inputPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&value.Storage().F32()[0])))
+	}
+	outputPtrs[0] = C.uintptr_t(uintptr(unsafe.Pointer(&loss.Storage().F32()[0])))
+	for i, parameter := range params {
+		//perfscan:ignore PS2001 one owned result tensor is required per parameter gradient
+		grads[i] = tensor.New(tensor.F32, parameter.Shape())
+		outputPtrs[i+1] = C.uintptr_t(uintptr(unsafe.Pointer(&grads[i].Storage().F32()[0])))
+	}
+	rc := C.mtl_gpt_loss_and_grad_f32(
+		(*C.uintptr_t)(unsafe.Pointer(&inputPtrs[0])),
+		(*C.uintptr_t)(unsafe.Pointer(&outputPtrs[0])),
+		C.int(attrs.Depth), C.int(attrs.Seq), C.int(attrs.Ctx), C.int(attrs.Vocab),
+		C.int(attrs.Dim), C.int(attrs.Hidden), C.int(attrs.Heads),
+		C.float(attrs.Eps1), C.float(attrs.Eps2), C.float(attrs.FinalEps),
+	)
+	runtime.KeepAlive(in)
+	runtime.KeepAlive(loss)
+	runtime.KeepAlive(grads)
+	if rc != 0 {
+		return nil, nil, true, fmt.Errorf("metal: GPT loss-and-gradient failed (code %d)", int(rc))
+	}
+	return loss, grads, true, nil
+}
+
+func gptLossAndGradMetalGeometry(in []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs) bool {
+	if attrs.Depth < 1 || attrs.Depth > 8 || attrs.Seq <= 0 || attrs.Ctx < attrs.Seq ||
+		attrs.Vocab <= 0 || attrs.Dim <= 0 || attrs.Hidden <= 0 || attrs.Heads <= 0 ||
+		attrs.Dim%attrs.Heads != 0 || attrs.Eps1 <= 0 || attrs.Eps2 <= 0 ||
+		attrs.FinalEps <= 0 || math.IsInf(attrs.Eps1, 0) || math.IsInf(attrs.Eps2, 0) ||
+		math.IsInf(attrs.FinalEps, 0) || len(in) != 7+12*attrs.Depth {
+		return false
+	}
+	for _, value := range in {
+		if value == nil || value.Dtype() != tensor.F32 || !value.IsContiguous() ||
+			value.Offset() != 0 || value.Numel() == 0 {
+			return false
+		}
+	}
+	if !vitMetalShape1(in[0], attrs.Seq) || !vitMetalShape1(in[1], attrs.Seq) {
+		return false
+	}
+	for _, value := range in[0].Storage().F32() {
+		token := int(value)
+		if value != float32(token) || token < 0 || token >= attrs.Vocab {
+			return false
+		}
+	}
+	for _, value := range in[1].Storage().F32() {
+		target := int(value)
+		if value != float32(target) || target < 0 || target >= attrs.Vocab {
+			return false
+		}
+	}
+	params := in[2:]
+	if !vitMetalShape2(params[0], attrs.Vocab, attrs.Dim) ||
+		!vitMetalShape2(params[1], attrs.Ctx, attrs.Dim) {
+		return false
+	}
+	for block := 0; block < attrs.Depth; block++ {
+		p := 2 + 12*block
+		if !vitMetalShape1(params[p], attrs.Dim) || !vitMetalShape1(params[p+1], attrs.Dim) ||
+			!vitMetalShape2(params[p+2], attrs.Dim, attrs.Dim) ||
+			!vitMetalShape2(params[p+3], attrs.Dim, attrs.Dim) ||
+			!vitMetalShape2(params[p+4], attrs.Dim, attrs.Dim) ||
+			!vitMetalShape2(params[p+5], attrs.Dim, attrs.Dim) ||
+			!vitMetalShape1(params[p+6], attrs.Dim) || !vitMetalShape1(params[p+7], attrs.Dim) ||
+			!vitMetalShape2(params[p+8], attrs.Dim, attrs.Hidden) ||
+			!vitMetalShape1(params[p+9], attrs.Hidden) ||
+			!vitMetalShape2(params[p+10], attrs.Hidden, attrs.Dim) ||
+			!vitMetalShape1(params[p+11], attrs.Dim) {
+			return false
+		}
+	}
+	final := 2 + 12*attrs.Depth
+	return vitMetalShape1(params[final], attrs.Dim) &&
+		vitMetalShape1(params[final+1], attrs.Dim) &&
+		vitMetalShape2(params[final+2], attrs.Dim, attrs.Vocab)
+}
+
 // rmsnormBackwardF32 computes the RMSNorm gradient on the GPU (§R29/§R35): (x,gamma,g) →
 // (dx, dgamma), one Metal thread per row (dx per-row, dgamma via float atomics). It makes
 // RMSNorm TRAINING run on the GPU. f32-only; empty tensors fall back to the reference (§I4).
