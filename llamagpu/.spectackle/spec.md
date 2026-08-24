@@ -80,11 +80,6 @@ Rationale: Keep lazy residency bounded and release-safe on every backend.
 WHEN the same-binary GPT-2-small constructor benchmark compares lazy residency with eager control, the promotion gate SHALL require at least 200000000 fewer B/op and 10 times lower ns/op while public Step and StepNLast retain at least 0.97 times throughput.
 
 Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.
-## GPT2-LOGITS-RESIDENCY-PERF-003
-WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the GPTDecoder SHALL allocate one grouped workspace at requested rows, reuse it for smaller requests, and grow only for larger requests.
-
-Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
-
 ## GPT2-LOGITS-RESIDENCY-PERF-004
 WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecoder SHALL release each prior or partial buffer exactly once and retain 0 stale grouped-workspace references.
 
