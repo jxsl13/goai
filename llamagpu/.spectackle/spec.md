@@ -76,7 +76,7 @@ WHEN the full-StepN overflow buffer grows or its decoder is released, the decode
 
 Rationale: Keep lazy residency bounded and release-safe on every backend.
 
-## GPT2-LOGITS-RESIDENCY-PERF-001
+## GPT2-LOGITS-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkGPTDecoderLogitsResidency}
 WHEN the same-binary GPT-2-small-geometry constructor benchmark compares lazy residency with eager control, the promotion gate SHALL require at least 200000000 fewer B/op and at least 10 times lower constructor ns/op while public Step and StepNLast retain at least 0.97 times throughput.
 
 Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.
