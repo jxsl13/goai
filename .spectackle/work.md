@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0S28QXJED6S143JYJG63Z1C Attribute the remaining M2 GPT training objective boundary
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.Backend.ViTLossAndGradF32, nlp/gpt.go, backend/metal/metal_bridge.m, internal/benchcompare/compare_test.go
 
