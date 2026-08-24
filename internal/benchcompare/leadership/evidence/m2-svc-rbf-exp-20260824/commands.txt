@@ -25,4 +25,3 @@ spectackle reindex -root .
 # Incumbent boundary on the exact CSV emitted by the compiled Go harness.
 PERF_CSV_DIR=DATA_DIR CANDIDATE_BINARY -test.run '^TestPerfCompareVsSklearn$' -test.v
 PERF_CSV_DIR=DATA_DIR .venv/bin/python testdata/bench_sklearn.py
-

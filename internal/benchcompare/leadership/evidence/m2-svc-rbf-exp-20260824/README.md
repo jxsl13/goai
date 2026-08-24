@@ -69,4 +69,3 @@ A scalar transcendental inside an otherwise scalar reduction can be batched
 without an extra allocation when completed inputs are staged directly in the
 operation's final output buffer. The reusable detector opportunity is tracked
 as [perfscan issue #899](https://github.com/jxsl13/perfscan/issues/899).
-
