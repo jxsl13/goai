@@ -148,3 +148,6 @@ WHEN a fused QKV buffer has exactly seq times stride elements and both band ends
 
 ## DECODER-STEP-INTO-SEMANTICS-001
 WHEN the destination length equals Vocab, the Decoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
+
+## DECODER-STEP-INTO-LENGTH-GUARD-001
+WHEN the destination length differs from Vocab, the Decoder.StepInto SHALL return an error before 0 cache rows or recurrent states are mutated.
