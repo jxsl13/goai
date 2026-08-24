@@ -82,3 +82,8 @@ IF dtype, layout, shape, backend capability, bias, LoRA, mask, or causal mode ex
 
 ## PRENORM-TRANSFORMER-BLOCK-FUSION-FALLBACK-001
 WHEN complete-block fusion eligibility fails, the pre-norm transformer-block helper SHALL execute the pre-norm attention helper followed by the pre-norm FFN helper with exactly 0 implicit backend migrations.
+
+## GPT-LOSS-GRAD-FALLBACK-001
+WHEN the active backend lacks the GPT loss-and-gradient capability or the request is ineligible, the GPT.LossAndGrad SHALL execute exactly 1 existing GPT forward, 1 mean hard-label cross-entropy, and 1 private-tape backward path and return gradients in Params order with 0 implicit backend migrations.
+
+Rationale: The model-boundary acceleration must remain optional and preserve portable semantics for every unsupported configuration.
