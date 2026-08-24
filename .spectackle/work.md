@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RKKV5RF95S1CDC657TGYH0 Attribute the remaining post-stack ViT training cost on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 refs: R-01M0RGHTRTE3CSGT21HN59B9QY
 targets: go:vision.ViT.Forward, go:metal_test.runPreNormFFNViTStep, go:metal.Recorder.Profile, vision/vit.go, backend/metal/metal_bridge.m
