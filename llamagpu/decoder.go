@@ -367,6 +367,9 @@ type backendOps struct {
 	// workspace for same-binary benchmarks. Production constructors retain one decode row and
 	// lazily materialize one grouped high-water workspace for StepN/StepNLast.
 	eagerFullDecoderScratch bool
+	// eagerPrefillHostStaging allocates the historical k*Dim host embedding staging on every prefill
+	// for same-binary benchmarks. Production constructors retain one exact high-water slice.
+	eagerPrefillHostStaging bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -488,6 +491,7 @@ type Decoder struct {
 	table                                                          *tensor.Tensor // token embedding, host-side gather source
 	invHost                                                        []float32      // RoPE inverse freqs (uploaded by allocScratch)
 	embedHost                                                      []float32      // reusable single-token embedding upload row [d]
+	embedBatchHost                                                 []float32      // reusable batched embedding upload rows, retained at the high-water row count
 	all                                                            []buffer
 	qweights                                                       []qweight // resident quantized weights (quant decoder)
 }
@@ -3632,6 +3636,16 @@ func (d *Decoder) Step(token, pos int) ([]float32, error) {
 // speculative decoding needs. pos+k must be ≤ the model's Ctx.
 func (d *Decoder) StepN(tokens []int, pos int) ([]float32, error) { return d.stepN(tokens, pos, false) }
 
+// StepNInto is StepN with caller-owned output storage. out must contain exactly
+// len(tokens)*Vocab elements. Its length is validated before any cache or recurrent-state mutation.
+func (d *Decoder) StepNInto(tokens []int, pos int, out []float32) error {
+	want := len(tokens) * d.v
+	if len(out) != want {
+		return fmt.Errorf("llamagpu(%s): StepNInto output length %d != tokens*vocab %d", d.ops.name, len(out), want)
+	}
+	return d.stepNInto(tokens, pos, false, out)
+}
+
 // StepNLast is StepN but projects and downloads ONLY the final prompt row's logits (the LM head runs
 // over 1 row instead of k, and the host download shrinks from k·vocab to vocab). The transformer body
 // still runs all k rows to populate the KV cache, so the returned [vocab] row is bit-identical to the
@@ -3643,52 +3657,80 @@ func (d *Decoder) StepNLast(tokens []int, pos int) ([]float32, error) {
 	return d.stepN(tokens, pos, true)
 }
 
-// stepN is StepN with an optional last-row-only mode. When lastOnly, only the FINAL prompt row's
+// StepNLastInto is StepNLast with caller-owned output storage. out must contain exactly Vocab
+// elements. Its length is validated before any cache or recurrent-state mutation.
+func (d *Decoder) StepNLastInto(tokens []int, pos int, out []float32) error {
+	if len(out) != d.v {
+		return fmt.Errorf("llamagpu(%s): StepNLastInto output length %d != vocab %d", d.ops.name, len(out), d.v)
+	}
+	return d.stepNInto(tokens, pos, true, out)
+}
+
+func (d *Decoder) batchEmbedHost(rows int) []float32 {
+	need := rows * d.d
+	if len(d.embedBatchHost) < need {
+		d.embedBatchHost = make([]float32, need)
+	}
+	return d.embedBatchHost[:need]
+}
+
+// stepN is the allocation-compatible wrapper around stepNInto.
+func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error) {
+	rows := len(tokens)
+	if lastOnly {
+		rows = 1
+	}
+	out := make([]float32, rows*d.v)
+	if err := d.stepNInto(tokens, pos, lastOnly, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// stepNInto executes StepN with an optional last-row-only mode. When lastOnly, only the FINAL prompt row's
 // logits are projected by the LM head and downloaded — the transformer body still runs all k rows
 // (the KV cache needs every position), but the [k-1] earlier rows' logits are never read by a caller
 // that only samples the post-prompt token (Generate), so their lm_head GEMM and vocab-sized host
-// download are pure waste — large for high-vocab models (a 512-token prompt over a 128k vocab downloads
-// 256 MB just to discard all but the last row). It then returns a single [vocab] row. Full-k mode is
-// unchanged and keeps every row for speculative/verify callers (Medusa, prompt-lookup).
-func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error) {
+// download are pure waste — large for high-vocab models. Full-k mode writes every row for
+// speculative/verify callers (Medusa, prompt-lookup).
+func (d *Decoder) stepNInto(tokens []int, pos int, lastOnly bool, out []float32) error {
 	k := len(tokens)
 	if k == 0 {
-		return nil, fmt.Errorf("llamagpu(%s): StepN needs ≥1 token", d.ops.name)
+		return fmt.Errorf("llamagpu(%s): StepN needs ≥1 token", d.ops.name)
 	}
 	if pos < 0 || pos+k > d.maxLen {
-		return nil, fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
+		return fmt.Errorf("llamagpu(%s): StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
+	}
+	for _, tok := range tokens {
+		if tok < 0 || tok >= d.v {
+			return fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, tok, d.v)
+		}
 	}
 	if d.mamba || d.mamba2 || d.rwkv || d.jamba {
 		// Mamba/Mamba-2/RWKV/Jamba's recurrence is inherently sequential (each token's state update reads the
 		// previous token's), so there is no batched prefill — process the prompt token by token through
-		// Step, which carries the recurrent state and resets it at pos==0. Returns [k, vocab].
+		// StepInto, which carries the recurrent state and resets it at pos==0.
 		if lastOnly { // only the final token's logits are wanted; still step all tokens for the state
-			var last []float32
 			for i, tok := range tokens {
-				row, err := d.Step(tok, pos+i)
-				if err != nil {
-					return nil, err
+				if err := d.StepInto(tok, pos+i, out); err != nil {
+					return err
 				}
-				last = row
 			}
-			return append([]float32(nil), last...), nil
+			return nil
 		}
-		out := make([]float32, k*d.v)
 		for i, tok := range tokens {
-			row, err := d.Step(tok, pos+i)
-			if err != nil {
-				return nil, err
+			if err := d.StepInto(tok, pos+i, out[i*d.v:(i+1)*d.v]); err != nil {
+				return err
 			}
-			copy(out[i*d.v:(i+1)*d.v], row)
 		}
-		return out, nil
+		return nil
 	}
 	logits := d.logits.b
 	if !lastOnly {
 		var err error
 		logits, err = logitsForRows(d.ops, d.logits.b, d.logitsRows, &d.fullLogits, k, d.v)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 	// a batched step rewrites the cache and scratch — any single-step encode pre-staged for
@@ -3696,23 +3738,23 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 	d.dropPending()
 	scratch, err := d.scratchForRows(k)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resident := d.selectScratch(scratch)
 	defer d.selectScratch(resident)
-	host := make([]float32, k*d.d)
+	host := d.batchEmbedHost(k)
+	if d.ops.eagerPrefillHostStaging {
+		host = make([]float32, k*d.d)
+	}
 	for i, tok := range tokens {
-		if tok < 0 || tok >= d.v {
-			return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, tok, d.v)
-		}
 		d.gatherEmbedInto(host[i*d.d:(i+1)*d.d], tok)
 	}
 	if err := d.dx.b.UploadF32(host); err != nil {
-		return nil, err
+		return err
 	}
 	r, err := d.ops.newRecorder()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	D, H, KVH, dk, kvDim := d.qDim, d.h, d.kvH, d.dk, d.kvDim // D = attention Q/O width (h·dk); = d.d unless head_dim decoupled
 	stride := D + 2*kvDim
@@ -3720,7 +3762,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		if d.mla { // DeepSeek-V2 MLA prefill: k new tokens at position pos
 			if e := firstErr(d.recordMLAAttention(r, b, pos, k), d.recordFFNSublayer(r, b, k)); e != nil {
 				r.Free()
-				return nil, e
+				return e
 			}
 			continue
 		}
@@ -3800,7 +3842,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		)
 		if e != nil {
 			r.Free()
-			return nil, e
+			return e
 		}
 	}
 	rows := k
@@ -3811,7 +3853,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		// rows' logits were never read, and row 0's value is exactly what row k-1 would have produced.
 		if e := r.Blit(d.dx.b, (k-1)*d.d, d.dx.b, 0, d.d); e != nil {
 			r.Free()
-			return nil, e
+			return e
 		}
 		rows = 1
 	}
@@ -3821,14 +3863,13 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		r.Finish(),
 	); e != nil {
 		r.Free()
-		return nil, e
+		return e
 	}
 	r.Free()
-	out := make([]float32, rows*d.v)
 	if err := logits.DownloadF32(out); err != nil {
-		return nil, err
+		return err
 	}
-	return out, nil
+	return nil
 }
 
 // Generate runs the batched decode as a text-generation loop: it prefills the prompt, then samples
@@ -3940,6 +3981,7 @@ func (d *Decoder) Release() {
 	d.dropPending()
 	d.fullLogits.release()
 	d.fullScratch.release()
+	d.embedBatchHost = nil
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()

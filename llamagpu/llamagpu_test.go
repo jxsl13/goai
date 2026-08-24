@@ -393,6 +393,25 @@ func TestStepNMatchesSequentialSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	allInto := make([]float32, len(all))
+	if err := dN.StepNInto(tokens, 0, allInto); err != nil {
+		t.Fatal(err)
+	}
+	for i := range all {
+		if allInto[i] != all[i] {
+			t.Fatalf("StepNInto logit[%d] = %v, StepN = %v", i, allInto[i], all[i])
+		}
+	}
+	lastInto := make([]float32, cfg.Vocab)
+	if err := dN.StepNLastInto(tokens, 0, lastInto); err != nil {
+		t.Fatal(err)
+	}
+	last := all[(len(tokens)-1)*cfg.Vocab:]
+	for i := range last {
+		if lastInto[i] != last[i] {
+			t.Fatalf("StepNLastInto logit[%d] = %v, StepN tail = %v", i, lastInto[i], last[i])
+		}
+	}
 
 	// sequential: one Step per token on a fresh decoder.
 	d1, err := llamagpu.New(m)

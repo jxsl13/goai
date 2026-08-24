@@ -79,7 +79,18 @@ func ExampleDecoder_StepN() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("logits for %d tokens (StepNLast agrees: %v)\n", len(last), len(lastOnly) == len(last))
+
+	// Caller-buffer variants remove result allocation for repeated prefill or verification loops.
+	allInto := make([]float32, len(prompt)*m.Config.Vocab)
+	if err := dec.StepNInto(prompt, 0, allInto); err != nil {
+		panic(err)
+	}
+	lastInto := make([]float32, m.Config.Vocab)
+	if err := dec.StepNLastInto(prompt, 0, lastInto); err != nil {
+		panic(err)
+	}
+	fmt.Printf("logits for %d tokens (StepNLast agrees: %v)\n", len(last),
+		len(lastOnly) == len(last) && len(allInto) == len(all) && len(lastInto) == len(last))
 	// Output: logits for 48 tokens (StepNLast agrees: true)
 }
 

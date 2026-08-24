@@ -64,10 +64,10 @@ func TestCUDARWKVMatchesReference(t *testing.T) {
 		}
 	}
 
-	// StepN prefill (loops Step for RWKV): every row must match too.
-	all, err := dec.StepN(prompt, 0)
-	if err != nil {
-		t.Fatalf("cuda StepN: %v", err)
+	// StepNInto prefill (loops StepInto for RWKV): every row must match too.
+	all := make([]float32, len(prompt)*vocab)
+	if err := dec.StepNInto(prompt, 0, all); err != nil {
+		t.Fatalf("cuda StepNInto: %v", err)
 	}
 	if len(all) != len(prompt)*vocab {
 		t.Fatalf("StepN returned %d logits, want %d", len(all), len(prompt)*vocab)
@@ -79,6 +79,16 @@ func TestCUDARWKVMatchesReference(t *testing.T) {
 			if math.IsNaN(float64(got)) || math.Abs(float64(got)-want) > 2e-2*math.Max(1, math.Abs(want)) {
 				t.Fatalf("rwkv StepN row %d logit[%d]: cuda %v vs reference %v", i, j, got, want)
 			}
+		}
+	}
+	last := make([]float32, vocab)
+	if err := dec.StepNLastInto(prompt, 0, last); err != nil {
+		t.Fatalf("cuda StepNLastInto: %v", err)
+	}
+	for j := range last {
+		want := refT.AtF64(len(prompt)-1, j)
+		if math.IsNaN(float64(last[j])) || math.Abs(float64(last[j])-want) > 2e-2*math.Max(1, math.Abs(want)) {
+			t.Fatalf("rwkv StepNLastInto logit[%d]: cuda %v vs reference %v", j, last[j], want)
 		}
 	}
 	t.Logf("llamagpu NewRWKVCUDA matches reference RWKV.Forward at all %d positions (Step + StepN); WKV recurrent GPU decoder", len(prompt))
