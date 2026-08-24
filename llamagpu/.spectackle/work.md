@@ -81,3 +81,11 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exactly one Vocab row. Add a backend-agnostic reusable overflow buffer that full multi-row StepN grows to exactly its required rows times Vocab capacity, reuses for smaller requests, replaces safely for larger requests, and releases with the decoder. Keep an unexported eagerFullLogits backendOps switch as the same-binary incumbent control. Route final projections and downloads to the selected buffer while preserving recurrent sequential fallbacks. Extend storage tests for both decoder cores, growth/reuse/release, and add a GPT-2-small-geometry constructor benchmark. Gate on at least 200 MB/op removed, at least 10x constructor speedup, Step and StepNLast throughput at least 0.97x, unchanged hot-path allocations, and all parity suites.
+
+## P-01M0SPBR6NFCJAE77W5JZZ4YA8 Right-size GPT activation residency with lazy reusable prefill workspace
+kind: proposal
+state: draft
+created: 2026-08-24
+targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+GPTDecoder currently retains every activation scratch tensor at maximum context although dominant Step uses one row. Retain one row by default, lazily allocate an exact reusable high-water workspace for StepN and StepNLast, preserve a same-binary eager control, and require exact parity plus M2 throughput non-regression. GPT-2-small should remove 35140608 resident bytes without changing public semantics.
