@@ -2174,6 +2174,9 @@ func layerNormSequenceClassifierF32(ctx *backend.Context, in []*tensor.Tensor, a
 	if !ok {
 		return refFallback()
 	}
+	if layerNormSequenceClassifierHostPreferred(rows, dim, classes, batch, seq) {
+		return refFallback()
+	}
 	pa = pa.WithDefaults()
 	out := tensor.New(tensor.F32, tensor.Shape{batch, classes})
 	rc := C.mtl_layernorm_sequence_classifier_f32(
@@ -2197,6 +2200,9 @@ func layerNormSequenceClassifierBackwardF32(ctx *backend.Context, in []*tensor.T
 	if !ok {
 		return refFallback()
 	}
+	if layerNormSequenceClassifierHostPreferred(rows, dim, classes, batch, seq) {
+		return refFallback()
+	}
 	pa = pa.WithDefaults()
 	out := make([]*tensor.Tensor, 5)
 	for i := range out {
@@ -2215,6 +2221,13 @@ func layerNormSequenceClassifierBackwardF32(ctx *backend.Context, in []*tensor.T
 		return nil, fmt.Errorf("metal: layernorm-sequence-classifier-backward failed (code %d)", int(rc))
 	}
 	return out, nil
+}
+
+// layerNormSequenceClassifierHostPreferred confines the measured synchronous
+// host win to its exact M2 ViT geometry. The cached MPSGraph remains the safe
+// route for every unmeasured shape.
+func layerNormSequenceClassifierHostPreferred(rows, dim, classes, batch, seq int) bool {
+	return runtime.GOARCH == "arm64" && rows == 520 && dim == 128 && classes == 10 && batch == 8 && seq == 65
 }
 
 // rmsnormBackwardF32 computes the RMSNorm gradient on the GPU (§R29/§R35): (x,gamma,g) →

@@ -24,20 +24,33 @@ const (
 
 type sequenceClassifierFixture struct {
 	x, gamma, beta, w, bias, dOut *tensor.Tensor
+	batch, seq, dim, classes      int
+	eps                           float64
 }
 
 func newSequenceClassifierFixture() sequenceClassifierFixture {
-	gamma := bench.RandF32(tensor.Shape{sequenceClassifierDim}, 501)
+	return newSequenceClassifierFixtureGeometry(
+		sequenceClassifierBatch, sequenceClassifierSeq, sequenceClassifierDim, sequenceClassifierClasses,
+	)
+}
+
+func newSequenceClassifierFixtureGeometry(batch, seq, dim, classes int) sequenceClassifierFixture {
+	gamma := bench.RandF32(tensor.Shape{dim}, 501)
 	for i := range gamma.Numel() {
 		gamma.Storage().F32()[i]++
 	}
 	return sequenceClassifierFixture{
-		x:     bench.RandF32(tensor.Shape{sequenceClassifierBatch * sequenceClassifierSeq, sequenceClassifierDim}, 500),
-		gamma: gamma,
-		beta:  bench.RandF32(tensor.Shape{sequenceClassifierDim}, 502),
-		w:     bench.RandF32(tensor.Shape{sequenceClassifierDim, sequenceClassifierClasses}, 503),
-		bias:  bench.RandF32(tensor.Shape{sequenceClassifierClasses}, 504),
-		dOut:  bench.RandF32(tensor.Shape{sequenceClassifierBatch, sequenceClassifierClasses}, 505),
+		x:       bench.RandF32(tensor.Shape{batch * seq, dim}, 500),
+		gamma:   gamma,
+		beta:    bench.RandF32(tensor.Shape{dim}, 502),
+		w:       bench.RandF32(tensor.Shape{dim, classes}, 503),
+		bias:    bench.RandF32(tensor.Shape{classes}, 504),
+		dOut:    bench.RandF32(tensor.Shape{batch, classes}, 505),
+		batch:   batch,
+		seq:     seq,
+		dim:     dim,
+		classes: classes,
+		eps:     sequenceClassifierEps,
 	}
 }
 
@@ -45,16 +58,16 @@ func compositeSequenceClassifier(t testing.TB, be backend.Backend, f sequenceCla
 	t.Helper()
 	tape := autograd.NewTapeOn(be)
 	ctx := tape.Context()
-	norm := &nn.LayerNorm{Gamma: f.gamma, Beta: f.beta, Eps: sequenceClassifierEps}
+	norm := &nn.LayerNorm{Gamma: f.gamma, Beta: f.beta, Eps: f.eps}
 	head := &nn.Linear{W: f.w, B: f.bias}
 	h, err := norm.Forward(ctx, f.x)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows := make([]*tensor.Tensor, sequenceClassifierBatch)
-	for batch := range sequenceClassifierBatch {
+	rows := make([]*tensor.Tensor, f.batch)
+	for batch := range f.batch {
 		out, err := backend.Execute(ctx, backend.OpSlice, []*tensor.Tensor{h}, backend.SliceAttrs{
-			Axis: 0, Start: batch * sequenceClassifierSeq, End: batch*sequenceClassifierSeq + 1,
+			Axis: 0, Start: batch * f.seq, End: batch*f.seq + 1,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -80,7 +93,7 @@ func fusedSequenceClassifier(t testing.TB, be backend.Backend, f sequenceClassif
 	tape := autograd.NewTapeOn(be)
 	out, err := backend.Execute(tape.Context(), backend.OpLayerNormSequenceClassifier, []*tensor.Tensor{
 		f.x, f.gamma, f.beta, f.w, f.bias,
-	}, backend.LayerNormSequenceClassifierAttrs{Batch: sequenceClassifierBatch, Eps: sequenceClassifierEps})
+	}, backend.LayerNormSequenceClassifierAttrs{Batch: f.batch, Eps: f.eps})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +148,24 @@ func TestLayerNormSequenceClassifierMetalParity(t *testing.T) {
 		if !slices.Equal(input.Storage().F32(), before[i]) {
 			t.Fatalf("input %d mutated", i)
 		}
+	}
+}
+
+func TestLayerNormSequenceClassifierMetalGraphParity(t *testing.T) {
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		t.Skip("Metal unavailable")
+	}
+	f := newSequenceClassifierFixtureGeometry(2, 7, 32, 11)
+	wantY, wantTape := compositeSequenceClassifier(t, be, f)
+	gotY, gotTape := fusedSequenceClassifier(t, be, f)
+	closePreNormAttentionTensor(t, "graph-logits", gotY, wantY)
+	for i, input := range []*tensor.Tensor{f.x, f.gamma, f.beta, f.w, f.bias} {
+		got, want := gotTape.Grad(input), wantTape.Grad(input)
+		if got == nil || want == nil {
+			t.Fatalf("gradient %d is nil", i)
+		}
+		closePreNormAttentionTensor(t, "graph-gradient", got, want)
 	}
 }
 
