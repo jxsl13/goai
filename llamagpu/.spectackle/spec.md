@@ -86,7 +86,7 @@ WHEN GPTDecoder is constructed with standard backend operations, the decoder SHA
 
 Rationale: Make dominant decode residency scale with active rows instead of maximum context.
 
-## GPT-FULL-WORKSPACE-GROWTH-001
+## GPT-FULL-WORKSPACE-GROWTH-001 {applies: go:llamagpu.GPTDecoder.scratchForRows,go:llamagpu.GPTDecoder.gptStepN,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
 WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the GPTDecoder SHALL allocate 1 grouped workspace at requested rows, reuse it for smaller requests, and grow only for larger requests.
 
 Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
