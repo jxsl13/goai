@@ -536,3 +536,6 @@ WHERE contiguous offset-zero F32 inputs with uniform geometry and Depth 2 throug
 
 ## M2-PRENORM-TRANSFORMER-STACK-PERF-001
 WHERE 3 order-alternated count-7 M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4, the promotion gate SHALL require 1.12 times boundary median, 1.05 times full-step median, and 1.03 times every aligned pair.
+
+## METAL-LAYERNORM-SEQUENCE-CLASSIFIER-NUMERIC-001-001
+WHEN supported output and backward parity is checked against the composite boundary, the Metal fused classifier boundary SHALL match logits and exactly 5 input gradients within established F32 tolerance and mutate exactly 0 input elements.
