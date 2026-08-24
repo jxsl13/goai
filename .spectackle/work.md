@@ -4033,7 +4033,7 @@ Measure the post-objective M2 bottleneck after the merged one-submission GPT gra
 
 ## P-01M0S5E2SBEZKAYCG0FBGTP63F Add a device-resident M2 GPT AdamW training session
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=1
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp/gpt.go, nn/optim.go, internal/benchcompare/compare_test.go, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
