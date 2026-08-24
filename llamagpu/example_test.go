@@ -383,6 +383,10 @@ func ExampleGPTDecoder_Step() {
 	if err != nil {
 		panic(err)
 	}
+	logitsInto := make([]float32, cfg.Vocab)
+	if err := dec.StepInto(3, 0, logitsInto); err != nil {
+		panic(err)
+	}
 	_, _, err = dec.StepHidden(5, 1)
 	if err != nil {
 		panic(err)
@@ -392,7 +396,7 @@ func ExampleGPTDecoder_Step() {
 		panic(err)
 	}
 	fmt.Printf("ctx=%d vocab=%d logits=%d hidden rows=%d\n",
-		dec.Ctx(), dec.Vocab(), len(logits), len(h)/cfg.Dim)
+		dec.Ctx(), dec.Vocab(), min(len(logits), len(logitsInto)), len(h)/cfg.Dim)
 	// Output: ctx=16 vocab=32 logits=32 hidden rows=2
 }
 
@@ -474,6 +478,14 @@ func ExampleGPTDecoder_StepNLast() {
 	if err != nil {
 		panic(err)
 	}
-	fmt.Printf("last-row logits: %d\n", len(last))
+	allInto := make([]float32, 3*cfg.Vocab)
+	if err := dec.StepNInto([]int{3, 7, 1}, 0, allInto); err != nil {
+		panic(err)
+	}
+	lastInto := make([]float32, cfg.Vocab)
+	if err := dec.StepNLastInto([]int{3, 7, 1}, 0, lastInto); err != nil {
+		panic(err)
+	}
+	fmt.Printf("last-row logits: %d\n", min(len(last), len(lastInto), len(allInto)/3))
 	// Output: last-row logits: 32
 }

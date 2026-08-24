@@ -835,15 +835,48 @@ func TestGPTStepNMatchesSequentialSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	allInto := make([]float32, len(all))
+	if err := dN.StepNInto(tokens, 0, allInto); err != nil {
+		t.Fatal(err)
+	}
+	for i := range all {
+		if allInto[i] != all[i] {
+			t.Fatalf("GPT StepNInto logit[%d] = %v, StepN = %v", i, allInto[i], all[i])
+		}
+	}
+	lastInto := make([]float32, cfg.Vocab)
+	if err := dN.StepNLastInto(tokens, 0, lastInto); err != nil {
+		t.Fatal(err)
+	}
+	last := all[(len(tokens)-1)*cfg.Vocab:]
+	for i := range last {
+		if lastInto[i] != last[i] {
+			t.Fatalf("GPT StepNLastInto logit[%d] = %v, StepN tail = %v", i, lastInto[i], last[i])
+		}
+	}
 	d1, err := llamagpu.NewGPT(m)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer d1.Release()
+	dInto, err := llamagpu.NewGPT(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dInto.Release()
 	for pos, tok := range tokens {
 		want, err := d1.Step(tok, pos)
 		if err != nil {
 			t.Fatal(err)
+		}
+		into := make([]float32, cfg.Vocab)
+		if err := dInto.StepInto(tok, pos, into); err != nil {
+			t.Fatal(err)
+		}
+		for j := range want {
+			if into[j] != want[j] {
+				t.Fatalf("pos %d logit[%d]: StepInto %v vs Step %v", pos, j, into[j], want[j])
+			}
 		}
 		got := all[pos*cfg.Vocab : (pos+1)*cfg.Vocab]
 		for j := range want {
