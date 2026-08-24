@@ -71,3 +71,12 @@ option: Retain the eager maximum-context buffer
 option: Redesign StepN around caller-owned output buffers
 blocks: P-01M0SN14HSEJ2VWB9HT1S7W01F
 choice: One-row resident plus lazy reusable high-water buffer
+
+## T-01M0SN2SMDFK09NPC0WFVNGWSR Implement and gate lazy full-StepN logits buffers
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0SN14HSEJ2VWB9HT1S7W01F
+targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exactly one Vocab row. Add a backend-agnostic reusable overflow buffer that full multi-row StepN grows to exactly its required rows times Vocab capacity, reuses for smaller requests, replaces safely for larger requests, and releases with the decoder. Keep an unexported eagerFullLogits backendOps switch as the same-binary incumbent control. Route final projections and downloads to the selected buffer while preserving recurrent sequential fallbacks. Extend storage tests for both decoder cores, growth/reuse/release, and add a GPT-2-small-geometry constructor benchmark. Gate on at least 200 MB/op removed, at least 10x constructor speedup, Step and StepNLast throughput at least 0.97x, unchanged hot-path allocations, and all parity suites.
