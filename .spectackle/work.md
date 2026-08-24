@@ -4023,22 +4023,6 @@ option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
 
-## ADR-01M0S9054HEP395N4TJ5MHKFYN Which boundary should generalize resident AdamW across GPT and ViT?
-kind: adr
-state: done
-created: 2026-08-24
-context: R-01M0S8MAAVFDS measured a promotion-sized ViT boundary; ADR-01M0S8XZMEFC9 records the full tradeoff analysis.
-decision: Share backend protocol and native update encoder while keeping model graph facades specialized
-consequences: Preserve existing GPT source compatibility; add a ViT-specific public session and objective bridge; share F32 AdamW attrs, session protocol, Metal pipeline, update encoder, and sync helper. Defer a graph or IR training engine until a third model supplies measured evidence.
-status: accepted
-
-kind: radio
-option: Duplicate all GPT optimizer infrastructure for ViT
-option: Share backend protocol and native update encoder while keeping model graph facades specialized
-option: Build a generic graph or IR training engine now
-blocks: P-01M0S8XJF9F5HTNGTQXZ3R9YMZ
-choice: Share backend protocol and native update encoder while keeping model graph facades specialized
-
 ## P-01M0S8XJF9F5HTNGTQXZ3R9YMZ Keep M2 ViT AdamW training state resident
 kind: proposal
 state: active
