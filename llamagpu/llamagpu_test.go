@@ -668,6 +668,12 @@ func TestGPTDecoderMatchesReference(t *testing.T) {
 	cache := m.NewCache()
 	tok := 5
 	for pos := range 6 {
+		llamagpu.SetGPTDecoderResidualFusionForTest(dec, false)
+		control, err := dec.Step(tok, pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		llamagpu.SetGPTDecoderResidualFusionForTest(dec, true)
 		got, err := dec.Step(tok, pos)
 		if err != nil {
 			t.Fatal(err)
@@ -678,6 +684,9 @@ func TestGPTDecoderMatchesReference(t *testing.T) {
 		}
 		bi := 0
 		for j := range got {
+			if delta := math.Abs(float64(got[j] - control[j])); delta > 2e-3*math.Max(1, math.Abs(float64(control[j]))) {
+				t.Fatalf("pos %d logit[%d]: fused residual %v vs split residual %v", pos, j, got[j], control[j])
+			}
 			want := refT.AtF64(0, j)
 			if math.Abs(float64(got[j])-want) > 3e-2*math.Max(1, math.Abs(want)) {
 				t.Fatalf("pos %d logit[%d]: gpt decoder %v vs reference %v", pos, j, got[j], want)

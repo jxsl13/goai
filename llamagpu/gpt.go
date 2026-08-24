@@ -37,14 +37,40 @@ type GPTDecoder struct {
 	logits            *bufSlot
 	tokEmb, posEmb    *tensor.Tensor // host gather sources
 	all               []buffer
+	fuseResidual      bool
+}
+
+func (d *GPTDecoder) recordAttentionResidual(r recorder, b gptBlock, rows int) error {
+	if d.fuseResidual {
+		return b.wo.recordAdd(r, d.attn.b, d.ao.b, d.dx.b, rows, d.d)
+	}
+	return firstErr(
+		b.wo.record(r, d.attn.b, d.ao.b, rows),
+		r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+	)
+}
+
+func (d *GPTDecoder) recordFFNResidual(r recorder, b gptBlock, rows int) error {
+	if d.fuseResidual {
+		return firstErr(
+			b.w2.recordAdd(r, d.hid.b, d.mo.b, d.dx.b, rows, d.d),
+			r.AddBias(d.dx.b, b.fb2, d.dx.b, rows, d.d),
+		)
+	}
+	return firstErr(
+		b.w2.record(r, d.hid.b, d.mo.b, rows),
+		r.AddBias(d.mo.b, b.fb2, d.mo.b, rows, d.d),
+		r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+	)
 }
 
 // newGPTDecoder uploads m's weights via ops and prepares per-block KV caches up to Ctx.
 func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 	cfg := m.Config
 	d := &GPTDecoder{
-		ops: ops,
-		d:   cfg.Dim, h: cfg.Heads, v: cfg.Vocab, maxLen: cfg.Ctx,
+		ops:          ops,
+		fuseResidual: true,
+		d:            cfg.Dim, h: cfg.Heads, v: cfg.Vocab, maxLen: cfg.Ctx,
 		eps: float32(cfg.Eps), tokEmb: m.TokEmb, posEmb: m.PosEmb,
 	}
 	if d.h <= 0 || d.d%d.h != 0 {
@@ -140,15 +166,12 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 			r.Blit(d.k.b, 0, b.kC, pos*D, D),
 			r.Blit(d.v_.b, 0, b.vC, pos*D, D),
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, H, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, 1),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			d.recordAttentionResidual(r, b, 1),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, 1, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, 1),
 			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
-			b.w2.record(r, d.hid.b, d.mo.b, 1),
-			r.AddBias(d.mo.b, b.fb2, d.mo.b, 1, D),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			d.recordFFNResidual(r, b, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -224,15 +247,12 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 			r.Blit(d.k.b, 0, b.kC, pos*D, k*D),
 			r.Blit(d.v_.b, 0, b.vC, pos*D, k*D),
 			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, H, dk, 1, 0, d.scale),
-			b.wo.record(r, d.attn.b, d.ao.b, k),
-			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
+			d.recordAttentionResidual(r, b, k),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, k, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, k),
 			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
-			b.w2.record(r, d.hid.b, d.mo.b, k),
-			r.AddBias(d.mo.b, b.fb2, d.mo.b, k, D),
-			r.Binary(d.dx.b, d.mo.b, d.dx.b, binaryAdd),
+			d.recordFFNResidual(r, b, k),
 		)
 		if e != nil {
 			r.Free()

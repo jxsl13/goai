@@ -109,18 +109,34 @@ func BenchmarkGPTDecodeStepMetal(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	pos := len(prompt)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for range b.N {
-		if pos >= ctxLen {
-			pos = len(prompt)
-		}
-		token := (pos*97 + 11) % vocab
-		if _, err := dec.Step(token, pos); err != nil {
-			b.Fatal(err)
-		}
-		pos++
+	for _, tc := range []struct {
+		name         string
+		fuseResidual bool
+	}{
+		{name: "control"},
+		{name: "residual", fuseResidual: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			llamagpu.SetGPTDecoderResidualFusionForTest(dec, tc.fuseResidual)
+			pos := len(prompt)
+			// Compile mode-specific pipelines and overwrite the same first decode row outside timing.
+			if _, err := dec.Step((pos*97+11)%vocab, pos); err != nil {
+				b.Fatal(err)
+			}
+			pos++
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if pos >= ctxLen {
+					pos = len(prompt) + 1
+				}
+				token := (pos*97 + 11) % vocab
+				if _, err := dec.Step(token, pos); err != nil {
+					b.Fatal(err)
+				}
+				pos++
+			}
+			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
 	}
-	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
 }
