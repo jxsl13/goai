@@ -3683,14 +3683,6 @@ option: Use operation- and build-specific measured CPU ceilings with direct Meta
 option: Keep every operation on direct Metal
 option: Use one universal CPU threshold for the whole unary family
 
-## P-01M0JG9TX8E73ATMBAQJKJYSGA Fuse ARM64 Q6_K decode unpack and dot on M2
-kind: proposal
-state: approved
-created: 2026-08-21
-targets: go:gguf.QMatMul, go:gguf.dotQ6_KRow, format/gguf/q6k.go, format/gguf/dequant_q6k_arm64.go, format/gguf/quant_matmul.go, format/gguf/bench_test.go, nlp/quant_mamba2_decode_bench_test.go, BENCHMARKS.md, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821, .spectackle
-
-On Apple M2 Pro, the current Q6_K scalar eager dequant takes about 148.5 us while the existing NEON dequant takes about 25.2 us over the same benchmark, but QMatMul M=1 dispatches scalar dotQ6_KRow and bypasses that SIMD work. A fresh merged-main recurrent Mamba2 Q6_K baseline is about 360 us/op with 93 allocations. Implement a dedicated ARM64 fused Q6_K unpack-scale-dot kernel selected only for contiguous F32 M=1 QMatMul. Preserve portable, non-ARM64, and M>1 paths. Accumulate vector partials with a scalar-relative error gate at most 1e-4; retain only if same-binary repeated M2 benchmarks show at least 1.5x on representative QMatMul and a statistically significant end-to-end Mamba2 gain without allocation regression. The rejected Metal packed-load proposal is non-overlapping: it changed GPU load width and measured 0.891x to 1.053x, whereas this proposal removes scalar CPU unpack and f64 per-element accumulation from the ARM64 M1 route.
-
 ## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
 kind: adr
 state: done
