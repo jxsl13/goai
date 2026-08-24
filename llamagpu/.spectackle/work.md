@@ -198,3 +198,11 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.
+
+## P-01M0ST9BK2FGYTT3D762HHYHVB Add zero-allocation shared Decoder stepping
+kind: proposal
+state: draft
+created: 2026-08-24
+targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
+
+Add a caller-buffer StepInto boundary and one reusable host embedding row to remove the seven per-token Go allocations from shared Decoder inference. Keep Step as the compatible allocating wrapper, validate destination length before cache mutation, preserve exact logits and cache semantics, and gate on M2 allocation elimination plus non-regressing throughput.
