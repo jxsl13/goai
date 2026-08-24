@@ -297,3 +297,9 @@ GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.newGPTDecoder	llamagpu/gpt.go	59-146	6
 GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.GPTDecoder.recordAttentionResidual	llamagpu/gpt.go	47-49	5fcbc63e28e1cae6	7467d40a5f77c2d7
 GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.GPTDecoder.recordFFNResidual	llamagpu/gpt.go	51-56	e9ce6f807937d14a	7467d40a5f77c2d7
 M2-GPT-DISPATCH-CUMULATIVE-PERF-001	go:llamagpu_test.BenchmarkGPTDecodeStepMetal	llamagpu/gpt2_scale_test.go	91-133	909853ca525cf3a1	dfd025755227ec21
+METAL-BIAS-GELU-BOUNDS-002	go:metal.Recorder.BiasGELU	backend/metal/metal.go	4691-4705	53ae38cd8333e006	b230224aa0d455b7
+METAL-BIAS-GELU-BOUNDS-002	go:metal_test.TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail	backend/metal/bias_gelu_test.go	23-90	fef03c02492adb4d	b230224aa0d455b7
+METAL-GPT-BIAS-GELU-STRUCTURE-002	go:llamagpu.GPTDecoder.recordBiasGELU	llamagpu/gpt.go	62-72	4105c3f3adebb70e	698e6763faa7ae07
+METAL-GPT-BIAS-GELU-STRUCTURE-002	go:llamagpu.TestMetalGPTBiasGELUProfileProvesFusedActivation	llamagpu/gpt_bias_gelu_metal_test.go	139-176	c396116f63deeb53	698e6763faa7ae07
+GPT-BIAS-GELU-FALLBACK-002	go:llamagpu.GPTDecoder.recordBiasGELU	llamagpu/gpt.go	62-72	4105c3f3adebb70e	6ec3831b534ad2ac
+GPT-BIAS-GELU-FALLBACK-002	go:llamagpu.TestMetalGPTBiasGELUStepAndStepNMatchSplitControl	llamagpu/gpt_bias_gelu_metal_test.go	103-137	e2581cc0a522e771	6ec3831b534ad2ac
