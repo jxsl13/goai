@@ -75,3 +75,8 @@ Rationale: Preserve full StepN semantics without per-call allocation churn or li
 WHEN the full-StepN overflow buffer grows or its decoder is released, the decoder SHALL release the previously owned overflow buffer exactly once and retain 0 stale overflow buffer references.
 
 Rationale: Keep lazy residency bounded and release-safe on every backend.
+
+## GPT2-LOGITS-RESIDENCY-PERF-001
+WHEN the same-binary GPT-2-small-geometry constructor benchmark compares lazy residency with eager control, the promotion gate SHALL require at least 200000000 fewer B/op and at least 10 times lower constructor ns/op while public Step and StepNLast retain at least 0.97 times throughput.
+
+Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.
