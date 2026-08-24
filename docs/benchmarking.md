@@ -528,6 +528,30 @@ versions, and the incumbent boundary are committed in
 [`m2-svc-rbf-exp-20260824`](../internal/benchcompare/leadership/evidence/m2-svc-rbf-exp-20260824/README.md);
 the generalized staging opportunity is [perfscan issue #899](https://github.com/jxsl13/perfscan/issues/899).
 
+### M2 SVC SMO active-set status cache (T-01M0TMY9SGFS7, 2026-08-24)
+
+The two ascending working-set scans now load exact cached `I_up` and `I_low`
+bits instead of re-evaluating label and alpha-bound predicates for every row.
+An accepted SMO step refreshes only the two changed entries. Alpha and the
+error vector share one allocation, so the new status slice does not increase
+allocations per fit.
+
+Two reversed-start seven-pair campaigns ran 300 complete 4,000x20 RBF fits per
+fresh process on Apple M2 Pro. Across the balanced 14-run set, the frozen
+baseline and candidate medians are 6.701902 and 6.230004 ms: **1.0757x faster**,
+with 10/14 paired wins. Median allocations remain 1,038/op; status storage adds
+4,145.5 B/op at the medians. The original seven-pair gate independently clears
+the 3% threshold at 1.0796x.
+
+The exactness gate preserves 79 SMO steps, 42 support vectors, decision signs,
+and the existing `3.3306690738754696e-15` maximum scalar/SIMD decision delta.
+Shared-host variance remains high, so this is an internal improvement rather
+than an absolute or cross-library claim. Raw samples, hashes, commands, and
+claim limits are committed in
+[`m2-svc-smo-status-20260824`](../internal/benchcompare/leadership/evidence/m2-svc-smo-status-20260824/README.md);
+the generalized finite-state cache opportunity is
+[perfscan issue #901](https://github.com/jxsl13/perfscan/issues/901).
+
 ### End-to-end GPT training step vs PyTorch (T883, 2026-07-20)
 
 The op-level comparison (matmul/conv/MHA vs torch) existed, but the end-to-end training
