@@ -110,3 +110,8 @@ Rationale: Preserve Medusa hidden-state semantics after activation workspace rig
 WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the constructor SHALL retain exactly 0 ao elements and 0 mo elements.
 
 Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
+
+## DECODER-REQUIRED-RESIDUAL-SCRATCH-001
+WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain exactly Ctx times Dim ao elements and Ctx times Dim mo elements.
+
+Rationale: These paths use projection scratch for fallback accumulation or output normalization.
