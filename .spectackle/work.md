@@ -4022,15 +4022,3 @@ option: Incremental per-operation tuning
 option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
-
-## ADR-01M0S5EQY6FSYSMGWNR92THDP8 Which M2 state boundary should own GPT AdamW updates?
-kind: adr
-state: done
-created: 2026-08-24
-decision: A: explicit resident session with one objective-plus-AdamW command buffer
-consequences: The session makes stale host parameters explicit, requires Sync before external model use, owns deterministic Close semantics, uses F32 moment arithmetic matching the pinned incumbent, and must pass the internal 1.25x plus external 1.05x leadership gates. Per-step graph extensions that retain host copies and copy-only tuning are rejected.
-status: accepted
-targets: backend/metal/metal_bridge.m, backend/metal/metal.go, backend/attrs.go, nlp/gpt.go, nn/optim.go
-
-Choose among: A, retain parameters, F32 moments, and gradient buffers inside an explicit closable training session, encode the existing objective graph plus one in-place custom AdamW encoder in a single command buffer, and sync host parameters only explicitly; B, extend the objective graph with AdamW but continue uploading and downloading all parameters every step; C, keep LossAndGrad plus host AdamW and tune copies. Research R-01M0S55DWJFPQ measures steady native upload at 1.91 ms, gradient copy at 4.56 ms, Go result construction near 2 ms, and host AdamW near 10.5 ms, making only A capable of the declared torch leadership gate.
-choice: A: explicit resident session with one objective-plus-AdamW command buffer
