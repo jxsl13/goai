@@ -571,7 +571,7 @@ WHERE three order-alternated count-seven M2 campaigns at F32 B8 S65 D128 H4 F512
 WHEN the supported objective is compared with the portable tape control, the Metal GPT loss-and-gradient capability SHALL match 1 scalar loss and every GPT parameter gradient within established F32 tolerance while mutating exactly 0 input or parameter elements.
 
 ## METAL-GPT-LOSS-GRAD-STRUCTURE-001
-WHERE contiguous offset-zero F32 inputs use supported uniform causal GPT geometry, the Metal GPT loss-and-gradient capability SHALL execute token and position gather, all blocks, final normalization, language-model head, mean cross-entropy, and every parameter gradient in exactly 1 bounded geometry-keyed cached MPSGraph submission.
+WHERE supported contiguous F32 causal GPT geometry, the Metal GPT loss-and-gradient capability SHALL execute embeddings, all blocks, final normalization, LM head, mean cross-entropy, and every parameter gradient in exactly 1 bounded geometry-keyed MPSGraph submission.
 
 ## M2-GPT-LOSS-GRAD-PERF-001
 WHERE 3 order-alternated count-7 M2 campaigns measure F32 V4096 S256 D512 H8 F2048 Depth6, the GPT objective promotion gate SHALL require at least 1.25 times median complete-objective speedup and at least 1.10 times speedup in every aligned pair.
