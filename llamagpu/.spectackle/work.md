@@ -223,6 +223,7 @@ kind: task
 state: draft
 created: 2026-08-24
 parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
+grilled: 2026-08-24 open=1
 targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.StepN, go:llamagpu.GPTDecoder.StepNLast, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go, llamagpu/gpt_storage_test.go, llamagpu/gpt2_scale_test.go, llamagpu/llamagpu_test.go, llamagpu/example_test.go
 
 Refactor GPTDecoder Step, StepN, and StepNLast into caller-buffer variants plus allocating wrappers; gather token and positional embeddings directly into one reusable row or exact high-water batch staging; validate destinations and token ranges before cache mutation; clear staging on Release; and route Metal NewGPT through the bounded recorder-wrapper pool. Add exact parity, invalid-length, high-water lifetime, public example, and M2 GPT-2-small benchmarks. Gate warmed StepInto and StepNLastInto at zero allocations, wrapper allocation bytes at result-only payloads, and paired throughput at or above 0.97 times current main.
