@@ -91,3 +91,34 @@ func TestConcurrentRecorderToggleDependenciesAndBoundaries(t *testing.T) {
 	}
 	open.Free() // must close and release an uncommitted active encoder safely
 }
+
+func TestRecorderResetRequiresFreeAndReopensSelectedMode(t *testing.T) {
+	if !Available() {
+		t.Skip("Metal unavailable")
+	}
+	previous := SetConcurrentDecodeRecorder(false)
+	defer SetConcurrentDecodeRecorder(previous)
+	r, err := NewRecorder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Reset(); err == nil {
+		t.Fatal("Reset accepted a live command buffer")
+	}
+	r.Free()
+	if err := r.Reset(); err != nil {
+		t.Fatal(err)
+	}
+	if r.concurrent {
+		t.Fatal("standard Reset opened a concurrent recorder")
+	}
+	r.Free()
+	SetConcurrentDecodeRecorder(true)
+	if err := r.ResetConcurrent(); err != nil {
+		t.Fatal(err)
+	}
+	if !r.concurrent {
+		t.Fatal("ResetConcurrent ignored the enabled selector")
+	}
+	r.Free()
+}

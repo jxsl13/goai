@@ -70,6 +70,66 @@ func TestDecoderMatchesReference(t *testing.T) {
 	t.Logf("llamagpu.Decoder matches the reference nlp.Llama across an autoregressive run (GQA %d:%d, SwiGLU, %d layers)", cfg.Heads, cfg.KVHeads, cfg.Layers)
 }
 
+func TestDecoderStepIntoMatchesStepAndGuardsLength(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal: no gpu")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 48, Ctx: 16, Dim: 64, Heads: 8, KVHeads: 2, Layers: 2,
+		Hidden: 176, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := llamagpu.New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wrapper.Release()
+	into, err := llamagpu.New(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer into.Release()
+	if err := into.StepInto(5, 0, make([]float32, cfg.Vocab-1)); err == nil {
+		t.Fatal("StepInto accepted a destination shorter than Vocab")
+	}
+	out := make([]float32, cfg.Vocab)
+	for pos, tok := range []int{5, 7, 11, 13} {
+		want, err := wrapper.Step(tok, pos)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := into.StepInto(tok, pos, out); err != nil {
+			t.Fatal(err)
+		}
+		for i := range out {
+			if math.Float32bits(out[i]) != math.Float32bits(want[i]) {
+				t.Fatalf("pos %d logit[%d]: StepInto %v vs Step %v", pos, i, out[i], want[i])
+			}
+		}
+	}
+	pos := 4
+	var stepErr error
+	allocs := testing.AllocsPerRun(32, func() {
+		if stepErr != nil {
+			return
+		}
+		if pos >= cfg.Ctx {
+			pos = 1
+		}
+		stepErr = into.StepInto((pos*7+3)%cfg.Vocab, pos, out)
+		pos++
+	})
+	if stepErr != nil {
+		t.Fatal(stepErr)
+	}
+	if allocs != 0 {
+		t.Fatalf("warmed StepInto allocations = %v, want 0", allocs)
+	}
+}
+
 // §T406: llamagpu.Decoder.Generate produces the SAME greedy token sequence as nlp.Llama.Generate.
 // Greedy (argmax) is deterministic, so the batched decode and the library's per-op decode must agree
 // token-for-token when their logits match.

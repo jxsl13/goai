@@ -126,6 +126,19 @@ func TestFlattenHelpersStridedInput(t *testing.T) {
 	}
 }
 
+func TestEmbedRowIntoAllocatesZeroAndMatches(t *testing.T) {
+	for _, dt := range []tensor.Dtype{tensor.F64, tensor.F32, tensor.F16, tensor.BF16} {
+		t.Run(dt.String(), func(t *testing.T) {
+			x := newFilled(dt, tensor.Shape{16, 17})
+			dst := make([]float32, 17)
+			if got := testing.AllocsPerRun(100, func() { embedRowInto(dst, x, 7, 17) }); got != 0 {
+				t.Fatalf("embedRowInto allocations = %v, want 0", got)
+			}
+			bitEqual(t, "embedRowInto", dst, embedRowOld(x, 7, 17))
+		})
+	}
+}
+
 // --- §V22 benchmarks: before (per-element AtF64) vs after (cache-tiled bulk-slice walk) ---
 //
 // flat2DT is a WEIGHT-UPLOAD-time cost: it runs once per tied lm_head / Mamba projection when a
@@ -170,5 +183,18 @@ func BenchmarkEmbedRowNew(b *testing.B) {
 	x := tensor.New(tensor.F32, tensor.Shape{32000, 2048})
 	for b.Loop() {
 		_ = embedRow(x, 12345, 2048)
+	}
+}
+
+func BenchmarkEmbedRowInto(b *testing.B) {
+	for _, dt := range []tensor.Dtype{tensor.F32, tensor.F64} {
+		b.Run(dt.String(), func(b *testing.B) {
+			x := tensor.New(dt, tensor.Shape{32000, 2048})
+			dst := make([]float32, 2048)
+			b.ReportAllocs()
+			for b.Loop() {
+				embedRowInto(dst, x, 12345, 2048)
+			}
+		})
 	}
 }
