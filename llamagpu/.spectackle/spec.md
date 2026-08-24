@@ -180,4 +180,4 @@ WHEN StepN or StepNLast gathers k token embeddings, the shared Decoder SHALL ret
 WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water embedding staging elements.
 
 ## M2-DECODER-STEPN-INTO-PERF-001-001
-WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 allocations per StepNLastInto operation, at least 32768 fewer bytes per StepNLast operation than the baseline, and at least 0.97 times baseline throughput.
+WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 StepNLastInto allocations, 32768 fewer StepNLast bytes, and at least 0.97 times baseline throughput.
