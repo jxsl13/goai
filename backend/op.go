@@ -169,6 +169,8 @@ const (
 	OpPreNormAttentionBackward        // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dWq,dWk,dWv,dWo)
 	OpPreNormTransformerBlock         // complete pre-LN transformer block: attention residual followed by exact-GELU FFN residual
 	OpPreNormTransformerBlockBackward // complete block backward: (...,dO)→gradients for all 13 differentiable inputs
+	OpPreNormTransformerStack         // sequential complete pre-LN transformer blocks: x plus 12 parameters per block
+	OpPreNormTransformerStackBackward // stack backward: (...,dO)→dX plus 12 parameter gradients per block
 
 	numOps
 )
@@ -277,6 +279,8 @@ var opName = [...]string{
 	OpPreNormAttentionBackward:        "prenorm_attention_backward",
 	OpPreNormTransformerBlock:         "prenorm_transformer_block",
 	OpPreNormTransformerBlockBackward: "prenorm_transformer_block_backward",
+	OpPreNormTransformerStack:         "prenorm_transformer_stack",
+	OpPreNormTransformerStackBackward: "prenorm_transformer_stack_backward",
 }
 
 // String implements fmt.Stringer.

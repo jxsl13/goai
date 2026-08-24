@@ -9751,6 +9751,314 @@ int mtl_prenorm_transformer_block_backward_f32(
     }
 }
 
+// ---- Cached depth-composed pre-norm transformer-stack graphs --------------
+// The dynamic uintptr_t ABI is consumed synchronously: host addresses are
+// copied into shared Metal buffers before this call returns and are never kept.
+#define PRENORM_STACK_MAX_DEPTH 8
+#define PRENORM_STACK_CACHE_CAP 8
+#define PRENORM_STACK_MAX_INPUTS (1 + 12 * PRENORM_STACK_MAX_DEPTH + 3)
+#define PRENORM_STACK_MAX_OUTPUTS (1 + 12 * PRENORM_STACK_MAX_DEPTH)
+
+static MPSGraph* gPreStackFwdGraphs[PRENORM_STACK_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPreStackFwdInputs[PRENORM_STACK_CACHE_CAP][PRENORM_STACK_MAX_INPUTS] = {{nil}};
+static MPSGraphTensor* gPreStackFwdOutputs[PRENORM_STACK_CACHE_CAP] = {nil};
+static int gPreStackFwdSigs[PRENORM_STACK_CACHE_CAP][6] = {{0}};
+static int gPreStackFwdValid[PRENORM_STACK_CACHE_CAP] = {0};
+static int gPreStackFwdNext = 0;
+
+static MPSGraph* gPreStackBwdGraphs[PRENORM_STACK_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPreStackBwdInputs[PRENORM_STACK_CACHE_CAP][PRENORM_STACK_MAX_INPUTS] = {{nil}};
+static MPSGraphTensor* gPreStackBwdOutputs[PRENORM_STACK_CACHE_CAP][PRENORM_STACK_MAX_OUTPUTS] = {{nil}};
+static int gPreStackBwdSigs[PRENORM_STACK_CACHE_CAP][6] = {{0}};
+static int gPreStackBwdValid[PRENORM_STACK_CACHE_CAP] = {0};
+static int gPreStackBwdNext = 0;
+
+static MPSGraphTensor* pre_stack_placeholder(MPSGraph* g, int local, int dim, int hidden) {
+    if (local == 0 || local == 1 || local == 6 || local == 7 || local == 11)
+        return [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+    if (local >= 2 && local <= 5)
+        return [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+    if (local == 8)
+        return [g placeholderWithShape:@[@(dim), @(hidden)] dataType:MPSDataTypeFloat32 name:nil];
+    if (local == 9)
+        return [g placeholderWithShape:@[@(hidden)] dataType:MPSDataTypeFloat32 name:nil];
+    if (local == 10)
+        return [g placeholderWithShape:@[@(hidden), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+    return nil;
+}
+
+static int ensure_prenorm_transformer_stack_forward_graph(
+    int depth, int rows, int dim, int hidden, int batch, int seq, int heads) {
+    int sig[6] = {depth, batch, seq, dim, heads, hidden};
+    for (int i = 0; i < PRENORM_STACK_CACHE_CAP; i++)
+        if (gPreStackFwdValid[i] && memcmp(sig, gPreStackFwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* inputs[PRENORM_STACK_MAX_INPUTS] = {nil};
+        inputs[0] = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        int epsIndex = 1 + 12 * depth;
+        inputs[epsIndex] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex + 1] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* h = inputs[0];
+        for (int block = 0; block < depth; block++) {
+            int p = 1 + 12 * block;
+            for (int local = 0; local < 12; local++)
+                inputs[p + local] = pre_stack_placeholder(g, local, dim, hidden);
+            prenorm_attention_nodes attention = build_prenorm_attention_nodes(
+                g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads);
+            prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
+                g, attention.y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
+                inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
+            if (!attention.y || !ffn.y) return -20;
+            h = ffn.y;
+        }
+        if (!g || !h) return -20;
+        int slot = gPreStackFwdNext;
+        gPreStackFwdGraphs[slot] = g;
+        for (int i = 0; i < epsIndex + 2; i++) gPreStackFwdInputs[slot][i] = inputs[i];
+        gPreStackFwdOutputs[slot] = h;
+        memcpy(gPreStackFwdSigs[slot], sig, sizeof(sig));
+        gPreStackFwdValid[slot] = 1;
+        gPreStackFwdNext = (slot + 1) % PRENORM_STACK_CACHE_CAP;
+        return slot;
+    }
+}
+
+static int ensure_prenorm_transformer_stack_backward_graph(
+    int depth, int rows, int dim, int hidden, int batch, int seq, int heads) {
+    int sig[6] = {depth, batch, seq, dim, heads, hidden};
+    for (int i = 0; i < PRENORM_STACK_CACHE_CAP; i++)
+        if (gPreStackBwdValid[i] && memcmp(sig, gPreStackBwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* inputs[PRENORM_STACK_MAX_INPUTS] = {nil};
+        MPSGraphTensor* outputs[PRENORM_STACK_MAX_OUTPUTS] = {nil};
+        prenorm_attention_nodes attention[PRENORM_STACK_MAX_DEPTH];
+        prenorm_ffn_nodes ffn[PRENORM_STACK_MAX_DEPTH];
+        inputs[0] = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        int dOIndex = 1 + 12 * depth;
+        int epsIndex = dOIndex + 1;
+        inputs[dOIndex] = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex + 1] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* h = inputs[0];
+        for (int block = 0; block < depth; block++) {
+            int p = 1 + 12 * block;
+            for (int local = 0; local < 12; local++)
+                inputs[p + local] = pre_stack_placeholder(g, local, dim, hidden);
+            attention[block] = build_prenorm_attention_nodes(
+                g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads);
+            ffn[block] = build_prenorm_ffn_nodes(
+                g, attention[block].y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
+                inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
+            if (!attention[block].y || !ffn[block].y) return -20;
+            h = ffn[block].y;
+        }
+        MPSGraphTensor* upstream = inputs[dOIndex];
+        for (int block = depth - 1; block >= 0; block--) {
+            int p = 1 + 12 * block;
+            prenorm_ffn_backward_nodes ffnBackward = build_prenorm_ffn_backward_nodes(
+                g, ffn[block], inputs[p + 6], inputs[p + 8], inputs[p + 10], upstream, dim, hidden);
+            prenorm_attention_backward_nodes attentionBackward = build_prenorm_attention_backward_nodes(
+                g, attention[block], inputs[p], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], ffnBackward.dX, rows, dim, batch, seq, heads);
+            outputs[p] = attentionBackward.dGamma;
+            outputs[p + 1] = attentionBackward.dBeta;
+            outputs[p + 2] = attentionBackward.dWq;
+            outputs[p + 3] = attentionBackward.dWk;
+            outputs[p + 4] = attentionBackward.dWv;
+            outputs[p + 5] = attentionBackward.dWo;
+            outputs[p + 6] = ffnBackward.dGamma;
+            outputs[p + 7] = ffnBackward.dBeta;
+            outputs[p + 8] = ffnBackward.dW1;
+            outputs[p + 9] = ffnBackward.dB1;
+            outputs[p + 10] = ffnBackward.dW2;
+            outputs[p + 11] = ffnBackward.dB2;
+            upstream = attentionBackward.dX;
+        }
+        outputs[0] = upstream;
+        for (int i = 0; i < 1 + 12 * depth; i++) if (!outputs[i]) return -20;
+        int slot = gPreStackBwdNext;
+        gPreStackBwdGraphs[slot] = g;
+        for (int i = 0; i < epsIndex + 2; i++) gPreStackBwdInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 1 + 12 * depth; i++) gPreStackBwdOutputs[slot][i] = outputs[i];
+        memcpy(gPreStackBwdSigs[slot], sig, sizeof(sig));
+        gPreStackBwdValid[slot] = 1;
+        gPreStackBwdNext = (slot + 1) % PRENORM_STACK_CACHE_CAP;
+        return slot;
+    }
+}
+
+static size_t pre_stack_length(int local, size_t dLen, size_t hLen, size_t aWLen, size_t fWLen) {
+    if (local == 0 || local == 1 || local == 6 || local == 7 || local == 11) return dLen;
+    if (local >= 2 && local <= 5) return aWLen;
+    if (local == 9) return hLen;
+    return fWLen;
+}
+
+static NSArray<NSNumber*>* pre_stack_shape(int local, int dim, int hidden) {
+    if (local == 0 || local == 1 || local == 6 || local == 7 || local == 11) return @[@(dim)];
+    if (local >= 2 && local <= 5) return @[@(dim), @(dim)];
+    if (local == 8) return @[@(dim), @(hidden)];
+    if (local == 9) return @[@(hidden)];
+    return @[@(hidden), @(dim)];
+}
+
+int mtl_prenorm_transformer_stack_f32(
+    const uintptr_t* inputs, uintptr_t output, int depth,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2) {
+    if (ensure_init() != 0) return -1;
+    if (!inputs || !output || depth < 2 || depth > PRENORM_STACK_MAX_DEPTH ||
+        rows != batch * seq || heads <= 0 || dim % heads != 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_prenorm_transformer_stack_forward_graph(depth, rows, dim, hidden, batch, seq, heads);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        int epsIndex = 1 + 12 * depth;
+        int inputCount = epsIndex + 2;
+        const float* hostIn[PRENORM_STACK_MAX_INPUTS] = {nil};
+        size_t lengths[PRENORM_STACK_MAX_INPUTS] = {0};
+        NSArray<NSNumber*>* shapes[PRENORM_STACK_MAX_INPUTS] = {nil};
+        hostIn[0] = (const float*)(uintptr_t)inputs[0];
+        lengths[0] = xLen;
+        shapes[0] = @[@(rows), @(dim)];
+        for (int block = 0; block < depth; block++) {
+            int p = 1 + 12 * block;
+            for (int local = 0; local < 12; local++) {
+                hostIn[p + local] = (const float*)(uintptr_t)inputs[p + local];
+                lengths[p + local] = pre_stack_length(local, dLen, hLen, aWLen, fWLen);
+                shapes[p + local] = pre_stack_shape(local, dim, hidden);
+            }
+        }
+        hostIn[epsIndex] = &eps1;
+        hostIn[epsIndex + 1] = &eps2;
+        lengths[epsIndex] = lengths[epsIndex + 1] = sizeof(float);
+        shapes[epsIndex] = shapes[epsIndex + 1] = @[@1];
+        id<MTLBuffer> in[PRENORM_STACK_MAX_INPUTS] = {nil};
+        MPSGraphTensorData* data[PRENORM_STACK_MAX_INPUTS] = {nil};
+        for (int i = 0; i < inputCount; i++) {
+            in[i] = pool_in(hostIn[i], lengths[i]);
+            if (!in[i]) return -2;
+            data[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i] shape:shapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!data[i]) return -2;
+        }
+        id<MTLBuffer> out = pool_buf(xLen);
+        if (!out) return -2;
+        MPSGraphTensorData* yd = [[MPSGraphTensorData alloc] initWithMTLBuffer:out
+                                                                        shape:@[@(rows), @(dim)]
+                                                                     dataType:MPSDataTypeFloat32];
+        if (!yd) return -2;
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:inputCount];
+        for (int i = 0; i < inputCount; i++) feeds[gPreStackFwdInputs[slot][i]] = data[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPreStackFwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                     resultsDictionary:@{gPreStackFwdOutputs[slot]:yd}
+                                   executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        memcpy((float*)(uintptr_t)output, out.contents, xLen);
+        return 0;
+    }
+}
+
+int mtl_prenorm_transformer_stack_backward_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs, int depth,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2) {
+    if (ensure_init() != 0) return -1;
+    if (!inputs || !outputs || depth < 2 || depth > PRENORM_STACK_MAX_DEPTH ||
+        rows != batch * seq || heads <= 0 || dim % heads != 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_prenorm_transformer_stack_backward_graph(depth, rows, dim, hidden, batch, seq, heads);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        int outputCount = 1 + 12 * depth;
+        int dOIndex = outputCount;
+        int epsIndex = dOIndex + 1;
+        int inputCount = epsIndex + 2;
+        const float* hostIn[PRENORM_STACK_MAX_INPUTS] = {nil};
+        size_t inputLengths[PRENORM_STACK_MAX_INPUTS] = {0};
+        NSArray<NSNumber*>* inputShapes[PRENORM_STACK_MAX_INPUTS] = {nil};
+        hostIn[0] = (const float*)(uintptr_t)inputs[0];
+        inputLengths[0] = xLen;
+        inputShapes[0] = @[@(rows), @(dim)];
+        for (int block = 0; block < depth; block++) {
+            int p = 1 + 12 * block;
+            for (int local = 0; local < 12; local++) {
+                hostIn[p + local] = (const float*)(uintptr_t)inputs[p + local];
+                inputLengths[p + local] = pre_stack_length(local, dLen, hLen, aWLen, fWLen);
+                inputShapes[p + local] = pre_stack_shape(local, dim, hidden);
+            }
+        }
+        hostIn[dOIndex] = (const float*)(uintptr_t)inputs[dOIndex];
+        inputLengths[dOIndex] = xLen;
+        inputShapes[dOIndex] = @[@(rows), @(dim)];
+        hostIn[epsIndex] = &eps1;
+        hostIn[epsIndex + 1] = &eps2;
+        inputLengths[epsIndex] = inputLengths[epsIndex + 1] = sizeof(float);
+        inputShapes[epsIndex] = inputShapes[epsIndex + 1] = @[@1];
+        id<MTLBuffer> in[PRENORM_STACK_MAX_INPUTS] = {nil};
+        MPSGraphTensorData* inputData[PRENORM_STACK_MAX_INPUTS] = {nil};
+        for (int i = 0; i < inputCount; i++) {
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i] shape:inputShapes[i]
+                                                                    dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+        size_t outputLengths[PRENORM_STACK_MAX_OUTPUTS] = {0};
+        NSArray<NSNumber*>* outputShapes[PRENORM_STACK_MAX_OUTPUTS] = {nil};
+        outputLengths[0] = xLen;
+        outputShapes[0] = @[@(rows), @(dim)];
+        for (int block = 0; block < depth; block++) {
+            int p = 1 + 12 * block;
+            for (int local = 0; local < 12; local++) {
+                outputLengths[p + local] = pre_stack_length(local, dLen, hLen, aWLen, fWLen);
+                outputShapes[p + local] = pre_stack_shape(local, dim, hidden);
+            }
+        }
+        id<MTLBuffer> out[PRENORM_STACK_MAX_OUTPUTS] = {nil};
+        MPSGraphTensorData* outputData[PRENORM_STACK_MAX_OUTPUTS] = {nil};
+        for (int i = 0; i < outputCount; i++) {
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i] shape:outputShapes[i]
+                                                                     dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:inputCount];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:outputCount];
+        for (int i = 0; i < inputCount; i++) feeds[gPreStackBwdInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < outputCount; i++) results[gPreStackBwdOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPreStackBwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                      resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        for (int i = 0; i < outputCount; i++)
+            memcpy((float*)(uintptr_t)outputs[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP
 // dS[i,j] = P[i,j]·(dP[i,j] − Σ_k P[i,k]·dP[i,k]) IN PLACE on dP (dS overwrites dP). Causal: only
 // j≤i valid (P is already 0 for j>i, so masked terms drop out; the tail is set to 0). One

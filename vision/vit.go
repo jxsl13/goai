@@ -318,11 +318,9 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	if err != nil {
 		return nil, err
 	}
-	h := packed[0]
-	for _, blk := range m.Blocks {
-		if h, err = blk.forwardBatched(ctx, h, B); err != nil {
-			return nil, err
-		}
+	h, err := m.forwardBlocks(ctx, packed[0], B)
+	if err != nil {
+		return nil, err
 	}
 	if h, err = m.Norm.Forward(ctx, h); err != nil {
 		return nil, err
@@ -365,11 +363,9 @@ func (m *ViT) Features(ctx *backend.Context, img *tensor.Tensor) (*tensor.Tensor
 	if err != nil {
 		return nil, err
 	}
-	h := seq
-	for _, b := range m.Blocks {
-		if h, err = b.forward(ctx, h); err != nil {
-			return nil, err
-		}
+	h, err := m.forwardBlocks(ctx, seq, 1)
+	if err != nil {
+		return nil, err
 	}
 	return m.Norm.Forward(ctx, h)
 }
@@ -396,4 +392,18 @@ func (b *vitBlock) forwardBatched(ctx *backend.Context, x *tensor.Tensor, batch 
 
 func (b *vitBlock) forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, error) {
 	return nlp.ForwardPreNormTransformerBlock(ctx, x, b.attn, b.ln1, b.ln2, b.fc1, b.fc2, 1)
+}
+
+func (m *ViT) forwardBlocks(ctx *backend.Context, x *tensor.Tensor, batch int) (*tensor.Tensor, error) {
+	blocks := make([]nlp.PreNormTransformerBlock, len(m.Blocks))
+	for i, block := range m.Blocks {
+		blocks[i] = nlp.PreNormTransformerBlock{
+			Attention: block.attn,
+			Norm1:     block.ln1,
+			Norm2:     block.ln2,
+			Up:        block.fc1,
+			Down:      block.fc2,
+		}
+	}
+	return nlp.ForwardPreNormTransformerStack(ctx, x, blocks, batch)
 }

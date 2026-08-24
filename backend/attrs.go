@@ -218,6 +218,36 @@ func (a PreNormTransformerBlockAttrs) WithDefaults() PreNormTransformerBlockAttr
 	return a
 }
 
+// PreNormTransformerStackAttrs parameterises a sequential stack of complete
+// pre-LayerNorm transformer blocks with uniform geometry and normalization
+// epsilon values.
+type PreNormTransformerStackAttrs struct {
+	Depth int     // number of sequential complete blocks
+	Heads int     // number of attention heads; 0 → 1
+	Batch int     // independent packed sequences along axis 0; 0 → 1
+	Eps1  float64 // attention LayerNorm variance floor; 0 → 1e-5
+	Eps2  float64 // FFN LayerNorm variance floor; 0 → 1e-5
+}
+
+func (PreNormTransformerStackAttrs) opAttrs() {}
+
+// WithDefaults fills the documented head, batch, and epsilon defaults.
+func (a PreNormTransformerStackAttrs) WithDefaults() PreNormTransformerStackAttrs {
+	if a.Heads == 0 {
+		a.Heads = 1
+	}
+	if a.Batch == 0 {
+		a.Batch = 1
+	}
+	if a.Eps1 == 0 {
+		a.Eps1 = 1e-5
+	}
+	if a.Eps2 == 0 {
+		a.Eps2 = 1e-5
+	}
+	return a
+}
+
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*
 // fields). Leaving the YaRN fields zero disables YaRN.
@@ -719,6 +749,8 @@ var opAttrsSpec = [numOps]attrsSpec{
 	OpPreNormAttentionBackward:        attrsOf(PreNormAttentionAttrs{}),
 	OpPreNormTransformerBlock:         attrsOf(PreNormTransformerBlockAttrs{}),
 	OpPreNormTransformerBlockBackward: attrsOf(PreNormTransformerBlockAttrs{}),
+	OpPreNormTransformerStack:         attrsOf(PreNormTransformerStackAttrs{}),
+	OpPreNormTransformerStackBackward: attrsOf(PreNormTransformerStackAttrs{}),
 	OpRMSNorm:                         attrsOf(NormAttrs{}),
 	OpRMSNormBackward:                 attrsOf(NormAttrs{}),
 	OpRoPE:                            attrsOf(RoPEAttrs{}),

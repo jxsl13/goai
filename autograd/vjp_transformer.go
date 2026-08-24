@@ -112,4 +112,11 @@ func init() {
 			in[7], in[8], in[9], in[10], in[11], in[12], g,
 		}, attrs)
 	})
+
+	RegisterVJP(backend.OpPreNormTransformerStack, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		backwardInputs := make([]*tensor.Tensor, len(in)+1)
+		copy(backwardInputs, in)
+		backwardInputs[len(in)] = g
+		return backend.Execute(ctx, backend.OpPreNormTransformerStackBackward, backwardInputs, attrs)
+	})
 }

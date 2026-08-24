@@ -8,6 +8,93 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+// PreNormTransformerBlock groups the layers of one complete pre-normalized
+// attention-plus-FFN transformer block for stack execution.
+type PreNormTransformerBlock struct {
+	// Attention supplies the self-attention projections and head geometry.
+	Attention *MHA
+	// Norm1 normalizes the attention input.
+	Norm1 *nn.LayerNorm
+	// Norm2 normalizes the feed-forward input.
+	Norm2 *nn.LayerNorm
+	// Up expands the feed-forward hidden dimension before exact GELU.
+	Up *nn.Linear
+	// Down projects the feed-forward activation back to the model dimension.
+	Down *nn.Linear
+}
+
+// ForwardPreNormTransformerStack computes blocks sequentially. Supported
+// backends may keep every intermediate activation inside one differentiable
+// operation; all other cases loop over ForwardPreNormTransformerBlock exactly.
+func ForwardPreNormTransformerStack(ctx *backend.Context, x *tensor.Tensor,
+	blocks []PreNormTransformerBlock, batch int) (*tensor.Tensor, error) {
+	if x == nil {
+		return nil, errors.New("nlp: ForwardPreNormTransformerStack requires non-nil input")
+	}
+	if len(blocks) == 0 {
+		return x, nil
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if preNormTransformerStackFusable(ctx, x, blocks, batch) {
+		inputs := make([]*tensor.Tensor, 1, 1+12*len(blocks))
+		inputs[0] = x
+		for _, block := range blocks {
+			inputs = append(inputs,
+				block.Norm1.Gamma, block.Norm1.Beta,
+				block.Attention.Wq, block.Attention.Wk, block.Attention.Wv, block.Attention.Wo,
+				block.Norm2.Gamma, block.Norm2.Beta,
+				block.Up.W, block.Up.B, block.Down.W, block.Down.B,
+			)
+		}
+		first := blocks[0]
+		out, err := backend.Execute(ctx, backend.OpPreNormTransformerStack, inputs, backend.PreNormTransformerStackAttrs{
+			Depth: len(blocks), Heads: first.Attention.Heads, Batch: batch,
+			Eps1: first.Norm1.Eps, Eps2: first.Norm2.Eps,
+		})
+		if err != nil {
+			return nil, err
+		}
+		return out[0], nil
+	}
+	h := x
+	var err error
+	for _, block := range blocks {
+		h, err = ForwardPreNormTransformerBlock(ctx, h, block.Attention, block.Norm1, block.Norm2, block.Up, block.Down, batch)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
+}
+
+func preNormTransformerStackFusable(ctx *backend.Context, x *tensor.Tensor,
+	blocks []PreNormTransformerBlock, batch int) bool {
+	if ctx.Backend == nil || len(blocks) < 2 || len(blocks) > 8 {
+		return false
+	}
+	first := blocks[0]
+	if first.Attention == nil || first.Norm1 == nil || first.Norm2 == nil || first.Up == nil || first.Down == nil {
+		return false
+	}
+	heads, hidden := first.Attention.Heads, 0
+	if first.Up.W != nil && first.Up.W.Ndim() == 2 {
+		hidden = first.Up.W.Shape()[1]
+	}
+	for _, block := range blocks {
+		if block.Attention == nil || block.Norm1 == nil || block.Norm2 == nil || block.Up == nil || block.Down == nil ||
+			block.Attention.Heads != heads || block.Norm1.Eps != first.Norm1.Eps || block.Norm2.Eps != first.Norm2.Eps ||
+			block.Up.W == nil || block.Up.W.Ndim() != 2 || block.Up.W.Shape()[1] != hidden ||
+			!preNormTransformerBlockInputsFusable(x, block.Attention, block.Norm1, block.Norm2, block.Up, block.Down, batch) {
+			return false
+		}
+	}
+	_, forward := ctx.Backend.Kernel(backend.OpPreNormTransformerStack, tensor.F32)
+	_, backward := ctx.Backend.Kernel(backend.OpPreNormTransformerStackBackward, tensor.F32)
+	return forward && backward
+}
+
 // ForwardPreNormTransformerBlock computes an attention residual followed by an
 // exact-GELU FFN residual. Supported backends may execute the complete
 // differentiable block as one operation; all other cases retain the established
@@ -47,7 +134,17 @@ func ForwardPreNormTransformerBlock(ctx *backend.Context, x *tensor.Tensor, atte
 
 func preNormTransformerBlockFusable(ctx *backend.Context, x *tensor.Tensor, attention *MHA,
 	norm1, norm2 *nn.LayerNorm, up, down *nn.Linear, batch int) bool {
-	if ctx.Backend == nil || len(attention.LoRA) != 0 || len(attention.Bias) != 0 || attention.Mask != nil || attention.Causal ||
+	if ctx.Backend == nil || !preNormTransformerBlockInputsFusable(x, attention, norm1, norm2, up, down, batch) {
+		return false
+	}
+	_, forward := ctx.Backend.Kernel(backend.OpPreNormTransformerBlock, tensor.F32)
+	_, backward := ctx.Backend.Kernel(backend.OpPreNormTransformerBlockBackward, tensor.F32)
+	return forward && backward
+}
+
+func preNormTransformerBlockInputsFusable(x *tensor.Tensor, attention *MHA,
+	norm1, norm2 *nn.LayerNorm, up, down *nn.Linear, batch int) bool {
+	if len(attention.LoRA) != 0 || len(attention.Bias) != 0 || attention.Mask != nil || attention.Causal ||
 		x.Dtype() != tensor.F32 || x.Ndim() != 2 || x.Shape()[0] == 0 || x.Shape()[1] == 0 ||
 		batch <= 0 || x.Shape()[0]%batch != 0 || attention.Heads <= 0 || x.Shape()[1]%attention.Heads != 0 {
 		return false
@@ -72,7 +169,5 @@ func preNormTransformerBlockFusable(ctx *backend.Context, x *tensor.Tensor, atte
 			return false
 		}
 	}
-	_, forward := ctx.Backend.Kernel(backend.OpPreNormTransformerBlock, tensor.F32)
-	_, backward := ctx.Backend.Kernel(backend.OpPreNormTransformerBlockBackward, tensor.F32)
-	return forward && backward
+	return true
 }
