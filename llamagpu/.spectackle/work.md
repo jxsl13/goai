@@ -74,7 +74,7 @@ choice: One-row resident plus lazy reusable high-water buffer
 
 ## T-01M0SN2SMDFK09NPC0WFVNGWSR Implement and gate lazy full-StepN logits buffers
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SN14HSEJ2VWB9HT1S7W01F
 grilled: 2026-08-24 open=0
