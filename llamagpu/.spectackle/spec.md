@@ -198,3 +198,6 @@ WHEN a destination length differs from its method requirement, the GPTDecoder In
 
 ## GPT-EMBED-STAGING-001-001
 WHEN Step or prefill gathers token and positional embeddings, the GPTDecoder SHALL reuse exactly 1 Dim host row or 1 exact high-water batch slice and allocate 0 embedding objects.
+
+## GPT-EMBED-STAGING-LIFETIME-001-001
+WHEN Release completes, the GPTDecoder SHALL retain exactly 0 host embedding staging elements.
