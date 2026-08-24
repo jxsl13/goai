@@ -626,3 +626,12 @@ WHEN a freed Metal Recorder is reset, the Metal backend SHALL open exactly 1 fre
 
 ## M2-METAL-TOPKN-INTO-PERF-001
 WHEN TopKNInto is benchmarked on M2 with N 32000 and K 56, the Metal device buffer gate SHALL require 0 B/op, 0 allocs/op, and at least 0.97 times TopKN median throughput.
+
+## METAL-KQUANT-EVEN-ROW-TAIL-SEMANTICS-001
+WHEN cooperative M=1 Q4_K or Q6_K receives an even output width N, the Metal backend SHALL select the aligned row-tail pipeline only after proving exactly N outputs, bit-exact control parity, and 0 changed input bytes.
+
+## METAL-KQUANT-ODD-ROW-TAIL-FALLBACK-001
+WHEN cooperative Q4_K or Q6_K receives an odd output width N, the Metal backend SHALL use the guarded pipeline and make odd-tail tests observe exactly N finite outputs with 0 out-of-range writes.
+
+## M2-METAL-KQUANT-ALIGNED-TAIL-PERF-001
+WHEN M2 promotes aligned Q4_K or Q6_K row-tail at K 2048 and N 2048 or 5632, the Metal benchmark gate SHALL require at least 1.03 times median leaf and 1.03 times median TinyLlama production throughput.
