@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### tensor -- carry allocation-free pool release tokens (T-01M0V1E9EFFHX, 2026-08-25)
+
+Pooled F32/F64 `Storage` now keeps a cold-allocated pointer token from
+allocation through `Release`, so warm recycling returns a pointer to
+`sync.Pool` instead of boxing a slice header. The exported `Allocator` API,
+same-class/public-path reuse, zeroing, GC reclamation, concurrency, and the
+F16/BF16 carve-out remain unchanged.
+
+Nine alternating Apple M2 Pro pairs improve small F32 `NewOn` plus release
+**1.300x** and small F64 **1.177x**; the large serial cells are 1.030x and
+1.035x. All four parallel medians improve **1.026x–1.298x**. Every production
+cell drops from three to two allocations, and small cells drop from 248 to 224
+B/op; isolated token recycling is 0 B/op and 0 allocs/op. The raw public
+allocator path remains neutral. Evidence is committed under the tensor pool
+release-token artifact, and the general pattern is perfscan issue #908.
+
 ### backend/cpu -- interleave exact MoE mixture outputs (T-01M0TYMJGMFMQ, 2026-08-25)
 
 The F64/F32 `OpMoECombine` kernels now reduce four adjacent output columns
