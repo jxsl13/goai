@@ -204,3 +204,6 @@ WHEN Release completes, the GPTDecoder SHALL retain exactly 0 host embedding sta
 
 ## GPT-METAL-RECORDER-POOL-SAFETY-001-001
 WHEN a pooled recorder is freed, the Metal GPT decoder adapter SHALL release exactly 1 native command buffer before returning its Go wrapper to the 2-slot pool.
+
+## M2-GPT-INTO-PERF-001-001
+WHEN GPT-2-small StepInto and 16-token StepNLastInto are benchmarked on M2, the GPT caller-buffer promotion gate SHALL require 0 allocations for both Into methods, 210000 and 147000 fewer wrapper bytes, and at least 0.97 times baseline throughput.
