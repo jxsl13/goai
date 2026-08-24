@@ -98,3 +98,4 @@
 {"t":"2026-08-24T10:52:37Z","eid":"374a5019da4f2c83","ag":"ag-32f1","ev":"decide","id":"ADR-01M0SPCGWTFB08X22KNMW0DDV6","dir":"llamagpu","note":"One-row resident workspace plus lazy grouped high-water storage"}
 {"t":"2026-08-24T10:52:49Z","eid":"94a0aae17cb28ed6","ag":"ag-7836","ev":"grill","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6e48de2eb0cfe63093dbbb3092a6ef08bcef476c0b68230a10575c0a5824f7d6"}
 {"t":"2026-08-24T10:52:59Z","eid":"05620c28ce12f70c","ag":"ag-f8da","ev":"revise","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","note":"refs revised"}
+{"t":"2026-08-24T10:53:11Z","eid":"3363bc918e123e36","ag":"ag-270a","ev":"grill","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6e48de2eb0cfe63093dbbb3092a6ef08bcef476c0b68230a10575c0a5824f7d6"}
