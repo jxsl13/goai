@@ -79,4 +79,4 @@ WHEN OpLayerNormSequenceClassifier or its backward operation executes, the backe
 WHEN the fused backend operation is unavailable for a valid layer-normalized sequence classifier request, the layer-normalized sequence classifier helper SHALL execute the existing LayerNorm, Batch first-row slices, 1 concat, and 1 linear projection with 0 implicit backend migrations.
 
 ## PATCH-EMBED-SEQUENCE-SEMANTICS-001
-WHEN OpPatchEmbedSequence or its backward operation executes, the backend SHALL return one packed sequence equivalent to biased patch projection plus shared class and position rows, and exactly five input gradients.
+WHEN OpPatchEmbedSequence or its backward operation executes, the backend SHALL make OpPatchEmbedSequence return 1 packed sequence equivalent to biased patch projection plus shared class and position rows, and its backward return exactly 5 gradients.
