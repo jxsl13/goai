@@ -71,3 +71,6 @@ WHEN OpPreNormTransformerStack or OpPreNormTransformerStackBackward executes, th
 
 ## PRENORM-TRANSFORMER-STACK-FALLBACK-001
 WHEN the stack is ineligible for a fused backend operation, the pre-norm transformer-stack helper SHALL execute the existing complete-block helper exactly Depth times with 0 implicit backend migrations.
+
+## LAYERNORM-SEQUENCE-CLASSIFIER-SEMANTICS-001-001
+WHEN OpLayerNormSequenceClassifier or its backward operation executes, the backend SHALL preserve biased last-axis LayerNorm with runtime epsilon over every packed row, select row b times rows divided by Batch for every batch index, apply one biased linear projection, and return gradients for exactly all 5 differentiable inputs.
