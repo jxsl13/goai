@@ -594,3 +594,8 @@ Rationale: The M2 leverage comes from keeping optimizer state and gradients on t
 WHEN Step executes on a supported resident ViT session, the Metal backend SHALL encode the complete objective and every AdamW parameter update in exactly 1 command buffer.
 
 Rationale: One command buffer preserves dependency ordering and removes the objective-to-optimizer synchronization boundary.
+
+## METAL-VIT-ADAMW-SESSION-NUMERIC-001
+WHEN the resident session is compared with portable F32 AdamW for 3 steps, the Metal ViT session SHALL match every loss and synchronized parameter within established F32 tolerance and preserve checkpoint continuation.
+
+Rationale: Resident execution must preserve the portable optimizer recurrence and explicit checkpoint semantics.
