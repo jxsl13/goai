@@ -142,3 +142,6 @@ WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exac
 
 ## TINYLLAMA-ACTIVATION-RESIDENCY-PERF-001
 WHEN the same-binary TinyLlama-class activation residency benchmark compares lazy and eager controls on M2, the promotion gate SHALL require at least 150000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times public Step and StepNLast throughput.
+
+## ROPE-PAIR-EXACT-STRIDE-STORAGE-001
+WHEN a fused QKV buffer contains exactly seq times stride elements and both Q and K band ends are at most stride, the Metal and Vulkan RoPEPair recorders SHALL accept the buffer with 0 offset-padding elements and reject every band end greater than stride.
