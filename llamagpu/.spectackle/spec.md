@@ -155,7 +155,7 @@ WHEN the destination length differs from Vocab, the Decoder.StepInto SHALL retur
 ## DECODER-EMBED-STAGING-001 {applies: go:llamagpu.Decoder.gatherEmbedInto,go:llamagpu.embedRowInto,go:llamagpu.TestEmbedRowIntoAllocatesZeroAndMatches}
 WHEN single-token stepping gathers a token embedding, the shared Decoder SHALL reuse exactly 1 Dim-element host row and allocate 0 per-token embedding objects.
 
-## M2-DECODER-STEP-INTO-PERF-001
+## M2-DECODER-STEP-INTO-PERF-001 {applies: go:llamagpu.BenchmarkLlamaDecodeStepIntoMetal,go:llamagpu_test.BenchmarkLlamaDecodeStepMetal}
 WHEN StepInto is benchmarked against Step on M2 at the tracked Llama boundary, the promotion gate SHALL require 0 allocations per operation, at least 8000 fewer B/op, and at least 0.97 times Step throughput.
 
 ## DECODER-METAL-RECORDER-POOL-SAFETY-001
