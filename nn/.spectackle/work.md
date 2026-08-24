@@ -31,8 +31,9 @@ PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a p
 
 ## T-01KYMCQ31GEB0TW27W6ZN2AR3P Route Muon newtonSchulz5 products through ops.MatMul and hoist its scratch onto the struct
 kind: task
-state: draft
+state: active
 created: 2026-07-28
+grilled: 2026-08-24 open=0
 
 FOLLOW-UP to T-01KYJR5WRXF5C, which landed steps 2+3 (ikj/axpy rewrite + symmetry) for a measured 2.09x: BenchmarkMuonStepOnly 418.3 -> 200.0 ms median on M2 Pro darwin/arm64 go1.26.5. Two parts of the original four remain, and they are independent of each other.
 
