@@ -175,3 +175,6 @@ WHEN the destination length differs from the method requirement, the Decoder.Ste
 
 ## DECODER-PREFILL-EMBED-STAGING-001-001
 WHEN StepN or StepNLast gathers k token embeddings, the shared Decoder SHALL retain exactly 1 host staging slice at the high-water size k times Dim, reuse it for every smaller request, and grow only for a larger request.
+
+## DECODER-PREFILL-STAGING-LIFETIME-001-001
+WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water embedding staging elements.
