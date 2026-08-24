@@ -566,3 +566,6 @@ WHERE contiguous offset-zero F32 inputs with supported uniform ViT geometry, the
 
 ## M2-VIT-LOSS-GRAD-PERF-001-001
 WHERE three order-alternated count-seven M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4 C10, the one-submission objective promotion gate SHALL require at least 1.20 times median complete-objective speedup and 1.10 times speedup in every aligned pair.
+
+## METAL-GPT-LOSS-GRAD-NUMERIC-001
+WHEN the supported objective is compared with the portable tape control, the Metal GPT loss-and-gradient capability SHALL match 1 scalar loss and every GPT parameter gradient within established F32 tolerance while mutating exactly 0 input or parameter elements.
