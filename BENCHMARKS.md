@@ -629,38 +629,37 @@ the scorecard rot-proof from here.
 ## 6. End-to-end training step — vs PyTorch
 
 *M2 Pro, one GPT training step = forward + cross-entropy + backward (no optimizer
-update, matching the Go benchmark), identical geometry (vocab 4096, ctx 256, dim
-512, 8 heads, 6 layers, seq 256, batch 1, f32). tok/s = seq / step time. GoAI:
-`internal/benchcompare` BenchmarkGPTTrainingStep (`GOEXPERIMENT=simd` cpu, Metal,
-Vulkan). torch 2.12.1, companion `testdata/bench_gpt_train_torch.py` (torch-cpu 8
-threads, torch-mps), median of 12. T883.*
+update), identical geometry (vocab 4096, ctx 256, dim 512, 8 heads, 6 layers,
+seq 256, batch 1, f32). tok/s = seq / step time. GoAI's eager rows use
+`BenchmarkGPTTrainingStep`; the objective row uses `BenchmarkGPTLossAndGrad` and
+returns the same mean loss plus gradients in `GPT.Params` order. torch 2.12.1,
+companion `testdata/bench_gpt_train_torch.py` (torch-cpu 8 threads, torch-mps),
+median of 12.*
 
-| Training step | GoAI | PyTorch | Gap |
-|---|---:|---:|---|
-| CPU | 2,257 tok/s (simd) | torch-cpu 5,058 | torch 2.24× ahead |
-| Apple GPU | 3,263 tok/s (Metal) | torch-mps 12,904 | torch-mps 3.95× ahead |
-| Vulkan | 1,966 tok/s | — | MoltenVK; no torch Vulkan path |
+| Training step | GoAI eager | GoAI `LossAndGrad` | PyTorch | Best gap |
+|---|---:|---:|---:|---|
+| CPU | 2,257 tok/s (simd) | portable fallback | torch-cpu 5,058 | torch 2.24× ahead |
+| Apple GPU | 3,263 tok/s | **12,338 tok/s** | torch-mps 12,904 | torch-mps 1.046× ahead |
+| Vulkan | 1,966 tok/s | portable fallback | — | MoltenVK; no torch Vulkan path |
 
-A loss, and an expected one. Two diagnosed causes, both already on the
-[losses table](#where-goai-loses-today):
+The Metal objective closes the measured PyTorch gap from 3.95× to 1.046×. It
+captures token/position embedding, six causal transformer blocks, final norm,
+mean cross-entropy, and every parameter gradient in one cached MPSGraph and one
+command-buffer submission. The public method retains the portable private-tape
+fallback for every unsupported model, dtype, layout, backend, or recorder state.
+The frozen M2 campaign recorded a 3.689× median improvement over the same eager
+GoAI semantics, with all 21 aligned samples winning and a 2.822× floor. Evidence:
+`internal/benchcompare/leadership/evidence/m2-metal-gpt-loss-grad-20260824/`.
 
-- **Apple GPU (3.95×):** GoAI's Metal training runs the autograd tape op-by-op —
-  each op is its own command-buffer commit + wait (≈0.27 ms dispatch floor), and a
-  6-layer forward+backward is hundreds of ops. PyTorch dispatches one fused MPS
-  graph and synchronizes once. GoAI's matmuls already call the same MPS kernels
-  (§4), so the gap is dispatch + fusion, not raw GEMM: the batched recorder that
-  gives 24× on *decode* (ADR-0019) buys only ≈1.4× on this training shape (§T411,
-  matmul-dominated at seq 256), leaving the ≈3× MPS-tuning ceiling.
+The remaining gaps are specific rather than architectural hand-waving:
+
+- **Apple GPU (4.6%):** the graph still copies a dense gradient tensor for every
+  parameter back to host memory because that is the public API contract. The next
+  fair comparison must either include optimizer/update placement on both sides or
+  add an explicit device-resident training state API.
 - **CPU (2.24×):** GoAI's f32 GEMM matches torch's Accelerate/AMX (§4), but a
-  training step is not all GEMM — PyTorch fuses scaled-dot-product attention and
-  its autograd backward, where GoAI runs separate NEON kernels (its CPU attention
-  is 2.6× behind torch's fused SDPA on its own). "No interpreter overhead" does not
-  beat a decade of fused-kernel engineering here.
-
-Honest read: GoAI's *inference* decode is competitive-to-ahead (§1–§3), but the
-*training* step trails PyTorch 2–4× on this box — fusion and MPS-kernel tuning, not
-a pure-Go penalty (the pure-Go f32 GEMM is at parity). The lever is graph/kernel
-fusion, tracked for both backends.
+  training step is not all GEMM. PyTorch fuses scaled-dot-product attention and
+  its autograd backward, while GoAI's portable path runs separate kernels.
 
 ## 7. Vision models — forward and training vs PyTorch
 

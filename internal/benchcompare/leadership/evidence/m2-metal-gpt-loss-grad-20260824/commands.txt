@@ -1,0 +1,29 @@
+# Build the focused Metal benchmark/test binary.
+go test -c -o /private/tmp/goai-gpt-objective-prototype-20260824.test ./backend/metal
+
+# Numerical parity and immutability.
+GOMAXPROCS=1 /private/tmp/goai-gpt-objective-prototype-20260824.test -test.run '^TestGPTLossAndGradMetalParityAndImmutability$' -test.count=1 -test.v
+
+# Candidate-only allocation and throughput screen.
+GOMAXPROCS=1 /private/tmp/goai-gpt-objective-prototype-20260824.test -test.run '^$' -test.bench '^BenchmarkGPTLossAndGradObjective$' -test.benchtime=5x -test.count=3 -test.benchmem
+
+# Frozen paired campaigns: control first, candidate first, control first.
+GOMAXPROCS=1 /private/tmp/goai-gpt-objective-prototype-20260824.test -test.run '^$' -test.bench '^BenchmarkGPTLossAndGradObjectivePaired$' -test.benchtime=1x -test.count=7 -test.benchmem
+GOAI_GPT_LOSS_GRAD_CANDIDATE_FIRST=1 GOMAXPROCS=1 /private/tmp/goai-gpt-objective-prototype-20260824.test -test.run '^$' -test.bench '^BenchmarkGPTLossAndGradObjectivePaired$' -test.benchtime=1x -test.count=7 -test.benchmem
+GOMAXPROCS=1 /private/tmp/goai-gpt-objective-prototype-20260824.test -test.run '^$' -test.bench '^BenchmarkGPTLossAndGradObjectivePaired$' -test.benchtime=1x -test.count=7 -test.benchmem
+
+# Portable API tests and runnable example.
+go test -c -o /private/tmp/goai-gpt-loss-grad-nlp-20260824.test ./nlp
+/private/tmp/goai-gpt-loss-grad-nlp-20260824.test -test.run '^(ExampleGPT_LossAndGrad|TestGPTLossAndGradPortableParity|TestGPTLossAndGradCapabilityFallbackAndRecorderIsolation|TestGPTLossAndGradRejectsInvalidInputs)$' -test.count=1 -test.v
+
+# Public cross-backend benchmark build and Metal integration screen.
+go test -c -tags vulkan -o /private/tmp/goai-benchcompare-gpt-loss-grad-20260824.test ./internal/benchcompare
+VK_ICD_FILENAMES=/opt/homebrew/etc/vulkan/icd.d/MoltenVK_icd.json GOMAXPROCS=1 /private/tmp/goai-benchcompare-gpt-loss-grad-20260824.test -test.run '^$' -test.bench '^BenchmarkGPTLossAndGrad/metal$' -test.benchtime=3x -test.count=3 -test.benchmem
+
+# Complete Metal package validation.
+go test ./backend/metal
+
+# Spec and scanner gates.
+spectackle call check '{}'
+make perfscan-check
+make preflight
