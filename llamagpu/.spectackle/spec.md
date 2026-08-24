@@ -17,6 +17,9 @@ schema: v1
 - T-01M0SZRTGPEJ995A6G4WZPCY9J Implement and gate allocation-bounded GPT generation: Implemented one Vocab-sized logits slice reused by StepNLastInto and every StepInto call while retaining the final cache-advancing decode. Exact Metal token parity and bit-identical continuation logits passed. GPT-2-small maxNew=8 measured 614784 B/op and 4 allocs/op versus 2253184 B/op and 12 allocs/op, removing exactly 1638400 bytes and 8 allocations. Seven order-reversed 50x campaigns ranged 0. [body truncated at tombstone retention cap]
 - ADR-01M0SZNGW5ER893A6C9QN52QC3 Reuse caller-owned logits inside GPT generation without changing cache advancement: Adopted a Generate-local caller-owned logits buffer and retained the final StepInto call. Rejected skipping the final decode because continuation cache state is observable; exact subsequent-step logits match the historical Step-based control.
 - P-01M0SZN5AHE0TS0198C0CVC36N Reuse one GPT generation logits buffer across tokens: Completed GPT generation result-buffer reuse. The promoted path removes 1638400 B/op and 8 allocs/op at GPT-2-small maxNew=8 with median 1.004 throughput, exact token/cache parity, green local gates, and perfscan issue #895 capturing the generalized loop-use-site opportunity.
+- T-01M0T2W1RQE8NBV10BEFP591PH Implement and validate shared Decoder generation logits reuse: Implemented in 9407cc45. Decoder.Generate now allocates one local Vocab F32 slice for host sampling and reuses StepNLastInto/StepInto; the device stepInto branch is unchanged. M2 Vocab 32000 maxNew 8 measured 4 versus 12 allocs/op and a nominal exact 1048576 allocator-byte saving. Seven alternating 50-pair ratios were 1.010, 1.013, 1.053, 1.011, 1.007, 1.010, and 0.974, median 1.010. Exact tokens, [body truncated at tombstone retention cap]
+- ADR-01M0T2VZJVER0T9BKZZM90YDKD Keep shared-decoder generation reuse local to the host-sampling path: Adopted: caller-owned local reuse is allocation-efficient without adding decoder-global result state. The existing device-resident sampler path remains separate and unchanged; the historical allocation control exists only for same-binary attribution.
+- P-01M0T2VE58FN89Y5S53G5P51MP Reuse one shared-decoder generation logits buffer across host-sampled tokens: Delivered shared-decoder generation result reuse with exact semantic parity and a passing M2 leverage gate. Standing behavior, cache, resident-device, and performance requirements were merged into the llamagpu specification; implementation and benchmarks are ready for PR review.
 
 ## METAL-F16-KV-CACHE-001
 The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at exactly 2 bytes per element while NewQuant retains f32 storage and all non-Metal constructors remain unchanged.
@@ -225,3 +228,15 @@ WHEN optimized Generate returns N tokens after a prompt of P tokens, the GPTDeco
 
 ## M2-GPT-GENERATE-ALLOCATION-PERF-001-001 {applies: go:llamagpu.BenchmarkGPTGenerateAllocationsMetal,go:llamagpu.BenchmarkGPTGeneratePairedMetal}
 WHEN the generation reuse slice is promoted, the GPT-2-small M2 maxNew 8 benchmark gate SHALL require 1638400 fewer B/op, 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
+
+## DECODER-GENERATE-LOGITS-REUSE-001
+WHEN Decoder.Generate emits N tokens through host sampling, the shared Decoder SHALL allocate exactly 1 Vocab F32 logits slice and reuse it for prefill and every decode step.
+
+## DECODER-GENERATE-CACHE-PARITY-001
+WHEN optimized Decoder.Generate returns N tokens after a prompt of P tokens, the shared Decoder SHALL retain exactly 1 populated cache row per prompt or generated token including 1 row for the final generated token.
+
+## DECODER-GENERATE-DEVICE-SAMPLING-001
+WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab decode-logit host downloads after the first sampled token.
+
+## M2-DECODER-GENERATE-ALLOCATION-PERF-001
+WHEN the generation reuse slice is promoted on M2 at Vocab 32000 and maxNew 8, the shared Decoder benchmark gate SHALL require at least 1048576 fewer B/op, at least 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
