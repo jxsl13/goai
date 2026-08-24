@@ -170,7 +170,7 @@ WHEN the destination length equals len(tokens) times Vocab, the Decoder.StepNInt
 ## DECODER-STEPN-LAST-INTO-SEMANTICS-001-001 {applies: go:llamagpu.Decoder.StepNLastInto,go:llamagpu.Decoder.stepNInto}
 WHEN the destination length equals Vocab, the Decoder.StepNLastInto SHALL advance exactly len(tokens) tokens and write exactly Vocab logits matching StepNLast.
 
-## DECODER-PREFILL-INTO-LENGTH-GUARD-001-001
+## DECODER-PREFILL-INTO-LENGTH-GUARD-001-001 {applies: go:llamagpu.Decoder.StepNInto,go:llamagpu.Decoder.StepNLastInto}
 WHEN the destination length differs from the method requirement, the Decoder.StepNInto or Decoder.StepNLastInto SHALL return an error and mutate exactly 0 cache rows and 0 recurrent states.
 
 ## DECODER-PREFILL-EMBED-STAGING-001-001
