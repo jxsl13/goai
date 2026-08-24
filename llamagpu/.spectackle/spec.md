@@ -166,3 +166,6 @@ WHEN a pooled Decoder recorder is freed, the Metal Decoder adapter SHALL release
 
 ## DECODER-STEPN-INTO-SEMANTICS-001-001
 WHEN the destination length equals len(tokens) times Vocab, the Decoder.StepNInto SHALL advance exactly len(tokens) tokens and write exactly len(tokens) times Vocab logits matching StepN.
+
+## DECODER-STEPN-LAST-INTO-SEMANTICS-001-001
+WHEN the destination length equals Vocab, the Decoder.StepNLastInto SHALL advance exactly len(tokens) tokens and write exactly Vocab logits matching StepNLast.
