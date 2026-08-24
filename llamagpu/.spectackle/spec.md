@@ -202,7 +202,7 @@ WHEN Step or prefill gathers token and positional embeddings, the GPTDecoder SHA
 ## GPT-EMBED-STAGING-LIFETIME-001-001 {applies: go:llamagpu.GPTDecoder.Release,go:llamagpu.GPTDecoder.batchEmbedHost}
 WHEN Release completes, the GPTDecoder SHALL retain exactly 0 host embedding staging elements.
 
-## GPT-METAL-RECORDER-POOL-SAFETY-001-001
+## GPT-METAL-RECORDER-POOL-SAFETY-001-001 {applies: go:llamagpu.NewGPT,go:llamagpu.metalGPTOps,go:llamagpu.pooledMRec.Free}
 WHEN a pooled recorder is freed, the Metal GPT decoder adapter SHALL release exactly 1 native command buffer before returning its Go wrapper to the 2-slot pool.
 
 ## M2-GPT-INTO-PERF-001-001
