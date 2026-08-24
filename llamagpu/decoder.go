@@ -348,6 +348,9 @@ type backendOps struct {
 	// ffn_gate|ffn_up can be column-fused into ONE GEMV (into the gu buffer) + one SwiGLUHalves op,
 	// instead of two GEMVs + a Binary SwiGLU. Set by the CUDA SwiGLU constructors; nil elsewhere.
 	fusedGateUp bool
+	// fusedF32QKV opts a backend into GPT's single-resident-weight QKV path. The recorder must
+	// implement f32QKVBandsRecorder so large prefills can address each output band without copies.
+	fusedF32QKV bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.

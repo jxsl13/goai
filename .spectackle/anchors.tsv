@@ -284,3 +284,16 @@ ARM64-EXACT-ABS-GO127-001	go:cpu.TestAbsF32Arm64ExactInPlace	backend/cpu/abs_f32
 ARM64-EXACT-ABS-GO126-001	go:cpu.absF32	backend/cpu/abs_f32_arm64.go	17-27	86e4ea8eaab0500f	1963dda8b3d2279c
 ARM64-EXACT-ABS-GO126-001	go:cpu.TestAbsF32Arm64ExactAllLengths	backend/cpu/abs_f32_arm64_test.go	10-50	8a86b7ce090023b1	1963dda8b3d2279c
 ARM64-EXACT-ABS-GO126-001	go:cpu.TestAbsF32Arm64ExactInPlace	backend/cpu/abs_f32_arm64_test.go	52-70	5a76ef6463a6e9f4	1963dda8b3d2279c
+METAL-GPT-QKV-OWNERSHIP-001	go:llamagpu.newGPTDecoder	llamagpu/gpt.go	60-149	6db6e312376bb3ad	3b53e62f0f6da893
+METAL-GPT-QKV-DECODE-001	go:llamagpu.GPTDecoder.Step	llamagpu/gpt.go	154-221	6c98ada0d2ccd3c5	52d9394c26942b5c
+METAL-GPT-QKV-PREFILL-001	go:llamagpu.mRec.F32QKVBands	llamagpu/llamagpu.go	48-55	15e8859b5aacac5e	6050ba69a8c6b953
+METAL-GPT-QKV-PREFILL-001	go:metal.Recorder.MatMulStridedB	backend/metal/metal.go	4905-4919	7d7477be08ec8f93	6050ba69a8c6b953
+PORTABLE-GPT-QKV-STORAGE-001	go:llamagpu.newGPTDecoder	llamagpu/gpt.go	60-149	6db6e312376bb3ad	2e93ae11c20e1219
+GPT-RESIDUAL-EPILOGUE-001	go:llamagpu.GPTDecoder.recordAttentionResidual	llamagpu/gpt.go	48-50	5fcbc63e28e1cae6	55d82a36fad8d102
+GPT-RESIDUAL-EPILOGUE-001	go:llamagpu.GPTDecoder.recordFFNResidual	llamagpu/gpt.go	52-57	e9ce6f807937d14a	55d82a36fad8d102
+M2-GPT-DISPATCH-FUSION-PERF-001	go:llamagpu_test.BenchmarkGPTDecodeStepMetal	llamagpu/gpt2_scale_test.go	91-133	909853ca525cf3a1	6d8e68a7c6b4a412
+M2-GPT-DISPATCH-FUSION-PERF-001	go:llamagpu_test.TestGPT2ScalePipeline	llamagpu/gpt2_scale_test.go	21-86	1963e87225b10d56	6d8e68a7c6b4a412
+GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.newGPTDecoder	llamagpu/gpt.go	59-146	6db6e312376bb3ad	7467d40a5f77c2d7
+GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.GPTDecoder.recordAttentionResidual	llamagpu/gpt.go	47-49	5fcbc63e28e1cae6	7467d40a5f77c2d7
+GPT-RESIDUAL-DEAD-SCRATCH-001	go:llamagpu.GPTDecoder.recordFFNResidual	llamagpu/gpt.go	51-56	e9ce6f807937d14a	7467d40a5f77c2d7
+M2-GPT-DISPATCH-CUMULATIVE-PERF-001	go:llamagpu_test.BenchmarkGPTDecodeStepMetal	llamagpu/gpt2_scale_test.go	91-133	909853ca525cf3a1	dfd025755227ec21

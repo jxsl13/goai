@@ -4291,6 +4291,32 @@ int mtl_recorder_matmul(void* rec, void* ah, void* bh, void* ch, int M, int K, i
     return 0;
 }
 
+// mtl_recorder_matmul_strided_b encodes C=A*B where B is a column band inside a wider
+// row-major matrix. bStride is the full B row width and bOffset selects the first column.
+// MPSMatrix views the band without copying or retaining a duplicate device weight.
+int mtl_recorder_matmul_strided_b(void* rec, void* ah, void* bh, void* ch,
+                                  int M, int K, int N, int bStride, int bOffset) {
+    if (rec == NULL || ah == NULL || bh == NULL || ch == NULL) return -2;
+    if (ensure_init() != 0) return -1;
+    recorder_end_active_compute_encoder(rec);
+    id<MTLCommandBuffer> cmd = recorder_command_buffer(rec);
+    id<MTLBuffer> aBuf = (__bridge id<MTLBuffer>)ah;
+    id<MTLBuffer> bBuf = (__bridge id<MTLBuffer>)bh;
+    id<MTLBuffer> cBuf = (__bridge id<MTLBuffer>)ch;
+    MPSMatrixDescriptor* aDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:K rowBytes:(size_t)K*sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor* bDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:K columns:N rowBytes:(size_t)bStride*sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrixDescriptor* cDesc = [MPSMatrixDescriptor matrixDescriptorWithRows:M columns:N rowBytes:(size_t)N*sizeof(float) dataType:MPSDataTypeFloat32];
+    MPSMatrix* mA = [[MPSMatrix alloc] initWithBuffer:aBuf descriptor:aDesc];
+    MPSMatrix* mB = [[MPSMatrix alloc] initWithBuffer:bBuf offset:(NSUInteger)bOffset*sizeof(float) descriptor:bDesc];
+    MPSMatrix* mC = [[MPSMatrix alloc] initWithBuffer:cBuf descriptor:cDesc];
+    MPSMatrixMultiplication* mm = [[MPSMatrixMultiplication alloc]
+        initWithDevice:gDevice transposeLeft:NO transposeRight:NO
+        resultRows:M resultColumns:N interiorColumns:K alpha:1.0 beta:0.0];
+    [mm encodeToCommandBuffer:cmd leftMatrix:mA rightMatrix:mB resultMatrix:mC];
+    recorder_note_mps_omission(rec);
+    return 0;
+}
+
 // mtl_probe_gemm_cold times an MPS GEMM with ROTATING weight buffers, so no weight stays
 // cache-resident between iterations — the regime a real forward pass runs in, where 154 distinct
 // weights stream past. The single-buffer probe above is warm and reports substantially higher
