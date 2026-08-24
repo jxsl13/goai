@@ -213,6 +213,48 @@ func randGPTf32(tb testing.TB, cfg nlp.GPTConfig, ffn int) *nlp.GPT {
 	return model
 }
 
+func warmGPTDecodeCache(tb testing.TB, model *nlp.GPT, ctx *backend.Context, vocab, tokens int) *nlp.KVCache {
+	tb.Helper()
+	cache := model.NewCache()
+	for range tokens {
+		pos := cache.NextPos()
+		if _, err := model.DecodeStep(ctx, cache, pos%vocab, pos); err != nil {
+			tb.Fatal(err)
+		}
+	}
+	return cache
+}
+
+func TestGPTDecodeBenchmarkCacheIsolation(t *testing.T) {
+	cfg := nlp.GPTConfig{Vocab: 32, Ctx: 16, Dim: 16, Heads: 4, Layers: 1, Eps: 1e-5}
+	model := randGPTf32(t, cfg, 4*cfg.Dim)
+	cpu, ok := backend.Get(backend.CPU)
+	if !ok {
+		t.Fatal("cpu backend unavailable")
+	}
+	ctx := backend.NewContext().WithBackend(cpu)
+
+	first := warmGPTDecodeCache(t, model, ctx, cfg.Vocab, 8)
+	second := warmGPTDecodeCache(t, model, ctx, cfg.Vocab, 8)
+	if got := first.NextPos(); got != 8 {
+		t.Fatalf("first warmed cache next position = %d, want 8", got)
+	}
+	if got := second.NextPos(); got != 8 {
+		t.Fatalf("second warmed cache next position = %d, want 8", got)
+	}
+
+	pos := first.NextPos()
+	if _, err := model.DecodeStep(ctx, first, pos%cfg.Vocab, pos); err != nil {
+		t.Fatal(err)
+	}
+	if got := first.NextPos(); got != 9 {
+		t.Fatalf("advanced cache next position = %d, want 9", got)
+	}
+	if got := second.NextPos(); got != 8 {
+		t.Fatalf("independent cache next position = %d, want 8", got)
+	}
+}
+
 // BenchmarkGPTForward times a full transformer forward pass — the REAL workload
 // (§C3/§B10: optimize against a model, not a micro-benchmark) — on cpu vs metal.
 // Reports tokens/s. A realistic small-GPT config exercises embed→(LN→attention→
@@ -312,22 +354,19 @@ func BenchmarkGPTDecode(b *testing.B) {
 			continue
 		}
 		ctx := backend.NewContext().WithBackend(be)
-		cache := model.NewCache()
-		for p := 0; p < 8; p++ { // warm the pipelines + prefill a short context
-			if _, err := model.DecodeStep(ctx, cache, p%cfg.Vocab, p); err != nil {
-				b.Fatal(err)
-			}
-		}
 		b.Run(string(name), func(b *testing.B) {
-			pos := 8
+			cache := warmGPTDecodeCache(b, model, ctx, cfg.Vocab, 8)
+			b.ResetTimer()
 			for range b.N {
+				pos := cache.NextPos()
+				if pos >= cfg.Ctx { // reset and rewarm outside the timed decode boundary
+					b.StopTimer()
+					cache = warmGPTDecodeCache(b, model, ctx, cfg.Vocab, 8)
+					pos = cache.NextPos()
+					b.StartTimer()
+				}
 				if _, err := model.DecodeStep(ctx, cache, pos%cfg.Vocab, pos); err != nil {
 					b.Fatal(err)
-				}
-				pos++
-				if pos >= cfg.Ctx { // reset the cache before it overflows the context
-					cache = model.NewCache()
-					pos = 0
 				}
 			}
 			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
