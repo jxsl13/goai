@@ -157,3 +157,6 @@ WHEN single-token stepping gathers a token embedding, the shared Decoder SHALL r
 
 ## M2-DECODER-STEP-INTO-PERF-001
 WHEN StepInto is benchmarked against Step on M2 at the tracked Llama boundary, the promotion gate SHALL require 0 allocations per operation, at least 8000 fewer B/op, and at least 0.97 times Step throughput.
+
+## DECODER-METAL-RECORDER-POOL-SAFETY-001
+WHEN a pooled Decoder recorder is freed, the Metal Decoder adapter SHALL release exactly 1 native Metal command buffer before returning its Go wrapper to the 2-slot pool.
