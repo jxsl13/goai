@@ -151,3 +151,6 @@ WHEN the destination length equals Vocab, the Decoder.StepInto SHALL advance exa
 
 ## DECODER-STEP-INTO-LENGTH-GUARD-001
 WHEN the destination length differs from Vocab, the Decoder.StepInto SHALL return an error before 0 cache rows or recurrent states are mutated.
+
+## DECODER-EMBED-STAGING-001
+WHEN single-token stepping gathers a token embedding, the shared Decoder SHALL reuse exactly 1 Dim-element host row and allocate 0 per-token embedding objects.
