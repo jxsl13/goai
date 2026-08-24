@@ -40,3 +40,6 @@ WHILE a backend has not opted into fused F32 QKV recording, the GPT decoder SHAL
 
 ## GPT-RESIDUAL-EPILOGUE-001 {applies: go:llamagpu.GPTDecoder.recordAttentionResidual,go:llamagpu.GPTDecoder.recordFFNResidual}
 WHEN a GPT attention-output or FFN-down projection updates the running residual, the decoder recorder SHALL use the projection recordAdd epilogue and issue 0 standalone residual Binary-add dispatches.
+
+## M2-GPT-DISPATCH-FUSION-PERF-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal,go:llamagpu_test.TestGPT2ScalePipeline}
+WHEN a GPT dispatch-fusion slice is promoted on M2 Pro at GPT-2-small geometry, the benchmark gate SHALL require at least 1.03 times paired median speedup, 21 of 21 non-regressing pairs, and exact greedy-token equality over 256 generated tokens.
