@@ -3700,29 +3700,6 @@ targets: format/gguf/q6k.go, format/gguf/dot_q6k_scalar.go, format/gguf/dot_q6k_
 
 Add an ARM64-only fused Q6_K block dot that assembles signed q6 values, applies the exact d times int8 sub-block scale ordering, multiplies contiguous F32 activations, and reduces vector partials. Route only the Q6_K M1 selector through it. Add direct kernel parity and dispatch tests plus permanent Q6_K leaf and production-shape benchmarks. Compare at least ten retained samples after discarding warmup against the precompiled merged-main control at leaf, N64/K1024, N4096/K1024, and QuantMamba2 decode. Reject on scalar-relative error above 1e-4, allocation regression, representative QMatMul speedup below 1.5x, or statistically insignificant Mamba2 improvement. Record raw evidence and update benchmark documentation.
 
-## ADR-01M0MMYANQFBNVT5BDZ667SCTC Share exact IQ2 Metal codebook infrastructure while gating formats independently
-kind: adr
-state: approved
-created: 2026-08-22
-grilled: 2026-08-22 open=0
-targets: backend/metal, llamagpu, nlp/quant_llama_gguf.go, nlp/quant_phi3_gguf.go
-
-## Context
-IQ2_XXS and IQ2_XS are distinct GGUF wire formats, but both decode each 8-value group through a fixed E8-derived grid and the same seven-bit sign parity scheme. Their M2 decode kernels need persistent immutable lookup data, identical one-SIMD-group-per-output scheduling, and the same direct/resident/recorder lifecycle. Duplicating residency and initialization would enlarge the correctness surface and initialization cost.
-
-## Decision
-Use one IQ2-family Metal infrastructure with separate immutable codebook buffers, type-specific block parsers, independent cooperative toggles, and independent benchmark verdicts.
-
-The Go side reconstructs both codebooks from the public exact GGUF decoder rather than duplicating literal tables. The C/Objective-C bridge owns process-lifetime Metal buffers. Every direct, resident, and recorder path calls the same readiness guard and the same per-type cooperative predicate. The scalar kernel remains callable as an in-process control.
-
-Model-loader admission is additive for exact GGUF wire types 16 and 17. It does not imply generic synchronous host offload: the fused ARM64 CPU route remains the fallback unless every required host cell clears the 1.10x gate.
-
-## Consequences
-Shared algebra and lifecycle have one implementation, while a regression or weak result in either wire format cannot promote the other. Persistent lookup residency removes repeated uploads from the hot path. The design extends naturally to IQ2_S only after its different block structure receives its own measured proposal.
-
-## Alternatives rejected
-Duplicated per-format residency was rejected because it repeats initialization and dispatch invariants. Literal shader codebooks were rejected because they create a second numerical truth source. A single family-wide promotion flag was rejected because one format could hide a losing cell in the other.
-
 ## ADR-01M09M0XT7FMX8SMS79DKGRR3D Which execution boundary may combine M2 gate and up projections?
 kind: adr
 state: done
