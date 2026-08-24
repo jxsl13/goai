@@ -207,13 +207,3 @@ grilled: 2026-08-24 open=1
 targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.StepN, go:llamagpu.GPTDecoder.StepNLast, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go, llamagpu/gpt2_scale_test.go, llamagpu/example_test.go
 
 Apple M2 Pro current main at GPT-2-small geometry measures public Step at 210992-210994 B/op and 4 allocs/op, and 16-token StepNLast at 352304-352312 B/op and 35 allocs/op. Add caller-owned StepInto, StepNInto, and StepNLastInto; replace token/position Slice-Cast embedding objects with reusable exact host rows; retain batched host staging at observed high water; and give NewGPT the bounded Metal recorder-wrapper pool already validated by Decoder. Preserve allocating wrappers and exact logits across backends. Promote only if warmed M2 StepInto and StepNLastInto reach 0 allocs/op, wrappers retain only their result allocation, exact parity holds, and paired throughput remains at least 0.97 times current main.
-
-## ADR-01M0SXS636FJBA7HAYV1199C07 Use caller buffers, reusable embedding staging, and bounded recorder wrappers for GPT
-kind: adr
-state: active
-created: 2026-08-24
-parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go
-
-Expose StepInto, StepNInto, and StepNLastInto while retaining Step, StepN, and StepNLast as allocating wrappers over one execution graph. Store one Dim host row and one exact high-water k-times-Dim host slice on GPTDecoder; fill token and learned-position embeddings directly with embedRowInto and clear both on Release. For Metal NewGPT, use the validated decoder-local two-wrapper mRecPool while creating a fresh one-shot native command buffer per acquisition. Reject sync.Pool because ownership is decoder-local and bounded, eager Ctx-times-Dim host residency because peak prompts should not define construction cost, device-side gather because the existing synchronous host upload is not the measured bottleneck, and duplicate Into execution graphs because semantic drift would outweigh the allocation win.
