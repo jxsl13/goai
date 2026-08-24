@@ -214,6 +214,7 @@ kind: task
 state: draft
 created: 2026-08-24
 parent: P-01M0SW6KB4FSERYN7Y0CRXS0DJ
+grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, llamagpu/decoder.go, llamagpu/llama_scale_bench_test.go, llamagpu/example_test.go
 
 Add StepNInto and StepNLastInto with exact pre-mutation destination validation. Retain a Decoder-owned high-water embedding staging slice, route recurrent rows through StepInto, download nonrecurrent logits directly into caller storage, preserve allocating wrappers and exact outputs, clear retained staging on Release, and add public examples plus cross-architecture tests. Gate warmed M2 StepNLastInto at zero allocations, reduce StepNLast by at least 32768 B/op for 16x512 prefill, preserve at least 0.97x baseline throughput, and record any generalizable finding in perfscan.
