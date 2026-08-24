@@ -360,6 +360,9 @@ type backendOps struct {
 	// eagerFullGPTScratch retains the historical max-context GPT activation workspace for
 	// same-binary benchmarks. Production constructors keep one row and grow prefill scratch lazily.
 	eagerFullGPTScratch bool
+	// eagerDecoderResidualScratch retains the historical Decoder ao/mo buffers for same-binary
+	// benchmarks. Production F32 pre-norm paths omit buffers their recordAdd epilogues ignore.
+	eagerDecoderResidualScratch bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -1241,6 +1244,22 @@ func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) erro
 	return r.RoPEPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.half, pos, d.posDiv)
 }
 
+// allocResidualScratch allocates projection-output storage only for paths that can read it. F32
+// recordAdd writes directly into dx and ignores its scratch argument, so ordinary pre-norm dense
+// decoders keep non-nil placeholder slots without retaining two max-context device buffers.
+func (d *Decoder) allocResidualScratch(mk func(data []float32) *bufSlot, rows int) {
+	d.ao, d.mo = &bufSlot{}, &bufSlot{}
+	required := d.ops.eagerDecoderResidualScratch || len(d.qweights) > 0 || d.postNorm || d.sandwich
+	if required {
+		d.ao = mk(make([]float32, rows*d.d))
+		d.mo = mk(make([]float32, rows*d.d))
+		return
+	}
+	if d.moe {
+		d.mo = mk(make([]float32, rows*d.d))
+	}
+}
+
 // allocScratch uploads the RoPE frequencies and allocates the per-step scratch buffers. They are
 // sized for up to maxLen rows so StepN can process a whole prompt (or a speculative draft window)
 // in one recorded step (§T418) — a few MB at typical configs.
@@ -1255,13 +1274,12 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	d.v_ = mk(make([]float32, c*d.kvDim))
 	d.qkv = mk(make([]float32, c*(d.qDim+2*d.kvDim)))
 	d.attn = mk(make([]float32, c*d.qDim))
-	d.ao = mk(make([]float32, c*d.d))
+	d.allocResidualScratch(mk, c)
 	d.gate = mk(make([]float32, c*d.hidden))
 	d.up = mk(make([]float32, c*d.hidden))
 	if d.ops.fusedGateUp {
 		d.gu = mk(make([]float32, c*2*d.hidden)) // fused gate|up GEMV output for the SwiGLUHalves path
 	}
-	d.mo = mk(make([]float32, c*d.d))
 	d.logitsRows = 1
 	if d.ops.eagerFullLogits {
 		d.logitsRows = c
