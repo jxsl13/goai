@@ -28,8 +28,9 @@ METHOD NOTE: capture the golden output bits before touching anything and diff af
 
 ## T-01KYJREH8QF2HTHB9KC6S8NBJ0 Remove the per-element indirect call and bounds checks from the elementwise kernels
 kind: task
-state: draft
+state: active
 created: 2026-07-27
+grilled: 2026-08-24 open=0
 
 SITE: backend/ref/elementwise.go:17 unaryKernel (loops :35-38, :42-45) and :57 binaryKernel (loops :78-81, :86-89).
 
