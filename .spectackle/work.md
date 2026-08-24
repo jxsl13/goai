@@ -4006,12 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## P-01M0RRS336FYBT4DC3PJA1WSKG Compose the ViT patch-projection sequence boundary
-kind: proposal
-state: done
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:vision.ViT.Forward, go:metal.layerNormSequenceClassifierF32, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref
-
-Consumes R-01M0RRGS0YEQ4. Replace the M2 Metal ViT batched patch projection, eight per-image class/position assembly chains, and their fragmented VJP with one typed operation. Input is prepatchified [B*N,K] data plus class [1,D], position [N+1,D], projection [K,D], and bias [D]; output is packed [B*(N+1),D]. Provide a portable exact fallback and a cached F32 MPSGraph forward/backward. Preserve the current composite on backends without both directions. Promotion requires output/parameter-gradient/input-immutability parity, supported/unsupported scope tests, boundary median >=1.20x, complete-step median >=1.05x in every order-controlled campaign, and every aligned complete-step pair >=1.03x.
