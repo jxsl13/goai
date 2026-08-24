@@ -96,7 +96,7 @@ WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecod
 
 Rationale: Keep grouped workspace ownership transactional and backend-independent.
 
-## GPT2-ACTIVATION-RESIDENCY-PERF-001
+## GPT2-ACTIVATION-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkGPTDecoderScratchResidency}
 WHEN the same-binary GPT-2-small activation-residency benchmark compares lazy and eager controls, the promotion gate SHALL require 34000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times Step and StepNLast throughput.
 
 Rationale: Validate retained-memory leverage without moving cost into dominant inference paths.
