@@ -34,3 +34,12 @@ grilled: 2026-08-21 open=0
 targets: backend/cpu/gemm_amx_bench_test.go
 
 Add benchmark-only cells for score shapes 128x64x128 and 512x64x512 plus output shapes 128x128x64 and 512x512x64 to the existing ADR-0027 path harness. Measure NEON and Accelerate in alternating count-seven physical-M2 campaigns from one exact binary. Advance to stride-aware binding and full MHA only if Accelerate is at least 1.35x faster in every head GEMM cell, providing margin for per-head cgo calls and causal overcompute; otherwise reject the proposal without production changes.
+
+## P-01M0TYHVNWF91A29YTTFVS98ZT Interleave exact CPU MoECombine output accumulators
+kind: proposal
+state: approved
+created: 2026-08-24
+grilled: 2026-08-24 open=0
+targets: go:cpu.moeCombineKernelCPU, backend/cpu/moe_combine.go, backend/cpu/moe_combine_bench_test.go
+
+Optimize the production F64 and F32 OpMoECombine output loops on Apple M2 by computing multiple adjacent output columns concurrently while preserving the exact ascending expert reduction order for every element. The transform must remain pure Go, preserve byte identity against backend/ref for zero and positive denominators, keep allocation behavior non-regressing, and retain the existing generic tail and exotic fallback. Acceptance requires a deliberately mutation-proven exactness gate, compiler/disassembly evidence that independent accumulator chains are emitted without changing arithmetic, and interleaved same-machine A/B medians for representative Mixtral E=8 and high-expert shapes with an unaffected control. Ship only statistically credible wins; otherwise reject with measurements. The external perfscan PS4008 finding is the discovery mechanism, and any generalizable measured lesson must be reported to github.com/jxsl13/perfscan.
