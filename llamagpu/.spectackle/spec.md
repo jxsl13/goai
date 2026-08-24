@@ -236,7 +236,16 @@ WHEN Decoder.Generate emits N tokens through host sampling, the shared Decoder S
 WHEN optimized Decoder.Generate returns N tokens after a prompt of P tokens, the shared Decoder SHALL retain exactly 1 populated cache row per prompt or generated token including 1 row for the final generated token.
 
 ## DECODER-GENERATE-DEVICE-SAMPLING-001
-WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab decode-logit host downloads after the first sampled token.
+WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab logit host downloads across prefill and every decode step.
 
 ## M2-DECODER-GENERATE-ALLOCATION-PERF-001
 WHEN the generation reuse slice is promoted on M2 at Vocab 32000 and maxNew 8, the shared Decoder benchmark gate SHALL require at least 1048576 fewer B/op, at least 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
+
+## DECODER-GENERATE-RESIDENT-PREFILL-FALLBACK-001
+WHEN Decoder.Generate cannot select an eligible device-resident sampler or a pure Top-P nucleus overflows its device candidates, the shared Decoder SHALL retain the established full-Vocab host sampling path and exact token semantics.
+
+## DECODER-GENERATE-RECURRENT-RESIDENT-PREFILL-001
+WHEN eligible device sampling prefills a P-token recurrent Decoder, the shared Decoder SHALL execute exactly P ordered state updates, retain final logits on device, and perform 0 full-Vocab host downloads.
+
+## M2-DECODER-RESIDENT-FIRST-TOKEN-PERF-001
+WHEN resident first-token sampling is promoted on M2 at Vocab 32000, prompt 16, and maxNew 1, the shared Decoder benchmark gate SHALL require 390000 fewer B/op, 2 fewer allocs/op, and 1.03x median control throughput.
