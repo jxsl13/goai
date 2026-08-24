@@ -185,3 +185,4 @@
 {"t":"2026-08-24T11:23:05Z","eid":"f92c01e0297e68b5","ag":"ag-23c1","ev":"move","id":"T-01M0SQW7VZEHBV68SWXCK966JB","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T11:23:08Z","eid":"56f420d83f8dc5aa","ag":"ag-20b4","ev":"move","id":"P-01M0SQMKR8FEBV8REH5J4G8N4B","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T11:31:07Z","eid":"ae20d142604297ac","ag":"ag-8c23","ev":"create","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","k":"proposal","ti":"Make Decoder activation workspaces demand-resident","dir":"llamagpu"}
+{"t":"2026-08-24T11:31:22Z","eid":"6389cff3aaa351b4","ag":"ag-87d5","ev":"move","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","dir":"llamagpu","fr":"draft","to":"active","note":"Standing user authorization directs continuous spec-driven performance work; activate after impact and rejection audit."}
