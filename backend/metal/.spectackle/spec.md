@@ -560,3 +560,6 @@ WHERE three fresh-process order-alternated count-seven campaigns at F32 B8 N64 K
 
 ## METAL-VIT-LOSS-GRAD-NUMERIC-001-001
 WHEN the supported objective is compared with the portable tape control, the Metal ViT loss-and-gradient capability SHALL match loss and every ViT parameter gradient within established F32 tolerance while mutating zero input or parameter elements.
+
+## METAL-VIT-LOSS-GRAD-STRUCTURE-001-001
+WHERE contiguous offset-zero F32 inputs with supported uniform ViT geometry, the Metal ViT loss-and-gradient capability SHALL execute patch sequence, every block, classifier, mean cross-entropy, and all parameter gradients in exactly one bounded geometry-keyed cached MPSGraph submission.
