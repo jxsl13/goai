@@ -4023,15 +4023,6 @@ option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
 
-## ADR-01M0S8XZMEFC98ZF81GACDFEGE Which boundary should generalize resident AdamW across GPT and ViT?
-kind: adr
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp/gpt.go, vision/vit.go
-
-Context: GPT already proves a resident objective-plus-update session, while R-01M0S8MAAVFDS shows the ViT host materialization boundary is promotion-sized. Option A duplicates GPT-named optimizer attrs, session protocol, Metal kernel, and update encoder for ViT; it is locally simple but creates model-specific optimizer infrastructure. Option B keeps model-specific public session facades and objective graphs, while introducing source-compatible backend AdamW attrs/session aliases plus one shared native F32 AdamW pipeline and update encoder; model input validation, parameter order, and graph cache remain specialized. Option C builds a generic graph-or-IR training session now; it has the highest future leverage but is not justified by two fixed objective graphs and would widen correctness risk beyond this measured cell. Decision: choose Option B. It removes duplicate optimizer machinery without forcing an unmeasured IR redesign, preserves the merged GPT API and performance semantics, and lets a future third model prove whether a higher-level resident training engine is warranted.
-
 ## ADR-01M0S9054HEP395N4TJ5MHKFYN Which boundary should generalize resident AdamW across GPT and ViT?
 kind: adr
 state: done
