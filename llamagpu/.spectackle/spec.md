@@ -186,3 +186,6 @@ WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim
 
 ## GPT-STEP-INTO-SEMANTICS-001-001
 WHEN the destination length equals Vocab, the GPTDecoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
+
+## GPT-STEPN-INTO-SEMANTICS-001-001
+WHEN the destination length equals len(tokens) times Vocab, the GPTDecoder.StepNInto SHALL advance exactly len(tokens) tokens and write exactly len(tokens) times Vocab logits matching StepN.
