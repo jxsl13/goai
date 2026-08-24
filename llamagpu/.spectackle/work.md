@@ -126,3 +126,11 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go, llamagpu/medusa.go, llamagpu/medusa_test.go, llamagpu/example_test.go
 
 Update GPT StepHidden and StepNHidden so hidden-state downloads read the resident or lazy workspace selected by the completed Step call. Preserve Llama hidden readback unchanged and validate Medusa all-reject, accept-all, and GPT examples.
+
+## P-01M0SQMKR8FEBV8REH5J4G8N4B Elide dead max-context residual projection scratch
+kind: proposal
+state: draft
+created: 2026-08-24
+targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
+
+Standard pre-norm F32 Decoder projections fuse their residual add and ignore ao/mo scratch, yet allocScratch retains both as Ctx times Dim buffers. Allocate placeholders for proven scratch-free F32 paths while retaining exact historical storage for quantized fallbacks, post-norm, sandwich, and MoE. Add an internal eager control, exact path tests, focused allocation evidence, and M2 Step/StepNLast non-regression gates. TinyLlama should remove 33554432 resident bytes.

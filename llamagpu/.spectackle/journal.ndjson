@@ -152,3 +152,4 @@
 {"t":"2026-08-24T11:07:06Z","eid":"be07550f3bf41d26","ag":"ag-1953","ev":"move","id":"T-01M0SPF62VEYQRE53F1G5G11X3","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T11:07:10Z","eid":"8eeba10e9249edef","ag":"ag-5818","ev":"move","id":"T-01M0SPRH8NEV49Q636WM7Y1PQA","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T11:07:13Z","eid":"8c8c1fea71decb32","ag":"ag-5deb","ev":"move","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","fr":"active","to":"done"}
+{"t":"2026-08-24T11:14:08Z","eid":"9fe084948681c609","ag":"ag-7047","ev":"create","id":"P-01M0SQMKR8FEBV8REH5J4G8N4B","k":"proposal","ti":"Elide dead max-context residual projection scratch","dir":"llamagpu"}
