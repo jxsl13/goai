@@ -4018,7 +4018,7 @@ Consumes R-01M0RRGS0YEQ4. Replace the M2 Metal ViT batched patch projection, eig
 
 ## T-01M0RRT1J6FSHREQ1W64YPRSC9 Implement and gate the fused ViT patch sequence
 kind: task
-state: active
+state: done
 created: 2026-08-24
 parent: P-01M0RRS336FYBT4DC3PJA1WSKG
 grilled: 2026-08-24 open=11
