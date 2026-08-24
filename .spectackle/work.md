@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## P-01M0RRS336FYBT4DC3PJA1WSKG Compose the ViT patch-projection sequence boundary
 kind: proposal
-state: active
+state: done
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: go:vision.ViT.Forward, go:metal.layerNormSequenceClassifierF32, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref
