@@ -4015,13 +4015,3 @@ grilled: 2026-08-24 open=0
 targets: go:vision.ViT.Forward, go:metal.layerNormSequenceClassifierF32, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref
 
 Consumes R-01M0RRGS0YEQ4. Replace the M2 Metal ViT batched patch projection, eight per-image class/position assembly chains, and their fragmented VJP with one typed operation. Input is prepatchified [B*N,K] data plus class [1,D], position [N+1,D], projection [K,D], and bias [D]; output is packed [B*(N+1),D]. Provide a portable exact fallback and a cached F32 MPSGraph forward/backward. Preserve the current composite on backends without both directions. Promotion requires output/parameter-gradient/input-immutability parity, supported/unsupported scope tests, boundary median >=1.20x, complete-step median >=1.05x in every order-controlled campaign, and every aligned complete-step pair >=1.03x.
-
-## T-01M0RRT1J6FSHREQ1W64YPRSC9 Implement and gate the fused ViT patch sequence
-kind: task
-state: done
-created: 2026-08-24
-parent: P-01M0RRS336FYBT4DC3PJA1WSKG
-grilled: 2026-08-24 open=11
-targets: go:vision.ViT.Forward, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m
-
-Add the typed OpPatchEmbedSequence forward/backward contract, exact reference kernels and VJP, cached Metal F32 MPSGraph implementation, and conditional ViT routing. Freeze the M2 B8/C3/HW32/P4/D128/depth4/H4 gate from the proposal; benchmark in fresh order-reversed same-binary campaigns, retain raw evidence, run external perfscan from github.com/jxsl13/perfscan/perfscan with GOPROXY=direct, and revert executable changes if any gate fails.
