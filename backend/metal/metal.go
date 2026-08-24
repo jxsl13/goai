@@ -4686,6 +4686,24 @@ func (r *Recorder) Unary(x, o *DeviceBuffer, op int) error {
 	return nil
 }
 
+// BiasGELU records O[i,j] = GELU(X[i,j]+B[j]) over exactly rows*n active f32 elements.
+// X and O may alias; storage beyond the active prefix is left untouched.
+func (r *Recorder) BiasGELU(x, b, o *DeviceBuffer, rows, n int) error {
+	if x == nil || b == nil || o == nil {
+		return fmt.Errorf("metal: Recorder bias-gelu requires non-nil buffers")
+	}
+	if rows <= 0 || n <= 0 || rows > x.n/n || rows > o.n/n || b.n < n ||
+		x.bytes != 4 || b.bytes != 4 || o.bytes != 4 {
+		return fmt.Errorf("metal: Recorder bias-gelu shape mismatch: x=%d o=%d b=%d rows=%d n=%d", x.n, o.n, b.n, rows, n)
+	}
+	rc := C.mtl_recorder_bias_gelu(r.handle, x.handle, b.handle, o.handle,
+		C.int(rows), C.int(n), r.takeBarrier())
+	if rc != 0 {
+		return fmt.Errorf("metal: Recorder bias-gelu failed (%d)", int(rc))
+	}
+	return nil
+}
+
 // Blit records a copy of n f32 elements from src[srcOff:] to dst[dstOff:] into the command
 // buffer (offsets and count in f32 elements). This is the KV-cache append: copy the new
 // token's k/v row into cache[cacheLen] each decode step, staying device-resident.

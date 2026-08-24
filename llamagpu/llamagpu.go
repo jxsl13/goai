@@ -7,6 +7,7 @@ package llamagpu
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/backend/metal"
@@ -38,6 +39,9 @@ func (m mRec) LayerNorm(x, g, bb, o buffer, rows, dim int, eps float32) error {
 }
 func (m mRec) AddBias(x, bb, o buffer, rows, n int) error {
 	return m.r.AddBias(mb(x), mb(bb), mb(o), rows, n)
+}
+func (m mRec) BiasGELU(x, bb, o buffer, rows, n int) error {
+	return m.r.BiasGELU(mb(x), mb(bb), mb(o), rows, n)
 }
 func (m mRec) MatMul(a, b, c buffer, mm, k, n int) error {
 	return m.r.MatMul(mb(a), mb(b), mb(c), mm, k, n)
@@ -224,8 +228,9 @@ func NewGPT(m *nlp.GPT) (*GPTDecoder, error) {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
 	return newGPTDecoder(m, backendOps{
-		name:        string(backend.Metal),
-		fusedF32QKV: true,
+		name:          string(backend.Metal),
+		fusedF32QKV:   true,
+		fusedBiasGELU: os.Getenv("GOAI_METAL_GPT_BIAS_GELU") != "0",
 		newBuffer: func(data []float32) (buffer, error) {
 			b, err := metal.NewDeviceBufferF32(data)
 			if err != nil {

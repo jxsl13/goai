@@ -1234,6 +1234,11 @@ static int ensure_unary(void) {
 static NSString* const kAddBiasSource =
     @"#include <metal_stdlib>\n"
      "using namespace metal;\n"
+     // Keep this polynomial instruction-for-instruction identical to unary GELU above.
+     "static inline float aserf(float x){ float ax=fabs(x);\n"
+     "  float t=1.0f/(1.0f+0.3275911f*ax);\n"
+     "  float y=1.0f-((((( 1.061405429f*t-1.453152027f)*t)+1.421413741f)*t-0.284496736f)*t+0.254829592f)*t*exp(-ax*ax);\n"
+     "  return x>=0.0f? y : -y; }\n"
      "kernel void addbias(device const float* X [[buffer(0)]],\n"
      "                    device const float* B [[buffer(1)]],\n"
      "                    device float* O [[buffer(2)]],\n"
@@ -1242,19 +1247,47 @@ static NSString* const kAddBiasSource =
      "  int rows=P[0], n=P[1];\n"
      "  if ((int)gid >= rows*n) return;\n"
      "  O[gid]=X[gid]+B[(int)gid%n];\n"
+     "}\n"
+     "kernel void bias_gelu(device const float* X [[buffer(0)]],\n"
+     "                      device const float* B [[buffer(1)]],\n"
+     "                      device float* O [[buffer(2)]],\n"
+     "                      constant int* P [[buffer(3)]],\n"
+     "                      uint gid [[thread_position_in_grid]]) {\n"
+     "  int rows=P[0], n=P[1];\n"
+     "  if ((int)gid >= rows*n) return;\n"
+     "  float v=X[gid]+B[(int)gid%n];\n"
+     "  O[gid]=0.5f*v*(1.0f+aserf(v*0.70710678118654752f));\n"
      "}\n";
 
+static id<MTLLibrary> gAddBiasLibrary = nil;
 static id<MTLComputePipelineState> gAddBias = nil;
+static id<MTLComputePipelineState> gBiasGELU = nil;
+
+static int ensure_addbias_library(void) {
+    if (gAddBiasLibrary != nil) return 0;
+    NSError* err = nil;
+    gAddBiasLibrary = [gDevice newLibraryWithSource:kAddBiasSource options:nil error:&err];
+    return gAddBiasLibrary != nil ? 0 : -6;
+}
 
 static int ensure_addbias(void) {
     if (gAddBias != nil) return 0;
+    if (ensure_addbias_library() != 0) return -6;
     NSError* err = nil;
-    id<MTLLibrary> lib = [gDevice newLibraryWithSource:kAddBiasSource options:nil error:&err];
-    if (lib == nil) return -6;
-    id<MTLFunction> fn = [lib newFunctionWithName:@"addbias"];
-    if (fn == nil) return -6;
-    gAddBias = [gDevice newComputePipelineStateWithFunction:fn error:&err];
+    id<MTLFunction> addBias = [gAddBiasLibrary newFunctionWithName:@"addbias"];
+    if (addBias == nil) return -6;
+    gAddBias = [gDevice newComputePipelineStateWithFunction:addBias error:&err];
     return gAddBias != nil ? 0 : -6;
+}
+
+static int ensure_bias_gelu(void) {
+    if (gBiasGELU != nil) return 0;
+    if (ensure_addbias_library() != 0) return -6;
+    NSError* err = nil;
+    id<MTLFunction> biasGELU = [gAddBiasLibrary newFunctionWithName:@"bias_gelu"];
+    if (biasGELU == nil) return -6;
+    gBiasGELU = [gDevice newComputePipelineStateWithFunction:biasGELU error:&err];
+    return gBiasGELU != nil ? 0 : -6;
 }
 
 int mtl_addbias_f32(const float* X, const float* B, float* O, int rows, int n) {
@@ -4087,6 +4120,31 @@ int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op, int barrier
     NSUInteger tg = gUnary.maxTotalThreadsPerThreadgroup;
     if ((NSUInteger)n < tg) tg = (NSUInteger)n;
     [enc dispatchThreads:MTLSizeMake(n,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
+    recorder_end_compute_encoder(rec, enc);
+    return 0;
+}
+
+// Fuses broadcast bias and the established exact erf-form GELU over the active rows*n prefix.
+// Capacity-sized scratch beyond that prefix is deliberately untouched.
+int mtl_recorder_bias_gelu(void* rec, void* xh, void* bh, void* oh,
+                           int rows, int n, int barrierBefore) {
+    if (rec == NULL || xh == NULL || bh == NULL || oh == NULL || rows <= 0 || n <= 0) return -2;
+    if (ensure_bias_gelu() != 0) return -6;
+    if (barrierBefore) recorder_memory_barrier(rec);
+    id<MTLBuffer> xb = (__bridge id<MTLBuffer>)xh;
+    id<MTLBuffer> bb = (__bridge id<MTLBuffer>)bh;
+    id<MTLBuffer> ob = (__bridge id<MTLBuffer>)oh;
+    int P[2] = {rows, n};
+    int total = rows * n;
+    id<MTLComputeCommandEncoder> enc = recorder_compute_encoder(rec, @"bias_gelu");
+    [enc setComputePipelineState:gBiasGELU];
+    [enc setBuffer:xb offset:0 atIndex:0];
+    [enc setBuffer:bb offset:0 atIndex:1];
+    [enc setBuffer:ob offset:0 atIndex:2];
+    [enc setBytes:P length:sizeof(P) atIndex:3];
+    NSUInteger tg = gBiasGELU.maxTotalThreadsPerThreadgroup;
+    if ((NSUInteger)total < tg) tg = (NSUInteger)total;
+    [enc dispatchThreads:MTLSizeMake(total,1,1) threadsPerThreadgroup:MTLSizeMake(tg,1,1)];
     recorder_end_compute_encoder(rec, enc);
     return 0;
 }

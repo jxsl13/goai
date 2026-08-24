@@ -319,6 +319,8 @@ typedef struct {
 } mtl_recorder_profile_snapshot_view;
 mtl_recorder_profile_snapshot_view mtl_recorder_profile_view(void* rec);
 int mtl_recorder_unary(void* rec, void* xh, void* oh, int n, int op, int barrierBefore);
+int mtl_recorder_bias_gelu(void* rec, void* xh, void* bh, void* oh,
+                           int rows, int n, int barrierBefore);
 int mtl_recorder_binary(void* rec, void* ah, void* bh, void* oh, int n, int op, int barrierBefore);
 int mtl_recorder_blit(void* rec, void* srcH, int srcOff, void* dstH, int dstOff, int nbytes);
 int mtl_recorder_copy2d(void* rec, void* srcH, int srcOff, int srcStride,
