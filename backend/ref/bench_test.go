@@ -37,6 +37,16 @@ func BenchmarkAddF32_4K(b *testing.B) {
 	benchOp(b, backend.OpAdd, nil, x, y)
 }
 
+func BenchmarkReLUF64_64K(b *testing.B) {
+	x := bench.RandF64(tensor.Shape{65536}, 3)
+	benchOp(b, backend.OpReLU, nil, x)
+}
+
+func BenchmarkTanhF64_64K(b *testing.B) {
+	x := bench.RandF64(tensor.Shape{65536}, 4)
+	benchOp(b, backend.OpTanh, nil, x)
+}
+
 func BenchmarkSumF64_64K(b *testing.B) {
 	x := bench.RandF64(tensor.Shape{65536}, 3)
 	benchOp(b, backend.OpSum, nil, x)
