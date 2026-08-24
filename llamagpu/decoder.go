@@ -492,8 +492,10 @@ type Decoder struct {
 	invHost                                                        []float32      // RoPE inverse freqs (uploaded by allocScratch)
 	embedHost                                                      []float32      // reusable single-token embedding upload row [d]
 	embedBatchHost                                                 []float32      // reusable batched embedding upload rows, retained at the high-water row count
-	all                                                            []buffer
-	qweights                                                       []qweight // resident quantized weights (quant decoder)
+	// eagerGenerateResultControl retains the historical per-token logits allocations for same-binary benchmarks.
+	eagerGenerateResultControl bool
+	all                        []buffer
+	qweights                   []qweight // resident quantized weights (quant decoder)
 }
 
 // bufSlot wraps a buffer so the struct fields read naturally while sharing the release list.
@@ -3883,12 +3885,18 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 	// prefill the whole prompt in ONE recorded step (§T418) — one dispatch round-trip instead of one
 	// per prompt token. lastOnly: generation samples only the post-prompt row, so the LM head projects
 	// and downloads that single row (not all len(prompt) rows) — a large saving for high-vocab models.
-	all, err := d.stepN(prompt, 0, true)
+	var logits []float32
+	var err error
+	if d.eagerGenerateResultControl {
+		logits, err = d.StepNLast(prompt, 0)
+	} else {
+		logits = make([]float32, d.v)
+		err = d.StepNLastInto(prompt, 0, logits)
+	}
 	if err != nil {
 		return nil, err
 	}
 	pos := len(prompt)
-	logits := all // last-row-only prefill returns exactly the post-prompt row's [vocab] logits
 	buf := make([]float64, d.v)
 	// Device-resident top-k sampling fast-path: for a penalty-free TopK sampler AND a logits buffer that
 	// can TopK (CUDA GPU reduction or Metal coherent-UMA selection), skip the whole-vocab host download.
@@ -3958,12 +3966,13 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 				return nil, e
 			}
 			logits = nil
-		} else {
-			l, e := d.Step(next, pos)
-			if e != nil {
-				return nil, e
+		} else if d.eagerGenerateResultControl {
+			logits, err = d.Step(next, pos)
+			if err != nil {
+				return nil, err
 			}
-			logits = l
+		} else if err = d.StepInto(next, pos, logits); err != nil {
+			return nil, err
 		}
 		pos++
 	}
