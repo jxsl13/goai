@@ -50,3 +50,13 @@ EXPECTED: Stage A alone 1.15-1.3x; A+B 1.3-1.6x (7.25ms -> about 4.5-5.5ms), whi
 BIT-IDENTITY BAR: Stages A and B change NOTHING about fitted-model output — same operations, same order, same values. Stage C WILL change fitted models in the last ulps of alpha/b and possibly by one support vector; the golden test TestSVMGoldenParity (classic/svm_test.go:107) allows 2e-3 on the decision function and +/-1 on SV count so it would likely still pass, but that makes it a BEHAVIOR CHANGE that must be declared as such, not an optimization. Neither stage touches the width guard, which lives solely in DecisionFunction (:559-562) with Predict deliberately routed through it (:572-577) — the flat-SV change must keep m.nFeat as the compared value and must NOT start deriving the width from the flat buffer's stride.
 
 NOTE ON PS4002: math.Exp at :179 is a scalar transcendental in a hot loop and a hand-vectorized sibling does exist (backend/cpu/vexp_arm64.s), but PS4002 will not fire — it is gated on the file already calling a SIMD kernel, and classic/svm.go calls none. Reporting the instance rather than proposing a rule change: the vexp path is f32-only and unexported so it is not directly reusable for []float64, and the exp count is irreducible, which is exactly why Stages A/B target everything AROUND the exp.
+
+## P-01M0TFVWHDFC7S7436BSCCVAA3 Batch RBF SVC exponentials through the existing ARM64 SIMD leaf
+kind: proposal
+state: approved
+created: 2026-08-24
+refs: R-01M05GX08VFEBB8YE9D19HBA7A
+grilled: 2026-08-24 open=0
+targets: go:classic.kernelCache.column, go:simd.ExpScaledF64
+
+M2 Pro current-main baseline 512fec03 for BenchmarkSVCFit/n4000_rbf at GOMAXPROCS=12 is 5.043733 ms/op median across seven order-alternated default-build samples; the SIMD build currently executes the same scalar math.Exp path. Research R-01M05GX08VFEB measured 176,000 RBF evaluations per fit and math.Exp at 27-32% of total time, while rejecting allocation slabs, distance-identity rewrites, and solver fan-out. Prototype a build-selected arm64+goexperiment.simd column path that preserves the existing squared-distance accumulation order, batches only the exp stage through go:simd.ExpScaledF64, and leaves the portable/default path unchanged. Gate promotion on ITERATIVE-SOLVER-PERTURBATION-IS-NOT-AN-ERROR-BUDGET-001, existing sklearn parity and hostile tests, exact deterministic candidate behavior, and at least a 3% median end-to-end gain across seven order-alternated M2 pairs without additional allocations. Reject and record the result if the SMO trajectory stalls or the gain gate fails.

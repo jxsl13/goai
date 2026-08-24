@@ -52,3 +52,13 @@ Rationale: Measured immediately after removing an unbuffered-channel rendezvous 
 WHEN one tuning constant is compared against different quantities in different functions, the maintainer SHALL split it into one constant per regime BEFORE sweeping either, because a sweep of the shared value measures the sum of two answers and finds neither.
 
 Rationale: Measured on classic treeRadixCutoff, which gated both a PER-NODE sort of a shrinking range in the CART builder and a ONE-TIME presort of every row in the GBM builder. Lowering it from 512 to 32 took BenchmarkForestFit 121.5 to 101.3 ms, minus 16.6 percent with all three new runs below all three base runs - and simultaneously cost GBMFit about 25 percent and moved the GBM bit-exact digest. That combination READ AS A MODEL-BEHAVIOR DECISION and was escalated as one, until splitting the constant showed it was an artifact: with the GBM presort keeping 512 as its own gbmRadixCutoff and the CART per-node cutoff at 32, ForestFit is minus 16.6 percent, GBMFit is flat, and BOTH digests pass unchanged. Nothing needed re-freezing and no trees changed. A SECOND FINDING CAME OUT OF THE SAME INVESTIGATION AND IS RECORDED IN THE CODE: radixByFeature claimed its unspecified tie order could not matter because thresholds sit between DISTINCT values. That is too strong - the sweep skips a candidate cut when consecutive values differ by at most featureThreshold, a tolerance of 1e-7, so values that are distinct yet closer behave like ties and reordering them changes which cuts are considered. It does not bite at cutoff 32, but it means any future sort swap has to be gated on a digest rather than argued from the comment. Encoded as perfscan PS3070, 4 candidates tree-wide.
+
+## SVC-RBF-SIMD-EXP-ROUTE-001 {applies: go:classic.kernelCache.column,go:simd.ExpScaledF64}
+WHEN an arm64+goexperiment.simd RBF kernel column is evaluated, the SVC RBF column path SHALL preserve scalar distance accumulation order, issue exactly 1 go:simd.ExpScaledF64 call per completed band, and keep 0 changes to portable and non-RBF routes.
+
+Rationale: The existing SIMD exponential leaf can amortize transcendental cost without reopening rejected solver fan-out or allocation work.
+
+## SVC-RBF-SIMD-EXP-GATE-001 {applies: go:classic.kernelCache.column}
+WHEN a candidate changes values consumed by SVC SMO, the acceptance gate SHALL match 1 merged-control iteration count, pass existing parity tests, add 0 allocations, and achieve at least 1.03x median speedup across 7 order-alternated M2 pairs.
+
+Rationale: SMO trajectory damage is non-monotonic in kernel error, so tolerance alone cannot validate the optimization.

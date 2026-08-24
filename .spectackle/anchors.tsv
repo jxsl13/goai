@@ -430,3 +430,6 @@ MUON-MATMUL-INTO-PERF-001	go:nn.newtonSchulz5WithScratch	nn/muon.go	263-315	2854
 MUON-MATMUL-INTO-PERF-001	go:ops.MatMulInto	ops/ops.go	175-178	86aa94d235beafbb	0c6045617b5b44e9
 MUON-MATMUL-INTO-PERF-001	go:nn.TestMuonStepIsBitIdentical	nn/muon_bitidentity_test.go	36-78	b09514f303d6be3d	0c6045617b5b44e9
 MUON-MATMUL-INTO-PERF-001	go:nn_test.BenchmarkMuonStepOnly	nn/train_bench_test.go	159-168	573335cd0b1a5b84	0c6045617b5b44e9
+SVC-RBF-SIMD-EXP-ROUTE-001	go:classic.kernelCache.column	classic/svm.go	337-462	f6070e57c4c96f85	f1c7dd003b676a75
+SVC-RBF-SIMD-EXP-ROUTE-001	go:simd.ExpScaledF64	internal/simd/exp_f64_arm64.go	62-74	3ce03e6c9eb880ec	f1c7dd003b676a75
+SVC-RBF-SIMD-EXP-GATE-001	go:classic.kernelCache.column	classic/svm.go	337-462	f6070e57c4c96f85	5d8de94c99f70b83

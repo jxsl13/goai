@@ -1157,3 +1157,20 @@
 {"t":"2026-08-24T17:55:49Z","eid":"302b27929577eebd","ag":"ag-e70b","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-24T17:56:01Z","eid":"684f530533f80666","ag":"ag-79d3","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-24T17:56:18Z","eid":"60292c9f880c7c6a","ag":"ag-6c4a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:17:33Z","eid":"e454410754983c19","ag":"ag-7e4d","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:17:40Z","eid":"cfe3e1d8e63dd8d4","ag":"ag-a447","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:17:54Z","eid":"253df7e51361a5e2","ag":"ag-fcc8","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:00Z","eid":"200626610ea27602","ag":"ag-5578","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:10Z","eid":"af0151511da67836","ag":"ag-8b84","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:17Z","eid":"875bbf05905e9f72","ag":"ag-454e","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:24Z","eid":"d1a438bff87cd10d","ag":"ag-b2dd","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:34Z","eid":"86cb458372df3cfe","ag":"ag-63ef","ev":"create","id":"T-01M0TFXRWJEZEB855HVZY4FYNH","k":"task","ti":"Implement and gate the M2 SIMD RBF column exp stage"}
+{"t":"2026-08-24T18:18:35Z","eid":"df112cb39520ce18","ag":"ag-63ef","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:42Z","eid":"b09f6c6ee22b0011","ag":"ag-0fed","ev":"grill","id":"T-01M0TFXRWJEZEB855HVZY4FYNH","gr":"2026-08-24 open=0","hash":"16d684e4b2eb9907fadebf5b2f3f4ee2a970d55b911c6e2d13664d06b3667d6e"}
+{"t":"2026-08-24T18:18:42Z","eid":"d7882cc62fe8c9a5","ag":"ag-0fed","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:18:51Z","eid":"c45d06d9be5804b6","ag":"ag-235f","ev":"move","id":"T-01M0TFXRWJEZEB855HVZY4FYNH","fr":"draft","to":"approved","note":"Approved under the standing autonomous M2 performance mandate after an open=0 grill; retention is conditional on measured convergence, correctness, allocation, and wall-time gates."}
+{"t":"2026-08-24T18:18:51Z","eid":"b0ff125465f4d1d2","ag":"ag-235f","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:19:36Z","eid":"6ce1135476236268","ag":"ag-193a","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:19:38Z","eid":"63fadf86539200fd","ag":"ag-67b7","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
+{"t":"2026-08-24T18:19:58Z","eid":"7440d71225ae68ac","ag":"ag-3c09","ev":"move","id":"T-01M0TFXRWJEZEB855HVZY4FYNH","fr":"approved","to":"active","note":"Spectackle work start correctly refused because the item exists only on this isolated serving root; continuing in the clean branch that owns the proposal and contracts."}
+{"t":"2026-08-24T18:19:58Z","eid":"cd2ffd7fcf1216f9","ag":"ag-3c09","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
