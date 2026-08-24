@@ -269,6 +269,23 @@ func (a LayerNormSequenceClassifierAttrs) WithDefaults() LayerNormSequenceClassi
 	return a
 }
 
+// PatchEmbedSequenceAttrs parameterises a packed batch of projected image
+// patches. Batch partitions the patch rows equally; one class row is prepended
+// to each partition before the shared position table is added.
+type PatchEmbedSequenceAttrs struct {
+	Batch int // independent packed sequences along axis 0; 0 → 1
+}
+
+func (PatchEmbedSequenceAttrs) opAttrs() {}
+
+// WithDefaults fills the documented batch default.
+func (a PatchEmbedSequenceAttrs) WithDefaults() PatchEmbedSequenceAttrs {
+	if a.Batch == 0 {
+		a.Batch = 1
+	}
+	return a
+}
+
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*
 // fields). Leaving the YaRN fields zero disables YaRN.
@@ -774,6 +791,8 @@ var opAttrsSpec = [numOps]attrsSpec{
 	OpPreNormTransformerStackBackward:     attrsOf(PreNormTransformerStackAttrs{}),
 	OpLayerNormSequenceClassifier:         attrsOf(LayerNormSequenceClassifierAttrs{}),
 	OpLayerNormSequenceClassifierBackward: attrsOf(LayerNormSequenceClassifierAttrs{}),
+	OpPatchEmbedSequence:                  attrsOf(PatchEmbedSequenceAttrs{}),
+	OpPatchEmbedSequenceBackward:          attrsOf(PatchEmbedSequenceAttrs{}),
 	OpRMSNorm:                             attrsOf(NormAttrs{}),
 	OpRMSNormBackward:                     attrsOf(NormAttrs{}),
 	OpRoPE:                                attrsOf(RoPEAttrs{}),

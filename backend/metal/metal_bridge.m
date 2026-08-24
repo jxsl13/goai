@@ -10303,6 +10303,243 @@ int mtl_layernorm_sequence_classifier_backward_f32(
     }
 }
 
+// ---- Cached patch-projection + class/position sequence graphs ------------
+// The graph replaces one projection, B slice/concat/add chains, and their VJP
+// with one synchronous submission per direction. Cache keys contain every
+// shape component; host addresses are copied into pooled shared buffers.
+#define PATCH_SEQUENCE_CACHE_CAP 16
+
+typedef struct {
+    __unsafe_unretained MPSGraphTensor* y;
+} patch_sequence_nodes;
+
+static patch_sequence_nodes build_patch_sequence_nodes(
+    MPSGraph* g, MPSGraphTensor* Patches, MPSGraphTensor* Class,
+    MPSGraphTensor* Pos, MPSGraphTensor* W, MPSGraphTensor* Bias,
+    int rows, int patchDim, int dim, int batch, int patches, int seq) {
+    MPSGraphTensor* projected = [g additionWithPrimaryTensor:
+        [g matrixMultiplicationWithPrimaryTensor:Patches secondaryTensor:W name:nil]
+                                            secondaryTensor:Bias name:nil];
+    MPSGraphTensor* projected3 = [g reshapeTensor:projected
+                                              withShape:@[@(batch), @(patches), @(dim)] name:nil];
+    MPSGraphTensor* class3 = [g reshapeTensor:Class withShape:@[@1, @1, @(dim)] name:nil];
+    MPSGraphTensor* classBatch = [g broadcastTensor:class3
+                                               toShape:@[@(batch), @1, @(dim)] name:nil];
+    MPSGraphTensor* packed = [g concatTensors:@[classBatch, projected3] dimension:1 name:nil];
+    MPSGraphTensor* pos3 = [g reshapeTensor:Pos withShape:@[@1, @(seq), @(dim)] name:nil];
+    MPSGraphTensor* posBatch = [g broadcastTensor:pos3
+                                             toShape:@[@(batch), @(seq), @(dim)] name:nil];
+    MPSGraphTensor* y3 = [g additionWithPrimaryTensor:packed secondaryTensor:posBatch name:nil];
+    patch_sequence_nodes n = {
+        .y = [g reshapeTensor:y3 withShape:@[@(batch * seq), @(dim)] name:nil],
+    };
+    return n;
+}
+
+static MPSGraph* gPatchSequenceFwdGraphs[PATCH_SEQUENCE_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPatchSequenceFwdInputs[PATCH_SEQUENCE_CACHE_CAP][5] = {{nil}};
+static MPSGraphTensor* gPatchSequenceFwdOutputs[PATCH_SEQUENCE_CACHE_CAP] = {nil};
+static int gPatchSequenceFwdSigs[PATCH_SEQUENCE_CACHE_CAP][4] = {{0}};
+static int gPatchSequenceFwdValid[PATCH_SEQUENCE_CACHE_CAP] = {0};
+static int gPatchSequenceFwdNext = 0;
+
+static MPSGraph* gPatchSequenceBwdGraphs[PATCH_SEQUENCE_CACHE_CAP] = {nil};
+static MPSGraphTensor* gPatchSequenceBwdInputs[PATCH_SEQUENCE_CACHE_CAP][3] = {{nil}};
+static MPSGraphTensor* gPatchSequenceBwdOutputs[PATCH_SEQUENCE_CACHE_CAP][5] = {{nil}};
+static int gPatchSequenceBwdSigs[PATCH_SEQUENCE_CACHE_CAP][4] = {{0}};
+static int gPatchSequenceBwdValid[PATCH_SEQUENCE_CACHE_CAP] = {0};
+static int gPatchSequenceBwdNext = 0;
+
+static int ensure_patch_sequence_forward_graph(
+    int rows, int patchDim, int dim, int batch, int patches, int seq) {
+    int sig[4] = {batch, patches, patchDim, dim};
+    for (int i = 0; i < PATCH_SEQUENCE_CACHE_CAP; i++)
+        if (gPatchSequenceFwdValid[i] &&
+            memcmp(sig, gPatchSequenceFwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* Patches = [g placeholderWithShape:@[@(rows), @(patchDim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Class = [g placeholderWithShape:@[@1, @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Pos = [g placeholderWithShape:@[@(seq), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* W = [g placeholderWithShape:@[@(patchDim), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Bias = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        patch_sequence_nodes n = build_patch_sequence_nodes(
+            g, Patches, Class, Pos, W, Bias, rows, patchDim, dim, batch, patches, seq);
+        if (!n.y) return -20;
+        int slot = gPatchSequenceFwdNext;
+        gPatchSequenceFwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[5] = {Patches, Class, Pos, W, Bias};
+        for (int i = 0; i < 5; i++) gPatchSequenceFwdInputs[slot][i] = inputs[i];
+        gPatchSequenceFwdOutputs[slot] = n.y;
+        memcpy(gPatchSequenceFwdSigs[slot], sig, sizeof(sig));
+        gPatchSequenceFwdValid[slot] = 1;
+        gPatchSequenceFwdNext = (slot + 1) % PATCH_SEQUENCE_CACHE_CAP;
+        return slot;
+    }
+}
+
+static int ensure_patch_sequence_backward_graph(
+    int rows, int patchDim, int dim, int batch, int patches, int seq) {
+    int sig[4] = {batch, patches, patchDim, dim};
+    for (int i = 0; i < PATCH_SEQUENCE_CACHE_CAP; i++)
+        if (gPatchSequenceBwdValid[i] &&
+            memcmp(sig, gPatchSequenceBwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* Patches = [g placeholderWithShape:@[@(rows), @(patchDim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* W = [g placeholderWithShape:@[@(patchDim), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* dY = [g placeholderWithShape:@[@(batch * seq), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* dY3 = [g reshapeTensor:dY withShape:@[@(batch), @(seq), @(dim)] name:nil];
+        MPSGraphTensor* dClass3 = [g sliceTensor:dY3 dimension:1 start:0 length:1 name:nil];
+        MPSGraphTensor* dClass = [g reshapeTensor:
+            [g reductionSumWithTensor:dClass3 axis:0 name:nil] withShape:@[@1, @(dim)] name:nil];
+        MPSGraphTensor* dPos = [g reshapeTensor:
+            [g reductionSumWithTensor:dY3 axis:0 name:nil] withShape:@[@(seq), @(dim)] name:nil];
+        MPSGraphTensor* dProjected3 = [g sliceTensor:dY3 dimension:1 start:1 length:patches name:nil];
+        MPSGraphTensor* dProjected = [g reshapeTensor:dProjected3
+                                                  withShape:@[@(rows), @(dim)] name:nil];
+        MPSGraphTensor* WT = [g transposeTensor:W dimension:0 withDimension:1 name:nil];
+        MPSGraphTensor* dPatches = [g matrixMultiplicationWithPrimaryTensor:dProjected
+                                                            secondaryTensor:WT name:nil];
+        MPSGraphTensor* patchesT = [g transposeTensor:Patches dimension:0 withDimension:1 name:nil];
+        MPSGraphTensor* dW = [g matrixMultiplicationWithPrimaryTensor:patchesT
+                                                      secondaryTensor:dProjected name:nil];
+        MPSGraphTensor* dBias = [g reshapeTensor:
+            [g reductionSumWithTensor:dProjected axis:0 name:nil] withShape:@[@(dim)] name:nil];
+        MPSGraphTensor* outputs[5] = {
+            dPatches, dClass, dPos, dW, dBias,
+        };
+        for (int i = 0; i < 5; i++) if (!outputs[i]) return -20;
+        int slot = gPatchSequenceBwdNext;
+        gPatchSequenceBwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[3] = {Patches, W, dY};
+        for (int i = 0; i < 3; i++) gPatchSequenceBwdInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 5; i++) gPatchSequenceBwdOutputs[slot][i] = outputs[i];
+        memcpy(gPatchSequenceBwdSigs[slot], sig, sizeof(sig));
+        gPatchSequenceBwdValid[slot] = 1;
+        gPatchSequenceBwdNext = (slot + 1) % PATCH_SEQUENCE_CACHE_CAP;
+        return slot;
+    }
+}
+
+int mtl_patch_embed_sequence_f32(
+    const float* Patches, const float* Class, const float* Pos,
+    const float* W, const float* Bias, float* Y,
+    int rows, int patchDim, int dim, int batch, int patches, int seq) {
+    if (ensure_init() != 0) return -1;
+    if (!Patches || !Class || !Pos || !W || !Bias || !Y || rows != batch * patches ||
+        seq != patches + 1 || rows <= 0 || patchDim <= 0 || dim <= 0 || batch <= 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_patch_sequence_forward_graph(rows, patchDim, dim, batch, patches, seq);
+        if (slot < 0) return slot;
+        size_t patchLen = (size_t)rows * patchDim * sizeof(float);
+        size_t classLen = (size_t)dim * sizeof(float);
+        size_t posLen = (size_t)seq * dim * sizeof(float);
+        size_t weightLen = (size_t)patchDim * dim * sizeof(float);
+        size_t outputLen = (size_t)batch * seq * dim * sizeof(float);
+        const float* hostIn[5] = {Patches, Class, Pos, W, Bias};
+        size_t lengths[5] = {patchLen, classLen, posLen, weightLen, classLen};
+        NSArray<NSNumber*>* shapes[5] = {
+            @[@(rows), @(patchDim)], @[@1, @(dim)], @[@(seq), @(dim)],
+            @[@(patchDim), @(dim)], @[@(dim)],
+        };
+        id<MTLBuffer> in[5] = {nil};
+        MPSGraphTensorData* data[5] = {nil};
+        for (int i = 0; i < 5; i++) {
+            in[i] = pool_in(hostIn[i], lengths[i]);
+            if (!in[i]) return -2;
+            data[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                             shape:shapes[i]
+                                                          dataType:MPSDataTypeFloat32];
+            if (!data[i]) return -2;
+        }
+        id<MTLBuffer> out = pool_buf(outputLen);
+        if (!out) return -2;
+        MPSGraphTensorData* outputData = [[MPSGraphTensorData alloc] initWithMTLBuffer:out
+                                                                                shape:@[@(batch * seq), @(dim)]
+                                                                             dataType:MPSDataTypeFloat32];
+        if (!outputData) return -2;
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:5];
+        for (int i = 0; i < 5; i++) feeds[gPatchSequenceFwdInputs[slot][i]] = data[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPatchSequenceFwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                           resultsDictionary:@{gPatchSequenceFwdOutputs[slot]:outputData}
+                                         executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        memcpy(Y, out.contents, outputLen);
+        return 0;
+    }
+}
+
+int mtl_patch_embed_sequence_backward_f32(
+    const float* Patches, const float* Class, const float* Pos,
+    const float* W, const float* Bias, const float* dY,
+    float* dPatches, float* dClass, float* dPos, float* dW, float* dBias,
+    int rows, int patchDim, int dim, int batch, int patches, int seq) {
+    if (ensure_init() != 0) return -1;
+    if (!Patches || !Class || !Pos || !W || !Bias || !dY || !dPatches || !dClass ||
+        !dPos || !dW || !dBias || rows != batch * patches || seq != patches + 1 ||
+        rows <= 0 || patchDim <= 0 || dim <= 0 || batch <= 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_patch_sequence_backward_graph(rows, patchDim, dim, batch, patches, seq);
+        if (slot < 0) return slot;
+        size_t patchLen = (size_t)rows * patchDim * sizeof(float);
+        size_t classLen = (size_t)dim * sizeof(float);
+        size_t posLen = (size_t)seq * dim * sizeof(float);
+        size_t weightLen = (size_t)patchDim * dim * sizeof(float);
+        size_t outputLen = (size_t)batch * seq * dim * sizeof(float);
+        const float* hostIn[3] = {Patches, W, dY};
+        size_t inputLengths[3] = {patchLen, weightLen, outputLen};
+        NSArray<NSNumber*>* inputShapes[3] = {
+            @[@(rows), @(patchDim)], @[@(patchDim), @(dim)], @[@(batch * seq), @(dim)],
+        };
+        id<MTLBuffer> in[3] = {nil};
+        MPSGraphTensorData* inputData[3] = {nil};
+        for (int i = 0; i < 3; i++) {
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                                  shape:inputShapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+        size_t outputLengths[5] = {patchLen, classLen, posLen, weightLen, classLen};
+        NSArray<NSNumber*>* outputShapes[5] = {
+            @[@(rows), @(patchDim)], @[@1, @(dim)], @[@(seq), @(dim)],
+            @[@(patchDim), @(dim)], @[@(dim)],
+        };
+        id<MTLBuffer> out[5] = {nil};
+        MPSGraphTensorData* outputData[5] = {nil};
+        for (int i = 0; i < 5; i++) {
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i]
+                                                                   shape:outputShapes[i]
+                                                                dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:3];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:5];
+        for (int i = 0; i < 3; i++) feeds[gPatchSequenceBwdInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < 5; i++) results[gPatchSequenceBwdOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gPatchSequenceBwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                           resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        float* hostOut[5] = {dPatches, dClass, dPos, dW, dBias};
+        for (int i = 0; i < 5; i++) memcpy(hostOut[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP
 // dS[i,j] = P[i,j]·(dP[i,j] − Σ_k P[i,k]·dP[i,k]) IN PLACE on dP (dS overwrites dP). Causal: only
 // j≤i valid (P is already 0 for j>i, so masked terms drop out; the tail is set to 0). One

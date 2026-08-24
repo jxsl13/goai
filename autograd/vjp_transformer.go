@@ -125,4 +125,10 @@ func init() {
 			in[0], in[1], in[2], in[3], in[4], g,
 		}, attrs)
 	})
+
+	RegisterVJP(backend.OpPatchEmbedSequence, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx, backend.OpPatchEmbedSequenceBackward, []*tensor.Tensor{
+			in[0], in[1], in[2], in[3], in[4], g,
+		}, attrs)
+	})
 }

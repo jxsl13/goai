@@ -270,17 +270,29 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	B := x.Shape()[0]
 	S := m.Pos.Shape()[0] // N+1 tokens (class + patches)
 	N := S - 1
+	usePatchSequence := false
+	if ctx != nil && ctx.Backend != nil && m.Embed != nil && m.Embed.B != nil {
+		_, forward := ctx.Backend.Kernel(backend.OpPatchEmbedSequence, m.Class.Dtype())
+		_, backward := ctx.Backend.Kernel(backend.OpPatchEmbedSequenceBackward, m.Class.Dtype())
+		usePatchSequence = forward && backward
+	}
+	inputCtx := ctx
+	if usePatchSequence && ctx != nil {
+		// patchify creates detached host tensors, so recording the input views
+		// cannot produce an image gradient and only enlarges the tape.
+		inputCtx = ctx.WithRecorder(nil)
+	}
 	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
 	patchRows := make([]*tensor.Tensor, B)
 	//perfscan:ignore PS4011 per-image slice loop bounded by batch; deliberate batching
 	for b := range B {
 		//perfscan:ignore PS6018 movement-fusion breaks autograd; movement-only
-		img, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
+		img, err := visExec1(inputCtx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
 		if err != nil {
 			return nil, err
 		}
 		//perfscan:ignore PS6016 invariant ReshapeAttrs literal; resource-only
-		one, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
+		one, err := visExec1(inputCtx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
 		if err != nil {
 			return nil, err
 		}
@@ -288,9 +300,22 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 			return nil, err
 		}
 	}
-	allPatches, err := backend.Execute(ctx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
+	allPatches, err := backend.Execute(inputCtx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
 	if err != nil {
 		return nil, err
+	}
+	if usePatchSequence {
+		packed, err := backend.Execute(ctx, backend.OpPatchEmbedSequence, []*tensor.Tensor{
+			allPatches[0], m.Class, m.Pos, m.Embed.W, m.Embed.B,
+		}, backend.PatchEmbedSequenceAttrs{Batch: B})
+		if err != nil {
+			return nil, err
+		}
+		h, err := m.forwardBlocks(ctx, packed[0], B)
+		if err != nil {
+			return nil, err
+		}
+		return m.forwardPackedClassifier(ctx, h, B, S)
 	}
 	emb, err := m.Embed.Forward(ctx, allPatches[0]) // [B·N, D]
 	if err != nil {

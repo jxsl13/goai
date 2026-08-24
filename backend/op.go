@@ -173,6 +173,8 @@ const (
 	OpPreNormTransformerStackBackward     // stack backward: (...,dO)→dX plus 12 parameter gradients per block
 	OpLayerNormSequenceClassifier         // packed sequences: LayerNorm, first-row gather, then biased linear projection
 	OpLayerNormSequenceClassifierBackward // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dW,dB)
+	OpPatchEmbedSequence                  // biased patch projection packed after one shared class row per batch plus shared positions
+	OpPatchEmbedSequenceBackward          // fused boundary backward: (...,dO)→(dPatches,dClass,dPos,dW,dB)
 
 	numOps
 )
@@ -285,6 +287,8 @@ var opName = [...]string{
 	OpPreNormTransformerStackBackward:     "prenorm_transformer_stack_backward",
 	OpLayerNormSequenceClassifier:         "layernorm_sequence_classifier",
 	OpLayerNormSequenceClassifierBackward: "layernorm_sequence_classifier_backward",
+	OpPatchEmbedSequence:                  "patch_embed_sequence",
+	OpPatchEmbedSequenceBackward:          "patch_embed_sequence_backward",
 }
 
 // String implements fmt.Stringer.
