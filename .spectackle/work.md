@@ -4054,7 +4054,7 @@ choice: A: explicit resident session with one objective-plus-AdamW command buffe
 
 ## T-01M0S5M8K2F4PTKVWC1QZG9ZQ5 Implement and gate the resident M2 GPT AdamW session
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, nlp/gpt.go, nlp/gpt_adamw_session_test.go, nlp/example_gpt_adamw_session_test.go, nn/optim.go, nn/optim_test.go, internal/benchcompare/compare_test.go, internal/benchcompare/leadership/evidence/m2-metal-gpt-adamw-session-20260824/README.md, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
