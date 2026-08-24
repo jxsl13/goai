@@ -88,3 +88,4 @@
 {"t":"2026-08-24T10:40:58Z","eid":"629dcae337d3a4c7","ag":"ag-14af","ev":"drift","dir":"llamagpu","rule":"METAL-GPT-QKV-OWNERSHIP-001","node":"go:llamagpu.newGPTDecoder","cls":"healed","oh":"6db6e312376bb3ad","nh":"0c871cfd2746501a"}
 {"t":"2026-08-24T10:40:58Z","eid":"e110f3087f1f8e62","ag":"ag-14af","ev":"drift","dir":"llamagpu","rule":"PORTABLE-GPT-QKV-STORAGE-001","node":"go:llamagpu.newGPTDecoder","cls":"healed","oh":"6db6e312376bb3ad","nh":"0c871cfd2746501a"}
 {"t":"2026-08-24T10:40:58Z","eid":"98dca5b8e7924915","ag":"ag-14af","ev":"drift","dir":"llamagpu","rule":"GPT-RESIDUAL-DEAD-SCRATCH-001","node":"go:llamagpu.newGPTDecoder","cls":"healed","oh":"6db6e312376bb3ad","nh":"0c871cfd2746501a"}
+{"t":"2026-08-24T10:42:39Z","eid":"8f1989cb6d8b2032","ag":"ag-9458","ev":"validate","id":"T-01M0SN2SMDFK09NPC0WFVNGWSR","dir":"llamagpu","op":"render","hash":"a9f7fbe3e099a226c0c20b1d0cb7e766c8948db01b546ca267492e46bacd90c7"}
