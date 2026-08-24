@@ -4084,6 +4084,7 @@ state: draft
 created: 2026-08-24
 parent: P-01M0S8XJF9F5HTNGTQXZ3R9YMZ
 refs: R-01M0S8MAAVFDSSRJKQKZ2AYBSV, ADR-01M0S8XZMEFC98ZF81GACDFEGE
+grilled: 2026-08-24 open=0
 targets: backend/metal/vit_adamw_attribution_test.go, backend/metal/vit_adamw_session_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/README.md
 
 Replace the temporary phase attribution benchmark with permanent cross-backend and paired session benchmarks. Run three order-alternated count-seven campaigns from one final binary, calculate every aligned control-to-candidate ratio, and reject unless aggregate median is at least 1.20x, every pair is at least 1.10x, and candidate median is below 9.138 ms. Run the corrected PyTorch 2.12.1 MPS objective-plus-AdamW comparator, record exact hardware, software, model, dtype, semantics, workspace, warm boundary, binary hash, commit, raw commands, correctness, and all samples. Run external direct perfscan, affected race binaries, full short suite, and relevant non-short packages. Existing perfscan issue 879 covers the general cross-step materialization pattern; create another perfscan issue only if validation discovers a distinct generalized detector opportunity.
