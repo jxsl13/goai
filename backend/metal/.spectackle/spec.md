@@ -554,3 +554,6 @@ WHEN supported output and backward parity is checked against the incumbent compo
 
 ## METAL-PATCH-EMBED-SEQUENCE-GRAPH-STRUCTURE-001
 WHERE valid contiguous offset-zero F32 patch sequence fusion, the Metal implementation SHALL execute exactly one bounded shape-keyed cached MPSGraph submission per direction with pooled buffers and Go-owned outputs.
+
+## M2-PATCH-EMBED-SEQUENCE-PERF-001
+WHERE three fresh-process order-alternated count-seven campaigns at F32 B8 N64 K48 D128, the M2 promotion gate SHALL require 1.20 times boundary median, 1.05 times complete-step median per campaign, and 1.03 times every aligned complete-step pair.
