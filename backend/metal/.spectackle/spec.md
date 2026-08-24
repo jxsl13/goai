@@ -589,3 +589,8 @@ WHERE 3 order-alternated count-7 M2 production-shape campaigns, the resident GPT
 WHERE the F32 ViT AdamW session is supported, the Metal backend SHALL retain all parameter gradient and moment buffers across Steps, copy exactly 1 loss scalar per Step, and copy parameters only on explicit Sync or Close.
 
 Rationale: The M2 leverage comes from keeping optimizer state and gradients on the GPU while retaining explicit host visibility boundaries.
+
+## METAL-VIT-ADAMW-SESSION-STRUCTURE-001
+WHEN Step executes on a supported resident ViT session, the Metal backend SHALL encode the complete objective and every AdamW parameter update in exactly 1 command buffer.
+
+Rationale: One command buffer preserves dependency ordering and removes the objective-to-optimizer synchronization boundary.
