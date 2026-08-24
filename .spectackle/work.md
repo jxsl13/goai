@@ -4039,14 +4039,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## T-01M0TFXRWJEZEB855HVZY4FYNH Implement and gate the M2 SIMD RBF column exp stage
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0TFVWHDFC7S7436BSCCVAA3
-refs: R-01M05GX08VFEBB8YE9D19HBA7A
-grilled: 2026-08-24 open=0
-targets: go:classic.kernelCache.column, go:simd.ExpScaledF64
-
-Implement a build-selected arm64+goexperiment.simd RBF kernel-column path that preserves each squared-distance accumulation in the current order and applies go:simd.ExpScaledF64 to completed distance bands. Keep the portable/default path and non-RBF kernels unchanged. Add a deterministic scalar-control route for tests, record the SMO step count without changing public API, and prove the candidate preserves the current n4000_rbf iteration count plus existing sklearn/hostile behavior. Compile tests with go test -c and run the binary; benchmark merged base versus candidate in seven order-alternated M2 Pro pairs at GOMAXPROCS=12. Retain only if median end-to-end time improves by at least 3%, allocations do not increase, and no correctness or convergence gate fails; otherwise revert code and reject with measurements.
