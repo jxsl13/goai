@@ -19,7 +19,7 @@ func (d *GPTDecoder) StepHidden(token, pos int) (logits, hidden []float32, err e
 		return nil, nil, err
 	}
 	hidden = make([]float32, d.d)
-	if err := d.xn.b.DownloadF32(hidden); err != nil {
+	if err := d.residentScratch().xn.DownloadF32(hidden); err != nil {
 		return nil, nil, err
 	}
 	return logits, hidden, nil
@@ -35,8 +35,12 @@ func (d *GPTDecoder) StepNHidden(tokens []int, pos int) (logits, hidden []float3
 	if err != nil {
 		return nil, nil, err
 	}
+	s, err := d.scratchForRows(len(tokens))
+	if err != nil {
+		return nil, nil, err
+	}
 	hidden = make([]float32, len(tokens)*d.d)
-	if err := d.xn.b.DownloadF32(hidden); err != nil {
+	if err := s.xn.DownloadF32(hidden); err != nil {
 		return nil, nil, err
 	}
 	return logits, hidden, nil
