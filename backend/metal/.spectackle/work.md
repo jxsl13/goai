@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJREJ34FN9BEZDREAF6WYT8 Fix the broken BenchmarkGPTDecode — it blocks honest sizing of dispatch work
 kind: task
-state: draft
+state: active
 created: 2026-07-27
 grilled: 2026-08-24 open=0
 
