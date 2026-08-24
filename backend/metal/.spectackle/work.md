@@ -52,3 +52,12 @@ option: Reuse Q4_0 after transforming Q4_1 weights or activations
 option: Materialize dense F32 weights before Metal GEMM
 blocks: P-01M0M9B6FRFCZA18408PMM2WGH
 choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4_0
+
+## T-01M0RQASR1E37R1CNS2SCEB1JZ Implement and gate the tiny CrossEntropy host route
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0RQAB74FFSA32RRCTPRK54H
+targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32
+
+Add an exact Darwin ARM64 F32 basic-mean B8/C10 selector in Metal CrossEntropy forward and backward. It must execute the existing reference implementation with a nil nested recorder and zero Metal submissions, preserve direct Metal for all unmeasured shapes/options, match loss and logits gradient without input mutation, and pass three order-alternated M2 campaigns plus full repository gates. Replace the temporary wrapper attribution control with a production-selector control toggle. Record accepted and rejected evidence and perfscan issue 875.
