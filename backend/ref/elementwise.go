@@ -31,16 +31,16 @@ func unaryKernel(f func(float64) float64) backend.Kernel {
 		// rounds only the STORED result.
 		switch x.Dtype() {
 		case tensor.F64:
-			xs := x.Contiguous().Storage().F64()
-			os := out.Storage().F64()
-			for i := range n {
+			xs := x.Contiguous().Storage().F64()[:n]
+			os := out.Storage().F64()[:n]
+			for i := range os {
 				os[i] = f(xs[i])
 			}
 			return []*tensor.Tensor{out}, nil
 		case tensor.F32:
-			xs := x.Contiguous().Storage().F32()
-			os := out.Storage().F32()
-			for i := range n {
+			xs := x.Contiguous().Storage().F32()[:n]
+			os := out.Storage().F32()[:n]
+			for i := range os {
 				os[i] = float32(f(float64(xs[i])))
 			}
 			return []*tensor.Tensor{out}, nil
@@ -74,18 +74,18 @@ func binaryKernel(op func(a, b float64) float64) backend.Kernel {
 			// loop; F32 reads float64, computes in float64 (op), rounds the store.
 			switch a.Dtype() {
 			case tensor.F64:
-				as := a.Contiguous().Storage().F64()
-				bs := b.Contiguous().Storage().F64()
-				os := out.Storage().F64()
-				for i := range n {
+				as := a.Contiguous().Storage().F64()[:n]
+				bs := b.Contiguous().Storage().F64()[:n]
+				os := out.Storage().F64()[:n]
+				for i := range os {
 					os[i] = op(as[i], bs[i])
 				}
 				return []*tensor.Tensor{out}, nil
 			case tensor.F32:
-				as := a.Contiguous().Storage().F32()
-				bs := b.Contiguous().Storage().F32()
-				os := out.Storage().F32()
-				for i := range n {
+				as := a.Contiguous().Storage().F32()[:n]
+				bs := b.Contiguous().Storage().F32()[:n]
+				os := out.Storage().F32()[:n]
+				for i := range os {
 					os[i] = float32(op(float64(as[i]), float64(bs[i])))
 				}
 				return []*tensor.Tensor{out}, nil
