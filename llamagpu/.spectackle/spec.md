@@ -9,6 +9,8 @@ schema: v1
 - T-01M0STA78PF4PABXVY1FBKZ98J Implement and benchmark Decoder StepInto: Implemented Decoder.StepInto with exact destination validation, reusable F32/F64/half-safe embedding staging, compatibility Step wrapper, and a two-slot Metal recorder-wrapper pool that preserves one-shot native command buffers. M2 Pro D512/L6/V1024 measurements: baseline Step 7 allocs/op and 8576-8578 B/op; warmed StepInto 0 allocs/op and 0-2 B/op; seven order-alternated pairs produced a median b [body truncated at tombstone retention cap]
 - ADR-01M0STA4CNESSRA8MS30X6VDFY Preserve Step as a wrapper over caller-buffer StepInto: Decision implemented: Step remains the allocating compatibility wrapper over StepInto; destination length is checked before state mutation; embedding rows write into caller-owned storage; Metal decoder wrappers alternate through a bounded two-slot owner-local pool while every native command buffer remains fresh. This removed the final recorder allocation without changing decode scheduling or logit [body truncated at tombstone retention cap]
 - P-01M0ST9BK2FGYTT3D762HHYHVB Add zero-allocation shared Decoder stepping: Delivered the zero-allocation shared Decoder host boundary. StepInto is public, documented, example-covered, bit-identical to Step, and allocation-free after warmup at the tracked M2 boundary. The original seven allocations and 8576-8578 B/op fell to zero with median paired throughput at 1.029 times baseline. Spectackle rules and symbol anchors cover semantics, length guards, embedding staging, re [body truncated at tombstone retention cap]
+- T-01M0SWB40KF9GR1EZHGRTDD4AA Implement and benchmark zero-allocation Decoder prefill: Implemented StepNInto and StepNLastInto with exact pre-mutation length guards, direct downloads, recurrent StepInto routing, and a Decoder-owned exact high-water embedding staging slice cleared by Release. M2 D512/L6/V1024 at 16 tokens: historical StepNLast 36864 B/op and 2 allocs/op; retained wrapper 4096 B/op and 1 alloc/op; warmed StepNLastInto 0 allocs/op and 0-1 B/op. Seven in-process order-r [body truncated at tombstone retention cap]
+- ADR-01M0SW7XPYFV69M6PYKDM7EHNR Use caller buffers and retained high-water embedding staging for Decoder prefill: Decision validated and implemented: caller buffers plus receiver-owned exact high-water host staging preserve allocating wrappers and exact semantics while removing 32768 staging bytes per 16x512 prefill. Rejected eager Ctx-sized residency, sync.Pool, and duplicated execution graphs remain rejected. M2 paired median throughput ratio 1.001x.
 
 ## METAL-F16-KV-CACHE-001
 The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at exactly 2 bytes per element while NewQuant retains f32 storage and all non-Metal constructors remain unchanged.
@@ -163,3 +165,21 @@ WHEN StepInto is benchmarked against Step on M2 at the tracked Llama boundary, t
 
 ## DECODER-METAL-RECORDER-POOL-SAFETY-001 {applies: go:llamagpu.mRecPool.acquire,go:llamagpu.pooledMRec.Free}
 WHEN a pooled Decoder recorder is freed, the Metal Decoder adapter SHALL release exactly 1 native Metal command buffer before returning its Go wrapper to the 2-slot pool.
+
+## DECODER-STEPN-INTO-SEMANTICS-001-001 {applies: go:llamagpu.Decoder.StepNInto,go:llamagpu.Decoder.stepNInto}
+WHEN the destination length equals len(tokens) times Vocab, the Decoder.StepNInto SHALL advance exactly len(tokens) tokens and write exactly len(tokens) times Vocab logits matching StepN.
+
+## DECODER-STEPN-LAST-INTO-SEMANTICS-001-001 {applies: go:llamagpu.Decoder.StepNLastInto,go:llamagpu.Decoder.stepNInto}
+WHEN the destination length equals Vocab, the Decoder.StepNLastInto SHALL advance exactly len(tokens) tokens and write exactly Vocab logits matching StepNLast.
+
+## DECODER-PREFILL-INTO-LENGTH-GUARD-001-001 {applies: go:llamagpu.Decoder.StepNInto,go:llamagpu.Decoder.StepNLastInto}
+WHEN the destination length differs from the method requirement, the Decoder.StepNInto or Decoder.StepNLastInto SHALL return an error and mutate exactly 0 cache rows and 0 recurrent states.
+
+## DECODER-PREFILL-EMBED-STAGING-001-001 {applies: go:llamagpu.Decoder.batchEmbedHost,go:llamagpu.Decoder.stepNInto}
+WHEN StepN or StepNLast gathers k token embeddings, the shared Decoder SHALL retain exactly 1 host staging slice at the high-water size k times Dim, reuse it for every smaller request, and grow only for a larger request.
+
+## DECODER-PREFILL-STAGING-LIFETIME-001-001 {applies: go:llamagpu.Decoder.Release,go:llamagpu.Decoder.batchEmbedHost}
+WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water embedding staging elements.
+
+## M2-DECODER-STEPN-INTO-PERF-001-001 {applies: go:llamagpu.BenchmarkLlamaPrefillLastIntoMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingPairedMetal}
+WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 StepNLastInto allocations, 32768 fewer StepNLast bytes, and at least 0.97 times baseline throughput.

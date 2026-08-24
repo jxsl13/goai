@@ -240,6 +240,42 @@ func TestDecoderScratchPartialAllocationFailureReleasesGeneration(t *testing.T) 
 	}
 }
 
+func TestDecoderBatchEmbedHostGrowthReuseAndRelease(t *testing.T) {
+	d := &Decoder{d: 8}
+	first := d.batchEmbedHost(4)
+	if len(first) != 32 || len(d.embedBatchHost) != 32 {
+		t.Fatalf("first staging lengths = %d/%d, want 32/32", len(first), len(d.embedBatchHost))
+	}
+	first[0] = 17
+	reused := d.batchEmbedHost(2)
+	if len(reused) != 16 || len(d.embedBatchHost) != 32 || reused[0] != 17 {
+		t.Fatalf("smaller staging len/high-water/first = %d/%d/%v, want 16/32/17",
+			len(reused), len(d.embedBatchHost), reused[0])
+	}
+	grown := d.batchEmbedHost(6)
+	if len(grown) != 48 || len(d.embedBatchHost) != 48 || &grown[0] == &first[0] {
+		t.Fatalf("grown staging len/high-water/reused = %d/%d/%v, want 48/48/false",
+			len(grown), len(d.embedBatchHost), &grown[0] == &first[0])
+	}
+	d.Release()
+	if d.embedBatchHost != nil {
+		t.Fatalf("Release retained %d batched embedding elements", len(d.embedBatchHost))
+	}
+}
+
+func TestDecoderPrefillIntoRejectsOutputLengthBeforeExecution(t *testing.T) {
+	d := &Decoder{ops: backendOps{name: "guard-test"}, v: 7, maxLen: 8, mamba: true}
+	if err := d.StepNInto([]int{1, 2}, 0, make([]float32, 13)); err == nil {
+		t.Fatal("StepNInto accepted a short destination")
+	}
+	if err := d.StepNLastInto([]int{1, 2}, 0, make([]float32, 8)); err == nil {
+		t.Fatal("StepNLastInto accepted a long destination")
+	}
+	if d.embedBatchHost != nil {
+		t.Fatal("destination guards reached prefill staging")
+	}
+}
+
 func TestDecoderScratchOptionalPathShapes(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
