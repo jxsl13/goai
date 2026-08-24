@@ -173,7 +173,7 @@ WHEN the destination length equals Vocab, the Decoder.StepNLastInto SHALL advanc
 ## DECODER-PREFILL-INTO-LENGTH-GUARD-001-001 {applies: go:llamagpu.Decoder.StepNInto,go:llamagpu.Decoder.StepNLastInto}
 WHEN the destination length differs from the method requirement, the Decoder.StepNInto or Decoder.StepNLastInto SHALL return an error and mutate exactly 0 cache rows and 0 recurrent states.
 
-## DECODER-PREFILL-EMBED-STAGING-001-001
+## DECODER-PREFILL-EMBED-STAGING-001-001 {applies: go:llamagpu.Decoder.batchEmbedHost,go:llamagpu.Decoder.stepNInto}
 WHEN StepN or StepNLast gathers k token embeddings, the shared Decoder SHALL retain exactly 1 host staging slice at the high-water size k times Dim, reuse it for every smaller request, and grow only for a larger request.
 
 ## DECODER-PREFILL-STAGING-LIFETIME-001-001
