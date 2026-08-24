@@ -129,7 +129,7 @@ Update GPT StepHidden and StepNHidden so hidden-state downloads read the residen
 
 ## P-01M0SQMKR8FEBV8REH5J4G8N4B Elide dead max-context residual projection scratch
 kind: proposal
-state: active
+state: done
 created: 2026-08-24
 refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
 grilled: 2026-08-24 open=0
