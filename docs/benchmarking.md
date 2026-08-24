@@ -496,6 +496,38 @@ forest past scikit-learn's parallel fit) and naive Bayes, and runs a pure-Go CAR
 within 2x of scikit-learn's decades-tuned C cores on the single tree and RBF SVC -- an
 honest split, dependency-free, now reproducible from committed artifacts.
 
+### M2 ARM64 SVC RBF batched exponentials (T-01M0TFXRWJEZE, 2026-08-24)
+
+With `GOEXPERIMENT=simd`, RBF SVC kernel columns now preserve the scalar
+squared-distance accumulation order, stage completed distances directly in the final
+column buffer, and evaluate one existing `ExpScaledF64` batch per parallel band. Default,
+non-ARM64, and non-RBF routes retain the established scalar implementation.
+
+Seven process-order-alternated frozen pre/post pairs ran 100 complete 4,000x20 fits per
+process on Apple M2 Pro. The exact implementation-commit campaign is the release claim:
+
+| SVC RBF fit | merged baseline | SIMD candidate | result |
+|---|---:|---:|---:|
+| median time | 5.048190 ms | 4.518638 ms | **1.1536x faster** |
+| paired wins | 1/7 | 6/7 | candidate |
+| median bytes/op | 1,620,155 | 1,620,116 | neutral |
+| median allocations/op | 1,040 | 1,040 | unchanged |
+
+A same-binary scalar control shows 1.3078x at GOMAXPROCS=12 and 1.3785x at
+GOMAXPROCS=1, with unchanged allocation counts. The convergence gate preserves exactly
+79 SMO steps and 42 support vectors; decision signs match, maximum absolute decision
+delta is `3.3306690738754696e-15`, and repeated SIMD fits are bit-deterministic.
+
+The shared host had continuous unrelated perfscan load: one of seven primary pairs lost
+7.66%, and absolute samples varied by roughly 2x. The paired median is therefore an
+internal M2 improvement signal, not an absolute latency or universal leadership claim.
+On identical rows, GoAI's best fresh process is 4.71 ms versus scikit-learn 1.9.0 at
+3.621500 ms, leaving GoAI 1.3006x behind the pinned libsvm incumbent. Batched or
+decomposition SMO remains the next frontier. Raw pairs, executable hashes, commands,
+versions, and the incumbent boundary are committed in
+[`m2-svc-rbf-exp-20260824`](../internal/benchcompare/leadership/evidence/m2-svc-rbf-exp-20260824/README.md);
+the generalized staging opportunity is [perfscan issue #899](https://github.com/jxsl13/perfscan/issues/899).
+
 ### End-to-end GPT training step vs PyTorch (T883, 2026-07-20)
 
 The op-level comparison (matmul/conv/MHA vs torch) existed, but the end-to-end training
