@@ -86,6 +86,7 @@ Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exa
 kind: proposal
 state: draft
 created: 2026-08-24
+grilled: 2026-08-24 open=0
 targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 GPTDecoder currently retains every activation scratch tensor at maximum context although dominant Step uses one row. Retain one row by default, lazily allocate an exact reusable high-water workspace for StepN and StepNLast, preserve a same-binary eager control, and require exact parity plus M2 throughput non-regression. GPT-2-small should remove 35140608 resident bytes without changing public semantics.

@@ -93,3 +93,4 @@
 {"t":"2026-08-24T10:42:59Z","eid":"e414f652db3b3575","ag":"ag-d9ca","ev":"move","id":"T-01M0SN2SMDFK09NPC0WFVNGWSR","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T10:43:02Z","eid":"1998e8debabde844","ag":"ag-cfd7","ev":"move","id":"P-01M0SN14HSEJ2VWB9HT1S7W01F","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T10:51:49Z","eid":"ff2b3bb918a2c76c","ag":"ag-a161","ev":"create","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","k":"proposal","ti":"Right-size GPT activation residency with lazy reusable prefill workspace","dir":"llamagpu"}
+{"t":"2026-08-24T10:52:02Z","eid":"804f85a1f3147c97","ag":"ag-0bff","ev":"grill","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6e48de2eb0cfe63093dbbb3092a6ef08bcef476c0b68230a10575c0a5824f7d6"}
