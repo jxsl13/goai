@@ -82,3 +82,45 @@ func TestGPT2ScalePipeline(t *testing.T) {
 	t.Logf("GPT-2-124M-shape batched decode: %d tokens in %.2fs = %.1f tok/s (prompt %d)",
 		genN, dt, float64(genN)/dt, len(prompt))
 }
+
+// BenchmarkGPTDecodeStepMetal measures the public single-token Step boundary at GPT-2-small
+// geometry. Model upload and the 16-token prefill are outside timing; positions advance through
+// the KV cache and wrap below Ctx so fixed-count campaigns execute identical context lengths.
+func BenchmarkGPTDecodeStepMetal(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no gpu")
+	}
+	const vocab, ctxLen, d, layers, heads = 50257, 1024, 768, 12, 12
+	g, err := nlp.GPT2FromHF(synthGPT2HF(vocab, ctxLen, d, layers), heads)
+	if err != nil {
+		b.Fatal(err)
+	}
+	dec, err := llamagpu.NewGPT(g)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(dec.Release)
+
+	prompt := make([]int, 16)
+	for i := range prompt {
+		prompt[i] = (i*97 + 11) % vocab
+	}
+	if _, err := dec.StepNLast(prompt, 0); err != nil {
+		b.Fatal(err)
+	}
+
+	pos := len(prompt)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if pos >= ctxLen {
+			pos = len(prompt)
+		}
+		token := (pos*97 + 11) % vocab
+		if _, err := dec.Step(token, pos); err != nil {
+			b.Fatal(err)
+		}
+		pos++
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}

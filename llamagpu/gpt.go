@@ -16,6 +16,7 @@ type gptBlock struct {
 	w1, w2         linear // FFN up [d,4d] / down [4d,d]
 	fb1, fb2       buffer // FFN biases [4d] / [d]
 	kC, vC         buffer // KV caches [maxLen*d]
+	ffn            int    // FFN width, fixed when the block is uploaded
 }
 
 // GPTDecoder is the batched-decode engine for nlp.GPT models (§T422) — the GPT-2-style sibling of
@@ -77,6 +78,7 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 			w1: lin(b.W1), w2: lin(b.W2),
 			fb1: mk(flat1D(b.B1)).b, fb2: mk(flat1D(b.B2)).b,
 			kC: mk(make([]float32, d.maxLen*d.d)).b, vC: mk(make([]float32, d.maxLen*d.d)).b,
+			ffn: b.W1.Shape()[1],
 		}
 		d.blocks = append(d.blocks, gb)
 	}
@@ -142,7 +144,7 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, 1, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, 1),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, d.ffnDim(b)),
+			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
 			b.w2.record(r, d.hid.b, d.mo.b, 1),
 			r.AddBias(d.mo.b, b.fb2, d.mo.b, 1, D),
@@ -226,7 +228,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 			r.Binary(d.dx.b, d.ao.b, d.dx.b, binaryAdd),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, k, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, k),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, d.ffnDim(b)),
+			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, b.ffn),
 			r.Unary(d.hid.b, d.hid.b, unaryGELU),
 			b.w2.record(r, d.hid.b, d.mo.b, k),
 			r.AddBias(d.mo.b, b.fb2, d.mo.b, k, D),
@@ -262,14 +264,6 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		return nil, err
 	}
 	return out, nil
-}
-
-// ffnDim returns the block's FFN width from its up-projection.
-func (d *GPTDecoder) ffnDim(b gptBlock) int {
-	if l, ok := b.w1.(f32Linear); ok {
-		return l.n
-	}
-	return 4 * d.d
 }
 
 // Generate prefills the whole prompt in ONE recorded StepN (§T423), then samples up to maxNew
