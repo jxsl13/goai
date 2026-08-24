@@ -101,7 +101,7 @@ WHEN the same-binary GPT-2-small activation-residency benchmark compares lazy an
 
 Rationale: Validate retained-memory leverage without moving cost into dominant inference paths.
 
-## GPT-HIDDEN-WORKSPACE-READBACK-001
+## GPT-HIDDEN-WORKSPACE-READBACK-001 {applies: go:llamagpu.GPTDecoder.StepNHidden}
 WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download exactly 1 or len(tokens) final rows from the corresponding selected activation workspace.
 
 Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.
