@@ -6,6 +6,7 @@ schema: v1
 kind: task
 state: draft
 created: 2026-07-27
+grilled: 2026-08-24 open=0
 
 BLOCKER, not an optimization. Small, but it gates a whole line of work.
 
