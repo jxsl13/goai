@@ -4018,7 +4018,7 @@ R-01M0RVG598FZA established that separate stack backward recomputation dominates
 
 ## P-01M0RX1WNKETXSZDBWJ22NK76F Add portable ViT LossAndGrad with one-graph Metal execution
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 parent: R-01M0RX17A7E9890D8DQTYKRXST
 grilled: 2026-08-24 open=0
