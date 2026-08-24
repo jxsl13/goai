@@ -487,6 +487,7 @@ type Decoder struct {
 	pendingPos                                                     int            // position pending encodes; -1 = none
 	table                                                          *tensor.Tensor // token embedding, host-side gather source
 	invHost                                                        []float32      // RoPE inverse freqs (uploaded by allocScratch)
+	embedHost                                                      []float32      // reusable single-token embedding upload row [d]
 	all                                                            []buffer
 	qweights                                                       []qweight // resident quantized weights (quant decoder)
 }
@@ -536,7 +537,7 @@ func newDecoderCommon(cfg nlp.LlamaConfig, tokEmb *tensor.Tensor, ops backendOps
 		ops: ops,
 		d:   cfg.Dim, h: cfg.Heads, kvH: cfg.KVHeads, hidden: cfg.Hidden, v: cfg.Vocab,
 		maxLen: cfg.Ctx, eps: float32(cfg.Eps), table: tokEmb,
-		pendingPos: -1, embMult: 1,
+		pendingPos: -1, embMult: 1, embedHost: make([]float32, cfg.Dim),
 	}
 	if d.kvH <= 0 {
 		d.kvH = d.h
@@ -3564,7 +3565,8 @@ func (d *Decoder) stepInto(token, pos int) error {
 		}
 	}
 	// the token's embedding must be resident BEFORE commit — the recorded chain reads d.dx.
-	if err := d.dx.b.UploadF32(d.gatherEmbed(token)); err != nil {
+	d.gatherEmbedInto(d.embedHost, token)
+	if err := d.dx.b.UploadF32(d.embedHost); err != nil {
 		return err
 	}
 	var r recorder
@@ -3597,15 +3599,26 @@ func (d *Decoder) stepInto(token, pos int) error {
 	return nil
 }
 
-// Step records and executes one decode step for token at pos, returning the host logits [d.v]. It wraps
-// stepInto (which leaves the result in the device logits buffer) with the whole-vocab host download; the
-// on-device sampling fast-path (Generate) instead reads the device logits directly via a top-k.
-func (d *Decoder) Step(token, pos int) ([]float32, error) {
-	if err := d.stepInto(token, pos); err != nil {
-		return nil, err
+// StepInto records and executes one decode step for token at pos and writes exactly Vocab logits into
+// out. The caller owns out and may reuse it across tokens. Its length is validated before any cache or
+// recurrent-state mutation. The on-device sampling fast-path (Generate) avoids this host download.
+func (d *Decoder) StepInto(token, pos int, out []float32) error {
+	if len(out) != d.v {
+		return fmt.Errorf("llamagpu(%s): StepInto output length %d != vocab %d", d.ops.name, len(out), d.v)
 	}
-	out := make([]float32, d.v)
+	if err := d.stepInto(token, pos); err != nil {
+		return err
+	}
 	if err := d.logits.b.DownloadF32(out); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Step is the allocation-compatible wrapper around StepInto.
+func (d *Decoder) Step(token, pos int) ([]float32, error) {
+	out := make([]float32, d.v)
+	if err := d.StepInto(token, pos, out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -3692,7 +3705,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		if tok < 0 || tok >= d.v {
 			return nil, fmt.Errorf("llamagpu(%s): token %d out of vocab %d", d.ops.name, tok, d.v)
 		}
-		copy(host[i*d.d:(i+1)*d.d], d.gatherEmbed(tok))
+		d.gatherEmbedInto(host[i*d.d:(i+1)*d.d], tok)
 	}
 	if err := d.dx.b.UploadF32(host); err != nil {
 		return nil, err
@@ -4054,31 +4067,40 @@ func flat1D(t *tensor.Tensor) []float32 {
 	return o
 }
 
-// embedRow reads one row of an embedding table as float32. It is on the per-token decode path, so
-// it takes the bulk-slice route too: one row view, one typed conversion, no per-element dispatch.
-//
-//perfscan:ignore PS3033 one small row alloc/token, resource-only, negligible vs forward
+// embedRowInto reads one embedding row as float32 without allocating. Contiguous F32/F64 tables use
+// their typed backing slices; strided and half-precision tables retain the dtype-safe scalar path.
+func embedRowInto(dst []float32, table *tensor.Tensor, row, cols int) {
+	if table.IsContiguous() {
+		off := table.Offset() + row*cols
+		switch table.Dtype() {
+		case tensor.F32:
+			copy(dst, table.Storage().F32()[off:off+cols])
+			return
+		case tensor.F64:
+			for j, v := range table.Storage().F64()[off : off+cols] {
+				dst[j] = float32(v)
+			}
+			return
+		}
+	}
+	for j := range cols {
+		dst[j] = float32(table.AtF64(row, j))
+	}
+}
+
 func embedRow(table *tensor.Tensor, row, cols int) []float32 {
 	o := make([]float32, cols)
-	r, err := table.Slice(0, row, row+1)
-	if err != nil {
-		for j := range cols {
-			o[j] = float32(table.AtF64(row, j))
-		}
-		return o
-	}
-	copy(o, r.Cast(tensor.F32).Storage().F32()[:cols])
+	embedRowInto(o, table, row, cols)
 	return o
 }
 
-// gatherEmbed reads a token's embedding row and applies the Granite EmbeddingMult (embMult == 1
-// for every non-Granite model, so this is embedRow verbatim then).
-func (d *Decoder) gatherEmbed(token int) []float32 {
-	e := embedRow(d.table, token, d.d)
+// gatherEmbedInto reads a token's embedding row into caller-owned storage and applies the Granite
+// EmbeddingMult (embMult == 1 for every non-Granite model).
+func (d *Decoder) gatherEmbedInto(dst []float32, token int) {
+	embedRowInto(dst, d.table, token, d.d)
 	if d.embMult != 1 {
-		for i := range e {
-			e[i] *= d.embMult
+		for i := range dst {
+			dst[i] *= d.embMult
 		}
 	}
-	return e
 }

@@ -279,7 +279,8 @@ func ExamplePromptLookupGenerate() {
 
 // Step is the decoder's smallest unit: feed ONE token at a position, get the
 // next-token logits back, with the KV cache advancing on the GPU. Ctx and
-// Vocab expose the geometry a custom decode loop needs; StepHidden and
+// Vocab expose the geometry a custom decode loop needs. StepInto writes into a reusable logits
+// buffer; StepHidden and
 // StepNHidden return the final HIDDEN states too — the attachment point for
 // auxiliary decoding heads (Medusa drafts its next window from the hidden rows
 // of the current verify pass). Generate wraps exactly this loop.
@@ -305,12 +306,16 @@ func ExampleDecoder_Step() {
 	if err != nil {
 		panic(err)
 	}
-	_, h1, err := dec.StepHidden(17, 1) // logits + one hidden row
+	reused := make([]float32, dec.Vocab())
+	if err := dec.StepInto(17, 1, reused); err != nil { // zero-allocation host boundary after warmup
+		panic(err)
+	}
+	_, h1, err := dec.StepHidden(9, 2) // logits + one hidden row
 	if err != nil {
 		panic(err)
 	}
 	_ = h1
-	_, h, err := dec.StepNHidden([]int{9, 4, 21}, 2) // a whole window in one step
+	_, h, err := dec.StepNHidden([]int{4, 21, 6}, 3) // a whole window in one step
 	if err != nil {
 		panic(err)
 	}

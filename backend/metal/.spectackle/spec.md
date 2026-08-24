@@ -620,3 +620,6 @@ Rationale: Go benchmark calibration may invoke the sub-benchmark repeatedly; clo
 WHEN BiasGELU receives valid F32 buffers and positive rows and columns, the Metal recorder SHALL dispatch the established exact erf-form bias plus GELU over exactly rows times columns elements and leave every output element beyond that active prefix unchanged.
 
 Rationale: Prevent capacity-sized scratch buffers from amplifying elementwise work or mutating inactive storage.
+
+## METAL-RECORDER-WRAPPER-REUSE-001 {applies: go:metal.Recorder.Reset,go:metal.Recorder.ResetConcurrent,go:metal.Recorder.reset}
+WHEN a freed Metal Recorder is reset, the Metal backend SHALL open exactly 1 fresh native command buffer and reuse the existing Go Recorder wrapper.

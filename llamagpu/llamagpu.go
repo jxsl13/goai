@@ -21,6 +21,69 @@ type mBuf struct{ *metal.DeviceBuffer }
 
 type mRec struct{ r *metal.Recorder }
 
+// pooledMRec keeps the two Go recorder wrappers used by Decoder's current/next command-buffer
+// overlap resident. Metal command buffers remain one-shot; only their allocation-free Go shells
+// alternate. Decoder is not safe for concurrent use, so this deliberately tiny pool needs no lock.
+type pooledMRec struct {
+	mRec
+	pool   *mRecPool
+	active bool
+}
+
+type mRecPool struct {
+	spare [2]*pooledMRec
+	n     int
+}
+
+func (p *mRecPool) acquire(concurrent bool) (recorder, error) {
+	var m *pooledMRec
+	if p.n != 0 {
+		p.n--
+		m, p.spare[p.n] = p.spare[p.n], nil
+		var err error
+		if concurrent {
+			err = m.r.ResetConcurrent()
+		} else {
+			err = m.r.Reset()
+		}
+		if err != nil {
+			p.release(m)
+			return nil, err
+		}
+	} else {
+		var r *metal.Recorder
+		var err error
+		if concurrent {
+			r, err = metal.NewConcurrentRecorder()
+		} else {
+			r, err = metal.NewRecorder()
+		}
+		if err != nil {
+			return nil, err
+		}
+		m = &pooledMRec{mRec: mRec{r: r}, pool: p}
+	}
+	m.active = true
+	return m, nil
+}
+
+func (p *mRecPool) release(m *pooledMRec) {
+	if p.n == len(p.spare) {
+		return
+	}
+	p.spare[p.n] = m
+	p.n++
+}
+
+func (m *pooledMRec) Free() {
+	if !m.active {
+		return
+	}
+	m.r.Free()
+	m.active = false
+	m.pool.release(m)
+}
+
 func (m mRec) Barrier() error { return m.r.Barrier() }
 
 // mProfileRec is used only by ProfileMetalStep. It captures the completed recorder before the
@@ -204,6 +267,7 @@ func New(m *nlp.Llama) (*Decoder, error) {
 }
 
 func metalDecoderOps() backendOps {
+	pool := new(mRecPool)
 	return backendOps{
 		name:        string(backend.Metal),
 		asyncEncode: true, // metal command buffers are independent objects (§T614)
@@ -214,13 +278,7 @@ func metalDecoderOps() backendOps {
 			}
 			return mBuf{b}, nil
 		},
-		newRecorder: func() (recorder, error) {
-			r, err := metal.NewRecorder()
-			if err != nil {
-				return nil, err
-			}
-			return mRec{r}, nil
-		},
+		newRecorder:   func() (recorder, error) { return pool.acquire(false) },
 		uploadQWeight: metalUploadQWeight,
 	}
 }
@@ -344,6 +402,7 @@ func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decode
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
+	pool := new(mRecPool)
 	ops := backendOps{
 		name:        string(backend.Metal),
 		asyncEncode: true, // metal command buffers are independent objects (§T614)
@@ -354,13 +413,7 @@ func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decode
 			}
 			return mBuf{b}, nil
 		},
-		newRecorder: func() (recorder, error) {
-			r, err := metal.NewRecorder()
-			if err != nil {
-				return nil, err
-			}
-			return mRec{r}, nil
-		},
+		newRecorder:   func() (recorder, error) { return pool.acquire(false) },
 		uploadQWeight: metalUploadQWeight,
 	}
 	if mixedQKV {
@@ -380,13 +433,7 @@ func newQuantMetalWithMixedQKV(m *nlp.QuantLlama, f16KV, mixedQKV bool) (*Decode
 		return nil, err
 	}
 	if concurrentMetalDecodeEligible(d) {
-		d.ops.newDecodeRecorder = func() (recorder, error) {
-			r, err := metal.NewConcurrentRecorder()
-			if err != nil {
-				return nil, err
-			}
-			return mRec{r}, nil
-		}
+		d.ops.newDecodeRecorder = func() (recorder, error) { return pool.acquire(true) }
 	}
 	return d, nil
 }

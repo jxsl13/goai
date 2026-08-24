@@ -4502,25 +4502,60 @@ func fillRecorderProfileEventsInto(p *RecorderProfile, nativeEvents []C.mtl_reco
 // NewRecorder opens a Recorder (a fresh command buffer). Record ops into it, then Finish to submit
 // and wait, and Free to release it. Not safe for concurrent use; drive one Recorder per goroutine.
 func NewRecorder() (*Recorder, error) {
-	h := C.mtl_recorder_begin()
-	if h == nil {
-		return nil, fmt.Errorf("metal: Recorder begin failed")
+	r := new(Recorder)
+	if err := r.Reset(); err != nil {
+		return nil, err
 	}
-	return &Recorder{handle: h}, nil
+	return r, nil
 }
 
 // NewConcurrentRecorder opens the dependency-tracked production recorder used by eligible
 // single-token decode graphs. SetConcurrentDecodeRecorder(false) keeps the same Go scheduling and
 // barriers but opens the established per-dispatch recorder, providing an honest in-process A/B.
 func NewConcurrentRecorder() (*Recorder, error) {
-	if !concurrentDecodeRecorder.Load() {
-		return NewRecorder()
+	r := new(Recorder)
+	if err := r.ResetConcurrent(); err != nil {
+		return nil, err
 	}
-	h := C.mtl_recorder_begin_concurrent()
+	return r, nil
+}
+
+// Reset reopens a previously freed Recorder around a fresh standard command buffer. Reusing the Go
+// wrapper avoids a hot-path heap allocation; the Metal command buffer itself remains strictly
+// one-shot. Reset returns an error unless Free has released the previous command buffer first.
+func (r *Recorder) Reset() error { return r.reset(false) }
+
+// ResetConcurrent is Reset for the production decode recorder selected by
+// SetConcurrentDecodeRecorder. The toggle is sampled for every fresh command buffer, matching
+// NewConcurrentRecorder even when a benchmark changes the setting between calls.
+func (r *Recorder) ResetConcurrent() error {
+	return r.reset(concurrentDecodeRecorder.Load())
+}
+
+func (r *Recorder) reset(concurrent bool) error {
+	if r == nil {
+		return errors.New("metal: nil Recorder reset")
+	}
+	if r.handle != nil {
+		return errors.New("metal: Recorder reset before Free")
+	}
+	var h unsafe.Pointer
+	if concurrent {
+		h = C.mtl_recorder_begin_concurrent()
+	} else {
+		h = C.mtl_recorder_begin()
+	}
 	if h == nil {
-		return nil, errors.New("metal: concurrent Recorder begin failed")
+		if concurrent {
+			return errors.New("metal: concurrent Recorder begin failed")
+		}
+		return errors.New("metal: Recorder begin failed")
 	}
-	return &Recorder{handle: h, concurrent: true}, nil
+	r.handle = h
+	r.concurrent = concurrent
+	r.pendingBarrier = false
+	r.pendingGroups = nil
+	return nil
 }
 
 // SetConcurrentDecodeRecorder selects the dependency-tracked concurrent encoder for newly opened

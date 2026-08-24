@@ -72,6 +72,45 @@ func BenchmarkLlamaDecodeStepMetal(b *testing.B) {
 	}
 }
 
+// BenchmarkLlamaDecodeStepIntoMetal measures the caller-buffer sibling of Decoder.Step at the same
+// geometry and warm state. It makes the host-boundary allocation contract visible beside throughput.
+func BenchmarkLlamaDecodeStepIntoMetal(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("metal: no gpu")
+	}
+	m, cfg := llamaBoundaryModel(b)
+	dec, err := New(m)
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.Cleanup(dec.Release)
+	prompt := make([]int, 16)
+	for i := range prompt {
+		prompt[i] = (i*97 + 11) % cfg.Vocab
+	}
+	if _, err := dec.StepNLast(prompt, 0); err != nil {
+		b.Fatal(err)
+	}
+	pos := len(prompt)
+	out := make([]float32, cfg.Vocab)
+	if err := dec.StepInto((pos*97+11)%cfg.Vocab, pos, out); err != nil {
+		b.Fatal(err)
+	}
+	pos++
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if pos >= cfg.Ctx {
+			pos = len(prompt) + 1
+		}
+		if err := dec.StepInto((pos*97+11)%cfg.Vocab, pos, out); err != nil {
+			b.Fatal(err)
+		}
+		pos++
+	}
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+}
+
 // BenchmarkLlamaPrefillLastMetal measures generation prefill through StepNLast. Iterations
 // overwrite the same 16 cache rows, keeping shape, commands, and cache positions identical.
 func BenchmarkLlamaPrefillLastMetal(b *testing.B) {
