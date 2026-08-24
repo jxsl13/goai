@@ -198,12 +198,3 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.
-
-## P-01M0T44EDPE42TNZEPAR566ZGW Keep shared-decoder prefill logits resident for the first device-sampled token
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go, llamagpu/decoder_generate_metal_test.go, go:llamagpu.fastTopKSampler, go:llamagpu.fastTopPSampler
-
-Eligible device Top-K and pure Top-P generation currently downloads one full Vocab prefill row, allocates F32 and F64 host staging, and performs CPU sampling for token 1 before switching to resident sampling for token 2. Execute last-row prefill into the existing resident logits buffer without a host download, then use the established device sampler for token 1. Preserve all host-sampler fallbacks, pure Top-P overflow behavior, recurrent-model state progression, exact token/RNG semantics, final cache advancement, and public StepNLastInto behavior. Promote only with exact parity plus measured maxNew 1 allocation and latency leverage on M2.
