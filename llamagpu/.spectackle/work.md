@@ -192,7 +192,7 @@ Decision: retain one complete activation generation for single-token decode and 
 
 ## T-01M0SRP162F01TWKCBSKV0RA5K Implement and benchmark Decoder activation residency
 kind: task
-state: active
+state: done
 created: 2026-08-24
 parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
