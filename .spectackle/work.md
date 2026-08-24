@@ -4028,7 +4028,7 @@ PR 1196 leaves the final classification boundary outside the composed transforme
 
 ## T-01M0RKZ1YSFHNVTJ65SHVC4Q0X Implement and gate the fused ViT classifier boundary
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0RKX6GTF838PM6SNEJ33XVC
 grilled: 2026-08-24 open=11
