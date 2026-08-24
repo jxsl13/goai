@@ -20,6 +20,12 @@ streams and methodology are committed under the Q6_K leadership evidence;
 the generalized SIMD-dequantizer/scalar-GEMV selector mismatch is tracked in
 perfscan issue #799.
 
+Independent archive validation also made the shared QMatMul benchmark result
+observably live through a typed package sink. Seven alternating 10,000-iteration
+pairs are neutral at 7,628 versus 7,634 ns/op (candidate/base 1.00079), with
+592 B/op and four allocations on both sides. The generalized discarded-result
+benchmark detector is tracked in perfscan issue #900.
+
 ### backend/metal -- accept shared exact IQ2 codebook lifecycle (ADR-01M0MMYANQFBN, 2026-08-24)
 
 The accepted Metal architecture keeps IQ2_XXS, IQ2_XS, and the subsequently
