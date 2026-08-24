@@ -557,5 +557,3 @@ WHERE valid contiguous offset-zero F32 patch sequence fusion, the Metal implemen
 
 ## M2-PATCH-EMBED-SEQUENCE-PERF-001
 WHERE three fresh-process order-alternated count-seven campaigns at F32 B8 N64 K48 D128, the M2 promotion gate SHALL require 1.20 times boundary median, 1.05 times complete-step median per campaign, and 1.03 times every aligned complete-step pair.
-## METAL-PRENORM-STACK-SAVED-FALLBACK-001-001
-WHEN saved state is disabled, missing, evicted, replayed, oversized, or requested outside recording mode, the Metal transformer-stack implementation SHALL execute the incumbent recomputing graph with 0 stale-state reads and unchanged eager-inference behavior.
