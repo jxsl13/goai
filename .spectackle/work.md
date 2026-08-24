@@ -4039,22 +4039,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## P-01M0T6TFF6EEY831F4721ZT7Z8 Specialize aligned M2 Q4_K and Q6_K row tails
-kind: proposal
-state: approved
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: backend/metal, llamagpu, internal/benchcompare
-
-Current-main M2 TinyLlama f16-KV profiling attributes 4.001 ms to Q4_K and 1.250 ms to Q6_K, together 67.73 percent of the decode command buffer. R-01M0T6TSEBE0G audits pinned llama.cpp v0.2.0 at bb4caa7540188872173c44d161602d9271386413: it uses the same two-row, two-simdgroup decode geometry already retained by GoAI; prior wider-load, precision, unroll, row-count, and tile experiments are rejected. The remaining isolated source difference is that GoAI reevaluates firstRow+row<N inside every K/256 super-block, while the pinned kernel guards only final stores. Test separately selectable even-N specializations with unconditional two-row inner loops; preserve the current guarded kernel for odd N. Require exact output and input-immutability parity for both formats, explicit odd-tail route coverage, at least 1.03x median leaf throughput for each promoted format, and at least 1.03x median TinyLlama production throughput over interleaved fresh-decoder pairs with identical tokens and continuation logits. Reject and revert any format below its gate.
-
-## T-01M0T6YB9NE0GRVP3TNFJ92G4F Implement and gate even-N Metal Q4_K and Q6_K row-tail specializations
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0T6TFF6EEY831F4721ZT7Z8
-grilled: 2026-08-24 open=10
-targets: backend/metal, llamagpu, internal/benchcompare
-
-Implement separately selectable Q4_K and Q6_K cooperative pipeline variants whose two-row inner super-block loops omit dynamic tail checks. Select a variant only for cooperative M=1 decode with even N; preserve the current guarded pipeline for odd N and every unsupported shape. Add a non-vacuous route probe plus exact parity and input-immutability tests at representative even N and odd N. Benchmark each format against the same-binary current cooperative control at TinyLlama shapes K=2048,N=2048 and K=2048,N=5632 using interleaved warmed campaigns. Promote a format only if its median leaf ratio is at least 1.03. If any leaf promotes, run interleaved fresh-decoder TinyLlama Q4_K_M f16-KV production campaigns and require at least 1.03x median throughput with identical generated tokens and continuation logits. Revert every sub-threshold candidate and record the rejection.
