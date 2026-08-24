@@ -4015,15 +4015,6 @@ targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.
 
 On current merged main, measure the pinned M2 Pro F32 GPT training workload (vocab 4096, sequence/context 256, width 512, 8 heads, 6 layers, FFN 2048) before selecting an implementation. Partition forward, mean hard-label cross-entropy, reverse mode, Metal submissions, and allocations; compare the portable tape path with a feasibility prototype only if attribution shows graph-boundary leverage. Search rejection history first and do not repeat ViT host-loss or retained-intermediate losers. Require exact semantic scope, fresh-process paired measurements, loss/all-gradient parity, input/parameter immutability, and a credible complete-objective gain before promotion.
 
-## P-01M0S2E3VVF8WSZW64D46VEWEZ Add portable GPT LossAndGrad with one-graph causal Metal execution
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=1
-targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.Backend.ViTLossAndGradF32, nlp/gpt.go, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_test.go, internal/benchcompare/compare_test.go
-
-Consume R-01M0S28QXJED6 by adding a model-boundary GPT.LossAndGrad API with the existing forward plus mean hard-label cross-entropy plus private-tape backward as its portable fallback. For contiguous offset-zero F32 GPT-2 geometry with uniform causal blocks, no layer offload, valid token/target indices, and bounded depth, expose an optional Metal capability that gathers token/position embeddings, runs every causal pre-norm block, final LayerNorm and LM head, computes mean cross-entropy, and returns gradients for Params order in one cached MPSGraph submission. Reuse explicit block VJPs and a baked causal mask; do not export intermediate activations or repeat the rejected tiny-host-loss route. Preserve loss/all-gradient parity, parameter/input immutability, recorder isolation, and unsupported-feature fallback. At the pinned M2 Pro V4096 S256 D512 H8 F2048 depth6 cell, require three order-alternated paired campaigns with at least 1.25x median complete-objective speedup and 1.10x in every aligned pair before promotion; publish allocation and throughput deltas and compare the resulting leadership cell with the pinned torch-mps boundary.
-
 ## ADR-01M0S2FBN8E06VT5ZM2P8YC1CP Which GPT training boundary should be promoted on M2?
 kind: adr
 state: done
