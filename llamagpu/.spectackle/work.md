@@ -201,7 +201,7 @@ Implement one-row resident Decoder activation generation, exact high-water StepN
 
 ## P-01M0SXR7C3E2MRKNF1YVZ48G65 Eliminate GPT decode and prefill boundary allocations
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=1
 targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.StepN, go:llamagpu.GPTDecoder.StepNLast, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go, llamagpu/gpt2_scale_test.go, llamagpu/example_test.go
