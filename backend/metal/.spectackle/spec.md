@@ -539,3 +539,6 @@ WHERE 3 order-alternated count-7 M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4,
 
 ## METAL-LAYERNORM-SEQUENCE-CLASSIFIER-NUMERIC-001-001
 WHEN supported output and backward parity is checked against the composite boundary, the Metal fused classifier boundary SHALL match logits and exactly 5 input gradients within established F32 tolerance and mutate exactly 0 input elements.
+
+## METAL-LAYERNORM-SEQUENCE-CLASSIFIER-GRAPH-STRUCTURE-001-001
+WHEN contiguous offset-zero F32 inputs execute the fused classifier boundary, the Metal implementation SHALL execute exactly 1 bounded shape-keyed cached MPSGraph submission per direction with runtime epsilon, pooled buffers, and Go-owned outputs.
