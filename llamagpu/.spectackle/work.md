@@ -217,13 +217,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepInto, go:llamagpu.Decoder.StepNLastInto
 
 Allocate one caller-owned Vocab F32 slice inside Decoder.Generate, fill it with StepNLastInto and StepInto for host sampling, and retain the current device-resident stepInto route for eligible Top-K and pure Top-P samplers. A test-only historical control may retain wrapper allocations for same-binary attribution. This avoids decoder-global mutable result ownership, preserves concurrency semantics, keeps final-token cache advancement, and does not add a host download to the device fast path.
-
-## T-01M0T2W1RQE8NBV10BEFP591PH Implement and validate shared Decoder generation logits reuse
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0T2VE58FN89Y5S53G5P51MP
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepInto, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go, llamagpu/decoder_generate_metal_test.go
-
-Replace per-prefill and per-host-decode Vocab-sized result allocations in Decoder.Generate with one local F32 buffer filled through StepNLastInto and StepInto. Preserve prompt plus generated token output, final-token cache advancement, bit-identical continuation logits, and the existing device-resident Top-K and pure Top-P route with zero new full-Vocab host downloads. Add an isolated test-only historical wrapper-allocation control for same-binary attribution. Validate on M2 using Vocab 32000, maxNew 8, at least three alternating-order throughput campaigns, exact allocation deltas, focused correctness, short repository tests, preflight, Metal preflight, and external direct perfscan. Promote only at at least 1048576 fewer B/op, at least 8 fewer allocs/op, and at least 0.97 times control throughput.
