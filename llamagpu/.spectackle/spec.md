@@ -111,13 +111,13 @@ WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the construc
 
 Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
 
-## DECODER-REQUIRED-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
-WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain 2 buffers with exactly Ctx times Dim elements each.
+## DECODER-REQUIRED-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability,go:llamagpu.TestDecoderScratchOptionalPathShapes}
+WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain 2 resident residual scratch buffers with exactly Dim elements each and materialize Ctx-sized residual scratch only inside an eager control or a selected Ctx-row high-water workspace.
 
 Rationale: These paths use projection scratch for fallback accumulation or output normalization.
 
-## DECODER-MOE-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
-WHEN an F32 pre-norm Decoder enables MoE without another scratch requirement, the constructor SHALL retain exactly 0 ao elements and Ctx times Dim mo elements.
+## DECODER-MOE-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability,go:llamagpu.TestDecoderScratchOptionalPathShapes}
+WHEN an F32 pre-norm Decoder enables MoE without another scratch requirement, the constructor SHALL retain exactly 0 resident ao elements and exactly Dim resident mo elements.
 
 Rationale: MoE accumulates each expert output through mo while F32 attention residuals need no ao scratch.
 
@@ -125,3 +125,23 @@ Rationale: MoE accumulates each expert output through mo while F32 attention res
 WHEN the same-binary TinyLlama residual-scratch benchmark compares lazy and eager controls, the promotion gate SHALL require 33000000 fewer B/op, 10 times lower focused ns/op, and 0.97 times Step and StepNLast throughput.
 
 Rationale: Validate retained-memory leverage without moving work into inference.
+
+## DECODER-ACTIVATION-RESIDENCY-001 {applies: go:llamagpu.Decoder.allocScratch,go:llamagpu.Decoder.makeScratch,go:llamagpu.TestDecoderScratchResidencyGrowthAndRelease}
+WHEN constructed with standard backend operations, the shared Decoder SHALL retain exactly 1 row of every common activation workspace buffer and 0 multi-row common activation workspace buffers.
+
+Rationale: Single-token decode is the steady-state path; context-sized transient storage has no live consumer before prefill.
+
+## DECODER-FULL-WORKSPACE-GROWTH-001 {applies: go:llamagpu.Decoder.scratchForRows,go:llamagpu.TestDecoderScratchResidencyGrowthAndRelease}
+WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the shared Decoder SHALL allocate 1 grouped workspace at exactly the requested rows, reuse it for every smaller request, and grow only for a larger request.
+
+## DECODER-FULL-WORKSPACE-LIFETIME-001 {applies: go:llamagpu.decoderScratch.release,go:llamagpu.Decoder.newScratch,go:llamagpu.Decoder.Release,go:llamagpu.TestDecoderScratchPartialAllocationFailureReleasesGeneration}
+WHEN grouped workspace growth fails or the Decoder is released, the shared Decoder SHALL release each prior or partial workspace buffer exactly once and retain 0 stale grouped-workspace references.
+
+## DECODER-HIDDEN-WORKSPACE-READBACK-001 {applies: go:llamagpu.Decoder.StepNHidden,go:llamagpu_test.TestMedusaGenerateLlamaAllRejectIsGreedy}
+WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exactly 1 or len(tokens) final hidden rows from the corresponding selected activation workspace.
+
+## TINYLLAMA-ACTIVATION-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkDecoderScratchResidency,go:llamagpu.BenchmarkLlamaDecodeStepMetal,go:llamagpu.BenchmarkLlamaPrefillLastMetal}
+WHEN the same-binary TinyLlama-class activation residency benchmark compares lazy and eager controls on M2, the promotion gate SHALL require at least 150000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times public Step and StepNLast throughput.
+
+## ROPE-PAIR-EXACT-STRIDE-STORAGE-001 {applies: go:metal.Recorder.RoPEPair,go:vulkan.Recorder.RoPEPair,go:llamagpu_test.TestDecoderMatchesReference,go:llamagpu_test.TestStepNMatchesSequentialSteps}
+WHEN a fused QKV buffer has exactly seq times stride elements and both band ends are within stride, the Metal and Vulkan RoPEPair recorders SHALL accept it with exactly 0 offset-padding elements.

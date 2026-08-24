@@ -200,7 +200,11 @@ func New(m *nlp.Llama) (*Decoder, error) {
 	if !metal.Available() {
 		return nil, fmt.Errorf("llamagpu: no metal GPU")
 	}
-	return newDecoder(m, backendOps{
+	return newDecoder(m, metalDecoderOps())
+}
+
+func metalDecoderOps() backendOps {
+	return backendOps{
 		name:        string(backend.Metal),
 		asyncEncode: true, // metal command buffers are independent objects (§T614)
 		newBuffer: func(data []float32) (buffer, error) {
@@ -218,7 +222,7 @@ func New(m *nlp.Llama) (*Decoder, error) {
 			return mRec{r}, nil
 		},
 		uploadQWeight: metalUploadQWeight,
-	})
+	}
 }
 
 // NewGPT uploads an nlp.GPT's weights into metal device buffers for batched decoding — the

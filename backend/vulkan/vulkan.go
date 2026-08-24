@@ -1580,9 +1580,11 @@ func (r *Recorder) RoPEAt(q, inv, o *DeviceBuffer, off, seq, width, heads, hd, h
 // (headsQ heads at element offset offQ) AND the k band (headsK heads at offK) of a fused
 // QKV buffer in place, rows `stride` floats wide — replacing two RoPEAt dispatches.
 func (r *Recorder) RoPEPair(qkv, inv *DeviceBuffer, seq, stride, headsQ, offQ, headsK, offK, hd, half, posOffset int, posDiv float32) error {
-	maxOff := max(offQ, offK)
-	if offQ < 0 || offK < 0 || qkv.n < maxOff+seq*stride || inv.n < half {
-		return fmt.Errorf("vulkan: Recorder rope2 shape mismatch: qkv=%d (want %d at off %d) inv=%d (want %d)", qkv.n, seq*stride, maxOff, inv.n, half)
+	qEnd, kEnd := offQ+headsQ*hd, offK+headsK*hd
+	if seq < 1 || stride < 1 || offQ < 0 || offK < 0 || qEnd > stride || kEnd > stride ||
+		qkv.n < seq*stride || inv.n < half {
+		return fmt.Errorf("vulkan: Recorder rope2 shape mismatch: qkv=%d (want %d) stride=%d bands=%d/%d inv=%d (want %d)",
+			qkv.n, seq*stride, stride, qEnd, kEnd, inv.n, half)
 	}
 	rc := C.vk_recorder_rope2(r.handle,
 		(*C.uint32_t)(unsafe.Pointer(&rope2Spirv[0])), C.int(len(rope2Spirv)),

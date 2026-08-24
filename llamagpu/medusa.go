@@ -66,8 +66,12 @@ func (d *Decoder) StepNHidden(tokens []int, pos int) (logits, hidden []float32, 
 	if err != nil {
 		return nil, nil, err
 	}
+	s, err := d.scratchForRows(len(tokens))
+	if err != nil {
+		return nil, nil, err
+	}
 	hidden = make([]float32, len(tokens)*d.d)
-	if err := d.xn.b.DownloadF32(hidden); err != nil {
+	if err := s.xn.b.DownloadF32(hidden); err != nil {
 		return nil, nil, err
 	}
 	return logits, hidden, nil
