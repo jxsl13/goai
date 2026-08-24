@@ -2496,10 +2496,6 @@ func embedF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([
 // fall back to the reference (§I4). §T401 measured the CPU-fallback forward at ~20ms (~2/3 of the
 // GPT forward); this cooperative kernel (one 256-thread threadgroup per [seq,vocab] row) replaces it.
 func crossentropyF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
-	return crossentropyF32Route(ctx, in, attrs, true)
-}
-
-func crossentropyF32Route(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs, allowHost bool) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropy, in, attrs)
 	}
@@ -2519,9 +2515,6 @@ func crossentropyF32Route(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 		return nil, fmt.Errorf("metal: crossentropy targets len %d != batch %d", tg.Shape()[0], b)
 	}
 	if b == 0 || c == 0 {
-		return refFallback()
-	}
-	if allowHost && crossentropyHostPreferred(b, c, pa) {
 		return refFallback()
 	}
 	tf := make([]float32, b)
@@ -2553,10 +2546,6 @@ func crossentropyF32Route(ctx *backend.Context, in []*tensor.Tensor, attrs backe
 }
 
 func crossentropyBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
-	return crossentropyBackwardF32Route(ctx, in, attrs, true)
-}
-
-func crossentropyBackwardF32Route(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs, allowHost bool) ([]*tensor.Tensor, error) {
 	refFallback := func() ([]*tensor.Tensor, error) {
 		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpCrossEntropyBackward, in, attrs)
 	}
@@ -2580,9 +2569,6 @@ func crossentropyBackwardF32Route(ctx *backend.Context, in []*tensor.Tensor, att
 		// non-mean reduction (both change the row set AND the divisor) → reference (§I4).
 		return refFallback()
 	}
-	if allowHost && crossentropyHostPreferred(b, c, pa) {
-		return refFallback()
-	}
 	zc := z.Contiguous()
 	tf := make([]float32, b) // targets → f32 indices (any tg dtype)
 	for i := range tf {
@@ -2599,12 +2585,6 @@ func crossentropyBackwardF32Route(ctx *backend.Context, in []*tensor.Tensor, att
 		return nil, fmt.Errorf("metal: crossentropy-backward failed (code %d)", int(rc))
 	}
 	return []*tensor.Tensor{dz}, nil
-}
-
-// crossentropyHostPreferred confines the measured synchronous host win to the
-// exact small ViT geometry. Unmeasured shapes and option sets stay on Metal.
-func crossentropyHostPreferred(batch, classes int, attrs backend.CrossEntropyAttrs) bool {
-	return runtime.GOARCH == "arm64" && batch == 8 && classes == 10 && attrs.IsBasic()
 }
 
 // softmaxF32 computes a numerically-stable softmax over the last axis on the GPU (§V12),
