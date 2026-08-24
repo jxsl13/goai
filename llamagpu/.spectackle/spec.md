@@ -34,3 +34,6 @@ WHEN single-token GPTDecoder.Step executes on Metal, the decoder recorder SHALL 
 
 ## METAL-GPT-QKV-PREFILL-001 {applies: go:llamagpu.mRec.F32QKVBands,go:metal.Recorder.MatMulStridedB}
 WHEN GPT prefill executes on Metal with 64 or more rows, the decoder recorder SHALL issue 3 strided views of the one resident grouped QKV weight and copy 0 weight bytes.
+
+## PORTABLE-GPT-QKV-STORAGE-001 {applies: go:llamagpu.newGPTDecoder}
+WHILE a backend has not opted into fused F32 QKV recording, the GPT decoder SHALL retain 3 split QKV weights, allocate 0 grouped QKV weights, and allocate 0 grouped-output scratch floats.
