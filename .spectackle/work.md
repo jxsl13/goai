@@ -4061,6 +4061,7 @@ choice: Share backend protocol and native update encoder while keeping model gra
 kind: proposal
 state: draft
 created: 2026-08-24
+refs: R-01M0S8MAAVFDSSRJKQKZ2AYBSV, ADR-01M0S8XZMEFC98ZF81GACDFEGE
 grilled: 2026-08-24 open=1
 targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, backend/metal/vit_adamw_session_test.go, backend/metal/vit_adamw_attribution_test.go, vision/vit.go, vision/vit_adamw_session_test.go, vision/example_vit_adamw_session_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/README.md
 
