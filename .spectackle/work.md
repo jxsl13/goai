@@ -4060,3 +4060,12 @@ parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, nlp/gpt.go, nlp/gpt_adamw_session_test.go, nlp/example_gpt_adamw_session_test.go, nn/optim.go, nn/optim_test.go, internal/benchcompare/compare_test.go, internal/benchcompare/leadership/evidence/m2-metal-gpt-adamw-session-20260824/README.md, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
 
 Implement the explicit F32 AdamW session across the portable GPT API and Metal backend. Correct the pinned torch companion semantics, prove multi-step parity plus Sync/Close safety, collect order-alternated M2 leadership evidence, report generalizable transfer-boundary findings to perfscan, and ship only if every declared performance gate passes.
+
+## T-01M0S6Y0Z1EEZR630749829ZDR Integrate GPT AdamW session with public API and scheduler guards
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
+targets: backend/example_gpt_adamw_session_test.go, nlp/example_gpt_adamw_session_test.go, nn/example_test.go, nn/scheduler_guard_test.go, nn/scheduler_test.go
+
+Document every exported field, add runnable examples for the backend session interface, nlp session, and AdamF32, and account for AdamF32 in BindLR reachability so the new public surface satisfies repository API policy.
