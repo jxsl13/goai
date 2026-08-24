@@ -4037,7 +4037,6 @@ kind: proposal
 state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=1
-needs: ADR-01M0S9054HEP395N4TJ5MHKFYN
 targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, backend/metal/vit_adamw_session_test.go, backend/metal/vit_adamw_attribution_test.go, vision/vit.go, vision/vit_adamw_session_test.go, vision/example_vit_adamw_session_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/README.md
 
 Consume R-01M0S8MAAVFDS by introducing a fixed-batch F32 ViT AdamW session. Preserve the portable LossAndGrad plus nn.AdamF32 path on unsupported backends. On Metal, upload all 56 parameters once, retain parameter, gradient, and F32 moment buffers, reuse the existing complete ViT objective graph, encode the objective plus all in-place AdamW updates in one command buffer per Step, return only scalar loss, and materialize parameters only on Sync or Close. Generalize the backend optimizer attrs/session names through source-compatible aliases and share the native AdamW update encoder without changing GPT semantics. Correctness gate: three-step loss and synchronized-parameter parity versus portable F32 AdamW, checkpoint Sync, stale host parameters before Sync, input immutability, idempotent Close, and use-after-close rejection. Performance gate: three order-alternated count-seven same-binary M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4 C10 must reach at least 1.20x aggregate paired median, at least 1.10x in every aligned pair versus exact LossAndGrad plus host AdamF32, and candidate median below the measured PyTorch MPS full-step median of 9.138 ms. Reuse perfscan issue 879 for the already-reported generalized cross-step materialization pattern; file a new issue only for an additional distinct generalizable detector finding.
@@ -4053,13 +4052,16 @@ Context: GPT already proves a resident objective-plus-update session, while R-01
 
 ## ADR-01M0S9054HEP395N4TJ5MHKFYN Which boundary should generalize resident AdamW across GPT and ViT?
 kind: adr
-state: submitted
+state: done
 created: 2026-08-24
 context: R-01M0S8MAAVFDS measured a promotion-sized ViT boundary; ADR-01M0S8XZMEFC9 records the full tradeoff analysis.
-status: proposed
+decision: Share backend protocol and native update encoder while keeping model graph facades specialized
+consequences: Preserve existing GPT source compatibility; add a ViT-specific public session and objective bridge; share F32 AdamW attrs, session protocol, Metal pipeline, update encoder, and sync helper. Defer a graph or IR training engine until a third model supplies measured evidence.
+status: accepted
 
 kind: radio
 option: Duplicate all GPT optimizer infrastructure for ViT
 option: Share backend protocol and native update encoder while keeping model graph facades specialized
 option: Build a generic graph or IR training engine now
 blocks: P-01M0S8XJF9F5HTNGTQXZ3R9YMZ
+choice: Share backend protocol and native update encoder while keeping model graph facades specialized

@@ -991,3 +991,4 @@
 {"t":"2026-08-24T06:57:44Z","eid":"9a6aecf3814e67e1","ag":"ag-4dee","ev":"grill","id":"R-01M0S8MAAVFDSSRJKQKZ2AYBSV","gr":"2026-08-24 open=0","hash":"89163719d3d564359a4f6b6c124d0f62114e3810a28e96fd38cc41c2606bbd86"}
 {"t":"2026-08-24T06:58:18Z","eid":"a5b4647184569e49","ag":"ag-81f3","ev":"create","id":"ADR-01M0S9054HEP395N4TJ5MHKFYN","k":"adr","ti":"Which boundary should generalize resident AdamW across GPT and ViT?"}
 {"t":"2026-08-24T06:58:18Z","eid":"04a504688410ddae","ag":"ag-81f3","ev":"move","id":"ADR-01M0S9054HEP395N4TJ5MHKFYN","fr":"draft","to":"submitted"}
+{"t":"2026-08-24T06:58:28Z","eid":"543073cf55756bf9","ag":"ag-7a8a","ev":"decide","id":"ADR-01M0S9054HEP395N4TJ5MHKFYN","note":"Share backend protocol and native update encoder while keeping model graph facades specialized"}
