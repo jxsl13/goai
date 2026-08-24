@@ -46,7 +46,9 @@ type GPTDecoder struct {
 	embedBatchHost []float32      // reusable batched embedding rows, retained at the exact high-water size
 	// eagerBoundaryControl retains the historical per-call host allocations for same-binary benchmarks.
 	eagerBoundaryControl bool
-	all                  []buffer
+	// eagerGenerateResultControl retains the historical per-token logits allocations for same-binary benchmarks.
+	eagerGenerateResultControl bool
+	all                        []buffer
 }
 
 type f32QKVBandsRecorder interface {
@@ -567,7 +569,14 @@ func (d *GPTDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]i
 	out := append([]int(nil), prompt...)
 	// generation samples only the post-prompt row, so project just the last prompt row's logits
 	// (StepNLast) instead of the full [len(prompt), vocab] LM head + download.
-	logits, err := d.StepNLast(prompt, 0)
+	var logits []float32
+	var err error
+	if d.eagerGenerateResultControl {
+		logits, err = d.StepNLast(prompt, 0)
+	} else {
+		logits = make([]float32, d.v)
+		err = d.StepNLastInto(prompt, 0, logits)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -582,11 +591,14 @@ func (d *GPTDecoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]i
 		}
 		next := s.SampleWithHistory(buf, out)
 		out = append(out, next)
-		l, err := d.Step(next, pos)
+		if d.eagerGenerateResultControl {
+			logits, err = d.Step(next, pos)
+		} else {
+			err = d.StepInto(next, pos, logits)
+		}
 		if err != nil {
 			return nil, err
 		}
-		logits = l
 		pos++
 	}
 	return out, nil

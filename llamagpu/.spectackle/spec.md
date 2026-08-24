@@ -213,3 +213,12 @@ WHEN GPT-2-small StepInto and 16-token StepNLastInto are benchmarked on M2, the 
 
 ## M2-GPT-WRAPPER-THROUGHPUT-001-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal,go:llamagpu_test.BenchmarkGPTPrefillLastMetal,go:llamagpu.BenchmarkGPTDecodeBoundaryPairedMetal,go:llamagpu.BenchmarkGPTPrefillBoundaryPairedMetal}
 WHEN GPT-2-small Step and 16-token StepNLast are benchmarked on M2, the GPT compatibility-wrapper promotion gate SHALL require at most 204804 B/op, exactly 1 allocation, and at least 0.97 times baseline throughput for both boundaries.
+
+## GPT-GENERATE-LOGITS-REUSE-001-001 {applies: go:llamagpu.GPTDecoder.Generate}
+WHEN Generate emits N tokens through host sampling, the GPTDecoder SHALL allocate exactly 1 Vocab F32 logits slice and reuse it for prefill and every decode step.
+
+## GPT-GENERATE-CACHE-PARITY-001-001 {applies: go:llamagpu.GPTDecoder.Generate}
+WHEN optimized Generate returns N tokens after a prompt of P tokens, the GPTDecoder SHALL retain exactly 1 populated cache row per prompt or generated token including 1 row for the final generated token.
+
+## M2-GPT-GENERATE-ALLOCATION-PERF-001-001 {applies: go:llamagpu.BenchmarkGPTGenerateAllocationsMetal,go:llamagpu.BenchmarkGPTGeneratePairedMetal}
+WHEN the generation reuse slice is promoted, the GPT-2-small M2 maxNew 8 benchmark gate SHALL require 1638400 fewer B/op, 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
