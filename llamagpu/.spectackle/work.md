@@ -216,3 +216,12 @@ parent: P-01M0ST9BK2FGYTT3D762HHYHVB
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
 
 Decision: add StepInto with exact destination-size validation before any cache mutation, keep Step as make(Vocab) plus StepInto, and store one Dim-sized host embedding row per non-concurrent Decoder. Fill contiguous F32/F64 embedding storage directly and use dtype-safe scalar fallback for strided or half storage. Rejected: change Step signature because it breaks API compatibility; retain Slice/Cast because it creates six per-token objects; duplicate the full step pipeline because it risks semantic drift.
+
+## T-01M0STA78PF4PABXVY1FBKZ98J Implement and benchmark Decoder StepInto
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0ST9BK2FGYTT3D762HHYHVB
+targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
+
+Implement reusable embedding-row staging, caller-buffer StepInto, allocating Step compatibility, length and no-mutation tests, dtype/stride parity tests, and persistent M2 benchmarks. Promotion requires zero allocations for StepInto after warmup, at least 8000 fewer B/op than Step at the boundary geometry, exact logits, and at least 0.97 times Step throughput.
