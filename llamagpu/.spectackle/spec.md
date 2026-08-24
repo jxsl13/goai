@@ -143,5 +143,5 @@ WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exac
 ## TINYLLAMA-ACTIVATION-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkDecoderScratchResidency,go:llamagpu.BenchmarkLlamaDecodeStepMetal,go:llamagpu.BenchmarkLlamaPrefillLastMetal}
 WHEN the same-binary TinyLlama-class activation residency benchmark compares lazy and eager controls on M2, the promotion gate SHALL require at least 150000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times public Step and StepNLast throughput.
 
-## ROPE-PAIR-EXACT-STRIDE-STORAGE-001
+## ROPE-PAIR-EXACT-STRIDE-STORAGE-001 {applies: go:metal.Recorder.RoPEPair,go:vulkan.Recorder.RoPEPair,go:llamagpu.TestDecoderMatchesReference,go:llamagpu.TestStepNMatchesSequentialSteps}
 WHEN a fused QKV buffer has exactly seq times stride elements and both band ends are within stride, the Metal and Vulkan RoPEPair recorders SHALL accept it with exactly 0 offset-padding elements.
