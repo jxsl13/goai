@@ -4042,7 +4042,7 @@ choice: One cached causal MPSGraph for the complete objective
 
 ## T-01M0S2GVS8EB7SQWGK4HYKR0YM Implement and gate one-submission causal GPT LossAndGrad
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0S2E3VVF8WSZW64D46VEWEZ
 targets: nlp/gpt.go, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_test.go, internal/benchcompare/compare_test.go
