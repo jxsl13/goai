@@ -4017,7 +4017,7 @@ Measure the post-classifier CrossEntropy forward/backward boundary and its contr
 
 ## P-01M0RQAB74FFSA32RRCTPRK54H Keep the tiny ViT loss boundary on host memory
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 parent: R-01M0RQ3BTBEDGTR3YTW6RJJRCM
 targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32, go:nn.CrossEntropy
