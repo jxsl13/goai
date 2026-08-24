@@ -4015,3 +4015,12 @@ parent: R-01M0RVG598FZABSSGTGDVG203A
 targets: vision/vit.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
 
 R-01M0RVG598FZA established that separate stack backward recomputation dominates and that exporting saved MPSGraph intermediates yields only 1.0156x complete-step. Validate a wider objective boundary where labels are already known: compose patch sequence, every pre-norm block, final classifier, mean hard-label cross-entropy, and gradients for all parameters inside one cached MPSGraph using the pinned SDK gradientForPrimaryTensor API already exercised by the classifier VJP. Compare a portable tape-based LossAndGrad fallback with the Metal capability on F32 B8/C3/HW32/P4/S65/D128/H512/depth4/H4/classes10. Require loss and every gradient parity, input/parameter immutability, one native submission, at least 1.20x median complete objective speedup, and at least 1.10x every paired sample.
+
+## P-01M0RX1WNKETXSZDBWJ22NK76F Add portable ViT LossAndGrad with one-graph Metal execution
+kind: proposal
+state: draft
+created: 2026-08-24
+parent: R-01M0RX17A7E9890D8DQTYKRXST
+targets: vision/vit.go, backend/attrs.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
+
+Introduce ViT.LossAndGrad(ctx, images, targets) returning mean basic cross-entropy and gradients aligned exactly with ViT.Params without mutating inputs or parameters. The portable path records Forward plus CrossEntropy on a private tape. An optional backend capability may consume packed detached patches, targets, and parameters directly. Metal implements the capability for contiguous offset-zero F32 uniform-depth ViTs by composing the already exact patch-sequence, pre-norm attention/FFN, first-token classifier, one-hot mean cross-entropy, and MPSGraph automatic parameter gradients into one bounded geometry-keyed graph and one synchronous submission. Unsupported dtype, shape, backend, recorder use, or capability falls back portably. Promote only with all-gradient/loss parity and the R-01M0RX17A7E98 M2 gates.
