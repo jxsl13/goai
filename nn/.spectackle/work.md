@@ -33,6 +33,8 @@ PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a p
 kind: task
 state: draft
 created: 2026-07-28
+grilled: 2026-08-24 open=0
+targets: nn/kda.go, nn/kda_test.go, backend/ref/mla.go, backend/ref/mla_test.go, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-ps4008-kda-mla-20260824
 
 REMAINING PS4008 candidates after three landed rounds (Muon 2.09x, SOAP 1.20x / Shampoo 1.26x, GaLore 1.75x): nn/kda.go (1), backend/ref/mla.go (3), classic/models.go (1). Tree-wide PS4008 is 12, down from 26 when the rule was minted.
 
