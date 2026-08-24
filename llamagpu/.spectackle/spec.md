@@ -66,7 +66,7 @@ WHEN GPTDecoder or Decoder is constructed with standard backend operations, the 
 
 Rationale: Make dominant decoder residency scale with active output rows rather than maximum context.
 
-## DECODER-FULL-STEPN-LOGITS-001
+## DECODER-FULL-STEPN-LOGITS-001 {applies: go:llamagpu.logitsForRows,go:llamagpu.GPTDecoder.gptStepN,go:llamagpu.TestGPTDecoderLogitsResidencyGrowthAndRelease}
 WHEN full StepN requests more logits rows than the resident buffer holds, the decoder SHALL allocate exactly requested rows times Vocab F32 overflow elements, reuse that buffer for every smaller request, and grow only for a larger request.
 
 Rationale: Preserve full StepN semantics without per-call allocation churn or lifetime maximum-context residency.
