@@ -156,6 +156,7 @@ state: draft
 created: 2026-08-24
 parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
 refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
+grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
 
 Add empty ao/mo placeholders and allocate Ctx times Dim storage only when quantized weights, post-norm, sandwich, MoE, or an internal eager control makes the scratch reachable. Test standard F32 omission and all required categories, benchmark TinyLlama 33554432-byte savings with at least 10x focused allocation speedup, and require at least 0.97x M2 Step and StepNLast throughput with unchanged allocations.
