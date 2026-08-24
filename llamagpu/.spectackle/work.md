@@ -107,7 +107,7 @@ choice: One-row resident workspace plus lazy grouped high-water storage
 
 ## T-01M0SPF62VEYQRE53F1G5G11X3 Implement and gate lazy GPT activation workspaces
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
 refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
