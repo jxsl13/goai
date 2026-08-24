@@ -4024,13 +4024,3 @@ refs: R-01M0RGHTRTE3CSGT21HN59B9QY
 targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go
 
 Add a generic depth-aware pre-norm transformer-stack operation whose exact portable fallback loops over the promoted complete-block helper. On Metal, eligible contiguous F32 depth-2-through-8 stacks use a bounded shape-and-depth-keyed cached MPSGraph that keeps intermediate activations device-local and submits once per forward or backward direction. Promote only if the frozen M2 depth-four gates in R-01M0RGHTRTE3CSGT21HN59B9QY pass; otherwise fully revert executable code.
-
-## T-01M0RGNBBDEF7RQWNFM2MJ2HYY Implement and gate a depth-composed Metal transformer stack
-kind: task
-state: active
-created: 2026-08-23
-parent: P-01M0RGMQF1ENNBTT2DFFC3P0A2
-refs: R-01M0RGHTRTE3CSGT21HN59B9QY
-targets: go:vision.vitBlock.forwardBatched, go:backend.OpPreNormTransformerBlock, backend/metal/metal_bridge.m, vision/vit.go
-
-Implement the generic stack operation, exact complete-block-loop fallback, bounded Metal forward and backward graph, ViT routing, parity and mutation tests, and depth-four boundary plus full-training benchmarks. Retain code only when every frozen research gate passes across three order-alternated campaigns; otherwise revert the executable experiment and archive the measured rejection.
