@@ -111,7 +111,7 @@ WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the construc
 
 Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
 
-## DECODER-REQUIRED-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
+## DECODER-REQUIRED-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability,go:llamagpu.TestDecoderScratchOptionalPathShapes}
 WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain 2 resident residual scratch buffers with exactly Dim elements each and materialize Ctx-sized residual scratch only inside an eager control or a selected Ctx-row high-water workspace.
 
 Rationale: These paths use projection scratch for fallback accumulation or output normalization.
