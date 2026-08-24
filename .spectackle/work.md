@@ -4039,3 +4039,11 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## P-01M0T6TFF6EEY831F4721ZT7Z8 Specialize aligned M2 Q4_K and Q6_K row tails
+kind: proposal
+state: draft
+created: 2026-08-24
+targets: backend/metal, llamagpu, internal/benchcompare
+
+Current-main M2 TinyLlama f16-KV profiling attributes 4.001 ms to Q4_K and 1.250 ms to Q6_K, together 67.73 percent of the decode command buffer. Pinned llama.cpp v0.2.0 at bb4caa7540188872173c44d161602d9271386413 uses the same two-row, two-simdgroup decode geometry already retained by GoAI; prior wider-load, precision, unroll, row-count, and tile experiments are rejected. The remaining isolated source difference is that GoAI reevaluates firstRow+row<N inside every K/256 super-block, while the pinned kernel guards only final stores. Test separately selectable even-N specializations with unconditional two-row inner loops; preserve the current guarded kernel for odd N. Require exact output and input-immutability parity for both formats, explicit odd-tail route coverage, at least 1.03x median leaf throughput for each promoted format, and at least 1.03x median TinyLlama production throughput over interleaved fresh-decoder pairs with identical tokens and continuation logits. Reject and revert any format below its gate.
