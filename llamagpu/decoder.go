@@ -351,6 +351,9 @@ type backendOps struct {
 	// fusedF32QKV opts a backend into GPT's single-resident-weight QKV path. The recorder must
 	// implement f32QKVBandsRecorder so large prefills can address each output band without copies.
 	fusedF32QKV bool
+	// fusedBiasGELU opts GPT into the recorder's bounded bias-plus-exact-GELU epilogue. Recorders
+	// without the optional capability retain the portable AddBias plus Unary chain.
+	fusedBiasGELU bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.

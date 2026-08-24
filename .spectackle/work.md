@@ -4022,3 +4022,20 @@ option: Incremental per-operation tuning
 option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
+
+## ADR-01M0SKZBF3F91TA6ME8FG200DX Which boundary should remove GPT hidden-buffer capacity amplification?
+kind: adr
+state: done
+created: 2026-08-24
+context: GPT writes only rows times FFN values but unbounded Unary consumes context times FFN storage; the solution must preserve exact GELU and portable fallback while reducing M2 dispatch work.
+decision: One bounded BiasGELU recorder dispatch
+consequences: Removes the 1,024-fold logical-work amplification and one dispatch per GPT block on single-token decode. The Metal kernel must use the established exact erf polynomial, match the split active prefix bit-for-bit, leave inactive tail storage unchanged, remain optional, and preserve the split chain for disabled or unsupported recorders.
+status: accepted
+
+kind: radio
+option: One bounded BiasGELU recorder dispatch
+option: Add UnaryN after the existing AddBias dispatch
+option: Resize hidden scratch for every Step shape
+option: Retain the capacity-wide unary control
+blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
+choice: One bounded BiasGELU recorder dispatch

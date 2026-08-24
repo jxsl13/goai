@@ -44,6 +44,10 @@ type f32QKVBandsRecorder interface {
 	F32QKVBands(x, w, q, k, v buffer, rows, dim int) error
 }
 
+type biasGELURecorder interface {
+	BiasGELU(x, b, o buffer, rows, n int) error
+}
+
 func (d *GPTDecoder) recordAttentionResidual(r recorder, b gptBlock, rows int) error {
 	return b.wo.recordAdd(r, d.attn.b, nil, d.dx.b, rows, d.d)
 }
@@ -52,6 +56,18 @@ func (d *GPTDecoder) recordFFNResidual(r recorder, b gptBlock, rows int) error {
 	return firstErr(
 		b.w2.recordAdd(r, d.hid.b, nil, d.dx.b, rows, d.d),
 		r.AddBias(d.dx.b, b.fb2, d.dx.b, rows, d.d),
+	)
+}
+
+func (d *GPTDecoder) recordBiasGELU(r recorder, b gptBlock, rows int) error {
+	if d.ops.fusedBiasGELU {
+		if fused, ok := r.(biasGELURecorder); ok {
+			return fused.BiasGELU(d.hid.b, b.fb1, d.hid.b, rows, b.ffn)
+		}
+	}
+	return firstErr(
+		r.AddBias(d.hid.b, b.fb1, d.hid.b, rows, b.ffn),
+		r.Unary(d.hid.b, d.hid.b, unaryGELU),
 	)
 }
 
@@ -192,8 +208,7 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 			d.recordAttentionResidual(r, b, 1),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, 1, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, 1),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, 1, b.ffn),
-			r.Unary(d.hid.b, d.hid.b, unaryGELU),
+			d.recordBiasGELU(r, b, 1),
 			d.recordFFNResidual(r, b, 1),
 		)
 		if e != nil {
@@ -288,8 +303,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 			d.recordAttentionResidual(r, b, k),
 			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, k, D, d.eps),
 			b.w1.record(r, d.xn2.b, d.hid.b, k),
-			r.AddBias(d.hid.b, b.fb1, d.hid.b, k, b.ffn),
-			r.Unary(d.hid.b, d.hid.b, unaryGELU),
+			d.recordBiasGELU(r, b, k),
 			d.recordFFNResidual(r, b, k),
 		)
 		if e != nil {
