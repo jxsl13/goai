@@ -50,6 +50,7 @@ GoAI's ViT.Params()/CNN.Params() (807306 / 1562).
 
 Usage:
     .venv/bin/python testdata/bench_vision_torch.py
+    .venv/bin/python testdata/bench_vision_torch.py --adamw
     .venv/bin/python testdata/bench_vision_torch.py --json
 """
 import json
@@ -150,13 +151,19 @@ def timed(step, device: str, reps: int) -> tuple[float, float]:
     return statistics.median(times), min(times)
 
 
-def bench(device: str, reps: int = 12) -> dict:
+def bench(device: str, reps: int = 12, adamw: bool = False) -> dict:
     torch.manual_seed(0)
     x = torch.rand(BATCH, CHANS, SIZE, SIZE, device=device)
     tgt = torch.arange(BATCH, device=device) % CLASSES
 
     vit = ViT().to(device).train()
     cnn = CNN().to(device).train()
+    vit_optimizer = torch.optim.AdamW(
+        vit.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.1
+    )
+    cnn_optimizer = torch.optim.AdamW(
+        cnn.parameters(), lr=1e-3, betas=(0.9, 0.999), eps=1e-8, weight_decay=0.1
+    )
 
     def vit_forward():
         with torch.no_grad():
@@ -174,12 +181,24 @@ def bench(device: str, reps: int = 12) -> dict:
         cnn.zero_grad(set_to_none=True)
         F.cross_entropy(cnn(x), tgt).backward()
 
+    def vit_adamw():
+        vit.zero_grad(set_to_none=True)
+        F.cross_entropy(vit(x), tgt).backward()
+        vit_optimizer.step()
+
+    def cnn_adamw():
+        cnn.zero_grad(set_to_none=True)
+        F.cross_entropy(cnn(x), tgt).backward()
+        cnn_optimizer.step()
+
     work = [
         ("vit_forward", vit_forward),
         ("vit_train", vit_train),
         ("cnn_forward", cnn_forward),
         ("cnn_train", cnn_train),
     ]
+    if adamw:
+        work.extend((("vit_adamw", vit_adamw), ("cnn_adamw", cnn_adamw)))
     res = {}
     for name, step in work:
         med, best = timed(step, device, reps)
@@ -189,12 +208,13 @@ def bench(device: str, reps: int = 12) -> dict:
 
 
 def main() -> None:
+    adamw = "--adamw" in sys.argv
     devices = ["cpu"]
     if torch.backends.mps.is_available():
         devices.append("mps")
 
     params = {"vit": nparams(ViT()), "cnn": nparams(CNN())}
-    out = {dev: bench(dev) for dev in devices}
+    out = {dev: bench(dev, adamw=adamw) for dev in devices}
 
     meta = {
         "torch": torch.__version__, "python": sys.version.split()[0],
@@ -203,8 +223,8 @@ def main() -> None:
                      f"ViT(patch={PATCH} dim={DIM} depth={DEPTH} heads={HEADS} mlp={4 * DIM}) | "
                      f"CNN(channels=[8,16] kernel=3)"),
         "params": params,
-        "timed": ("forward (no_grad) and train step = forward + cross_entropy + "
-                  "backward (no optimizer step)"),
+        "timed": ("forward (no_grad), train = forward + cross_entropy + backward, "
+                  "and optional adamw = train + AdamW(lr=1e-3, wd=0.1)"),
     }
     if "--json" in sys.argv:
         print(json.dumps({"meta": meta, "results": out}, indent=2))
