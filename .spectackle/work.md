@@ -4042,7 +4042,7 @@ Introduce an explicit GPT F32 AdamW training session with portable semantics and
 
 ## ADR-01M0S5EQY6FSYSMGWNR92THDP8 Which M2 state boundary should own GPT AdamW updates?
 kind: adr
-state: draft
+state: submitted
 created: 2026-08-24
 targets: backend/metal/metal_bridge.m, backend/metal/metal.go, backend/attrs.go, nlp/gpt.go, nn/optim.go
 
