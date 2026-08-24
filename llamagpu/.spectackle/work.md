@@ -189,3 +189,12 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Decision: retain one complete activation generation for single-token decode and lazily allocate one exact-row high-water generation for batched StepN. StepN temporarily selects that generation, restores the resident generation on every exit, and StepNHidden reads from the selected high-water generation. Each generation preserves optional quantized, post-norm, sandwich, fused gate-up, and MoE buffers. Rejected: resize individual fields in place because partial failure creates mixed generations; keep max-context allocation because it wastes hundreds of MiB at common contexts; thread scratch through every recorder helper because it creates broad high-risk signature churn without added performance.
+
+## T-01M0SRP162F01TWKCBSKV0RA5K Implement and benchmark Decoder activation residency
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
+targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
+
+Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.

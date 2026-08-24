@@ -189,3 +189,4 @@
 {"t":"2026-08-24T11:31:41Z","eid":"8dfbf2a4e9ae626b","ag":"ag-a6ae","ev":"grill","id":"P-01M0SRKP79ETWS3GGEVN1XZMPW","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"e64af6649679bb476a681ad849e1a7827c01d7577c6a22dcf40428530bbb35a6"}
 {"t":"2026-08-24T11:31:59Z","eid":"5c87ccfcd21eb38e","ag":"ag-313a","ev":"create","id":"ADR-01M0SRN9PVFRMRJC6NNCAHZBNY","k":"adr","ti":"Use generation-swapped Decoder activation workspaces","dir":"llamagpu"}
 {"t":"2026-08-24T11:32:15Z","eid":"fdccb0f73c34fe2d","ag":"ag-e3c4","ev":"move","id":"ADR-01M0SRN9PVFRMRJC6NNCAHZBNY","dir":"llamagpu","fr":"draft","to":"active","note":"Decision adopted: whole-generation ownership makes growth atomic and retains the established helper graph while bounding resident decode storage."}
+{"t":"2026-08-24T11:32:23Z","eid":"24af3f3b24082520","ag":"ag-2995","ev":"create","id":"T-01M0SRP162F01TWKCBSKV0RA5K","k":"task","ti":"Implement and benchmark Decoder activation residency","dir":"llamagpu"}
