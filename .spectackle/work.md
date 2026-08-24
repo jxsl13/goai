@@ -4024,12 +4024,3 @@ grilled: 2026-08-24 open=0
 targets: go:nlp.ForwardPreNormTransformerStack, go:metal.preNormTransformerStackF32, go:metal.preNormTransformerStackBackwardF32, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_stack_test.go
 
 Research R-01M0RVG598FZA measured the fused depth-4 ViT stack at roughly 4.05 ms forward and 8.9 ms backward; backward rebuilds the full forward graph and dominates the approximately 9.7 ms complete training step. A correct Q/K/V grouping prototype reached only about 1.032x at the boundary and reversed in paired complete-step samples, so it is rejected. For recording-mode F32 Metal stacks only, materialize the expensive attention state and FFN pre-activations into a bounded two-slot native cache keyed by the forward output address. Backward consumes a matching entry once and uses a graph that reconstructs only cheap LayerNorm/GELU elementwise state; cache miss, eviction, repeated backward, unsupported shape, and eager inference use the existing recomputing path. Cap each retained state, serialize access under the existing Metal operation lock, retain no Go pointer, preserve exact logits/loss/all gradients/input immutability, and require at least 1.05x complete-step median with a 1.03x paired floor on the pinned M2 ViT workload.
-
-## T-01M0RW8MHYFZXTSAKCJV12GWS5 Implement and gate retained Metal stack activations
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0RW85SWF8H9ZYX9XJ9ND2YB
-targets: go:nlp.ForwardPreNormTransformerStack, go:metal.preNormTransformerStackF32, go:metal.preNormTransformerStackBackwardF32, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
-
-Implement the bounded saved-activation route from P-01M0RW85SWF8H. Preserve the incumbent recomputing graph as the eager, cache-miss, eviction, replay, oversize, and disabled control path. Validate direct stack output plus all 49 gradients, complete ViT logits/loss/parameter gradients, input immutability, bounded ownership, and fresh-process paired M2 performance before promotion.
