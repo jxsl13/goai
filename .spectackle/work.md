@@ -4051,12 +4051,3 @@ targets: backend/metal/metal_bridge.m, backend/metal/metal.go, backend/attrs.go,
 
 Choose among: A, retain parameters, F32 moments, and gradient buffers inside an explicit closable training session, encode the existing objective graph plus one in-place custom AdamW encoder in a single command buffer, and sync host parameters only explicitly; B, extend the objective graph with AdamW but continue uploading and downloading all parameters every step; C, keep LossAndGrad plus host AdamW and tune copies. Research R-01M0S55DWJFPQ measures steady native upload at 1.91 ms, gradient copy at 4.56 ms, Go result construction near 2 ms, and host AdamW near 10.5 ms, making only A capable of the declared torch leadership gate.
 choice: A: explicit resident session with one objective-plus-AdamW command buffer
-
-## T-01M0S5M8K2F4PTKVWC1QZG9ZQ5 Implement and gate the resident M2 GPT AdamW session
-kind: task
-state: done
-created: 2026-08-24
-parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
-targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, nlp/gpt.go, nlp/gpt_adamw_session_test.go, nlp/example_gpt_adamw_session_test.go, nn/optim.go, nn/optim_test.go, internal/benchcompare/compare_test.go, internal/benchcompare/leadership/evidence/m2-metal-gpt-adamw-session-20260824/README.md, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
-
-Implement the explicit F32 AdamW session across the portable GPT API and Metal backend. Correct the pinned torch companion semantics, prove multi-step parity plus Sync/Close safety, collect order-alternated M2 leadership evidence, report generalizable transfer-boundary findings to perfscan, and ship only if every declared performance gate passes.
