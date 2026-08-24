@@ -67,3 +67,4 @@
 {"t":"2026-08-24T10:28:52Z","eid":"873453f9f67ee9ed","ag":"ag-967f","ev":"grill","id":"P-01M0SN14HSEJ2VWB9HT1S7W01F","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"98afcae41ba4c1566cf083acb749e14083c318d42152776982196a8bfb5bfbc8"}
 {"t":"2026-08-24T10:28:55Z","eid":"8c09189797087590","ag":"ag-c5ac","ev":"create","id":"ADR-01M0SN1SY1EF1B4H7TW75ERAH2","k":"adr","ti":"How should decoders serve rare multi-row StepN logits without retaining Ctx times Vocab storage?","dir":"llamagpu"}
 {"t":"2026-08-24T10:28:55Z","eid":"31f5e9d8aaf7b992","ag":"ag-c5ac","ev":"move","id":"ADR-01M0SN1SY1EF1B4H7TW75ERAH2","dir":"llamagpu","fr":"draft","to":"submitted"}
+{"t":"2026-08-24T10:29:07Z","eid":"c10438d17ef50c59","ag":"ag-eaa7","ev":"decide","id":"ADR-01M0SN1SY1EF1B4H7TW75ERAH2","dir":"llamagpu","note":"One-row resident plus lazy reusable high-water buffer"}
