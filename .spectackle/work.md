@@ -4020,6 +4020,7 @@ kind: proposal
 state: active
 created: 2026-08-24
 parent: R-01M0RQ3BTBEDGTR3YTW6RJJRCM
+grilled: 2026-08-24 open=0
 targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32, go:nn.CrossEntropy
 
 For the exact post-PR-1197 M2 ViT B8/C10 basic mean CrossEntropy boundary, avoid two synchronous Metal submissions and execute the existing exact host implementation over unified memory. Preserve direct Metal for every unmeasured geometry or option set. Initial order-reversed count-seven screens show about 106x-116x boundary speedup and 1.18x-1.25x complete-step speedup. The change is execution routing only; the archived scalar math.Log vectorization rejection remains binding. Require exact loss/logits-gradient parity, zero input mutation, a zero-submission structural gate, three campaigns, and external perfscan issue 875.
