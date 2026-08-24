@@ -935,3 +935,4 @@
 {"t":"2026-08-24T05:03:52Z","eid":"59e8cf34dada7b8d","ag":"ag-12ca","ev":"grill","id":"P-01M0S2E3VVF8WSZW64D46VEWEZ","gr":"2026-08-24 open=1","hash":"abad187ed13b5427eeb610aaf8ecc58fe38a74ebe88297704e5badcf5ec1bbfd","open":1,"keys":["blast:10"]}
 {"t":"2026-08-24T05:04:16Z","eid":"50bbe95b931ec22a","ag":"ag-80c2","ev":"create","id":"ADR-01M0S2FBN8E06VT5ZM2P8YC1CP","k":"adr","ti":"Which GPT training boundary should be promoted on M2?"}
 {"t":"2026-08-24T05:04:16Z","eid":"f210f3e7ce3c3ae1","ag":"ag-80c2","ev":"move","id":"ADR-01M0S2FBN8E06VT5ZM2P8YC1CP","fr":"draft","to":"submitted"}
+{"t":"2026-08-24T05:04:27Z","eid":"be678d130633c81d","ag":"ag-5c6f","ev":"decide","id":"ADR-01M0S2FBN8E06VT5ZM2P8YC1CP","note":"One cached causal MPSGraph for the complete objective"}
