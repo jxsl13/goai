@@ -105,3 +105,8 @@ Rationale: Validate retained-memory leverage without moving cost into dominant i
 WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download exactly 1 or len(tokens) final rows from the corresponding selected activation workspace.
 
 Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.
+
+## DECODER-F32-RESIDUAL-SCRATCH-001
+WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the constructor SHALL retain exactly 0 ao elements and 0 mo elements.
+
+Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
