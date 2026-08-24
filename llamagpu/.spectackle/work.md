@@ -220,7 +220,7 @@ Expose StepInto, StepNInto, and StepNLastInto while retaining Step, StepN, and S
 
 ## T-01M0SXVBXBFWQB2XB30NCJC88B Implement and gate allocation-free GPT decode and prefill
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
 grilled: 2026-08-24 open=1

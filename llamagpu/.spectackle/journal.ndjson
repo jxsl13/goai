@@ -280,3 +280,4 @@
 {"t":"2026-08-24T13:02:27Z","eid":"55232a1806ffc41c","ag":"ag-0b5f","ev":"move","id":"P-01M0SXR7C3E2MRKNF1YVZ48G65","dir":"llamagpu","fr":"draft","to":"active"}
 {"t":"2026-08-24T13:02:41Z","eid":"b1ea47f6ff61afa3","ag":"ag-72b1","ev":"create","id":"T-01M0SXVBXBFWQB2XB30NCJC88B","k":"task","ti":"Implement and gate allocation-free GPT decode and prefill","dir":"llamagpu"}
 {"t":"2026-08-24T13:02:49Z","eid":"56662e6c8ce15f73","ag":"ag-297d","ev":"grill","id":"T-01M0SXVBXBFWQB2XB30NCJC88B","dir":"llamagpu","gr":"2026-08-24 open=1","hash":"d70d6257f7e4fafff90fe5f4d2fd7ca72e341b005764f95fd546a775fb943b84","open":1,"keys":["blast:11"]}
+{"t":"2026-08-24T13:02:51Z","eid":"1e22d362595832be","ag":"ag-65c9","ev":"move","id":"T-01M0SXVBXBFWQB2XB30NCJC88B","dir":"llamagpu","fr":"draft","to":"active"}
