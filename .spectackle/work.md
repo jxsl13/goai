@@ -4024,7 +4024,7 @@ Research R-01M0S05JDTENN measured the registry and invocation surface. Pin the c
 
 ## T-01M0S0F690EA7AMXY0W7CXX56M Cut over to pinned direct external perfscan with coverage parity
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0S0D3ZPFCBAT7MTC0J7NJMX
 targets: Makefile, .github/workflows/ci.yml, internal/cichange/config.go, .claude/workflows/perfscan-autofix.js, internal/perfscan, perfscan.yaml, LOOP.md, docs/perf-notes-training.md
