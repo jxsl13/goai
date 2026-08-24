@@ -286,6 +286,23 @@ func (a PatchEmbedSequenceAttrs) WithDefaults() PatchEmbedSequenceAttrs {
 	return a
 }
 
+// ViTLossAndGradAttrs describes the complete, eager ViT training objective
+// consumed by optional backend capabilities. It is deliberately not an Attrs:
+// LossAndGrad is a model boundary rather than a primitive Execute operation.
+type ViTLossAndGradAttrs struct {
+	Depth    int     // number of sequential encoder blocks
+	Batch    int     // number of independent images
+	Patches  int     // patches per image, excluding the class token
+	PatchDim int     // flattened input width of one patch
+	Dim      int     // transformer embedding width
+	Hidden   int     // feed-forward hidden width
+	Heads    int     // attention head count
+	Classes  int     // classifier output width
+	Eps1     float64 // first LayerNorm epsilon shared by all blocks
+	Eps2     float64 // second LayerNorm epsilon shared by all blocks
+	FinalEps float64 // final classifier LayerNorm epsilon
+}
+
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*
 // fields). Leaving the YaRN fields zero disables YaRN.

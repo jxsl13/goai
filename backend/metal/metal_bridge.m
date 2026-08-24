@@ -10540,6 +10540,305 @@ int mtl_patch_embed_sequence_backward_f32(
     }
 }
 
+// ---- Cached complete ViT objective and parameter-gradient graphs ---------
+// This boundary keeps patch projection, all encoder activations, classification
+// loss, and reverse-mode differentiation inside one MPSGraph submission.
+#define VIT_OBJECTIVE_MAX_DEPTH 8
+#define VIT_OBJECTIVE_MAX_PARAMS (8 + 12 * VIT_OBJECTIVE_MAX_DEPTH)
+#define VIT_OBJECTIVE_MAX_INPUTS (2 + VIT_OBJECTIVE_MAX_PARAMS + 3)
+#define VIT_OBJECTIVE_MAX_OUTPUTS (1 + VIT_OBJECTIVE_MAX_PARAMS)
+#define VIT_OBJECTIVE_CACHE_CAP 4
+
+static MPSGraph* gViTObjectiveGraphs[VIT_OBJECTIVE_CACHE_CAP] = {nil};
+static MPSGraphTensor* gViTObjectiveInputs[VIT_OBJECTIVE_CACHE_CAP][VIT_OBJECTIVE_MAX_INPUTS] = {{nil}};
+static MPSGraphTensor* gViTObjectiveOutputs[VIT_OBJECTIVE_CACHE_CAP][VIT_OBJECTIVE_MAX_OUTPUTS] = {{nil}};
+static int gViTObjectiveSigs[VIT_OBJECTIVE_CACHE_CAP][8] = {{0}};
+static int gViTObjectiveValid[VIT_OBJECTIVE_CACHE_CAP] = {0};
+static int gViTObjectiveNext = 0;
+
+static size_t vit_objective_param_length(
+    int param, int depth, size_t dLen, size_t posLen, size_t patchWLen,
+    size_t hLen, size_t aWLen, size_t fWLen, size_t headWLen, size_t classLen) {
+    if (param == 0) return dLen;
+    if (param == 1) return posLen;
+    if (param == 2) return patchWLen;
+    if (param == 3) return dLen;
+    int final = 4 + 12 * depth;
+    if (param < final)
+        return pre_stack_length((param - 4) % 12, dLen, hLen, aWLen, fWLen);
+    if (param == final || param == final + 1) return dLen;
+    if (param == final + 2) return headWLen;
+    return classLen;
+}
+
+static NSArray<NSNumber*>* vit_objective_param_shape(
+    int param, int depth, int seq, int patchDim, int dim, int hidden, int classes) {
+    if (param == 0) return @[@1, @(dim)];
+    if (param == 1) return @[@(seq), @(dim)];
+    if (param == 2) return @[@(patchDim), @(dim)];
+    if (param == 3) return @[@(dim)];
+    int final = 4 + 12 * depth;
+    if (param < final) return pre_stack_shape((param - 4) % 12, dim, hidden);
+    if (param == final || param == final + 1) return @[@(dim)];
+    if (param == final + 2) return @[@(dim), @(classes)];
+    return @[@(classes)];
+}
+
+static MPSGraphTensor* vit_objective_param_placeholder(
+    MPSGraph* g, int param, int depth, int seq, int patchDim,
+    int dim, int hidden, int classes) {
+    return [g placeholderWithShape:
+        vit_objective_param_shape(param, depth, seq, patchDim, dim, hidden, classes)
+                         dataType:MPSDataTypeFloat32 name:nil];
+}
+
+static int ensure_vit_objective_graph(
+    int depth, int batch, int patches, int patchDim,
+    int dim, int hidden, int heads, int classes) {
+    int sig[8] = {depth, batch, patches, patchDim, dim, hidden, heads, classes};
+    for (int i = 0; i < VIT_OBJECTIVE_CACHE_CAP; i++)
+        if (gViTObjectiveValid[i] &&
+            memcmp(sig, gViTObjectiveSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        int seq = patches + 1;
+        int patchRows = batch * patches;
+        int rows = batch * seq;
+        int paramCount = 8 + 12 * depth;
+        int epsIndex = 2 + paramCount;
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* inputs[VIT_OBJECTIVE_MAX_INPUTS] = {nil};
+        MPSGraphTensor* outputs[VIT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        inputs[0] = [g placeholderWithShape:@[@(patchRows), @(patchDim)]
+                                   dataType:MPSDataTypeFloat32 name:nil];
+        inputs[1] = [g placeholderWithShape:@[@(batch)]
+                                   dataType:MPSDataTypeFloat32 name:nil];
+        for (int param = 0; param < paramCount; param++)
+            inputs[2 + param] = vit_objective_param_placeholder(
+                g, param, depth, seq, patchDim, dim, hidden, classes);
+        inputs[epsIndex] = [g placeholderWithShape:@[@1]
+                                         dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex + 1] = [g placeholderWithShape:@[@1]
+                                             dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex + 2] = [g placeholderWithShape:@[@1]
+                                             dataType:MPSDataTypeFloat32 name:nil];
+
+        patch_sequence_nodes patch = build_patch_sequence_nodes(
+            g, inputs[0], inputs[2], inputs[3], inputs[4], inputs[5],
+            patchRows, patchDim, dim, batch, patches, seq);
+        prenorm_attention_nodes attention[VIT_OBJECTIVE_MAX_DEPTH];
+        prenorm_ffn_nodes ffn[VIT_OBJECTIVE_MAX_DEPTH];
+        MPSGraphTensor* h = patch.y;
+        for (int block = 0; block < depth; block++) {
+            int p = 2 + 4 + 12 * block;
+            attention[block] = build_prenorm_attention_nodes(
+                g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex],
+                rows, dim, batch, seq, heads);
+            ffn[block] = build_prenorm_ffn_nodes(
+                g, attention[block].y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
+                inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
+            if (!attention[block].y || !ffn[block].y) return -20;
+            h = ffn[block].y;
+        }
+        int final = 2 + 4 + 12 * depth;
+        sequence_classifier_nodes classifier = build_sequence_classifier_nodes(
+            g, h, inputs[final], inputs[final + 1], inputs[final + 2],
+            inputs[final + 3], inputs[epsIndex + 2],
+            rows, dim, classes, batch, seq);
+        MPSGraphTensor* targetIndices = [g castTensor:inputs[1]
+                                                toType:MPSDataTypeInt32 name:nil];
+        MPSGraphTensor* labels = [g oneHotWithIndicesTensor:targetIndices
+                                                     depth:(NSUInteger)classes axis:1
+                                                  dataType:MPSDataTypeFloat32
+                                                   onValue:1.0 offValue:0.0 name:nil];
+        MPSGraphTensor* loss = [g softMaxCrossEntropyWithSourceTensor:classifier.y
+                                                         labelsTensor:labels axis:1
+                                                        reductionType:MPSGraphLossReductionTypeMean
+                                                                 name:nil];
+        outputs[0] = [g reshapeTensor:loss withShape:@[@1] name:nil];
+
+        // MPSGraph automatic differentiation supports the compact classifier
+        // subgraph, but not the class-token broadcast/concat path. Stop at the
+        // encoder output, then apply the already exact explicit block and
+        // patch VJPs while staying inside this same graph and submission.
+        NSArray<MPSGraphTensor*>* classifierWrt = @[
+            h, inputs[final], inputs[final + 1], inputs[final + 2], inputs[final + 3],
+        ];
+        NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* classifierGradients =
+            [g gradientForPrimaryTensor:loss withTensors:classifierWrt name:nil];
+        int finalParam = 4 + 12 * depth;
+        MPSGraphTensor* upstream = classifierGradients[h];
+        for (int local = 0; local < 4; local++)
+            outputs[1 + finalParam + local] = classifierGradients[inputs[final + local]];
+
+        for (int block = depth - 1; block >= 0; block--) {
+            int p = 2 + 4 + 12 * block;
+            int out = 1 + 4 + 12 * block;
+            prenorm_ffn_backward_nodes ffnBackward = build_prenorm_ffn_backward_nodes(
+                g, ffn[block], inputs[p + 6], inputs[p + 8], inputs[p + 10],
+                upstream, dim, hidden);
+            prenorm_attention_backward_nodes attentionBackward = build_prenorm_attention_backward_nodes(
+                g, attention[block], inputs[p], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], ffnBackward.dX,
+                rows, dim, batch, seq, heads);
+            outputs[out] = attentionBackward.dGamma;
+            outputs[out + 1] = attentionBackward.dBeta;
+            outputs[out + 2] = attentionBackward.dWq;
+            outputs[out + 3] = attentionBackward.dWk;
+            outputs[out + 4] = attentionBackward.dWv;
+            outputs[out + 5] = attentionBackward.dWo;
+            outputs[out + 6] = ffnBackward.dGamma;
+            outputs[out + 7] = ffnBackward.dBeta;
+            outputs[out + 8] = ffnBackward.dW1;
+            outputs[out + 9] = ffnBackward.dB1;
+            outputs[out + 10] = ffnBackward.dW2;
+            outputs[out + 11] = ffnBackward.dB2;
+            upstream = attentionBackward.dX;
+        }
+
+        MPSGraphTensor* dY3 = [g reshapeTensor:upstream
+                                           withShape:@[@(batch), @(seq), @(dim)] name:nil];
+        MPSGraphTensor* dClass3 = [g sliceTensor:dY3 dimension:1 start:0 length:1 name:nil];
+        outputs[1] = [g reshapeTensor:[g reductionSumWithTensor:dClass3 axis:0 name:nil]
+                            withShape:@[@1, @(dim)] name:nil];
+        outputs[2] = [g reshapeTensor:[g reductionSumWithTensor:dY3 axis:0 name:nil]
+                            withShape:@[@(seq), @(dim)] name:nil];
+        MPSGraphTensor* dProjected3 = [g sliceTensor:dY3
+                                            dimension:1 start:1 length:patches name:nil];
+        MPSGraphTensor* dProjected = [g reshapeTensor:dProjected3
+                                               withShape:@[@(patchRows), @(dim)] name:nil];
+        MPSGraphTensor* patchesT = [g transposeTensor:inputs[0]
+                                              dimension:0 withDimension:1 name:nil];
+        outputs[3] = [g matrixMultiplicationWithPrimaryTensor:patchesT
+                                               secondaryTensor:dProjected name:nil];
+        outputs[4] = [g reshapeTensor:[g reductionSumWithTensor:dProjected axis:0 name:nil]
+                            withShape:@[@(dim)] name:nil];
+        if (!g || !patch.y || !classifier.y || !outputs[0]) return -20;
+        for (int i = 0; i < 1 + paramCount; i++) if (!outputs[i]) return -20;
+
+        int slot = gViTObjectiveNext;
+        for (int i = 0; i < VIT_OBJECTIVE_MAX_INPUTS; i++)
+            gViTObjectiveInputs[slot][i] = nil;
+        for (int i = 0; i < VIT_OBJECTIVE_MAX_OUTPUTS; i++)
+            gViTObjectiveOutputs[slot][i] = nil;
+        gViTObjectiveGraphs[slot] = g;
+        for (int i = 0; i < epsIndex + 3; i++) gViTObjectiveInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 1 + paramCount; i++) gViTObjectiveOutputs[slot][i] = outputs[i];
+        memcpy(gViTObjectiveSigs[slot], sig, sizeof(sig));
+        gViTObjectiveValid[slot] = 1;
+        gViTObjectiveNext = (slot + 1) % VIT_OBJECTIVE_CACHE_CAP;
+        return slot;
+    }
+}
+
+int mtl_vit_loss_and_grad_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs,
+    int depth, int batch, int patches, int patchDim,
+    int dim, int hidden, int heads, int classes,
+    float eps1, float eps2, float finalEps) {
+    if (ensure_init() != 0) return -1;
+    if (!inputs || !outputs || depth < 1 || depth > VIT_OBJECTIVE_MAX_DEPTH ||
+        batch <= 0 || patches <= 0 || patchDim <= 0 || dim <= 0 || hidden <= 0 ||
+        heads <= 0 || dim % heads != 0 || classes <= 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_vit_objective_graph(
+            depth, batch, patches, patchDim, dim, hidden, heads, classes);
+        if (slot < 0) return slot;
+        int seq = patches + 1;
+        int paramCount = 8 + 12 * depth;
+        int hostInputCount = 2 + paramCount;
+        int epsIndex = hostInputCount;
+        int graphInputCount = epsIndex + 3;
+        int outputCount = 1 + paramCount;
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t posLen = (size_t)seq * dim * sizeof(float);
+        size_t patchWLen = (size_t)patchDim * dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        size_t headWLen = (size_t)dim * classes * sizeof(float);
+        size_t classLen = (size_t)classes * sizeof(float);
+
+        const float* hostIn[VIT_OBJECTIVE_MAX_INPUTS] = {nil};
+        size_t inputLengths[VIT_OBJECTIVE_MAX_INPUTS] = {0};
+        NSArray<NSNumber*>* inputShapes[VIT_OBJECTIVE_MAX_INPUTS] = {nil};
+        hostIn[0] = (const float*)(uintptr_t)inputs[0];
+        inputLengths[0] = (size_t)batch * patches * patchDim * sizeof(float);
+        inputShapes[0] = @[@(batch * patches), @(patchDim)];
+        hostIn[1] = (const float*)(uintptr_t)inputs[1];
+        inputLengths[1] = (size_t)batch * sizeof(float);
+        inputShapes[1] = @[@(batch)];
+        for (int param = 0; param < paramCount; param++) {
+            int i = 2 + param;
+            hostIn[i] = (const float*)(uintptr_t)inputs[i];
+            inputLengths[i] = vit_objective_param_length(
+                param, depth, dLen, posLen, patchWLen, hLen,
+                aWLen, fWLen, headWLen, classLen);
+            inputShapes[i] = vit_objective_param_shape(
+                param, depth, seq, patchDim, dim, hidden, classes);
+        }
+        hostIn[epsIndex] = &eps1;
+        hostIn[epsIndex + 1] = &eps2;
+        hostIn[epsIndex + 2] = &finalEps;
+        for (int i = epsIndex; i < graphInputCount; i++) {
+            inputLengths[i] = sizeof(float);
+            inputShapes[i] = @[@1];
+        }
+
+        id<MTLBuffer> in[VIT_OBJECTIVE_MAX_INPUTS] = {nil};
+        MPSGraphTensorData* inputData[VIT_OBJECTIVE_MAX_INPUTS] = {nil};
+        for (int i = 0; i < graphInputCount; i++) {
+            if (!hostIn[i]) return -6;
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                                  shape:inputShapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+
+        size_t outputLengths[VIT_OBJECTIVE_MAX_OUTPUTS] = {0};
+        NSArray<NSNumber*>* outputShapes[VIT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        outputLengths[0] = sizeof(float);
+        outputShapes[0] = @[@1];
+        for (int param = 0; param < paramCount; param++) {
+            outputLengths[1 + param] = vit_objective_param_length(
+                param, depth, dLen, posLen, patchWLen, hLen,
+                aWLen, fWLen, headWLen, classLen);
+            outputShapes[1 + param] = vit_objective_param_shape(
+                param, depth, seq, patchDim, dim, hidden, classes);
+        }
+        id<MTLBuffer> out[VIT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        MPSGraphTensorData* outputData[VIT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        for (int i = 0; i < outputCount; i++) {
+            if (!outputs[i]) return -6;
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i]
+                                                                   shape:outputShapes[i]
+                                                                dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:graphInputCount];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:outputCount];
+        for (int i = 0; i < graphInputCount; i++)
+            feeds[gViTObjectiveInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < outputCount; i++)
+            results[gViTObjectiveOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gViTObjectiveGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                       resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        for (int i = 0; i < outputCount; i++)
+            memcpy((float*)(uintptr_t)outputs[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP
 // dS[i,j] = P[i,j]·(dP[i,j] − Σ_k P[i,k]·dP[i,k]) IN PLACE on dP (dS overwrites dP). Causal: only
 // j≤i valid (P is already 0 for j>i, so masked terms drop out; the tail is set to 0). One
