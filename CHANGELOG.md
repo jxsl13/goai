@@ -4,6 +4,28 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### format/gguf -- fuse ARM64 Q6_K decode unpack and dot (T-01M0JGCPFFEZZ, 2026-08-21)
+
+Single-token contiguous-F32 Q6_K `QMatMul` now selects an ARM64 NEON row
+kernel that fuses six-bit unpacking, signed sub-block scaling, activation
+multiplication, and reduction. Portable, non-ARM64, M>1, and other-format
+routes are unchanged. Direct and arbitrary-block gates observe maximum
+scalar-relative errors of `4.41e-7` and `1.20e-5`, below the `1e-4` contract.
+
+Ten retained Apple M2 Pro samples improve the K=4096 row dot **10.65x**,
+M1/N64/K1024 **10.26x**, M1/N4096/K1024 **6.05x**, and recurrent QuantMamba2
+Q6_K decode **3.59x**; every changed time cell has `p=0.000` and unchanged
+allocations. The untouched Q4_K decode control is flat (`p=0.853`). Raw
+streams and methodology are committed under the Q6_K leadership evidence;
+the generalized SIMD-dequantizer/scalar-GEMV selector mismatch is tracked in
+perfscan issue #799.
+
+Independent archive validation also made the shared QMatMul benchmark result
+observably live through a typed package sink. Seven alternating 10,000-iteration
+pairs are neutral at 7,628 versus 7,634 ns/op (candidate/base 1.00079), with
+592 B/op and four allocations on both sides. The generalized discarded-result
+benchmark detector is tracked in perfscan issue #900.
+
 ### backend/metal -- accept shared exact IQ2 codebook lifecycle (ADR-01M0MMYANQFBN, 2026-08-24)
 
 The accepted Metal architecture keeps IQ2_XXS, IQ2_XS, and the subsequently

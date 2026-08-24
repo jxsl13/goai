@@ -2122,6 +2122,14 @@ llama.cpp CPU comparison; the refreshed Q8_0 whole-model cell above is now
 faster than float. See
 `internal/benchcompare/leadership/evidence/m2-arm64-q6k-fused-dot-20260821`.
 
+Archive revalidation made the shared QMatMul benchmark result observably live
+through a typed package sink. Seven process-order-alternated 10,000-iteration
+M1/N64/K1024 pairs measured 7,628 ns/op before and 7,634 ns/op after at the
+medians (candidate/base 1.00079), with exactly 592 B/op and four allocations on
+both sides. The benchmark-integrity change is neutral and does not alter the
+Q6_K production claim. The reusable detector opportunity is
+[perfscan issue #900](https://github.com/jxsl13/perfscan/issues/900).
+
 ## Further reading
 
 - Hoefler & Belli, *Scientific Benchmarking of Parallel Computing Systems* (SC '15) — the canonical treatment of run variance, warm-up and honest reporting that this document's rules follow.

@@ -133,6 +133,8 @@ func BenchmarkDecodeF16(b *testing.B) {
 	}
 }
 
+var benchQMatMulSink *tensor.Tensor
+
 func benchQMatMul(b *testing.B, m int, qt QuantType) {
 	const n, k = 64, 1024
 	w := tensor.FromFloat32(tensor.Shape{n * k}, benchF32(n*k))
@@ -145,9 +147,11 @@ func benchQMatMul(b *testing.B, m int, qt QuantType) {
 	b.SetBytes(int64(m) * n * k * 4)
 	b.ResetTimer()
 	for range b.N {
-		if _, err := QMatMul(x, raw, qt, n, k); err != nil {
+		out, err := QMatMul(x, raw, qt, n, k)
+		if err != nil {
 			b.Fatal(err)
 		}
+		benchQMatMulSink = out
 	}
 }
 
