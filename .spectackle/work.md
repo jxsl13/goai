@@ -3982,13 +3982,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## T-01M0TYMJGMFMQSDXF6A4EBG4CV Implement and gate exact output-axis interleaving for CPU MoECombine
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0TYHVNWF91A29YTTFVS98ZT
-grilled: 2026-08-24 open=0
-targets: backend/cpu/moe_combine.go, backend/cpu/moe_combine_bench_test.go, docs/benchmarking.md, CHANGELOG.md
-
-Implement a pure-Go F64 and F32 MoECombine loop that processes adjacent output columns through independent accumulator chains while preserving the exact ascending expert accumulation order for each element. Keep the current scalar tail, zero-denominator behavior, dtype fallback, and output allocation contract. First freeze exact pre-change behavior across E=1,2,3,4,8, odd D tails, positive/zero denominators, signed zero, infinities, NaNs, and both dtypes; prove non-vacuity with a deliberate accumulation-order mutation. Benchmark merged main versus the candidate in an interleaved M2 campaign for E=8 representative prefill/decode-shaped rows and E=64 high-expert work, plus an unaffected control; retain only measured non-regressing wins with unchanged bytes/op and allocs/op. Inspect Go 1.27 arm64 disassembly to confirm multiple independent accumulator chains and no extra indirect calls. Report the generalizable output-axis interleaving result to github.com/jxsl13/perfscan and commit evidence.
