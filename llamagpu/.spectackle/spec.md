@@ -163,3 +163,6 @@ WHEN StepInto is benchmarked against Step on M2 at the tracked Llama boundary, t
 
 ## DECODER-METAL-RECORDER-POOL-SAFETY-001 {applies: go:llamagpu.mRecPool.acquire,go:llamagpu.pooledMRec.Free}
 WHEN a pooled Decoder recorder is freed, the Metal Decoder adapter SHALL release exactly 1 native Metal command buffer before returning its Go wrapper to the 2-slot pool.
+
+## DECODER-STEPN-INTO-SEMANTICS-001-001
+WHEN the destination length equals len(tokens) times Vocab, the Decoder.StepNInto SHALL advance exactly len(tokens) tokens and write exactly len(tokens) times Vocab logits matching StepN.
