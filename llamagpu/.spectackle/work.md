@@ -183,7 +183,7 @@ Replace max-context resident transient activation storage in the shared Decoder 
 
 ## ADR-01M0SRN9PVFRMRJC6NNCAHZBNY Use generation-swapped Decoder activation workspaces
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
