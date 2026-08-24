@@ -207,13 +207,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.GPTDecoder.Generate, go:llamagpu.GPTDecoder.StepInto, go:llamagpu.GPTDecoder.StepNLastInto, llamagpu/gpt.go, llamagpu/gpt_boundary_metal_bench_test.go, llamagpu/gpt2_scale_test.go
 
 Current GPTDecoder.Generate calls allocating StepNLast once and allocating Step once for every generated token, even though each logits slice is consumed before the next step and never escapes. At GPT-2-small Vocab 50257, every redundant Step result is a 204800-byte allocation; an 8-token generation therefore creates at least 1638400 avoidable bytes and 8 avoidable allocations. Allocate one Vocab host slice, fill it with StepNLastInto, and overwrite it through StepInto for every subsequent token while preserving token output, cache advancement, sampler semantics, and the allocating Step APIs. Promote only with exact token and post-generation cache parity, at least 1638400 fewer B/op and 8 fewer allocs/op for 8 tokens, and at least 0.97 times current-main throughput on M2.
-
-## ADR-01M0SZNGW5ER893A6C9QN52QC3 Reuse caller-owned logits inside GPT generation without changing cache advancement
-kind: adr
-state: active
-created: 2026-08-24
-parent: P-01M0SZN5AHE0TS0198C0CVC36N
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.GPTDecoder.Generate, go:llamagpu.GPTDecoder.StepInto, go:llamagpu.GPTDecoder.StepNLastInto, llamagpu/gpt.go
-
-GPTDecoder.Generate will allocate one Vocab float32 slice, fill it through StepNLastInto, and overwrite it through StepInto after every sampled token. It will retain the existing final StepInto call so the decoder cache still includes every returned token, preserving continuation behavior and exact sampler history. Step, StepNLast, and all public ownership contracts remain unchanged. Reject skipping the final step because cache state is observable through later Step calls; reject a decoder-resident logits host slice because Generate is a single call with an obvious local lifetime; reject sync.Pool because the buffer size is model-specific and the local owner is exact.
