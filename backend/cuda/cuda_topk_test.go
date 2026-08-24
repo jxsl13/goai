@@ -31,8 +31,11 @@ func TestCUDATopK(t *testing.T) {
 			must(t, err)
 			must(t, d.UploadF32(x))
 			gi, gv, err := d.TopK(k)
-			d.Free()
 			must(t, err)
+			giInto := make([]int32, k)
+			gvInto := make([]float32, k)
+			must(t, d.TopKNInto(n, giInto, gvInto))
+			d.Free()
 
 			// CPU reference: indices sorted by value descending.
 			idx := make([]int, n)
@@ -41,6 +44,10 @@ func TestCUDATopK(t *testing.T) {
 			}
 			sort.Slice(idx, func(a, b int) bool { return x[idx[a]] > x[idx[b]] })
 			for r := 0; r < k; r++ {
+				if giInto[r] != gi[r] || gvInto[r] != gv[r] {
+					t.Fatalf("n=%d k=%d rank %d: TopKNInto (%d,%v) != TopK (%d,%v)",
+						n, k, r, giInto[r], gvInto[r], gi[r], gv[r])
+				}
 				if int(gi[r]) != idx[r] {
 					t.Fatalf("n=%d k=%d rank %d: gpu idx %d (val %v) != cpu idx %d (val %v)",
 						n, k, r, gi[r], gv[r], idx[r], x[idx[r]])

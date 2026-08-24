@@ -66,10 +66,29 @@ func (d *DeviceF32) TopKN(n, k int) ([]int32, []float32, error) {
 	}
 	idx := make([]int32, k)
 	val := make([]float32, k)
-	if rc := C.cu_topk_f32(d.ptr, C.int(n), C.int(k), (*C.int)(&idx[0]), (*C.float)(&val[0])); rc != 0 {
-		return nil, nil, fmt.Errorf("cuda: TopKN failed (code %d)", int(rc))
+	if err := d.TopKNInto(n, idx, val); err != nil {
+		return nil, nil, err
 	}
 	return idx, val, nil
+}
+
+// TopKNInto is TopKN with caller-owned result storage. The equal-length index and value slices set
+// k and may be reused across decode tokens instead of allocating two result slices per call.
+func (d *DeviceF32) TopKNInto(n int, idx []int32, val []float32) error {
+	if n < 1 || n > d.rows*d.cols {
+		return fmt.Errorf("cuda: TopKNInto n=%d out of range (1..%d)", n, d.rows*d.cols)
+	}
+	k := len(idx)
+	if len(val) != k {
+		return fmt.Errorf("cuda: TopKNInto index/value lengths differ: %d != %d", k, len(val))
+	}
+	if k < 1 || k > 256 || k > n {
+		return fmt.Errorf("cuda: TopKNInto k=%d out of range for n=%d (1..min(256,n))", k, n)
+	}
+	if rc := C.cu_topk_f32(d.ptr, C.int(n), C.int(k), (*C.int)(&idx[0]), (*C.float)(&val[0])); rc != 0 {
+		return fmt.Errorf("cuda: TopKNInto failed (code %d)", int(rc))
+	}
+	return nil
 }
 
 // LayerNormInto writes LayerNorm(d)·gamma + beta into out over the last axis
