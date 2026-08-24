@@ -81,7 +81,7 @@ WHEN the same-binary GPT-2-small constructor benchmark compares lazy residency w
 
 Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.
 
-## GPT-ACTIVATION-RESIDENCY-001
+## GPT-ACTIVATION-RESIDENCY-001 {applies: go:llamagpu.newGPTDecoder,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
 WHEN GPTDecoder is constructed with standard backend operations, the decoder SHALL retain exactly 1 row of every activation workspace buffer and 0 multi-row activation workspace buffers.
 
 Rationale: Make dominant decode residency scale with active rows instead of maximum context.
