@@ -4017,7 +4017,7 @@ Starting from merged PR 1198, remeasure the pinned M2 Pro F32 ViT B8/C3/HW32/P4/
 
 ## P-01M0RW85SWF8H9ZYX9XJ9ND2YB Retain bounded Metal stack activations for backward
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 parent: R-01M0RVG598FZABSSGTGDVG203A
 targets: go:nlp.ForwardPreNormTransformerStack, go:metal.preNormTransformerStackF32, go:metal.preNormTransformerStackBackwardF32, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_stack_test.go
