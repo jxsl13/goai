@@ -145,3 +145,6 @@ WHEN the same-binary TinyLlama-class activation residency benchmark compares laz
 
 ## ROPE-PAIR-EXACT-STRIDE-STORAGE-001 {applies: go:metal.Recorder.RoPEPair,go:vulkan.Recorder.RoPEPair,go:llamagpu_test.TestDecoderMatchesReference,go:llamagpu_test.TestStepNMatchesSequentialSteps}
 WHEN a fused QKV buffer has exactly seq times stride elements and both band ends are within stride, the Metal and Vulkan RoPEPair recorders SHALL accept it with exactly 0 offset-padding elements.
+
+## DECODER-STEP-INTO-SEMANTICS-001
+WHEN the destination length equals Vocab, the Decoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
