@@ -2846,3 +2846,37 @@ commands, hashes, and claim limits live under
 `internal/benchcompare/leadership/evidence/m2-arm64-q4-1-fused-dot-20260822`.
 The generalizable fused affine-nibble opportunity is tracked as
 [perfscan issue 819](https://github.com/jxsl13/perfscan/issues/819).
+
+## CPU MoECombine exact output interleaving (2026-08-25)
+
+The production F64/F32 `OpMoECombine` reduction formerly completed one output
+column at a time, leaving one loop-carried `FMADD` chain. It now processes four
+adjacent columns with independent accumulators while retaining ascending expert
+order for every output. This is bit-exact, unlike reduction-axis reassociation;
+F32 still widens operands to F64 and narrows only at the final store.
+
+Apple M2 Pro, Go 1.27.0, nine fresh-process fixed-work A/B pairs after one
+discarded warm-up pair:
+
+| cell | scalar-output baseline | four-output interleave | result |
+|---|---:|---:|---:|
+| decode E8 F64, T=1 D=4096 | 27,095 ns | **15,895 ns** | **1.7046x**, 6/9 wins |
+| decode E8 F32, T=1 D=4096 | 24,028 ns | **12,965 ns** | **1.8533x**, 7/9 wins |
+| prefill E8 F64, T=128 D=2048 | 963,309 ns | **589,262 ns** | **1.6348x**, 8/9 wins |
+| prefill E8 F32, T=128 D=2048 | 955,999 ns | **664,469 ns** | **1.4387x**, 9/9 wins |
+| high-expert E64 F64, T=32 D=2048 | 3,117,331 ns | **1,932,820 ns** | **1.6128x**, 9/9 wins |
+| high-expert E64 F32, T=32 D=2048 | 3,029,996 ns | **1,488,315 ns** | **2.0359x**, 9/9 wins |
+
+All benchmark weights are positive so the timed target always executes the
+mixture reduction. The unchanged zero-denominator control moves only 1.0733x.
+Allocation counts are identical, and no production allocation site was added.
+An eight-column rung stayed exact but repeatedly regressed high-expert F64, so
+four is the measured M2 width rather than a universal constant.
+
+Raw pairs, staged-rung measurements, executable hashes, mutation evidence, and
+reproduction commands live under
+`internal/benchcompare/leadership/evidence/m2-cpu-moecombine-interleave-20260825`.
+The generalizable detector lesson is tracked as
+[perfscan issue #906](https://github.com/jxsl13/perfscan/issues/906); the
+random-input branch-bypass benchmark defect is
+[perfscan issue #907](https://github.com/jxsl13/perfscan/issues/907).

@@ -66,9 +66,28 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 					for i := 0; i < e; i++ {
 						wn[i] = ws[wbase+i] / denom
 					}
-					for j := 0; j < d; j++ {
+					// Process four output columns together so the CPU has independent
+					// accumulator chains to schedule. Each column still visits experts in
+					// ascending order, preserving every output bit from the scalar loop.
+					j := 0
+					for ; j+3 < d; j += 4 {
+						var acc0, acc1, acc2, acc3 float64
+						for i := 0; i < e; i++ {
+							wi := wn[i]
+							ex := ecs[i]
+							acc0 += wi * ex[base+j]
+							acc1 += wi * ex[base+j+1]
+							acc2 += wi * ex[base+j+2]
+							acc3 += wi * ex[base+j+3]
+						}
+						os[base+j] = acc0
+						os[base+j+1] = acc1
+						os[base+j+2] = acc2
+						os[base+j+3] = acc3
+					}
+					for ; j < d; j++ {
 						var acc float64
-						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
+						//perfscan:ignore PS3010,PS4008 exact d%4 tail after measured four-output sibling; at most three columns
 						for i := 0; i < e; i++ {
 							acc += wn[i] * ecs[i][base+j]
 						}
@@ -113,9 +132,27 @@ func moeCombineKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.At
 					for i := 0; i < e; i++ {
 						wn[i] = float64(ws[wbase+i]) / denom
 					}
-					for j := 0; j < d; j++ {
+					// Keep four independent f64 accumulation chains even for F32: the
+					// reference widens every operand and rounds only at the final store.
+					j := 0
+					for ; j+3 < d; j += 4 {
+						var acc0, acc1, acc2, acc3 float64
+						for i := 0; i < e; i++ {
+							wi := wn[i]
+							ex := ecs[i]
+							acc0 += wi * float64(ex[base+j])
+							acc1 += wi * float64(ex[base+j+1])
+							acc2 += wi * float64(ex[base+j+2])
+							acc3 += wi * float64(ex[base+j+3])
+						}
+						os[base+j] = float32(acc0)
+						os[base+j+1] = float32(acc1)
+						os[base+j+2] = float32(acc2)
+						os[base+j+3] = float32(acc3)
+					}
+					for ; j < d; j++ {
 						var acc float64
-						//perfscan:ignore PS3010 mixture reduction over few experts; reassoc breaks byte-identity
+						//perfscan:ignore PS3010,PS4008 exact d%4 tail after measured four-output sibling; at most three columns
 						for i := 0; i < e; i++ {
 							acc += wn[i] * float64(ecs[i][base+j])
 						}

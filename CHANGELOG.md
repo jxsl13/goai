@@ -4,6 +4,23 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- interleave exact MoE mixture outputs (T-01M0TYMJGMFMQ, 2026-08-25)
+
+The F64/F32 `OpMoECombine` kernels now reduce four adjacent output columns
+through independent accumulator chains while preserving each column's exact
+ascending expert order. The scalar tail, zero-denominator behavior, F32
+widen-accumulate-narrow sequence, and fallback routes are unchanged. Exact
+gates cover expert counts 1/2/3/4/8, odd widths, cancellation, signed zero,
+NaNs, and infinities; a reversed-order mutation fails both dtype gates.
+
+Nine alternating Apple M2 Pro pairs improve decode E8 by **1.7046x** F64 and
+**1.8533x** F32, prefill E8 by **1.6348x** and **1.4387x**, and E64 by
+**1.6128x** and **2.0359x**. Allocation counts are unchanged. A zero-denominator
+control moves only 1.0733x, and an eight-column rung is rejected because it
+regresses high-expert F64. Raw evidence is committed under the M2 CPU
+MoECombine artifact; the generalized exact PS4008 refinement is perfscan issue
+#906, and the benchmark branch-bypass finding is issue #907.
+
 ### backend/ref -- devirtualize exact elementwise loops (T-01KYJREH8QF2H, 2026-08-25)
 
 Reference F32/F64 unary and binary kernels now establish their raw-slice bounds
