@@ -4039,12 +4039,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## P-01M0SW6KB4FSERYN7Y0CRXS0DJ Add allocation-free shared Decoder prefill boundaries
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.Release, llamagpu/llama_scale_bench_test.go, llamagpu/llamagpu_test.go
-
-M2 Pro profiling on merged main shows the warmed 16-token F32 StepNLast boundary retains exactly 36864 B/op in two allocations: 32768 bytes for k times Dim embedding staging and 4096 bytes for returned Vocab logits. Add reusable high-water embedding staging plus caller-buffer StepNInto and StepNLastInto methods. Keep StepN and StepNLast as allocating compatibility wrappers. Validate destination sizes before cache or recurrent-state mutation; preserve bit-exact logits across dense, quantized, recurrent, MoE, MLA, post-norm, and sandwich paths. Promotion requires 0 allocs/op for warmed StepNLastInto, at least 32768 fewer B/op for StepNLast, and at least 0.97 times baseline prefill throughput at the tracked D512 L6 V1024 k16 M2 boundary.
