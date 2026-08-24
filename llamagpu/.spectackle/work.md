@@ -219,7 +219,7 @@ Decision: add StepInto with exact destination-size validation before any cache m
 
 ## T-01M0STA78PF4PABXVY1FBKZ98J Implement and benchmark Decoder StepInto
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0ST9BK2FGYTT3D762HHYHVB
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
