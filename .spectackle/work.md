@@ -4080,7 +4080,7 @@ Implement the fixed-batch public ViT AdamW session and portable F32 fallback. Ad
 
 ## T-01M0S98NX1F9ST89XX9G29TP8J Validate and publish the M2 ViT AdamW leadership cell
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0S8XJF9F5HTNGTQXZ3R9YMZ
 refs: R-01M0S8MAAVFDSSRJKQKZ2AYBSV, ADR-01M0S8XZMEFC98ZF81GACDFEGE
