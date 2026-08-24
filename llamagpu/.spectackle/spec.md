@@ -149,7 +149,7 @@ WHEN a fused QKV buffer has exactly seq times stride elements and both band ends
 ## DECODER-STEP-INTO-SEMANTICS-001 {applies: go:llamagpu.Decoder.StepInto,go:llamagpu.Decoder.Step,go:llamagpu_test.TestDecoderStepIntoMatchesStepAndGuardsLength}
 WHEN the destination length equals Vocab, the Decoder.StepInto SHALL advance exactly 1 token and write exactly Vocab logits matching Step.
 
-## DECODER-STEP-INTO-LENGTH-GUARD-001
+## DECODER-STEP-INTO-LENGTH-GUARD-001 {applies: go:llamagpu.Decoder.StepInto,go:llamagpu_test.TestDecoderStepIntoMatchesStepAndGuardsLength}
 WHEN the destination length differs from Vocab, the Decoder.StepInto SHALL return an error and mutate exactly 0 cache rows and 0 recurrent states.
 
 ## DECODER-EMBED-STAGING-001
