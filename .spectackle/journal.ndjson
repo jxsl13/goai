@@ -866,3 +866,4 @@
 {"t":"2026-08-24T02:10:17Z","eid":"bc1eae534e89423e","ag":"ag-41aa","ev":"create","id":"R-01M0RRGS0YEQ48CY5QY9NC7T9F","k":"research","ti":"Attribute the post-stack ViT input boundary on M2"}
 {"t":"2026-08-24T02:10:27Z","eid":"98968b242aee18c1","ag":"ag-67a3","ev":"revise","id":"R-01M0RRGS0YEQ48CY5QY9NC7T9F","note":"body revised"}
 {"t":"2026-08-24T02:10:30Z","eid":"162eafcb9cb10207","ag":"ag-0131","ev":"move","id":"R-01M0RRGS0YEQ48CY5QY9NC7T9F","fr":"draft","to":"active"}
+{"t":"2026-08-24T02:14:49Z","eid":"c35a9219180b4fa5","ag":"ag-5788","ev":"create","id":"P-01M0RRS336FYBT4DC3PJA1WSKG","k":"proposal","ti":"Compose the ViT patch-projection sequence boundary"}
