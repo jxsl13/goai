@@ -10059,6 +10059,250 @@ int mtl_prenorm_transformer_stack_backward_f32(
     }
 }
 
+// ---- Cached layernorm + packed-sequence classifier graphs -----------------
+// Only the first row of each packed sequence reaches the public logits. Moving
+// the gather before LayerNorm is exact because the normalization is row-local;
+// it removes all unobserved patch-row work and lets the slice VJP produce the
+// sparse packed-input gradient inside one graph submission.
+#define SEQUENCE_CLASSIFIER_CACHE_CAP 16
+
+typedef struct {
+    __unsafe_unretained MPSGraphTensor* xhat;
+    __unsafe_unretained MPSGraphTensor* norm;
+    __unsafe_unretained MPSGraphTensor* y;
+} sequence_classifier_nodes;
+
+static sequence_classifier_nodes build_sequence_classifier_nodes(
+    MPSGraph* g, MPSGraphTensor* X, MPSGraphTensor* Gamma, MPSGraphTensor* Beta,
+    MPSGraphTensor* W, MPSGraphTensor* Bias, MPSGraphTensor* Eps,
+    int rows, int dim, int classes, int batch, int seq) {
+    MPSGraphTensor* packed = [g reshapeTensor:X withShape:@[@(batch), @(seq), @(dim)] name:nil];
+    MPSGraphTensor* first3 = [g sliceTensor:packed dimension:1 start:0 length:1 name:nil];
+    MPSGraphTensor* first = [g reshapeTensor:first3 withShape:@[@(batch), @(dim)] name:nil];
+    MPSGraphTensor* mean = [g meanOfTensor:first axes:@[@1] name:nil];
+    MPSGraphTensor* centered = [g subtractionWithPrimaryTensor:first secondaryTensor:mean name:nil];
+    MPSGraphTensor* variance = [g meanOfTensor:[g squareWithTensor:centered name:nil]
+                                         axes:@[@1] name:nil];
+    MPSGraphTensor* one = [g constantWithScalar:1.0 dataType:MPSDataTypeFloat32];
+    MPSGraphTensor* inv = [g divisionWithPrimaryTensor:one secondaryTensor:
+                             [g squareRootWithTensor:
+                                [g additionWithPrimaryTensor:variance secondaryTensor:Eps name:nil]
+                                                  name:nil]
+                                                name:nil];
+    MPSGraphTensor* xhat = [g multiplicationWithPrimaryTensor:centered secondaryTensor:inv name:nil];
+    MPSGraphTensor* norm = [g additionWithPrimaryTensor:
+                              [g multiplicationWithPrimaryTensor:xhat secondaryTensor:Gamma name:nil]
+                                          secondaryTensor:Beta name:nil];
+    sequence_classifier_nodes n = {
+        .xhat = xhat,
+        .norm = norm,
+        .y = [g additionWithPrimaryTensor:
+                [g matrixMultiplicationWithPrimaryTensor:norm secondaryTensor:W name:nil]
+                            secondaryTensor:Bias name:nil],
+    };
+    return n;
+}
+
+static MPSGraph* gSequenceClassifierFwdGraphs[SEQUENCE_CLASSIFIER_CACHE_CAP] = {nil};
+static MPSGraphTensor* gSequenceClassifierFwdInputs[SEQUENCE_CLASSIFIER_CACHE_CAP][6] = {{nil}};
+static MPSGraphTensor* gSequenceClassifierFwdOutputs[SEQUENCE_CLASSIFIER_CACHE_CAP] = {nil};
+static int gSequenceClassifierFwdSigs[SEQUENCE_CLASSIFIER_CACHE_CAP][4] = {{0}};
+static int gSequenceClassifierFwdValid[SEQUENCE_CLASSIFIER_CACHE_CAP] = {0};
+static int gSequenceClassifierFwdNext = 0;
+
+static MPSGraph* gSequenceClassifierBwdGraphs[SEQUENCE_CLASSIFIER_CACHE_CAP] = {nil};
+static MPSGraphTensor* gSequenceClassifierBwdInputs[SEQUENCE_CLASSIFIER_CACHE_CAP][7] = {{nil}};
+static MPSGraphTensor* gSequenceClassifierBwdOutputs[SEQUENCE_CLASSIFIER_CACHE_CAP][5] = {{nil}};
+static int gSequenceClassifierBwdSigs[SEQUENCE_CLASSIFIER_CACHE_CAP][4] = {{0}};
+static int gSequenceClassifierBwdValid[SEQUENCE_CLASSIFIER_CACHE_CAP] = {0};
+static int gSequenceClassifierBwdNext = 0;
+
+static int ensure_sequence_classifier_forward_graph(
+    int rows, int dim, int classes, int batch, int seq) {
+    int sig[4] = {batch, seq, dim, classes};
+    for (int i = 0; i < SEQUENCE_CLASSIFIER_CACHE_CAP; i++)
+        if (gSequenceClassifierFwdValid[i] &&
+            memcmp(sig, gSequenceClassifierFwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* X = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Gamma = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Beta = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* W = [g placeholderWithShape:@[@(dim), @(classes)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Bias = [g placeholderWithShape:@[@(classes)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Eps = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        sequence_classifier_nodes n = build_sequence_classifier_nodes(
+            g, X, Gamma, Beta, W, Bias, Eps, rows, dim, classes, batch, seq);
+        if (!n.y) return -20;
+        int slot = gSequenceClassifierFwdNext;
+        gSequenceClassifierFwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[6] = {X, Gamma, Beta, W, Bias, Eps};
+        for (int i = 0; i < 6; i++) gSequenceClassifierFwdInputs[slot][i] = inputs[i];
+        gSequenceClassifierFwdOutputs[slot] = n.y;
+        memcpy(gSequenceClassifierFwdSigs[slot], sig, sizeof(sig));
+        gSequenceClassifierFwdValid[slot] = 1;
+        gSequenceClassifierFwdNext = (slot + 1) % SEQUENCE_CLASSIFIER_CACHE_CAP;
+        return slot;
+    }
+}
+
+static int ensure_sequence_classifier_backward_graph(
+    int rows, int dim, int classes, int batch, int seq) {
+    int sig[4] = {batch, seq, dim, classes};
+    for (int i = 0; i < SEQUENCE_CLASSIFIER_CACHE_CAP; i++)
+        if (gSequenceClassifierBwdValid[i] &&
+            memcmp(sig, gSequenceClassifierBwdSigs[i], sizeof(sig)) == 0) return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* X = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Gamma = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Beta = [g placeholderWithShape:@[@(dim)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* W = [g placeholderWithShape:@[@(dim), @(classes)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Bias = [g placeholderWithShape:@[@(classes)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* dY = [g placeholderWithShape:@[@(batch), @(classes)] dataType:MPSDataTypeFloat32 name:nil];
+        MPSGraphTensor* Eps = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:nil];
+        sequence_classifier_nodes n = build_sequence_classifier_nodes(
+            g, X, Gamma, Beta, W, Bias, Eps, rows, dim, classes, batch, seq);
+        MPSGraphTensor* objective = [g reductionSumWithTensor:
+                                       [g multiplicationWithPrimaryTensor:n.y secondaryTensor:dY name:nil]
+                                                             axes:@[@0, @1] name:nil];
+        NSArray<MPSGraphTensor*>* wrt = @[X, Gamma, Beta, W, Bias];
+        NSDictionary<MPSGraphTensor*, MPSGraphTensor*>* gradients =
+            [g gradientForPrimaryTensor:objective withTensors:wrt name:nil];
+        MPSGraphTensor* outputs[5] = {
+            gradients[X], gradients[Gamma], gradients[Beta], gradients[W], gradients[Bias],
+        };
+        for (int i = 0; i < 5; i++) if (!outputs[i]) return -20;
+        int slot = gSequenceClassifierBwdNext;
+        gSequenceClassifierBwdGraphs[slot] = g;
+        MPSGraphTensor* inputs[7] = {X, Gamma, Beta, W, Bias, dY, Eps};
+        for (int i = 0; i < 7; i++) gSequenceClassifierBwdInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 5; i++) gSequenceClassifierBwdOutputs[slot][i] = outputs[i];
+        memcpy(gSequenceClassifierBwdSigs[slot], sig, sizeof(sig));
+        gSequenceClassifierBwdValid[slot] = 1;
+        gSequenceClassifierBwdNext = (slot + 1) % SEQUENCE_CLASSIFIER_CACHE_CAP;
+        return slot;
+    }
+}
+
+int mtl_layernorm_sequence_classifier_f32(
+    const float* X, const float* Gamma, const float* Beta,
+    const float* W, const float* Bias, float* Y,
+    int rows, int dim, int classes, int batch, int seq, float eps) {
+    if (ensure_init() != 0) return -1;
+    if (!X || !Gamma || !Beta || !W || !Bias || !Y || rows != batch * seq ||
+        rows <= 0 || dim <= 0 || classes <= 0 || batch <= 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_sequence_classifier_forward_graph(rows, dim, classes, batch, seq);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t wLen = (size_t)dim * classes * sizeof(float);
+        size_t cLen = (size_t)classes * sizeof(float);
+        size_t yLen = (size_t)batch * classes * sizeof(float);
+        const float* hostIn[6] = {X, Gamma, Beta, W, Bias, &eps};
+        size_t lengths[6] = {xLen, dLen, dLen, wLen, cLen, sizeof(float)};
+        NSArray<NSNumber*>* shapes[6] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)],
+            @[@(dim), @(classes)], @[@(classes)], @[@1],
+        };
+        id<MTLBuffer> in[6];
+        MPSGraphTensorData* data[6];
+        for (int i = 0; i < 6; i++) {
+            in[i] = pool_in(hostIn[i], lengths[i]);
+            if (!in[i]) return -2;
+            data[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                             shape:shapes[i]
+                                                          dataType:MPSDataTypeFloat32];
+            if (!data[i]) return -2;
+        }
+        id<MTLBuffer> out = pool_buf(yLen);
+        if (!out) return -2;
+        MPSGraphTensorData* outputData = [[MPSGraphTensorData alloc] initWithMTLBuffer:out
+                                                                                shape:@[@(batch), @(classes)]
+                                                                             dataType:MPSDataTypeFloat32];
+        if (!outputData) return -2;
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:6];
+        for (int i = 0; i < 6; i++) feeds[gSequenceClassifierFwdInputs[slot][i]] = data[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gSequenceClassifierFwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                                resultsDictionary:@{gSequenceClassifierFwdOutputs[slot]:outputData}
+                                              executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        memcpy(Y, out.contents, yLen);
+        return 0;
+    }
+}
+
+int mtl_layernorm_sequence_classifier_backward_f32(
+    const float* X, const float* Gamma, const float* Beta,
+    const float* W, const float* Bias, const float* dY,
+    float* dX, float* dGamma, float* dBeta, float* dW, float* dBias,
+    int rows, int dim, int classes, int batch, int seq, float eps) {
+    if (ensure_init() != 0) return -1;
+    if (!X || !Gamma || !Beta || !W || !Bias || !dY || !dX || !dGamma ||
+        !dBeta || !dW || !dBias || rows != batch * seq || rows <= 0 ||
+        dim <= 0 || classes <= 0 || batch <= 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_sequence_classifier_backward_graph(rows, dim, classes, batch, seq);
+        if (slot < 0) return slot;
+        size_t xLen = (size_t)rows * dim * sizeof(float);
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t wLen = (size_t)dim * classes * sizeof(float);
+        size_t cLen = (size_t)classes * sizeof(float);
+        size_t yLen = (size_t)batch * classes * sizeof(float);
+        const float* hostIn[7] = {X, Gamma, Beta, W, Bias, dY, &eps};
+        size_t inputLengths[7] = {xLen, dLen, dLen, wLen, cLen, yLen, sizeof(float)};
+        NSArray<NSNumber*>* inputShapes[7] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)], @[@(dim), @(classes)],
+            @[@(classes)], @[@(batch), @(classes)], @[@1],
+        };
+        id<MTLBuffer> in[7];
+        MPSGraphTensorData* inputData[7];
+        for (int i = 0; i < 7; i++) {
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                                  shape:inputShapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+        size_t outputLengths[5] = {xLen, dLen, dLen, wLen, cLen};
+        NSArray<NSNumber*>* outputShapes[5] = {
+            @[@(rows), @(dim)], @[@(dim)], @[@(dim)], @[@(dim), @(classes)], @[@(classes)],
+        };
+        id<MTLBuffer> out[5];
+        MPSGraphTensorData* outputData[5];
+        for (int i = 0; i < 5; i++) {
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i]
+                                                                   shape:outputShapes[i]
+                                                                dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:7];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:5];
+        for (int i = 0; i < 7; i++) feeds[gSequenceClassifierBwdInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < 5; i++) results[gSequenceClassifierBwdOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gSequenceClassifierBwdGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                                resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        float* hostOut[5] = {dX, dGamma, dBeta, dW, dBias};
+        for (int i = 0; i < 5; i++) memcpy(hostOut[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP
 // dS[i,j] = P[i,j]·(dP[i,j] − Σ_k P[i,k]·dP[i,k]) IN PLACE on dP (dS overwrites dP). Causal: only
 // j≤i valid (P is already 0 for j>i, so masked terms drop out; the tail is set to 0). One

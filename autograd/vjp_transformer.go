@@ -119,4 +119,10 @@ func init() {
 		backwardInputs[len(in)] = g
 		return backend.Execute(ctx, backend.OpPreNormTransformerStackBackward, backwardInputs, attrs)
 	})
+
+	RegisterVJP(backend.OpLayerNormSequenceClassifier, func(ctx *backend.Context, in, _ []*tensor.Tensor, attrs backend.Attrs, g *tensor.Tensor) ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx, backend.OpLayerNormSequenceClassifierBackward, []*tensor.Tensor{
+			in[0], in[1], in[2], in[3], in[4], g,
+		}, attrs)
+	})
 }

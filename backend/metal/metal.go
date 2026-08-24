@@ -1280,6 +1280,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return preNormTransformerStackF32, true
 		case backend.OpPreNormTransformerStackBackward:
 			return preNormTransformerStackBackwardF32, true
+		case backend.OpLayerNormSequenceClassifier:
+			return layerNormSequenceClassifierF32, true
+		case backend.OpLayerNormSequenceClassifierBackward:
+			return layerNormSequenceClassifierBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -2124,6 +2128,91 @@ func preNormTransformerStackBackwardF32(ctx *backend.Context, in []*tensor.Tenso
 	runtime.KeepAlive(out)
 	if rc != 0 {
 		return nil, fmt.Errorf("metal: prenorm-transformer-stack-backward failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
+func layerNormSequenceClassifierMetalGeometry(in []*tensor.Tensor, attrs backend.LayerNormSequenceClassifierAttrs, backward bool) (rows, dim, classes, batch, seq int, ok bool) {
+	want := 5
+	if backward {
+		want++
+	}
+	if len(in) != want {
+		return 0, 0, 0, 0, 0, false
+	}
+	for _, value := range in {
+		if value == nil || value.Dtype() != tensor.F32 || !value.IsContiguous() || value.Offset() != 0 || value.Numel() == 0 {
+			return 0, 0, 0, 0, 0, false
+		}
+	}
+	x, gamma, beta, weight, bias := in[0], in[1], in[2], in[3], in[4]
+	attrs = attrs.WithDefaults()
+	if x.Ndim() != 2 || attrs.Batch <= 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	rows, dim, batch = x.Shape()[0], x.Shape()[1], attrs.Batch
+	if rows <= 0 || dim <= 0 || rows%batch != 0 || gamma.Ndim() != 1 || gamma.Shape()[0] != dim ||
+		beta.Ndim() != 1 || beta.Shape()[0] != dim || weight.Ndim() != 2 || weight.Shape()[0] != dim || weight.Shape()[1] <= 0 {
+		return 0, 0, 0, 0, 0, false
+	}
+	classes, seq = weight.Shape()[1], rows/batch
+	if bias.Ndim() != 1 || bias.Shape()[0] != classes {
+		return 0, 0, 0, 0, 0, false
+	}
+	if backward && (in[5].Ndim() != 2 || !in[5].Shape().Equal(tensor.Shape{batch, classes})) {
+		return 0, 0, 0, 0, 0, false
+	}
+	return rows, dim, classes, batch, seq, true
+}
+
+func layerNormSequenceClassifierF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpLayerNormSequenceClassifier, in, attrs)
+	}
+	pa, _ := attrs.(backend.LayerNormSequenceClassifierAttrs)
+	rows, dim, classes, batch, seq, ok := layerNormSequenceClassifierMetalGeometry(in, pa, false)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	out := tensor.New(tensor.F32, tensor.Shape{batch, classes})
+	rc := C.mtl_layernorm_sequence_classifier_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&out.Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(classes), C.int(batch), C.int(seq), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: layernorm-sequence-classifier failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func layerNormSequenceClassifierBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpLayerNormSequenceClassifierBackward, in, attrs)
+	}
+	pa, _ := attrs.(backend.LayerNormSequenceClassifierAttrs)
+	rows, dim, classes, batch, seq, ok := layerNormSequenceClassifierMetalGeometry(in, pa, true)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	out := make([]*tensor.Tensor, 5)
+	for i := range out {
+		out[i] = tensor.New(tensor.F32, in[i].Shape())
+	}
+	rc := C.mtl_layernorm_sequence_classifier_backward_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&out[0].Storage().F32()[0]), (*C.float)(&out[1].Storage().F32()[0]),
+		(*C.float)(&out[2].Storage().F32()[0]), (*C.float)(&out[3].Storage().F32()[0]),
+		(*C.float)(&out[4].Storage().F32()[0]),
+		C.int(rows), C.int(dim), C.int(classes), C.int(batch), C.int(seq), C.float(pa.Eps),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: layernorm-sequence-classifier-backward failed (code %d)", int(rc))
 	}
 	return out, nil
 }
