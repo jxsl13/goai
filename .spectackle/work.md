@@ -4018,6 +4018,7 @@ Measure the current M2 ViT B8/C3/HW32/P4/D128/depth4/H4 training step after the 
 kind: proposal
 state: draft
 created: 2026-08-24
+grilled: 2026-08-24 open=0
 targets: go:vision.ViT.Forward, go:metal.layerNormSequenceClassifierF32, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref
 
 Consumes R-01M0RRGS0YEQ4. Replace the M2 Metal ViT batched patch projection, eight per-image class/position assembly chains, and their fragmented VJP with one typed operation. Input is prepatchified [B*N,K] data plus class [1,D], position [N+1,D], projection [K,D], and bias [D]; output is packed [B*(N+1),D]. Provide a portable exact fallback and a cached F32 MPSGraph forward/backward. Preserve the current composite on backends without both directions. Promotion requires output/parameter-gradient/input-immutability parity, supported/unsupported scope tests, boundary median >=1.20x, complete-step median >=1.05x in every order-controlled campaign, and every aligned complete-step pair >=1.03x.
