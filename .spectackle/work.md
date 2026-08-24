@@ -4033,7 +4033,7 @@ Measure the fixed F32 B8 S65 D128 H4 F512 Depth4 C10 ViT objective plus incumben
 
 ## P-01M0S8XJF9F5HTNGTQXZ3R9YMZ Keep M2 ViT AdamW training state resident
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, backend/metal/vit_adamw_session_test.go, backend/metal/vit_adamw_attribution_test.go, vision/vit.go, vision/vit_adamw_session_test.go, vision/example_vit_adamw_session_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py, BENCHMARKS.md, internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/README.md
 
