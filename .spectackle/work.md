@@ -4021,6 +4021,7 @@ kind: task
 state: draft
 created: 2026-08-24
 parent: P-01M0RRS336FYBT4DC3PJA1WSKG
+grilled: 2026-08-24 open=11
 targets: go:vision.ViT.Forward, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m
 
 Add the typed OpPatchEmbedSequence forward/backward contract, exact reference kernels and VJP, cached Metal F32 MPSGraph implementation, and conditional ViT routing. Freeze the M2 B8/C3/HW32/P4/D128/depth4/H4 gate from the proposal; benchmark in fresh order-reversed same-binary campaigns, retain raw evidence, run external perfscan from github.com/jxsl13/perfscan/perfscan with GOPROXY=direct, and revert executable changes if any gate fails.
