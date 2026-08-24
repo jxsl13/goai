@@ -4042,7 +4042,7 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## P-01M0SW6KB4FSERYN7Y0CRXS0DJ Add allocation-free shared Decoder prefill boundaries
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.Release, llamagpu/llama_scale_bench_test.go, llamagpu/llamagpu_test.go

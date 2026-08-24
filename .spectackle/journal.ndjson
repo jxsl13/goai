@@ -1050,3 +1050,4 @@
 {"t":"2026-08-24T12:33:52Z","eid":"7badbd00a16ad498","ag":"ag-e4ae","ev":"create","id":"P-01M0SW6KB4FSERYN7Y0CRXS0DJ","k":"proposal","ti":"Add allocation-free shared Decoder prefill boundaries"}
 {"t":"2026-08-24T12:34:06Z","eid":"d8a6b1f5c8e7851b","ag":"ag-8bf1","ev":"revise","id":"P-01M0SW6KB4FSERYN7Y0CRXS0DJ","note":"body+targets revised"}
 {"t":"2026-08-24T12:34:15Z","eid":"0ceb5be061ed2938","ag":"ag-9b33","ev":"grill","id":"P-01M0SW6KB4FSERYN7Y0CRXS0DJ","gr":"2026-08-24 open=0","hash":"d947cd2fe79a5ebec02b4d6c8252805edaef3d32182eceb92a65ce4341e9703f"}
+{"t":"2026-08-24T12:34:25Z","eid":"3ef667af8e7ce74b","ag":"ag-714d","ev":"move","id":"P-01M0SW6KB4FSERYN7Y0CRXS0DJ","fr":"draft","to":"active","note":"Authorized by the standing M2-first performance mandate after a clean rejection audit and direct merged-main allocation measurement. This is an API-compatible resource and latency-boundary improvement; promotion remains benchmark-gated."}
