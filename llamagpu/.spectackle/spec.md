@@ -91,7 +91,7 @@ WHEN StepN or StepNLast requests more activation rows than the resident workspac
 
 Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
 
-## GPT-FULL-WORKSPACE-LIFETIME-001
+## GPT-FULL-WORKSPACE-LIFETIME-001 {applies: go:llamagpu.GPTDecoder.newScratch,go:llamagpu.gptScratch.release,go:llamagpu.GPTDecoder.Release,go:llamagpu.TestGPTScratchPartialAllocationFailureReleasesGeneration,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
 WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecoder SHALL release each prior or partial buffer exactly once and retain 0 stale grouped-workspace references.
 
 Rationale: Keep grouped workspace ownership transactional and backend-independent.
