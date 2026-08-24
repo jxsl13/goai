@@ -81,3 +81,48 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exactly one Vocab row. Add a backend-agnostic reusable overflow buffer that full multi-row StepN grows to exactly its required rows times Vocab capacity, reuses for smaller requests, replaces safely for larger requests, and releases with the decoder. Keep an unexported eagerFullLogits backendOps switch as the same-binary incumbent control. Route final projections and downloads to the selected buffer while preserving recurrent sequential fallbacks. Extend storage tests for both decoder cores, growth/reuse/release, and add a GPT-2-small-geometry constructor benchmark. Gate on at least 200 MB/op removed, at least 10x constructor speedup, Step and StepNLast throughput at least 0.97x, unchanged hot-path allocations, and all parity suites.
+
+## P-01M0SPBR6NFCJAE77W5JZZ4YA8 Right-size GPT activation residency with lazy reusable prefill workspace
+kind: proposal
+state: done
+created: 2026-08-24
+refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
+grilled: 2026-08-24 open=0
+targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+GPTDecoder currently retains every activation scratch tensor at maximum context although dominant Step uses one row. Retain one row by default, lazily allocate an exact reusable high-water workspace for StepN and StepNLast, preserve a same-binary eager control, and require exact parity plus M2 throughput non-regression. GPT-2-small should remove 35140608 resident bytes without changing public semantics.
+
+## ADR-01M0SPCGWTFB08X22KNMW0DDV6 Use one-row resident GPT workspace plus lazy grouped high-water storage
+kind: adr
+state: done
+created: 2026-08-24
+parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+decision: One-row resident workspace plus lazy grouped high-water storage
+consequences: Removes 35140608 GPT-2-small resident bytes while keeping Step allocation-free; prefill growth is atomic across activation buffers, reuse is bounded by the largest prompt, and growth avoids simultaneous old-plus-new workspace residency.
+status: accepted
+targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Choose a grouped workspace owner: keep one row resident for Step, allocate all prefill activation buffers together at exact requested rows, reuse the group for smaller requests, release the old group before growth, and release the final group with the decoder. An eager max-context control remains internal for same-binary comparison. Rejected alternatives: per-field independent growth risks mixed generations after partial failure; permanent max-context storage wastes 35140608 bytes at GPT-2-small geometry; per-call allocation churn adds latency.
+choice: One-row resident workspace plus lazy grouped high-water storage
+
+## T-01M0SPF62VEYQRE53F1G5G11X3 Implement and gate lazy GPT activation workspaces
+kind: task
+state: done
+created: 2026-08-24
+parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Add a one-row resident GPT activation workspace, grouped exact-row lazy high-water allocation for StepN and StepNLast, release-safe growth and teardown, and an internal eager max-context control. Test fused and portable shapes, reuse, growth, failure cleanup, final release, and full StepN parity. Benchmark GPT-2-small activation residency and require at least 34000000 fewer B/op, at least 10x lower constructor ns/op, and at least 0.97x M2 Step and StepNLast throughput with unchanged allocations.
+
+## T-01M0SPRH8NEV49Q636WM7Y1PQA Route GPT hidden-state readback through selected activation workspace
+kind: task
+state: done
+created: 2026-08-24
+parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go, llamagpu/medusa.go, llamagpu/medusa_test.go, llamagpu/example_test.go
+
+Update GPT StepHidden and StepNHidden so hidden-state downloads read the resident or lazy workspace selected by the completed Step call. Preserve Llama hidden readback unchanged and validate Medusa all-reject, accept-all, and GPT examples.

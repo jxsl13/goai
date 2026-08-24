@@ -80,3 +80,28 @@ Rationale: Keep lazy residency bounded and release-safe on every backend.
 WHEN the same-binary GPT-2-small constructor benchmark compares lazy residency with eager control, the promotion gate SHALL require at least 200000000 fewer B/op and 10 times lower ns/op while public Step and StepNLast retain at least 0.97 times throughput.
 
 Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.
+
+## GPT-ACTIVATION-RESIDENCY-001 {applies: go:llamagpu.newGPTDecoder,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
+WHEN GPTDecoder is constructed with standard backend operations, the decoder SHALL retain exactly 1 row of every activation workspace buffer and 0 multi-row activation workspace buffers.
+
+Rationale: Make dominant decode residency scale with active rows instead of maximum context.
+
+## GPT-FULL-WORKSPACE-GROWTH-001 {applies: go:llamagpu.GPTDecoder.scratchForRows,go:llamagpu.GPTDecoder.gptStepN,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
+WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the GPTDecoder SHALL allocate 1 grouped workspace at requested rows, reuse it for smaller requests, and grow only for larger requests.
+
+Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
+
+## GPT-FULL-WORKSPACE-LIFETIME-001 {applies: go:llamagpu.GPTDecoder.newScratch,go:llamagpu.gptScratch.release,go:llamagpu.GPTDecoder.Release,go:llamagpu.TestGPTScratchPartialAllocationFailureReleasesGeneration,go:llamagpu.TestGPTDecoderScratchResidencyGrowthAndRelease}
+WHEN grouped GPT workspace growth fails or its decoder is released, the GPTDecoder SHALL release each prior or partial buffer exactly once and retain 0 stale grouped-workspace references.
+
+Rationale: Keep grouped workspace ownership transactional and backend-independent.
+
+## GPT2-ACTIVATION-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkGPTDecoderScratchResidency}
+WHEN the same-binary GPT-2-small activation-residency benchmark compares lazy and eager controls, the promotion gate SHALL require 34000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times Step and StepNLast throughput.
+
+Rationale: Validate retained-memory leverage without moving cost into dominant inference paths.
+
+## GPT-HIDDEN-WORKSPACE-READBACK-001 {applies: go:llamagpu.GPTDecoder.StepHidden,go:llamagpu.GPTDecoder.StepNHidden}
+WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download exactly 1 or len(tokens) final rows from the corresponding selected activation workspace.
+
+Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.

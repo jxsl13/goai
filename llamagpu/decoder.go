@@ -357,6 +357,9 @@ type backendOps struct {
 	// eagerFullLogits retains the historical Ctx×Vocab output scratch for same-binary benchmarks.
 	// Production constructors leave it false and lazily materialize multi-row StepN output instead.
 	eagerFullLogits bool
+	// eagerFullGPTScratch retains the historical max-context GPT activation workspace for
+	// same-binary benchmarks. Production constructors keep one row and grow prefill scratch lazily.
+	eagerFullGPTScratch bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
