@@ -84,7 +84,7 @@ Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exa
 
 ## P-01M0SPBR6NFCJAE77W5JZZ4YA8 Right-size GPT activation residency with lazy reusable prefill workspace
 kind: proposal
-state: active
+state: done
 created: 2026-08-24
 refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
 grilled: 2026-08-24 open=0
