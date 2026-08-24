@@ -4006,3 +4006,11 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
+
+## R-01M0S28QXJED6S143JYJG63Z1C Attribute the remaining M2 GPT training objective boundary
+kind: research
+state: draft
+created: 2026-08-24
+targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.Backend.ViTLossAndGradF32, nlp/gpt.go, backend/metal/metal_bridge.m, internal/benchcompare/compare_test.go
+
+On current merged main, measure the pinned M2 Pro F32 GPT training workload (vocab 4096, sequence/context 256, width 512, 8 heads, 6 layers, FFN 2048) before selecting an implementation. Partition forward, mean hard-label cross-entropy, reverse mode, Metal submissions, and allocations; compare the portable tape path with a feasibility prototype only if attribution shows graph-boundary leverage. Search rejection history first and do not repeat ViT host-loss or retained-intermediate losers. Require exact semantic scope, fresh-process paired measurements, loss/all-gradient parity, input/parameter immutability, and a credible complete-objective gain before promotion.
