@@ -179,5 +179,5 @@ WHEN StepN or StepNLast gathers k token embeddings, the shared Decoder SHALL ret
 ## DECODER-PREFILL-STAGING-LIFETIME-001-001 {applies: go:llamagpu.Decoder.Release,go:llamagpu.Decoder.batchEmbedHost}
 WHEN Release completes, the shared Decoder SHALL retain exactly 0 high-water embedding staging elements.
 
-## M2-DECODER-STEPN-INTO-PERF-001-001
+## M2-DECODER-STEPN-INTO-PERF-001-001 {applies: go:llamagpu.BenchmarkLlamaPrefillLastIntoMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingMetal,go:llamagpu.BenchmarkLlamaPrefillHostStagingPairedMetal}
 WHEN StepNLastInto is benchmarked against StepNLast on M2 with 16 tokens and Dim 512, the Decoder prefill promotion gate SHALL require 0 StepNLastInto allocations, 32768 fewer StepNLast bytes, and at least 0.97 times baseline throughput.
