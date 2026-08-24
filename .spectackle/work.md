@@ -4025,12 +4025,3 @@ grilled: 2026-08-24 open=0
 targets: vision/vit.go, backend/attrs.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
 
 Introduce ViT.LossAndGrad(ctx, images, targets) returning mean basic cross-entropy and gradients aligned exactly with ViT.Params without mutating inputs or parameters. The portable path records Forward plus CrossEntropy on a private tape. An optional backend capability may consume packed detached patches, targets, and parameters directly. Metal implements the capability for contiguous offset-zero F32 uniform-depth ViTs by composing the already exact patch-sequence, pre-norm attention/FFN, first-token classifier, one-hot mean cross-entropy, and MPSGraph automatic parameter gradients into one bounded geometry-keyed graph and one synchronous submission. Unsupported dtype, shape, backend, recorder use, or capability falls back portably. Promote only with all-gradient/loss parity and the R-01M0RX17A7E98 M2 gates.
-
-## T-01M0RX4KE4E119HHCYKHQX6YNQ Implement and gate one-submission ViT LossAndGrad
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0RX1WNKETXSZDBWJ22NK76F
-targets: vision/vit.go, backend/attrs.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
-
-Add a portable ViT.LossAndGrad eager API whose fallback records Forward plus mean basic CrossEntropy on a private tape and returns gradients aligned exactly with ViT.Params. Add an optional Metal backend capability for eligible contiguous F32 uniform-geometry ViTs that composes patch sequence, all pre-norm blocks, classifier, loss, and all parameter gradients into one cached MPSGraph submission. Verify loss and every gradient against the portable control, preserve inputs and parameters, compile all touched packages, and retain only if three paired M2 campaigns reach at least 1.20x median complete-objective speedup and every pair reaches at least 1.10x.
