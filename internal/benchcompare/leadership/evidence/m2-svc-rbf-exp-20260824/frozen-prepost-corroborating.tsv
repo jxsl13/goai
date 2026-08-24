@@ -1,0 +1,9 @@
+pair	order	baseline_ns_op	candidate_ns_op	candidate_over_baseline
+1	baseline-candidate	12657869	7096852	0.5606672
+2	candidate-baseline	11712022	9586171	0.8184898
+3	baseline-candidate	10938346	8597028	0.7859532
+4	candidate-baseline	9111002	7264630	0.7973470
+5	baseline-candidate	10713729	9355655	0.8732398
+6	candidate-baseline	10199166	9506425	0.9320787
+7	baseline-candidate	10726122	8948403	0.8342627
+

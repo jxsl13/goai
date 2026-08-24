@@ -1,0 +1,56 @@
+{
+  "date": "2026-08-24",
+  "hardware": "Apple M2 Pro, 12 cores, 32 GiB",
+  "os": "macOS 26.5.1 (25F80), Darwin 25.5.0 arm64",
+  "go": "go1.27.0 darwin/arm64",
+  "baseline_source": "512fec0370065ce84b0855d1f9de6c5139db307a",
+  "candidate_source": "6e88d7aadf184545590628d85a1103902fec7f5e",
+  "branch": "codex/m2-next-scan-20260824",
+  "spectackle": "0.10.0",
+  "spectackle_proposal": "P-01M0TFVWHDFC7",
+  "spectackle_task": "T-01M0TFXRWJEZE",
+  "spectackle_rules": [
+    "SVC-RBF-SIMD-EXP-ROUTE-001",
+    "SVC-RBF-SIMD-EXP-GATE-001"
+  ],
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/899",
+  "binary_sha256": {
+    "baseline_simd": "8801dbfaf8a52c7d0c2b0daf6bb62446f02128159a8c4555b42819f31455e2e2",
+    "candidate_simd": "401b5068bb5b9e6e9e9af8baabb9250b9a8982ce013695820710c947f0d356fe"
+  },
+  "sampling": {
+    "gomaxprocs": 12,
+    "process_pairs": 7,
+    "iterations_per_process": 100,
+    "order": "alternating baseline-candidate/candidate-baseline",
+    "host_load": "continuous unrelated perfscan jobs; no exclusive CPU window"
+  },
+  "primary_result": {
+    "baseline_median_ns": 5048190,
+    "candidate_median_ns": 4518638,
+    "candidate_over_baseline_median": 0.8668821318583187,
+    "speedup": 1.1535593632046828,
+    "candidate_pair_wins": 6,
+    "baseline_pair_wins": 1,
+    "baseline_median_bytes": 1620155,
+    "candidate_median_bytes": 1620116,
+    "baseline_median_allocations": 1040,
+    "candidate_median_allocations": 1040
+  },
+  "correctness": {
+    "scalar_smo_steps": 79,
+    "simd_smo_steps": 79,
+    "support_vectors": 42,
+    "maximum_absolute_decision_delta": 3.3306690738754696e-15,
+    "decision_signs": "exact",
+    "repeated_simd_fit": "bit-deterministic"
+  },
+  "incumbent": {
+    "scikit_learn": "1.9.0",
+    "numpy": "2.5.1",
+    "python": "3.14.7",
+    "goai_best_ms": 4.71,
+    "scikit_learn_best_ms": 3.6214999854564667,
+    "goai_over_scikit_learn": 1.30056606900865
+  }
+}

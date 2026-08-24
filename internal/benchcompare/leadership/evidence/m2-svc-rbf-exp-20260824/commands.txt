@@ -1,0 +1,28 @@
+# Build frozen binaries from the revisions pinned in manifest.json.
+GOCACHE=/private/tmp/goai-svc-gocache CGO_ENABLED=0 GOEXPERIMENT=simd go test -c -o BASELINE_BINARY
+GOCACHE=/private/tmp/goai-svc-gocache CGO_ENABLED=0 GOEXPERIMENT=simd go test -c -o CANDIDATE_BINARY
+
+# Run from classic. Alternate process order for seven pairs; each command is one sample.
+GOMAXPROCS=12 BINARY -test.run '^$' -test.bench '^BenchmarkSVCFit/n4000_rbf$' -test.benchmem -test.benchtime=100x -test.count=1
+
+# Same-binary route controls, available in the candidate SIMD binary.
+GOMAXPROCS=12 CANDIDATE_BINARY -test.run '^$' -test.bench '^BenchmarkSVCFitRBFExp(ScalarControl|SIMD)$' -test.benchmem -test.benchtime=100x -test.count=1
+GOMAXPROCS=1 CANDIDATE_BINARY -test.run '^$' -test.bench '^BenchmarkSVCFitRBFExp(ScalarControl|SIMD)$' -test.benchmem -test.benchtime=100x -test.count=1
+
+# Numerical, convergence, and package gates use the compiled binaries.
+CANDIDATE_BINARY -test.run '^TestSVCRBFExpSIMDConvergence$' -test.v
+CANDIDATE_BINARY -test.run '.'
+DEFAULT_BINARY -test.run '.'
+
+# Repository and static gates.
+GOCACHE=/private/tmp/goai-svc-gocache CGO_ENABLED=0 go test -short ./...
+CGO_ENABLED=0 go vet ./classic
+CGO_ENABLED=0 GOEXPERIMENT=simd go vet ./classic
+GOPROXY=direct perfscan -exit-zero ./classic
+spectackle lint .
+spectackle reindex -root .
+
+# Incumbent boundary on the exact CSV emitted by the compiled Go harness.
+PERF_CSV_DIR=DATA_DIR CANDIDATE_BINARY -test.run '^TestPerfCompareVsSklearn$' -test.v
+PERF_CSV_DIR=DATA_DIR .venv/bin/python testdata/bench_sklearn.py
+

@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### classic -- batch RBF SVC exponentials through ARM64 SIMD (T-01M0TFXRWJEZE, 2026-08-24)
+
+On ARM64 SIMD builds, RBF SVC kernel columns now preserve scalar distance
+accumulation while staging completed distances in the final column buffer for
+one batched `ExpScaledF64` call per band. Default, non-ARM64, and non-RBF paths
+retain the established scalar route. The acceptance gate preserves exactly 79
+SMO steps, 42 support vectors, matching decision signs, a maximum decision
+delta of `3.3306690738754696e-15`, and bit-deterministic repeated SIMD fits.
+
+Seven alternating frozen pre/post pairs on Apple M2 Pro improve the exact
+implementation artifact from 5.048190 to 4.518638 ms at the medians (**1.1536x**),
+with six pair wins and unchanged median allocation count. Continuous unrelated
+host load makes this an internal paired-ratio claim, not an absolute leadership
+claim. Same-binary controls show 1.3078x at 12 cores and 1.3785x at one core.
+The candidate remains 1.3006x behind scikit-learn 1.9.0 on the identical cell
+(4.71 versus 3.621500 ms), so solver restructuring remains open. Reproducible
+streams, hashes, commands, specifications, and the incumbent boundary are
+committed; the reusable output-staging opportunity is perfscan issue #899.
+
 ### vision/metal -- fuse the ViT class-token normalization boundary (T-01M0RKZ1YSFHN, 2026-08-24)
 
 ViT now exposes a differentiable LayerNorm-sequence-classifier operation that
