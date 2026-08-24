@@ -4027,7 +4027,7 @@ Research R-01M0RVG598FZA measured the fused depth-4 ViT stack at roughly 4.05 ms
 
 ## T-01M0RW8MHYFZXTSAKCJV12GWS5 Implement and gate retained Metal stack activations
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0RW85SWF8H9ZYX9XJ9ND2YB
 targets: go:nlp.ForwardPreNormTransformerStack, go:metal.preNormTransformerStackF32, go:metal.preNormTransformerStackBackwardF32, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
