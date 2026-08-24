@@ -176,6 +176,7 @@ Add public Step and StepNLast Metal benchmarks for a representative multi-layer 
 kind: proposal
 state: active
 created: 2026-08-24
+grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Replace max-context resident transient activation storage in the shared Decoder with one decode row plus one reusable exact high-water StepN generation. Preserve command semantics, special residual scratch requirements within the selected generation, hidden-state readback, cache mutation, and eager same-binary controls. Benchmark constructor memory/time and public Step/StepNLast throughput on M2 before promotion.
