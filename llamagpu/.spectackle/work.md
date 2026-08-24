@@ -201,7 +201,7 @@ Implement one-row resident Decoder activation generation, exact high-water StepN
 
 ## ADR-01M0SW7XPYFV69M6PYKDM7EHNR Use caller buffers and retained high-water embedding staging for Decoder prefill
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SW6KB4FSERYN7Y0CRXS0DJ
 grilled: 2026-08-24 open=0
