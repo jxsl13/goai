@@ -100,3 +100,8 @@ Rationale: Keep grouped workspace ownership transactional and backend-independen
 WHEN the same-binary GPT-2-small activation-residency benchmark compares lazy and eager controls, the promotion gate SHALL require 34000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times Step and StepNLast throughput.
 
 Rationale: Validate retained-memory leverage without moving cost into dominant inference paths.
+
+## GPT-HIDDEN-WORKSPACE-READBACK-001
+WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download exactly 1 or len(tokens) final rows from the corresponding selected activation workspace.
+
+Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.
