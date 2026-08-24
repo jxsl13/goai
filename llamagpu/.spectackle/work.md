@@ -213,6 +213,7 @@ kind: adr
 state: draft
 created: 2026-08-24
 parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
+grilled: 2026-08-24 open=0
 targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go
 
 Expose StepInto, StepNInto, and StepNLastInto while retaining Step, StepN, and StepNLast as allocating wrappers over one execution graph. Store one Dim host row and one exact high-water k-times-Dim host slice on GPTDecoder; fill token and learned-position embeddings directly with embedRowInto and clear both on Release. For Metal NewGPT, use the validated decoder-local two-wrapper mRecPool while creating a fresh one-shot native command buffer per acquisition. Reject sync.Pool because ownership is decoder-local and bounded, eager Ctx-times-Dim host residency because peak prompts should not define construction cost, device-side gather because the existing synchronous host upload is not the measured bottleneck, and duplicate Into execution graphs because semantic drift would outweigh the allocation win.
