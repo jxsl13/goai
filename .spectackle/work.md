@@ -4051,7 +4051,7 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## T-01M0SM16REF6SS8STVE2CJ5BHR Implement and gate bounded Metal GPT BiasGELU
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SKYF35FYGB3RPMP0DDPCAW
 grilled: 2026-08-24 open=11
