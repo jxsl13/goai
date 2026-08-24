@@ -1,0 +1,43 @@
+Binary SHA-256: b5107beb1216543169c510c717ee97b54ad9f230aa5a241d47f98e7907b44595
+Units: ns/op
+
+Accepted boundary campaign 1 (control first)
+control:   1503802 1530663 1510793 1563964 1538642 1563805 1550905
+candidate: 83845 83388 83168 83129 83045 84243 83998
+medians: control=1538642 candidate=83388 ratio=18.451600x weakest-aligned=17.935500x
+
+Accepted boundary campaign 2 (candidate first)
+candidate: 88009 85323 85097 85344 147993 103779 245262
+control:   2834095 3607298 3673883 4076895 3714695 3803885 4280391
+medians: control=3714695 candidate=88009 ratio=42.208126x weakest-aligned=17.452320x
+
+Accepted boundary campaign 3 (control first)
+control:   5097338 3297869 3066717 3050422 2638145 2377261 2511000
+candidate: 138421 132223 128324 130224 135755 163416 158677
+medians: control=3050422 candidate=135755 ratio=22.470053x weakest-aligned=14.547296x
+
+Accepted full-step campaign 1 (control first)
+control:   17044296 17041938 16842326 17992417 17287887 18733728 18006566
+candidate: 14714771 14036740 14228372 14115878 15063156 13384223 14646629
+medians: control=17287887 candidate=14228372 ratio=1.215029x weakest-aligned=1.147694x
+
+Accepted full-step campaign 2 (candidate first)
+candidate: 22041144 22640510 19358717 21169390 20569254 19284774 20831734
+control:   23461581 23742693 23999596 23657698 24212152 23956330 28167745
+medians: control=23956330 candidate=20831734 ratio=1.149992x weakest-aligned=1.048682x
+
+Accepted full-step campaign 3 (control first)
+control:   19387379 18676294 24355918 18848851 19354745 20524452 19459692
+candidate: 13970759 13120410 12457567 13032787 13138894 12742871 13835738
+medians: control=19387379 candidate=13120410 ratio=1.477650x weakest-aligned=1.387711x
+
+Rejected same-binary full-step screen (control first)
+control:   30571933 19881263 18918041 15629601 14842209 14961782 16076493
+candidate: 13777790 11645631 12034065 13288808 18284760 12993763 12120413
+reason: median passed, but aligned pair 5 was 0.8117x and violated the frozen 1.03x floor
+
+Stable allocation samples
+boundary control:   4635736 B/op 245 allocs/op
+boundary candidate: 462384 B/op 111 allocs/op
+full control:       15752384 B/op 1271 allocs/op
+full candidate:     11575984 B/op 1008 allocs/op

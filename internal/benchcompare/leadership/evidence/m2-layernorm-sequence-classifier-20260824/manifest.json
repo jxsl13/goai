@@ -1,0 +1,26 @@
+{
+  "date": "2026-08-24",
+  "base_commit": "8a52aa93ffe860cc733ff8374e0940109a1903aa",
+  "implementation_commit": "def1abfe1461e6d47830ab8e0363237d36409f8d",
+  "binary": "goai-metal-sequence-classifier-def1abfe.test",
+  "binary_sha256": "b5107beb1216543169c510c717ee97b54ad9f230aa5a241d47f98e7907b44595",
+  "go": "go1.27.0 darwin/arm64",
+  "os": "macOS 26.5.1 (25F80)",
+  "cpu": "Apple M2 Pro",
+  "memory_bytes": 34359738368,
+  "shape": {"batch": 8, "sequence": 65, "dimension": 128, "classes": 10, "dtype": "f32"},
+  "protocol": {"gomaxprocs": 1, "benchtime": "1s", "count": 7, "campaigns": 3},
+  "gates": {
+    "boundary_median_speedup": 1.20,
+    "full_step_median_speedup": 1.05,
+    "full_step_aligned_pair_speedup": 1.03
+  },
+  "result": {
+    "boundary_median_speedups": [18.451600, 42.208126, 22.470053],
+    "full_step_median_speedups": [1.215029, 1.149992, 1.477650],
+    "weakest_full_step_aligned_pair": 1.048682,
+    "full_step_bytes_removed": 4176400,
+    "full_step_allocations_removed": 263
+  },
+  "perfscan_issue": "https://github.com/jxsl13/perfscan/issues/874"
+}

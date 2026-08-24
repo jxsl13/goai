@@ -440,3 +440,30 @@ loop without implicit backend migration.
 
 Full protocol and raw output are in
 `internal/benchcompare/leadership/evidence/m2-metal-prenorm-transformer-stack-20260824`.
+
+## Eliminate dead class-token normalization work on M2
+
+After composing the depth-four encoder stack, the ViT tail still normalized all
+520 packed token rows before retaining only eight class-token rows. LayerNorm
+is row-local, so the fused classifier operation selects those rows first,
+normalizes only live data, and applies the biased projection. Its explicit VJP
+returns gradients for x, gamma, beta, weight, and bias; discarded x rows remain
+exactly zero.
+
+A one-submission cached MPSGraph implementation remains available for supported
+unmeasured shapes. At the exact M2 production geometry B=8, S=65, D=128, C=10,
+however, the synchronous graph lost to the host kernel over unified memory, so
+the measured route makes zero Metal submissions. This is a shape-scoped result,
+not a claim that CPU placement wins generally.
+
+Three fresh-process order-alternated count-seven campaigns improve the complete
+classifier boundary by 18.4516x, 42.2081x, and 22.4701x. The full ViT training
+step improves by 1.2150x, 1.1500x, and 1.4777x; the weakest of all 21 accepted
+aligned pairs is 1.0487x. The full step removes 4,176,400 B/op and 263
+allocations/op. Output, all five operation gradients, complete ViT logits,
+every parameter gradient, and input immutability match the composite.
+
+One screening campaign with an isolated candidate latency spike was rejected
+because it failed the predeclared aligned-pair floor even though its median
+passed. The raw rejected samples are retained with the accepted evidence in
+`internal/benchcompare/leadership/evidence/m2-layernorm-sequence-classifier-20260824`.

@@ -1,0 +1,17 @@
+PASS  backend/ref full package binary, executed from backend/ref
+PASS  vision full package binary
+PASS  backend/metal full package binary, executed from backend/metal
+PASS  CGO_ENABLED=0 reference classifier parity binary
+PASS  CGO_ENABLED=0 vision parity binary
+PASS  Metal exact M2 host-route output, five gradients, and input immutability
+PASS  Metal non-host B2/S7/D32/C11 MPSGraph output and five gradients
+PASS  complete ViT logits and every model-parameter gradient against the composite control
+PASS  make preflight
+PASS  make preflight-metal
+PASS  spectackle call check '{}' (zero drift/errors; repository-wide legacy warnings remain)
+PASS  git diff --check
+
+The first diagnostic launches of the full reference and Metal binaries used the
+repository root as cwd and could not locate existing package-relative golden
+fixtures. The identical binaries pass from backend/ref and backend/metal,
+respectively; this was an invocation error, not a test failure.

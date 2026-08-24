@@ -322,23 +322,44 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 	if err != nil {
 		return nil, err
 	}
-	if h, err = m.Norm.Forward(ctx, h); err != nil {
-		return nil, err
+	return m.forwardPackedClassifier(ctx, h, B, S)
+}
+
+func (m *ViT) forwardPackedClassifier(ctx *backend.Context, h *tensor.Tensor, batch, seq int) (*tensor.Tensor, error) {
+	if ctx != nil && ctx.Backend != nil && m.Norm != nil && m.Head != nil && m.Head.B != nil {
+		_, forward := ctx.Backend.Kernel(backend.OpLayerNormSequenceClassifier, h.Dtype())
+		_, backward := ctx.Backend.Kernel(backend.OpLayerNormSequenceClassifierBackward, h.Dtype())
+		if forward && backward {
+			// The fused operation may eliminate unobserved patch-row norms; its
+			// portable implementation preserves the exact composite semantics.
+			logits, err := backend.Execute(ctx, backend.OpLayerNormSequenceClassifier, []*tensor.Tensor{
+				h, m.Norm.Gamma, m.Norm.Beta, m.Head.W, m.Head.B,
+			}, backend.LayerNormSequenceClassifierAttrs{Batch: batch, Eps: m.Norm.Eps})
+			if err != nil {
+				return nil, err
+			}
+			return logits[0], nil
+		}
 	}
-	// Gather each image's [class] row (row b·S) → [B, D] and run the classification head once.
-	clsRows := make([]*tensor.Tensor, B)
-	for b := range B {
-		cr, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * S, End: b*S + 1}, h)
+	if h, err := m.Norm.Forward(ctx, h); err != nil {
+		return nil, err
+	} else {
+		// Gather each image's [class] row (row b·S) → [B, D] and run the
+		// classification head once.
+		clsRows := make([]*tensor.Tensor, batch)
+		for b := range batch {
+			cr, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b * seq, End: b*seq + 1}, h)
+			if err != nil {
+				return nil, err
+			}
+			clsRows[b] = cr
+		}
+		cls, err := backend.Execute(ctx, backend.OpConcat, clsRows, backend.ConcatAttrs{Axis: 0})
 		if err != nil {
 			return nil, err
 		}
-		clsRows[b] = cr
+		return m.Head.Forward(ctx, cls[0])
 	}
-	cls, err := backend.Execute(ctx, backend.OpConcat, clsRows, backend.ConcatAttrs{Axis: 0})
-	if err != nil {
-		return nil, err
-	}
-	return m.Head.Forward(ctx, cls[0]) // [B, classes]
 }
 
 // Features returns the encoder's final token representations [N+1, D] for one

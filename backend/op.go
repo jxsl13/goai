@@ -163,14 +163,16 @@ const (
 	OpSigmoidFocalCore         // per-element stable sigmoid focal term; reduction stays explicit
 	OpSigmoidFocalCoreBackward // fused focal backward (logits,targets,g)→dlogits; targets stay detached
 
-	OpPreNormFFN                      // pre-LN exact-GELU FFN residual: (x,gamma,beta,w1,b1,w2,b2)→x+gelu(LN(x)·w1+b1)·w2+b2
-	OpPreNormFFNBackward              // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dW1,dB1,dW2,dB2)
-	OpPreNormAttention                // pre-LN MHA residual: (x,gamma,beta,wq,wk,wv,wo)→x+MHA(LN(x))·wo
-	OpPreNormAttentionBackward        // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dWq,dWk,dWv,dWo)
-	OpPreNormTransformerBlock         // complete pre-LN transformer block: attention residual followed by exact-GELU FFN residual
-	OpPreNormTransformerBlockBackward // complete block backward: (...,dO)→gradients for all 13 differentiable inputs
-	OpPreNormTransformerStack         // sequential complete pre-LN transformer blocks: x plus 12 parameters per block
-	OpPreNormTransformerStackBackward // stack backward: (...,dO)→dX plus 12 parameter gradients per block
+	OpPreNormFFN                          // pre-LN exact-GELU FFN residual: (x,gamma,beta,w1,b1,w2,b2)→x+gelu(LN(x)·w1+b1)·w2+b2
+	OpPreNormFFNBackward                  // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dW1,dB1,dW2,dB2)
+	OpPreNormAttention                    // pre-LN MHA residual: (x,gamma,beta,wq,wk,wv,wo)→x+MHA(LN(x))·wo
+	OpPreNormAttentionBackward            // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dWq,dWk,dWv,dWo)
+	OpPreNormTransformerBlock             // complete pre-LN transformer block: attention residual followed by exact-GELU FFN residual
+	OpPreNormTransformerBlockBackward     // complete block backward: (...,dO)→gradients for all 13 differentiable inputs
+	OpPreNormTransformerStack             // sequential complete pre-LN transformer blocks: x plus 12 parameters per block
+	OpPreNormTransformerStackBackward     // stack backward: (...,dO)→dX plus 12 parameter gradients per block
+	OpLayerNormSequenceClassifier         // packed sequences: LayerNorm, first-row gather, then biased linear projection
+	OpLayerNormSequenceClassifierBackward // fused boundary backward: (...,dO)→(dX,dGamma,dBeta,dW,dB)
 
 	numOps
 )
@@ -271,16 +273,18 @@ var opName = [...]string{
 	OpSiLUBackward:         "silu_backward",
 	OpSoftplusBackward:     "softplus_backward",
 
-	OpSigmoidFocalCore:                "sigmoid_focal_core",
-	OpSigmoidFocalCoreBackward:        "sigmoid_focal_core_backward",
-	OpPreNormFFN:                      "prenorm_ffn",
-	OpPreNormFFNBackward:              "prenorm_ffn_backward",
-	OpPreNormAttention:                "prenorm_attention",
-	OpPreNormAttentionBackward:        "prenorm_attention_backward",
-	OpPreNormTransformerBlock:         "prenorm_transformer_block",
-	OpPreNormTransformerBlockBackward: "prenorm_transformer_block_backward",
-	OpPreNormTransformerStack:         "prenorm_transformer_stack",
-	OpPreNormTransformerStackBackward: "prenorm_transformer_stack_backward",
+	OpSigmoidFocalCore:                    "sigmoid_focal_core",
+	OpSigmoidFocalCoreBackward:            "sigmoid_focal_core_backward",
+	OpPreNormFFN:                          "prenorm_ffn",
+	OpPreNormFFNBackward:                  "prenorm_ffn_backward",
+	OpPreNormAttention:                    "prenorm_attention",
+	OpPreNormAttentionBackward:            "prenorm_attention_backward",
+	OpPreNormTransformerBlock:             "prenorm_transformer_block",
+	OpPreNormTransformerBlockBackward:     "prenorm_transformer_block_backward",
+	OpPreNormTransformerStack:             "prenorm_transformer_stack",
+	OpPreNormTransformerStackBackward:     "prenorm_transformer_stack_backward",
+	OpLayerNormSequenceClassifier:         "layernorm_sequence_classifier",
+	OpLayerNormSequenceClassifierBackward: "layernorm_sequence_classifier_backward",
 }
 
 // String implements fmt.Stringer.

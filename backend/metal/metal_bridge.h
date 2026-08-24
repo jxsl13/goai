@@ -557,6 +557,16 @@ int mtl_prenorm_transformer_stack_backward_f32(
     int rows, int dim, int hidden, int batch, int seq, int heads,
     float eps1, float eps2);
 
+int mtl_layernorm_sequence_classifier_f32(
+    const float* X, const float* Gamma, const float* Beta,
+    const float* W, const float* Bias, float* Y,
+    int rows, int dim, int classes, int batch, int seq, float eps);
+int mtl_layernorm_sequence_classifier_backward_f32(
+    const float* X, const float* Gamma, const float* Beta,
+    const float* W, const float* Bias, const float* dY,
+    float* dX, float* dGamma, float* dBeta, float* dW, float* dBias,
+    int rows, int dim, int classes, int batch, int seq, float eps);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA
