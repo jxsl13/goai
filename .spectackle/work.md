@@ -4048,13 +4048,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## T-01M0SM16REF6SS8STVE2CJ5BHR Implement and gate bounded Metal GPT BiasGELU
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0SKYF35FYGB3RPMP0DDPCAW
-grilled: 2026-08-24 open=11
-targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/bias_gelu_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/gpt.go, llamagpu/gpt_bias_gelu_metal_test.go, llamagpu/gpt2_scale_test.go
-
-Add the optional BiasGELU recorder capability and a Metal kernel that computes the established exact erf-form GELU after broadcast bias over exactly rows times n values. Enable it only for Metal GPT through a constructor-time control seam; keep CUDA, Vulkan, and unsupported recorders on the current AddBias plus Unary chain. Replace both GPTDecoder.Step and gptStepN FFN activation sites. Prove fused-versus-split prefix numerics, zero tail mutations, one versus two profiled dispatches, Step and StepN logits, and 256-token greedy parity. Benchmark GPT-2-small on M2 Pro in one frozen binary: 21 order-alternated Step pairs must reach at least 1.03x median with 21/21 wins and no allocation increase; report prompt-16/64/256 prefill effects. Report the general capacity-sized unary diagnostic to perfscan.
