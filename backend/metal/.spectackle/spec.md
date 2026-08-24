@@ -621,5 +621,5 @@ WHEN BiasGELU receives valid F32 buffers and positive rows and columns, the Meta
 
 Rationale: Prevent capacity-sized scratch buffers from amplifying elementwise work or mutating inactive storage.
 
-## METAL-RECORDER-WRAPPER-REUSE-001
+## METAL-RECORDER-WRAPPER-REUSE-001 {applies: go:metal.Recorder.Reset,go:metal.Recorder.ResetConcurrent,go:metal.Recorder.reset}
 WHEN a freed Metal Recorder is reset, the Metal backend SHALL open exactly 1 fresh native command buffer and reuse the existing Go Recorder wrapper.
