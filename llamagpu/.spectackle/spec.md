@@ -60,3 +60,8 @@ Rationale: Remove one dispatch and context-capacity work amplification from Meta
 WHILE the bounded BiasGELU capability is unavailable or disabled, the decoder SHALL retain the established AddBias followed by exact unary GELU activation chain.
 
 Rationale: Preserve portable CUDA, Vulkan, CPU, and same-binary control behavior.
+
+## DECODER-LOGITS-RESIDENCY-001
+WHEN GPTDecoder or Decoder is constructed with standard backend operations, the decoder SHALL retain exactly Vocab F32 logits elements for Step and StepNLast and retain 0 multi-row logits elements.
+
+Rationale: Make dominant decoder residency scale with active output rows rather than maximum context.
