@@ -4059,7 +4059,7 @@ choice: Share backend protocol and native update encoder while keeping model gra
 
 ## P-01M0S8XJF9F5HTNGTQXZ3R9YMZ Keep M2 ViT AdamW training state resident
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 refs: R-01M0S8MAAVFDSSRJKQKZ2AYBSV, ADR-01M0S8XZMEFC98ZF81GACDFEGE
 grilled: 2026-08-24 open=1
