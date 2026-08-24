@@ -6,16 +6,21 @@ wins that justify it. **Every scanner hit is a CANDIDATE** — confirm with a
 pre/post benchmark before changing, and skip cold paths (one-time init,
 eval-only) where the fix isn't worth the code.
 
-When you find a NEW generic pattern worth codifying, add it here AND teach the
-scanner (extend a callee map or add a detector in `perfscan.go`, with a positive
-+ negative fixture test in `perfscan_test.go`) — SPEC §C29.
+> **Cutover status (2026-08-24):** `make perfscan` runs the pinned external
+> `github.com/jxsl13/perfscan@v1.81.0` release with `GOPROXY=direct` and the
+> repository-root `perfscan.yaml`. This directory is a compatibility catalog and
+> fixture suite for the 53 IDs not yet upstream. `perfscan-compat-checks.txt` and
+> `make perfscan-registry-check` are the retirement gate tracked by perfscan #877.
 
-This is the SINGLE perfscan for the repo (`internal/perfscan`, run via
-`make perfscan` / `go run ./internal/perfscan`); each static check has a
-PS-prefixed 4-digit ID (`perfscan -list` prints them all). The sections below
-catalog a subset with detailed wins — their IDs head each section. The `P3`/`P4`/
-`P5` sections are profile/benchmark heuristics with **no** static detector.
-`PS4003` generalizes `PS4002` to a transcendental hidden one call deep in a helper.
+When you find a new generic pattern worth codifying, file it in the external
+perfscan repository with its benchmark evidence and add the detector there. Add
+to this compatibility engine only when the external release cannot yet carry a
+load-bearing GoAI check.
+
+The external registry is canonical; each static check has a PS-prefixed 4-digit
+ID (`make perfscan ARGS=-list` prints it). The sections below retain detailed
+GoAI measurements, including compatibility-only checks. The `P3`/`P4`/`P5`
+sections are profile/benchmark heuristics with **no** static detector.
 
 ## Repo-agnostic engine + config
 
@@ -50,9 +55,9 @@ with `-config file.json` or a discovered `perfscan.json` / `.perfscan.json`:
 }
 ```
 
-GoAI ships its own vocabulary in `internal/perfscan/perfscan.json`, which `make
-perfscan` loads. This catalog's win figures are GoAI's measured results; the
-patterns and the engine are generic.
+GoAI ships its vocabulary at repository root in `perfscan.yaml`, which both the
+canonical scanner and temporary compatibility lane load. This catalog's win
+figures are GoAI's measured results; the patterns are generic.
 
 ## Check IDs, auto-fix, editor integration
 
@@ -82,7 +87,7 @@ extension needed:
 {
   "label": "perfscan",
   "type": "shell",
-  "command": "go run ./internal/perfscan ./...",
+  "command": "make perfscan PERFSCAN_VERBOSE=1",
   "problemMatcher": {
     "owner": "perfscan",
     "fileLocation": ["relative", "${workspaceFolder}"],

@@ -306,7 +306,7 @@ func f(a *T, m, n int, quick bool) float64 {
 }
 
 // TestPS1005SilentOnFastPathHelperInElseArm pins the helper-name half. The fast path need not be a
-// literal Storage().F64(): perfscan.json already lists flatRowMajor, flatF64, flatF32 and friends in
+// literal Storage().F64(): perfscan.yaml already lists flatRowMajor, flatF64, flatF32 and friends in
 // fastPathHelpers, and the suppression has to honor the same list the rest of the tool does.
 func TestPS1005SilentOnFastPathHelperInElseArm(t *testing.T) {
 	src := `package p

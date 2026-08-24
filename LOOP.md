@@ -78,9 +78,12 @@ When the active item does not dictate otherwise, advance the perf front:
 3. **Backpropagate generalizable wins into perfscan.** Whenever an optimization removes
    an anti-pattern that could recur (a per-element dispatch/alloc, a batch-API-wrapped
    single item, a re-encode-instead-of-slice, a copy a verbatim-bulk move avoids), ADD
-   or extend a detector in `internal/perfscan` so the whole tree is swept for it
-   automatically. A one-off fix that leaves the class undetectable is HALF-DONE — the
-   tool is how each win compounds across the codebase.
+   or report/extend a detector in
+   [`jxsl13/perfscan`](https://github.com/jxsl13/perfscan) so the whole tree is
+   swept by `make perfscan`. A one-off fix that leaves the class undetectable is
+   HALF-DONE — the shared tool is how each win compounds across codebases. The
+   temporary `make perfscan-compat` lane covers GoAI checks not yet ported
+   upstream; issue #877 is its zero-difference retirement gate.
 
 4. **New optimization field?** When you discover a fresh axis/domain to optimize,
    re-read this file and the `base-perf-sweep` notes before diving in.

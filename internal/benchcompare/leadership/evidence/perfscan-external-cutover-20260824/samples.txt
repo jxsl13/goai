@@ -1,0 +1,34 @@
+Environment
+  Apple M2 Pro, 32 GiB
+  macOS 26.5.1 (25F80)
+  go1.27.0 darwin/arm64
+  github.com/jxsl13/perfscan@v1.81.0
+  GOPROXY=direct
+
+Registry
+  internal IDs: 146
+  external IDs: 375
+  shared IDs: 93
+  external-only IDs: 282
+  internal-only compatibility IDs: 53
+
+Findings
+  external whole-tree production scan: 1903 advisory findings
+  internal-only compatibility scan: 200 advisory findings
+
+Warm runtime, seconds (real)
+  external:      21.56 25.85 25.08   median 25.08
+  old internal:   5.14  4.96  5.14   median  5.14
+  compatibility:  5.14  4.98  5.23   median  5.14
+  registry audit: 0.87  0.83  0.80   median  0.83
+
+Derived
+  external/old-internal runtime: 4.88x slower
+  staged external + compatibility + audit median: 31.05s
+  external registry breadth: 2.57x as many IDs as internal
+  net additional external coverage: 282 IDs
+
+Interpretation
+  The cutover is accepted for coverage and maintenance leverage. It is not a
+  scanner execution-speed improvement. The explicit compatibility cost buys a
+  provable no-regression path while the 53 checks are ported upstream.

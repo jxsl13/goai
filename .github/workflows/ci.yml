@@ -78,6 +78,38 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # The shared scanner is an explicit lane rather than an always-run Go package:
+  # that proves CI executes the same external command developers run. Findings
+  # remain advisory until a baseline is ratcheted, but tool/config/registry drift
+  # is hard-failing. GOPROXY=direct avoids the measured proxy latency; perfscan
+  # issue #877 tracks retirement of the temporary compatibility selector.
+  perfscan:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    name: perfscan / ubuntu
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "0"
+      GOPROXY: direct
+      PERFSCAN_MODULE: github.com/jxsl13/perfscan@v1.81.0
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+      - uses: ./.github/actions/go-build-cache
+        with:
+          lane: perfscan
+      - name: verify external integration, registry difference, and compatibility fixtures
+        run: make perfscan-check
+      - name: scan the complete production Go tree with external perfscan
+        run: make perfscan
+      - name: scan the 53 not-yet-ported compatibility checks
+        run: make perfscan-compat
+
   # §V4/§V7/§V23 — the portable promise: the whole library builds, vets (which
   # compiles _test.go files, §B45) and tests WITHOUT a C toolchain, on all
   # three OSes. This is the gate every local iteration runs; now enforced on push.
