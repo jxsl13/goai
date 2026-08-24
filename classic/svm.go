@@ -155,6 +155,10 @@ type SVC struct {
 	classNeg float64 // original label mapped to −1
 	classPos float64 // original label mapped to +1
 	fitted   bool
+
+	// Acceptance-only scalar control for value-changing kernel experiments. It
+	// packs beside fitted, so it does not enlarge SVC or affect the public API.
+	forceScalarRBF bool
 }
 
 // NewSVC constructs a binary support vector classifier with the given options
@@ -200,26 +204,32 @@ func dot(a, b []float64) float64 {
 // It returns an error on empty/ragged/mismatched input, non-binary labels, or
 // C ≤ 0.
 func (m *SVC) Fit(x [][]float64, y []float64) error {
+	_, err := m.fit(x, y)
+	return err
+}
+
+// fit returns the measured SMO step count to same-package acceptance tests.
+func (m *SVC) fit(x [][]float64, y []float64) (int, error) {
 	n := len(x)
 	if n == 0 || len(y) != n {
-		return fmt.Errorf("classic: svc bad shapes n=%d len(y)=%d", n, len(y))
+		return 0, fmt.Errorf("classic: svc bad shapes n=%d len(y)=%d", n, len(y))
 	}
 	if m.cfg.c <= 0 {
-		return fmt.Errorf("classic: svc C must be > 0, got %g", m.cfg.c)
+		return 0, fmt.Errorf("classic: svc C must be > 0, got %g", m.cfg.c)
 	}
 	d := len(x[0])
 	if d == 0 {
-		return fmt.Errorf("classic: svc needs ≥1 feature")
+		return 0, fmt.Errorf("classic: svc needs ≥1 feature")
 	}
 	for _, row := range x {
 		if len(row) != d {
-			return fmt.Errorf("classic: svc ragged X")
+			return 0, fmt.Errorf("classic: svc ragged X")
 		}
 	}
 	// binary label check
 	neg, pos, ok := twoLabels(y)
 	if !ok {
-		return fmt.Errorf("classic: svc requires exactly 2 distinct labels (binary only)")
+		return 0, fmt.Errorf("classic: svc requires exactly 2 distinct labels (binary only)")
 	}
 	m.classNeg, m.classPos = neg, pos
 	m.nFeat = d
@@ -266,7 +276,7 @@ func (m *SVC) Fit(x [][]float64, y []float64) error {
 	// so the solver only pays for the columns of the indices it actually selects
 	// into a working set (≈ the support vectors + KKT violators).
 	cache := newKernelCache(m, x, n)
-	alpha, b := m.smo(cache, yi, n)
+	alpha, b, steps := m.smo(cache, yi, n)
 
 	// keep support vectors (αᵢ > 0) in original index order
 	m.sv = m.sv[:0]
@@ -287,7 +297,7 @@ func (m *SVC) Fit(x [][]float64, y []float64) error {
 	// intercept_ = −rho).
 	m.b = -b
 	m.fitted = true
-	return nil
+	return steps, nil
 }
 
 // kernelCache lazily computes and caches kernel columns K(:,i) for the SMO
@@ -427,8 +437,8 @@ func (kc *kernelCache) column(i int) []float64 {
 	// The distance loop is NOT latency-bound on its accumulator chain as its shape suggests: four
 	// independent accumulators buy only 1.16x.
 	//
-	// THE FULL BUDGET, and it closes this line of work. Go's assembly math.Exp on arm64 runs at
-	// 10.27 ns standalone (8.51 ns 4-way interleaved, so only 1.21x of ILP is left on the table):
+	// The original scalar budget was as follows. Go's assembly math.Exp on arm64 ran at 10.27 ns
+	// standalone (8.51 ns 4-way interleaved, so only 1.21x of scalar ILP was left on the table):
 	//
 	//	  kernel columns     3.68 ms   54%
 	//	    math.Exp         1.81 ms   27%   176k x 10.27 ns
@@ -436,21 +446,33 @@ func (kc *kernelCache) column(i int) []float64 {
 	//	  solver + updates   3.14 ms   46%   948k visits = 3.31 ns/visit
 	//	  TOTAL              6.82 ms         scikit-learn's WHOLE fit: 3.54 ms
 	//
-	// With math.Exp entirely FREE this fit is 5.01 ms — still behind. With the ENTIRE kernel free
-	// it is 3.14 ms, bare parity. So no single optimisation can win here: the deficit is a uniform
-	// ~2x across BOTH the kernel and the solver, not a hotspot. Targeted work on any one term is
-	// bounded above by a loss.
+	// With math.Exp entirely free this fit would still be 5.01 ms, and with the entire kernel free
+	// it would be 3.14 ms. That budget correctly said a kernel optimisation alone could not establish
+	// overall leadership, but incorrectly treated scalar math.Exp as the only available execution
+	// shape.
 	//
-	// What would be required is a different shape, not a faster line: evaluating kernel entries in
-	// BATCHES through a BLAS-style gemm on the distance identity, so the arithmetic reaches
-	// Accelerate rather than a scalar Go loop. SMO asks for one column at a time, so that is a
-	// solver restructuring (batched/decomposition SMO), not a kernel change — a real project, and
-	// the only remaining direction with the headroom to close 1.72x.
-	parallelBands(kc.n, len(xi), func(lo, hi int) {
-		for t := lo; t < hi; t++ {
-			col[t] = kc.m.kernel(xi, kc.x[t])
-		}
-	})
+	// CORRECTED 2026-08-24: preserve the scalar squared-distance accumulation order, stage the
+	// completed distances in the destination column, then evaluate one ExpScaledF64 batch per band.
+	// On M2 Pro with GOEXPERIMENT=simd, seven order-alternated frozen pre/post pairs all won: median
+	// 10.726 ms -> 8.948 ms (1.2218x) with no allocation-count increase. A same-binary scalar control
+	// showed 1.3078x at GOMAXPROCS=12 and 1.3785x at GOMAXPROCS=1. The acceptance gate retained the
+	// exact 79-step SMO trajectory and 42 support vectors; maximum decision delta was 3.33e-15,
+	// decision signs matched, and repeated SIMD fits were bit-deterministic.
+	//
+	// This standalone gain narrows but does not close the incumbent gap: the candidate's best fresh
+	// process was 4.71 ms versus scikit-learn 1.9.0 at 3.6215 ms on identical data (1.30x behind).
+	// Batched/decomposition SMO therefore remains the next frontier for overall leadership.
+	if kc.m.cfg.kernel == SVMKernelRBF && rbfColumnSIMD && !kc.m.forceScalarRBF {
+		parallelBands(kc.n, len(xi), func(lo, hi int) {
+			rbfColumnBand(col[lo:hi], xi, kc.x[lo:hi], kc.m.gammaVal)
+		})
+	} else {
+		parallelBands(kc.n, len(xi), func(lo, hi int) {
+			for t := lo; t < hi; t++ {
+				col[t] = kc.m.kernel(xi, kc.x[t])
+			}
+		})
+	}
 	if kc.cap > 0 && len(kc.cols) >= kc.cap {
 		evict := kc.order[0]
 		kc.order = kc.order[1:]
@@ -472,7 +494,7 @@ func (kc *kernelCache) column(i int) []float64 {
 // up/low index sets, so each step is O(n) and touches only two kernel columns.
 // The dual is convex, so this reaches the same global optimum as libsvm/sklearn
 // (§V golden parity), just via a different iteration order.
-func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
+func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64, int) {
 	C := m.cfg.c
 	tol := m.cfg.tol
 	alpha := make([]float64, n)
@@ -507,7 +529,9 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 	const stallWindow = 2000
 
 	//perfscan:ignore PS3044 sequential SMO iteration, step depends on previous
+	steps := 0
 	for step := 0; step < maxSteps; step++ {
+		steps = step + 1
 		// pass 1: select i over I_up and track the I_low maximum for stopping
 		iUp := -1
 		eUpMin := math.Inf(1)
@@ -617,7 +641,7 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64) {
 		alpha[j] = a2new
 	}
 
-	return alpha, m.calcRho(alpha, e, y, n)
+	return alpha, m.calcRho(alpha, e, y, n), steps
 }
 
 // calcRho recovers the decision threshold ρ from the converged dual, averaging
