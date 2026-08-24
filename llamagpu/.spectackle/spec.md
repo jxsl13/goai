@@ -55,3 +55,8 @@ WHEN the complete GPT dispatch-fusion design is promoted on M2 Pro at GPT-2-smal
 WHEN the enabled Metal GPT FFN activation executes, the decoder SHALL record exactly one bounded BiasGELU dispatch and zero split AddBias or unary GELU dispatches for that activation.
 
 Rationale: Remove one dispatch and context-capacity work amplification from Metal GPT.
+
+## GPT-BIAS-GELU-FALLBACK-002
+WHILE the bounded BiasGELU capability is unavailable or disabled, the decoder SHALL retain the established AddBias followed by exact unary GELU activation chain.
+
+Rationale: Preserve portable CUDA, Vulkan, CPU, and same-binary control behavior.
