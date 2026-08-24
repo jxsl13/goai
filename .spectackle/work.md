@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RVG598FZABSSGTGDVG203A Attribute the remaining fused ViT training step after patch-sequence fusion
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 targets: go:metal.preNormTransformerStackF32, vision/vit.go, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_stack_test.go
 
