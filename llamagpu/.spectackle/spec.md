@@ -31,3 +31,6 @@ Rationale: Prevent a decode optimization from duplicating approximately 17 perce
 
 ## METAL-GPT-QKV-DECODE-001 {applies: go:llamagpu.GPTDecoder.Step}
 WHEN single-token GPTDecoder.Step executes on Metal, the decoder recorder SHALL issue 1 grouped QKV matrix multiplication, 2 direct K/V cache blits, and 0 split Q, K, or V projection matrix multiplications per block.
+
+## METAL-GPT-QKV-PREFILL-001 {applies: go:llamagpu.mRec.F32QKVBands,go:metal.Recorder.MatMulStridedB}
+WHEN GPT prefill executes on Metal with 64 or more rows, the decoder recorder SHALL issue 3 strided views of the one resident grouped QKV weight and copy 0 weight bytes.
