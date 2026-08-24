@@ -4035,6 +4035,7 @@ Measure the post-objective M2 bottleneck after the merged one-submission GPT gra
 kind: proposal
 state: draft
 created: 2026-08-24
+grilled: 2026-08-24 open=1
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp/gpt.go, nn/optim.go, internal/benchcompare/compare_test.go, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
 
 Introduce an explicit GPT F32 AdamW training session with portable semantics and an optional Metal implementation. Metal shall upload parameters once, retain parameters plus F32 moments and gradient buffers, encode the existing complete causal objective followed by in-place AdamW updates in one command buffer, return only the scalar loss per Step, and copy parameters back only on Sync or Close. Correct the torch companion to the same no-attention-bias model and single shared pre-attention normalization. Gate on multi-step numerical parity, checkpoint sync, lifetime safety, three order-alternated count-seven M2 campaigns with median at least 1.25x and every pair at least 1.10x versus LossAndGrad plus host AdamW, and median step latency at most 24.69 ms to lead pinned torch-mps by at least 1.05x.
