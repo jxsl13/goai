@@ -4063,7 +4063,7 @@ Implement the explicit F32 AdamW session across the portable GPT API and Metal b
 
 ## T-01M0S6Y0Z1EEZR630749829ZDR Integrate GPT AdamW session with public API and scheduler guards
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
 targets: BENCHMARKS.md, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, internal/benchcompare/compare_test.go, internal/benchcompare/leadership/evidence/m2-metal-gpt-adamw-session-20260824/README.md, nlp/gpt.go, nlp/gpt_adamw_session_test.go, nn/optim.go, nn/optim_test.go, testdata/bench_gpt_train_torch.py, backend/example_gpt_adamw_session_test.go, nlp/example_gpt_adamw_session_test.go, nn/example_test.go, nn/scheduler_guard_test.go, nn/scheduler_test.go
