@@ -1,6 +1,6 @@
 # ADR-0008 — GPU strategy: offload only measured winners
 
-- Status: accepted; amended 2026-07-19 by §T29 after §T338–§T348 measurements
+- Status: accepted; amended 2026-07-19 and 2026-08-24 by the ViT objective graph
 - Date: 2026-07-06
 - Relates: §C2/§C3 (cgo gate), §T28–T30, §T42/§T43, §R36–R40
 
@@ -34,6 +34,14 @@ family (§T338–§T348).
    GPU autodiff, §R36; CUDA graphs; Vulkan command buffers). That is the vehicle
    for large-model GPU training/inference (§T42 CUDA, MPSGraph expansion), where
    the per-op transfer tax vanishes.
+4. **Whole-objective acceleration is an optional model capability.** A public
+   model method keeps a portable eager implementation, then structurally
+   detects whether the active backend can own the same objective. The first
+   instance is `ViT.LossAndGrad`: its fallback records `Forward` plus mean basic
+   cross-entropy on a private tape, while Metal composes patching, every encoder
+   block, classification loss, and all parameter gradients into one cached
+   MPSGraph submission. This avoids widening the primitive `Backend` interface
+   or making `vision` import an accelerator package.
 
 ## Rationale
 
@@ -49,8 +57,10 @@ family (§T338–§T348).
 - §T28 remains dropped as written. §T29 is superseded: per-op softmax/norm is
   justified by its measured representative shapes; this does not invent an
   unimplemented small-shape router or grant future kernels blanket coverage.
-- Full GPU-resident training (no per-op copy) tracked under MPSGraph/CUDA graph
-  work (§T42 and a future MPSGraph task).
+- The ViT objective now proves the graph-resident training direction for one
+  model boundary. General graph capture, device-resident optimizers, CUDA, and
+  Vulkan equivalents remain separate measured work; this decision does not
+  imply that every model should bypass the ordinary tape.
 
 ## Revisit if
 
