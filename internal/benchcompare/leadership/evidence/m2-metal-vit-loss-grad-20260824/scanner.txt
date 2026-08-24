@@ -1,0 +1,25 @@
+Scanner
+  module: github.com/jxsl13/perfscan/perfscan
+  resolved release: github.com/jxsl13/perfscan v1.81.0
+  release timestamp observed: 2026-08-22
+  dependency path: GOPROXY=direct
+
+Scope
+  ./backend
+  ./backend/metal
+  ./vision
+
+Result
+  No surviving finding targets a changed source line. Three new constant errors
+  were expressed with errors.New. The parameter-gradient result allocation has
+  an explicit PS2001 ownership justification because the API must return one
+  independently owned tensor per parameter.
+
+  External v1.81.0 warns that several keys in GoAI's legacy internal perfscan
+  configuration are unknown. That configuration migration is deliberately not
+  mixed into this performance PR and is the next separate restructuring unit.
+
+Generalized finding
+  https://github.com/jxsl13/perfscan/issues/876
+  Detect forward-loss-backward boundaries eligible for one graph submission
+

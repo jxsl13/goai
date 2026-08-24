@@ -1,0 +1,48 @@
+Benchmark identity
+  source code commit: 2f95fa87db1e5e9af037751dc2031488c08dc5b1
+  binary SHA-256: 4fa0f337813ef4b5eedfb0e4e3001eb7ccdcb5cd0014d21ab822bfcf28e22855
+  goos: darwin
+  goarch: arm64
+  cpu: Apple M2 Pro
+  GOMAXPROCS/test cpu: 12
+  benchtime: 20x per arm
+  samples: 7 per campaign
+
+Columns
+  campaign sample candidate-ns/objective control-ns/objective speedup
+
+Campaign 1 — control first
+  1 1 5653521  8214617  1.453
+  1 2 4603737  6918350  1.503
+  1 3 6818310  9810804  1.439
+  1 4 6492940  9425214  1.452
+  1 5 5663244  8236898  1.454
+  1 6 5281254  7877704  1.492
+  1 7 6972660 10153427  1.456
+  median 1.454; minimum 1.439
+
+Campaign 2 — candidate first
+  2 1 6612571  9501988  1.437
+  2 2 6498475  9329585  1.436
+  2 3 6287058  9403854  1.496
+  2 4 5344721  7749073  1.450
+  2 5 7313408 10584810  1.447
+  2 6 7326602 12124598  1.655
+  2 7 7249569 10684765  1.474
+  median 1.450; minimum 1.436
+
+Campaign 3 — control first
+  3 1 6880758 10310669  1.498
+  3 2 6769785 11904310  1.758
+  3 3 7796367 10301646  1.321
+  3 4 7284575 11026187  1.514
+  3 5 8593723 12886085  1.499
+  3 6 8238573 11945550  1.450
+  3 7 7828208 12315254  1.573
+  median 1.499; minimum 1.321
+
+All accepted samples
+  median 1.456; minimum 1.321; maximum 1.758
+  predeclared campaign-median gate >= 1.20: PASS
+  predeclared every-sample gate >= 1.10: PASS
+

@@ -25,6 +25,24 @@ func ExampleViT() {
 	// Output: (1, 3) true
 }
 
+// LossAndGrad evaluates the standard classification objective and returns one
+// gradient for every trainable ViT parameter in Params order.
+func ExampleViT_LossAndGrad() {
+	m, err := vision.NewViT(1, 8, 3, 7,
+		vision.WithViTDim(8), vision.WithViTHeads(2), vision.WithViTDepth(1))
+	if err != nil {
+		panic(err)
+	}
+	images := tensor.New(tensor.F32, tensor.Shape{2, 1, 8, 8})
+	targets := tensor.New(tensor.F32, tensor.Shape{2})
+	loss, grads, err := m.LossAndGrad(backend.NewContext(), images, targets)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(loss.Numel(), len(grads))
+	// Output: 1 20
+}
+
 // NewViT validates geometry: the patch size must divide the image size.
 func ExampleNewViT() {
 	_, err := vision.NewViT(1, 8, 3, 7, vision.WithViTPatch(3))

@@ -577,6 +577,16 @@ int mtl_patch_embed_sequence_backward_f32(
     float* dPatches, float* dClass, float* dPos, float* dW, float* dBias,
     int rows, int patchDim, int dim, int batch, int patches, int seq);
 
+// Whole-objective ViT training boundary. inputs contains packed patches,
+// targets, and parameters in ViT.Params order; outputs contains scalar loss
+// followed by one gradient per parameter. All addresses are consumed
+// synchronously and retained nowhere.
+int mtl_vit_loss_and_grad_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs,
+    int depth, int batch, int patches, int patchDim,
+    int dim, int hidden, int heads, int classes,
+    float eps1, float eps2, float finalEps);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA

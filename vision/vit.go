@@ -1,8 +1,10 @@
 package vision
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/nn"
@@ -202,6 +204,141 @@ func (m *ViT) Params() []*tensor.Tensor {
 	out = append(out, m.Norm.Params()...)
 	out = append(out, m.Head.Params()...)
 	return out
+}
+
+// vitLossAndGradBackend is an optional whole-objective capability. Returning
+// supported=false asks LossAndGrad to execute its portable tape fallback;
+// supported=true with an error reports an attempted accelerator failure.
+type vitLossAndGradBackend interface {
+	ViTLossAndGradF32(inputs []*tensor.Tensor, attrs backend.ViTLossAndGradAttrs) (
+		loss *tensor.Tensor, grads []*tensor.Tensor, supported bool, err error)
+}
+
+// LossAndGrad evaluates mean hard-label cross-entropy and returns gradients in
+// exactly the same order as Params. The method owns a private tape, so it is an
+// eager objective boundary even when ctx already carries a recorder.
+func (m *ViT) LossAndGrad(ctx *backend.Context, images, targets *tensor.Tensor) (*tensor.Tensor, []*tensor.Tensor, error) {
+	if m == nil {
+		return nil, nil, errors.New("vision: ViT.LossAndGrad called on nil model")
+	}
+	if images == nil || targets == nil {
+		return nil, nil, errors.New("vision: ViT.LossAndGrad needs non-nil images and targets")
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if ctx.Backend == nil {
+		return nil, nil, errors.New("vision: ViT.LossAndGrad needs a context backend")
+	}
+
+	if ctx.Recorder == nil {
+		if accelerated, ok := ctx.Backend.(vitLossAndGradBackend); ok {
+			if attrs, eligible := m.lossAndGradAttrs(images, targets); eligible {
+				patches, err := m.patchifyBatch(images)
+				if err != nil {
+					return nil, nil, err
+				}
+				params := m.Params()
+				inputs := make([]*tensor.Tensor, 0, 2+len(params))
+				inputs = append(inputs, patches, targets)
+				inputs = append(inputs, params...)
+				loss, grads, supported, err := accelerated.ViTLossAndGradF32(inputs, attrs)
+				if supported {
+					if err != nil {
+						return nil, nil, err
+					}
+					if loss == nil || len(grads) != len(params) {
+						return nil, nil, fmt.Errorf("vision: ViT loss-and-gradient backend returned %d gradients for %d parameters", len(grads), len(params))
+					}
+					return loss, grads, nil
+				}
+			}
+		}
+	}
+
+	tape := autograd.NewTapeOn(ctx.Backend)
+	recording := ctx.WithRecorder(tape)
+	logits, err := m.Forward(recording, images)
+	if err != nil {
+		return nil, nil, err
+	}
+	loss, err := nn.CrossEntropy(recording, logits, targets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tape.Backward(loss); err != nil {
+		return nil, nil, err
+	}
+	params := m.Params()
+	grads := make([]*tensor.Tensor, len(params))
+	for i, parameter := range params {
+		grads[i] = tape.Grad(parameter)
+		if grads[i] == nil {
+			return nil, nil, fmt.Errorf("vision: ViT parameter %d has no gradient", i)
+		}
+	}
+	return loss, grads, nil
+}
+
+func (m *ViT) lossAndGradAttrs(images, targets *tensor.Tensor) (backend.ViTLossAndGradAttrs, bool) {
+	if images.Ndim() != 4 || targets.Dtype() != tensor.F32 || targets.Ndim() != 1 ||
+		m.Patch <= 0 || m.Embed == nil || m.Embed.W == nil || m.Embed.B == nil ||
+		m.Class == nil || m.Class.Dtype() != tensor.F32 || m.Pos == nil || m.Pos.Ndim() != 2 ||
+		m.Norm == nil || m.Norm.Gamma == nil ||
+		m.Norm.Beta == nil || m.Head == nil || m.Head.W == nil || m.Head.B == nil ||
+		len(m.Blocks) == 0 || len(m.Blocks) > 8 || m.Embed.W.Ndim() != 2 || m.Head.W.Ndim() != 2 {
+		return backend.ViTLossAndGradAttrs{}, false
+	}
+	batch := images.Shape()[0]
+	dim := m.Embed.W.Shape()[1]
+	classes := m.Head.W.Shape()[1]
+	patches := m.Pos.Shape()[0] - 1
+	patchDim := m.Embed.W.Shape()[0]
+	if batch <= 0 || targets.Shape()[0] != batch || dim <= 0 || classes <= 0 || patches <= 0 {
+		return backend.ViTLossAndGradAttrs{}, false
+	}
+	first := m.Blocks[0]
+	if first == nil || first.ln1 == nil || first.ln2 == nil || first.attn == nil ||
+		first.fc1 == nil || first.fc1.W == nil || first.fc1.W.Ndim() != 2 {
+		return backend.ViTLossAndGradAttrs{}, false
+	}
+	hidden := first.fc1.W.Shape()[1]
+	heads, eps1, eps2 := first.attn.Heads, first.ln1.Eps, first.ln2.Eps
+	for _, block := range m.Blocks {
+		if !eligibleViTLossAndGradBlock(block, dim, hidden, heads, eps1, eps2) {
+			return backend.ViTLossAndGradAttrs{}, false
+		}
+	}
+	return backend.ViTLossAndGradAttrs{
+		Depth: len(m.Blocks), Batch: batch, Patches: patches, PatchDim: patchDim,
+		Dim: dim, Hidden: hidden, Heads: heads, Classes: classes,
+		Eps1: eps1, Eps2: eps2, FinalEps: m.Norm.Eps,
+	}, true
+}
+
+func eligibleViTLossAndGradBlock(block *vitBlock, dim, hidden, heads int, eps1, eps2 float64) bool {
+	if block == nil || block.ln1 == nil || block.ln2 == nil || block.attn == nil ||
+		block.fc1 == nil || block.fc2 == nil || block.fc1.B == nil || block.fc2.B == nil ||
+		block.ln1.Eps != eps1 || block.ln2.Eps != eps2 || block.attn.Heads != heads ||
+		block.attn.Causal || block.attn.Mask != nil {
+		return false
+	}
+	for _, name := range []string{"q", "k", "v", "o"} {
+		if block.attn.LoRA[name] != nil || block.attn.Bias[name] != nil {
+			return false
+		}
+	}
+	for _, value := range []*tensor.Tensor{
+		block.ln1.Gamma, block.ln1.Beta, block.attn.Wq, block.attn.Wk,
+		block.attn.Wv, block.attn.Wo, block.ln2.Gamma, block.ln2.Beta,
+		block.fc1.W, block.fc1.B, block.fc2.W, block.fc2.B,
+	} {
+		if value == nil {
+			return false
+		}
+	}
+	return block.fc1.W.Ndim() == 2 && block.fc1.W.Shape()[0] == dim && block.fc1.W.Shape()[1] == hidden &&
+		block.fc2.W.Ndim() == 2 && block.fc2.W.Shape()[0] == hidden && block.fc2.W.Shape()[1] == dim
 }
 
 // patchify flattens one [C,H,W] image into [N, C·p·p] patch rows (row-major over

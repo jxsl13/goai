@@ -557,3 +557,12 @@ WHERE valid contiguous offset-zero F32 patch sequence fusion, the Metal implemen
 
 ## M2-PATCH-EMBED-SEQUENCE-PERF-001
 WHERE three fresh-process order-alternated count-seven campaigns at F32 B8 N64 K48 D128, the M2 promotion gate SHALL require 1.20 times boundary median, 1.05 times complete-step median per campaign, and 1.03 times every aligned complete-step pair.
+
+## METAL-VIT-LOSS-GRAD-NUMERIC-001-001
+WHEN the supported objective is compared with the portable tape control, the Metal ViT loss-and-gradient capability SHALL match loss and every ViT parameter gradient within established F32 tolerance while mutating zero input or parameter elements.
+
+## METAL-VIT-LOSS-GRAD-STRUCTURE-001-001
+WHERE contiguous offset-zero F32 inputs with supported uniform ViT geometry, the Metal ViT loss-and-gradient capability SHALL execute patch sequence, every block, classifier, mean cross-entropy, and all parameter gradients in exactly one bounded geometry-keyed cached MPSGraph submission.
+
+## M2-VIT-LOSS-GRAD-PERF-001-001
+WHERE three order-alternated count-seven M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4 C10, the one-submission objective promotion gate SHALL require at least 1.20 times median complete-objective speedup and 1.10 times speedup in every aligned pair.

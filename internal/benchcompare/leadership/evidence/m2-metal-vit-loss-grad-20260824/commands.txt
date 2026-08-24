@@ -1,0 +1,36 @@
+# Environment
+go version
+sw_vers
+sysctl -n machdep.cpu.brand_string
+sysctl -n hw.memsize
+spectackle version
+
+# Compile package tests; execute the compiled binaries separately.
+go test -c -o /private/tmp/goai-vit-loss-grad-vision.test ./vision
+/private/tmp/goai-vit-loss-grad-vision.test -test.run 'TestViTLossAndGrad'
+(cd backend/metal && go test -c -o /private/tmp/goai-vit-loss-grad-metal.test .)
+(cd backend/metal && /private/tmp/goai-vit-loss-grad-metal.test -test.run 'TestViTLossAndGradMetalParityAndImmutability')
+
+# Repository validation.
+make preflight
+make preflight-metal
+go test ./...
+
+# External perfscan, bypassing the Go proxy.
+env GOPROXY=direct go run github.com/jxsl13/perfscan/perfscan@latest -level 3 ./backend
+env GOPROXY=direct go run github.com/jxsl13/perfscan/perfscan@latest -level 3 ./backend/metal
+env GOPROXY=direct go run github.com/jxsl13/perfscan/perfscan@latest -level 3 ./vision
+
+# Exact benchmark binary and identity.
+(cd backend/metal && go test -c -o /private/tmp/goai-vit-loss-grad-final.test .)
+shasum -a 256 /private/tmp/goai-vit-loss-grad-final.test
+
+# Campaign 1: control first.
+env GOMAXPROCS=12 /private/tmp/goai-vit-loss-grad-final.test -test.run '^$' -test.bench '^BenchmarkViTLossAndGradObjectivePaired$' -test.benchtime=20x -test.count=7 -test.cpu=12
+
+# Campaign 2: candidate first.
+env GOMAXPROCS=12 GOAI_VIT_LOSS_GRAD_CANDIDATE_FIRST=1 /private/tmp/goai-vit-loss-grad-final.test -test.run '^$' -test.bench '^BenchmarkViTLossAndGradObjectivePaired$' -test.benchtime=20x -test.count=7 -test.cpu=12
+
+# Campaign 3: control first.
+env GOMAXPROCS=12 /private/tmp/goai-vit-loss-grad-final.test -test.run '^$' -test.bench '^BenchmarkViTLossAndGradObjectivePaired$' -test.benchtime=20x -test.count=7 -test.cpu=12
+

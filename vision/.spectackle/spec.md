@@ -7,3 +7,6 @@ schema: v1
 
 ## VIT-PATCH-EMBED-SEQUENCE-FALLBACK-001
 WHEN the active backend lacks either patch-embed-sequence direction, the ViT batched forward SHALL execute the existing patch projection, Batch class/position assembly chains, and final concat with zero implicit backend migrations.
+
+## VIT-LOSS-GRAD-FALLBACK-001-001
+WHEN the active backend lacks the ViT loss-and-gradient capability, the ViT.LossAndGrad SHALL execute Forward plus mean basic CrossEntropy on a private tape and return gradients aligned exactly with ViT.Params.
