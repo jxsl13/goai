@@ -27,6 +27,7 @@ void mtl_set_coop_max_m(int m) { gCoopMaxM = m; }
 #import <MetalPerformanceShaders/MetalPerformanceShaders.h>
 #import <MetalPerformanceShadersGraph/MetalPerformanceShadersGraph.h>
 #include <pthread.h>
+#include <math.h>
 #include <stdint.h>
 #include <string.h>
 #include <sys/mman.h> // mincore (zero-copy operand wrapping)
@@ -11171,6 +11172,297 @@ int mtl_gpt_loss_and_grad_f32(
             memcpy((float*)(uintptr_t)outputs[i], out[i].contents, outputLengths[i]);
         return 0;
     }
+}
+
+// A fixed-geometry GPT session keeps all large training state inside Metal.
+// Shared storage is intentional on Apple Silicon: MPSGraph and the custom
+// optimizer consume the same UMA allocations, while host access occurs only at
+// the scalar-loss and explicit synchronization boundaries.
+@interface GOAIGPTAdamWSession : NSObject
+@property(nonatomic, strong) MPSGraph* graph;
+@property(nonatomic, strong) NSArray* paramBuffers;
+@property(nonatomic, strong) NSArray* gradBuffers;
+@property(nonatomic, strong) NSArray* moment1Buffers;
+@property(nonatomic, strong) NSArray* moment2Buffers;
+@property(nonatomic, strong) NSArray* paramLengths;
+@property(nonatomic, strong) id<MTLBuffer> tokenBuffer;
+@property(nonatomic, strong) id<MTLBuffer> targetBuffer;
+@property(nonatomic, strong) id<MTLBuffer> lossBuffer;
+@property(nonatomic, strong) NSDictionary* feeds;
+@property(nonatomic, strong) NSDictionary* results;
+@property(nonatomic) int seq;
+@property(nonatomic) int step;
+@property(nonatomic) float lr;
+@property(nonatomic) float beta1;
+@property(nonatomic) float beta2;
+@property(nonatomic) float epsilon;
+@property(nonatomic) float weightDecay;
+@end
+
+@implementation GOAIGPTAdamWSession
+@end
+
+typedef struct {
+    uint32_t n;
+    float lr;
+    float beta1;
+    float beta2;
+    float epsilon;
+    float decay;
+    float invCorrection1;
+    float invCorrection2;
+} gpt_adamw_args;
+
+static id<MTLComputePipelineState> gGPTAdamWPipeline = nil;
+
+static int ensure_gpt_adamw_pipeline(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString* source =
+            @"#include <metal_stdlib>\n"
+             "using namespace metal;\n"
+             "struct AdamArgs { uint n; float lr; float b1; float b2; float eps; float decay; float ic1; float ic2; };\n"
+             "kernel void gpt_adamw(device float* p [[buffer(0)]], device const float* g [[buffer(1)]],\n"
+             "                      device float* m [[buffer(2)]], device float* v [[buffer(3)]],\n"
+             "                      constant AdamArgs& a [[buffer(4)]], uint i [[thread_position_in_grid]]) {\n"
+             "  if (i >= a.n) return;\n"
+             "  float gv = g[i];\n"
+             "  float mi = a.b1*m[i] + (1.0f-a.b1)*gv;\n"
+             "  float vi = a.b2*v[i] + (1.0f-a.b2)*gv*gv;\n"
+             "  m[i] = mi; v[i] = vi;\n"
+             "  p[i] = p[i]*a.decay - a.lr*(mi*a.ic1)/(sqrt(vi*a.ic2)+a.eps);\n"
+             "}\n";
+        NSError* error = nil;
+        id<MTLLibrary> library = [gDevice newLibraryWithSource:source options:nil error:&error];
+        id<MTLFunction> function = [library newFunctionWithName:@"gpt_adamw"];
+        if (function) gGPTAdamWPipeline = [gDevice newComputePipelineStateWithFunction:function error:&error];
+    });
+    return gGPTAdamWPipeline ? 0 : -2;
+}
+
+uintptr_t mtl_gpt_adamw_session_new(
+    const uintptr_t* params,
+    int depth, int seq, int ctx, int vocab,
+    int dim, int hidden, int heads,
+    float eps1, float eps2, float finalEps,
+    float lr, float beta1, float beta2, float adamEps, float weightDecay,
+    int* status) {
+    if (status) *status = -1;
+    if (ensure_init() != 0 || ensure_gpt_adamw_pipeline() != 0) {
+        if (status) *status = -2;
+        return 0;
+    }
+    if (!params || !status || depth < 1 || depth > GPT_OBJECTIVE_MAX_DEPTH || seq <= 0 ||
+        ctx < seq || vocab <= 0 || dim <= 0 || hidden <= 0 || heads <= 0 || dim % heads != 0 ||
+        !isfinite(lr) || lr <= 0 || !isfinite(beta1) || beta1 < 0 || beta1 >= 1 ||
+        !isfinite(beta2) || beta2 < 0 || beta2 >= 1 || !isfinite(adamEps) || adamEps <= 0 ||
+        !isfinite(weightDecay) || weightDecay < 0) {
+        *status = -6;
+        return 0;
+    }
+    @autoreleasepool {
+        int slot = ensure_gpt_objective_graph(depth, seq, ctx, vocab, dim, hidden, heads);
+        if (slot < 0) {
+            *status = slot;
+            return 0;
+        }
+        int paramCount = 5 + 12 * depth;
+        int epsIndex = 2 + paramCount;
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t tokLen = (size_t)vocab * dim * sizeof(float);
+        size_t posLen = (size_t)ctx * dim * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        size_t headLen = (size_t)dim * vocab * sizeof(float);
+
+        GOAIGPTAdamWSession* session = [GOAIGPTAdamWSession new];
+        session.graph = gGPTObjectiveGraphs[slot];
+        session.seq = seq;
+        session.lr = lr;
+        session.beta1 = beta1;
+        session.beta2 = beta2;
+        session.epsilon = adamEps;
+        session.weightDecay = weightDecay;
+        session.tokenBuffer = [gDevice newBufferWithLength:(size_t)seq * sizeof(float)
+                                                   options:MTLResourceStorageModeShared];
+        session.targetBuffer = [gDevice newBufferWithLength:(size_t)seq * sizeof(float)
+                                                    options:MTLResourceStorageModeShared];
+        session.lossBuffer = [gDevice newBufferWithLength:sizeof(float)
+                                                  options:MTLResourceStorageModeShared];
+        if (!session.graph || !session.tokenBuffer || !session.targetBuffer || !session.lossBuffer) {
+            *status = -2;
+            return 0;
+        }
+
+        NSMutableArray* paramBuffers = [NSMutableArray arrayWithCapacity:paramCount];
+        NSMutableArray* gradBuffers = [NSMutableArray arrayWithCapacity:paramCount];
+        NSMutableArray* moment1Buffers = [NSMutableArray arrayWithCapacity:paramCount];
+        NSMutableArray* moment2Buffers = [NSMutableArray arrayWithCapacity:paramCount];
+        NSMutableArray* paramLengths = [NSMutableArray arrayWithCapacity:paramCount];
+        for (int param = 0; param < paramCount; param++) {
+            size_t length = gpt_objective_param_length(
+                param, depth, tokLen, posLen, dLen, hLen, aWLen, fWLen, headLen);
+            const void* host = (const void*)(uintptr_t)params[param];
+            if (!host || length == 0) {
+                *status = -6;
+                return 0;
+            }
+            id<MTLBuffer> parameter = [gDevice newBufferWithBytes:host length:length
+                                                           options:MTLResourceStorageModeShared];
+            id<MTLBuffer> gradient = [gDevice newBufferWithLength:length options:MTLResourceStorageModeShared];
+            id<MTLBuffer> moment1 = [gDevice newBufferWithLength:length options:MTLResourceStorageModeShared];
+            id<MTLBuffer> moment2 = [gDevice newBufferWithLength:length options:MTLResourceStorageModeShared];
+            if (!parameter || !gradient || !moment1 || !moment2) {
+                *status = -2;
+                return 0;
+            }
+            memset(moment1.contents, 0, length);
+            memset(moment2.contents, 0, length);
+            [paramBuffers addObject:parameter];
+            [gradBuffers addObject:gradient];
+            [moment1Buffers addObject:moment1];
+            [moment2Buffers addObject:moment2];
+            [paramLengths addObject:@(length)];
+        }
+        session.paramBuffers = paramBuffers;
+        session.gradBuffers = gradBuffers;
+        session.moment1Buffers = moment1Buffers;
+        session.moment2Buffers = moment2Buffers;
+        session.paramLengths = paramLengths;
+
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:epsIndex + 3];
+        MPSGraphTensorData* tokenData = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:session.tokenBuffer shape:@[@(seq)] dataType:MPSDataTypeFloat32];
+        MPSGraphTensorData* targetData = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:session.targetBuffer shape:@[@(seq)] dataType:MPSDataTypeFloat32];
+        if (!tokenData || !targetData) {
+            *status = -2;
+            return 0;
+        }
+        feeds[gGPTObjectiveInputs[slot][0]] = tokenData;
+        feeds[gGPTObjectiveInputs[slot][1]] = targetData;
+        for (int param = 0; param < paramCount; param++) {
+            MPSGraphTensorData* data = [[MPSGraphTensorData alloc]
+                initWithMTLBuffer:paramBuffers[param]
+                             shape:gpt_objective_param_shape(param, depth, ctx, vocab, dim, hidden)
+                          dataType:MPSDataTypeFloat32];
+            if (!data) {
+                *status = -2;
+                return 0;
+            }
+            feeds[gGPTObjectiveInputs[slot][2 + param]] = data;
+        }
+        float epsilonValues[3] = {eps1, eps2, finalEps};
+        for (int i = 0; i < 3; i++) {
+            id<MTLBuffer> buffer = [gDevice newBufferWithBytes:&epsilonValues[i] length:sizeof(float)
+                                                       options:MTLResourceStorageModeShared];
+            MPSGraphTensorData* data = [[MPSGraphTensorData alloc]
+                initWithMTLBuffer:buffer shape:@[@1] dataType:MPSDataTypeFloat32];
+            if (!buffer || !data) {
+                *status = -2;
+                return 0;
+            }
+            feeds[gGPTObjectiveInputs[slot][epsIndex + i]] = data;
+        }
+        session.feeds = feeds;
+
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:1 + paramCount];
+        MPSGraphTensorData* lossData = [[MPSGraphTensorData alloc]
+            initWithMTLBuffer:session.lossBuffer shape:@[@1] dataType:MPSDataTypeFloat32];
+        if (!lossData) {
+            *status = -2;
+            return 0;
+        }
+        results[gGPTObjectiveOutputs[slot][0]] = lossData;
+        for (int param = 0; param < paramCount; param++) {
+            MPSGraphTensorData* data = [[MPSGraphTensorData alloc]
+                initWithMTLBuffer:gradBuffers[param]
+                             shape:gpt_objective_param_shape(param, depth, ctx, vocab, dim, hidden)
+                          dataType:MPSDataTypeFloat32];
+            if (!data) {
+                *status = -2;
+                return 0;
+            }
+            results[gGPTObjectiveOutputs[slot][1 + param]] = data;
+        }
+        session.results = results;
+        *status = 0;
+        return (uintptr_t)CFBridgingRetain(session);
+    }
+}
+
+int mtl_gpt_adamw_session_step(
+    uintptr_t handle, const float* tokenIndices, const float* targets, float* loss) {
+    if (ensure_init() != 0) return -1;
+    if (!handle || !tokenIndices || !targets || !loss) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        GOAIGPTAdamWSession* session = (__bridge GOAIGPTAdamWSession*)(void*)handle;
+        memcpy(session.tokenBuffer.contents, tokenIndices, (size_t)session.seq * sizeof(float));
+        memcpy(session.targetBuffer.contents, targets, (size_t)session.seq * sizeof(float));
+        MPSCommandBuffer* commandBuffer = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!commandBuffer) return -3;
+        [session.graph encodeToCommandBuffer:commandBuffer feeds:session.feeds targetOperations:nil
+                           resultsDictionary:session.results executionDescriptor:nil];
+        id<MTLComputeCommandEncoder> encoder = [commandBuffer computeCommandEncoder];
+        if (!encoder) return -3;
+        [encoder setComputePipelineState:gGPTAdamWPipeline];
+        int nextStep = session.step + 1;
+        float invCorrection1 = 1.0f / (1.0f - powf(session.beta1, (float)nextStep));
+        float invCorrection2 = 1.0f / (1.0f - powf(session.beta2, (float)nextStep));
+        float decay = 1.0f - session.lr * session.weightDecay;
+        NSUInteger threads = MIN((NSUInteger)256, gGPTAdamWPipeline.maxTotalThreadsPerThreadgroup);
+        NSUInteger width = gGPTAdamWPipeline.threadExecutionWidth;
+        threads = MAX(width, (threads / width) * width);
+        for (NSUInteger param = 0; param < session.paramBuffers.count; param++) {
+            size_t length = [session.paramLengths[param] unsignedLongLongValue];
+            gpt_adamw_args args = {
+                .n = (uint32_t)(length / sizeof(float)),
+                .lr = session.lr,
+                .beta1 = session.beta1,
+                .beta2 = session.beta2,
+                .epsilon = session.epsilon,
+                .decay = decay,
+                .invCorrection1 = invCorrection1,
+                .invCorrection2 = invCorrection2,
+            };
+            [encoder setBuffer:session.paramBuffers[param] offset:0 atIndex:0];
+            [encoder setBuffer:session.gradBuffers[param] offset:0 atIndex:1];
+            [encoder setBuffer:session.moment1Buffers[param] offset:0 atIndex:2];
+            [encoder setBuffer:session.moment2Buffers[param] offset:0 atIndex:3];
+            [encoder setBytes:&args length:sizeof(args) atIndex:4];
+            [encoder dispatchThreads:MTLSizeMake(args.n, 1, 1)
+                threadsPerThreadgroup:MTLSizeMake(threads, 1, 1)];
+        }
+        [encoder endEncoding];
+        [commandBuffer commit];
+        [commandBuffer waitUntilCompleted];
+        if (commandBuffer.status != MTLCommandBufferStatusCompleted) return -4;
+        session.step = nextStep;
+        memcpy(loss, session.lossBuffer.contents, sizeof(float));
+        return 0;
+    }
+}
+
+int mtl_gpt_adamw_session_sync(uintptr_t handle, const uintptr_t* params) {
+    if (!handle || !params) return -6;
+    @autoreleasepool {
+        GOAIGPTAdamWSession* session = (__bridge GOAIGPTAdamWSession*)(void*)handle;
+        for (NSUInteger param = 0; param < session.paramBuffers.count; param++) {
+            void* host = (void*)(uintptr_t)params[param];
+            size_t length = [session.paramLengths[param] unsignedLongLongValue];
+            if (!host || length == 0) return -6;
+            memcpy(host, [session.paramBuffers[param] contents], length);
+        }
+        return 0;
+    }
+}
+
+int mtl_gpt_adamw_session_close(uintptr_t handle) {
+    if (!handle) return 0;
+    CFRelease((CFTypeRef)(void*)handle);
+    return 0;
 }
 
 // softmax_jacobian (§T399): given P=softmax(S) and dP (both [rows,cols]), compute the softmax VJP

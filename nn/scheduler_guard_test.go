@@ -24,6 +24,7 @@ var bindableOptimizers = map[string]string{
 	// Rule 3: exported LR float64 field, found by reflection.
 	"Adafactor":     "LR field",
 	"AdamMini":      "LR field",
+	"AdamF32":       "LR field",
 	"AdEMAMix":      "LR field",
 	"APOLLO":        "LR field",
 	"CautiousAdamW": "LR field",

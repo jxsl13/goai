@@ -151,6 +151,39 @@ func TestOptimizerGoldenParity(t *testing.T) {
 	}
 }
 
+func TestAdamWF32UsesF32StateAndArithmetic(t *testing.T) {
+	p := tensor.FromFloat32(tensor.Shape{3}, []float32{1, -2, 0.5})
+	opt := nn.NewAdamWF32([]*tensor.Tensor{p}, 1e-3, 0.1)
+	grads := [][]float32{{0.2, -0.4, 0.1}, {-0.3, 0.5, 0.7}, {0.8, -0.2, -0.6}}
+	if len(grads) == 0 {
+		t.Fatal("test gradient trajectory is empty")
+	}
+	m, v := make([]float32, 3), make([]float32, 3)
+	want := []float32{1, -2, 0.5}
+	for step, values := range grads {
+		g := tensor.FromFloat32(tensor.Shape{3}, values)
+		if err := opt.Step(func(*tensor.Tensor) *tensor.Tensor { return g }); err != nil {
+			t.Fatal(err)
+		}
+		b1, b2 := float32(0.9), float32(0.999)
+		ic1 := float32(1) / (float32(1) - float32(math.Pow(float64(b1), float64(step+1))))
+		ic2 := float32(1) / (float32(1) - float32(math.Pow(float64(b2), float64(step+1))))
+		for i, gv := range values {
+			m[i] = b1*m[i] + (1-b1)*gv
+			v[i] = b2*v[i] + (1-b2)*gv*gv
+			want[i] = want[i]*(1-float32(1e-3*0.1)) -
+				float32(1e-3)*(m[i]*ic1)/(float32(math.Sqrt(float64(v[i]*ic2)))+float32(1e-8))
+			if p.Storage().F32()[i] != want[i] {
+				t.Fatalf("step %d param %d = %g, want exact F32 %g", step+1, i, p.Storage().F32()[i], want[i])
+			}
+		}
+	}
+	bad := tensor.New(tensor.F64, tensor.Shape{3})
+	if err := nn.NewAdamF32([]*tensor.Tensor{bad}, 1e-3).Step(func(*tensor.Tensor) *tensor.Tensor { return bad }); err == nil {
+		t.Fatal("AdamF32 accepted an F64 parameter")
+	}
+}
+
 // §T33: global-norm gradient clipping scales all grads by maxNorm/norm.
 func TestClipGradNorm(t *testing.T) {
 	p1 := tensor.New(tensor.F64, tensor.Shape{2})
@@ -220,7 +253,7 @@ func TestOptimizerTrainingDecreasesLoss(t *testing.T) {
 		l := nn.NewLinear(tensor.F64, 2, 1, 11)
 		opt := mk(l.Params())
 		var prev float64
-		for step := range 5 {
+		for step := 0; step < 5; step++ {
 			tape := autograd.NewTape()
 			ctx := tape.Context()
 			pred, err := l.Forward(ctx, x)

@@ -460,3 +460,14 @@ func ExampleQuantLinear_Close() {
 	fmt.Println(q.Close())
 	// Output: <nil>
 }
+
+// AdamF32 is the explicit F32-state optimizer for accelerator-matched training.
+func ExampleAdamF32() {
+	parameter := tensor.FromFloat32(tensor.Shape{1}, []float32{1})
+	gradient := tensor.FromFloat32(tensor.Shape{1}, []float32{0.25})
+	optimizer := nn.NewAdamF32([]*tensor.Tensor{parameter}, 1e-3)
+	optimizer.WeightDecay = 0.1
+	_ = optimizer.Step(func(*tensor.Tensor) *tensor.Tensor { return gradient })
+	fmt.Println(parameter.AtF64(0) < 1)
+	// Output: true
+}

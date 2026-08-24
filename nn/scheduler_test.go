@@ -86,6 +86,7 @@ func TestBindLRReachesCommonOptimizers(t *testing.T) {
 		{"SGD", nn.NewSGD([]*tensor.Tensor{p}, 0.5, 0.9), 0.5},
 		{"Adam", nn.NewAdam([]*tensor.Tensor{p}, 1e-3), 1e-3},
 		{"AdamW", nn.NewAdamW([]*tensor.Tensor{p}, 3e-4, 0.1), 3e-4},
+		{"AdamF32", nn.NewAdamF32([]*tensor.Tensor{tensor.New(tensor.F32, tensor.Shape{2})}, 2e-3), 2e-3},
 		{"Lion", nn.NewLion([]*tensor.Tensor{p}, 1e-4), 1e-4},
 	}
 	for _, c := range cases {

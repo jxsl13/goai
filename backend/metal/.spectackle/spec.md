@@ -575,3 +575,12 @@ WHERE supported contiguous F32 causal GPT geometry, the Metal GPT loss-and-gradi
 
 ## M2-GPT-LOSS-GRAD-PERF-001
 WHERE 3 order-alternated count-7 M2 campaigns measure F32 V4096 S256 D512 H8 F2048 Depth6, the GPT objective promotion gate SHALL require at least 1.25 times median complete-objective speedup and at least 1.10 times speedup in every aligned pair.
+
+## METAL-GPT-ADAMW-SESSION-STRUCTURE-001
+WHERE an F32 GPT session is supported, the Metal session SHALL upload parameters once; retain parameter, gradient, and moment buffers; encode 1 objective-plus-update command buffer per Step; return 1 scalar loss; and copy parameters only on Sync or Close.
+
+## METAL-GPT-ADAMW-SESSION-NUMERIC-001
+WHEN compared with portable F32 AdamW for 3 steps, the Metal session SHALL match every loss and synchronized parameter within F32 tolerance, preserve checkpoint state, reject use after Close, and permit repeated Close.
+
+## M2-GPT-ADAMW-SESSION-PERF-001
+WHERE 3 order-alternated count-7 M2 production-shape campaigns, the resident GPT AdamW gate SHALL require median speedup at least 1.25x, every pair at least 1.10x versus host F32 AdamW, and median latency at most 24.69 milliseconds.

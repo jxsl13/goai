@@ -597,6 +597,21 @@ int mtl_gpt_loss_and_grad_f32(
     int dim, int hidden, int heads,
     float eps1, float eps2, float finalEps);
 
+// Stateful causal-GPT F32 AdamW boundary. Construction uploads Params-order
+// parameters once. Each step returns only the scalar loss; sync is the explicit
+// host materialization point. The opaque handle must be released with close.
+uintptr_t mtl_gpt_adamw_session_new(
+    const uintptr_t* params,
+    int depth, int seq, int ctx, int vocab,
+    int dim, int hidden, int heads,
+    float eps1, float eps2, float finalEps,
+    float lr, float beta1, float beta2, float adamEps, float weightDecay,
+    int* status);
+int mtl_gpt_adamw_session_step(
+    uintptr_t handle, const float* tokenIndices, const float* targets, float* loss);
+int mtl_gpt_adamw_session_sync(uintptr_t handle, const uintptr_t* params);
+int mtl_gpt_adamw_session_close(uintptr_t handle);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA
