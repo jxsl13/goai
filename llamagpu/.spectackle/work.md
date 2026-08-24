@@ -207,13 +207,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepInto, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go
 
 Eliminate repeated Vocab-sized result allocation in Decoder.Generate while preserving host sampling semantics, resident device sampling, final cache advancement, and backend portability.
-
-## ADR-01M0T2VZJVER0T9BKZZM90YDKD Keep shared-decoder generation reuse local to the host-sampling path
-kind: adr
-state: active
-created: 2026-08-24
-parent: P-01M0T2VE58FN89Y5S53G5P51MP
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepInto, go:llamagpu.Decoder.StepNLastInto
-
-Allocate one caller-owned Vocab F32 slice inside Decoder.Generate, fill it with StepNLastInto and StepInto for host sampling, and retain the current device-resident stepInto route for eligible Top-K and pure Top-P samplers. A test-only historical control may retain wrapper allocations for same-binary attribution. This avoids decoder-global mutable result ownership, preserves concurrency semantics, keeps final-token cache advancement, and does not add a host download to the device fast path.
