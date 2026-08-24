@@ -196,7 +196,7 @@ WHEN the destination length equals Vocab, the GPTDecoder.StepNLastInto SHALL adv
 ## GPT-INTO-LENGTH-GUARD-001-001 {applies: go:llamagpu.GPTDecoder.StepInto,go:llamagpu.GPTDecoder.StepNInto,go:llamagpu.GPTDecoder.StepNLastInto}
 WHEN a destination length differs from its method requirement, the GPTDecoder Into methods SHALL return an error and mutate exactly 0 cache rows.
 
-## GPT-EMBED-STAGING-001-001
+## GPT-EMBED-STAGING-001-001 {applies: go:llamagpu.GPTDecoder.gatherEmbedInto,go:llamagpu.GPTDecoder.batchEmbedHost,go:llamagpu.addEmbedRowInto,go:llamagpu.GPTDecoder.stepInto,go:llamagpu.GPTDecoder.gptStepNInto}
 WHEN Step or prefill gathers token and positional embeddings, the GPTDecoder SHALL reuse exactly 1 Dim host row or 1 exact high-water batch slice and allocate 0 embedding objects.
 
 ## GPT-EMBED-STAGING-LIFETIME-001-001
