@@ -4025,7 +4025,7 @@ choice: One cached causal MPSGraph for the complete objective
 
 ## R-01M0S55DWJFPQBV7Q5589G0ASW Attribute M2 GPT training-state transfer and optimizer costs
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 targets: nlp/gpt.go, backend/metal/metal_bridge.m, nn/optim.go, backend/cuda/cuda_optim.go
 
