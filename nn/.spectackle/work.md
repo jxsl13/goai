@@ -31,7 +31,7 @@ PERFSCAN RULE REQUIRED, and it has wide reach here: interface-sourced RNG in a p
 
 ## T-01KYMDP9EMFTBT3952B5NMZXTN Assess the last PS4008 site, nn/kda.go, and the three in backend/ref/mla.go
 kind: task
-state: approved
+state: active
 created: 2026-07-28
 grilled: 2026-08-24 open=0
 targets: nn/kda.go, nn/kda_test.go, backend/ref/mla.go, backend/ref/mla_test.go, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-ps4008-kda-mla-20260824
