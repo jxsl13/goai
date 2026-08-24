@@ -1,0 +1,19 @@
+Exact compiled test gates:
+PASS backend/ref TestPatchEmbedSequenceReferenceMatchesComposite
+PASS vision TestViTPatchifyBatchMatchesPerImagePacking
+PASS backend/metal TestPatchEmbedSequence*
+
+Focused package gate:
+PASS go test ./backend ./autograd ./backend/ref ./vision ./backend/metal
+
+Repository gates:
+PASS make preflight
+PASS make preflight-metal
+
+Semantic coverage:
+- F32 and F64 reference forward plus all five gradients match the composite.
+- Metal forward plus all five gradients match the composite.
+- Complete ViT logits and every parameter gradient match the control.
+- Direct batched patch packing exactly matches per-image packing for F32/F64.
+- Input tensors remain immutable.
+- Offset layouts execute the reference fallback.

@@ -548,3 +548,12 @@ WHEN 3 order-alternated count-7 M2 Pro campaigns measure F32 B8 S65 D128 C10, th
 
 ## M2-LAYERNORM-SEQUENCE-CLASSIFIER-HOST-ROUTE-001-001
 WHEN F32 B8 S65 D128 C10 executes on Darwin arm64, the Metal classifier selector SHALL execute the fused reference boundary with exactly 0 Metal submissions while preserving logits and 5 gradients.
+
+## METAL-PATCH-EMBED-SEQUENCE-NUMERIC-001
+WHEN supported output and backward parity is checked against the incumbent composite, the Metal patch sequence implementation SHALL match one packed output and exactly five gradients within established F32 tolerance while mutating exactly zero input elements.
+
+## METAL-PATCH-EMBED-SEQUENCE-GRAPH-STRUCTURE-001
+WHERE valid contiguous offset-zero F32 patch sequence fusion, the Metal implementation SHALL execute exactly one bounded shape-keyed cached MPSGraph submission per direction with pooled buffers and Go-owned outputs.
+
+## M2-PATCH-EMBED-SEQUENCE-PERF-001
+WHERE three fresh-process order-alternated count-seven campaigns at F32 B8 N64 K48 D128, the M2 promotion gate SHALL require 1.20 times boundary median, 1.05 times complete-step median per campaign, and 1.03 times every aligned complete-step pair.

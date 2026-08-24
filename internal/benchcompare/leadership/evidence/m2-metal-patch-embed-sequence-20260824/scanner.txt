@@ -1,0 +1,20 @@
+External scanner:
+/Users/john/go/bin/perfscan (installed from github.com/jxsl13/perfscan/perfscan with GOPROXY=direct)
+
+Commands:
+GOPROXY=direct /Users/john/go/bin/perfscan -json -exit-zero ./...
+GOPROXY=direct /Users/john/go/bin/perfscan -tests -exit-zero ./...
+
+Result:
+- No finding references patch_embed_sequence.go, patch_embed_sequence_test.go,
+  or vit_patchify_test.go.
+- No finding occurs in an added line of vision/vit.go, backend/metal/metal.go,
+  autograd/vjp_transformer.go, backend/attrs.go, or backend/op.go.
+- Filtered output contains only the repository baseline PS2126 constant-error
+  findings in unchanged hunks of backend/metal/metal.go and vision/vit.go.
+- The generalized optimization is reported at
+  https://github.com/jxsl13/perfscan/issues/772#issuecomment-5390086434
+
+Spectackle:
+PASS spectackle call check '{}'
+No drift or errors; warnings are the repository baseline.

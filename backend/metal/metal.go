@@ -1284,6 +1284,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return layerNormSequenceClassifierF32, true
 		case backend.OpLayerNormSequenceClassifierBackward:
 			return layerNormSequenceClassifierBackwardF32, true
+		case backend.OpPatchEmbedSequence:
+			return patchEmbedSequenceF32, true
+		case backend.OpPatchEmbedSequenceBackward:
+			return patchEmbedSequenceBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -2231,6 +2235,90 @@ func layerNormSequenceClassifierBackwardF32(ctx *backend.Context, in []*tensor.T
 // route for every unmeasured shape.
 func layerNormSequenceClassifierHostPreferred(rows, dim, classes, batch, seq int) bool {
 	return runtime.GOARCH == "arm64" && rows == 520 && dim == 128 && classes == 10 && batch == 8 && seq == 65
+}
+
+func patchEmbedSequenceMetalGeometry(in []*tensor.Tensor, attrs backend.PatchEmbedSequenceAttrs, backward bool) (rows, patchDim, dim, batch, patches, seq int, ok bool) {
+	want := 5
+	if backward {
+		want++
+	}
+	if len(in) != want {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	for _, value := range in {
+		if value == nil || value.Dtype() != tensor.F32 || !value.IsContiguous() || value.Offset() != 0 || value.Numel() == 0 {
+			return 0, 0, 0, 0, 0, 0, false
+		}
+	}
+	patchRows, class, pos, weight, bias := in[0], in[1], in[2], in[3], in[4]
+	attrs = attrs.WithDefaults()
+	if patchRows.Ndim() != 2 || class.Ndim() != 2 || pos.Ndim() != 2 || weight.Ndim() != 2 || bias.Ndim() != 1 || attrs.Batch <= 0 {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	rows, patchDim, batch = patchRows.Shape()[0], patchRows.Shape()[1], attrs.Batch
+	dim = weight.Shape()[1]
+	if rows <= 0 || rows%batch != 0 || patchDim <= 0 || dim <= 0 || weight.Shape()[0] != patchDim ||
+		!class.Shape().Equal(tensor.Shape{1, dim}) || bias.Shape()[0] != dim {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	patches, seq = rows/batch, rows/batch+1
+	if !pos.Shape().Equal(tensor.Shape{seq, dim}) {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	if backward && !in[5].Shape().Equal(tensor.Shape{batch * seq, dim}) {
+		return 0, 0, 0, 0, 0, 0, false
+	}
+	return rows, patchDim, dim, batch, patches, seq, true
+}
+
+func patchEmbedSequenceF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPatchEmbedSequence, in, attrs)
+	}
+	pa, _ := attrs.(backend.PatchEmbedSequenceAttrs)
+	rows, patchDim, dim, batch, patches, seq, ok := patchEmbedSequenceMetalGeometry(in, pa, false)
+	if !ok {
+		return refFallback()
+	}
+	out := tensor.New(tensor.F32, tensor.Shape{batch * seq, dim})
+	rc := C.mtl_patch_embed_sequence_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&out.Storage().F32()[0]),
+		C.int(rows), C.int(patchDim), C.int(dim), C.int(batch), C.int(patches), C.int(seq),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: patch-embed-sequence failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func patchEmbedSequenceBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPatchEmbedSequenceBackward, in, attrs)
+	}
+	pa, _ := attrs.(backend.PatchEmbedSequenceAttrs)
+	rows, patchDim, dim, batch, patches, seq, ok := patchEmbedSequenceMetalGeometry(in, pa, true)
+	if !ok {
+		return refFallback()
+	}
+	out := make([]*tensor.Tensor, 5)
+	for i := range out {
+		out[i] = tensor.New(tensor.F32, in[i].Shape())
+	}
+	rc := C.mtl_patch_embed_sequence_backward_f32(
+		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
+		(*C.float)(&in[2].Storage().F32()[0]), (*C.float)(&in[3].Storage().F32()[0]),
+		(*C.float)(&in[4].Storage().F32()[0]), (*C.float)(&in[5].Storage().F32()[0]),
+		(*C.float)(&out[0].Storage().F32()[0]), (*C.float)(&out[1].Storage().F32()[0]),
+		(*C.float)(&out[2].Storage().F32()[0]), (*C.float)(&out[3].Storage().F32()[0]),
+		(*C.float)(&out[4].Storage().F32()[0]),
+		C.int(rows), C.int(patchDim), C.int(dim), C.int(batch), C.int(patches), C.int(seq),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: patch-embed-sequence-backward failed (code %d)", int(rc))
+	}
+	return out, nil
 }
 
 // rmsnormBackwardF32 computes the RMSNorm gradient on the GPU (§R29/§R35): (x,gamma,g) →
