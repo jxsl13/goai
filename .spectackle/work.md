@@ -4039,3 +4039,12 @@ option: Incremental per-operation tuning
 option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
+
+## T-01M0S2GVS8EB7SQWGK4HYKR0YM Implement and gate one-submission causal GPT LossAndGrad
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0S2E3VVF8WSZW64D46VEWEZ
+targets: nlp/gpt.go, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_test.go, internal/benchcompare/compare_test.go
+
+Implement portable nlp.GPT.LossAndGrad and its strict optional capability path. Add a bounded geometry-keyed Metal MPSGraph with token and position gathers, one shared causal mask, every pre-norm exact-GELU block, final LayerNorm, LM head, mean hard-label cross-entropy, explicit reverse mode, embedding scatters, and Params-order gradients in one command buffer. Keep unsupported dtypes, layouts, layer offload, geometry, options, invalid indices, and recorder contexts on the existing tape fallback. Add portable parity, Metal loss/all-gradient tolerance, immutability, fallback/recorder isolation, structural submission, and same-binary paired benchmarks. Promote only after three order-alternated count-seven M2 campaigns clear 1.25x median and 1.10x every pair; otherwise remove production code and record rejection.
