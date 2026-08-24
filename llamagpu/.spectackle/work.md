@@ -167,6 +167,7 @@ state: draft
 created: 2026-08-24
 parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
 refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
+grilled: 2026-08-24 open=0
 targets: llamagpu/llama_scale_bench_test.go
 
 Add public Step and StepNLast Metal benchmarks for a representative multi-layer F32 Llama geometry. Keep model construction and warmup outside timing, report tokens per second and allocations, and use them for order-alternated candidate versus main non-regression evidence.
