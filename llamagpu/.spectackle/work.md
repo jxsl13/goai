@@ -163,7 +163,7 @@ Add empty ao/mo placeholders and allocate Ctx times Dim storage only when quanti
 
 ## T-01M0SQW7VZEHBV68SWXCK966JB Add persistent M2 F32 Decoder boundary benchmarks
 kind: task
-state: active
+state: done
 created: 2026-08-24
 parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
 refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
