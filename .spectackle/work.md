@@ -4021,12 +4021,3 @@ grilled: 2026-08-24 open=1
 targets: Makefile, .github/workflows/ci.yml, internal/cichange/config.go, .claude/workflows/perfscan-autofix.js, internal/perfscan, perfscan.yaml, LOOP.md, docs/perf-notes-training.md
 
 Research R-01M0S05JDTENN measured the registry and invocation surface. Pin the current root-module external perfscan v1.81.0 and run it only with GOPROXY=direct; the requested historical /perfscan submodule currently stops at v1.71.0 and would be a downgrade. Move GoAI vocabulary to root perfscan.yaml for auto-discovery. Replace make perfscan and the autofix workflow with the external command, add an explicit whole-tree advisory CI lane, and remove internal/perfscan from cichange alwaysRun. Preserve the in-tree engine under an explicitly compatibility-only command restricted by a generated 53-ID selector until upstream issue 877 reaches registry parity; do not silently discard those benchmark-derived checks. Add a parity audit that fails retirement if any internal-only ID remains. Preserve the nested Spectackle history and the non-scanner exactness utility.
-
-## T-01M0S0F690EA7AMXY0W7CXX56M Cut over to pinned direct external perfscan with coverage parity
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0S0D3ZPFCBAT7MTC0J7NJMX
-targets: Makefile, .github/workflows/ci.yml, internal/cichange/config.go, .claude/workflows/perfscan-autofix.js, internal/perfscan, perfscan.yaml, LOOP.md, docs/perf-notes-training.md
-
-Implement and validate the staged cutover. External v1.81.0 at github.com/jxsl13/perfscan is the canonical make/workflow/CI scanner and must always resolve with GOPROXY=direct. Root perfscan.yaml owns the vocabulary. The legacy internal scanner remains callable only through a compatibility target restricted to the exact 53 internal-only IDs recorded in perfscan issue 877. Add a registry-difference audit that prevents deleting compatibility coverage before external parity. Remove internal/perfscan from cichange alwaysRun because a dedicated external whole-tree CI lane replaces its indirect package test. Preserve nested Spectackle history and the exactness sweep utility.
