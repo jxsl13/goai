@@ -4008,13 +4008,3 @@ grilled: 2026-08-24 open=0
 targets: go:classic.SVC.smo, classic/svm.go, classic/svm_rbf_exp_arm64_test.go, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-svc-smo-status-20260824
 
 Current merged M2 Pro SIMD profiling attributes 940 ms flat of 4.50 sampled seconds to SVC.smo. The repeated pass-1 and pass-2 working-set scans dominate the visible solver cost, while the incremental gradient AXPY is only 130 ms and cannot reliably clear the 3 percent end-to-end gate alone. Each scan recomputes I_up and I_low membership from immutable labels and alpha bounds for every row, although one SMO step changes only two alpha values. Cache exact two-bit I_up/I_low membership per variable, initialize it from the same comparisons, and refresh only i and j after each accepted update. Preserve ascending traversal, <= and > tie behavior, alpha arithmetic, kernel values, portable routing, public API, and the exact 79-step trajectory. Retain only if seven order-alternated M2 pairs improve median end-to-end n4000_rbf fit by at least 3 percent with no allocation-count increase and all scalar/SIMD parity and hostile tests passing; otherwise revert and reject with measurements.
-
-## T-01M0TMY9SGFS7VGEP2TA68XEN2 Implement and benchmark exact SVC SMO membership caching
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0TMV3V1EZR8DBZWH5HFWT7G
-grilled: 2026-08-24 open=0
-targets: go:classic.SVC.smo, classic/svm.go, classic/svm_rbf_exp_arm64_test.go, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-svc-smo-status-20260824
-
-Replace repeated I_up/I_low predicate evaluation in both ascending working-set scans with an exact two-bit status cache initialized from the same label/alpha comparisons and refreshed only for the two updated variables after an accepted SMO step. Preserve scan order, <= and > tie behavior, floating-point arithmetic, kernel routing, public API, and the exact 79-step n4000_rbf convergence trajectory. Keep the change only if seven order-alternated M2 binary pairs improve median end-to-end fit by at least 3 percent with no allocation-count increase and all parity, hostile, and package tests passing; otherwise revert the implementation and close with measured evidence.
