@@ -105,3 +105,23 @@ Rationale: Validate retained-memory leverage without moving cost into dominant i
 WHEN GPT StepHidden or StepNHidden completes, the hidden readback SHALL download exactly 1 or len(tokens) final rows from the corresponding selected activation workspace.
 
 Rationale: Preserve Medusa hidden-state semantics after activation workspace right-sizing.
+
+## DECODER-F32-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
+WHEN a pre-norm non-MoE Decoder uses only F32 residual projections, the constructor SHALL retain exactly 0 ao elements and 0 mo elements.
+
+Rationale: F32 recordAdd writes directly into the residual and ignores projection scratch.
+
+## DECODER-REQUIRED-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
+WHEN a Decoder has quantized weights, post-norm, or sandwich residuals, the constructor SHALL retain 2 buffers with exactly Ctx times Dim elements each.
+
+Rationale: These paths use projection scratch for fallback accumulation or output normalization.
+
+## DECODER-MOE-RESIDUAL-SCRATCH-001 {applies: go:llamagpu.Decoder.allocResidualScratch,go:llamagpu.TestDecoderResidualScratchReachability}
+WHEN an F32 pre-norm Decoder enables MoE without another scratch requirement, the constructor SHALL retain exactly 0 ao elements and Ctx times Dim mo elements.
+
+Rationale: MoE accumulates each expert output through mo while F32 attention residuals need no ao scratch.
+
+## TINYLLAMA-RESIDUAL-SCRATCH-PERF-001 {applies: go:llamagpu.BenchmarkDecoderResidualScratchResidency,go:llamagpu_test.BenchmarkLlamaDecodeStepMetal,go:llamagpu_test.BenchmarkLlamaPrefillLastMetal}
+WHEN the same-binary TinyLlama residual-scratch benchmark compares lazy and eager controls, the promotion gate SHALL require 33000000 fewer B/op, 10 times lower focused ns/op, and 0.97 times Step and StepNLast throughput.
+
+Rationale: Validate retained-memory leverage without moving work into inference.

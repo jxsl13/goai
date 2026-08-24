@@ -126,3 +126,48 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go, llamagpu/medusa.go, llamagpu/medusa_test.go, llamagpu/example_test.go
 
 Update GPT StepHidden and StepNHidden so hidden-state downloads read the resident or lazy workspace selected by the completed Step call. Preserve Llama hidden readback unchanged and validate Medusa all-reject, accept-all, and GPT examples.
+
+## P-01M0SQMKR8FEBV8REH5J4G8N4B Elide dead max-context residual projection scratch
+kind: proposal
+state: done
+created: 2026-08-24
+refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
+
+Standard pre-norm F32 Decoder projections fuse their residual add and ignore ao/mo scratch, yet allocScratch retains both as Ctx times Dim buffers. Allocate placeholders for proven scratch-free F32 paths while retaining exact historical storage for quantized fallbacks, post-norm, sandwich, and MoE. Add an internal eager control, exact path tests, focused allocation evidence, and M2 Step/StepNLast non-regression gates. TinyLlama should remove 33554432 resident bytes.
+
+## ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF Gate residual projection scratch by reachable consumers
+kind: adr
+state: done
+created: 2026-08-24
+parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
+decision: Allocate ao/mo only for reachable scratch consumers
+consequences: Standard pre-norm F32 decoders retain zero ao/mo elements; quantized, post-norm, sandwich, and MoE paths keep historical Ctx times Dim capacity. Empty bufSlot placeholders preserve call-site safety without device allocation.
+status: accepted
+targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
+
+Choose path-sensitive allocation: retain empty bufSlot placeholders when every block projection is F32 pre-norm and no MoE accumulation exists; allocate ao/mo at historical Ctx times Dim capacity for quantized weights, post-norm, sandwich, or MoE. Keep an internal eager control. Rejected alternatives: passing nil fields would panic at call-site selection; deleting scratch globally breaks quant fallback and normalized residual paths; lazy scratch adds runtime branching without benefit because the required architectures use it on every step.
+choice: Allocate ao/mo only for reachable scratch consumers
+
+## T-01M0SQP0Y0EX9RTVSNMYZM1CB9 Implement and gate path-sensitive residual scratch allocation
+kind: task
+state: done
+created: 2026-08-24
+parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
+refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
+
+Add empty ao/mo placeholders and allocate Ctx times Dim storage only when quantized weights, post-norm, sandwich, MoE, or an internal eager control makes the scratch reachable. Test standard F32 omission and all required categories, benchmark TinyLlama 33554432-byte savings with at least 10x focused allocation speedup, and require at least 0.97x M2 Step and StepNLast throughput with unchanged allocations.
+
+## T-01M0SQW7VZEHBV68SWXCK966JB Add persistent M2 F32 Decoder boundary benchmarks
+kind: task
+state: done
+created: 2026-08-24
+parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
+refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
+grilled: 2026-08-24 open=0
+targets: llamagpu/llama_scale_bench_test.go
+
+Add public Step and StepNLast Metal benchmarks for a representative multi-layer F32 Llama geometry. Keep model construction and warmup outside timing, report tokens per second and allocations, and use them for order-alternated candidate versus main non-regression evidence.
