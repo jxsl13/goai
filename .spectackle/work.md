@@ -4043,7 +4043,7 @@ Consume R-01M0S8MAAVFDS by introducing a fixed-batch F32 ViT AdamW session. Pres
 
 ## ADR-01M0S8XZMEFC98ZF81GACDFEGE Which boundary should generalize resident AdamW across GPT and ViT?
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp/gpt.go, vision/vit.go
