@@ -732,3 +732,6 @@ Rationale: A performance result without artifact and toolchain identity is not r
 
 ## PERFSCAN-EXTERNAL-DIRECT-PIN-001
 WHEN GoAI invokes perfscan from Make, CI, or an automation workflow, the GoAI tooling SHALL run github.com/jxsl13/perfscan@v1.81.0 with GOPROXY=direct and repository-root perfscan.yaml.
+
+## PERFSCAN-COVERAGE-PARITY-001
+WHILE the external registry lacks at least one stable ID present in the legacy registry, the GoAI tooling SHALL retain a compatibility selector equal to the registry difference and reject legacy retirement until that difference contains zero IDs.
