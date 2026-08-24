@@ -4,7 +4,7 @@ schema: v1
 
 ## T-01KYJPSEWVFRSRSMX2VEV7AY95 Measure and fuse GPTDecoder single-token dispatch on M2
 kind: task
-state: draft
+state: active
 created: 2026-07-27
 refs: R-01M01Z6AC8F42BT1ZPEH18K497
 grilled: 2026-08-24 open=0
