@@ -217,13 +217,3 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go
 
 Let the existing internal stepNInto execution accept a nil destination only from Decoder.Generate, meaning execute and leave the final logits in the resident buffer without DownloadF32. Public StepNInto and StepNLastInto retain strict destination-length validation and identical downloads. Recurrent decoders execute each prompt token through internal stepInto and leave only the final logits resident. Generate selects this path only after both sampler eligibility and device capability are known; all other paths keep caller-owned host logits. This confines the optimization to an already non-concurrent decoder without adding buffers or changing public API.
-
-## T-01M0T45AR8FEV9FAGQSYKN700B Implement and gate resident first-token sampling
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0T44EDPE42TNZEPAR566ZGW
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.Decoder.Generate, go:llamagpu.Decoder.StepNLastInto, llamagpu/decoder.go, llamagpu/decoder_generate_metal_test.go
-
-Move device-sampler capability selection before prefill. For eligible Top-K or pure Top-P sampling, execute last-row prefill into resident logits with zero host download and sample token 1 using the existing device path; allocate full-vocabulary host F32/F64 staging only for ineligible or overflow fallbacks. Preserve public Into length guards, exact seeded token sequence, bit-identical continuation logits, recurrent prompt state updates, and final generated-token cache advancement. Add same-binary historical-prefill control benchmarks at Vocab 32000, prompt 16, maxNew 1. Require at least 390000 fewer B/op, at least 2 fewer allocs/op, and median candidate throughput at least 1.03 times control across seven alternating 50-pair campaigns, then pass focused, short, preflight, Metal, and direct perfscan gates.
