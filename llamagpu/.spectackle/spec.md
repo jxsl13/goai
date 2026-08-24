@@ -50,3 +50,8 @@ WHEN F32 GPT residual projections use recordAdd, the GPT decoder constructor SHA
 
 ## M2-GPT-DISPATCH-CUMULATIVE-PERF-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal}
 WHEN the complete GPT dispatch-fusion design is promoted on M2 Pro at GPT-2-small geometry, the public-Step benchmark gate SHALL require at least 1.20 times paired median speedup, 7 of 7 wins, and no allocation increase across an order-alternated campaign.
+
+## METAL-GPT-BIAS-GELU-STRUCTURE-002
+WHEN the enabled Metal GPT FFN activation executes, the decoder SHALL record exactly one bounded BiasGELU dispatch and zero split AddBias or unary GELU dispatches for that activation.
+
+Rationale: Remove one dispatch and context-capacity work amplification from Metal GPT.
