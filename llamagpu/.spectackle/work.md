@@ -220,7 +220,7 @@ Allocate one caller-owned Vocab F32 slice inside Decoder.Generate, fill it with 
 
 ## T-01M0T2W1RQE8NBV10BEFP591PH Implement and validate shared Decoder generation logits reuse
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0T2VE58FN89Y5S53G5P51MP
 grilled: 2026-08-24 open=0
