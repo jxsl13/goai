@@ -192,3 +192,6 @@ WHEN the destination length equals len(tokens) times Vocab, the GPTDecoder.StepN
 
 ## GPT-STEPN-LAST-INTO-SEMANTICS-001-001
 WHEN the destination length equals Vocab, the GPTDecoder.StepNLastInto SHALL advance exactly len(tokens) tokens and write exactly Vocab logits matching StepNLast.
+
+## GPT-INTO-LENGTH-GUARD-001-001
+WHEN a destination length differs from its method requirement, the GPTDecoder Into methods SHALL return an error and mutate exactly 0 cache rows.
