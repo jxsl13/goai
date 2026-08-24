@@ -130,3 +130,6 @@ Rationale: Validate retained-memory leverage without moving work into inference.
 WHEN constructed with standard backend operations, the shared Decoder SHALL retain exactly 1 row of every common activation workspace buffer and 0 multi-row common activation workspace buffers.
 
 Rationale: Single-token decode is the steady-state path; context-sized transient storage has no live consumer before prefill.
+
+## DECODER-FULL-WORKSPACE-GROWTH-001
+WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the shared Decoder SHALL allocate 1 grouped workspace at exactly the requested rows, reuse it for every smaller request, and grow only for a larger request.
