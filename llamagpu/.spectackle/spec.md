@@ -125,3 +125,8 @@ Rationale: MoE accumulates each expert output through mo while F32 attention res
 WHEN the same-binary TinyLlama residual-scratch benchmark compares lazy and eager controls, the promotion gate SHALL require 33000000 fewer B/op, 10 times lower focused ns/op, and 0.97 times Step and StepNLast throughput.
 
 Rationale: Validate retained-memory leverage without moving work into inference.
+
+## DECODER-ACTIVATION-RESIDENCY-001
+WHEN constructed with standard backend operations, the shared Decoder SHALL retain exactly 1 row of every common activation workspace buffer and 0 multi-row common activation workspace buffers.
+
+Rationale: Single-token decode is the steady-state path; context-sized transient storage has no live consumer before prefill.
