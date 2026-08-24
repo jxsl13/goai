@@ -604,3 +604,8 @@ Rationale: Resident execution must preserve the portable optimizer recurrence an
 The Metal backend SHALL reject every Step and Sync after exactly 1 successful Close and permit any later Close to return nil.
 
 Rationale: The native resource owner needs deterministic lifetime behavior without double-free risk.
+
+## M2-VIT-ADAMW-SESSION-PERF-001
+WHERE 3 order-alternated count-7 M2 campaigns measure the pinned ViT cell, the promotion gate SHALL require at least 1.20 times aggregate median speedup, at least 1.10 times every aligned pair, and candidate median below 9.138 milliseconds.
+
+Rationale: The gate compares the exact resident session with LossAndGrad plus host F32-moment AdamW and the measured PyTorch 2.12.1 MPS cell.
