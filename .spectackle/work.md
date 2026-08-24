@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RQ3BTBEDGTR3YTW6RJJRCM Attribute the remaining ViT loss-tail cost on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 targets: go:nn.CrossEntropy, go:metal_test.BenchmarkLayerNormSequenceClassifierViTTrainStep
 
