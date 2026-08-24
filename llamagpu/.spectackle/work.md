@@ -208,3 +208,12 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.Release
 
 Decision: expose StepNInto and StepNLastInto with exact destination-size validation before state mutation. Keep StepN and StepNLast as allocating wrappers. Reuse one Decoder-owned k times Dim host embedding slice at its observed high-water mark and clear it on Release. Recurrent decoders write sequential StepInto results directly into the caller buffer, reusing the final-row destination for last-only mode. Rejected: sync.Pool because ownership and retention become nondeterministic; constructor-sized Ctx times Dim staging because it restores eager memory amplification; duplicate prefill graphs because it risks semantic drift.
+
+## T-01M0SWB40KF9GR1EZHGRTDD4AA Implement and benchmark zero-allocation Decoder prefill
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0SW6KB4FSERYN7Y0CRXS0DJ
+targets: go:llamagpu.Decoder.StepN, go:llamagpu.Decoder.StepNLast, go:llamagpu.Decoder.stepN, llamagpu/decoder.go, llamagpu/llama_scale_bench_test.go, llamagpu/example_test.go
+
+Add StepNInto and StepNLastInto with exact pre-mutation destination validation. Retain a Decoder-owned high-water embedding staging slice, route recurrent rows through StepInto, download nonrecurrent logits directly into caller storage, preserve allocating wrappers and exact outputs, clear retained staging on Release, and add public examples plus cross-architecture tests. Gate warmed M2 StepNLastInto at zero allocations, reduce StepNLast by at least 32768 B/op for 16x512 prefill, preserve at least 0.97x baseline throughput, and record any generalizable finding in perfscan.

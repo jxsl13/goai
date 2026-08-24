@@ -247,3 +247,4 @@
 {"t":"2026-08-24T12:34:35Z","eid":"e09f7c10d92ca9ff","ag":"ag-2766","ev":"create","id":"ADR-01M0SW7XPYFV69M6PYKDM7EHNR","k":"adr","ti":"Use caller buffers and retained high-water embedding staging for Decoder prefill","dir":"llamagpu"}
 {"t":"2026-08-24T12:35:44Z","eid":"4d5bda5b1095940e","ag":"ag-4d2e","ev":"grill","id":"ADR-01M0SW7XPYFV69M6PYKDM7EHNR","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"646ea1923f19b2de501f4fd2e2bd7313878f722c083b28ff23c8e75cb9c1ee8c"}
 {"t":"2026-08-24T12:36:07Z","eid":"17f024100f79fdf5","ag":"ag-dcf2","ev":"move","id":"ADR-01M0SW7XPYFV69M6PYKDM7EHNR","dir":"llamagpu","fr":"draft","to":"active"}
+{"t":"2026-08-24T12:36:20Z","eid":"f97f825c19439384","ag":"ag-c38e","ev":"create","id":"T-01M0SWB40KF9GR1EZHGRTDD4AA","k":"task","ti":"Implement and benchmark zero-allocation Decoder prefill","dir":"llamagpu"}
