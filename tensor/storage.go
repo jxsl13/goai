@@ -16,8 +16,9 @@ type Storage struct {
 	// The struct grows in exchange; that trade was taken deliberately.
 	f32   []float32
 	f64   []float64
-	u16   []uint16  // F16/BF16 raw bits; dtype disambiguates
-	alloc Allocator // owner; used by Release to return the buffer
+	u16   []uint16            // F16/BF16 raw bits; dtype disambiguates
+	alloc Allocator           // owner; used by Release to return the buffer
+	pool  *pooledStorageBlock // reusable slice-header token for pooled F32/F64
 }
 
 // NewStorage allocates a zeroed heap buffer of n elements of dtype. It panics on
@@ -33,6 +34,11 @@ func newStorageWith(a Allocator, dtype Dtype, n int) *Storage {
 		panic("tensor: negative storage length")
 	}
 	s := &Storage{dtype: dtype, n: n, alloc: a}
+	if pa, ok := a.(pooledStorageAllocator); ok && n != 0 && (dtype == F32 || dtype == F64) {
+		buf := pa.allocPooledStorage(dtype, n)
+		s.f32, s.f64, s.pool = buf.f32, buf.f64, buf.block
+		return s
+	}
 	// The typed path exists to avoid the interface box. Allocators in this repo all
 	// implement it; a foreign Allocator keeps the exported any-returning contract
 	// unchanged and simply pays the box it always did.
@@ -66,7 +72,9 @@ func newStorageWith(a Allocator, dtype Dtype, n int) *Storage {
 // storage empty. It invalidates every Tensor view sharing this storage, so use
 // it only for scratch buffers with known lifetimes. Safe to call more than once.
 func (s *Storage) Release() {
-	if s.alloc != nil {
+	if s.pool != nil {
+		s.pool.release()
+	} else if s.alloc != nil {
 		if ta, ok := s.alloc.(typedAllocator); ok {
 			// Typed free for the same reason as typed alloc: handing a slice to the
 			// any-taking Free would re-box it and move the allocation rather than
@@ -91,6 +99,7 @@ func (s *Storage) Release() {
 		}
 	}
 	s.f32, s.f64, s.u16 = nil, nil, nil
+	s.pool = nil
 	s.n = 0
 }
 

@@ -88,6 +88,30 @@ type Pool struct {
 	f64   [bits.UintSize]sync.Pool
 }
 
+// pooledStorageBlock is the pointer-sized release token for the internal
+// Storage path. A slice placed directly in sync.Pool escapes as a 24-byte
+// interface box on every Put. Storage can retain this block from allocation to
+// Release, so warm releases put an already allocated pointer instead. The same
+// size-class pools accept public []float slices too: crossing from one path to
+// the other may create or discard one token, but never strands a reusable
+// backing buffer or changes the exported Allocator contract.
+type pooledStorageBlock struct {
+	pool  *Pool
+	class int
+	f32   []float32
+	f64   []float64
+}
+
+type pooledStorageBuffer struct {
+	block *pooledStorageBlock
+	f32   []float32
+	f64   []float64
+}
+
+type pooledStorageAllocator interface {
+	allocPooledStorage(dtype Dtype, n int) pooledStorageBuffer
+}
+
 // PoolOption configures a Pool.
 type PoolOption func(*Pool)
 
@@ -117,6 +141,51 @@ func NewPool(opts ...PoolOption) *Pool {
 // Alignment returns the pool's byte alignment for allocations.
 func (p *Pool) Alignment() int { return p.align }
 
+func (p *Pool) allocPooledStorage(dtype Dtype, n int) pooledStorageBuffer {
+	if negCheck(n) == 0 || (dtype != F32 && dtype != F64) {
+		return pooledStorageBuffer{}
+	}
+	class := sizeClass(n)
+	capacity := 1 << class
+	var block *pooledStorageBlock
+	switch dtype {
+	case F32:
+		switch v := p.f32[class].Get().(type) {
+		case *pooledStorageBlock:
+			block = v
+		case []float32:
+			block = &pooledStorageBlock{pool: p, class: class, f32: v[:cap(v)]}
+		default:
+			block = &pooledStorageBlock{pool: p, class: class, f32: make([]float32, capacity)}
+		}
+		buf := block.f32[:n]
+		clear(buf)
+		return pooledStorageBuffer{block: block, f32: buf}
+	case F64:
+		switch v := p.f64[class].Get().(type) {
+		case *pooledStorageBlock:
+			block = v
+		case []float64:
+			block = &pooledStorageBlock{pool: p, class: class, f64: v[:cap(v)]}
+		default:
+			block = &pooledStorageBlock{pool: p, class: class, f64: make([]float64, capacity)}
+		}
+		buf := block.f64[:n]
+		clear(buf)
+		return pooledStorageBuffer{block: block, f64: buf}
+	default:
+		panic("unreachable")
+	}
+}
+
+func (b *pooledStorageBlock) release() {
+	if b.f32 != nil {
+		b.pool.f32[b.class].Put(b)
+		return
+	}
+	b.pool.f64[b.class].Put(b)
+}
+
 // sizeClass returns the exponent c such that 1<<c is the smallest power of two
 // >= n (with n>=1). n==1 → 0 (cap 1).
 func sizeClass(n int) int { return bits.Len(uint(n - 1)) }
@@ -141,22 +210,28 @@ func (p *Pool) Alloc(dtype Dtype, n int) any {
 	switch dtype {
 	case F32:
 		var s []float32
-		if v := p.f32[class].Get(); v == nil {
+		switch v := p.f32[class].Get().(type) {
+		case nil:
 			s = make([]float32, capacity)
-		} else {
+		case []float32:
 			// Pooled entries keep whatever length Free received; only the
 			// (power-of-two) capacity is class-invariant, so reslice via cap.
-			s = v.([]float32)
+			s = v
+		case *pooledStorageBlock:
+			s = v.f32
 		}
 		s = s[:n]
 		clear(s)
 		return s
 	case F64:
 		var s []float64
-		if v := p.f64[class].Get(); v == nil {
+		switch v := p.f64[class].Get().(type) {
+		case nil:
 			s = make([]float64, capacity)
-		} else {
-			s = v.([]float64)
+		case []float64:
+			s = v
+		case *pooledStorageBlock:
+			s = v.f64
 		}
 		s = s[:n]
 		clear(s)
@@ -209,10 +284,13 @@ func (p *Pool) allocF32(n int) []float32 {
 	}
 	class := sizeClass(n)
 	var s []float32
-	if v := p.f32[class].Get(); v == nil {
+	switch v := p.f32[class].Get().(type) {
+	case nil:
 		s = make([]float32, 1<<class)
-	} else {
-		s = v.([]float32)
+	case []float32:
+		s = v
+	case *pooledStorageBlock:
+		s = v.f32
 	}
 	s = s[:n]
 	clear(s)
@@ -225,10 +303,13 @@ func (p *Pool) allocF64(n int) []float64 {
 	}
 	class := sizeClass(n)
 	var s []float64
-	if v := p.f64[class].Get(); v == nil {
+	switch v := p.f64[class].Get().(type) {
+	case nil:
 		s = make([]float64, 1<<class)
-	} else {
-		s = v.([]float64)
+	case []float64:
+		s = v
+	case *pooledStorageBlock:
+		s = v.f64
 	}
 	s = s[:n]
 	clear(s)
@@ -241,12 +322,14 @@ func (p *Pool) allocU16(n int) []uint16 { return make([]uint16, negCheck(n)) }
 
 func (p *Pool) freeF32(b []float32) {
 	if c := cap(b); c != 0 && c&(c-1) == 0 {
+		//perfscan:ignore PS2114 raw typed fallback cannot carry a release token; pooled Storage uses allocPooledStorage
 		p.f32[bits.Len(uint(c-1))].Put(b) //nolint:staticcheck // pooling a slice
 	}
 }
 
 func (p *Pool) freeF64(b []float64) {
 	if c := cap(b); c != 0 && c&(c-1) == 0 {
+		//perfscan:ignore PS2114 raw typed fallback cannot carry a release token; pooled Storage uses allocPooledStorage
 		p.f64[bits.Len(uint(c-1))].Put(b) //nolint:staticcheck
 	}
 }
