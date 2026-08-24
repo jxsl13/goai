@@ -27,6 +27,7 @@ type gptBlock struct {
 type GPTDecoder struct {
 	ops                 backendOps
 	d, h, dk, v, maxLen int
+	ffn                 int
 	eps, scale          float32
 
 	blocks         []gptBlock
@@ -38,6 +39,8 @@ type GPTDecoder struct {
 	logits         *bufSlot
 	logitsRows     int
 	fullLogits     growBuffer
+	scratchRows    int
+	fullScratch    gptScratch
 	tokEmb, posEmb *tensor.Tensor // host gather sources
 	all            []buffer
 }
@@ -50,26 +53,111 @@ type biasGELURecorder interface {
 	BiasGELU(x, b, o buffer, rows, n int) error
 }
 
-func (d *GPTDecoder) recordAttentionResidual(r recorder, b gptBlock, rows int) error {
-	return b.wo.recordAdd(r, d.attn.b, nil, d.dx.b, rows, d.d)
+// gptScratch is one generation of transient activation storage. The decoder owns one resident
+// generation for Step and, after the first multi-row call, at most one reusable high-water
+// generation for StepN/StepNLast.
+type gptScratch struct {
+	rows                       int
+	dx, xn, xn2, q, k, v_, qkv buffer
+	attn, hid                  buffer
 }
 
-func (d *GPTDecoder) recordFFNResidual(r recorder, b gptBlock, rows int) error {
+func (s *gptScratch) release() {
+	for _, b := range []buffer{s.dx, s.xn, s.xn2, s.q, s.k, s.v_, s.qkv, s.attn, s.hid} {
+		if b != nil {
+			b.Release()
+		}
+	}
+	*s = gptScratch{}
+}
+
+func (d *GPTDecoder) residentScratch() gptScratch {
+	var qkv buffer
+	if d.qkv != nil {
+		qkv = d.qkv.b
+	}
+	return gptScratch{
+		rows: d.scratchRows,
+		dx:   d.dx.b, xn: d.xn.b, xn2: d.xn2.b,
+		q: d.q.b, k: d.k.b, v_: d.v_.b,
+		attn: d.attn.b, hid: d.hid.b,
+		qkv: qkv,
+	}
+}
+
+func (d *GPTDecoder) newScratch(rows int) (gptScratch, error) {
+	s := gptScratch{rows: rows}
+	var err error
+	alloc := func(n int) buffer {
+		if err != nil {
+			return nil
+		}
+		var b buffer
+		b, err = d.ops.newBuffer(make([]float32, n))
+		return b
+	}
+	s.dx = alloc(rows * d.d)
+	s.xn = alloc(rows * d.d)
+	s.xn2 = alloc(rows * d.d)
+	s.q = alloc(rows * d.d)
+	s.k = alloc(rows * d.d)
+	s.v_ = alloc(rows * d.d)
+	if d.ops.fusedF32QKV {
+		s.qkv = alloc(min(rows, 63) * 3 * d.d)
+	}
+	s.attn = alloc(rows * d.d)
+	s.hid = alloc(rows * d.ffn)
+	if err != nil {
+		s.release()
+		return gptScratch{}, err
+	}
+	return s, nil
+}
+
+func (d *GPTDecoder) scratchForRows(rows int) (gptScratch, error) {
+	if rows <= d.scratchRows {
+		return d.residentScratch(), nil
+	}
+	if d.fullScratch.rows >= rows {
+		return d.fullScratch, nil
+	}
+	d.fullScratch.release()
+	s, err := d.newScratch(rows)
+	if err != nil {
+		return gptScratch{}, err
+	}
+	d.fullScratch = s
+	return s, nil
+}
+
+func (d *GPTDecoder) scratchElements(s gptScratch) int {
+	n := s.rows * (7*d.d + d.ffn)
+	if s.qkv != nil {
+		n += min(s.rows, 63) * 3 * d.d
+	}
+	return n
+}
+
+func (d *GPTDecoder) recordAttentionResidual(r recorder, b gptBlock, s gptScratch, rows int) error {
+	return b.wo.recordAdd(r, s.attn, nil, s.dx, rows, d.d)
+}
+
+func (d *GPTDecoder) recordFFNResidual(r recorder, b gptBlock, s gptScratch, rows int) error {
 	return firstErr(
-		b.w2.recordAdd(r, d.hid.b, nil, d.dx.b, rows, d.d),
-		r.AddBias(d.dx.b, b.fb2, d.dx.b, rows, d.d),
+		b.w2.recordAdd(r, s.hid, nil, s.dx, rows, d.d),
+		r.AddBias(s.dx, b.fb2, s.dx, rows, d.d),
 	)
 }
 
-func (d *GPTDecoder) recordBiasGELU(r recorder, b gptBlock, rows int) error {
+func (d *GPTDecoder) recordBiasGELU(r recorder, b gptBlock, s gptScratch, rows int) error {
 	if d.ops.fusedBiasGELU {
 		if fused, ok := r.(biasGELURecorder); ok {
-			return fused.BiasGELU(d.hid.b, b.fb1, d.hid.b, rows, b.ffn)
+			return fused.BiasGELU(s.hid, b.fb1, s.hid, rows, b.ffn)
 		}
 	}
 	return firstErr(
-		r.AddBias(d.hid.b, b.fb1, d.hid.b, rows, b.ffn),
-		r.Unary(d.hid.b, d.hid.b, unaryGELU),
+		r.AddBias(s.hid, b.fb1, s.hid, rows, b.ffn),
+		r.Unary(s.hid, s.hid, unaryGELU),
 	)
 }
 
@@ -137,27 +225,30 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 	d.lnfG = mk(flat1D(m.LNf.Gamma))
 	d.lnfB = mk(flat1D(m.LNf.Beta))
 	d.head = lin(m.Head)
-	ffn := 4 * d.d
+	d.ffn = 4 * d.d
 	if len(m.Blocks) > 0 {
-		ffn = m.Blocks[0].W1.Shape()[1]
+		d.ffn = m.Blocks[0].W1.Shape()[1]
 	}
-	c := d.maxLen // scratch sized for multi-token StepN (§T423)
-	d.dx = mk(make([]float32, c*d.d))
-	d.xn = mk(make([]float32, c*d.d))
-	d.xn2 = mk(make([]float32, c*d.d))
-	d.q = mk(make([]float32, c*d.d))
-	d.k = mk(make([]float32, c*d.d))
-	d.v_ = mk(make([]float32, c*d.d))
+	d.scratchRows = 1
+	if ops.eagerFullGPTScratch {
+		d.scratchRows = d.maxLen
+	}
+	d.dx = mk(make([]float32, d.scratchRows*d.d))
+	d.xn = mk(make([]float32, d.scratchRows*d.d))
+	d.xn2 = mk(make([]float32, d.scratchRows*d.d))
+	d.q = mk(make([]float32, d.scratchRows*d.d))
+	d.k = mk(make([]float32, d.scratchRows*d.d))
+	d.v_ = mk(make([]float32, d.scratchRows*d.d))
 	if ops.fusedF32QKV {
 		// Large prefills address bands of the single fused weight directly. Only rows below the
-		// strided-band crossover need a grouped-output scratch, bounding it to 63 rows.
-		d.qkv = mk(make([]float32, min(c, 63)*3*d.d))
+		// strided-band crossover need grouped output, so every workspace bounds it to 63 rows.
+		d.qkv = mk(make([]float32, min(d.scratchRows, 63)*3*d.d))
 	}
-	d.attn = mk(make([]float32, c*d.d))
-	d.hid = mk(make([]float32, c*ffn))
+	d.attn = mk(make([]float32, d.scratchRows*d.d))
+	d.hid = mk(make([]float32, d.scratchRows*d.ffn))
 	d.logitsRows = 1
 	if ops.eagerFullLogits {
-		d.logitsRows = c
+		d.logitsRows = d.maxLen
 	}
 	d.logits = mk(make([]float32, d.logitsRows*d.v))
 	if err != nil {
@@ -182,7 +273,8 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 	for i := range x {
 		x[i] += pe[i]
 	}
-	if err := d.dx.b.UploadF32(x); err != nil {
+	s := d.residentScratch()
+	if err := s.dx.UploadF32(x); err != nil {
 		return nil, err
 	}
 	r, err := d.ops.newRecorder()
@@ -191,31 +283,31 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
-		e := r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, 1, D, d.eps)
-		qBuf := d.q.b
+		e := r.LayerNorm(s.dx, b.g1, b.b1, s.xn, 1, D, d.eps)
+		qBuf := s.q
 		if d.ops.fusedF32QKV {
-			qBuf = d.qkv.b
+			qBuf = s.qkv
 			e = firstErr(e,
-				b.wqkv.record(r, d.xn.b, d.qkv.b, 1),
-				r.Blit(d.qkv.b, D, b.kC, pos*D, D),
-				r.Blit(d.qkv.b, 2*D, b.vC, pos*D, D),
+				b.wqkv.record(r, s.xn, s.qkv, 1),
+				r.Blit(s.qkv, D, b.kC, pos*D, D),
+				r.Blit(s.qkv, 2*D, b.vC, pos*D, D),
 			)
 		} else {
 			e = firstErr(e,
-				b.wq.record(r, d.xn.b, d.q.b, 1),
-				b.wk.record(r, d.xn.b, d.k.b, 1),
-				b.wv.record(r, d.xn.b, d.v_.b, 1),
-				r.Blit(d.k.b, 0, b.kC, pos*D, D),
-				r.Blit(d.v_.b, 0, b.vC, pos*D, D),
+				b.wq.record(r, s.xn, s.q, 1),
+				b.wk.record(r, s.xn, s.k, 1),
+				b.wv.record(r, s.xn, s.v_, 1),
+				r.Blit(s.k, 0, b.kC, pos*D, D),
+				r.Blit(s.v_, 0, b.vC, pos*D, D),
 			)
 		}
 		e = firstErr(e,
-			r.MHA(qBuf, b.kC, b.vC, d.attn.b, 1, pos+1, D, H, H, dk, 1, 0, d.scale),
-			d.recordAttentionResidual(r, b, 1),
-			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, 1, D, d.eps),
-			b.w1.record(r, d.xn2.b, d.hid.b, 1),
-			d.recordBiasGELU(r, b, 1),
-			d.recordFFNResidual(r, b, 1),
+			r.MHA(qBuf, b.kC, b.vC, s.attn, 1, pos+1, D, H, H, dk, 1, 0, d.scale),
+			d.recordAttentionResidual(r, b, s, 1),
+			r.LayerNorm(s.dx, b.g2, b.b2, s.xn2, 1, D, d.eps),
+			b.w1.record(r, s.xn2, s.hid, 1),
+			d.recordBiasGELU(r, b, s, 1),
+			d.recordFFNResidual(r, b, s, 1),
 		)
 		if e != nil {
 			r.Free()
@@ -223,8 +315,8 @@ func (d *GPTDecoder) Step(token, pos int) ([]float32, error) {
 		}
 	}
 	if e := firstErr(
-		r.LayerNorm(d.dx.b, d.lnfG.b, d.lnfB.b, d.xn.b, 1, D, d.eps),
-		d.head.record(r, d.xn.b, d.logits.b, 1),
+		r.LayerNorm(s.dx, d.lnfG.b, d.lnfB.b, s.xn, 1, D, d.eps),
+		d.head.record(r, s.xn, d.logits.b, 1),
 		r.Finish(),
 	); e != nil {
 		r.Free()
@@ -270,6 +362,10 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 			return nil, err
 		}
 	}
+	s, err := d.scratchForRows(k)
+	if err != nil {
+		return nil, err
+	}
 	host := make([]float32, k*d.d)
 	for i, tok := range tokens {
 		if tok < 0 || tok >= d.v {
@@ -282,7 +378,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 			row[j] += pe[j]
 		}
 	}
-	if err := d.dx.b.UploadF32(host); err != nil {
+	if err := s.dx.UploadF32(host); err != nil {
 		return nil, err
 	}
 	r, err := d.ops.newRecorder()
@@ -291,34 +387,34 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 	}
 	D, H, dk := d.d, d.h, d.dk
 	for _, b := range d.blocks {
-		e := r.LayerNorm(d.dx.b, b.g1, b.b1, d.xn.b, k, D, d.eps)
+		e := r.LayerNorm(s.dx, b.g1, b.b1, s.xn, k, D, d.eps)
 		if d.ops.fusedF32QKV {
 			if bands, ok := r.(f32QKVBandsRecorder); ok && k >= 64 {
-				e = firstErr(e, bands.F32QKVBands(d.xn.b, b.wqkv.w, d.q.b, d.k.b, d.v_.b, k, D))
+				e = firstErr(e, bands.F32QKVBands(s.xn, b.wqkv.w, s.q, s.k, s.v_, k, D))
 			} else {
 				e = firstErr(e,
-					b.wqkv.record(r, d.xn.b, d.qkv.b, k),
-					r.Copy2D(d.qkv.b, 0, 3*D, d.q.b, 0, D, k, D),
-					r.Copy2D(d.qkv.b, D, 3*D, d.k.b, 0, D, k, D),
-					r.Copy2D(d.qkv.b, 2*D, 3*D, d.v_.b, 0, D, k, D),
+					b.wqkv.record(r, s.xn, s.qkv, k),
+					r.Copy2D(s.qkv, 0, 3*D, s.q, 0, D, k, D),
+					r.Copy2D(s.qkv, D, 3*D, s.k, 0, D, k, D),
+					r.Copy2D(s.qkv, 2*D, 3*D, s.v_, 0, D, k, D),
 				)
 			}
 		} else {
 			e = firstErr(e,
-				b.wq.record(r, d.xn.b, d.q.b, k),
-				b.wk.record(r, d.xn.b, d.k.b, k),
-				b.wv.record(r, d.xn.b, d.v_.b, k),
+				b.wq.record(r, s.xn, s.q, k),
+				b.wk.record(r, s.xn, s.k, k),
+				b.wv.record(r, s.xn, s.v_, k),
 			)
 		}
 		e = firstErr(e,
-			r.Blit(d.k.b, 0, b.kC, pos*D, k*D),
-			r.Blit(d.v_.b, 0, b.vC, pos*D, k*D),
-			r.MHA(d.q.b, b.kC, b.vC, d.attn.b, k, pos+k, D, H, H, dk, 1, 0, d.scale),
-			d.recordAttentionResidual(r, b, k),
-			r.LayerNorm(d.dx.b, b.g2, b.b2, d.xn2.b, k, D, d.eps),
-			b.w1.record(r, d.xn2.b, d.hid.b, k),
-			d.recordBiasGELU(r, b, k),
-			d.recordFFNResidual(r, b, k),
+			r.Blit(s.k, 0, b.kC, pos*D, k*D),
+			r.Blit(s.v_, 0, b.vC, pos*D, k*D),
+			r.MHA(s.q, b.kC, b.vC, s.attn, k, pos+k, D, H, H, dk, 1, 0, d.scale),
+			d.recordAttentionResidual(r, b, s, k),
+			r.LayerNorm(s.dx, b.g2, b.b2, s.xn2, k, D, d.eps),
+			b.w1.record(r, s.xn2, s.hid, k),
+			d.recordBiasGELU(r, b, s, k),
+			d.recordFFNResidual(r, b, s, k),
 		)
 		if e != nil {
 			r.Free()
@@ -330,15 +426,15 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 		// Only the final row's logits are wanted: move its residual to row 0 so the final LN + LM head
 		// project ONE row and the download shrinks from k·vocab to vocab (bit-identical — row 0 then
 		// holds exactly what row k-1 would have produced; a no-op when k==1).
-		if e := r.Blit(d.dx.b, (k-1)*D, d.dx.b, 0, D); e != nil {
+		if e := r.Blit(s.dx, (k-1)*D, s.dx, 0, D); e != nil {
 			r.Free()
 			return nil, e
 		}
 		rows = 1
 	}
 	if e := firstErr(
-		r.LayerNorm(d.dx.b, d.lnfG.b, d.lnfB.b, d.xn.b, rows, D, d.eps),
-		d.head.record(r, d.xn.b, logits, rows),
+		r.LayerNorm(s.dx, d.lnfG.b, d.lnfB.b, s.xn, rows, D, d.eps),
+		d.head.record(r, s.xn, logits, rows),
 		r.Finish(),
 	); e != nil {
 		r.Free()
@@ -394,6 +490,7 @@ func (d *GPTDecoder) Ctx() int { return d.maxLen }
 
 // Release frees all device buffers.
 func (d *GPTDecoder) Release() {
+	d.fullScratch.release()
 	d.fullLogits.release()
 	for _, b := range d.all {
 		if b != nil {
