@@ -1276,6 +1276,10 @@ func (Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, bool) 
 			return preNormTransformerBlockF32, true
 		case backend.OpPreNormTransformerBlockBackward:
 			return preNormTransformerBlockBackwardF32, true
+		case backend.OpPreNormTransformerStack:
+			return preNormTransformerStackF32, true
+		case backend.OpPreNormTransformerStackBackward:
+			return preNormTransformerStackBackwardF32, true
 		case backend.OpNeg:
 			return unaryF32(backend.OpNeg, unaryNeg), true
 		case backend.OpExp:
@@ -2018,6 +2022,108 @@ func preNormTransformerBlockBackwardF32(ctx *backend.Context, in []*tensor.Tenso
 	)
 	if rc != 0 {
 		return nil, fmt.Errorf("metal: prenorm-transformer-block-backward failed (code %d)", int(rc))
+	}
+	return out, nil
+}
+
+func preNormTransformerStackMetalGeometry(in []*tensor.Tensor, attrs backend.PreNormTransformerStackAttrs, backward bool) (rows, dim, hidden, batch, seq, heads, depth int, ok bool) {
+	attrs = attrs.WithDefaults()
+	depth = attrs.Depth
+	if depth < 2 || depth > 8 {
+		return 0, 0, 0, 0, 0, 0, 0, false
+	}
+	want := 1 + 12*depth
+	if backward {
+		want++
+	}
+	if len(in) != want {
+		return 0, 0, 0, 0, 0, 0, 0, false
+	}
+	for block := 0; block < depth; block++ {
+		base := 1 + 12*block
+		blockInputs := make([]*tensor.Tensor, 13, 14)
+		blockInputs[0] = in[0]
+		copy(blockInputs[1:], in[base:base+12])
+		if backward {
+			blockInputs = append(blockInputs, in[len(in)-1])
+		}
+		blockRows, blockDim, blockHidden, blockBatch, blockSeq, blockHeads, valid :=
+			preNormTransformerBlockMetalGeometry(blockInputs, backend.PreNormTransformerBlockAttrs{
+				Heads: attrs.Heads, Batch: attrs.Batch, Eps1: attrs.Eps1, Eps2: attrs.Eps2,
+			}, backward)
+		if !valid {
+			return 0, 0, 0, 0, 0, 0, 0, false
+		}
+		if block == 0 {
+			rows, dim, hidden, batch, seq, heads = blockRows, blockDim, blockHidden, blockBatch, blockSeq, blockHeads
+			continue
+		}
+		if blockRows != rows || blockDim != dim || blockHidden != hidden || blockBatch != batch || blockSeq != seq || blockHeads != heads {
+			return 0, 0, 0, 0, 0, 0, 0, false
+		}
+	}
+	return rows, dim, hidden, batch, seq, heads, depth, true
+}
+
+func preNormTransformerStackF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormTransformerStack, in, attrs)
+	}
+	pa, _ := attrs.(backend.PreNormTransformerStackAttrs)
+	rows, dim, hidden, batch, seq, heads, depth, ok := preNormTransformerStackMetalGeometry(in, pa, false)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	inputPtrs := make([]C.uintptr_t, len(in))
+	for i, value := range in {
+		inputPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&value.Storage().F32()[0])))
+	}
+	out := tensor.New(tensor.F32, in[0].Shape())
+	rc := C.mtl_prenorm_transformer_stack_f32(
+		(*C.uintptr_t)(unsafe.Pointer(&inputPtrs[0])),
+		C.uintptr_t(uintptr(unsafe.Pointer(&out.Storage().F32()[0]))),
+		C.int(depth), C.int(rows), C.int(dim), C.int(hidden), C.int(batch), C.int(seq), C.int(heads),
+		C.float(pa.Eps1), C.float(pa.Eps2),
+	)
+	runtime.KeepAlive(in)
+	runtime.KeepAlive(out)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-transformer-stack failed (code %d)", int(rc))
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func preNormTransformerStackBackwardF32(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
+	refFallback := func() ([]*tensor.Tensor, error) {
+		return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpPreNormTransformerStackBackward, in, attrs)
+	}
+	pa, _ := attrs.(backend.PreNormTransformerStackAttrs)
+	rows, dim, hidden, batch, seq, heads, depth, ok := preNormTransformerStackMetalGeometry(in, pa, true)
+	if !ok {
+		return refFallback()
+	}
+	pa = pa.WithDefaults()
+	inputPtrs := make([]C.uintptr_t, len(in))
+	for i, value := range in {
+		inputPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&value.Storage().F32()[0])))
+	}
+	out := make([]*tensor.Tensor, len(in)-1)
+	outputPtrs := make([]C.uintptr_t, len(out))
+	for i := range out {
+		out[i] = tensor.New(tensor.F32, in[i].Shape())
+		outputPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&out[i].Storage().F32()[0])))
+	}
+	rc := C.mtl_prenorm_transformer_stack_backward_f32(
+		(*C.uintptr_t)(unsafe.Pointer(&inputPtrs[0])),
+		(*C.uintptr_t)(unsafe.Pointer(&outputPtrs[0])),
+		C.int(depth), C.int(rows), C.int(dim), C.int(hidden), C.int(batch), C.int(seq), C.int(heads),
+		C.float(pa.Eps1), C.float(pa.Eps2),
+	)
+	runtime.KeepAlive(in)
+	runtime.KeepAlive(out)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: prenorm-transformer-stack-backward failed (code %d)", int(rc))
 	}
 	return out, nil
 }

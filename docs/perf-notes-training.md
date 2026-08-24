@@ -415,3 +415,28 @@ implicit reference migration.
 
 Full protocol and raw output are in
 `internal/benchcompare/leadership/evidence/m2-metal-prenorm-transformer-block-20260824`.
+
+## Compose depth-four pre-norm transformer stacks on Metal
+
+The promoted complete-block graph still synchronized through Go between every
+encoder block. A bounded depth-aware graph now chains two through eight
+complete blocks in one forward submission and one explicit backward
+submission. All intermediate block activations stay device-local; the public
+fallback executes the existing complete-block helper once per block.
+
+At batch=8, sequence=65, dimension=128, heads=4, hidden=512, depth=4, and F32,
+three `GOMAXPROCS=1` order-alternated count-seven campaigns improve the full
+stack training boundary by 2.179x, 2.203x, and 1.435x. The full ViT training
+step improves by 1.089x, 1.097x, and 1.152x. The weakest of all 21 aligned
+full-step pairs is 1.051x. The full step also removes 1,629,048 B/op and 171
+allocations/op.
+
+The control retains all four independently promoted complete-block graphs, so
+the result isolates inter-block submission and host-round-trip elimination.
+The fused output, all 49 gradients, input immutability, full-model logits, and
+every ViT parameter gradient match the control. Unsupported depth, geometry,
+features, dtype, layout, or backend support retains the exact complete-block
+loop without implicit backend migration.
+
+Full protocol and raw output are in
+`internal/benchcompare/leadership/evidence/m2-metal-prenorm-transformer-stack-20260824`.

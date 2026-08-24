@@ -1,0 +1,35 @@
+## control first
+
+goos: darwin
+goarch: arm64
+pkg: github.com/jxsl13/goai/backend/metal
+cpu: Apple M2 Pro
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	     100	  15026566 ns/op	 5345552 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      85	  13838379 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      94	  13850701 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      93	  14151870 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      86	  13308048 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      98	  13221075 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/control         	      88	  13512847 ns/op	 5345496 B/op	     234 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     130	   9727358 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     133	   9043008 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     139	   8765669 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     139	   8747078 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     120	   9645946 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     127	  10157014 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackTrainingBoundary/candidate       	     121	   9914535 ns/op	 3722496 B/op	     197 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      60	  20970726 ns/op	       381.5 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      56	  21575385 ns/op	       370.8 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      57	  17850059 ns/op	       448.2 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      69	  18196003 ns/op	       439.7 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      70	  18559892 ns/op	       431.0 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      72	  18495990 ns/op	       432.5 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/control             	      70	  18426129 ns/op	       434.2 img/s	17374840 B/op	    1304 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      67	  16473108 ns/op	       485.6 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      76	  16440832 ns/op	       486.6 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      75	  16245488 ns/op	       492.4 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	     100	  15093621 ns/op	       530.0 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      74	  15901502 ns/op	       503.1 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      82	  16053513 ns/op	       498.3 img/s	15745792 B/op	    1133 allocs/op
+BenchmarkPreNormTransformerStackViTTrainStep/candidate           	      75	  15200468 ns/op	       526.3 img/s	15745792 B/op	    1133 allocs/op
+PASS

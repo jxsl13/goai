@@ -527,3 +527,12 @@ WHEN supported parity is checked against the two-boundary incumbent, the Metal p
 
 ## M2-PRENORM-TRANSFORMER-BLOCK-PERF-001
 WHERE 3 count-7 alternating M2 campaigns at B8 S65 D128 H4 F512, the promotion gate SHALL require boundary median at least 1.15 times, depth-4 ViT train median at least 1.08 times, and every aligned pair at least 1.03 times control.
+
+## METAL-PRENORM-TRANSFORMER-STACK-NUMERIC-001
+WHEN depth-four output and backward parity is checked against the complete-block loop, the Metal pre-norm transformer-stack implementation SHALL match 1 output and exactly 49 gradients within established F32 tolerance while mutating exactly 0 inputs.
+
+## METAL-PRENORM-TRANSFORMER-STACK-GRAPH-STRUCTURE-001
+WHERE contiguous offset-zero F32 inputs with uniform geometry and Depth 2 through 8, the Metal stack implementation SHALL submit exactly 1 cached shape-and-depth-keyed MPSGraph per direction with 2 runtime epsilon feeds and pooled buffers.
+
+## M2-PRENORM-TRANSFORMER-STACK-PERF-001
+WHERE 3 order-alternated count-7 M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4, the promotion gate SHALL require 1.12 times boundary median, 1.05 times full-step median, and 1.03 times every aligned pair.

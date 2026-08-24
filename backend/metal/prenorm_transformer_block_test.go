@@ -119,7 +119,8 @@ func runOrderedPreNormTransformerBlockBenchmarks(
 }
 
 func (b noPreNormTransformerBlockMetalBackend) Kernel(op backend.Op, dt tensor.Dtype) (backend.Kernel, bool) {
-	if op == backend.OpPreNormTransformerBlock || op == backend.OpPreNormTransformerBlockBackward {
+	if op == backend.OpPreNormTransformerBlock || op == backend.OpPreNormTransformerBlockBackward ||
+		op == backend.OpPreNormTransformerStack || op == backend.OpPreNormTransformerStackBackward {
 		return nil, false
 	}
 	return b.Backend.Kernel(op, dt)

@@ -20,6 +20,15 @@ func (b noPreNormTransformerBlockBackend) Kernel(op backend.Op, dt tensor.Dtype)
 	return b.Backend.Kernel(op, dt)
 }
 
+type noPreNormTransformerStackBackend struct{ backend.Backend }
+
+func (b noPreNormTransformerStackBackend) Kernel(op backend.Op, dt tensor.Dtype) (backend.Kernel, bool) {
+	if op == backend.OpPreNormTransformerStack || op == backend.OpPreNormTransformerStackBackward {
+		return nil, false
+	}
+	return b.Backend.Kernel(op, dt)
+}
+
 type noPreNormTransformerBlockDirectionBackend struct {
 	backend.Backend
 	disabled backend.Op
@@ -138,5 +147,66 @@ func TestForwardPreNormTransformerBlockRejectsNilInputs(t *testing.T) {
 	}
 	if _, err := nlp.ForwardPreNormTransformerBlock(nil, x, mha, nil, norm2, up, down, 2); err == nil {
 		t.Fatal("expected nil normalization error")
+	}
+}
+
+func preNormTransformerStackFixture(t *testing.T) ([]nlp.PreNormTransformerBlock, *tensor.Tensor) {
+	t.Helper()
+	blocks := make([]nlp.PreNormTransformerBlock, 2)
+	var x *tensor.Tensor
+	for i := range blocks {
+		mha, norm1, norm2, up, down, blockX := preNormTransformerBlockFixture(t)
+		if x == nil {
+			x = blockX
+		}
+		blocks[i] = nlp.PreNormTransformerBlock{
+			Attention: mha, Norm1: norm1, Norm2: norm2, Up: up, Down: down,
+		}
+	}
+	return blocks, x
+}
+
+func TestForwardPreNormTransformerStackUsesCompleteStackBoundary(t *testing.T) {
+	blocks, x := preNormTransformerStackFixture(t)
+	r := &preNormAttentionRecorder{}
+	ctx := (&backend.Context{Backend: backend.Reference()}).WithRecorder(r)
+	if _, err := nlp.ForwardPreNormTransformerStack(ctx, x, blocks, 2); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.ops) != 1 || r.ops[0] != backend.OpPreNormTransformerStack {
+		t.Fatalf("recorded ops=%v, want one complete-stack op", r.ops)
+	}
+}
+
+func TestForwardPreNormTransformerStackFallsBackToCompleteBlocks(t *testing.T) {
+	blocks, x := preNormTransformerStackFixture(t)
+	r := &preNormAttentionRecorder{}
+	ctx := (&backend.Context{Backend: noPreNormTransformerStackBackend{backend.Reference()}}).WithRecorder(r)
+	if _, err := nlp.ForwardPreNormTransformerStack(ctx, x, blocks, 2); err != nil {
+		t.Fatal(err)
+	}
+	want := []backend.Op{backend.OpPreNormTransformerBlock, backend.OpPreNormTransformerBlock}
+	if len(r.ops) != len(want) {
+		t.Fatalf("recorded ops=%v, want %v", r.ops, want)
+	}
+	for i := range want {
+		if r.ops[i] != want[i] {
+			t.Fatalf("recorded ops=%v, want %v", r.ops, want)
+		}
+	}
+}
+
+func TestForwardPreNormTransformerStackRequiresUniformGeometry(t *testing.T) {
+	blocks, x := preNormTransformerStackFixture(t)
+	blocks[1].Attention.Heads = 1
+	r := &preNormAttentionRecorder{}
+	ctx := (&backend.Context{Backend: backend.Reference()}).WithRecorder(r)
+	if _, err := nlp.ForwardPreNormTransformerStack(ctx, x, blocks, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range r.ops {
+		if op == backend.OpPreNormTransformerStack || op == backend.OpPreNormTransformerStackBackward {
+			t.Fatalf("nonuniform stack recorded fused stack op: %v", r.ops)
+		}
 	}
 }

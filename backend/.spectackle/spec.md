@@ -65,3 +65,9 @@ WHEN the fused forward or backward operation executes, the pre-norm attention fu
 
 ## PRENORM-TRANSFORMER-BLOCK-FUSION-SEMANTICS-001
 WHEN OpPreNormTransformerBlock or OpPreNormTransformerBlockBackward executes, the pre-norm transformer-block operation SHALL preserve 2 biased runtime-epsilon layer normalizations, packed-batch noncausal scaled dot-product attention, exact GELU, 2 residual additions, and gradients for exactly all 13 differentiable inputs.
+
+## PRENORM-TRANSFORMER-STACK-FUSION-SEMANTICS-001
+WHEN OpPreNormTransformerStack or OpPreNormTransformerStackBackward executes, the pre-norm transformer-stack operation SHALL preserve Depth sequential complete pre-norm transformer blocks and gradients for exactly 1 plus 12 times Depth differentiable inputs.
+
+## PRENORM-TRANSFORMER-STACK-FALLBACK-001
+WHEN the stack is ineligible for a fused backend operation, the pre-norm transformer-stack helper SHALL execute the existing complete-block helper exactly Depth times with 0 implicit backend migrations.

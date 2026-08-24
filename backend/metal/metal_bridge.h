@@ -546,6 +546,17 @@ int mtl_prenorm_transformer_block_backward_f32(
     int rows, int dim, int hidden, int batch, int seq, int heads,
     float eps1, float eps2);
 
+// Dynamic pointer tables keep the depth-2-through-8 stack ABI bounded. The
+// bridge consumes every address synchronously and retains none of them.
+int mtl_prenorm_transformer_stack_f32(
+    const uintptr_t* inputs, uintptr_t output, int depth,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2);
+int mtl_prenorm_transformer_stack_backward_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs, int depth,
+    int rows, int dim, int hidden, int batch, int seq, int heads,
+    float eps1, float eps2);
+
 // mtl_mha_backward_f32 is the SDPA backward: (Q,K,V,dO)[sq,·] → (dQ,dK,dV). One
 // thread per (head, query row): dQ is written exclusively (own head slice + row),
 // while dK/dV are accumulated with atomic float adds because query heads in a GQA
