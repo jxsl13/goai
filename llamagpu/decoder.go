@@ -354,6 +354,9 @@ type backendOps struct {
 	// fusedBiasGELU opts GPT into the recorder's bounded bias-plus-exact-GELU epilogue. Recorders
 	// without the optional capability retain the portable AddBias plus Unary chain.
 	fusedBiasGELU bool
+	// eagerFullLogits retains the historical Ctx×Vocab output scratch for same-binary benchmarks.
+	// Production constructors leave it false and lazily materialize multi-row StepN output instead.
+	eagerFullLogits bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -448,6 +451,8 @@ type Decoder struct {
 	out                                                            linear
 	gFinal, bFinal, outBias, dinv                                  *bufSlot
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits          *bufSlot
+	logitsRows                                                     int
+	fullLogits                                                     growBuffer
 	gu                                                             *bufSlot       // fused gate|up GEMV output [·, 2·hidden] (nil unless ops.fusedGateUp)
 	moeGate, moeW, moeCol                                          *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
 	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv        *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
@@ -466,6 +471,41 @@ type Decoder struct {
 
 // bufSlot wraps a buffer so the struct fields read naturally while sharing the release list.
 type bufSlot struct{ b buffer }
+
+// growBuffer owns one backend buffer whose capacity grows only when a caller requests more
+// elements. It is deliberately kept outside Decoder.all: growth releases the old buffer before
+// allocating its exact replacement, while decoder Release handles the final owner explicitly.
+type growBuffer struct {
+	b buffer
+	n int
+}
+
+func (g *growBuffer) ensure(newBuffer func([]float32) (buffer, error), n int) (buffer, error) {
+	if g.b != nil && g.n >= n {
+		return g.b, nil
+	}
+	g.release()
+	b, err := newBuffer(make([]float32, n))
+	if err != nil {
+		return nil, err
+	}
+	g.b, g.n = b, n
+	return b, nil
+}
+
+func (g *growBuffer) release() {
+	if g.b != nil {
+		g.b.Release()
+	}
+	g.b, g.n = nil, 0
+}
+
+func logitsForRows(ops backendOps, resident buffer, residentRows int, overflow *growBuffer, rows, vocab int) (buffer, error) {
+	if rows <= residentRows {
+		return resident, nil
+	}
+	return overflow.ensure(ops.newBuffer, rows*vocab)
+}
 
 // newDecoderCommon sets the geometry, RoPE frequencies and scratch buffers shared by the f32 and
 // quantized constructors.
@@ -673,10 +713,10 @@ func (d *Decoder) recordDownProj(r recorder, b block, rows int) error {
 
 // recordLogits records the final projection to logits (xn·Out) plus the optional output bias
 // (Phi's biased untied lm_head; nil ⇒ no bias, as for Llama/StableLM/StarCoder2).
-func (d *Decoder) recordLogits(r recorder, rows int) error {
-	e := d.out.record(r, d.xn.b, d.logits.b, rows)
+func (d *Decoder) recordLogits(r recorder, logits buffer, rows int) error {
+	e := d.out.record(r, d.xn.b, logits, rows)
 	if d.outBias != nil {
-		e = firstErr(e, r.AddBias(d.logits.b, d.outBias.b, d.logits.b, rows, d.v))
+		e = firstErr(e, r.AddBias(logits, d.outBias.b, logits, rows, d.v))
 	}
 	return e
 }
@@ -1219,7 +1259,11 @@ func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 		d.gu = mk(make([]float32, c*2*d.hidden)) // fused gate|up GEMV output for the SwiGLUHalves path
 	}
 	d.mo = mk(make([]float32, c*d.d))
-	d.logits = mk(make([]float32, c*d.v))
+	d.logitsRows = 1
+	if d.ops.eagerFullLogits {
+		d.logitsRows = c
+	}
+	d.logits = mk(make([]float32, d.logitsRows*d.v))
 	if d.moe {
 		d.moeGate = mk(make([]float32, c*d.nExperts))
 		d.moeW = mk(make([]float32, c*d.nExperts))
@@ -3338,7 +3382,7 @@ func (d *Decoder) encodeStep(pos int) (recorder, error) {
 	}
 	e := d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, 1)
 	e = firstErr(e, recordBarrier(r))
-	e = firstErr(e, d.recordLogits(r, 1))
+	e = firstErr(e, d.recordLogits(r, d.logits.b, 1))
 	if e != nil {
 		r.Free()
 		return nil, e
@@ -3498,6 +3542,14 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 		}
 		return out, nil
 	}
+	logits := d.logits.b
+	if !lastOnly {
+		var err error
+		logits, err = logitsForRows(d.ops, d.logits.b, d.logitsRows, &d.fullLogits, k, d.v)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// a batched step rewrites the cache and scratch — any single-step encode pre-staged for
 	// the old position is now invalid (§T614).
 	d.dropPending()
@@ -3618,7 +3670,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 	}
 	if e := firstErr(
 		d.norm(r, d.dx.b, d.gFinal.b, d.bFinalBeta(), d.xn.b, rows),
-		d.recordLogits(r, rows),
+		d.recordLogits(r, logits, rows),
 		r.Finish(),
 	); e != nil {
 		r.Free()
@@ -3626,7 +3678,7 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 	}
 	r.Free()
 	out := make([]float32, rows*d.v)
-	if err := d.logits.b.DownloadF32(out); err != nil {
+	if err := logits.DownloadF32(out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -3739,6 +3791,7 @@ func (d *Decoder) Ctx() int { return d.maxLen }
 // Release frees all device buffers and resident quantized weights.
 func (d *Decoder) Release() {
 	d.dropPending()
+	d.fullLogits.release()
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()

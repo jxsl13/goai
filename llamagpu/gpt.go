@@ -36,6 +36,8 @@ type GPTDecoder struct {
 	q, k, v_, qkv  *bufSlot
 	attn, hid      *bufSlot
 	logits         *bufSlot
+	logitsRows     int
+	fullLogits     growBuffer
 	tokEmb, posEmb *tensor.Tensor // host gather sources
 	all            []buffer
 }
@@ -153,7 +155,11 @@ func newGPTDecoder(m *nlp.GPT, ops backendOps) (*GPTDecoder, error) {
 	}
 	d.attn = mk(make([]float32, c*d.d))
 	d.hid = mk(make([]float32, c*ffn))
-	d.logits = mk(make([]float32, c*d.v))
+	d.logitsRows = 1
+	if ops.eagerFullLogits {
+		d.logitsRows = c
+	}
+	d.logits = mk(make([]float32, d.logitsRows*d.v))
 	if err != nil {
 		d.Release()
 		return nil, err
@@ -256,6 +262,14 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 	if pos < 0 || pos+k > d.maxLen {
 		return nil, fmt.Errorf("llamagpu(%s): gpt StepN [%d,%d) out of [0,%d)", d.ops.name, pos, pos+k, d.maxLen)
 	}
+	logits := d.logits.b
+	if !lastOnly {
+		var err error
+		logits, err = logitsForRows(d.ops, d.logits.b, d.logitsRows, &d.fullLogits, k, d.v)
+		if err != nil {
+			return nil, err
+		}
+	}
 	host := make([]float32, k*d.d)
 	for i, tok := range tokens {
 		if tok < 0 || tok >= d.v {
@@ -324,7 +338,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 	}
 	if e := firstErr(
 		r.LayerNorm(d.dx.b, d.lnfG.b, d.lnfB.b, d.xn.b, rows, D, d.eps),
-		d.head.record(r, d.xn.b, d.logits.b, rows),
+		d.head.record(r, d.xn.b, logits, rows),
 		r.Finish(),
 	); e != nil {
 		r.Free()
@@ -332,7 +346,7 @@ func (d *GPTDecoder) gptStepN(tokens []int, pos int, lastOnly bool) ([]float32, 
 	}
 	r.Free()
 	out := make([]float32, rows*d.v)
-	if err := d.logits.b.DownloadF32(out); err != nil {
+	if err := logits.DownloadF32(out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -380,6 +394,7 @@ func (d *GPTDecoder) Ctx() int { return d.maxLen }
 
 // Release frees all device buffers.
 func (d *GPTDecoder) Release() {
+	d.fullLogits.release()
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()
