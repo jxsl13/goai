@@ -319,10 +319,10 @@ type GPTLossAndGradAttrs struct {
 	FinalEps float64 // final LayerNorm epsilon
 }
 
-// GPTAdamWAttrs configures an incumbent-precision AdamW update: parameters,
+// AdamWAttrs configures an incumbent-precision AdamW update: parameters,
 // gradients, and both moment tensors use F32. It is kept separate from Attrs
 // because a training session is a stateful model boundary, not an Execute op.
-type GPTAdamWAttrs struct {
+type AdamWAttrs struct {
 	LR          float64 // learning rate applied to the adaptive update and decay
 	Beta1       float64 // first-moment exponential decay in [0,1)
 	Beta2       float64 // second-moment exponential decay in [0,1)
@@ -330,15 +330,29 @@ type GPTAdamWAttrs struct {
 	WeightDecay float64 // non-negative decoupled AdamW decay coefficient
 }
 
-// GPTAdamWSession is the backend-owned half of a stateful GPT training
-// session. Step consumes F32 token indices and targets, Sync materializes the
+// AdamWSession is the backend-owned half of a stateful model training session.
+// Step consumes two model-specific contiguous F32 inputs, Sync materializes the
 // current parameter state into Params-order host tensors, and Close releases
 // backend resources without an implicit synchronization.
-type GPTAdamWSession interface {
-	Step(tokenIndices, targets *tensor.Tensor) (*tensor.Tensor, error)
+type AdamWSession interface {
+	Step(input, targets *tensor.Tensor) (*tensor.Tensor, error)
 	Sync(params []*tensor.Tensor) error
 	Close() error
 }
+
+// GPTAdamWAttrs preserves the original GPT configuration name as a
+// source-compatible alias of AdamWAttrs.
+type GPTAdamWAttrs = AdamWAttrs
+
+// GPTAdamWSession preserves the original GPT capability name as a
+// source-compatible alias of AdamWSession.
+type GPTAdamWSession = AdamWSession
+
+// ViTAdamWAttrs names AdamWAttrs at the ViT capability boundary.
+type ViTAdamWAttrs = AdamWAttrs
+
+// ViTAdamWSession names AdamWSession at the ViT capability boundary.
+type ViTAdamWSession = AdamWSession
 
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*

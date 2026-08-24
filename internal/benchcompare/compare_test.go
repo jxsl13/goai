@@ -22,6 +22,7 @@ import (
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
+	"github.com/jxsl13/goai/vision"
 
 	_ "github.com/jxsl13/goai/backend/cpu"
 	_ "github.com/jxsl13/goai/backend/metal"
@@ -473,6 +474,42 @@ func BenchmarkGPTAdamWSession(b *testing.B) {
 				b.Fatal(err)
 			}
 			b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}
+
+// BenchmarkViTAdamWSession measures the pinned vision objective-plus-update
+// boundary. Metal keeps parameters, gradients, and F32 moments resident;
+// other registered backends execute the identical portable session.
+func BenchmarkViTAdamWSession(b *testing.B) {
+	images, targets := visionInputs()
+	for _, name := range gptBackends {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		b.Run(string(name), func(b *testing.B) {
+			model := newViT(b)
+			session, err := model.NewAdamWSession(
+				backend.NewContext().WithBackend(be), visBatch,
+				vision.DefaultViTAdamWConfig(1e-3, 0.1))
+			if err != nil {
+				b.Fatal(err)
+			}
+			if _, err := session.Step(images, targets); err != nil {
+				b.Fatal(err)
+			}
+			b.ResetTimer()
+			for range b.N {
+				if _, err := session.Step(images, targets); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			if err := session.Close(); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportMetric(float64(visBatch)*float64(b.N)/b.Elapsed().Seconds(), "img/s")
 		})
 	}
 }

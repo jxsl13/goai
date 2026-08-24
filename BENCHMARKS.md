@@ -687,19 +687,27 @@ companion `testdata/bench_vision_torch.py`; both models carry the identical
 | CNN forward | 8,701 | 7,375 | 25,744 | 17,832 |
 | CNN train | 2,618 | 1,083 | 9,453 | 6,017 |
 
-torch is ahead everywhere, but the two models fail differently:
+The whole-objective and full-optimizer boundary is a newer, separately pinned
+cell. It uses identical F32 AdamW semantics on the same ViT geometry:
 
-- **ViT attention batch dispatch is closed; encoder/tape fusion is now the dominant gap.** T908
-  packed the projection GEMMs, and the 2026-08-23 batch-axis `OpMHA` change removed
-  the remaining 3B Slice + B attention + Concat core. Three count-seven M2
-  campaigns improve forward 49.6–60.8% and train-step 14.6–20.1%, with exact leaf
-  output and Metal gradient parity. The follow-up cached backward graph replaces B
-  synchronous native backward submissions with one packed graph; three additional
-  count-seven campaigns improve training throughput by 69.1–71.4%, with every
-  aligned pair at least 1.508×. Forward is 7.2× and training 9.4× behind the pinned
-  torch-mps result, not ≈40×. The remaining target is wider encoder/tape graph
-  fusion. Raw evidence: `internal/benchcompare/leadership/evidence/m2-metal-batched-attention-20260823/`
-  and `internal/benchcompare/leadership/evidence/m2-metal-batched-attention-backward-20260823/`.
+| ViT objective + F32 AdamW | GoAI host-state control | GoAI resident session | torch-mps | Verdict |
+|---|---:|---:|---:|---|
+| Apple GPU | 1,425.69 img/s (5.611 ms) | **1,829.55 img/s (4.373 ms)** | 875.49 img/s (9.138 ms) | **GoAI 2.090x** |
+
+The legacy eager rows above remain behind torch, but the resident full step now
+leads its matched torch-mps cell:
+
+- **ViT progressed from batch fusion to a complete graph and resident optimizer.**
+  T908 packed projection GEMMs, the batch-axis `OpMHA` work removed per-image
+  attention dispatch, and the cached backward graph removed B native backward
+  submissions. The complete objective now captures patch projection, all four
+  encoder blocks, classifier, cross-entropy, and every parameter gradient in one
+  MPSGraph. `ViT.NewAdamWSession` retains parameters, gradients, and F32 moments,
+  then encodes all 56 AdamW updates on the same command buffer. Three
+  order-alternated count-seven campaigns measure 1.269x paired median speedup
+  over the exact materialized control with a 1.216x floor; multi-step parity,
+  checkpoint sync, stale-host isolation, and lifetime tests pass. Evidence:
+  `internal/benchcompare/leadership/evidence/m2-metal-vit-adamw-session-20260824/`.
 - **CNN is a normal fusion gap (2.4× fwd / 5.6× train on the GPU).** The CNN is
   natively batched on both sides, so this is the same fused-conv + fused-backward
   story as the training-step section (§6): torch's fused kernels vs GoAI's separate
@@ -810,7 +818,7 @@ honestly documented deficit with a root cause is a deliverable):
 | Apple-GPU matmul vs torch-mps | 3.0× | Apple's closed MPS kernel tuning; measured as the platform ceiling | parked (§B39/§T410) — revisit only with new evidence |
 | Materialized GPT objective vs torch-mps (Apple GPU) | 1.131× | `LossAndGrad` intentionally returns 77 host-visible gradients; torch keeps them in MPS tensors | resident `GPTAdamWSession` closes this boundary for full steps and leads 1.667×; retain the objective row as the honest API-specific deficit |
 | Training step vs torch-cpu | 2.24× | GEMM is at AMX parity, but torch fuses SDPA attention + autograd backward; GoAI runs separate NEON kernels | fused-attention/backward CPU kernels |
-| ViT training vs torch-mps (Apple GPU) | ≈9.4× | attention forward and backward are batch-axis graphs, but the surrounding encoder tape remains op-by-op and torch uses more heavily fused MPS kernels | encoder/tape graph fusion, then profile the remaining MPS-kernel ceiling |
+| Eager ViT tape training vs torch-mps (Apple GPU) | ≈9.4× | the legacy compositional API materializes an op-by-op tape | complete `LossAndGrad` plus resident `ViTAdamWSession` closes the full-step boundary and leads torch-mps 2.090×; retain the eager row as a distinct API cell |
 | CPU attention vs torch fused SDPA | 2.6× | operator fusion | candidate fused-attention CPU kernel |
 | Production CPU Q4_K decode vs llama.cpp | llama.cpp is 2.74–3.60× ahead in the closest available diagnostic; **not a matched claim** | identical GGUF/threads/step count, but GoAI uses f32 KV while llama.cpp uses f16 KV and token streams differ; GoAI's active whole-step work remains larger | first add a shared-dtype/token-stream harness, then profile attributed active work and test whole-step scheduling/fusion |
 | Apple production decode vs llama.cpp | 1.043× at matched f32 KV; **1.096×** at shipping f16 KV after the opt-in cache path | the f16-cache capability gap is closed; K-quant projection and whole-step scheduling/fusion remain | persistent command/graph execution plus measured quantized decode fusion |
@@ -864,6 +872,7 @@ non-negotiables (§V22, §C3):
 | Classical ML vs scikit-learn | `make bench-classic-python` (GoAI + scikit-learn 1.9.0 on the same CSV; §5, T881) |
 | BPE tokenizer vs tiktoken | `go test ./nlp -run '^$' -bench BenchmarkGPT2` + `.venv/bin/python internal/benchcompare/tokenizer_compare.py` (§3, T882) |
 | GPT training step vs torch | `make bench-gpt-train-python` (add `--adamw` for the full step) + `BenchmarkGPTTrainingStep`, `BenchmarkGPTLossAndGrad`, and `BenchmarkGPTAdamWSession` (§6, T883) |
+| ViT training step vs torch | `make bench-vision-python` plus `.venv/bin/python testdata/bench_vision_torch.py --adamw`, `BenchmarkViTAdamWSession`, and `BenchmarkViTAdamWSessionPaired` (§7, T884) |
 | GEMM AMX head-to-head | `GOEXPERIMENT=simd go test ./backend/cpu -run '^$' -bench GEMM -benchtime 10x` |
 
 ## Further reading

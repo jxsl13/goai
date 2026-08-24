@@ -2418,6 +2418,138 @@ func vitMetalShape2(value *tensor.Tensor, rows, cols int) bool {
 	return value.Ndim() == 2 && value.Shape()[0] == rows && value.Shape()[1] == cols
 }
 
+type vitAdamWMetalSession struct {
+	mu     sync.Mutex
+	handle C.uintptr_t
+	attrs  backend.ViTLossAndGradAttrs
+	shapes []tensor.Shape
+	closed bool
+}
+
+// NewViTAdamWSessionF32 implements vision's optional resident training-session
+// capability. Valid Metal geometries retain their parameters and optimizer
+// state in native buffers; unsupported geometries ask vision to use its
+// portable F32 AdamW implementation.
+func (Backend) NewViTAdamWSessionF32(
+	params []*tensor.Tensor,
+	attrs backend.ViTLossAndGradAttrs,
+	optim backend.ViTAdamWAttrs,
+) (backend.ViTAdamWSession, bool, error) {
+	dummy := []*tensor.Tensor{
+		tensor.New(tensor.F32, tensor.Shape{attrs.Batch * attrs.Patches, attrs.PatchDim}),
+		tensor.New(tensor.F32, tensor.Shape{attrs.Batch}),
+	}
+	dummy = append(dummy, params...)
+	if !vitLossAndGradMetalGeometry(dummy, attrs) {
+		return nil, false, nil
+	}
+	if !validMetalAdamWAttrs(optim) {
+		return nil, true, fmt.Errorf("metal: invalid ViT AdamW configuration")
+	}
+	paramPtrs := make([]C.uintptr_t, len(params))
+	shapes := make([]tensor.Shape, len(params))
+	for i, parameter := range params {
+		paramPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&parameter.Storage().F32()[0])))
+		shapes[i] = parameter.Shape().Clone()
+	}
+	var status C.int
+	handle := C.mtl_vit_adamw_session_new(
+		(*C.uintptr_t)(unsafe.Pointer(&paramPtrs[0])),
+		C.int(attrs.Depth), C.int(attrs.Batch), C.int(attrs.Patches), C.int(attrs.PatchDim),
+		C.int(attrs.Dim), C.int(attrs.Hidden), C.int(attrs.Heads), C.int(attrs.Classes),
+		C.float(attrs.Eps1), C.float(attrs.Eps2), C.float(attrs.FinalEps),
+		C.float(optim.LR), C.float(optim.Beta1), C.float(optim.Beta2),
+		C.float(optim.Eps), C.float(optim.WeightDecay), &status,
+	)
+	runtime.KeepAlive(params)
+	if handle == 0 || status != 0 {
+		return nil, true, fmt.Errorf("metal: ViT AdamW session construction failed (code %d)", int(status))
+	}
+	return &vitAdamWMetalSession{handle: handle, attrs: attrs, shapes: shapes}, true, nil
+}
+
+func (s *vitAdamWMetalSession) Step(patches, targets *tensor.Tensor) (*tensor.Tensor, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, fmt.Errorf("metal: ViT AdamW session is closed")
+	}
+	if patches == nil || targets == nil || patches.Dtype() != tensor.F32 || targets.Dtype() != tensor.F32 ||
+		!patches.IsContiguous() || !targets.IsContiguous() || patches.Offset() != 0 || targets.Offset() != 0 ||
+		!patches.Shape().Equal(tensor.Shape{s.attrs.Batch * s.attrs.Patches, s.attrs.PatchDim}) ||
+		!targets.Shape().Equal(tensor.Shape{s.attrs.Batch}) {
+		return nil, fmt.Errorf("metal: ViT AdamW step needs contiguous offset-zero F32 patches [%d,%d] and targets [%d]",
+			s.attrs.Batch*s.attrs.Patches, s.attrs.PatchDim, s.attrs.Batch)
+	}
+	for _, value := range targets.Storage().F32() {
+		class := int(value)
+		if value != float32(class) || class < 0 || class >= s.attrs.Classes {
+			return nil, fmt.Errorf("metal: ViT AdamW target %v outside classes %d", value, s.attrs.Classes)
+		}
+	}
+	loss := tensor.New(tensor.F32, tensor.Shape{})
+	rc := C.mtl_vit_adamw_session_step(
+		s.handle,
+		(*C.float)(&patches.Storage().F32()[0]),
+		(*C.float)(&targets.Storage().F32()[0]),
+		(*C.float)(&loss.Storage().F32()[0]),
+	)
+	runtime.KeepAlive(patches)
+	runtime.KeepAlive(targets)
+	runtime.KeepAlive(loss)
+	if rc != 0 {
+		return nil, fmt.Errorf("metal: ViT AdamW step failed (code %d)", int(rc))
+	}
+	return loss, nil
+}
+
+func (s *vitAdamWMetalSession) Sync(params []*tensor.Tensor) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("metal: ViT AdamW session is closed")
+	}
+	if len(params) != len(s.shapes) {
+		return fmt.Errorf("metal: ViT AdamW sync got %d parameters, want %d", len(params), len(s.shapes))
+	}
+	paramPtrs := make([]C.uintptr_t, len(params))
+	for i, parameter := range params {
+		if parameter == nil || parameter.Dtype() != tensor.F32 || !parameter.IsContiguous() || parameter.Offset() != 0 ||
+			!parameter.Shape().Equal(s.shapes[i]) {
+			return fmt.Errorf("metal: ViT AdamW sync parameter %d does not match its construction tensor", i)
+		}
+		paramPtrs[i] = C.uintptr_t(uintptr(unsafe.Pointer(&parameter.Storage().F32()[0])))
+	}
+	rc := C.mtl_vit_adamw_session_sync(s.handle, (*C.uintptr_t)(unsafe.Pointer(&paramPtrs[0])))
+	runtime.KeepAlive(params)
+	if rc != 0 {
+		return fmt.Errorf("metal: ViT AdamW sync failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func (s *vitAdamWMetalSession) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	rc := C.mtl_vit_adamw_session_close(s.handle)
+	s.handle = 0
+	if rc != 0 {
+		return fmt.Errorf("metal: ViT AdamW close failed (code %d)", int(rc))
+	}
+	return nil
+}
+
+func validMetalAdamWAttrs(optim backend.AdamWAttrs) bool {
+	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+	return finite(optim.LR) && optim.LR > 0 && finite(optim.Beta1) && optim.Beta1 >= 0 && optim.Beta1 < 1 &&
+		finite(optim.Beta2) && optim.Beta2 >= 0 && optim.Beta2 < 1 && finite(optim.Eps) && optim.Eps > 0 &&
+		finite(optim.WeightDecay) && optim.WeightDecay >= 0
+}
+
 // GPTLossAndGradF32 implements nlp's optional whole-objective capability.
 // Invalid or unsupported geometry returns supported=false so the caller can
 // preserve portable tape semantics without coupling nlp to this package.
@@ -2481,10 +2613,7 @@ func (Backend) NewGPTAdamWSessionF32(
 	if !gptLossAndGradMetalGeometry(dummy, attrs) {
 		return nil, false, nil
 	}
-	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
-	if !finite(optim.LR) || optim.LR <= 0 || !finite(optim.Beta1) || optim.Beta1 < 0 || optim.Beta1 >= 1 ||
-		!finite(optim.Beta2) || optim.Beta2 < 0 || optim.Beta2 >= 1 || !finite(optim.Eps) || optim.Eps <= 0 ||
-		!finite(optim.WeightDecay) || optim.WeightDecay < 0 {
+	if !validMetalAdamWAttrs(optim) {
 		return nil, true, fmt.Errorf("metal: invalid GPT AdamW configuration")
 	}
 	paramPtrs := make([]C.uintptr_t, len(params))
