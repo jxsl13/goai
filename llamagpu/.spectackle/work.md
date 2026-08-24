@@ -210,7 +210,7 @@ Apple M2 Pro current main at GPT-2-small geometry measures public Step at 210992
 
 ## ADR-01M0SXS636FJBA7HAYV1199C07 Use caller buffers, reusable embedding staging, and bounded recorder wrappers for GPT
 kind: adr
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
 grilled: 2026-08-24 open=0
