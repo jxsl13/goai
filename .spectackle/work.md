@@ -4006,12 +4006,3 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
-
-## R-01M0RKKV5RF95S1CDC657TGYH0 Attribute the remaining post-stack ViT training cost on M2
-kind: research
-state: active
-created: 2026-08-24
-refs: R-01M0RGHTRTE3CSGT21HN59B9QY
-targets: go:vision.ViT.Forward, go:metal_test.runPreNormFFNViTStep, go:metal.Recorder.Profile, vision/vit.go, backend/metal/metal_bridge.m
-
-Measure the current F32 batch-8 depth-4 ViT training step after PR 1196 and partition wall time, Metal submissions, host copies, and allocations across packed image preparation, patch embedding, composed transformer stack, final LayerNorm, class-row gather, classifier projection, cross-entropy, and their backward paths. Use the promoted transformer-stack graph as the immutable control. Prioritize a next boundary only if attribution supports a frozen full-step median gate of at least 1.05x with every aligned pair at least 1.03x; do not repeat the rejected movement-heavy flattening from P-01M0FMNNMKFRXR0FDEYZ8GXX7S. Any prototype must preserve logits, loss, all parameter gradients, and zero input mutations, and must be fully reverted if its gate fails.
