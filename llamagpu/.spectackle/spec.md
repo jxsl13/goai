@@ -137,7 +137,7 @@ WHEN StepN or StepNLast requests more activation rows than the resident workspac
 ## DECODER-FULL-WORKSPACE-LIFETIME-001 {applies: go:llamagpu.decoderScratch.release,go:llamagpu.Decoder.newScratch,go:llamagpu.Decoder.Release,go:llamagpu.TestDecoderScratchPartialAllocationFailureReleasesGeneration}
 WHEN grouped workspace growth fails or the Decoder is released, the shared Decoder SHALL release each prior or partial workspace buffer exactly once and retain 0 stale grouped-workspace references.
 
-## DECODER-HIDDEN-WORKSPACE-READBACK-001
+## DECODER-HIDDEN-WORKSPACE-READBACK-001 {applies: go:llamagpu.Decoder.StepNHidden,go:llamagpu_test.TestMedusaGenerateLlamaAllRejectIsGreedy}
 WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exactly 1 or len(tokens) final hidden rows from the corresponding selected activation workspace.
 
 ## TINYLLAMA-ACTIVATION-RESIDENCY-PERF-001
