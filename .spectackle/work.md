@@ -4016,7 +4016,7 @@ Measure the current M2 ViT B8/C3/HW32/P4/D128/depth4/H4 training step after the 
 
 ## P-01M0RRS336FYBT4DC3PJA1WSKG Compose the ViT patch-projection sequence boundary
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: go:vision.ViT.Forward, go:metal.layerNormSequenceClassifierF32, backend/op.go, backend/attrs.go, autograd/vjp_transformer.go, backend/ref
