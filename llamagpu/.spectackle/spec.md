@@ -199,7 +199,7 @@ WHEN a destination length differs from its method requirement, the GPTDecoder In
 ## GPT-EMBED-STAGING-001-001 {applies: go:llamagpu.GPTDecoder.gatherEmbedInto,go:llamagpu.GPTDecoder.batchEmbedHost,go:llamagpu.addEmbedRowInto,go:llamagpu.GPTDecoder.stepInto,go:llamagpu.GPTDecoder.gptStepNInto}
 WHEN Step or prefill gathers token and positional embeddings, the GPTDecoder SHALL reuse exactly 1 Dim host row or 1 exact high-water batch slice and allocate 0 embedding objects.
 
-## GPT-EMBED-STAGING-LIFETIME-001-001
+## GPT-EMBED-STAGING-LIFETIME-001-001 {applies: go:llamagpu.GPTDecoder.Release,go:llamagpu.GPTDecoder.batchEmbedHost}
 WHEN Release completes, the GPTDecoder SHALL retain exactly 0 host embedding staging elements.
 
 ## GPT-METAL-RECORDER-POOL-SAFETY-001-001
