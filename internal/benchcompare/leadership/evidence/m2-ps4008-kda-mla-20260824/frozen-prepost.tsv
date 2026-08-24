@@ -1,0 +1,15 @@
+pair	order	arm	ns/op	B/op	allocs/op
+1	first	baseline	238708888	3282433	15
+1	second	candidate	207803142	3413504	14
+2	first	candidate	208795771	3413504	14
+2	second	baseline	259866138	3282433	15
+3	first	baseline	245062725	3282433	15
+3	second	candidate	224251450	3413504	14
+4	first	candidate	222883521	3413504	14
+4	second	baseline	251142950	3282433	15
+5	first	baseline	241786588	3282432	15
+5	second	candidate	261456854	3413504	14
+6	first	candidate	265786583	3413504	14
+6	second	baseline	254712567	3282433	15
+7	first	baseline	222496588	3282433	15
+7	second	candidate	198267800	3413504	14

@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/ref -- interchange exact MLA RoPE score accumulation (T-01KYMDP9EMFTB, 2026-08-24)
+
+Reference `OpMLA` now transposes the shared RoPE key once and updates
+independent key scores with the reduction dimension still ascending. This
+removes the final MLA PS4008 dependency chain without reassociation. A
+frozen-loop tolerance-zero test catches reversed reduction order, and CPU/ref
+MLA stays bit-identical across F32/F64, three geometries, and both causal modes.
+
+Seven alternating Apple M2 Pro pairs improve seq512/heads8/dh64/dR32 causal
+reference MLA from 245.062725 to 222.883521 ms at the medians (**1.0995x**),
+with 5/7 paired wins. One combined RoPE buffer reduces allocations from 15 to
+14; the transposed view adds 131,071 B/op. Current KDA already emits no PS4008
+finding and was left unchanged. Raw evidence is committed under the PS4008 KDA
+and MLA artifact; the generalized exact-interchange detector refinement is
+perfscan issue #902.
+
 ### classic -- cache exact SVC SMO active-set membership (T-01M0TMY9SGFS7, 2026-08-24)
 
 The two ascending SMO working-set scans now load exact cached `I_up` and
