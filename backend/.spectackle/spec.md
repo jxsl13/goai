@@ -88,3 +88,8 @@ Rationale: The optimizer session boundary is reusable while existing GPT callers
 
 ## DEVICE-TOPKN-INTO-SEMANTICS-001
 WHEN TopKNInto receives equal index and value destinations of valid length K, the Metal and CUDA device buffers SHALL write exactly K index-value pairs matching TopKN and allocate 0 result slices.
+
+## CALLER-OWNED-OUTPUT-001 {applies: go:backend.ExecuteInto,go:backend.IntoBackend,go:cpu.matmulInto,go:ops.MatMulInto}
+WHEN an IntoKernel is available and the caller supplies valid dense non-aliasing outputs, the backend.ExecuteInto SHALL return results in the exact supplied tensors with 0 result-storage allocations and output bit-identical to Execute.
+
+Rationale: Fixed-shape iterative workloads need backend-optimized kernels without per-iteration result allocation and copy costs.

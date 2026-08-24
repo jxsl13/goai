@@ -82,3 +82,13 @@ WHEN fresh-process Apple M2 Pro campaigns measure the Q4_K leaf and 64-step Tiny
 
 ## PRENORM-FFN-FUSION-FALLBACK-001
 IF the active backend lacks either fused direction for the dtype or layout, THEN the pre-norm FFN helper SHALL execute the incumbent 7-operation composite with exactly 0 implicit backend migrations.
+
+## MUON-WORKSPACE-REUSE-001 {applies: go:nn.NewMuon,go:nn.newtonSchulz5WithScratch,go:nn.TestMuonStepIsBitIdentical,go:nn.TestMuonStepIgnoresStaleScratch,go:nn_test.BenchmarkMuonStepOnly}
+WHEN NewMuon constructs a fixed-shape 2-D parameter workspace and Step runs Newton-Schulz products, the Muon SHALL reuse exactly 1 workspace per parameter, overwrite every scratch element before reading it, and preserve the exact 3-step F64 and F32 parameter digests.
+
+Rationale: Repeated optimizer products must not recreate shape-invariant buffers or introduce trajectory drift.
+
+## MUON-MATMUL-INTO-PERF-001 {applies: go:nn.newtonSchulz5WithScratch,go:ops.MatMulInto,go:nn.TestMuonStepIsBitIdentical,go:nn_test.BenchmarkMuonStepOnly}
+WHEN 7 alternating M2 Pro 30-iteration BenchmarkMuonStepOnly campaigns compare the merged baseline, the Muon SHALL retain the candidate only at 3.00x median speed, 99 percent lower B/op, and exact 3-step F64 and F32 digests.
+
+Rationale: The architectural seam is justified only by large end-to-end optimizer leverage without trajectory drift.

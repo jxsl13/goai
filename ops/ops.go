@@ -169,6 +169,14 @@ func ArgMaxFlat(x *tensor.Tensor) (*tensor.Tensor, error) {
 // operands are supported by passing transpose views.
 func MatMul(a, b *tensor.Tensor) (*tensor.Tensor, error) { return eager(backend.OpMatMul, a, b) }
 
+// MatMulInto computes A[M,K]·B[K,N] into caller-owned out[M,N]. Reusing out
+// removes the result allocation from fixed-shape hot paths; the numerical and
+// backend-selection semantics are the same as MatMul.
+func MatMulInto(out, a, b *tensor.Tensor) error {
+	return backend.ExecuteInto(backend.NewContext(), backend.OpMatMul,
+		[]*tensor.Tensor{a, b}, []*tensor.Tensor{out}, nil)
+}
+
 // Conv2D cross-correlates x[N,C,H,W] with w[F,C,KH,KW] (+ optional bias[F];
 // pass nil for none) using zero padding.
 func Conv2D(x, w, bias *tensor.Tensor, stride, pad int) (*tensor.Tensor, error) {

@@ -92,11 +92,13 @@ func TestExecuteFallback(t *testing.T) {
 }
 
 type capRecorder struct {
-	ops []Op
+	ops     []Op
+	outputs [][]*tensor.Tensor
 }
 
-func (r *capRecorder) Record(op Op, _, _ []*tensor.Tensor, _ Attrs) {
+func (r *capRecorder) Record(op Op, _ []*tensor.Tensor, outputs []*tensor.Tensor, _ Attrs) {
 	r.ops = append(r.ops, op)
+	r.outputs = append(r.outputs, outputs)
 }
 
 // §T13 gate: a Recorder attached to the context sees every forward op — the seam
@@ -113,6 +115,24 @@ func TestRecorderInterception(t *testing.T) {
 	}
 	if len(rec.ops) != 2 || rec.ops[0] != OpAdd || rec.ops[1] != OpNeg {
 		t.Errorf("recorder saw %v, want [add neg]", rec.ops)
+	}
+}
+
+// A backend without IntoBackend support uses the allocating compatibility path,
+// then copies into and records the caller-owned output rather than the temporary.
+func TestExecuteIntoCompatibilityFallback(t *testing.T) {
+	rec := &capRecorder{}
+	ctx := NewContext().WithBackend(activeMock).WithRecorder(rec)
+	x := tensor.FromFloat64(tensor.Shape{2}, []float64{3, 7})
+	out := tensor.FromFloat64(tensor.Shape{2}, []float64{-1, -1})
+	if err := ExecuteInto(ctx, OpAdd, []*tensor.Tensor{x}, []*tensor.Tensor{out}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.Storage().F64(); got[0] != 3 || got[1] != 7 {
+		t.Fatalf("fallback output = %v, want [3 7]", got)
+	}
+	if len(rec.ops) != 1 || rec.ops[0] != OpAdd || len(rec.outputs) != 1 || rec.outputs[0][0] != out {
+		t.Fatalf("recorder saw ops=%v outputs=%v, want caller-owned output", rec.ops, rec.outputs)
 	}
 }
 
