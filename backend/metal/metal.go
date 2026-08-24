@@ -4180,6 +4180,31 @@ func (b *DeviceBuffer) TopKN(n, k int) ([]int32, []float32, error) {
 	}
 	indices := make([]int32, k)
 	values := make([]float32, k)
+	if err := b.TopKNInto(n, indices, values); err != nil {
+		return nil, nil, err
+	}
+	return indices, values, nil
+}
+
+// TopKNInto is TopKN with caller-owned result storage. The equal-length index and value slices set
+// k and may be reused across calls, avoiding two per-token allocations at a resident sampling boundary.
+func (b *DeviceBuffer) TopKNInto(n int, indices []int32, values []float32) error {
+	if b.handle == nil {
+		return fmt.Errorf("metal: TopKNInto on released buffer")
+	}
+	if b.bytes != 4 {
+		return fmt.Errorf("metal: TopKNInto requires f32 storage, got %d-byte elements", b.bytes)
+	}
+	if n < 1 || n > b.n {
+		return fmt.Errorf("metal: TopKNInto n=%d out of range (1..%d)", n, b.n)
+	}
+	k := len(indices)
+	if len(values) != k {
+		return fmt.Errorf("metal: TopKNInto index/value lengths differ: %d != %d", k, len(values))
+	}
+	if k < 1 || k > 256 || k > n {
+		return fmt.Errorf("metal: TopKNInto k=%d out of range for n=%d (1..min(256,n))", k, n)
+	}
 	rc := C.mtl_devbuf_topk(
 		b.handle,
 		C.int(n),
@@ -4188,9 +4213,9 @@ func (b *DeviceBuffer) TopKN(n, k int) ([]int32, []float32, error) {
 		(*C.float)(unsafe.Pointer(&values[0])),
 	)
 	if rc != 0 {
-		return nil, nil, fmt.Errorf("metal: TopKN failed (code %d)", int(rc))
+		return fmt.Errorf("metal: TopKNInto failed (code %d)", int(rc))
 	}
-	return indices, values, nil
+	return nil
 }
 
 // downloadF16Bits is the exact-storage test seam for the specialized KV cache. The public

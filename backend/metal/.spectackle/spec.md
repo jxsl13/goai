@@ -623,3 +623,6 @@ Rationale: Prevent capacity-sized scratch buffers from amplifying elementwise wo
 
 ## METAL-RECORDER-WRAPPER-REUSE-001 {applies: go:metal.Recorder.Reset,go:metal.Recorder.ResetConcurrent,go:metal.Recorder.reset}
 WHEN a freed Metal Recorder is reset, the Metal backend SHALL open exactly 1 fresh native command buffer and reuse the existing Go Recorder wrapper.
+
+## M2-METAL-TOPKN-INTO-PERF-001
+WHEN TopKNInto is benchmarked on M2 with N 32000 and K 56, the Metal device buffer gate SHALL require 0 B/op, 0 allocs/op, and at least 0.97 times TopKN median throughput.

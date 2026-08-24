@@ -85,3 +85,6 @@ WHEN OpPatchEmbedSequence or its backward operation executes, the backend SHALL 
 WHEN model-specific GPT or ViT code uses the shared F32 AdamW session protocol, the backend API SHALL preserve GPTAdamWAttrs and GPTAdamWSession as source-compatible aliases and accept exactly 2 contiguous F32 Step inputs.
 
 Rationale: The optimizer session boundary is reusable while existing GPT callers retain source compatibility.
+
+## DEVICE-TOPKN-INTO-SEMANTICS-001
+WHEN TopKNInto receives equal index and value destinations of valid length K, the Metal and CUDA device buffers SHALL write exactly K index-value pairs matching TopKN and allocate 0 result slices.

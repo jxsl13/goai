@@ -494,8 +494,13 @@ type Decoder struct {
 	embedBatchHost                                                 []float32      // reusable batched embedding upload rows, retained at the high-water row count
 	// eagerGenerateResultControl retains the historical per-token logits allocations for same-binary benchmarks.
 	eagerGenerateResultControl bool
-	all                        []buffer
-	qweights                   []qweight // resident quantized weights (quant decoder)
+	// eagerGeneratePrefillReadbackControl retains the historical first-token host sampling boundary.
+	eagerGeneratePrefillReadbackControl bool
+	topKIndices                         [256]int32
+	topKValues                          [256]float32
+	topKLogits                          [256]float64
+	all                                 []buffer
+	qweights                            []qweight // resident quantized weights (quant decoder)
 }
 
 // bufSlot wraps a buffer so the struct fields read naturally while sharing the release list.
@@ -3690,11 +3695,12 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 }
 
 // stepNInto executes StepN with an optional last-row-only mode. When lastOnly, only the FINAL prompt row's
-// logits are projected by the LM head and downloaded — the transformer body still runs all k rows
+// logits are projected by the LM head — the transformer body still runs all k rows
 // (the KV cache needs every position), but the [k-1] earlier rows' logits are never read by a caller
-// that only samples the post-prompt token (Generate), so their lm_head GEMM and vocab-sized host
-// download are pure waste — large for high-vocab models. Full-k mode writes every row for
-// speculative/verify callers (Medusa, prompt-lookup).
+// that only samples the post-prompt token (Generate), so their lm_head GEMM is pure waste. A nil out
+// is the private resident-generation boundary: execute without downloading the final row. Public Into
+// methods validate non-nil exact-length destinations before calling here. Full-k mode writes every row
+// for speculative/verify callers (Medusa, prompt-lookup).
 func (d *Decoder) stepNInto(tokens []int, pos int, lastOnly bool, out []float32) error {
 	k := len(tokens)
 	if k == 0 {
@@ -3713,6 +3719,14 @@ func (d *Decoder) stepNInto(tokens []int, pos int, lastOnly bool, out []float32)
 		// previous token's), so there is no batched prefill — process the prompt token by token through
 		// StepInto, which carries the recurrent state and resets it at pos==0.
 		if lastOnly { // only the final token's logits are wanted; still step all tokens for the state
+			if out == nil {
+				for i, tok := range tokens {
+					if err := d.stepInto(tok, pos+i); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
 			for i, tok := range tokens {
 				if err := d.StepInto(tok, pos+i, out); err != nil {
 					return err
@@ -3868,6 +3882,9 @@ func (d *Decoder) stepNInto(tokens []int, pos int, lastOnly bool, out []float32)
 		return e
 	}
 	r.Free()
+	if out == nil {
+		return nil
+	}
 	if err := logits.DownloadF32(out); err != nil {
 		return err
 	}
@@ -3882,12 +3899,22 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 		return nil, fmt.Errorf("llamagpu(%s): Generate needs a non-empty prompt", d.ops.name)
 	}
 	out := append([]int(nil), prompt...)
+	// Resolve device-sampler capability before prefill. Eligible paths can consume the final prompt
+	// row directly from d.logits, avoiding the historical first-token full-Vocab host boundary.
+	sp, fastK := fastTopKSampler(s, d.v)
+	spP, fastC := fastTopPSampler(s, d.v) // pure-top-p device path (mutually exclusive with sp: needs top-k off)
+	dt, hasDev := d.logits.b.(deviceTopKer)
+	dtInto, hasDevInto := d.logits.b.(deviceTopKIntoer)
+	dtP, hasDevP := d.logits.b.(deviceTopPer)
+	fast := (sp != nil && hasDev) || (spP != nil && hasDevP)
 	// prefill the whole prompt in ONE recorded step (§T418) — one dispatch round-trip instead of one
 	// per prompt token. lastOnly: generation samples only the post-prompt row, so the LM head projects
-	// and downloads that single row (not all len(prompt) rows) — a large saving for high-vocab models.
+	// that single row. Device sampling leaves it resident; host sampling downloads exactly that row.
 	var logits []float32
 	var err error
-	if d.eagerGenerateResultControl {
+	if fast && !d.eagerGeneratePrefillReadbackControl {
+		err = d.stepNInto(prompt, 0, true, nil)
+	} else if d.eagerGenerateResultControl {
 		logits, err = d.StepNLast(prompt, 0)
 	} else {
 		logits = make([]float32, d.v)
@@ -3897,17 +3924,15 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 		return nil, err
 	}
 	pos := len(prompt)
-	buf := make([]float64, d.v)
+	var buf []float64
+	if logits != nil {
+		buf = make([]float64, d.v)
+	}
 	// Device-resident top-k sampling fast-path: for a penalty-free TopK sampler AND a logits buffer that
 	// can TopK (CUDA GPU reduction or Metal coherent-UMA selection), skip the whole-vocab host download.
 	// Read the K highest logits at the resident boundary and draw over them, bit-identical to the
 	// full-vocab sampler (see fastTopKSampler/sampleTopKCandidates). Any other sampler/backend takes the
 	// flexible host path.
-	sp, fastK := fastTopKSampler(s, d.v)
-	spP, fastC := fastTopPSampler(s, d.v) // pure-top-p device path (mutually exclusive with sp: needs top-k off)
-	dt, hasDev := d.logits.b.(deviceTopKer)
-	dtP, hasDevP := d.logits.b.(deviceTopPer)
-	fast := (sp != nil && hasDev) || (spP != nil && hasDevP)
 	for range maxNew {
 		if pos >= d.maxLen {
 			break
@@ -3915,11 +3940,21 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 		var next int
 		if fast && logits == nil { // decode step, logits resident on device (first d.v of the buffer)
 			if sp != nil { // top-k (± post-shrink top-p/min-p): draw over the K-candidate superset
-				gi, gv, e := dt.TopKN(d.v, fastK)
-				if e != nil {
-					return nil, e
+				var gi []int32
+				var gv []float32
+				if hasDevInto {
+					gi, gv = d.topKIndices[:fastK], d.topKValues[:fastK]
+					if e := dtInto.TopKNInto(d.v, gi, gv); e != nil {
+						return nil, e
+					}
+				} else {
+					var e error
+					gi, gv, e = dt.TopKN(d.v, fastK)
+					if e != nil {
+						return nil, e
+					}
 				}
-				next = sampleTopKCandidates(sp, gi, gv)
+				next = sampleTopKCandidatesInto(sp, gi, gv, d.topKLogits[:fastK])
 			} else { // pure top-p: resolve the nucleus over the top-C candidates using full-vocab stats
 				maxL, zexp, e2 := dtP.SoftmaxStatsN(d.v, spP.Temperature)
 				if e2 != nil {
@@ -3929,11 +3964,21 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 				// Cheap overflow guard (stats only): top-C mass ≤ C/Zexp; below TopP the nucleus can't fit,
 				// so skip the O(n·C) device TopK and fall straight to the host path (see the graph decoder).
 				if float64(fastC)/zexp >= spP.TopP {
-					gi, gv, e := dtP.TopKN(d.v, fastC)
-					if e != nil {
-						return nil, e
+					var gi []int32
+					var gv []float32
+					if hasDevInto {
+						gi, gv = d.topKIndices[:fastC], d.topKValues[:fastC]
+						if e := dtInto.TopKNInto(d.v, gi, gv); e != nil {
+							return nil, e
+						}
+					} else {
+						var e error
+						gi, gv, e = dtP.TopKN(d.v, fastC)
+						if e != nil {
+							return nil, e
+						}
 					}
-					cl := make([]float64, len(gv))
+					cl := d.topKLogits[:len(gv)]
 					for i, v := range gv {
 						cl[i] = float64(v)
 					}
@@ -3947,6 +3992,9 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 					if e3 != nil {
 						return nil, e3
 					}
+					if buf == nil {
+						buf = make([]float64, d.v)
+					}
 					lf := l.Storage().F32()
 					for i := 0; i < d.v; i++ {
 						buf[i] = float64(lf[i])
@@ -3954,7 +4002,7 @@ func (d *Decoder) Generate(prompt []int, maxNew int, s nlp.TokenSampler) ([]int,
 					next = s.SampleWithHistory(buf, out)
 				}
 			}
-		} else { // first token (prefill host logits) or the full-vocab fallback
+		} else { // host prefill or the full-vocab fallback
 			for i, x := range logits {
 				buf[i] = float64(x)
 			}

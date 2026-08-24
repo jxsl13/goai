@@ -2,7 +2,6 @@ package llamagpu
 
 import (
 	"os"
-	"sort"
 
 	"github.com/jxsl13/goai/nlp"
 	"github.com/jxsl13/goai/tensor"
@@ -17,6 +16,12 @@ type deviceTopKer interface {
 	// TopKN returns the k highest (index, value) pairs over the FIRST n elements (n = vocab; the decode
 	// logits occupy [0,n) of a buffer that may be over-allocated for prefill/batch).
 	TopKN(n, k int) ([]int32, []float32, error)
+}
+
+// deviceTopKIntoer is the allocation-free sibling implemented by current Metal and CUDA buffers.
+// Generate retains fixed-capacity scratch and falls back to deviceTopKer for older implementations.
+type deviceTopKIntoer interface {
+	TopKNInto(n int, indices []int32, values []float32) error
 }
 
 // deviceTopPer extends deviceTopKer with the full-vocab softmax stats and a whole-buffer download needed
@@ -117,19 +122,59 @@ func fastTopPSampler(s nlp.TokenSampler, vocab int) (*nlp.Sampler, int) {
 // scan visits the selected tokens in the same order (and consumes the same rng) as the full-vocab path,
 // then maps the chosen local index back to its vocab id. Exact for the penalty-free TopK case (K⊇top-k).
 func sampleTopKCandidates(sp *nlp.Sampler, gi []int32, gv []float32) int {
+	if len(gi) > 256 {
+		return 0
+	}
+	var vals [256]float64
+	return sampleTopKCandidatesInto(sp, gi, gv, vals[:len(gi)])
+}
+
+func sampleTopKCandidatesInto(sp *nlp.Sampler, gi []int32, gv []float32, vals []float64) int {
 	k := len(gi)
-	order := make([]int, k)
-	for j := range order {
-		order[j] = j
+	if len(gv) != k || len(vals) < k || k > 256 {
+		return 0
 	}
-	sort.Slice(order, func(a, b int) bool { return gi[order[a]] < gi[order[b]] })
-	vals := make([]float64, k)
-	for j, o := range order {
-		vals[j] = float64(gv[o])
+	// TopKN returns value-ranked pairs. The sampler's cumulative draw must instead visit them in
+	// ascending vocabulary order to consume the same RNG interval as full-vocabulary sampling.
+	// An in-place pair heapsort stays allocation-free without imposing insertion sort's O(K²) tail
+	// at the supported K=256 ceiling.
+	sortTopKCandidatesByIndex(gi, gv)
+	for i := range k {
+		vals[i] = float64(gv[i])
 	}
-	local := sp.Sample(vals)
+	local := sp.Sample(vals[:k])
 	if local < 0 || local >= k {
 		local = 0 // degenerate (no positive mass) — the sampler already fell back to argmax on vals
 	}
-	return int(gi[order[local]])
+	return int(gi[local])
+}
+
+func sortTopKCandidatesByIndex(indices []int32, values []float32) {
+	n := len(indices)
+	for root := n/2 - 1; root >= 0; root-- {
+		siftDownTopKCandidates(indices, values, root, n)
+	}
+	for end := n - 1; end > 0; end-- {
+		indices[0], indices[end] = indices[end], indices[0]
+		values[0], values[end] = values[end], values[0]
+		siftDownTopKCandidates(indices, values, 0, end)
+	}
+}
+
+func siftDownTopKCandidates(indices []int32, values []float32, root, end int) {
+	for {
+		child := root*2 + 1
+		if child >= end {
+			return
+		}
+		if child+1 < end && indices[child] < indices[child+1] {
+			child++
+		}
+		if indices[root] >= indices[child] {
+			return
+		}
+		indices[root], indices[child] = indices[child], indices[root]
+		values[root], values[child] = values[child], values[root]
+		root = child
+	}
 }

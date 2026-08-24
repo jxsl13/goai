@@ -48,12 +48,23 @@ func TestMetalResidentTopKN(t *testing.T) {
 				buf.Release()
 				t.Fatalf("n=%d k=%d: %v", n, k, err)
 			}
+			intoIdx := make([]int32, k)
+			intoVal := make([]float32, k)
+			if err := buf.TopKNInto(n, intoIdx, intoVal); err != nil {
+				buf.Release()
+				t.Fatalf("TopKNInto n=%d k=%d: %v", n, k, err)
+			}
 			want := topKReference(x, n, k)
 			for rank := range k {
 				if int(gotIdx[rank]) != want[rank] || gotVal[rank] != x[want[rank]] {
 					buf.Release()
 					t.Fatalf("n=%d k=%d rank=%d: got (%d,%v), want (%d,%v)",
 						n, k, rank, gotIdx[rank], gotVal[rank], want[rank], x[want[rank]])
+				}
+				if intoIdx[rank] != gotIdx[rank] || intoVal[rank] != gotVal[rank] {
+					buf.Release()
+					t.Fatalf("TopKNInto n=%d k=%d rank=%d: got (%d,%v), TopKN (%d,%v)",
+						n, k, rank, intoIdx[rank], intoVal[rank], gotIdx[rank], gotVal[rank])
 				}
 			}
 		}
@@ -85,6 +96,9 @@ func TestMetalResidentTopKNTiesAndGuards(t *testing.T) {
 		if _, _, err := buf.TopKN(tc.n, tc.k); err == nil {
 			t.Fatalf("TopKN(%d,%d) unexpectedly succeeded", tc.n, tc.k)
 		}
+	}
+	if err := buf.TopKNInto(5, make([]int32, 3), make([]float32, 2)); err == nil {
+		t.Fatal("TopKNInto accepted mismatched destination lengths")
 	}
 	buf.Release()
 	if _, _, err := buf.TopKN(1, 1); err == nil {
@@ -131,6 +145,31 @@ func BenchmarkMetalResidentTopKN32K56(b *testing.B) {
 	b.ResetTimer()
 	for range b.N {
 		if _, _, err := buf.TopKN(32000, 56); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkMetalResidentTopKNInto32K56(b *testing.B) {
+	if !metal.Available() {
+		b.Skip("Metal unavailable")
+	}
+	rng := rand.New(rand.NewPCG(32000, 0x5eed))
+	x := make([]float32, 32000)
+	for i := range x {
+		x[i] = float32(rng.NormFloat64())
+	}
+	buf, err := metal.NewDeviceBufferF32(x)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer buf.Release()
+	indices := make([]int32, 56)
+	values := make([]float32, 56)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := buf.TopKNInto(32000, indices, values); err != nil {
 			b.Fatal(err)
 		}
 	}

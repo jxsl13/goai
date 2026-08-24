@@ -20,6 +20,9 @@ schema: v1
 - T-01M0T2W1RQE8NBV10BEFP591PH Implement and validate shared Decoder generation logits reuse: Implemented in 9407cc45. Decoder.Generate now allocates one local Vocab F32 slice for host sampling and reuses StepNLastInto/StepInto; the device stepInto branch is unchanged. M2 Vocab 32000 maxNew 8 measured 4 versus 12 allocs/op and a nominal exact 1048576 allocator-byte saving. Seven alternating 50-pair ratios were 1.010, 1.013, 1.053, 1.011, 1.007, 1.010, and 0.974, median 1.010. Exact tokens, [body truncated at tombstone retention cap]
 - ADR-01M0T2VZJVER0T9BKZZM90YDKD Keep shared-decoder generation reuse local to the host-sampling path: Adopted: caller-owned local reuse is allocation-efficient without adding decoder-global result state. The existing device-resident sampler path remains separate and unchanged; the historical allocation control exists only for same-binary attribution.
 - P-01M0T2VE58FN89Y5S53G5P51MP Reuse one shared-decoder generation logits buffer across host-sampled tokens: Delivered shared-decoder generation result reuse with exact semantic parity and a passing M2 leverage gate. Standing behavior, cache, resident-device, and performance requirements were merged into the llamagpu specification; implementation and benchmarks are ready for PR review.
+- T-01M0T45AR8FEV9FAGQSYKN700B Implement and gate resident first-token sampling: Implemented in a378d91d. The first resident candidate saved about 413 KB but regressed 11 versus 7 allocs/op, so it was not promoted. Added Metal/CUDA TopKNInto, 256-entry decoder scratch, and allocation-free pair heapsort. Final M2 Vocab 32000 prompt 16 maxNew 1 measured resident 517 B/op and 5 allocs/op versus control 409444 B/op and 7 allocs/op. Seven alternating 200-pair ratios were 1.059, 1.0 [body truncated at tombstone retention cap]
+- ADR-01M0T458A9EW2BJ08S8YQMBA1J Expose an internal no-download last-row prefill boundary: Adopted with one measured refinement: resident prefill alone won bytes but lost object count, so the boundary also required caller-buffer TopKNInto and bounded decoder-owned candidate scratch. Allocating TopKN and all public prefill Into behavior remain compatible.
+- P-01M0T44EDPE42TNZEPAR566ZGW Keep shared-decoder prefill logits resident for the first device-sampled token: Delivered zero full-Vocab downloads across eligible shared-decoder prefill and decode, plus allocation-free Metal/CUDA TopKNInto. The frozen M2 end-to-end and primitive leverage gates passed; portable and overflow fallbacks remain intact.
 
 ## METAL-F16-KV-CACHE-001
 The Metal quant decoder SHALL expose NewQuantF16KV with retained K/V storage at exactly 2 bytes per element while NewQuant retains f32 storage and all non-Metal constructors remain unchanged.
@@ -236,7 +239,16 @@ WHEN Decoder.Generate emits N tokens through host sampling, the shared Decoder S
 WHEN optimized Decoder.Generate returns N tokens after a prompt of P tokens, the shared Decoder SHALL retain exactly 1 populated cache row per prompt or generated token including 1 row for the final generated token.
 
 ## DECODER-GENERATE-DEVICE-SAMPLING-001
-WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab decode-logit host downloads after the first sampled token.
+WHEN Decoder.Generate selects the eligible device-resident Top-K or pure Top-P sampling path, the shared Decoder SHALL perform exactly 0 full-Vocab logit host downloads across prefill and every decode step.
 
 ## M2-DECODER-GENERATE-ALLOCATION-PERF-001
 WHEN the generation reuse slice is promoted on M2 at Vocab 32000 and maxNew 8, the shared Decoder benchmark gate SHALL require at least 1048576 fewer B/op, at least 8 fewer allocs/op, and at least 0.97 times historical-control throughput.
+
+## DECODER-GENERATE-RESIDENT-PREFILL-FALLBACK-001
+WHEN Decoder.Generate cannot select an eligible device-resident sampler or a pure Top-P nucleus overflows its device candidates, the shared Decoder SHALL retain the established full-Vocab host sampling path and exact token semantics.
+
+## DECODER-GENERATE-RECURRENT-RESIDENT-PREFILL-001
+WHEN eligible device sampling prefills a P-token recurrent Decoder, the shared Decoder SHALL execute exactly P ordered state updates, retain final logits on device, and perform 0 full-Vocab host downloads.
+
+## M2-DECODER-RESIDENT-FIRST-TOKEN-PERF-001
+WHEN resident first-token sampling is promoted on M2 at Vocab 32000, prompt 16, and maxNew 1, the shared Decoder benchmark gate SHALL require 390000 fewer B/op, 2 fewer allocs/op, and 1.03x median control throughput.

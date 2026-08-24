@@ -72,6 +72,68 @@ func TestDecoderGenerateLogitsReusePreservesTokensAndCache(t *testing.T) {
 	}
 }
 
+func TestDecoderGenerateResidentPrefillPreservesTopKTokensAndCache(t *testing.T) {
+	if !metal.Available() {
+		t.Skip("metal: no gpu")
+	}
+	cfg := nlp.LlamaConfig{
+		Vocab: 2048, Ctx: 64, Dim: 256, Heads: 8, KVHeads: 2, Layers: 4,
+		Hidden: 512, Eps: 1e-5, RopeBase: 10000,
+	}
+	m, err := nlp.NewLlama(cfg, 29)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := newDecoder(m, metalDecoderOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer candidate.Release()
+	control, err := newDecoder(m, metalDecoderOps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Release()
+	control.eagerGeneratePrefillReadbackControl = true
+	newSampler := func() nlp.TokenSampler {
+		return nlp.NewSampler(1234, nlp.WithTemperature(0.8), nlp.WithTopK(40), nlp.WithTopP(0.92))
+	}
+
+	prompt := []int{1, 9, 42, 17}
+	const maxNew = 16
+	got, err := candidate.Generate(prompt, maxNew, newSampler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := control.Generate(prompt, maxNew, newSampler())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("token count = %d, host-prefill control %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("token[%d] = %d, host-prefill control %d", i, got[i], want[i])
+		}
+	}
+
+	probe := (got[len(got)-1] + 11) % cfg.Vocab
+	gotLogits, err := candidate.Step(probe, len(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLogits, err := control.Step(probe, len(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range gotLogits {
+		if math.Float32bits(gotLogits[i]) != math.Float32bits(wantLogits[i]) {
+			t.Fatalf("continuation logit[%d] = %v, host-prefill control %v", i, gotLogits[i], wantLogits[i])
+		}
+	}
+}
+
 func decoderGenerateBenchmark(tb testing.TB) (dec *Decoder, prompt []int) {
 	tb.Helper()
 	if !metal.Available() {
@@ -145,6 +207,76 @@ func BenchmarkDecoderGeneratePairedMetal(b *testing.B) {
 	var candidateDuration, controlDuration time.Duration
 	run := func(control bool, elapsed *time.Duration) {
 		dec.eagerGenerateResultControl = control
+		start := time.Now()
+		out, err := dec.Generate(prompt, maxNew, sampler)
+		*elapsed += time.Since(start)
+		if err != nil {
+			b.Fatal(err)
+		}
+		decoderGenerateTokensSink = out
+	}
+	b.ResetTimer()
+	for i := range b.N {
+		if i&1 == 0 {
+			run(true, &controlDuration)
+			run(false, &candidateDuration)
+		} else {
+			run(false, &candidateDuration)
+			run(true, &controlDuration)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(controlDuration)/float64(candidateDuration), "candidate/control")
+}
+
+// BenchmarkDecoderGenerateResidentPrefillAllocationsMetal isolates the first-token host boundary
+// at TinyLlama's 32k vocabulary. Both arms use the resident device Top-K path after prefill.
+func BenchmarkDecoderGenerateResidentPrefillAllocationsMetal(b *testing.B) {
+	dec, prompt := decoderGenerateBenchmark(b)
+	const maxNew = 1
+	sampler := nlp.NewSampler(31, nlp.WithTemperature(0.8), nlp.WithTopK(40))
+	for _, control := range []bool{false, true} {
+		dec.eagerGeneratePrefillReadbackControl = control
+		if _, err := dec.Generate(prompt, maxNew, sampler); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name    string
+		control bool
+	}{
+		{name: "resident"},
+		{name: "host-prefill-control", control: true},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			dec.eagerGeneratePrefillReadbackControl = tc.control
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				out, err := dec.Generate(prompt, maxNew, sampler)
+				if err != nil {
+					b.Fatal(err)
+				}
+				decoderGenerateTokensSink = out
+			}
+		})
+	}
+}
+
+// BenchmarkDecoderGenerateResidentPrefillPairedMetal measures maxNew=1 latency in alternating order.
+func BenchmarkDecoderGenerateResidentPrefillPairedMetal(b *testing.B) {
+	dec, prompt := decoderGenerateBenchmark(b)
+	const maxNew = 1
+	sampler := nlp.NewSampler(37, nlp.WithTemperature(0.8), nlp.WithTopK(40))
+	for _, control := range []bool{false, true} {
+		dec.eagerGeneratePrefillReadbackControl = control
+		if _, err := dec.Generate(prompt, maxNew, sampler); err != nil {
+			b.Fatal(err)
+		}
+	}
+	var candidateDuration, controlDuration time.Duration
+	run := func(control bool, elapsed *time.Duration) {
+		dec.eagerGeneratePrefillReadbackControl = control
 		start := time.Now()
 		out, err := dec.Generate(prompt, maxNew, sampler)
 		*elapsed += time.Since(start)
