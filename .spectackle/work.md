@@ -4028,6 +4028,21 @@ kind: proposal
 state: draft
 created: 2026-08-24
 grilled: 2026-08-24 open=1
+needs: ADR-01M0SKZBF3F91TA6ME8FG200DX
 targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/bias_gelu_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/gpt.go, llamagpu/gpt_bias_gelu_metal_test.go, llamagpu/gpt2_scale_test.go
 
 Eliminate a capacity-sized activation defect in GPT decode and prefill. GPTDecoder allocates hid for Ctx times FFN, but Step and gptStepN currently AddBias over rows times FFN and then call unbounded Recorder.Unary over all Ctx times FFN values. At GPT-2-small single-token geometry this evaluates exact GELU over 3,145,728 values instead of 3,072, a 1,024-fold logical-work amplification repeated once per layer. Add an optional recorder BiasGELU(x,b,o,rows,n) capability whose Metal implementation performs the existing exact Abramowitz-Stegun erf GELU after broadcast bias in one dispatch bounded to rows times n. Metal GPT uses it by default; a constructor-time control switch retains the exact established AddBias plus unbounded Unary chain in the same binary. Preserve portable/CUDA/Vulkan behavior. Validate fused-versus-split prefix numerics, untouched tail storage, one-versus-two dispatch structure, public Step/StepN and 256-token greedy parity. Promote on M2 Pro GPT-2-small only after 21 order-alternated single-binary Step pairs reach at least 1.03 times paired median with 21 of 21 non-regressing pairs and no allocation increase; also report prompt-16/64/256 prefill effects.
+
+## ADR-01M0SKZBF3F91TA6ME8FG200DX Which boundary should remove GPT hidden-buffer capacity amplification?
+kind: adr
+state: submitted
+created: 2026-08-24
+context: GPT writes only rows times FFN values but unbounded Unary consumes context times FFN storage; the solution must preserve exact GELU and portable fallback while reducing M2 dispatch work.
+status: proposed
+
+kind: radio
+option: One bounded BiasGELU recorder dispatch
+option: Add UnaryN after the existing AddBias dispatch
+option: Resize hidden scratch for every Step shape
+option: Retain the capacity-wide unary control
+blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
