@@ -136,3 +136,6 @@ WHEN StepN or StepNLast requests more activation rows than the resident workspac
 
 ## DECODER-FULL-WORKSPACE-LIFETIME-001
 WHEN grouped workspace growth fails or the Decoder is released, the shared Decoder SHALL release each prior or partial workspace buffer exactly once and retain 0 stale grouped-workspace references.
+
+## DECODER-HIDDEN-WORKSPACE-READBACK-001
+WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exactly 1 or len(tokens) final hidden rows from the corresponding selected activation workspace.
