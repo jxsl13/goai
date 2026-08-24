@@ -4025,7 +4025,7 @@ choice: One cached causal MPSGraph for the complete objective
 
 ## R-01M0S8MAAVFDSSRJKQKZ2AYBSV Attribute the M2 ViT optimizer materialization boundary
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 targets: go:vision.ViT.LossAndGrad, go:metal.Backend.ViTLossAndGradF32, backend/attrs.go, backend/metal/metal_bridge.m, backend/metal/vit_adamw_attribution_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py
 
