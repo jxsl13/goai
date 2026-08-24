@@ -363,6 +363,10 @@ type backendOps struct {
 	// eagerDecoderResidualScratch retains the historical Decoder ao/mo buffers for same-binary
 	// benchmarks. Production F32 pre-norm paths omit buffers their recordAdd epilogues ignore.
 	eagerDecoderResidualScratch bool
+	// eagerFullDecoderScratch retains the historical max-context shared-Decoder activation
+	// workspace for same-binary benchmarks. Production constructors retain one decode row and
+	// lazily materialize one grouped high-water workspace for StepN/StepNLast.
+	eagerFullDecoderScratch bool
 }
 
 // moeFFN is one sparse-MoE expert: a SwiGLU FFN (gate/up/down) with its own weights.
@@ -414,6 +418,16 @@ type block struct {
 	rwPrevTM, rwPrevCM, rwAA, rwBB, rwPP buffer // per-block RWKV recurrent state [Dim] (token-shift + WKV aa/bb/pp)
 }
 
+// decoderScratch is one complete generation of transient activation storage. Keeping ownership at
+// generation granularity makes growth atomic: a partial allocation can be released without exposing
+// a decoder whose fields mix old and new capacities.
+type decoderScratch struct {
+	rows                                                   int
+	dx, xn, xn2, q, k, v_, qkv, attn, ao, gate, up, mo, gu *bufSlot
+	moeGate, moeW, moeCol                                  *bufSlot
+	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn        *bufSlot
+}
+
 // Decoder holds a Llama's weights + KV cache as device-resident buffers and runs one batched decode
 // step per token. Not safe for concurrent use — one Decoder per goroutine. Release when done.
 type Decoder struct {
@@ -459,6 +473,8 @@ type Decoder struct {
 	dx, xn, xn2, q, k, v_, attn, ao, gate, up, mo, logits          *bufSlot
 	logitsRows                                                     int
 	fullLogits                                                     growBuffer
+	scratchRows                                                    int
+	fullScratch                                                    decoderScratch
 	gu                                                             *bufSlot       // fused gate|up GEMV output [·, 2·hidden] (nil unless ops.fusedGateUp)
 	moeGate, moeW, moeCol                                          *bufSlot       // sparse-MoE scratch: router logits [·,E], routing weights [·,E], one weight column [·]
 	mlaCQ, mlaQ, mlaComp, mlaLatent, mlaKV, mlaAttn, mlaInv        *bufSlot       // MLA scratch: compressed query, fused Q, kv_a out, normed kv latent, kv_b out, attn out, QKRope freqs
@@ -1244,52 +1260,150 @@ func (d *Decoder) ropeQK(r recorder, qkv, inv buffer, seq, stride, pos int) erro
 	return r.RoPEPair(qkv, inv, seq, stride, d.h, 0, d.kvH, d.d, d.dk, d.half, pos, d.posDiv)
 }
 
-// allocResidualScratch allocates projection-output storage only for paths that can read it. F32
-// recordAdd writes directly into dx and ignores its scratch argument, so ordinary pre-norm dense
-// decoders keep non-nil placeholder slots without retaining two max-context device buffers.
-func (d *Decoder) allocResidualScratch(mk func(data []float32) *bufSlot, rows int) {
-	d.ao, d.mo = &bufSlot{}, &bufSlot{}
-	required := d.ops.eagerDecoderResidualScratch || len(d.qweights) > 0 || d.postNorm || d.sandwich
-	if required {
-		d.ao = mk(make([]float32, rows*d.d))
-		d.mo = mk(make([]float32, rows*d.d))
-		return
+// release frees one lazily owned activation generation. Resident scratch is tracked in Decoder.all
+// and therefore never released through this method.
+func (s *decoderScratch) release() {
+	for _, slot := range []*bufSlot{
+		s.dx, s.xn, s.xn2, s.q, s.k, s.v_, s.qkv, s.attn, s.ao, s.gate, s.up, s.mo, s.gu,
+		s.moeGate, s.moeW, s.moeCol,
+		s.mlaCQ, s.mlaQ, s.mlaComp, s.mlaLatent, s.mlaKV, s.mlaAttn,
+	} {
+		if slot != nil && slot.b != nil {
+			slot.b.Release()
+		}
 	}
-	if d.moe {
-		d.mo = mk(make([]float32, rows*d.d))
+	*s = decoderScratch{}
+}
+
+func (d *Decoder) residentScratch() decoderScratch {
+	return decoderScratch{
+		rows: d.scratchRows,
+		dx:   d.dx, xn: d.xn, xn2: d.xn2,
+		q: d.q, k: d.k, v_: d.v_, qkv: d.qkv, attn: d.attn,
+		ao: d.ao, gate: d.gate, up: d.up, mo: d.mo, gu: d.gu,
+		moeGate: d.moeGate, moeW: d.moeW, moeCol: d.moeCol,
+		mlaCQ: d.mlaCQ, mlaQ: d.mlaQ, mlaComp: d.mlaComp,
+		mlaLatent: d.mlaLatent, mlaKV: d.mlaKV, mlaAttn: d.mlaAttn,
 	}
 }
 
+// selectScratch installs s and returns the previously selected generation. StepN uses this as a
+// scoped swap so every existing recording helper continues to read the Decoder fields directly.
+func (d *Decoder) selectScratch(s decoderScratch) decoderScratch {
+	old := d.residentScratch()
+	d.dx, d.xn, d.xn2 = s.dx, s.xn, s.xn2
+	d.q, d.k, d.v_, d.qkv, d.attn = s.q, s.k, s.v_, s.qkv, s.attn
+	d.ao, d.gate, d.up, d.mo, d.gu = s.ao, s.gate, s.up, s.mo, s.gu
+	d.moeGate, d.moeW, d.moeCol = s.moeGate, s.moeW, s.moeCol
+	d.mlaCQ, d.mlaQ, d.mlaComp = s.mlaCQ, s.mlaQ, s.mlaComp
+	d.mlaLatent, d.mlaKV, d.mlaAttn = s.mlaLatent, s.mlaKV, s.mlaAttn
+	return old
+}
+
+// residualScratch allocates projection-output storage only for paths that can read it. F32
+// recordAdd writes directly into dx and ignores its scratch argument, so ordinary pre-norm dense
+// decoders keep non-nil placeholder slots without retaining two device buffers.
+func (d *Decoder) residualScratch(mk func(data []float32) *bufSlot, rows int) (ao, mo *bufSlot) {
+	ao, mo = &bufSlot{}, &bufSlot{}
+	required := d.ops.eagerDecoderResidualScratch || len(d.qweights) > 0 || d.postNorm || d.sandwich
+	if required {
+		return mk(make([]float32, rows*d.d)), mk(make([]float32, rows*d.d))
+	}
+	if d.moe {
+		mo = mk(make([]float32, rows*d.d))
+	}
+	return ao, mo
+}
+
+func (d *Decoder) allocResidualScratch(mk func(data []float32) *bufSlot, rows int) {
+	d.ao, d.mo = d.residualScratch(mk, rows)
+}
+
+func (d *Decoder) makeScratch(mk func(data []float32) *bufSlot, rows int) decoderScratch {
+	s := decoderScratch{rows: rows}
+	s.dx = mk(make([]float32, rows*d.d))
+	s.xn = mk(make([]float32, rows*d.d))
+	s.xn2 = mk(make([]float32, rows*d.d))
+	s.q = mk(make([]float32, rows*d.qDim))
+	s.k = mk(make([]float32, rows*d.kvDim))
+	s.v_ = mk(make([]float32, rows*d.kvDim))
+	s.qkv = mk(make([]float32, rows*(d.qDim+2*d.kvDim)))
+	s.attn = mk(make([]float32, rows*d.qDim))
+	s.ao, s.mo = d.residualScratch(mk, rows)
+	s.gate = mk(make([]float32, rows*d.hidden))
+	s.up = mk(make([]float32, rows*d.hidden))
+	if d.ops.fusedGateUp {
+		s.gu = mk(make([]float32, rows*2*d.hidden))
+	}
+	if d.moe {
+		s.moeGate = mk(make([]float32, rows*d.nExperts))
+		s.moeW = mk(make([]float32, rows*d.nExperts))
+		s.moeCol = mk(make([]float32, rows))
+	}
+	if d.mla {
+		s.mlaCQ = mk(make([]float32, rows*d.qLoRA))
+		s.mlaQ = mk(make([]float32, rows*d.h*d.qkHead))
+		s.mlaComp = mk(make([]float32, rows*(d.kvLoRA+d.qkRope)))
+		s.mlaLatent = mk(make([]float32, rows*d.kvLoRA))
+		s.mlaKV = mk(make([]float32, rows*d.h*(d.qkNope+d.vHead)))
+		s.mlaAttn = mk(make([]float32, rows*d.h*d.vHead))
+	}
+	return s
+}
+
+func (d *Decoder) newScratch(rows int) (decoderScratch, error) {
+	var err error
+	mk := func(data []float32) *bufSlot {
+		if err != nil {
+			return &bufSlot{}
+		}
+		var b buffer
+		b, err = d.ops.newBuffer(data)
+		if err != nil {
+			return &bufSlot{}
+		}
+		return &bufSlot{b: b}
+	}
+	s := d.makeScratch(mk, rows)
+	if err != nil {
+		s.release()
+		return decoderScratch{}, err
+	}
+	return s, nil
+}
+
+func (d *Decoder) scratchForRows(rows int) (decoderScratch, error) {
+	if rows <= d.scratchRows {
+		return d.residentScratch(), nil
+	}
+	if d.fullScratch.rows >= rows {
+		return d.fullScratch, nil
+	}
+	d.fullScratch.release()
+	s, err := d.newScratch(rows)
+	if err != nil {
+		return decoderScratch{}, err
+	}
+	d.fullScratch = s
+	return s, nil
+}
+
 // allocScratch uploads the RoPE frequencies and allocates the per-step scratch buffers. They are
-// sized for up to maxLen rows so StepN can process a whole prompt (or a speculative draft window)
-// in one recorded step (§T418) — a few MB at typical configs.
+// one-row resident for decode. StepN lazily selects a grouped high-water generation sized to the
+// requested prompt/speculative window (§T418).
 func (d *Decoder) allocScratch(mk func(data []float32) *bufSlot) {
 	c := d.maxLen
 	d.dinv = mk(d.invHost)
-	d.dx = mk(make([]float32, c*d.d))
-	d.xn = mk(make([]float32, c*d.d))
-	d.xn2 = mk(make([]float32, c*d.d))
-	d.q = mk(make([]float32, c*d.qDim))
-	d.k = mk(make([]float32, c*d.kvDim))
-	d.v_ = mk(make([]float32, c*d.kvDim))
-	d.qkv = mk(make([]float32, c*(d.qDim+2*d.kvDim)))
-	d.attn = mk(make([]float32, c*d.qDim))
-	d.allocResidualScratch(mk, c)
-	d.gate = mk(make([]float32, c*d.hidden))
-	d.up = mk(make([]float32, c*d.hidden))
-	if d.ops.fusedGateUp {
-		d.gu = mk(make([]float32, c*2*d.hidden)) // fused gate|up GEMV output for the SwiGLUHalves path
+	d.scratchRows = 1
+	if d.ops.eagerFullDecoderScratch {
+		d.scratchRows = c
 	}
+	d.selectScratch(d.makeScratch(mk, d.scratchRows))
 	d.logitsRows = 1
 	if d.ops.eagerFullLogits {
 		d.logitsRows = c
 	}
 	d.logits = mk(make([]float32, d.logitsRows*d.v))
-	if d.moe {
-		d.moeGate = mk(make([]float32, c*d.nExperts))
-		d.moeW = mk(make([]float32, c*d.nExperts))
-		d.moeCol = mk(make([]float32, c))
-	}
 }
 
 // mkBuf returns a bufSlot allocator that records the first error and tracks buffers for Release.
@@ -1912,7 +2026,6 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 		return nil, fmt.Errorf("llamagpu(%s): DeepSeek-V2 has no blocks", ops.name)
 	}
 	qkHead := cfg.QKNope + cfg.QKRope
-	kvHead := cfg.QKNope + cfg.VHead
 	// hidden must cover the widest SwiGLU across every block (dense, routed-expert, shared) since the
 	// gate/up scratch is shared; nExperts/topK/routedScale come from the first MoE block if any.
 	hidden, nExperts, topK, hasMoE := 0, 0, 0, false
@@ -1977,12 +2090,6 @@ func newDeepSeekV2Decoder(m *nlp.DeepSeekV2, ops backendOps) (*Decoder, error) {
 		mlaInv[i] = float32(invF64[i])
 	}
 	d.mlaInv = mk(mlaInv)
-	d.mlaCQ = mk(make([]float32, c*cfg.QLoraRank))
-	d.mlaQ = mk(make([]float32, c*cfg.Heads*qkHead))
-	d.mlaComp = mk(make([]float32, c*(cfg.KVLoraRank+cfg.QKRope)))
-	d.mlaLatent = mk(make([]float32, c*cfg.KVLoraRank))
-	d.mlaKV = mk(make([]float32, c*cfg.Heads*kvHead))
-	d.mlaAttn = mk(make([]float32, c*cfg.Heads*cfg.VHead))
 
 	//perfscan:ignore PS3032 newDeepSeekV2Decoder block-upload, one-time model build
 	for _, b := range m.Blocks {
@@ -3574,6 +3681,12 @@ func (d *Decoder) stepN(tokens []int, pos int, lastOnly bool) ([]float32, error)
 	// a batched step rewrites the cache and scratch — any single-step encode pre-staged for
 	// the old position is now invalid (§T614).
 	d.dropPending()
+	scratch, err := d.scratchForRows(k)
+	if err != nil {
+		return nil, err
+	}
+	resident := d.selectScratch(scratch)
+	defer d.selectScratch(resident)
 	host := make([]float32, k*d.d)
 	for i, tok := range tokens {
 		if tok < 0 || tok >= d.v {
@@ -3813,6 +3926,7 @@ func (d *Decoder) Ctx() int { return d.maxLen }
 func (d *Decoder) Release() {
 	d.dropPending()
 	d.fullLogits.release()
+	d.fullScratch.release()
 	for _, b := range d.all {
 		if b != nil {
 			b.Release()
