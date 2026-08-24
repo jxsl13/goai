@@ -1234,3 +1234,4 @@
 {"t":"2026-08-24T20:13:20Z","eid":"65b84efc95f05cd0","ag":"ag-0be0","ev":"gitskip","note":"edge commit skipped: index contention after retries"}
 {"t":"2026-08-24T21:22:55Z","eid":"09b6b4dc238fbf48","ag":"ag-1239","ev":"grill","id":"T-01KYM5BJANE63RPY53Z7QDFSRP","gr":"2026-08-24 open=0","hash":"31d6a9e36ec7d18632575bb3f8e9e86e7caddc2b0bf38b3c83531a6dd13c84ea"}
 {"t":"2026-08-24T21:23:31Z","eid":"fcf6967f6e25a1ed","ag":"ag-3c77","ev":"move","id":"T-01KYM5BJANE63RPY53Z7QDFSRP","fr":"draft","to":"approved","note":"Approved under the standing M2-first directive because this bit-exact reference oracle directly hardens the Metal FlashAttention parity authority; grill reports zero open concerns."}
+{"t":"2026-08-24T21:23:57Z","eid":"d0da13feddc1b9e5","ag":"codex-flashoracle-20260824","ev":"move","id":"T-01KYM5BJANE63RPY53Z7QDFSRP","fr":"approved","to":"active"}

@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/ref -- lock the blocked FlashAttention schedule exactly (T-01KYM5BJANE63, 2026-08-24)
+
+Reference `OpFlashAttn` now has a bit-exact independent oracle that reproduces
+its key-block order, ascending QK and P*V reductions, running-max rescaling,
+and single final normalization. Six F64/F32 cases cover causal and non-causal
+attention, MQA/GQA, `dk=1`, and default, unit, non-dividing, and oversized
+blocks. This prevents the Metal FlashAttention parity gate from inheriting an
+unnoticed drift in its reference authority.
+
+Three schedule-defect probes change QK indexing, the running max, and old-block
+rescaling; all produce a bit difference. A temporary production QK-index
+mutation also makes every applicable oracle case fail, while the `dk=1`
+control correctly remains unchanged. This is test-only hardening with no
+runtime change or performance claim.
+
 ### backend/ref -- interchange exact MLA RoPE score accumulation (T-01KYMDP9EMFTB, 2026-08-24)
 
 Reference `OpMLA` now transposes the shared RoPE key once and updates

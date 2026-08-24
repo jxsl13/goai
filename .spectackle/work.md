@@ -517,7 +517,7 @@ NOT MEASURED: no benchmark was run. Declining on structure was sufficient here â
 
 ## T-01KYM5BJANE63RPY53Z7QDFSRP Bit-exact oracle for ref/flashattn â€” the Metal parity test depends on it
 kind: task
-state: approved
+state: active
 created: 2026-07-28
 grilled: 2026-08-24 open=0
 
