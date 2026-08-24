@@ -4023,15 +4023,6 @@ option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
 
-## R-01M0S8MAAVFDSSRJKQKZ2AYBSV Attribute the M2 ViT optimizer materialization boundary
-kind: research
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:vision.ViT.LossAndGrad, go:metal.Backend.ViTLossAndGradF32, backend/attrs.go, backend/metal/metal_bridge.m, backend/metal/vit_adamw_attribution_test.go, internal/benchcompare/vision_train_test.go, testdata/bench_vision_torch.py
-
-Measure the fixed F32 B8 S65 D128 H4 F512 Depth4 C10 ViT objective plus incumbent AdamW update as separate upload, graph execution, gradient materialization, host optimizer, and synchronization phases. Compare a resident objective-plus-update candidate only if the complete step preserves exact declared semantics and clears a predeclared paired M2 gate. Account for prior rejections: retained activations lost to materialization, constant-dispatch restructuring failed repeatability, and host-only tiny loss was rejected after full-objective evidence. Reuse the merged GPT resident-state semantics only where the ViT parameter order and graph geometry prove compatible.
-
 ## ADR-01M0S8XZMEFC98ZF81GACDFEGE Which boundary should generalize resident AdamW across GPT and ViT?
 kind: adr
 state: active
