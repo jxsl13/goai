@@ -616,7 +616,7 @@ WHEN BenchmarkGPTDecode begins a CPU or Metal calibration, the benchmark harness
 
 Rationale: Go benchmark calibration may invoke the sub-benchmark repeatedly; closure-owned cache state made the local position stale and invalidated the measuring instrument.
 
-## METAL-BIAS-GELU-BOUNDS-002
+## METAL-BIAS-GELU-BOUNDS-002 {applies: go:metal.Recorder.BiasGELU,go:metal_test.TestRecorderBiasGELUMatchesSplitPrefixAndPreservesTail}
 WHEN BiasGELU receives valid F32 buffers and positive rows and columns, the Metal recorder SHALL dispatch the established exact erf-form bias plus GELU over exactly rows times columns elements and leave every output element beyond that active prefix unchanged.
 
 Rationale: Prevent capacity-sized scratch buffers from amplifying elementwise work or mutating inactive storage.
