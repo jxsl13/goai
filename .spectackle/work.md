@@ -4067,17 +4067,6 @@ targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/me
 
 Research: R-01M0S8MAAVFDSSRJKQKZ2AYBSV. Architecture decision: ADR-01M0S8XZMEFC98ZF81GACDFEGE. Introduce a fixed-batch F32 ViT AdamW session. Preserve the portable LossAndGrad plus nn.AdamF32 path on unsupported backends. On Metal, upload all 56 parameters once, retain parameter, gradient, and F32 moment buffers, reuse the existing complete ViT objective graph, encode the objective plus all in-place AdamW updates in one command buffer per Step, return only scalar loss, and materialize parameters only on Sync or Close. Per ADR-01M0S8XZMEFC98ZF81GACDFEGE, generalize backend optimizer attrs and the session protocol through source-compatible aliases, share the native AdamW pipeline and update encoder, and keep model-specific public facades and objective graphs. Correctness gate: three-step loss and synchronized-parameter parity versus portable F32 AdamW, checkpoint Sync, stale host parameters before Sync, input immutability, idempotent Close, and use-after-close rejection. Performance gate: three order-alternated count-seven same-binary M2 campaigns at F32 B8 S65 D128 H4 F512 Depth4 C10 must reach at least 1.20x aggregate paired median, at least 1.10x in every aligned pair versus exact LossAndGrad plus host AdamF32, and candidate median below the measured PyTorch MPS full-step median of 9.138 ms. Reuse perfscan issue 879 for the already-reported generalized cross-step materialization pattern; file a new issue only for an additional distinct generalizable detector finding.
 
-## T-01M0S98NTHF7E9WQ6WQVBE29TV Implement the resident M2 ViT AdamW session
-kind: task
-state: active
-created: 2026-08-24
-parent: P-01M0S8XJF9F5HTNGTQXZ3R9YMZ
-refs: R-01M0S8MAAVFDSSRJKQKZ2AYBSV, ADR-01M0S8XZMEFC98ZF81GACDFEGE
-grilled: 2026-08-24 open=11
-targets: backend/attrs.go, backend/example_gpt_adamw_session_test.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_adamw_session_test.go, backend/metal/vit_adamw_session_test.go, vision/vit.go, vision/vit_adamw_session_test.go, vision/example_vit_adamw_session_test.go
-
-Implement the fixed-batch public ViT AdamW session and portable F32 fallback. Add source-compatible generic backend AdamW attrs and session protocol aliases. Reuse the existing complete ViT objective graph and introduce native ViT session construction, Step, Sync, and Close. Refactor the GPT-named Metal optimizer kernel into one shared F32 AdamW pipeline and update encoder while preserving GPT behavior. Tests must directly invoke the optional capability, compare three losses and every synchronized parameter with the portable control, prove host parameters remain stale until Sync, verify checkpoint continuation, input immutability, invalid geometry and configuration rejection, idempotent Close, and use-after-close errors. Verify by compiling affected test binaries with go test -c and executing their test filters through binary -test.run; run go test -short ./... before completion.
-
 ## T-01M0S98NX1F9ST89XX9G29TP8J Validate and publish the M2 ViT AdamW leadership cell
 kind: task
 state: active
