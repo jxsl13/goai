@@ -152,7 +152,7 @@ choice: Allocate ao/mo only for reachable scratch consumers
 
 ## T-01M0SQP0Y0EX9RTVSNMYZM1CB9 Implement and gate path-sensitive residual scratch allocation
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
 refs: ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF
