@@ -73,7 +73,7 @@ WHEN OpPreNormTransformerStack or OpPreNormTransformerStackBackward executes, th
 WHEN the stack is ineligible for a fused backend operation, the pre-norm transformer-stack helper SHALL execute the existing complete-block helper exactly Depth times with 0 implicit backend migrations.
 
 ## LAYERNORM-SEQUENCE-CLASSIFIER-SEMANTICS-001-001
-WHEN OpLayerNormSequenceClassifier or its backward operation executes, the backend SHALL preserve biased last-axis LayerNorm with runtime epsilon over every packed row, select row b times rows divided by Batch for every batch index, apply one biased linear projection, and return gradients for exactly all 5 differentiable inputs.
+WHEN OpLayerNormSequenceClassifier or its backward operation executes, the backend SHALL produce logits equivalent to biased LayerNorm of every row followed by 1 first-row selection per sequence and a biased linear projection, with exactly 5 gradients.
 
 ## LAYERNORM-SEQUENCE-CLASSIFIER-FALLBACK-001-001
 WHEN the fused backend operation is unavailable for a valid layer-normalized sequence classifier request, the layer-normalized sequence classifier helper SHALL execute the existing LayerNorm, Batch first-row slices, 1 concat, and 1 linear projection with 0 implicit backend migrations.
