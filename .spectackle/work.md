@@ -517,8 +517,9 @@ NOT MEASURED: no benchmark was run. Declining on structure was sufficient here â
 
 ## T-01KYM5BJANE63RPY53Z7QDFSRP Bit-exact oracle for ref/flashattn â€” the Metal parity test depends on it
 kind: task
-state: draft
+state: approved
 created: 2026-07-28
+grilled: 2026-08-24 open=0
 
 Write a bit-exact oracle for backend/ref/flashattn.go. It is the top item of the ULP audit (R-01KYM4HGM1EEY) and the risk compounds in a way the audit did not yet capture.
 
