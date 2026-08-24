@@ -563,3 +563,6 @@ WHEN a recording-mode contiguous offset-zero F32 pre-norm transformer stack forw
 
 ## METAL-PRENORM-STACK-SAVED-BACKWARD-001-001
 WHEN stack backward finds a matching unconsumed saved entry, the Metal saved-activation route SHALL consume it exactly once and submit 1 cached backward graph that recomputes only normalization and activation elementwise state while returning exactly 1 plus 12 times Depth gradients.
+
+## METAL-PRENORM-STACK-SAVED-FALLBACK-001-001
+WHEN saved state is disabled, missing, evicted, replayed, oversized, or requested outside recording mode, the Metal transformer-stack implementation SHALL execute the incumbent recomputing graph with 0 stale-state reads and unchanged eager-inference behavior.
