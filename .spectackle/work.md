@@ -4009,7 +4009,7 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 
 ## R-01M0RRGS0YEQ48CY5QY9NC7T9F Attribute the post-stack ViT input boundary on M2
 kind: research
-state: draft
+state: active
 created: 2026-08-24
 
 Measure the current M2 ViT B8/C3/HW32/P4/D128/depth4/H4 training step after the merged transformer-stack and row-local classifier gains. Attribute patchification, patch projection, class/position assembly, stack, classifier, loss, and backward costs with same-binary interleaving. A fused input operation is only justified if this boundary is now material end-to-end; do not revive the rejected constant-dispatch batch rewrite without new evidence.
