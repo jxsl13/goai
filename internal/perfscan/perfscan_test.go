@@ -14,15 +14,13 @@ import (
 )
 
 // scanSrc parses one in-memory source file and returns the findings.
-// testSets loads the shipped GoAI vocabulary (perfscan.json, next to this test)
-// and compiles it, so the domain-check fixtures run with AtF64/flatF64/Numel/… and
-// the tests double as a validation that the shipped config parses and activates the
-// checks. The engine itself is repo-agnostic; this is the config a project supplies.
+// testSets loads the repository-root GoAI vocabulary and compiles it, so the
+// compatibility fixtures exercise the same names as the canonical external scanner.
 func testSets(t *testing.T) nameSets {
 	t.Helper()
-	c, err := loadConfig("perfscan.json")
+	c, err := loadConfig("../../perfscan.yaml")
 	if err != nil {
-		t.Fatalf("load perfscan.json: %v", err)
+		t.Fatalf("load ../../perfscan.yaml: %v", err)
 	}
 	return c.compile()
 }

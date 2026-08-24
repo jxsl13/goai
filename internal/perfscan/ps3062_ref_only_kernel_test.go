@@ -23,7 +23,7 @@ func refOnlyFindingsIn(t *testing.T, refSrc, cpuSrc string) []finding {
 	}
 	ns := testSets(t)
 	if ns.refBackendPkg == "" || len(ns.optBackendPkgs) == 0 || len(ns.kernelRegisterFuncs) == 0 {
-		t.Fatal("perfscan.json must name the reference and optimized backend packages and the" +
+		t.Fatal("perfscan.yaml must name the reference and optimized backend packages and the" +
 			" kernel-registration function, or this check is silent for a reason unrelated to" +
 			" the fixture")
 	}

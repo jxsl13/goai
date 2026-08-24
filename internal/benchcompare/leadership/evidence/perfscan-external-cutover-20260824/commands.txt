@@ -1,0 +1,21 @@
+# Resolve current module versions without the Go proxy.
+env GOPROXY=direct go list -m -json github.com/jxsl13/perfscan@latest
+env GOPROXY=direct go list -m -json github.com/jxsl13/perfscan/perfscan@latest
+
+# Compare registries.
+make perfscan-registry-check
+
+# Canonical external whole-tree scan and retained compatibility scan.
+make perfscan
+make perfscan-compat
+
+# Integration and retained fixture gates.
+make perfscan-check
+bash -n scripts/perfscan.sh scripts/perfscan-compat.sh scripts/perfscan-registry-diff.sh
+go test ./internal/perfscan ./internal/cichange
+
+# Three warm runtime samples for each lane.
+for i in 1 2 3; do /usr/bin/time -p scripts/perfscan.sh; done
+for i in 1 2 3; do /usr/bin/time -p scripts/perfscan-compat.sh; done
+for i in 1 2 3; do /usr/bin/time -p scripts/perfscan-registry-diff.sh; done
+for i in 1 2 3; do /usr/bin/time -p sh -c 'env CGO_ENABLED=0 go run ./internal/perfscan -config perfscan.yaml ./... >/dev/null'; done

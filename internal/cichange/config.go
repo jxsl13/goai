@@ -50,12 +50,11 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	// into every non-empty selection to close that seam (a pure-docs diff still stays
 	// zero-runner, §C16 EXC2). A package may only be listed here once it is GREEN on
 	// the committed tree, else it fails CI on the FIRST push.
-	//   - internal/perfscan (T920 per-element hot-loop finder) is GREEN — its detector
-	//     tests + TestScanWholeModule (parses every first-party .go, asserts the scan
-	//     completes and still finds candidates) pass on the committed tree — so it is
-	//     enabled. It gates the TOOL, not the codebase: the scan stays ADVISORY (no
-	//     candidate-count assertion), so a legitimately cold per-element loop never
-	//     reddens CI, but a detector that panics/regresses on real source does.
+	//   - perfscan is no longer an always-run Go package. CI owns an explicit
+	//     `perfscan / ubuntu` lane that invokes the pinned external scanner over ./...
+	//     with GOPROXY=direct, then runs the internal-only compatibility selector.
+	//     Keeping it here as well would duplicate the legacy fixture package in every
+	//     OS lane without exercising the canonical external command.
 	//   - internal/apicheck (§V19 doc/example gate) is now GREEN — the per-package
 	//     documentation pass added the missing godocs/Examples and justified-allowlisted
 	//     the internal transformer blocks/caches — so it is enabled and gates every push
@@ -71,7 +70,7 @@ func defaultRules() (ignore, ignoreRe, fullRe, pkgRe, alwaysRun []string) {
 	// Spec integrity itself is no longer gated here: the spec lives in the
 	// server-owned .spectackle/ bundle, which is linted by `spectackle lint` and
 	// verified by `spectackle check` rather than by a Go meta-test.
-	alwaysRun = []string{"internal/perfscan", "internal/apicheck", "internal/mdlint"}
+	alwaysRun = []string{"internal/apicheck", "internal/mdlint"}
 	return ignore, ignoreRe, fullRe, pkgRe, alwaysRun
 }
 

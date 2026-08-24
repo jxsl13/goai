@@ -3008,7 +3008,7 @@ func main() {
 	list := flag.Bool("list", false, "list the checks (ID, category, title, fixable) and exit")
 	doFix := flag.Bool("fix", false, "apply the safe mechanical fixes in place (fixable checks only; see -list)")
 	jsonOut := flag.Bool("json", false, "emit findings and fixes as JSON (for editor / tool integration)")
-	configPath := flag.String("config", "", "path to a JSON config naming a project's element accessors/allocators/etc. that drive the domain checks (PS1001/PS1002/PS2001/PS4002); empty = discover perfscan.json/.perfscan.json upward, else stdlib-only")
+	configPath := flag.String("config", "", "path to a JSON-compatible config naming a project's element accessors/allocators/etc. that drive the domain checks (PS1001/PS1002/PS2001/PS4002); empty = discover perfscan.json/.perfscan.json upward, else stdlib-only")
 	flag.Parse()
 
 	// Load the project vocabulary that activates the domain checks. An explicit
@@ -3075,10 +3075,9 @@ func main() {
 	// configured, PS1001/PS1002 can never report, and the scan prints a clean
 	// "no candidates" that reads as "no instances". That false assurance cost a
 	// multi-round investigation into a rule that was not broken — it was simply
-	// running with an empty accessor set because perfscan.json lives inside
-	// internal/perfscan/ and config discovery walks UPWARD from the working
-	// directory, so an invocation from the repo root never finds it. Warn loudly
-	// rather than report a silent zero.
+	// running with an empty accessor set because the old vocabulary was not at
+	// repository root. The compatibility target now passes perfscan.yaml
+	// explicitly. Warn loudly rather than report a silent zero for ad hoc calls.
 	domainVocab := map[string]map[string]bool{
 		"per-element-dispatch":               ns.accessors,
 		"per-element-closure":                ns.visitors,
@@ -3107,7 +3106,7 @@ func main() {
 		sort.Strings(starved)
 		fmt.Fprintf(os.Stderr, "perfscan: WARNING: %s %s enabled but its vocabulary is empty — "+
 			"these checks CANNOT report and a zero result here means nothing. Pass "+
-			"-config <perfscan.json> (this repo: -config internal/perfscan/perfscan.json, "+
+			"-config <perfscan.json> (this repo: -config perfscan.yaml, "+
 			"or run `make perfscan`).\n",
 			strings.Join(starved, ", "), map[bool]string{true: "are", false: "is"}[len(starved) > 1])
 	}

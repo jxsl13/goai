@@ -1,5 +1,6 @@
 {
-  "_comment": "GoAI's perfscan vocabulary — the project-specific function/method names that drive the four DOMAIN checks (PS1001 per-element-dispatch, PS1002 per-element-closure, PS2001 alloc-in-loop, PS4002 scalar-transcendental-vectorizable). The stdlib/language checks need no config. `make perfscan` passes this file via -config; any other repo supplies its own (or none, for stdlib-only scanning).",
+  "_comment": "GoAI's project vocabulary for github.com/jxsl13/perfscan v1.81.0. JSON syntax is intentional: YAML accepts it and the staged legacy compatibility scanner can read the same single source of truth.",
+  "cacheLineBytes": 128,
   "elementAccessors": [
     "AtF64",
     "SetF64"

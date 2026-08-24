@@ -2,10 +2,12 @@
 GO       ?= go
 PKGS     ?= ./...
 CGO_OFF   = CGO_ENABLED=0
+PERFSCAN_MODULE ?= github.com/jxsl13/perfscan@v1.81.0
 
 .PHONY: all build vet test race bench fmt tidy ci golden simd-build clean apicheck \
 	metal-test metal-bench cuda-test vulkan-spv vulkan-test vulkan-bench \
-	perfscan perfscan-check gofmt-check preflight preflight-full install-hooks \
+	perfscan perfscan-check perfscan-compat perfscan-registry-check \
+	gofmt-check preflight preflight-full install-hooks \
 	spec-check spec-state spec-index spec-verify lint-md
 
 all: build vet apicheck test
@@ -214,27 +216,41 @@ spec-verify:
 	spectackle lint
 	$(GO) run ./internal/mdlint ./...
 
-## perfscan: staticcheck-style finder for the hot-loop anti-patterns this repo
-## repeatedly optimizes away (T919). REPO-AGNOSTIC engine — the language/stdlib
-## checks run on any module; the four domain checks (per-element access/alloc,
-## PS1001/PS1002/PS2001/PS4002) read GoAI's own vocabulary from
-## internal/perfscan/perfscan.json (-config), so nothing GoAI-specific is baked in.
-## Each check has a stable PS-prefixed 4-digit ID (`make perfscan ARGS=-list`).
-## Advisory (candidates need an A/B + bit-identity proof, §C3/§V22); -strict exits
-## non-zero. -fix applies the safe mechanical fixes; -json emits findings+fixes for
-## an editor. e.g. make perfscan ARGS='-strict ./nn/...' or ARGS='-fix ./...'.
+## perfscan: canonical external staticcheck-style performance scanner. The root
+## module is intentional: github.com/jxsl13/perfscan/perfscan is the historical
+## submodule and stops at v1.71.0, while the current root release is v1.81.0.
+## scripts/perfscan.sh pins that release, forces GOPROXY=direct, loads the single
+## root perfscan.yaml vocabulary, and summarizes advisory findings without hiding
+## tool/configuration failures. Set PERFSCAN_VERBOSE=1 for findings. ARGS is passed
+## through, e.g. make perfscan ARGS='-checks PS1001 ./tensor/...'.
 perfscan:
-	$(CGO_OFF) $(GO) run ./internal/perfscan -config internal/perfscan/perfscan.json $(ARGS)
+	@PERFSCAN_MODULE=$(PERFSCAN_MODULE) scripts/perfscan.sh $(ARGS)
 
-## perfscan-check: the perfscan detector test suite (positive + negative fixtures).
+## perfscan-check: integration gate for the pinned external scanner plus the exact
+## legacy/external registry difference. The legacy detector fixture suite remains
+## part of go test ./... until its final 53 checks are upstream.
 perfscan-check:
-	$(CGO_OFF) $(GO) test ./internal/perfscan/
+	@$(MAKE) --no-print-directory perfscan-registry-check
+	@PERFSCAN_MODULE=$(PERFSCAN_MODULE) scripts/perfscan.sh -checks PS1001 ./tensor
+	@$(CGO_OFF) $(GO) test ./internal/perfscan/
+
+## perfscan-compat: temporary coverage bridge for checks not yet ported upstream.
+## The selector file is machine-checked by perfscan-registry-check; issue #877
+## tracks the zero-difference retirement gate.
+perfscan-compat:
+	@scripts/perfscan-compat.sh $(ARGS)
+
+## perfscan-registry-check: fail if the compatibility selector is not exactly
+## internal IDs minus external IDs. This prevents a broader scanner from silently
+## dropping a specialized, benchmark-derived check during the cutover.
+perfscan-registry-check:
+	@PERFSCAN_MODULE=$(PERFSCAN_MODULE) scripts/perfscan-registry-diff.sh
 
 ## preflight: the local PRE-PUSH gate — every HARD CI check runnable without a
 ## C/CUDA/Vulkan toolchain, fail-fast (§V23). Mirrors ci.yml: gofmt (the cgo+race
 ## lane), go vet ./... (all lanes' §V23 soundness backstop, compiles every _test.go),
-## the -short test suite INCLUDING the always-run meta-tests perfscan / apicheck
-## (pure-go lane), and the go-mod-tidy drift gate. The
+## the -short test suite, the pinned external whole-tree perfscan, its compatibility
+## parity audit, and the go-mod-tidy drift gate. The
 ## -short suite self-skips the trained-model e2e tests, so this is ~seconds. It runs
 ## every package EXCEPT internal/mdlint — the one gate CI still holds out of always-run
 ## as known-red debt (mdlint reddens on unrelated worker markdown). apicheck is now
@@ -256,6 +272,9 @@ preflight:
 	@$(CGO_OFF) $(GO) vet ./...
 	@echo "→ go mod tidy drift gate"
 	@$(CGO_OFF) $(GO) mod tidy && git diff --exit-code -- go.mod go.sum || { echo "go.mod/go.sum drift — commit the tidy result"; exit 1; }
+	@echo "→ external perfscan v1.81.0 (GOPROXY=direct, advisory findings)"
+	@$(MAKE) --no-print-directory perfscan-registry-check
+	@$(MAKE) --no-print-directory perfscan
 	@echo "→ CGO_ENABLED=0 go test -short  (buildable pure-go packages incl. apicheck; only mdlint held out)"
 	@$(CGO_OFF) $(GO) test -short -count=1 $$($(CGO_OFF) $(GO) list -e -f '{{if or .GoFiles .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -vE 'internal/(mdlint)$$')
 	@echo "✓ preflight OK — cgo/metal/cuda/vulkan/simd lanes run in CI (or: make preflight-full)"

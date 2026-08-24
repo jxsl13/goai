@@ -1,15 +1,15 @@
 export const meta = {
   name: 'perfscan-autofix',
   description: 'perfscan → parallel agents implement each fix (worktree-isolated, bit-exact) → SERIAL bench-validate → keep only benchmark-proven wins and open draft PRs',
-  whenToUse: 'Auto-fix perfscan findings the staticcheck way, but for perf patterns that need judgment + a benchmark. args: {checks?: string (default "strided-inner-reduction"), max?: number (default 6), benchtime?: string (default "200x")}',
+  whenToUse: 'Auto-fix perfscan findings the staticcheck way, but for perf patterns that need judgment + a benchmark. args: {checks?: string (default "PS1006"), max?: number (default 6), benchtime?: string (default "200x")}',
   phases: [
-    { title: 'Scan', detail: 'go run ./internal/perfscan -json; pick actionable, benchmark-backed candidates' },
+    { title: 'Scan', detail: 'run pinned external perfscan with GOPROXY=direct; pick actionable, benchmark-backed candidates' },
     { title: 'Implement', detail: 'one agent per candidate — bit-exact fix + correctness test, parallel isolated worktrees, NO benchmarking' },
     { title: 'Validate', detail: 'SERIAL: bench PRE/POST each fix one-at-a-time (no ns/op contamination); keep wins' },
   ],
 }
 
-const checks = (args && args.checks) || 'strided-inner-reduction'
+const checks = (args && args.checks) || 'PS1006'
 const max = (args && args.max) || 6
 const benchtime = (args && args.benchtime) || '200x'
 
@@ -52,7 +52,7 @@ const VALIDATE_SCHEMA = {
 phase('Scan')
 const scan = await agent(
   `Find perfscan candidates worth auto-fixing. Run from the repo root:\n` +
-  `  go run ./internal/perfscan -config internal/perfscan/perfscan.json -checks=${checks} -json ./...\n` +
+  `  env GOPROXY=direct CGO_ENABLED=0 go run github.com/jxsl13/perfscan@v1.81.0 -config perfscan.yaml -checks=${checks} -json -exit-zero ./...\n` +
   `Parse the JSON findings. Return up to ${max} candidates. For each, resolve the enclosing FUNCTION name and its go package import path (pkg), and find whether an existing Benchmark* in that package exercises that function (set benchName to it, else ""). PRIORITIZE candidates that (a) have a benchName and (b) are in a hot inference/training kernel; SKIP _test.go, generated code, cold/fallback/error paths, and anything already contiguous. Do NOT modify any files.`,
   { label: 'scan', phase: 'Scan', schema: CAND_SCHEMA })
 

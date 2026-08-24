@@ -18,7 +18,7 @@ func leftSerialFindingsIn(t *testing.T, src string) []finding {
 	collectFanoutHelpers([]*ast.File{f})
 	ns := testSets(t)
 	if !ns.accessors["SetF64"] {
-		t.Fatal("perfscan.json must list the element accessors, or the setter-call half of this" +
+		t.Fatal("perfscan.yaml must list the element accessors, or the setter-call half of this" +
 			" check is silent for a reason unrelated to the fixture")
 	}
 	var out []finding
