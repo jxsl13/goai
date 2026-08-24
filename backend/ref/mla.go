@@ -155,10 +155,19 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	base := pa.RoPEBase
 	scale := 1 / math.Sqrt(float64(dh+dR))
 
-	qR := make([]float64, seq*heads*dR)
-	kR := make([]float64, seq*dR)
+	qLen := seq * heads * dR
+	kLen := seq * dR
+	rope := make([]float64, qLen+2*kLen)
+	qR := rope[:qLen:qLen]
+	kR := rope[qLen : qLen+kLen : qLen+kLen]
+	kRT := rope[qLen+kLen:]
 	mlaRoPE(qRpre, heads, dR, base, qR)
 	mlaRoPE(kRpre, 1, dR, base, kR)
+	for j := range seq {
+		for e := range dR {
+			kRT[e*seq+j] = kR[j*dR+e]
+		}
+	}
 
 	out := tensor.NewOn(ctx.Device(), qC.Dtype(), qC.Shape())
 	a := make([]float64, seq)
@@ -171,7 +180,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 	// explicit row-major arithmetic. Iteration order, the RoPE-augmented score, the
 	// softmax (max subtraction, denominator) and the value accumulation are byte-for-
 	// byte identical: every attention accumulator (score s, denom sum, output o) stays
-	// float64 on ALL paths, qR/kR are already f64, and the F32 path only widens each
+	// float64 on ALL paths, qR/kRT are already f64, and the F32 path only widens each
 	// loaded input and rounds the STORED output element ONCE per (i,hc+d) — matching
 	// the single narrowing SetF64. Contiguous() is called once per read tensor (self
 	// when dense); out is freshly allocated so it is already dense.
@@ -188,8 +197,6 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 					if causal {
 						jmax = i + 1
 					}
-					m := math.Inf(-1)
-					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						var s float64
 						qb, kb := i*hdh+hc, j*hdh+hc
@@ -197,11 +204,13 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						for d := range dh {
 							s += qs[qb+d] * ks[kb+d]
 						}
-						//perfscan:ignore PS3010 reference oracle: intentionally simple, correctness baseline not an optimization target
-						for e := range dR {
-							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
-						}
-						s *= scale
+						a[j] = s
+					}
+					mlaAddRoPEScores(a, qR, kRT, (i*heads+h)*dR, seq, dR, jmax)
+					m := math.Inf(-1)
+					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
+					for j := range jmax {
+						s := a[j] * scale
 						a[j] = s
 						if s > m {
 							m = s
@@ -247,8 +256,6 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 					if causal {
 						jmax = i + 1
 					}
-					m := math.Inf(-1)
-					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
 					for j := range jmax {
 						var s float64 // score accumulates in float64; only inputs widen
 						qb, kb := i*hdh+hc, j*hdh+hc
@@ -256,11 +263,13 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 						for d := range dh {
 							s += float64(qs[qb+d]) * float64(ks[kb+d])
 						}
-						//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
-						for e := range dR {
-							s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
-						}
-						s *= scale
+						a[j] = s
+					}
+					mlaAddRoPEScores(a, qR, kRT, (i*heads+h)*dR, seq, dR, jmax)
+					m := math.Inf(-1)
+					//perfscan:ignore PS6010 reference oracle: intentionally simple, correctness baseline not an optimization target
+					for j := range jmax {
+						s := a[j] * scale
 						a[j] = s
 						if s > m {
 							m = s
@@ -299,7 +308,7 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			return []*tensor.Tensor{out}, nil
 		}
 	}
-	// Generic fallback for exotic / mixed dtypes (verbatim original loop).
+	// Generic fallback for exotic / mixed dtypes preserves the original arithmetic.
 	for h := range heads {
 		hc := h * dh
 		for i := range seq {
@@ -307,17 +316,17 @@ func mlaKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) (
 			if causal {
 				jmax = i + 1
 			}
-			m := math.Inf(-1)
 			for j := range jmax {
 				var s float64
 				for d := range dh {
 					s += qC.AtF64(i, hc+d) * kC.AtF64(j, hc+d)
 				}
-				//perfscan:ignore PS3010,PS4008 reference oracle: intentionally simple, correctness baseline not an optimization target
-				for e := range dR {
-					s += qR[(i*heads+h)*dR+e] * kR[j*dR+e]
-				}
-				s *= scale
+				a[j] = s
+			}
+			mlaAddRoPEScores(a, qR, kRT, (i*heads+h)*dR, seq, dR, jmax)
+			m := math.Inf(-1)
+			for j := range jmax {
+				s := a[j] * scale
 				a[j] = s
 				if s > m {
 					m = s
