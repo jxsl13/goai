@@ -4007,13 +4007,6 @@ targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, ba
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
 
-## R-01M0RRGS0YEQ48CY5QY9NC7T9F Attribute the post-stack ViT input boundary on M2
-kind: research
-state: active
-created: 2026-08-24
-
-Measure the current M2 ViT B8/C3/HW32/P4/D128/depth4/H4 training step after the merged transformer-stack and row-local classifier gains. Attribute patchification, patch projection, class/position assembly, stack, classifier, loss, and backward costs with same-binary interleaving. A fused input operation is only justified if this boundary is now material end-to-end; do not revive the rejected constant-dispatch batch rewrite without new evidence.
-
 ## P-01M0RRS336FYBT4DC3PJA1WSKG Compose the ViT patch-projection sequence boundary
 kind: proposal
 state: active
