@@ -48,7 +48,7 @@ PERFSCAN RULE REQUIRED: a function returns a slice of n*stride elements and at o
 
 ## P-01M0SN14HSEJ2VWB9HT1S7W01F Right-size decoder logits residency and lazily materialize full StepN output
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
