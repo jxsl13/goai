@@ -4006,3 +4006,11 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
+
+## R-01M0RVG598FZABSSGTGDVG203A Attribute the remaining fused ViT training step after patch-sequence fusion
+kind: research
+state: draft
+created: 2026-08-24
+targets: go:metal.preNormTransformerStackF32, vision/vit.go, backend/metal/metal_bridge.m, backend/metal/prenorm_transformer_stack_test.go
+
+Starting from merged PR 1198, remeasure the pinned M2 Pro F32 ViT B8/C3/HW32/P4/S65/D128/H512/depth4/H4 train step. Partition wall time, native submissions, host copies, and Go/native allocations across direct patch packing, patch-sequence forward/backward, fused transformer-stack forward/backward, classifier boundary, and loss. Use fresh processes and interleaved control probes. Do not repeat rejected constant-dispatch flattening or the rejected tiny host loss route. Promote only a boundary with a credible complete-step median gain of at least 1.05x and a paired floor of 1.03x; preserve logits, loss, all parameter gradients, and input immutability.
