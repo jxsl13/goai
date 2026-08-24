@@ -4025,7 +4025,7 @@ choice: One cached causal MPSGraph for the complete objective
 
 ## P-01M0SKYF35FYGB3RPMP0DDPCAW Bound and fuse GPT bias-GELU activation on M2
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=1
 targets: backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/bias_gelu_test.go, llamagpu/decoder.go, llamagpu/llamagpu.go, llamagpu/gpt.go, llamagpu/gpt_bias_gelu_metal_test.go, llamagpu/gpt2_scale_test.go

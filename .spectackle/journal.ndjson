@@ -1031,3 +1031,4 @@
 {"t":"2026-08-24T10:10:06Z","eid":"c7b042fe8d72d2a5","ag":"ag-d791","ev":"move","id":"ADR-01M0SKZBF3F91TA6ME8FG200DX","fr":"draft","to":"submitted"}
 {"t":"2026-08-24T10:10:15Z","eid":"eba5523ef902bad7","ag":"ag-6106","ev":"decide","id":"ADR-01M0SKZBF3F91TA6ME8FG200DX","note":"One bounded BiasGELU recorder dispatch"}
 {"t":"2026-08-24T10:10:19Z","eid":"2373bd71a1280f63","ag":"ag-4fe4","ev":"grill","id":"P-01M0SKYF35FYGB3RPMP0DDPCAW","gr":"2026-08-24 open=1","hash":"6e654013b6046877613b8492658fffa9063c6593d9f94fa4c1876762c72edc22","open":1,"keys":["blast:9"]}
+{"t":"2026-08-24T10:10:21Z","eid":"e755c9396ebc29b5","ag":"ag-9ff3","ev":"move","id":"P-01M0SKYF35FYGB3RPMP0DDPCAW","fr":"draft","to":"active"}
