@@ -121,7 +121,7 @@ WHEN an F32 pre-norm Decoder enables MoE without another scratch requirement, th
 
 Rationale: MoE accumulates each expert output through mo while F32 attention residuals need no ao scratch.
 
-## TINYLLAMA-RESIDUAL-SCRATCH-PERF-001 {applies: go:llamagpu.BenchmarkDecoderResidualScratchResidency,go:llamagpu_test.BenchmarkLlamaDecodeStepMetal,go:llamagpu_test.BenchmarkLlamaPrefillLastMetal}
+## TINYLLAMA-RESIDUAL-SCRATCH-PERF-001 {applies: go:llamagpu.BenchmarkDecoderResidualScratchResidency,go:llamagpu.BenchmarkLlamaDecodeStepMetal,go:llamagpu.BenchmarkLlamaPrefillLastMetal}
 WHEN the same-binary TinyLlama residual-scratch benchmark compares lazy and eager controls, the promotion gate SHALL require 33000000 fewer B/op, 10 times lower focused ns/op, and 0.97 times Step and StepNLast throughput.
 
 Rationale: Validate retained-memory leverage without moving work into inference.
