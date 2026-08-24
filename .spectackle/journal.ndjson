@@ -626,3 +626,4 @@
 {"t":"2026-08-17T23:41:36Z","eid":"88e941e529dd20c6","ag":"ag-65a8","ev":"start","id":"T-01KYJNDR38E4ZSN52KVM0PC5J9","note":"branch spectackle/T-01KYJNDR38E4Z base 3b3bc6b0dd61"}
 {"t":"2026-08-24T13:58:43Z","eid":"e23cabb853fc223d","ag":"ag-9b99","ev":"start","id":"T-01KYJNDQJZEW0SMH58S84Z23PM","note":"branch spectackle/T-01KYJNDQJZEW0 base 3287e217f8f3"}
 {"t":"2026-08-24T14:00:01Z","eid":"fc01e474c36d21a3","ag":"ag-9b99","ev":"abort","id":"T-01KYJNDQJZEW0SMH58S84Z23PM","note":"worktree abandoned by ag-9b99"}
+{"t":"2026-08-24T14:01:04Z","eid":"933cd6fe0f89208c","ag":"ag-2908","ev":"start","id":"T-01KYJNDQJZEW0SMH58S84Z23PM","note":"branch spectackle/T-01KYJNDQJZEW0 base e799c5a6cdd4"}
