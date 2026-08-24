@@ -152,7 +152,7 @@ WHEN the destination length equals Vocab, the Decoder.StepInto SHALL advance exa
 ## DECODER-STEP-INTO-LENGTH-GUARD-001 {applies: go:llamagpu.Decoder.StepInto,go:llamagpu_test.TestDecoderStepIntoMatchesStepAndGuardsLength}
 WHEN the destination length differs from Vocab, the Decoder.StepInto SHALL return an error and mutate exactly 0 cache rows and 0 recurrent states.
 
-## DECODER-EMBED-STAGING-001
+## DECODER-EMBED-STAGING-001 {applies: go:llamagpu.Decoder.gatherEmbedInto,go:llamagpu.embedRowInto,go:llamagpu.TestEmbedRowIntoAllocatesZeroAndMatches}
 WHEN single-token stepping gathers a token embedding, the shared Decoder SHALL reuse exactly 1 Dim-element host row and allocate 0 per-token embedding objects.
 
 ## M2-DECODER-STEP-INTO-PERF-001
