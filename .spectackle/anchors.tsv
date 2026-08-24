@@ -424,7 +424,7 @@ CALLER-OWNED-OUTPUT-001	go:ops.MatMulInto	ops/ops.go	175-178	86aa94d235beafbb	9d
 MUON-WORKSPACE-REUSE-001	go:nn.NewMuon	nn/muon.go	88-106	d8a0bdb2de252769	437929143b8d896a
 MUON-WORKSPACE-REUSE-001	go:nn.newtonSchulz5WithScratch	nn/muon.go	263-315	2854a72c71ab5952	437929143b8d896a
 MUON-WORKSPACE-REUSE-001	go:nn.TestMuonStepIsBitIdentical	nn/muon_bitidentity_test.go	36-78	b09514f303d6be3d	437929143b8d896a
-MUON-WORKSPACE-REUSE-001	go:nn.TestMuonStepIgnoresStaleScratch	nn/muon_matmul_internal_test.go	260-311	bbf8fde99254efbe	437929143b8d896a
+MUON-WORKSPACE-REUSE-001	go:nn.TestMuonStepIgnoresStaleScratch	nn/muon_matmul_internal_test.go	182-233	bbf8fde99254efbe	437929143b8d896a
 MUON-WORKSPACE-REUSE-001	go:nn_test.BenchmarkMuonStepOnly	nn/train_bench_test.go	159-168	573335cd0b1a5b84	437929143b8d896a
 MUON-MATMUL-INTO-PERF-001	go:nn.newtonSchulz5WithScratch	nn/muon.go	263-315	2854a72c71ab5952	0c6045617b5b44e9
 MUON-MATMUL-INTO-PERF-001	go:ops.MatMulInto	ops/ops.go	175-178	86aa94d235beafbb	0c6045617b5b44e9
