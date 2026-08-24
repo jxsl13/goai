@@ -174,7 +174,7 @@ Add public Step and StepNLast Metal benchmarks for a representative multi-layer 
 
 ## P-01M0SRKP79ETWS3GGEVN1XZMPW Make Decoder activation workspaces demand-resident
 kind: proposal
-state: active
+state: done
 created: 2026-08-24
 grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
