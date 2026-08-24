@@ -85,3 +85,8 @@ Rationale: Validate memory leverage and prevent moving allocation cost into domi
 WHEN GPTDecoder is constructed with standard backend operations, the decoder SHALL retain exactly 1 row of every activation workspace buffer and 0 multi-row activation workspace buffers.
 
 Rationale: Make dominant decode residency scale with active rows instead of maximum context.
+
+## GPT2-LOGITS-RESIDENCY-PERF-003
+WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the GPTDecoder SHALL allocate one grouped workspace at requested rows, reuse it for smaller requests, and grow only for larger requests.
+
+Rationale: Preserve batched semantics without per-call churn or maximum-context lifetime residency.
