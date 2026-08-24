@@ -845,3 +845,4 @@
 {"t":"2026-08-24T00:49:41Z","eid":"e1d49973c4ea206b","ag":"ag-2d81","ev":"create","id":"P-01M0RKX6GTF838PM6SNEJ33XVC","k":"proposal","ti":"Fuse the ViT classifier boundary on Metal"}
 {"t":"2026-08-24T00:50:05Z","eid":"5fdde751b210c4d9","ag":"ag-0cfa","ev":"move","id":"P-01M0RKX6GTF838PM6SNEJ33XVC","fr":"draft","to":"active"}
 {"t":"2026-08-24T00:50:17Z","eid":"45aef9c7711c4caa","ag":"ag-5796","ev":"grill","id":"P-01M0RKX6GTF838PM6SNEJ33XVC","gr":"2026-08-24 open=0","hash":"ec3244b8b40100727ee0d01544e2523cc315a5b6a171b72343758d2945a36f9b"}
+{"t":"2026-08-24T00:50:42Z","eid":"0f863100ae6bfc9f","ag":"ag-50af","ev":"create","id":"T-01M0RKZ1YSFHNVTJ65SHVC4Q0X","k":"task","ti":"Implement and gate the fused ViT classifier boundary"}
