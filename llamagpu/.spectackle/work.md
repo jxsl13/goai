@@ -198,12 +198,3 @@ parent: P-01M0SRKP79ETWS3GGEVN1XZMPW
 targets: go:llamagpu.Decoder.allocScratch, go:llamagpu.Decoder.stepN, go:llamagpu.Decoder.StepNHidden
 
 Implement one-row resident Decoder activation generation, exact high-water StepN generation with atomic ownership and release, eager control, and correct StepNHidden readback. Validate dense F32, quantized, post-norm, sandwich, MoE buffer shapes; run reference and short suites; benchmark TinyLlama-class constructor bytes/time and M2 public Step/StepNLast throughput.
-
-## P-01M0SZN5AHE0TS0198C0CVC36N Reuse one GPT generation logits buffer across tokens
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:llamagpu.GPTDecoder.Generate, go:llamagpu.GPTDecoder.StepInto, go:llamagpu.GPTDecoder.StepNLastInto, llamagpu/gpt.go, llamagpu/gpt_boundary_metal_bench_test.go, llamagpu/gpt2_scale_test.go
-
-Current GPTDecoder.Generate calls allocating StepNLast once and allocating Step once for every generated token, even though each logits slice is consumed before the next step and never escapes. At GPT-2-small Vocab 50257, every redundant Step result is a 204800-byte allocation; an 8-token generation therefore creates at least 1638400 avoidable bytes and 8 avoidable allocations. Allocate one Vocab host slice, fill it with StepNLastInto, and overwrite it through StepInto for every subsequent token while preserving token output, cache advancement, sampler semantics, and the allocating Step APIs. Promote only with exact token and post-generation cache parity, at least 1638400 fewer B/op and 8 fewer allocs/op for 8 tokens, and at least 0.97 times current-main throughput on M2.
