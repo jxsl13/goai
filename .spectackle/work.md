@@ -4014,7 +4014,7 @@ created: 2026-08-24
 
 ## P-01M0S0D3ZPFCBAT7MTC0J7NJMX Make external perfscan canonical without losing internal-only checks
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 refs: R-01M0S05JDTENNRZD2EQNZ2FSTW
 grilled: 2026-08-24 open=1
