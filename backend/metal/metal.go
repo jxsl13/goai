@@ -2204,9 +2204,12 @@ func layerNormSequenceClassifierBackwardF32(ctx *backend.Context, in []*tensor.T
 		return refFallback()
 	}
 	pa = pa.WithDefaults()
-	out := make([]*tensor.Tensor, 5)
-	for i := range out {
-		out[i] = tensor.New(tensor.F32, in[i].Shape())
+	out := []*tensor.Tensor{
+		tensor.New(tensor.F32, in[0].Shape()),
+		tensor.New(tensor.F32, in[1].Shape()),
+		tensor.New(tensor.F32, in[2].Shape()),
+		tensor.New(tensor.F32, in[3].Shape()),
+		tensor.New(tensor.F32, in[4].Shape()),
 	}
 	rc := C.mtl_layernorm_sequence_classifier_backward_f32(
 		(*C.float)(&in[0].Storage().F32()[0]), (*C.float)(&in[1].Storage().F32()[0]),
