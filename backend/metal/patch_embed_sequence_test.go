@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
@@ -237,4 +238,47 @@ func BenchmarkPatchEmbedSequenceViTTrainStep(b *testing.B) {
 		}
 		b.ReportMetric(float64(patchSequenceBatch*b.N)/b.Elapsed().Seconds(), "img/s")
 	})
+}
+
+// BenchmarkPatchEmbedSequenceViTTrainStepPaired interleaves control and
+// candidate inside every calibrated iteration. The grouped sub-benchmarks
+// above retain allocation attribution; this paired form removes sustained
+// thermal/OS drift from the end-to-end speedup gate.
+func BenchmarkPatchEmbedSequenceViTTrainStepPaired(b *testing.B) {
+	be, ok := backend.Get(backend.Metal)
+	if !ok {
+		b.Skip("Metal unavailable")
+	}
+	m := newPreNormFFNViT(b)
+	x, targets := preNormFFNViTInputs()
+	control := noPatchSequenceMetalBackend{be}
+	runPreNormFFNViTStep(b, control, m, x, targets)
+	runPreNormFFNViTStep(b, be, m, x, targets)
+	candidateFirst := os.Getenv("GOAI_PATCH_SEQUENCE_CANDIDATE_FIRST") == "1"
+	var controlDuration, candidateDuration time.Duration
+	b.ResetTimer()
+	for i := range b.N {
+		candidateLeads := (i%2 == 0) == candidateFirst
+		if candidateLeads {
+			start := time.Now()
+			runPreNormFFNViTStep(b, be, m, x, targets)
+			candidateDuration += time.Since(start)
+			start = time.Now()
+			runPreNormFFNViTStep(b, control, m, x, targets)
+			controlDuration += time.Since(start)
+			continue
+		}
+		start := time.Now()
+		runPreNormFFNViTStep(b, control, m, x, targets)
+		controlDuration += time.Since(start)
+		start = time.Now()
+		runPreNormFFNViTStep(b, be, m, x, targets)
+		candidateDuration += time.Since(start)
+	}
+	b.StopTimer()
+	controlNS := float64(controlDuration.Nanoseconds()) / float64(b.N)
+	candidateNS := float64(candidateDuration.Nanoseconds()) / float64(b.N)
+	b.ReportMetric(controlNS, "control-ns/step")
+	b.ReportMetric(candidateNS, "candidate-ns/step")
+	b.ReportMetric(controlNS/candidateNS, "speedup")
 }

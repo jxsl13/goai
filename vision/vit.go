@@ -244,6 +244,84 @@ func (m *ViT) patchify(img *tensor.Tensor) (*tensor.Tensor, error) {
 	return out, nil
 }
 
+// patchifyBatch packs [B,C,H,W] directly into [B*N,C*p*p]. Unlike repeated
+// patchify calls followed by Concat, it allocates only the final detached host
+// tensor and preserves the batch-major patch order consumed by the fused patch
+// sequence boundary.
+func (m *ViT) patchifyBatch(images *tensor.Tensor) (*tensor.Tensor, error) {
+	sh := images.Shape()
+	if images.Ndim() != 4 || sh[1] != m.channels || sh[2] != m.size || sh[3] != m.size {
+		return nil, fmt.Errorf("vision: ViT expects [batch,%d,%d,%d] images, got %v", m.channels, m.size, m.size, sh)
+	}
+	batch := sh[0]
+	p := m.Patch
+	grid := m.size / p
+	n := grid * grid
+	patchDim := m.channels * p * p
+	in := images.Contiguous()
+	out := tensor.New(m.Class.Dtype(), tensor.Shape{batch * n, patchDim})
+
+	// The model hot path keeps image and parameter dtypes equal. Keep those
+	// cases typed so F32 packing never detours through a float64 scratch slice.
+	switch {
+	case in.Dtype() == tensor.F32 && out.Dtype() == tensor.F32:
+		src, dst := in.Storage().F32(), out.Storage().F32()
+		packViTBatch(dst, src, batch, m.channels, m.size, p, grid, n, patchDim)
+	case in.Dtype() == tensor.F64 && out.Dtype() == tensor.F64:
+		src, dst := in.Storage().F64(), out.Storage().F64()
+		packViTBatch(dst, src, batch, m.channels, m.size, p, grid, n, patchDim)
+	case in.Dtype() == tensor.F64 && out.Dtype() == tensor.F32:
+		src, dst := in.Storage().F64(), out.Storage().F32()
+		packViTBatchConvert(dst, src, batch, m.channels, m.size, p, grid, n, patchDim)
+	case in.Dtype() == tensor.F32 && out.Dtype() == tensor.F64:
+		src, dst := in.Storage().F32(), out.Storage().F64()
+		packViTBatchConvert(dst, src, batch, m.channels, m.size, p, grid, n, patchDim)
+	default:
+		return nil, fmt.Errorf("vision: ViT patchify supports F32/F64, got input %v and output %v", in.Dtype(), out.Dtype())
+	}
+	return out, nil
+}
+
+type vitFloat interface {
+	~float32 | ~float64
+}
+
+func packViTBatch[T vitFloat](dst, src []T, batch, channels, size, patch, grid, patches, patchDim int) {
+	for b := range batch {
+		for py := range grid {
+			for px := range grid {
+				row := (b*patches + py*grid + px) * patchDim
+				for c := range channels {
+					for dy := range patch {
+						srcStart := ((b*channels+c)*size+py*patch+dy)*size + px*patch
+						dstStart := row + (c*patch+dy)*patch
+						copy(dst[dstStart:dstStart+patch], src[srcStart:srcStart+patch])
+					}
+				}
+			}
+		}
+	}
+}
+
+func packViTBatchConvert[D, S vitFloat](dst []D, src []S, batch, channels, size, patch, grid, patches, patchDim int) {
+	for b := range batch {
+		for py := range grid {
+			for px := range grid {
+				row := (b*patches + py*grid + px) * patchDim
+				for c := range channels {
+					for dy := range patch {
+						srcStart := ((b*channels+c)*size+py*patch+dy)*size + px*patch
+						dstStart := row + (c*patch+dy)*patch
+						for dx := range patch {
+							dst[dstStart+dx] = D(src[srcStart+dx])
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
 // makeReader returns a flat-index reader over a contiguous F32/F64 tensor.
 func makeReader(t *tensor.Tensor) func(int) float64 {
 	if t.Dtype() == tensor.F64 {
@@ -276,37 +354,16 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 		_, backward := ctx.Backend.Kernel(backend.OpPatchEmbedSequenceBackward, m.Class.Dtype())
 		usePatchSequence = forward && backward
 	}
-	inputCtx := ctx
-	if usePatchSequence && ctx != nil {
-		// patchify creates detached host tensors, so recording the input views
-		// cannot produce an image gradient and only enlarges the tape.
-		inputCtx = ctx.WithRecorder(nil)
-	}
-	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
-	patchRows := make([]*tensor.Tensor, B)
-	//perfscan:ignore PS4011 per-image slice loop bounded by batch; deliberate batching
-	for b := range B {
-		//perfscan:ignore PS6018 movement-fusion breaks autograd; movement-only
-		img, err := visExec1(inputCtx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
-		if err != nil {
-			return nil, err
-		}
-		//perfscan:ignore PS6016 invariant ReshapeAttrs literal; resource-only
-		one, err := visExec1(inputCtx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
-		if err != nil {
-			return nil, err
-		}
-		if patchRows[b], err = m.patchify(one); err != nil {
-			return nil, err
-		}
-	}
-	allPatches, err := backend.Execute(inputCtx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
-	if err != nil {
-		return nil, err
-	}
 	if usePatchSequence {
+		// Image patching is detached preprocessing. Pack the complete batch into
+		// its final matrix directly instead of recording B Slice/Reshape calls,
+		// B temporary patch tensors, and a final Concat.
+		allPatches, err := m.patchifyBatch(x)
+		if err != nil {
+			return nil, err
+		}
 		packed, err := backend.Execute(ctx, backend.OpPatchEmbedSequence, []*tensor.Tensor{
-			allPatches[0], m.Class, m.Pos, m.Embed.W, m.Embed.B,
+			allPatches, m.Class, m.Pos, m.Embed.W, m.Embed.B,
 		}, backend.PatchEmbedSequenceAttrs{Batch: B})
 		if err != nil {
 			return nil, err
@@ -316,6 +373,28 @@ func (m *ViT) Forward(ctx *backend.Context, x *tensor.Tensor) (*tensor.Tensor, e
 			return nil, err
 		}
 		return m.forwardPackedClassifier(ctx, h, B, S)
+	}
+	// patchify each image (no gradient) and stack into one [B·N, C·p·p] matrix for a single Embed GEMM.
+	patchRows := make([]*tensor.Tensor, B)
+	//perfscan:ignore PS4011 per-image slice loop bounded by batch; deliberate batching
+	for b := range B {
+		//perfscan:ignore PS6018 movement-fusion breaks autograd; movement-only
+		img, err := visExec1(ctx, backend.OpSlice, backend.SliceAttrs{Axis: 0, Start: b, End: b + 1}, x)
+		if err != nil {
+			return nil, err
+		}
+		//perfscan:ignore PS6016 invariant ReshapeAttrs literal; resource-only
+		one, err := visExec1(ctx, backend.OpReshape, backend.ReshapeAttrs{Shape: tensor.Shape{m.channels, m.size, m.size}}, img)
+		if err != nil {
+			return nil, err
+		}
+		if patchRows[b], err = m.patchify(one); err != nil {
+			return nil, err
+		}
+	}
+	allPatches, err := backend.Execute(ctx, backend.OpConcat, patchRows, backend.ConcatAttrs{Axis: 0})
+	if err != nil {
+		return nil, err
 	}
 	emb, err := m.Embed.Forward(ctx, allPatches[0]) // [B·N, D]
 	if err != nil {
