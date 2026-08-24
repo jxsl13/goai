@@ -118,7 +118,7 @@ Add a one-row resident GPT activation workspace, grouped exact-row lazy high-wat
 
 ## T-01M0SPRH8NEV49Q636WM7Y1PQA Route GPT hidden-state readback through selected activation workspace
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
 refs: ADR-01M0SPCGWTFB08X22KNMW0DDV6
