@@ -4031,6 +4031,7 @@ kind: task
 state: draft
 created: 2026-08-24
 parent: P-01M0RKX6GTF838PM6SNEJ33XVC
+grilled: 2026-08-24 open=11
 targets: backend/op.go, backend/attrs.go, backend/ref, autograd, vision/vit.go, vision, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal, docs/perf-notes-training.md, internal/benchcompare/leadership/evidence, CHANGELOG.md
 
 Implement the active proposal as one independently gated slice. Add OpLayerNormSequenceClassifier and backward with typed attrs Batch and Eps. Inputs are packed sequence rows H, LayerNorm gamma/beta, classifier W/B; forward normalizes every row, gathers row b*(rows/Batch), and applies one linear projection. Backward returns gradients for all five inputs and must preserve exact composite semantics in F32/F64. Register the VJP and portable reference implementation; route only batched ViT Forward through the helper, while unsupported backends and shapes remain exact through normal Execute fallback. On Metal F32 contiguous offset-zero inputs, use bounded shape-keyed cached MPSGraph executables, runtime epsilon, pooled buffers, and one synchronous submission per direction. Preserve Go-owned outputs and input immutability. Add reference and Metal parity tests, full ViT logits/loss/all-parameter-gradient parity, boundary and full-step benchmarks, docs, and frozen evidence. Promotion requires boundary median >=1.20x, full-step median >=1.05x, every aligned pair >=1.03x across three order-alternated count-seven M2 campaigns; otherwise fully revert production code and reject.
