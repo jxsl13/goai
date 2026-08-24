@@ -3999,12 +3999,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## P-01M0TMV3V1EZR8DBZWH5HFWT7G Cache exact SVC SMO active-set membership
-kind: proposal
-state: active
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:classic.SVC.smo, classic/svm.go, classic/svm_rbf_exp_arm64_test.go, docs/benchmarking.md, internal/benchcompare/leadership/evidence/m2-svc-smo-status-20260824
-
-Current merged M2 Pro SIMD profiling attributes 940 ms flat of 4.50 sampled seconds to SVC.smo. The repeated pass-1 and pass-2 working-set scans dominate the visible solver cost, while the incremental gradient AXPY is only 130 ms and cannot reliably clear the 3 percent end-to-end gate alone. Each scan recomputes I_up and I_low membership from immutable labels and alpha bounds for every row, although one SMO step changes only two alpha values. Cache exact two-bit I_up/I_low membership per variable, initialize it from the same comparisons, and refresh only i and j after each accepted update. Preserve ascending traversal, <= and > tie behavior, alpha arithmetic, kernel values, portable routing, public API, and the exact 79-step trajectory. Retain only if seven order-alternated M2 pairs improve median end-to-end n4000_rbf fit by at least 3 percent with no allocation-count increase and all scalar/SIMD parity and hostile tests passing; otherwise revert and reject with measurements.
