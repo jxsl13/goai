@@ -999,3 +999,4 @@
 {"t":"2026-08-24T06:59:36Z","eid":"5d323b515ffb5caf","ag":"ag-92fb","ev":"move","id":"P-01M0S8XJF9F5HTNGTQXZ3R9YMZ","fr":"rejected","to":"draft","note":"Reopen after the procedural rejection to revise the deliberation references."}
 {"t":"2026-08-24T06:59:51Z","eid":"f48c71c9f9d8a47a","ag":"ag-9a9c","ev":"revise","id":"P-01M0S8XJF9F5HTNGTQXZ3R9YMZ","note":"body+targets revised"}
 {"t":"2026-08-24T06:59:58Z","eid":"030b2bd5c50a60f0","ag":"ag-8efd","ev":"grill","id":"P-01M0S8XJF9F5HTNGTQXZ3R9YMZ","gr":"2026-08-24 open=1","hash":"7ec41f8c91cd4bd30650ef0a5cde0196b0b22ef3dbd6da801085e3ed03a94e47","open":1,"keys":["blast:15"]}
+{"t":"2026-08-24T07:00:44Z","eid":"4011d3022be61b4b","ag":"ag-32cc","ev":"revise","id":"P-01M0S8XJF9F5HTNGTQXZ3R9YMZ","note":"body+targets revised"}
