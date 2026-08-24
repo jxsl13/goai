@@ -4039,3 +4039,11 @@ grilled: 2026-08-24 open=1
 targets: backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, nlp/gpt.go, nn/optim.go, internal/benchcompare/compare_test.go, testdata/bench_gpt_train_torch.py, BENCHMARKS.md
 
 Introduce an explicit GPT F32 AdamW training session with portable semantics and an optional Metal implementation. Metal shall upload parameters once, retain parameters plus F32 moments and gradient buffers, encode the existing complete causal objective followed by in-place AdamW updates in one command buffer, return only the scalar loss per Step, and copy parameters back only on Sync or Close. Correct the torch companion to the same no-attention-bias model and single shared pre-attention normalization. Gate on multi-step numerical parity, checkpoint sync, lifetime safety, three order-alternated count-seven M2 campaigns with median at least 1.25x and every pair at least 1.10x versus LossAndGrad plus host AdamW, and median step latency at most 24.69 ms to lead pinned torch-mps by at least 1.05x.
+
+## ADR-01M0S5EQY6FSYSMGWNR92THDP8 Which M2 state boundary should own GPT AdamW updates?
+kind: adr
+state: draft
+created: 2026-08-24
+targets: backend/metal/metal_bridge.m, backend/metal/metal.go, backend/attrs.go, nlp/gpt.go, nn/optim.go
+
+Choose among: A, retain parameters, F32 moments, and gradient buffers inside an explicit closable training session, encode the existing objective graph plus one in-place custom AdamW encoder in a single command buffer, and sync host parameters only explicitly; B, extend the objective graph with AdamW but continue uploading and downloading all parameters every step; C, keep LossAndGrad plus host AdamW and tune copies. Research R-01M0S55DWJFPQ measures steady native upload at 1.91 ms, gradient copy at 4.56 ms, Go result construction near 2 ms, and host AdamW near 10.5 ms, making only A capable of the declared torch leadership gate.
