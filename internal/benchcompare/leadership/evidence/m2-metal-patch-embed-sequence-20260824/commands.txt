@@ -1,0 +1,33 @@
+# Build and freeze the exact benchmark binary.
+go test -c -o /private/tmp/goai-patch-sequence-final.test ./backend/metal
+shasum -a 256 /private/tmp/goai-patch-sequence-final.test
+
+# Boundary campaigns 1 and 3 (control first).
+GOMAXPROCS=1 /private/tmp/goai-patch-sequence-final.test -test.run '^$' -test.bench '^BenchmarkPatchEmbedSequenceTrainingBoundary$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Boundary campaign 2 (candidate first).
+GOMAXPROCS=1 GOAI_PATCH_SEQUENCE_CANDIDATE_FIRST=1 /private/tmp/goai-patch-sequence-final.test -test.run '^$' -test.bench '^BenchmarkPatchEmbedSequenceTrainingBoundary$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Interleaved complete-step campaigns 1 and 3 (control leads first pair).
+GOMAXPROCS=1 /private/tmp/goai-patch-sequence-final.test -test.run '^$' -test.bench '^BenchmarkPatchEmbedSequenceViTTrainStepPaired$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Interleaved complete-step campaign 2 (candidate leads first pair).
+GOMAXPROCS=1 GOAI_PATCH_SEQUENCE_CANDIDATE_FIRST=1 /private/tmp/goai-patch-sequence-final.test -test.run '^$' -test.bench '^BenchmarkPatchEmbedSequenceViTTrainStepPaired$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Non-gating allocation attribution.
+GOMAXPROCS=1 /private/tmp/goai-patch-sequence-final.test -test.run '^$' -test.bench '^BenchmarkPatchEmbedSequenceViTTrainStep$' -test.benchtime=1s -test.count=3 -test.cpu=1 -test.benchmem
+
+# Correctness and repository gates. Compile first; do not use go test -run.
+go test -c -o /private/tmp/goai-patch-sequence-ref.test ./backend/ref
+/private/tmp/goai-patch-sequence-ref.test -test.run '^TestPatchEmbedSequenceReferenceMatchesComposite$'
+go test -c -o /private/tmp/goai-patch-sequence-vision.test ./vision
+/private/tmp/goai-patch-sequence-vision.test -test.run '^TestViTPatchifyBatchMatchesPerImagePacking$'
+go test -c -o /private/tmp/goai-patch-sequence-metal.test ./backend/metal
+/private/tmp/goai-patch-sequence-metal.test -test.run '^TestPatchEmbedSequence'
+go test ./backend ./autograd ./backend/ref ./vision ./backend/metal
+make preflight
+make preflight-metal
+
+# Upstream scanner, bypassing the Go proxy.
+GOPROXY=direct /Users/john/go/bin/perfscan -json -exit-zero ./...
+GOPROXY=direct /Users/john/go/bin/perfscan -tests -json -exit-zero ./...
