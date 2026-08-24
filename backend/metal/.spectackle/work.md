@@ -55,7 +55,7 @@ choice: Separate scalar and two-SIMD-group cooperative pipelines derived from Q4
 
 ## T-01M0RQASR1E37R1CNS2SCEB1JZ Implement and gate the tiny CrossEntropy host route
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0RQAB74FFSA32RRCTPRK54H
 targets: go:metal.crossentropyF32, go:metal.crossentropyBackwardF32
