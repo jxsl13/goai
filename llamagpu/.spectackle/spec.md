@@ -133,3 +133,6 @@ Rationale: Single-token decode is the steady-state path; context-sized transient
 
 ## DECODER-FULL-WORKSPACE-GROWTH-001
 WHEN StepN or StepNLast requests more activation rows than the resident workspace holds, the shared Decoder SHALL allocate 1 grouped workspace at exactly the requested rows, reuse it for every smaller request, and grow only for a larger request.
+
+## DECODER-FULL-WORKSPACE-LIFETIME-001
+WHEN grouped workspace growth fails or the Decoder is released, the shared Decoder SHALL release each prior or partial workspace buffer exactly once and retain 0 stale grouped-workspace references.
