@@ -731,4 +731,4 @@ WHEN TestProdCPUQuantDecodeGGUF accepts an external GGUF leadership fixture, the
 Rationale: A performance result without artifact and toolchain identity is not reproducible.
 
 ## PERFSCAN-EXTERNAL-DIRECT-PIN-001
-WHEN GoAI invokes perfscan from Make, CI, or an automation workflow, the GoAI tooling SHALL shall run github.com/jxsl13/perfscan@v1.81.0 with GOPROXY=direct and repository-root perfscan.yaml.
+WHEN GoAI invokes perfscan from Make, CI, or an automation workflow, the GoAI tooling SHALL run github.com/jxsl13/perfscan@v1.81.0 with GOPROXY=direct and repository-root perfscan.yaml.
