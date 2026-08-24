@@ -139,3 +139,6 @@ WHEN grouped workspace growth fails or the Decoder is released, the shared Decod
 
 ## DECODER-HIDDEN-WORKSPACE-READBACK-001
 WHEN StepHidden or StepNHidden completes, the shared Decoder SHALL download exactly 1 or len(tokens) final hidden rows from the corresponding selected activation workspace.
+
+## TINYLLAMA-ACTIVATION-RESIDENCY-PERF-001
+WHEN the same-binary TinyLlama-class activation residency benchmark compares lazy and eager controls on M2, the promotion gate SHALL require at least 150000000 fewer B/op, 10 times lower constructor ns/op, and 0.97 times public Step and StepNLast throughput.
