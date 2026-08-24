@@ -497,11 +497,16 @@ func (kc *kernelCache) column(i int) []float64 {
 func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64, int) {
 	C := m.cfg.c
 	tol := m.cfg.tol
-	alpha := make([]float64, n)
+	// Keep alpha and its error vector in one allocation so the active-set
+	// status cache below does not increase allocations per fit.
+	state := make([]float64, 2*n)
+	alpha := state[:n:n]
 	// e_i = u(x_i) − y_i; with α = 0, u ≡ 0 ⇒ e_i = −y_i.
-	e := make([]float64, n)
+	e := state[n:]
+	status := make([]uint8, n)
 	for i := range n {
 		e[i] = -y[i]
+		status[i] = svcSMOStatus(y[i], alpha[i], C)
 	}
 	const tau = 1e-12
 
@@ -537,14 +542,14 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64, int)
 		eUpMin := math.Inf(1)
 		eLowMax := math.Inf(-1)
 		for t := range n {
-			at := alpha[t]
-			if (y[t] > 0 && at < C) || (y[t] < 0 && at > 0) { // I_up
+			st := status[t]
+			if st&svcSMOIUp != 0 {
 				if e[t] <= eUpMin {
 					eUpMin = e[t]
 					iUp = t
 				}
 			}
-			if (y[t] > 0 && at > 0) || (y[t] < 0 && at < C) { // I_low
+			if st&svcSMOILow != 0 {
 				if e[t] > eLowMax {
 					eLowMax = e[t]
 				}
@@ -566,8 +571,7 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64, int)
 		jLow := -1
 		objMin := math.Inf(1)
 		for t := range n {
-			at := alpha[t]
-			if (y[t] > 0 && at > 0) || (y[t] < 0 && at < C) { // I_low
+			if status[t]&svcSMOILow != 0 {
 				gradDiff := e[t] - eUpMin
 				if gradDiff > 0 {
 					eta := Kii + kc.diag[t] - 2*Ki[t]
@@ -639,9 +643,27 @@ func (m *SVC) smo(kc *kernelCache, y []float64, n int) ([]float64, float64, int)
 		}
 		alpha[i] = a1new
 		alpha[j] = a2new
+		status[i] = svcSMOStatus(y1, a1new, C)
+		status[j] = svcSMOStatus(y2, a2new, C)
 	}
 
 	return alpha, m.calcRho(alpha, e, y, n), steps
+}
+
+const (
+	svcSMOIUp uint8 = 1 << iota
+	svcSMOILow
+)
+
+func svcSMOStatus(y, alpha, C float64) uint8 {
+	var status uint8
+	if (y > 0 && alpha < C) || (y < 0 && alpha > 0) {
+		status |= svcSMOIUp
+	}
+	if (y > 0 && alpha > 0) || (y < 0 && alpha < C) {
+		status |= svcSMOILow
+	}
+	return status
 }
 
 // calcRho recovers the decision threshold ρ from the converged dual, averaging
