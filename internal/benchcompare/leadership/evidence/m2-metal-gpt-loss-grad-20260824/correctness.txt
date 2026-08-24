@@ -1,0 +1,26 @@
+Focused portable API binary
+  PASS TestGPTLossAndGradPortableParity
+  PASS TestGPTLossAndGradCapabilityFallbackAndRecorderIsolation
+  PASS TestGPTLossAndGradRejectsInvalidInputs
+  PASS ExampleGPT_LossAndGrad
+
+Focused Metal binary
+  PASS TestGPTLossAndGradMetalParityAndImmutability
+
+Full Metal package
+  ok github.com/jxsl13/goai/backend/metal 48.578s
+
+Cross-backend benchmark package
+  compile PASS with darwin,cgo,vulkan
+  BenchmarkGPTLossAndGrad/metal PASS (three 3x samples)
+
+Pure-Go preflight
+  PASS gofmt, build, vet, go-mod-tidy drift, external perfscan invocation,
+  short package tests, and apicheck
+
+Pre-existing host-default NLP failure attribution
+  A complete `go test ./nlp` run reaches the unchanged deterministic failure in
+  TestDiffusionLMGrammarE2E after producing the same invalid sample twice. A
+  binary compiled from pristine origin/main commit 9b37881b reproduces the exact
+  sample and failure. The new focused NLP tests and example pass; the pure-Go CI
+  lane is covered separately by preflight.

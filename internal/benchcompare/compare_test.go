@@ -400,3 +400,36 @@ func BenchmarkGPTTrainingStep(b *testing.B) {
 		})
 	}
 }
+
+// BenchmarkGPTLossAndGrad times the same objective through GPT's portable
+// whole-objective boundary. Backends without a specialized implementation keep
+// the exact BenchmarkGPTTrainingStep semantics through the private-tape fallback.
+func BenchmarkGPTLossAndGrad(b *testing.B) {
+	cfg := nlp.GPTConfig{Vocab: 4096, Ctx: 256, Dim: 512, Heads: 8, Layers: 6, Eps: 1e-5}
+	const seq = 256
+	model := randGPT(b, cfg, 4*cfg.Dim)
+	tokens := make([]int, seq)
+	targets := tensor.New(tensor.F32, tensor.Shape{seq})
+	for i := range tokens {
+		tokens[i] = i % cfg.Vocab
+		targets.SetF64(float64(i%cfg.Vocab), i)
+	}
+	for _, name := range gptBackends {
+		be, ok := backend.Get(name)
+		if !ok {
+			continue
+		}
+		ctx := backend.NewContext().WithBackend(be)
+		if _, _, err := model.LossAndGrad(ctx, tokens, targets); err != nil {
+			b.Fatal(err)
+		}
+		b.Run(string(name), func(b *testing.B) {
+			for range b.N {
+				if _, _, err := model.LossAndGrad(ctx, tokens, targets); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(seq)*float64(b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}

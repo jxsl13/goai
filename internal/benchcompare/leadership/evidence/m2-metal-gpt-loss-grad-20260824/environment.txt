@@ -1,0 +1,11 @@
+date: 2026-08-24
+hardware: Apple M2 Pro, 32 GiB
+os: macOS 26.5.1 (25F80)
+go: go1.27.0 darwin/arm64
+spectackle: 0.10.0
+benchmark GOMAXPROCS: 1
+benchmark binary SHA-256: 3a2b9c1ad4c28ac5009a8eeaa9bd9e02d6200532042f7993688699852aa453f1
+source code commit: fab7e6e5a129c2a12c268beb4aa5d59f2e7eef8d
+base commit: 9b37881b6ef1d66dbeb24b3f769366d9c5503d08
+external baseline: torch 2.12.1, pinned in BENCHMARKS.md
+perfscan module: github.com/jxsl13/perfscan@v1.81.0, GOPROXY=direct

@@ -9085,7 +9085,8 @@ typedef struct {
 static prenorm_attention_nodes build_prenorm_attention_nodes(
     MPSGraph* g, MPSGraphTensor* X, MPSGraphTensor* Gamma, MPSGraphTensor* Beta,
     MPSGraphTensor* Wq, MPSGraphTensor* Wk, MPSGraphTensor* Wv, MPSGraphTensor* Wo,
-    MPSGraphTensor* Eps, int rows, int dim, int batch, int seq, int heads) {
+    MPSGraphTensor* Eps, int rows, int dim, int batch, int seq, int heads,
+    MPSGraphTensor* scoreBias) {
     int dk = dim / heads;
     MPSGraphTensor* mean = [g meanOfTensor:X axes:@[@1] name:nil];
     MPSGraphTensor* centered = [g subtractionWithPrimaryTensor:X secondaryTensor:mean name:nil];
@@ -9116,6 +9117,8 @@ static prenorm_attention_nodes build_prenorm_attention_nodes(
     MPSGraphTensor* qsc = [g multiplicationWithPrimaryTensor:q4 secondaryTensor:scale name:nil];
     MPSGraphTensor* kt = [g transposeTensor:k4 dimension:2 withDimension:3 name:nil];
     MPSGraphTensor* scores = [g matrixMultiplicationWithPrimaryTensor:qsc secondaryTensor:kt name:nil];
+    if (scoreBias)
+        scores = [g additionWithPrimaryTensor:scores secondaryTensor:scoreBias name:nil];
     MPSGraphTensor* p = [g softMaxWithTensor:scores axis:3 name:nil];
     MPSGraphTensor* attn4 = [g matrixMultiplicationWithPrimaryTensor:p secondaryTensor:v4 name:nil];
     MPSGraphTensor* attnPacked = [g transposeTensor:attn4 permutation:@[@0,@2,@1,@3] name:nil];
@@ -9250,7 +9253,7 @@ static int ensure_prenorm_attention_forward_graph(int rows, int dim, int batch, 
         MPSGraphTensor* Wo = [g placeholderWithShape:@[@(dim), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_attn_wo"];
         MPSGraphTensor* Eps = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_attn_eps"];
         prenorm_attention_nodes n = build_prenorm_attention_nodes(g, X, Gamma, Beta, Wq, Wk, Wv, Wo,
-                                                                   Eps, rows, dim, batch, seq, heads);
+                                                                   Eps, rows, dim, batch, seq, heads, nil);
         if (!g || !n.y) return -20;
         int slot = gPreAttnFwdNext;
         gPreAttnFwdGraphs[slot] = g;
@@ -9281,7 +9284,7 @@ static int ensure_prenorm_attention_backward_graph(int rows, int dim, int batch,
         MPSGraphTensor* dO = [g placeholderWithShape:@[@(rows), @(dim)] dataType:MPSDataTypeFloat32 name:@"pre_attn_bwd_do"];
         MPSGraphTensor* Eps = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_attn_bwd_eps"];
         prenorm_attention_nodes n = build_prenorm_attention_nodes(g, X, Gamma, Beta, Wq, Wk, Wv, Wo,
-                                                                   Eps, rows, dim, batch, seq, heads);
+                                                                   Eps, rows, dim, batch, seq, heads, nil);
 
         MPSGraphTensor* attnT = [g transposeTensor:n.attn2 dimension:0 withDimension:1 name:nil];
         MPSGraphTensor* dWo = [g matrixMultiplicationWithPrimaryTensor:attnT secondaryTensor:dO name:nil];
@@ -9527,7 +9530,7 @@ static int ensure_prenorm_transformer_block_forward_graph(
         MPSGraphTensor* Eps1 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_eps1"];
         MPSGraphTensor* Eps2 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_eps2"];
         prenorm_attention_nodes attention = build_prenorm_attention_nodes(
-            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads);
+            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads, nil);
         prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
             g, attention.y, Gamma2, Beta2, W1, B1, W2, B2, Eps2);
         if (!g || !attention.y || !ffn.y) return -20;
@@ -9570,7 +9573,7 @@ static int ensure_prenorm_transformer_block_backward_graph(
         MPSGraphTensor* Eps1 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_eps1"];
         MPSGraphTensor* Eps2 = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"pre_block_bwd_eps2"];
         prenorm_attention_nodes attention = build_prenorm_attention_nodes(
-            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads);
+            g, X, Gamma1, Beta1, Wq, Wk, Wv, Wo, Eps1, rows, dim, batch, seq, heads, nil);
         prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
             g, attention.y, Gamma2, Beta2, W1, B1, W2, B2, Eps2);
         prenorm_ffn_backward_nodes ffnBackward = build_prenorm_ffn_backward_nodes(
@@ -9806,7 +9809,7 @@ static int ensure_prenorm_transformer_stack_forward_graph(
                 inputs[p + local] = pre_stack_placeholder(g, local, dim, hidden);
             prenorm_attention_nodes attention = build_prenorm_attention_nodes(
                 g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
-                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads);
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads, nil);
             prenorm_ffn_nodes ffn = build_prenorm_ffn_nodes(
                 g, attention.y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
                 inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
@@ -9849,7 +9852,7 @@ static int ensure_prenorm_transformer_stack_backward_graph(
                 inputs[p + local] = pre_stack_placeholder(g, local, dim, hidden);
             attention[block] = build_prenorm_attention_nodes(
                 g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
-                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads);
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex], rows, dim, batch, seq, heads, nil);
             ffn[block] = build_prenorm_ffn_nodes(
                 g, attention[block].y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
                 inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
@@ -10633,7 +10636,7 @@ static int ensure_vit_objective_graph(
             attention[block] = build_prenorm_attention_nodes(
                 g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
                 inputs[p + 4], inputs[p + 5], inputs[epsIndex],
-                rows, dim, batch, seq, heads);
+                rows, dim, batch, seq, heads, nil);
             ffn[block] = build_prenorm_ffn_nodes(
                 g, attention[block].y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
                 inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
@@ -10829,6 +10832,337 @@ int mtl_vit_loss_and_grad_f32(
         MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
         if (!cmd) return -3;
         [gViTObjectiveGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
+                                       resultsDictionary:results executionDescriptor:nil];
+        [cmd commit];
+        [cmd waitUntilCompleted];
+        if (cmd.status != MTLCommandBufferStatusCompleted) return -4;
+        for (int i = 0; i < outputCount; i++)
+            memcpy((float*)(uintptr_t)outputs[i], out[i].contents, outputLengths[i]);
+        return 0;
+    }
+}
+
+// ---- Cached complete causal GPT objective and parameter-gradient graphs ---
+#define GPT_OBJECTIVE_MAX_DEPTH 8
+#define GPT_OBJECTIVE_MAX_PARAMS (5 + 12 * GPT_OBJECTIVE_MAX_DEPTH)
+#define GPT_OBJECTIVE_MAX_INPUTS (2 + GPT_OBJECTIVE_MAX_PARAMS + 3)
+#define GPT_OBJECTIVE_MAX_OUTPUTS (1 + GPT_OBJECTIVE_MAX_PARAMS)
+#define GPT_OBJECTIVE_CACHE_CAP 2
+
+static MPSGraph* gGPTObjectiveGraphs[GPT_OBJECTIVE_CACHE_CAP] = {nil};
+static MPSGraphTensor* gGPTObjectiveInputs[GPT_OBJECTIVE_CACHE_CAP][GPT_OBJECTIVE_MAX_INPUTS] = {{nil}};
+static MPSGraphTensor* gGPTObjectiveOutputs[GPT_OBJECTIVE_CACHE_CAP][GPT_OBJECTIVE_MAX_OUTPUTS] = {{nil}};
+static int gGPTObjectiveSigs[GPT_OBJECTIVE_CACHE_CAP][7] = {{0}};
+static int gGPTObjectiveValid[GPT_OBJECTIVE_CACHE_CAP] = {0};
+static int gGPTObjectiveNext = 0;
+
+static size_t gpt_objective_param_length(
+    int param, int depth, size_t tokLen, size_t posLen, size_t dLen,
+    size_t hLen, size_t aWLen, size_t fWLen, size_t headLen) {
+    if (param == 0) return tokLen;
+    if (param == 1) return posLen;
+    int final = 2 + 12 * depth;
+    if (param < final)
+        return pre_stack_length((param - 2) % 12, dLen, hLen, aWLen, fWLen);
+    if (param == final || param == final + 1) return dLen;
+    if (param == final + 2) return headLen;
+    return 0;
+}
+
+static NSArray<NSNumber*>* gpt_objective_param_shape(
+    int param, int depth, int ctx, int vocab, int dim, int hidden) {
+    if (param == 0) return @[@(vocab), @(dim)];
+    if (param == 1) return @[@(ctx), @(dim)];
+    int final = 2 + 12 * depth;
+    if (param < final) return pre_stack_shape((param - 2) % 12, dim, hidden);
+    if (param == final || param == final + 1) return @[@(dim)];
+    if (param == final + 2) return @[@(dim), @(vocab)];
+    return nil;
+}
+
+static MPSGraphTensor* gpt_causal_score_bias(MPSGraph* g, int seq) {
+    size_t n = (size_t)seq * seq;
+    float* mask = (float*)malloc(n * sizeof(float));
+    if (!mask) return nil;
+    for (int i = 0; i < seq; i++)
+        for (int j = 0; j < seq; j++)
+            mask[(size_t)i * seq + j] = (j <= i) ? 0.0f : -1.0e30f;
+    NSData* data = [NSData dataWithBytes:mask length:n * sizeof(float)];
+    free(mask);
+    if (!data) return nil;
+    return [g constantWithData:data shape:@[@1, @1, @(seq), @(seq)]
+                     dataType:MPSDataTypeFloat32];
+}
+
+static int ensure_gpt_objective_graph(
+    int depth, int seq, int ctx, int vocab, int dim, int hidden, int heads) {
+    int sig[7] = {depth, seq, ctx, vocab, dim, hidden, heads};
+    for (int i = 0; i < GPT_OBJECTIVE_CACHE_CAP; i++)
+        if (gGPTObjectiveValid[i] && memcmp(sig, gGPTObjectiveSigs[i], sizeof(sig)) == 0)
+            return i;
+    @autoreleasepool {
+        MPSGraph* g = [MPSGraph new];
+        MPSGraphTensor* inputs[GPT_OBJECTIVE_MAX_INPUTS] = {nil};
+        MPSGraphTensor* outputs[GPT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        int paramCount = 5 + 12 * depth;
+        int epsIndex = 2 + paramCount;
+        inputs[0] = [g placeholderWithShape:@[@(seq)] dataType:MPSDataTypeFloat32 name:@"gpt_tokens"];
+        inputs[1] = [g placeholderWithShape:@[@(seq)] dataType:MPSDataTypeFloat32 name:@"gpt_targets"];
+        for (int param = 0; param < paramCount; param++)
+            inputs[2 + param] = [g placeholderWithShape:
+                gpt_objective_param_shape(param, depth, ctx, vocab, dim, hidden)
+                                                dataType:MPSDataTypeFloat32 name:nil];
+        inputs[epsIndex] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"gpt_eps1"];
+        inputs[epsIndex + 1] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"gpt_eps2"];
+        inputs[epsIndex + 2] = [g placeholderWithShape:@[@1] dataType:MPSDataTypeFloat32 name:@"gpt_final_eps"];
+
+        MPSGraphTensor* tokenIndices = [g castTensor:inputs[0] toType:MPSDataTypeInt32 name:nil];
+        MPSGraphTensor* tokenRows = [g gatherWithUpdatesTensor:inputs[2]
+                                                     indicesTensor:tokenIndices
+                                                              axis:0 batchDimensions:0 name:nil];
+        MPSGraphTensor* positionRows = [g sliceTensor:inputs[3] dimension:0 start:0 length:seq name:nil];
+        MPSGraphTensor* h = [g additionWithPrimaryTensor:tokenRows secondaryTensor:positionRows name:nil];
+        MPSGraphTensor* causalBias = gpt_causal_score_bias(g, seq);
+        if (!g || !tokenRows || !positionRows || !h || !causalBias) return -20;
+
+        prenorm_attention_nodes attention[GPT_OBJECTIVE_MAX_DEPTH];
+        prenorm_ffn_nodes ffn[GPT_OBJECTIVE_MAX_DEPTH];
+        for (int block = 0; block < depth; block++) {
+            int p = 4 + 12 * block;
+            attention[block] = build_prenorm_attention_nodes(
+                g, h, inputs[p], inputs[p + 1], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], inputs[epsIndex],
+                seq, dim, 1, seq, heads, causalBias);
+            ffn[block] = build_prenorm_ffn_nodes(
+                g, attention[block].y, inputs[p + 6], inputs[p + 7], inputs[p + 8],
+                inputs[p + 9], inputs[p + 10], inputs[p + 11], inputs[epsIndex + 1]);
+            if (!attention[block].y || !ffn[block].y) return -20;
+            h = ffn[block].y;
+        }
+
+        int finalParam = 2 + 12 * depth;
+        int final = 2 + finalParam;
+        MPSGraphTensor* mean = [g meanOfTensor:h axes:@[@1] name:nil];
+        MPSGraphTensor* centered = [g subtractionWithPrimaryTensor:h secondaryTensor:mean name:nil];
+        MPSGraphTensor* variance = [g meanOfTensor:[g squareWithTensor:centered name:nil]
+                                             axes:@[@1] name:nil];
+        MPSGraphTensor* one = [g constantWithScalar:1.0 dataType:MPSDataTypeFloat32];
+        MPSGraphTensor* inv = [g divisionWithPrimaryTensor:one secondaryTensor:
+                                 [g squareRootWithTensor:
+                                    [g additionWithPrimaryTensor:variance
+                                                  secondaryTensor:inputs[epsIndex + 2] name:nil]
+                                                      name:nil]
+                                                    name:nil];
+        MPSGraphTensor* xhat = [g multiplicationWithPrimaryTensor:centered secondaryTensor:inv name:nil];
+        MPSGraphTensor* norm = [g additionWithPrimaryTensor:
+                                  [g multiplicationWithPrimaryTensor:xhat
+                                                       secondaryTensor:inputs[final] name:nil]
+                                              secondaryTensor:inputs[final + 1] name:nil];
+        MPSGraphTensor* logits = [g matrixMultiplicationWithPrimaryTensor:norm
+                                                          secondaryTensor:inputs[final + 2] name:nil];
+        MPSGraphTensor* targetIndices = [g castTensor:inputs[1] toType:MPSDataTypeInt32 name:nil];
+        MPSGraphTensor* labels = [g oneHotWithIndicesTensor:targetIndices
+                                                 depth:(NSUInteger)vocab axis:1
+                                              dataType:MPSDataTypeFloat32
+                                               onValue:1.0 offValue:0.0 name:nil];
+        MPSGraphTensor* loss = [g softMaxCrossEntropyWithSourceTensor:logits
+                                                         labelsTensor:labels axis:1
+                                                        reductionType:MPSGraphLossReductionTypeMean
+                                                                 name:nil];
+        outputs[0] = [g reshapeTensor:loss withShape:@[@1] name:nil];
+
+        MPSGraphTensor* probabilities = [g softMaxWithTensor:logits axis:1 name:nil];
+        MPSGraphTensor* invSeq = [g constantWithScalar:1.0 / (double)seq
+                                              dataType:MPSDataTypeFloat32];
+        MPSGraphTensor* dLogits = [g multiplicationWithPrimaryTensor:
+                                     [g subtractionWithPrimaryTensor:probabilities
+                                                      secondaryTensor:labels name:nil]
+                                                 secondaryTensor:invSeq name:nil];
+        MPSGraphTensor* normT = [g transposeTensor:norm dimension:0 withDimension:1 name:nil];
+        outputs[1 + finalParam + 2] = [g matrixMultiplicationWithPrimaryTensor:normT
+                                                                   secondaryTensor:dLogits name:nil];
+        MPSGraphTensor* headT = [g transposeTensor:inputs[final + 2]
+                                          dimension:0 withDimension:1 name:nil];
+        MPSGraphTensor* dNorm = [g matrixMultiplicationWithPrimaryTensor:dLogits
+                                                         secondaryTensor:headT name:nil];
+        outputs[1 + finalParam] = [g reshapeTensor:
+            [g reductionSumWithTensor:
+                [g multiplicationWithPrimaryTensor:dNorm secondaryTensor:xhat name:nil]
+                                      axis:0 name:nil]
+                                           withShape:@[@(dim)] name:nil];
+        outputs[1 + finalParam + 1] = [g reshapeTensor:
+            [g reductionSumWithTensor:dNorm axis:0 name:nil]
+                                           withShape:@[@(dim)] name:nil];
+        MPSGraphTensor* dXhat = [g multiplicationWithPrimaryTensor:dNorm
+                                                     secondaryTensor:inputs[final] name:nil];
+        MPSGraphTensor* meanDXhat = [g meanOfTensor:dXhat axes:@[@1] name:nil];
+        MPSGraphTensor* meanDXhatXhat = [g meanOfTensor:
+            [g multiplicationWithPrimaryTensor:dXhat secondaryTensor:xhat name:nil]
+                                                    axes:@[@1] name:nil];
+        MPSGraphTensor* upstream = [g multiplicationWithPrimaryTensor:inv secondaryTensor:
+            [g subtractionWithPrimaryTensor:
+                [g subtractionWithPrimaryTensor:dXhat secondaryTensor:meanDXhat name:nil]
+                              secondaryTensor:
+                [g multiplicationWithPrimaryTensor:xhat secondaryTensor:meanDXhatXhat name:nil]
+                                         name:nil]
+                                                    name:nil];
+
+        for (int block = depth - 1; block >= 0; block--) {
+            int p = 4 + 12 * block;
+            int out = 1 + 2 + 12 * block;
+            prenorm_ffn_backward_nodes ffnBackward = build_prenorm_ffn_backward_nodes(
+                g, ffn[block], inputs[p + 6], inputs[p + 8], inputs[p + 10],
+                upstream, dim, hidden);
+            prenorm_attention_backward_nodes attentionBackward = build_prenorm_attention_backward_nodes(
+                g, attention[block], inputs[p], inputs[p + 2], inputs[p + 3],
+                inputs[p + 4], inputs[p + 5], ffnBackward.dX,
+                seq, dim, 1, seq, heads);
+            outputs[out] = attentionBackward.dGamma;
+            outputs[out + 1] = attentionBackward.dBeta;
+            outputs[out + 2] = attentionBackward.dWq;
+            outputs[out + 3] = attentionBackward.dWk;
+            outputs[out + 4] = attentionBackward.dWv;
+            outputs[out + 5] = attentionBackward.dWo;
+            outputs[out + 6] = ffnBackward.dGamma;
+            outputs[out + 7] = ffnBackward.dBeta;
+            outputs[out + 8] = ffnBackward.dW1;
+            outputs[out + 9] = ffnBackward.dB1;
+            outputs[out + 10] = ffnBackward.dW2;
+            outputs[out + 11] = ffnBackward.dB2;
+            upstream = attentionBackward.dX;
+        }
+
+        MPSGraphTensor* tokenHot = [g oneHotWithIndicesTensor:tokenIndices
+                                                depth:(NSUInteger)vocab axis:1
+                                             dataType:MPSDataTypeFloat32
+                                              onValue:1.0 offValue:0.0 name:nil];
+        MPSGraphTensor* tokenHotT = [g transposeTensor:tokenHot dimension:0 withDimension:1 name:nil];
+        outputs[1] = [g matrixMultiplicationWithPrimaryTensor:tokenHotT
+                                              secondaryTensor:upstream name:nil];
+        int32_t* positionValues = (int32_t*)malloc((size_t)seq * sizeof(int32_t));
+        if (!positionValues) return -20;
+        for (int i = 0; i < seq; i++) positionValues[i] = i;
+        NSData* positionData = [NSData dataWithBytes:positionValues length:(size_t)seq * sizeof(int32_t)];
+        free(positionValues);
+        if (!positionData) return -20;
+        MPSGraphTensor* positionIndices = [g constantWithData:positionData shape:@[@(seq)]
+                                                    dataType:MPSDataTypeInt32];
+        MPSGraphTensor* positionHot = [g oneHotWithIndicesTensor:positionIndices
+                                                   depth:(NSUInteger)ctx axis:1
+                                                dataType:MPSDataTypeFloat32
+                                                 onValue:1.0 offValue:0.0 name:nil];
+        MPSGraphTensor* positionHotT = [g transposeTensor:positionHot dimension:0 withDimension:1 name:nil];
+        outputs[2] = [g matrixMultiplicationWithPrimaryTensor:positionHotT
+                                              secondaryTensor:upstream name:nil];
+
+        for (int i = 0; i < 1 + paramCount; i++) if (!outputs[i]) return -20;
+        int slot = gGPTObjectiveNext;
+        for (int i = 0; i < GPT_OBJECTIVE_MAX_INPUTS; i++)
+            gGPTObjectiveInputs[slot][i] = nil;
+        for (int i = 0; i < GPT_OBJECTIVE_MAX_OUTPUTS; i++)
+            gGPTObjectiveOutputs[slot][i] = nil;
+        gGPTObjectiveGraphs[slot] = g;
+        for (int i = 0; i < epsIndex + 3; i++) gGPTObjectiveInputs[slot][i] = inputs[i];
+        for (int i = 0; i < 1 + paramCount; i++) gGPTObjectiveOutputs[slot][i] = outputs[i];
+        memcpy(gGPTObjectiveSigs[slot], sig, sizeof(sig));
+        gGPTObjectiveValid[slot] = 1;
+        gGPTObjectiveNext = (slot + 1) % GPT_OBJECTIVE_CACHE_CAP;
+        return slot;
+    }
+}
+
+int mtl_gpt_loss_and_grad_f32(
+    const uintptr_t* inputs, const uintptr_t* outputs,
+    int depth, int seq, int ctx, int vocab,
+    int dim, int hidden, int heads,
+    float eps1, float eps2, float finalEps) {
+    if (ensure_init() != 0) return -1;
+    if (!inputs || !outputs || depth < 1 || depth > GPT_OBJECTIVE_MAX_DEPTH ||
+        seq <= 0 || ctx < seq || vocab <= 0 || dim <= 0 || hidden <= 0 ||
+        heads <= 0 || dim % heads != 0) return -6;
+    OP_BEGIN;
+    @autoreleasepool {
+        int slot = ensure_gpt_objective_graph(depth, seq, ctx, vocab, dim, hidden, heads);
+        if (slot < 0) return slot;
+        int paramCount = 5 + 12 * depth;
+        int hostInputCount = 2 + paramCount;
+        int epsIndex = hostInputCount;
+        int graphInputCount = epsIndex + 3;
+        int outputCount = 1 + paramCount;
+        size_t dLen = (size_t)dim * sizeof(float);
+        size_t hLen = (size_t)hidden * sizeof(float);
+        size_t tokLen = (size_t)vocab * dim * sizeof(float);
+        size_t posLen = (size_t)ctx * dim * sizeof(float);
+        size_t aWLen = (size_t)dim * dim * sizeof(float);
+        size_t fWLen = (size_t)dim * hidden * sizeof(float);
+        size_t headLen = (size_t)dim * vocab * sizeof(float);
+
+        const float* hostIn[GPT_OBJECTIVE_MAX_INPUTS] = {nil};
+        size_t inputLengths[GPT_OBJECTIVE_MAX_INPUTS] = {0};
+        NSArray<NSNumber*>* inputShapes[GPT_OBJECTIVE_MAX_INPUTS] = {nil};
+        hostIn[0] = (const float*)(uintptr_t)inputs[0];
+        inputLengths[0] = (size_t)seq * sizeof(float);
+        inputShapes[0] = @[@(seq)];
+        hostIn[1] = (const float*)(uintptr_t)inputs[1];
+        inputLengths[1] = (size_t)seq * sizeof(float);
+        inputShapes[1] = @[@(seq)];
+        for (int param = 0; param < paramCount; param++) {
+            int i = 2 + param;
+            hostIn[i] = (const float*)(uintptr_t)inputs[i];
+            inputLengths[i] = gpt_objective_param_length(
+                param, depth, tokLen, posLen, dLen, hLen, aWLen, fWLen, headLen);
+            inputShapes[i] = gpt_objective_param_shape(param, depth, ctx, vocab, dim, hidden);
+        }
+        hostIn[epsIndex] = &eps1;
+        hostIn[epsIndex + 1] = &eps2;
+        hostIn[epsIndex + 2] = &finalEps;
+        for (int i = epsIndex; i < graphInputCount; i++) {
+            inputLengths[i] = sizeof(float);
+            inputShapes[i] = @[@1];
+        }
+
+        id<MTLBuffer> in[GPT_OBJECTIVE_MAX_INPUTS] = {nil};
+        MPSGraphTensorData* inputData[GPT_OBJECTIVE_MAX_INPUTS] = {nil};
+        for (int i = 0; i < graphInputCount; i++) {
+            if (!hostIn[i] || inputLengths[i] == 0 || !inputShapes[i]) return -6;
+            in[i] = pool_in(hostIn[i], inputLengths[i]);
+            if (!in[i]) return -2;
+            inputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:in[i]
+                                                                  shape:inputShapes[i]
+                                                               dataType:MPSDataTypeFloat32];
+            if (!inputData[i]) return -2;
+        }
+
+        size_t outputLengths[GPT_OBJECTIVE_MAX_OUTPUTS] = {0};
+        NSArray<NSNumber*>* outputShapes[GPT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        outputLengths[0] = sizeof(float);
+        outputShapes[0] = @[@1];
+        for (int param = 0; param < paramCount; param++) {
+            outputLengths[1 + param] = gpt_objective_param_length(
+                param, depth, tokLen, posLen, dLen, hLen, aWLen, fWLen, headLen);
+            outputShapes[1 + param] = gpt_objective_param_shape(
+                param, depth, ctx, vocab, dim, hidden);
+        }
+        id<MTLBuffer> out[GPT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        MPSGraphTensorData* outputData[GPT_OBJECTIVE_MAX_OUTPUTS] = {nil};
+        for (int i = 0; i < outputCount; i++) {
+            if (!outputs[i] || outputLengths[i] == 0 || !outputShapes[i]) return -6;
+            out[i] = pool_buf(outputLengths[i]);
+            if (!out[i]) return -2;
+            outputData[i] = [[MPSGraphTensorData alloc] initWithMTLBuffer:out[i]
+                                                                   shape:outputShapes[i]
+                                                                dataType:MPSDataTypeFloat32];
+            if (!outputData[i]) return -2;
+        }
+        NSMutableDictionary* feeds = [NSMutableDictionary dictionaryWithCapacity:graphInputCount];
+        NSMutableDictionary* results = [NSMutableDictionary dictionaryWithCapacity:outputCount];
+        for (int i = 0; i < graphInputCount; i++)
+            feeds[gGPTObjectiveInputs[slot][i]] = inputData[i];
+        for (int i = 0; i < outputCount; i++)
+            results[gGPTObjectiveOutputs[slot][i]] = outputData[i];
+        MPSCommandBuffer* cmd = [MPSCommandBuffer commandBufferFromCommandQueue:gQueue];
+        if (!cmd) return -3;
+        [gGPTObjectiveGraphs[slot] encodeToCommandBuffer:cmd feeds:feeds targetOperations:nil
                                        resultsDictionary:results executionDescriptor:nil];
         [cmd commit];
         [cmd waitUntilCompleted];

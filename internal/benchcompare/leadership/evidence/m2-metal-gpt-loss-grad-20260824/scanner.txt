@@ -1,0 +1,7 @@
+make perfscan-check
+  perfscan registry parity: 53 internal-only compatibility check(s)
+  perfscan github.com/jxsl13/perfscan@v1.81.0: 0 advisory finding(s)
+  ok github.com/jxsl13/goai/internal/perfscan 3.354s
+
+Generalizable finding
+  https://github.com/jxsl13/perfscan/issues/878

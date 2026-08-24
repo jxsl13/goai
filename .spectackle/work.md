@@ -4006,3 +4006,19 @@ created: 2026-08-23
 targets: msl:mha_dec_splitk_p2, c:mtl_recorder_mha, c:mtl_recorder_mha_f16kv, backend/metal/mha_decode_bench_test.go, go:llamagpu.NewQuantF16KV
 
 Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group per head, yet every lane sequentially merges all 64 accumulator dimensions and only lane 0 writes. Fresh TinyLlama context-512 profiles attribute 648 us of an 11.208 ms f32 token and 206 us of a 13.556 ms f16-KV token to 22 pass-2 events; the spread itself requires paired measurement, but the 31 discarded lane copies are structural. A candidate can give lane i dimensions 2i and 2i+1 while every lane preserves the incumbent sequential chunk order for m, l, and its owned accumulators. This removes 32x redundant accumulator work without changing pass 1, partial layout, route scope, buffers, or arithmetic order per output. Prior lane-octet pass-1 work won leaf kernels but reversed end to end; therefore require full-attention and real-model gates, not pass-2-only evidence.
+
+## ADR-01M0S2FBN8E06VT5ZM2P8YC1CP Which GPT training boundary should be promoted on M2?
+kind: adr
+state: done
+created: 2026-08-24
+context: R-01M0S28QXJED6 measured a 105.9 ms complete step versus 35.0 ms forward-only, 246 MB/op, and 1,650 allocations. Prior retained-intermediate and tiny-host-loss experiments missed end-to-end gates.
+decision: One cached causal MPSGraph for the complete objective
+consequences: R-01M0S28QXJED6 and the standing high-risk/high-impact M2 directive justify the model-boundary graph. The candidate remains conditional on correctness and paired end-to-end gates; failure requires rejection and full code removal.
+status: accepted
+
+kind: radio
+option: One cached causal MPSGraph for the complete objective
+option: Incremental per-operation tuning
+option: Export and retain intermediate activations
+blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
+choice: One cached causal MPSGraph for the complete objective

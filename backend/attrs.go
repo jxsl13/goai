@@ -303,6 +303,22 @@ type ViTLossAndGradAttrs struct {
 	FinalEps float64 // final classifier LayerNorm epsilon
 }
 
+// GPTLossAndGradAttrs describes the complete eager GPT training objective
+// consumed by optional backend capabilities. It is deliberately not an Attrs:
+// LossAndGrad is a model boundary rather than a primitive Execute operation.
+type GPTLossAndGradAttrs struct {
+	Depth    int     // number of sequential causal transformer blocks
+	Seq      int     // number of token rows in the objective
+	Ctx      int     // position-embedding row count
+	Vocab    int     // token-embedding and language-model-head width
+	Dim      int     // transformer embedding width
+	Hidden   int     // feed-forward hidden width
+	Heads    int     // attention head count
+	Eps1     float64 // first LayerNorm epsilon shared by all blocks
+	Eps2     float64 // second LayerNorm epsilon shared by all blocks
+	FinalEps float64 // final LayerNorm epsilon
+}
+
 // RoPEAttrs parameterises rotary position embedding (OpRoPE), including linear
 // position interpolation (PosScale) and YaRN NTK-by-parts scaling (the YaRN*
 // fields). Leaving the YaRN fields zero disables YaRN.

@@ -2,8 +2,10 @@ package nlp
 
 import (
 	"fmt"
+	"math"
 	"sync"
 
+	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/nn"
 	"github.com/jxsl13/goai/tensor"
@@ -263,6 +265,155 @@ func (g *GPT) Params() []*tensor.Tensor {
 	}
 	ps = append(ps, g.LNf.Gamma, g.LNf.Beta, g.Head)
 	return ps
+}
+
+// gptLossAndGradBackend is an optional whole-objective capability. Returning
+// supported=false asks LossAndGrad to execute its portable tape fallback;
+// supported=true with an error reports an attempted accelerator failure.
+type gptLossAndGradBackend interface {
+	GPTLossAndGradF32(inputs []*tensor.Tensor, attrs backend.GPTLossAndGradAttrs) (
+		loss *tensor.Tensor, grads []*tensor.Tensor, supported bool, err error)
+}
+
+// LossAndGrad evaluates mean hard-label cross-entropy and returns gradients in
+// exactly the same order as Params. The method owns a private tape, so it is an
+// eager objective boundary even when ctx already carries a recorder.
+func (g *GPT) LossAndGrad(ctx *backend.Context, tokens []int, targets *tensor.Tensor) (*tensor.Tensor, []*tensor.Tensor, error) {
+	if g == nil {
+		return nil, nil, fmt.Errorf("nlp: GPT.LossAndGrad called on nil model")
+	}
+	if targets == nil {
+		return nil, nil, fmt.Errorf("nlp: GPT.LossAndGrad needs non-nil targets")
+	}
+	if len(tokens) == 0 || len(tokens) > g.Config.Ctx {
+		return nil, nil, fmt.Errorf("nlp: GPT.LossAndGrad token count %d outside (0,%d]", len(tokens), g.Config.Ctx)
+	}
+	for _, token := range tokens {
+		if token < 0 || token >= g.Config.Vocab {
+			return nil, nil, fmt.Errorf("nlp: GPT.LossAndGrad token %d outside vocab %d", token, g.Config.Vocab)
+		}
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if ctx.Backend == nil {
+		return nil, nil, fmt.Errorf("nlp: GPT.LossAndGrad needs a context backend")
+	}
+
+	if ctx.Recorder == nil {
+		if accelerated, ok := ctx.Backend.(gptLossAndGradBackend); ok {
+			if attrs, eligible := g.lossAndGradAttrs(tokens, targets); eligible {
+				tokenIndices := tensor.New(tensor.F32, tensor.Shape{len(tokens)})
+				for i, token := range tokens {
+					tokenIndices.SetF64(float64(token), i)
+				}
+				params := g.Params()
+				inputs := make([]*tensor.Tensor, 0, 2+len(params))
+				inputs = append(inputs, tokenIndices, targets)
+				inputs = append(inputs, params...)
+				loss, grads, supported, err := accelerated.GPTLossAndGradF32(inputs, attrs)
+				if supported {
+					if err != nil {
+						return nil, nil, err
+					}
+					if loss == nil || len(grads) != len(params) {
+						return nil, nil, fmt.Errorf("nlp: GPT loss-and-gradient backend returned %d gradients for %d parameters", len(grads), len(params))
+					}
+					return loss, grads, nil
+				}
+			}
+		}
+	}
+
+	tape := autograd.NewTapeOn(ctx.Backend)
+	recording := ctx.WithRecorder(tape)
+	logits, err := g.Forward(recording, tokens)
+	if err != nil {
+		return nil, nil, err
+	}
+	loss, err := nn.CrossEntropy(recording, logits, targets)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tape.Backward(loss); err != nil {
+		return nil, nil, err
+	}
+	params := g.Params()
+	grads := make([]*tensor.Tensor, len(params))
+	for i, parameter := range params {
+		grads[i] = tape.Grad(parameter)
+		if grads[i] == nil {
+			return nil, nil, fmt.Errorf("nlp: GPT parameter %d has no gradient", i)
+		}
+	}
+	return loss, grads, nil
+}
+
+func (g *GPT) lossAndGradAttrs(tokens []int, targets *tensor.Tensor) (backend.GPTLossAndGradAttrs, bool) {
+	if targets.Dtype() != tensor.F32 || targets.Ndim() != 1 || targets.Shape()[0] != len(tokens) ||
+		len(g.LayerBackends) != 0 || len(g.Blocks) == 0 || len(g.Blocks) > 8 ||
+		g.TokEmb == nil || g.PosEmb == nil || g.LNf == nil || g.LNf.Gamma == nil ||
+		g.LNf.Beta == nil || g.Head == nil || g.TokEmb.Ndim() != 2 ||
+		g.PosEmb.Ndim() != 2 || g.Head.Ndim() != 2 {
+		return backend.GPTLossAndGradAttrs{}, false
+	}
+	dim, vocab, seq := g.Config.Dim, g.Config.Vocab, len(tokens)
+	if dim <= 0 || vocab <= 0 || g.Config.Ctx < seq || g.Config.Heads <= 0 || dim%g.Config.Heads != 0 ||
+		!g.TokEmb.Shape().Equal(tensor.Shape{vocab, dim}) ||
+		!g.PosEmb.Shape().Equal(tensor.Shape{g.Config.Ctx, dim}) ||
+		!g.Head.Shape().Equal(tensor.Shape{dim, vocab}) ||
+		g.LNf.Gamma.Ndim() != 1 || g.LNf.Gamma.Shape()[0] != dim ||
+		g.LNf.Beta.Ndim() != 1 || g.LNf.Beta.Shape()[0] != dim {
+		return backend.GPTLossAndGradAttrs{}, false
+	}
+	first := g.Blocks[0]
+	if first == nil || first.LN1 == nil || first.LN2 == nil || first.W1 == nil || first.W1.Ndim() != 2 {
+		return backend.GPTLossAndGradAttrs{}, false
+	}
+	hidden := first.W1.Shape()[1]
+	eps1, eps2 := first.LN1.Eps, first.LN2.Eps
+	for _, block := range g.Blocks {
+		if !eligibleGPTLossAndGradBlock(block, dim, hidden, g.Config.Heads, eps1, eps2) {
+			return backend.GPTLossAndGradAttrs{}, false
+		}
+	}
+	for _, eps := range []float64{eps1, eps2, g.LNf.Eps} {
+		if eps <= 0 || math.IsNaN(eps) || math.IsInf(eps, 0) {
+			return backend.GPTLossAndGradAttrs{}, false
+		}
+	}
+	return backend.GPTLossAndGradAttrs{
+		Depth: len(g.Blocks), Seq: seq, Ctx: g.Config.Ctx, Vocab: vocab,
+		Dim: dim, Hidden: hidden, Heads: g.Config.Heads,
+		Eps1: eps1, Eps2: eps2, FinalEps: g.LNf.Eps,
+	}, true
+}
+
+func eligibleGPTLossAndGradBlock(block *Block, dim, hidden, heads int, eps1, eps2 float64) bool {
+	if block == nil || block.LN1 == nil || block.LN2 == nil || block.Attn == nil ||
+		block.W1 == nil || block.B1 == nil || block.W2 == nil || block.B2 == nil ||
+		block.LN1.Eps != eps1 || block.LN2.Eps != eps2 || block.Attn.Heads != heads ||
+		!block.Attn.Causal || block.Attn.Mask != nil {
+		return false
+	}
+	for _, name := range []string{"q", "k", "v", "o"} {
+		if block.Attn.LoRA[name] != nil || block.Attn.Bias[name] != nil {
+			return false
+		}
+	}
+	for _, value := range []*tensor.Tensor{
+		block.LN1.Gamma, block.LN1.Beta, block.Attn.Wq, block.Attn.Wk,
+		block.Attn.Wv, block.Attn.Wo, block.LN2.Gamma, block.LN2.Beta,
+		block.W1, block.B1, block.W2, block.B2,
+	} {
+		if value == nil {
+			return false
+		}
+	}
+	return block.W1.Shape().Equal(tensor.Shape{dim, hidden}) &&
+		block.B1.Shape().Equal(tensor.Shape{hidden}) &&
+		block.W2.Shape().Equal(tensor.Shape{hidden, dim}) &&
+		block.B2.Shape().Equal(tensor.Shape{dim})
 }
 
 // Safetensors returns the model's parameters under the FromSafetensors naming
