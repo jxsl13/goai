@@ -253,7 +253,7 @@ func TestOptimizerTrainingDecreasesLoss(t *testing.T) {
 		l := nn.NewLinear(tensor.F64, 2, 1, 11)
 		opt := mk(l.Params())
 		var prev float64
-		for step := range 5 {
+		for step := 0; step < 5; step++ {
 			tape := autograd.NewTape()
 			ctx := tape.Context()
 			pred, err := l.Forward(ctx, x)

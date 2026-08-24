@@ -15,6 +15,11 @@ import (
 	"github.com/jxsl13/goai/tensor"
 )
 
+type gptAdamWSessionCapability interface {
+	NewGPTAdamWSessionF32([]*tensor.Tensor, backend.GPTLossAndGradAttrs, backend.GPTAdamWAttrs) (
+		backend.GPTAdamWSession, bool, error)
+}
+
 func TestGPTAdamWSessionMetalParitySyncAndLifetime(t *testing.T) {
 	be, ok := backend.Get(backend.Metal)
 	if !ok {
@@ -23,6 +28,15 @@ func TestGPTAdamWSessionMetalParitySyncAndLifetime(t *testing.T) {
 	cfg := nlp.GPTConfig{Vocab: 16, Ctx: 6, Dim: 8, Heads: 2, Layers: 2, Eps: 1e-5}
 	control := randGPTf32(t, cfg, 4*cfg.Dim)
 	candidate := randGPTf32(t, cfg, 4*cfg.Dim)
+	capability, ok := be.(gptAdamWSessionCapability)
+	if !ok {
+		t.Fatal("Metal backend lacks GPT AdamW session capability")
+	}
+	unsupported, supported, err := capability.NewGPTAdamWSessionF32(
+		candidate.Params(), backend.GPTLossAndGradAttrs{}, backend.GPTAdamWAttrs{})
+	if err != nil || supported || unsupported != nil {
+		t.Fatalf("invalid geometry: session=%v supported=%v err=%v", unsupported, supported, err)
+	}
 	tokens := []int{2, 5, 2, 9}
 	targets := tensor.New(tensor.F32, tensor.Shape{len(tokens)})
 	for i, token := range tokens {
