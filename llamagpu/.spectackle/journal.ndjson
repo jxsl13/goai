@@ -154,3 +154,4 @@
 {"t":"2026-08-24T11:07:13Z","eid":"8c8c1fea71decb32","ag":"ag-5deb","ev":"move","id":"P-01M0SPBR6NFCJAE77W5JZZ4YA8","dir":"llamagpu","fr":"active","to":"done"}
 {"t":"2026-08-24T11:14:08Z","eid":"9fe084948681c609","ag":"ag-7047","ev":"create","id":"P-01M0SQMKR8FEBV8REH5J4G8N4B","k":"proposal","ti":"Elide dead max-context residual projection scratch","dir":"llamagpu"}
 {"t":"2026-08-24T11:14:20Z","eid":"88c5c5485ce894a1","ag":"ag-8f3f","ev":"create","id":"ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF","k":"adr","ti":"Gate residual projection scratch by reachable consumers","dir":"llamagpu"}
+{"t":"2026-08-24T11:14:33Z","eid":"4ee5c1d71aa0051e","ag":"ag-618a","ev":"decide","id":"ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF","dir":"llamagpu","note":"Allocate ao/mo only for reachable scratch consumers"}

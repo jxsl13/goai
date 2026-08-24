@@ -137,9 +137,13 @@ Standard pre-norm F32 Decoder projections fuse their residual add and ignore ao/
 
 ## ADR-01M0SQMYR1FGPRAZKCYZ4VTEKF Gate residual projection scratch by reachable consumers
 kind: adr
-state: draft
+state: done
 created: 2026-08-24
 parent: P-01M0SQMKR8FEBV8REH5J4G8N4B
+decision: Allocate ao/mo only for reachable scratch consumers
+consequences: Standard pre-norm F32 decoders retain zero ao/mo elements; quantized, post-norm, sandwich, and MoE paths keep historical Ctx times Dim capacity. Empty bufSlot placeholders preserve call-site safety without device allocation.
+status: accepted
 targets: llamagpu/decoder.go, llamagpu/decoder_storage_test.go
 
 Choose path-sensitive allocation: retain empty bufSlot placeholders when every block projection is F32 pre-norm and no MoE accumulation exists; allocate ao/mo at historical Ctx times Dim capacity for quantized weights, post-norm, sandwich, or MoE. Keep an internal eager control. Rejected alternatives: passing nil fields would panic at call-site selection; deleting scratch globally breaks quant fallback and normalized residual paths; lazy scratch adds runtime branching without benefit because the required architectures use it on every step.
+choice: Allocate ao/mo only for reachable scratch consumers
