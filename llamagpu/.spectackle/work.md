@@ -201,7 +201,7 @@ Implement one-row resident Decoder activation generation, exact high-water StepN
 
 ## P-01M0ST9BK2FGYTT3D762HHYHVB Add zero-allocation shared Decoder stepping
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
 
