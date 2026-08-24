@@ -117,32 +117,78 @@ func matContiguousF64(t *tensor.Tensor) *tensor.Tensor {
 const matmulInlineWork = 1 << 18
 
 func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
+	m, k, n, err := matmulDims(in)
+	if err != nil {
+		return nil, err
+	}
+	out := tensor.NewOn(ctx.Device(), in[0].Dtype(), tensor.Shape{m, n})
+	if err := matmulInto(in[0], in[1], out, m, k, n, false); err != nil {
+		return nil, err
+	}
+	return []*tensor.Tensor{out}, nil
+}
+
+func matmulIntoKernel(_ *backend.Context, in, outputs []*tensor.Tensor, _ backend.Attrs) error {
+	m, k, n, err := matmulDims(in)
+	if err != nil {
+		return err
+	}
+	if len(outputs) != 1 {
+		return fmt.Errorf("cpu: matmul into wants 1 output, got %d", len(outputs))
+	}
+	out := outputs[0]
+	if out == nil {
+		return fmt.Errorf("cpu: matmul into output is nil")
+	}
+	if out.Dtype() != in[0].Dtype() || !out.Shape().Equal(tensor.Shape{m, n}) {
+		return fmt.Errorf("cpu: matmul into output %v/%v, want [%d %d]/%v",
+			out.Shape(), out.Dtype(), m, n, in[0].Dtype())
+	}
+	if !out.IsContiguous() || out.Offset() != 0 {
+		return fmt.Errorf("cpu: matmul into output must be dense and offset-zero")
+	}
+	if out.Device().Kind() != tensor.KindCPU {
+		return fmt.Errorf("cpu: matmul into output must be on cpu, got %v", out.Device().Kind())
+	}
+	if out.Storage() == in[0].Storage() || out.Storage() == in[1].Storage() {
+		return fmt.Errorf("cpu: matmul into output must not alias an input")
+	}
+	return matmulInto(in[0], in[1], out, m, k, n, true)
+}
+
+func matmulDims(in []*tensor.Tensor) (m, k, n int, err error) {
 	if len(in) != 2 {
-		return nil, fmt.Errorf("cpu: matmul wants 2 inputs, got %d", len(in))
+		return 0, 0, 0, fmt.Errorf("cpu: matmul wants 2 inputs, got %d", len(in))
 	}
 	a, b := in[0], in[1]
 	if a.Ndim() != 2 || b.Ndim() != 2 {
-		return nil, fmt.Errorf("cpu: matmul needs rank-2, got %dD and %dD", a.Ndim(), b.Ndim())
+		return 0, 0, 0, fmt.Errorf("cpu: matmul needs rank-2, got %dD and %dD", a.Ndim(), b.Ndim())
 	}
 	if a.Dtype() != b.Dtype() {
-		return nil, fmt.Errorf("cpu: matmul dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
+		return 0, 0, 0, fmt.Errorf("cpu: matmul dtype mismatch %v vs %v", a.Dtype(), b.Dtype())
 	}
-	m, k := a.Shape()[0], a.Shape()[1]
+	m, k = a.Shape()[0], a.Shape()[1]
 	k2, n := b.Shape()[0], b.Shape()[1]
 	if k != k2 {
-		return nil, fmt.Errorf("cpu: matmul inner dim mismatch %v · %v", a.Shape(), b.Shape())
+		return 0, 0, 0, fmt.Errorf("cpu: matmul inner dim mismatch %v · %v", a.Shape(), b.Shape())
 	}
+	return m, k, n, nil
+}
+
+func matmulInto(a, b, out *tensor.Tensor, m, k, n int, reuseOutput bool) error {
 	ac, bc := a, b
 	if a.Dtype() == tensor.F32 {
 		ac, bc = matContiguousF32(a), matContiguousF32(b)
 	} else {
 		ac, bc = matContiguousF64(a), matContiguousF64(b)
 	}
-	out := tensor.NewOn(ctx.Device(), a.Dtype(), tensor.Shape{m, n})
 
 	switch a.Dtype() {
 	case tensor.F64:
 		A, B, C := ac.Storage().F64(), bc.Storage().F64(), out.Storage().F64()
+		if reuseOutput {
+			clear(C)
+		}
 		if m == 1 {
 			// Single-row (GEMV, the decode shape): the row-band split above
 			// degenerates to ONE chunk — the whole product ran serial on the
@@ -154,7 +200,7 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 			parallelWork(n, k, func(loCol, hiCol int) {
 				gemvF64Cols(A, B, C, k, n, loCol, hiCol)
 			})
-			return []*tensor.Tensor{out}, nil
+			return nil
 		}
 		if m*k*n < matmulInlineWork {
 			// Small matmul (e.g. a training step's tiny layers): compute-cheap but it
@@ -175,9 +221,9 @@ func matmulKernel(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([
 		C := out.Storage().F32()
 		gemmF32(A, B, C, m, k, n)
 	default:
-		return nil, fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
+		return fmt.Errorf("cpu: unsupported dtype %v", a.Dtype())
 	}
-	return []*tensor.Tensor{out}, nil
+	return nil
 }
 
 // gemvF64Cols computes C[0, lo:hi] of the single-row product C[1,n] =

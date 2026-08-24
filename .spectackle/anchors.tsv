@@ -7,7 +7,7 @@ ARCH-015	go:backend.RegisterDefault	backend/registry.go	68-76	77f244cac8574f7e	5
 ARCH-016	go:backend.Attrs	backend/attrs.go	41-41	80cf5196e9ab8229	a95c36e5cd3d5bd9
 ARCH-017	go:backend.Execute	backend/execute.go	180-325	6eb8f3a1c62145fe	3dfb39f6fd63d34a
 ARCH-018	go:backend.Execute	backend/execute.go	180-325	6eb8f3a1c62145fe	9f281c6c2293a179
-ARCH-019	go:backend.Backend	backend/backend.go	30-37	03c713b32f516509	5cbbf7816a6606a8
+ARCH-019	go:backend.Backend	backend/backend.go	43-50	03c713b32f516509	5cbbf7816a6606a8
 ARCH-020	go:apicheck.TestNoMagicBackendNameStrings	internal/apicheck/nomagicstrings_test.go	36-82	cd088fe7f4e09e7a	92bceff4f398f40c
 NUM-013	go:backend.Execute	backend/execute.go	180-325	6eb8f3a1c62145fe	f6b05adca6a63e62
 CI-009	go:main.TestRunAlwaysRunSelectsMetaTests	internal/cichange/impact_alwaysrun_test.go	55-78	6fa3699faaf8c24c	16b66fc6c48e0992
@@ -66,7 +66,7 @@ ARM64-F64-GEMM-BAND-PERF-001	go:cpu.gemmF64Full	backend/cpu/gemm_f64_neon_arm64.
 ARM64-F64-GEMM-BAND-PERF-001	go:cpu.packBPanelsF64	backend/cpu/gemm_f64_neon_arm64.go	64-72	77e0fc23fdcdd6c4	47ccbaaba89bb6ec
 ARM64-F64-GEMM-BAND-PERF-001	go:cpu.gemmF64Tile4x8Neon	backend/cpu/gemm_f64_neon_arm64.go	12-12	0cf39f5a1f4f8477	47ccbaaba89bb6ec
 ARM64-F64-GEMM-BAND-PERF-001	asm:cpu.gemmF64Tile4x8Neon	backend/cpu/gemm_f64_neon_arm64.s	12-12	9b91c903db2de0cb	47ccbaaba89bb6ec
-ARM64-F64-GEMM-BAND-SCOPE-001	go:cpu.matmulKernel	backend/cpu/gemm.go	119-181	57989f1eb14fdbb3	d4dae01e98ed90ef
+ARM64-F64-GEMM-BAND-SCOPE-001	go:cpu.matmulKernel	backend/cpu/gemm.go	119-129	ec63cba86d3eb9b2	d4dae01e98ed90ef
 ARM64-F64-GEMM-BAND-SCOPE-001	go:cpu.gemmF64Full	backend/cpu/gemm_f64_neon_arm64.go	34-62	aba41e4f79ee96cb	d4dae01e98ed90ef
 ARM64-F64-GEMM-BAND-SCOPE-001	go:cpu.gemmF64Full~2	backend/cpu/gemm_f64full_other.go	5-5	c89cca0d8f5e3553	d4dae01e98ed90ef
 ARM64-F64-GEMM-BAND-SCOPE-001	go:cpu.gemmF64BandPortable	backend/cpu/gemm_nosimd.go	28-163	7a62ab0cff610b56	d4dae01e98ed90ef
@@ -417,3 +417,16 @@ GPT-GENERATE-CACHE-PARITY-001-001	go:llamagpu.GPTDecoder.Generate	llamagpu/gpt.g
 GPT-GENERATE-LOGITS-REUSE-001-001	go:llamagpu.GPTDecoder.Generate	llamagpu/gpt.go	565-605	640edf059198e95f	6fc636c4fe66c8f0
 M2-GPT-GENERATE-ALLOCATION-PERF-001-001	go:llamagpu.BenchmarkGPTGenerateAllocationsMetal	llamagpu/gpt_boundary_metal_bench_test.go	171-200	158c8f594e7d1a78	aa95b81cff61e506
 M2-GPT-GENERATE-ALLOCATION-PERF-001-001	go:llamagpu.BenchmarkGPTGeneratePairedMetal	llamagpu/gpt_boundary_metal_bench_test.go	203-235	4ebde86909d5eb20	aa95b81cff61e506
+CALLER-OWNED-OUTPUT-001	go:backend.ExecuteInto	backend/execute_into.go	17-73	b3799db482367a60	9d292c11185f3c4a
+CALLER-OWNED-OUTPUT-001	go:backend.IntoBackend	backend/backend.go	29-31	cf56d1ca72fd632d	9d292c11185f3c4a
+CALLER-OWNED-OUTPUT-001	go:cpu.matmulInto	backend/cpu/gemm.go	178-227	ef59f2f11cd81c65	9d292c11185f3c4a
+CALLER-OWNED-OUTPUT-001	go:ops.MatMulInto	ops/ops.go	175-178	86aa94d235beafbb	9d292c11185f3c4a
+MUON-WORKSPACE-REUSE-001	go:nn.NewMuon	nn/muon.go	88-106	d8a0bdb2de252769	437929143b8d896a
+MUON-WORKSPACE-REUSE-001	go:nn.newtonSchulz5WithScratch	nn/muon.go	263-315	2854a72c71ab5952	437929143b8d896a
+MUON-WORKSPACE-REUSE-001	go:nn.TestMuonStepIsBitIdentical	nn/muon_bitidentity_test.go	36-78	b09514f303d6be3d	437929143b8d896a
+MUON-WORKSPACE-REUSE-001	go:nn.TestMuonStepIgnoresStaleScratch	nn/muon_matmul_internal_test.go	260-311	bbf8fde99254efbe	437929143b8d896a
+MUON-WORKSPACE-REUSE-001	go:nn_test.BenchmarkMuonStepOnly	nn/train_bench_test.go	159-168	573335cd0b1a5b84	437929143b8d896a
+MUON-MATMUL-INTO-PERF-001	go:nn.newtonSchulz5WithScratch	nn/muon.go	263-315	2854a72c71ab5952	0c6045617b5b44e9
+MUON-MATMUL-INTO-PERF-001	go:ops.MatMulInto	ops/ops.go	175-178	86aa94d235beafbb	0c6045617b5b44e9
+MUON-MATMUL-INTO-PERF-001	go:nn.TestMuonStepIsBitIdentical	nn/muon_bitidentity_test.go	36-78	b09514f303d6be3d	0c6045617b5b44e9
+MUON-MATMUL-INTO-PERF-001	go:nn_test.BenchmarkMuonStepOnly	nn/train_bench_test.go	159-168	573335cd0b1a5b84	0c6045617b5b44e9

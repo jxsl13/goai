@@ -43,6 +43,16 @@ func (b *Backend) Kernel(op backend.Op, dtype tensor.Dtype) (backend.Kernel, boo
 	return k, ok
 }
 
+// IntoKernel exposes allocation-free fixed-output forms without expanding the
+// mandatory backend interface. MatMul is the first fixed-shape hot path; other
+// ops retain ExecuteInto's compatibility fallback until they earn a native form.
+func (b *Backend) IntoKernel(op backend.Op, dtype tensor.Dtype) (backend.IntoKernel, bool) {
+	if op == backend.OpMatMul && (dtype == tensor.F32 || dtype == tensor.F64) {
+		return matmulIntoKernel, true
+	}
+	return nil, false
+}
+
 // parThreshold is the total work (items × work-per-item) below which parallelism is not
 // worth the overhead of handing chunks to the worker pool. Boundary behavior: set it too
 // LOW and small ops pay pool-dispatch + cache-sync cost that exceeds the compute they save

@@ -100,7 +100,7 @@ func TestNewtonSchulz5CrossReferenceExact(t *testing.T) {
 }
 
 // TestMatmulABtKeepsZeroTerms holds the claim matmulABt's comment makes: it must
-// NOT adopt matmulFlat's `if av == 0 { continue }` skip. A skipped 0·(±Inf) term is
+// not skip exact-zero multipliers. A skipped 0·(±Inf) term is
 // a dropped NaN, so the skip would silently turn a NaN output into a finite one.
 // Random fixtures never contain an exact zero, so without this the exactness gate
 // passes with the skip in place — it was measured doing exactly that.
@@ -147,92 +147,14 @@ func assertBitsEqual(t *testing.T, got, want []float64, what string, m, k int) {
 	}
 }
 
-// matmulFlatSerialRef is matmulFlat EXACTLY as it stood before the row bands: one goroutine
-// walking every row in ikj order. It is the bit-identity oracle for the split, and it must stay
-// frozen — rewriting it to follow the implementation would make the gate self-fulfilling.
-func matmulFlatSerialRef(a, b []float64, m, k, n int) []float64 {
-	c := make([]float64, m*n)
-	for i := range m {
-		ci := c[i*n : i*n+n]
-		for p := range k {
-			av := a[i*k+p]
-			if av == 0 {
-				continue
-			}
-			bp := b[p*n : p*n+n]
-			for j := range ci {
-				ci[j] += av * bp[j]
-			}
-		}
-	}
-	return c
-}
-
-// TestMatmulFlatBandsMatchSerialExactly holds the parallel matmulFlat bit-identical to the serial
-// form, with no tolerance: a band owns whole rows of C, so every element still accumulates its k
-// products in the same ascending-p order. A tolerance here would accept exactly the reassociation
-// the split is claiming not to do.
-//
-// The shapes are chosen to clear parallelRows' m*k*n >= 1<<14 gate — below it the helper runs the
-// body serially and the test would compare the serial path against itself — and to include a row
-// count that does NOT divide evenly across workers, since an off-by-one in the band arithmetic
-// shows up only in the last, short band. The wide exponent spread in randMat is what makes a
-// reordered accumulation round differently and be caught at all.
-func TestMatmulFlatBandsMatchSerialExactly(t *testing.T) {
-	rng := rand.New(rand.NewSource(20260802))
-	for _, d := range []struct{ m, k, n int }{
-		{64, 64, 64},   // square, evenly divisible
-		{37, 48, 53},   // none of the three divides the worker count
-		{256, 64, 512}, // the Newton-Schulz shape: many rows, heavy per row
-		{3, 512, 512},  // few rows, huge per-row work — the case a row-count gate would miss
-		{1, 256, 256},  // single row: the split degenerates
-		{129, 17, 8},   // odd row count, narrow output
-	} {
-		a := randMat(rng, d.m, d.k)
-		b := randMat(rng, d.k, d.n)
-		// A column of exact zeros exercises the av == 0 skip inside a band.
-		for i := range d.m {
-			a[i*d.k] = 0
-		}
-		got := matmulFlat(a, b, d.m, d.k, d.n)
-		want := matmulFlatSerialRef(a, b, d.m, d.k, d.n)
-		if len(got) != len(want) {
-			t.Fatalf("[%d,%d,%d]: %d values, want %d", d.m, d.k, d.n, len(got), len(want))
-		}
-		for i := range want {
-			if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
-				t.Fatalf("[%d,%d,%d] element %d (row %d): %v, serial %v — the band split changed"+
-					" an accumulation", d.m, d.k, d.n, i, i/d.n, got[i], want[i])
-			}
-		}
-	}
-}
-
-// TestMatmulIntoClearsADirtyDestination pins the precondition that makes buffer reuse safe here:
-// both kernels ACCUMULATE into their destination, so a reused buffer must be zeroed first.
-//
-// The existing cross-reference tests cannot see this. They call matmulFlat and matmulABt, which
-// pass a nil destination and get a fresh make — already zero — so the clear is never exercised.
-// This calls the Into forms twice on one buffer, with the second result compared against a fresh
-// computation: if the clear is dropped, the second answer is the sum of both products.
-func TestMatmulIntoClearsADirtyDestination(t *testing.T) {
+// TestMatmulABtIntoClearsADirtyDestination pins the precondition that makes
+// output-buffer reuse safe: the kernel accumulates, so a reused buffer must be
+// cleared before the first product.
+func TestMatmulABtIntoClearsADirtyDestination(t *testing.T) {
 	rng := rand.New(rand.NewSource(20260803))
-	const m, k, n = 12, 9, 7
-	a1, b1 := randMat(rng, m, k), randMat(rng, k, n)
-	a2, b2 := randMat(rng, m, k), randMat(rng, k, n)
-
-	dst := make([]float64, m*n)
-	matmulFlatInto(dst, a1, b1, m, k, n) // dirty the buffer with a different product
-	got := matmulFlatInto(dst, a2, b2, m, k, n)
-	want := matmulFlat(a2, b2, m, k, n)
-	for i := range want {
-		if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
-			t.Fatalf("matmulFlatInto element %d on a reused buffer: %v, fresh %v — the destination"+
-				" was not cleared, so the previous product is still in it", i, got[i], want[i])
-		}
-	}
-
-	// Same for the AᐧBᵀ kernel, in both its shapes: the symmetric path writes only the lower
+	const m, k = 12, 9
+	a1 := randMat(rng, m, k)
+	// Exercise AᐧBᵀ in both shapes: the symmetric path writes only the lower
 	// triangle before mirroring, so a stale upper triangle would survive there too.
 	for _, aliased := range []bool{false, true} {
 		x := randMat(rng, m, k)
@@ -253,10 +175,10 @@ func TestMatmulIntoClearsADirtyDestination(t *testing.T) {
 	}
 }
 
-// TestMuonStepIgnoresStaleScratch pins the receiver-held direction buffer. It is reused across
-// steps, so every entry must be written before it is read — poisoning it with NaN between steps
-// must change nothing. This is the check PS3035's advice calls for, run against the real optimizer
-// rather than against a fixture that mimics it.
+// TestMuonStepIgnoresStaleScratch pins every receiver-held workspace. Each is reused across steps,
+// so every entry must be written or cleared before it is read — poisoning it with NaN between
+// steps must change nothing. This is the check PS3035's advice calls for, run against the real
+// optimizer rather than against a fixture that mimics it.
 func TestMuonStepIgnoresStaleScratch(t *testing.T) {
 	mk := func() ([]*tensor.Tensor, GradFn) {
 		p := tensor.New(tensor.F64, tensor.Shape{24, 16})
@@ -281,6 +203,18 @@ func TestMuonStepIgnoresStaleScratch(t *testing.T) {
 		for i := range poisoned.dir {
 			for j := range poisoned.dir[i] {
 				poisoned.dir[i][j] = math.NaN()
+			}
+			workspace := &poisoned.ns[i]
+			for _, scratchTensor := range []*tensor.Tensor{
+				workspace.x, workspace.xt, workspace.out, workspace.a, workspace.a2, workspace.bm, workspace.bx,
+			} {
+				if scratchTensor == nil {
+					continue
+				}
+				buf := scratchTensor.Storage().F64()
+				for j := range buf {
+					buf[j] = math.NaN()
+				}
 			}
 		}
 		if err := poisoned.Step(gp); err != nil {

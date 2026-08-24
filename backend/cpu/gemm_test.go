@@ -1,6 +1,7 @@
 package cpu_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -35,6 +36,63 @@ func TestGemmCrossReferenceExact(t *testing.T) {
 			gr := run(t, ref, backend.OpMatMul, a, b)
 			assertMatMul(t, gc, gr, "matmul")
 		}
+	}
+}
+
+// Caller-owned output must have the same values as the allocating kernel and
+// must overwrite stale data completely. This is the fixed-shape execution seam
+// used by Muon's repeated Newton-Schulz products.
+func TestGemmIntoMatchesAllocatingExactly(t *testing.T) {
+	cpu, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(cpu)
+	for _, s := range []struct{ m, k, n int }{{1, 7, 3}, {8, 16, 8}, {64, 32, 48}} {
+		for _, dtype := range []tensor.Dtype{tensor.F64, tensor.F32} {
+			var a, b, out *tensor.Tensor
+			if dtype == tensor.F64 {
+				a = bench.RandF64(tensor.Shape{s.m, s.k}, 31)
+				b = bench.RandF64(tensor.Shape{s.k, s.n}, 32)
+				out = tensor.New(tensor.F64, tensor.Shape{s.m, s.n})
+				for i := range out.Storage().F64() {
+					out.Storage().F64()[i] = 12345
+				}
+			} else {
+				a = bench.RandF32(tensor.Shape{s.m, s.k}, 31)
+				b = bench.RandF32(tensor.Shape{s.k, s.n}, 32)
+				out = tensor.New(tensor.F32, tensor.Shape{s.m, s.n})
+				for i := range out.Storage().F32() {
+					out.Storage().F32()[i] = 12345
+				}
+			}
+			want := run(t, cpu, backend.OpMatMul, a, b)
+			if err := backend.ExecuteInto(ctx, backend.OpMatMul,
+				[]*tensor.Tensor{a, b}, []*tensor.Tensor{out}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if dtype == tensor.F64 {
+				for i, got := range out.Storage().F64() {
+					if math.Float64bits(got) != math.Float64bits(want.Storage().F64()[i]) {
+						t.Fatalf("F64 matmul-into element %d = %v, allocating %v", i, got, want.Storage().F64()[i])
+					}
+				}
+			} else {
+				for i, got := range out.Storage().F32() {
+					if math.Float32bits(got) != math.Float32bits(want.Storage().F32()[i]) {
+						t.Fatalf("F32 matmul-into element %d = %v, allocating %v", i, got, want.Storage().F32()[i])
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestGemmIntoRejectsAliasedOutput(t *testing.T) {
+	cpu, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(cpu)
+	a := bench.RandF64(tensor.Shape{4, 4}, 41)
+	b := bench.RandF64(tensor.Shape{4, 4}, 42)
+	if err := backend.ExecuteInto(ctx, backend.OpMatMul,
+		[]*tensor.Tensor{a, b}, []*tensor.Tensor{a}, nil); err == nil {
+		t.Fatal("MatMulInto accepted an output that aliases its input")
 	}
 }
 

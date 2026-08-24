@@ -34,6 +34,18 @@ func ExampleMatMul() {
 	// Output: 19 22 43 50
 }
 
+// MatMulInto reuses a caller-owned output tensor, which removes result storage
+// allocation from fixed-shape loops.
+func ExampleMatMulInto() {
+	a := tensor.FromFloat64(tensor.Shape{1, 2}, []float64{1, 2})
+	b := tensor.FromFloat64(tensor.Shape{2, 1}, []float64{3, 4})
+	out := tensor.New(tensor.F64, tensor.Shape{1, 1})
+
+	_ = ops.MatMulInto(out, a, b)
+	fmt.Println(out.AtF64(0, 0))
+	// Output: 11
+}
+
 // Softmax turns a score vector into a probability distribution over the last axis
 // (numerically stable). Two equal scores map to a uniform [0.5, 0.5].
 func ExampleSoftmax() {

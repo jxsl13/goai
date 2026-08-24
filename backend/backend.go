@@ -17,6 +17,19 @@ import (
 // autograd — it records nothing; interception happens in Execute (ADR-0003).
 type Kernel func(ctx *Context, inputs []*tensor.Tensor, attrs Attrs) ([]*tensor.Tensor, error)
 
+// IntoKernel executes one primitive op into caller-owned output tensors. It is
+// the allocation-free twin of Kernel for fixed-shape hot paths; backends expose
+// it selectively through IntoBackend, and ExecuteInto falls back to the regular
+// allocating kernel when no native into form exists.
+type IntoKernel func(ctx *Context, inputs, outputs []*tensor.Tensor, attrs Attrs) error
+
+// IntoBackend is an optional backend extension for kernels that can write into
+// caller-owned output tensors. Backend remains source-compatible for external
+// implementations; supporting an into kernel is an opt-in performance feature.
+type IntoBackend interface {
+	IntoKernel(op Op, dtype tensor.Dtype) (k IntoKernel, ok bool)
+}
+
 // Backend is a named compute implementation for one device.
 //
 // Execution/sync model (§V14): Execute returns output tensors that are final

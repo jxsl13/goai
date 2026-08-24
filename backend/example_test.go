@@ -96,6 +96,29 @@ func ExampleSwiGLUF32ChunkFuser() {
 	// Output: true [0 0]
 }
 
+// IntoBackend is the optional capability for operations that can write into a
+// caller-owned tensor. Call ExecuteInto rather than invoking the kernel directly;
+// capability detection is useful when reporting backend support.
+func ExampleIntoBackend() {
+	_, available := backend.Default().(backend.IntoBackend)
+	fmt.Println(available)
+	// Output: true
+}
+
+// IntoKernel is the implementation hook used by backend authors. The output is
+// supplied by the caller and must be completely overwritten by the kernel.
+func ExampleIntoKernel() {
+	kernel := backend.IntoKernel(func(_ *backend.Context, inputs, outputs []*tensor.Tensor, _ backend.Attrs) error {
+		copy(outputs[0].Storage().F64(), inputs[0].Storage().F64())
+		return nil
+	})
+	in := tensor.FromFloat64(tensor.Shape{2}, []float64{3, 7})
+	out := tensor.New(tensor.F64, tensor.Shape{2})
+	_ = kernel(backend.NewContext(), []*tensor.Tensor{in}, []*tensor.Tensor{out}, nil)
+	fmt.Println(out.Storage().F64())
+	// Output: [3 7]
+}
+
 // --- Level 3: embedded — a real matmul on the auto-selected backend ----------
 
 // End to end with zero configuration: build tensors and run a matmul. It executes
