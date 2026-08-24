@@ -217,3 +217,12 @@ grilled: 2026-08-24 open=0
 targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go
 
 Expose StepInto, StepNInto, and StepNLastInto while retaining Step, StepN, and StepNLast as allocating wrappers over one execution graph. Store one Dim host row and one exact high-water k-times-Dim host slice on GPTDecoder; fill token and learned-position embeddings directly with embedRowInto and clear both on Release. For Metal NewGPT, use the validated decoder-local two-wrapper mRecPool while creating a fresh one-shot native command buffer per acquisition. Reject sync.Pool because ownership is decoder-local and bounded, eager Ctx-times-Dim host residency because peak prompts should not define construction cost, device-side gather because the existing synchronous host upload is not the measured bottleneck, and duplicate Into execution graphs because semantic drift would outweigh the allocation win.
+
+## T-01M0SXVBXBFWQB2XB30NCJC88B Implement and gate allocation-free GPT decode and prefill
+kind: task
+state: draft
+created: 2026-08-24
+parent: P-01M0SXR7C3E2MRKNF1YVZ48G65
+targets: go:llamagpu.GPTDecoder.Step, go:llamagpu.GPTDecoder.StepN, go:llamagpu.GPTDecoder.StepNLast, go:llamagpu.GPTDecoder.gptStepN, go:llamagpu.NewGPT, llamagpu/gpt.go, llamagpu/llamagpu.go, llamagpu/gpt_storage_test.go, llamagpu/gpt2_scale_test.go, llamagpu/llamagpu_test.go, llamagpu/example_test.go
+
+Refactor GPTDecoder Step, StepN, and StepNLast into caller-buffer variants plus allocating wrappers; gather token and positional embeddings directly into one reusable row or exact high-water batch staging; validate destinations and token ranges before cache mutation; clear staging on Release; and route Metal NewGPT through the bounded recorder-wrapper pool. Add exact parity, invalid-length, high-water lifetime, public example, and M2 GPT-2-small benchmarks. Gate warmed StepInto and StepNLastInto at zero allocations, wrapper allocation bytes at result-only payloads, and paired throughput at or above 0.97 times current main.
