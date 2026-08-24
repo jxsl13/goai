@@ -542,3 +542,6 @@ WHEN supported output and backward parity is checked against the composite bound
 
 ## METAL-LAYERNORM-SEQUENCE-CLASSIFIER-GRAPH-STRUCTURE-001-001
 WHEN contiguous offset-zero F32 inputs execute the fused classifier boundary, the Metal implementation SHALL execute exactly 1 bounded shape-keyed cached MPSGraph submission per direction with runtime epsilon, pooled buffers, and Go-owned outputs.
+
+## M2-LAYERNORM-SEQUENCE-CLASSIFIER-PERF-001-001
+WHEN 3 order-alternated count-7 M2 Pro campaigns measure F32 B8 S65 D128 C10, the promotion gate SHALL retain classifier fusion only at 1.20 times boundary median, 1.05 times full-step median, and 1.03 times every aligned full-step pair.
