@@ -4016,6 +4016,7 @@ created: 2026-08-24
 kind: proposal
 state: draft
 created: 2026-08-24
+refs: R-01M0S05JDTENNRZD2EQNZ2FSTW
 grilled: 2026-08-24 open=1
 targets: Makefile, .github/workflows/ci.yml, internal/cichange/config.go, .claude/workflows/perfscan-autofix.js, internal/perfscan, perfscan.yaml, LOOP.md, docs/perf-notes-training.md
 
