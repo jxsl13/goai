@@ -3,6 +3,8 @@ package vision
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sync"
 
 	"github.com/jxsl13/goai/autograd"
 	"github.com/jxsl13/goai/backend"
@@ -41,6 +43,39 @@ type ViT struct {
 	Head   *nn.Linear     // classification head [D → classes]
 
 	channels, size int // expected input geometry (C, H=W=size)
+}
+
+// ViTAdamWConfig configures a stateful ViT training session whose parameters,
+// gradients, and AdamW moments all use F32 precision.
+type ViTAdamWConfig struct {
+	LR          float64 // learning rate applied to the adaptive update and decay
+	Beta1       float64 // first-moment exponential decay in [0,1)
+	Beta2       float64 // second-moment exponential decay in [0,1)
+	Eps         float64 // positive denominator floor outside the square root
+	WeightDecay float64 // non-negative decoupled AdamW decay coefficient
+}
+
+// DefaultViTAdamWConfig returns the canonical AdamW beta and epsilon values.
+func DefaultViTAdamWConfig(lr, weightDecay float64) ViTAdamWConfig {
+	return ViTAdamWConfig{
+		LR: lr, Beta1: 0.9, Beta2: 0.999, Eps: 1e-8, WeightDecay: weightDecay,
+	}
+}
+
+// ViTAdamWSession owns optimizer state across fixed-batch ViT training steps.
+// Accelerator implementations may keep parameters and moments resident; call
+// Sync before reading model parameters and Close when the session is done.
+type ViTAdamWSession struct {
+	mu         sync.Mutex
+	model      *ViT
+	ctx        *backend.Context
+	batch      int
+	patches    *tensor.Tensor
+	resident   backend.ViTAdamWSession
+	portable   *nn.AdamF32
+	paramIndex map[*tensor.Tensor]int
+	grads      []*tensor.Tensor
+	closed     bool
 }
 
 // vitBlock is one pre-LN encoder block: x += MHA(LN1(x)); x += MLP(LN2(x)).
@@ -212,6 +247,181 @@ func (m *ViT) Params() []*tensor.Tensor {
 type vitLossAndGradBackend interface {
 	ViTLossAndGradF32(inputs []*tensor.Tensor, attrs backend.ViTLossAndGradAttrs) (
 		loss *tensor.Tensor, grads []*tensor.Tensor, supported bool, err error)
+}
+
+type vitAdamWSessionBackend interface {
+	NewViTAdamWSessionF32(params []*tensor.Tensor, attrs backend.ViTLossAndGradAttrs, optim backend.ViTAdamWAttrs) (
+		session backend.ViTAdamWSession, supported bool, err error)
+}
+
+// NewAdamWSession creates a fixed-batch F32 AdamW training session. The
+// portable implementation evaluates LossAndGrad then updates F32 moment state;
+// capable backends may retain every large tensor across calls. A session owns
+// exclusive mutation of model parameters until Close returns.
+func (m *ViT) NewAdamWSession(ctx *backend.Context, batch int, config ViTAdamWConfig) (*ViTAdamWSession, error) {
+	if m == nil {
+		return nil, errors.New("vision: ViT.NewAdamWSession called on nil model")
+	}
+	if batch <= 0 {
+		return nil, fmt.Errorf("vision: ViT AdamW batch must be positive, got %d", batch)
+	}
+	if err := validateViTAdamWConfig(config); err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		ctx = backend.NewContext()
+	}
+	if ctx.Backend == nil {
+		return nil, errors.New("vision: ViT AdamW session needs a context backend")
+	}
+	params := m.Params()
+	for i, parameter := range params {
+		if parameter == nil || parameter.Dtype() != tensor.F32 || !parameter.IsContiguous() || parameter.Offset() != 0 {
+			return nil, fmt.Errorf("vision: ViT AdamW parameter %d requires contiguous offset-zero F32 storage", i)
+		}
+	}
+	s := &ViTAdamWSession{
+		model: m, ctx: ctx, batch: batch,
+		paramIndex: make(map[*tensor.Tensor]int, len(params)),
+		grads:      make([]*tensor.Tensor, len(params)),
+	}
+	for i, parameter := range params {
+		s.paramIndex[parameter] = i
+	}
+	optim := backend.ViTAdamWAttrs{
+		LR: config.LR, Beta1: config.Beta1, Beta2: config.Beta2,
+		Eps: config.Eps, WeightDecay: config.WeightDecay,
+	}
+	if accelerated, ok := ctx.Backend.(vitAdamWSessionBackend); ok && ctx.Recorder == nil {
+		images := tensor.New(tensor.F32, tensor.Shape{batch, m.channels, m.size, m.size})
+		targets := tensor.New(tensor.F32, tensor.Shape{batch})
+		if attrs, eligible := m.lossAndGradAttrs(images, targets); eligible {
+			resident, supported, err := accelerated.NewViTAdamWSessionF32(params, attrs, optim)
+			if supported {
+				if err != nil {
+					return nil, err
+				}
+				if resident == nil {
+					return nil, errors.New("vision: ViT AdamW backend returned a nil resident session")
+				}
+				s.resident = resident
+				s.patches = tensor.New(tensor.F32, tensor.Shape{batch * attrs.Patches, attrs.PatchDim})
+				return s, nil
+			}
+		}
+	}
+	s.portable = nn.NewAdamWF32(params, config.LR, config.WeightDecay)
+	s.portable.Beta1, s.portable.Beta2, s.portable.Eps = config.Beta1, config.Beta2, config.Eps
+	return s, nil
+}
+
+func validateViTAdamWConfig(config ViTAdamWConfig) error {
+	finite := func(value float64) bool { return !math.IsNaN(value) && !math.IsInf(value, 0) }
+	if !finite(config.LR) || config.LR <= 0 {
+		return errors.New("vision: ViT AdamW learning rate must be finite and positive")
+	}
+	if !finite(config.Beta1) || config.Beta1 < 0 || config.Beta1 >= 1 ||
+		!finite(config.Beta2) || config.Beta2 < 0 || config.Beta2 >= 1 {
+		return errors.New("vision: ViT AdamW betas must be finite and in [0,1)")
+	}
+	if !finite(config.Eps) || config.Eps <= 0 {
+		return errors.New("vision: ViT AdamW epsilon must be finite and positive")
+	}
+	if !finite(config.WeightDecay) || config.WeightDecay < 0 {
+		return errors.New("vision: ViT AdamW weight decay must be finite and non-negative")
+	}
+	return nil
+}
+
+// Step evaluates one mean-cross-entropy objective and applies one AdamW update.
+// Its returned scalar loss is materialized on the host; resident parameters are
+// not copied back until Sync or Close.
+func (s *ViTAdamWSession) Step(images, targets *tensor.Tensor) (*tensor.Tensor, error) {
+	if s == nil {
+		return nil, errors.New("vision: nil ViT AdamW session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, errors.New("vision: ViT AdamW session is closed")
+	}
+	if err := s.validateInputs(images, targets); err != nil {
+		return nil, err
+	}
+	if s.resident != nil {
+		if err := s.model.patchifyBatchInto(s.patches, images); err != nil {
+			return nil, err
+		}
+		return s.resident.Step(s.patches, targets)
+	}
+	loss, grads, err := s.model.LossAndGrad(s.ctx, images, targets)
+	if err != nil {
+		return nil, err
+	}
+	copy(s.grads, grads)
+	if err := s.portable.Step(func(parameter *tensor.Tensor) *tensor.Tensor {
+		return s.grads[s.paramIndex[parameter]]
+	}); err != nil {
+		return nil, err
+	}
+	return loss, nil
+}
+
+func (s *ViTAdamWSession) validateInputs(images, targets *tensor.Tensor) error {
+	if images == nil || images.Dtype() != tensor.F32 || images.Ndim() != 4 ||
+		!images.IsContiguous() || images.Offset() != 0 || images.Shape()[0] != s.batch ||
+		images.Shape()[1] != s.model.channels || images.Shape()[2] != s.model.size || images.Shape()[3] != s.model.size {
+		return fmt.Errorf("vision: ViT AdamW images must be contiguous offset-zero F32 [%d,%d,%d,%d]", s.batch, s.model.channels, s.model.size, s.model.size)
+	}
+	if targets == nil || targets.Dtype() != tensor.F32 || targets.Ndim() != 1 ||
+		!targets.IsContiguous() || targets.Offset() != 0 || targets.Shape()[0] != s.batch {
+		return fmt.Errorf("vision: ViT AdamW targets must be contiguous offset-zero F32 [%d]", s.batch)
+	}
+	classes := s.model.Head.W.Shape()[1]
+	for _, value := range targets.Storage().F32() {
+		target := int(value)
+		if value != float32(target) || target < 0 || target >= classes {
+			return fmt.Errorf("vision: ViT AdamW target %v outside classes %d", value, classes)
+		}
+	}
+	return nil
+}
+
+// Sync copies resident parameters into the model. It is a no-op for the
+// portable session, whose parameters are already host-visible and current.
+func (s *ViTAdamWSession) Sync() error {
+	if s == nil {
+		return errors.New("vision: nil ViT AdamW session")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return errors.New("vision: ViT AdamW session is closed")
+	}
+	if s.resident == nil {
+		return nil
+	}
+	return s.resident.Sync(s.model.Params())
+}
+
+// Close synchronizes the final parameter state and releases backend resources.
+// It is safe to call more than once.
+func (s *ViTAdamWSession) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	if s.resident == nil {
+		return nil
+	}
+	syncErr := s.resident.Sync(s.model.Params())
+	closeErr := s.resident.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 // LossAndGrad evaluates mean hard-label cross-entropy and returns gradients in
@@ -390,13 +600,31 @@ func (m *ViT) patchifyBatch(images *tensor.Tensor) (*tensor.Tensor, error) {
 	if images.Ndim() != 4 || sh[1] != m.channels || sh[2] != m.size || sh[3] != m.size {
 		return nil, fmt.Errorf("vision: ViT expects [batch,%d,%d,%d] images, got %v", m.channels, m.size, m.size, sh)
 	}
+	grid := m.size / m.Patch
+	out := tensor.New(m.Class.Dtype(), tensor.Shape{sh[0] * grid * grid, m.channels * m.Patch * m.Patch})
+	if err := m.patchifyBatchInto(out, images); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// patchifyBatchInto reuses the caller-owned packed tensor. Resident training
+// sessions use it to keep Go allocation out of the per-step input boundary.
+func (m *ViT) patchifyBatchInto(out, images *tensor.Tensor) error {
+	sh := images.Shape()
+	if images.Ndim() != 4 || sh[1] != m.channels || sh[2] != m.size || sh[3] != m.size {
+		return fmt.Errorf("vision: ViT expects [batch,%d,%d,%d] images, got %v", m.channels, m.size, m.size, sh)
+	}
 	batch := sh[0]
 	p := m.Patch
 	grid := m.size / p
 	n := grid * grid
 	patchDim := m.channels * p * p
+	if out == nil || out.Ndim() != 2 || out.Shape()[0] != batch*n || out.Shape()[1] != patchDim ||
+		!out.IsContiguous() || out.Offset() != 0 {
+		return fmt.Errorf("vision: ViT packed patch destination must be contiguous offset-zero [%d,%d]", batch*n, patchDim)
+	}
 	in := images.Contiguous()
-	out := tensor.New(m.Class.Dtype(), tensor.Shape{batch * n, patchDim})
 
 	// The model hot path keeps image and parameter dtypes equal. Keep those
 	// cases typed so F32 packing never detours through a float64 scratch slice.
@@ -414,9 +642,9 @@ func (m *ViT) patchifyBatch(images *tensor.Tensor) (*tensor.Tensor, error) {
 		src, dst := in.Storage().F32(), out.Storage().F64()
 		packViTBatchConvert(dst, src, batch, m.channels, m.size, p, grid, n, patchDim)
 	default:
-		return nil, fmt.Errorf("vision: ViT patchify supports F32/F64, got input %v and output %v", in.Dtype(), out.Dtype())
+		return fmt.Errorf("vision: ViT patchify supports F32/F64, got input %v and output %v", in.Dtype(), out.Dtype())
 	}
-	return out, nil
+	return nil
 }
 
 type vitFloat interface {

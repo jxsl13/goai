@@ -584,3 +584,28 @@ WHEN compared with portable F32 AdamW for 3 steps, the Metal session SHALL match
 
 ## M2-GPT-ADAMW-SESSION-PERF-001
 WHERE 3 order-alternated count-7 M2 production-shape campaigns, the resident GPT AdamW gate SHALL require median speedup at least 1.25x, every pair at least 1.10x versus host F32 AdamW, and median latency at most 24.69 milliseconds.
+
+## METAL-VIT-ADAMW-SESSION-RESIDENCY-001
+WHERE the F32 ViT AdamW session is supported, the Metal backend SHALL retain all parameter gradient and moment buffers across Steps, copy exactly 1 loss scalar per Step, and copy parameters only on explicit Sync or Close.
+
+Rationale: The M2 leverage comes from keeping optimizer state and gradients on the GPU while retaining explicit host visibility boundaries.
+
+## METAL-VIT-ADAMW-SESSION-STRUCTURE-001
+WHEN Step executes on a supported resident ViT session, the Metal backend SHALL encode the complete objective and every AdamW parameter update in exactly 1 command buffer.
+
+Rationale: One command buffer preserves dependency ordering and removes the objective-to-optimizer synchronization boundary.
+
+## METAL-VIT-ADAMW-SESSION-NUMERIC-001
+WHEN the resident session is compared with portable F32 AdamW for 3 steps, the Metal ViT session SHALL match every loss and synchronized parameter within established F32 tolerance and preserve checkpoint continuation.
+
+Rationale: Resident execution must preserve the portable optimizer recurrence and explicit checkpoint semantics.
+
+## METAL-VIT-ADAMW-SESSION-LIFETIME-001
+The Metal backend SHALL reject every Step and Sync after exactly 1 successful Close and permit any later Close to return nil.
+
+Rationale: The native resource owner needs deterministic lifetime behavior without double-free risk.
+
+## M2-VIT-ADAMW-SESSION-PERF-001
+WHERE 3 order-alternated count-7 M2 campaigns measure the pinned ViT cell, the promotion gate SHALL require at least 1.20 times aggregate median speedup, at least 1.10 times every aligned pair, and candidate median below 9.138 milliseconds.
+
+Rationale: The gate compares the exact resident session with LossAndGrad plus host F32-moment AdamW and the measured PyTorch 2.12.1 MPS cell.

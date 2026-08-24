@@ -80,3 +80,8 @@ WHEN the fused backend operation is unavailable for a valid layer-normalized seq
 
 ## PATCH-EMBED-SEQUENCE-SEMANTICS-001
 WHEN OpPatchEmbedSequence or its backward operation executes, the backend SHALL make OpPatchEmbedSequence return 1 packed sequence equivalent to biased patch projection plus shared class and position rows, and its backward return exactly 5 gradients.
+
+## ADAMW-SESSION-PROTOCOL-COMPAT-001
+WHEN model-specific GPT or ViT code uses the shared F32 AdamW session protocol, the backend API SHALL preserve GPTAdamWAttrs and GPTAdamWSession as source-compatible aliases and accept exactly 2 contiguous F32 Step inputs.
+
+Rationale: The optimizer session boundary is reusable while existing GPT callers retain source compatibility.

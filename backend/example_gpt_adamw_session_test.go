@@ -25,3 +25,21 @@ func ExampleGPTAdamWSession() {
 	fmt.Println(loss.Numel())
 	// Output: 1
 }
+
+// AdamWSession is the model-agnostic resident optimizer lifecycle.
+func ExampleAdamWSession() {
+	var session backend.AdamWSession = exampleGPTAdamWSession{}
+	loss, _ := session.Step(nil, nil)
+	_ = session.Sync(nil)
+	_ = session.Close()
+	fmt.Println(loss.Numel())
+	// Output: 1
+}
+
+// Model-specific capabilities may name the shared lifecycle explicitly.
+func ExampleViTAdamWSession() {
+	var session backend.ViTAdamWSession = exampleGPTAdamWSession{}
+	loss, _ := session.Step(nil, nil)
+	fmt.Println(loss.Numel())
+	// Output: 1
+}
