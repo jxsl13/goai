@@ -794,6 +794,38 @@ the definitive gap-finder. (2) Re-running that audit measures *coverage* (which 
 route to ref), not speed — the speed win is per-op-typed, so verify it with the op's
 own parity/gradcheck, not a fallback-count diff.
 
+### Direct reference elementwise loops (T-01KYJREH8QF2H, 2026-08-25)
+
+The typed reference elementwise paths previously retained two lower-level
+costs: `Numel` supplied the loop bound without proving the lengths of the raw
+storage slices, and a function value computed each element. The kernels now
+establish slice bounds once and dispatch a zero-size functor once before direct
+operation-specific loops. M2 disassembly confirms direct `fadd`, `fsub`,
+`fmul`, and `fdiv` loop arms with no indirect branch or `FMADD`.
+
+Nine fresh-process Apple M2 Pro pairs alternate baseline/candidate order and
+run 1,000 operations per benchmark with `GOMAXPROCS=1`:
+
+| reference operation | baseline | direct loop | result | paired wins |
+|---|---:|---:|---:|---:|
+| Add F64 4K | 20,192 ns | 7,762 ns | **2.6014x** | 9/9 |
+| Add F32 4K | 14,038 ns | 6,604 ns | **2.1257x** | 8/9 |
+| ReLU F64 64K | 1,050,402 ns | 731,328 ns | **1.4363x** | 7/9 |
+| Tanh F64 64K | 1,596,969 ns | 1,628,712 ns | neutral, 0.9805x | 4/9 |
+
+Bytes and four allocations per call are unchanged. Tanh bounds the claim:
+removing dispatch is immaterial when the direct libm call dominates. Frozen
+pre-change scalar loops remain bit-exact for all registered F64 and F32
+operations, including NaNs, infinities, signed zero, and F32
+widen/compute/narrow semantics.
+
+Raw staged and final samples, executable hashes, compiler diagnostics, and
+reproduction commands are in
+[`m2-ref-elementwise-devirt-20260825`](../internal/benchcompare/leadership/evidence/m2-ref-elementwise-devirt-20260825/README.md).
+The generalized detector proposals are
+[perfscan issue #904](https://github.com/jxsl13/perfscan/issues/904) and
+[perfscan issue #905](https://github.com/jxsl13/perfscan/issues/905).
+
 ### Bit-identical reference MLA RoPE score interchange (T-01KYMDP9EMFTB, 2026-08-24)
 
 The reference MLA score previously completed one scalar RoPE dot per key. The

@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/ref -- devirtualize exact elementwise loops (T-01KYJREH8QF2H, 2026-08-25)
+
+Reference F32/F64 unary and binary kernels now establish their raw-slice bounds
+once and select direct operation-specific loops through zero-size functors.
+This removes per-element bounds checks and indirect scalar calls while keeping
+the F32 widen/compute/narrow sequence, IEEE-754 behavior, broadcasting
+fallback, and public API unchanged. Exact bit gates cover every registered
+operation, and a deliberate Add-to-Sub mutation proves the oracle detects
+semantic drift.
+
+Nine alternating Apple M2 Pro pairs at 1,000 operations per fresh process
+improve Add F64 4K from 20,192 to 7,762 ns/op (**2.6014x**, 9/9 wins), Add F32
+4K from 14,038 to 6,604 ns/op (**2.1257x**, 8/9), and ReLU F64 64K from
+1,050,402 to 731,328 ns/op (**1.4363x**, 7/9). Tanh is honestly neutral at
+0.9805x because libm dominates. Bytes and four allocations per operation are
+unchanged. Raw staged and final evidence is committed in the M2 reference
+elementwise artifact; generalized bounds and Go-generic dispatch findings are
+perfscan issues #904 and #905.
+
 ### backend/ref -- lock the blocked FlashAttention schedule exactly (T-01KYM5BJANE63, 2026-08-24)
 
 Reference `OpFlashAttn` now has a bit-exact independent oracle that reproduces
