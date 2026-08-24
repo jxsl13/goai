@@ -90,3 +90,12 @@ grilled: 2026-08-24 open=0
 targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 GPTDecoder currently retains every activation scratch tensor at maximum context although dominant Step uses one row. Retain one row by default, lazily allocate an exact reusable high-water workspace for StepN and StepNLast, preserve a same-binary eager control, and require exact parity plus M2 throughput non-regression. GPT-2-small should remove 35140608 resident bytes without changing public semantics.
+
+## ADR-01M0SPCGWTFB08X22KNMW0DDV6 Use one-row resident GPT workspace plus lazy grouped high-water storage
+kind: adr
+state: draft
+created: 2026-08-24
+parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Choose a grouped workspace owner: keep one row resident for Step, allocate all prefill activation buffers together at exact requested rows, reuse the group for smaller requests, release the old group before growth, and release the final group with the decoder. An eager max-context control remains internal for same-binary comparison. Rejected alternatives: per-field independent growth risks mixed generations after partial failure; permanent max-context storage wastes 35140608 bytes at GPT-2-small geometry; per-call allocation churn adds latency.
