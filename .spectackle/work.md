@@ -4020,6 +4020,20 @@ kind: proposal
 state: active
 created: 2026-08-24
 grilled: 2026-08-24 open=1
+needs: ADR-01M0S2FBN8E06VT5ZM2P8YC1CP
 targets: go:nlp.GPT.Forward, go:benchcompare.BenchmarkGPTTrainingStep, go:metal.Backend.ViTLossAndGradF32, nlp/gpt.go, backend/attrs.go, backend/metal/metal.go, backend/metal/metal_bridge.h, backend/metal/metal_bridge.m, backend/metal/gpt_test.go, internal/benchcompare/compare_test.go
 
 Consume R-01M0S28QXJED6 by adding a model-boundary GPT.LossAndGrad API with the existing forward plus mean hard-label cross-entropy plus private-tape backward as its portable fallback. For contiguous offset-zero F32 GPT-2 geometry with uniform causal blocks, no layer offload, valid token/target indices, and bounded depth, expose an optional Metal capability that gathers token/position embeddings, runs every causal pre-norm block, final LayerNorm and LM head, computes mean cross-entropy, and returns gradients for Params order in one cached MPSGraph submission. Reuse explicit block VJPs and a baked causal mask; do not export intermediate activations or repeat the rejected tiny-host-loss route. Preserve loss/all-gradient parity, parameter/input immutability, recorder isolation, and unsupported-feature fallback. At the pinned M2 Pro V4096 S256 D512 H8 F2048 depth6 cell, require three order-alternated paired campaigns with at least 1.25x median complete-objective speedup and 1.10x in every aligned pair before promotion; publish allocation and throughput deltas and compare the resulting leadership cell with the pinned torch-mps boundary.
+
+## ADR-01M0S2FBN8E06VT5ZM2P8YC1CP Which GPT training boundary should be promoted on M2?
+kind: adr
+state: submitted
+created: 2026-08-24
+context: R-01M0S28QXJED6 measured a 105.9 ms complete step versus 35.0 ms forward-only, 246 MB/op, and 1,650 allocations. Prior retained-intermediate and tiny-host-loss experiments missed end-to-end gates.
+status: proposed
+
+kind: radio
+option: One cached causal MPSGraph for the complete objective
+option: Incremental per-operation tuning
+option: Export and retain intermediate activations
+blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ

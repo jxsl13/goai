@@ -933,3 +933,5 @@
 {"t":"2026-08-24T05:03:35Z","eid":"26a4d40c94398da4","ag":"ag-16c5","ev":"create","id":"P-01M0S2E3VVF8WSZW64D46VEWEZ","k":"proposal","ti":"Add portable GPT LossAndGrad with one-graph causal Metal execution"}
 {"t":"2026-08-24T05:03:44Z","eid":"e4ccde1432e46f73","ag":"ag-2d9b","ev":"move","id":"P-01M0S2E3VVF8WSZW64D46VEWEZ","fr":"draft","to":"active","note":"Standing user approval authorizes this high-impact M2 implementation. Current-main baseline is 105.9 ms and 246 MB/op versus 35.0 ms forward-only; rejection and impact context were reviewed."}
 {"t":"2026-08-24T05:03:52Z","eid":"59e8cf34dada7b8d","ag":"ag-12ca","ev":"grill","id":"P-01M0S2E3VVF8WSZW64D46VEWEZ","gr":"2026-08-24 open=1","hash":"abad187ed13b5427eeb610aaf8ecc58fe38a74ebe88297704e5badcf5ec1bbfd","open":1,"keys":["blast:10"]}
+{"t":"2026-08-24T05:04:16Z","eid":"50bbe95b931ec22a","ag":"ag-80c2","ev":"create","id":"ADR-01M0S2FBN8E06VT5ZM2P8YC1CP","k":"adr","ti":"Which GPT training boundary should be promoted on M2?"}
+{"t":"2026-08-24T05:04:16Z","eid":"f210f3e7ce3c3ae1","ag":"ag-80c2","ev":"move","id":"ADR-01M0S2FBN8E06VT5ZM2P8YC1CP","fr":"draft","to":"submitted"}
