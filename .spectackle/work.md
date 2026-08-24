@@ -4063,7 +4063,7 @@ Implement the explicit F32 AdamW session across the portable GPT API and Metal b
 
 ## T-01M0S6Y0Z1EEZR630749829ZDR Integrate GPT AdamW session with public API and scheduler guards
 kind: task
-state: active
+state: done
 created: 2026-08-24
 parent: P-01M0S5E2SBEZKAYCG0FBGTP63F
 rounds: 1
