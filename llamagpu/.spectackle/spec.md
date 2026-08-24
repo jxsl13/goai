@@ -28,3 +28,6 @@ WHEN 3 valid token-interleaved M2 TinyLlama campaigns measure f16-KV decode at c
 The Metal GPT decoder SHALL store exactly one resident fused QKV weight per block and bound grouped-output scratch to min(context, 63) times 3 times model width floats.
 
 Rationale: Prevent a decode optimization from duplicating approximately 17 percent of GPT-2-small F32 model weights.
+
+## METAL-GPT-QKV-DECODE-001 {applies: go:llamagpu.GPTDecoder.Step}
+WHEN single-token GPTDecoder.Step executes on Metal, the decoder recorder SHALL issue 1 grouped QKV matrix multiplication, 2 direct K/V cache blits, and 0 split Q, K, or V projection matrix multiplications per block.
