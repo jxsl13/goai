@@ -4018,7 +4018,7 @@ Measure the current F32 batch-8 depth-4 ViT training step after PR 1196 and part
 
 ## P-01M0RKX6GTF838PM6SNEJ33XVC Fuse the ViT classifier boundary on Metal
 kind: proposal
-state: draft
+state: active
 created: 2026-08-24
 parent: R-01M0RKKV5RF95S1CDC657TGYH0
 targets: go:vision.ViT.Forward, go:backend.OpPreNormTransformerStack, go:metal.preNormTransformerStackF32, vision/vit.go, backend/metal/metal_bridge.m

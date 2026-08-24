@@ -843,3 +843,4 @@
 {"t":"2026-08-24T00:44:34Z","eid":"628db2b46197ff9a","ag":"ag-c249","ev":"create","id":"R-01M0RKKV5RF95S1CDC657TGYH0","k":"research","ti":"Attribute the remaining post-stack ViT training cost on M2"}
 {"t":"2026-08-24T00:44:45Z","eid":"b19b6a508c436e76","ag":"ag-d0cf","ev":"move","id":"R-01M0RKKV5RF95S1CDC657TGYH0","fr":"draft","to":"active","note":"Begin uncontended M2 attribution from merged PR 1196 before selecting any new fused boundary."}
 {"t":"2026-08-24T00:49:41Z","eid":"e1d49973c4ea206b","ag":"ag-2d81","ev":"create","id":"P-01M0RKX6GTF838PM6SNEJ33XVC","k":"proposal","ti":"Fuse the ViT classifier boundary on Metal"}
+{"t":"2026-08-24T00:50:05Z","eid":"5fdde751b210c4d9","ag":"ag-0cfa","ev":"move","id":"P-01M0RKX6GTF838PM6SNEJ33XVC","fr":"draft","to":"active"}
