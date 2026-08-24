@@ -65,3 +65,5 @@
 {"t":"2026-08-24T10:14:21Z","eid":"1d74b91862a9c2c5","ag":"ag-b711","ev":"drift","dir":"llamagpu","rule":"METAL-GPT-QKV-DECODE-001","node":"go:llamagpu.GPTDecoder.Step","cls":"healed","oh":"6c98ada0d2ccd3c5","nh":"5fd1921cf37f4ad9"}
 {"t":"2026-08-24T10:28:33Z","eid":"cc4847a0ec863673","ag":"ag-2311","ev":"create","id":"P-01M0SN14HSEJ2VWB9HT1S7W01F","k":"proposal","ti":"Right-size decoder logits residency and lazily materialize full StepN output","dir":"llamagpu"}
 {"t":"2026-08-24T10:28:52Z","eid":"873453f9f67ee9ed","ag":"ag-967f","ev":"grill","id":"P-01M0SN14HSEJ2VWB9HT1S7W01F","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"98afcae41ba4c1566cf083acb749e14083c318d42152776982196a8bfb5bfbc8"}
+{"t":"2026-08-24T10:28:55Z","eid":"8c09189797087590","ag":"ag-c5ac","ev":"create","id":"ADR-01M0SN1SY1EF1B4H7TW75ERAH2","k":"adr","ti":"How should decoders serve rare multi-row StepN logits without retaining Ctx times Vocab storage?","dir":"llamagpu"}
+{"t":"2026-08-24T10:28:55Z","eid":"31f5e9d8aaf7b992","ag":"ag-c5ac","ev":"move","id":"ADR-01M0SN1SY1EF1B4H7TW75ERAH2","dir":"llamagpu","fr":"draft","to":"submitted"}

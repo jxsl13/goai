@@ -51,6 +51,21 @@ kind: proposal
 state: draft
 created: 2026-08-24
 grilled: 2026-08-24 open=0
+needs: ADR-01M0SN1SY1EF1B4H7TW75ERAH2
 targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 Remove maximum-context logits residency from both GPTDecoder and the shared Llama-style Decoder. They currently allocate Ctx times Vocab F32 output storage for their lifetime although Step, Generate, and StepNLast project and consume exactly one vocab row. GPT-2-small therefore retains 205,852,672 logits bytes for a 201,028-byte common-path requirement, a 1,024-fold amplification. Keep one resident vocab row by default and lazily allocate an exact reusable high-water buffer only when full StepN requests multiple rows; release or replace that buffer safely with the decoder. Retain an internal eager-capacity control in the same binary. Preserve every public output shape and bit pattern across Step, StepNLast, full StepN, recurrent fallbacks, Metal, CUDA, and Vulkan. Promote only after structural tests prove one-row default residency and bounded lazy growth/reuse/release, the GPT-2-small constructor benchmark removes at least 200,000,000 B/op and improves latency by at least 10 times versus eager control, public Step and StepNLast retain at least 0.97 times throughput with unchanged allocations, and the existing exact generation and StepN parity suites pass.
+
+## ADR-01M0SN1SY1EF1B4H7TW75ERAH2 How should decoders serve rare multi-row StepN logits without retaining Ctx times Vocab storage?
+kind: adr
+state: submitted
+created: 2026-08-24
+context: Step and StepNLast need one vocab row, while full StepN needs k rows and may repeat at a stable verification width. Allocation must remain backend-agnostic and release-safe.
+status: proposed
+
+kind: radio
+option: One-row resident plus lazy reusable high-water buffer
+option: Allocate and free an exact temporary buffer on every full StepN
+option: Retain the eager maximum-context buffer
+option: Redesign StepN around caller-owned output buffers
+blocks: P-01M0SN14HSEJ2VWB9HT1S7W01F
