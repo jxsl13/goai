@@ -1,0 +1,18 @@
+perfscan v1.81.1-0.20260823112112-5af3350190e4
+Invocation used GOPROXY=direct and the upstream binary at /Users/john/go/bin/perfscan.
+
+Production scan: 1704 repository-wide findings; zero findings in the new
+reference kernel or the new Metal classifier section. Findings elsewhere in
+modified legacy files predate this change.
+
+Test-inclusive touched-file review reports the deliberately preserved
+Slice-plus-Concat composite twice (PS6012): those functions are the semantic
+oracle and benchmark control for the optimization PS6012 describes. It also
+reports PS2008 on a parity-test snapshot loop, but the input Numel values vary,
+so the suggested single loop-invariant slab length does not apply. Neither is a
+production-path finding.
+
+The generalized production opportunity -- moving a deterministic sparse row
+selection before a row-local transform, and screening a host route for small
+synchronous UMA boundaries -- is reported as:
+https://github.com/jxsl13/perfscan/issues/874

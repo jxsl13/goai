@@ -1,0 +1,29 @@
+# Build and freeze the exact benchmark binary.
+go test -c -o /tmp/goai-metal-sequence-classifier-def1abfe.test ./backend/metal
+shasum -a 256 /tmp/goai-metal-sequence-classifier-def1abfe.test
+
+# Boundary campaigns 1 and 3 (control first).
+GOMAXPROCS=1 /tmp/goai-metal-sequence-classifier-def1abfe.test -test.run '^$' -test.bench '^BenchmarkLayerNormSequenceClassifierTrainingBoundary$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Boundary campaign 2 (candidate first).
+GOAI_SEQUENCE_CLASSIFIER_CANDIDATE_FIRST=1 GOMAXPROCS=1 /tmp/goai-metal-sequence-classifier-def1abfe.test -test.run '^$' -test.bench '^BenchmarkLayerNormSequenceClassifierTrainingBoundary$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Complete-step campaigns 1 and 3 (control first).
+GOMAXPROCS=1 /tmp/goai-metal-sequence-classifier-def1abfe.test -test.run '^$' -test.bench '^BenchmarkLayerNormSequenceClassifierViTTrainStep$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Complete-step campaign 2 (candidate first).
+GOAI_SEQUENCE_CLASSIFIER_CANDIDATE_FIRST=1 GOMAXPROCS=1 /tmp/goai-metal-sequence-classifier-def1abfe.test -test.run '^$' -test.bench '^BenchmarkLayerNormSequenceClassifierViTTrainStep$' -test.benchtime=1s -test.count=7 -test.cpu=1 -test.benchmem
+
+# Correctness and repository gates. Compile first; do not use go test -run.
+go test -c -o /tmp/goai-ref-classifier.test ./backend/ref
+/tmp/goai-ref-classifier.test -test.run 'TestLayerNormSequenceClassifier' -test.count=1
+go test -c -o /tmp/goai-metal-classifier.test ./backend/metal
+/tmp/goai-metal-classifier.test -test.run 'TestLayerNormSequenceClassifier' -test.count=1
+go test -c -o /tmp/goai-vision-classifier.test ./vision
+/tmp/goai-vision-classifier.test -test.run 'TestViT' -test.count=1
+make preflight
+make preflight-metal
+
+# Upstream scanner, bypassing the Go proxy.
+GOPROXY=direct /Users/john/go/bin/perfscan -json -exit-zero ./...
+GOPROXY=direct /Users/john/go/bin/perfscan -tests -json -exit-zero ./...

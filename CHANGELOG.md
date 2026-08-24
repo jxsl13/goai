@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### vision/metal -- fuse the ViT class-token normalization boundary (T-01M0RKZ1YSFHN, 2026-08-24)
+
+ViT now exposes a differentiable LayerNorm-sequence-classifier operation that
+selects each packed sequence's class row before row-local normalization and the
+biased projection. The portable F32/F64 reference path defines exact forward
+and five-input VJP semantics. Metal uses a cached MPSGraph for supported
+unmeasured shapes, while the measured Darwin ARM64 B8/S65/D128/C10 route stays
+on the host over unified memory and makes zero Metal submissions. Unsupported
+backends, dtypes, shapes, or missing backend directions preserve the original
+composite.
+
+On Apple M2 Pro, three fresh-process count-seven campaigns improve the complete
+boundary by 18.45x-42.21x and the full depth-four ViT training step by
+1.150x-1.478x; the weakest aligned full-step pair is 1.0487x. The full step
+also removes 4,176,400 B/op and 263 allocations/op. Reference and Metal parity,
+complete-model logits and every parameter gradient, input immutability,
+portable fallback, external perfscan, and both preflight lanes are gated.
+
 ### format/gguf -- complete IQ and MXFP4 wire dispatch (T-01M0M30EFGEN4, 2026-08-22)
 
 Eager `Read` now routes every already-supported IQ and MXFP4 GGUF wire type
