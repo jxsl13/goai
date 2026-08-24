@@ -211,7 +211,7 @@ Decision: expose StepNInto and StepNLastInto with exact destination-size validat
 
 ## T-01M0SWB40KF9GR1EZHGRTDD4AA Implement and benchmark zero-allocation Decoder prefill
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0SW6KB4FSERYN7Y0CRXS0DJ
 grilled: 2026-08-24 open=0
