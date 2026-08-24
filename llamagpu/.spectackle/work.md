@@ -203,6 +203,7 @@ Implement one-row resident Decoder activation generation, exact high-water StepN
 kind: proposal
 state: active
 created: 2026-08-24
+grilled: 2026-08-24 open=0
 targets: go:llamagpu.Decoder.Step, go:llamagpu.Decoder.gatherEmbed, go:llamagpu.embedRow
 
 Add a caller-buffer StepInto boundary and one reusable host embedding row to remove the seven per-token Go allocations from shared Decoder inference. Keep Step as the compatible allocating wrapper, validate destination length before cache mutation, preserve exact logits and cache semantics, and gate on M2 allocation elimination plus non-regressing throughput.
