@@ -551,3 +551,6 @@ WHEN F32 B8 S65 D128 C10 executes on Darwin arm64, the Metal classifier selector
 
 ## METAL-PATCH-EMBED-SEQUENCE-NUMERIC-001
 WHEN supported output and backward parity is checked against the incumbent composite, the Metal patch sequence implementation SHALL match one packed output and exactly five gradients within established F32 tolerance while mutating exactly zero input elements.
+
+## METAL-PATCH-EMBED-SEQUENCE-GRAPH-STRUCTURE-001
+WHERE valid contiguous offset-zero F32 patch sequence fusion, the Metal implementation SHALL execute exactly one bounded shape-keyed cached MPSGraph submission per direction with pooled buffers and Go-owned outputs.
