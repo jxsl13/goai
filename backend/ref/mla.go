@@ -99,6 +99,19 @@ func mlaRoPE(src *tensor.Tensor, nheads, dR int, base float64, dst []float64) {
 	}
 }
 
+// mlaAddRoPEScores adds the decoupled-RoPE score terms to existing content
+// scores. kRT stores the shared RoPE keys transposed as [dR, seq], so each
+// inner loop updates independent score accumulators from contiguous keys.
+func mlaAddRoPEScores(a, qR, kRT []float64, qBase, seq, dR, jmax int) {
+	for e := range dR {
+		q := qR[qBase+e]
+		ke := kRT[e*seq : e*seq+jmax]
+		for j := range jmax {
+			a[j] += q * ke[j]
+		}
+	}
+}
+
 // mlaKernel is fused Multi-head Latent Attention (DeepSeek-V2, Liu et al. 2024,
 // arXiv:2405.04434 §2.1, §R74). It takes the already-projected per-head content
 // query/key/value plus the PRE-RoPE decoupled query/key, applies the decoupled
