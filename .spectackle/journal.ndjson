@@ -912,3 +912,4 @@
 {"t":"2026-08-24T04:28:06Z","eid":"3ce64636ff1d5fe3","ag":"ag-506f","ev":"create","id":"P-01M0S0D3ZPFCBAT7MTC0J7NJMX","k":"proposal","ti":"Make external perfscan canonical without losing internal-only checks"}
 {"t":"2026-08-24T04:28:21Z","eid":"cb72c84236c3d5fb","ag":"ag-4160","ev":"grill","id":"P-01M0S0D3ZPFCBAT7MTC0J7NJMX","gr":"2026-08-24 open=1","hash":"03c358b50660f847977b5b5d3a4a477cfc6644ba928ffdf2e3bf3fc9b826ac64","open":1,"keys":["blast:8"]}
 {"t":"2026-08-24T04:28:33Z","eid":"0d708e4c15636042","ag":"ag-3fc2","ev":"revise","id":"P-01M0S0D3ZPFCBAT7MTC0J7NJMX","note":"body revised"}
+{"t":"2026-08-24T04:28:37Z","eid":"1716da941a16a0fb","ag":"ag-1d55","ev":"grill","id":"P-01M0S0D3ZPFCBAT7MTC0J7NJMX","gr":"2026-08-24 open=1","hash":"400826a6496562e64352016d2893c034ca0157d9c0fe5b2e5dc66363fe4fa8b3","open":1,"keys":["blast:8"]}
