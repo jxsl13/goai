@@ -219,3 +219,4 @@
 {"t":"2026-08-24T12:00:25Z","eid":"1e6c5f591f6b8397","ag":"ag-62ff","ev":"create","id":"P-01M0ST9BK2FGYTT3D762HHYHVB","k":"proposal","ti":"Add zero-allocation shared Decoder stepping","dir":"llamagpu"}
 {"t":"2026-08-24T12:00:35Z","eid":"1563df8c5b9d50d4","ag":"ag-3b97","ev":"move","id":"P-01M0ST9BK2FGYTT3D762HHYHVB","dir":"llamagpu","fr":"draft","to":"active","note":"Standing authorization directs continuous spec-driven M2 performance work; activate after allocation attribution and rejection audit."}
 {"t":"2026-08-24T12:00:38Z","eid":"bd362aa5f5b3c08e","ag":"ag-07b7","ev":"grill","id":"P-01M0ST9BK2FGYTT3D762HHYHVB","dir":"llamagpu","gr":"2026-08-24 open=0","hash":"6309e60fd6f16573593fd4f73ca31a3ba268faa36bf1b9e3e8e73dfdcbf4e4bd"}
+{"t":"2026-08-24T12:00:51Z","eid":"87fd0e21d7ffd2b0","ag":"ag-935f","ev":"create","id":"ADR-01M0STA4CNESSRA8MS30X6VDFY","k":"adr","ti":"Preserve Step as a wrapper over caller-buffer StepInto","dir":"llamagpu"}
