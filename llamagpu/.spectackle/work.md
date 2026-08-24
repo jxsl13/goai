@@ -93,9 +93,13 @@ GPTDecoder currently retains every activation scratch tensor at maximum context 
 
 ## ADR-01M0SPCGWTFB08X22KNMW0DDV6 Use one-row resident GPT workspace plus lazy grouped high-water storage
 kind: adr
-state: draft
+state: done
 created: 2026-08-24
 parent: P-01M0SPBR6NFCJAE77W5JZZ4YA8
+decision: One-row resident workspace plus lazy grouped high-water storage
+consequences: Removes 35140608 GPT-2-small resident bytes while keeping Step allocation-free; prefill growth is atomic across activation buffers, reuse is bounded by the largest prompt, and growth avoids simultaneous old-plus-new workspace residency.
+status: accepted
 targets: llamagpu/gpt.go, llamagpu/gpt_storage_test.go
 
 Choose a grouped workspace owner: keep one row resident for Step, allocate all prefill activation buffers together at exact requested rows, reuse the group for smaller requests, release the old group before growth, and release the final group with the decoder. An eager max-context control remains internal for same-binary comparison. Rejected alternatives: per-field independent growth risks mixed generations after partial failure; permanent max-context storage wastes 35140608 bytes at GPT-2-small geometry; per-call allocation churn adds latency.
+choice: One-row resident workspace plus lazy grouped high-water storage
