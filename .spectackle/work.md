@@ -4028,7 +4028,7 @@ Introduce ViT.LossAndGrad(ctx, images, targets) returning mean basic cross-entro
 
 ## T-01M0RX4KE4E119HHCYKHQX6YNQ Implement and gate one-submission ViT LossAndGrad
 kind: task
-state: draft
+state: active
 created: 2026-08-24
 parent: P-01M0RX1WNKETXSZDBWJ22NK76F
 targets: vision/vit.go, backend/attrs.go, go:metal.Backend, backend/metal/metal_bridge.m, backend/metal/metal_bridge.h, backend/metal/prenorm_transformer_stack_test.go
