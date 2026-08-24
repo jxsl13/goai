@@ -4011,3 +4011,11 @@ Merged-main inspection finds mha_dec_splitk_p2 dispatches one 32-lane SIMD group
 kind: research
 state: active
 created: 2026-08-24
+
+## P-01M0S0D3ZPFCBAT7MTC0J7NJMX Make external perfscan canonical without losing internal-only checks
+kind: proposal
+state: draft
+created: 2026-08-24
+targets: Makefile, .github/workflows/ci.yml, internal/cichange/config.go, .claude/workflows/perfscan-autofix.js, internal/perfscan, perfscan.yaml, LOOP.md, docs/perf-notes-training.md
+
+Pin the current root-module external perfscan v1.81.0 and run it only with GOPROXY=direct. Move GoAI vocabulary to root perfscan.yaml for auto-discovery. Replace make perfscan and the autofix workflow with the external command, add an explicit whole-tree advisory CI lane, and remove internal/perfscan from cichange alwaysRun. Preserve the in-tree engine under an explicitly compatibility-only command restricted by a generated 53-ID selector until upstream issue 877 reaches registry parity; do not silently discard those benchmark-derived checks. Add a parity audit that fails retirement if any internal-only ID remains. Preserve the nested Spectackle history and the non-scanner exactness utility.
