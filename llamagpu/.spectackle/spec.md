@@ -61,7 +61,7 @@ WHILE the bounded BiasGELU capability is unavailable or disabled, the decoder SH
 
 Rationale: Preserve portable CUDA, Vulkan, CPU, and same-binary control behavior.
 
-## DECODER-LOGITS-RESIDENCY-001
+## DECODER-LOGITS-RESIDENCY-001 {applies: go:llamagpu.Decoder.allocScratch,go:llamagpu.GPTDecoder.newGPTDecoder,go:llamagpu.TestGPTDecoderLogitsResidencyGrowthAndRelease,go:llamagpu.TestDecoderLogitsResidencyAndEagerControl}
 WHEN GPTDecoder or Decoder is constructed with standard backend operations, the decoder SHALL retain exactly Vocab F32 logits elements for Step and StepNLast and retain 0 multi-row logits elements.
 
 Rationale: Make dominant decoder residency scale with active output rows rather than maximum context.
