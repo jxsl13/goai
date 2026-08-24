@@ -93,7 +93,7 @@ func preNormAttentionForwardKernel(ctx *backend.Context, in []*tensor.Tensor, at
 	if err != nil {
 		return nil, err
 	}
-	return binaryKernel(func(a, b float64) float64 { return a + b })(ctx, []*tensor.Tensor{in[0], projected[0]}, nil)
+	return binaryKernel(addOp{})(ctx, []*tensor.Tensor{in[0], projected[0]}, nil)
 }
 
 func preNormAttentionBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
@@ -136,7 +136,7 @@ func preNormAttentionBackwardKernel(ctx *backend.Context, in []*tensor.Tensor, a
 		}
 		dWeights[i], dNormParts[i] = dWeight[0], dNorm[0]
 	}
-	add := binaryKernel(func(a, b float64) float64 { return a + b })
+	add := binaryKernel(addOp{})
 	dNorm, err := add(ctx, dNormParts[:2], nil)
 	if err != nil {
 		return nil, err

@@ -13,9 +13,95 @@ import (
 // path (§V9); typed/SIMD speedups are §T11. Kernels are dtype-agnostic, so one
 // implementation serves both F32 and F64 storage.
 
-// unaryKernel applies scalar f elementwise, reading any layout and writing a
-// fresh contiguous output on the context device.
-func unaryKernel(f func(float64) float64) backend.Kernel {
+type unaryOp interface {
+	apply(float64) float64
+}
+
+type (
+	identityOp struct{}
+	negOp      struct{}
+	expOp      struct{}
+	logOp      struct{}
+	tanhOp     struct{}
+	reluOp     struct{}
+	geluOp     struct{}
+	sigmoidOp  struct{}
+	siluOp     struct{}
+	sqrtOp     struct{}
+	absOp      struct{}
+)
+
+func (identityOp) apply(x float64) float64 { return x }
+func (negOp) apply(x float64) float64      { return -x }
+func (expOp) apply(x float64) float64      { return math.Exp(x) }
+func (logOp) apply(x float64) float64      { return math.Log(x) }
+func (tanhOp) apply(x float64) float64     { return math.Tanh(x) }
+func (reluOp) apply(x float64) float64     { return relu(x) }
+func (geluOp) apply(x float64) float64     { return gelu(x) }
+func (sigmoidOp) apply(x float64) float64  { return sigmoid(x) }
+func (siluOp) apply(x float64) float64     { return x * sigmoid(x) }
+func (sqrtOp) apply(x float64) float64     { return math.Sqrt(x) }
+func (absOp) apply(x float64) float64      { return math.Abs(x) }
+
+func elemUnary[T refFloat, O unaryOp](xs, os []T, op O) {
+	if len(os) == 0 {
+		return
+	}
+	_ = xs[len(os)-1]
+	switch any(op).(type) {
+	case identityOp:
+		for i := range os {
+			os[i] = xs[i]
+		}
+	case negOp:
+		for i := range os {
+			os[i] = T(-float64(xs[i]))
+		}
+	case expOp:
+		for i := range os {
+			os[i] = T(math.Exp(float64(xs[i])))
+		}
+	case logOp:
+		for i := range os {
+			os[i] = T(math.Log(float64(xs[i])))
+		}
+	case tanhOp:
+		for i := range os {
+			os[i] = T(math.Tanh(float64(xs[i])))
+		}
+	case reluOp:
+		for i := range os {
+			os[i] = T(relu(float64(xs[i])))
+		}
+	case geluOp:
+		for i := range os {
+			os[i] = T(gelu(float64(xs[i])))
+		}
+	case sigmoidOp:
+		for i := range os {
+			os[i] = T(sigmoid(float64(xs[i])))
+		}
+	case siluOp:
+		for i := range os {
+			x := float64(xs[i])
+			os[i] = T(x * sigmoid(x))
+		}
+	case sqrtOp:
+		for i := range os {
+			os[i] = T(math.Sqrt(float64(xs[i])))
+		}
+	case absOp:
+		for i := range os {
+			os[i] = T(math.Abs(float64(xs[i])))
+		}
+	}
+}
+
+// unaryKernel applies a statically selected scalar operation elementwise,
+// reading any layout and writing a fresh contiguous output on the context
+// device. The zero-size operation type lets the compiler inline trivial
+// arithmetic into elemUnary instead of issuing an indirect call per element.
+func unaryKernel[O unaryOp](op O) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) != 1 {
 			return nil, fmt.Errorf("ref: unary op wants 1 input, got %d", len(in))
@@ -33,30 +119,81 @@ func unaryKernel(f func(float64) float64) backend.Kernel {
 		case tensor.F64:
 			xs := x.Contiguous().Storage().F64()[:n]
 			os := out.Storage().F64()[:n]
-			for i := range os {
-				os[i] = f(xs[i])
-			}
+			elemUnary(xs, os, op)
 			return []*tensor.Tensor{out}, nil
 		case tensor.F32:
 			xs := x.Contiguous().Storage().F32()[:n]
 			os := out.Storage().F32()[:n]
-			for i := range os {
-				os[i] = float32(f(float64(xs[i])))
-			}
+			elemUnary(xs, os, op)
 			return []*tensor.Tensor{out}, nil
 		}
 		// Generic fallback for exotic dtypes (verbatim original loop).
 		for pos := range n {
 			idx := tensor.Unravel(pos, x.Shape())
-			out.SetF64(f(x.AtF64(idx...)), idx...)
+			out.SetF64(op.apply(x.AtF64(idx...)), idx...)
 		}
 		return []*tensor.Tensor{out}, nil
 	}
 }
 
-// binaryKernel applies scalar op elementwise over two same-shape, same-dtype
-// inputs (no broadcasting yet — a later task).
-func binaryKernel(op func(a, b float64) float64) backend.Kernel {
+type binaryOp interface {
+	apply(float64, float64) float64
+}
+
+type (
+	addOp     struct{}
+	subOp     struct{}
+	mulOp     struct{}
+	divOp     struct{}
+	maximumOp struct{}
+	minimumOp struct{}
+)
+
+func (addOp) apply(a, b float64) float64     { return a + b }
+func (subOp) apply(a, b float64) float64     { return a - b }
+func (mulOp) apply(a, b float64) float64     { return a * b }
+func (divOp) apply(a, b float64) float64     { return a / b }
+func (maximumOp) apply(a, b float64) float64 { return math.Max(a, b) }
+func (minimumOp) apply(a, b float64) float64 { return math.Min(a, b) }
+
+func elemBinary[T refFloat, O binaryOp](as, bs, os []T, op O) {
+	if len(os) == 0 {
+		return
+	}
+	_ = as[len(os)-1]
+	_ = bs[len(os)-1]
+	switch any(op).(type) {
+	case addOp:
+		for i := range os {
+			os[i] = T(float64(as[i]) + float64(bs[i]))
+		}
+	case subOp:
+		for i := range os {
+			os[i] = T(float64(as[i]) - float64(bs[i]))
+		}
+	case mulOp:
+		for i := range os {
+			os[i] = T(float64(as[i]) * float64(bs[i]))
+		}
+	case divOp:
+		for i := range os {
+			os[i] = T(float64(as[i]) / float64(bs[i]))
+		}
+	case maximumOp:
+		for i := range os {
+			os[i] = T(math.Max(float64(as[i]), float64(bs[i])))
+		}
+	case minimumOp:
+		for i := range os {
+			os[i] = T(math.Min(float64(as[i]), float64(bs[i])))
+		}
+	}
+}
+
+// binaryKernel applies a statically selected scalar operation elementwise.
+// The zero-size operation type removes the function-value call from the hot
+// same-shape loops while preserving the generic broadcasting fallback.
+func binaryKernel[O binaryOp](op O) backend.Kernel {
 	return func(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) ([]*tensor.Tensor, error) {
 		if len(in) != 2 {
 			return nil, fmt.Errorf("ref: binary op wants 2 inputs, got %d", len(in))
@@ -77,23 +214,19 @@ func binaryKernel(op func(a, b float64) float64) backend.Kernel {
 				as := a.Contiguous().Storage().F64()[:n]
 				bs := b.Contiguous().Storage().F64()[:n]
 				os := out.Storage().F64()[:n]
-				for i := range os {
-					os[i] = op(as[i], bs[i])
-				}
+				elemBinary(as, bs, os, op)
 				return []*tensor.Tensor{out}, nil
 			case tensor.F32:
 				as := a.Contiguous().Storage().F32()[:n]
 				bs := b.Contiguous().Storage().F32()[:n]
 				os := out.Storage().F32()[:n]
-				for i := range os {
-					os[i] = float32(op(float64(as[i]), float64(bs[i])))
-				}
+				elemBinary(as, bs, os, op)
 				return []*tensor.Tensor{out}, nil
 			}
 			// Generic fallback for exotic dtypes (verbatim original loop).
 			for pos := range n {
 				idx := tensor.Unravel(pos, a.Shape())
-				out.SetF64(op(a.AtF64(idx...), b.AtF64(idx...)), idx...)
+				out.SetF64(op.apply(a.AtF64(idx...), b.AtF64(idx...)), idx...)
 			}
 			return []*tensor.Tensor{out}, nil
 		}
@@ -109,7 +242,7 @@ func binaryKernel(op func(a, b float64) float64) backend.Kernel {
 			oc := tensor.Unravel(pos, outShape)
 			backend.BroadcastCoords(ac, oc, a.Shape(), offA)
 			backend.BroadcastCoords(bc, oc, b.Shape(), offB)
-			out.SetF64(op(a.AtF64(ac...), b.AtF64(bc...)), oc...)
+			out.SetF64(op.apply(a.AtF64(ac...), b.AtF64(bc...)), oc...)
 		}
 		return []*tensor.Tensor{out}, nil
 	}
@@ -347,28 +480,28 @@ func init() {
 		std.add(op, tensor.F64, k)
 	}
 
-	reg(backend.OpStopGradient, unaryKernel(func(x float64) float64 { return x })) // detach: identity forward
-	reg(backend.OpNeg, unaryKernel(func(x float64) float64 { return -x }))
-	reg(backend.OpExp, unaryKernel(math.Exp))
-	reg(backend.OpLog, unaryKernel(math.Log))
-	reg(backend.OpTanh, unaryKernel(math.Tanh))
-	reg(backend.OpReLU, unaryKernel(relu))
-	reg(backend.OpGELU, unaryKernel(gelu))
+	reg(backend.OpStopGradient, unaryKernel(identityOp{})) // detach: identity forward
+	reg(backend.OpNeg, unaryKernel(negOp{}))
+	reg(backend.OpExp, unaryKernel(expOp{}))
+	reg(backend.OpLog, unaryKernel(logOp{}))
+	reg(backend.OpTanh, unaryKernel(tanhOp{}))
+	reg(backend.OpReLU, unaryKernel(reluOp{}))
+	reg(backend.OpGELU, unaryKernel(geluOp{}))
 	reg(backend.OpGELUBackward, geluBackwardKernel)
 	reg(backend.OpSiLUBackward, siluBackwardKernel)
 	reg(backend.OpSoftplusBackward, softplusBackwardKernel)
-	reg(backend.OpSigmoid, unaryKernel(sigmoid))
-	reg(backend.OpSiLU, unaryKernel(func(x float64) float64 { return x * sigmoid(x) }))
-	reg(backend.OpSqrt, unaryKernel(math.Sqrt))
-	reg(backend.OpAbs, unaryKernel(math.Abs))
+	reg(backend.OpSigmoid, unaryKernel(sigmoidOp{}))
+	reg(backend.OpSiLU, unaryKernel(siluOp{}))
+	reg(backend.OpSqrt, unaryKernel(sqrtOp{}))
+	reg(backend.OpAbs, unaryKernel(absOp{}))
 	reg(backend.OpClip, clipKernel)
 
-	reg(backend.OpAdd, binaryKernel(func(a, b float64) float64 { return a + b }))
-	reg(backend.OpSub, binaryKernel(func(a, b float64) float64 { return a - b }))
-	reg(backend.OpMul, binaryKernel(func(a, b float64) float64 { return a * b }))
-	reg(backend.OpDiv, binaryKernel(func(a, b float64) float64 { return a / b }))
-	reg(backend.OpMaximum, binaryKernel(math.Max))
-	reg(backend.OpMinimum, binaryKernel(math.Min))
+	reg(backend.OpAdd, binaryKernel(addOp{}))
+	reg(backend.OpSub, binaryKernel(subOp{}))
+	reg(backend.OpMul, binaryKernel(mulOp{}))
+	reg(backend.OpDiv, binaryKernel(divOp{}))
+	reg(backend.OpMaximum, binaryKernel(maximumOp{}))
+	reg(backend.OpMinimum, binaryKernel(minimumOp{}))
 	reg(backend.OpWhere, whereKernel)
 }
 
