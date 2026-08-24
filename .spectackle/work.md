@@ -4023,14 +4023,6 @@ option: Export and retain intermediate activations
 blocks: P-01M0S2E3VVF8WSZW64D46VEWEZ
 choice: One cached causal MPSGraph for the complete objective
 
-## R-01M0S55DWJFPQBV7Q5589G0ASW Attribute M2 GPT training-state transfer and optimizer costs
-kind: research
-state: active
-created: 2026-08-24
-targets: nlp/gpt.go, backend/metal/metal_bridge.m, nn/optim.go, backend/cuda/cuda_optim.go
-
-Measure the post-objective M2 bottleneck after the merged one-submission GPT graph. Separate parameter upload, dense gradient materialization and copy, graph compute, and host AdamW costs at the pinned 4096/256/512/8/6 F32 shape. Compare against the existing CUDA DeviceAdam residency precedent and the rejected retained-activation approach. Produce a decision-ready gate before introducing long-lived Metal training state.
-
 ## ADR-01M0S5EQY6FSYSMGWNR92THDP8 Which M2 state boundary should own GPT AdamW updates?
 kind: adr
 state: done
