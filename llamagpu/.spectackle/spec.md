@@ -60,3 +60,23 @@ Rationale: Remove one dispatch and context-capacity work amplification from Meta
 WHILE the bounded BiasGELU capability is unavailable or disabled, the decoder SHALL retain the established AddBias followed by exact unary GELU activation chain.
 
 Rationale: Preserve portable CUDA, Vulkan, CPU, and same-binary control behavior.
+
+## DECODER-LOGITS-RESIDENCY-001 {applies: go:llamagpu.Decoder.allocScratch,go:llamagpu.newGPTDecoder,go:llamagpu.TestGPTDecoderLogitsResidencyGrowthAndRelease,go:llamagpu.TestDecoderLogitsResidencyAndEagerControl}
+WHEN GPTDecoder or Decoder is constructed with standard backend operations, the decoder SHALL retain exactly Vocab F32 logits elements for Step and StepNLast and retain 0 multi-row logits elements.
+
+Rationale: Make dominant decoder residency scale with active output rows rather than maximum context.
+
+## DECODER-FULL-STEPN-LOGITS-001 {applies: go:llamagpu.logitsForRows,go:llamagpu.GPTDecoder.gptStepN,go:llamagpu.TestGPTDecoderLogitsResidencyGrowthAndRelease}
+WHEN full StepN requests more logits rows than the resident buffer holds, the decoder SHALL allocate exactly requested rows times Vocab F32 overflow elements, reuse that buffer for every smaller request, and grow only for a larger request.
+
+Rationale: Preserve full StepN semantics without per-call allocation churn or lifetime maximum-context residency.
+
+## DECODER-FULL-LOGITS-LIFETIME-001 {applies: go:llamagpu.growBuffer.ensure,go:llamagpu.Decoder.Release,go:llamagpu.GPTDecoder.Release,go:llamagpu.TestGrowBufferReleasesBeforeFailedReplacement,go:llamagpu.TestGPTDecoderLogitsResidencyGrowthAndRelease}
+WHEN the full-StepN overflow buffer grows or its decoder is released, the decoder SHALL release the previously owned overflow buffer exactly once and retain 0 stale overflow buffer references.
+
+Rationale: Keep lazy residency bounded and release-safe on every backend.
+
+## GPT2-LOGITS-RESIDENCY-PERF-001 {applies: go:llamagpu.BenchmarkGPTDecoderLogitsResidency}
+WHEN the same-binary GPT-2-small constructor benchmark compares lazy residency with eager control, the promotion gate SHALL require at least 200000000 fewer B/op and 10 times lower ns/op while public Step and StepNLast retain at least 0.97 times throughput.
+
+Rationale: Validate memory leverage and prevent moving allocation cost into dominant inference paths.

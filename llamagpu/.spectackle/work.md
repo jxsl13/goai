@@ -45,3 +45,39 @@ EXPECTED: 1.3-1.6x on prefill wall time at 512-token prompts (larger at bigger v
 BIT-IDENTITY BAR: change 1 has NONE — the removed work has no consumer. Change 2 is REAL and must be gated: the last row's logits would come from a GEMM with M=1 instead of M=k, MPS may select a different kernel and K-reduction order, and the package's own TestStepNMatchesSequentialSteps (llamagpu_test.go:350) asserts only 2e-3 relative tolerance between M=1 and M=k — it already knows they are not bit-equal. A 1e-3 logit shift can flip a near-tie and change the emitted token. Gate change 2 on a new test: greedy Generate(prompt, 256) before and after must return TOKEN-FOR-TOKEN identical ids across several prompt lengths and both decoders. If that does not hold, ship change 1 alone.
 
 PERFSCAN RULE REQUIRED: a function returns a slice of n*stride elements and at one or more call sites the result is bound to the blank identifier, or the only subsequent index expression is a constant-offset suffix such as all[(n-1)*stride:]. AST pass over call sites of package-local functions with slice results: classify each site as discarded, single-row, or full-use, and flag any producer whose expensive tail (a record*/Download* call guarded by the row count) is unconditional while at least one site is discarded.
+
+## P-01M0SN14HSEJ2VWB9HT1S7W01F Right-size decoder logits residency and lazily materialize full StepN output
+kind: proposal
+state: done
+created: 2026-08-24
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Remove maximum-context logits residency from both GPTDecoder and the shared Llama-style Decoder. They currently allocate Ctx times Vocab F32 output storage for their lifetime although Step, Generate, and StepNLast project and consume exactly one vocab row. GPT-2-small therefore retains 205,852,672 logits bytes for a 201,028-byte common-path requirement, a 1,024-fold amplification. Keep one resident vocab row by default and lazily allocate an exact reusable high-water buffer only when full StepN requests multiple rows; release or replace that buffer safely with the decoder. Retain an internal eager-capacity control in the same binary. Preserve every public output shape and bit pattern across Step, StepNLast, full StepN, recurrent fallbacks, Metal, CUDA, and Vulkan. Promote only after structural tests prove one-row default residency and bounded lazy growth/reuse/release, the GPT-2-small constructor benchmark removes at least 200,000,000 B/op and improves latency by at least 10 times versus eager control, public Step and StepNLast retain at least 0.97 times throughput with unchanged allocations, and the existing exact generation and StepN parity suites pass.
+
+## ADR-01M0SN1SY1EF1B4H7TW75ERAH2 How should decoders serve rare multi-row StepN logits without retaining Ctx times Vocab storage?
+kind: adr
+state: done
+created: 2026-08-24
+context: Step and StepNLast need one vocab row, while full StepN needs k rows and may repeat at a stable verification width. Allocation must remain backend-agnostic and release-safe.
+decision: One-row resident plus lazy reusable high-water buffer
+consequences: Cuts dominant lifetime residency to one vocab row, amortizes repeated full-StepN allocation, and preserves public output semantics. Growth replaces and releases the previous overflow buffer before allocating a larger exact capacity; decoder Release owns the remaining buffer. An internal eager flag retains the incumbent same-binary benchmark control.
+status: accepted
+
+kind: radio
+option: One-row resident plus lazy reusable high-water buffer
+option: Allocate and free an exact temporary buffer on every full StepN
+option: Retain the eager maximum-context buffer
+option: Redesign StepN around caller-owned output buffers
+blocks: P-01M0SN14HSEJ2VWB9HT1S7W01F
+choice: One-row resident plus lazy reusable high-water buffer
+
+## T-01M0SN2SMDFK09NPC0WFVNGWSR Implement and gate lazy full-StepN logits buffers
+kind: task
+state: done
+created: 2026-08-24
+parent: P-01M0SN14HSEJ2VWB9HT1S7W01F
+grilled: 2026-08-24 open=0
+targets: llamagpu/decoder.go, llamagpu/gpt.go, llamagpu/gpt_storage_test.go
+
+Change GPTDecoder and Decoder default logits storage from Ctx times Vocab to exactly one Vocab row. Add a backend-agnostic reusable overflow buffer that full multi-row StepN grows to exactly its required rows times Vocab capacity, reuses for smaller requests, replaces safely for larger requests, and releases with the decoder. Keep an unexported eagerFullLogits backendOps switch as the same-binary incumbent control. Route final projections and downloads to the selected buffer while preserving recurrent sequential fallbacks. Extend storage tests for both decoder cores, growth/reuse/release, and add a GPT-2-small-geometry constructor benchmark. Gate on at least 200 MB/op removed, at least 10x constructor speedup, Step and StepNLast throughput at least 0.97x, unchanged hot-path allocations, and all parity suites.
