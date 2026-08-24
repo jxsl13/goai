@@ -43,3 +43,9 @@ WHEN a GPT attention-output or FFN-down projection updates the running residual,
 
 ## M2-GPT-DISPATCH-FUSION-PERF-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal,go:llamagpu_test.TestGPT2ScalePipeline}
 WHEN a GPT dispatch-fusion slice is promoted on M2 Pro at GPT-2-small geometry, the benchmark gate SHALL require at least 1.03 times paired median speedup, 21 of 21 non-regressing pairs, and exact greedy-token equality over 256 generated tokens.
+
+## GPT-RESIDUAL-DEAD-SCRATCH-001 {applies: go:llamagpu.newGPTDecoder,go:llamagpu.GPTDecoder.recordAttentionResidual,go:llamagpu.GPTDecoder.recordFFNResidual}
+WHEN F32 GPT residual projections use recordAdd, the GPT decoder constructor SHALL allocate 0 attention-output scratch floats and 0 FFN-output scratch floats.
+
+## M2-GPT-DISPATCH-CUMULATIVE-PERF-001 {applies: go:llamagpu_test.BenchmarkGPTDecodeStepMetal}
+WHEN the complete GPT dispatch-fusion design is promoted on M2 Pro at GPT-2-small geometry, the public-Step benchmark gate SHALL require at least 1.20 times paired median speedup, 7 of 7 wins, and no allocation increase across an order-alternated campaign.
