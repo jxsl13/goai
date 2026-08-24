@@ -586,6 +586,6 @@ WHEN compared with portable F32 AdamW for 3 steps, the Metal session SHALL match
 WHERE 3 order-alternated count-7 M2 production-shape campaigns, the resident GPT AdamW gate SHALL require median speedup at least 1.25x, every pair at least 1.10x versus host F32 AdamW, and median latency at most 24.69 milliseconds.
 
 ## M2-GPT-ADAMW-SESSION-PERF-002
-WHERE the F32 ViT AdamW session is supported, the Metal backend SHALL retain parameters gradients and moments across steps and materialize only scalar loss per Step and parameters on Sync or Close.
+WHERE the F32 ViT AdamW session is supported, the Metal backend SHALL retain all parameter gradient and moment buffers across Steps, copy exactly 1 loss scalar per Step, and copy parameters only on explicit Sync or Close.
 
 Rationale: Cross-step residency is the measured optimization; explicit Sync and Close preserve host visibility.
