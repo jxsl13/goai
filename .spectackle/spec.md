@@ -772,3 +772,8 @@ WHILE the external registry lacks at least one stable ID present in the legacy r
 
 ## PERFSCAN-CI-WHOLE-TREE-001
 WHEN CI evaluates a non-documentation change, the GoAI CI SHALL execute one external perfscan scan over ./..., fail on tool or configuration errors, and publish the advisory finding count.
+
+## GO127-LIVE-TOOLCHAIN-001
+WHEN GoAI is built or tested in live CI, the GoAI SHALL require Go 1.27.0 in go.mod and select Go 1.27.x in all ten setup-go lanes.
+
+Rationale: One declared compiler generation prevents local, documentation, and CI semantics from drifting across Go 1.27 lowering changes.
