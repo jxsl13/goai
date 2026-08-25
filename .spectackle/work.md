@@ -3985,8 +3985,9 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## T-01M0VEZY4CE0P99262CW681K3A Reprice the M2 F32 Abs parallel crossover for the Go 1.27 NEON kernel
 kind: task
-state: draft
+state: active
 created: 2026-08-25
+grilled: 2026-08-25 open=0
 targets: backend/cpu/abs_f32_arm64.go, backend/cpu/abs_f32_arm64_test.go, backend/cpu/abs_bench_test.go, backend/cpu/elementwise.go, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence/m2-go127-abs-f32-crossover-20260825
 
 Go 1.27 changed float32(math.Abs(float64(x))) NaN semantics, allowing the Apple ARM64 NEON leaf to remove four vector compares, four quiet-bit masks, and four ORs per 16 values. The production fan-out threshold remains 1<<18 from the older heavier leaf, so it may now parallelize shapes whose faster serial stream already wins. Sweep exact frozen binaries across threshold candidates and the complete-operation shapes 131072, 262144, 349440, 524288, 2097152, 4194304, and 8388608 on the Apple M2 Pro. Preserve Go 1.27 Float32bits behavior for every finite/zero/infinity/NaN case, in-place semantics, non-ARM fallbacks, allocation counts, and large-shape throughput. Promote only a threshold with stable alternating-pair wins near the old crossover and no material large-shape regression; commit raw evidence, hashes, commands, and add a two-arm threshold geometry test.
