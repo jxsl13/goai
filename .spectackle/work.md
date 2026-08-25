@@ -3994,9 +3994,10 @@ Rebuild GoAI with the installed Go 1.27.0 release and make that toolchain explic
 
 ## T-01M0V9BWA4F358SJSN3A4SFWYW Rebuild and validate GoAI with Go 1.27
 kind: task
-state: draft
+state: active
 created: 2026-08-25
 parent: P-01M0V9AJGTFXNTP2BSGMQ2XGTN
+grilled: 2026-08-25 open=1
 targets: go.mod, README.md, .github/workflows/ci.yml
 
 Set the module language/toolchain floor to Go 1.27.0, update the public installation requirement to Go 1.27+, and update all ten setup-go CI declarations from 1.26.x to 1.27.x. Preserve historical benchmark artifacts and compiler-behavior commentary. Rebuild the complete library with local Go 1.27.0, run exact module-tidy, pure-Go preflight, cgo/race, Metal, Vulkan, and cross-platform compile gates, and compare representative current-main M2 benchmarks against Go 1.26.6 without changing workload or source. Definition of done: every live version declaration agrees, the full Go 1.27 validation is green, no representative regression is hidden, and the PR CI is terminal green before merge.
