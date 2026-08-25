@@ -27,10 +27,10 @@ func rowMaxF32(x []float32) float32 {
 	acc := vNegInf
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		acc = acc.Max(archsimd.LoadFloat32x8Slice(x[i:]))
+		acc = acc.Max(archsimd.LoadFloat32x8(x[i:]))
 	}
 	var lanes [8]float32
-	acc.Store(&lanes)
+	acc.Store(lanes[:])
 	m := lanes[0]
 	for _, v := range lanes[1:] {
 		if v > m {
@@ -57,7 +57,7 @@ func axpbRowF32(x []float32, a, b float32) {
 	av, bv := archsimd.BroadcastFloat32x8(a), archsimd.BroadcastFloat32x8(b)
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		archsimd.LoadFloat32x8Slice(x[i:]).MulAdd(av, bv).StoreSlice(x[i:])
+		archsimd.LoadFloat32x8(x[i:]).MulAdd(av, bv).Store(x[i:])
 	}
 	for i := n8; i < len(x); i++ {
 		x[i] = x[i]*a + b
@@ -75,7 +75,7 @@ func scaleRowF32(x []float32, inv float32) {
 	iv := archsimd.BroadcastFloat32x8(inv)
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		archsimd.LoadFloat32x8Slice(x[i:]).Mul(iv).StoreSlice(x[i:])
+		archsimd.LoadFloat32x8(x[i:]).Mul(iv).Store(x[i:])
 	}
 	for i := n8; i < len(x); i++ {
 		x[i] *= inv

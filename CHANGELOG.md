@@ -20,6 +20,14 @@ host load. This is a compatibility rebuild, not a universal performance claim.
 Toolchain fingerprinting and declaration-drift detection are tracked in
 perfscan issue #912.
 
+The Go 1.27 experimental SIMD API migration also covers every AMD64 load,
+store, and vector-round caller in the CPU, GGUF, and internal SIMD packages.
+The compatibility-only port preserves vector operation order, reductions,
+runtime feature gates, and portable fallbacks. A complete Linux/AMD64
+`GOEXPERIMENT=simd` build plus focused test-binary compiles now gate future
+toolchain changes; the corresponding AMD64 vector-exp accuracy and underflow
+tests also pass in an x86_64 binary executed under Rosetta on the M2.
+
 ### autograd -- tile exact Eigh VJP outputs (T-01M0V7KKKCES5, 2026-08-25)
 
 The eigendecomposition VJP now computes four adjacent columns of

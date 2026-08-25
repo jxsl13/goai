@@ -41,3 +41,29 @@ under Go 1.26.6 and 1.573 s under Go 1.27.0 against a non-race 800 ms ceiling.
 Every other package in the local race sweep passed. The required Linux cgo/race
 authority is therefore the PR CI lane, which does not share the Darwin MLA
 floating-point boundary.
+
+## Go 1.27 AMD64 SIMD migration
+
+The first Go 1.27 PR run exposed a source-compatibility break in the
+experimental `simd/archsimd` API on Ubuntu/AMD64. The tree-wide port maps the
+removed `Load*Slice` and `StoreSlice` forms to their Go 1.27 slice APIs, maps
+the vector `RoundToEven` spelling to `Round`, and adapts the existing
+pointer-based unaligned loads through fixed-length `unsafe.Slice` views. It
+does not change arithmetic order, reduction topology, dispatch, or fallbacks.
+
+Validation on the exact replacement source includes:
+
+- a complete Linux/AMD64 `CGO_ENABLED=0 GOEXPERIMENT=simd` build;
+- Linux/AMD64 SIMD test-binary compiles for `internal/simd`, `backend/cpu`,
+  and `format/gguf`;
+- x86_64 execution under Rosetta on the Apple M2 Pro, where the vector F64
+  exponential underflow and accuracy gates pass (maximum relative error
+  `3.409e-16`, maximum ULP error `2.00`); and
+- the normal Apple ARM64 preflight, which continues to exercise the portable
+  and native M2 paths.
+
+This API-only repair has no independent speedup claim. Its performance
+evidence is the same-source Go 1.26.6 versus Go 1.27.0 campaign above; an
+AMD64 runtime comparison would conflate the compiler upgrade with the API
+rename and is therefore deliberately not promoted as kernel leverage. PR CI
+is the native Linux/AMD64 execution authority.

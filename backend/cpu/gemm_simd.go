@@ -79,18 +79,18 @@ func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
 		j := 0
 		// 8-wide body: two column groups per row = 8 accumulator chains in flight.
 		for ; j < nv8; j += 8 {
-			a0 := archsimd.LoadFloat64x4Slice(c0[j:])
-			a0h := archsimd.LoadFloat64x4Slice(c0[j+4:])
-			a1 := archsimd.LoadFloat64x4Slice(c1[j:])
-			a1h := archsimd.LoadFloat64x4Slice(c1[j+4:])
-			a2 := archsimd.LoadFloat64x4Slice(c2[j:])
-			a2h := archsimd.LoadFloat64x4Slice(c2[j+4:])
-			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
-			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
+			a0 := archsimd.LoadFloat64x4(c0[j:])
+			a0h := archsimd.LoadFloat64x4(c0[j+4:])
+			a1 := archsimd.LoadFloat64x4(c1[j:])
+			a1h := archsimd.LoadFloat64x4(c1[j+4:])
+			a2 := archsimd.LoadFloat64x4(c2[j:])
+			a2h := archsimd.LoadFloat64x4(c2[j+4:])
+			a3 := archsimd.LoadFloat64x4(c3[j:])
+			a3h := archsimd.LoadFloat64x4(c3[j+4:])
 			bo := j
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat64x4Slice(B[bo:])
-				hi := archsimd.LoadFloat64x4Slice(B[bo+4:])
+				lo := archsimd.LoadFloat64x4(B[bo:])
+				hi := archsimd.LoadFloat64x4(B[bo+4:])
 				ap := A[p*m+i : p*m+i+4 : p*m+i+4]
 				b0 := archsimd.BroadcastFloat64x4(ap[0])
 				b1 := archsimd.BroadcastFloat64x4(ap[1])
@@ -106,23 +106,23 @@ func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
 				a3h = b3.Mul(hi).Add(a3h)
 				bo += n
 			}
-			a0.StoreSlice(c0[j:])
-			a0h.StoreSlice(c0[j+4:])
-			a1.StoreSlice(c1[j:])
-			a1h.StoreSlice(c1[j+4:])
-			a2.StoreSlice(c2[j:])
-			a2h.StoreSlice(c2[j+4:])
-			a3.StoreSlice(c3[j:])
-			a3h.StoreSlice(c3[j+4:])
+			a0.Store(c0[j:])
+			a0h.Store(c0[j+4:])
+			a1.Store(c1[j:])
+			a1h.Store(c1[j+4:])
+			a2.Store(c2[j:])
+			a2h.Store(c2[j+4:])
+			a3.Store(c3[j:])
+			a3h.Store(c3[j+4:])
 		}
 		for ; j < nv; j += 4 { // 4-wide cleanup
-			acc0 := archsimd.LoadFloat64x4Slice(c0[j:])
-			acc1 := archsimd.LoadFloat64x4Slice(c1[j:])
-			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
-			acc3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			acc0 := archsimd.LoadFloat64x4(c0[j:])
+			acc1 := archsimd.LoadFloat64x4(c1[j:])
+			acc2 := archsimd.LoadFloat64x4(c2[j:])
+			acc3 := archsimd.LoadFloat64x4(c3[j:])
 			bo := j
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat64x4Slice(B[bo:])
+				bv := archsimd.LoadFloat64x4(B[bo:])
 				ap := A[p*m+i : p*m+i+4 : p*m+i+4]
 				acc0 = archsimd.BroadcastFloat64x4(ap[0]).Mul(bv).Add(acc0)
 				acc1 = archsimd.BroadcastFloat64x4(ap[1]).Mul(bv).Add(acc1)
@@ -130,10 +130,10 @@ func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
 				acc3 = archsimd.BroadcastFloat64x4(ap[3]).Mul(bv).Add(acc3)
 				bo += n
 			}
-			acc0.StoreSlice(c0[j:])
-			acc1.StoreSlice(c1[j:])
-			acc2.StoreSlice(c2[j:])
-			acc3.StoreSlice(c3[j:])
+			acc0.Store(c0[j:])
+			acc1.Store(c1[j:])
+			acc2.Store(c2[j:])
+			acc3.Store(c3[j:])
 		}
 		for ; j < n; j++ { // scalar column tail
 			s0, s1, s2, s3 := c0[j], c1[j], c2[j], c3[j]
@@ -154,13 +154,13 @@ func gemmATF64Band(A, B, C []float64, loRow, hiRow, m, k, n int) {
 		ci := C[i*n : i*n+n]
 		j := 0
 		for ; j < nv; j += 4 {
-			acc := archsimd.LoadFloat64x4Slice(ci[j:])
+			acc := archsimd.LoadFloat64x4(ci[j:])
 			bo := j
 			for p := 0; p < k; p++ {
-				acc = archsimd.BroadcastFloat64x4(A[p*m+i]).Mul(archsimd.LoadFloat64x4Slice(B[bo:])).Add(acc)
+				acc = archsimd.BroadcastFloat64x4(A[p*m+i]).Mul(archsimd.LoadFloat64x4(B[bo:])).Add(acc)
 				bo += n
 			}
-			acc.StoreSlice(ci[j:])
+			acc.Store(ci[j:])
 		}
 		for ; j < n; j++ {
 			s := ci[j]
@@ -201,19 +201,19 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 		// 8-wide body: two column groups per row = 8 independent accumulator
 		// chains, enough in flight to hide the add latency (nr=4 left only 4).
 		for ; j < nv8; j += 8 {
-			a0 := archsimd.LoadFloat64x4Slice(c0[j:])
-			a0h := archsimd.LoadFloat64x4Slice(c0[j+4:])
-			a1 := archsimd.LoadFloat64x4Slice(c1[j:])
-			a1h := archsimd.LoadFloat64x4Slice(c1[j+4:])
-			a2 := archsimd.LoadFloat64x4Slice(c2[j:])
-			a2h := archsimd.LoadFloat64x4Slice(c2[j+4:])
-			a3 := archsimd.LoadFloat64x4Slice(c3[j:])
-			a3h := archsimd.LoadFloat64x4Slice(c3[j+4:])
+			a0 := archsimd.LoadFloat64x4(c0[j:])
+			a0h := archsimd.LoadFloat64x4(c0[j+4:])
+			a1 := archsimd.LoadFloat64x4(c1[j:])
+			a1h := archsimd.LoadFloat64x4(c1[j+4:])
+			a2 := archsimd.LoadFloat64x4(c2[j:])
+			a2h := archsimd.LoadFloat64x4(c2[j+4:])
+			a3 := archsimd.LoadFloat64x4(c3[j:])
+			a3h := archsimd.LoadFloat64x4(c3[j+4:])
 			bo := j
 			bptr := unsafe.Pointer(&B[0])
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo)*8)))
-				hi := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo+4)*8)))
+				lo := archsimd.LoadFloat64x4(unsafe.Slice((*float64)(unsafe.Add(bptr, uintptr(bo)*8)), 4))
+				hi := archsimd.LoadFloat64x4(unsafe.Slice((*float64)(unsafe.Add(bptr, uintptr(bo+4)*8)), 4))
 				b0 := archsimd.BroadcastFloat64x4(ar0[p])
 				b1 := archsimd.BroadcastFloat64x4(ar1[p])
 				b2 := archsimd.BroadcastFloat64x4(ar2[p])
@@ -228,34 +228,34 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 				a3h = b3.MulAdd(hi, a3h)
 				bo += n
 			}
-			a0.StoreSlice(c0[j:])
-			a0h.StoreSlice(c0[j+4:])
-			a1.StoreSlice(c1[j:])
-			a1h.StoreSlice(c1[j+4:])
-			a2.StoreSlice(c2[j:])
-			a2h.StoreSlice(c2[j+4:])
-			a3.StoreSlice(c3[j:])
-			a3h.StoreSlice(c3[j+4:])
+			a0.Store(c0[j:])
+			a0h.Store(c0[j+4:])
+			a1.Store(c1[j:])
+			a1h.Store(c1[j+4:])
+			a2.Store(c2[j:])
+			a2h.Store(c2[j+4:])
+			a3.Store(c3[j:])
+			a3h.Store(c3[j+4:])
 		}
 		for ; j < nv; j += 4 { // 4-wide cleanup (n%8 in [4,7])
-			acc0 := archsimd.LoadFloat64x4Slice(c0[j:])
-			acc1 := archsimd.LoadFloat64x4Slice(c1[j:])
-			acc2 := archsimd.LoadFloat64x4Slice(c2[j:])
-			acc3 := archsimd.LoadFloat64x4Slice(c3[j:])
+			acc0 := archsimd.LoadFloat64x4(c0[j:])
+			acc1 := archsimd.LoadFloat64x4(c1[j:])
+			acc2 := archsimd.LoadFloat64x4(c2[j:])
+			acc3 := archsimd.LoadFloat64x4(c3[j:])
 			bo := j
 			bptr := unsafe.Pointer(&B[0])
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat64x4((*[4]float64)(unsafe.Add(bptr, uintptr(bo)*8)))
+				bv := archsimd.LoadFloat64x4(unsafe.Slice((*float64)(unsafe.Add(bptr, uintptr(bo)*8)), 4))
 				acc0 = archsimd.BroadcastFloat64x4(ar0[p]).MulAdd(bv, acc0)
 				acc1 = archsimd.BroadcastFloat64x4(ar1[p]).MulAdd(bv, acc1)
 				acc2 = archsimd.BroadcastFloat64x4(ar2[p]).MulAdd(bv, acc2)
 				acc3 = archsimd.BroadcastFloat64x4(ar3[p]).MulAdd(bv, acc3)
 				bo += n
 			}
-			acc0.StoreSlice(c0[j:])
-			acc1.StoreSlice(c1[j:])
-			acc2.StoreSlice(c2[j:])
-			acc3.StoreSlice(c3[j:])
+			acc0.Store(c0[j:])
+			acc1.Store(c1[j:])
+			acc2.Store(c2[j:])
+			acc3.Store(c3[j:])
 		}
 		for ; j < jHi; j++ { // scalar column tail (span%4)
 			s0, s1, s2, s3 := c0[j], c1[j], c2[j], c3[j]
@@ -276,13 +276,13 @@ func gemmF64BandCols(A, B, C []float64, loRow, hiRow, k, n, jLo, jHi int) {
 		ai := A[i*k : (i+1)*k]
 		j := jLo
 		for ; j < nv; j += 4 {
-			acc := archsimd.LoadFloat64x4Slice(ci[j:])
+			acc := archsimd.LoadFloat64x4(ci[j:])
 			bo := j
 			for p := 0; p < k; p++ {
-				acc = archsimd.BroadcastFloat64x4(ai[p]).MulAdd(archsimd.LoadFloat64x4Slice(B[bo:]), acc)
+				acc = archsimd.BroadcastFloat64x4(ai[p]).MulAdd(archsimd.LoadFloat64x4(B[bo:]), acc)
 				bo += n
 			}
-			acc.StoreSlice(ci[j:])
+			acc.Store(ci[j:])
 		}
 		for ; j < jHi; j++ {
 			s := ci[j]
@@ -444,25 +444,25 @@ func gemmF32SmallM(A, B, C []float32, jLo, jHi, m, k, n int) {
 			bo := j
 			for p := 0; p < k; p++ {
 				b := archsimd.BroadcastFloat32x8(ai[p])
-				s0 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s0)
-				s1 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4))), s1)
-				s2 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+16)*4))), s2)
-				s3 = b.MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+24)*4))), s3)
+				s0 = b.MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)), 8)), s0)
+				s1 = b.MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4)), 8)), s1)
+				s2 = b.MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+16)*4)), 8)), s2)
+				s3 = b.MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+24)*4)), 8)), s3)
 				bo += n
 			}
-			s0.StoreSlice(ci[j:])
-			s1.StoreSlice(ci[j+8:])
-			s2.StoreSlice(ci[j+16:])
-			s3.StoreSlice(ci[j+24:])
+			s0.Store(ci[j:])
+			s1.Store(ci[j+8:])
+			s2.Store(ci[j+16:])
+			s3.Store(ci[j+24:])
 		}
 		for ; j < nv; j += 8 {
 			s := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s)
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)), 8)), s)
 				bo += n
 			}
-			s.StoreSlice(ci[j:])
+			s.Store(ci[j:])
 		}
 		for ; j < jHi; j++ {
 			var t float32
@@ -546,8 +546,8 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s3h := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				lo := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)))
-				hi := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4)))
+				lo := archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)), 8))
+				hi := archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo+8)*4)), 8))
 				b0 := archsimd.BroadcastFloat32x8(a0[p])
 				b1 := archsimd.BroadcastFloat32x8(a1[p])
 				b2 := archsimd.BroadcastFloat32x8(a2[p])
@@ -562,14 +562,14 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 				s3h = b3.MulAdd(hi, s3h)
 				bo += n
 			}
-			s0.StoreSlice(c0[j:])
-			s0h.StoreSlice(c0[j+8:])
-			s1.StoreSlice(c1[j:])
-			s1h.StoreSlice(c1[j+8:])
-			s2.StoreSlice(c2[j:])
-			s2h.StoreSlice(c2[j+8:])
-			s3.StoreSlice(c3[j:])
-			s3h.StoreSlice(c3[j+8:])
+			s0.Store(c0[j:])
+			s0h.Store(c0[j+8:])
+			s1.Store(c1[j:])
+			s1h.Store(c1[j+8:])
+			s2.Store(c2[j:])
+			s2h.Store(c2[j+8:])
+			s3.Store(c3[j:])
+			s3h.Store(c3[j+8:])
 		}
 		for ; j < nv; j += 8 {
 			s0 := archsimd.BroadcastFloat32x8(0)
@@ -578,17 +578,17 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s3 := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				bv := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)))
+				bv := archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)), 8))
 				s0 = archsimd.BroadcastFloat32x8(a0[p]).MulAdd(bv, s0)
 				s1 = archsimd.BroadcastFloat32x8(a1[p]).MulAdd(bv, s1)
 				s2 = archsimd.BroadcastFloat32x8(a2[p]).MulAdd(bv, s2)
 				s3 = archsimd.BroadcastFloat32x8(a3[p]).MulAdd(bv, s3)
 				bo += n
 			}
-			s0.StoreSlice(c0[j:])
-			s1.StoreSlice(c1[j:])
-			s2.StoreSlice(c2[j:])
-			s3.StoreSlice(c3[j:])
+			s0.Store(c0[j:])
+			s1.Store(c1[j:])
+			s2.Store(c2[j:])
+			s3.Store(c3[j:])
 		}
 		for ; j < jHi; j++ { // f32-native scalar tail (span%8)
 			var t0, t1, t2, t3 float32
@@ -612,10 +612,10 @@ func gemmF32BandDirectCols(A, B, C []float32, loRow, hiRow, k, n, jLo, jHi int) 
 			s := archsimd.BroadcastFloat32x8(0)
 			bo := j
 			for p := 0; p < k; p++ {
-				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8((*[8]float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4))), s)
+				s = archsimd.BroadcastFloat32x8(ai[p]).MulAdd(archsimd.LoadFloat32x8(unsafe.Slice((*float32)(unsafe.Add(unsafe.Pointer(&B[0]), uintptr(bo)*4)), 8)), s)
 				bo += n
 			}
-			s.StoreSlice(ci[j:])
+			s.Store(ci[j:])
 		}
 		for ; j < jHi; j++ {
 			var t float32
