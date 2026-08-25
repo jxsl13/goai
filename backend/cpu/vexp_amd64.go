@@ -23,6 +23,7 @@ const (
 	vsiluF64Fast    = true
 	vsigmoidF64Fast = true
 	vtanhF64Fast    = true
+	vsoftcapF64Fast = true
 )
 
 var vexpHasAVX = archsimd.X86.AVX() && archsimd.X86.FMA()

@@ -48,6 +48,29 @@ func BenchmarkTanhF64_64K_cpu(b *testing.B) {
 func BenchmarkSigmoidF64_64K_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpSigmoid, bench.RandF64(tensor.Shape{65536}, 3))
 }
+
+func benchSoftCapF64(b *testing.B, n int, cap float64) {
+	be, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(be)
+	x := bench.RandF64(tensor.Shape{n}, 3)
+	attrs := backend.SoftCapAttrs{Cap: cap}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		if _, err := backend.Execute(ctx, backend.OpSoftCap, []*tensor.Tensor{x}, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkSoftCapF64_64K_cpu(b *testing.B) {
+	benchSoftCapF64(b, 1<<16, 30)
+}
+
+func BenchmarkSoftCapF64_256K_cpu(b *testing.B) {
+	benchSoftCapF64(b, 1<<18, 30)
+}
+
 func BenchmarkAddBiasF32_512x1024_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpAddBias, bench.RandF32(tensor.Shape{512, 1024}, 1), bench.RandF32(tensor.Shape{1024}, 2))
 }
