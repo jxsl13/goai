@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- register-tile causal Conv1D channels (T-01M0VJKX5ZEYN, 2026-08-25)
+
+The F32/F64 Mamba/Jamba depthwise causal Conv1D kernel now reduces four
+adjacent channels through independent F64 accumulators. Each tap reads a
+contiguous four-value activation band while every output retains its original
+ascending-tap arithmetic, optional-bias behavior, and single store rounding.
+
+Nine alternating frozen-binary Apple M2 Pro pairs at `L2048,D1024,K4` improve
+F32 from 2.517768 to 1.460454 ms (**1.724x**, paired median **1.630x**, 9/9
+wins) and F64 from 1.534858 to 1.066286 ms (**1.439x**, paired median
+**1.517x**, 9/9 wins), with six allocations per operation unchanged. Exact-bit
+gates cover both dtypes, bias/no-bias, causal prefixes, `K=1`, and channel
+tails. Single-P boundary controls also retain gains. The allocation-heavy full
+row interchange and an inconclusive eight-channel tile were rejected. The
+generalized finding is perfscan issue #915.
+
 ### backend/cpu -- reprice Go 1.27 F32 Abs fan-out (T-01M0VEZY4CE0P, 2026-08-25)
 
 The Apple ARM64 F32 Abs route now keeps the Go 1.27 NEON leaf serial below

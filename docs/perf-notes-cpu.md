@@ -492,3 +492,31 @@ order fails immediately at n=5, proving that the gate protects the exact
 arithmetic schedule. Focused external perfscan no longer reports the PS6010
 site after transformation. The production-shaped validation is perfscan issue
 #911.
+
+## Register-tile depthwise causal Conv1D channels (T-01M0VJKX5ZEYN)
+
+The Mamba/Jamba CPU Conv1D kernel used one channel accumulator and walked the
+activation input with a `D`-element stride through its short tap loop. Four
+adjacent channels now keep four independent F64 accumulators, so each tap reads
+a contiguous four-value activation band. Every output still reduces taps in
+ascending order and narrows once, retaining Float64-bit identity for F32 and
+F64, bias/no-bias, causal prefixes, and odd channel tails.
+
+Nine alternating frozen-binary Apple M2 Pro pairs at `L2048,D1024,K4` give the
+conservative production result:
+
+| dtype | before median | after median | speedup | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| F32 | 2.517768 ms | 1.460454 ms | **1.724x** | **1.630x** | 9/9 |
+| F64 | 1.534858 ms | 1.066286 ms | **1.439x** | **1.517x** | 9/9 |
+
+Allocation counts remain six per operation. Single-P boundary controls win 9/9
+at `L1,D1024,K4`, 9/9 at unaligned no-bias `L64,D1023,K4`, and 7/9 at
+`L512,D256,K8`; their paired medians are 1.258x, 1.933x, and 1.488x.
+
+A full contiguous-row interchange was rejected because exact F32 semantics
+required per-worker F64 scratch and increased allocation pressure. An
+eight-channel tile was also rejected after splitting only 5/9 against four
+channels for each dtype. The host was variable, so paired directions constrain
+the claim and the absolute times are not cross-library leadership evidence.
+The reusable PS1006/PS4008 lesson is [perfscan issue #915](https://github.com/jxsl13/perfscan/issues/915).
