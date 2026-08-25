@@ -1267,3 +1267,4 @@
 {"t":"2026-08-25T00:28:24Z","eid":"2db0167a704d17b4","ag":"ag-c5e5","ev":"create","id":"T-01M0V52YFDFSF9QW4JXPG5KCTS","k":"task","ti":"Implement and gate exact normalized-weight reuse in MoE combine VJP"}
 {"t":"2026-08-25T00:30:03Z","eid":"f89a306d80fb494e","ag":"ag-adb6","ev":"grill","id":"T-01M0V52YFDFSF9QW4JXPG5KCTS","gr":"2026-08-25 open=0","hash":"43ef09f99882cbb1d2508c9a55f86c98634179d07fab45966f3109ec6fd884a0"}
 {"t":"2026-08-25T00:30:12Z","eid":"b60be1b13b8e3465","ag":"ag-6b93","ev":"move","id":"T-01M0V52YFDFSF9QW4JXPG5KCTS","fr":"draft","to":"active","note":"Grill passed with no open questions. Implement the exact cached-division path and gates under the active proposal."}
+{"t":"2026-08-25T00:51:15Z","eid":"a4b581a798cafe8a","ag":"ag-89bd","ev":"start","id":"T-01M0V52YFDFSF9QW4JXPG5KCTS","note":"branch spectackle/T-01M0V52YFDFSF base 70b5b0ba5ae6"}

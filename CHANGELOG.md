@@ -4,6 +4,24 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd -- reuse exact MoE gate quotients (T-01M0V52YFDFSF, 2026-08-25)
+
+The typed F64/F32 `OpMoECombine` backward now computes each token's exact
+`weight/denominator` quotient once per expert and reuses that rounded value for
+the mixture and expert gradients. F64 combines this with a four-output register
+tile; F32 uses contiguous expert-row streaming after its widen-to-F64
+conversion. Per-output expert order, token fan-out, zero-denominator behavior,
+fallbacks, dtype narrowing, and the public API are unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs at T4096/E8/D256 improve the
+F64 median from 13.416355 to 10.386168 ms (**1.292x**, 8/9 wins) and F32 from
+11.755059 to 10.988136 ms (**1.070x**, 7/9 wins). Median allocation counts stay
+at 64 and 60 respectively; per-worker quotient scratch adds about 3.1 KiB/op
+(less than 0.005% of total bytes). Serial/parallel, F64/F32, top-3/top-8, odd
+width, and skipped-token cells are bit-identical to the pre-change formula. A
+reciprocal-multiplication mutation fails the F64 oracle. Generalized quotient
+reuse is tracked in perfscan issue #909.
+
 ### tensor -- carry allocation-free pool release tokens (T-01M0V1E9EFFHX, 2026-08-25)
 
 Pooled F32/F64 `Storage` now keeps a cold-allocated pointer token from
