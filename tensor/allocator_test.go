@@ -1,6 +1,9 @@
 package tensor
 
-import "testing"
+import (
+	"sync"
+	"testing"
+)
 
 func TestSizeClass(t *testing.T) {
 	cases := map[int]int{1: 0, 2: 1, 3: 2, 4: 2, 5: 3, 8: 3, 9: 4}
@@ -103,6 +106,7 @@ func TestTensorOnPooledDeviceRelease(t *testing.T) {
 		t.Fatal("device kind lost")
 	}
 	x.SetF64(3, 0)
+	before := &x.Storage().F64()[0]
 	x.Storage().Release()
 	// reuse: next alloc of the same class should recycle
 	y := p.Alloc(F64, 4).([]float64)
@@ -112,6 +116,89 @@ func TestTensorOnPooledDeviceRelease(t *testing.T) {
 	if y[0] != 0 {
 		t.Error("released+realloc must be zeroed")
 	}
+	if !raceEnabled && before != &y[0] {
+		t.Error("Storage release must remain reusable through the public Pool path")
+	}
+	p.Free(y)
+	z := NewOn(dev, F64, Shape{4})
+	if z.Storage().pool == nil {
+		t.Fatal("pooled F64 Storage must retain its release token")
+	}
+	if !raceEnabled && before != &z.Storage().F64()[0] {
+		t.Error("public Pool release must remain reusable through the Storage path")
+	}
+	z.Storage().Release()
+	z.Storage().Release() // idempotent even after returning a token
+}
+
+func TestPooledStorageReleaseTokenZeroesBothDtypes(t *testing.T) {
+	p := NewPool()
+	for _, dtype := range []Dtype{F32, F64} {
+		t.Run(dtype.String(), func(t *testing.T) {
+			first := newStorageWith(p, dtype, 5) // class 3, cap 8
+			block := first.pool
+			if block == nil {
+				t.Fatal("pooled Storage did not retain a release token")
+			}
+			switch dtype {
+			case F32:
+				for i := range first.f32[:cap(first.f32)] {
+					first.f32[:cap(first.f32)][i] = 17
+				}
+			case F64:
+				for i := range first.f64[:cap(first.f64)] {
+					first.f64[:cap(first.f64)][i] = -23
+				}
+			}
+			first.Release()
+
+			second := newStorageWith(p, dtype, 7)
+			if !raceEnabled && second.pool != block {
+				t.Error("same-class Storage allocation did not reuse its release token")
+			}
+			for i := 0; i < second.Len(); i++ {
+				if got := second.atF64(i); got != 0 {
+					t.Fatalf("reused Storage element %d = %g, want zero", i, got)
+				}
+			}
+			second.Release()
+		})
+	}
+
+	for _, dtype := range []Dtype{F16, BF16} {
+		storage := newStorageWith(p, dtype, 8)
+		if storage.pool != nil {
+			t.Fatalf("%v must keep the shared-U16 non-pooled carve-out", dtype)
+		}
+	}
+}
+
+func TestPooledStorageReleaseTokenConcurrent(t *testing.T) {
+	p := NewPool()
+	var wg sync.WaitGroup
+	for worker := 0; worker < 24; worker++ {
+		wg.Add(1)
+		go func(worker int) {
+			defer wg.Done()
+			dtype := F32
+			if worker%2 != 0 {
+				dtype = F64
+			}
+			for iteration := 0; iteration < 500; iteration++ {
+				storage := newStorageWith(p, dtype, 65+iteration%32)
+				for i := 0; i < storage.Len(); i++ {
+					if got := storage.atF64(i); got != 0 {
+						t.Errorf("worker %d iteration %d element %d = %g, want zero", worker, iteration, i, got)
+						storage.Release()
+						return
+					}
+					storage.setF64(i, float64(worker+1))
+				}
+				storage.Release()
+			}
+		}(worker)
+	}
+	wg.Wait()
 }
 
 func TestViewsInheritDevice(t *testing.T) {

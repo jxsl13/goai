@@ -2880,3 +2880,43 @@ The generalizable detector lesson is tracked as
 [perfscan issue #906](https://github.com/jxsl13/perfscan/issues/906); the
 random-input branch-bypass benchmark defect is
 [perfscan issue #907](https://github.com/jxsl13/perfscan/issues/907).
+
+## Tensor pool release-token recycling (2026-08-25)
+
+Putting a slice value into `sync.Pool` boxes its three-word header. The raw
+`Allocator` API cannot avoid that cost because it exposes only a slice, but a
+`Storage` object owns the whole acquire-to-release lifetime. Pooled F32/F64
+storage now carries a pointer token allocated only with a cold backing buffer
+and returns that same pointer on release. The existing size-class `sync.Pool`
+still controls GC reclamation and accepts public slices, so cross-path reuse and
+the exported API remain exact.
+
+Apple M2 Pro, Go 1.27.0. An external public-API harness alternated exact main
+`1823fccf2ab22dd173df3ea19550d3179eb48099` and candidate fresh processes after
+one discarded warmup pair:
+
+| serial cell | exact main | release token | result |
+|---|---:|---:|---:|
+| F32, 64 elements | 277.1 ns | **213.2 ns** | **1.300x**, 7/9 wins |
+| F32, 65,536 elements | 2,985 ns | **2,899 ns** | **1.030x**, 4/9 wins |
+| F64, 64 elements | 335.9 ns | **285.3 ns** | **1.177x**, 6/9 wins |
+| F64, 65,536 elements | 8,169 ns | **7,893 ns** | **1.035x**, 4/9 wins |
+
+| parallel cell | exact main | release token | result |
+|---|---:|---:|---:|
+| F32, 64 elements | 183.8 ns | **177.8 ns** | **1.034x**, 5/7 wins |
+| F32, 65,536 elements | 1,411 ns | **1,375 ns** | **1.026x**, 6/7 wins |
+| F64, 64 elements | 220.8 ns | **170.1 ns** | **1.298x**, 5/7 wins |
+| F64, 65,536 elements | 2,402 ns | **2,319 ns** | **1.036x**, 3/7 wins |
+
+All warm production cells drop from three to two allocations; the small cells
+drop from 248 to 224 B/op. Isolated F32/F64 token cycles are 0 B/op and 0
+allocs/op. The unchanged public raw allocator remains neutral and retains its
+API-bound 24 B/op allocation. A private freelist was rejected because it would
+retain large buffers across garbage collections; creating a fresh pointer
+wrapper per release was rejected because it only moves the allocation.
+
+Raw pairs, harness source, exact scope, and correctness gates live under
+`internal/benchcompare/leadership/evidence/m2-tensor-pool-release-token-20260825`.
+The reusable ownership-token pattern is reported as
+[perfscan issue #908](https://github.com/jxsl13/perfscan/issues/908).

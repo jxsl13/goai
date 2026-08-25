@@ -1,0 +1,40 @@
+package allocatorbench
+
+import (
+	"fmt"
+	"testing"
+
+	"github.com/jxsl13/goai/tensor"
+)
+
+func benchmarkPooledNew(b *testing.B, parallel bool) {
+	for _, tc := range []struct {
+		dtype tensor.Dtype
+		n     int
+	}{
+		{tensor.F32, 64}, {tensor.F32, 65536},
+		{tensor.F64, 64}, {tensor.F64, 65536},
+	} {
+		b.Run(fmt.Sprintf("%s/N%d", tc.dtype, tc.n), func(b *testing.B) {
+			dev := tensor.NewCPUDevice(tensor.NewPool())
+			shape := tensor.Shape{tc.n}
+			b.ReportAllocs()
+			if parallel {
+				b.RunParallel(func(pb *testing.PB) {
+					for pb.Next() {
+						t := tensor.NewOn(dev, tc.dtype, shape)
+						t.Storage().Release()
+					}
+				})
+				return
+			}
+			for range b.N {
+				t := tensor.NewOn(dev, tc.dtype, shape)
+				t.Storage().Release()
+			}
+		})
+	}
+}
+
+func BenchmarkPooledNewSerial(b *testing.B)   { benchmarkPooledNew(b, false) }
+func BenchmarkPooledNewParallel(b *testing.B) { benchmarkPooledNew(b, true) }

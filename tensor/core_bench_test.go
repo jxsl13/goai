@@ -127,6 +127,30 @@ func BenchmarkPoolAllocFreeSmall(b *testing.B) {
 	}
 }
 
+func BenchmarkPooledStorageTokenF32(b *testing.B) {
+	p := NewPool()
+	warm := p.allocPooledStorage(F32, 4096)
+	warm.block.release()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		buf := p.allocPooledStorage(F32, 4096)
+		buf.block.release()
+	}
+}
+
+func BenchmarkPooledStorageTokenF64Small(b *testing.B) {
+	p := NewPool()
+	warm := p.allocPooledStorage(F64, 64)
+	warm.block.release()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		buf := p.allocPooledStorage(F64, 64)
+		buf.block.release()
+	}
+}
+
 func BenchmarkCastF32toF64(b *testing.B) {
 	x := New(F32, Shape{512, 512})
 	b.ResetTimer()
