@@ -28,3 +28,6 @@ Rationale: Measured across the three autograd factorization adjoints, which shar
 
 ## MOE-NORMALIZED-WEIGHT-REUSE-001
 WHEN one normalized gate weight spans hidden outputs, the typed OpMoECombine VJP SHALL perform 1 division per expert and preserve bit-equivalent outputs in TestMoECombineBackwardNormalizedWeightsBitExact.
+
+## EIGH-VJP-OUTPUT-TILE-EXACT-001
+WHEN inner times V-transpose spans 4 adjacent output columns, the Eigh VJP SHALL preserve Float64bits outputs in TestEighVJPIsBitIdentical and keep the scalar n modulo 4 tail.
