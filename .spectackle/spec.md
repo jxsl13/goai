@@ -779,3 +779,8 @@ WHEN CI evaluates a non-documentation change, the GoAI CI SHALL execute one exte
 WHEN GoAI is built or tested in live CI, the GoAI SHALL require Go 1.27.0 in go.mod and select Go 1.27.x in all ten setup-go lanes.
 
 Rationale: One declared compiler generation prevents local, documentation, and CI semantics from drifting across Go 1.27 lowering changes.
+
+## TOOLCHAIN-CHANGE-AMD64-SIMD-GATE-001
+WHEN the minimum Go toolchain changes, the GoAI SHALL cross-build the full Linux AMD64 tree with GOEXPERIMENT=simd and execute 1 internal/simd CI test suite before archive.
+
+Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, whose API is outside the Go 1 compatibility promise.
