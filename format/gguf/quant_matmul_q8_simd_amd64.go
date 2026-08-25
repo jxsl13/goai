@@ -24,17 +24,17 @@ func q8FusedDecodeM1SIMD(row []float32, weight []byte, n, k, rowBytes int, outf 
 			o := bi * 34
 			d := f16ToF32(binary.LittleEndian.Uint16(rb[o : o+2]))
 			q := rb[o+2:]
-			qv := archsimd.LoadInt8x32((*[32]int8)(unsafe.Pointer(&q[0])))
+			qv := archsimd.LoadInt8x32(unsafe.Slice((*int8)(unsafe.Pointer(&q[0])), 32))
 			lo := qv.GetLo().ExtendToInt16()
 			hi := qv.GetHi().ExtendToInt16()
 			g0 := lo.GetLo().ExtendToInt32().ConvertToFloat32()
 			g1 := lo.GetHi().ExtendToInt32().ConvertToFloat32()
 			g2 := hi.GetLo().ExtendToInt32().ConvertToFloat32()
 			g3 := hi.GetHi().ExtendToInt32().ConvertToFloat32()
-			x0 := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Pointer(&row[off])))
-			x1 := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Pointer(&row[off+8])))
-			x2 := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Pointer(&row[off+16])))
-			x3 := archsimd.LoadFloat32x8((*[8]float32)(unsafe.Pointer(&row[off+24])))
+			x0 := archsimd.LoadFloat32x8(row[off:])
+			x1 := archsimd.LoadFloat32x8(row[off+8:])
+			x2 := archsimd.LoadFloat32x8(row[off+16:])
+			x3 := archsimd.LoadFloat32x8(row[off+24:])
 			bacc := x0.Mul(g0)
 			bacc = x1.MulAdd(g1, bacc)
 			bacc = x2.MulAdd(g2, bacc)
@@ -43,7 +43,7 @@ func q8FusedDecodeM1SIMD(row []float32, weight []byte, n, k, rowBytes int, outf 
 			bi++
 		}
 		var buf [8]float32
-		acc.StoreSlice(buf[:])
+		acc.Store(buf[:])
 		accF := float64(buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7])
 		//perfscan:ignore PS3010 hand SIMD Q8 matmul at-ceiling; absent in this worktree
 		for i := kb; i < k; i++ {

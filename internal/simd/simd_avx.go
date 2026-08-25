@@ -31,7 +31,7 @@ func AddF64(dst, a, b []float64) {
 	}
 	i, n := 0, len(dst)
 	for ; i+4 <= n; i += 4 {
-		archsimd.LoadFloat64x4Slice(a[i:]).Add(archsimd.LoadFloat64x4Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat64x4(a[i:]).Add(archsimd.LoadFloat64x4(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] + b[i]
@@ -47,7 +47,7 @@ func SubF64(dst, a, b []float64) {
 	}
 	i, n := 0, len(dst)
 	for ; i+4 <= n; i += 4 {
-		archsimd.LoadFloat64x4Slice(a[i:]).Sub(archsimd.LoadFloat64x4Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat64x4(a[i:]).Sub(archsimd.LoadFloat64x4(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] - b[i]
@@ -63,7 +63,7 @@ func MulF64(dst, a, b []float64) {
 	}
 	i, n := 0, len(dst)
 	for ; i+4 <= n; i += 4 {
-		archsimd.LoadFloat64x4Slice(a[i:]).Mul(archsimd.LoadFloat64x4Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat64x4(a[i:]).Mul(archsimd.LoadFloat64x4(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] * b[i]
@@ -79,7 +79,7 @@ func DivF64(dst, a, b []float64) {
 	}
 	i, n := 0, len(dst)
 	for ; i+4 <= n; i += 4 {
-		archsimd.LoadFloat64x4Slice(a[i:]).Div(archsimd.LoadFloat64x4Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat64x4(a[i:]).Div(archsimd.LoadFloat64x4(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] / b[i]
@@ -95,7 +95,7 @@ func AddF32(dst, a, b []float32) {
 	}
 	i, n := 0, len(dst)
 	for ; i+8 <= n; i += 8 {
-		archsimd.LoadFloat32x8Slice(a[i:]).Add(archsimd.LoadFloat32x8Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat32x8(a[i:]).Add(archsimd.LoadFloat32x8(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] + b[i]
@@ -111,7 +111,7 @@ func SubF32(dst, a, b []float32) {
 	}
 	i, n := 0, len(dst)
 	for ; i+8 <= n; i += 8 {
-		archsimd.LoadFloat32x8Slice(a[i:]).Sub(archsimd.LoadFloat32x8Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat32x8(a[i:]).Sub(archsimd.LoadFloat32x8(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] - b[i]
@@ -127,7 +127,7 @@ func MulF32(dst, a, b []float32) {
 	}
 	i, n := 0, len(dst)
 	for ; i+8 <= n; i += 8 {
-		archsimd.LoadFloat32x8Slice(a[i:]).Mul(archsimd.LoadFloat32x8Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat32x8(a[i:]).Mul(archsimd.LoadFloat32x8(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] * b[i]
@@ -143,7 +143,7 @@ func DivF32(dst, a, b []float32) {
 	}
 	i, n := 0, len(dst)
 	for ; i+8 <= n; i += 8 {
-		archsimd.LoadFloat32x8Slice(a[i:]).Div(archsimd.LoadFloat32x8Slice(b[i:])).StoreSlice(dst[i:])
+		archsimd.LoadFloat32x8(a[i:]).Div(archsimd.LoadFloat32x8(b[i:])).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = a[i] / b[i]
@@ -252,12 +252,12 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 	acc := eZero
 	i, n := 0, len(f)
 	for ; i+4 <= n; i += 4 {
-		fv := archsimd.LoadFloat64x4Slice(f[i:])
-		yv := archsimd.LoadFloat64x4Slice(y[i:])
+		fv := archsimd.LoadFloat64x4(f[i:])
+		yv := archsimd.LoadFloat64x4(y[i:])
 		acc = acc.Add(softplusF64x4v(eOne.Sub(yv.Mul(spTwo)).Mul(fv))) // softplus((1−2y)·f)
 	}
 	var lanes [4]float64
-	acc.StoreSlice(lanes[:])
+	acc.Store(lanes[:])
 	s := lanes[0] + lanes[1] + lanes[2] + lanes[3]
 	//perfscan:ignore PS3010,PS4003 AVX scalar tail loop (<4 elems)
 	for ; i < n; i++ {
@@ -275,7 +275,7 @@ func SoftplusNegLLSumF64(f, y []float64) float64 {
 func expF64x4v(x archsimd.Float64x4) archsimd.Float64x4 {
 	under := x.Less(eLo) // x < −708 (incl −Inf): exp underflows to exact 0 below the f64 floor
 	x = x.Max(eLo)
-	kf := x.Mul(eLog2e).RoundToEven()
+	kf := x.Mul(eLog2e).Round()
 	r := kf.MulAdd(eNHi, x)
 	r = kf.MulAdd(eNLo, r)
 	p := eC13
@@ -313,12 +313,12 @@ func ExpSumF64(dst, src []float64, bias float64) float64 {
 	acc := eZero
 	i, n := 0, len(src)
 	for ; i+4 <= n; i += 4 {
-		e := expF64x4v(archsimd.LoadFloat64x4Slice(src[i:]).Sub(vb))
-		e.StoreSlice(dst[i:])
+		e := expF64x4v(archsimd.LoadFloat64x4(src[i:]).Sub(vb))
+		e.Store(dst[i:])
 		acc = acc.Add(e)
 	}
 	var lanes [4]float64
-	acc.StoreSlice(lanes[:])
+	acc.Store(lanes[:])
 	sum := lanes[0] + lanes[1] + lanes[2] + lanes[3]
 	for ; i < n; i++ {
 		e := math.Exp(src[i] - bias)
@@ -344,7 +344,7 @@ func ExpScaledF64(dst, src []float64, scale float64) {
 	vs := archsimd.BroadcastFloat64x4(scale)
 	i, n := 0, len(src)
 	for ; i+4 <= n; i += 4 {
-		expF64x4v(archsimd.LoadFloat64x4Slice(src[i:]).Mul(vs)).StoreSlice(dst[i:])
+		expF64x4v(archsimd.LoadFloat64x4(src[i:]).Mul(vs)).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		dst[i] = math.Exp(scale * src[i])
@@ -370,10 +370,10 @@ func SigmoidF64(dst, src []float64) {
 	}
 	i, n := 0, len(src)
 	for ; i+4 <= n; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
+		x := archsimd.LoadFloat64x4(src[i:])
 		z := expF64x4v(eZero.Sub(x.AsUint64x4().And(eAbs).AsFloat64x4())) // e^(−|x|)
 		num := eOne.Merge(z, x.GreaterEqual(eZero))                       // x≥0 ? 1 : z
-		num.Div(eOne.Add(z)).StoreSlice(dst[i:])
+		num.Div(eOne.Add(z)).Store(dst[i:])
 	}
 	for ; i < n; i++ {
 		x := src[i]
@@ -405,7 +405,7 @@ func WKVScanF64(k, v, w, u, out []float64, seq, d int) {
 // this is the RWKV decode/prefill recurrence, which rides persistent AA/BB/PP. Passing
 // nil for all three is exactly WKVScanF64 (the fresh forward scan): the nil branch sits
 // outside the per-token loop, so the fresh path keeps WKVScanF64's throughput and stays
-// bit-identical to it. Because StoreSlice/Load round-trips the f64 state losslessly,
+// bit-identical to it. Because Store/Load round-trips the f64 state losslessly,
 // chunking a sequence through this (decode) is bit-exact with one whole-sequence scan
 // (forward) — the property RWKV's forward/decode parity depends on.
 func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
@@ -416,18 +416,18 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 	pInit := archsimd.BroadcastFloat64x4(-1e38)
 	c := 0
 	for ; c+4 <= d; c += 4 {
-		wc := archsimd.LoadFloat64x4Slice(w[c:])
-		uc := archsimd.LoadFloat64x4Slice(u[c:])
+		wc := archsimd.LoadFloat64x4(w[c:])
+		uc := archsimd.LoadFloat64x4(u[c:])
 		aa, bb, pp := eZero, eZero, pInit
 		if aa0 != nil {
-			aa = archsimd.LoadFloat64x4Slice(aa0[c:])
-			bb = archsimd.LoadFloat64x4Slice(bb0[c:])
-			pp = archsimd.LoadFloat64x4Slice(pp0[c:])
+			aa = archsimd.LoadFloat64x4(aa0[c:])
+			bb = archsimd.LoadFloat64x4(bb0[c:])
+			pp = archsimd.LoadFloat64x4(pp0[c:])
 		}
 		for t := 0; t < seq; t++ {
 			base := t*d + c
-			kk := archsimd.LoadFloat64x4Slice(k[base:])
-			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			kk := archsimd.LoadFloat64x4(k[base:])
+			vv := archsimd.LoadFloat64x4(v[base:])
 			// Each max-subtracted exp pair has one operand exactly 0 (the max side,
 			// pp-q or ww-q), so expF64x4v of it is exactly 1.0 — recomputing it is a
 			// wasted 13-term poly. Evaluate only the ONE negative-argument exp
@@ -443,7 +443,7 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 			ge := d1.GreaterEqual(d2) // pp≥ww ⇔ d1 is the 0/max side
 			e1 := eOne.Merge(e, ge)   // ge ? 1 : e
 			e2 := e.Merge(eOne, ge)   // ge ? e : 1
-			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
+			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).Store(out[base:])
 			ppw := pp.Sub(wc)
 			q2 := ppw.Max(kk)
 			d3 := ppw.Sub(q2)
@@ -457,9 +457,9 @@ func WKVScanStateF64(k, v, w, u, out, aa0, bb0, pp0 []float64, seq, d int) {
 			pp = q2
 		}
 		if aa0 != nil {
-			aa.StoreSlice(aa0[c:])
-			bb.StoreSlice(bb0[c:])
-			pp.StoreSlice(pp0[c:])
+			aa.Store(aa0[c:])
+			bb.Store(bb0[c:])
+			pp.Store(pp0[c:])
 		}
 	}
 	if c < d {
@@ -481,13 +481,13 @@ func WKVScanRangeF64(k, v, w, u, out []float64, seq, d, cLo, cHi int) {
 	pInit := archsimd.BroadcastFloat64x4(-1e38)
 	c := cLo
 	for ; c+4 <= cHi; c += 4 {
-		wc := archsimd.LoadFloat64x4Slice(w[c:])
-		uc := archsimd.LoadFloat64x4Slice(u[c:])
+		wc := archsimd.LoadFloat64x4(w[c:])
+		uc := archsimd.LoadFloat64x4(u[c:])
 		aa, bb, pp := eZero, eZero, pInit
 		for t := 0; t < seq; t++ {
 			base := t*d + c
-			kk := archsimd.LoadFloat64x4Slice(k[base:])
-			vv := archsimd.LoadFloat64x4Slice(v[base:])
+			kk := archsimd.LoadFloat64x4(k[base:])
+			vv := archsimd.LoadFloat64x4(v[base:])
 			ww := uc.Add(kk)
 			q := pp.Max(ww)
 			d1 := pp.Sub(q)
@@ -496,7 +496,7 @@ func WKVScanRangeF64(k, v, w, u, out []float64, seq, d, cLo, cHi int) {
 			ge := d1.GreaterEqual(d2)
 			e1 := eOne.Merge(e, ge)
 			e2 := e.Merge(eOne, ge)
-			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).StoreSlice(out[base:])
+			e1.Mul(aa).Add(e2.Mul(vv)).Div(e1.Mul(bb).Add(e2)).Store(out[base:])
 			ppw := pp.Sub(wc)
 			q2 := ppw.Max(kk)
 			d3 := ppw.Sub(q2)
@@ -541,14 +541,14 @@ func SSMScanF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N int) {
 			dtut := archsimd.BroadcastFloat64x4(dt * ut)
 			yacc := eZero
 			for n := 0; n < nMain; n += 4 {
-				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4Slice(as[base+n:])))
-				hv := abar.Mul(archsimd.LoadFloat64x4Slice(h[base+n:])).
-					Add(dtut.Mul(archsimd.LoadFloat64x4Slice(bs[tn+n:])))
-				hv.StoreSlice(h[base+n:])
-				yacc = yacc.Add(archsimd.LoadFloat64x4Slice(cs[tn+n:]).Mul(hv))
+				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4(as[base+n:])))
+				hv := abar.Mul(archsimd.LoadFloat64x4(h[base+n:])).
+					Add(dtut.Mul(archsimd.LoadFloat64x4(bs[tn+n:])))
+				hv.Store(h[base+n:])
+				yacc = yacc.Add(archsimd.LoadFloat64x4(cs[tn+n:]).Mul(hv))
 			}
 			var lanes [4]float64
-			yacc.StoreSlice(lanes[:])
+			yacc.Store(lanes[:])
 			y := lanes[0] + lanes[1] + lanes[2] + lanes[3]
 			if dsk != nil { // AVX main owns the per-d skip (the tail pass must not re-add it)
 				y += dsk[d] * ut
@@ -587,14 +587,14 @@ func SSMScanRangeF64(u, delta, as, bs, cs, dsk, out, h []float64, L, D, N, dLo, 
 			dtut := archsimd.BroadcastFloat64x4(dt * ut)
 			yacc := eZero
 			for n := 0; n < nMain; n += 4 {
-				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4Slice(as[base+n:])))
-				hv := abar.Mul(archsimd.LoadFloat64x4Slice(h[base+n:])).
-					Add(dtut.Mul(archsimd.LoadFloat64x4Slice(bs[tn+n:])))
-				hv.StoreSlice(h[base+n:])
-				yacc = yacc.Add(archsimd.LoadFloat64x4Slice(cs[tn+n:]).Mul(hv))
+				abar := expF64x4v(dtVec.Mul(archsimd.LoadFloat64x4(as[base+n:])))
+				hv := abar.Mul(archsimd.LoadFloat64x4(h[base+n:])).
+					Add(dtut.Mul(archsimd.LoadFloat64x4(bs[tn+n:])))
+				hv.Store(h[base+n:])
+				yacc = yacc.Add(archsimd.LoadFloat64x4(cs[tn+n:]).Mul(hv))
 			}
 			var lanes [4]float64
-			yacc.StoreSlice(lanes[:])
+			yacc.Store(lanes[:])
 			y := lanes[0] + lanes[1] + lanes[2] + lanes[3]
 			if dsk != nil {
 				y += dsk[d] * ut
@@ -634,10 +634,10 @@ func FWHTF64(a []float64) {
 		}
 		for i := 0; i < n; i += h << 1 {
 			for j := i; j < i+h; j += 4 {
-				x := archsimd.LoadFloat64x4Slice(a[j:])
-				y := archsimd.LoadFloat64x4Slice(a[j+h:])
-				x.Add(y).StoreSlice(a[j:])
-				x.Sub(y).StoreSlice(a[j+h:])
+				x := archsimd.LoadFloat64x4(a[j:])
+				y := archsimd.LoadFloat64x4(a[j+h:])
+				x.Add(y).Store(a[j:])
+				x.Sub(y).Store(a[j+h:])
 			}
 		}
 	}
