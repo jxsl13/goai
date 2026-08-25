@@ -201,7 +201,7 @@ make vulkan-test  # Vulkan backend suite (MoltenVK on macOS)
 make bench-compare  # cross-backend benchmark harness
 ```
 
-Requires Go 1.26+. No C toolchain needed for the default build. The
+Requires Go 1.27+. No C toolchain needed for the default build. The
 architecture intent and the verifiable contracts live in the `.spectackle/`
 spec bundles, read with `make spec-state` and never hand-edited; design
 rationale in [`docs/`](docs/) and [`docs/decisions/`](docs/decisions/); the
