@@ -3982,3 +3982,12 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## T-01M0VQEJ6GEY3A7PXTYHT0N972 Share the M2 F64 NEON logistic leaf between SiLU and sigmoid
+kind: task
+state: approved
+created: 2026-08-25
+grilled: 2026-08-25 open=1
+targets: backend/cpu/vexp_arm64.go, backend/cpu/vexp_arm64.s, backend/cpu/vexp_amd64.go, backend/cpu/vexp_default.go, backend/cpu/elementwise.go, backend/cpu/vsigmoid_f64_arm64_test.go, backend/cpu/cpu_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
+
+Generalize the existing Apple ARM64 goexperiment.simd two-lane F64 SiLU assembly leaf into a mode-selected stable logistic primitive so the same exp polynomial can emit either x*sigmoid(x) or sigmoid(x) without duplicating the degree-13 pipeline. Add a separate compile-time vsigmoidF64Fast capability: enable it for ARM64 and AMD64 SIMD builds, leave default/non-SIMD false, route only OpSigmoid F64 through it, and let the existing SiLU-backward kernel consume the accelerated shared helper. Keep vexpF64Fast false on ARM64 so tanh, softplus, softcap, GELU, distillation, and other composites remain separately gated under ARM64-F64-EXP-SCOPE-001. Preserve the existing ARM64 SiLU vector and tail bits; make sigmoid vector lanes bit-identical to sigmoidF64poly tails; cover dense accuracy at relative error <=1e-13, odd lengths, signed zeros, infinities, NaNs, and vector/scalar boundary identity. Gate promotion on nine alternating frozen-binary Apple M2 measurements for production OpSigmoid F64 64K and SiLUBackward F64 256K, with nine-pair no-regression control for the existing SiLU leaf, unchanged allocation structure, and compiler/objdump confirmation of D2 vector arithmetic. Run backend/cpu tests in plain and GOEXPERIMENT=simd builds, focused race where supported, Darwin ARM64 plus Linux ARM64/AMD64 and Darwin AMD64 compile gates, Rosetta AMD64 SIMD tests, changed Markdown lint, external perfscan via GOPROXY=direct, and make preflight. Report the generalizable shared-transcendental-leaf result to github.com/jxsl13/perfscan.
