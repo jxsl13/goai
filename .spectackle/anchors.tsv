@@ -94,9 +94,7 @@ ARM64-F64-EXP-FALLBACK-001	go:simd.ExpSumF64~2	internal/simd/simd.go	79-87	f38f9
 ARM64-F64-EXP-FALLBACK-001	go:simd.ExpScaledF64~2	internal/simd/simd.go	91-95	b629341f5c959a67	36f0a91c983bb2d7
 ARM64-F64-EXP-FALLBACK-001	go:simd.SigmoidF64~2	internal/simd/simd.go	99-108	588bed54fd4c6c19	36f0a91c983bb2d7
 ARM64-F64-EXP-FALLBACK-001	go:simd.SoftplusNegLLSumF64~2	internal/simd/simd.go	112-123	c901dc868591febc	36f0a91c983bb2d7
-ARM64-F64-EXP-SCOPE-001	go:cpu.vexpF64Fast~2	backend/cpu/vexp_arm64.go	13-13	452ad10ed89f1c1b	f6e68f76ffe459b4
-ARM64-F64-EXP-SCOPE-001	go:cpu.vsiluPairsNeonF64	backend/cpu/vexp_arm64.go	215-215	5b8a85c2dafd6480	f6e68f76ffe459b4
-ARM64-F64-EXP-SCOPE-001	asm:cpu.vsiluPairsNeonF64	backend/cpu/vexp_arm64.s	773-773	b60ee193b3533b0c	f6e68f76ffe459b4
+ARM64-F64-EXP-SCOPE-001	go:cpu.vexpF64Fast~2	backend/cpu/vexp_arm64.go	13-13	816a1c01e6bd8ca7	f6e68f76ffe459b4
 ARCH-GOLD-SIMD-001	go:archgold.PickSIMD	internal/archgold/archgold.go	53-61	97955be025ebf1a1	74fa54db1fa8cafd
 ARCH-GOLD-SIMD-001	go:simd.SigmoidF64	internal/simd/exp_f64_arm64.go	88-112	a95e49d4aac85e1f	74fa54db1fa8cafd
 ARM64-F64-SSM-PERF-001	go:simd.ssmChannelNegNeonF64	internal/simd/ssm_arm64.go	8-8	14cb44602c4069e0	6bfbee8beb4846b9
@@ -433,3 +431,5 @@ MUON-MATMUL-INTO-PERF-001	go:nn_test.BenchmarkMuonStepOnly	nn/train_bench_test.g
 SVC-RBF-SIMD-EXP-ROUTE-001	go:classic.kernelCache.column	classic/svm.go	347-484	5589e63a08230cc7	f1c7dd003b676a75
 SVC-RBF-SIMD-EXP-ROUTE-001	go:simd.ExpScaledF64	internal/simd/exp_f64_arm64.go	62-74	3ce03e6c9eb880ec	f1c7dd003b676a75
 SVC-RBF-SIMD-EXP-GATE-001	go:classic.kernelCache.column	classic/svm.go	347-484	5589e63a08230cc7	5d8de94c99f70b83
+ARM64-F64-EXP-SCOPE-001	go:cpu.vlogisticPairsNeonF64	backend/cpu/vexp_arm64.go	223-223	2b7693dc386ab77b	f6e68f76ffe459b4
+ARM64-F64-EXP-SCOPE-001	asm:cpu.vlogisticPairsNeonF64	backend/cpu/vexp_arm64.s	775-775	8166a48612807159	f6e68f76ffe459b4
