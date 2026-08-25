@@ -4,6 +4,25 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- compose ARM64 F64 tanh from the shared logistic leaf (T-01M0VW5BZ2FR1, 2026-08-25)
+
+Apple ARM64 `GOEXPERIMENT=simd` tanh now composes
+`2*sigmoid(2*x)-1` from the shared two-lane F64 logistic leaf, using the output
+as its only workspace and repairing signed zero. A separate capability gate
+keeps the global vector-exp policy, other deferred composites, default builds,
+and AMD64 behavior unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve production Tanh F64
+64K from 322.985 to 132.859 us (**2.431x** independent, **2.449x** paired
+median, 9/9 wins), with six allocations unchanged. The direct same-binary leaf
+control improves **3.247x**. Dense accuracy, vector/tail bit identity, special
+values, native scalar/SIMD suites and race, multi-architecture compile, the
+parallel production path, and focused Rosetta gates pass. The SIMD-only
+cross-reference tolerance now reflects the pre-existing approximate F64 tanh
+contract while preserving exact scalar coverage. Focused external perfscan
+PS6077 findings fall from four to three; the generalized result is recorded on
+perfscan issue #917.
+
 ### backend/cpu -- reuse the ARM64 F64 logistic derivative (T-01M0VTHS92F97, 2026-08-25)
 
 Apple ARM64 `GOEXPERIMENT=simd` Softplus backward now reuses the two-lane F64

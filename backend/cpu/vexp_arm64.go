@@ -19,6 +19,9 @@ const (
 	// promotes OpSigmoid and the existing SiLU-backward consumer without opening
 	// the unrelated vexpF64Fast composite routes.
 	vsigmoidF64Fast = true
+	// vtanhF64Fast promotes only the separately validated tanh composition;
+	// global vexpF64Fast and every other deferred F64 composite stay disabled.
+	vtanhF64Fast = true
 )
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
@@ -282,11 +285,33 @@ func vsiluF64(dst, src []float64) {
 	}
 }
 
-// vtanhF64 exists only so tanhKernelCPU type-checks on arm64; vexpF64Fast is false
-// here, so it is dead at run time (the math.Tanh exact path runs).
+// tanhF64LogisticPoly is the scalar twin of the three-pass ARM64 composition.
+// Signed-zero repair retains tanh(-0) while the sigmoid form stays stable at
+// infinities and limits cancellation to the documented near-zero error budget.
+func tanhF64LogisticPoly(x float64) float64 {
+	y := sigmoidF64poly(x + x)
+	t := (y + y) - 1
+	if t == 0 {
+		return math.Copysign(0, x)
+	}
+	return t
+}
+
+// vtanhF64 composes tanh(x)=2*sigmoid(2*x)-1 from the shared two-lane NEON
+// logistic leaf. The final output is also the only workspace: two cheap scalar
+// streaming transforms surround the expensive in-place vector sigmoid.
 func vtanhF64(dst, src []float64) {
-	for i, v := range src {
-		dst[i] = math.Tanh(v)
+	src = src[:len(dst)]
+	for i, x := range src {
+		dst[i] = x + x
+	}
+	vsigmoidF64(dst, dst)
+	for i, y := range dst {
+		t := (y + y) - 1
+		if t == 0 {
+			t = math.Copysign(0, src[i])
+		}
+		dst[i] = t
 	}
 }
 

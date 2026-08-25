@@ -2,6 +2,8 @@ package cpu_test
 
 import (
 	"math"
+	"runtime/debug"
+	"strings"
 	"testing"
 
 	"github.com/jxsl13/goai/backend"
@@ -278,7 +280,33 @@ func TestCPUParallelCorrect(t *testing.T) {
 
 	ge := run(t, cpu, backend.OpTanh, a)
 	gre := run(t, ref, backend.OpTanh, a)
+	if simdExperimentEnabled() {
+		got, want := ge.Storage().F64(), gre.Storage().F64()
+		for i := range got {
+			if math.Abs(got[i]-want[i]) > 1e-13*math.Max(1, math.Abs(want[i])) {
+				t.Fatalf("parallel-tanh [%d]: cpu %v vs ref %v", i, got[i], want[i])
+			}
+		}
+		return
+	}
 	assertEqualExact(t, ge, gre, "parallel-tanh")
+}
+
+func simdExperimentEnabled() bool {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return false
+	}
+	for _, setting := range info.Settings {
+		if setting.Key == "GOEXPERIMENT" {
+			for _, experiment := range strings.Split(setting.Value, ",") {
+				if experiment == "simd" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Non-contiguous inputs are handled (materialized) and stay correct.
