@@ -49,6 +49,14 @@ func BenchmarkSigmoidF64_64K_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpSigmoid, bench.RandF64(tensor.Shape{65536}, 3))
 }
 
+func BenchmarkSoftplusF64_64K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSoftplus, bench.RandF64(tensor.Shape{1 << 16}, 3))
+}
+
+func BenchmarkSoftplusF64_256K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpSoftplus, bench.RandF64(tensor.Shape{1 << 18}, 3))
+}
+
 func benchSoftCapF64(b *testing.B, n int, cap float64) {
 	be, _ := backend.Get(backend.CPU)
 	ctx := backend.NewContext().WithBackend(be)

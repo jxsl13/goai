@@ -20,10 +20,11 @@ const (
 	// vsiluF64Fast gates ONLY the F64 SiLU lane. It is split out from vexpF64Fast
 	// because arm64 now has a NEON F64 SiLU while its other F64 lanes stay scalar;
 	// on amd64 both are true, so this changes nothing here.
-	vsiluF64Fast    = true
-	vsigmoidF64Fast = true
-	vtanhF64Fast    = true
-	vsoftcapF64Fast = true
+	vsiluF64Fast     = true
+	vsigmoidF64Fast  = true
+	vtanhF64Fast     = true
+	vsoftplusF64Fast = true
+	vsoftcapF64Fast  = true
 )
 
 var vexpHasAVX = archsimd.X86.AVX() && archsimd.X86.FMA()
