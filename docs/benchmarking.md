@@ -2946,3 +2946,36 @@ Raw pairs and reproduction commands live under
 `internal/benchcompare/leadership/evidence/go127-toolchain-rebuild-20260825`.
 The generalizable requirement to fingerprint and cross-check the compiler is
 [perfscan issue #912](https://github.com/jxsl13/perfscan/issues/912).
+
+## Go 1.27 ARM64 F32 Abs dispatch crossover (2026-08-25)
+
+The Go 1.27 ARM64 F32 Abs leaf clears sign bits in a four-register NEON stream.
+Its previous `1<<18` fan-out threshold predated that narrower kernel. The M2 Pro
+route now remains serial below `1<<21` values and parallel from that boundary.
+
+Nine fresh-process pairs alternated policy/process order at `GOMAXPROCS=12`.
+The policy benchmark preallocates input and output; the production benchmark
+also includes tensor allocation and backend dispatch.
+
+| values | selected policy | policy direction | complete-operation result |
+|---:|---:|---:|---:|
+| 262,144 | serial | **1.361x**, 9/9 serial wins | allocation-heavy result noisy |
+| 349,440 | serial | **1.192x**, 9/9 serial wins | 354,955 → **344,511 ns**, 8/9 wins |
+| 524,288 | serial | **1.075x paired**, 7/9 serial wins | 1.034x paired, 5/9 wins |
+| 1,048,576 | serial | **1.108x paired**, 7/9 serial wins | 1.019x paired, 6/9 wins |
+| 2,097,152 | parallel | 1.021x paired, 7/9 parallel wins | **1.092x paired**, 8/9 vs serial |
+
+The allocation-heavy cells vary as GC and host pressure move, so weak 5/9 and
+6/9 directions are not promoted to standalone throughput claims. The boundary
+is instead supported by both the stable preallocated policy crossover and the
+8/9 production rejection of an over-serializing `1<<22` candidate. Serial
+production cells remove the parallel closure/barrier pair, dropping from six
+to four allocations. Raw-bit tests cover `threshold-1`, `threshold`, in-place
+execution, tails, infinities, signed zero, and signaling/quiet NaN payloads.
+
+Raw pairs, the complete `1<<18` through `1<<23` exploratory sweep, frozen
+binary hashes, and reproduction commands live under
+`internal/benchcompare/leadership/evidence/m2-go127-abs-f32-crossover-20260825`.
+The reusable requirement to invalidate measured crossovers after leaf,
+scheduler, or toolchain changes is
+[perfscan issue #914](https://github.com/jxsl13/perfscan/issues/914).

@@ -18,7 +18,7 @@ func BenchmarkAbsF32CPU(b *testing.B) {
 		b.Fatal("CPU backend unavailable")
 	}
 	ctx := backend.NewContext().WithBackend(be)
-	for _, n := range []int{2048, 65536, 131072, 349440, 524288, 2097152, 4194304, 8388608} {
+	for _, n := range []int{2048, 65536, 131072, 262144, 349440, 524288, 1048576, 2097152, 4194304, 8388608} {
 		b.Run("n"+strconv.Itoa(n), func(b *testing.B) {
 			x := bench.RandF32(tensor.Shape{n}, 37)
 			in := []*tensor.Tensor{x}
@@ -54,6 +54,38 @@ func BenchmarkAbsF32Leaf(b *testing.B) {
 			b.ResetTimer()
 			for range b.N {
 				absF32(dst, src)
+			}
+		})
+	}
+}
+
+// BenchmarkAbsF32DispatchPolicy isolates the serial/parallel crossover from
+// tensor allocation and backend dispatch. Keep both policies visible: a leaf
+// kernel or scheduler change can move the crossover even when neither regresses
+// in isolation.
+func BenchmarkAbsF32DispatchPolicy(b *testing.B) {
+	for _, n := range []int{131072, 262144, 349440, 524288, 1048576, 2097152} {
+		b.Run("n"+strconv.Itoa(n), func(b *testing.B) {
+			src := make([]float32, n)
+			dst := make([]float32, n)
+			for i := range src {
+				src[i] = float32(i&1023) - 512
+			}
+			for _, policy := range []string{"serial", "parallel"} {
+				b.Run(policy, func(b *testing.B) {
+					b.SetBytes(int64(2 * n * 4))
+					b.ReportAllocs()
+					b.ResetTimer()
+					for range b.N {
+						if policy == "serial" {
+							absF32(dst, src)
+							continue
+						}
+						parallel(n, func(lo, hi int) {
+							absF32(dst[lo:hi], src[lo:hi])
+						})
+					}
+				})
 			}
 		})
 	}
