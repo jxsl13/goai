@@ -50,16 +50,39 @@ func conv1dKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 				if lo := (K - 1) - t; lo > 0 {
 					kStart = lo
 				}
-				for c := 0; c < D; c++ {
+				ob := t * D
+				c := 0
+				// Four channels keep independent ascending-tap reductions in registers.
+				// At each tap their activation loads are one contiguous four-value band.
+				for ; c+3 < D; c += 4 {
+					var a0, a1, a2, a3 float64
+					//perfscan:ignore PS4008 four independent channel accumulators already hide the short-K chain latency
+					for k := kStart; k < K; k++ {
+						xb := (t-(K-1)+k)*D + c
+						a0 += ws[(c+0)*K+k] * xs[xb+0]
+						a1 += ws[(c+1)*K+k] * xs[xb+1]
+						a2 += ws[(c+2)*K+k] * xs[xb+2]
+						a3 += ws[(c+3)*K+k] * xs[xb+3]
+					}
+					if bias != nil {
+						a0 += bs[c+0]
+						a1 += bs[c+1]
+						a2 += bs[c+2]
+						a3 += bs[c+3]
+					}
+					os[ob+c+0], os[ob+c+1] = a0, a1
+					os[ob+c+2], os[ob+c+3] = a2, a3
+				}
+				for ; c < D; c++ {
 					var acc float64
-					//perfscan:ignore PS3010,PS4008 short K-tap inner loop, already parallel typed fastpath | conv width K~4 tiny, strided x access, not matmul do
+					//perfscan:ignore PS4008 fewer than four tail channels; main loop is register tiled and K is normally four
 					for k := kStart; k < K; k++ {
 						acc += ws[c*K+k] * xs[(t-(K-1)+k)*D+c]
 					}
 					if bias != nil {
 						acc += bs[c]
 					}
-					os[t*D+c] = acc
+					os[ob+c] = acc
 				}
 			}
 		})
@@ -78,16 +101,35 @@ func conv1dKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs)
 				if lo := (K - 1) - t; lo > 0 {
 					kStart = lo
 				}
-				for c := 0; c < D; c++ {
+				ob := t * D
+				c := 0
+				for ; c+3 < D; c += 4 {
+					var a0, a1, a2, a3 float64
+					for k := kStart; k < K; k++ {
+						xb := (t-(K-1)+k)*D + c
+						a0 += float64(ws[(c+0)*K+k]) * float64(xs[xb+0])
+						a1 += float64(ws[(c+1)*K+k]) * float64(xs[xb+1])
+						a2 += float64(ws[(c+2)*K+k]) * float64(xs[xb+2])
+						a3 += float64(ws[(c+3)*K+k]) * float64(xs[xb+3])
+					}
+					if bias != nil {
+						a0 += float64(bs[c+0])
+						a1 += float64(bs[c+1])
+						a2 += float64(bs[c+2])
+						a3 += float64(bs[c+3])
+					}
+					os[ob+c+0], os[ob+c+1] = float32(a0), float32(a1)
+					os[ob+c+2], os[ob+c+3] = float32(a2), float32(a3)
+				}
+				for ; c < D; c++ {
 					var acc float64
-					//perfscan:ignore PS3010 F32 short-K loop, already optimized parallel fastpath
 					for k := kStart; k < K; k++ {
 						acc += float64(ws[c*K+k]) * float64(xs[(t-(K-1)+k)*D+c])
 					}
 					if bias != nil {
 						acc += float64(bs[c])
 					}
-					os[t*D+c] = float32(acc)
+					os[ob+c] = float32(acc)
 				}
 			}
 		})
