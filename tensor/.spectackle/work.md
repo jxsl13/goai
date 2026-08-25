@@ -22,12 +22,3 @@ EXPECTED: 1.5-2.5x on rank-3/4 strided Contiguous/Cast. High confidence that the
 BIT-IDENTITY BAR: none — pure reordering of independent element copies and conversions, the same (i,j) -> dst[i*cols+j] mapping, no accumulation involved. gatherBlocked2D's doc comment at tensor.go:130-134 already makes this argument for rank 2 and it carries over unchanged. Verify with TestContiguousPermuted3DMatchesGeneric asserting exact []float32 equality against gatherCast.
 
 PERFSCAN RULE REQUIRED: a fast path gated on an exact rank or dimension literal where the underlying condition is rank-agnostic. AST shape: an assignment whose RHS is a BinaryExpr{&&} containing X == <int literal> where X is len(<field>) or a variable assigned from it, and where the guarded branch calls a helper ALSO reachable from a default/else branch handling the same dtypes. Report as "dimensionality-gated fast path — check whether the general case is reachable". Related sub-check worth adding at the same time: flag stale NOTE(... rejected) comments whose claim contradicts a currently-live code path.
-
-## P-01M0V1D8STFTSTEMVWM1P3BRE8 Eliminate tensor pool slice boxing with typed bounded recycling
-kind: proposal
-state: approved
-created: 2026-08-24
-grilled: 2026-08-24 open=0
-targets: go:tensor.Pool.allocF32, go:tensor.Pool.freeF32, go:tensor.Pool.allocF64, go:tensor.Pool.freeF64, go:tensor.Pool.Free, tensor/allocator.go, tensor/storage.go
-
-Apple M2 Pro Go 1.27 baseline proves every Pool F32/F64 Alloc+Free cycle allocates a 24-byte slice-interface box: F32/4096 median 271.0 ns/op, F64/64 median 103.3 ns/op, each 24 B/op and 1 alloc/op; pooled NewOn remains 3 allocs/op. Replace the sync.Pool slice-value boundary with a pure-Go typed bounded recycling design that preserves zeroing, power-of-two admission, foreign-buffer dropping, concurrency safety, public Allocator behavior, and CGO-free builds. Gate F32/F64 small/large sequential and parallel paths; require 0 pool-cycle allocations, no material time regression on any common cell, a measured pooled tensor boundary gain, full race/correctness checks, and an external perfscan report documenting the general pattern. Reject wrapper-pointer designs that allocate a replacement header per Free and unbounded freelists that retain arbitrary memory.
