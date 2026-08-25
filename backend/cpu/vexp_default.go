@@ -17,6 +17,7 @@ const (
 	// the scalar exact path runs, exactly as before.
 	vsiluF64Fast    = false
 	vsigmoidF64Fast = false
+	vtanhF64Fast    = false
 )
 
 // vexpF32 computes p[i] = exp(p[i]-m) in place and returns Σ p[i].

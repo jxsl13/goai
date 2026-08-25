@@ -614,3 +614,37 @@ Focused external perfscan v1.81.0 drops from five PS6077 findings to four. The
 general derivative-consumer result is recorded on
 [perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
 local same-machine kernel claims, not cross-library leadership evidence.
+
+## Composed F64 NEON tanh (T-01M0VW5BZ2FR1)
+
+Apple ARM64 `GOEXPERIMENT=simd` tanh now composes
+`tanh(x)=2*sigmoid(2*x)-1` from the shared two-lane F64 logistic leaf. The
+output buffer first receives `2*x`, becomes the sigmoid result in place, and is
+then transformed to `2*y-1`; no scratch allocation or assembly ABI extension
+is required. Explicit zero-sign repair retains `tanh(-0)`. A dedicated
+`vtanhF64Fast` capability enables only this validated composite, leaving global
+`vexpF64Fast`, other deferred F64 operations, plain builds, and AMD64 unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs with Go 1.27.0 give:
+
+| benchmark | before median | after median | speedup | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| Tanh F64, 64K | 322.985 us | 132.859 us | **2.431x** | **2.449x** | 9/9 |
+
+Allocation counts remain six per production operation. A same-binary direct
+control puts the scalar polynomial twin at 518.047 us and the composed NEON
+leaf at 159.562 us (**3.247x**). Dense validation observes maximum absolute
+error 3.331e-16 over 262,145 values; vector bodies and scalar tails produce the
+same bits as the scalar polynomial twin, including signed zeros, infinities,
+NaNs, and an unmodified input. Native scalar and SIMD suites cover the parallel
+production route; focused race, Linux ARM64/AMD64 cross-build, and Rosetta AMD64
+SIMD gates also pass. The broad SIMD gate exposed a stale bit-exact parallel
+tanh assertion: the test now applies the existing tight approximate contract
+only when the binary records `GOEXPERIMENT=simd`, while the plain build retains
+its exact reference assertion. The sole full Rosetta failure is the known WKV
+bit-identity baseline failure and is unrelated to this ARM64 source partition.
+
+Focused external perfscan v1.81.0 drops from four PS6077 findings to three. The
+general shared-transcendental-composition result is recorded on
+[perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
+local same-machine kernel claims, not cross-library leadership evidence.

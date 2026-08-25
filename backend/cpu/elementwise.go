@@ -473,12 +473,11 @@ func tanhKernelCPU(ctx *backend.Context, in []*tensor.Tensor, _ backend.Attrs) (
 	switch in[0].Dtype() {
 	case tensor.F64:
 		d, o := xc.Storage().F64(), out.Storage().F64()
-		if vexpF64Fast {
-			// amd64 SIMD build: 4-wide f64-native tanh on the AVX2 expF64x4 primitive
-			// — the stable sign-split (1−e^(−2|x|))/(1+e^(−2|x|)) (the vsoftcapF64
-			// lane at cap=1). Not under the CPU==Ref exact invariant (that test skips
-			// OpTanh/F64); rides the model f64 tolerance. The non-SIMD build below
-			// keeps math.Tanh bit-for-bit.
+		if vtanhF64Fast {
+			// SIMD build: f64-native tanh on the vector exponential primitive —
+			// direct sign-split AVX2 or the shared logistic composition on ARM64.
+			// Not under the CPU==Ref exact invariant; rides the model f64 tolerance.
+			// The non-SIMD build below keeps math.Tanh bit-for-bit.
 			parallel(len(o), func(lo, hi int) { vtanhF64(o[lo:hi], d[lo:hi]) })
 			break
 		}
