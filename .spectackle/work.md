@@ -3991,13 +3991,3 @@ grilled: 2026-08-25 open=0
 targets: autograd/vjp_moe.go, autograd/vjp_moe_bench_internal_test.go, autograd/vjp_moe_parallel_internal_test.go, autograd/vjp_moe_f32_internal_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
 
 The OpMoECombine VJP divides each token gate weight by its denominator inside every hidden-dimension output dot, then repeats the identical division for expert gradients. At the production benchmark shape T=4096, E=8, D=256 on Apple M2 Pro, the F64 backward costs 13.3-15.9 ms/op. Cache each exact w/denom result once per token and reuse it without changing accumulation order, output layout, dtype conversion, parallel token partitioning, or fallback behavior. Add bit-identity coverage against the pre-change formula for both F64 and F32 and benchmark both typed paths. Reject reciprocal multiplication because it changes rounding.
-
-## T-01M0V52YFDFSF9QW4JXPG5KCTS Implement and gate exact normalized-weight reuse in MoE combine VJP
-kind: task
-state: active
-created: 2026-08-25
-parent: P-01M0V51EZTFN1985RFY2HMDM4D
-grilled: 2026-08-25 open=0
-targets: autograd/vjp_moe.go, autograd/vjp_moe_bench_internal_test.go, autograd/vjp_moe_parallel_internal_test.go, autograd/vjp_moe_f32_internal_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
-
-Implement typed F64 and F32 OpMoECombine VJP scratch that stores the exact division w_i/denom once per token and reuses it in the output mixture and expert-gradient pass. Preserve every per-output accumulation order, token parallelism, generic fallback, denominator behavior, tensor layout, and dtype conversion. Add pre-change reference parity that requires bit-identical F64 and F32 outputs across serial and parallel thresholds, add a realistic F32 benchmark beside F64, and retain the existing production shape. Acceptance: make preflight passes; F64 and F32 benchmarks show a repeatable M2 latency win with no allocation regression; before/after comparison follows interleaving hygiene; generalizable loop-invariant division reuse is reported to perfscan; changelog and CPU performance notes record measured scope and semantics.
