@@ -427,3 +427,40 @@ and MLA.
 profiled first. It is **72.8% `gemmF64Band`** — the CPU GEMM — so the leverage
 there is in a kernel with a known BLAS-shaped ceiling, not in a loop this
 technique reaches. Left alone deliberately rather than for lack of size.
+
+## Cache the quotient, not its reciprocal (T-01M0V52YFDFSF)
+
+The typed MoE-combine backward repeated `weight[i]/denominator` in every hidden
+output dot and then performed the same division again for the expert gradient.
+Both operands are invariant across the hidden dimension, so the exact rounded
+quotient can be stored once per token and expert. This is different from the
+usual reciprocal-strength reduction: `weight[i] * (1/denominator)` moved F64
+bits and is explicitly rejected by the mutation gate.
+
+The memory schedule still matters after removing the divisions. Six alternating
+candidate pairs compared two bit-identical schedules:
+
+| dtype | retained schedule | rejected schedule | measured reason |
+|---|---|---|---|
+| F64 | four adjacent output accumulators | one row-major output pass per expert | register tile median 1.113x faster, 4/6 wins |
+| F32 | one row-major output pass per expert | four-output tile | widening makes row streaming 1.035x faster at the medians |
+
+The final T4096/E8/D256 production cell used nine alternating frozen-binary
+pairs on Apple M2 Pro with `GOMAXPROCS=12`:
+
+| benchmark | before median | after median | speedup | paired wins |
+|---|---:|---:|---:|---:|
+| `BenchmarkMoECombineBackward` F64 | 13.416355 ms | 10.386168 ms | **1.292x** | 8/9 |
+| `BenchmarkMoECombineBackwardF32` | 11.755059 ms | 10.988136 ms | **1.070x** | 7/9 |
+
+The host was under variable concurrent load, so the alternating pair direction
+and win counts are part of the claim; the absolute times are not a cross-library
+leadership result. Median allocation counts remain 64 for F64 and 60 for F32.
+Extending each worker's scratch from D to D+E crosses a size class and adds about
+3.1 KiB/op, less than 0.005% of the output-dominated 64/32 MiB totals.
+
+The generalized detector request is perfscan issue #909. `PS1010` found the two
+expert-column walks and disappeared after scheduling, but no existing check
+identified the dominant invariant division. The requested rule is deliberately
+exact: compute the original division once and reuse its result; never recommend
+reciprocal multiplication when output bits are a contract.
