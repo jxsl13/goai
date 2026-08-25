@@ -4,6 +4,30 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### build -- require and validate Go 1.27 (T-01M0V9BWA4F35, 2026-08-25)
+
+The module now requires Go 1.27.0, the public installation floor is Go 1.27+,
+and all ten GitHub Actions toolchain declarations use Go 1.27.x. Historical
+benchmark records and comments describing earlier compiler behavior are
+unchanged.
+
+Nine alternating same-source Apple M2 Pro pairs compare frozen Go 1.26.6 and
+Go 1.27.0 binaries. Go 1.27 improves SVD 128x128 **1.049x** with 9/9 wins;
+serial Eigh VJP and MoECombine backward move **1.009x** and **1.057x** with 6/9
+wins. Parallel Eigh is directionally **1.109x** with only 5/9 wins, while
+parallel MoECombine is honestly **1.066x slower** with 2/9 wins under variable
+host load. This is a compatibility rebuild, not a universal performance claim.
+Toolchain fingerprinting and declaration-drift detection are tracked in
+perfscan issue #912.
+
+The Go 1.27 experimental SIMD API migration also covers every AMD64 load,
+store, and vector-round caller in the CPU, GGUF, and internal SIMD packages.
+The compatibility-only port preserves vector operation order, reductions,
+runtime feature gates, and portable fallbacks. A complete Linux/AMD64
+`GOEXPERIMENT=simd` build plus focused test-binary compiles now gate future
+toolchain changes; the corresponding AMD64 vector-exp accuracy and underflow
+tests also pass in an x86_64 binary executed under Rosetta on the M2.
+
 ### autograd -- tile exact Eigh VJP outputs (T-01M0V7KKKCES5, 2026-08-25)
 
 The eigendecomposition VJP now computes four adjacent columns of

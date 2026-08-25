@@ -86,8 +86,8 @@ func TestExpF64polyMatchesVector(t *testing.T) {
 }
 
 func loadExp(in []float64) []float64 {
-	x := archsimd.LoadFloat64x4Slice(in)
+	x := archsimd.LoadFloat64x4(in)
 	out := make([]float64, 4)
-	expF64x4(x).StoreSlice(out)
+	expF64x4(x).Store(out)
 	return out
 }

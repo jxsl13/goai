@@ -2920,3 +2920,29 @@ Raw pairs, harness source, exact scope, and correctness gates live under
 `internal/benchcompare/leadership/evidence/m2-tensor-pool-release-token-20260825`.
 The reusable ownership-token pattern is reported as
 [perfscan issue #908](https://github.com/jxsl13/perfscan/issues/908).
+
+## Go 1.27 compatibility rebuild (2026-08-25)
+
+GoAI now declares Go 1.27.0 as its module floor and runs every CI lane with Go
+1.27.x. To separate the compatibility decision from compiler performance,
+identical current-main source at `8e81197759faa8b8660ffab9f989d1edd2a8e6ea`
+was compiled into frozen Go 1.26.6 and Go 1.27.0 binaries. Nine alternating
+pairs ran on Apple M2 Pro, macOS 26.5.1; warmups were excluded.
+
+| benchmark | GOMAXPROCS | Go 1.26.6 | Go 1.27.0 | result | 1.27 wins |
+|---|---:|---:|---:|---:|---:|
+| SVD 128x128 | 12 | 30.748157 ms | 29.306284 ms | **1.049x faster** | 9/9 |
+| Eigh VJP 128 | 1 | 4.097625 ms | 4.060631 ms | 1.009x faster | 6/9 |
+| MoECombine backward | 1 | 19.207853 ms | 18.176724 ms | **1.057x faster** | 6/9 |
+| Eigh VJP 128 | 12 | 2.934442 ms | 2.645581 ms | 1.109x faster | 5/9 |
+| MoECombine backward | 12 | 7.731329 ms | 8.245376 ms | **1.066x slower** | 2/9 |
+
+The parallel host was variable. SVD's 9/9 direction is robust, but parallel
+Eigh's 5/9 direction is not a standalone speedup claim. The opposing parallel
+MoE result is retained instead of hidden: a compiler upgrade is not uniformly
+positive, and future MoE scheduling work must treat Go 1.27 as its incumbent.
+
+Raw pairs and reproduction commands live under
+`internal/benchcompare/leadership/evidence/go127-toolchain-rebuild-20260825`.
+The generalizable requirement to fingerprint and cross-check the compiler is
+[perfscan issue #912](https://github.com/jxsl13/perfscan/issues/912).

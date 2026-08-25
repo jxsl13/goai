@@ -12,7 +12,7 @@ import (
 func evalExpF64x4(x float64) float64 {
 	in := [4]float64{x, x, x, x}
 	var out [4]float64
-	expF64x4(archsimd.LoadFloat64x4Slice(in[:])).StoreSlice(out[:])
+	expF64x4(archsimd.LoadFloat64x4(in[:])).Store(out[:])
 	return out[0]
 }
 

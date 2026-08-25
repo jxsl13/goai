@@ -520,6 +520,9 @@ Mathematical and scientific grounding is required per unit of work. Numeric deci
 - P-01M0V51EZTFN1985RFY2HMDM4D Cache normalized MoE gate weights in combine backward: Completed through T-01M0V52YFDFSF: exact normalized quotient reuse and per-dtype output scheduling deliver measured M2 wins without output-bit drift. The durable arithmetic contract is MOE-NORMALIZED-WEIGHT-REUSE-001; benchmark and schedule evidence is in docs/perf-notes-cpu.md and CHANGELOG.md; generalized tooling follow-up is perfscan #909.
 - T-01M0V7KKKCES5R4JQBAPPYFGQN Implement and gate four-output Eigh VJP inner-product tiling: Implemented exact four-output tiling for Eigh VJP inner*V-transpose with an unchanged ascending reduction order and scalar n%4 tail. Eight balanced alternating M2 Pro frozen-binary pairs improved n=128 by 1.168x (6/8 wins) and n=256 by 1.225x (8/8 wins), with allocations unchanged. Float64 bit gates cover n=5,6,7,12,48,64; a reversed-reduction mutation fails at n=5. Full preflight, autograd race e [body truncated at tombstone retention cap]
 - P-01M0V7J7H3E9PRCBFTXSQ6PE7E Tile exact Eigh VJP output columns in inner times V transpose: Accepted and delivered through task T-01M0V7KKKCES5. Exact output-axis reuse produces paired M2 Pro gains of 1.168x at n=128 and 1.225x at n=256 without allocations or arithmetic-order drift. The bit-identity and mutation gates, documentation, full preflight, and perfscan #911 make the result reproducible; the requested four-output tranche is complete.
+- T-01M0V9BWA4F358SJSN3A4SFWYW Rebuild and validate GoAI with Go 1.27: Rebuilt GoAI with go.mod 1.27.0, README Go 1.27+, and all ten setup-go lanes on 1.27.x. Full pure-Go preflight, benchmark smoke, SIMD, native M2 Metal, MoltenVK tagged build/vet/tests, and Linux AMD64/Linux ARM64/Windows AMD64 cross-builds passed. Nine alternating same-source M2 pairs show SVD 1.049x (9/9), serial Eigh 1.009x (6/9), serial MoE 1.057x (6/9), variable parallel Eigh 1.109x (5/9), and [body truncated at tombstone retention cap]
+- P-01M0V9AJGTFXNTP2BSGMQ2XGTN Raise the supported build and CI toolchain to Go 1.27: Delivered by archived task T-01M0V9BWA4F35. The live module, installation, and all CI declarations now agree on Go 1.27; historical evidence remains unchanged. Local M2, pure-Go, accelerator, cross-platform, and benchmark gates passed, with honest compiler gains and the parallel MoE regression recorded. PR CI remains the Linux race and CUDA link authority.
+- B-01M0VBYXNNF4T8VMN25FR0CX8A Complete the Go 1.27 AMD64 archsimd API migration tree-wide: Completed the tree-wide Go 1.27 AMD64 experimental archsimd migration across all nine declared production and test targets. Replaced removed slice load/store and vector-round spellings, retained fixed-width unaligned loads through unsafe.Slice, and preserved arithmetic order, reductions, runtime gates, and portable fallbacks. The exact source passes a full Linux/AMD64 CGO_ENABLED=0 GOEXPERIMENT=si [body truncated at tombstone retention cap]
 
 ## PROC-007
 WHERE a performance transform is not bit-identical, the GoAI SHALL apply it only where the value is a continuous output, and never where it feeds round, quantize, argmax, or a threshold comparison.
@@ -772,3 +775,13 @@ WHILE the external registry lacks at least one stable ID present in the legacy r
 
 ## PERFSCAN-CI-WHOLE-TREE-001
 WHEN CI evaluates a non-documentation change, the GoAI CI SHALL execute one external perfscan scan over ./..., fail on tool or configuration errors, and publish the advisory finding count.
+
+## GO127-LIVE-TOOLCHAIN-001
+WHEN GoAI is built or tested in live CI, the GoAI SHALL require Go 1.27.0 in go.mod and select Go 1.27.x in all ten setup-go lanes.
+
+Rationale: One declared compiler generation prevents local, documentation, and CI semantics from drifting across Go 1.27 lowering changes.
+
+## TOOLCHAIN-CHANGE-AMD64-SIMD-GATE-001
+WHEN the minimum Go toolchain changes, the GoAI SHALL cross-build the full Linux AMD64 tree with GOEXPERIMENT=simd and execute 1 internal/simd CI test suite before archive.
+
+Rationale: Darwin ARM64 cannot compile AMD64-only experimental archsimd calls, whose API is outside the Go 1 compatibility promise.

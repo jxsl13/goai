@@ -18,13 +18,13 @@ func dequantQ8_0IntoSIMD(dst []float32, raw []byte) {
 		y := dst[b*blockElems : b*blockElems+blockElems]
 		q := blk[2:34]
 		bd := archsimd.BroadcastFloat32x8(d)
-		qv := archsimd.LoadInt8x32((*[32]int8)(unsafe.Pointer(&q[0])))
+		qv := archsimd.LoadInt8x32(unsafe.Slice((*int8)(unsafe.Pointer(&q[0])), 32))
 		lo := qv.GetLo().ExtendToInt16()
 		hi := qv.GetHi().ExtendToInt16()
-		lo.GetLo().ExtendToInt32().ConvertToFloat32().Mul(bd).StoreSlice(y[0:])
-		lo.GetHi().ExtendToInt32().ConvertToFloat32().Mul(bd).StoreSlice(y[8:])
-		hi.GetLo().ExtendToInt32().ConvertToFloat32().Mul(bd).StoreSlice(y[16:])
-		hi.GetHi().ExtendToInt32().ConvertToFloat32().Mul(bd).StoreSlice(y[24:])
+		lo.GetLo().ExtendToInt32().ConvertToFloat32().Mul(bd).Store(y[0:])
+		lo.GetHi().ExtendToInt32().ConvertToFloat32().Mul(bd).Store(y[8:])
+		hi.GetLo().ExtendToInt32().ConvertToFloat32().Mul(bd).Store(y[16:])
+		hi.GetHi().ExtendToInt32().ConvertToFloat32().Mul(bd).Store(y[24:])
 	}
 }
 

@@ -30,11 +30,11 @@ func layerNormNormalizeF32(x, gamma, beta, out []float32, mean, inv float32) {
 	iv := archsimd.BroadcastFloat32x8(inv)
 	n8 := len(gamma) &^ 7
 	for i := 0; i < n8; i += 8 {
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		gv := archsimd.LoadFloat32x8Slice(gamma[i:])
-		bv := archsimd.LoadFloat32x8Slice(beta[i:])
-		t := xv.Sub(mv).Mul(iv)              // (x−mean)·inv
-		t.MulAdd(gv, bv).StoreSlice(out[i:]) // t·gamma + beta
+		xv := archsimd.LoadFloat32x8(x[i:])
+		gv := archsimd.LoadFloat32x8(gamma[i:])
+		bv := archsimd.LoadFloat32x8(beta[i:])
+		t := xv.Sub(mv).Mul(iv)         // (x−mean)·inv
+		t.MulAdd(gv, bv).Store(out[i:]) // t·gamma + beta
 	}
 	for i := n8; i < len(gamma); i++ {
 		out[i] = (x[i]-mean)*inv*gamma[i] + beta[i]
@@ -53,9 +53,9 @@ func rmsNormNormalizeF32(x, gamma, out []float32, inv float32) {
 	iv := archsimd.BroadcastFloat32x8(inv)
 	n8 := len(gamma) &^ 7
 	for i := 0; i < n8; i += 8 {
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		gv := archsimd.LoadFloat32x8Slice(gamma[i:])
-		xv.Mul(iv).Mul(gv).StoreSlice(out[i:]) // x·inv·gamma
+		xv := archsimd.LoadFloat32x8(x[i:])
+		gv := archsimd.LoadFloat32x8(gamma[i:])
+		xv.Mul(iv).Mul(gv).Store(out[i:]) // x·inv·gamma
 	}
 	for i := n8; i < len(gamma); i++ {
 		out[i] = x[i] * inv * gamma[i]
@@ -79,12 +79,12 @@ func rmsNormDxF32(u, g, x, dx []float32, inv, c float32) {
 	ncv := archsimd.BroadcastFloat32x8(-c)
 	n8 := len(dx) &^ 7
 	for i := 0; i < n8; i += 8 {
-		uv := archsimd.LoadFloat32x8Slice(u[i:])
-		gv := archsimd.LoadFloat32x8Slice(g[i:])
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		a := uv.Mul(gv)               // u·g
-		t := xv.MulAdd(ncv, a)        // x·(−c) + a = a − x·c
-		t.Mul(ivv).StoreSlice(dx[i:]) // inv·(a − x·c)
+		uv := archsimd.LoadFloat32x8(u[i:])
+		gv := archsimd.LoadFloat32x8(g[i:])
+		xv := archsimd.LoadFloat32x8(x[i:])
+		a := uv.Mul(gv)          // u·g
+		t := xv.MulAdd(ncv, a)   // x·(−c) + a = a − x·c
+		t.Mul(ivv).Store(dx[i:]) // inv·(a − x·c)
 	}
 	for i := n8; i < len(dx); i++ {
 		dx[i] = inv * (u[i]*g[i] - x[i]*c)
@@ -110,14 +110,14 @@ func layerNormDxF32(u, g, x, dx []float32, mu, inv, meanA, meanAX float32) {
 	nmAXv := archsimd.BroadcastFloat32x8(-meanAX)
 	n8 := len(dx) &^ 7
 	for i := 0; i < n8; i += 8 {
-		uv := archsimd.LoadFloat32x8Slice(u[i:])
-		gv := archsimd.LoadFloat32x8Slice(g[i:])
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
+		uv := archsimd.LoadFloat32x8(u[i:])
+		gv := archsimd.LoadFloat32x8(g[i:])
+		xv := archsimd.LoadFloat32x8(x[i:])
 		a := uv.Mul(gv)              // u·g
 		xhat := xv.Sub(muv).Mul(ivv) // (x−mu)·inv
 		t := a.Sub(mAv)              // a − meanA
 		r := xhat.MulAdd(nmAXv, t)   // x̂·(−meanAX) + t = t − x̂·meanAX
-		r.Mul(ivv).StoreSlice(dx[i:])
+		r.Mul(ivv).Store(dx[i:])
 	}
 	for i := n8; i < len(dx); i++ {
 		xhat := (x[i] - mu) * inv
@@ -143,7 +143,7 @@ func sumF32(x []float32) float64 {
 	lo, hi := archsimd.BroadcastFloat64x4(0), archsimd.BroadcastFloat64x4(0)
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		v := archsimd.LoadFloat32x8Slice(x[i:])
+		v := archsimd.LoadFloat32x8(x[i:])
 		lo = lo.Add(v.GetLo().ConvertToFloat64())
 		hi = hi.Add(v.GetHi().ConvertToFloat64())
 	}
@@ -168,7 +168,7 @@ func sumSqF32(x []float32) float64 {
 	lo, hi := archsimd.BroadcastFloat64x4(0), archsimd.BroadcastFloat64x4(0)
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		v := archsimd.LoadFloat32x8Slice(x[i:])
+		v := archsimd.LoadFloat32x8(x[i:])
 		vl, vh := v.GetLo().ConvertToFloat64(), v.GetHi().ConvertToFloat64()
 		lo = vl.MulAdd(vl, lo) // lo += vl·vl
 		hi = vh.MulAdd(vh, hi)
@@ -195,7 +195,7 @@ func varSumF32(x []float32, mu float64) float64 {
 	lo, hi := archsimd.BroadcastFloat64x4(0), archsimd.BroadcastFloat64x4(0)
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		v := archsimd.LoadFloat32x8Slice(x[i:])
+		v := archsimd.LoadFloat32x8(x[i:])
 		dl := v.GetLo().ConvertToFloat64().Sub(muv)
 		dh := v.GetHi().ConvertToFloat64().Sub(muv)
 		lo = dl.MulAdd(dl, lo) // lo += dl·dl
@@ -212,6 +212,6 @@ func varSumF32(x []float32, mu float64) float64 {
 // horizF64x4 returns the sum of the four f64 lanes (tree order, matching the scalar (s0+s1)+(s2+s3)).
 func horizF64x4(v archsimd.Float64x4) float64 {
 	var a [4]float64
-	v.Store(&a)
+	v.Store(a[:])
 	return (a[0] + a[1]) + (a[2] + a[3])
 }

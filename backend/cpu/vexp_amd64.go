@@ -117,12 +117,12 @@ func vexpF32(p []float32, m float32) float32 {
 	sumv := vZero
 	n8 := len(p) &^ 7
 	for i := 0; i < n8; i += 8 {
-		res := expF32x8(archsimd.LoadFloat32x8Slice(p[i:]).Sub(mv))
-		res.StoreSlice(p[i:])
+		res := expF32x8(archsimd.LoadFloat32x8(p[i:]).Sub(mv))
+		res.Store(p[i:])
 		sumv = sumv.Add(res)
 	}
 	var lanes [8]float32
-	sumv.Store(&lanes)
+	sumv.Store(lanes[:])
 	sum := lanes[0] + lanes[1] + lanes[2] + lanes[3] + lanes[4] + lanes[5] + lanes[6] + lanes[7]
 	for i := n8; i < len(p); i++ {
 		e := expF32(p[i] - m)
@@ -145,7 +145,7 @@ func vgeluF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		a := x.Mul(vGInvS2).AsUint32x8().And(vAbs).AsFloat32x8() // |x/√2|
 		t := vOne.Div(a.MulAdd(vGP, vOne))                       // 1/(1+p·a)
 		s := vGA5.MulAdd(t, vGA4)
@@ -156,7 +156,7 @@ func vgeluF32(dst, src []float32) {
 		E := vOne.Sub(s.Mul(t).Mul(e))                       // erf magnitude
 		erf := E.AsUint32x8().Or(x.AsUint32x8().And(vSign))  // re-apply sign(x)
 		res := x.Mul(vHalf.MulAdd(erf.AsFloat32x8(), vHalf)) // x·(0.5 + 0.5·erf)
-		res.StoreSlice(dst[i:])
+		res.Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = geluF32(src[i])
@@ -176,8 +176,8 @@ func vgeluGradF32(dst, x, g []float32) {
 	}
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		xv := archsimd.LoadFloat32x8(x[i:])
+		gv := archsimd.LoadFloat32x8(g[i:])
 		a := xv.Mul(vGInvS2).AsUint32x8().And(vAbs).AsFloat32x8() // |x/√2|
 		t := vOne.Div(a.MulAdd(vGP, vOne))
 		s := vGA5.MulAdd(t, vGA4)
@@ -191,7 +191,7 @@ func vgeluGradF32(dst, x, g []float32) {
 		phi := vHalf.MulAdd(erf, vHalf)    // Φ(x) = 0.5 + 0.5·erf
 		pdf := vGPdf.Mul(e)                // φ(x)
 		res := gv.Mul(xv.MulAdd(pdf, phi)) // g·(Φ + x·φ)
-		res.StoreSlice(dst[i:])
+		res.Store(dst[i:])
 	}
 	for i := n8; i < len(x); i++ {
 		dst[i] = geluGradF32(x[i], g[i])
@@ -211,11 +211,11 @@ func vsiluF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		z := expF32x8(vZero.Sub(x.AsUint32x8().And(vAbs).AsFloat32x8())) // e^(−|x|)
 		z = z.Masked(z.Greater(vGPdfMn))
 		num := vOne.Merge(z, x.GreaterEqual(vZero)) // x≥0 ? 1 : z
-		x.Mul(num).Div(vOne.Add(z)).StoreSlice(dst[i:])
+		x.Mul(num).Div(vOne.Add(z)).Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = siluF32(src[i])
@@ -234,14 +234,14 @@ func vsiluGradF32(dst, x, g []float32) {
 	}
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		xv := archsimd.LoadFloat32x8(x[i:])
+		gv := archsimd.LoadFloat32x8(g[i:])
 		z := expF32x8(vZero.Sub(xv.AsUint32x8().And(vAbs).AsFloat32x8()))
 		z = z.Masked(z.Greater(vGPdfMn))
 		num := vOne.Merge(z, xv.GreaterEqual(vZero))
 		den := vOne.Add(z)
 		d := num.MulAdd(den, xv.Mul(z)).Div(den.Mul(den)) // (num·den + x·z)/den²
-		gv.Mul(d).StoreSlice(dst[i:])
+		gv.Mul(d).Store(dst[i:])
 	}
 	for i := n8; i < len(x); i++ {
 		dst[i] = siluGradF32(x[i], g[i])
@@ -260,10 +260,10 @@ func vsigmoidF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		z := expF32x8(vZero.Sub(x.AsUint32x8().And(vAbs).AsFloat32x8()))
 		num := vOne.Merge(z, x.GreaterEqual(vZero))
-		num.Div(vOne.Add(z)).StoreSlice(dst[i:])
+		num.Div(vOne.Add(z)).Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = sigmoidF32(src[i])
@@ -281,11 +281,11 @@ func vsoftplusGradF32(dst, x, g []float32) {
 	}
 	n8 := len(x) &^ 7
 	for i := 0; i < n8; i += 8 {
-		xv := archsimd.LoadFloat32x8Slice(x[i:])
-		gv := archsimd.LoadFloat32x8Slice(g[i:])
+		xv := archsimd.LoadFloat32x8(x[i:])
+		gv := archsimd.LoadFloat32x8(g[i:])
 		z := expF32x8(vZero.Sub(xv.AsUint32x8().And(vAbs).AsFloat32x8())) // e^(−|x|)
 		num := vOne.Merge(z, xv.GreaterEqual(vZero))                      // x≥0 ? 1 : z
-		gv.Mul(num.Div(vOne.Add(z))).StoreSlice(dst[i:])                  // g·(num/(1+z)) = g·σ(x)
+		gv.Mul(num.Div(vOne.Add(z))).Store(dst[i:])                       // g·(num/(1+z)) = g·σ(x)
 	}
 	for i := n8; i < len(x); i++ {
 		dst[i] = softplusGradF32(x[i], g[i])
@@ -305,7 +305,7 @@ func vexpFullF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		xc := x.Max(vLo).Min(vFullHi)
 		n := xc.MulAdd(vLog2e, vMagic).Sub(vMagic)
 		r := n.MulAdd(vNHi, xc)
@@ -323,7 +323,7 @@ func vexpFullF32(dst, src []float32) {
 		res = res.Mul(s1).Mul(s2).Min(vMaxF32)
 		res = vZero.Merge(res, x.Less(vLo))       // underflow → exact 0 (NaN keeps res)
 		res = vInf.Merge(res, x.Greater(vInfCut)) // overflow → +Inf (NaN keeps res)
-		res.StoreSlice(dst[i:])
+		res.Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = expFullF32(src[i])
@@ -339,12 +339,12 @@ func vtanhF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		a := x.AsUint32x8().And(vAbs).AsFloat32x8()                       // |x|
 		z := expF32x8(vZero.Sub(a.Add(a)))                                // e^(−2|x|), only the lo clamp is live
 		t := vOne.Sub(z).Div(vOne.Add(z))                                 // (1−z)/(1+z)
 		res := t.AsUint32x8().Or(x.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
-		res.StoreSlice(dst[i:])
+		res.Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = tanhF32(src[i])
@@ -366,12 +366,12 @@ func vsoftcapF32(dst, src []float32, cap float32) {
 	capV := archsimd.BroadcastFloat32x8(cap)
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		zc := archsimd.LoadFloat32x8Slice(src[i:]).Div(capV)            // x/cap
+		zc := archsimd.LoadFloat32x8(src[i:]).Div(capV)                 // x/cap
 		a := zc.AsUint32x8().And(vAbs).AsFloat32x8()                    // |x/cap|
 		z := expF32x8(vZero.Sub(a.Add(a)))                              // e^(−2|x/cap|)
 		t := vOne.Sub(z).Div(vOne.Add(z))                               // tanh(|x/cap|)
 		t = t.AsUint32x8().Or(zc.AsUint32x8().And(vSign)).AsFloat32x8() // re-apply sign(x)
-		t.Mul(capV).StoreSlice(dst[i:])                                 // ·cap
+		t.Mul(capV).Store(dst[i:])                                      // ·cap
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = softcapF32(src[i], cap)
@@ -425,7 +425,7 @@ func vsoftplusF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		softplusF32x8(archsimd.LoadFloat32x8Slice(src[i:])).StoreSlice(dst[i:])
+		softplusF32x8(archsimd.LoadFloat32x8(src[i:])).Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = softplusF32(src[i])
@@ -441,7 +441,7 @@ func vlogF32(dst, src []float32) {
 	}
 	n8 := len(src) &^ 7
 	for i := 0; i < n8; i += 8 {
-		x := archsimd.LoadFloat32x8Slice(src[i:])
+		x := archsimd.LoadFloat32x8(src[i:])
 		sub := x.Less(vLogMin)              // subnormal (also 0/neg; fixed by the specials below)
 		xs := x.Mul(vLog2P25).Merge(x, sub) // pre-scale subnormals by 2²⁵
 		bx := xs.AsUint32x8()
@@ -472,7 +472,7 @@ func vlogF32(dst, src []float32) {
 		r = vNegInf.Merge(r, x.Equal(vZero))
 		r = vNaN.Merge(r, x.Less(vZero))
 		r = vInf.Merge(r, x.Equal(vInf))
-		r.StoreSlice(dst[i:])
+		r.Store(dst[i:])
 	}
 	for i := n8; i < len(src); i++ {
 		dst[i] = logF32(src[i])
@@ -525,7 +525,7 @@ var (
 func expF64x4(x archsimd.Float64x4) archsimd.Float64x4 {
 	under := x.Less(vF64ExpZero) // eˣ underflows to 0 for x < −745.2 (masking feeds −∞)
 	x = x.Max(vF64ExpLo)
-	kf := x.Mul(vF64Log2e).RoundToEven()
+	kf := x.Mul(vF64Log2e).Round()
 	r := kf.MulAdd(vF64NLn2Hi, x) // x − k·ln2Hi
 	r = kf.MulAdd(vF64NLn2Lo, r)  // − k·ln2Lo
 	// degree-13 Taylor of eʳ: p = Σ rᵏ/k!, Horner from 1/13! down to 1 + r.
@@ -608,10 +608,10 @@ func vsiluF64(dst, src []float64) {
 	}
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
+		x := archsimd.LoadFloat64x4(src[i:])
 		z := expF64x4(vF64Zero.Sub(x.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|)
 		num := vF64One.Merge(z, x.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
-		x.Mul(num).Div(vF64One.Add(z)).StoreSlice(dst[i:])
+		x.Mul(num).Div(vF64One.Add(z)).Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = siluF64poly(src[i])
@@ -631,10 +631,10 @@ func vsigmoidF64(dst, src []float64) {
 	}
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
+		x := archsimd.LoadFloat64x4(src[i:])
 		z := expF64x4(vF64Zero.Sub(x.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|)
 		num := vF64One.Merge(z, x.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
-		num.Div(vF64One.Add(z)).StoreSlice(dst[i:])
+		num.Div(vF64One.Add(z)).Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = sigmoidF64poly(src[i])
@@ -758,7 +758,7 @@ func vsoftplusF64(dst, src []float64) {
 	}
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		softplusF64x4(archsimd.LoadFloat64x4Slice(src[i:])).StoreSlice(dst[i:])
+		softplusF64x4(archsimd.LoadFloat64x4(src[i:])).Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = softplusF64poly(src[i])
@@ -779,11 +779,11 @@ func vsoftplusGradF64(dst, x, g []float64) {
 	}
 	n4 := len(x) &^ 3
 	for i := 0; i < n4; i += 4 {
-		xv := archsimd.LoadFloat64x4Slice(x[i:])
-		gv := archsimd.LoadFloat64x4Slice(g[i:])
+		xv := archsimd.LoadFloat64x4(x[i:])
+		gv := archsimd.LoadFloat64x4(g[i:])
 		z := expF64x4(vF64Zero.Sub(xv.AsUint64x4().And(vF64Abs).AsFloat64x4())) // e^(−|x|) ∈ (0,1]
 		num := vF64One.Merge(z, xv.GreaterEqual(vF64Zero))                      // x≥0 ? 1 : z
-		gv.Mul(num.Div(vF64One.Add(z))).StoreSlice(dst[i:])                     // g·num/(1+z)
+		gv.Mul(num.Div(vF64One.Add(z))).Store(dst[i:])                          // g·num/(1+z)
 	}
 	for i := n4; i < len(x); i++ {
 		dst[i] = softplusGradF64(x[i], g[i])
@@ -832,12 +832,12 @@ func vsoftcapF64(dst, src []float64, cap float64) {
 	capV := archsimd.BroadcastFloat64x4(cap)
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		zc := archsimd.LoadFloat64x4Slice(src[i:]).Div(capV) // x/cap
-		a := zc.AsUint64x4().And(vF64Abs).AsFloat64x4()      // |zc|
-		z := expF64x4(vF64Zero.Sub(a.Add(a)))                // e^(−2|zc|)
-		t := vF64One.Sub(z).Div(vF64One.Add(z))              // tanh(|zc|)
+		zc := archsimd.LoadFloat64x4(src[i:]).Div(capV) // x/cap
+		a := zc.AsUint64x4().And(vF64Abs).AsFloat64x4() // |zc|
+		z := expF64x4(vF64Zero.Sub(a.Add(a)))           // e^(−2|zc|)
+		t := vF64One.Sub(z).Div(vF64One.Add(z))         // tanh(|zc|)
 		t = t.AsUint64x4().Or(zc.AsUint64x4().And(vF64Sign)).AsFloat64x4()
-		t.Mul(capV).StoreSlice(dst[i:])
+		t.Mul(capV).Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = softcapF64poly(src[i], cap)
@@ -857,12 +857,12 @@ func vtanhF64(dst, src []float64) {
 	}
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
+		x := archsimd.LoadFloat64x4(src[i:])
 		a := x.AsUint64x4().And(vF64Abs).AsFloat64x4()                    // |x|
 		z := expF64x4(vF64Zero.Sub(a.Add(a)))                             // e^(−2|x|)
 		t := vF64One.Sub(z).Div(vF64One.Add(z))                           // tanh(|x|)
 		t = t.AsUint64x4().Or(x.AsUint64x4().And(vF64Sign)).AsFloat64x4() // copysign(t, x)
-		t.StoreSlice(dst[i:])
+		t.Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = tanhF64poly(src[i])
@@ -1063,9 +1063,9 @@ func vgeluF64(dst, src []float64) {
 	}
 	n4 := len(src) &^ 3
 	for i := 0; i < n4; i += 4 {
-		x := archsimd.LoadFloat64x4Slice(src[i:])
+		x := archsimd.LoadFloat64x4(src[i:])
 		erf := erfF64x4(x.Mul(vErfInvSqrt2))
-		x.Mul(vF64Half).Mul(vF64One.Add(erf)).StoreSlice(dst[i:])
+		x.Mul(vF64Half).Mul(vF64One.Add(erf)).Store(dst[i:])
 	}
 	for i := n4; i < len(src); i++ {
 		dst[i] = geluF64poly(src[i])
@@ -1100,11 +1100,11 @@ func vgeluGradF64(dst, x, g []float64) {
 	}
 	n4 := len(x) &^ 3
 	for i := 0; i < n4; i += 4 {
-		xv := archsimd.LoadFloat64x4Slice(x[i:])
-		gv := archsimd.LoadFloat64x4Slice(g[i:])
+		xv := archsimd.LoadFloat64x4(x[i:])
+		gv := archsimd.LoadFloat64x4(g[i:])
 		phi := vF64Half.Mul(vF64One.Add(erfF64x4(xv.Mul(vErfInvSqrt2))))   // Φ = 0.5(1+erf(x/√2))
 		pdf := expF64x4(vGeluNegHalf.Mul(xv).Mul(xv)).Mul(vGeluInvSqrt2Pi) // (1/√2π)e^(−x²/2)
-		gv.Mul(phi.Add(xv.Mul(pdf))).StoreSlice(dst[i:])                   // g·(Φ + x·pdf)
+		gv.Mul(phi.Add(xv.Mul(pdf))).Store(dst[i:])                        // g·(Φ + x·pdf)
 	}
 	for i := n4; i < len(x); i++ {
 		dst[i] = geluGradF64poly(x[i], g[i])
