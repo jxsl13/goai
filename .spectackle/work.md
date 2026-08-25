@@ -3982,12 +3982,3 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
-
-## P-01M0V7J7H3E9PRCBFTXSQ6PE7E Tile exact Eigh VJP output columns in inner times V transpose
-kind: proposal
-state: active
-created: 2026-08-25
-grilled: 2026-08-25 open=0
-targets: autograd/vjp_eigh.go, autograd/vjp_eigh_bench_test.go, autograd/vjp_eigh_bitidentity_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
-
-The Eigh backward computes tmp[a,j] as a dot between inner[a,:] and V[j,:]. The inner row is invariant across output j but is streamed once per output, matching external perfscan PS6010. On Apple M2 Pro, the current n=256 benchmark median is about 9.98 ms with substantial host-load variance. Compute four adjacent j outputs with independent accumulators while each retains the original ascending b reduction; keep the scalar tail, row-parallel ownership, tensor layout, all other Eigh stages, and public behavior unchanged. Gate raw-bit identity against the existing full column-walk reference and benchmark n=128/256 with alternating frozen binaries.
