@@ -3985,8 +3985,9 @@ choice: One bounded BiasGELU recorder dispatch
 
 ## B-01M0VBPMFMFAYBFCHE83V4S9NZ Port AMD64 experimental SIMD calls to the Go 1.27 API
 kind: bug
-state: draft
+state: active
 created: 2026-08-25
+grilled: 2026-08-25 open=10
 targets: internal/simd/simd_avx.go, format/gguf/dequant_q8_simd_amd64.go, format/gguf/quant_matmul_q8_simd_amd64.go
 
 PR #1234 CI proves Go 1.27 removed LoadFloat64x4Slice, LoadFloat32x8Slice, and StoreSlice, while LoadInt8x32 and LoadFloat32x8 now accept slices rather than array pointers. Darwin/ARM64 cannot compile these AMD64-only files, so local preflight missed the break. Replace only the renamed load/store calls and pointer adapters, preserve vector operation order and scalar fallbacks, remove now-unused unsafe imports, and add a local Linux/AMD64 GOEXPERIMENT=simd build/test gate to the validation record. Definition of done: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 GOEXPERIMENT=simd builds the full tree and compiles/runs internal/simd tests under Go 1.27.0; all PR checks then pass on the exact head.
