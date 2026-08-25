@@ -584,3 +584,33 @@ Focused external perfscan v1.81.0 drops from six PS6077 findings to five. The
 general shared-transcendental-leaf result is
 [perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
 local same-machine kernel claims, not cross-library leadership evidence.
+
+## Reused F64 NEON logistic derivative (T-01M0VTHS92F97)
+
+Apple ARM64 `GOEXPERIMENT=simd` Softplus backward now writes the validated
+two-lane NEON sigmoid directly into the final gradient buffer, then streams the
+upstream gradient once for an in-place multiply. This removes the scalar
+`math.Exp` loop without adding scratch or extending the assembly ABI. The global
+ARM64 `vexpF64Fast` capability remains false, and Softplus forward, tanh,
+soft-cap, GELU, WKV, SSM, default builds, and AMD64 behavior are unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs with Go 1.27.0 give:
+
+| benchmark | before median | after median | speedup | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| Softplus backward F64, 256K | 710.607 us | 264.545 us | **2.686x** | **2.468x** | 9/9 |
+
+The operation remains at seven allocations. A same-binary direct control puts
+the scalar gradient loop at 1.906083 ms and the shared logistic leaf plus
+multiply at 558.779 us (**3.411x**). Dense validation observes maximum relative
+error 3.370e-16 over 262,145 values; vector bodies and scalar tails produce the
+same bits as `g*sigmoidF64poly(x)`, including signed zeros, infinities, and NaNs.
+Native ARM64 plain/SIMD and focused race gates, Linux ARM64/AMD64 cross-builds,
+and a focused Rosetta AMD64 SIMD regression gate pass. The two failures from a
+full Rosetta suite reproduce identically in untouched-main and candidate WKV
+and tanh tests, outside this ARM64-only source partition.
+
+Focused external perfscan v1.81.0 drops from five PS6077 findings to four. The
+general derivative-consumer result is recorded on
+[perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
+local same-machine kernel claims, not cross-library leadership evidence.
