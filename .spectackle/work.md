@@ -3982,3 +3982,12 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## T-01M0VW5BZ2FR1B6SDPM0TWRGG0 Compose the M2 F64 tanh route from the shared NEON logistic leaf
+kind: task
+state: approved
+created: 2026-08-25
+grilled: 2026-08-25 open=1
+targets: backend/cpu/vexp_arm64.go, backend/cpu/vexp_amd64.go, backend/cpu/vexp_default.go, backend/cpu/elementwise.go, backend/cpu/vtanh_f64_arm64_test.go, backend/cpu/cpu_test.go, docs/perf-notes-cpu.md, CHANGELOG.md
+
+Under ARM64-F64-EXP-SCOPE-001, add a separately gated vtanhF64Fast capability and promote only Apple ARM64 GOEXPERIMENT=simd OpTanh F64. Implement vtanhF64 by streaming 2*x into the final output, running the already validated two-lane vsigmoidF64 leaf in place, then streaming 2*y-1 with explicit signed-zero repair. Keep global vexpF64Fast false and leave Softplus forward, soft-cap, GELU, WKV, SSM, default builds, and AMD64 behavior unchanged. Preserve input immutability, stable infinities and NaN classes, odd tails, parallel chunking, allocation structure, and a documented absolute-error budget around cancellation near zero. Add ARM64 SIMD dense accuracy against math.Tanh, vector/tail identity against a scalar twin, signed-zero/infinity/NaN edges, and production backend parity. Gate promotion on nine alternating frozen-binary Apple M2 BenchmarkTanhF64_64K_cpu measurements with unchanged allocations plus a same-binary scalar control. Confirm the logistic leaf D2 arithmetic and the two streaming scalar transforms by objdump. Run backend/cpu plain and GOEXPERIMENT=simd suites, focused native race, Linux ARM64/AMD64 and Darwin AMD64 plain/SIMD compile gates, focused Rosetta AMD64 SIMD regression tests with baseline attribution for existing failures, changed Markdown lint, external perfscan v1.81.0 through GOPROXY=direct, and make preflight. Report the generalizable composite-reuse result to github.com/jxsl13/perfscan.
