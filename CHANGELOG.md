@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- fuse ARM64 F64 Softplus into one NEON pass (T-01M0W39FV0F7Z, 2026-08-25)
+
+Apple ARM64 `GOEXPERIMENT=simd` Softplus now fuses its exponential reduction,
+Cephes `log1p` rational, positive-input addition, and NaN repair into one
+two-lane assembly traversal. A dedicated capability preserves the global F64
+exp policy and every other architecture and composite route.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve production F64
+Softplus **3.822x** by paired median at 64K and **3.508x** at 256K, with 9/9
+wins and six allocations unchanged. Same-binary leaf medians improve **2.085x**
+and **2.122x** with zero allocations. Maximum absolute error is 7.105e-15;
+vector/tail identity, aliases, special values, full Go 1.27 preflight, native
+plain/SIMD and race tests, disassembly, and cross-platform test builds pass.
+Focused external perfscan PS6077 findings fall from two to one; the reusable
+composite-fusion result is recorded on perfscan issue #917.
+
 ### backend/cpu -- fuse ARM64 F64 soft-cap into one NEON pass (T-01M0W06V0GEVT, 2026-08-25)
 
 Apple ARM64 `GOEXPERIMENT=simd` soft-cap now fuses scale, degree-13 exponential

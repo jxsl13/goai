@@ -709,3 +709,56 @@ external perfscan v1.81.0 drops from three PS6077 findings to two, leaving
 ARM64 F64 Softplus forward and GELU as the remaining cross-partition gaps.
 These are local same-machine kernel claims, not cross-library leadership
 evidence.
+
+## Single-pass F64 NEON Softplus (T-01M0W39FV0F7Z)
+
+Apple ARM64 `GOEXPERIMENT=simd` Softplus now keeps the complete stable formula
+`max(x,0)+log1p(exp(-abs(x)))` between one input load and one output store. The
+two-lane assembly kernel interleaves two independent vectors through the
+degree-13 F64 exponential reduction, then replaces the coefficient registers
+with the Cephes double-log rational for `1+exp(-abs(x))`. An ordered select
+restores quiet-NaN payloads. A dedicated `vsoftplusF64Fast` capability leaves
+global `vexpF64Fast`, GELU, existing sigmoid/SiLU/tanh/soft-cap routes, plain
+builds, and non-ARM64 behavior unchanged.
+
+The frozen baseline uses main `5e70abfd`; the candidate implementation is
+`022ea11e`. Both use Go 1.27.0 on Apple M2 Pro, `GOMAXPROCS=12`, a calibrated
+500 ms Go benchmark sample per row, and alternating fresh-process order:
+
+| pair | order | 64K baseline | 64K candidate | 256K baseline | 256K candidate |
+|---:|:---:|---:|---:|---:|---:|
+| 1 | B→C | 702.493 us | 183.477 us | 1.253059 ms | 358.002 us |
+| 2 | C→B | 687.549 us | 180.317 us | 1.219804 ms | 350.822 us |
+| 3 | B→C | 691.697 us | 184.850 us | 1.253975 ms | 352.023 us |
+| 4 | C→B | 693.599 us | 183.965 us | 1.225069 ms | 351.272 us |
+| 5 | B→C | 698.468 us | 180.112 us | 1.224096 ms | 347.584 us |
+| 6 | C→B | 690.980 us | 180.782 us | 1.233982 ms | 351.153 us |
+| 7 | B→C | 697.205 us | 182.244 us | 1.225204 ms | 349.235 us |
+| 8 | C→B | 693.911 us | 180.403 us | 1.227647 ms | 348.347 us |
+| 9 | B→C | 697.278 us | 190.670 us | 1.225262 ms | 363.392 us |
+
+| production shape | baseline median | candidate median | independent | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| F64 64K | 693.911 us | 182.244 us | **3.808x** | **3.822x** | 9/9 |
+| F64 256K | 1.225262 ms | 351.153 us | **3.489x** | **3.508x** | 9/9 |
+
+Both production cells retain six allocations. Same-binary serial leaf medians
+move from 544.983 to 261.380 us at 64K (**2.085x**) and from 2.223694 to
+1.047816 ms at 256K (**2.122x**), with zero allocations. The unchanged
+sigmoid and soft-cap production controls move against the candidate by paired
+medians of 0.973x and 0.960x respectively, so host drift makes the target gains
+conservative rather than explaining them; their allocation counts and source
+paths are unchanged.
+
+Dense validation over 262,145 values spanning [-800,800] observes maximum
+absolute error 7.105e-15. Vector bodies and scalar tails are bit-identical;
+aliasing, input immutability, signed zeros, infinities, and two quiet-NaN
+payloads pass. Objdump confirms one load/store traversal with D2 FMA, divide,
+fold, and ordered-select instructions. Native plain and SIMD suites, focused
+race tests, Linux ARM64/AMD64 and Windows AMD64 SIMD test-binary builds, and
+`make preflight-full` pass. Focused external perfscan v1.81.0 reduces PS6077
+from two findings to one, leaving ARM64 F64 GELU. The generalized register-
+resident composite lesson is recorded on
+[perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917#issuecomment-5408382260).
+These are local same-machine kernel claims, not cross-library leadership
+evidence.
