@@ -725,8 +725,9 @@ gradOdd:
 gradDone:
 	RET
 
-// F64 SiLU constants, each duplicated for one 2-lane NEON vector. The exp
-// polynomial is the same degree-13 FMA chain as expF64poly/vexp_amd64.go.
+// F64 logistic constants, each duplicated for one 2-lane NEON vector. The exp
+// polynomial is the same degree-13 FMA chain as expF64poly/vexp_amd64.go and is
+// shared by SiLU and sigmoid.
 DATA siluF64Consts<>+0(SB)/8, $0x3FF71547652B82FE
 DATA siluF64Consts<>+8(SB)/8, $0x3FF71547652B82FE  // V12 log2(e)
 DATA siluF64Consts<>+16(SB)/8, $0x3FE62E42FEE00000
@@ -765,15 +766,17 @@ DATA siluF64Consts<>+272(SB)/8, $0x3FE0000000000000
 DATA siluF64Consts<>+280(SB)/8, $0x3FE0000000000000 // V29 c2
 GLOBL siluF64Consts<>(SB), RODATA|NOPTR, $288
 
-// func vsiluPairsNeonF64(dst, src *float64, pairs int)
+// func vlogisticPairsNeonF64(dst, src *float64, pairs, mulX int)
 //
 // Two f64 lanes per vector, with two independent vectors interleaved so the
-// degree-13 FMA chains overlap. WORD encodings were generated with Apple clang
-// and verified through go tool objdump.
-TEXT ·vsiluPairsNeonF64(SB), NOSPLIT, $0-24
+// degree-13 FMA chains overlap. mulX=1 emits SiLU; mulX=0 skips the final x
+// multiply and repairs NaN payloads with an ordered select to emit sigmoid.
+// WORD encodings were generated with Apple clang and verified through objdump.
+TEXT ·vlogisticPairsNeonF64(SB), NOSPLIT, $0-32
 	MOVD dst+0(FP), R1
 	MOVD src+8(FP), R0
 	MOVD pairs+16(FP), R2
+	MOVD mulX+24(FP), R6
 	MOVD $siluF64Consts<>(SB), R3
 	VLD1.P 64(R3), [V12.D2, V13.D2, V14.D2, V15.D2]
 	VLD1.P 64(R3), [V16.D2, V17.D2, V18.D2, V19.D2]
@@ -876,10 +879,26 @@ siluF64Loop2:
 	WORD $0x6E671DE8 // BSL V8.16B, V15.16B, V7.16B
 	WORD $0x4E6FD423 // FADD V3.2D, V1.2D, V15.2D
 	WORD $0x4E6FD4E9 // FADD V9.2D, V7.2D, V15.2D
+	CBZ R6, logisticF64Sigmoid2
 	WORD $0x6E62DC00 // FMUL V0.2D, V0.2D, V2.2D
 	WORD $0x6E68DCC6 // FMUL V6.2D, V6.2D, V8.2D
+	B logisticF64Divide2
+logisticF64Sigmoid2:
+	WORD $0x4EA01C04 // MOV V4.16B, V0.16B: preserve x/NaN payload
+	WORD $0x4EA61CCA // MOV V10.16B, V6.16B
+	WORD $0x4EA21C40 // MOV V0.16B, V2.16B: numerator
+	WORD $0x4EA81D06 // MOV V6.16B, V8.16B
+logisticF64Divide2:
 	WORD $0x6E63FC00 // FDIV V0.2D, V0.2D, V3.2D
 	WORD $0x6E69FCC6 // FDIV V6.2D, V6.2D, V9.2D
+	CBNZ R6, logisticF64Store2
+	WORD $0x6E64E482 // FCMGE V2.2D, V4.2D, V4.2D: ordered mask
+	WORD $0x6E641C02 // BSL V2.16B, V0.16B, V4.16B: result or original NaN
+	WORD $0x4EA21C40 // MOV V0.16B, V2.16B
+	WORD $0x6E6AE548 // FCMGE V8.2D, V10.2D, V10.2D
+	WORD $0x6E6A1CC8 // BSL V8.16B, V6.16B, V10.16B
+	WORD $0x4EA81D06 // MOV V6.16B, V8.16B
+logisticF64Store2:
 	VST1.P [V0.D2], 16(R1)
 	VST1.P [V6.D2], 16(R1)
 	SUBS $1, R4, R4
@@ -931,8 +950,19 @@ siluF64Odd:
 	WORD $0x6EE0C802
 	WORD $0x6E611DE2
 	WORD $0x4E6FD423
+	CBZ R6, logisticF64SigmoidOdd
 	WORD $0x6E62DC00
+	B logisticF64DivideOdd
+logisticF64SigmoidOdd:
+	WORD $0x4EA01C04 // MOV V4.16B, V0.16B
+	WORD $0x4EA21C40 // MOV V0.16B, V2.16B
+logisticF64DivideOdd:
 	WORD $0x6E63FC00
+	CBNZ R6, logisticF64StoreOdd
+	WORD $0x6E64E482 // FCMGE V2.2D, V4.2D, V4.2D
+	WORD $0x6E641C02 // BSL V2.16B, V0.16B, V4.16B
+	WORD $0x4EA21C40 // MOV V0.16B, V2.16B
+logisticF64StoreOdd:
 	VST1.P [V0.D2], 16(R1)
 
 siluF64Done:

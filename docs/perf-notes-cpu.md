@@ -551,3 +551,36 @@ cross-library leadership result. Compiler diagnostics confirm an inline cost of
 24 and every reduce-all/trailing hot-loop call is inlined. Focused external
 perfscan drops from 20 PS3082 findings to zero. The reusable detector request is
 [perfscan issue #916](https://github.com/jxsl13/perfscan/issues/916).
+
+## Shared F64 NEON logistic leaf (T-01M0VQEJ6GEY3)
+
+The Apple ARM64 `GOEXPERIMENT=simd` route now shares one two-lane, degree-13
+FMA exponential pipeline between SiLU and sigmoid. A mode selected once per
+call changes only the final numerator: SiLU multiplies by the input, while
+sigmoid preserves the stable positive/negative split and repairs NaN payloads
+with an ordered vector select. The global ARM64 `vexpF64Fast` capability remains
+false, so tanh, softplus, soft-cap, GELU, and unrelated composites are not
+promoted by this change.
+
+Nine alternating frozen-binary Apple M2 Pro pairs with Go 1.27.0 give:
+
+| benchmark | before median | after median | speedup | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| Sigmoid F64, 64K | 658.926 us | 217.549 us | **3.029x** | **3.029x** | 9/9 |
+| SiLU backward F64, 256K | 1.310995 ms | 628.120 us | **2.087x** | **2.195x** | 9/9 |
+| existing SiLU F64 leaf, 256K | 691.117 us | 696.405 us | 0.992x | 1.043x | 6/9 |
+
+Sigmoid and SiLU-backward allocation counts remain six and seven. The original
+SiLU leaf control is neutral within run noise: its independent medians differ
+by 0.76%, while the paired median favors the shared implementation and six of
+nine pairs win. Dense sigmoid validation observes maximum relative error
+2.220e-16 over 262,145 values; vector bodies and scalar tails are bit-identical,
+including signed zeros, infinities, and NaN payloads. Native ARM64 plain/SIMD
+and race tests, Linux ARM64/AMD64 cross-builds, and Rosetta AMD64 SIMD tests
+cover the capability partitions. Objdump confirms D2 FMA, divide, compare, and
+select instructions in the shared leaf.
+
+Focused external perfscan v1.81.0 drops from six PS6077 findings to five. The
+general shared-transcendental-leaf result is
+[perfscan issue #917](https://github.com/jxsl13/perfscan/issues/917). These are
+local same-machine kernel claims, not cross-library leadership evidence.

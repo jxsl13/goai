@@ -200,12 +200,13 @@ func TestCPUGeluBackwardCrossReference(t *testing.T) {
 	}
 }
 
-// §V3/§V11 CROSS for the SiLU VJP (§T665): on the default build (and amd64,
-// and F64 everywhere) the cpu backend registers no silu_backward kernel, so
-// dispatch falls back to ref — asserted BIT-EXACT here. On the arm64 perf
-// build the F32 kernel is the f32-native NEON vsiluGrad pipeline (vexp.go) —
-// asserted within the TestSiluGradF32Accuracy envelope (geluF32Tolerant gates
-// on exactly the vexpNeon build combination). The SwiGLU FFN training shape
+// §V3/§V11 CROSS for the SiLU VJP (§T665): F64 SIMD builds evaluate the
+// sigmoid through their native polynomial and ride the dedicated
+// TestActivationBackwardF64CPUMatchesRef 1e-11 envelope; default-build exactness
+// remains pinned there too. On the arm64 perf build the F32 kernel is the
+// f32-native NEON vsiluGrad pipeline (vexp.go), asserted within the
+// TestSiluGradF32Accuracy envelope (geluF32Tolerant gates on exactly the
+// vexpNeon build combination). The SwiGLU FFN training shape
 // [256,1365] (hidden ≈ 8·512/3 for Dim512) exceeds parThreshold, so the
 // parallel chunking (and its NEON lane/scalar-tail splits — 1365 is not a
 // multiple of 4) is exercised too.
@@ -247,6 +248,15 @@ func TestCPUSiluBackwardCrossReference(t *testing.T) {
 				cf, rf := float64(c[i]), float64(r[i])
 				if math.Abs(cf-rf) > 1e-6+2e-4*math.Abs(rf) {
 					t.Fatalf("silu_backward/F32 [%d]: cpu %v vs ref %v", i, c[i], r[i])
+				}
+			}
+			continue
+		}
+		if dtype == tensor.F64 {
+			c, r := gc[0].Storage().F64(), gr[0].Storage().F64()
+			for i := range c {
+				if math.Abs(c[i]-r[i]) > 1e-11*math.Max(1, math.Abs(r[i])) {
+					t.Fatalf("silu_backward/F64 [%d]: cpu %v vs ref %v", i, c[i], r[i])
 				}
 			}
 			continue

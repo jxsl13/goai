@@ -10,11 +10,15 @@ import "math"
 const (
 	vexpNeon    = true
 	vexpF32Fast = true
-	vexpF64Fast = false // arm64 F64 tanh/sigmoid/softplus/softcap/GELU keep the scalar exact path
+	vexpF64Fast = false // arm64 F64 tanh/softplus/softcap/GELU keep the scalar exact path
 	// vsiluF64Fast is split out from vexpF64Fast so the ONE F64 lane that now has a
 	// NEON implementation on arm64 — SiLU, the SwiGLU FFN activation — can be enabled
 	// without disturbing the other F64 lanes, which stay scalar and exact.
 	vsiluF64Fast = true
+	// vsigmoidF64Fast is split out for the shared two-lane logistic leaf. It
+	// promotes OpSigmoid and the existing SiLU-backward consumer without opening
+	// the unrelated vexpF64Fast composite routes.
+	vsigmoidF64Fast = true
 )
 
 // vexpQuadsNeonF32 is the 4-wide NEON exp kernel (vexp_arm64.s):
@@ -208,11 +212,12 @@ func vlogF32(dst, src []float32) {
 	}
 }
 
-// vsiluPairsNeonF64 evaluates two float64 lanes per pair with the same
-// range-reduced FMA polynomial as expF64poly.
+// vlogisticPairsNeonF64 evaluates two float64 lanes per pair with the same
+// range-reduced FMA polynomial as expF64poly. mulX selects SiLU (1) or sigmoid
+// (0), sharing the complete exponential pipeline.
 //
 //go:noescape
-func vsiluPairsNeonF64(dst, src *float64, pairs int)
+func vlogisticPairsNeonF64(dst, src *float64, pairs, mulX int)
 
 // expF64poly is the scalar twin of the NEON exp lane. Keeping the operation
 // sequence identical makes the vector body and the odd tail bit-for-bit equal.
@@ -270,7 +275,7 @@ func siluF64poly(x float64) float64 {
 func vsiluF64(dst, src []float64) {
 	n2 := len(src) &^ 1
 	if n2 > 0 {
-		vsiluPairsNeonF64(&dst[0], &src[0], n2>>1)
+		vlogisticPairsNeonF64(&dst[0], &src[0], n2>>1, 1)
 	}
 	for i := n2; i < len(src); i++ {
 		dst[i] = siluF64poly(src[i])
@@ -285,16 +290,34 @@ func vtanhF64(dst, src []float64) {
 	}
 }
 
-// vsigmoidF64 exists only so sigmoidKernelCPU type-checks on arm64; vexpF64Fast is
-// false here, so it is dead at run time (the scalar exact path runs).
+// sigmoidF64poly is the scalar bit-twin of the ARM64 logistic leaf. The explicit
+// NaN return matches the vector lane's payload-preserving ordered-select repair.
+func sigmoidF64poly(x float64) float64 {
+	if math.IsNaN(x) {
+		return x
+	}
+	a := math.Abs(x)
+	z := 0.0
+	if a <= 708.0 {
+		z = expF64poly(-a)
+	}
+	num := z
+	if x >= 0 {
+		num = 1
+	}
+	return num / (1 + z)
+}
+
+// vsigmoidF64 is the two-lane ARM64 F64 sigmoid. It shares the complete NEON
+// exp polynomial with vsiluF64 and differs only in the final optional x
+// multiply. Whole pairs and the scalar tail are bit-identical.
 func vsigmoidF64(dst, src []float64) {
-	for i, v := range src {
-		if v >= 0 {
-			dst[i] = 1 / (1 + math.Exp(-v))
-		} else {
-			z := math.Exp(v)
-			dst[i] = z / (1 + z)
-		}
+	n2 := len(src) &^ 1
+	if n2 > 0 {
+		vlogisticPairsNeonF64(&dst[0], &src[0], n2>>1, 0)
+	}
+	for i := n2; i < len(src); i++ {
+		dst[i] = sigmoidF64poly(src[i])
 	}
 }
 
