@@ -752,9 +752,10 @@ func siluBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs back
 	return backend.Execute(ctx.WithBackend(backend.Reference()).WithRecorder(nil), backend.OpSiLUBackward, in, attrs)
 }
 
-// softplusBackwardKernelCPU computes dx = g·softplus'(x) = g·σ(x). The F64 case (Mamba/Jamba
-// Δ backward) runs the vectorized vsoftplusGradF64 (4-wide AVX2 on amd64, scalar elsewhere)
-// over parallel chunks; other dtypes fall back to the reference kernel.
+// softplusBackwardKernelCPU computes dx = g·softplus'(x) = g·σ(x). The F64 case
+// (Mamba/Jamba Δ backward) runs vsoftplusGradF64 over parallel chunks: four-wide
+// AVX2 on amd64 or the shared two-lane NEON logistic leaf plus an in-place g
+// multiply on arm64. Other dtypes fall back to the reference kernel.
 func softplusBackwardKernelCPU(ctx *backend.Context, in []*tensor.Tensor, attrs backend.Attrs) ([]*tensor.Tensor, error) {
 	if len(in) == 2 && in[0].Dtype() == tensor.F64 && in[1].Dtype() == tensor.F64 &&
 		in[1].Shape().Equal(in[0].Shape()) {

@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- reuse the ARM64 F64 logistic derivative (T-01M0VTHS92F97, 2026-08-25)
+
+Apple ARM64 `GOEXPERIMENT=simd` Softplus backward now reuses the two-lane F64
+sigmoid leaf and applies the upstream gradient with one allocation-free in-place
+pass. The separately gated change leaves global `vexpF64Fast`, Softplus forward,
+all other deferred composites, default builds, and AMD64 behavior unchanged.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve the production 256K
+operation from 710.607 to 264.545 us (**2.686x** independent, **2.468x** paired
+median, 9/9 wins), with seven allocations unchanged. A same-binary direct
+control improves **3.411x**. Dense accuracy, vector/tail bit identity, special
+values, native race, multi-architecture compile, and focused Rosetta gates pass.
+External perfscan PS6077 findings fall from five to four; the generalized result
+is recorded on perfscan issue #917.
+
 ### backend/cpu -- share the ARM64 F64 logistic leaf (T-01M0VQEJ6GEY3, 2026-08-25)
 
 Apple ARM64 `GOEXPERIMENT=simd` builds now reuse the existing two-lane F64
