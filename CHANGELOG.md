@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- inline exact reduction Min/Max (T-01M0VMYCBAEZN, 2026-08-25)
+
+F32/F64 reduce-all and contiguous-axis Max/Min kernels now avoid Go 1.27's
+per-element out-of-line `math.Max`/`math.Min` calls. Inlineable helpers preserve
+dominant infinities, signed zeros, NaN payloads, four-way grouping, and output
+allocation behavior across the native ARM64 and Rosetta AMD64 semantic gates.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve reduce-all Max F64
+**5.083x** (9/9 wins), trailing-axis Max F64 **3.883x** (9/9), trailing-axis
+Min F64 **3.614x** (9/9), and leading-axis Max F64 **1.115x** (7/9) by
+independent medians. Allocation behavior is structurally unchanged. Compiler
+diagnostics confirm every reduce-all/trailing helper call is inlined, and the
+focused external scan drops from 20 PS3082 findings to zero. A bare built-in
+substitution was rejected because it changed dominant-infinity and NaN-payload
+bits. The generalized finding is perfscan issue #916.
+
 ### backend/cpu -- register-tile causal Conv1D channels (T-01M0VJKX5ZEYN, 2026-08-25)
 
 The F32/F64 Mamba/Jamba depthwise causal Conv1D kernel now reduces four

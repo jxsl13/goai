@@ -20,3 +20,12 @@ func BenchmarkMeanAllF64_256K_cpu(b *testing.B) {
 func BenchmarkMaxAllF64_256K_cpu(b *testing.B) {
 	benchOn(b, backend.CPU, backend.OpMax, bench.RandF64(tensor.Shape{262144}, 3))
 }
+func BenchmarkMinAllF64_256K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpMin, bench.RandF64(tensor.Shape{262144}, 3))
+}
+func BenchmarkMaxAllF32_256K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpMax, bench.RandF32(tensor.Shape{262144}, 3))
+}
+func BenchmarkMinAllF32_256K_cpu(b *testing.B) {
+	benchOn(b, backend.CPU, backend.OpMin, bench.RandF32(tensor.Shape{262144}, 3))
+}
