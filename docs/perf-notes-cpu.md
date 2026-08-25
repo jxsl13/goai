@@ -464,3 +464,31 @@ expert-column walks and disappeared after scheduling, but no existing check
 identified the dominant invariant division. The requested rule is deliberately
 exact: compute the original division once and reuse its result; never recommend
 reciprocal multiplication when output bits are a contract.
+
+## Four-output reuse in Eigh backward (T-01M0V7KKKCES5)
+
+The eigendecomposition VJP forms `tmp = inner*Vᵀ` with one output row owned by
+each parallel callback. The original scalar column loop reloaded the same
+`inner[a,b]` value for every output column. Computing four adjacent columns
+together keeps four independent accumulators, shares that source-row load, and
+retains the exact ascending `b` reduction order. A scalar tail handles every
+`n%4` remainder without padding or a second layout.
+
+Eight balanced alternating frozen-binary pairs on Apple M2 Pro used
+`GOMAXPROCS=12` and a 750 ms benchmark time:
+
+| shape | before median | after median | speedup | paired wins |
+|---|---:|---:|---:|---:|
+| n=128 | 3.532182 ms | 3.024644 ms | **1.168x** | 6/8 |
+| n=256 | 21.236037 ms | 17.336679 ms | **1.225x** | 8/8 |
+
+The host was variable enough that absolute timings are not a leadership claim;
+the balanced process order, paired directions, and win counts are the evidence.
+Allocations remain 228/op at n=128 and 356/op at n=256.
+
+The Float64-bit oracle now covers n=5, 6, 7, 12, 48, and 64, spanning all four
+tail remainders and both serial and parallel thresholds. Reversing the reduction
+order fails immediately at n=5, proving that the gate protects the exact
+arithmetic schedule. Focused external perfscan no longer reports the PS6010
+site after transformation. The production-shaped validation is perfscan issue
+#911.

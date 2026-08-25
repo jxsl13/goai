@@ -73,15 +73,26 @@ func init() {
 		// G = V·inner·Vᵀ  (T = inner·Vᵀ, then G = V·T).
 		tmp := alloc2D(n, n)
 		logdetParallelIdx(n, n*n*n, func(a int) {
-			for j := range n {
-				var s float64 // (inner·Vᵀ)_aj = Σ_b inner[a,b]·V[j,b]
-				//perfscan:ignore PS3010 same hot dot flagged at :72
-				for b := range n {
-					//perfscan:ignore PS3016 2-deep bounds-check hoist, marginal
-					s += inner[a][b] * v[j][b]
+			innera, tmpa := inner[a], tmp[a]
+			j := 0
+			for ; j+3 < n; j += 4 {
+				var s0, s1, s2, s3 float64
+				v0, v1, v2, v3 := v[j], v[j+1], v[j+2], v[j+3]
+				for b, x := range innera {
+					s0 += x * v0[b]
+					s1 += x * v1[b]
+					s2 += x * v2[b]
+					s3 += x * v3[b]
 				}
-				//perfscan:ignore PS3016 2-deep bounds-check hoist on tmp store, marginal
-				tmp[a][j] = s
+				tmpa[j], tmpa[j+1], tmpa[j+2], tmpa[j+3] = s0, s1, s2, s3
+			}
+			for ; j < n; j++ {
+				var s float64 // (inner·Vᵀ)_aj = Σ_b inner[a,b]·V[j,b]
+				vj := v[j]
+				for b, x := range innera {
+					s += x * vj[b]
+				}
+				tmpa[j] = s
 			}
 		})
 		abar := tensor.New(vt.Dtype(), tensor.Shape{n, n})

@@ -20,12 +20,13 @@ import (
 // change to the eigensolver): both the optimized path and the reference consume the SAME OpEigh
 // output, so their bit-identity is a property of the VJP arithmetic alone.
 //
-// The sizes straddle the fan-out gate: 6 and 12 run the triangular loop inline, 48 and 64 band
-// it, and 48 is not a multiple of the worker count.
+// The sizes straddle the fan-out gate: 5, 6, 7 and 12 run the triangular loop inline, 48 and 64
+// band it, and 48 is not a multiple of the worker count. Sizes 5, 6, 7 and 12 exercise every
+// remainder of the four-output tmp tile.
 func TestEighVJPIsBitIdentical(t *testing.T) {
 	fn := vjpsMulti[backend.OpEigh]
 	ctx := backend.NewContext()
-	for _, n := range []int{6, 12, 48, 64} {
+	for _, n := range []int{5, 6, 7, 12, 48, 64} {
 		a := tensor.New(tensor.F64, tensor.Shape{n, n})
 		for i := range n {
 			for j := range n {

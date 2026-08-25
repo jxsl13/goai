@@ -4,6 +4,22 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### autograd -- tile exact Eigh VJP outputs (T-01M0V7KKKCES5, 2026-08-25)
+
+The eigendecomposition VJP now computes four adjacent columns of
+`inner*Vᵀ` together, reusing each loaded `inner` value across four independent
+accumulators. Every reduction still visits the eigenvector dimension in its
+original ascending order, and a scalar tail preserves all `n%4` shapes.
+
+Eight balanced alternating frozen-binary Apple M2 Pro pairs improve the n=128
+median from 3.532182 to 3.024644 ms (**1.168x**, 6/8 wins) and n=256 from
+21.236037 to 17.336679 ms (**1.225x**, 8/8 wins). Allocation counts remain 228
+and 356 respectively. The host had variable concurrent load, so paired
+directions and win counts bound this claim. Float64-bit gates cover n=5, 6, 7,
+12, 48, and 64; a reversed-reduction mutation fails at n=5. The production site
+disappears from focused PS6010 output, and the reusable result is tracked in
+perfscan issue #911.
+
 ### autograd -- reuse exact MoE gate quotients (T-01M0V52YFDFSF, 2026-08-25)
 
 The typed F64/F32 `OpMoECombine` backward now computes each token's exact
