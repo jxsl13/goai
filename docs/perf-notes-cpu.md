@@ -520,3 +520,34 @@ eight-channel tile was also rejected after splitting only 5/9 against four
 channels for each dtype. The host was variable, so paired directions constrain
 the claim and the absolute times are not cross-library leadership evidence.
 The reusable PS1006/PS4008 lesson is [perfscan issue #915](https://github.com/jxsl13/perfscan/issues/915).
+
+## Inline exact reduction Min/Max combines (T-01M0VMYCBAEZN)
+
+Go 1.27 still implements `math.Max` and `math.Min` as out-of-line assembly
+calls on Apple ARM64. CPU reduce-all and trailing-axis kernels paid that call
+for every element despite already using four independent accumulators. The new
+helpers retain the dominant-infinity behavior, signed-zero result, and NaN
+payload bits while lowering the common path to inline language `max`/`min`
+built-ins. ARM64 uses the operand order selected by its assembly implementation;
+other architectures delegate uncommon NaN inputs to their own math routine.
+
+Nine alternating frozen-binary Apple M2 Pro pairs with Go 1.27.0 give:
+
+| benchmark | before median | after median | speedup | paired median | wins |
+|---|---:|---:|---:|---:|---:|
+| reduce-all Max F64, 256K | 1.393048 ms | 274.035 us | **5.083x** | **4.957x** | 9/9 |
+| trailing-axis Max F64, 4096x4096 | 23.571097 ms | 6.069971 ms | **3.883x** | **4.158x** | 9/9 |
+| trailing-axis Min F64, 4096x4096 | 27.269331 ms | 7.545648 ms | **3.614x** | **4.187x** | 9/9 |
+| leading-axis Max F64, 4096x4096 | 31.081155 ms | 27.870283 ms | **1.115x** | **1.090x** | 7/9 |
+
+Allocations remain four per reduce-all operation and eight per trailing-axis
+reduction; the leading route has no structural allocation change.
+Cartesian raw-bit tests cover both signed zeros, infinities, three NaN payloads,
+and every operand order; the same oracle passes natively on ARM64 and under
+Rosetta AMD64. A bare built-in was rejected because it changes NaN paired with
+the dominant infinity and selects different payload bits. The host was variable,
+so paired directions constrain these local kernel claims; they are not a
+cross-library leadership result. Compiler diagnostics confirm an inline cost of
+24 and every reduce-all/trailing hot-loop call is inlined. Focused external
+perfscan drops from 20 PS3082 findings to zero. The reusable detector request is
+[perfscan issue #916](https://github.com/jxsl13/perfscan/issues/916).

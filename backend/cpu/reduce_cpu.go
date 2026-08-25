@@ -2,10 +2,48 @@ package cpu
 
 import (
 	"math"
+	"runtime"
 
 	"github.com/jxsl13/goai/backend"
 	"github.com/jxsl13/goai/tensor"
 )
+
+// exactMax and exactMin retain math.Max/math.Min's dominant-infinity and NaN
+// rules while letting the Go 1.27 compiler inline the language built-ins on the
+// common path. On ARM64 the math functions are out-of-line assembly calls; the
+// built-ins compile at the call site.
+func exactMax(x, y float64) float64 {
+	const positiveInfinityBits = uint64(0x7ff0000000000000)
+	positiveInfinity := math.Float64frombits(positiveInfinityBits)
+	if x == positiveInfinity || y == positiveInfinity {
+		return positiveInfinity
+	}
+	if runtime.GOARCH == "arm64" {
+		// ARM64 math.archMax executes FMAXD with y as its NaN-propagating
+		// operand; the built-in lowers with the opposite operand order.
+		return max(y, x)
+	}
+	if x != x || y != y {
+		// Keep architecture-specific NaN payload selection off the hot path.
+		return math.Max(x, y)
+	}
+	return max(x, y)
+}
+
+func exactMin(x, y float64) float64 {
+	const negativeInfinityBits = uint64(0xfff0000000000000)
+	negativeInfinity := math.Float64frombits(negativeInfinityBits)
+	if x == negativeInfinity || y == negativeInfinity {
+		return negativeInfinity
+	}
+	if runtime.GOARCH == "arm64" {
+		return min(y, x)
+	}
+	if x != x || y != y {
+		return math.Min(x, y)
+	}
+	return min(x, y)
+}
 
 // trailingReduce reports whether the reduction described by pa over a rank-nd shape reduces exactly
 // the innermost CONTIGUOUS suffix of axes (e.g. axis 1 of [rows,cols], or axes {1,2} of [b,h,w]),
@@ -302,10 +340,9 @@ func init() {
 		},
 		leadReducer{init: 0, comb: add, mean: true})
 	// Max/Min use a 4-way accumulator unroll to break the loop-carried dependency
-	// chain. math.Max/math.Min are NOT intrinsified on amd64 (hardware MAXSD/MINSD
-	// disagree on NaN/signed-zero), so each element is a real non-inlined CALL whose
-	// result feeds the next — the serial single-accumulator form is latency-bound.
-	// Four independent chains let the calls overlap (throughput-bound). Bit-exact
+	// chain. exactMax/exactMin preserve math.Max/math.Min semantics without their
+	// out-of-line architecture call, and four independent chains expose throughput.
+	// Bit-exact
 	// (unlike Sum/Prod reassociation): math.Max/math.Min are associative AND
 	// commutative including their IEEE tie rules — NaN is absorbing, and
 	// math.Max(+0,-0)=+0 / math.Min(+0,-0)=-0 regardless of grouping — so folding the
@@ -317,14 +354,14 @@ func init() {
 			i := 0
 			for ; i+4 <= len(xs); i += 4 {
 				//perfscan:ignore PS3019 deliberate 4-way Max unroll, already optimal fastpath
-				m0 = math.Max(m0, xs[i])
-				m1 = math.Max(m1, xs[i+1])
-				m2 = math.Max(m2, xs[i+2])
-				m3 = math.Max(m3, xs[i+3])
+				m0 = exactMax(m0, xs[i])
+				m1 = exactMax(m1, xs[i+1])
+				m2 = exactMax(m2, xs[i+2])
+				m3 = exactMax(m3, xs[i+3])
 			}
-			m := math.Max(math.Max(m0, m1), math.Max(m2, m3))
+			m := exactMax(exactMax(m0, m1), exactMax(m2, m3))
 			for ; i < len(xs); i++ {
-				m = math.Max(m, xs[i])
+				m = exactMax(m, xs[i])
 			}
 			return m
 		},
@@ -333,32 +370,32 @@ func init() {
 			i := 0
 			for ; i+4 <= len(xs); i += 4 {
 				//perfscan:ignore PS3019 deliberate 4-way Max f32 unroll, already optimal
-				m0 = math.Max(m0, float64(xs[i]))
-				m1 = math.Max(m1, float64(xs[i+1]))
-				m2 = math.Max(m2, float64(xs[i+2]))
-				m3 = math.Max(m3, float64(xs[i+3]))
+				m0 = exactMax(m0, float64(xs[i]))
+				m1 = exactMax(m1, float64(xs[i+1]))
+				m2 = exactMax(m2, float64(xs[i+2]))
+				m3 = exactMax(m3, float64(xs[i+3]))
 			}
-			m := math.Max(math.Max(m0, m1), math.Max(m2, m3))
+			m := exactMax(exactMax(m0, m1), exactMax(m2, m3))
 			for ; i < len(xs); i++ {
-				m = math.Max(m, float64(xs[i]))
+				m = exactMax(m, float64(xs[i]))
 			}
 			return m
 		},
-		leadReducer{init: math.Inf(-1), comb: math.Max})
+		leadReducer{init: math.Inf(-1), comb: exactMax})
 	reg(backend.OpMin,
 		func(xs []float64) float64 {
 			m0, m1, m2, m3 := math.Inf(1), math.Inf(1), math.Inf(1), math.Inf(1)
 			i := 0
 			for ; i+4 <= len(xs); i += 4 {
 				//perfscan:ignore PS3019 deliberate 4-way Min unroll, already optimal fastpath
-				m0 = math.Min(m0, xs[i])
-				m1 = math.Min(m1, xs[i+1])
-				m2 = math.Min(m2, xs[i+2])
-				m3 = math.Min(m3, xs[i+3])
+				m0 = exactMin(m0, xs[i])
+				m1 = exactMin(m1, xs[i+1])
+				m2 = exactMin(m2, xs[i+2])
+				m3 = exactMin(m3, xs[i+3])
 			}
-			m := math.Min(math.Min(m0, m1), math.Min(m2, m3))
+			m := exactMin(exactMin(m0, m1), exactMin(m2, m3))
 			for ; i < len(xs); i++ {
-				m = math.Min(m, xs[i])
+				m = exactMin(m, xs[i])
 			}
 			return m
 		},
@@ -367,18 +404,18 @@ func init() {
 			i := 0
 			for ; i+4 <= len(xs); i += 4 {
 				//perfscan:ignore PS3019 deliberate 4-way Min f32 unroll, already optimal
-				m0 = math.Min(m0, float64(xs[i]))
-				m1 = math.Min(m1, float64(xs[i+1]))
-				m2 = math.Min(m2, float64(xs[i+2]))
-				m3 = math.Min(m3, float64(xs[i+3]))
+				m0 = exactMin(m0, float64(xs[i]))
+				m1 = exactMin(m1, float64(xs[i+1]))
+				m2 = exactMin(m2, float64(xs[i+2]))
+				m3 = exactMin(m3, float64(xs[i+3]))
 			}
-			m := math.Min(math.Min(m0, m1), math.Min(m2, m3))
+			m := exactMin(exactMin(m0, m1), exactMin(m2, m3))
 			for ; i < len(xs); i++ {
-				m = math.Min(m, float64(xs[i]))
+				m = exactMin(m, float64(xs[i]))
 			}
 			return m
 		},
-		leadReducer{init: math.Inf(1), comb: math.Min})
+		leadReducer{init: math.Inf(1), comb: exactMin})
 	reg(backend.OpProd,
 		func(xs []float64) float64 {
 			p := 1.0

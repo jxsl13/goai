@@ -137,6 +137,9 @@ func BenchmarkReduceAxis0SumF64_4096x4096_cpu(b *testing.B) {
 func BenchmarkReduceAxis0MaxF64_4096x4096_cpu(b *testing.B) {
 	benchAxisCPUAx(b, backend.OpMax, 4096, 4096, 0)
 }
+func BenchmarkReduceAxis0MinF64_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUAx(b, backend.OpMin, 4096, 4096, 0)
+}
 func BenchmarkReduceAxis0MeanF64_4096x4096_cpu(b *testing.B) {
 	benchAxisCPUAx(b, backend.OpMean, 4096, 4096, 0)
 }
@@ -156,11 +159,32 @@ func benchAxisCPU(b *testing.B, op backend.Op, rows, cols int) {
 	}
 }
 
+func benchAxisCPUF32(b *testing.B, op backend.Op, rows, cols int) {
+	be, _ := backend.Get(backend.CPU)
+	ctx := backend.NewContext().WithBackend(be)
+	x := bench.RandF32(tensor.Shape{rows, cols}, 3)
+	attrs := backend.ReduceAttrs{Axes: []int{1}, KeepDims: false}
+	ins := []*tensor.Tensor{x}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if _, err := backend.Execute(ctx, op, ins, attrs); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func BenchmarkReduceAxisMaxF64_4096x4096_cpu(b *testing.B) {
 	benchAxisCPU(b, backend.OpMax, 4096, 4096)
 }
 func BenchmarkReduceAxisMinF64_4096x4096_cpu(b *testing.B) {
 	benchAxisCPU(b, backend.OpMin, 4096, 4096)
+}
+func BenchmarkReduceAxisMaxF32_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUF32(b, backend.OpMax, 4096, 4096)
+}
+func BenchmarkReduceAxisMinF32_4096x4096_cpu(b *testing.B) {
+	benchAxisCPUF32(b, backend.OpMin, 4096, 4096)
 }
 func BenchmarkReduceAxisSumF64_4096x4096_cpu(b *testing.B) {
 	benchAxisCPU(b, backend.OpSum, 4096, 4096)
