@@ -4,6 +4,21 @@ All notable changes per §T task. Dates ISO. Pre-1.0: API unstable (§V8).
 
 ## [Unreleased]
 
+### backend/cpu -- share the ARM64 F64 logistic leaf (T-01M0VQEJ6GEY3, 2026-08-25)
+
+Apple ARM64 `GOEXPERIMENT=simd` builds now reuse the existing two-lane F64
+SiLU exponential pipeline for stable sigmoid and its SiLU-backward consumer.
+The mode-selected leaf preserves vector/tail bit identity and special values;
+unrelated F64 composites remain behind their existing disabled capability.
+
+Nine alternating frozen-binary Apple M2 Pro pairs improve production Sigmoid
+F64 64K **3.029x** and SiLU backward F64 256K **2.087x** by independent
+medians, both with 9/9 wins and unchanged allocations. The original SiLU leaf
+control remains neutral within noise (0.992x independent, 1.043x paired median,
+6/9 wins). Dense accuracy, native race, multi-architecture compile, Rosetta,
+and disassembly gates pass. Focused external perfscan PS6077 findings fall from
+six to five; the reusable result is perfscan issue #917.
+
 ### backend/cpu -- inline exact reduction Min/Max (T-01M0VMYCBAEZN, 2026-08-25)
 
 F32/F64 reduce-all and contiguous-axis Max/Min kernels now avoid Go 1.27's
