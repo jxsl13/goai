@@ -3982,3 +3982,11 @@ option: Resize hidden scratch for every Step shape
 option: Retain the capacity-wide unary control
 blocks: P-01M0SKYF35FYGB3RPMP0DDPCAW
 choice: One bounded BiasGELU recorder dispatch
+
+## T-01M0VDT5M1FK4B4BGXJP2SC2AH Retune MoE backward token claims for Go 1.27 on heterogeneous M2 cores
+kind: task
+state: draft
+created: 2026-08-25
+targets: autograd/vjp_moe.go, autograd/vjp_moe_bench_internal_test.go, autograd/vjp_moe_parallel_internal_test.go, docs/benchmarking.md, CHANGELOG.md, internal/benchcompare/leadership/evidence/m2-go127-moe-claim-scheduling-20260825
+
+The pinned Go 1.27 rebuild campaign exposed a 1.066x parallel MoECombine-backward regression at GOMAXPROCS=12 (2/9 wins) while the serial cell improved 1.057x. Test the current 16-token atomic claim against measured grain and scheduling rungs on the Apple M2 Pro 8P+4E topology. Preserve each token arithmetic order, F64/F32 bit identity, skipped-token behavior, thresholds, fallbacks, and public APIs. Promote only a same-source Go 1.27 candidate that wins stable alternating frozen-binary pairs at GOMAXPROCS=12, does not materially regress GOMAXPROCS=8 or serial execution, and leaves allocations unchanged; otherwise reject with the complete rung evidence. Commit raw pairs, exact commands, hashes, and an honest claim boundary.
